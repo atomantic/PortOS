@@ -9,12 +9,16 @@
  *
  * ## The rule
  *
- * Every `router.post|put|patch(…)` call under `server/routes/` whose handler
- * text mentions `req.body` must also contain one of
+ * Every `router.post|put|patch(…)` call under `server/routes/` (and the
+ * vendored toolkit's `lib/aiToolkit/routes/`, plus the CoS runner's own
+ * `app.post|put|patch(…)` in `cos-runner/index.js`) whose handler text mentions
+ * `req.body` must also contain one of
  *
  *   - `validateRequest(schema, …)` (the default — throws the 400),
- *   - `validate(schema, …)` (the non-throwing sibling providers/social routes use), or
- *   - `<name>Schema….safeParse(…)` / `<name>Schema….parse(…)`.
+ *   - `validate(schema, …)` (the non-throwing sibling providers/social routes use),
+ *   - `parseBody(schema, …)` (the toolkit prompts router's local wrapper over `validate`), or
+ *   - `<name>Schema….safeParse(…)` / `<name>Schema….parse(…)` (the CoS runner's shape:
+ *     it is a separate process, so it answers its own `{ error }` 400).
  *
  * ## Allowlist
  *
@@ -32,10 +36,9 @@
  * reading `req.body` raw is flagged. It cannot see a body validated field-by-field
  * through a helper. It does not follow a handler delegated to a named function declared elsewhere;
  * and it only sees `router.<verb>(…)` call sites (not `router.route(…).post`).
- * Out of scope on purpose: `lib/aiToolkit/routes/` (the vendored toolkit is
- * self-contained and cannot import `lib/validation.js`) and `cos-runner/` (a
- * separate process with its own spawn API). `req.query` reads and the
- * aiToolkit/cos-runner trees are follow-ups (#10024).
+ * The toolkit cannot import `lib/validation.js` (self-contained), so its schemas
+ * live in `lib/aiToolkit/validation.js`; the runner's are `cos-runner/requestSchemas.js`.
+ * Out of scope for now: `req.query` reads, a follow-up (#10024).
  */
 
 import { describe, it, expect } from 'vitest';
@@ -58,9 +61,9 @@ const ALLOWED_UNVALIDATED = new Map([
   ['routes/pipeline/audio.js POST /issues/:id/stages/audio/music/upload', 'multipart upload: req.body only carries an optional label text field'],
 ]);
 
-const ROUTE_CALL = /\b(?:router|[A-Za-z]*Router)\.(post|put|patch)\s*\(/g;
+const ROUTE_CALL = /\b(?:router|app|[A-Za-z]*Router)\.(post|put|patch)\s*\(/g;
 const READS_BODY = /\breq\.body\b/;
-const VALIDATE_CALL = /\bvalidateRequest\s*\(|\bvalidate\s*\(|\.safeParse\s*\(|[Ss]chema\w*\.parse\s*\(/g;
+const VALIDATE_CALL = /\bvalidateRequest\s*\(|\bvalidate\s*\(|\bparseBody\s*\(|\.safeParse\s*\(|[Ss]chema\w*\.parse\s*\(/g;
 // `const body = req.body`, `const { a, ...rest } = req.body`: a name that carries the raw body.
 const BODY_ALIAS = /\b(?:const|let|var)\s+(\{[^}]*\}|[A-Za-z_$][\w$]*)\s*=\s*req\.body\b/g;
 
@@ -95,10 +98,10 @@ function validatesBody(text) {
     const end = matchBracket(text, open);
     if (end === -1) continue;
     const args = text.slice(open + 1, end);
-    // `validateRequest(schema, data)` / `validate(schema, data)` take the data second, so
+    // `validateRequest(schema, data)` / `validate(schema, data)` / `parseBody(schema, data, label)` take the data second, so
     // a body mentioned inside the schema expression does not count. `.safeParse(data)` /
     // `Schema.parse(data)` take it first.
-    const schemaFirst = /^(?:validateRequest|validate)\b/.test(call[0].trim());
+    const schemaFirst = /^(?:validateRequest|validate|parseBody)\b/.test(call[0].trim());
     const dataArg = schemaFirst ? args.slice(topLevelComma(args) + 1) : args;
     if (carriesBody.test(dataArg)) return true;
   }
@@ -122,7 +125,11 @@ export function findUnvalidatedBodyHandlers(src) {
   return hits;
 }
 
-const trackedRouteSources = () => execFileSync('git', ['ls-files', 'routes'], {
+// `routes/` plus the two out-of-tree HTTP surfaces (#10024): the vendored toolkit's
+// routers and the CoS runner's standalone Express app.
+const SCANNED_PATHS = ['routes', 'lib/aiToolkit/routes', 'cos-runner/index.js'];
+
+const trackedRouteSources = () => execFileSync('git', ['ls-files', ...SCANNED_PATHS], {
   cwd: SERVER_ROOT,
   encoding: 'utf8',
   maxBuffer: 64 * 1024 * 1024,
@@ -132,7 +139,7 @@ const scanTree = () => trackedRouteSources().flatMap((file) => (
   findUnvalidatedBodyHandlers(readFileSync(join(SERVER_ROOT, file), 'utf8')).map((hit) => `${file} ${hit}`)
 ));
 
-describe('route handlers validate req.body (#9950)', () => {
+describe('route handlers validate req.body (#9950, #10024)', () => {
   it('scans the route tree', () => {
     // A broken `git ls-files` would otherwise let the assertions below pass by scanning nothing.
     expect(trackedRouteSources().length).toBeGreaterThan(100);
@@ -209,6 +216,17 @@ describe('the unvalidated-body recognizer', () => {
       'const { password, ...rest } = req.body; validateRequest(fooSchema, rest);',
     ]) {
       expect(findUnvalidatedBodyHandlers(`router.put('/x', asyncHandler(async (req, res) => { ${body} }));`), body).toEqual([]);
+    }
+  });
+
+  it('covers the toolkit routers and the CoS runner app (#10024)', () => {
+    const files = trackedRouteSources();
+    expect(files).toContain('lib/aiToolkit/routes/prompts.js');
+    expect(files).toContain('cos-runner/index.js');
+    expect(findUnvalidatedBodyHandlers("app.post('/spawn', lifecycle.spawnRoute(async (req, res) => { const { agentId } = req.body; }));"))
+      .toEqual(['POST /spawn']);
+    for (const call of ['spawnBodySchema.safeParse(req.body ?? {})', "parseBody(promptStageUpdateBodySchema, req.body, 'stage data')"]) {
+      expect(findUnvalidatedBodyHandlers(`router.put('/x', asyncHandler(async (req, res) => { ${call}; }));`), call).toEqual([]);
     }
   });
 

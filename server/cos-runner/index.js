@@ -36,6 +36,7 @@ import { usableAgentPid, runnerAgentLivenessFields } from '../lib/runnerAgentLiv
 import { ALLOWED_COMMANDS, isAllowedCommand } from './allowedCommands.js';
 import { armForceKill as armForceKillShared } from './forceKill.js';
 import { createTuiExitHandler } from './tuiExit.js';
+import { bodyErrorMessage, btwBodySchema, pauseBodySchema, spawnBodySchema, spawnTuiBodySchema } from './requestSchemas.js';
 import { createRunnerShutdown, registerRunnerShutdownSignals } from './shutdown.js';
 import { createHttpDrain } from '../lib/httpDrain.js';
 import { PORTS } from '../lib/ports.js';
@@ -212,6 +213,8 @@ app.get('/agents', async (req, res) => {
  */
 app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
   assertDatabaseAdmission();
+  const body = spawnTuiBodySchema.safeParse(req.body ?? {});
+  if (!body.success) return res.status(400).json({ error: bodyErrorMessage(body.error) });
   const {
     agentId,
     taskId,
@@ -226,7 +229,7 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
     cols = 80,
     rows = 24,
     doneSentinelPath = null,
-  } = req.body;
+  } = body.data;
 
   // Name the offending field. A single opaque "missing or invalid fields" 400
   // sent a grok-tui agent to the zombie reaper with no shell and no clue why —
@@ -241,9 +244,6 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
     return res.status(400).json({
       error: `Command not allowed: ${command}. Permitted commands: ${[...ALLOWED_COMMANDS].join(', ')}`
     });
-  }
-  if (!Array.isArray(args)) {
-    return res.status(400).json({ error: 'Invalid args: expected an array' });
   }
   if (activeAgents.has(agentId)) {
     return res.status(409).json({ error: `Agent ${agentId} is already running` });
@@ -457,6 +457,8 @@ app.get('/agents/:agentId/stats', async (req, res) => {
  */
 app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
   assertDatabaseAdmission();
+  const body = spawnBodySchema.safeParse(req.body ?? {});
+  if (!body.success) return res.status(400).json({ error: bodyErrorMessage(body.error) });
   const {
     agentId,
     taskId,
@@ -472,7 +474,7 @@ app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
     cliArgs,
     // Legacy: Claude-specific (deprecated)
     claudePath = process.env.CLAUDE_PATH || 'claude'
-  } = req.body;
+  } = body.data;
 
   if (!agentId || !taskId || !prompt) {
     return res.status(400).json({ error: 'Missing required fields: agentId, taskId, prompt' });
@@ -488,18 +490,10 @@ app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
       });
     }
     command = cliCommand;
-    // Default to empty args if cliArgs not provided
+    // cliArgs is an array or a single string (the schema rejects anything else);
+    // default to empty args when not provided.
     const args = cliArgs ?? [];
-    // Normalize cliArgs to an array
-    if (Array.isArray(args)) {
-      spawnArgs = args;
-    } else if (typeof args === 'string') {
-      spawnArgs = [args];
-    } else {
-      return res.status(400).json({
-        error: 'Invalid cliArgs: expected an array or string'
-      });
-    }
+    spawnArgs = Array.isArray(args) ? args : [args];
   } else {
     // Legacy: Claude-specific args
     command = claudePath;
@@ -803,7 +797,9 @@ app.post('/kill/:agentId', async (req, res) => {
  */
 app.post('/pause/:agentId', async (req, res) => {
   const { agentId } = req.params;
-  const { reason = null } = req.body || {};
+  const body = pauseBodySchema.safeParse(req.body ?? {});
+  if (!body.success) return res.status(400).json({ error: bodyErrorMessage(body.error) });
+  const { reason = null } = body.data;
   const agent = activeAgents.get(agentId);
 
   if (!agent) {
@@ -857,16 +853,15 @@ app.post('/terminate-all', async (req, res) => {
  */
 app.post('/btw/:agentId', async (req, res) => {
   const { agentId } = req.params;
-  const { message } = req.body;
   const agent = activeAgents.get(agentId);
 
   if (!agent) {
     return res.status(404).json({ error: 'Agent not found or not running' });
   }
 
-  if (!message || typeof message !== 'string') {
-    return res.status(400).json({ error: 'Missing or invalid message' });
-  }
+  const body = btwBodySchema.safeParse(req.body ?? {});
+  if (!body.success) return res.status(400).json({ error: bodyErrorMessage(body.error) });
+  const { message } = body.data;
 
   // Derive workspace from the agent's known record, not from request body
   const agentWorkspace = agent.workspacePath;

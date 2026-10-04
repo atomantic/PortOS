@@ -134,8 +134,7 @@ export function createAIToolkit(config = {}) {
 
   let providerStatusRouter = null;
   if (providerStatusService) {
-    // providerStatus has no 4xx error paths today, so it takes no ServerError.
-    providerStatusRouter = createProviderStatusRoutes(providerStatusService, { asyncHandler });
+    providerStatusRouter = createProviderStatusRoutes(providerStatusService, { asyncHandler, ServerError });
   }
 
   return {
