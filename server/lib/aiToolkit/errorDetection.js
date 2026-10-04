@@ -135,16 +135,33 @@ const ERROR_PATTERNS = [
   {
     // `upgrade your subscription to increase your limits` is Antigravity's
     // quota banner (see AGY_QUOTA_BANNER). Claude Code reports its rolling
-    // subscription exhaustion as `You've hit your monthly spend limit ...
-    // your session limit resets ...`, which is a usage limit too even though it
-    // does not contain the older `usage limit` wording. The existing
-    // usage-limit category is also used by the immediate-fallback signals; the
-    // CLI path needs this post-hoc match to bench the provider and reach a
-    // fallback rather than falling through to UNKNOWN. Kept to vendor/billing
-    // phrasing — a bare
-    // "quota reached" is a phrase story text can legitimately contain, and
-    // this scan reads the model's entire screen.
-    pattern: /(?:hit your usage limit|hit your (?:monthly )?spend limit|your session limit resets?|usage limit|Upgrade to Pro|upgrade your subscription to increase your limits|(?:^|\n)\s*(?:\[stderr\]\s*)?Now using extra usage\s*(?:\r?\n|$))/i,
+    // subscription exhaustion as a `You've hit your <kind> limit` banner, which
+    // is a usage limit too even though it does not contain the older
+    // `usage limit` wording. The existing usage-limit category is also used by
+    // the immediate-fallback signals; the CLI path needs this post-hoc match to
+    // bench the provider and reach a fallback rather than falling through to
+    // UNKNOWN. Kept to vendor/billing phrasing — a bare "quota reached" is a
+    // phrase story text can legitimately contain, and this scan reads the
+    // model's entire screen.
+    //
+    // `hit your (<word> ){1,2}limit` is ONE alternative covering the whole
+    // banner family rather than an enumeration of limit kinds, because the kind
+    // and the separator both vary and an enumeration kept missing live wordings.
+    // At least one kind word is REQUIRED: every real banner names the kind
+    // (`session`, `usage`, `weekly`, `5-hour`, `monthly spend`, `Opus usage`),
+    // while a bare `hit your limit` is reachable by ordinary prose — "he had
+    // hit your limit of patience" matched when the kind was optional.
+    // The earlier `your session limit resets?` required `limit` to be adjacent
+    // to `resets`, which only holds for the LONG combined banner
+    // (`... monthly spend limit · ... · your session limit resets 7:15am (UTC)`).
+    // Claude Code's standalone short form puts a `·` between them —
+    // `You've hit your session limit · resets 12:40am (UTC)` — so it fell
+    // through to UNKNOWN, which benched nothing and escalated a spent
+    // subscription to a tier-4 investigation task instead of a fallback. The
+    // `5-hour`/`weekly`/`Opus` kinds the CLI also emits were missing for the
+    // same reason. Anchored on the second-person `hit your … limit` so the
+    // bound wildcard cannot be reached by prose about a limit.
+    pattern: /(?:hit your (?:[\w-]+ ){1,2}limit\b|usage limit|Upgrade to Pro|upgrade your subscription to increase your limits|(?:^|\n)\s*(?:\[stderr\]\s*)?Now using extra usage\s*(?:\r?\n|$))/i,
     category: ERROR_CATEGORIES.USAGE_LIMIT,
     requiresFallback: true,
     actionable: true,
@@ -236,7 +253,18 @@ const ERROR_PATTERNS = [
 ];
 
 const WAIT_TIME_PATTERNS = [
-  /resets?\s+(\d{1,2}(?:am|pm)?)\s*\(([^)]+)\)/i,
+  // A reset CLOCK time, not a duration: `resets 12:40am (UTC)`. The minutes are
+  // optional (`resets 3pm`) and so is the parenthesized zone — Claude Code emits
+  // the bare form too (`resets 6:00 PM`), and requiring both meant the most
+  // common wording, `H:MM<meridiem>`, extracted no wait time at all because
+  // `\d{1,2}` stopped at the `:`.
+  //
+  // A meridiem or an `H:MM` is REQUIRED, so the hour cannot be a bare integer:
+  // with the zone parens optional, a lone `\d{1,2}` would claim the number out
+  // of a DURATION phrased off `resets` (`resets 5 minutes from now` → `5`),
+  // which the general duration scan below reads correctly as `5 minutes`.
+  // `resets in 3h51m14s` has no digit after `resets` and falls through either way.
+  /resets?\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)|\d{1,2}:\d{2})\s*(?:\(([^)]+)\))?/i,
   /try again in\s+((?:\d+\s*(?:day|hour|minute|second)s?\s*)+)/i,
   /wait\s+((?:\d+\s*(?:day|hour|minute|second)s?\s*)+)/i,
   /in\s+(\d+)\s*(day|hour|minute|second)s?/i,

@@ -119,6 +119,35 @@ describe('Error Detection', () => {
       expect(result.requiresFallback).toBe(true);
     });
 
+    // The STANDALONE short banner, which separates the limit from its reset
+    // with a `·` instead of running them together as the long combined banner
+    // above does. The pattern used to require `session limit resets` adjacent,
+    // so a spent subscription reported this way classified as UNKNOWN: nothing
+    // benched the provider, no fallback ran, and the run was escalated to a
+    // tier-4 investigation task. The `5-hour` / `weekly` / `Opus` kinds the CLI
+    // also emits were missed for the same reason.
+    it.each([
+      ['a session limit with a separated reset clock', "You've hit your session limit · resets 12:40am (UTC)"],
+      ['a session limit with no timezone', "You've hit your session limit · resets 6:00 PM"],
+      ['a rolling 5-hour limit', "You've hit your 5-hour limit · resets 3pm"],
+      ['a weekly limit', "You've hit your weekly limit · resets Monday"],
+      ['a per-model limit', "You've hit your Opus usage limit · /model to use best available model"],
+    ])('classifies %s as a usage limit requiring fallback', (_label, text) => {
+      const result = analyzeError(text, 1);
+      expect(result.hasError).toBe(true);
+      expect(result.category).toBe(ERROR_CATEGORIES.USAGE_LIMIT);
+      expect(result.requiresFallback).toBe(true);
+    });
+
+    // The limit KIND is required, not optional. `analyzeError` reads an agent's
+    // whole CLI screen, where a bare "hit your limit" is ordinary prose.
+    it.each([
+      ['prose about reaching a personal limit', 'He had hit your limit of patience, the narrator wrote.'],
+      ['prose naming an unrelated limit', 'The hero hit your father with a limit break attack'],
+    ])('does not classify %s as a usage limit', (_label, text) => {
+      expect(analyzeError(text, 1).category).not.toBe(ERROR_CATEGORIES.USAGE_LIMIT);
+    });
+
     it('should detect Claude extra-usage status as a usage limit', () => {
       const result = analyzeError('Now using extra usage');
       expect(result.hasError).toBe(true);
@@ -828,6 +857,29 @@ describe('Error Detection', () => {
       const result = extractWaitTime('Wait 5 minutes before retrying');
       expect(result).toBeTruthy();
       expect(result).toMatch(/5\s*min/i);
+    });
+
+    // A reset CLOCK time rather than a duration. `H:MM<meridiem>` is the
+    // wording Claude Code actually emits and it extracted nothing, because the
+    // hour matcher stopped at the `:` and the timezone parens were mandatory —
+    // so a benched provider carried no reset time for the caller to wait out.
+    it.each([
+      ['a clock time with a timezone', 'resets 12:40am (UTC)', '12:40am UTC'],
+      ['a clock time with no timezone', 'resets 6:00 PM', '6:00 PM'],
+      ['a whole-hour reset', 'resets 3pm', '3pm'],
+      ['a 24-hour clock reset', 'resets 18:30', '18:30'],
+    ])('extracts %s', (_label, text, expected) => {
+      expect(extractWaitTime(text)).toBe(expected);
+    });
+
+    // A DURATION phrased off `resets` is not a clock time. The clock pattern
+    // requires a meridiem or an `H:MM`, so a lone hour cannot swallow the
+    // number and leave the unit behind ("resets 5 minutes from now" → "5").
+    it.each([
+      ['minutes', 'Rate limit resets 5 minutes from now', '5 minutes'],
+      ['hours', 'limit resets 3 hours from now', '3 hours'],
+    ])('reads a duration in %s off "resets" as a duration, not a clock time', (_label, text, expected) => {
+      expect(extractWaitTime(text)).toBe(expected);
     });
 
     it('should return null for no time found', () => {
