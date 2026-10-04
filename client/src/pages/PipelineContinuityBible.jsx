@@ -23,9 +23,8 @@ import {
   getContinuityBibleStatus,
   pipelineContinuityBibleSseUrl,
 } from '../services/api';
-import { usePipelineProgress } from '../hooks/usePipelineProgress';
-
-const RUN_ENDED = new Set(['complete', 'canceled', 'cancelled', 'error']);
+import { useSeriesRunLifecycle } from '../hooks/useSeriesRunLifecycle';
+import RunRecoveryBanner from '../components/pipeline/RunRecoveryBanner';
 
 // The server ships `ledger.categories` (its FACT_CATEGORIES) with every
 // response, so section order + labels come from the server and can't drift.
@@ -51,11 +50,44 @@ export default function PipelineContinuityBible() {
   const [series, setSeries] = useState(null);
   const [ledger, setLedger] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [active, setActive] = useState(false);
   const [starting, setStarting] = useState(false);
-  const activeRunIdRef = useRef(null);
   // Supersession token for the ledger re-read below.
   const ledgerRequestRef = useRef(0);
+
+  // Re-read the saved ledger, dropping a response that a newer read or a
+  // series switch has superseded.
+  const reloadLedger = () => {
+    const req = ++ledgerRequestRef.current;
+    const forSeries = seriesId;
+    getContinuityBible(seriesId)
+      .then((l) => { if (req === ledgerRequestRef.current && seriesIdRef.current === forSeries) setLedger(l); })
+      .catch(() => {});
+  };
+
+  // The run's lifecycle — terminal frame, stream closed without one, cancel
+  // settlement — lives in the shared hook; this page owns the result + toasts.
+  const run = useSeriesRunLifecycle({
+    scopeId: seriesId,
+    urlBuilder: pipelineContinuityBibleSseUrl,
+    fetchStatus: getContinuityBibleStatus,
+    requestCancel: cancelContinuityBible,
+    onTerminal: (frame) => {
+      if (frame.type === 'complete') {
+        reloadLedger();
+        if (frame.status === 'no-content') toast.warning('Nothing to build a ledger from — add canon or draft a manuscript first');
+        else toast.success(`Continuity bible ready — ${frame.factCount || 0} facts`);
+      } else if (frame.type === 'canceled') {
+        toast.success('Continuity bible canceled');
+      } else {
+        toast.error(frame.error || 'Continuity bible failed');
+      }
+    },
+    onReconciled: ({ canceled }) => {
+      reloadLedger();
+      toast.success(canceled ? 'Continuity bible canceled' : 'Continuity bible run finished — showing the saved ledger');
+    },
+  });
+  const { active, adopt: adoptRun } = run;
 
   // Load series + ledger, and re-attach to an in-flight run on (re)mount.
   useEffect(() => {
@@ -70,7 +102,7 @@ export default function PipelineContinuityBible() {
         if (canceled) return;
         setSeries(s);
         setLedger(l);
-        if (status?.active) setActive(true);
+        if (status?.active) adoptRun();
       })
       .catch((err) => {
         if (canceled) return;
@@ -79,38 +111,10 @@ export default function PipelineContinuityBible() {
       })
       .finally(() => { if (!canceled) setLoading(false); });
     return () => { canceled = true; };
-  }, [seriesId, navigate]);
-
-  const { latest } = usePipelineProgress(pipelineContinuityBibleSseUrl, [seriesId], { enabled: active });
-
-  // React to the terminal frame: refetch the ledger, drop the busy state.
-  useEffect(() => {
-    if (!active || !latest || !RUN_ENDED.has(latest.type)) return;
-    if (activeRunIdRef.current && latest.runId && latest.runId !== activeRunIdRef.current) return;
-    // A request-generation ref, not a `let active` flag: `active` is in this
-    // effect's own dependency array, so the write below re-runs the effect
-    // immediately and a lifetime-scoped flag would be flipped by its own
-    // cleanup before the response landed. The re-run early-returns without
-    // bumping, so the in-flight request stays current and only a genuinely
-    // newer one supersedes it.
-    setActive(false);
-    activeRunIdRef.current = null;
-    if (latest.type === 'complete') {
-      const req = ++ledgerRequestRef.current;
-      const forSeries = seriesId;
-      getContinuityBible(seriesId)
-        .then((l) => { if (req === ledgerRequestRef.current && seriesIdRef.current === forSeries) setLedger(l); })
-        .catch(() => {});
-      if (latest.status === 'no-content') toast.warning('Nothing to build a ledger from — add canon or draft a manuscript first');
-      else toast.success(`Continuity bible ready — ${latest.factCount || 0} facts`);
-    } else if (latest.type === 'canceled') {
-      toast.success('Continuity bible canceled');
-    } else {
-      toast.error(latest.error || 'Continuity bible failed');
-    }
-  }, [active, latest, seriesId]);
+  }, [seriesId, navigate, adoptRun]);
 
   const handleGenerate = async (force) => {
+    const forSeries = seriesId;
     setStarting(true);
     // Await the POST so the run is registered server-side BEFORE the SSE
     // subscription connects — otherwise the progress stream 404s on attach.
@@ -119,13 +123,9 @@ export default function PipelineContinuityBible() {
       return null;
     });
     setStarting(false);
-    if (!res?.runId) return;
-    activeRunIdRef.current = res.runId;
-    setActive(true);
-  };
-
-  const handleCancel = () => {
-    cancelContinuityBible(seriesId).catch(() => {});
+    // A kickoff acknowledged after the user switched series belongs to the old one.
+    if (!res?.runId || seriesIdRef.current !== forSeries) return;
+    adoptRun(res.runId);
   };
 
   if (loading) {
@@ -171,10 +171,11 @@ export default function PipelineContinuityBible() {
           {active ? (
             <button
               type="button"
-              onClick={handleCancel}
-              className="inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-port-border bg-port-card text-sm text-gray-300 hover:text-white"
+              onClick={run.cancel}
+              disabled={Boolean(run.cancelState)}
+              className="inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-port-border bg-port-card text-sm text-gray-300 hover:text-white disabled:opacity-50"
             >
-              <X size={14} /> Cancel
+              <X size={14} /> {run.cancelState ? 'Canceling…' : 'Cancel'}
             </button>
           ) : null}
           <button
@@ -192,6 +193,14 @@ export default function PipelineContinuityBible() {
           </button>
         </div>
       </header>
+
+      <RunRecoveryBanner
+        recovery={run.recovery}
+        cancelPending={run.cancelState === 'pending'}
+        noun="continuity bible"
+        onReattach={run.reattach}
+        onRetryStatus={run.retryStatus}
+      />
 
       {ledger?.stale && hasLedger ? (
         <div className="mb-4 flex items-center gap-2 px-3 py-2 rounded-lg border border-port-warning/40 bg-port-warning/10 text-port-warning text-sm">
