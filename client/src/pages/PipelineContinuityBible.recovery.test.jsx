@@ -28,6 +28,13 @@ const SAVED = {
   facts: [{ id: 'f-1', category: 'physical', source: 'prose', subject: 'Alice', statement: 'Alice has green eyes.', issueNumber: 1 }],
 };
 
+// The EventSource is opened by a passive effect after the busy state renders, so
+// wait for it rather than assuming it exists the instant the button appears.
+const failStream = async () => {
+  await waitFor(() => expect(lastEventSource()).toBeDefined());
+  await act(async () => { lastEventSource().fail(); });
+};
+
 const renderPage = () => render(
   <MemoryRouter initialEntries={['/pipeline/series/ser-1/continuity-bible']}>
     <Routes>
@@ -60,7 +67,7 @@ describe('PipelineContinuityBible stream recovery', () => {
     // The run finished and was pruned: the progress GET 404s, status says inactive.
     getContinuityBibleStatus.mockResolvedValue({ active: false });
     getContinuityBible.mockResolvedValue(SAVED);
-    act(() => lastEventSource().fail());
+    await failStream();
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Rebuild ledger' })).toBeEnabled());
     expect(await screen.findByText(/Alice has green eyes/)).toBeInTheDocument();
@@ -100,10 +107,10 @@ describe('PipelineContinuityBible stream recovery', () => {
     await screen.findByRole('button', { name: /Building/ });
 
     getContinuityBibleStatus.mockResolvedValue({ active: true });
-    act(() => lastEventSource().fail());
+    await failStream();
 
     await user.click(await screen.findByRole('button', { name: 'Reattach' }));
-    expect(MockEventSource.instances).toHaveLength(2);
+    await waitFor(() => expect(MockEventSource.instances).toHaveLength(2));
     expect(screen.getByRole('button', { name: /Cancel/ })).toBeEnabled();
     expect(generateContinuityBible).toHaveBeenCalledTimes(1);
   });
@@ -115,7 +122,7 @@ describe('PipelineContinuityBible stream recovery', () => {
     await screen.findByRole('button', { name: /Building/ });
 
     getContinuityBibleStatus.mockRejectedValueOnce(new Error('offline'));
-    act(() => lastEventSource().fail());
+    await failStream();
     const retry = await screen.findByRole('button', { name: 'Retry status' });
     expect(screen.getByRole('button', { name: /Building/ })).toBeDisabled();
 
