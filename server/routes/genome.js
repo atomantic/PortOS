@@ -6,6 +6,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import {
   genomeUploadSchema,
+  genomeClinvarSyncSchema,
   genomeSearchSchema,
   genomeSaveMarkerSchema,
   genomeUpdateNotesSchema,
@@ -100,9 +101,10 @@ router.get('/clinvar/status', asyncHandler(async (req, res) => {
 
 // POST /api/meatspace/genome/clinvar/sync — Download and index ClinVar database
 router.post('/clinvar/sync', asyncHandler(async (req, res) => {
+  const { requestId } = validateRequest(genomeClinvarSyncSchema, req.body ?? {});
   const io = req.app.get('io');
   const onProgress = (message) => {
-    if (io) io.emit('genome:clinvar-progress', { message });
+    if (io) io.emit('genome:clinvar-progress', { message, ...(requestId ? { requestId } : {}) });
   };
 
   const result = await clinvarService.syncClinvar(onProgress);

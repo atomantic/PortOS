@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import toast from '../../ui/Toast';
 import {Upload, Download, Trash2, Search, Dna, AlertTriangle, Save} from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
+import socket from '../../../services/socket';
+import { uuidv4 } from '../../../lib/uuid';
 // Native ZIP parser — replaces fflate's unzipSync/strFromU8
 async function parseZipText(arrayBuffer, ext = '.txt') {
   const data = new Uint8Array(arrayBuffer);
@@ -137,6 +139,12 @@ export default function GenomeTab() {
   const [clinvarExpanded, setClinvarExpanded] = useState({});
   const [clinvarFilter, setClinvarFilter] = useState('all');
   const [clinvarStarFilter, setClinvarStarFilter] = useState(0);
+  const activeClinvarSyncRef = useRef(null);
+  useEffect(() => () => {
+    const active = activeClinvarSyncRef.current;
+    if (active) socket.off('genome:clinvar-progress', active.onProgress);
+    activeClinvarSyncRef.current = null;
+  }, []);
   const dropRef = useRef(null);
   const notesTimerRef = useRef({});
   const jumpRef = useRef(null);
@@ -318,12 +326,22 @@ export default function GenomeTab() {
 
   // ClinVar handlers
   const handleClinvarSync = useCallback(async () => {
+    if (activeClinvarSyncRef.current) return;
+    const requestId = uuidv4();
+    const onProgress = (frame) => {
+      if (activeClinvarSyncRef.current?.requestId === requestId &&
+          frame?.requestId === requestId && typeof frame.message === 'string') {
+        setClinvarProgress(frame.message);
+      }
+    };
+    activeClinvarSyncRef.current = { requestId, onProgress };
+    socket.on('genome:clinvar-progress', onProgress);
     setClinvarSyncing(true);
     setClinvarProgress('Starting ClinVar sync...');
-    const result = await api.syncClinvar().catch(() => {
-      setClinvarProgress('');
-      return null;
-    });
+    const result = await api.syncClinvar(requestId).catch(() => null);
+    socket.off('genome:clinvar-progress', onProgress);
+    if (activeClinvarSyncRef.current?.requestId !== requestId) return;
+    activeClinvarSyncRef.current = null;
     if (result) {
       toast.success(`ClinVar synced: ${formatCount(result.variantCount)} variants indexed`);
       setClinvarStatus(result);
