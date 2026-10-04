@@ -131,3 +131,25 @@ describe('DraftsTab interrupted delivery', () => {
     expect(api.sendMessageDraft).not.toHaveBeenCalled();
   });
 });
+
+describe('DraftsTab send capabilities', () => {
+  it('offers copy instead of approval/send for Outlook and Teams while Gmail still sends', async () => {
+    api.getMessageDrafts.mockResolvedValue([
+      { id: 'outlook-draft', status: 'draft', accountId: 'outlook', sendVia: 'playwright', body: 'Outlook text' },
+      { id: 'teams-draft', status: 'approved', accountId: 'teams', sendVia: 'playwright', body: 'Teams text' },
+      { id: 'gmail-draft', status: 'approved', accountId: 'gmail', sendVia: 'api', body: 'Gmail text' }
+    ]);
+    render(<DraftsTab accounts={[
+      { id: 'outlook', name: 'Outlook', canSend: false },
+      { id: 'teams', name: 'Teams', canSend: false },
+      { id: 'gmail', name: 'Gmail', canSend: true }
+    ]} />);
+    expect(await screen.findAllByText(/Sending from this account isn't supported yet/)).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'Copy message' })).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Send' })).toHaveLength(1);
+    api.sendMessageDraft.mockResolvedValueOnce({ success: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(api.sendMessageDraft).toHaveBeenCalledWith('gmail-draft'));
+  });
+});

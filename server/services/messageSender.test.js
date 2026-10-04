@@ -43,6 +43,14 @@ beforeEach(() => {
 });
 
 describe('draft send workflow', () => {
+  it('refuses unsupported sends without consuming approval or dispatching', async () => {
+    seed({ id: 'outlook-draft', sendVia: 'playwright' });
+    doubles.getAccount.mockResolvedValueOnce({ id: 'account-1', type: 'outlook', canSend: false });
+    expect(await sendDraft('outlook-draft')).toMatchObject({ status: 501, code: 'SEND_NOT_SUPPORTED' });
+    expect(await getDraft('outlook-draft')).toMatchObject({ status: 'approved' });
+    expect(doubles.sendPlaywright).not.toHaveBeenCalled();
+  });
+
   it('claims once after overlapping reads and prevents edits from reopening the send', async () => {
     seed({ id: 'draft-1' });
     const bothRead = barrier();

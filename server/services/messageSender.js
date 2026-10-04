@@ -18,6 +18,10 @@ export async function sendDraft(draftId, io) {
   const account = await getAccount(draft.accountId);
   if (!account) return { success: false, status: 404, code: 'ACCOUNT_NOT_FOUND', error: 'Account not found' };
 
+  if (account.canSend === false) {
+    return { success: false, status: 501, code: 'SEND_NOT_SUPPORTED', error: "Sending from this account isn't supported yet — copy the draft" };
+  }
+
   const expectedSendVia = ACCOUNT_TYPE_TO_SEND_VIA[account.type];
   if (draft.sendVia !== expectedSendVia) {
     return { success: false, status: 400, code: 'SEND_VIA_MISMATCH', error: `sendVia "${draft.sendVia}" does not match account type "${account.type}" (expected "${expectedSendVia}")` };

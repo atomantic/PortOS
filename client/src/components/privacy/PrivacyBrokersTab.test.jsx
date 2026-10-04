@@ -58,6 +58,15 @@ import * as apiMod from '../../services/api';
 const renderTab = (props = {}) => render(<MemoryRouter initialEntries={['/privacy/brokers']}><PrivacyBrokersTab {...props} /></MemoryRouter>);
 
 describe('PrivacyBrokersTab', () => {
+  it('shows the missing send account next action after an opt-out pass', async () => {
+    const toast = (await import('../ui/Toast')).default;
+    apiMod.runPrivacyOptOut.mockResolvedValueOnce({ submitted: [], skipped: 1, nextActions: ['Connect a Gmail account to send opt-out emails'] });
+    renderTab();
+    await screen.findByText('Spokeo');
+    fireEvent.click(screen.getByRole('button', { name: /Run opt-out pass/i }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Connect a Gmail account to send opt-out emails'));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     api.runScanDeferred = null;

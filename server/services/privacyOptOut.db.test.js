@@ -43,7 +43,7 @@ describe.skipIf(!runDb)('privacy opt-out engine DB round-trip', () => {
   const createdVaultIds = [];
   let optOutGrantId = null;
 
-  const account = { id: 'acct-test', type: 'gmail' };
+  const account = { id: 'acct-test', type: 'gmail', canSend: true };
   const injectedAccounts = async () => [account];
   const drafts = [];
   const injectedDraftCreator = async (d) => { const draft = { id: `draft-${drafts.length + 1}`, status: 'draft', ...d }; drafts.push(draft); return draft; };
@@ -86,6 +86,23 @@ describe.skipIf(!runDb)('privacy opt-out engine DB round-trip', () => {
     await close();
     if (originalKey === undefined) delete process.env.PRIVACY_VAULT_KEY;
     else process.env.PRIVACY_VAULT_KEY = originalKey;
+  });
+
+  it('keeps a found case unchanged in the ledger when auto-approve has no send-capable account', async () => {
+    const kase = await brokers.recordScanVerdict(emailBrokerId, 'found', { evidence: {}, found: true });
+    const broker = await brokers.getBroker(emailBrokerId);
+    const draftCount = drafts.length;
+    const res = await svc.emailLane(broker, kase, {
+      disclosedFields: ['full_name', 'email'], payload: { full_name: 'Example Person', email: 'example@example.com' },
+      autoApprove: true,
+      accountsProvider: async () => [{ id: 'outlook-test', type: 'outlook', canSend: false }],
+      draftCreator: injectedDraftCreator,
+      draftApprover: async () => { throw new Error('Unsupported account must not approve'); },
+      sender: async () => { throw new Error('Unsupported account must not send'); },
+    });
+    expect(res).toMatchObject({ outcome: 'account_required', nextAction: 'Connect a Gmail account to send opt-out emails' });
+    expect(drafts).toHaveLength(draftCount);
+    expect((await brokers.getCaseForBroker(emailBrokerId)).state).toBe('found');
   });
 
   it('emailLane drives a found case found → submitted in the ledger', async () => {

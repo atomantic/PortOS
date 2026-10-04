@@ -29,7 +29,7 @@ vi.mock('./privacyOrgs.js', () => ({
   getOrg: vi.fn(async (id) => ({ id, name: 'Acme Bank', contact: { email: 'ops@acme.example' } })),
 }));
 vi.mock('./messageAccounts.js', () => ({
-  listAccounts: vi.fn(async () => [{ id: 'acct-1', type: 'gmail', name: 'Primary' }]),
+  listAccounts: vi.fn(async () => [{ id: 'acct-1', type: 'gmail', canSend: true, name: 'Primary' }]),
 }));
 vi.mock('./messageDrafts.js', () => ({
   createDraft: vi.fn(async (data) => ({ id: 'draft-1', status: 'draft', ...data })),
@@ -271,6 +271,13 @@ describe('listChangeEvents', () => {
 });
 
 describe('draftUpdateEmail', () => {
+  it('refuses an unsupported account before revealing the replacement or creating a draft', async () => {
+    queryMock.mockResolvedValue({ rows: [eventRow()] });
+    messageAccounts.listAccounts.mockResolvedValueOnce([{ id: 'outlook', type: 'outlook', canSend: false }]);
+    await expect(draftUpdateEmail('ev1', 'o1')).rejects.toMatchObject({ code: 'NO_MESSAGE_ACCOUNT' });
+    expect(privacyVault.revealValue).not.toHaveBeenCalled();
+  });
+
   it('creates an UNAPPROVED draft (status draft) to the org contact email', async () => {
     queryMock.mockImplementation(async (sql) => {
       if (/FROM privacy_change_events WHERE id/.test(sql)) return { rows: [eventRow()] };

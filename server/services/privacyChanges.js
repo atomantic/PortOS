@@ -342,8 +342,8 @@ export async function draftUpdateEmail(eventId, orgId) {
   if (!to) throw new ServerError('Organization has no contact email', { status: 400, code: 'ORG_EMAIL_MISSING' });
 
   const accounts = await listAccounts();
-  const account = accounts.find((a) => a.type === 'gmail') ?? accounts[0];
-  if (!account) throw new ServerError('No message account configured', { status: 400, code: 'NO_MESSAGE_ACCOUNT' });
+  const account = accounts.find((a) => a.canSend && a.enabled !== false);
+  if (!account) throw new ServerError('Connect a Gmail account to send update emails', { status: 400, code: 'NO_MESSAGE_ACCOUNT' });
 
   const oldRecord = await getVaultRecord(event.vaultRecordId);
   const newReveal = await revealValue(event.replacementRecordId);
@@ -362,7 +362,7 @@ export async function draftUpdateEmail(eventId, orgId) {
     subject,
     body,
     generatedBy: 'privacy-change',
-    sendVia: account.type === 'gmail' ? 'api' : 'playwright',
+    sendVia: 'api',
   });
   console.log(`📧 Drafted privacy update email for org ${orgId} (change ${eventId}, draft ${draft.id})`);
   return { draftId: draft.id, status: draft.status };

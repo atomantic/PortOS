@@ -24,12 +24,12 @@ async function saveAccounts(accounts) {
 
 export async function listAccounts() {
   const accounts = await loadAccounts();
-  return Object.values(accounts).sort((a, b) => a.name.localeCompare(b.name));
+  return Object.values(accounts).map(account => ({ ...account, canSend: account.type === 'gmail' })).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export async function getAccount(id) {
   const accounts = await loadAccounts();
-  return accounts[id] || null;
+  return accounts[id] ? { ...accounts[id], canSend: accounts[id].type === 'gmail' } : null;
 }
 
 export async function createAccount(data) {
