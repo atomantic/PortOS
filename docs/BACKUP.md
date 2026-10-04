@@ -17,9 +17,34 @@ If an admitted take does not drain within two minutes, or the cut cannot be
 released, the snapshot is marked failed (never published or used for retention
 pruning) and take publication reopens.
 
-This is the first slice of [the cross-store consistency work](https://github.com/atomantic/PortOS/issues/9923). Media-job completion, other durable asset
-replacement/deletion paths, and database maintenance are tracked as separate
-children. Until those owners are covered, `status: ok` reports that the file
+**Media-job completion (#9981).** A render's completion holds the same admission
+from staging its terminal queue row (`media-jobs.json`) through the `completed`
+event fan-out; it is never held while rendering, waiting in the queue, calling a
+provider, or for failure and cancellation outcomes. Each attach hook that names
+the render's file in a row takes its own admission synchronously inside that
+fan-out, so a cut already waiting to drain still waits for it. A completion that
+arrives during the cut leaves the job `running` in the queue snapshot (the
+finished file is an unreferenced extra, never a dangling reference) and
+publishes once the cut releases; the lane stays occupied meanwhile, but the
+renderer is not stopped and cancellation is unchanged. A terminal write that
+fails inside the admission is retried inside it and releases it when it gives
+up.
+
+Admission inventory (`withBackupAssetPublication`):
+
+| Owner | Status |
+| --- | --- |
+| Music Designer take publication (`musicTakePublication.js`) | Covered (#9980) |
+| Media-job completion: queue terminal row + `completed` fan-out (`mediaJobQueue/index.js`) | Covered |
+| Attach hooks on `completed` via `mediaJobImageHook.js` (writers-room, catalog, music-video scene image/video/cast-sets, CD scene image/music bed, FableLoom scene image/video, sprite references, deck cards, music studio) | Covered |
+| Pipeline filename hooks (`filenameHookFactory.js` comic pages and storyboards, `seasonCoverFilenameHook.js`) | Covered |
+| Recovery commit of a completion whose terminal write failed (the next queue write acknowledges it outside any admission) | Outstanding |
+| Other `mediaJobEvents` `completed` subscribers that write rows (universe-builder collection hook, LoRA dataset, character sheet, sprite animation, Creative Director scene runner/plan advance/seed settle, music-video production) | Outstanding |
+| Durable replacement/deletion owners | Outstanding (#9982) |
+| Database maintenance | Outstanding (#9983) |
+
+This is part of [the cross-store consistency work](https://github.com/atomantic/PortOS/issues/9923).
+Until every owner is covered, `status: ok` reports that the file
 copy, manifest, and database dump completed; it does not assert that every
 database asset reference resolves to the captured filesystem bytes. A restore
 operator should verify affected assets before treating a snapshot as a complete

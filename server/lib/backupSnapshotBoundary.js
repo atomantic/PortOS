@@ -22,8 +22,11 @@ function releasePublications() {
 
 /** Hold one admission across an entire file-plus-row workflow. Nested calls reuse it. */
 export async function withBackupAssetPublication(work) {
-  if (publicationScope.getStore()?.active) return work();
-  while (cutRequested || cutActive) {
+  const scope = publicationScope.getStore();
+  if (scope?.active) return work();
+  // Work spawned by a still-admitted lease joins it: the cut already waits for that lease.
+  const joinsAdmitted = scope?.spawnedBy?.active === true;
+  while (!joinsAdmitted && (cutRequested || cutActive)) {
     await new Promise(resolve => publicationWaiters.push(resolve));
   }
   admitted += 1;
@@ -39,6 +42,19 @@ export async function withBackupAssetPublication(work) {
       for (const resolve of waiters) resolve();
     }
   }
+}
+
+/**
+ * Run a synchronous fan-out (an event emit) so each listener acquires its OWN
+ * lease while the caller's lease is still held, even if a cut is already
+ * waiting to drain. A listener reusing the caller's lease would continue
+ * unadmitted once the caller finished and could land mid-cut; one queued behind
+ * the cut would leave the caller's publication half drained. Listeners must
+ * call withBackupAssetPublication before their first await, and the caller must
+ * not await them.
+ */
+export function runOutsideBackupAssetPublication(work) {
+  return publicationScope.run({ active: false, spawnedBy: publicationScope.getStore() }, work);
 }
 
 /**

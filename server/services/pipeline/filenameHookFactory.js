@@ -31,6 +31,7 @@
  * test's still-running write (#9634).
  */
 
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { mediaJobEvents } from '../mediaJobQueue/index.js';
 import { updateStageWithLatest } from './issues.js';
 
@@ -60,7 +61,8 @@ export function createFilenameHook({ name, stageId, kind = 'image', parseOwner, 
   const runs = createHookRunTracker();
 
   const handler = (job) => {
-    void runs.track((async () => {
+    // Admitted synchronously so the stage-row stamp is never split by a backup cut.
+    void runs.track(withBackupAssetPublication(async () => {
       if (!job || job.kind !== kind) return;
       const filename = job.result?.filename;
       if (typeof filename !== 'string' || !filename) return;
@@ -96,7 +98,7 @@ export function createFilenameHook({ name, stageId, kind = 'image', parseOwner, 
           });
         }
       }
-    })().catch((err) => {
+    }).catch((err) => {
       console.error(`❌ ${name} filename hook crashed: ${err?.message || err}`);
     }));
   };

@@ -33,6 +33,7 @@ import { unlink } from 'fs/promises';
 import { join, resolve as pathResolve, sep as PATH_SEP } from 'path';
 import { PATHS, readJSONFileStrict, atomicWrite, ensureDir, sleep } from '../../lib/fileUtils.js';
 import { SSE_HEADERS } from '../../lib/sseHeaders.js';
+import { runOutsideBackupAssetPublication, withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { reapAndCleanDetachedDirs } from '../../lib/detachedSpawn.js';
 import {
@@ -1149,6 +1150,15 @@ async function runJobLifecycle(job, markDispatched) {
     emitter.off?.('activity', onActivity);
     emitter.off?.('progress', onActivity);
     await drainProgressPersist();
+    // Only a completion publishes durable output. It holds backup admission from
+    // staging the terminal row through the hook fan-out, never while rendering
+    // or waiting in the queue; failures and cancellations stay unadmitted so a
+    // backup never delays them.
+    const publish = () => publishTerminalTransition(state, apply);
+    await (state === 'completed' ? withBackupAssetPublication(publish) : publish());
+  }
+
+  async function publishTerminalTransition(state, apply) {
     stageTerminalTransition(job, (job) => {
       apply(job);
       job.status = state;
@@ -1180,7 +1190,9 @@ async function runJobLifecycle(job, markDispatched) {
         : { type: 'error', error: job.error };
       broadcastSse(sseEntry, ssePayload);
       closeJobAfterDelay(sseJobs, job.id);
-      mediaJobEvents.emit(state, job);
+      // Hooks that publish files or rows acquire their own admission; see
+      // runOutsideBackupAssetPublication.
+      runOutsideBackupAssetPublication(() => mediaJobEvents.emit(state, job));
     });
     await persistTerminalTransition(job);
   }
