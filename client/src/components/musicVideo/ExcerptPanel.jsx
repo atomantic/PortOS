@@ -232,7 +232,7 @@ export default function ExcerptPanel({ project, rendering, occupied = rendering,
           </div>
           {suggestionError && (
             <div className="flex items-center justify-between gap-2 text-xs">
-              <p className="text-port-error">{suggestionError}</p>
+              <p role="alert" className="text-port-error">{suggestionError}</p>
               <button type="button" onClick={suggestHooks} disabled={suggesting} className="text-port-accent disabled:opacity-50">Retry</button>
             </div>
           )}
