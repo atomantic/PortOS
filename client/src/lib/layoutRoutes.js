@@ -3,6 +3,11 @@
 // padded+scrolling one. Checked in order: exact path, then prefix, then
 // regex — see `isFullWidthRoute` below.
 const EXACT_FULL_WIDTH_PATHS = [
+  '/apps',
+  '/stacker-news',
+  '/x',
+  '/privacy',
+  '/code-animation',
   '/character',
   '/eidoverse',
   '/ai',
@@ -36,6 +41,12 @@ const EXACT_FULL_WIDTH_PATHS = [
 ];
 
 const FULL_WIDTH_PATH_PREFIXES = [
+  '/review/',
+  '/rapid-reader/',
+  '/stacker-news/',
+  '/x/',
+  '/privacy/',
+  '/code-animation/',
   '/ask/',
   '/calendar',
   // Only the Catalog DETAIL editor (/catalog/{type}/{id}) and the

@@ -608,7 +608,12 @@ describe('Layout — isFullWidthRoute classification', () => {
     ['/shell', true], ['/shell/abc', true], ['/shellx', false],
     ['/ask', true], ['/ask/1', true], ['/asking', false],
     ['/timeline', true], ['/timeline/2026-08-12', true],
-    ['/tribe', true], ['/rapid-reader', true], ['/openclaw', true],
+    ['/tribe', true], ['/rapid-reader', true], ['/rapid-reader/r1', true], ['/openclaw', true],
+    ['/review', true], ['/review/a1', true], ['/reviewing', false],
+    ['/stacker-news', true], ['/stacker-news/a1/review', true], ['/x', true], ['/x/a1/posts', true], ['/xyz', false],
+    ['/privacy', true], ['/privacy/vault', true], ['/privacy-policy', false],
+    ['/code-animation', true], ['/code-animation/j1', true], ['/code-animation/production/p1', true],
+    ['/code-animations', false], ['/apps', true],
     ['/eidoverse', true], ['/eidoverse/world', false],
     // Index page stays padded+scrolling; only the DETAIL route is full-width.
     ['/catalog', false], ['/catalog/book/1', true],

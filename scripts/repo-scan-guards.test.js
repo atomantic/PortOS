@@ -61,6 +61,7 @@ const STRUCTURALLY_SELECTED = new Map([
   ['client/src/hooks/mountedRefConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/moduleContractConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/numberFormattingConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
+  ['client/src/pageShellConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/pollingConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/popoverClampConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/providerSelectConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
