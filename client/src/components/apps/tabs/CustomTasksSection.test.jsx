@@ -269,6 +269,7 @@ describe('CustomTasksSection trigger outcomes', () => {
   });
 
   it('runs a task with values typed into the card, without saving them to the task', async () => {
+    const user = userEvent.setup();
     api.getCosJobs.mockResolvedValue({
       jobs: [{
         ...task,
@@ -284,9 +285,11 @@ describe('CustomTasksSection trigger outcomes', () => {
 
     // The card exposes the field itself — no Edit round-trip to re-aim a run.
     const subject = screen.getByLabelText('Subject');
-    expect(subject).toHaveValue('Saved subject');
-    fireEvent.change(subject, { target: { value: 'One-off subject' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
+    await waitFor(() => expect(subject).toHaveValue('Saved subject'));
+    await user.clear(subject);
+    await user.type(subject, 'One-off subject');
+    await waitFor(() => expect(subject).toHaveValue('One-off subject'));
+    await user.click(screen.getByRole('button', { name: 'Run now' }));
 
     await waitFor(() => expect(api.triggerCosJob).toHaveBeenCalledWith('job-1', {
       formValues: { subject: 'One-off subject' }
