@@ -510,7 +510,7 @@ export default function MusicVideo() {
   // Saving a brief hands the project to autopilot, so mode follows it.
   const saveAutomation = (automation) => updateMusicVideoProject(selected.id, { automation, mode: 'autonomous' }, { silent: true })
     .then((proj) => patchProject(proj.id, { automation: proj.automation, mode: proj.mode, updatedAt: proj.updatedAt }))
-    .catch((err) => { toast.error(err?.message || 'Failed to save autopilot brief'); throw err; });
+    .catch((err) => { toast.error(err?.message || 'Failed to save automation brief'); throw err; });
 
   // Auto-arrange (#1915): distribute every scene across the analyzed song
   // sections weighted by each section's energy, writing the same persisted
@@ -1281,8 +1281,9 @@ export default function MusicVideo() {
             projectPanels={<div className="space-y-3 min-w-0">
               {autopilotRun && activeStage !== 'setup' && (
                 <StageSection
+                  id="mv-autonomous-run"
                   key={`autonomous-${selected.id}`}
-                  title="Autopilot run"
+                  title="Autonomous run"
                   summary={autopilotSummary(autopilotRun, productionReview.readiness)}
                   defaultOpen={!!runStage || autopilotRun.interrupted || ['running', 'awaiting-approval', 'needs-human', 'failed'].includes(autopilotRun.status)}
                 >
