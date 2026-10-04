@@ -17,6 +17,7 @@ import { basename, join, resolve, relative, isAbsolute } from 'path';
 import { PATHS, ensureDir, readJSONFile, readJSONFileStrict, atomicWrite, sha256File } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { acquireBackupSnapshotCut } from '../lib/backupSnapshotBoundary.js';
+import { assertDatabaseAdmission } from '../lib/databaseMaintenanceJournal.js';
 import { createLineReader } from '../lib/streamLines.js';
 import { getEvent } from './eventScheduler.js';
 import { POOL_CONFIG, checkHealth, databaseRestoreRecovery, getServerMajorVersion, query, withDatabaseMaintenance } from '../lib/db.js';
@@ -577,6 +578,9 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
   };
 
   try {
+    // Refuse before reserving a snapshot while database maintenance is fenced;
+    // the cut below repeats this check after it drains.
+    assertDatabaseAdmission();
     await access(destPath).catch((cause) => {
       // Never expose the filesystem message: it can include private paths.
       const code = ['ENOENT', 'EACCES', 'EPERM', 'EIO'].includes(cause.code) ? cause.code : 'UNKNOWN';
@@ -1566,7 +1570,7 @@ const DUMP_UNREADABLE = Object.freeze({ status: 'failed', reason: 'dump_unreadab
  *   { status: 'ok', dryRun, sizeBytes, tableCount }   (dry-run or applied)
  *   { status: 'skipped', reason: 'no_dump' }           (no sql file in snapshot)
  *   { status: 'skipped', reason: 'not_configured' }    (real restore, PG unreachable)
- *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'dump_unreadable'|'dump_incomplete'|'restore_compatibility'|'restore_preflight'|'restore_journal'|'restore_error'|'timeout', error? }
+ *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'dump_unreadable'|'dump_incomplete'|'restore_compatibility'|'restore_preflight'|'restore_journal'|'backup_snapshot_busy'|'restore_error'|'timeout', error? }
  *     (nothing changed; a failed replay is reported only once proven rolled back)
  *   { status: 'failed', reason: 'restore_recovery_pending'|'restore_commit_unknown'|'restore_schema_reconciliation'|'restore_sync_resync'|'restore_recovery_release', error, recovery }
  *     (a restore awaits recovery: ordinary database work stays fenced until
@@ -1685,6 +1689,29 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
   }
   if (dryRun) return { status: 'ok', dryRun: true, sizeBytes, tableCount };
 
+  // The replay replaces every row. Take the backup boundary first so no admitted
+  // file-plus-row publication is half done underneath it and no backup cut is
+  // capturing the database mid-replay. Only this restore's own cut is released.
+  let releaseSnapshotCut;
+  try {
+    releaseSnapshotCut = await acquireBackupSnapshotCut();
+  } catch (err) {
+    if (err.code !== 'BACKUP_SNAPSHOT_BUSY') throw err;
+    console.warn(`⚠️ restore: refused for snapshot ${snapshotId}: ${err.message}`);
+    return {
+      status: 'failed',
+      reason: 'backup_snapshot_busy',
+      error: 'A backup is capturing the database or an asset publication did not finish draining. Restore was refused without changing data; retry when it finishes.',
+    };
+  }
+  try {
+    return await replayAdmittedDump({ tableCount, sizeBytes, snapshotId, dump, reset, replayPath });
+  } finally {
+    releaseSnapshotCut();
+  }
+}
+
+async function replayAdmittedDump({ tableCount, sizeBytes, snapshotId, dump, reset, replayPath }) {
   return withDatabaseMaintenance(async ({ adoptRestoreRecovery }) => {
     // Read before the replay rewinds them, then make them durable together
     // with this operation's identity BEFORE anything destructive runs: a

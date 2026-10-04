@@ -40,6 +40,7 @@ const DB_RESTORE_FAILURE_MESSAGES = {
   dump_incomplete: 'The snapshot database dump is incomplete (truncated or damaged). Nothing was changed; choose another snapshot.',
   restore_preflight: 'Database restore was refused because the database contains unexpected objects, ownership, or dependencies. Nothing was changed. Check the server logs and resolve the reported database conflict before trying again.',
   restore_journal: 'The restore recovery journal could not be written. Nothing was changed. Check the server logs and available disk space before trying again.',
+  backup_snapshot_busy: 'A backup is capturing the database, or an asset publication did not finish in time. Nothing was changed. Retry once the backup completes.',
   no_dump: 'No DB dump in this snapshot',
   not_configured: 'The database is unavailable for restore. Check Database status and the server logs for connection details.',
   restore_error: 'Database restore failed. Check Backup status, any recovery warning, and the server logs for details.',

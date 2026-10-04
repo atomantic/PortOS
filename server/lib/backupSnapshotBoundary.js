@@ -3,8 +3,15 @@
  * Callers hold one mutation lease across BOTH stores, not around individual
  * filesystem or SQL operations. The backup closes admission before rsync and
  * keeps it closed through the database dump and manifest write.
+ *
+ * Database maintenance shares the boundary. A cut is refused while a maintenance
+ * fence is up, and maintenance that must not observe or replace a half-published
+ * pair takes the same cut around its own destructive step. Publication itself is
+ * never refused here: under a fence the database already rejects the row write.
+ * Every retryable refusal carries BACKUP_SNAPSHOT_BUSY.
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { assertDatabaseAdmission } from './databaseMaintenanceJournal.js';
 
 const publicationScope = new AsyncLocalStorage();
 const DEFAULT_DRAIN_TIMEOUT_MS = 120_000;
@@ -13,6 +20,8 @@ let cutRequested = false;
 let cutActive = false;
 let drainWaiters = [];
 let publicationWaiters = [];
+
+const busyError = message => Object.assign(new Error(message), { status: 503, code: 'BACKUP_SNAPSHOT_BUSY' });
 
 function releasePublications() {
   const waiters = publicationWaiters;
@@ -44,6 +53,27 @@ export async function withBackupAssetPublication(work) {
   }
 }
 
+/** Wait for already admitted workflows to settle, or reject when they do not. */
+async function awaitDrain(timeoutMs) {
+  let timer;
+  let onDrained;
+  try {
+    await Promise.race([
+      new Promise(resolve => {
+        onDrained = resolve;
+        drainWaiters.push(resolve);
+      }),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(busyError('Timed out draining asset publications for backup')), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    drainWaiters = drainWaiters.filter(resolve => resolve !== onDrained);
+  }
+}
+
 /**
  * Run a synchronous fan-out (an event emit) so each listener acquires its OWN
  * lease while the caller's lease is still held, even if a cut is already
@@ -58,37 +88,25 @@ export function runOutsideBackupAssetPublication(work) {
 }
 
 /**
- * Close admission and drain already admitted workflows before copying files.
- * The returned release function owns only this cut. A timed-out drain reopens
- * admission and rejects, so runBackup marks its incomplete snapshot failed.
+ * Close admission and drain already admitted workflows before the caller reads
+ * or replaces both stores. The returned release function owns only this cut. A
+ * failed drain (timeout, or a maintenance fence that closed meanwhile) reopens
+ * admission and rejects: runBackup then marks its incomplete snapshot failed,
+ * and maintenance acceptance refuses before publishing its fence.
  */
 export async function acquireBackupSnapshotCut({ timeoutMs = DEFAULT_DRAIN_TIMEOUT_MS } = {}) {
   // A cut requested from inside an admitted workflow would wait on itself for the whole timeout.
   if (publicationScope.getStore()?.active) throw new Error('Backup snapshot cut cannot be acquired inside an asset publication');
-  if (cutRequested || cutActive) throw new Error('Backup snapshot cut already owned');
+  if (cutRequested || cutActive) throw busyError('Backup snapshot cut already owned');
+  assertDatabaseAdmission();
   cutRequested = true;
-  if (admitted > 0) {
-    let timer;
-    let onDrained;
-    try {
-      await Promise.race([
-        new Promise(resolve => {
-          onDrained = resolve;
-          drainWaiters.push(resolve);
-        }),
-        new Promise((_, reject) => {
-          timer = setTimeout(() => reject(new Error('Timed out draining asset publications for backup')), timeoutMs);
-          timer.unref?.();
-        }),
-      ]);
-    } catch (error) {
-      cutRequested = false;
-      releasePublications();
-      throw error;
-    } finally {
-      clearTimeout(timer);
-      drainWaiters = drainWaiters.filter(resolve => resolve !== onDrained);
-    }
+  try {
+    if (admitted > 0) await awaitDrain(timeoutMs);
+    assertDatabaseAdmission();
+  } catch (error) {
+    cutRequested = false;
+    releasePublications();
+    throw error;
   }
   cutActive = true;
   cutRequested = false;
