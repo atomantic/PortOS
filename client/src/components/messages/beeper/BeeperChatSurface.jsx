@@ -350,7 +350,8 @@ export default function BeeperChatSurface({
 
   const scopeParam = searchParams.get('scope') || 'inbox';
   const unreadOnly = searchParams.get('unread') === '1';
-  const search = (searchParams.get('q') || '').trim();
+  const searchRaw = searchParams.get('q') || '';
+  const search = searchRaw.trim();
   const [searchOpen, setSearchOpen] = useState(Boolean(search));
 
   const [networks, setNetworks] = useState([]);
@@ -930,14 +931,14 @@ export default function BeeperChatSurface({
           <div className="relative shrink-0 px-3 pb-2">
             <input
               type="search"
-              value={search}
+              value={searchRaw}
               onChange={(event) => setParam('q', event.target.value || null)}
               placeholder="Search conversations"
               aria-label="Search conversations by name"
               autoFocus
               className="w-full rounded border border-port-border bg-port-bg px-2 py-1.5 pr-8 text-xs text-white placeholder:text-gray-500 focus:border-port-accent focus:outline-none"
             />
-            {search && (
+            {searchRaw && (
               <button
                 type="button"
                 onClick={() => setParam('q', null)}

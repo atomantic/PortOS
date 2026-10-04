@@ -244,6 +244,14 @@ describe('conversation search', () => {
       { search: 'bob', archived: false, lowPriority: false },
       { silent: true },
     ));
+    const box = screen.getByLabelText('Search conversations by name');
+    fireEvent.change(box, { target: { value: 'bob ' } });
+    expect(box).toHaveValue('bob ');
+    fireEvent.change(box, { target: { value: 'bob smith' } });
+    await waitFor(() => expect(api.getBeeperConversations).toHaveBeenLastCalledWith(
+      { search: 'bob smith', archived: false, lowPriority: false },
+      { silent: true },
+    ));
     fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
     await waitFor(() => expect(api.getBeeperConversations).toHaveBeenLastCalledWith(
       { archived: false, lowPriority: false },
