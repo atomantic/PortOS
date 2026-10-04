@@ -1302,6 +1302,9 @@ export const musicVideoProductionFeedbackSchema = z.object({
   target: z.string().trim().min(1).max(300), text: z.string().trim().min(1).max(8000),
   decision: z.enum(['comment', 'structure-accepted', 'request-changes']),
 }).strict();
+export const musicVideoProductionReviseSchema = musicVideoCastAndSetsStartSchema.extend({
+  stage: z.enum(['art', 'storyboard', 'proof']),
+}).strict();
 export const musicVideoProductionFeedbackResolutionSchema = z.object({
   feedbackId: z.string().min(1).max(128), resolution: z.string().trim().min(1).max(8000), password: z.string().max(1024).optional(),
 }).strict();

@@ -191,6 +191,28 @@ describe('Production proof playback evidence', () => {
     expect(screen.getByLabelText('Requested change').closest('details').open).toBe(true);
   });
 
+  it('offers a stage revision for open change requests and explains the blocked approval', async () => {
+    const review = { ...reviewFixture(), revise: vi.fn(async () => ({ revision: { stage: 'storyboard', sceneIds: ['scene-a', 'scene-b'] } })) };
+    review.readiness.storyboard = { approved: false, problems: ['Resolve storyboard feedback for shot: Chorus: Land the leap on the downbeat'] };
+    const withRequests = { ...project, scenes: [{ sceneId: 'scene-a', label: 'Chorus', startSec: 0, endSec: 10 }],
+      productionReview: { ...project.productionReview, feedback: [
+        { id: 'fb-open', stage: 'storyboard', target: 'shot: Chorus', text: 'Land the leap on the downbeat', decision: 'request-changes', basis: 'board' },
+        { id: 'fb-done', stage: 'storyboard', target: 'shot: Intro', text: 'Already handled', decision: 'request-changes', basis: 'board', resolvedAt: '2026-01-01T00:00:00.000Z' },
+        { id: 'fb-proof', stage: 'proof', target: 'frame: 0:04', text: 'Prop lands late', decision: 'request-changes', basis: 'same-creative-basis' },
+      ] } };
+    render(<ProductionReviewPanel project={withRequests} review={review} onOpenArtifact={vi.fn()} />);
+    const requests = screen.getByRole('group', { name: 'Lyric-timed storyboard change requests' });
+    expect(requests.textContent).toContain('Approval stays blocked until these are resolved. Revise from feedback, or edit and resolve manually.');
+    expect(requests.textContent).toContain('Land the leap on the downbeat');
+    expect(requests.textContent).not.toContain('Already handled');
+    fireEvent.click(within(requests).getByRole('button', { name: 'Revise from feedback' }));
+    expect(review.revise).toHaveBeenCalledWith('storyboard');
+    await waitFor(() => expect(requests.textContent).toContain('Revised 2 shots. Review them, then resolve each request.'));
+    // A document-mode proof with no imported source can be re-authored as a generated candidate.
+    const proofRequests = screen.getByRole('group', { name: 'Animated proof change requests' });
+    expect(within(proofRequests).getByRole('button', { name: 'Revise from feedback' })).toBeTruthy();
+  });
+
   it('keeps the hash-selected art context open when readiness arrives', () => {
     window.location.hash = '#mv-review-art';
     const review = reviewFixture();

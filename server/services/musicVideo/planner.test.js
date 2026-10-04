@@ -17,6 +17,7 @@ import {
   validSections,
   buildScenePlanPrompt,
   planProject,
+  proposeShotRevisions,
 } from './planner.js';
 import { planShots } from './shotPlan.js';
 
@@ -696,5 +697,55 @@ describe('directed planner', () => {
     expect(mutateProjectRecord).not.toHaveBeenCalled();
     const inputs = addProjectScenes.mock.calls[0][1];
     expect(inputs.every((s) => s.shotMode === undefined && s.visualLayer === undefined && s.framePrompt === undefined)).toBe(true);
+  });
+});
+
+describe('review feedback in shot planning', () => {
+  const feedback = (target, text, extra = {}) => ({ id: `fb-${target}`, stage: 'storyboard', target, text, decision: 'request-changes', basis: 'b', ...extra });
+
+  it('carries unresolved review feedback into the plan prompt and drops resolved feedback', () => {
+    const project = makeProject({ productionReview: { feedback: [
+      feedback('shot: Drop', 'Let the figure leap on the drop instead of walking'),
+      feedback('shot: Intro', 'Already handled', { resolvedAt: '2026-01-01T00:00:00.000Z' }),
+    ] } });
+    const { shots } = planShots(SECTIONS, { beats: BEATS, downbeats: DOWNBEATS });
+    const prompt = buildScenePlanPrompt(project, shots);
+    expect(prompt).toContain('UNRESOLVED REVIEW FEEDBACK');
+    expect(prompt).toContain('storyboard / shot: Drop / request-changes: Let the figure leap on the drop instead of walking');
+    expect(prompt).not.toContain('Already handled');
+  });
+
+  it('revises only the named shots in place, showing the model their current prompts', async () => {
+    const scenes = [
+      { sceneId: 'scene-intro', label: 'Intro', startSec: 0, endSec: 10, framePrompt: 'quiet alley', prompt: 'slow push' },
+      { sceneId: 'scene-drop', label: 'Drop', startSec: 10, endSec: 18, framePrompt: 'crowded rooftop', prompt: 'figure walks' },
+      { sceneId: 'scene-outro', label: 'Outro', startSec: 18, endSec: 30, framePrompt: 'dawn street', prompt: 'static' },
+    ];
+    const requests = [feedback('frame: 12.5s', 'Let the figure leap on the drop')];
+    const project = makeProject({ scenes, productionReview: { feedback: requests } });
+    resolveProviderAndModel.mockResolvedValue({ provider: { id: 'p1', type: 'api' }, selectedModel: 'gpt' });
+    runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify([{ index: 0, framePrompt: 'rooftop at the peak', prompt: 'figure leaps on the downbeat' }]) });
+
+    const updates = await proposeShotRevisions(project, requests);
+
+    const prompt = runPromptThroughProvider.mock.calls[0][0].prompt;
+    expect(prompt).toContain('current frame: crowded rooftop; current motion: figure walks');
+    expect(prompt).not.toContain('quiet alley');
+    expect(prompt).toContain('Let the figure leap on the drop');
+    expect([...updates]).toEqual([['scene-drop', { framePrompt: 'rooftop at the peak', prompt: 'figure leaps on the downbeat' }]]);
+  });
+
+  it('treats a request that names no shot as addressing every shot, and fails loudly when nothing usable returns', async () => {
+    const scenes = [
+      { sceneId: 'scene-a', label: 'Intro', startSec: 0, endSec: 10 },
+      { sceneId: 'scene-b', label: 'Drop', startSec: 10, endSec: 18 },
+    ];
+    const requests = [feedback('overall pacing', 'Everything feels too slow')];
+    resolveProviderAndModel.mockResolvedValue({ provider: { id: 'p1', type: 'api' }, selectedModel: 'gpt' });
+    runPromptThroughProvider.mockResolvedValue({ text: 'no json here' });
+    await expect(proposeShotRevisions(makeProject({ scenes }), requests)).rejects.toMatchObject({ status: 422, code: 'SHOT_REVISION_FAILED' });
+    const prompt = runPromptThroughProvider.mock.calls[0][0].prompt;
+    expect(prompt).toContain('"Intro"');
+    expect(prompt).toContain('"Drop"');
   });
 });

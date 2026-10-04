@@ -44,6 +44,7 @@ import { runPromptThroughProvider } from '../promptRunner.js';
 import { effortArg, recordLlmRoute, resolveMusicVideoLlm } from './llmRoute.js';
 import { directShots, planShots, resolveClipCapacitySec, validSections } from './shotPlan.js';
 import { getProject, addProjectScenes, mutateProjectRecord } from './projects.js';
+import { productionFeedbackContext } from './productionReview.js';
 
 const SCENE_LABEL_MAX = 120;
 const SCENE_TEXT_MAX = 2000;
@@ -163,8 +164,11 @@ export function buildScenePlanPrompt(project, shots) {
       if (times) parts.push(`${kind} (seconds): ${times}`);
     }
     if (s.shotMode === 'performance') parts.push(PERFORMANCE_FRAME);
+    if (s.current?.framePrompt) parts.push(`current frame: ${quote(s.current.framePrompt, PROMPT_GUIDANCE_MAX)}`);
+    if (s.current?.prompt) parts.push(`current motion: ${quote(s.current.prompt, PROMPT_GUIDANCE_MAX)}`);
     return parts.join('; ');
   }).join('\n');
+  const revising = shots.some((s) => s.current);
 
   return `You are directing a music video for "${project.name}".
 ${conceptLine}
@@ -174,6 +178,7 @@ ${musicVideoDirectionContext(direction)}
 ${briefLines}
 ${guidanceLine}
 ${motionPlan}
+${productionFeedbackContext(project)}
 
 The song has been cut into these shots (index; musical section and the shot's position inside it; duration; normalized 0..1 section energy — higher is louder/more intense; the lyric lines sung during the shot, or "instrumental"; optional director intent${hasDelivery ? '; optional delivery directions from the lyric sheet' : ''}):
 ${shotLines}
@@ -184,7 +189,7 @@ For EACH shot above, propose a timed composition for its assigned medium (code-a
 - Shots in the same section are one edited sequence: keep subject and setting continuous, but vary framing (wide / medium / close), angle, or action from shot to shot so consecutive shots cut rather than repeat.
 - The OPENING HOOK shot must grab attention immediately.
 - In each motion prompt, name absolute start/end times and the supplied musical anchors for subject action, prop transformation, camera framing/movement and any permitted graphic typography. Follow the saved energy target; this proposal still needs human review. Repeated choruses must develop the action, scale or staging instead of replaying the same pose. Include anticipation, payoff and recovery; motivated holds and long takes are valid. Do not replace choreography with continuous camera drift, geometry presence, subtitles alone or an arbitrary fast-cut quota.
-- If an energy target or required audio timing is absent, identify it as a director decision to review rather than inventing analysis or claiming the plan is approved.
+${revising ? '- These shots already exist. Revise each one\'s current frame and motion to address the unresolved review feedback, keeping what the feedback does not ask to change.\n' : ''}- If an energy target or required audio timing is absent, identify it as a director decision to review rather than inventing analysis or claiming the plan is approved.
 ${hasLyrics ? '- Let the lyric lines inform the imagery and emotion of their shot (interpret, do not illustrate word-for-word). Never render the lyrics as on-screen text in footage; assigned card layers use their explicit card text.\n' : ''}${hasDelivery ? '- Follow the delivery directions: spoken or whispered lines play as intimate close-ups; shouts land as hard-hitting cuts or impacts; a silence or stop is a held, frozen or cut-to-black beat.\n' : ''}- Keep the assigned layer and shot mode: performance uses source-audio lip-sync and a frontal medium close-up with the mouth visible; cutaways show narrative action without lip-sync; cards are graphic beats.\n- Honor any director intent given for a shot. Instrumental shots carry no singing or lip-sync.
 
 Respond with ONLY a JSON array, one object per shot, in shot-index order (replace every <…> with real content; do NOT output the literal angle-bracket text), no other text:
@@ -315,15 +320,7 @@ export async function planProject(id, { seedPrompts = true, providerId, model, e
 
   // One shot list drives both the seeded scenes and the prompt, so prompt
   // indices agree 1:1 with `sceneInputs`.
-  const { shots: tiledShots, pacing } = planShots(sections, {
-    downbeats: project.audioAnalysis?.downbeats,
-    beats: project.audioAnalysis?.beats,
-    lyricCues: project.lyricCues,
-    phrases: project.phrases,
-    pacing: project.pacing,
-    clipCapacitySec: resolveClipCapacitySec(project.videoSettings),
-  });
-  const shots = directShots(tiledShots, project);
+  const { shots, pacing } = directedShotPlan(project, sections);
   const sceneInputs = sceneInputsFromShots(shots);
 
   let promptsSeeded = false;
@@ -364,6 +361,75 @@ export async function planProject(id, { seedPrompts = true, providerId, model, e
   const updated = (persisted.automation && await recordLlmRoute(id, 'plan', llmRoute)) || persisted;
   console.log(`🪄 Music Video plan: seeded ${scenes.length} scene${scenes.length === 1 ? '' : 's'} for ${id} (prompts ${promptsSeeded ? 'seeded' : `skipped: ${promptsSkippedReason || 'n/a'}`})`);
   return { project: updated, scenesAdded: scenes.length, promptsSeeded, promptsSkippedReason, pacing, llmRoute };
+}
+
+/** The directed shot list for a project's analyzed sections. Deterministic for a given analysis. */
+function directedShotPlan(project, sections) {
+  const { shots, pacing } = planShots(sections, {
+    downbeats: project.audioAnalysis?.downbeats,
+    beats: project.audioAnalysis?.beats,
+    lyricCues: project.lyricCues,
+    phrases: project.phrases,
+    pacing: project.pacing,
+    clipCapacitySec: resolveClipCapacitySec(project.videoSettings),
+  });
+  return { shots: directShots(shots, project), pacing };
+}
+
+const sameSpan = (a, b) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) < 0.01;
+const TIMECODE = /(\d{1,2}):(\d{2}(?:\.\d+)?)|(\d+(?:\.\d+)?)s\b/g;
+
+/**
+ * Board scenes a review note addresses: its target names the shot label,
+ * section or scene id, or a time inside the shot. A note that names no shot
+ * addresses every shot, so general feedback is never dropped.
+ */
+function feedbackSceneIds(scenes, feedback) {
+  const ids = new Set();
+  for (const item of feedback) {
+    const target = String(item.target || '').toLowerCase();
+    const times = [...target.matchAll(TIMECODE)].map((m) => (m[3] != null ? Number(m[3]) : Number(m[1]) * 60 + Number(m[2])));
+    const named = scenes.filter((scene) => [scene.sceneId, scene.label, scene.sectionLabel]
+      .some((name) => typeof name === 'string' && name.trim().length >= 3 && target.includes(name.trim().toLowerCase()))
+      || times.some((t) => t >= scene.startSec && t < scene.endSec));
+    if (!named.length) return scenes.map((scene) => scene.sceneId);
+    for (const scene of named) ids.add(scene.sceneId);
+  }
+  return scenes.filter((scene) => ids.has(scene.sceneId)).map((scene) => scene.sceneId);
+}
+
+/**
+ * Propose revised frame/motion prompts for the Board shots that unresolved
+ * review feedback names, without re-tiling the board. Each shot keeps its
+ * span, takes and selected media; the caller persists the returned fields.
+ * A shot whose span still matches the deterministic plan keeps its assigned
+ * set, look and layer direction. Throws when no usable proposal comes back.
+ * @returns {Promise<Map<string, { framePrompt?: string, prompt?: string }>>} revised fields by sceneId
+ */
+export async function proposeShotRevisions(project, feedback, { providerId, model, effort } = {}) {
+  const scenes = (project.scenes || []).filter((scene) => Number.isFinite(scene.startSec) && scene.endSec > scene.startSec);
+  if (!scenes.length) throw new ServerError('Plan timed Board shots before revising them from feedback', { status: 409, code: 'NO_SCENES' });
+  const targets = new Set(feedbackSceneIds(scenes, feedback));
+  const sections = validSections(project.audioAnalysis?.sections);
+  const planned = sections.length ? directedShotPlan(project, sections).shots : [];
+  const shots = scenes.filter((scene) => targets.has(scene.sceneId)).map((scene, index) => {
+    const match = planned.find((shot) => sameSpan(shot.startSec, scene.startSec) && sameSpan(shot.endSec, scene.endSec)
+      && (shot.visualLayer || null) === (scene.visualLayer || null));
+    const base = match || { sectionLabel: scene.sectionLabel || scene.label, sectionIndex: scene.sectionIndex ?? index,
+      shotIndex: 0, shotCount: 1, startSec: scene.startSec, endSec: scene.endSec };
+    return { ...base, lyricText: scene.lyricText ?? base.lyricText, visualIntent: scene.visualIntent ?? base.visualIntent,
+      sceneId: scene.sceneId, current: { framePrompt: scene.framePrompt, prompt: scene.prompt } };
+  });
+  const { seeded, reason } = await tryProposeScenePrompts(project, shots, { providerId, model, effort });
+  if (!seeded) throw new ServerError(`No revised shots came back (${reason}). Edit the shots by hand or retry.`, { status: 422, code: 'SHOT_REVISION_FAILED' });
+  const updates = new Map();
+  for (const [index, fields] of seeded) {
+    const shot = shots[index];
+    updates.set(shot.sceneId, shot.visualLayer ? directedPrompts(shot, fields) : {
+      ...(fields.framePrompt ? { framePrompt: fields.framePrompt } : {}), ...(fields.prompt ? { prompt: fields.prompt } : {}),
+    });
+  }
+  return updates;
 }
 
 async function persistPlan(id, sceneInputs, { hasCards, replace }) {
