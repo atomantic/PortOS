@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { synthesize } from './tts.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
   getProfileForSynthesis,
@@ -33,35 +34,41 @@ const benchmarkLinesFor = (profile) => {
  * Render each benchmark line sequentially. Local engines are intentionally
  * serialized: Kokoro has one resident model and Piper/Qwen spawn processes,
  * so concurrency only increases contention and muddles timings.
+ *
+ * Synthesis stays outside backup admission because it runs for as long as the
+ * engine takes. The renders are held in memory and the WAV files plus the
+ * benchmark row that names them are published under one lease, so a snapshot
+ * never carries a benchmark naming audio it did not copy (#9982).
  */
 export async function renderProfileBenchmark(profileId, { signal } = {}) {
   const profile = await getProfileForSynthesis(profileId, 'studio');
   const directory = join(profileArtifactDirectory(profile.id), 'benchmarks', `v${profile.version}`);
-  await mkdir(directory, { recursive: true });
-  const lines = [];
+  const renders = [];
   for (const [index, line] of benchmarkLinesFor(profile).entries()) {
     const result = await synthesize(line.text, {
       profileId: profile.id,
       route: 'studio',
       signal,
     });
-    const filename = `${String(index + 1).padStart(2, '0')}-${line.key}.wav`;
-    await writeFile(join(directory, filename), result.wav);
-    lines.push({
-      key: line.key,
-      text: line.text,
-      filename: `voice-profiles/${profile.id}/benchmarks/v${profile.version}/${filename}`,
-      latencyMs: result.latencyMs,
-      engine: result.engine,
-      modelRevision: result.provenance?.modelRevision || profile.modelRevision,
-      effectiveControls: result.provenance?.effectiveControls || { rate: null },
-    });
+    renders.push({ line, result, filename: `${String(index + 1).padStart(2, '0')}-${line.key}.wav` });
   }
-  return saveProfileBenchmark(profile, {
-    profileRevision: profile.version,
-    renderedAt: new Date().toISOString(),
-    lines,
-    mastering: profile.mastering,
+  return withBackupAssetPublication(async () => {
+    await mkdir(directory, { recursive: true });
+    await Promise.all(renders.map(({ filename, result }) => writeFile(join(directory, filename), result.wav)));
+    return saveProfileBenchmark(profile, {
+      profileRevision: profile.version,
+      renderedAt: new Date().toISOString(),
+      lines: renders.map(({ line, result, filename }) => ({
+        key: line.key,
+        text: line.text,
+        filename: `voice-profiles/${profile.id}/benchmarks/v${profile.version}/${filename}`,
+        latencyMs: result.latencyMs,
+        engine: result.engine,
+        modelRevision: result.provenance?.modelRevision || profile.modelRevision,
+        effectiveControls: result.provenance?.effectiveControls || { rate: null },
+      })),
+      mastering: profile.mastering,
+    });
   });
 }
 
