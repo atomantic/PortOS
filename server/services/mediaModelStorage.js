@@ -10,7 +10,9 @@ import { existsSync } from 'fs';
 import { readdir, stat } from 'fs/promises';
 import { join } from 'path';
 import { PATHS, dirSize, formatBytes } from '../lib/fileUtils.js';
-import { getHfCacheRoot } from '../lib/hfCache.js';
+import {
+  getHfCacheRoot, listLinkedSharedBlobs, scanSharedBlobStore,
+} from '../lib/hfCache.js';
 import { loadMediaModels } from '../lib/mediaModels.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 
@@ -50,11 +52,21 @@ export async function listHfModelStorage({ strict = false } = {}) {
     ? (await readdir(hubDir)).filter((name) => name.startsWith('models--'))
     : [];
 
+  const linkedBlobs = new Set();
   const models = await mapWithConcurrency(entries, 4, async (dirName) => {
     const modelKey = dirName.replace('models--', '');
     const [org, ...nameParts] = modelKey.split('--');
     const name = nameParts.join('--');
-    const size = await dirSize(join(hubDir, dirName), { strict });
+    // A model dir can be mostly links into the shared blob store; count those
+    // bytes so the row reflects what deleting it frees (or at least what it uses).
+    const [ownSize, linked] = await Promise.all([
+      dirSize(join(hubDir, dirName), { strict }),
+      listLinkedSharedBlobs(hubDir, dirName),
+    ]);
+    let sharedSize = 0;
+    for (const bytes of linked.values()) sharedSize += bytes;
+    const size = ownSize + sharedSize;
+    for (const target of linked.keys()) linkedBlobs.add(target);
     return {
       id: dirName,
       org,
@@ -63,14 +75,22 @@ export async function listHfModelStorage({ strict = false } = {}) {
       label: APP_MODELS[modelKey] || null,
       size,
       sizeHuman: formatBytes(size),
+      sharedBytes: sharedSize,
     };
   });
+
+  // Shared blobs can back several models, so the total counts each blob once:
+  // the per-model own bytes plus the whole shared store (referenced or leaked).
+  const store = hubPresent ? await scanSharedBlobStore(hubDir) : { bytes: 0, files: new Map() };
+  let unreferencedBytes = 0;
+  for (const [target, bytes] of store.files) if (!linkedBlobs.has(target)) unreferencedBytes += bytes;
 
   models.sort((a, b) => b.size - a.size);
   return {
     hubDir,
     models,
-    totalBytes: models.reduce((sum, model) => sum + model.size, 0),
+    sharedStore: { bytes: store.bytes, unreferencedBytes },
+    totalBytes: models.reduce((sum, model) => sum + model.size - model.sharedBytes, 0) + store.bytes,
   };
 }
 

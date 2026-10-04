@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
@@ -57,6 +60,8 @@ vi.mock('../lib/videoTextEncoders.js', () => ({
     ...(entry.sizeBytes ? { sizeBytes: entry.sizeBytes } : {}),
   }),
 }));
+
+vi.mock('../services/modelManifest.js', () => ({ recordModelUninstall: vi.fn(async () => {}) }));
 
 // Avoid touching the real HF cache dir in GET / (not under test here).
 vi.mock('../lib/fileUtils.js', async (orig) => {
@@ -180,5 +185,47 @@ describe('catalog availability and support requests', () => {
     addTask.mockClear();
     expect((await request(makeApp()).post('/api/image-video/models/support-request').send({ kind: 'audio', request: 'Example' })).status).toBe(400);
     expect(addTask).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /hf/:dirName', () => {
+  let hub;
+  let prevCache;
+  beforeEach(() => {
+    prevCache = process.env.HF_HUB_CACHE;
+    hub = mkdtempSync(join(tmpdir(), 'hf-delete-'));
+    process.env.HF_HUB_CACHE = hub;
+  });
+  afterEach(() => {
+    if (prevCache === undefined) delete process.env.HF_HUB_CACHE; else process.env.HF_HUB_CACHE = prevCache;
+    rmSync(hub, { recursive: true, force: true });
+  });
+
+  // Regression: a model whose weights live in the shared blob store is only
+  // symlinks, so removing its directory freed no disk space.
+  it('frees shared-store blobs the deleted model alone used, keeping a sibling\'s', async () => {
+    const blob = (hash, bytes) => {
+      mkdirSync(join(hub, 'blobs', hash.slice(0, 2)), { recursive: true });
+      const path = join(hub, 'blobs', hash.slice(0, 2), hash);
+      writeFileSync(path, Buffer.alloc(bytes, 1));
+      return path;
+    };
+    const model = (dirName, files) => {
+      const snap = join(hub, dirName, 'snapshots', 'b'.repeat(40));
+      mkdirSync(snap, { recursive: true });
+      for (const [file, target] of Object.entries(files)) symlinkSync(target, join(snap, file));
+    };
+    const mine = blob('aa11', 64);
+    const common = blob('bb22', 32);
+    model('models--org--gone', { 'a.safetensors': mine, 'b.safetensors': common });
+    model('models--org--stays', { 'b.safetensors': common });
+
+    const res = await request(makeApp()).delete('/api/image-video/models/hf/models--org--gone');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, freedSharedBytes: 64 });
+    expect(existsSync(join(hub, 'models--org--gone'))).toBe(false);
+    expect(existsSync(mine)).toBe(false);
+    expect(existsSync(common)).toBe(true);
   });
 });
