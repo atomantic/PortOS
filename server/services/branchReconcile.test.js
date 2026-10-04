@@ -1297,6 +1297,79 @@ describe('reconcile', () => {
     expect(git.deleteBranch).not.toHaveBeenCalled();
   });
 
+  // #10089: a claim run that cut its own checkout keeps the SOURCE repository as
+  // its registered workspace, so the basename Set never names it. Its registered
+  // branch binding must hold the dirty tree; once the run is verifiably over the
+  // same tree is genuine abandoned work again.
+  describe('a live claim owner registered on the source repository', () => {
+    const dirtyClaim = () => {
+      git.getBranches.mockResolvedValue([
+        { name: 'claim/issue-101', isDefault: false, current: false, tracking: null, merged: true }
+      ]);
+      wt.listWorktrees.mockResolvedValue([
+        { path: '/repo/data/cos/worktrees/claim-issue-101', branch: 'refs/heads/claim/issue-101' }
+      ]);
+      git.hasBranchMergeEvidence.mockResolvedValue(true);
+      execGit.mockResolvedValue({ stdout: '?? server/services/newThing.test.js\n', exitCode: 0 });
+    };
+    // Pinned to epic 100, then bound child 101 before cutting it.
+    const owner = (status, metadata = {}) => ({
+      id: 'agent-epicrun', status, workspacePath: '/repo',
+      metadata: { claimBranch: 'claim/issue-100', claimPicksOwnBranch: false, claimBranches: ['claim/issue-101'], sourceWorkspace: '/repo', ...metadata },
+    });
+
+    it('holds its dirty child checkout instead of dispatching it as abandoned', async () => {
+      dirtyClaim();
+      for (const status of ['running', 'paused']) {
+        const res = await reconcile('/repo', { activeAgentIds: new Set(['agent-epicrun']), claimOwners: { agents: [owner(status)] } });
+        expect(res.inFlight).toEqual([]);
+        // A fresh child branch with only uncommitted work still points at a
+        // default-branch commit, so it lands in MERGED — held, never retired.
+        expect(res.skipped.map((w) => [w.branch, w.reason])).toEqual([['claim/issue-101', 'claim-owner-active']]);
+      }
+      expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+      expect(git.deleteBranch).not.toHaveBeenCalled();
+    });
+
+    it('holds every claim checkout in the repository while a pinned run has not bound its selection yet', async () => {
+      dirtyClaim();
+      const choosing = owner('running', { claimBranches: undefined, claimSelectionPending: true });
+      const res = await reconcile('/repo', { activeAgentIds: new Set(), claimOwners: { agents: [choosing] } });
+      expect(res.inFlight).toEqual([]);
+      expect(res.skipped.map((w) => w.reason)).toEqual(['claim-owner-ambiguous']);
+    });
+
+    it('defers without dispatching when the registry is unreadable', async () => {
+      dirtyClaim();
+      const res = await reconcile('/repo', { activeAgentIds: new Set(), claimOwners: { agents: null } });
+      expect(res.inFlight).toEqual([]);
+      expect(res.skipped.map((w) => w.reason)).toEqual(['claim-ownership-unreadable']);
+    });
+
+    it('recovers the tree as abandoned work once the owner completed or released the branch', async () => {
+      dirtyClaim();
+      for (const agents of [[owner('completed')], [owner('running', { claimBranches: [], claimReleasedBranches: ['claim/issue-101'] })]]) {
+        const res = await reconcile('/repo', { activeAgentIds: new Set(), claimOwners: { agents } });
+        expect(res.inFlight.map((i) => [i.branch, i.state])).toEqual([['claim/issue-101', 'ABANDONED_WIP']]);
+      }
+    });
+
+    it('never retires a merged, clean claim checkout its live owner is still handing off', async () => {
+      git.getBranches.mockResolvedValue([
+        { name: 'claim/issue-101', isDefault: false, current: false, tracking: 'origin/claim/issue-101', merged: true }
+      ]);
+      wt.listWorktrees.mockResolvedValue([
+        { path: '/repo/data/cos/worktrees/claim-issue-101', branch: 'refs/heads/claim/issue-101' }
+      ]);
+      git.hasBranchMergeEvidence.mockResolvedValue(true);
+      execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+      const res = await reconcile('/repo', { activeAgentIds: new Set(), claimOwners: { agents: [owner('running')] } });
+      expect(res.skipped).toEqual([expect.objectContaining({ branch: 'claim/issue-101', reason: 'claim-owner-active' })]);
+      expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+      expect(git.deleteBranch).not.toHaveBeenCalled();
+    });
+  });
+
   it('still leaves that branch untouched while its agent is running', async () => {
     git.getBranches.mockResolvedValue([
       { name: 'cos/task-x/agent-deadbeef', isDefault: false, current: false, tracking: 'origin/main', merged: true }
@@ -1905,6 +1978,20 @@ describe('formatInFlightForPrompt', () => {
     // that only the dedicated dispatch-hint tests below exercise.
     getIssueDispatchHintMock.mockReset();
     getIssueDispatchHintMock.mockResolvedValue({ status: 'unavailable', model: null, effort: null });
+  });
+
+  it('gives each branch a pre-mutation ownership recheck when the app is known (#10089)', async () => {
+    const block = await formatInFlightForPrompt([
+      { branch: 'claim/issue-101', state: 'ABANDONED_WIP', worktreePath: '/wt/claim-issue-101' },
+      { branch: 'feature/x', state: 'NEEDS_PR' }
+    ], { defaultBranch: 'main', actions: {}, appId: 'app-x' });
+    expect(block).toContain('Ownership recheck: immediately before the FIRST edit');
+    expect(block).toContain('/api/cos/claim-ownership');
+    expect(block).toContain('{"action":"check","appId":"app-x","branch":"claim/issue-101","worktreePath":"/wt/claim-issue-101"}');
+    expect(block).toContain('{"action":"check","appId":"app-x","branch":"feature/x"}');
+    expect(block).toContain('Authorization: Bearer');
+    expect(await formatInFlightForPrompt([{ branch: 'feature/x', state: 'NEEDS_PR' }], { defaultBranch: 'main', actions: {} }))
+      .not.toContain('claim-ownership');
   });
 
   it('renders the default branch, each branch with its PR + worktree + Do line', async () => {

@@ -45,15 +45,81 @@ function samePath(a, b) {
  *   - a run pinned to a target owns exactly `claim/…` for that target;
  *   - an unpinned run (the issue picker, including a swarm orchestrator whose
  *     fan-out children cut their own trees) owns a branch it chooses later, so
- *     it is registered as possibly owning ANY claim branch in its repository.
+ *     it is registered as possibly owning ANY claim branch in its repository
+ *     until it binds the concrete ones (`bindClaimBranch`).
  * Null for a task that is not a claim flow. Pure.
  *
- * @returns {{ claimBranch: string|null, claimPicksOwnBranch: boolean }|null}
+ * @returns {{ claimBranch: string|null, claimPicksOwnBranch: boolean, claimSelectionPending?: true }|null}
  */
 export function claimOwnershipBinding(task) {
   if (!isTruthyMeta(task?.metadata?.claimFlow)) return null;
   const claimBranch = claimContinuationBranch(task?.metadata?.claimTarget);
-  return { claimBranch, claimPicksOwnBranch: !claimBranch };
+  // A pinned run may still check out a DIFFERENT branch: a pinned tracking epic
+  // ships its first eligible child, and an oversized issue is split and its
+  // first slice shipped. Until the run binds the branch it actually works on
+  // (`bindClaimBranch`), it may own any claim tree in its repository.
+  return { claimBranch, claimPicksOwnBranch: !claimBranch, ...(claimBranch ? { claimSelectionPending: true } : {}) };
+}
+
+/** A branch a claim run may bind to itself: `claim/…` or slashdo's `next/…`. */
+export function isClaimOwnershipBranch(name) {
+  const branch = String(name ?? '');
+  return branch.length <= 200 && /^(claim|next)\/[A-Za-z0-9._/-]+$/.test(branch)
+    && !branch.includes('..') && !branch.endsWith('/') && !branch.endsWith('.lock');
+}
+
+const ownershipList = (agent, key) => {
+  const list = agent?.metadata?.[key] ?? agent?.[key];
+  return Array.isArray(list) ? list.filter((b) => typeof b === 'string') : [];
+};
+
+/** Most branches one run may hold bound at once — a swarm binds one per child. */
+export const MAX_BOUND_CLAIM_BRANCHES = 50;
+
+/**
+ * The metadata patch that binds `branch` to a running claim run: the concrete
+ * branch it is about to check out (the pinned target, an epic's child, a split
+ * slice, or the issue a picker selected). The first binding settles the run's
+ * open selection (see `mayPickClaimBranch`). `{ refused }` when the record is
+ * not a live claim run, the branch is not claim-shaped, or the bound list is
+ * full. Pure.
+ *
+ * @returns {{ claimBranches: string[], claimReleasedBranches: string[], claimSelectionPending: false }|{ refused: string }}
+ */
+export function bindClaimBranch(agent, branch) {
+  const refused = bindingRefusal(agent, branch);
+  if (refused) return { refused };
+  const bound = ownershipList(agent, 'claimBranches');
+  if (!bound.includes(branch) && bound.length >= MAX_BOUND_CLAIM_BRANCHES) return { refused: 'too-many-branches' };
+  return {
+    claimBranches: bound.includes(branch) ? bound : [...bound, branch],
+    claimReleasedBranches: ownershipList(agent, 'claimReleasedBranches').filter((b) => b !== branch),
+    claimSelectionPending: false,
+  };
+}
+
+/**
+ * The metadata patch that explicitly releases `branch` from a running claim run
+ * that is handing it to somebody else before the run ends. Completion of the run
+ * releases everything without this. `{ refused }` on the same conditions as
+ * `bindClaimBranch`. Pure.
+ */
+export function releaseClaimBranch(agent, branch) {
+  const refused = bindingRefusal(agent, branch);
+  if (refused) return { refused };
+  const released = ownershipList(agent, 'claimReleasedBranches');
+  return {
+    claimBranches: ownershipList(agent, 'claimBranches').filter((b) => b !== branch),
+    claimReleasedBranches: released.includes(branch) ? released : [...released, branch].slice(-MAX_BOUND_CLAIM_BRANCHES),
+  };
+}
+
+// Only a live claim run may change its own bindings, and only for a claim branch.
+function bindingRefusal(agent, branch) {
+  if (!isLiveAgent(agent)) return 'owner-not-running';
+  const claimRun = Boolean(registeredClaimBranch(agent)) || isTruthyMeta(agent?.claimPicksOwnBranch ?? agent?.metadata?.claimPicksOwnBranch);
+  if (!claimRun) return 'claim-owner-unverified';
+  return isClaimOwnershipBranch(branch) ? null : 'branch-invalid';
 }
 
 function isLiveAgent(agent) {
@@ -79,14 +145,34 @@ function registeredClaimBranch(agent) {
   return agent?.claimBranch ?? agent?.metadata?.claimBranch;
 }
 
+// Every branch the run registered — its pinned target plus each branch it bound
+// — minus the ones it explicitly released.
+function ownsClaimBranch(agent, branchName) {
+  if (ownershipList(agent, 'claimReleasedBranches').includes(branchName)) return false;
+  return registeredClaimBranch(agent) === branchName || ownershipList(agent, 'claimBranches').includes(branchName);
+}
+
+// A run that may hold a claim checkout nobody can name yet: a picker until it
+// binds its first branch, a pinned run until it binds the branch it actually
+// works on. The claim prompt binds every branch BEFORE its worktree exists, so
+// once a run has bound one, each tree it cuts is named; a run that never binds
+// (an older prompt, a provider that cannot curl) stays possible owner of every
+// claim tree in its repository until it ends.
+function mayPickClaimBranch(agent) {
+  if (isTruthyMeta(agent?.claimSelectionPending ?? agent?.metadata?.claimSelectionPending)) return true;
+  return isTruthyMeta(agent?.claimPicksOwnBranch ?? agent?.metadata?.claimPicksOwnBranch)
+    && ownershipList(agent, 'claimBranches').length === 0;
+}
+
 /**
  * Whether a running or paused agent other than `ignoreIds` holds, or may hold,
  * the claim checkout:
- *   - `active`: it works inside the directory, or registered this exact branch
- *     in this repository;
- *   - `ambiguous`: it is a claim run that picks its own branch, in this same
- *     repository, so it might be the one that cut this tree — unprovable from
- *     the registry alone.
+ *   - `active`: it works inside the directory, or registered or bound this
+ *     exact branch in this repository (and has not released it);
+ *   - `ambiguous`: it is a claim run that picks its own branch, or a pinned run
+ *     that has not yet bound the branch it works on, in this same repository,
+ *     so it might be the one that cut this tree — unprovable from the registry
+ *     alone.
  * `active` outranks `ambiguous` across the whole list.
  *
  * @returns {'active'|'ambiguous'|null}
@@ -99,8 +185,8 @@ function claimHolderOccupancy({ agents, holderPath, branchName, sourceWorkspace,
     const workspace = agentWorkspace(agent);
     if (samePath(workspace, holderPath) || (holderPath && workspace && isPathInsideDir(holderPath, workspace))) return 'active';
     if (!inRepository(agent, sourceWorkspace)) continue;
-    if (registeredClaimBranch(agent) === branchName) return 'active';
-    if (claimHolder && isTruthyMeta(agent.claimPicksOwnBranch ?? agent.metadata?.claimPicksOwnBranch)) ambiguous = true;
+    if (ownsClaimBranch(agent, branchName)) return 'active';
+    if (claimHolder && mayPickClaimBranch(agent)) ambiguous = true;
   }
   return ambiguous ? 'ambiguous' : null;
 }
@@ -217,7 +303,8 @@ export function claimBranchAdmission({ branchName, preferredPath, agentId, sourc
  * children cut trees PortOS never sees) might own this tree. Nothing observable
  * proves it does not — git activity, the continued run's own registration, and
  * the absence of a process inside the tree can all be true of a live owner — so
- * the launch stays deferred until that run ends, which is its explicit release.
+ * the launch stays deferred until that run binds the branches it works on (the
+ * claim prompt binds each before cutting it) or ends.
  *
  * @param {{
  *   metadata?: object,
@@ -238,4 +325,22 @@ export function claimContinuationAdmission({ metadata, agentId, sourceWorkspace,
     branchName, preferredPath: worktreePath, agentId, sourceWorkspace, worktrees, agents,
     ignoreIds: [metadata?.resumedFromAgentId],
   });
+}
+
+/**
+ * Why a live claim owner holds this branch's checkout, for a caller about to
+ * classify, dispatch or mutate it from outside that run (branch-reconcile's
+ * scan and its worker's pre-mutation recheck). The same branch/repository owner
+ * contract as `claimBranchAdmission`, without its holder-path bookkeeping: the
+ * caller already knows the checkout. An unreadable registry holds the branch.
+ *
+ * @param {{ branchName: string, holderPath?: string|null, sourceWorkspace?: string, agents: Array<object>|null, ignoreIds?: string[] }} input
+ * @returns {'claim-owner-active'|'claim-owner-ambiguous'|'claim-ownership-unreadable'|null}
+ */
+export function claimCheckoutOwnerReason({ branchName, holderPath = null, sourceWorkspace, agents, ignoreIds = [] }) {
+  if (!Array.isArray(agents) || !branchName) return 'claim-ownership-unreadable';
+  const occupancy = claimHolderOccupancy({
+    agents, holderPath, branchName, sourceWorkspace, ignoreIds: new Set(ignoreIds.filter(Boolean)),
+  });
+  return occupancy ? `claim-owner-${occupancy}` : null;
 }

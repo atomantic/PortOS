@@ -43,6 +43,19 @@ describe('review-enabled completion merge gate', () => {
 });
 
 
+describe('claim ownership binding instructions (#10089)', () => {
+  it('binds every branch the run checks out before its worktree exists, whatever the completion policy', () => {
+    for (const leavePrOpen of [false, true]) {
+      const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example', leavePrOpen });
+      expect(prompt).toContain('"agentId":"parent-example","action":"bind","branch":"BRANCH"');
+      expect(prompt).toContain('a tracking epic');
+      expect(prompt).toContain('do not create or enter that worktree');
+      expect(prompt).toContain('"action":"release"');
+    }
+    expect(buildClaimFlowCompletionSection()).toContain('possibly yours until this run ends');
+  });
+});
+
 describe('claim parent merge admission instructions', () => {
   it('binds the parent through CI, requires resync on external base movement and releases on either outcome', () => {
     const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example' });

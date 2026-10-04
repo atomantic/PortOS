@@ -39,6 +39,9 @@ import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { ledgerPath, readVerdictLedger, partitionSuperseded, recordVerdictInstruction, recordVerdict, sameDirtyPaths } from './supersededLedger.js';
 import { backupSupersededBranch } from './supersededBackup.js';
+import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
+import { agentApiCurl } from '../lib/agentApiToken.js';
+import { localApiBaseUrl } from '../lib/networkExposure.js';
 
 // Never reconciled — the canonical long-lived-branch set (`main`/`master`/`dev`/
 // `develop`/`release`/`gh-pages`) shared with the git branch-cleanup guards in
@@ -361,6 +364,51 @@ export function worktreeProtectionExpiresAt({ path, locked, activeAgentIds, ageM
     allowLiveClaim,
     ageMs,
     staleClaimIdleMs,
+  });
+}
+
+/**
+ * The live-owner context branch-reconcile classifies against: the runtime ids,
+ * plus every running or paused record's id and its workspace basename (a claim
+ * tree uses a branch-shaped directory name, not the run's `agent-*` id). Pure.
+ *
+ * @param {Iterable<string>} runtimeIds - `getActiveAgentIds()`
+ * @param {object[]} liveAgents - the agent registry
+ * @returns {Set<string>}
+ */
+export function buildActiveOwnerIds(runtimeIds, liveAgents) {
+  const ids = new Set(runtimeIds);
+  for (const agent of liveAgents) {
+    if (agent?.status !== 'running' && agent?.status !== 'paused') continue;
+    if (agent.id) ids.add(agent.id);
+    const worktreeId = worktreeAgentId(agent.workspacePath || agent.metadata?.workspacePath);
+    if (worktreeId) ids.add(worktreeId);
+  }
+  return ids;
+}
+
+/**
+ * A claim run that cut a `claim-*` checkout itself still lists the source
+ * repository as its workspace, so neither `activeAgentIds` nor the branch name
+ * proves it gone. The registry's branch/repository bindings do: a pinned or
+ * bound branch is `claim-owner-active`, and a picker (or a pinned run still
+ * choosing, as a tracking epic does before it picks its child) makes every
+ * claim checkout in its repository `claim-owner-ambiguous`.
+ *
+ * `claimOwners` is `{ agents }` from the caller. Omitted (undefined) means the
+ * caller does not dispatch or mutate on this answer (a read-only detector) and
+ * nothing is added; supplied but unreadable holds every branch.
+ *
+ * @param {{ branch: string, path: string|null, claimOwners?: { agents: object[]|null }, sourceWorkspace: string }} input
+ * @returns {string|null}
+ */
+export function resolveClaimOwnerReason({ branch, path, claimOwners, sourceWorkspace }) {
+  if (claimOwners === undefined) return null;
+  return claimCheckoutOwnerReason({
+    branchName: branch,
+    holderPath: path,
+    sourceWorkspace,
+    agents: claimOwners?.agents ?? null,
   });
 }
 
@@ -785,7 +833,7 @@ async function worktreeAgeMs(worktreePath) {
  *     worktreeDirty, dirtyPaths, behind, ahead, collisionPaths, abandonedAgentWorktree,
  *     abandonedClaimWorktree, openPr }
  */
-export async function gatherBranchState(repoPath, { defaultBranch, activeAgentIds = null, remoteHeads: providedRemoteHeads, hasOrigin: providedHasOrigin, origin: providedOrigin, forgeExec = null, forgeAccount = null } = {}) {
+export async function gatherBranchState(repoPath, { defaultBranch, activeAgentIds = null, claimOwners = undefined, remoteHeads: providedRemoteHeads, hasOrigin: providedHasOrigin, origin: providedOrigin, forgeExec = null, forgeAccount = null } = {}) {
   const protectedSet = new Set([...PROTECTED_BRANCHES, defaultBranch]);
   // Read origin ONCE and use it for both facts below — `hasOrigin` (the gate on
   // classifyBranch's ahead-based NEEDS_PR arm, so an origin-less repo's local work
@@ -851,6 +899,7 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
     // failure so an unreadable tip can never match a recorded one.
     const tipOut = await execGit(['rev-parse', b.name], repoPath, { ignoreExitCode: true }).catch(() => null);
     const tip = (tipOut?.stdout || '').trim() || null;
+    const claimOwnerReason = resolveClaimOwnerReason({ branch: b.name, path: worktreePath, claimOwners, sourceWorkspace: repoPath });
     inputs.push({
       branch: b.name,
       tip,
@@ -880,9 +929,13 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
       // uses to refuse a teardown, reused by the classifier to refuse a DISPATCH —
       // the two must agree, or the reconciler protects a worktree from deletion and
       // then hands its branch to an agent that rebases underneath the live session.
+      // A registered claim owner counts too: a run that cut its own claim tree
+      // keeps the source repository as its workspace, so neither the basename
+      // set nor the branch name can see it (#10089).
       liveOwnerReason: resolveLiveOwnerReason({
         branch: b.name, path: worktreePath, locked: worktreeLocked, activeAgentIds
-      }),
+      }) || claimOwnerReason,
+      claimOwnerReason,
       behind: divergence.behind,
       ahead: divergence.ahead,
       collisionPaths: divergence.collisionPaths,
@@ -1145,6 +1198,9 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
  * @returns {Promise<{ ok: true, prepared?: any } | { ok: false, reason: string, retryAt?: string }>}
  */
 async function retireBranch(repoPath, b, { activeAgentIds = new Set(), staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, prepare }) {
+  // A live claim run may still be finishing this branch (CI wait, merge handoff,
+  // its own cleanup) — never remove its checkout or ref from under it.
+  if (b.claimOwnerReason) return { ok: false, reason: b.claimOwnerReason };
   if (b.worktreePath) {
     // Never tear down a worktree that's locked, a RECENT human /claim session, or
     // an active CoS agent workspace. An abandoned claim worktree (clean and older
@@ -1198,6 +1254,8 @@ async function retireBranch(repoPath, b, { activeAgentIds = new Set(), staleClai
  *   branches left on `origin` that nothing local points at; off, they are only
  *   reported — see `reapOrphanedRemotes`. `activeAgentIds` protects in-use CoS
  *   agent worktrees and any live worktree basename tokens supplied by the caller.
+ *   `claimOwners` (`{ agents }`, the agent registry) adds the registered claim
+ *   owners — see `resolveClaimOwnerReason`; a dispatching caller must pass it.
  *   `forgeAccount` is the managed app record's explicit gh
  *   account pin, so an app whose repo belongs to another GitHub account is
  *   polled with a credential that can actually see it (#7540); unset, the
@@ -1213,7 +1271,7 @@ async function retireBranch(repoPath, b, { activeAgentIds = new Set(), staleClai
  *   failed mid-cycle. Either way an empty `inFlight` says nothing about the repo
  *   and the caller must retry rather than park on it (#3358).
  */
-export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSuperseded = cleanup, reapRemotes = false, activeAgentIds = new Set(), forgeAccount = null } = {}) {
+export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSuperseded = cleanup, reapRemotes = false, activeAgentIds = new Set(), claimOwners = undefined, forgeAccount = null } = {}) {
   // Worktree cleanup is the first reconcile step, before any forge probe. It
   // only removes a tree after proving both that it is completely clean and
   // that every branch commit is already in the default branch (including
@@ -1272,7 +1330,7 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
   // per cycle is the cost of each destructive step reading the remote itself.
   const remoteHeads = origin?.hasOrigin ? await listRemoteHeads(repoPath) : null;
   const inputs = await gatherBranchState(repoPath, {
-    defaultBranch, activeAgentIds, remoteHeads, hasOrigin: Boolean(origin?.hasOrigin), origin,
+    defaultBranch, activeAgentIds, claimOwners, remoteHeads, hasOrigin: Boolean(origin?.hasOrigin), origin,
     forgeExec, forgeAccount
   });
   // A gh failure AFTER a passing probe (a blip mid-cycle, or an unparseable
@@ -1620,10 +1678,11 @@ async function dispatchHintLineForBranch(branchName, repoPath) {
  * gets one forge read for its issue's `model:`/`effort:` labels — see
  * `dispatchHintLineForBranch`.
  * @param {object[]} inFlight - actionable branches (post-filterActionable)
- * @param {{ defaultBranch:string, actions:object, branchesPerAgent?:number, repoPath?:string }} ctx
+ * @param {{ defaultBranch:string, actions:object, branchesPerAgent?:number, repoPath?:string, appId?:string }} ctx
+ *   `appId` adds each branch's pre-mutation ownership recheck command.
  * @returns {Promise<string>}
  */
-export async function formatInFlightForPrompt(inFlight, { defaultBranch, actions, branchesPerAgent, repoPath } = {}) {
+export async function formatInFlightForPrompt(inFlight, { defaultBranch, actions, branchesPerAgent, repoPath, appId } = {}) {
   // One gh round-trip per issue-derived branch — resolved in parallel (not
   // inline in the loop below) so N branches cost one round-trip's latency,
   // not N of them in series.
@@ -1632,10 +1691,19 @@ export async function formatInFlightForPrompt(inFlight, { defaultBranch, actions
   if (Number.isInteger(branchesPerAgent) && branchesPerAgent > 0) {
     lines.splice(1, 0, `This coordinator run is limited to up to ${branchesPerAgent} branch(es); finish every branch listed below before reporting done.`);
   }
+  // This list is a scan from before dispatch; a claim run can take a branch
+  // after it. Each branch's own recheck runs right before its first mutation (#10089).
+  if (appId) {
+    lines.splice(lines.length - 1, 0, '', 'Ownership recheck: immediately before the FIRST edit, commit, rebase, push, merge, PR change, move or removal on a branch below (and again before its merge), run that branch\'s "Recheck" command and require a parsed JSON response with admitted:true. On admitted:false, an HTTP/auth/transport error or unreadable JSON, leave that branch and its checkout untouched and report it as held by a live owner with the returned reason — a live claim run owns it now.');
+  }
   inFlight.forEach((b, i) => {
     const pr = b.openPr ? ` — PR #${b.openPr.number} (${b.openPr.mergeable})${b.openPr.url ? ` ${b.openPr.url}` : ''}` : ' — no PR';
     lines.push(`### \`${b.branch}\` [${b.state}]${pr}`);
     if (b.worktreePath) lines.push(`- Worktree: \`${b.worktreePath}\`${b.state === 'ABANDONED_WIP' ? ' (holds UNCOMMITTED work — read it before doing anything)' : ''}`);
+    if (appId) {
+      const payload = JSON.stringify({ action: 'check', appId, branch: b.branch, ...(b.worktreePath ? { worktreePath: b.worktreePath } : {}) });
+      lines.push(`- Recheck: \`${agentApiCurl({ apiBase: localApiBaseUrl(), path: '/api/cos/claim-ownership', payload })}\``);
+    }
     // A never-pushed NEEDS_PR branch reads identically to a pushed one in this
     // block, and the difference decides whether the push needs `-u`. State it
     // rather than making the agent infer it from a missing PR link.
