@@ -28,6 +28,7 @@ import { emptyToUndefined, validateRequest } from '../lib/validation.js';
 import { ADDABLE_IMAGE_RUNNERS, ADDABLE_VIDEO_RUNTIMES, searchHuggingfaceModels } from '../lib/huggingfaceModel.js';
 import { addModelFromHuggingface } from '../services/mediaModelInstall.js';
 import { getMediaModelStorage } from '../services/mediaModelStorage.js';
+import { isModelStoreBackend, isSafeModelStoreKey, removeModelStoreItem } from '../services/modelStoreStorage.js';
 import { recordModelUninstall } from '../services/modelManifest.js';
 import { detectSystemCapabilities, withHardwareCompatibility } from '../lib/systemCapabilities.js';
 
@@ -223,6 +224,18 @@ router.delete('/lora/:filename', asyncHandler(async (req, res) => {
   // `loras.deleteLora`, so it clears the manifest entry itself.
   await recordModelUninstall({ backend: 'lora', key: filename });
   res.json({ ok: true });
+}));
+
+// DELETE /store/:backend/:key — remove or clear one item of a file-system model
+// store (MTPLX, Hunyuan3D, HF xet cache, Pixie Forge LoRAs). The key must match
+// an item the server just scanned; the path removed comes from that scan, never
+// from the request.
+router.delete('/store/:backend/:key', asyncHandler(async (req, res) => {
+  const { backend, key } = req.params;
+  if (!isModelStoreBackend(backend) || !isSafeModelStoreKey(key)) {
+    throw new ServerError('Invalid model store item', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  res.json(await removeModelStoreItem(backend, key));
 }));
 
 export default router;

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Film, Music, Activity, Image as ImageIcon, Video, Wand2 } from 'lucide-react';
 import { MUSCRIPTOR_MODELS } from '../../lib/muscriptorModels.js';
 import { isLayeredComposition, sceneRenderReady, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
@@ -60,13 +61,31 @@ export function AudioActions({ project, midi, midiBound, busy, onAnalyze }) {
 /** Plan the shots against the analyzed song and spread them by energy. */
 export function PlanActions({ project, busy, onPlan, onAutoArrange }) {
   const sceneCount = (project.scenes || []).length;
+  // A board that already has shots needs an explicit choice before planning:
+  // planning blindly would stack a second full-song plan on top of it.
+  const [choosing, setChoosing] = useState(false);
+  const choose = (mode) => { setChoosing(false); onPlan(mode); };
   return (
     <div className={groupCls}>
-      <button onClick={onPlan} disabled={busy.planning || !project.audioAnalysis}
+      <button onClick={() => (sceneCount > 0 ? setChoosing(true) : onPlan())} disabled={busy.planning || !project.audioAnalysis}
         title={!project.audioAnalysis ? 'Analyze the track first' : 'AI-plan bounded shots per song section, cut on timed lyrics, phrases and beats'}
         className={buttonCls}>
         <Wand2 size={15} /> {busy.planning ? 'Planning…' : 'AI Plan'}
       </button>
+      {choosing && !busy.planning && (
+        <div role="group" aria-label="Plan mode" className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-gray-400">The board has {sceneCount} shot{sceneCount === 1 ? '' : 's'}.</span>
+          <button onClick={() => choose('replace')} className={buttonCls}
+            title="Swap the board for a new plan; takes and clips are kept on shots whose time span is reused">
+            Replace {sceneCount} shot{sceneCount === 1 ? '' : 's'}
+          </button>
+          <button onClick={() => choose('append')} className={buttonCls}
+            title="Add the planned shots after the existing ones (can overlap them)">
+            Add to board
+          </button>
+          <button onClick={() => setChoosing(false)} className={buttonCls}>Cancel</button>
+        </div>
+      )}
       <button onClick={onAutoArrange}
         disabled={busy.arranging || !project.audioAnalysis || sceneCount === 0}
         title={!project.audioAnalysis

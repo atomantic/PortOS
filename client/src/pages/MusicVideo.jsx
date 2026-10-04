@@ -434,10 +434,10 @@ export default function MusicVideo() {
   // Director-first — seeded shots are ordinary, fully-editable board entries.
   // `target` lets the autopilot kickoff plan the freshly analyzed record
   // before `selected` re-renders with it.
-  const handlePlan = (target = selected) => {
+  const handlePlan = (target = selected, mode) => {
     if (!target?.audioAnalysis) return Promise.resolve();
     setPlanning(true);
-    return planMusicVideoProject(target.id, { seedPrompts: true }, { silent: true })
+    return planMusicVideoProject(target.id, { seedPrompts: true, ...(mode ? { mode } : {}) }, { silent: true })
       .then(({ project, scenesAdded, promptsSeeded, promptsSkippedReason }) => {
         replaceProject(project);
         const suffix = promptsSeeded
@@ -951,7 +951,7 @@ export default function MusicVideo() {
     setPickerTarget,
     onAddReference: () => setPickerTarget({ type: 'reference' }),
     onAnalyze: () => handleAnalyze(),
-    onPlan: () => handlePlan(),
+    onPlan: (mode) => handlePlan(selected, mode),
     onAutoArrange: handleAutoArrange,
     onKickoff: handleKickoff,
     onChangeTrack: handleChangeTrack,

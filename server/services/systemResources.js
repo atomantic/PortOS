@@ -20,6 +20,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
 import { getDataOverview } from './dataManager.js';
 import { listHfModelStorage, listLoraStorage } from './mediaModelStorage.js';
+import { listModelStore } from './modelStoreStorage.js';
 import * as ollamaManager from './ollamaManager.js';
 import * as lmStudioManager from './lmStudioManager.js';
 import { getQueueCapacity } from './mediaJobQueue/index.js';
@@ -31,6 +32,8 @@ import {
   localModelInventoryRow,
   loraInventoryRow,
   modelInventoryId,
+  modelStoreInventoryRow,
+  MODEL_STORE_BACKENDS,
 } from '../lib/modelInventory.js';
 import { getModelManifest, reconcileModelManifest } from './modelManifest.js';
 
@@ -179,9 +182,34 @@ const normalizeLmStudioRepo = (value) => String(value || '')
   .replace(/[-.]gguf$/i, '')
   .replace(/[-.]mlx[-.].*$/i, '');
 
+// File-system model stores beyond the HF hub cache and `data/loras/`; one
+// storage area, one inventory backend, one totals key each.
+const MODEL_STORES = [
+  { backend: 'mtplx', total: 'mtplx', label: 'MTPLX models', note: 'MTPLX checkpoints and the session bank.' },
+  { backend: 'hy3dgen', total: 'hy3dgen', label: 'Hunyuan3D models', note: 'Image-to-3D weights in the hy3dgen cache.' },
+  { backend: 'hf-xet-cache', total: 'hfXetCache', label: 'Hugging Face xet cache', note: 'Regenerable download chunk cache and xet logs older than 7 days; counted separately from the Hub cache.' },
+  { backend: 'pixie-forge', total: 'pixieForge', label: 'Pixie Forge LoRAs', note: 'LoRA adapters outside PortOS data.' },
+];
+
+const MODEL_STORE_MANAGE_PATH = Object.fromEntries(Object.entries(MODEL_STORE_BACKENDS).map(([id, store]) => [id, store.managePath]));
+
+const modelStoreRows = (stores) => MODEL_STORES.flatMap(({ backend }) => (stores?.[backend]?.items || []).map((entry) => ({
+  ...modelStoreInventoryRow({
+    backend,
+    key: entry.key,
+    name: entry.name,
+    detail: entry.detail,
+    sizeBytes: entry.size,
+    risk: entry.risk,
+    cleanupReason: entry.cleanupReason,
+  }),
+  loaded: false,
+})));
+
 function downloadedModelInventory({
   hf,
   loraStorage,
+  stores,
   ollamaStatus,
   ollamaStored,
   ollamaLoaded,
@@ -289,7 +317,7 @@ function downloadedModelInventory({
       inventoryUnknown: !Array.isArray(lmStudioStored) || Boolean(stored.inventoryUnknown),
     };
   });
-  return [...huggingFace, ...loras, ...ollama, ...lmstudio]
+  return [...huggingFace, ...loras, ...modelStoreRows(stores), ...ollama, ...lmstudio]
     .sort((a, b) => (b.sizeBytes || 0) - (a.sizeBytes || 0));
 }
 
@@ -358,6 +386,10 @@ export async function buildSystemResourceReport() {
     databaseRow,
     hf,
     loraStorage,
+    mtplxStore,
+    hy3dgenStore,
+    xetStore,
+    pixieForgeStore,
     ollamaStatus,
     ollamaStored,
     ollamaLoaded,
@@ -384,6 +416,7 @@ export async function buildSystemResourceReport() {
       .catch(() => null),
     listHfModelStorage({ strict: true }).catch(() => null),
     listLoraStorage({ strict: true }).catch(() => null),
+    ...MODEL_STORES.map(({ backend }) => listModelStore(backend).catch(() => null)),
     ollamaManager.getStatus(true).catch(() => null),
     ollamaManager.listStoredModels().catch(() => null),
     ollamaManager.getLoadedModels().catch(() => null),
@@ -432,9 +465,16 @@ export async function buildSystemResourceReport() {
     ...(settings?.localLlm?.ollama?.disabled ? ['ollama'] : []),
     ...(settings?.localLlm?.lmstudio?.disabled ? ['lmstudio'] : []),
   ];
+  const stores = {
+    mtplx: mtplxStore,
+    hy3dgen: hy3dgenStore,
+    'hf-xet-cache': xetStore,
+    'pixie-forge': pixieForgeStore,
+  };
   const downloadedModels = downloadedModelInventory({
     hf,
     loraStorage,
+    stores,
     ollamaStatus,
     ollamaStored,
     ollamaLoaded,
@@ -458,7 +498,13 @@ export async function buildSystemResourceReport() {
     byKind: capacity.byKind,
   };
   const agentQueue = agentQueueSummary(cosTasks, cosStatus, cosAgents);
-  const modelBytes = sumKnownBytes([hf?.totalBytes, loraStorage?.totalBytes, ollamaBytes, lmStudioBytes]);
+  const modelBytes = sumKnownBytes([
+    hf?.totalBytes,
+    loraStorage?.totalBytes,
+    ...MODEL_STORES.map(({ backend }) => stores[backend]?.totalBytes),
+    ollamaBytes,
+    lmStudioBytes,
+  ]);
   const storageAreas = [
     {
       id: 'portos-data', label: 'PortOS data', kind: 'data',
@@ -484,6 +530,12 @@ export async function buildSystemResourceReport() {
       managePath: '/models/loras', protected: false,
       note: 'Fine-tuning adapters in PortOS data. This total also appears inside PortOS data.',
     },
+    ...MODEL_STORES.map(({ backend, label, note }) => ({
+      id: backend, label, kind: 'model',
+      sizeBytes: finiteOrNull(stores[backend]?.totalBytes), status: backendState(stores[backend]),
+      managePath: MODEL_STORE_MANAGE_PATH[backend], protected: false,
+      note,
+    })),
     {
       id: 'ollama', label: 'Ollama models', kind: 'model',
       sizeBytes: finiteOrNull(ollamaBytes), status: backendState(ollamaBytes),
@@ -575,6 +627,7 @@ export async function buildSystemResourceReport() {
       totals: {
         huggingface: finiteOrNull(hf?.totalBytes),
         loras: finiteOrNull(loraStorage?.totalBytes),
+        ...Object.fromEntries(MODEL_STORES.map(({ backend, total }) => [total, finiteOrNull(stores[backend]?.totalBytes)])),
         ollama: finiteOrNull(ollamaBytes),
         lmstudio: finiteOrNull(lmStudioBytes),
         all: modelBytes,
@@ -658,6 +711,7 @@ export async function getTrackedModelInventory() {
       totals: {
         huggingface: backendTotal('huggingface'),
         loras: backendTotal('lora'),
+        ...Object.fromEntries(MODEL_STORES.map(({ backend, total }) => [total, backendTotal(backend)])),
         ollama: backendTotal('ollama'),
         lmstudio: backendTotal('lmstudio'),
         all: sumKnownBytes(downloaded.map((model) => model.sizeBytes)),

@@ -11,8 +11,14 @@ const TITLE_LIMITS = { youtube: 100, shorts: 100, reddit: 300, stackerNews: 80 }
 const DEFAULT_SUBREDDIT = 'aivideo';
 
 const missing = (message) => new ServerError(message, { status: 422, code: 'PUBLISH_ASSET_MISSING' });
+const stale = () => new ServerError('The publishing kit was built from an earlier render — rebuild the kit before filling this draft', { status: 409, code: 'PUBLISH_KIT_STALE' });
 const text = (v) => (typeof v === 'string' ? v.trim() : '');
 const kitOf = (project) => (project?.publishKit && typeof project.publishKit === 'object' ? project.publishKit : {});
+
+/** Refuse a kit whose master came from a different render than the project's current one. */
+function requireFreshKit(project, kit) {
+  if ((kit.master?.renderHistoryId ?? null) !== (project?.renderHistoryId ?? null)) throw stale();
+}
 
 /** The newest finished 9:16 social cut (#9280): what Shorts, TikTok and Reels upload. */
 function latestVerticalCut(project) {
@@ -44,6 +50,7 @@ const instagramSafe = (caption) => caption.replace(/@(\w)/g, '$1');
 const BUILDERS = {
   youtube: (project, kit) => {
     if (!kit.master?.filename) throw missing('Build the publishing kit first — it names the final render to upload');
+    requireFreshKit(project, kit);
     return {
       video: { dir: 'videos', name: kit.master.filename },
       title: requireTitle('youtube', text(kit.copy?.youtube?.title)),
@@ -75,6 +82,7 @@ const BUILDERS = {
     if (!hook) throw missing('Write the X hook post in the release copy first');
     const clip = (kit.exports || []).find((e) => e.kind === 'x-1080p')?.filename;
     if (!clip) throw missing('Build the publishing kit first — the X post carries its 1080p encode');
+    requireFreshKit(project, kit);
     const links = [
       songUrl(kit, options) ? `The song: ${songUrl(kit, options)}` : '',
       // X builds a post's link card from its LAST link, so the full video goes last.
@@ -104,6 +112,7 @@ const BUILDERS = {
     let video = null;
     if (kind === 'video') {
       if (!kit.master?.filename) throw missing('Build the publishing kit first — a Reddit video post uploads the final render');
+      requireFreshKit(project, kit);
       video = { dir: 'videos', name: kit.master.filename };
     }
     const url = kind === 'link' ? (text(options.url) || fullVideoUrl(kit)) : '';

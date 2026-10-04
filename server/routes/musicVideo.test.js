@@ -583,7 +583,7 @@ describe('musicVideo routes', () => {
     it('plans with default options when no body is sent', async () => {
       const r = await request(app).post('/api/music-video/mv-1/plan');
       expect(r.status).toBe(200);
-      expect(planProject).toHaveBeenCalledWith('mv-1', { seedPrompts: undefined, providerId: undefined, model: undefined });
+      expect(planProject).toHaveBeenCalledWith('mv-1', { seedPrompts: undefined, providerId: undefined, model: undefined, mode: 'require' });
       expect(r.body.scenesAdded).toBe(1);
       expect(r.body.promptsSeeded).toBe(false);
     });
@@ -592,7 +592,26 @@ describe('musicVideo routes', () => {
       const r = await request(app).post('/api/music-video/mv-1/plan')
         .send({ seedPrompts: false, providerId: 'p1', model: 'gpt-x' });
       expect(r.status).toBe(200);
-      expect(planProject).toHaveBeenCalledWith('mv-1', { seedPrompts: false, providerId: 'p1', model: 'gpt-x' });
+      expect(planProject).toHaveBeenCalledWith('mv-1', { seedPrompts: false, providerId: 'p1', model: 'gpt-x', mode: 'require' });
+    });
+
+    it.each(['replace', 'append'])('forwards an explicit %s mode', async (mode) => {
+      const r = await request(app).post('/api/music-video/mv-1/plan').send({ mode });
+      expect(r.status).toBe(200);
+      expect(planProject).toHaveBeenCalledWith('mv-1', expect.objectContaining({ mode }));
+    });
+
+    it('surfaces the 409 PLAN_MODE_REQUIRED the planner raises for a non-empty board', async () => {
+      const { ServerError } = await import('../lib/errorHandler.js');
+      planProject.mockRejectedValueOnce(new ServerError('choose', { status: 409, code: 'PLAN_MODE_REQUIRED' }));
+      const r = await request(app).post('/api/music-video/mv-1/plan');
+      expect(r.status).toBe(409);
+      expect(r.body.code).toBe('PLAN_MODE_REQUIRED');
+    });
+
+    it('rejects an unknown mode', async () => {
+      const r = await request(app).post('/api/music-video/mv-1/plan').send({ mode: 'merge' });
+      expect(r.status).toBe(400);
     });
 
     it('rejects an unknown body field', async () => {
