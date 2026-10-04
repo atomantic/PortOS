@@ -27,6 +27,10 @@ vi.mock('./history.js', () => ({
   getHistory: vi.fn().mockResolvedValue({ entries: [] })
 }))
 
+vi.mock('./musicVideo/projects.js', () => ({
+  listProjects: vi.fn().mockResolvedValue([])
+}))
+
 import { fanOutSearch } from './search.js'
 import { getAll } from './brainStorage.js'
 import { __resetBrainSearchIndex, BRAIN_SEARCH_TYPES } from './brainSearchIndex.js'
@@ -34,6 +38,7 @@ import { searchBM25 } from './memoryBM25.js'
 import { getMemories, ensureBackend, hybridSearchMemories } from './memoryBackend.js'
 import { getAllApps } from './apps.js'
 import { getHistory } from './history.js'
+import { listProjects as listMusicVideoProjects } from './musicVideo/projects.js'
 
 // Per-type record fixtures the mocked brainStorage.getAll serves.
 let brainRecords = {}
@@ -316,6 +321,22 @@ describe('search service', () => {
       const appsSource = results.find(s => s.id === 'apps')
       expect(appsSource).toBeDefined()
       expect(appsSource.results).toHaveLength(1)
+    })
+
+    it('should search across music-video projects', async () => {
+      listMusicVideoProjects.mockResolvedValue([
+        { id: 'mv-1', name: 'Cyberpunk Odyssey', concept: 'Sci-fi cyberpunk music video' },
+        { id: 'mv-2', name: 'Acoustic Sunset', concept: 'Serene folk ballad' }
+      ])
+
+      const results = await fanOutSearch('cyberpunk')
+      const mvSource = results.find(s => s.id === 'musicVideo')
+      expect(mvSource).toBeDefined()
+      expect(mvSource.results).toHaveLength(1)
+      expect(mvSource.results[0].id).toBe('mv-1')
+      expect(mvSource.results[0].title).toBe('Cyberpunk Odyssey')
+      expect(mvSource.results[0].url).toBe('/music-video/mv-1')
+      expect(mvSource.results[0].type).toBe('music-video')
     })
   })
 })

@@ -12,7 +12,7 @@ import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
  * are collapsed to a thumbnail, lyric and status until tapped.
  */
 export default function BoardStage({ board }) {
-  const { project, locked, busy, sceneMedia, videoSettings, takes } = board;
+  const { project, locked, busy, sceneMedia, videoSettings, takes, activeSceneId, onToggleSceneExpand } = board;
   const scenes = project.scenes || [];
   const performanceReviews = new Map();
   const attempts = (project.autoReviews || []).flatMap((run) => run.attempts || []).slice().reverse();
@@ -54,6 +54,8 @@ export default function BoardStage({ board }) {
             <SceneCard
               key={scene.sceneId}
               scene={scene}
+              expanded={activeSceneId === scene.sceneId}
+              onToggleExpand={onToggleSceneExpand}
               performanceReview={performanceReviews.get(`${scene.sceneId}:${scene.videoHistoryId}`)}
               index={idx}
               isLast={idx === scenes.length - 1}

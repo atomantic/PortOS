@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import NeedsAttentionBanner from './NeedsAttentionBanner.jsx';
 import MusicVideoLayout from './MusicVideoLayout.jsx';
 import { MUSIC_VIDEO_STAGES } from '../../lib/musicVideoStages.js';
 import { deriveAttentionItems } from '../../lib/musicVideoAttention.js';
+
+const renderWithRouter = (ui) => render(<MemoryRouter>{ui}</MemoryRouter>);
 
 const actions = () => ({
   onResumeRevision: vi.fn(), onCancelRevision: vi.fn(), onResumeCastAndSets: vi.fn(),
@@ -21,15 +24,16 @@ const stranded = {
 
 describe('NeedsAttentionBanner (#9940)', () => {
   it('renders nothing when there is nothing to attend to', () => {
-    const { container } = render(<NeedsAttentionBanner items={[]} />);
+    const { container } = renderWithRouter(<NeedsAttentionBanner items={[]} />);
     expect(container).toBeEmptyDOMElement();
   });
 
   it('offers Resume and Cancel for an open revision, wired to the id the project holds', () => {
     const handlers = actions();
-    render(<NeedsAttentionBanner items={deriveAttentionItems({ ...stranded, status: 'complete', castAndSets: null })} actions={handlers} />);
+    renderWithRouter(<NeedsAttentionBanner items={deriveAttentionItems({ ...stranded, status: 'complete', castAndSets: null })} actions={handlers} />);
     const banner = screen.getByRole('region', { name: 'Needs attention' });
     expect(banner).toHaveTextContent('A section revision is open');
+    expect(within(banner).getByRole('link', { name: /scene 1/i })).toHaveAttribute('href', '/music-video/mv-example/board/scene/scene-a');
     fireEvent.click(within(banner).getByRole('button', { name: 'Resume the open revision' }));
     expect(handlers.onResumeRevision).toHaveBeenCalledWith('mvrev-open');
     fireEvent.click(within(banner).getByRole('button', { name: 'Cancel the open revision' }));
@@ -43,7 +47,7 @@ describe('NeedsAttentionBanner (#9940)', () => {
       revisions: [{ id: 'mvrev-owned', status: 'open', sections: [{ sceneId: 'scene-a', kind: 'image', verdict: 'rejected' }] }],
       autoReviews: [{ id: 'mvar-example', status: 'running', attempts: [{ n: 1, revisionId: 'mvrev-owned' }] }],
     };
-    render(<NeedsAttentionBanner items={deriveAttentionItems(project)} actions={handlers} />);
+    renderWithRouter(<NeedsAttentionBanner items={deriveAttentionItems(project)} actions={handlers} />);
     fireEvent.click(screen.getByRole('button', { name: 'Resume the Cast & Sets check-in' }));
     expect(handlers.onResumeCastAndSets).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole('button', { name: 'Continue the auto-review run' }));
@@ -58,13 +62,13 @@ describe('NeedsAttentionBanner (#9940)', () => {
 
   it('shows only Cancel while a revision re-renders, and disables every exit while a request is busy', () => {
     const rendering = { ...stranded, status: 'complete', castAndSets: null, revisions: [{ ...stranded.revisions[0], status: 'rendering' }] };
-    render(<NeedsAttentionBanner items={deriveAttentionItems(rendering)} busy actions={actions()} />);
+    renderWithRouter(<NeedsAttentionBanner items={deriveAttentionItems(rendering)} busy actions={actions()} />);
     expect(screen.queryByRole('button', { name: 'Resume the open revision' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Cancel the open revision' })).toBeDisabled();
   });
 
   it('sits in the Music Video header under the status line, on every stage', () => {
-    render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project' }} stage="board"
+    renderWithRouter(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project' }} stage="board"
       onStageChange={() => {}} progress={{ current: 'board', stages: MUSIC_VIDEO_STAGES.map((stage) => ({ ...stage, state: 'todo' })) }}
       spend={{ spentUsd: 0 }}
       status={{ headline: 'Stage 3 of 7: Board', tone: 'muted', facts: [] }}
