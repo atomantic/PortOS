@@ -252,7 +252,7 @@ export default function MusicVideo() {
   // Selective section revision (#8987): regenerate only a draft's flagged
   // sections, resumable from the server's checkpoint.
   const revisions = useMusicVideoRevisions({ project: selected, replaceProject, sceneMedia, attachRender: excerpts.attachRender });
-  const autoReview = useMusicVideoAutoReview({ project: selected, replaceProject, submitSections: revisions.submitSections });
+  const autoReview = useMusicVideoAutoReview({ project: selected, replaceProject });
   const production = useMusicVideoProduction({ project: selected, replaceProject });
   const autonomous = useAutonomousMusicVideo({ project: selected, replaceProject });
   // Which finished autonomous stage's output is open (`?run-stage=lyrics`).

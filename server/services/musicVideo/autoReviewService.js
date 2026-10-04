@@ -5,14 +5,14 @@
  *
  * `advanceAutoReview` derives the run's next step from the record and keeps
  * taking steps until the run has to wait: for a draft render, for generation
- * jobs, or for the director's board to submit the sections it hands out
- * (generation goes through the board's normal scene lanes, tagged with the
- * run's revision — the same path a manual #8987 revision uses, so every job
- * passes the enqueue-time spend check in `assertRevisionOpen`).
+ * jobs. A board-owned run submits its revised sections itself, server-side
+ * (autoReviewDispatch.js, #10014), so it completes with no browser open; a
+ * production-owned run's hand-outs are dispatched by productionService. Every
+ * job is tagged with the run's revision, so it passes the enqueue-time spend
+ * check in `assertRevisionOpen`.
  *
  * What moves a run forward:
- *   - the director — start, resume (and the board submitting handed-out
- *     sections);
+ *   - the director — start, resume;
  *   - completion events of work THIS run put in flight: its draft render
  *     finishing (`excerpt-render`) or a take landing on one of its revised
  *     sections (`scene-image` / `scene-video`).
@@ -339,8 +339,24 @@ async function takeSteps(projectId, runId) {
       const current = findRun(fresh, runId);
       // Paused or cancelled while the revision resumed: hand nothing out.
       if (current.status !== 'running') return { project: fresh, run: current, action: { type: 'idle' } };
-      if (resumed.needsGeneration.length) {
+      if (resumed.needsGeneration.length && run.productionRunId) {
+        // A production-owned run's hand-out is dispatched by productionService.
         return { project: fresh, run: current, action: { type: 'generate', revisionId: step.revisionId, sections: resumed.needsGeneration } };
+      }
+      if (resumed.needsGeneration.length) {
+        // A board-owned run generates its own revised sections here, so it
+        // completes with no browser open (#10014).
+        const { dispatchRevisedSections } = await import('./autoReviewDispatch.js');
+        const sent = await dispatchRevisedSections({ projectId, revisionId: step.revisionId, sections: resumed.needsGeneration });
+        const after = await requireProject(projectId);
+        const latest = findRun(after, runId);
+        if (latest.status !== 'running') return { project: after, run: latest, action: { type: 'idle' } };
+        if (sent.halt) {
+          const out = await halt(projectId, runId, sent.halt);
+          return { ...out, action: { type: 'idle' } };
+        }
+        console.log(`🎬 Music Video auto-review ${short(runId)} submitted ${sent.submitted.length} revised section${sent.submitted.length === 1 ? '' : 's'}`);
+        return { project: after, run: latest, action: { type: 'wait', on: 'generation', revisionId: step.revisionId, submitted: sent.submitted } };
       }
       return { project: fresh, run: current, action: { type: 'wait', on: 'generation', revisionId: step.revisionId } };
     }

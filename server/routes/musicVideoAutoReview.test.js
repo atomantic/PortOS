@@ -39,7 +39,7 @@ const h = vi.hoisted(() => {
     return p;
   };
   return {
-    procs, spawn, jobs: [], verdicts: [], review: null, temporalInstalled: false, temporalCapability: null, temporalResult: null, temporalCalls: [], analysisAvailable: true, freezeStderr: '',
+    procs, spawn, jobs: [], verdicts: [], settings: null, submitError: null, submits: [], review: null, temporalInstalled: false, temporalCapability: null, temporalResult: null, temporalCalls: [], analysisAvailable: true, freezeStderr: '',
   };
 });
 
@@ -75,7 +75,7 @@ vi.mock('../lib/ffmpeg.js', async (importOriginal) => {
     probeVideoStreamInfo: vi.fn(async () => ({ width: 640, height: 360, fps: 24, frameCount: null })),
   };
 });
-vi.mock('../lib/sseUtils.js', () => ({ broadcastSse: vi.fn(), attachSseClient: vi.fn(() => true), closeJobAfterDelay: vi.fn() }));
+vi.mock('../lib/sseUtils.js', async (importOriginal) => ({ ...(await importOriginal()), broadcastSse: vi.fn(), attachSseClient: vi.fn(() => true), closeJobAfterDelay: vi.fn() }));
 vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'inst-test') }));
 vi.mock('../lib/killWithEscalation.js', () => ({ killWithEscalation: vi.fn((proc) => proc.emit('close', null, 'SIGTERM')) }));
 // Real sheet files, so the reviewer sees a non-empty continuous strip.
@@ -87,8 +87,30 @@ vi.mock('../services/htmlComposition/encode.js', async () => {
 vi.mock('../services/mediaJobQueue/index.js', async () => ({
   mediaJobEvents: new (await import('events')).EventEmitter(),
   listJobs: vi.fn(({ kind } = {}) => h.jobs.filter((j) => !kind || j.kind === kind)),
-  enqueueJob: vi.fn(),
+  // The frame lane's queue write — the revision guard already ran in front of it.
+  enqueueJob: vi.fn(async ({ kind, params, owner }) => {
+    const job = { id: `job-${h.jobs.length + 1}`, kind, owner, status: 'queued', queuedAt: new Date().toISOString(), params };
+    h.jobs.push(job);
+    return { jobId: job.id };
+  }),
   cancelJob: vi.fn(async () => {}),
+}));
+// The video submit service's contract the dispatch relies on: the revision guard
+// runs last before the queue write; a refusal never reaches the queue.
+vi.mock('../services/videoGen/submitJob.js', () => ({
+  submitVideoGenJob: vi.fn(async (body) => {
+    h.submits.push(body);
+    if (h.submitError) throw h.submitError;
+    const { assertRevisionOpen: guard } = await import('../services/musicVideo/revisionService.js');
+    await guard(body.musicVideo.projectId, body.musicVideo.revisionId, { sceneId: body.musicVideo.sceneId, kind: 'video' });
+    const job = { id: `job-${h.jobs.length + 1}`, kind: 'video', status: 'queued', queuedAt: new Date().toISOString(), params: { musicVideo: body.musicVideo } };
+    h.jobs.push(job);
+    return { jobId: job.id };
+  }),
+}));
+vi.mock('../services/settings.js', async (importOriginal) => ({ ...(await importOriginal()), getSettings: vi.fn(async () => h.settings) }));
+vi.mock('../services/videoGen/modelSelection.js', () => ({
+  resolveVideoModelSelection: vi.fn(async () => ({ model: { id: 'ltx-example' }, modelId: 'ltx-example' })),
 }));
 vi.mock('../services/promptRunner.js', () => ({
   resolveProviderAndModel: vi.fn(async () => ({ provider: { id: 'reviewer', name: 'Reviewer', type: 'api' }, selectedModel: 'vision-1' })),
@@ -172,6 +194,9 @@ beforeEach(() => {
   h.jobs.length = 0;
   h.verdicts.length = 0;
   h.analysisAvailable = true;
+  h.settings = { imageGen: { mode: 'local', local: { pythonPath: '/opt/example/python' }, codex: { enabled: true } } };
+  h.submitError = null;
+  h.submits.length = 0;
   h.freezeStderr = '';
   h.temporalInstalled = false;
   h.temporalCapability = { protocolVersion: 1, id: 'example-analyzer', version: '1.0', ready: true, temporalLipSync: true, localOnly: true };
@@ -218,12 +243,14 @@ describe('opt-in automatic review/retries (#8988)', () => {
     const revision = current.revisions.find((rv) => rv.id === attempt1.revisionId);
     expect(revision.sections.filter((s) => s.verdict === 'rejected').map((s) => s.sceneId)).toEqual(['s2']);
 
-    // The board submits s2: the enqueue guard charges it. A double submit
-    // while its job is live, and any further paid job past the run's spend
-    // limit, are refused BEFORE they reach the queue.
+    // The server submits s2 itself — no board is connected: the enqueue guard
+    // charged it, and tagged it with the revision. A double submit while its
+    // job is live, and any further paid job past the run's spend limit, are
+    // refused BEFORE they reach the queue.
     const s2 = { sceneId: 's2', kind: 'video' };
-    await assertRevisionOpen(p.id, revision.id, s2);
-    h.jobs.push({ id: 'job-s2', kind: 'video', status: 'running', queuedAt: new Date().toISOString(), params: { musicVideo: { projectId: p.id, sceneId: 's2', revisionId: revision.id } } });
+    await vi.waitFor(() => expect(h.jobs).toHaveLength(1), { timeout: 5000, interval: 20 });
+    expect(h.submits).toHaveLength(1);
+    expect(h.submits[0]).toMatchObject({ backend: 'local', mode: 'image', sourceImageFile: 'f2.png', musicVideo: { projectId: p.id, sceneId: 's2', revisionId: revision.id } });
     await expect(assertRevisionOpen(p.id, revision.id, s2)).rejects.toMatchObject({ code: 'AUTO_REVIEW_SECTION_IN_FLIGHT' });
     await expect(assertRevisionOpen(p.id, revision.id, { sceneId: 's1', kind: 'video' })).rejects.toMatchObject({ code: 'AUTO_REVIEW_SPEND_LIMIT' });
     h.jobs[0].status = 'completed';
@@ -249,6 +276,8 @@ describe('opt-in automatic review/retries (#8988)', () => {
     let current = await settled(p.id, (x) => expect(run(x).attempts[0].revisionId).toBeTruthy());
     const runId = run(current).id;
     const reviewed = run(current).attempts[0].review;
+    // The server submits the flagged section before the director pauses.
+    await vi.waitFor(() => expect(h.jobs).toHaveLength(1), { timeout: 5000, interval: 20 });
 
     expect((await request(app).post(`${base(p.id)}/auto-reviews/${runId}/stop`)).body.run.status).toBe('stopped');
     // The take the board already paid for still lands — but a stopped run
@@ -269,39 +298,99 @@ describe('opt-in automatic review/retries (#8988)', () => {
     current = await settled(p.id, (x) => expect(run(x).status).toBe('passed'));
     expect(runPromptThroughProvider).toHaveBeenCalledTimes(2);
     expect(run(current).attempts[0].review).toEqual(reviewed);
-    expect(run(current).usage).toEqual({ reviews: 2, generations: 0 });
+    // The one generation was the server's own submission of the flagged section
+    // (before the pause); resuming does not pay for it again.
+    expect(run(current).usage).toEqual({ reviews: 2, generations: 1 });
+    expect(h.submits).toHaveLength(1);
     expect(h.procs).toHaveLength(2);
   });
 
-  it('refunds a kickoff that never reached the queue, and pauses (not retries) when a revised generation fails', async () => {
+  it('pauses (not retries) when a server-submitted revised generation fails', async () => {
     const p = await project();
     h.verdicts.push(FAIL_S2);
     await start(p.id, { maxAttempts: 2, maxGenerations: 2 });
     await finishDraft(p.id, 1);
     let current = await settled(p.id, (x) => expect(run(x).attempts[0].revisionId).toBeTruthy());
     const revisionId = run(current).attempts[0].revisionId;
-    const s2 = { sceneId: 's2', kind: 'video' };
-
-    // The board's kickoff was charged but failed before the queue: releasing
-    // the section returns the generation to the budget.
-    await assertRevisionOpen(p.id, revisionId, s2);
+    await vi.waitFor(() => expect(h.jobs).toHaveLength(1), { timeout: 5000, interval: 20 });
     expect(run(await projects.getProject(p.id)).usage.generations).toBe(1);
-    await request(app).post(`${base(p.id)}/revisions/${revisionId}/release`).send({ sceneId: 's2' });
-    expect(run(await projects.getProject(p.id)).usage.generations).toBe(0);
 
-    // Resubmitted, queued, and the provider fails it: the run pauses for the
-    // director instead of paying for a retry on its own.
-    await assertRevisionOpen(p.id, revisionId, s2);
-    const job = { id: 'job-s2', kind: 'video', status: 'failed', error: 'provider error', queuedAt: new Date().toISOString(), params: { musicVideo: { projectId: p.id, sceneId: 's2', revisionId } } };
+    // The provider fails the queued job: the run pauses for the director
+    // instead of paying for a retry on its own.
+    const job = { ...h.jobs[0], status: 'failed', error: 'provider error' };
     mediaJobEvents.emit('failed', job);
     current = await settled(p.id, (x) => expect(run(x).status).toBe('stopped'));
     expect(run(current).stopReason).toMatch(/generation failed: provider error/);
     expect(run(current).usage.generations).toBe(1);
     expect(current.revisions.find((rv) => rv.id === revisionId).sections.find((s) => s.sceneId === 's2').claimedAt).toBeNull();
     // That job DID reach the queue, so a later release never refunds it.
-    h.jobs.push(job);
     await request(app).post(`${base(p.id)}/revisions/${revisionId}/release`).send({ sceneId: 's2' });
     expect(run(await projects.getProject(p.id)).usage.generations).toBe(1);
+  });
+
+  it('parks the run needs-human and refunds the charge when a revised section cannot reach the queue', async () => {
+    const p = await project();
+    h.verdicts.push(FAIL_S2);
+    h.submitError = Object.assign(new Error('The local video runtime refused the clip'), { status: 422, code: 'VIDEO_INVALID' });
+    await start(p.id, { maxAttempts: 2, maxGenerations: 2 });
+    await finishDraft(p.id, 1);
+    const current = await settled(p.id, (x) => expect(run(x).status).toBe('needs-human'));
+    expect(run(current).stopReason).toMatch(/clip for "s2" was refused: The local video runtime refused the clip/);
+    expect(h.jobs).toHaveLength(0);
+    expect(run(current).usage.generations).toBe(0); // never reached the queue → nothing spent
+    // Released, so resuming the revision hands it straight out again once the cause is fixed.
+    const revision = current.revisions.find((rv) => rv.id === run(current).attempts[0].revisionId);
+    expect(revision.status).toBe('open');
+    expect(revision.sections.find((s) => s.sceneId === 's2').claimedAt).toBeNull();
+    // Once the cause is fixed, resuming the open revision (the banner's Continue) re-derives the step and hands the section out again.
+    const resumed = await request(app).post(`${base(p.id)}/revisions/${revision.id}/resume`);
+    expect(resumed.body.needsGeneration).toEqual([expect.objectContaining({ sceneId: 's2', kind: 'video' })]);
+  });
+
+  it('parks the run needs-human, naming the section, when its clip cannot be generated without the board', async () => {
+    const p = await project();
+    await projects.updateProject(p.id, { videoSettings: { backend: 'local', generationMode: 'audioReactive' } });
+    h.verdicts.push(FAIL_S2);
+    await start(p.id, { maxAttempts: 2, maxGenerations: 2 });
+    await finishDraft(p.id, 1);
+    const current = await settled(p.id, (x) => expect(run(x).status).toBe('needs-human'));
+    expect(run(current).stopReason).toMatch(/clip for "s2" cannot be generated automatically: .*audio-reactive/);
+    expect(h.submits).toHaveLength(0);
+    expect(h.jobs).toHaveLength(0);
+    expect(run(current).usage.generations).toBe(0);
+  });
+
+  it('parks the run needs-human when the pinned video backend is not usable here, never substituting another', async () => {
+    vi.stubEnv('FAL_KEY', '');
+    const p = await project();
+    await projects.updateProject(p.id, { videoSettings: { backend: 'fal' } });
+    h.verdicts.push(FAIL_S2);
+    await start(p.id, { maxAttempts: 2, maxGenerations: 2 });
+    await finishDraft(p.id, 1);
+    const current = await settled(p.id, (x) => expect(run(x).status).toBe('needs-human'));
+    expect(run(current).stopReason).toMatch(/clip for "s2" cannot be generated automatically: .*fal.*not usable/);
+    expect(h.submits).toHaveLength(0);
+    expect(run(current).usage.generations).toBe(0);
+    vi.unstubAllEnvs();
+  });
+
+  it('dispatches a revised frame on the project\'s pinned image backend, tagged and charged like the board\'s lane', async () => {
+    const p = await project();
+    await projects.updateProject(p.id, { imageMode: 'codex' });
+    // A blocking problem at excerpt time 17s — inside the still s3 (song time 22s).
+    h.verdicts.push({ ...FAIL_S2, findings: [{ ...FAIL_S2.findings[0], atSec: 17 }] });
+    await start(p.id, { maxAttempts: 2, maxGenerations: 2 });
+    await finishDraft(p.id, 1);
+    const current = await settled(p.id, (x) => expect(run(x).attempts[0].revisionId).toBeTruthy());
+    const revisionId = run(current).attempts[0].revisionId;
+    expect(current.revisions.find((rv) => rv.id === revisionId).sections.filter((s) => s.verdict === 'rejected')).toEqual([expect.objectContaining({ sceneId: 's3', kind: 'image' })]);
+
+    await vi.waitFor(() => expect(h.jobs).toHaveLength(1), { timeout: 5000, interval: 20 });
+    expect(h.submits).toHaveLength(0); // a frame never touches the video lane
+    expect(h.jobs[0]).toMatchObject({ kind: 'image', owner: `music-video-auto-review:${revisionId}`, params: { mode: 'codex', musicVideo: { projectId: p.id, sceneId: 's3', revisionId } } });
+    expect(run(await projects.getProject(p.id)).usage.generations).toBe(1);
+    // The same section is not handed out twice while its job is live.
+    await expect(assertRevisionOpen(p.id, revisionId, { sceneId: 's3', kind: 'image' })).rejects.toMatchObject({ code: 'AUTO_REVIEW_SECTION_IN_FLIGHT' });
   });
 
   it('cancelling a run closes its open revision in the same write — nothing more is charged or allowed', async () => {

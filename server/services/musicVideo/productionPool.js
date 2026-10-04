@@ -195,6 +195,16 @@ async function routeIncapableReason(route, requirement, env) {
   return null;
 }
 
+/**
+ * Why `route` cannot generate `requirement` on this install right now, or null
+ * — the eligibility + capability checks a production step passes, for a caller
+ * with no pool to choose from (a standalone auto-review run, #10014).
+ */
+export async function routeUnavailableReason(route, requirement, env) {
+  const { ok, reason } = await routeEligibility(route, env);
+  return ok ? routeIncapableReason(route, requirement, env) : reason;
+}
+
 /** Start-time check: every route in the pool must be eligible now. Throws 409 with every reason. */
 export async function assertPoolEligible(pool, env) {
   const problems = [];

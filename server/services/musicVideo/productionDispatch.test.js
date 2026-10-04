@@ -15,6 +15,8 @@ const submitVideoGenJob = vi.fn(async () => ({ jobId: 'job-video' }));
 vi.mock('../mediaJobQueue/index.js', () => ({ enqueueJob: (...a) => enqueueJob(...a) }));
 vi.mock('../videoGen/submitJob.js', () => ({ submitVideoGenJob: (...a) => submitVideoGenJob(...a) }));
 vi.mock('./productionService.js', () => ({ assertProductionSubmission: vi.fn(async () => {}) }));
+const assertRevisionOpen = vi.fn(async () => {});
+vi.mock('./revisionService.js', () => ({ assertRevisionOpen: (...a) => assertRevisionOpen(...a) }));
 vi.mock('../imageGen/index.js', () => ({ resolveImageCleaners: () => ({ cleanC2PA: false, denoise: false }) }));
 
 const { dispatchProductionStep } = await import('./productionDispatch.js');
@@ -94,6 +96,19 @@ describe('production scene dispatch (#9066)', () => {
     expect(assertProductionSubmission).toHaveBeenCalledWith(tag.projectId, tag.productionRunId, tag.productionStepKey,
       { sceneId: tag.sceneId, kind: 'image' });
     expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it('dispatches a standalone auto-review frame (no production run): the revision guard runs, the production reservation does not (#10014)', async () => {
+    const revisionTag = { projectId: 'mv-example', sceneId: 'mvs-a', revisionId: 'mvr-example' };
+    await dispatchProductionStep({ stepKind: 'frame', project, scene, route: { kind: 'image', mode: 'codex', model: null }, tag: revisionTag, settings });
+    expect(assertRevisionOpen).toHaveBeenCalledWith('mv-example', 'mvr-example', { sceneId: 'mvs-a', kind: 'image' });
+    expect(assertProductionSubmission).not.toHaveBeenCalled();
+    expect(enqueueJob.mock.calls[0][0]).toMatchObject({ kind: 'image', owner: 'music-video-auto-review:mvr-example', params: { musicVideo: revisionTag } });
+    // A refused revision guard keeps the job out of the queue.
+    assertRevisionOpen.mockRejectedValueOnce(Object.assign(new Error('Spend limit'), { code: 'AUTO_REVIEW_SPEND_LIMIT' }));
+    await expect(dispatchProductionStep({ stepKind: 'frame', project, scene, route: { kind: 'image', mode: 'codex', model: null }, tag: revisionTag, settings }))
+      .rejects.toMatchObject({ code: 'AUTO_REVIEW_SPEND_LIMIT' });
+    expect(enqueueJob).toHaveBeenCalledTimes(1);
   });
 
   it('submits a clip with an explicit backend so the install pin ladder cannot substitute one', async () => {

@@ -34,38 +34,33 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
-const setup = (submitSections) => {
+const setup = () => {
   const replaceProject = vi.fn();
-  const hook = renderHook(() => useMusicVideoAutoReview({ project, replaceProject, submitSections }));
+  const hook = renderHook(() => useMusicVideoAutoReview({ project, replaceProject }));
   return { ...hook, replaceProject };
 };
 const flush = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 
-it('says so — and points at Continue — when handing out revised sections throws (#9940)', async () => {
-  setup(vi.fn(() => Promise.reject(new Error('lane exploded'))));
-  act(() => handlers.get('music-video:auto-review')(generateEvent));
-  await flush();
-  expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('lane exploded'));
-  expect(toast.error.mock.calls[0][0]).toContain('Continue');
-});
-
-it('reports how many revised sections the board submitted', async () => {
+it('applies the pushed project and never submits a revised section from the board (#10014)', async () => {
   const submitSections = vi.fn(() => Promise.resolve(2));
-  setup(submitSections);
-  act(() => handlers.get('music-video:auto-review')(generateEvent));
+  const replaceProject = vi.fn();
+  const pushed = { ...project, autoReviews: [] };
+  const { result } = renderHook(() => useMusicVideoAutoReview({ project, replaceProject, submitSections }));
+  // A hand-out with a running run — the shape the board used to submit — is only applied.
+  act(() => handlers.get('music-video:auto-review')({ ...generateEvent, project: pushed }));
   await flush();
-  expect(submitSections).toHaveBeenCalledWith(project, generateEvent.action.sections, 'mvrev-example');
-  expect(toast.info).toHaveBeenCalledWith('Auto-review: generating 2 revised sections');
+  expect(submitSections).not.toHaveBeenCalled();
+  expect(replaceProject).toHaveBeenCalledWith(pushed);
+  expect(result.current.action).toEqual(generateEvent.action);
   expect(toast.error).not.toHaveBeenCalled();
 });
 
-it('does not hand out sections for a run a production owns or one that is no longer running', async () => {
-  const submitSections = vi.fn(() => Promise.resolve(1));
-  setup(submitSections);
-  act(() => handlers.get('music-video:auto-review')({ ...generateEvent, run: { ...generateEvent.run, productionRunId: 'mvpr-example' } }));
-  act(() => handlers.get('music-video:auto-review')({ ...generateEvent, run: { ...generateEvent.run, status: 'stopped' } }));
+it('ignores another project\'s event', async () => {
+  const { result, replaceProject } = setup();
+  act(() => handlers.get('music-video:auto-review')({ ...generateEvent, projectId: 'mv-other' }));
   await flush();
-  expect(submitSections).not.toHaveBeenCalled();
+  expect(replaceProject).not.toHaveBeenCalled();
+  expect(result.current.action).toBeNull();
 });
 
 it('links a start refused for an open revision to it, reloading the record so the banner can show it', async () => {
@@ -74,7 +69,7 @@ it('links a start refused for an open revision to it, reloading the record so th
   startMusicVideoAutoReview.mockRejectedValue(Object.assign(new Error('Finish or cancel the open revision before starting an auto-review run'), {
     code: 'REVISION_IN_PROGRESS', context: { revisionId: 'mvrev-open' },
   }));
-  const { result, replaceProject } = setup(vi.fn());
+  const { result, replaceProject } = setup();
   await act(async () => { await result.current.start(0, 10, { maxAttempts: 1, maxGenerations: 1 }); });
   expect(getMusicVideoProject).toHaveBeenCalledWith('mv-example', { silent: true });
   await flush();

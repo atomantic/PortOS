@@ -15,7 +15,12 @@ const STATUS_TONES = {
 const CHECK_TONES = { pass: 'bg-port-success/20 text-port-success', fail: 'bg-port-error/20 text-port-error', unverified: 'bg-port-border text-port-text-muted' };
 const CHECK_LABELS = { composition: 'Composition', continuity: 'Continuity', motion: 'Motion', audioSync: 'Stream-duration parity', lipSync: 'Temporal lip-sync' };
 const ACTION_LABELS = {
-  wait: (a) => (a.on === 'generation' ? 'Waiting for the revised sections to generate…' : 'Rendering the draft…'),
+  wait: (a) => {
+    if (a.on !== 'generation') return 'Rendering the draft…';
+    // The server submitted these itself (#10014) — no tab has to stay open.
+    const n = a.submitted?.length || 0;
+    return n ? `Generating ${n} revised section${n === 1 ? '' : 's'}…` : 'Waiting for the revised sections to generate…';
+  },
   reviewing: () => 'Reviewing the draft (frames + continuous excerpt)…',
   generate: (a) => `Generating ${a.sections?.length || 0} revised section${a.sections?.length === 1 ? '' : 's'}…`,
 };
@@ -167,7 +172,7 @@ export default function AutoReviewPanel({ project, startSec, endSec, rangeValid,
             </span>
             {active && (
               <div className="flex items-center gap-2">
-                {/* After a reload the board may have missed a hand-out: Continue re-derives the step. */}
+                {/* The server generates a run's revised sections itself; Continue re-derives the step of a run that stalled (e.g. across a restart). */}
                 {run.status === 'running' && !autoReview.action && (
                   <button type="button" disabled={busy} onClick={() => autoReview.resume(run.id)} className="flex items-center gap-1 text-port-accent disabled:opacity-50 min-h-[44px] sm:min-h-0"><Play size={12} /> Continue</button>
                 )}

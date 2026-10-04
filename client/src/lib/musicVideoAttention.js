@@ -1,7 +1,7 @@
 /**
  * "Needs attention" for the Music Video header (#9940): the server-held states
  * a client-orchestrated workflow can strand — an open revision, an interrupted
- * Cast & Sets stage, a running auto-review waiting on its revised sections, a
+ * Cast & Sets stage, a running auto-review that never handed out its revised sections, a
  * final render nobody is watching. Request A opens server state and step B
  * finalizes it, so a throw or reload between them leaves a record that blocks
  * production while nothing on screen says why. Everything here is derived from
@@ -87,13 +87,16 @@ export function deriveAttentionItems(project, { generatingSceneIds = null, draft
     const owned = revisions.find((r) => r.id === ownedRevisionId);
     if (owned?.status === 'open') {
       const { rejected } = sectionProgress(project, owned);
-      if (!rejected.some((s) => spinning(s.sceneId))) {
+      // The server generates a run's revised sections itself (#10014), so a
+      // claimed section is in flight there even though no spinner on this
+      // board shows it. Only a revision that was never handed out has stalled.
+      if (!rejected.some((s) => spinning(s.sceneId) || s.claimedAt)) {
         items.push({
           id: `auto-review:${liveReview.id}`,
           kind: 'auto-review',
           tone: 'warn',
           title: 'Auto-review is waiting for its revised sections',
-          detail: 'The board hands them out while it is open. If you reloaded or closed it, continue to hand them out again — nothing is generated beyond the limits you set for the run.',
+          detail: 'The server generates them as soon as the run reaches this step. If it stalled (for example across a restart), continue to hand them out again — nothing is generated beyond the limits you set for the run.',
           runId: liveReview.id,
         });
       }

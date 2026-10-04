@@ -50,10 +50,6 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
  * `replaceProject(project)` swaps the local record whole; `sceneMedia` is the
  * `useMusicVideoSceneMedia` result; `attachRender(jobId, projectId)` is
  * `useMusicVideoExcerpts().attachRender`.
- *
- * `submitSections(project, refs, revisionId)` exposes the same tagged
- * submission for an auto-review run's hand-outs (#8988); resolves to the
- * number of sections that reached the queue.
  */
 export default function useMusicVideoRevisions({ project, replaceProject, sceneMedia, attachRender } = {}) {
   const projectId = project?.id || null;
@@ -175,7 +171,5 @@ export default function useMusicVideoRevisions({ project, replaceProject, sceneM
     .then((res) => (res ? settle(res, (r) => replaceProject(r.project), 'The repair revision opened') : null))
     .then(resumeOpened);
 
-  // Also used by an opt-in auto-review run (#8988), which hands its revised
-  // sections to the open board over the `music-video:auto-review` event.
-  return { busy, repair, repairPerformance, revise, resume, cancel, submitSections: generateSections };
+  return { busy, repair, repairPerformance, revise, resume, cancel };
 }
