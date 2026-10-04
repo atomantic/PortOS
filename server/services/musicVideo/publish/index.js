@@ -108,15 +108,6 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
   });
 }
 
-/** Final publication is deliberately unavailable to agents and API callers.
- * The operator reviews and publishes in the destination platform itself.
- */
-export async function submitPublishDraft() {
-  throw new ServerError('Publish manually in the destination platform, then record the post link in PortOS.', {
-    status: 403, code: 'PUBLISH_MANUAL_REQUIRED',
-  });
-}
-
 /** Close a draft without posting it. */
 export async function discardPublishDraft(projectId, draftId) {
   const draft = drafts.get(draftId);
