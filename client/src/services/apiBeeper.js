@@ -181,3 +181,6 @@ export const updateBeeperScope = (id, scope, options = {}) => request(`/beeper/s
 export const deleteBeeperScope = (id, options = {}) => request(`/beeper/scopes/${encodeURIComponent(id)}`, {
   method: 'DELETE', ...options,
 });
+
+export const createBeeperConversation = (input, options = {}) =>
+  request('/beeper/conversations', { ...options, method: 'POST', body: JSON.stringify(input) });

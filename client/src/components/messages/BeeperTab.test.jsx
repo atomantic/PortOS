@@ -60,6 +60,7 @@ const api = vi.hoisted(() => ({
 // barrel every other call in this file goes through — so `useBeeperOutbox`
 // needs its own mock rather than riding along on `api` above.
 const apiBeeper = vi.hoisted(() => ({
+  createBeeperConversation: vi.fn(),
   listOutboxEntries: vi.fn(),
   createOutboxEntry: vi.fn(),
   sendOutboxEntry: vi.fn(),
@@ -1762,4 +1763,22 @@ it('reopens a shared Later URL with search and unread filters', async () => {
     { snoozed: true, search: 'example', unreadOnly: true }, { silent: true },
   ));
   expect(screen.getByRole('button', { name: 'Later' })).toHaveAttribute('aria-pressed', 'true');
+});
+
+it('opens a new direct conversation from the surface and navigates to its mirrored thread', async () => {
+  api.getBeeperStatus.mockResolvedValue({
+    tokenConfigured: true, accounts: [{ accountId: 'example-account', displayName: 'Example network' }],
+  });
+  apiBeeper.createBeeperConversation.mockResolvedValue({ id: CONV_A });
+  api.getBeeperConversation.mockResolvedValue(conversation());
+  api.getBeeperMessages.mockResolvedValue({ messages: [], nextCursor: null });
+  renderTab();
+  fireEvent.click(await screen.findByRole('button', { name: 'New conversation' }));
+  fireEvent.change(screen.getByLabelText('Recipient ID'), { target: { value: 'recipient-example' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Open conversation' }));
+  await waitFor(() => expect(api.getBeeperConversation).toHaveBeenCalledWith(CONV_A, { silent: true }));
+  expect(screen.queryByLabelText('Recipient ID')).toBeNull();
+  expect(apiBeeper.createBeeperConversation).toHaveBeenCalledWith({
+    accountId: 'example-account', participantId: 'recipient-example',
+  }, { silent: true });
 });

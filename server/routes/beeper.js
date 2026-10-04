@@ -15,7 +15,7 @@ import {
 } from '../lib/validation.js';
 import { getBeeperStatus, checkBeeperConnection } from '../services/beeperStatus.js';
 import { completeBeeperOAuth, connectWithPastedToken, disconnectBeeper, startBeeperOAuth } from '../services/beeperOAuth.js';
-import { runBeeperSweep } from '../services/beeperSync.js';
+import { runBeeperSweep, createBeeperConversation } from '../services/beeperSync.js';
 import {
   clearOutboxBreaker, createOutboxEntry, discardOutboxEntry, reconcileOutboxEntry, listOutboxEntries, sendOutboxEntry,
 } from '../services/beeperOutbox.js';
@@ -247,6 +247,17 @@ const conversationParamsSchema = z.object({ id: z.string().guid() });
 
 const archiveSchema = z.object({ archived: z.boolean() }).strict();
 const lowPrioritySchema = z.object({ lowPriority: z.boolean() }).strict();
+
+const createConversationSchema = z.object({
+  accountId: z.string().trim().min(1).max(200),
+  participantId: z.string().trim().min(1).max(500),
+}).strict();
+
+router.post('/conversations', asyncHandler(async (req, res) => {
+  const input = validateRequest(createConversationSchema, req.body);
+  const result = await createBeeperConversation(input).catch((err) => { throw mapBeeperError(err); });
+  res.status(201).json(result);
+}));
 
 // GET /api/beeper/conversations — the rail's list for one scope. Filters are
 // per-network and unread-only (#9's MVP scoping) plus the two system scopes

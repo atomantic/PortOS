@@ -83,6 +83,7 @@ vi.mock('./beeperTribe.js', () => ({
 
 const {
   runBeeperSweep,
+  createBeeperConversation,
   reconcileBeeperEvent, isBeeperIngestionArmed, getBeeperSyncConfig, chatNeedsSweep,
   normalizeAccountRow, normalizeMessageRow, normalizeAttachmentRows, DEFAULT_INTERVAL_MINUTES,
 } = await import('./beeperSync.js');
@@ -1274,5 +1275,53 @@ describe('Later scope mirror', () => {
     writes = dbCalls.filter(({ text }) => text.includes('UPDATE beeper_conversations SET snooze_until'));
     expect(writes.at(-1).params[2]).toBeNull();
     expect(messageRequests()).toHaveLength(0);
+  });
+});
+
+describe('user-triggered direct chat creation', () => {
+  it.each(['modern', 'legacy'])('creates once and mirrors the retrieved chat (%s response)', async (version) => {
+    queryMock.mockResolvedValueOnce({ rows: [{ account_id: 'account-example' }] });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(version === 'modern'
+        ? { id: 'chat-example' } : { chatID: 'chat-example', status: 'created' }))
+      .mockResolvedValueOnce(jsonResponse({
+        id: 'chat-example', accountID: 'account-example', network: 'Example', title: 'Recipient',
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await createBeeperConversation({ accountId: 'account-example', participantId: 'user-example' });
+    expect(result).toEqual({ id: 'conv-chat-example' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      accountID: 'account-example', participantIDs: ['user-example'], type: 'single',
+    });
+    expect(fetchMock.mock.calls[0][1].method).toBe('POST');
+    expect(dbCalls.find(({ text }) => text.includes('INSERT INTO beeper_conversations')).params.slice(0, 4))
+      .toEqual(['account-example', 'Example', 'chat-example', 'Recipient']);
+  });
+
+  it('rejects an unknown local account before any remote write', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(createBeeperConversation({ accountId: 'missing', participantId: 'user-example' }))
+      .rejects.toMatchObject({ code: 'CONVERSATION_NOT_FOUND' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects mismatched remote identity without inserting a mirror row', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [{ account_id: 'account-example' }] });
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ id: 'chat-example' }))
+      .mockResolvedValueOnce(jsonResponse({ id: 'chat-example', accountID: 'wrong-account' })));
+    await expect(createBeeperConversation({ accountId: 'account-example', participantId: 'user-example' }))
+      .rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' });
+    expect(dbCalls.some(({ text }) => text.includes('INSERT INTO beeper_conversations'))).toBe(false);
+  });
+
+  it('never retries a failed creation request', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [{ account_id: 'account-example' }] });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 503, text: async () => JSON.stringify({ error: 'unavailable' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(createBeeperConversation({ accountId: 'account-example', participantId: 'user-example' })).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
