@@ -13,7 +13,8 @@ const lyricAt = (cues, t) => {
 // A phone's collapsed mini-player has no picture to show, so it must not pull
 // every scene take into memory up front — iOS Safari kills the tab and offers
 // only "A problem repeatedly occurred". Without matchMedia, load eagerly.
-const startsDeferred = (collapsed) => collapsed && window.matchMedia?.('(min-width: 1024px)').matches === false;
+const DESKTOP_QUERY = '(min-width: 1024px)';
+const startsDeferred = (collapsed) => collapsed && window.matchMedia?.(DESKTOP_QUERY).matches === false;
 
 /**
  * Live preview of the project's composition document: the sandboxed iframe,
@@ -35,7 +36,16 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const [previewError, setPreviewError] = useState('');
   const [status, setStatus] = useState('');
   const [wanted, setWanted] = useState(() => !startsDeferred(collapsed));
-  useEffect(() => { if (!collapsed) setWanted(true); }, [collapsed]);
+  useEffect(() => {
+    if (!collapsed) { setWanted(true); return undefined; }
+    const desktop = window.matchMedia?.(DESKTOP_QUERY);
+    // The desktop dock is always visible and has no expand button. A preview
+    // deferred on a phone must therefore load when its viewport becomes wide.
+    const reveal = () => { if (!desktop || desktop.matches) setWanted(true); };
+    reveal();
+    desktop?.addEventListener?.('change', reveal);
+    return () => desktop?.removeEventListener?.('change', reveal);
+  }, [collapsed]);
   const [t, setT] = useState(0);
   const [playing, setPlaying] = useState(false);
   const iframeRef = useRef(null);

@@ -315,12 +315,15 @@ async function openComposeInPage(args, h, readRow) {
     h.typeInto(input, address);
     const option = await h.waitFor(() => {
       const hits = [...document.querySelectorAll(sels.recipientSuggestion)]
-        .filter(el => h.visible(el) && h.labelOf(el).toLowerCase().includes(address));
+        .filter(el => {
+          const emails = h.emailsIn(el);
+          return h.visible(el) && emails.length === 1 && emails[0] === address;
+        });
       return hits.length === 1 ? hits[0] : null;
     }, 6000);
     if (!option) return { code: 'RECIPIENT_UNRESOLVED' };
     option.click();
-    resolved.push(address);
+    resolved.push(...h.emailsIn(option));
     await h.sleep(300);
   }
   const box = await h.waitFor(() => h.only(document, sels.composeBox));

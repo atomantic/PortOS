@@ -118,3 +118,45 @@ describe('buildComposePhaseScript', () => {
     expect(() => buildComposePhaseScript('send-now', args)).toThrow(/Unknown compose phase/);
   });
 });
+
+// Execute the actual recipient-picker script: a transport stub returning the
+// requested address cannot catch a suggestion for a different mailbox.
+describe('Teams recipient selection in the provider page', () => {
+  it.each([
+    ['Ann Example ANN@example.com', true],
+    ['Joann Example joann@example.com', false],
+    ['Ann Example ann@example.com other@example.com', false],
+  ])('selects only an exact, unambiguous address from %s', async (suggestion, accepted) => {
+    let selected = false;
+    let now = 0;
+    const element = (innerText = '') => ({
+      innerText, isConnected: true, disabled: false,
+      getClientRects: () => [{}], getAttribute: () => null,
+      querySelectorAll: () => [], focus() {}, click() {}, setAttribute() {},
+    });
+    const input = element();
+    const box = element();
+    const option = { ...element(suggestion), click: () => { selected = true; } };
+    const sels = COMPOSE_SELECTOR_DEFAULTS.teams;
+    const matches = {
+      [sels.newChat]: [element()], [sels.recipientInput]: [input],
+      [sels.recipientSuggestion]: [option], [sels.composeBox]: [box],
+    };
+    const document = {
+      execCommand() {},
+      querySelector: selector => selector === sels.composeBox ? box : null,
+      querySelectorAll: selector => matches[selector] || [],
+    };
+    const result = await vm.runInNewContext(buildComposePhaseScript('open', {
+      provider: 'teams', sels, token: 'attempt-1', to: ['ann@example.com'],
+    }), { document, Date: { now: () => { now += 1000; return now; } }, setTimeout: callback => { callback(); } });
+    expect(selected).toBe(accepted);
+    if (accepted) {
+      expect(result.ok).toBe(true);
+      expect(recipientsMatch({ to: ['ann@example.com'], cc: [] }, { to: result.resolved, cc: [] })).toBe(true);
+    } else {
+      expect(result.code).toBe('RECIPIENT_UNRESOLVED');
+      expect(result.resolved).toBeUndefined();
+    }
+  });
+});

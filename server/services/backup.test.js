@@ -2342,7 +2342,7 @@ describe('restoreSnapshot manifest verification', () => {
       }
     }
 
-    it.each([
+    it.for([
       { name: 'full restore', options: {} },
       { name: 'brain-scoped restore', options: { subdirFilter: 'brain' } },
     ])('a $name keeps an absent destination authority absent, so a healthy native backend is still admitted', async ({ options }, context) => {

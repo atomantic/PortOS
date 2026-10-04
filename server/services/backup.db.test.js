@@ -88,14 +88,17 @@ afterAll(async () => {
   }
 });
 
-async function restore(dryRun = false, snapshotId = 'old-schema') {
-  const pending = restorePostgres(dest, snapshotId, { source: 'fixture-source', dryRun });
+async function trackRestore(pending) {
   pendingRestores.add(pending);
   try {
     return await pending;
   } finally {
     pendingRestores.delete(pending);
   }
+}
+
+function restore(dryRun = false, snapshotId = 'old-schema') {
+  return trackRestore(restorePostgres(dest, snapshotId, { source: 'fixture-source', dryRun }));
 }
 
 describe.skipIf(!ready)('restore older database schema', () => {
@@ -202,7 +205,9 @@ describe.skipIf(!ready)('restore older database schema', () => {
     await expect(query('SELECT 1')).rejects.toMatchObject({ code: 'DATABASE_RESTORE_RECOVERY' });
     expect(await restore(true)).toMatchObject({ status: 'failed', reason: 'restore_recovery_pending' });
 
-    expect(await resumeDatabaseRestore(journal.id)).toMatchObject({ status: 'ok', outcome: 'repaired' });
+    // Recovery owns the same maintenance fence and pool as replay. If this
+    // assertion times out, later cases and teardown must drain it too.
+    expect(await trackRestore(resumeDatabaseRestore(journal.id))).toMatchObject({ status: 'ok', outcome: 'repaired' });
     expect(databaseRestoreRecovery.read()).toBeNull();
     // The receipt committed with the replay, inside its transaction.
     expect((await query('SELECT dump_sha256 FROM restore_receipts WHERE operation_id = $1', [journal.id])).rows)
