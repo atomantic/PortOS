@@ -239,6 +239,7 @@ describe('BackupWidget snapshots', () => {
 
   it('describes restore as files-only and never claims all data is up to date', async () => {
     mockRestoreBackup.mockResolvedValueOnce({ changedFiles: [] });
+    renderWidget();
     await openRestorePanel();
     expect(screen.getByText(/PostgreSQL records are not restored here/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Restore PostgreSQL records in Backup settings' })).toHaveAttribute('href', '/settings/backup');
