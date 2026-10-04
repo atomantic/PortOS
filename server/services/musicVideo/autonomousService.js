@@ -116,6 +116,14 @@ export const presentAutonomousRun = (run) => (run
   ? { ...run, interrupted: run.status === 'running' && run.processId !== PROCESS_ID }
   : null);
 
+/** `presentAutonomousRun` for a project read; reader-only — never persist the result. */
+export const presentProjectAutonomousRun = (project) => (project?.autonomousRun
+  ? { ...project, autonomousRun: presentAutonomousRun(project.autonomousRun) }
+  : project);
+
+/** Test seam: this process's pin id. */
+export const __autonomousProcessId = () => PROCESS_ID;
+
 function publish(project, run) {
   musicVideoEvents.emit('autonomous', { projectId: project.id, runId: run.id, run: presentAutonomousRun(run), project: { ...project, autonomousRun: presentAutonomousRun(run) } });
 }
