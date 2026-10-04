@@ -1382,7 +1382,7 @@ export async function hasBranchMergeEvidence(dir, branch, target) {
   // Rebase/cherry-pick path: does target contain every branch commit as an
   // individual patch-equivalent commit?
   const individualCherry = await execGit(['cherry', targetSha, branchSha], dir, { ignoreExitCode: true })
-    .then(r => r.stdout.trim())
+    .then(r => r.exitCode === 0 ? r.stdout.trim() : null)
     .catch(() => null);
   if (individualCherry === null) return false;
   if (individualCherry !== '' && individualCherry.split('\n').every(line => line.startsWith('-'))) {
@@ -1411,7 +1411,7 @@ export async function hasBranchMergeEvidence(dir, branch, target) {
   if (!synthesized) return false;
 
   const combinedCherry = await execGit(['cherry', targetSha, synthesized], dir, { ignoreExitCode: true })
-    .then(r => r.stdout.trim())
+    .then(r => r.exitCode === 0 ? r.stdout.trim() : null)
     .catch(() => null);
   if (combinedCherry === null) return false;
   if (combinedCherry === '') return true; // empty patch (tree already matches) ⇒ merged

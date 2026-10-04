@@ -1506,57 +1506,65 @@ export async function reapMergedWorktrees(sourceWorkspace, {
  * worktrees directory. They're invisible to PortOS's `git worktree list`.
  */
 async function cleanupExternalRepoWorktrees(activeAgentIds, alreadyHandled) {
+  const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
   const entries = await readdir(WORKTREES_DIR, { withFileTypes: true }).catch(() => []);
   let cleaned = 0;
 
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const agentId = entry.name;
-    if (alreadyHandled.has(agentId) || activeAgentIds.has(agentId)) continue;
-    // Human-driven `/claim` worktrees are not CoS agents — never reap them.
-    if (isHumanClaimWorktree(agentId)) continue;
+    if (!entry.isDirectory() || alreadyHandled.has(entry.name)) continue;
+    const worktreePath = join(WORKTREES_DIR, entry.name);
+    const ownership = {
+      path: worktreePath,
+      activeAgentIds,
+      roots: [{ path: WORKTREES_DIR, requireAgentId: true }],
+      requireKnownLiveness: true,
+    };
+    if (worktreeOwnershipReason(ownership)) continue;
+    const gitFile = await lstat(join(worktreePath, '.git')).catch(() => null);
+    if (!gitFile?.isFile()) continue;
 
-    const worktreePath = join(WORKTREES_DIR, agentId);
-    const gitFile = join(worktreePath, '.git');
+    // Ask Git for its common directory and actual registration, rather than
+    // inferring a parent from the spelling of a .git file. Relative pointers,
+    // separate git directories and Windows separators are all valid.
+    const commonDir = await execGit(['rev-parse', '--git-common-dir'], worktreePath)
+      .then(r => r.stdout.trim() ? resolve(worktreePath, r.stdout.trim()) : null).catch(() => null);
+    if (!commonDir) continue;
+    // Git expands Windows short (8.3) aliases even where Node's realpath
+    // keeps them. Compare Git's own spelling with its registration output.
+    const gitWorktreePath = await execGit(['rev-parse', '--show-toplevel'], worktreePath)
+      .then(r => r.stdout.trim()).catch(() => null);
+    if (!gitWorktreePath) continue;
+    const registrations = await listWorktrees(worktreePath).catch(() => []);
+    const wt = registrations.find(candidate => pathsEqual(candidate.path, gitWorktreePath));
+    const primary = registrations[0];
+    if (!wt || wt.bare || wt.detached || wt.prunable || !wt.branch) continue;
+    if (!primary || primary.bare || pathsEqual(primary.path, gitWorktreePath)) continue;
+    if (worktreeOwnershipReason({ ...ownership, locked: wt.locked })) continue;
 
-    // Read .git file to find the parent repo
-    // In a worktree, .git is a file containing "gitdir: ..."; in a normal repo it's a directory
-    const gitStat = await stat(gitFile).catch(() => null);
-    if (gitStat?.isDirectory()) {
-      // This is a normal git repo, not a worktree — skip to avoid accidental data loss
-      continue;
-    }
-    const gitContent = gitStat ? await tryReadFile(gitFile) : null;
-    if (!gitContent?.startsWith('gitdir:')) {
-      // No .git file or unreadable — skip rather than removing potentially valuable data
-      console.log(`🌳 Skipping worktree directory ${agentId} — cannot determine parent repo`);
-      continue;
-    }
+    const parentRepo = primary.path;
+    const parentCommonDir = await execGit(['rev-parse', '--git-common-dir'], parentRepo)
+      .then(r => r.stdout.trim() ? resolve(parentRepo, r.stdout.trim()) : null).catch(() => null);
+    if (!parentCommonDir || !pathsEqual(commonDir, parentCommonDir)) continue;
 
-    // Extract the parent repo from the gitdir path (e.g., /path/to/repo/.git/worktrees/agent-xxx)
-    const gitdir = gitContent.replace('gitdir:', '').trim();
-    const parentRepoGitDir = gitdir.replace(/\/worktrees\/[^/]+$/, '');
-    const parentRepo = parentRepoGitDir.replace(/\/\.git$/, '');
+    const branchName = wt.branch.replace(/^refs\/heads\//, '');
+    const defaultBranch = await getDefaultBranch(parentRepo, { strict: true }).catch(() => null);
+    if (!defaultBranch || ['main', 'master', 'dev', 'develop', 'release', defaultBranch].includes(branchName)) continue;
+    const status = await execGit(['status', '--porcelain'], worktreePath).then(r => r.stdout).catch(() => null);
+    if (status === null || !classifyWorktreeDirt(status).clean) continue;
+    const target = await resolveMergeTarget(parentRepo, defaultBranch);
+    const merged = await hasBranchMergeEvidence(parentRepo, branchName, target).catch(() => false);
+    if (!merged) continue;
 
-    if (!existsSync(parentRepo)) {
-      // Parent repo no longer exists — just remove directory
-      console.log(`🌳 Removing orphaned external worktree ${agentId} (parent repo gone: ${parentRepo})`);
-      await rm(worktreePath, { recursive: true, force: true }).catch(() => {});
-      cleaned++;
-      continue;
-    }
-
-    // Clean via the parent repo's git
-    console.log(`🌳 Cleaning external worktree ${agentId} from ${parentRepo}`);
-    const branchName = await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath)
-      .then(r => r.stdout.trim())
-      .catch(() => '');
-
-    await forceRemoveWorktreeDir(parentRepo, worktreePath);
-
-    if (branchName) {
-      await execGit(['branch', '-D', branchName], parentRepo).catch(() => {});
-    }
+    // Non-force removal is a final Git guard against newly dirty or locked
+    // trees. A refusal must never fall through to recursive filesystem removal.
+    const removed = await execGit(['worktree', 'remove', worktreePath], parentRepo).then(() => true).catch(err => {
+      console.warn(`⚠️ Preserved external worktree ${entry.name}: ${err.message}`);
+      return false;
+    });
+    if (!removed) continue;
+    await execGit(['branch', '-D', branchName], parentRepo).catch(err => {
+      console.warn(`⚠️ External branch cleanup failed for ${branchName}: ${err.message}`);
+    });
     cleaned++;
   }
 

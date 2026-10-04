@@ -2,7 +2,12 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execFileSync } from 'child_process';
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it as vitestIt, vi } from 'vitest';
+
+import { ownTestBodies } from '../lib/mockPathsDataRoot.js';
+
+const owned = ownTestBodies(vitestIt);
+const it = owned.it;
 
 // The CoS agent registry is the one collaborator these fixtures cannot supply:
 // the temp repos are not a PortOS install, so the live registry read fails
@@ -36,7 +41,13 @@ function makeRepo() {
 }
 
 beforeEach(() => vi.restoreAllMocks());
-afterAll(() => repos.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+// Fail-fast cancellation can finish Vitest's wrapper while its Git subprocess
+// still owns the checkout. Drain those bodies before deleting the fixtures.
+afterAll(async () => {
+  try { await owned.drain(); } finally {
+    repos.forEach((dir) => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  }
+});
 
 describe('update repo readiness', () => {
   it('reports a clean checkout on the default branch as ready', async () => {
