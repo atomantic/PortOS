@@ -180,6 +180,7 @@ import {
   approveCastAndSets,
   skipCastAndSets,
   getCastAndSets,
+  presentProjectCastAndSets,
 } from '../services/musicVideo/castAndSetsService.js';
 
 const router = Router();
@@ -200,7 +201,7 @@ const projectUpdateSchema = musicVideoProjectUpdateSchema.extend(recordRenderPin
 // passes `limit`/`offset`, the response becomes the bounded
 // `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
 router.get('/', asyncHandler(async (req, res) => {
-  const projects = await listProjects();
+  const projects = (await listProjects()).map(presentProjectCastAndSets);
   if (!isPaginationRequested(req.query)) {
     return res.json(projects);
   }
@@ -212,7 +213,8 @@ router.get('/:id', asyncHandler(async (req, res) => {
   if (!p) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   // Transient (never persisted): lets a reloaded page reattach to a running publishing-kit build.
   const activePublishKitBuild = getActivePublishKitBuild(p.id);
-  res.json(activePublishKitBuild ? { ...p, activePublishKitBuild } : p);
+  const presented = presentProjectCastAndSets(p);
+  res.json(activePublishKitBuild ? { ...presented, activePublishKitBuild } : presented);
 }));
 
 router.post('/', asyncHandler(async (req, res) => {

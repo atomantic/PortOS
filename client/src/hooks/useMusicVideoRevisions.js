@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import toast from '../components/ui/Toast';
+import { toastWorkflowError } from '../components/musicVideo/workflowErrorToast.jsx';
 import {
   getMusicVideoProject,
   startMusicVideoDependencyRepair,
@@ -62,7 +63,7 @@ export default function useMusicVideoRevisions({ project, replaceProject, sceneM
   const run = (request) => {
     setBusy(true);
     return request()
-      .catch((err) => { toast.error(err?.message || 'Revision request failed'); return null; })
+      .catch((err) => { toastWorkflowError(err, 'Revision request failed', { reload: reloadProject }); return null; })
       .finally(() => setBusy(false));
   };
 

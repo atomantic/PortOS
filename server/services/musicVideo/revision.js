@@ -428,7 +428,7 @@ export function releaseRevisionClaim(project, revisionId, sceneId, now = new Dat
 export function startDependencyRepairOnProject(project, impact, { basis }, now = new Date().toISOString()) {
   const active = projectRevisions(project).find(isActive);
   if (active?.dependencyBasis === basis) return { project, revision: active, skippedSceneIds: [] };
-  if (active) throw revisionError(409, 'REVISION_IN_PROGRESS', 'Finish or cancel the open revision before repairing dependencies');
+  if (active) throw revisionError(409, 'REVISION_IN_PROGRESS', 'Finish or cancel the open revision before repairing dependencies', { revisionId: active.id });
   if (basis !== impact.basis) throw revisionError(409, 'DEPENDENCY_PREVIEW_CHANGED', 'Assets changed after the repair preview — review the impact again');
   if (!impact.shots.length && !impact.evidence.length) throw revisionError(422, 'NOTHING_TO_REVISE', 'All recorded dependencies are current');
   if (codeFirst(project)) {
