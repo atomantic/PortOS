@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({
   getMusicVideoCompositionDocument: vi.fn(),
@@ -34,6 +34,8 @@ const bare = { id: 'mv-1', name: 'Example', updatedAt: '2026-01-01T00:00:00.000Z
 const attached = { ...bare, composition: { mode: 'document', document: DOCUMENT } };
 const generated = { ...DOCUMENT, directory: 'music-video/mv-1/composition/doc-generated', source: { kind: 'generated', name: 'Mixed-media composition' } };
 const withCandidate = { ...bare, composition: { mode: 'document', document: DOCUMENT, documentDraft: generated } };
+
+afterEach(() => { vi.useRealTimers(); });
 
 beforeEach(() => {
   Object.assign(authorProvider, { type: 'api', toolFreeOneShot: true });
@@ -124,7 +126,9 @@ describe('DocumentCompositionPanel', () => {
   it('shows the attached document and asks twice before replacing or detaching it', async () => {
     const onProject = vi.fn();
     render(<DocumentCompositionPanel project={attached} onProject={onProject} onSave={vi.fn()} />);
-    expect(screen.getByText(/template · layered · 9 files/)).toBeTruthy();
+    // The source summary is folded into the Document source section header; file count sits in the panel header.
+    expect(screen.getByText('template · layered')).toBeTruthy();
+    expect(screen.getByText(/9 files/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: /Replace with template/ }));
     expect(api.startMusicVideoCompositionTemplate).not.toHaveBeenCalled();
@@ -135,6 +139,35 @@ describe('DocumentCompositionPanel', () => {
     expect(api.detachMusicVideoCompositionDocument).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /Click again to detach/ }));
     await waitFor(() => expect(onProject).toHaveBeenLastCalledWith(bare));
+  });
+
+  it('expires the replace and detach confirmations after 5 seconds without acting', () => {
+    vi.useFakeTimers();
+    render(<DocumentCompositionPanel project={attached} onProject={vi.fn()} onSave={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Replace with template/ }));
+    expect(screen.getByRole('button', { name: /Click again to replace/ })).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(4900); });
+    expect(screen.getByRole('button', { name: /Click again to replace/ })).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(200); });
+    expect(screen.queryByRole('button', { name: /Click again to replace/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /Replace with template/ })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Detach/ }));
+    expect(screen.getByRole('button', { name: /Click again to detach/ })).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(5100); });
+    expect(screen.queryByRole('button', { name: /Click again to detach/ })).toBeNull();
+
+    expect(api.startMusicVideoCompositionTemplate).not.toHaveBeenCalled();
+    expect(api.detachMusicVideoCompositionDocument).not.toHaveBeenCalled();
+  });
+
+  it('opens candidate review automatically when a candidate exists', async () => {
+    api.getMusicVideoMixedMediaCandidate.mockResolvedValue({ candidate: generated, source: generated, stale: false,
+      sections: [{ id: 'verse', label: 'Verse', startSec: 0, endSec: 10 }] });
+    const { container } = render(<DocumentCompositionPanel project={withCandidate} onProject={vi.fn()} onSave={vi.fn()} />);
+    await screen.findByRole('button', { name: 'Accept reviewed version' });
+    expect(container.querySelector('#mv-doc-candidate').open).toBe(true);
   });
 
   it('keeps the active document while a generated candidate is reviewed and explicitly accepted', async () => {
