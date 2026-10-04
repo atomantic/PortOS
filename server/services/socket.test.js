@@ -998,18 +998,22 @@ describe('socket.js — initSocket', () => {
       expect(opts.env.PM2_HOME).toBeUndefined();
     });
 
-    it('still streams when the app lookup fails rather than throwing', async () => {
+    it('rejects the subscription when the app lookup fails rather than guessing a home', async () => {
       const socket = makeSocket('logs-lookup-fails');
       io.connect(socket);
       vi.mocked(getAppById).mockRejectedValue(new Error('registry unreadable'));
 
       // Runs outside the Express lifecycle — an unhandled rejection here would
-      // take the process down, so the lookup degrades to the default home.
+      // take the process down, so the handler reports a correlated error.
       await expect(
         socket.handlers['logs:subscribe']({ processName: 'game', lines: 200, appId: 'app-1' })
       ).resolves.toBeUndefined();
 
-      expect(vi.mocked(spawnPm2)).toHaveBeenCalledTimes(1);
+      expect(socket.emitted).toContainEqual([
+        'logs:error',
+        { error: 'Unable to resolve PM2 home for game', processName: 'game' },
+      ]);
+      expect(vi.mocked(spawnPm2)).not.toHaveBeenCalled();
     });
 
     it('does not spawn an orphan stream when the socket disconnected mid-lookup', async () => {

@@ -19,7 +19,9 @@ vi.mock('../services/appProcessStatus.js', () => ({
   resolvePm2HomeForProcess: vi.fn(async () => null),
 }));
 
-import { spawnPm2 } from '../services/pm2.js';
+import { buildEnv, spawnPm2 } from '../services/pm2.js';
+import { getAppById } from '../services/apps.js';
+import { resolvePm2HomeForProcess } from '../services/appProcessStatus.js';
 import { registerLogHandlers, cleanupSocketStreams } from './logs.js';
 
 const makeChild = () => {
@@ -30,7 +32,7 @@ const makeChild = () => {
   return child;
 };
 
-const subscribe = async (processName = 'example-app') => {
+const subscribe = async (processName = 'example-app', options = {}) => {
   const handlers = new Map();
   const emitted = [];
   const socket = {
@@ -42,7 +44,7 @@ const subscribe = async (processName = 'example-app') => {
   const child = makeChild();
   spawnPm2.mockReturnValue(child);
   registerLogHandlers(socket, { emit: () => {} });
-  await handlers.get('logs:subscribe')({ processName, lines: 100 });
+  await handlers.get('logs:subscribe')({ processName, lines: 100, ...options });
   return { socket, child, emitted, processName };
 };
 
@@ -94,5 +96,55 @@ describe('logs:subscribe line reassembly', () => {
       { line: 'out tail', type: 'stdout' },
       { line: 'err tail', type: 'stderr' },
     ]);
+  });
+});
+
+describe('logs:subscribe PM2 home resolution', () => {
+  it.each([
+    ['app id lookup', async () => getAppById.mockRejectedValueOnce(new Error('registry unavailable')), { appId: 'app-1' }],
+    ['process lookup', async () => resolvePm2HomeForProcess.mockRejectedValueOnce(new Error('registry unavailable')), {}],
+  ])('reports %s rejection without starting a default-home stream', async (_name, rejectLookup, options) => {
+    const handlers = new Map();
+    const emitted = [];
+    const socket = {
+      id: 'socket-test',
+      disconnected: false,
+      on: (event, fn) => handlers.set(event, fn),
+      emit: (event, payload) => emitted.push({ event, payload }),
+    };
+    registerLogHandlers(socket, { emit: () => {} });
+    await rejectLookup();
+    await handlers.get('logs:subscribe')({ processName: 'example-app', lines: 100, ...options });
+
+    expect(spawnPm2).not.toHaveBeenCalled();
+    expect(emitted).toContainEqual({
+      event: 'logs:error',
+      payload: { error: 'Unable to resolve PM2 home for example-app', processName: 'example-app' },
+    });
+    expect(emitted.some(({ event }) => event === 'logs:subscribed')).toBe(false);
+  });
+
+  it('uses a successfully resolved custom home', async () => {
+    const handlers = new Map();
+    const socket = { id: 'socket-test', disconnected: false, on: (event, fn) => handlers.set(event, fn), emit: vi.fn() };
+    getAppById.mockResolvedValueOnce({ pm2Home: '/synthetic/custom-home' });
+    registerLogHandlers(socket, { emit: () => {} });
+    await handlers.get('logs:subscribe')({ processName: 'example-app', appId: 'app-1', lines: 100 });
+
+    expect(buildEnv).toHaveBeenCalledWith('/synthetic/custom-home');
+    expect(spawnPm2).toHaveBeenCalledOnce();
+    expect(socket.emit).toHaveBeenCalledWith('logs:subscribed', expect.objectContaining({ processName: 'example-app' }));
+  });
+
+  it('keeps a successful null lookup on the default home', async () => {
+    const handlers = new Map();
+    const socket = { id: 'socket-test', disconnected: false, on: (event, fn) => handlers.set(event, fn), emit: vi.fn() };
+    resolvePm2HomeForProcess.mockResolvedValueOnce(null);
+    registerLogHandlers(socket, { emit: () => {} });
+    await handlers.get('logs:subscribe')({ processName: 'example-app', lines: 100 });
+
+    expect(buildEnv).toHaveBeenCalledWith(null);
+    expect(spawnPm2).toHaveBeenCalledOnce();
+    expect(socket.emit).toHaveBeenCalledWith('logs:subscribed', expect.objectContaining({ processName: 'example-app' }));
   });
 });

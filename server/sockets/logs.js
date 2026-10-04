@@ -72,22 +72,23 @@ export const registerLogHandlers = (socket, _io) => {
       // Resolve the app's custom PM2_HOME so the stream tails the home its
       // processes actually run in. appId remains the disambiguating fast path;
       // legacy callers without it fall back to the process-name registry lookup.
-      // This runs outside the Express lifecycle, so a lookup failure must not
-      // throw — fall back to the default home.
+      // A successful null means the app uses the default PM2 home. A rejected
+      // registry read is different: do not start a stream from an unverified
+      // home or tell the client that subscription succeeded.
       let pm2Home = null;
-      if (appId) {
-        pm2Home = await getAppById(appId)
-          .then(app => app?.pm2Home || null)
-          .catch(err => {
-            console.error(`❌ logs:subscribe could not resolve app ${appId}: ${err.message}`);
-            return null;
-          });
-      } else {
-        pm2Home = await resolvePm2HomeForProcess(processName)
-          .catch(err => {
-            console.error(`❌ logs:subscribe could not resolve ${processName}: ${err.message}`);
-            return null;
-          });
+      try {
+        if (appId) {
+          const app = await getAppById(appId);
+          pm2Home = app?.pm2Home || null;
+        } else {
+          pm2Home = await resolvePm2HomeForProcess(processName);
+        }
+      } catch (err) {
+        console.error(`❌ logs:subscribe could not resolve PM2 home for ${processName}: ${err?.message ?? String(err)}`);
+        if (!socket.disconnected && streamGenerations.get(key) === generation) {
+          socket.emit('logs:error', { error: `Unable to resolve PM2 home for ${processName}`, processName });
+        }
+        return;
       }
 
       // The await above yields, so a disconnect, an unsubscribe, or a newer
