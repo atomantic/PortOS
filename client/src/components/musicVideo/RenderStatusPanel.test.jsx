@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
-import { RenderFailure } from './RenderStatusPanel.jsx';
+import RenderStatusPanel, { RenderFailure } from './RenderStatusPanel.jsx';
 
 afterEach(cleanup);
 it('keeps a persisted render failure visible after reload and isolates another project’s SSE failure', () => {
@@ -12,4 +12,11 @@ it('keeps a persisted render failure visible after reload and isolates another p
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   rerender(<RenderFailure project={{ ...project, status: 'complete', renderError: null }} renderJob={{}} />);
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});
+
+it('shows an amber out-of-date notice only when the final render is stale (#10143)', () => {
+  const { rerender } = render(<RenderStatusPanel renderHistoryId="rh-1" stale />);
+  expect(screen.getByRole('status')).toHaveTextContent('Final render is out of date — re-render');
+  rerender(<RenderStatusPanel renderHistoryId="rh-1" />);
+  expect(screen.queryByRole('status')).not.toBeInTheDocument();
 });
