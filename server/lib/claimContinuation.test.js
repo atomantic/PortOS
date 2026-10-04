@@ -271,6 +271,23 @@ describe('claim branch binding lifecycle', () => {
     expect(reason([bound], 'claim/issue-55', `${ROOT}/claim-portos-issue-55`)).toBeNull();
   });
 
+  it('stays settled after a picker releases its last binding', () => {
+    const bound = bind(register({ metadata: { claimFlow: true } }), 'claim/issue-101');
+    const released = { ...bound, metadata: { ...bound.metadata, ...releaseClaimBranch(bound, 'claim/issue-101') } };
+    expect(reason([released])).toBeNull();
+    expect(reason([released], 'claim/issue-55', `${ROOT}/claim-portos-issue-55`)).toBeNull();
+  });
+
+  it('refuses to bind a branch another live run in the repository already owns', () => {
+    const rival = bind({ ...register({ metadata: { claimFlow: true } }), id: 'agent-rival' }, 'claim/issue-101');
+    const pinned = register({ metadata: { claimFlow: true, claimTarget: '100' } });
+    expect(bindClaimBranch(pinned, 'claim/issue-101', [rival, pinned])).toEqual({ refused: 'owner-active' });
+    expect(bindClaimBranch(pinned, 'claim/issue-101', [{ ...rival, status: 'completed' }])).toMatchObject({ claimBranches: ['claim/issue-101'] });
+    // The run this one continues is not a rival.
+    const relaunch = { ...pinned, metadata: { ...pinned.metadata, resumedFromAgentId: 'agent-rival' } };
+    expect(bindClaimBranch(relaunch, 'claim/issue-101', [rival])).toMatchObject({ claimBranches: ['claim/issue-101'] });
+  });
+
   it('refuses to bind for a finished run, a non-claim run or a non-claim branch', () => {
     const pinned = register({ metadata: { claimFlow: true, claimTarget: '100' } });
     expect(bindClaimBranch({ ...pinned, status: 'completed' }, 'claim/issue-101')).toEqual({ refused: 'owner-not-running' });

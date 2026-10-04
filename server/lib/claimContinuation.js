@@ -81,14 +81,23 @@ export const MAX_BOUND_CLAIM_BRANCHES = 50;
  * branch it is about to check out (the pinned target, an epic's child, a split
  * slice, or the issue a picker selected). The first binding settles the run's
  * open selection (see `mayPickClaimBranch`). `{ refused }` when the record is
- * not a live claim run, the branch is not claim-shaped, or the bound list is
- * full. Pure.
+ * not a live claim run, the branch is not claim-shaped, another live run in
+ * `agents` already owns it, or the bound list is full. Pure.
  *
  * @returns {{ claimBranches: string[], claimReleasedBranches: string[], claimSelectionPending: false }|{ refused: string }}
  */
-export function bindClaimBranch(agent, branch) {
+export function bindClaimBranch(agent, branch, agents = []) {
   const refused = bindingRefusal(agent, branch);
   if (refused) return { refused };
+  // Another live run in this repository already owns the branch: binding it too
+  // would hand both runs the same checkout. A predecessor this run continues is
+  // not a rival. A merely POSSIBLE owner (a picker that has not bound) does not
+  // refuse — git refuses a second checkout of one branch on its own.
+  const occupancy = claimHolderOccupancy({
+    agents, holderPath: null, branchName: branch, sourceWorkspace: agentRepository(agent),
+    ignoreIds: new Set([agent.id, agent.metadata?.resumedFromAgentId].filter(Boolean)),
+  });
+  if (occupancy === 'active') return { refused: 'owner-active' };
   const bound = ownershipList(agent, 'claimBranches');
   if (!bound.includes(branch) && bound.length >= MAX_BOUND_CLAIM_BRANCHES) return { refused: 'too-many-branches' };
   return {
@@ -155,13 +164,16 @@ function ownsClaimBranch(agent, branchName) {
 // A run that may hold a claim checkout nobody can name yet: a picker until it
 // binds its first branch, a pinned run until it binds the branch it actually
 // works on. The claim prompt binds every branch BEFORE its worktree exists, so
-// once a run has bound one, each tree it cuts is named; a run that never binds
-// (an older prompt, a provider that cannot curl) stays possible owner of every
-// claim tree in its repository until it ends.
-function mayPickClaimBranch(agent) {
+// once a run has bound one, each tree it cuts is named — releasing it later
+// does not reopen the selection. A run that never binds (an older prompt, a
+// provider that cannot curl) stays possible owner of every claim tree in its
+// repository until it ends, except a branch it explicitly released.
+function mayPickClaimBranch(agent, branchName) {
+  if (ownershipList(agent, 'claimReleasedBranches').includes(branchName)) return false;
   if (isTruthyMeta(agent?.claimSelectionPending ?? agent?.metadata?.claimSelectionPending)) return true;
   return isTruthyMeta(agent?.claimPicksOwnBranch ?? agent?.metadata?.claimPicksOwnBranch)
-    && ownershipList(agent, 'claimBranches').length === 0;
+    && ownershipList(agent, 'claimBranches').length === 0
+    && ownershipList(agent, 'claimReleasedBranches').length === 0;
 }
 
 /**
@@ -186,7 +198,7 @@ function claimHolderOccupancy({ agents, holderPath, branchName, sourceWorkspace,
     if (samePath(workspace, holderPath) || (holderPath && workspace && isPathInsideDir(holderPath, workspace))) return 'active';
     if (!inRepository(agent, sourceWorkspace)) continue;
     if (ownsClaimBranch(agent, branchName)) return 'active';
-    if (claimHolder && mayPickClaimBranch(agent)) ambiguous = true;
+    if (claimHolder && mayPickClaimBranch(agent, branchName)) ambiguous = true;
   }
   return ambiguous ? 'ambiguous' : null;
 }

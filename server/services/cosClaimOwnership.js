@@ -32,7 +32,7 @@ export async function updateClaimOwnership({ agentId, action, branch }) {
     const state = await loadState();
     const agent = state.agents?.[agentId];
     if (!agent || agent.id !== agentId) return { [done]: false, reason: 'owner-unknown' };
-    const patch = action === 'bind' ? bindClaimBranch(agent, branch) : releaseClaimBranch(agent, branch);
+    const patch = action === 'bind' ? bindClaimBranch(agent, branch, Object.values(state.agents)) : releaseClaimBranch(agent, branch);
     if (patch.refused) return { [done]: false, reason: patch.refused };
     state.agents[agentId] = { ...agent, metadata: { ...agent.metadata, ...patch } };
     await saveState(state);
