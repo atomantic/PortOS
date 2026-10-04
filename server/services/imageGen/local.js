@@ -45,6 +45,7 @@ import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/syste
 import { usesDiffusersRunner, flux2Bf16BaseRepo } from '../../lib/runners.js';
 import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
 import { provenanceForRender } from '../../lib/assetProvenance.js';
+import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { readTriggerWordsByFilename, readLoraLicensesByFilename } from '../loras.js';
 
 // Read the registry lazily — callers below hit getImageModels() at request
@@ -1329,24 +1330,38 @@ export async function deleteImage(filename) {
   return { ok: true };
 }
 
+// Sidecar edits are whole-file read→modify→replace cycles; atomicWrite stops a
+// torn file but not two edits (prompt + visibility) reading the same copy and
+// the later write dropping the earlier field. One tail per gallery filename
+// covers both sidecar spellings, and the index refresh stays inside the turn.
+const sidecarEditQueue = createKeyCachedQueue();
+
+function editImageSidecar(filename, mutate) {
+  return sidecarEditQueue(filename, async () => {
+    const { path: sidecarPath, metadata } = await readImageSidecar(filename);
+    const result = mutate(metadata);
+    await atomicWrite(sidecarPath, metadata);
+    await refreshImageIndex(filename);
+    return result;
+  });
+}
+
 export async function setImageHidden(filename, hidden) {
   assertGalleryFilename(filename);
-  const { path: sidecarPath, metadata } = await readImageSidecar(filename);
-  metadata.hidden = !!hidden;
-  await atomicWrite(sidecarPath, metadata);
-  await refreshImageIndex(filename);
-  return { ok: true, hidden: metadata.hidden };
+  return editImageSidecar(filename, (metadata) => {
+    metadata.hidden = !!hidden;
+    return { ok: true, hidden: metadata.hidden };
+  });
 }
 
 export async function updateImagePrompt(filename, prompt) {
   assertGalleryFilename(filename);
-  const { path: sidecarPath, metadata } = await readImageSidecar(filename);
   const trimmedPrompt = typeof prompt === 'string' ? prompt.trim() : '';
-  if (trimmedPrompt) metadata.prompt = trimmedPrompt;
-  else delete metadata.prompt;
-  await atomicWrite(sidecarPath, metadata);
-  await refreshImageIndex(filename);
-  return { filename, prompt: trimmedPrompt };
+  return editImageSidecar(filename, (metadata) => {
+    if (trimmedPrompt) metadata.prompt = trimmedPrompt;
+    else delete metadata.prompt;
+    return { filename, prompt: trimmedPrompt };
+  });
 }
 
 // Returns just `{ filename, name }` — clients send `filename` back in the
