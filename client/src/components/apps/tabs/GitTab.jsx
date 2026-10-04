@@ -199,7 +199,12 @@ export default function GitTab({ appId, appName, repoPath }) {
     }
   }, [repoPath]);
 
-  const loadGitInfo = useCallback(() => loadGitData({ includeRemote: false }), [loadGitData]);
+  // Local git mutations (push/sync/commit) change ahead/behind counts, so the
+  // Repository sources card must re-fetch too.
+  const loadGitInfo = useCallback(async () => {
+    await loadGitData({ includeRemote: false });
+    setSourceRefreshKey((key) => key + 1);
+  }, [loadGitData]);
 
   const loadRemoteBranches = useCallback(async (opts = {}) => {
     if (!repoPath) return;
