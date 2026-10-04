@@ -12,6 +12,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { join } from 'path';
+import {
+  acquireBackupSnapshotCut, runOutsideBackupAssetPublication, withBackupAssetPublication,
+} from '../../lib/backupSnapshotBoundary.js';
+import { withAnimationWriteTail } from './animationWorkflow.js';
 
 const mediaJobEvents = new EventEmitter();
 let queuedJobs = [];
@@ -301,6 +305,84 @@ describe('initSpriteLocalAnimationHook', () => {
     mediaJobEvents.emit('completed', walkJob());
     await Promise.resolve();
     expect(attachTuiWalkResult).not.toHaveBeenCalled();
+  });
+});
+
+// A cut must never land between staging a clip and the run record that names the
+// frames packaged from it (#9982).
+describe('backup admission', () => {
+  const deferred = () => {
+    let resolve;
+    const promise = new Promise((done) => { resolve = done; });
+    return { promise, resolve };
+  };
+  const settleTicks = async () => { for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve)); };
+  // Holds the attach open, so a test can request a cut while a filing is mid-flight.
+  const holdAttach = () => {
+    const reached = deferred();
+    const finish = deferred();
+    attachTuiWalkResult.mockImplementation(async () => { reached.resolve(); await finish.promise; });
+    return { reached: reached.promise, finish: finish.resolve };
+  };
+
+  it('drains a settle already staging and attaching a clip', async () => {
+    const hold = holdAttach();
+    const settling = settleSpriteAnimationJob(walkJob());
+    await hold.reached;
+    let cutReady = false;
+    const cut = acquireBackupSnapshotCut().then((release) => { cutReady = true; return release; });
+    await settleTicks();
+    expect(cutReady).toBe(false);
+    hold.finish();
+    expect(await settling).toBe(true);
+    (await cut)();
+  });
+
+  it('stages and files nothing for a job that settles during a cut', async () => {
+    const release = await acquireBackupSnapshotCut();
+    const settling = settleSpriteAnimationJob(walkJob());
+    await settleTicks();
+    expect(collectLocalAnimationClip).not.toHaveBeenCalled();
+    expect(attachTuiWalkResult).not.toHaveBeenCalled();
+    release();
+    expect(await settling).toBe(true);
+    expect(attachTuiWalkResult).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets a cut already waiting on the job\'s own completion also wait for a filing queued behind the record\'s write tail', async () => {
+    initSpriteLocalAnimationHook();
+    const hold = holdAttach();
+    const tailHeld = deferred();
+    const blocker = withAnimationWriteTail('hero', () => tailHeld.promise);
+    const completion = deferred();
+    // The queue's completion lease, whose fan-out reaches this listener.
+    const completing = withBackupAssetPublication(async () => {
+      await completion.promise;
+      runOutsideBackupAssetPublication(() => mediaJobEvents.emit('completed', walkJob()));
+    });
+    let cutReady = false;
+    const cut = acquireBackupSnapshotCut().then((release) => { cutReady = true; return release; });
+    await settleTicks();
+    completion.resolve();
+    await completing;
+    // The completion's own lease is gone and the filing still waits for the tail:
+    // only the listener's own lease, taken at emit time, keeps the cut waiting.
+    await settleTicks();
+    expect(cutReady).toBe(false);
+    tailHeld.resolve();
+    await blocker;
+    await hold.reached;
+    await settleTicks();
+    expect(cutReady).toBe(false);
+    hold.finish();
+    (await cut)();
+    expect(attachTuiWalkResult).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes no lease for a media job that is not a sprite render', async () => {
+    const release = await acquireBackupSnapshotCut();
+    expect(await settleSpriteAnimationJob({ kind: 'video', params: {} })).toBe(false);
+    release();
   });
 });
 

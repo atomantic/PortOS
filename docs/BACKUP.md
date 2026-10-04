@@ -68,15 +68,18 @@ Admission inventory (`withBackupAssetPublication`):
 | Universe Builder completion listeners: collection filing, canon entry-ref append, and sidecar enrichment (`universeBuilderCollectionHook.js`); character reference sheet copy and pointer stamp (`universeCharacterSheet.js`) | Covered (#9982 partial) |
 | Creative Director evaluation frames: render-completion sampling (`creativeDirector/sceneRunner.js`) and the resume pass that re-samples missing frames in place (`creativeDirector/completionHook.js`) | Covered from the first `${jobId}-fN.jpg` write through the scene row that names them (#9982 partial) |
 | Creative Director render settlement (scene status and auto-accept, plan-step settle, seed-frame wait) and Music Video production step settlement (`musicVideo/productionService.js`) | Reference-only: these write no bytes, and the render they name was on disk before its admitted completion published |
-| Sprite animation completion: clip copy, frame packaging and run record (`sprites/localAnimationJobHook.js`) | Outstanding (#9982) |
+| Sprite animation completion: clip copy, frame packaging and run record (`sprites/localAnimationJobHook.js`) | Covered from clip staging through the run record that names the packaged frames (#9982 partial) |
 | Direct gallery upload, image prompt/visibility sidecar replacement, and image deletion (`imageGen/local.js`) | Covered as one file/sidecar/index workflow (#9982 partial) |
 | Gallery image deletion's universe canon purge (`galleryImageDeletion.js`) and character reference sheet deletion (`universeCharacterSheet.js`) | Covered from file removal through the universe pointer purge (#9982 partial) |
 | Video-history deletion, including downloaded-video deletion (`videoGen/historyOps.js`) | Covered through file/history/index removal (#9982 partial) |
 | LoRA dataset uploads, gallery imports, reference-sheet crops, generated completion/recovery copies, image/dataset deletion, and queued record edits (`loraDatasets.js`, `loraDatasetGenerate.js`) | Covered as complete file/record workflows (#9982 partial) |
 | Voice Studio audition and character assignment (`voice/studio.js`) | Covered from source-file write/copy through profile-row commit and failed-write cleanup (#9982 partial) |
 | Music Video development artifact import/generated save and vocal-stem attachment (`musicVideo/devArtifactService.js`, `musicVideo/vocalStem.js`) | Covered from final file copy/write through project-record commit and failed-write cleanup (#9982 partial) |
-| Music-library deletion (`pipeline/musicLibrary.js`) | Outstanding: its route intentionally leaves existing issue/project references to the removed file (#9982) |
-| Voice fine-tune and benchmark outputs (`voice/fineTuning.js`, `voice/profileBenchmarks.js`) and other Music Video asset workflows | Outstanding (#9982) |
+| Music-library upload copy and deletion (`pipeline/musicLibrary.js`) | Covered (#9982 partial): the copy and the unlink each hold one lease; the delete route intentionally leaves existing issue/project references to the removed file |
+| Voice benchmark audio and row (`voice/profileBenchmarks.js`), cloned-candidate recording and row (`voice/profiles.js`), and the fine-tune job record that names each sealed checkpoint (`voice/fineTuning.js`) | Covered (#9982 partial); promoting a checkpoint writes only a row naming bytes the job record already named |
+| Pipeline audio stage rows: generated music, cue render and voice-over line render (`routes/pipeline/audio.js`) | Covered (#9982 partial): the row that first names the WAV takes the lease; the sidecar or synthesizer writes the WAV before it |
+| Music-library upload attach: Music Designer upload, pipeline music upload and YouTube import (`routes/tracks.js`, `routes/pipeline/audio.js`, `trackYoutubeImport.js`) | Reference-only: the admitted library import copies the file first and the track or issue row commits after it |
+| Remaining durable owners, classified by domain in `backupAssetOwners.js` | Outstanding (#9982): sprites, Music Video renders and records, video generation, image generation tails, Writers Room drafts, LoRA registration and deletion, code animation, peer and share imports, attachments and catalog media, mood boards, image-to-3D and rigging, archive and document imports |
 | Durable replacement/deletion owners not yet classified | Outstanding (#9982) |
 | Snapshot consistency claim (`backupAssetOwners.js`, see below) | Covered (#9982 partial) |
 | Database restore execution and backend-cutover acceptance (`backup.js`, `databasePreflight.js`) | Covered (#9983) |
@@ -129,6 +132,22 @@ Creative Director frame sampling holds its lease while ffmpeg decodes the
 clip, a few seconds for a typical scene; the evaluator dispatch that follows
 stays outside it.
 
+Sprite animation completion files the finished clip under one lease: staging the
+MP4, decoding and packaging its frames, and the run record that names them. It
+takes the lease before the per-record write tail, so a filing queued behind a
+long Reprocess holds its lease while it waits and can stretch a cut's drain by
+that wait. Voice benchmarks synthesize outside admission, then write every WAV
+and the benchmark row under one lease. A fine-tune job's checkpoints are written
+by the training process, which cannot be admitted, so the job record that first
+names each sealed checkpoint takes the lease instead. The music library's upload
+copy and its deletion each hold a lease; deletion leaves the issues and projects
+that named the track pointing at the removed file, as before. The pipeline audio
+routes (music generation, cue render, voice-over line render) hold the lease only
+around the row commit: the sidecar or synthesizer has already written the WAV,
+possibly while a cut was running, and a row that waits out the cut can only name
+audio the snapshot copied, or nothing. Music library uploads need no lease of
+their own at the row: the admitted import copies the file first.
+
 **Snapshot consistency claim.** `server/lib/backupAssetOwners.js` inventories
 each durable owner as `admitted`, `reference-only` or `outstanding`, and its
 test fails when an `admitted` entry stops taking the lease or a module that
@@ -140,12 +159,20 @@ and `outstanding` lists the owner ids still outside admission. An unrecognized
 status counts as outstanding, never as covered. Snapshots written before this
 field existed carry no claim and must be treated as partial.
 
-The remaining inventory includes sprite animation completion, music-library
-deletion, voice fine-tune and benchmark outputs, other Music Video asset
-workflows, and owners not yet classified. Their persistence adapters and direct
-filesystem calls still need workflow-level classification; independently
-locking `fileCore` or SQL primitives would not cover the gap between writes.
-No domain is excluded from the snapshot to satisfy the claim.
+The remaining inventory is the `outstanding` entries in `backupAssetOwners.js`,
+grouped by domain with the modules whose file-plus-record workflows still run
+outside admission, plus an `unclassified-durable-owners` entry for anything a
+code sweep did not reach. Their persistence adapters and direct filesystem calls
+still need workflow-level classification; independently locking `fileCore` or
+SQL primitives would not cover the gap between writes. No domain is excluded
+from the snapshot to satisfy the claim.
+
+When wrapping one of them, remember the order a cut works in: it copies files,
+then dumps rows. A row that names new bytes therefore has to commit under the
+lease unless the lease already covered the byte write. A deletion that removes
+the row first and the bytes second is safe either way, because the dump that
+follows the copy sees no row. A deletion that unlinks first, or one that leaves
+rows naming the removed file, must hold the lease around the unlink.
 
 This is part of [the cross-store consistency work](https://github.com/atomantic/PortOS/issues/9923).
 While `assetConsistency.scope` is `admitted-owners`, `status: ok` reports that
