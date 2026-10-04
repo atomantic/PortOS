@@ -26,7 +26,7 @@ vi.mock('../services/apiLocalLlm', async (importOriginal) => ({
   ...await importOriginal(),
   getLocalLlmStatus: vi.fn().mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } }),
 }));
-vi.mock('../components/ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
+vi.mock('../components/ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), dismiss: vi.fn() }) }));
 
 import PipelineManuscriptEditor from './PipelineManuscriptEditor';
 
@@ -277,6 +277,180 @@ describe('PipelineManuscriptEditor', () => {
   const mockBothFormats = () => api.getPipelineManuscript.mockImplementation((_id, type) => Promise.resolve(type === 'teleplay'
     ? { sections: [{ issueId: 'iss-1', number: 1, title: 'One', stageId: 'teleplay', content: 'INT. ROOM - DAY' }], viewType: 'teleplay', availableTypes: ['prose', 'teleplay'] }
     : { sections: [{ issueId: 'iss-1', number: 1, title: 'One', stageId: 'prose', content: 'The hero walked in. She left.' }], viewType: 'prose', pinnedPrimary: 'prose', availableTypes: ['prose', 'teleplay'] }));
+
+  const deferred = () => {
+    let resolve;
+    const promise = new Promise((done) => { resolve = done; });
+    return { promise, resolve };
+  };
+  const acceptedProse = {
+    comment: { ...comment, status: 'accepted' },
+    section: { issueId: 'iss-1', number: 1, stageId: 'prose', content: 'Accepted prose.', versions: [] },
+  };
+  const expectTeleplayUnchanged = async () => {
+    const textarea = screen.getByDisplayValue('INT. ROOM - DAY');
+    expect(screen.queryByText('saved')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Issue 1 has unsaved edits')).not.toBeInTheDocument();
+    await act(async () => { fireEvent.blur(textarea); });
+    expect(api.savePipelineManuscriptSection).not.toHaveBeenCalled();
+  };
+
+  it('disposes a delayed format read when the route changes to another series (#9953)', async () => {
+    mockBothFormats();
+    const load = api.getPipelineManuscript.getMockImplementation();
+    const pending = deferred();
+    api.getPipelineManuscript.mockImplementation((id, type) => id === 'ser-1' && type === 'teleplay'
+      ? pending.promise
+      : id === 'ser-2'
+        ? Promise.resolve({ sections: [{ issueId: 'other-1', number: 1, stageId: 'prose', content: 'Other series draft.' }], viewType: 'prose', availableTypes: ['prose'] })
+        : load(id, type));
+    api.getPipelineSeries.mockImplementation((id) => Promise.resolve({ id, name: id === 'ser-2' ? 'Other Series' : 'My Series' }));
+    const { router } = renderEditor();
+    await screen.findByDisplayValue('The hero walked in. She left.');
+    fireEvent.click(screen.getByRole('button', { name: 'Teleplay' }));
+    await waitFor(() => expect(api.getPipelineManuscript).toHaveBeenCalledWith('ser-1', 'teleplay', { silent: true }));
+    await act(async () => { await router.navigate('/pipeline/series/ser-2/manuscript/1'); });
+    await screen.findByDisplayValue('Other series draft.');
+    await act(async () => { pending.resolve(await load('ser-1', 'teleplay')); });
+    expect(screen.getByDisplayValue('Other series draft.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Other Series' })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe('/pipeline/series/ser-2/manuscript/1');
+    fireEvent.blur(screen.getByDisplayValue('Other series draft.'));
+    expect(api.savePipelineManuscriptSection).not.toHaveBeenCalled();
+  });
+
+  it.each(['Accept', 'Manual edit'])('drops a delayed %s from the prior format before it can enter a save (#9953)', async (action) => {
+    mockBothFormats();
+    api.getPipelineManuscriptReview.mockResolvedValue({ comments: [{ ...comment, fix: { find: 'She left.', replace: 'Accepted prose.' } }] });
+    const pending = deferred();
+    api.acceptPipelineManuscriptFix.mockReturnValue(pending.promise);
+    renderEditor();
+    await screen.findByDisplayValue('The hero walked in. She left.');
+    revealFromIndex(comment.problem);
+    if (action === 'Manual edit') {
+      fireEvent.click(await screen.findByRole('button', { name: 'Manual edit' }));
+      fireEvent.change(screen.getByDisplayValue('She left.'), { target: { value: 'Accepted prose.' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Apply edit' }));
+    } else fireEvent.click(await screen.findByRole('button', { name: 'Accept' }));
+    await waitFor(() => expect(api.acceptPipelineManuscriptFix).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Teleplay' }));
+    await screen.findByText('INT. ROOM - DAY');
+    fireEvent.click(screen.getByRole('button', { name: /Live/ }));
+    await act(async () => { pending.resolve(acceptedProse); });
+    await expectTeleplayUnchanged();
+    expect(screen.getByText(/1 open/)).toBeInTheDocument();
+  });
+
+  it('drops a prior-format version restore without changing the new baseline or save state (#9953)', async () => {
+    mockBothFormats();
+    const load = api.getPipelineManuscript.getMockImplementation();
+    api.getPipelineManuscript.mockImplementation(async (id, type) => {
+      const data = await load(id, type);
+      if (!type) data.sections[0].versions = [{ runId: 'v1' }];
+      return data;
+    });
+    const pending = deferred();
+    api.restorePipelineStageVersion.mockReturnValue(pending.promise);
+    renderEditor();
+    await screen.findByDisplayValue('The hero walked in. She left.');
+    fireEvent.click(screen.getByTitle('Show prior saved versions'));
+    fireEvent.click(screen.getByRole('button', { name: 'Revert' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Teleplay' }));
+    await screen.findByDisplayValue('INT. ROOM - DAY');
+    await act(async () => { pending.resolve({ stage: { output: 'Restored prose.', runHistory: [] } }); });
+    await expectTeleplayUnchanged();
+    expect(api.restorePipelineStageVersion).toHaveBeenCalledWith('iss-1', 'prose', 'v1', { silent: true });
+  });
+
+  it('keeps the Undo toast bound to the format that accepted the fix (#9953)', async () => {
+    mockBothFormats();
+    api.getPipelineManuscriptReview.mockResolvedValue({ comments: [{ ...comment, fix: { find: 'She left.', replace: 'Accepted prose.' } }] });
+    api.acceptPipelineManuscriptFix.mockResolvedValue(acceptedProse);
+    const pending = deferred();
+    api.undoPipelineManuscriptFix.mockReturnValue(pending.promise);
+    const toast = (await import('../components/ui/Toast')).default;
+    renderEditor();
+    await screen.findByDisplayValue('The hero walked in. She left.');
+    revealFromIndex(comment.problem);
+    fireEvent.click(await screen.findByRole('button', { name: 'Accept' }));
+    await screen.findByText('Accepted prose.');
+    const renderToast = toast.mock.calls.find(([value]) => typeof value === 'function')[0];
+    render(renderToast({ id: 'test-toast' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Teleplay' }));
+    await screen.findByText('INT. ROOM - DAY');
+    fireEvent.click(screen.getByRole('button', { name: /Live/ }));
+    await act(async () => { pending.resolve({ ...acceptedProse, comment, section: { ...acceptedProse.section, content: 'Original prose.' } }); });
+    await expectTeleplayUnchanged();
+    expect(api.undoPipelineManuscriptFix).toHaveBeenCalledWith('ser-1', comment.id, { silent: true });
+  });
+
+  it.each(['success', 'failure'])('stops a delayed accept-all batch after %s when another format replaces its owner (#9953)', async (outcome) => {
+    mockBothFormats();
+    const second = { ...comment, id: 'mrc-2', anchorQuote: 'The hero walked in.', fix: { find: 'The hero walked in.', replace: 'A visitor arrived.' } };
+    api.getPipelineManuscriptReview.mockResolvedValue({ comments: [{ ...comment, fix: { find: 'She left.', replace: 'Accepted prose.' } }, second] });
+    const pending = deferred();
+    api.acceptPipelineManuscriptFix.mockReturnValue(pending.promise);
+    renderEditor();
+    await screen.findByDisplayValue('The hero walked in. She left.');
+    fireEvent.click(screen.getByRole('button', { name: 'Impact preview' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Accept all 2 edits' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Teleplay' }));
+    await screen.findByDisplayValue('INT. ROOM - DAY');
+    await act(async () => { pending.resolve(outcome === 'success' ? acceptedProse : null); });
+    await expectTeleplayUnchanged();
+    expect(api.acceptPipelineManuscriptFix).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('dialog', { name: 'Manuscript impact preview' })).toBeInTheDocument();
+  });
+
+  it('keeps an old card response from changing another series text, comments or selection (#9953)', async () => {
+    api.getPipelineManuscriptReview.mockResolvedValue({ comments: [{ ...comment, fix: { find: 'She left.', replace: 'Accepted prose.' } }] });
+    const pending = deferred();
+    api.acceptPipelineManuscriptFix.mockReturnValue(pending.promise);
+    const { router } = renderEditor();
+    await screen.findByDisplayValue('The hero walked in. She left.');
+    revealFromIndex(comment.problem);
+    fireEvent.click(await screen.findByRole('button', { name: 'Accept' }));
+    await act(async () => { await router.navigate('/pipeline/series/ser-2/manuscript/1'); });
+    await screen.findByText(comment.problem);
+    fireEvent.click(screen.getByRole('button', { name: /Live/ }));
+    await act(async () => { pending.resolve(acceptedProse); });
+    expect(screen.getByDisplayValue('The hero walked in. She left.')).toBeInTheDocument();
+    expect(screen.getByText(/1 open/)).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe('/pipeline/series/ser-2/manuscript/1');
+  });
+
+  it('retains an unblurred draft across issue tabs in the same series (#9953)', async () => {
+    api.getPipelineManuscript.mockResolvedValue({
+      sections: [
+        { issueId: 'iss-1', number: 1, stageId: 'prose', content: 'First issue draft.' },
+        { issueId: 'iss-2', number: 2, stageId: 'prose', content: 'Second issue draft.' },
+      ], viewType: 'prose', availableTypes: ['prose'],
+    });
+    renderEditor('/pipeline/series/ser-1/manuscript/1');
+    fireEvent.change(await screen.findByDisplayValue('First issue draft.'), { target: { value: 'Unblurred edit.' } });
+    const tabs = within(screen.getByRole('navigation', { name: 'Issues' }));
+    fireEvent.click(tabs.getByRole('link', { name: /Issue 2/ }));
+    await screen.findByDisplayValue('Second issue draft.');
+    fireEvent.click(tabs.getByRole('link', { name: /Issue 1/ }));
+    expect(await screen.findByDisplayValue('Unblurred edit.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Issue 1 has unsaved edits')).toBeInTheDocument();
+    expect(api.getPipelineManuscript).toHaveBeenCalledTimes(1);
+  });
+
+  it('disposes old review responses without replacing another series comments or route (#9953)', async () => {
+    const pending = deferred();
+    api.analyzePipelineManuscriptCompleteness.mockReturnValue(pending.promise);
+    api.getPipelineSeries.mockImplementation((id) => Promise.resolve({ id, name: id === 'ser-2' ? 'Other Series' : 'My Series' }));
+    const { router } = renderEditor();
+    await screen.findByDisplayValue('The hero walked in. She left.');
+    fireEvent.click(screen.getByRole('button', { name: 'Run editorial review' }));
+    await act(async () => { await router.navigate('/pipeline/series/ser-2/manuscript/1'); });
+    await screen.findByRole('heading', { name: 'Other Series' });
+    await act(async () => { pending.resolve({ review: { comments: [] } }); });
+    expect(screen.getByText(comment.problem)).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe('/pipeline/series/ser-2/manuscript/1');
+  });
 
   const savedProse = {
     section: { issueId: 'iss-1', number: 1, title: 'One', stageId: 'prose', content: 'The hero walked in. She stayed.', versions: [] },
