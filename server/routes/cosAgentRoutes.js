@@ -13,6 +13,18 @@ import { validateRequest, resumeCosAgentSchema, relaunchCosAgentSchema, cosAgent
 
 const router = Router();
 
+const mergeAdmissionSchema = z.object({
+  agentId: z.string().min(1).max(200),
+  action: z.enum(['acquire', 'check', 'release']),
+  token: z.string().uuid().optional(),
+  outcome: z.enum(['merged', 'leave-open']).optional(),
+});
+router.post('/merge-admission', asyncHandler(async (req, res) => {
+  const input = validateRequest(mergeAdmissionSchema, req.body ?? {});
+  const { claimMergeAdmission } = await import('../services/cosMergeAdmission.js');
+  res.json(await claimMergeAdmission(input));
+}));
+
 // `reason` is persisted into task metadata + interpolated into logs; guard the
 // shape so a non-string body can't store `[object Object]`.
 const pauseBodySchema = z.object({ reason: z.string().max(500).optional() });

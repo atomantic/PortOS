@@ -24,6 +24,39 @@ Autonomous agent manager that watches task files, spawns sub-agents, and maintai
 9. **Durable Agent Feedback**: Completion notifications accept quick ratings, while the Agents tab keeps a filterable queue of loaded runs that still need feedback after a notification expires. Recent unrated completed runs are also surfaced as a CoS insight that links directly to the URL-backed review filter. Feedback details can be attached to helpful, unhelpful, or neutral ratings so learning has actionable context. The Learning tab aggregates ratings from both live state and date-bucketed agent archives, de-duplicating runs that are still present in both stores so historical feedback remains visible for the archive retention window.
 10. **Learning-Aligned ETAs**: Pending tasks and active agents resolve their estimates from the same metadata-first task-learning bucket that records outcomes, including archived scheduled-agent metadata, instead of inferring a potentially different category from task text.
 
+## Repository merge admission
+
+Self-managed claim parents and the deterministic pending-merge sweep share one
+repository-scoped final-merge lease (`server/services/cosMergeAdmission.js`).
+The host-control-gated `POST /api/cos/merge-admission` accepts the registered
+parent agent ID and `acquire`, `check`, or `release`; check/release require the
+returned token. Repository identity comes from that parent's registered source
+checkout and normalized origin host/repository, not its child worktree path.
+
+Acquire after local review and PR publication, before final base synchronization,
+pregate/push, current-head CI and merge. Keep the lease through verified merge
+and cleanup, or release with a recorded `leave-open` outcome. Swarm children
+continue implementing and reviewing concurrently; the parent holds admission
+while they finish and while CI runs. A waiter reports the refusal reason every
+minute, retries at 15-second intervals for at most 30 minutes, then leaves the
+reviewed PR and claim intact. Sweep deferrals preserve their retry budget.
+
+Leases extend the existing machine-local CoS runtime ownership in
+`data/cos/state.json`, under its existing write queue; there is no new store,
+seed, migration, or federation payload. Missing lease fields are compatible
+with older state. Unreadable, mismatched or stale ownership refuses admission.
+A claim lease can be recovered only from a matching finalized parent record
+(including its archive); elapsed time, completed children and absent cwd
+processes never release a running/paused parent. A crashed deterministic sweep
+is recoverable only after its server process is proven absent. Failed reads and
+ambiguous/reused process identities hold admission conservatively.
+
+This coordinates participating runs on **one install**. Manual merges, older
+prompts and other installs can still move the base. Always re-read the live base
+before merge and repeat sync, pregate and fresh current-head CI when it changes.
+Admission does not grant permission to adopt another owner's branch or checkout,
+does not replace reviews/CI, and does not make queued auto-merge a completed merge.
+
 ## Task File Format
 
 ```markdown

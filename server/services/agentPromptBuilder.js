@@ -550,6 +550,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
       leavePrOpen: resolvePrCompletion(task.metadata) === PR_COMPLETIONS.LEAVE_OPEN || leavesPrForHuman(task),
       prCompletion: task.metadata?.prCompletion || null,
       claimResume: claimResumeContext(task, worktreeInfo),
+      agentId,
     }),
     [COMPLETION_MODES.AUDIT_FLOW]: () => buildAuditFlowCompletionSection({ isTui, sentinelPath }),
     [COMPLETION_MODES.RECONCILE_FLOW]: () => buildReconcileFlowCompletionSection({ sentinelPath }),
@@ -1059,6 +1060,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
       leavePrOpen: resolvePrCompletion(task.metadata) === PR_COMPLETIONS.LEAVE_OPEN || leavesPrForHuman(task),
       prCompletion: task.metadata?.prCompletion || null,
       claimResume: claimResumeContext(task, worktreeInfo),
+      agentId,
     })),
     [COMPLETION_MODES.READ_ONLY]: () => contractSections.push(buildReadOnlyCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.REVIEW_LOOP_FOLLOW_UP]: () => {
