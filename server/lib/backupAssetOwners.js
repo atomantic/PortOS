@@ -77,6 +77,20 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     modules: ['services/voice/fineTuning.js', 'services/voice/profileBenchmarks.js', 'services/voice/profiles.js'],
   },
   {
+    // Trained LoRA registration (adapter, sidecar, run row, dataset flag),
+    // checkpoint promotion over the deployed adapter, the promoted-checkpoint
+    // preview copy, the progress row that first names trainer-written samples
+    // and checkpoints, run deletion, and LoRA deletion from either manager
+    // route. Civitai and Hugging Face installs land the weights under their
+    // final name first; the sidecar naming them is the admitted commit.
+    // Staged trainer inputs are rebuilt from the dataset on every run and
+    // resume, and sidecar metadata patches change no asset bytes. Dataset
+    // deletion is part of `lora-dataset-workflows`.
+    id: 'lora-training-registration-and-deletion',
+    status: 'admitted',
+    modules: ['services/loraTraining/index.js', 'services/loras.js'],
+  },
+  {
     // Generated and cue-rendered music and voice-over line audio land on disk
     // before the issue row that names them; the row commit takes the lease.
     id: 'pipeline-audio-stage-rows',
@@ -149,13 +163,6 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     id: 'writers-room-drafts',
     status: 'outstanding',
     modules: ['services/writersRoom/local.js', 'services/writersRoom/sync.js', 'services/writersRoom/polish.js'],
-  },
-  {
-    // Trained LoRA registration and checkpoint promotion, preview copies, and
-    // the run, LoRA and dataset deletes.
-    id: 'lora-training-registration-and-deletion',
-    status: 'outstanding',
-    modules: ['services/loraTraining/index.js', 'services/loras.js', 'routes/loraTraining.js', 'routes/loras.js'],
   },
   {
     // Generated HTML, package import and repair, run artifacts, and the final

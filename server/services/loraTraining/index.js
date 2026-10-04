@@ -17,8 +17,9 @@ import { spawn } from '../../lib/childProcess.js';
 import { existsSync } from 'fs';
 import { join, basename, dirname } from 'path';
 import { platform } from 'os';
-import { PATHS, ensureDir, atomicWrite, shortId, copyFileGuarded, writeFileGuarded } from '../../lib/fileUtils.js';
+import { PATHS, ensureDir, atomicWrite, shortId, copyFileGuarded, writeFileGuarded, rmGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { v4 as uuidv4 } from '../../lib/uuid.js';
 import { hfChildEnv } from '../hfToken.js';
@@ -27,7 +28,7 @@ import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { getImageModels } from '../../lib/mediaModels.js';
 import { resolveFlux2Python, isFlux2VenvHealthy, resolveMfluxPython } from '../../lib/pythonSetup.js';
 import { getSettings } from '../settings.js';
-import { writeLoraSidecar } from '../loras.js';
+import { deleteLora, writeLoraSidecar } from '../loras.js';
 import { assertMediaQueueRoom, enqueueJob, getJob, mediaJobEvents } from '../mediaJobQueue/index.js';
 import { updateDataset } from '../loraDatasets.js';
 import { trainingEvents } from './events.js';
@@ -434,6 +435,34 @@ export const clearDatasetForDeletedLora = (run, deletedFilename) => {
 };
 
 /**
+ * Delete a terminal run: its artifact dir, optionally its trained LoRA (and the
+ * dataset's trained flag naming it), then the row. One backup admission spans
+ * every step, so a snapshot never dumps a row naming samples or an adapter its
+ * own file pass skipped (#9982).
+ */
+export async function deleteTrainingRun(runId, { withLora = false } = {}) {
+  return withBackupAssetPublication(async () => {
+    const run = await runsDb.getRunRequired(runId);
+    if (['queued', 'running'].includes(run.status)) {
+      throw new ServerError('Cancel the run before deleting it', { status: 409, code: 'RUN_ACTIVE' });
+    }
+    // Artifact dir is server-derived from the run id (uuid) — confined under
+    // PATHS.trainingRuns by construction.
+    await rmGuarded(runDir(run.id), { recursive: true, force: true });
+    const loraFilename = run.output?.loraFilename;
+    if (withLora && loraFilename) {
+      await deleteLora(loraFilename).catch((err) => {
+        console.warn(`⚠️ trained LoRA delete skipped: ${err?.message}`);
+      });
+      // Reset the owning dataset off 'trained' so it can't keep advertising the
+      // subject as trained against the file just deleted.
+      await clearDatasetForDeletedLora(run, loraFilename);
+    }
+    return runsDb.deleteRun(run.id);
+  });
+}
+
+/**
  * Queue-worker entry — `mediaJobQueue.runJob` calls this for kind
  * 'training'. Resolves the trainer binary + args, spawns, parses the line
  * protocol into trainingEvents, and finalizes (LoRA registration or
@@ -733,7 +762,11 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
     if (!progressDirty) return Promise.resolve();
     const flushing = progressDirty;
     progressDirty = null;
-    return runsDb.updateRun(runId, (current) => ({
+    // The trainer writes sample and checkpoint files in place before announcing
+    // them, so only the row that first names them takes backup admission
+    // (#9982); a progress-only flush never waits out a cut.
+    const namesArtifacts = !!(flushing.checkpoints || flushing.samples);
+    const write = () => runsDb.updateRun(runId, (current) => ({
       ...current,
       progress: { ...current.progress, ...flushing.progress },
       artifacts: {
@@ -746,8 +779,9 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
         ...(flushing.checkpoints ? { checkpoints: dedupeCheckpointsByStep([...current.artifacts.checkpoints, ...flushing.checkpoints]) } : {}),
         ...(flushing.samples ? { samples: [...new Set([...current.artifacts.samples, ...flushing.samples])] } : {}),
       },
-    })).then(() => {
-      if (flushing.checkpoints || flushing.samples) trainingEvents.emit('checkpoints:changed', { runId });
+    }));
+    return (namesArtifacts ? withBackupAssetPublication(write) : write()).then(() => {
+      if (namesArtifacts) trainingEvents.emit('checkpoints:changed', { runId });
     }).catch((err) => console.error(`❌ training [${shortId(jobId)}] progress persist failed: ${err?.message}`));
   };
   // Checkpoints/samples accumulate as arrays so two that land in one debounce
@@ -983,26 +1017,32 @@ async function finalizeTraining({ jobId, runId, code, signal, state, stallKilled
     const filename = trainedLoraFilename({
       name: run?.name, characterName: run?.character?.name, runId,
     });
-    const { sizeBytes } = await registerTrainedLora({
-      run,
-      buffer: selection.buffer,
-      filename,
-      result: state.result,
-      previewImageUrl: selection.previewUrl,
-      selectedStep: selection.step,
-      autoSelected: selection.autoSelected,
+    // One backup admission from the adapter write through the run row and the
+    // dataset flag that name it (#9982). The completion event fires after the
+    // lease, so the queue's own admitted commit never borrows this one.
+    const { sizeBytes } = await withBackupAssetPublication(async () => {
+      const registered = await registerTrainedLora({
+        run,
+        buffer: selection.buffer,
+        filename,
+        result: state.result,
+        previewImageUrl: selection.previewUrl,
+        selectedStep: selection.step,
+        autoSelected: selection.autoSelected,
+      });
+      await runsDb.updateRun(runId, {
+        status: 'completed',
+        completedAt: new Date().toISOString(),
+        output: {
+          loraFilename: filename,
+          finalLoss: Number.isFinite(state.result.final_loss) ? state.result.final_loss : null,
+          selectedCheckpointStep: selection.step,
+          autoSelectedCheckpoint: selection.autoSelected,
+        },
+      });
+      await flipDatasetAfterRun(run, { trained: true, loraFilename: filename });
+      return registered;
     });
-    await runsDb.updateRun(runId, {
-      status: 'completed',
-      completedAt: new Date().toISOString(),
-      output: {
-        loraFilename: filename,
-        finalLoss: Number.isFinite(state.result.final_loss) ? state.result.final_loss : null,
-        selectedCheckpointStep: selection.step,
-        autoSelectedCheckpoint: selection.autoSelected,
-      },
-    });
-    await flipDatasetAfterRun(run, { trained: true, loraFilename: filename });
     if (selection.autoSelected) console.log(`⚠️ training [${shortId(jobId)}] ${selection.reason} (size ${sizeBytes ?? '?'}B)`);
     console.log(`✅ training [${shortId(jobId)}] complete — registered ${filename} @ step ${selection.step}`);
     trainingEvents.emit('completed', {
@@ -1124,26 +1164,30 @@ export async function promoteCheckpoint(runId, step) {
   // Keep trainedSteps pointing at the run's final step so the sidecar can note
   // "checkpoint @ step N" whenever the promoted step isn't the final one.
   const finalStep = Math.max(0, ...listed.map((c) => c.step), run.progress?.step || 0) || null;
-  await registerTrainedLora({
-    run,
-    buffer,
-    filename,
-    result: { steps: finalStep, final_loss: target.loss },
-    previewImageUrl: target.previewUrl,
-    selectedStep: step,
-    autoSelected: false,
+  // Promotion replaces the deployed adapter in place, so the new bytes, the run
+  // row and the dataset flag publish under one backup admission (#9982).
+  await withBackupAssetPublication(async () => {
+    await registerTrainedLora({
+      run,
+      buffer,
+      filename,
+      result: { steps: finalStep, final_loss: target.loss },
+      previewImageUrl: target.previewUrl,
+      selectedStep: step,
+      autoSelected: false,
+    });
+    await runsDb.updateRun(runId, (current) => ({
+      ...current,
+      output: {
+        ...current.output,
+        loraFilename: filename,
+        selectedCheckpointStep: step,
+        autoSelectedCheckpoint: false,
+      },
+    }));
+    await flipDatasetAfterRun(run, { trained: true, loraFilename: filename });
   });
-  await runsDb.updateRun(runId, (current) => ({
-    ...current,
-    output: {
-      ...current.output,
-      loraFilename: filename,
-      selectedCheckpointStep: step,
-      autoSelectedCheckpoint: false,
-    },
-  }));
   trainingEvents.emit('checkpoints:changed', { runId });
-  await flipDatasetAfterRun(run, { trained: true, loraFilename: filename });
   console.log(`📌 training [${shortId(runId)}] promoted checkpoint step ${step} → ${filename}`);
   // If the promoted checkpoint had no preview (its step didn't land on the
   // sampleEvery cadence — most often the final step, e.g. 1188 with sampleEvery
@@ -1214,15 +1258,19 @@ async function ensureCheckpointPreview(run, step, loraFilename) {
   const renderedPath = join(PATHS.images, result?.filename || `lora-preview-${runId}-${step}.png`);
   if (!existsSync(renderedPath)) { console.error(`⚠️ training [${shortId(runId)}] preview render produced no file`); return; }
 
-  await ensureDir(samplesDir);
-  await copyFileGuarded(renderedPath, dest);
-  // Join is by step, sourced from artifacts.samples — append so listRunCheckpoints
-  // picks it up. updateRun's function form merges against the freshest record.
-  await runsDb.updateRun(runId, (current) => {
-    const samples = current.artifacts?.samples || [];
-    const name = previewSampleName(step);
-    if (samples.includes(name)) return current;
-    return { ...current, artifacts: { ...current.artifacts, samples: [...samples, name] } };
+  // The copy and the row naming it are one backup-admitted publication (#9982);
+  // the render above stays outside the lease.
+  await withBackupAssetPublication(async () => {
+    await ensureDir(samplesDir);
+    await copyFileGuarded(renderedPath, dest);
+    // Join is by step, sourced from artifacts.samples — append so listRunCheckpoints
+    // picks it up. updateRun's function form merges against the freshest record.
+    await runsDb.updateRun(runId, (current) => {
+      const samples = current.artifacts?.samples || [];
+      const name = previewSampleName(step);
+      if (samples.includes(name)) return current;
+      return { ...current, artifacts: { ...current.artifacts, samples: [...samples, name] } };
+    });
   });
   trainingEvents.emit('checkpoint-preview', { generationId: run.jobId || runId, runId, step });
   trainingEvents.emit('checkpoints:changed', { runId });

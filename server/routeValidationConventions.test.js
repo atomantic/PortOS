@@ -259,7 +259,6 @@ const UNVALIDATED_QUERY_BASELINE = [
   'routes/jira.js GET /reports',
   'routes/localLlm.js GET /catalog',
   'routes/localLlm.js GET /loaded',
-  'routes/loraTraining.js DELETE /runs/:id',
   'routes/loras.js GET /',
   'routes/loras.js GET /suggestions',
   'routes/meatspaceAlcoholRoutes.js GET /alcohol/daily',

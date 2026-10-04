@@ -79,7 +79,8 @@ Admission inventory (`withBackupAssetPublication`):
 | Voice benchmark audio and row (`voice/profileBenchmarks.js`), cloned-candidate recording and row (`voice/profiles.js`), and the fine-tune job record that names each sealed checkpoint (`voice/fineTuning.js`) | Covered (#9982 partial); promoting a checkpoint writes only a row naming bytes the job record already named |
 | Pipeline audio stage rows: generated music, cue render and voice-over line render (`routes/pipeline/audio.js`) | Covered (#9982 partial): the row that first names the WAV takes the lease; the sidecar or synthesizer writes the WAV before it |
 | Music-library upload attach: Music Designer upload, pipeline music upload and YouTube import (`routes/tracks.js`, `routes/pipeline/audio.js`, `trackYoutubeImport.js`) | Reference-only: the admitted library import copies the file first and the track or issue row commits after it |
-| Remaining durable owners, classified by domain in `backupAssetOwners.js` | Outstanding (#9982): sprites, Music Video renders and records, video generation, image generation tails, Writers Room drafts, LoRA registration and deletion, code animation, peer and share imports, attachments and catalog media, mood boards, image-to-3D and rigging, archive and document imports |
+| LoRA training and deployed LoRAs: trained-adapter registration, checkpoint promotion over the deployed adapter, the promoted-checkpoint preview copy, the progress row naming trainer-written samples and checkpoints, run deletion, and LoRA deletion from the LoRA manager or Media Models (`loraTraining/index.js`, `loras.js`) | Covered (#9982 partial): registration and promotion hold one lease from the adapter write through the run row and dataset flag; Civitai and Hugging Face installs admit the sidecar that first names the already-linked weights |
+| Remaining durable owners, classified by domain in `backupAssetOwners.js` | Outstanding (#9982): sprites, Music Video renders and records, video generation, image generation tails, Writers Room drafts, code animation, peer and share imports, attachments and catalog media, mood boards, image-to-3D and rigging, archive and document imports |
 | Durable replacement/deletion owners not yet classified | Outstanding (#9982) |
 | Snapshot consistency claim (`backupAssetOwners.js`, see below) | Covered (#9982 partial) |
 | Database restore execution and backend-cutover acceptance (`backup.js`, `databasePreflight.js`) | Covered (#9983) |
@@ -147,6 +148,20 @@ around the row commit: the sidecar or synthesizer has already written the WAV,
 possibly while a cut was running, and a row that waits out the cut can only name
 audio the snapshot copied, or nothing. Music library uploads need no lease of
 their own at the row: the admitted import copies the file first.
+
+LoRA training registers its adapter, sidecar, run row and dataset flag under one
+lease, and checkpoint promotion does the same while it overwrites the deployed
+adapter in place; the completion event fires after the lease so the media
+queue's own admitted commit never borrows it. The trainer writes samples and
+checkpoints itself, so only the progress row that first names them takes the
+lease, and a progress-only update never waits out a cut. Run deletion holds one
+lease from the artifact-directory removal through the LoRA unlink, the dataset
+reset and the row delete. A LoRA deleted from the manager leaves runs and other
+records that named it pointing at the removed file, so that unlink holds the
+lease too. A downloaded LoRA is linked under its final name before its sidecar
+is written; the sidecar write takes the lease, so a snapshot can hold weights
+without their sidecar (they list with fallback metadata) but never a sidecar
+without its weights.
 
 **Snapshot consistency claim.** `server/lib/backupAssetOwners.js` inventories
 each durable owner as `admitted`, `reference-only` or `outstanding`, and its

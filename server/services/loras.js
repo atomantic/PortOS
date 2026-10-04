@@ -29,6 +29,7 @@ import {
   siblingDownloadMeta,
   streamResumableDownload,
 } from '../lib/downloadPreflight.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { atomicWrite, assertSafeFilename, ensureDir, listDirectoryByExtension, sha256File, PATHS, rmGuarded, unlinkGuarded } from '../lib/fileUtils.js';
 import { verifySafetensorsStructure } from '../lib/hfCache.js';
 import { isPlainObject } from '../lib/objects.js';
@@ -326,10 +327,13 @@ export const getLora = async (filename) => {
   return lora;
 };
 
+// Run, dataset and character rows can keep naming a deleted LoRA, so the
+// unlink holds backup admission: it waits out an open cut, and a cut waits out
+// an unlink in flight (#9982).
 export const deleteLora = async (filename) => {
   assertSafeLoraFilename(filename);
   const filePath = join(PATHS.loras, filename);
-  await queueSidecarWrite(filename, async () => {
+  await withBackupAssetPublication(() => queueSidecarWrite(filename, async () => {
     if (!existsSync(filePath)) {
       throw new ServerError(`LoRA not found: ${filename}`, { status: 404, code: 'NOT_FOUND' });
     }
@@ -356,7 +360,7 @@ export const deleteLora = async (filename) => {
       throw modelRemovalError;
     }
     invalidateLoraMetadataCache(filename);
-  });
+  }));
   await recordModelUninstall({ backend: 'lora', key: filename });
   console.log(`🗑️ Deleted LoRA: ${filename}`);
   return { ok: true, filename };
@@ -385,7 +389,11 @@ const queueSidecarWrite = createKeyedFileWriteQueue();
 // here rather than in each installer is what keeps a fourth one from arriving
 // untracked — and a re-install over an existing filename keeps its original
 // `installedAt`, so it does not read as newly downloaded.
-export const writeLoraSidecar = (filename, sidecar) => queueSidecarWrite(filename, async () => {
+//
+// The sidecar is the record that first names freshly installed or trained
+// weights, which are already on disk under their final name, so writing it is
+// the commit that takes backup admission (#9982).
+export const writeLoraSidecar = (filename, sidecar) => withBackupAssetPublication(() => queueSidecarWrite(filename, async () => {
   const loraPath = join(PATHS.loras, filename);
   if (!existsSync(loraPath)) {
     throw new ServerError(`LoRA not found: ${filename}`, { status: 404, code: 'NOT_FOUND' });
@@ -399,7 +407,7 @@ export const writeLoraSidecar = (filename, sidecar) => queueSidecarWrite(filenam
     // HF one carries nothing, so the file itself is the only uniform source.
     sizeBytes: await stat(loraPath).then((info) => info.size, () => null),
   }));
-});
+}));
 
 export const patchLoraSidecar = async (filename, patch) => {
   assertSafeLoraFilename(filename);

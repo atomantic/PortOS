@@ -11,13 +11,12 @@ import { join } from 'path';
 import { z } from 'zod';
 import { asyncHandler, sendErrorResponse, ServerError } from '../lib/errorHandler.js';
 import { startTrainingRunSchema, validateRequest } from '../lib/validation.js';
-import { assertSafeFilename, rmGuarded } from '../lib/fileUtils.js';
+import { assertSafeFilename } from '../lib/fileUtils.js';
 import { resolveFlux2Python, isFlux2VenvHealthy, resolveMfluxPython } from '../lib/pythonSetup.js';
 import { getSettings } from '../services/settings.js';
 import { attachSseClient, cancelJob } from '../services/mediaJobQueue/index.js';
 import {
-  clearDatasetForDeletedLora,
-  deleteRun,
+  deleteTrainingRun,
   getRunRequired,
   isMfluxTrainAvailable,
   listCheckpoints,
@@ -25,12 +24,10 @@ import {
   listSamples,
   promoteCheckpoint,
   resumeTrainingRun,
-  runDir,
   runSamplesDir,
   startTrainingRun,
 } from '../services/loraTraining/index.js';
 import { TRAINING_DEFAULTS } from '../services/loraTraining/runtimes.js';
-import { deleteLora } from '../services/loras.js';
 
 const router = Router();
 
@@ -107,23 +104,10 @@ router.post('/runs/:id/resume', asyncHandler(async (req, res) => {
   res.status(202).json(await resumeTrainingRun(req.params.id));
 }));
 
+const deleteRunQuerySchema = z.object({ deleteLora: z.enum(['true', 'false']).optional() });
 router.delete('/runs/:id', asyncHandler(async (req, res) => {
-  const run = await getRunRequired(req.params.id);
-  if (['queued', 'running'].includes(run.status)) {
-    throw new ServerError('Cancel the run before deleting it', { status: 409, code: 'RUN_ACTIVE' });
-  }
-  // Artifact dir is server-derived from the run id (uuid) — confined under
-  // PATHS.trainingRuns by construction.
-  await rmGuarded(runDir(run.id), { recursive: true, force: true });
-  if (req.query.deleteLora === 'true' && run.output?.loraFilename) {
-    await deleteLora(run.output.loraFilename).catch((err) => {
-      console.log(`⚠️ trained LoRA delete skipped: ${err?.message}`);
-    });
-    // Reset the owning dataset off 'trained' so it can't keep advertising the
-    // subject as trained against the file we just deleted.
-    await clearDatasetForDeletedLora(run, run.output.loraFilename);
-  }
-  res.json(await deleteRun(run.id));
+  const { deleteLora } = validateRequest(deleteRunQuerySchema, req.query);
+  res.json(await deleteTrainingRun(req.params.id, { withLora: deleteLora === 'true' }));
 }));
 
 // Checkpoint picker: list every saved checkpoint with its step, loss, and
