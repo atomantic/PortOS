@@ -55,6 +55,14 @@ vi.mock('./mediaModelStorage.js', () => ({
     loras: [{ filename: 'private-project.safetensors', name: 'Private Project', size: 200 }],
   })),
 }));
+vi.mock('./modelStoreStorage.js', () => ({
+  listModelStore: vi.fn(async (backend) => backend === 'mtplx'
+    ? { totalBytes: 60, items: [
+      { key: 'org--ckpt', name: 'org/ckpt', detail: 'MTPLX checkpoint', size: 50 },
+      { key: 'session-bank', name: 'MTPLX session bank', detail: 'cache', size: 10, risk: 'low', cleanupReason: 'Rebuilt on demand.' },
+    ] }
+    : { totalBytes: 0, items: [] }),
+}));
 vi.mock('./ollamaManager.js', () => ({
   getStatus: vi.fn(async () => ({ available: true, models: [{ id: 'example:latest', name: 'Example', size: 100 }] })),
   listStoredModels: vi.fn(async () => [{ id: 'example:latest', name: 'Example', size: 100 }]),
@@ -109,6 +117,7 @@ const db = await import('../lib/db.js');
 const fileUtils = await import('../lib/fileUtils.js');
 const dataManager = await import('./dataManager.js');
 const mediaModelStorage = await import('./mediaModelStorage.js');
+const modelStoreStorage = await import('./modelStoreStorage.js');
 const ollamaManager = await import('./ollamaManager.js');
 const lmStudioManager = await import('./lmStudioManager.js');
 const cos = await import('./cos.js');
@@ -318,6 +327,32 @@ describe('system resource reporting', () => {
     expect(report.sourceErrors).toEqual(expect.arrayContaining(['agent-queue', 'agent-status']));
   });
 
+  // Regression: the file-system model stores (MTPLX, Hunyuan3D, xet cache, Pixie
+  // Forge) were invisible to the report. Each is its own backend, sized, armed with
+  // a server-issued action, and a failed read marks the source unavailable instead
+  // of reading as an empty store.
+  it('inventories the file-system model stores with delete and clear actions', async () => {
+    const report = await buildSystemResourceReport();
+
+    const ckpt = report.models.downloaded.find((row) => row.id === 'mtplx:org--ckpt');
+    expect(ckpt).toMatchObject({ backend: 'mtplx', sizeBytes: 50, action: { type: 'model-store', backend: 'mtplx', key: 'org--ckpt' } });
+    expect(report.models.downloaded.find((row) => row.id === 'mtplx:session-bank')).toMatchObject({ risk: 'low' });
+    expect(report.models.totals.mtplx).toBe(60);
+    expect(report.storageAreas.find((area) => area.id === 'mtplx')).toMatchObject({ sizeBytes: 60, status: 'ready' });
+    expect(report.storageAreas.find((area) => area.id === 'pixie-forge')).toMatchObject({ sizeBytes: 0, status: 'ready' });
+    expect(report.cleanupCandidates.find((candidate) => candidate.id === 'mtplx:org--ckpt').action)
+      .toEqual({ type: 'model-store', backend: 'mtplx', key: 'org--ckpt' });
+  });
+
+  it('marks an unreadable model store unavailable rather than empty', async () => {
+    modelStoreStorage.listModelStore.mockRejectedValueOnce(new Error('permission denied'));
+
+    const report = await buildSystemResourceReport();
+
+    expect(report.sourceErrors).toContain('mtplx');
+    expect(report.models.totals.mtplx).toBeNull();
+  });
+
   it('keeps daemon status unknown when only the COS status probe fails', async () => {
     cos.getStatus.mockRejectedValueOnce(new Error('daemon status unavailable'));
 
@@ -337,6 +372,7 @@ describe('system resource reporting', () => {
     db.query.mockRejectedValueOnce(new Error('database unavailable'));
     mediaModelStorage.listHfModelStorage.mockRejectedValueOnce(new Error('cache unavailable'));
     mediaModelStorage.listLoraStorage.mockRejectedValueOnce(new Error('lora store unavailable'));
+    modelStoreStorage.listModelStore.mockRejectedValue(new Error('store unreadable'));
     fileUtils.dirSize.mockResolvedValue(null);
 
     const report = await buildSystemResourceReport();

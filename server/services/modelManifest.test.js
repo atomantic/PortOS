@@ -147,7 +147,7 @@ describe('reconciliation against a scan', () => {
       sourceErrors: ['lmstudio-backend', 'loras'],
       disabledSources: ['ollama'],
     });
-    expect(result).toMatchObject({ added: 0, removed: 0, trusted: ['huggingface'] });
+    expect(result).toMatchObject({ added: 0, removed: 0, trusted: ['huggingface', 'mtplx', 'hy3dgen', 'hf-xet-cache', 'pixie-forge'] });
     expect((await getModelManifest()).models).toHaveLength(3);
   });
 
@@ -175,7 +175,7 @@ describe('reconciliation against a scan', () => {
   });
 
   it('maps every scan source error to the backend it actually invalidates', () => {
-    expect([...trustedInventoryBackends({})]).toEqual(['huggingface', 'lora', 'ollama', 'lmstudio']);
+    expect([...trustedInventoryBackends({})]).toEqual(['huggingface', 'lora', 'ollama', 'lmstudio', 'mtplx', 'hy3dgen', 'hf-xet-cache', 'pixie-forge']);
     expect([...trustedInventoryBackends({ sourceErrors: ['huggingface'] })]).not.toContain('huggingface');
     expect([...trustedInventoryBackends({ sourceErrors: ['loras'] })]).not.toContain('lora');
     expect([...trustedInventoryBackends({ sourceErrors: ['ollama-inventory'] })]).not.toContain('ollama');
@@ -184,6 +184,10 @@ describe('reconciliation against a scan', () => {
     // A residency probe failure says nothing about what is ON DISK, so it must
     // not stop a reconcile — the inventory read is a separate source.
     expect([...trustedInventoryBackends({ sourceErrors: ['ollama-residency', 'lmstudio-residency'] })])
-      .toEqual(['huggingface', 'lora', 'ollama', 'lmstudio']);
+      .toEqual(['huggingface', 'lora', 'ollama', 'lmstudio', 'mtplx', 'hy3dgen', 'hf-xet-cache', 'pixie-forge']);
+    // The file-system model stores report as storage areas under their backend id.
+    for (const backend of ['mtplx', 'hy3dgen', 'hf-xet-cache', 'pixie-forge']) {
+      expect([...trustedInventoryBackends({ sourceErrors: [backend] })]).not.toContain(backend);
+    }
   });
 });
