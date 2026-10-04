@@ -539,6 +539,33 @@ describe('sweepAttachmentOrphans — the backstop, both directions', () => {
     expect(healed[0]).toEqual([missing]);
   });
 
+  it('never heals a row whose file landed after the listing, and fences the UPDATE on fetched_at', async () => {
+    const landed = `cc/${'c'.repeat(64)}.png`;
+    const gone = `11/${'1'.repeat(64)}.png`;
+    // The download commits its file after listStoredFiles() but before the
+    // reference query runs, so the file is referenced yet absent from the listing.
+    vi.mocked(query).mockImplementation(async (sql, params) => {
+      const flat = String(sql).replace(/\s+/g, ' ');
+      if (flat.includes('SELECT DISTINCT local_path FROM beeper_attachments WHERE local_path IS NOT NULL')) {
+        mkdirSync(join(attachmentsRoot(), 'cc'), { recursive: true });
+        writeFileSync(join(attachmentsRoot(), landed), Buffer.alloc(8));
+        return { rows: [{ local_path: landed }, { local_path: gone }] };
+      }
+      if (flat.includes('WHERE local_path = ANY')) {
+        expect(flat).toContain('fetched_at < $2');
+        expect(params[1]).toBeInstanceOf(Date);
+        return { rowCount: params[0].length };
+      }
+      return { rows: [] };
+    });
+
+    const result = await sweepAttachmentOrphans();
+    expect(result.healedRows).toBe(1);
+    const update = vi.mocked(query).mock.calls.find(([sql]) => String(sql).includes('WHERE local_path = ANY'));
+    expect(update[1][0]).toEqual([gone]);
+    expect(existsSync(join(attachmentsRoot(), landed))).toBe(true);
+  });
+
   it('spares a file that gained a reference between the snapshot and the unlink', async () => {
     const shared = `ff/${'f'.repeat(64)}.png`;
     mkdirSync(join(attachmentsRoot(), 'ff'), { recursive: true });
