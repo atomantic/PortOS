@@ -25,7 +25,7 @@ export const deleteGenomeData = () => request('/meatspace/genome', { method: 'DE
 
 // MeatSpace - Genome ClinVar
 export const getClinvarStatus = () => request('/meatspace/genome/clinvar/status');
-export const syncClinvar = () => request('/meatspace/genome/clinvar/sync', { method: 'POST' });
+export const syncClinvar = (requestId, options) => request('/meatspace/genome/clinvar/sync', { method: 'POST', ...(requestId ? { body: JSON.stringify({ requestId }) } : {}), ...options });
 export const scanClinvar = () => request('/meatspace/genome/clinvar/scan', { method: 'POST' });
 
 // MeatSpace - Epigenetic Lifestyle Tracking

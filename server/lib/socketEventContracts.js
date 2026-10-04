@@ -44,6 +44,10 @@ const loomRunSnapshot = (production) => Object.freeze({
 });
 
 export const SOCKET_EVENT_CONTRACTS = Object.freeze({
+  'genome:clinvar-progress': {
+    direction: 'server-to-client', summary: 'ClinVar download and indexing progress for an optional client request ID.',
+    payloadSchema: { type: 'object', required: ['message'], properties: { message: { type: 'string' }, requestId: { type: 'string', format: 'uuid' } } },
+  },
   'music-video:song-revision': {
     direction: 'server-to-client', summary: 'A song revision changed; apply the persisted project snapshot.',
     payloadSchema: { type: 'object', required: ['projectId', 'project'], properties: { projectId: { type: 'string' }, project: { type: 'object' } } },
