@@ -1715,6 +1715,7 @@ describe('saved conversation scopes', () => {
     api.getBeeperScopes.mockRejectedValueOnce(new Error('Example read failure')).mockResolvedValue({ scopes: [saved] });
     renderTab();
     expect(await screen.findByText(/Could not load saved scopes/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add scope' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Retry scopes' }));
     expect(await screen.findByRole('button', { name: saved.name })).toBeInTheDocument();
     api.getBeeperScopes.mockResolvedValue({ scopes: [] });
@@ -1728,6 +1729,7 @@ describe('saved conversation scopes', () => {
     api.createBeeperScope.mockRejectedValueOnce(new Error('Example save failure')).mockResolvedValueOnce(saved);
     renderTab('/messages/beeper?scope=net:signal&q=Example&unread=1');
     await screen.findByRole('button', { name: 'Add scope' });
+    await awaitEnabled(screen.getByRole('button', { name: 'Add scope' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add scope' }));
     fireEvent.change(screen.getByLabelText('Scope name'), { target: { value: saved.name } });
     fireEvent.click(screen.getByRole('button', { name: 'Save scope' }));

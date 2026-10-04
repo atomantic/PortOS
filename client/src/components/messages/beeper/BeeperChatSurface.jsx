@@ -174,7 +174,7 @@ function SyncStrip({ sweep }) {
 /* ------------------------------------------------------------------ rail -- */
 
 function Rail({
-  networks, scope, onScope, totalUnread, onOpenSettings, savedScopes, onAddScope,
+  networks, scope, onScope, totalUnread, onOpenSettings, savedScopes, onAddScope, scopesReady,
 }) {
   const item = 'relative flex size-11 shrink-0 items-center justify-center rounded-xl transition';
   return (
@@ -209,7 +209,7 @@ function Rail({
           <Bookmark size={19} />
         </button>
       ))}
-      <button type="button" title="Save current scope" aria-label="Add scope" onClick={onAddScope}
+      <button type="button" title="Save current scope" aria-label="Add scope" disabled={!scopesReady} onClick={onAddScope}
         className={`${item} text-gray-500 hover:text-white`}><Plus size={19} /></button>
 
       <div className="mx-1 h-7 w-px shrink-0 bg-port-border sm:mx-0 sm:my-1.5 sm:h-px sm:w-7" />
@@ -903,6 +903,7 @@ export default function BeeperChatSurface({
           return params;
         }, { replace: true })}
         savedScopes={savedScopes || []}
+        scopesReady={savedScopes !== null}
         onAddScope={() => { setScopeEditor({ filters }); setScopeName(''); }}
         totalUnread={totalUnread}
         onOpenSettings={onOpenSettings}
