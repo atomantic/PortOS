@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { access } from 'node:fs/promises';
+import { access, rm } from 'node:fs/promises';
 
 const launch = vi.hoisted(() => ({ spawn: vi.fn() }));
+vi.mock('node:fs/promises', async original => {
+  const actual = await original();
+  return { ...actual, rm: vi.fn(actual.rm) };
+});
 vi.mock('../../lib/childProcess.js', async original => ({ ...await original(), spawn: launch.spawn }));
 vi.mock('../browserService.js', () => ({ loadConfig: async () => ({ chromePath: '/synthetic/chrome' }) }));
 const { launchCompositionBrowser } = await import('./ownedBrowser.js');
@@ -18,6 +22,7 @@ beforeEach(() => {
   child.kill = vi.fn(signal => {
     child.signalCode = signal;
     child.emit('exit', null, signal);
+    child.emit('close', null, signal);
     return true;
   });
   startup = () => {
@@ -30,6 +35,7 @@ beforeEach(() => {
     queueMicrotask(startup);
     return child;
   });
+  vi.mocked(rm).mockClear();
 });
 afterEach(() => { child.stderr.destroy(); });
 
@@ -86,6 +92,7 @@ describe('owned composition capture browser lifecycle', () => {
       if (signal === 'SIGKILL') {
         child.signalCode = signal;
         child.emit('exit', null, signal);
+        child.emit('close', null, signal);
       }
       return true;
     });
@@ -94,6 +101,29 @@ describe('owned composition capture browser lifecycle', () => {
     await expect(access(profile)).resolves.toBeUndefined();
     await closing;
     expect(child.kill.mock.calls.map(([signal]) => signal)).toEqual(['SIGTERM', 'SIGKILL']);
+    await expect(access(profile)).rejects.toThrow();
+  });
+
+  it('closes owned stdio after exit and keeps the profile until child close', async () => {
+    child.kill = vi.fn(signal => {
+      child.signalCode = signal;
+      child.emit('exit', null, signal);
+      return true;
+    });
+    const owner = await launchCompositionBrowser();
+    const closing = owner.close();
+    // Let cleanup advance after exit while holding back the child's close
+    // event, as with a pipe inherited by a Chrome helper.
+    await Promise.resolve();
+    await Promise.resolve();
+    try {
+      expect(child.stderr.destroyed).toBe(true);
+      expect(rm).not.toHaveBeenCalled();
+      await expect(access(profile)).resolves.toBeUndefined();
+    } finally {
+      child.emit('close', null, 'SIGTERM');
+      await closing;
+    }
     await expect(access(profile)).rejects.toThrow();
   });
 });

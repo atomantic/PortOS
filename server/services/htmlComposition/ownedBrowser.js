@@ -16,32 +16,39 @@ export async function launchCompositionBrowser({ signal, startupMs = 20000, shut
   const profile = await mkdtemp(join(tmpdir(), 'portos-composition-browser-'));
   let proc;
   let exited = false;
+  let closed = false;
   let spawned = false;
   let closing;
-  let exitResolve;
-  const exit = new Promise(resolve => { exitResolve = resolve; });
-  const onExit = () => { exited = true; exitResolve(); };
-  // Child 'error' may also be emitted by kill(). Keep a listener until exit.
-  const onError = () => { if (!spawned && !proc?.pid) onExit(); };
+  let closeResolve;
+  const childClosed = new Promise(resolve => { closeResolve = resolve; });
+  const onExit = () => {
+    exited = true;
+    // Chrome helpers may retain inherited stderr after the browser exits.
+    // Release our pipe without signaling unrelated or discovered processes.
+    proc?.stderr?.destroy();
+  };
+  const onClose = () => { closed = true; closeResolve(); };
+  // Child 'error' may also be emitted by kill(). Keep a listener until close.
+  const onError = () => { if (!spawned && !proc?.pid) { onExit(); onClose(); } };
   const close = () => closing ??= (async () => {
     signal?.removeEventListener('abort', abort);
     let escalation;
     let deadline;
     try {
-      if (proc && !exited) {
-        escalation = killWithEscalation(proc, {
+      if (proc && !closed) {
+        if (!exited) escalation = killWithEscalation(proc, {
           label: 'Composition browser', delayMs: Math.min(1000, shutdownMs / 2),
           stillRunning: () => !exited,
         });
-        await Promise.race([exit, new Promise((_, reject) => {
-          deadline = setTimeout(() => reject(new Error('Composition browser cleanup exceeded its deadline')), shutdownMs);
+        await Promise.race([childClosed, new Promise((_, reject) => {
+          deadline = setTimeout(() => reject(new Error(`Composition browser cleanup exceeded its deadline (exit=${exited}, stdioClosed=${Boolean(proc.stderr?.destroyed)})`)), shutdownMs);
         })]);
       }
     } finally {
       clearTimeout(escalation);
       clearTimeout(deadline);
-      // Do not delete a profile that a child still owns, or hide a failed kill.
-      if (!proc || exited) {
+      // Wait for the process and our pipe to close before removing its profile.
+      if (!proc || closed) {
         proc?.removeListener('error', onError);
         await rm(profile, { recursive: true, force: true });
       }
@@ -58,6 +65,7 @@ export async function launchCompositionBrowser({ signal, startupMs = 20000, shut
     ], safeChildProcessOptions({ stdio: ['ignore', 'ignore', 'pipe'] }));
     proc.once('spawn', () => { spawned = true; });
     proc.once('exit', onExit);
+    proc.once('close', onClose);
     proc.on('error', onError);
     const webSocketDebuggerUrl = await new Promise((resolve, reject) => {
       let tail = '';
