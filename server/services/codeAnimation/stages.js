@@ -16,6 +16,7 @@ import { join } from 'path';
 import { createCodeAnimationPackage } from '../../lib/codeAnimationPackage.js';
 import { codeAnimationStageRunSchema } from '../../lib/codeAnimationProjects.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { extractJson } from '../../lib/jsonExtract.js';
 import { PATHS } from '../../lib/paths.js';
 import { htmlCompositionContractSchema, validateRequest } from '../../lib/validation.js';
 import { emitCodeAnimationChanged } from '../socket.js';
@@ -226,18 +227,17 @@ async function reviewViaAuthoringRoute({ project, manifest, artifacts, signal, t
     source: 'code-animation-review', cwd: PATHS.data, allowFallback: preflight.allowFallback, toolFree: true,
   }).finally(() => signal?.removeEventListener('abort', stopProvider));
   const route = _recordEffectiveRoute(preflight.resolved, project.localSettings, result);
-  const parsed = parseReviewFindings(result.text);
+  const parsed = parseReviewFindings(result.text?.split(prompt).join(''));
   if (!parsed) throw new ServerError('The reviewer response was not valid JSON findings', { status: 422, code: 'CODE_ANIMATION_REVIEW_INVALID' });
   return { findings: parsed, tokens: Math.ceil((prompt.length + result.text.length) / 4), reviewer: { providerId: route.effective.providerId, model: route.effective.model }, effective: route };
 }
 
 /** Pull `{findings:[…]}` out of a reply that may be fenced or wrapped in prose; null when it carries none. */
 function parseReviewFindings(text) {
-  const match = String(text ?? '').match(/\{[\s\S]*\}/);
-  if (!match) return null;
-  let value;
-  try { value = JSON.parse(match[0]); } catch { return null; }
-  if (!Array.isArray(value?.findings)) return null;
+  const isReviewPayload = value => Array.isArray(value?.findings)
+    && value.findings.every(item => typeof item?.detail === 'string');
+  const { value } = extractJson(text, { shapePredicate: isReviewPayload, skipInnerFence: true });
+  if (!isReviewPayload(value)) return null;
   return value.findings.filter(item => typeof item?.detail === 'string' && item.detail.trim()).slice(0, 10)
     .map(item => ({ detail: item.detail.trim().slice(0, 500), atSeconds: Number.isFinite(item.atSeconds) ? item.atSeconds : null }));
 }
