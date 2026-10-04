@@ -9,6 +9,7 @@
  * and the branch cleaned up.
  */
 
+import { claimBranchAdmission } from '../lib/claimContinuation.js';
 import { existsSync, realpathSync } from 'fs';
 import { lstat, readlink, readdir, rm, stat, symlink, unlink } from 'fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'path';
@@ -750,25 +751,26 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
  * @param {object} [options]
  * @param {Set<string>} [options.activeAgentIds] - agents currently running
  * @param {string} [options.preferredPath] - cached holder path to validate first
- * @param {boolean} [options.allowLiveClaim=false] - treat a `claim-*` holder as
- *   adoptable rather than off-limits. The claim flow keeps no durable agent id
- *   for its branch, so this can't distinguish an idle claim tree from a live
- *   `/do:next` session in it — pass it only for a task whose whole purpose IS
- *   that exact branch (a review-loop resolve-and-merge follow-up, or a PR-
- *   remediation follow-up — `isNonCommittingCoordinatorTask` in taskTypeHooks.js),
- *   where the task's own deliverable is the signal that the claim's work should
- *   be finished and landed. Mirrors `branchReconcile.resolveLiveOwnerReason`'s
- *   dispatch-side carve-out for the same directory shape (#6243).
+ * @param {boolean} [options.allowLiveClaim=false] - recover a claim holder only
+ *   after the supplied full registry passes branch/repository owner admission.
+ * @param {Array<object>|null} [options.agents] - required for claim recovery
+ * @param {string|null} [options.requestingAgentId] - the requesting run, not its predecessor
  * @returns {Promise<{ path: string, agentId: string }|null>}
  */
 export async function findAdoptableWorktreeForBranch(sourceWorkspace, branchName, {
   activeAgentIds = new Set(),
   preferredPath = null,
   allowLiveClaim = false,
+  agents = null,
+  requestingAgentId = null,
 } = {}) {
   if (!sourceWorkspace || !branchName) return null;
 
-  const worktrees = await listWorktrees(sourceWorkspace).catch(() => []);
+  const worktrees = await listWorktrees(sourceWorkspace).catch(() => null);
+  if (!worktrees) return null;
+  if (allowLiveClaim && !claimBranchAdmission({
+    branchName, preferredPath, agentId: requestingAgentId, sourceWorkspace, worktrees, agents,
+  }).admit) return null;
   // Git permits one holder per branch. A resume pointer is merely a cache of that
   // answer, so validate it against the current worktree list first and then fall
   // back to discovery when the cached path went stale or was moved.
@@ -794,7 +796,7 @@ export async function findAdoptableWorktreeForBranch(sourceWorkspace, branchName
 
 // How long a sibling `/do:next` tree must sit untouched before a follow-up may
 // release its branch. An agent that finished and kept its tree (waiting on CI,
-// say) goes quiet for far longer; a live session touches its index constantly.
+// say) goes quiet for far longer; owner admission must pass independently.
 export const SIBLING_NEXT_HOLDER_IDLE_MS = 10 * 60 * 1000;
 
 /**
@@ -811,23 +813,28 @@ export const SIBLING_NEXT_HOLDER_IDLE_MS = 10 * 60 * 1000;
  *
  * Refuses (returns false) unless ALL hold: the branch is `next/…`; the holder is
  * a linked worktree (never the primary checkout) outside the managed root,
- * unlocked; no running/paused agent works inside it; nothing in it changed for
- * `idleMs`; the tree is clean, untracked files included; and HEAD is already on
+ * unlocked; the readable registry has no branch/repository owner or running/paused
+ * agent inside it; nothing in it changed for `idleMs`; the tree is clean, untracked files included; and HEAD is already on
  * the remote, so nothing is left only in that tree.
  *
  * @param {string} sourceWorkspace
  * @param {string} branchName
- * @param {{ activeWorkspacePaths?: string[], idleMs?: number, nowMs?: number }} [options]
+ * @param {{ activeWorkspacePaths?: string[], agents?: object[], requestingAgentId?: string, idleMs?: number, nowMs?: number }} [options]
  * @returns {Promise<{ path: string }|null>} the released holder, or null
  */
 export async function releaseIdleSiblingNextHolder(sourceWorkspace, branchName, {
   activeWorkspacePaths = [],
+  agents = null,
+  requestingAgentId = null,
   idleMs = SIBLING_NEXT_HOLDER_IDLE_MS,
   nowMs = Date.now(),
 } = {}) {
   if (!sourceWorkspace || !branchName?.startsWith('next/')) return null;
 
-  const worktrees = await listWorktrees(sourceWorkspace).catch(() => []);
+  const worktrees = await listWorktrees(sourceWorkspace).catch(() => null);
+  if (!claimBranchAdmission({
+    branchName, agentId: requestingAgentId, sourceWorkspace, worktrees, agents,
+  }).admit) return null;
   const holderIndex = worktrees.findIndex(wt => wt.branch?.replace('refs/heads/', '') === branchName);
   // Index 0 is the main worktree — the user's own checkout is never released.
   if (holderIndex <= 0) return null;

@@ -76,7 +76,7 @@ import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, listWork
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 
-beforeEach(() => { vi.clearAllMocks(); });
+beforeEach(() => { vi.clearAllMocks(); listWorktrees.mockResolvedValue([]); });
 
 describe('prepareAgentWorkspace — Creative Director scratch cwd (#4650)', () => {
   it('pins a CD no-worktree task to an isolated scratch dir and skips the git pull', async () => {
@@ -700,7 +700,7 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
 
     const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: followUpTask() });
 
-    expect(releaseIdleSiblingNextHolder).toHaveBeenCalledWith(expect.any(String), 'cos/task-x/agent-y', { activeWorkspacePaths: ['/elsewhere/live'] });
+    expect(releaseIdleSiblingNextHolder).toHaveBeenCalledWith(expect.any(String), 'cos/task-x/agent-y', expect.objectContaining({ activeWorkspacePaths: ['/elsewhere/live'], agents: expect.any(Array), requestingAgentId: 'agent-new' }));
     expect(r.outcome).toBe('ready');
     expect(updateTask).not.toHaveBeenCalled();
   });
@@ -745,6 +745,50 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
     expect(findAdoptableWorktreeForBranch).not.toHaveBeenCalled();
     expect(adoptWorktree).toHaveBeenCalledTimes(0);
     expect(r.outcome).toBe('blocked');
+  });
+
+  it('recovers an unrelated ordinary agent branch while a swarm owns claim branches', async () => {
+    const path = '/mock/worktrees/agent-y';
+    const branch = 'cos/task-x/agent-y';
+    listWorktrees.mockResolvedValue([{ path, branch: `refs/heads/${branch}` }]);
+    getAgents.mockResolvedValue([{ id: 'agent-parent', status: 'running', claimPicksOwnBranch: true }]);
+    findAdoptableWorktreeForBranch.mockResolvedValue({ path, agentId: 'agent-y' });
+    adoptWorktree.mockResolvedValue({ worktreePath: '/mock/worktrees/agent-new', branchName: branch, adopted: true });
+    const result = await prepareAgentWorkspace({ agentId: 'agent-new', task: followUpTask() });
+    expect(result.outcome).toBe('ready');
+    expect(adoptWorktree).toHaveBeenCalled();
+  });
+
+  it.each(['claim/issue-42', 'next/issue-42'])('defers coordinator takeover of %s through the child completion and merge window', async branch => {
+    const path = '/mock/worktrees/claim-issue-42';
+    listWorktrees.mockResolvedValue([{ path, branch: `refs/heads/${branch}` }]);
+    getAgents.mockResolvedValue([
+      { id: 'agent-parent', status: 'running', claimPicksOwnBranch: true },
+      { id: 'agent-child', status: 'completed', claimBranch: branch },
+    ]);
+    // Without owner admission this route moves the selected checkout, or
+    // detaches a sibling holder and creates a new one. Neither is authorized.
+    findAdoptableWorktreeForBranch.mockResolvedValue({ path, agentId: 'claim-issue-42' });
+    adoptWorktree.mockResolvedValue({ worktreePath: '/mock/worktrees/agent-new', branchName: branch, adopted: true });
+    const result = await prepareAgentWorkspace({
+      agentId: 'agent-new', task: followUpTask({ reviewLoopPRBranch: branch }),
+    });
+    expect(result).toMatchObject({ outcome: 'blocked', reason: expect.stringContaining('owner-ambiguous') });
+    expect(adoptWorktree).not.toHaveBeenCalled();
+    expect(releaseIdleSiblingNextHolder).not.toHaveBeenCalled();
+    expect(createWorktree).not.toHaveBeenCalled();
+  });
+
+  it.each(['unreadable', 'missing', 'changed'])('refuses %s coordinator ownership without taking a fallback', async fault => {
+    const path = '/mock/worktrees/claim-issue-42';
+    listWorktrees.mockResolvedValue(fault === 'unreadable' ? null : fault === 'missing' ? [] : [{ path, branch: 'refs/heads/claim/issue-99' }]);
+    const result = await prepareAgentWorkspace({ agentId: 'agent-new', task: followUpTask({
+      reviewLoopPRBranch: 'claim/issue-42', resumeWorktreePath: path,
+    }) });
+    expect(result.outcome).toBe('blocked');
+    expect(adoptWorktree).not.toHaveBeenCalled();
+    expect(releaseIdleSiblingNextHolder).not.toHaveBeenCalled();
+    expect(createWorktree).not.toHaveBeenCalled();
   });
 
   it('falls back to the cooldown pause when the adoption is refused', async () => {
