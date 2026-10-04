@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import NetworkLogo, { networkLabel } from './BeeperNetworkLogo';
 import BeeperThread from './BeeperThread';
+import BeeperNewConversation from './BeeperNewConversation';
 import ConnectionStatusDot from '../../ui/ConnectionStatusDot';
 import toast from '../../ui/Toast';
 import useMounted from '../../../hooks/useMounted';
@@ -30,8 +31,8 @@ import * as api from '../../../services/api';
  *  - **The rail includes each network the MIRROR holds and saved scopes.**
  *    Saved scopes retain named filters in machine-local settings.
  *  - **`Archive` and `Low priority` are wired**, because `isArchived` and
- *    `isLowPriority` are real fields on every chat row. Requests, Later and
- *    new conversation are omitted until they work (#9985) — an inert control
+ *    `isLowPriority` are real fields on every chat row. Requests is omitted
+ *    until its source state can be mirrored (#9985) — an inert control
  *    that looks live is worse than an absent one.
  *  - **The pinned grid is Beeper's own `isPinned`, mirrored.** PortOS never
  *    stores a pin of its own; a second source of truth for it is the whole
@@ -48,8 +49,7 @@ import * as api from '../../../services/api';
  * rendered over the newer one.
  */
 
-// Fixed system scopes. Requests and
-// new conversation are omitted until implemented
+// Fixed system scopes. Requests is omitted until implemented
 // (tracked in the Beeper enhancements issue, #9985).
 const SCOPE_EVENTS = ['beeper:invalidate'];
 const SYSTEM_SCOPES = [
@@ -355,7 +355,7 @@ function ConversationRow({ conversation, unified, selected, onSelect }) {
 
 export default function BeeperChatSurface({
   conversationId = null, realtime = null, invalidationSeq = 0, invalidationFrames = null, breaker = null,
-  sweep = null, tokenConfigured = false, onOpenSettings,
+  sweep = null, tokenConfigured = false, accounts = [], onOpenSettings,
 }) {
   const navigate = useNavigate();
   const mountedRef = useMounted();
@@ -377,6 +377,7 @@ export default function BeeperChatSurface({
   const searchRaw = searchParams.get('q') ?? savedScope?.filters.search ?? '';
   const search = searchRaw.trim();
   const [searchOpen, setSearchOpen] = useState(Boolean(search));
+  const [creatingConversation, setCreatingConversation] = useState(false);
   const setSavedScopes = scopesResource.updateData;
   const [scopeEditor, setScopeEditor] = useState(null);
   const [scopeName, setScopeName] = useState('');
@@ -956,6 +957,13 @@ export default function BeeperChatSurface({
           >
             <Search size={15} />
           </button>
+          {tokenConfigured && accounts.length > 0 && (
+            <button type="button" aria-label="New conversation" title="New conversation"
+              onClick={() => setCreatingConversation(true)}
+              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded text-gray-500 hover:text-white">
+              <Plus size={15} />
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setParam('unread', unreadOnly ? (savedScope ? '0' : null) : '1')}
@@ -977,6 +985,11 @@ export default function BeeperChatSurface({
             <RefreshCw size={15} className={syncing || listLoading ? 'animate-spin' : undefined} />
           </button>
         </div>
+
+        {creatingConversation && (
+          <BeeperNewConversation accounts={accounts} onCancel={() => setCreatingConversation(false)}
+            onCreated={(id) => { setCreatingConversation(false); navigate(`/messages/beeper/${encodeURIComponent(id)}`); }} />
+        )}
 
         {scopeEditor && (
           <form className="space-y-2 border-b border-port-border p-3" onSubmit={async (event) => {

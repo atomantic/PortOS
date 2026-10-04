@@ -86,6 +86,8 @@ import {
   listChatsPage,
   listMessagesPage,
   getMessage,
+  getChat,
+  createChat,
 } from './beeperClient.js';
 import { upsertParticipant, logSenderTouchpoints, loadRosterIndex } from './beeperTribe.js';
 import { isInstanceFeatureEnabled } from './instanceFeatures.js';
@@ -446,6 +448,29 @@ async function upsertConversation(chat) {
     ],
   );
   return result.rows[0]?.id ?? null;
+}
+
+/** User-triggered direct-chat creation. Reuse the sweep's mirror writer. */
+export async function createBeeperConversation({ accountId, participantId }) {
+  // Require a mirrored account before a remote write: the conversation FK
+  // would otherwise fail after Beeper had already created the chat.
+  const account = await query('SELECT account_id FROM beeper_accounts WHERE account_id = $1', [accountId]);
+  if (!account.rows.length) throw new BeeperApiError('Unknown Beeper account', { status: 404, code: 'CONVERSATION_NOT_FOUND' });
+  const options = await resolveBeeperConfig();
+  const created = await createChat(accountId, participantId, options);
+  // Older Desktop versions return only chatID; newer ones return the Chat.
+  const sourceId = created?.id || created?.chatID;
+  if (typeof sourceId !== 'string' || !sourceId) {
+    throw new BeeperApiError('Beeper returned no chat ID', { code: 'MALFORMED_RESPONSE' });
+  }
+  const chat = await getChat(sourceId, options);
+  if (chat?.id !== sourceId || chat?.accountID !== accountId) {
+    throw new BeeperApiError('Beeper returned a mismatched chat', { code: 'MALFORMED_RESPONSE' });
+  }
+  const id = await upsertConversation(normalizeChatRow(chat));
+  if (!id) throw new BeeperApiError('Could not mirror the created chat', { code: 'MALFORMED_RESPONSE' });
+  beeperSocketEvents.emit('invalidate', { kind: 'chats', chatID: sourceId });
+  return { id };
 }
 
 /** Shared transaction writer: source edit versions outrank fetch-start time.

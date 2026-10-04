@@ -16,7 +16,7 @@ vi.mock('../services/beeperOAuth.js', () => ({
   connectWithPastedToken: vi.fn(),
   disconnectBeeper: vi.fn(),
 }));
-vi.mock('../services/beeperSync.js', () => ({ runBeeperSweep: vi.fn() }));
+vi.mock('../services/beeperSync.js', () => ({ runBeeperSweep: vi.fn(), createBeeperConversation: vi.fn() }));
 vi.mock('../services/beeperOutbox.js', () => ({
   createOutboxEntry: vi.fn(),
   sendOutboxEntry: vi.fn(),
@@ -58,7 +58,7 @@ import { getBeeperStatus, checkBeeperConnection } from '../services/beeperStatus
 import {
   completeBeeperOAuth, connectWithPastedToken, disconnectBeeper, startBeeperOAuth,
 } from '../services/beeperOAuth.js';
-import { runBeeperSweep } from '../services/beeperSync.js';
+import { runBeeperSweep, createBeeperConversation } from '../services/beeperSync.js';
 import {
   clearOutboxBreaker, createOutboxEntry, discardOutboxEntry, listOutboxEntries, sendOutboxEntry, reconcileOutboxEntry,
 } from '../services/beeperOutbox.js';
@@ -957,5 +957,34 @@ describe('saved Beeper scopes routes', () => {
     expect((await request(app).post('/api/beeper/scopes').send({ ...input, name: 'x'.repeat(61) })).status).toBe(400);
     expect((await request(app).patch('/api/beeper/scopes/11111111-1111-4111-8111-111111111111').send(input)).status).toBe(404);
     expect(settings.beeperSavedScopes).toBeUndefined();
+  });
+});
+
+describe('new direct conversations', () => {
+  it('validates input before invoking creation and returns the mirrored identity', async () => {
+    vi.mocked(createBeeperConversation).mockResolvedValue({ id: CONV_ID });
+    const app = buildApp();
+    const result = await request(app).post('/api/beeper/conversations').send({
+      accountId: 'account-example', participantId: 'user-example',
+    });
+    expect(result.status).toBe(201);
+    expect(result.body).toEqual({ id: CONV_ID });
+    expect(createBeeperConversation).toHaveBeenCalledWith({
+      accountId: 'account-example', participantId: 'user-example',
+    });
+    vi.mocked(createBeeperConversation).mockClear();
+    const invalid = await request(app).post('/api/beeper/conversations').send({
+      accountId: 'account-example', participantId: ' ', messageText: 'must not send',
+    });
+    expect(invalid.status).toBe(400);
+    expect(createBeeperConversation).not.toHaveBeenCalled();
+  });
+
+  it('surfaces upstream failures without pretending a chat was created', async () => {
+    vi.mocked(createBeeperConversation).mockRejectedValue(new BeeperApiError('offline', { code: 'NETWORK_ERROR' }));
+    const result = await request(buildApp()).post('/api/beeper/conversations').send({
+      accountId: 'account-example', participantId: 'user-example',
+    });
+    expect(result.status).toBe(503);
   });
 });

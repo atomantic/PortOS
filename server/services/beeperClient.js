@@ -515,6 +515,14 @@ export async function getChat(chatId, { baseUrl, token, timeoutMs } = {}) {
   return beeperRequest(`/v1/chats/${encodeURIComponent(chatId)}`, { baseUrl, token, timeoutMs, allowRetry: true });
 }
 
+/** Create a direct chat without sending a first message or retrying a write. */
+export async function createChat(accountID, participantID, options = {}) {
+  return beeperRequest('/v1/chats', {
+    ...options, method: 'POST',
+    body: { accountID, participantIDs: [participantID], type: 'single' },
+  });
+}
+
 /** `GET /v1/chats/search` — has `limit` (default 50, max 200). One page. */
 export async function searchChatsPage({ limit, cursor, direction = 'before', baseUrl, token, timeoutMs, ...params } = {}) {
   const qs = new URLSearchParams();
