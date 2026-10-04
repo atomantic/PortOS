@@ -30,7 +30,7 @@
     "compression": "1.8.2",
     "express": "5.2.1",
     "node-pty": "1.2.0-beta.15",
-    "pg": "8.23.0",
+    "pg": "8.23.1",
     "playwright-core": "1.63.0",
     "pm2": "7.0.4",
     "sharp": "0.35.5",
