@@ -1035,7 +1035,7 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
       // A failed or malformed preflight cannot prove that the branch is empty.
       // Keep both refs in place so retry can safely decide whether to merge.
       if (countResult?.exitCode !== 0 || !Number.isSafeInteger(parsedCount)) {
-        console.log(`⚠️ Could not determine commits ahead for ${branchName}; preserving its worktree and branch for retry`);
+        console.warn(`⚠️ Could not determine commits ahead for ${branchName}; preserving its worktree and branch for retry`);
         warnings.push(`Worktree and branch ${branchName} preserved — could not read a valid commit count; retry cleanup when Git refs are available`);
         return { merged: false, removed: false, uncommittedSaved: false, warnings };
       }
