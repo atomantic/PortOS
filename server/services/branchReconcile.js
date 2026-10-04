@@ -1170,7 +1170,12 @@ async function retireBranch(repoPath, b, { activeAgentIds = new Set(), staleClai
   }
   const prepared = prepare ? await prepare() : null;
   if (prepared?.error) return { ok: false, reason: prepared.error };
-  if (b.worktreePath) await forceRemoveWorktreeDir(repoPath, b.worktreePath, { label, log: 'all' });
+  if (b.worktreePath) {
+    const removal = await forceRemoveWorktreeDir(repoPath, b.worktreePath, { label, log: 'all' });
+    // The branch is still checked out by a surviving worktree: deleting it would
+    // fail, and reporting success would mark the branch reconciled while it is held.
+    if (!removal.removed) return { ok: false, reason: 'worktree-remove-failed' };
+  }
   const result = await deleteBranch(repoPath, b.branch, { local: true }).catch((err) => ({ error: err.message }));
   if (result?.error || result?.results?.local?.startsWith?.('failed')) {
     return { ok: false, reason: `delete-failed: ${result.error || result.results.local}` };
