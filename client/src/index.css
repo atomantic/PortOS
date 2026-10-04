@@ -517,8 +517,7 @@ html[data-port-theme] [role="button"] {
     background-color var(--port-motion-fast) ease,
     border-color var(--port-motion-fast) ease,
     box-shadow var(--port-motion-fast) ease,
-    color var(--port-motion-fast) ease,
-    opacity var(--port-motion-fast) ease;
+    color var(--port-motion-fast) ease;
 }
 
 /* === Shared foreground color contract ===
@@ -1831,6 +1830,21 @@ input[type="color"],
   ) {
     text-align: left;
   }
+
+  /* Prevent WebKit/Safari composite-layer ghosting where an active/animating button
+     (e.g. animate-spin, dynamic label expansion) promotes to a hardware-accelerated layer
+     on the fly, leaving behind a stale rasterized frame of the static button in the
+     ancestor's shared backing store. Giving buttons their own isolated stacking context
+     and GPU compositing layer up front ensures the ancestor backing store never retains
+     stale button pixels.
+     Uses :where() to keep specificity at (0,0,0) so author transform utilities
+     (e.g., hover:scale-105, active:scale-95) continue to win cleanly. */
+  :where(button, [role="button"]) {
+    isolation: isolate;
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
+    transform: translateZ(0);
+  }
 }
 
 /* Accessibility: Ensure disabled elements are perceivable but not interactive */
@@ -1880,6 +1894,15 @@ input[type="color"],
 }
 
 /* Custom animations */
+/* WebKit/Safari hardware acceleration & subpixel stabilization for spinning icons.
+   Prevents anti-aliasing flickering, jitter, and stale rasterized frames during CSS rotation. */
+.animate-spin {
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  transform: translateZ(0);
+  will-change: transform;
+}
+
 @keyframes pulse-soft {
   0%, 100% {
     opacity: 1;
