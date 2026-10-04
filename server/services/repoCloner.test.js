@@ -19,7 +19,7 @@ vi.mock('../lib/fileUtils.js', () => ({
 import { existsSync } from 'fs';
 import { access, mkdtemp, readdir, rename, rm } from 'fs/promises';
 import { spawn } from '../lib/childProcess.js';
-import { cloneRepo, reapStaleCloneStaging } from './repoCloner.js';
+import { cloneRepo, reapStaleCloneStaging, pullRepo } from './repoCloner.js';
 
 const REPOS_DIR = '/repos';
 const OWNER_DIR = join(REPOS_DIR, 'acme');
@@ -290,5 +290,103 @@ describe('cloneRepo across hosts', () => {
     await expect(cloneRepo('https://bitbucket.org/acme/widgets'))
       .rejects.toThrow('Invalid repository URL');
     expect(spawn).not.toHaveBeenCalled();
+  });
+});
+
+describe('pullRepo', () => {
+  const localPath = '/local/repo';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    existsSync.mockReturnValue(true);
+  });
+
+  const createChildWithStdout = () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = vi.fn();
+    return child;
+  };
+
+  it('clears the timeout when git pull exits successfully', async () => {
+    const child = createChildWithStdout();
+    spawn.mockReturnValue(child);
+
+    const resultPromise = pullRepo(localPath);
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+
+    // Verify spawn was called with the correct git command
+    expect(spawn).toHaveBeenCalledWith('git', ['pull', '--ff-only'], expect.objectContaining({
+      cwd: localPath,
+      shell: false
+    }));
+
+    child.emit('close', 0);
+
+    const result = await expect(resultPromise).resolves.toMatchObject({
+      success: true
+    });
+    // Verify that child.kill() was NOT called by the timeout
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it('clears the timeout when git pull encounters an error', async () => {
+    const child = createChildWithStdout();
+    spawn.mockReturnValue(child);
+
+    const resultPromise = pullRepo(localPath);
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+
+    child.stderr.emit('data', Buffer.from('fatal: not a git repository'));
+    child.emit('close', 128);
+
+    await expect(resultPromise).rejects.toThrow('Git pull failed');
+    // Verify that child.kill() was NOT called by the timeout
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it('clears the timeout when the child process emits an error', async () => {
+    const child = createChildWithStdout();
+    spawn.mockReturnValue(child);
+
+    const resultPromise = pullRepo(localPath);
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+
+    const testError = new Error('spawn failed');
+    child.emit('error', testError);
+
+    await expect(resultPromise).rejects.toThrow('spawn failed');
+    // Verify that child.kill() was NOT called by the timeout
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it('rejects if the path is not a git repository', async () => {
+    existsSync.mockReturnValue(false);
+
+    await expect(pullRepo(localPath)).rejects.toThrow('Not a git repository');
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('does not settle the promise twice when timeout fires after close event', async () => {
+    const child = createChildWithStdout();
+    spawn.mockReturnValue(child);
+
+    const resultPromise = pullRepo(localPath);
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+
+    // Get a reference to the timeout so we can verify it was called
+    const timeoutHandle = vi.useFakeTimers();
+
+    // Simulate close event
+    child.emit('close', 0);
+
+    // Attempt to fire the timeout (it should be cleared and not call reject)
+    // The real promise should resolve with the close event, not be rejected by timeout
+    const result = await resultPromise;
+    expect(result.success).toBe(true);
+    expect(child.kill).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
   });
 });
