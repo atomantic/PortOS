@@ -844,6 +844,8 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | `musicVideoMediaPolicy.js` | Whole-workflow media modes, legacy intent, selection admission and independent document renderer choice. |
 
+| `musicVideoSummary.js` | `summarizeMusicVideoProject(project, readiness)` bounded index/picker projection (stage, run status, spend, preview/poster, card badges) and `compareMusicVideoProjectsNewestFirst` for `GET /api/music-video?summary=1` (#10169). |
+
 | `sandboxDelegation.js` | Bounded tool-free worker context, route configuration, and fidelity evaluation schemas. |
 
 | `forgeMaintenanceTasks.js` | Current forge-maintenance screening version, queue-compatible identity check, task classification, and legacy refusal reason. |

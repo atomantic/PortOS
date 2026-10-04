@@ -124,6 +124,60 @@ describe('musicVideo routes', () => {
     expect(r.body.offset).toBe(1);
   });
 
+  it('GET /?summary=1 returns bounded summary projections with cursor pagination (#10169)', async () => {
+    const p1 = {
+      id: 'mv-older',
+      name: 'Older Project',
+      version: 1,
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+      scenes: [{ sceneId: 's1' }],
+      productionRuns: [{ status: 'complete', usage: { spentUsd: 1.25 } }],
+    };
+    const p2 = {
+      id: 'mv-newer',
+      name: 'Newer Project',
+      version: 2,
+      rootProjectId: 'mv-root',
+      createdAt: '2026-02-01T00:00:00Z',
+      updatedAt: '2026-02-01T00:00:00Z',
+      scenes: [{ sceneId: 's1' }, { sceneId: 's2' }],
+      productionRuns: [{ status: 'running', limits: { spendCapUsd: 5.0 }, usage: { spentUsd: 0.5 } }],
+    };
+    svc.listProjects.mockResolvedValue([p1, p2]);
+
+    // Page 1: limit=1
+    const r1 = await request(app).get('/api/music-video?summary=1&limit=1');
+    expect(r1.status).toBe(200);
+    expect(r1.body.total).toBe(2);
+    expect(r1.body.limit).toBe(1);
+    expect(r1.body.offset).toBe(0);
+    expect(r1.body.nextCursor).toBe('1');
+    expect(r1.body.items).toHaveLength(1);
+
+    const first = r1.body.items[0];
+    expect(first.id).toBe('mv-newer');
+    expect(first.name).toBe('Newer Project');
+    expect(first.version).toBe(2);
+    expect(first.rootProjectId).toBe('mv-root');
+    expect(first.versionRoot).toBe('mv-root');
+    expect(first.stage).toBe('produce');
+    expect(first.status).toBe('draft');
+    expect(first.runStatus).toBe('running');
+    expect(first.spend).toEqual({ spentUsd: 0.5, capUsd: 5.0 });
+    expect(first.updatedAt).toBe('2026-02-01T00:00:00Z');
+    expect(first.scenes).toBeUndefined();
+
+    // Page 2: limit=1, cursor=1
+    const r2 = await request(app).get(`/api/music-video?summary=1&limit=1&cursor=${r1.body.nextCursor}`);
+    expect(r2.status).toBe(200);
+    expect(r2.body.total).toBe(2);
+    expect(r2.body.offset).toBe(1);
+    expect(r2.body.nextCursor).toBeNull();
+    expect(r2.body.items).toHaveLength(1);
+    expect(r2.body.items[0].id).toBe('mv-older');
+  });
+
   it('GET /:id 404s when missing', async () => {
     svc.getProject.mockResolvedValue(null);
     const r = await request(app).get('/api/music-video/mv-x');

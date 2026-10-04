@@ -9,8 +9,10 @@ import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import PageHeader from '../components/PageHeader';
 import Banner from '../components/ui/Banner.jsx';
+import { usePagedCollection } from '../hooks/usePagedCollection';
+import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
 import {
-  listMusicVideoProjects,
+  listMusicVideoProjectSummaries,
   createMusicVideoProject,
   cloneMusicVideoProject,
   updateMusicVideoProject,
@@ -141,13 +143,62 @@ export default function MusicVideo() {
     return next;
   });
   const navigate = useNavigate();
-  const [projects, setProjects] = useState([]);
+  // The index and picker read bounded summaries; an open project is its own
+  // single-record fetch (#10169), so neither load can fail the other.
+  const [selectedProject, setSelectedProject] = useState(null);
+  // The last failed/absent read of the open project, keyed by id so it never
+  // outlives a navigation; it stays up during a retry and clears on success.
+  const [selectedFault, setSelectedFault] = useState(null);
+  const [selectedFetching, setSelectedFetching] = useState(false);
+  const [selectedReload, setSelectedReload] = useState(0);
+  const deferredPatches = useRef(new Map());
   const [tracks, setTracks] = useState([]);
   const [universes, setUniverses] = useState(null);
   const selectedId = routeProjectId || null;
-  const [loading, setLoading] = useState(true);
-  const [projectsError, setProjectsError] = useState(null);
-  const projectsLoadPending = useRef(false);
+  // Summaries load for the index, or once the header picker is used on a deep link;
+  // once wanted they stay loaded (disabling the hook would reset its items).
+  const [summariesWanted, setSummariesWanted] = useState(!selectedId);
+  if (!selectedId && !summariesWanted) setSummariesWanted(true);
+  const fetchSummariesPage = useCallback(
+    ({ cursor, signal }) => listMusicVideoProjectSummaries({ cursor, limit: 30 }, { signal, silent: true }),
+    [],
+  );
+  const summaries = usePagedCollection(fetchSummariesPage, { enabled: summariesWanted });
+  // Same stickiness for the list: the banner outlives the retry that clears `summaries.error`.
+  const [listError, setListError] = useState(null);
+  useEffect(() => {
+    if (summaries.error) setListError(summaries.error.message || 'Failed to load music video projects');
+    else if (summaries.loaded) setListError(null);
+  }, [summaries.error, summaries.loaded]);
+  const selectedLoaded = selectedProject?.id === selectedId;
+  const fault = selectedFault?.id === selectedId ? selectedFault : null;
+  const loading = selectedId ? !selectedLoaded && (selectedFetching || !fault) : (summaries.loading || !summaries.loaded) && !summaries.error;
+  const projectsError = selectedId ? (fault?.notFound ? null : fault?.message) : listError;
+
+  useEffect(() => {
+    if (!selectedId) return undefined;
+    let cancelled = false;
+    setSelectedFetching(true);
+    getMusicVideoProject(selectedId, { silent: true })
+      .then((project) => {
+        if (cancelled) return;
+        setSelectedFault(project ? null : { id: selectedId, notFound: true });
+        const patches = deferredPatches.current.get(selectedId) || [];
+        deferredPatches.current.delete(selectedId);
+        if (project) setSelectedProject(patches.reduce((current, apply) => apply(current), project));
+      })
+      .catch((err) => {
+        if (!cancelled) setSelectedFault({ id: selectedId, notFound: err?.status === 404, message: err?.message || 'Failed to load music video project' });
+      })
+      .finally(() => { if (!cancelled) setSelectedFetching(false); });
+    return () => { cancelled = true; };
+  }, [selectedId, selectedReload]);
+
+  const loadProjects = selectedId
+    ? () => setSelectedReload((n) => n + 1)
+    : () => { if (!summaries.loading) summaries.refreshFirst(); };
+  const selected = selectedLoaded ? selectedProject : null;
+
   const [analyzing, setAnalyzing] = useState(false);
   const [arranging, setArranging] = useState(false);
   const [creativeSetupPending, setCreativeSetupPending] = useState(false);
@@ -161,7 +212,6 @@ export default function MusicVideo() {
   const [aligningLyrics, setAligningLyrics] = useState(false);
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState(emptyCreateForm);
-  const selected = projects.find((p) => p.id === selectedId) || null;
 
   // Which stage tab is open. The URL is the source of truth; with none (or an
   // unknown one) the tab is the stage the project was in when it was opened,
@@ -184,11 +234,23 @@ export default function MusicVideo() {
   const [renamingId, setRenamingId] = useState(null);
   const renaming = !!selected && renamingId === selected.id;
   const [renameDraft, setRenameDraft] = useState('');
-  const replaceProject = (next) => setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
-  const sortedProjects = useMemo(
-    () => [...projects].sort(compareMusicVideoProjectsNewestFirst),
-    [projects],
-  );
+  // A full record replaces its summary in the index list; the project card
+  // derives from whichever it holds, so no summary-only field can go stale.
+  const replaceProject = (next) => {
+    setSelectedProject((prev) => (prev?.id === next.id ? next : prev));
+    summaries.setItems((prev) => prev.map((p) => (p.id === next.id ? next : p)));
+  };
+  // Open a project the page just received whole (created, forked, started).
+  const openProject = (proj) => {
+    summaries.setItems((prev) => [proj, ...prev.filter((p) => p.id !== proj.id)]);
+    setSelectedProject(proj);
+  };
+  // The open project leads; summaries fill in the rest of the picker.
+  const sortedProjects = useMemo(() => {
+    const byId = new Map(summaries.items.map((p) => [p.id, p]));
+    if (selected) byId.set(selected.id, selected);
+    return [...byId.values()].sort(compareMusicVideoProjectsNewestFirst);
+  }, [selected, summaries.items]);
   const productionReview = useMusicVideoProductionReview({ project: selected, replaceProject });
   const progress = useMemo(() => deriveStages(selected, productionReview.readiness), [selected, productionReview.readiness]);
   const [openedStage, setOpenedStage] = useState({ id: null, stage: null });
@@ -211,14 +273,22 @@ export default function MusicVideo() {
   // that resolves after the user edited the board can't clobber those edits with
   // a stale project snapshot. `patch` may be a function of the current record
   // when the merge has to read a field it is also writing.
-  const patchProject = (projectId, patch) =>
-    setProjects((prev) => prev.map((p) => (p.id === projectId
-      ? { ...p, ...(typeof patch === 'function' ? patch(p) : patch) }
-      : p)));
-  const patchScene = (projectId, sceneId, patch) =>
-    setProjects((prev) => prev.map((p) => (p.id === projectId
-      ? { ...p, scenes: (p.scenes || []).map((s) => (s.sceneId === sceneId ? { ...s, ...patch } : s)) }
-      : p)));
+  const patchProject = (projectId, patch) => {
+    const apply = (project) => ({ ...project, ...(typeof patch === 'function' ? patch(project) : patch) });
+    // The picker and index show a project's name/status/recency, so keep those current.
+    summaries.setItems((prev) => prev.map((p) => {
+      if (p.id !== projectId) return p;
+      const { name, status, updatedAt } = apply(p);
+      return { ...p, name, status, updatedAt };
+    }));
+    if (projectId === selectedId) setSelectedProject((prev) => (prev?.id === projectId ? apply(prev) : prev));
+    // A project that isn't open (a render finished after the user navigated away)
+    // takes the patch when it is next fetched.
+    else deferredPatches.current.set(projectId, [...(deferredPatches.current.get(projectId) || []), apply]);
+  };
+  const patchScene = (projectId, sceneId, patch) => patchProject(projectId, (project) => ({
+    scenes: (project.scenes || []).map((s) => (s.sceneId === sceneId ? { ...s, ...patch } : s)),
+  }));
 
   const youtube = useMusicVideoYoutubeImport({
     routeProjectId,
@@ -305,7 +375,7 @@ export default function MusicVideo() {
     if (value) next.set('q', value); else next.delete('q');
     return next;
   }, { replace: true });
-  const projectGroups = useMemo(() => groupMusicVideoProjects(projects, nameQuery), [projects, nameQuery]);
+  const projectGroups = useMemo(() => groupMusicVideoProjects(sortedProjects, nameQuery), [sortedProjects, nameQuery]);
   const [pickedVersion, setPickedVersion] = useState({}); // rootId -> project id
   useEffect(() => {
     const onRunEvent = (data) => {
@@ -340,27 +410,6 @@ export default function MusicVideo() {
     const search = searchParams.toString();
     navigate(id ? `/music-video/${id}${search ? `?${search}` : ''}` : `/music-video${search ? `?${search}` : ''}`);
   };
-
-  const loadProjects = useCallback(async () => {
-    if (projectsLoadPending.current) return;
-    projectsLoadPending.current = true;
-    setLoading(true);
-    try {
-      const data = await listMusicVideoProjects({ silent: true });
-      const sorted = Array.isArray(data) ? [...data].sort(compareMusicVideoProjectsNewestFirst) : [];
-      setProjects(sorted);
-      setProjectsError(null);
-    } catch (err) {
-      setProjectsError(err?.message || 'Failed to load music video projects');
-    } finally {
-      projectsLoadPending.current = false;
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadProjects();
-  }, [loadProjects]);
 
   useEffect(() => {
     listTracks({ silent: true }).then((t) => setTracks(t || [])).catch(() => setTracks([]));
@@ -403,7 +452,7 @@ export default function MusicVideo() {
       ...(form.mode === 'autonomous' ? { automation: automationFromDraft(form.automation) } : {}),
     }, { silent: true })
       .then((proj) => {
-        setProjects((prev) => [proj, ...prev]);
+        openProject(proj);
         selectProject(proj.id);
         setForm(emptyCreateForm());
         setCreateOpen(false);
@@ -433,7 +482,7 @@ export default function MusicVideo() {
     }
     deleteMusicVideoProject(id, { silent: true })
       .then(() => {
-        setProjects((prev) => prev.filter((p) => p.id !== id));
+        summaries.setItems((prev) => prev.filter((p) => p.id !== id));
         if (selectedId === id) navigate('/music-video');
       })
       .catch((err) => toast.error(err?.message || 'Failed to delete project'));
@@ -448,7 +497,7 @@ export default function MusicVideo() {
     setCloningId(target.id);
     cloneMusicVideoProject(target.id, options, { silent: true })
       .then((project) => {
-        setProjects((prev) => [project, ...prev]);
+        openProject(project);
         navigate(`/music-video/${project.id}${songRevision === true ? "/setup" : ""}`);
         toast.success(`Created ${project.name}`);
       })
@@ -620,7 +669,7 @@ export default function MusicVideo() {
       .then((target) => updateMusicVideoProject(target.id, patch, { silent: true }).then((proj) => ({ proj, forked: target !== selected })))
       .then(({ proj, forked }) => {
         if (forked) {
-          setProjects((prev) => [proj, ...prev]);
+          openProject(proj);
           navigate(`/music-video/${proj.id}/setup`);
         } else replaceProject(proj);
         if (cleared.length > 0) toast.success('Track changed — re-run Analyze and Align words');
@@ -1084,13 +1133,14 @@ export default function MusicVideo() {
               id="mv-project-picker"
               value={selectedId || ''}
               onChange={(e) => selectProject(e.target.value || null)}
+              onFocus={() => setSummariesWanted(true)}
               disabled={loading || youtube.editJob.active}
               className="min-w-0 w-full sm:w-72 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm disabled:opacity-50"
             >
               <option value="">{loading ? 'Loading projects…' : 'Select a project…'}</option>
               {sortedProjects.map((project) => (
                 <option key={project.id} value={project.id}>
-                  {project.name} · {projectShotSummary(project)}
+                  {project.name} · {project.shotSummary || projectShotSummary(project)}
                 </option>
               ))}
             </select>
@@ -1209,14 +1259,14 @@ export default function MusicVideo() {
         open={autonomousOpen}
         onClose={() => setAutonomousOpen(false)}
         onStarted={(proj) => {
-          setProjects((prev) => [proj, ...prev]);
+          openProject(proj);
           selectProject(proj.id);
           setAutonomousOpen(false);
         }}
       />
 
       <div id={MUSIC_VIDEO_SCROLL_ID} className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
-        {projectsError && (
+        {projectsError && !selected && (
           <Banner tone="error" size="md" title="Music video projects unavailable" className="mb-4" actions={(
             <button
               type="button"
@@ -1245,7 +1295,7 @@ export default function MusicVideo() {
               <div className="text-center py-8 text-sm text-port-text-muted">
                 Loading projects…
               </div>
-            ) : projectsError ? null : projects.length === 0 ? (
+            ) : projectsError ? null : sortedProjects.length === 0 ? (
               <div className="text-center py-6 text-sm text-port-text-muted">
                 No music video projects yet. Create your first project above to get started.
               </div>
@@ -1253,7 +1303,7 @@ export default function MusicVideo() {
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h2 className="text-sm font-semibold uppercase tracking-wider text-port-text-muted">
-                    Projects ({projectGroups.length})
+                    Projects ({summaries.hasMore ? `${projectGroups.length}+` : projectGroups.length})
                   </h2>
                   <label htmlFor="mv-project-filter" className="sr-only">Filter projects by name</label>
                   <input
@@ -1295,6 +1345,13 @@ export default function MusicVideo() {
                     );
                   })}
                 </div>
+                <InfiniteScrollFooter
+                  hasMore={summaries.hasMore}
+                  loading={summaries.loading}
+                  error={summaries.error}
+                  onLoadMore={summaries.loadMore}
+                  label="Load more projects"
+                />
               </div>
             )}
           </div>

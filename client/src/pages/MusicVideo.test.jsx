@@ -44,6 +44,10 @@ vi.mock('../hooks/useMusicVideoProductionReview.js', () => ({ default: ({ projec
 
 vi.mock('../services/apiMusicVideo.js', () => ({
   listMusicVideoProjects: vi.fn(async () => []),
+  listMusicVideoProjectSummaries: vi.fn(async (params, options) => {
+    const res = await listMusicVideoProjects(params, options);
+    return Array.isArray(res) ? { items: res, total: res.length, nextCursor: null } : res;
+  }),
   createMusicVideoProject: vi.fn(),
   cloneMusicVideoProject: vi.fn(),
   updateMusicVideoProject: vi.fn(async (id, patch) => ({
@@ -236,7 +240,7 @@ vi.mock('../components/PageHeader', () => ({ default: ({ title, actions }) => <d
 
 import MusicVideo from './MusicVideo.jsx';
 import {
-  listMusicVideoProjects, createMusicVideoProject, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject,
+  listMusicVideoProjects, listMusicVideoProjectSummaries, createMusicVideoProject, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject,
   deleteMusicVideoProject, transcribeMusicVideoMidi, cancelMusicVideoRender, analyzeMusicVideoProject,
   importMusicVideoLyrics, importMusicVideoTrackLyrics, separateMusicVideoVocals, alignMusicVideoLyrics, updateMusicVideoScene, splitMusicVideoScene,
   selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff,
@@ -379,7 +383,15 @@ beforeEach(() => {
   // Keep the real artifact iframe and src assertions without navigating to its API URL.
   window.happyDOM.settings.navigation.disableChildFrameNavigation = true;
   vi.clearAllMocks();
-  getMusicVideoProject.mockImplementation(async id => (await listMusicVideoProjects()).find(project => project.id === id));
+  listMusicVideoProjects.mockReset();
+  listMusicVideoProjects.mockResolvedValue([]);
+  listMusicVideoProjectSummaries.mockReset();
+  listMusicVideoProjectSummaries.mockImplementation(async (params, options) => {
+    const res = await listMusicVideoProjects(params, options);
+    return Array.isArray(res) ? { items: res, total: res.length, nextCursor: null } : res;
+  });
+  getMusicVideoProject.mockReset();
+  getMusicVideoProject.mockImplementation(async id => (await listMusicVideoProjects({ silent: true })).find(project => project.id === id));
   sseState.latest = null;
   sseState.closed = false;
   sseState.isOpen = true;
@@ -404,7 +416,14 @@ describe('MusicVideo project load recovery (#9761)', () => {
     expect(screen.queryByText(/No music video projects yet/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Project not found/)).not.toBeInTheDocument();
     expect(screen.getByTestId('loc')).toHaveTextContent(path);
-    expect(listMusicVideoProjects).toHaveBeenCalledWith({ silent: true });
+    if (path === '/music-video') {
+      expect(listMusicVideoProjectSummaries).toHaveBeenCalledWith(
+        expect.objectContaining({ limit: 30 }),
+        expect.objectContaining({ silent: true }),
+      );
+    } else {
+      expect(getMusicVideoProject).toHaveBeenCalledWith('mv-2', { silent: true });
+    }
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Still unavailable'));
@@ -412,7 +431,7 @@ describe('MusicVideo project load recovery (#9761)', () => {
     fireEvent.click(retry);
     expect(screen.getByRole('button', { name: 'Retrying…' })).toBeDisabled();
     fireEvent.click(retry);
-    expect(listMusicVideoProjects).toHaveBeenCalledTimes(3);
+    expect(path === '/music-video' ? listMusicVideoProjectSummaries : getMusicVideoProject).toHaveBeenCalledTimes(3);
     expect(screen.queryByText(/No music video projects yet/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Project not found/)).not.toBeInTheDocument();
 
@@ -436,6 +455,71 @@ describe('MusicVideo project load recovery (#9761)', () => {
     expect(await screen.findByText(message)).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+  });
+});
+
+describe('MusicVideo bounded summary index and project isolation (#10169)', () => {
+  it('opening /music-video/:id makes one project GET and no full-list call', async () => {
+    getMusicVideoProject.mockResolvedValue(PROJECT_WITH_CLIP);
+    render(
+      <MemoryRouter initialEntries={['/music-video/mv-1/board']}>
+        {MV_ROUTES}
+      </MemoryRouter>,
+    );
+    await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
+    expect(getMusicVideoProject).toHaveBeenCalledTimes(1);
+    expect(getMusicVideoProject).toHaveBeenCalledWith('mv-1', { silent: true });
+    expect(listMusicVideoProjects).not.toHaveBeenCalled();
+    expect(listMusicVideoProjectSummaries).not.toHaveBeenCalled();
+  });
+
+  it('the index view loads summaries with cursor pagination', async () => {
+    listMusicVideoProjectSummaries.mockResolvedValue({
+      items: [
+        {
+          id: 'mv-summary-1',
+          name: 'Summary Video',
+          version: 1,
+          rootProjectId: 'mv-summary-1',
+          versionRoot: 'mv-summary-1',
+          stage: 'board',
+          status: 'ready',
+          runStatus: null,
+          poster: null,
+          preview: { kind: 'none', label: 'No render yet' },
+          spend: { spentUsd: 0, capUsd: null },
+          updatedAt: '2026-10-04T00:00:00Z',
+          sceneCount: 3,
+          shotSummary: '3 scenes',
+        },
+      ],
+      total: 1,
+      nextCursor: null,
+    });
+    render(
+      <MemoryRouter initialEntries={['/music-video']}>
+        {MV_ROUTES}
+      </MemoryRouter>,
+    );
+    expect(await screen.findByTestId('mv-project-grid')).toHaveTextContent('Summary Video');
+    expect(listMusicVideoProjectSummaries).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 30 }),
+      expect.anything(),
+    );
+  });
+
+  it('a list failure does not break an open project', async () => {
+    getMusicVideoProject.mockResolvedValue(PROJECT_WITH_CLIP);
+    listMusicVideoProjectSummaries.mockRejectedValueOnce(new Error('List network failure'));
+    listMusicVideoProjects.mockRejectedValueOnce(new Error('List network failure'));
+    render(
+      <MemoryRouter initialEntries={['/music-video/mv-1/board']}>
+        {MV_ROUTES}
+      </MemoryRouter>,
+    );
+    await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name })).toBeInTheDocument();
   });
 });
 
@@ -2600,7 +2684,7 @@ describe('MusicVideo main page project cards', () => {
   });
 
   it('navigates to project when clicking Open on its card', async () => {
-    listMusicVideoProjects.mockResolvedValueOnce([PROJECT_WITH_CLIP]);
+    listMusicVideoProjects.mockResolvedValue([PROJECT_WITH_CLIP]);
     renderMV();
 
     const card = await screen.findByTestId(`mv-project-card-${PROJECT_WITH_CLIP.id}`);

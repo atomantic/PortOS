@@ -1,0 +1,154 @@
+/**
+ * Music Video project summary projection (#10169).
+ *
+ * `GET /api/music-video?summary=1` returns one bounded record per project — just
+ * what the project index card and the header picker render — so the index never
+ * ships every project's scenes, excerpts, revisions, runs and reviews. The stage
+ * / spend / preview rules mirror `client/src/lib/musicVideoStages.js` and
+ * `musicVideoPreview.js`, which still derive them for a full record.
+ */
+import { isLayeredComposition, sceneRenderReady } from './musicVideoLayers.js';
+
+const STAGE_IDS = ['setup', 'cast-sets', 'board', 'produce', 'compose', 'review', 'publish'];
+const RESUMABLE_RUN_STATUSES = new Set(['running', 'stopped', 'limit-reached', 'blocked', 'needs-replan']);
+const FOOTAGE_OPTIONAL_MODES = new Set(['code', 'document', 'eidoverse']);
+
+const nonEmptyString = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+const imageSrc = (assetId) => (/^(https?:|data:|blob:)/i.test(assetId) || assetId.startsWith('/') ? assetId : `/data/images/${assetId}`);
+const imageFallback = (assetId) => (assetId.includes('.') ? null : `/data/images/${assetId}.png`);
+
+const currentRun = (project) => {
+  const runs = Array.isArray(project.productionRuns) ? project.productionRuns : [];
+  return runs.find((r) => RESUMABLE_RUN_STATUSES.has(r.status)) || runs[runs.length - 1] || null;
+};
+
+function projectSpend(project, run) {
+  const runs = Array.isArray(project.productionRuns) ? project.productionRuns : [];
+  const spentUsd = runs.reduce((sum, r) => {
+    const spent = Number(r?.usage?.spentUsd);
+    return sum + (Number.isFinite(spent) ? spent : 0);
+  }, 0);
+  const capUsd = run?.limits?.spendCapUsd ?? project.automation?.budgetUsd ?? null;
+  return { spentUsd, capUsd };
+}
+
+function composeDone(project, mode) {
+  const composition = project.composition || {};
+  if (mode === 'composed') return (composition.textCues || []).length > 0;
+  if (mode === 'document') return Boolean(composition.document);
+  if (mode === 'eidoverse') return Boolean(composition.eidoverseScene?.inlineScript);
+  if (mode === 'code') return Boolean(composition.codeVideo?.generatedAt || (composition.codeVideo?.sections || []).length > 0);
+  return true;
+}
+
+// The first stage not yet done; a live production run pins Produce.
+function currentStage(project, readiness, run) {
+  if (run && RESUMABLE_RUN_STATUSES.has(run.status)) return 'produce';
+  const scenes = project.scenes || [];
+  const mode = project.composition?.mode || 'concat';
+  const layered = isLayeredComposition(project);
+  const planned = Boolean(readiness?.storyboard?.approved);
+  const proofApproved = Boolean(readiness?.proof?.approved);
+  const footageReady = FOOTAGE_OPTIONAL_MODES.has(mode) || scenes.every((scene) => sceneRenderReady(scene, { layered }));
+  const done = {
+    setup: Boolean(project.trackId || project.uploadedAudioFilename) && Boolean(project.audioAnalysis),
+    'cast-sets': Boolean(readiness?.art?.approved),
+    board: planned,
+    produce: planned && footageReady && proofApproved,
+    compose: proofApproved && composeDone(project, mode),
+    review: Boolean(project.renderHistoryId),
+    publish: Object.keys(project.publishKit?.posts || {}).length > 0,
+  };
+  return STAGE_IDS.find((id) => !done[id]) || 'publish';
+}
+
+function projectPreview(project) {
+  const finalId = nonEmptyString(project.renderHistoryId);
+  const video = (jobId, label, src = `/data/videos/${jobId}.mp4`) => ({
+    kind: 'video', jobId, src, poster: jobId ? `/data/video-thumbnails/${jobId}.jpg` : null, label,
+  });
+  if (finalId) return video(finalId, 'Final video');
+
+  const excerpts = Array.isArray(project.excerpts) ? project.excerpts : [];
+  const excerpt = [...excerpts].reverse().find((e) => e.status === 'complete' && (e.filename || e.jobId));
+  if (excerpt) {
+    const jobId = nonEmptyString(excerpt.jobId);
+    const filename = nonEmptyString(excerpt.filename);
+    return video(jobId, excerpt.label || 'Latest excerpt', filename ? `/data/videos/${filename}` : (jobId ? `/data/videos/${jobId}.mp4` : null));
+  }
+
+  const scenes = Array.isArray(project.scenes) ? project.scenes : [];
+  for (let i = scenes.length - 1; i >= 0; i -= 1) {
+    const jobId = nonEmptyString(scenes[i]?.videoHistoryId);
+    if (jobId) return video(jobId, `Scene ${i + 1} clip`);
+  }
+  for (let i = scenes.length - 1; i >= 0; i -= 1) {
+    const frameId = nonEmptyString(scenes[i]?.referenceImageId);
+    if (frameId) return { kind: 'image', src: imageSrc(frameId), fallbackSrc: imageFallback(frameId), label: `Scene ${i + 1} frame` };
+  }
+  const reference = project.visualSpec?.references?.[0];
+  const refId = nonEmptyString(reference?.imageId);
+  if (refId) return { kind: 'image', src: imageSrc(refId), fallbackSrc: imageFallback(refId), label: reference.label || 'Style reference' };
+  return { kind: 'none', label: 'No render yet' };
+}
+
+function shotSummary(project) {
+  const draft = project.productionReview?.draft;
+  const document = project.composition?.mode === 'document' && draft?.storyboardSource === 'document';
+  const count = (document ? draft.storyboard : project.scenes)?.length || 0;
+  return `${count} ${document ? 'document shot' : 'scene'}${count === 1 ? '' : 's'}`;
+}
+
+/** Newest created first, then newest updated — the order the index and picker show. */
+export function compareMusicVideoProjectsNewestFirst(a, b) {
+  const created = (Date.parse(b?.createdAt || b?.updatedAt) || 0) - (Date.parse(a?.createdAt || a?.updatedAt) || 0);
+  return created || (Date.parse(b?.updatedAt) || 0) - (Date.parse(a?.updatedAt) || 0);
+}
+
+/**
+ * Bounded projection of one project. `readiness` is the server's
+ * `productionReadiness(project)` (approvals decide the stage, and only the
+ * server computes them). Nested objects keep the shape of the full record so
+ * the project card reads a summary and a full project the same way.
+ */
+export function summarizeMusicVideoProject(project, readiness) {
+  const run = currentRun(project);
+  const scenes = Array.isArray(project.scenes) ? project.scenes : [];
+  const preview = projectPreview(project);
+  const video = project.videoSettings || {};
+  const concept = project.concept || {};
+  return {
+    id: project.id,
+    name: project.name,
+    version: project.version || 1,
+    rootProjectId: project.rootProjectId || project.id,
+    versionRoot: project.rootProjectId || project.id,
+    parentProjectId: project.parentProjectId || null,
+    mode: project.mode || 'director',
+    status: project.status || 'draft',
+    stage: currentStage(project, readiness, run),
+    runStatus: project.autonomousRun?.status || run?.status || null,
+    runInterrupted: Boolean(project.autonomousRun?.interrupted || project.castAndSets?.interrupted || run?.interrupted),
+    runAwaiting: project.autonomousRun?.status === 'awaiting-approval',
+    poster: preview.poster || (preview.kind === 'image' ? preview.src : null),
+    preview,
+    spend: projectSpend(project, run),
+    shotSummary: shotSummary(project),
+    sceneCount: scenes.length,
+    clipCount: scenes.filter((s) => s.videoHistoryId).length,
+    frameCount: scenes.filter((s) => s.referenceImageId).length,
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt,
+    trackId: project.trackId || null,
+    uploadedAudioFilename: project.uploadedAudioFilename || null,
+    audioAnalysis: project.audioAnalysis?.bpm ? { bpm: project.audioAnalysis.bpm } : null,
+    videoSettings: {
+      backend: video.backend, modelId: video.modelId, generationMode: video.generationMode, audioReactiveLora: video.audioReactiveLora,
+    },
+    vocalStemFilename: project.vocalStemFilename || null,
+    midiTranscription: Boolean(project.midiTranscription),
+    composition: { mode: project.composition?.mode },
+    concept: { style: concept.style || concept.prompt || null, universeId: concept.universeId || null },
+    visualSpec: { palette: Array.isArray(project.visualSpec?.palette) ? project.visualSpec.palette.slice(0, 5) : [] },
+  };
+}
