@@ -13,8 +13,7 @@ vi.mock('../services/lmStudioManager.js', () => ({
   unloadModel: vi.fn(),
   quickCompletion: vi.fn(),
   getEmbeddings: vi.fn(),
-  updateConfig: vi.fn(),
-  resetCache: vi.fn()
+  updateConfig: vi.fn()
 }));
 
 vi.mock('../services/localThinking.js', () => ({

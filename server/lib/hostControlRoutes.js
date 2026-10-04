@@ -13,7 +13,7 @@
  * the host, or when it sets what one will run (a repo path, a start command, a
  * task prompt, a shell job). Read-only GETs stay open. Mutating routes in the
  * same families that are deliberately left OUT:
- *   - apps: delete/archive/unarchive, detect-icons, scope-adherence — they
+ *   - apps: delete/archive/unarchive, scope-adherence — they
  *     change only PortOS's own records or read files; nothing runs.
  *   - CoS: stop/pause/kill/terminate/delete and feedback — they reduce or
  *     annotate execution, never start it; task reorder/refresh/enhance,

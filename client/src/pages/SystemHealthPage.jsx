@@ -46,7 +46,7 @@ const DRILL_INS = ['disk', 'process', 'apps'].map(type => REMEDIATION[type]);
 
 // Icon per tab id. The manifest (`tabGroup: 'system-resources'`) owns
 // id/label/order — this page owns only how each tab looks; the short page-local
-// labels (vs the manifest's "System Resources Overview"/"Storage Report"/
+// labels (vs the manifest's "System Resources"/"Storage Report"/
 // "Active Queues", which need the qualifier to be unambiguous in ⌘K) come from
 // the manifest's `tabLabel`. The downloaded-model inventory used to be a fourth
 // tab here. It answered the same question Models → Status answers, in a

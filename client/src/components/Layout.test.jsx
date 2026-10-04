@@ -399,7 +399,7 @@ describe('Layout — System Resources location state', () => {
     await renderLayout('/system-resources/storage');
 
     const link = screen.getByRole('link', { name: 'System Resources' });
-    expect(link).toHaveAttribute('href', '/system-resources');
+    expect(link).toHaveAttribute('href', '/system-resources/overview');
     expect(link.className).toContain('text-port-accent');
   });
 });

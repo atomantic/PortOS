@@ -253,18 +253,6 @@ router.get('/instances/:instanceId/tickets/:ticketId/transitions', asyncHandler(
 }));
 
 /**
- * DELETE /api/jira/instances/:instanceId/tickets/:ticketId
- * Delete a JIRA ticket
- */
-router.delete('/instances/:instanceId/tickets/:ticketId', asyncHandler(async (req, res) => {
-  const result = await jiraService.deleteTicket(
-    req.params.instanceId,
-    req.params.ticketId
-  );
-  res.json(result);
-}));
-
-/**
  * POST /api/jira/instances/:instanceId/tickets/:ticketId/transition
  * Transition JIRA ticket status
  */

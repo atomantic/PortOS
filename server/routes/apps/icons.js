@@ -2,7 +2,6 @@
  * App icon serving + detection.
  *
  *   GET  /:id/icon        → image bytes (ETag / CSP-guarded SVG)
- *   POST /detect-icons    → { success, detected, total }  (all apps)
  *   POST /:id/detect-icon → { success, detected, appIconPath }  (single app)
  */
 
@@ -91,29 +90,6 @@ router.get('/:id/icon', loadApp, asyncHandler(async (req, res) => {
   const iconData = await readFile(iconPath).catch(e => e.code === 'ENOENT' ? null : Promise.reject(e));
   if (!iconData) throw new ServerError('No app icon found', { status: 404 });
   res.send(isRaster ? await getRasterIcon(app.id, iconPath, iconStat, size, iconData) : iconData);
-}));
-
-// POST /api/apps/detect-icons - Detect and persist app icons for all apps
-router.post('/detect-icons', asyncHandler(async (req, res) => {
-  const apps = await appsService.getAllApps();
-  let detected = 0;
-
-  for (const app of apps) {
-    if (!app.repoPath || !await pathExists(app.repoPath)) continue;
-    // Skip apps that already have a valid icon path
-    if (app.appIconPath && await pathExists(app.appIconPath)) continue;
-
-    const iconPath = await detectAppIcon(app.repoPath, app.type);
-    if (iconPath) {
-      await appsService.updateApp(app.id, { appIconPath: iconPath });
-      detected++;
-      console.log(`🎨 Detected icon for ${app.name}: ${iconPath.split('/').pop()}`);
-    }
-  }
-
-  if (detected > 0) notifyAppsChanged('detect-icons');
-  console.log(`🎨 Icon detection complete: ${detected}/${apps.length} apps`);
-  res.json({ success: true, detected, total: apps.length });
 }));
 
 // POST /api/apps/:id/detect-icon - Detect and persist app icon for a single app

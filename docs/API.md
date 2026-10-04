@@ -257,6 +257,7 @@ Context tools remain read-only. Semantic reads and writes are independent, defau
 | GET | `/cos/learning` | Get learning insights and recommendations |
 | GET | `/cos/learning/durations` | Get task duration estimates by type |
 | POST | `/cos/learning/backfill` | Backfill learning data from history |
+| POST | `/cos/learning/recalculate-durations` | Manual repair: rebuild the success-only duration ETAs (and the execution-scoped buckets) from the agent archive. No UI or scheduled caller — run it by hand after a bulk edit or purge of the archive |
 
 ### CoS Jobs (Autonomous Jobs)
 
@@ -488,6 +489,7 @@ settings controls and source-closed UI prompts are tracked separately in #7664.
 | PUT | `/digital-twin/documents/:id` | Update document |
 | DELETE | `/digital-twin/documents/:id` | Delete document |
 | GET | `/digital-twin/export/formats` | List available export formats |
+| POST | `/digital-twin/feedback/recalculate` | Manual refresh: recompute the suggested per-document weight adjustments from feedback history (also described in [the twin feature doc](features/digital-twin.md)) |
 | POST | `/digital-twin/export` | Export the twin in the requested format |
 | GET | `/digital-twin/tests` | Get the behavioral test suite |
 | POST | `/digital-twin/tests/run` | Run behavioral tests against one provider/model |
