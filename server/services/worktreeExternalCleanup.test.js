@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, realpathSync } from 'fs';
 import { mkdir, open, readFile, rm, symlink, unlink, writeFile } from 'fs/promises';
-import { join, relative, resolve } from 'path';
+import { join, relative } from 'path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { materializeGitRepo, resetGitWorktreeSandbox, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
 import { PATHS } from '../lib/fileUtils.js';
@@ -17,18 +17,12 @@ vi.mock('fs', async (importOriginal) => {
 vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-external-cleanup-'),
 }));
-const fault = vi.hoisted(() => ({ command: null, cwd: null, successfulMatches: 0, pathAlias: null, aliasTarget: null, registrationPath: null, calls: [] }));
-// Git reports POSIX separators (and possibly a different case/alias spelling)
-// on Windows, so an exact string match would silently skip the injected fault.
-const sameDir = (a, b) => {
-  const norm = (p) => { const r = resolve(p).replace(/\\/g, '/'); return process.platform === 'win32' ? r.toLowerCase() : r; };
-  return norm(a) === norm(b);
-};
+const fault = vi.hoisted(() => ({ command: null, subcommand: null, cwd: null, successfulMatches: 0, pathAlias: null, aliasTarget: null, registrationPath: null, calls: [] }));
 vi.mock('../lib/execGit.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, execGit: async (args, cwd, options) => {
     fault.calls.push({ args, cwd });
-    if (args[0] === fault.command && (!fault.cwd || sameDir(cwd, fault.cwd))) {
+    if (args[0] === fault.command && (!fault.subcommand || args[1] === fault.subcommand) && (!fault.cwd || cwd === fault.cwd)) {
       if (fault.successfulMatches > 0) {
         fault.successfulMatches--;
         return actual.execGit(args, cwd, options);
@@ -90,6 +84,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
   });
   beforeEach(async () => {
     fault.command = null;
+    fault.subcommand = null;
     fault.cwd = null;
     fault.successfulMatches = 0;
     fault.pathAlias = null;
@@ -181,8 +176,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
 
   it('never bypasses a Git removal refusal with recursive deletion or branch removal', async () => {
     const path = await addTree('agent-remove-refused');
+    // Match the Git operation, not the cwd: cleanup runs it from the path Git
+    // itself reports for the parent repo, whose spelling differs on Windows.
     fault.command = 'worktree';
-    fault.cwd = external;
+    fault.subcommand = 'remove';
     expect(await cleanupOrphanedWorktrees(primary, new Set())).toBe(0);
     expect(existsSync(path)).toBe(true);
     expect(fault.calls.some(({ args }) => args[0] === 'branch' && args[1] === '-D')).toBe(false);
