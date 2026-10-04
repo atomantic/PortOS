@@ -86,6 +86,9 @@ export const beeperSettingsSchema = z.object({
   baseUrl: z.string().trim().min(1).max(500).optional(),
   attachmentBudgetGb: z.number().min(0.1).max(1000).optional(),
   allowNonLoopbackBaseUrl: z.boolean().optional(),
+  // Opt-in real read receipts (#9985): when true, opening a thread also tells
+  // Beeper the chat was read. Absent/false = PortOS-local "seen" only.
+  sendReadReceipts: z.boolean().optional(),
 }).strict().superRefine((value, ctx) => {
   if (value.baseUrl === undefined) return;
   const parsed = parseBrowserOrigin(value.baseUrl);
