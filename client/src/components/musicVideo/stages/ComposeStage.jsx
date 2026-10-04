@@ -26,7 +26,7 @@ export default function ComposeStage({ board }) {
         </div>
         <GradePanel project={project} onSave={board.saveCompositionGrade} />
         {mode !== 'eidoverse' && <TypographyPanel project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />}
-        {mode === 'eidoverse' && <EidoverseVideoPanel key={project.id} project={project} onProject={board.replaceProject} />}
+        {mode === 'eidoverse' && <EidoverseVideoPanel key={project.id} project={project} onProject={board.replaceProject} productionReadiness={board.productionReadiness} />}
         {mode === 'code' && (
           <CodeVideoPanel project={project} audioUrl={audioUrl} onProject={board.replaceProject} />
         )}

@@ -36,7 +36,32 @@ const DOC = {
   ] },
 };
 
-const project = { id: 'mv-1', updatedAt: '2026-01-01T00:00:00.000Z', composition: { mode: 'code' } };
+const project = {
+  id: 'mv-1',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+  composition: {
+    mode: 'code',
+    codeVideo: {
+      sections: [
+        { id: 'a', source: 'export default () => {}' },
+      ],
+    },
+  },
+  productionReview: {
+    approvals: {
+      storyboard: {
+        basis: 'approved-basis',
+      },
+    },
+  },
+};
+
+const projectNoStoryboard = {
+  id: 'mv-1',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+  composition: { mode: 'code' },
+  productionReview: {},
+};
 
 beforeEach(() => {
   api.getMusicVideoCodeDocument.mockReset();
@@ -47,10 +72,12 @@ beforeEach(() => {
   api.regenerateMusicVideoCodeSection.mockResolvedValue({ project });
 });
 
-function renderPanel() {
+const APPROVED = { storyboard: { approved: true } };
+
+function renderPanel(testProject = project, readiness = APPROVED) {
   return render(
     <MemoryRouter initialEntries={['/music-video/mv-1']}>
-      <CodeVideoPanel project={project} audioUrl={null} onProject={vi.fn()} />
+      <CodeVideoPanel project={testProject} audioUrl={null} onProject={vi.fn()} productionReadiness={readiness} />
     </MemoryRouter>,
   );
 }
@@ -76,6 +103,55 @@ describe('CodeVideoPanel (#9076)', () => {
     fireEvent.keyDown(window, { key: '.' });
     expect(Number(screen.getByLabelText('Scrub preview').value)).toBeCloseTo(1 / 24, 5);
     fireEvent.keyDown(window, { key: ']' });
-    await waitFor(() => expect(screen.getByText(/Chorus/)).toBeTruthy());
+    const select = await screen.findByLabelText('Section to regenerate');
+    await waitFor(() => expect(select.value).toBe('b'));
+  });
+});
+
+describe('CodeVideoPanel section select (#10163)', () => {
+  it('shows a section select with generated/default labels', async () => {
+    renderPanel();
+    const select = await screen.findByLabelText('Section to regenerate');
+    expect(select).toBeTruthy();
+    expect(select.querySelector('option[value="a"]').textContent).toContain('generated');
+    expect(select.querySelector('option[value="b"]').textContent).toContain('default');
+  });
+
+  it('changes the ?section= param when a section is selected', async () => {
+    renderPanel();
+    const select = await screen.findByLabelText('Section to regenerate');
+    fireEvent.change(select, { target: { value: 'b' } });
+    await waitFor(() => {
+      expect(select.value).toBe('b');
+    });
+  });
+
+  it('disables both Generate buttons and shows reason when storyboard not approved', async () => {
+    renderPanel(projectNoStoryboard, { storyboard: { approved: false } });
+    await screen.findByLabelText('Section to regenerate');
+    const generateBtn = screen.getByRole('button', { name: /Generate code video/ });
+    const regenerateBtn = screen.getByRole('button', { name: /Regenerate section/ });
+    expect(generateBtn).toBeDisabled();
+    expect(regenerateBtn).toBeDisabled();
+    expect(await screen.findByText('Approve the storyboard first')).toBeTruthy();
+  });
+
+  it('stays gated when a saved approval is stale (server readiness says not approved)', async () => {
+    renderPanel(project, { storyboard: { approved: false } });
+    await screen.findByLabelText('Section to regenerate');
+    expect(screen.getByRole('button', { name: /Generate code video/ })).toBeDisabled();
+    expect(await screen.findByText('Approve the storyboard first')).toBeTruthy();
+  });
+
+  it('enables Generate buttons when storyboard is approved', async () => {
+    renderPanel();
+    await screen.findByLabelText('Section to regenerate');
+    const generateBtn = screen.getByRole('button', { name: /Generate code video/ });
+    const regenerateBtn = screen.getByRole('button', { name: /Regenerate section/ });
+    await waitFor(() => {
+      expect(generateBtn).toBeEnabled();
+      expect(regenerateBtn).toBeEnabled();
+    });
+    expect(screen.queryByText('Approve the storyboard first')).toBeFalsy();
   });
 });
