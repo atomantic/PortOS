@@ -16,7 +16,11 @@ file/directory fsync and atomic rename. No seed or DB migration is required.
 
 Ready means every admitted agent, persistent-mind turn, provider run, media render
 (including its browser/export preparation), and scheduled shell/script has released
-ownership after its final saving and cleanup. Idle daemons, queued work, independently
+ownership after its final saving and cleanup. This includes federated jobs dispatched
+by this instance, through remote completion and verified local publication; a peer
+being unreachable is not completion. New peer dispatch stays held. A held restart
+retains unresolved remote ownership without replaying an unknown submission.
+Idle daemons, queued work, independently
 operated browser sessions and unrelated host apps do not count. Maintenance never
 cancels work, replays a paid submission, or enables a previously disabled policy.
 Resume removes the identified hold only; a stale request cannot remove a later hold.

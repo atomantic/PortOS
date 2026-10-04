@@ -629,6 +629,7 @@ export async function initMediaJobQueue() {
         // the remote adapter replay the submission, recover the provider job,
         // and continue polling (or deliver a persisted cancellation intent).
         if (isRemoteMediaJob(j)) {
+          maintenance.recoverOwned('media', j.id);
           const marker = j.params?.remoteMedia;
           queue.push({
             ...j,
@@ -765,7 +766,8 @@ function startLaneJob(job, { lane }) {
     return false;
   }
   const permit = recoveringJobs.has(job.id)
-    ? maintenance.recoverOwned('media', job.id) : maintenance.tryAdmit('media', job.id);
+    ? maintenance.recoverOwned('media', job.id)
+    : maintenance.tryAdmit('media', job.id, { reconnect: isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true });
   if (!permit) return false;
   queue.splice(idx, 1);
   job.status = 'running';
@@ -1443,6 +1445,9 @@ async function runJobLifecycle(job, markDispatched) {
     markDispatched();
     await kickoff;
   } catch (err) {
+    // Policy/auth refusal still stands, but it cannot prove a previously
+    // admitted peer render finished before this recovery attempt.
+    if (isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true) maintenance.markCurrentUnsettled();
     // generateVideo / generateChainedVideo / generateImage threw before
     // reaching their proc.on cleanup hooks (e.g. PYTHON not configured,
     // validation fail). Clean up multipart upload temp files the route

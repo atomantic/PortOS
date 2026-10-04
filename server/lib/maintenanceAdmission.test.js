@@ -13,6 +13,19 @@ const gate = () => {
 afterEach(() => { vi.useRealTimers(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe('durable graceful maintenance', () => {
+  it('reuses remote reconciliation ownership without bypassing a hold', async () => {
+    const { admission } = gate();
+    const existing = admission.admit('media', 'peer-render');
+    const hold = admission.begin({ reason: 'Drain', owner: 'Operator' }).hold;
+    expect(admission.tryAdmit('media', 'peer-render', { reconnect: true })).toBeNull();
+    admission.resume({ id: hold.id, revision: hold.revision });
+    const reconnected = admission.admit('media', 'peer-render', { reconnect: true });
+    expect(reconnected.id).toBe(existing.id);
+    expect(admission.status().blockers).toHaveLength(1);
+    await reconnected.finish();
+    expect(admission.status().blockers).toEqual([]);
+  });
+
   it('fences every new admission while an admitted thought can finish its next provider call and saving', async () => {
     const { admission } = gate();
     const turn = admission.admit('mind-turn', 'thought');

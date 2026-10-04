@@ -1348,6 +1348,25 @@ describe('mediaJobQueue', () => {
 });
 
 describe('Audio kind (#1928)', () => {
+  it('holds new peer dispatch while an admitted remote render settles locally', async () => {
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    let reconcileRemote;
+    stubs.generateAudioRemote.mockImplementationOnce(() => new Promise(resolve => { reconcileRemote = resolve; }));
+    const active = await mediaJobQueue.enqueueJob({ kind: 'audio', params: { remoteMedia: remoteMediaParams() } });
+    await waitFor(() => stubs.generateAudioRemote.mock.calls.length === 1);
+    const { hold } = maintenance.begin({ reason: 'Peer drain', owner: 'Operator' });
+    try {
+      const queued = await mediaJobQueue.enqueueJob({ kind: 'audio', params: { remoteMedia: remoteMediaParams() } });
+      audioGenEvents.emit('completed', { generationId: active.jobId, filename: `${active.jobId}.wav` });
+      await waitFor(() => mediaJobQueue.getJob(active.jobId)?.status === 'completed');
+      expect(maintenance.status().state).toBe('draining');
+      expect(stubs.generateAudioRemote).toHaveBeenCalledTimes(1);
+      reconcileRemote();
+      await waitFor(() => !maintenance.status().blockers.some(blocker => blocker.resource === active.jobId));
+      expect(mediaJobQueue.getJob(queued.jobId).status).toBe('queued');
+    } finally { maintenance.resume({ id: hold.id, revision: hold.revision }); }
+  });
+
   it('dispatches an audio job to audioGen/local.js#generateAudio and completes', async () => {
     const job = await mediaJobQueue.enqueueJob({
       kind: 'audio',

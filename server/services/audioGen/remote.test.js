@@ -150,6 +150,29 @@ afterEach(() => {
 });
 
 describe('federated audio consumer adapter', () => {
+  it('keeps invalid recovered routing metadata unresolved without contacting the peer', async () => {
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const owner = maintenance.admit('media', 'invalid-recovered-peer');
+    await owner.run(() => generateAudio(params({ remoteMedia: { reconcile: true } })));
+    await owner.finish();
+    expect(transport.fetch).not.toHaveBeenCalled();
+    expect(maintenance.status().blockers).toContainEqual(expect.objectContaining({ resource: 'invalid-recovered-peer', unsettled: true }));
+  });
+
+  it.each(['running', 'failed'])('distinguishes peer access loss from a confirmed %s outcome', async remoteStatus => {
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const owner = maintenance.admit('media', `peer-${remoteStatus}`);
+    transport.fetch.mockImplementation(async (url, options) => {
+      if (url.endsWith('/jobs') && options.method === 'POST') return jsonResponse(providerJob(remoteStatus), 202);
+      return jsonResponse({ code: 'ACCESS_REVOKED' }, 403);
+    });
+    await owner.run(() => generateAudio(params()));
+    await owner.finish();
+    const blocker = maintenance.status().blockers.find(entry => entry.resource === `peer-${remoteStatus}`);
+    if (remoteStatus === 'running') expect(blocker).toMatchObject({ unsettled: true });
+    else expect(blocker).toBeUndefined();
+  });
+
   it('reconciles a queued provider job and atomically imports a verified WAV', async () => {
     const wav = Buffer.from('RIFF-example-wave-bytes');
     const digest = sha256(wav);

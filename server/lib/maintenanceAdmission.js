@@ -120,14 +120,18 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
   const held = () => status().state !== 'normal';
   const assertOpen = () => { if (held()) throw error(status().state === 'unavailable' ? 'MAINTENANCE_UNAVAILABLE' : 'MAINTENANCE_HELD'); };
   const currentId = () => context.getStore() ?? null;
-  const admit = (kind, resource = '', { continuation = false, parentId = null, parentKinds = null } = {}) => {
+  const admit = (kind, resource = '', { continuation = false, parentId = null, parentKinds = null, reconnect = false } = {}) => {
     const inheritedId = parentId ?? (continuation ? currentId() : null);
-    const id = randomUUID();
+    let id = randomUUID();
     transaction(state => {
       const inherited = inheritedId && state.operations.some(op => op.id === inheritedId && (!op.unsettled || kind === 'settlement') && (!parentKinds || parentKinds.includes(op.kind)));
       if (state.hold && !inherited) throw error();
       // An explicitly supplied expired parent must never become new work.
       if (parentId && !inherited) throw error('MAINTENANCE_HELD', 'The admitted parent operation has already settled.');
+      // Reconciliation may submit an idempotent replay, so it still obeys the
+      // admission fence above; reuse ownership only after that fence passes.
+      const existing = reconnect && state.operations.find(op => op.kind === kind && op.resource === resource);
+      if (existing) { id = existing.id; return; }
       state.operations.push({ id, kind, resource, pid: process.pid, startedAt: new Date().toISOString() });
     });
     return permitFor(id);

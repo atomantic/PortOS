@@ -23,6 +23,7 @@
  * federatedMedia/inputAssets.js.
  */
 
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { createWriteStream } from 'node:fs';
 import { mkdir, rename, stat, unlink } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -306,8 +307,10 @@ export function createRemoteMediaExecutor({
   async function pollProviderJob(state, initial) {
     let current = initial;
     while (true) {
+      if (['completed', 'failed', 'canceled'].includes(current.status)) state.remoteTerminal = true;
       if (state.cancelRequested && !state.cancelSent) {
         current = await sendRemoteCancel(state, current.id);
+        if (['completed', 'failed', 'canceled'].includes(current.status)) state.remoteTerminal = true;
       }
       if (state.cancelRequested && ['completed', 'failed', 'canceled'].includes(current.status)) {
         throw canceledError();
@@ -367,7 +370,7 @@ export function createRemoteMediaExecutor({
     const partialPath = join(dir, `.${filename}.partial`);
     await mkdir(dir, { recursive: true });
     if (await existingResultMatches(finalPath, metadata)) return { filename, dir, path: finalPath };
-    await unlink(partialPath).catch(() => {});
+    await unlink(partialPath).catch((error) => { if (error.code !== 'ENOENT') maintenance.markCurrentUnsettled(); });
 
     const peer = await findPeer(state.peerId, { standingRoute: state.standingRoute });
     // Keep the controller live for the body stream so cancel()/the queue
@@ -430,7 +433,7 @@ export function createRemoteMediaExecutor({
         await rename(partialPath, finalPath);
         return { filename, dir, path: finalPath };
       } finally {
-        await unlink(partialPath).catch(() => {});
+        await unlink(partialPath).catch((error) => { if (error.code !== 'ENOENT') maintenance.markCurrentUnsettled(); });
       }
     }, { timeoutMs: null });
   }
@@ -469,6 +472,7 @@ export function createRemoteMediaExecutor({
     const submitted = await submitOrRecover(state, request);
     const completed = await pollProviderJob(state, submitted);
     const downloaded = await downloadResult(state, completed);
+    state.finalizing = true;
     const local = await finalize({
       jobId: state.jobId,
       peerId: state.peerId,
@@ -483,6 +487,7 @@ export function createRemoteMediaExecutor({
       renderStartedAtMs: state.renderStartedAtMs,
       ...downloaded,
     });
+    state.finalizing = false;
     return {
       ...local,
       federatedMedia: {
@@ -497,6 +502,7 @@ export function createRemoteMediaExecutor({
   async function run(params) {
     const marker = markerSchema.safeParse(params?.remoteMedia);
     if (!marker.success) {
+      if (params?.remoteMedia?.reconcile === true) maintenance.markCurrentUnsettled();
       events.emit('failed', {
         generationId: params?.jobId,
         error: `Remote ${label} job has invalid persisted routing metadata`,
@@ -532,6 +538,9 @@ export function createRemoteMediaExecutor({
       const result = await runRemote(state, marker.data);
       events.emit('completed', { generationId: params.jobId, ...result });
     } catch (error) {
+      // An unreachable/revoked peer is not proof that its admitted render
+      // stopped. Keep local ownership until completion can be reconciled.
+      if ((state.submissionMayExist && !state.remoteTerminal) || state.finalizing) maintenance.markCurrentUnsettled();
       events.emit('failed', {
         generationId: params.jobId,
         error: error?.canceled
