@@ -1698,6 +1698,19 @@ describe('saved conversation scopes', () => {
     await waitFor(() => expect(api.getBeeperConversations).toHaveBeenLastCalledWith({ archived: false, lowPriority: false }, { silent: true }));
   });
 
+  it('lets the reader clear a saved search and disable its unread filter without editing the saved scope', async () => {
+    api.getBeeperScopes.mockResolvedValue({ scopes: [saved] });
+    renderTab(`/messages/beeper?scope=saved:${CONV_B}`);
+    expect(await screen.findByRole('button', { name: saved.name })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Unread only' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('searchbox')).toHaveValue('Example');
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Unread only' }));
+    await waitFor(() => expect(api.getBeeperConversations).toHaveBeenLastCalledWith({ network: 'signal', archived: false }, { silent: true }));
+    expect(screen.getByRole('button', { name: 'Unread only' })).toHaveAttribute('aria-pressed', 'false');
+    expect(api.updateBeeperScope).not.toHaveBeenCalled();
+  });
+
   it('reconciles saved scopes on remote invalidation and reports failed reads without inventing an empty set', async () => {
     api.getBeeperScopes.mockRejectedValueOnce(new Error('Example read failure')).mockResolvedValue({ scopes: [saved] });
     renderTab();

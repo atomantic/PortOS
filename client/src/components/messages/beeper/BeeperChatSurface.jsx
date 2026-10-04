@@ -360,10 +360,6 @@ export default function BeeperChatSurface({
   const [searchParams, setSearchParams] = useSearchParams();
 
   const scopeParam = searchParams.get('scope') || 'inbox';
-  const unreadOnly = searchParams.get('unread') === '1';
-  const searchRaw = searchParams.get('q') || '';
-  const search = searchRaw.trim();
-  const [searchOpen, setSearchOpen] = useState(Boolean(search));
 
   const scopesResource = useSocketResource(async () => {
     const data = await api.getBeeperScopes({ silent: true });
@@ -371,6 +367,14 @@ export default function BeeperChatSurface({
     return data.scopes;
   }, { events: SCOPE_EVENTS, matchesEvent: (payload) => payload?.kind === 'scopes' });
   const savedScopes = scopesResource.data;
+  const savedScope = savedScopes?.find((entry) => `saved:${entry.id}` === scopeParam);
+  // Missing URL overrides inherit the saved filter. Explicit empty/zero values
+  // clear it, so the search and unread controls always describe effective state.
+  const unreadOnly = searchParams.has('unread')
+    ? searchParams.get('unread') === '1' : savedScope?.filters.unreadOnly === true;
+  const searchRaw = searchParams.get('q') ?? savedScope?.filters.search ?? '';
+  const search = searchRaw.trim();
+  const [searchOpen, setSearchOpen] = useState(Boolean(search));
   const setSavedScopes = scopesResource.updateData;
   const [scopeEditor, setScopeEditor] = useState(null);
   const [scopeName, setScopeName] = useState('');
@@ -410,15 +414,16 @@ export default function BeeperChatSurface({
   const listGenRef = useRef(0);
   const threadGenRef = useRef(0);
 
-  const savedScope = savedScopes?.find((entry) => `saved:${entry.id}` === scopeParam);
   const scope = savedScope || LIVE_SYSTEM_SCOPES.has(scopeParam) || scopeParam.startsWith(NETWORK_SCOPE_PREFIX)
     ? scopeParam
     : 'inbox';
   const activeNetwork = savedScope?.filters.network || scopeNetwork(scope);
   const unified = !activeNetwork;
-  const filters = useMemo(() => savedScope
-    ? { ...savedScope.filters, ...(unreadOnly ? { unreadOnly: true } : {}), ...(search ? { search } : {}) }
-    : filtersForScope(scope, unreadOnly, search), [savedScope, scope, unreadOnly, search]);
+  const filters = useMemo(() => {
+    if (!savedScope) return filtersForScope(scope, unreadOnly, search);
+    const { search: _savedSearch, unreadOnly: _savedUnread, ...base } = savedScope.filters;
+    return { ...base, ...(unreadOnly ? { unreadOnly: true } : {}), ...(search ? { search } : {}) };
+  }, [savedScope, scope, unreadOnly, search]);
 
   const setParam = useCallback((key, value) => {
     setSearchParams((prev) => {
@@ -938,19 +943,19 @@ export default function BeeperChatSurface({
           <button
             type="button"
             onClick={() => {
-              if (searchOpen) setParam('q', null);
-              setSearchOpen(!searchOpen);
+              if (searchOpen || search) setParam('q', savedScope ? '' : null);
+              setSearchOpen(!(searchOpen || search));
             }}
             title="Search conversations"
             aria-label="Search conversations"
-            aria-pressed={searchOpen}
-            className={`ml-auto inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded p-1.5 ${searchOpen ? 'bg-port-accent text-port-bg' : 'text-gray-500 hover:text-white'}`}
+            aria-pressed={searchOpen || Boolean(search)}
+            className={`ml-auto inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded p-1.5 ${searchOpen || search ? 'bg-port-accent text-port-bg' : 'text-gray-500 hover:text-white'}`}
           >
             <Search size={15} />
           </button>
           <button
             type="button"
-            onClick={() => setParam('unread', unreadOnly ? null : '1')}
+            onClick={() => setParam('unread', unreadOnly ? (savedScope ? '0' : null) : '1')}
             title="Unread only"
             aria-label="Unread only"
             aria-pressed={unreadOnly}
@@ -1022,12 +1027,12 @@ export default function BeeperChatSurface({
           </form>
         )}
 
-        {searchOpen && (
+        {(searchOpen || search) && (
           <div className="relative shrink-0 px-3 pb-2">
             <input
               type="search"
               value={searchRaw}
-              onChange={(event) => setParam('q', event.target.value || null)}
+              onChange={(event) => setParam('q', event.target.value || (savedScope ? '' : null))}
               placeholder="Search conversations"
               aria-label="Search conversations by name"
               autoFocus
@@ -1036,7 +1041,7 @@ export default function BeeperChatSurface({
             {searchRaw && (
               <button
                 type="button"
-                onClick={() => setParam('q', null)}
+                onClick={() => setParam('q', savedScope ? '' : null)}
                 aria-label="Clear search"
                 className="absolute right-4 top-1/2 -translate-y-1/2 -mt-1 text-gray-500 hover:text-white"
               >
