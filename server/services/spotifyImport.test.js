@@ -93,7 +93,14 @@ describe('spotifyRecordToCandidate', () => {
     const c1 = spotifyRecordToCandidate(extendedRecord);
     const c2 = spotifyRecordToCandidate({ ...extendedRecord });
     expect(c1.dedupeKey).toBe(c2.dedupeKey);
-    expect(c1.dedupeKey).toBe('spotify:spotify:track:2gjHtqrEnMBmD3lBWJUp2P:2023-05-01T18:30:00.000Z');
+    expect(c1.dedupeKey).toBe('spotify:2023-05-01T18:30:00.000Z:2gjHtqrEnMBmD3lBWJUp2P');
+  });
+
+  it('keys URI records as spotify:<playedAt>:<bareId>, matching live sync', () => {
+    const c = spotifyRecordToCandidate(extendedRecord);
+    const [, playedAt, id] = /^spotify:(.+Z):(\w+)$/.exec(c.dedupeKey);
+    expect(playedAt).toBe(c.happenedAt);
+    expect(id).toBe('2gjHtqrEnMBmD3lBWJUp2P');
   });
 
   it('gives URI-less records an artist+album+title fallback identity (no title-only collapse)', () => {
