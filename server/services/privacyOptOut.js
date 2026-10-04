@@ -51,6 +51,7 @@ import {
 import { listScanEligibleValues } from './privacyVault.js';
 import { buildSearchVectors, probeBroker } from './privacyScan.js';
 import { createDraft, approveDraft } from './messageDrafts.js';
+import { pickEmailSenderAccount, sendViaForAccountType } from '../lib/messageTransport.js';
 import { listAccounts } from './messageAccounts.js';
 import { getMessages } from './messageSync.js';
 import { getSettings } from './settings.js';
@@ -332,10 +333,10 @@ export async function emailLane(broker, kase, {
     return { caseId: kase.id, lane: 'email', outcome: 'human_task_queued' };
   }
   const accounts = await accountsProvider();
-  const account = accounts.find((a) => a.canSend && a.enabled !== false);
+  const account = pickEmailSenderAccount(accounts);
   if (!account) {
     return { caseId: kase.id, lane: 'email', outcome: 'account_required',
-      nextAction: 'Connect a Gmail account to send opt-out emails' };
+      nextAction: 'Connect a Gmail or Outlook account to send opt-out emails' };
   }
   const { subject, body, templateName } = await renderOptOutEmail({ broker, payload, disclosedFields, listingUrls, now });
   const draft = await draftCreator({
@@ -344,7 +345,7 @@ export async function emailLane(broker, kase, {
     subject,
     body,
     generatedBy: 'privacy-optout',
-    sendVia: 'api',
+    sendVia: sendViaForAccountType(account.type), // the account's real transport, not an assumed Gmail API
   });
 
   await transitionCase(kase.id, 'optout_in_progress', { channel: 'email', disclosedFields, evidence: { lane: 'email', to, template: templateName, draftId: draft.id, disclosed: disclosedFields }, now });

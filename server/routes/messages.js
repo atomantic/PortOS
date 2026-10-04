@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { UUID_RE } from '../lib/fileUtils.js';
+import { sendViaForAccountType } from '../lib/messageTransport.js';
 import * as messageAccounts from '../services/messageAccounts.js';
 import * as messageSync from '../services/messageSync.js';
 import * as messageDrafts from '../services/messageDrafts.js';
@@ -207,7 +208,7 @@ router.post('/drafts', asyncHandler(async (req, res) => {
   const data = validateRequest(createDraftSchema, req.body);
   const account = await messageAccounts.getAccount(data.accountId);
   if (!account) throw new ServerError('Account not found', { status: 404 });
-  const derivedSendVia = account.type === 'gmail' ? 'api' : 'playwright';
+  const derivedSendVia = sendViaForAccountType(account.type) ?? 'playwright';
   if (data.sendVia && data.sendVia !== derivedSendVia) {
     throw new ServerError(`sendVia "${data.sendVia}" conflicts with account type "${account.type}" (expected "${derivedSendVia}")`, { status: 400 });
   }
@@ -251,7 +252,7 @@ router.post('/drafts/generate', asyncHandler(async (req, res) => {
     subject: '',
     body: replyBody,
     generatedBy: 'ai',
-    sendVia: account.type === 'gmail' ? 'api' : 'playwright'
+    sendVia: sendViaForAccountType(account.type) ?? 'playwright'
   });
   req.app.get('io')?.emit('messages:draft:created', { draftId: draft.id });
   res.status(201).json(draft);

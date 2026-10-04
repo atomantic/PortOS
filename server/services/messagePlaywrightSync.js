@@ -4,6 +4,12 @@ import crypto from 'crypto';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureDir, PATHS, safeJSONParse, tryReadFile, atomicWrite } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
+import { createMutex } from '../lib/asyncMutex.js';
+import { messageLogError } from '../lib/messageLogError.js';
+import {
+  COMPOSE_PROVIDER_LABEL, SUBMIT_EVALUATE_TIMEOUT_MS, SUBMIT_OBSERVE_MS, buildComposePhaseScript, checkAccountIdentity, classifySendOutcome,
+  describeComposeFailure, planDelivery, recipientsMatch, resolveComposeConfig
+} from '../lib/messageBrowserCompose.js';
 import { findOrOpenPage, listCdpPages, isAuthPage, evaluateOnPage } from './browserService.js';
 
 // Compat re-exports — older consumers and test mocks import these from here
@@ -453,12 +459,115 @@ export async function refreshMessageDetail(account, message) {
   return detail;
 }
 
+const SEND_PAGE_MATCH = { outlook: 'outlook.office.com/mail', teams: 'teams.microsoft.com' };
+
+// One browser tab per provider, so two sends to the same provider must not
+// interleave their compose steps. Claimed drafts of different providers still run in parallel.
+const sendLocks = { outlook: createMutex(), teams: createMutex() };
+
+// A send never opens a tab: a freshly opened one cannot be signed in, and the
+// sign-in state the user already established is exactly what authorizes the send.
+async function findExistingProviderPage(provider) {
+  const pages = await getPages().catch(() => []);
+  return pages.find(page => (!page.type || page.type === 'page') && page.url?.includes(SEND_PAGE_MATCH[provider])) ?? null;
+}
+
+const notSent = (status, code, error) => ({ success: false, status, code, error });
+
+const deliveryUnknown = label => ({
+  success: false,
+  deliveryUnknown: true,
+  status: 502,
+  code: 'DELIVERY_UNKNOWN',
+  error: `${label} did not confirm delivery and it may already have been sent. Check ${label === 'Teams' ? 'the conversation' : 'Sent Items'}, then record the outcome. PortOS will not resend it.`
+});
+
 /**
- * Send message via Playwright browser automation
+ * Deliver an approved draft through the provider's web UI. Every phase before the
+ * single submit click is side-effect free and fails as a definite "not sent"; after
+ * the click, only a positive provider acknowledgement is success and anything else
+ * is `deliveryUnknown` — never retried here (see `lib/messageBrowserCompose.js`).
  */
-export async function sendPlaywright(account, draft) {
-  console.log(`📧 Playwright send for account ${account.id} (${account.type}) — automation pending`);
-  return { success: false, error: 'Playwright send not yet implemented', status: 501, code: 'NOT_IMPLEMENTED' };
+async function deliverViaBrowser(account, draft, { replyTarget, requireIdentity }, markSubmitting) {
+  const provider = account.type;
+  const label = COMPOSE_PROVIDER_LABEL[provider];
+  const planned = planDelivery(provider, draft, replyTarget);
+  if (!planned.ok) return notSent(planned.status, planned.code, planned.error);
+  const { plan } = planned;
+
+  const page = await findExistingProviderPage(provider);
+  if (!page) return notSent(409, 'PROVIDER_TAB_UNAVAILABLE', `No ${label} tab is open in the PortOS browser — open ${label}, sign in, and retry`);
+  if (!page.webSocketDebuggerUrl) return notSent(502, 'PROVIDER_TAB_UNAVAILABLE', `Cannot connect to the ${label} tab`);
+  if (isAuthPage(page)) return notSent(409, 'PROVIDER_LOGIN_REQUIRED', `Login required — sign into ${label} and retry`);
+
+  const config = resolveComposeConfig(provider, (await getSelectors())[provider]);
+  const token = draft.sendAttemptId || uuidv4();
+  const run = (phase, extra = {}, options) =>
+    evaluateOnPage(page, buildComposePhaseScript(phase, { provider, sels: config.sels, token, ...extra }), options);
+  // Only used before the click: removes our own compose surface, best effort.
+  const abort = async failure => {
+    await run('discard').catch(() => null);
+    return { success: false, ...describeComposeFailure(provider, failure) };
+  };
+
+  const identity = await run('probe');
+  if (!identity) return notSent(502, 'PROVIDER_TAB_UNAVAILABLE', `The ${label} tab did not respond`);
+  const who = checkAccountIdentity({ expected: account.email, observed: identity, required: requireIdentity });
+  if (!who.ok) {
+    return notSent(409, who.code, who.code === 'ACCOUNT_IDENTITY_MISMATCH'
+      ? `The ${label} tab is signed in as a different account — sign into this account and retry`
+      : `Several ${label} accounts exist and the browser tab does not show which one is signed in, so sending is blocked to keep it from going out of the wrong mailbox`);
+  }
+
+  const opened = await run('open', { to: plan.to, reply: plan.reply });
+  if (opened?.ok !== true) return abort(opened);
+  if (provider === 'teams' && !recipientsMatch(plan, { to: opened.resolved, cc: [] })) return abort({ code: 'RECIPIENT_MISMATCH' });
+
+  const filled = await run('fill', { to: plan.to, cc: plan.cc, subject: plan.subject, body: plan.body, reply: plan.reply });
+  if (filled?.ok !== true) return abort(filled);
+  if (provider === 'outlook' && !recipientsMatch(plan, filled)) return abort({ code: 'RECIPIENT_MISMATCH' });
+  if (filled.bodyOk !== true || filled.subjectOk === false) return abort({ code: 'CONTENT_MISMATCH' });
+
+  markSubmitting(); // from here a throw can no longer prove nothing was sent
+  const observed = await run('submit', {
+    body: plan.body, ackPattern: config.ackPattern, refusalPattern: config.refusalPattern, timeoutMs: SUBMIT_OBSERVE_MS
+  }, { timeout: SUBMIT_EVALUATE_TIMEOUT_MS });
+  const verdict = classifySendOutcome(observed);
+  if (verdict.outcome === 'confirmed') {
+    console.log(`📧 ${label} send confirmed: draft ${draft.id}`);
+    return { success: true, confirmed: true };
+  }
+  if (verdict.outcome === 'not_sent') return abort(verdict);
+  if (verdict.outcome === 'refused') {
+    return notSent(502, 'PROVIDER_REFUSED', `${label} refused the message. Close its compose window, fix the problem, and approve the draft again`);
+  }
+  console.warn(`⚠️ ${label} delivery unconfirmed: draft ${draft.id}`);
+  return deliveryUnknown(label);
+}
+
+/**
+ * Send an approved draft via the provider's web UI (Outlook / Teams).
+ * `replyTarget` is the cached message the draft answers, resolved within the
+ * draft's own account by the sender; `requireIdentity` is set when more than one
+ * enabled account shares this provider's single browser sign-in.
+ */
+export async function sendPlaywright(account, draft, options) {
+  const { replyTarget = null, requireIdentity = false } = options ?? {};
+  const label = COMPOSE_PROVIDER_LABEL[account.type];
+  if (!label) return notSent(501, 'SEND_NOT_SUPPORTED', "Sending from this account isn't supported yet — copy the draft");
+  return sendLocks[account.type](async () => {
+    let submitting = false;
+    return deliverViaBrowser(account, draft, { replyTarget, requireIdentity }, () => { submitting = true; }).catch(error => {
+      // A throw before the click is a definite failure; once Send may have been
+      // clicked the same throw cannot prove the message stayed in the mailbox.
+      if (submitting) {
+        console.warn(`⚠️ ${label} delivery unconfirmed after error: draft ${draft.id}: ${messageLogError(error)}`);
+        return deliveryUnknown(label);
+      }
+      console.error(`❌ ${label} send failed before submit: draft ${draft.id}: ${messageLogError(error)}`);
+      return notSent(502, 'SEND_FAILED', `${label} send failed before anything was submitted — nothing was sent`);
+    });
+  });
 }
 
 /**

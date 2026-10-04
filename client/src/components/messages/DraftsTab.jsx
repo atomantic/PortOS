@@ -32,9 +32,9 @@ function DeliveryReconciliation({ draft, onReconciled }) {
   return (
     <div className="rounded border border-port-warning/40 p-3 space-y-3 text-sm">
       <p className="text-port-warning">
-        Delivery is unknown because this send was interrupted. It may already have
-        reached the recipient. Check your sent mailbox or conversation before recording
-        the outcome. PortOS will not resend it automatically.
+        Delivery is unknown because this send was interrupted or the provider never
+        confirmed it. It may already have reached the recipient. Check your sent mailbox
+        or conversation before recording the outcome. PortOS will not resend it automatically.
       </p>
       <label className="flex items-start gap-2" htmlFor={`checked-mailbox-${draft.id}`}>
         <input id={`checked-mailbox-${draft.id}`} type="checkbox"
@@ -103,7 +103,12 @@ export default function DraftsTab({ accounts }) {
       sendingRef.current.delete(id);
       setSendingIds(new Set(sendingRef.current));
     });
-    if (!result || result.success === false) return;
+    if (!result || result.success === false) {
+      // The server has already moved the draft out of "approved" — to failed, or to
+      // delivery unknown when the provider never confirmed — so show that state now.
+      if (!result) fetchDrafts();
+      return;
+    }
     setDrafts(prev => prev.map(d => d.id === id ? { ...d, status: 'sent' } : d));
     toast.success('Message sent');
   };
@@ -123,8 +128,7 @@ export default function DraftsTab({ accounts }) {
   };
 
   const isCopyOnly = draft => draft.sendVia === 'review' ||
-    accounts.find(account => account.id === draft.accountId)?.canSend === false ||
-    draft.sendVia === 'playwright';
+    accounts.find(account => account.id === draft.accountId)?.canSend === false;
 
   const statusColors = {
     draft: 'bg-gray-700 text-gray-300',

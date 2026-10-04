@@ -100,7 +100,7 @@ describe.skipIf(!runDb)('privacy opt-out engine DB round-trip', () => {
       draftApprover: async () => { throw new Error('Unsupported account must not approve'); },
       sender: async () => { throw new Error('Unsupported account must not send'); },
     });
-    expect(res).toMatchObject({ outcome: 'account_required', nextAction: 'Connect a Gmail account to send opt-out emails' });
+    expect(res).toMatchObject({ outcome: 'account_required', nextAction: 'Connect a Gmail or Outlook account to send opt-out emails' });
     expect(drafts).toHaveLength(draftCount);
     expect((await brokers.getCaseForBroker(emailBrokerId)).state).toBe('found');
   });

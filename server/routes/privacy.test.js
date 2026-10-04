@@ -506,7 +506,7 @@ describe('POST /api/privacy/optout', () => {
     optOutService.runOptOutPass.mockImplementationOnce(actual.runOptOutPass);
     const res = await request(makeApp()).post('/api/privacy/optout').send({ runVerification: false });
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ submitted: [], skipped: 1, nextActions: ['Connect a Gmail account to send opt-out emails'] });
+    expect(res.body).toMatchObject({ submitted: [], skipped: 1, nextActions: ['Connect a Gmail or Outlook account to send opt-out emails'] });
     expect(brokers.transitionCase).not.toHaveBeenCalled();
     expect(drafts.createDraft).not.toHaveBeenCalled();
     expect(drafts.approveDraft).not.toHaveBeenCalled();

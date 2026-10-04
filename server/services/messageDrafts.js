@@ -146,7 +146,10 @@ export async function claimDraftForSend(id) {
   });
 }
 
-export async function finishDraftSend(id, attemptId, success) {
+// `outcome` is true (delivered), false (definitely not delivered, may be re-approved)
+// or 'delivery_unknown' (the transport cannot say — same state a crash leaves, and
+// it likewise needs a human to check the mailbox before the draft can move again).
+export async function finishDraftSend(id, attemptId, outcome) {
   return queueWrite(async () => {
     const drafts = await loadDrafts();
     const draft = drafts.find(d => d.id === id);
@@ -154,7 +157,7 @@ export async function finishDraftSend(id, attemptId, success) {
     if (draft.status !== 'sending' || draft.sendAttemptId !== attemptId || activeAttempts.get(id) !== attemptId) {
       throw new ServerError('Draft is not sending', { status: 409, code: 'DRAFT_STATE_CONFLICT' });
     }
-    draft.status = success ? 'sent' : 'failed';
+    draft.status = outcome === 'delivery_unknown' ? 'delivery_unknown' : outcome === true ? 'sent' : 'failed';
     draft.updatedAt = new Date().toISOString();
     const attempt = draft.sendAttempts.find(a => a.id === attemptId);
     attempt.outcome = draft.status;
