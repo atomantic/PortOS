@@ -8,6 +8,7 @@ import {
   bindClaimBranch,
   releaseClaimBranch,
   claimCheckoutOwnerReason,
+  injectReconcileAgentId,
 } from './claimContinuation.js';
 
 const ROOT = '/data/cos/worktrees';
@@ -299,5 +300,22 @@ describe('claim branch binding lifecycle', () => {
 
   it('holds the branch when the registry is unreadable', () => {
     expect(reason(null)).toBe('claim-ownership-unreadable');
+  });
+});
+
+describe('injectReconcileAgentId', () => {
+  const text = `curl -d '{"action":"check","branch":"b","agentId":"{agentId}"}' and again '{"agentId":"{agentId}"}'`;
+
+  it('fills every slot with the run id', () => {
+    expect(injectReconcileAgentId(text, 'agent-1a2b')).toBe(
+      `curl -d '{"action":"check","branch":"b","agentId":"agent-1a2b"}' and again '{"agentId":"agent-1a2b"}'`,
+    );
+  });
+
+  it('drops the field, keeping the read-only check, when there is no usable id', () => {
+    for (const id of [undefined, '', "x'; rm -rf /"]) {
+      expect(injectReconcileAgentId(text, id)).toBe(`curl -d '{"action":"check","branch":"b"}' and again '{"agentId":"{agentId}"}'`);
+    }
+    expect(injectReconcileAgentId(undefined, 'agent-1')).toBeUndefined();
   });
 });
