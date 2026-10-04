@@ -1,3 +1,4 @@
+import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
  * Compatibility shim for PortOS services that import from runner.js
  * Re-exports toolkit runner service functions with local overrides
@@ -65,6 +66,8 @@ function safeSettle(fn, label) {
   }
 }
 
+const settleCompletion = (fn, label) => safeSettle(() => maintenance.continueSettlement(fn), label);
+
 export async function createRun(options) {
   // The toolkit's runner emits its own "🤖 AI run [source]: provider/model"
   // line — don't duplicate it here.
@@ -112,7 +115,7 @@ export async function finalizeRunRecord({ runId, output, exitCode, success, erro
   const outputPath = join(runDir, 'output.txt');
   const metadataPath = join(runDir, 'metadata.json');
 
-  await writeFileGuarded(outputPath, output).catch(() => {});
+  await writeFileGuarded(outputPath, output).catch(() => maintenance.markCurrentUnsettled());
 
   const metadataStr = await readFile(metadataPath, 'utf-8').catch(() => '{}');
   let metadata = {};
@@ -173,7 +176,7 @@ export async function finalizeRunRecord({ runId, output, exitCode, success, erro
     metadata.errorAnalysis = errorAnalysis;
   }
 
-  await atomicWrite(metadataPath, metadata).catch(() => {});
+  await atomicWrite(metadataPath, metadata).catch(() => maintenance.markCurrentUnsettled());
 
   // Guarded: these hooks are host-supplied, and every caller of this function
   // runs outside the request lifecycle — the /runs route never awaits its
@@ -182,13 +185,13 @@ export async function finalizeRunRecord({ runId, output, exitCode, success, erro
   // unhandled rejection with the run stuck looking in-flight. The metadata is
   // already persisted by this point, so a failing hook must not un-finalize it.
   if (success) {
-    safeSettle(() => runnerConfig.hooks?.onRunCompleted?.(metadata, output), 'onRunCompleted');
+    settleCompletion(() => runnerConfig.hooks?.onRunCompleted?.(metadata, output), 'onRunCompleted');
   } else if (canceled) {
     // A Stop is not a provider failure. The hook still has to fire so the
     // shared activity snapshot drops the run; `onRunFailed` stays silent.
-    safeSettle(() => runnerConfig.hooks?.onRunCanceled?.({ runId: metadata.id }), 'onRunCanceled');
+    settleCompletion(() => runnerConfig.hooks?.onRunCanceled?.({ runId: metadata.id }), 'onRunCanceled');
   } else if (reportFailure) {
-    safeSettle(() => runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output), 'onRunFailed');
+    settleCompletion(() => runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output), 'onRunFailed');
   }
 
   return metadata;
@@ -215,7 +218,7 @@ export async function failRunRecord({ runId, error, exitCode = null, startTime =
   const failure = await finalizeRunRecord({
     runId, output: message, exitCode, success: false, error, startTime, identity, reportFailure,
   });
-  safeSettle(() => onComplete?.(failure), 'onComplete');
+  settleCompletion(() => onComplete?.(failure), 'onComplete');
   return failure;
 }
 
@@ -323,7 +326,13 @@ const describeSpawnFailure = (spawnError, command) =>
  * `.cmd`/`.bat` spawn under `shell:false` fails outright post-CVE-2024-27980,
  * and why the `cmd.exe` wrapper avoids DEP0190's unescaped-join hazard).
  */
-export async function executeCliRun({ runId, provider, prompt, workspacePath, screenshots = [], onData, onComplete, timeout, toolFree = false, beforeExecute }) {
+export async function executeCliRun(options) {
+  const permit = maintenance.admit('cli-run', options.runId, { continuation: true });
+  try { return await permit.run(() => executeAdmittedCliRun(options, permit)); }
+  catch (err) { permit.finish(); throw err; }
+}
+
+async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, screenshots = [], onData, onComplete, timeout, toolFree = false, beforeExecute }, permit) {
   const toolkit = requireToolkit();
 
   const runsPath = join(runnerConfig.dataDir, 'runs');
@@ -367,7 +376,7 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
   const { cwd: effectiveCwd, failure } = await resolveRunCwd({
     runId, workspacePath, label: `Run ${runId}`, startTime, onData, onComplete,
   });
-  if (failure) return;
+  if (failure) { await permit.finish(); return; }
 
   const prepareVision = screenshots.length > 0 ? await import('./visionCli.js') : null;
   const vision = prepareVision
@@ -624,13 +633,14 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
       // Isolate lifecycle hooks from onComplete so a hook failure never changes
       // the terminal result or prevents the caller from settling.
       if (metadata.success) {
-        safeSettle(() => runnerConfig.hooks?.onRunCompleted?.(metadata, output), `Run ${runId} onRunCompleted hook`);
+        settleCompletion(() => runnerConfig.hooks?.onRunCompleted?.(metadata, output), `Run ${runId} onRunCompleted hook`);
       } else if (canceled) {
-        safeSettle(() => runnerConfig.hooks?.onRunCanceled?.({ runId }), `Run ${runId} onRunCanceled hook`);
+        settleCompletion(() => runnerConfig.hooks?.onRunCanceled?.({ runId }), `Run ${runId} onRunCanceled hook`);
       } else {
-        safeSettle(() => runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output), `Run ${runId} onRunFailed hook`);
+        settleCompletion(() => runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output), `Run ${runId} onRunFailed hook`);
       }
-      safeSettle(() => onComplete?.(stdoutIsResponse && metadata.success ? { ...metadata, text: assistantOutput } : metadata), `Run ${runId} onComplete`);
+      settleCompletion(() => onComplete?.(stdoutIsResponse && metadata.success ? { ...metadata, text: assistantOutput } : metadata), `Run ${runId} onComplete`);
+      permit.finish();
       return metadata;
     } catch (err) {
       const handler = spawnError ? 'error' : 'close';
@@ -647,11 +657,11 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
         ...(canceled ? { canceled: true, completionReason: hostInterrupted ? 'host-shutdown' : 'canceled' } : {}),
       };
       if (canceled) {
-        safeSettle(() => runnerConfig.hooks?.onRunCanceled?.({ runId }), `Run ${runId} onRunCanceled hook`);
+        settleCompletion(() => runnerConfig.hooks?.onRunCanceled?.({ runId }), `Run ${runId} onRunCanceled hook`);
       } else {
-        safeSettle(() => runnerConfig.hooks?.onRunFailed?.(failMetadata, failMetadata.error, output), `Run ${runId} onRunFailed hook`);
+        settleCompletion(() => runnerConfig.hooks?.onRunFailed?.(failMetadata, failMetadata.error, output), `Run ${runId} onRunFailed hook`);
       }
-      safeSettle(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
+      settleCompletion(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
       return failMetadata;
     }
   };
@@ -660,12 +670,15 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
     return finalizationPromise;
   };
 
+  let terminalSpawnError = null;
   handleSpawnError = (err) => {
-    void finalizeOnce({ exitCode: -1, spawnError: err });
+    terminalSpawnError = err;
+    // With no pid there was no child. Otherwise close owns physical exit.
+    if (!childProcess.pid) void finalizeOnce({ exitCode: -1, spawnError: err });
   };
 
   childProcess.on('close', (code, signal) => {
-    void finalizeOnce({ exitCode: code, signal });
+    void finalizeOnce({ exitCode: code, signal, spawnError: terminalSpawnError });
   });
 
   // A failed spawn emits 'error' and commonly 'close' after it; finalizeOnce

@@ -1,3 +1,4 @@
+import maintenanceRoutes from './routes/maintenance.js';
 import './services/databaseBootFence.js';
 import express from 'express';
 import { Server } from 'socket.io';
@@ -302,6 +303,7 @@ app.use('/api/alerts', alertsRoutes);
 app.use('/api/avatar', avatarRoutes);
 app.use('/api/system', systemActivityRoutes);
 app.use('/api/system', systemHealthRoutes);
+app.use('/api/system', maintenanceRoutes);
 app.use('/api/system/capabilities', systemCapabilitiesRoutes);
 app.use('/api/system-resources', systemResourcesRoutes);
 app.use('/api/remote-desktop', remoteDesktopRoutes);

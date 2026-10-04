@@ -7,8 +7,11 @@ import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../../li
 
 // The lifecycle really creates and removes files, so PATHS must point at a temp
 // tree — the install's data/ is the developer's live gallery.
-vi.mock('../../lib/fileUtils.js', async (importOriginal) =>
-  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-upscale-job-') }));
+vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...makePathsProxy(actual, { dataRoot: () => lazyTempDataRoot('portos-upscale-job-') }),
+    unlinkGuarded: vi.fn(actual.unlinkGuarded) };
+});
 afterAll(cleanupTempDataRoots);
 
 const state = vi.hoisted(() => ({
@@ -24,6 +27,11 @@ const state = vi.hoisted(() => ({
   // Whether the fake runner writes the file it was told to produce.
   writesOutput: true,
   buildArgsCalls: [],
+  admission: null,
+}));
+vi.mock('../../lib/maintenanceAdmission.js', async importOriginal => ({
+  ...await importOriginal(),
+  maintenance: new Proxy({}, { get: (_target, property) => state.admission[property] }),
 }));
 
 vi.mock('./upscaleVideo.js', () => ({
@@ -86,7 +94,9 @@ const { enqueueJob } = await import('../mediaJobQueue/index.js');
 const { mutateVideoHistory } = await import('./history.js');
 const { padSourceForUpscale, finalizeUpscaleOutput } = await import('./upscaleFfmpeg.js');
 const { videoGenEvents } = await import('./events.js');
-const { PATHS } = await import('../../lib/fileUtils.js');
+const { PATHS, unlinkGuarded } = await import('../../lib/fileUtils.js');
+const realFiles = await vi.importActual('../../lib/fileUtils.js');
+const { createMaintenanceAdmission } = await import('../../lib/maintenanceAdmission.js');
 const { LTX_UPSCALE_JOB_KIND, LTX_PROVENANCE_FIELDS } = await import('./upscalePlan.js');
 
 const SOURCE_ID = '11111111-1111-4111-8111-111111111111';
@@ -136,6 +146,9 @@ const makeChild = () => {
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
+  child.pid = 101;
+  child.exitCode = null;
+  child.signalCode = null;
   child.kill = vi.fn(() => { child.emit('close', null, 'SIGTERM'); return true; });
   return child;
 };
@@ -164,6 +177,8 @@ const sourcePath = () => join(PATHS.videos, SOURCE_FILE);
 // Drive the fake runner: it writes the file the real one would, then exits.
 const finishChild = (code = 0, signal = null) => {
   if (state.writesOutput && code === 0) writeFileSync(renderOutputPath, 'rendered');
+  state.child.exitCode = code;
+  state.child.signalCode = signal;
   state.child.emit('close', code, signal);
 };
 
@@ -175,7 +190,10 @@ const runWith = async (drive, params = {}) => {
   return run;
 };
 
+let admissionFixture = 0;
 beforeEach(() => {
+  state.admission = createMaintenanceAdmission(join(PATHS.data, 'admission-fixtures', String(admissionFixture++)));
+  unlinkGuarded.mockReset().mockImplementation(realFiles.unlinkGuarded);
   mkdirSync(PATHS.videos, { recursive: true });
   writeFileSync(sourcePath(), 'source-bytes');
   state.history = [sourceRow()];
@@ -489,6 +507,53 @@ describe('runVideoUpscale — failure and cancellation leave the source alone', 
     expect(deliverables()).toHaveLength(0);
     expect(failures).toHaveLength(1);
     expect(failures[0].error).toMatch(/exit 3/);
+  });
+
+  it('retains a live errored child and publishes failure only after close and scratch cleanup', async () => {
+    const cleanup = Promise.withResolvers();
+    unlinkGuarded.mockImplementationOnce(async (...args) => { await cleanup.promise; return realFiles.unlinkGuarded(...args); });
+    state.child.kill.mockReturnValue(true);
+    const permit = state.admission.admit('media', JOB_ID);
+    const failed = vi.fn();
+    videoGenEvents.on('failed', failed);
+    const run = permit.run(() => runVideoUpscale(jobParams())).finally(() => permit.finish());
+    try {
+      await vi.waitFor(() => expect(state.child.listenerCount('close')).toBeGreaterThan(0));
+      state.admission.begin({ reason: 'Drain upscale', owner: 'Operator' });
+      state.child.emit('error', new Error('Signal transport failed'));
+      await Promise.resolve();
+      expect(failed).not.toHaveBeenCalled();
+      expect(unlinkGuarded).not.toHaveBeenCalled();
+      expect(cancel(JOB_ID)).toBe(true);
+      finishChild(1);
+      await vi.waitFor(() => expect(unlinkGuarded).toHaveBeenCalledWith(renderOutputPath));
+      expect(failed).not.toHaveBeenCalled();
+      expect(state.admission.status().state).toBe('draining');
+      cleanup.resolve();
+      await run;
+      expect(failed).toHaveBeenCalledTimes(1);
+      expect(state.admission.status().state).toBe('ready');
+      expect(cancel(JOB_ID)).toBe(false);
+    } finally {
+      cleanup.resolve();
+      finishChild(1);
+      await run;
+      videoGenEvents.off('failed', failed);
+    }
+  });
+
+  it('keeps a recovery blocker when owned scratch cleanup fails', async () => {
+    unlinkGuarded.mockRejectedValueOnce(Object.assign(new Error('Cleanup denied'), { code: 'EACCES' }));
+    const permit = state.admission.admit('media', JOB_ID);
+    const run = permit.run(() => runWith(() => {
+      state.admission.begin({ reason: 'Drain upscale', owner: 'Operator' });
+      finishChild(1);
+    }));
+    await run;
+    await permit.finish();
+    expect(state.admission.status()).toMatchObject({
+      state: 'draining', blockers: [expect.objectContaining({ resource: JOB_ID, unsettled: true })],
+    });
   });
 
   it('fails when the runner exits clean but writes nothing', async () => {

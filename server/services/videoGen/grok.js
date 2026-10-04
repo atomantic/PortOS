@@ -38,6 +38,7 @@ import { mutateVideoHistory } from './history.js';
 import { noImageReason, deriveAspectRatio, GROK_ASPECT_RATIOS } from '../imageGen/grok.js';
 import { resolveGrokDuration } from '../../lib/grokVideoClip.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 
 // 30 minutes — an image-first video turn is two sequential tool calls
 // (image_gen then image_to_video render + download), so it runs meaningfully
@@ -209,12 +210,25 @@ async function runGrokVideo(job, jobId, bin, args, {
   // scratch-dir spawn telling the child one consistent story about where it is.
   const proc = spawn(spawnBin, spawnArgs, { cwd: scratchDir, env: withSpawnCwdEnv(process.env, scratchDir), shell: false, stdio: [useStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
   activeProcs.set(jobId, proc);
-  const removeScratch = () => rmGuarded(scratchDir, { recursive: true, force: true }).catch(() => {});
+  const retainOwnership = (error) => {
+    maintenance.markCurrentUnsettled();
+    maintenance.markResourceUnsettled('media', jobId);
+    console.error(`❌ Grok video settlement failed [${jobId.slice(0, 8)}]: ${error?.message || error}`);
+  };
   // The route stages a multipart source image into data/uploads and hands us
   // its path — the provider owns unlinking it on every terminal path (same
   // contract as videoGen/local.js; the queue only cleans up when the
   // provider throws before spawning, or on boot-restore of a dead job).
-  const removeUpload = () => { if (uploadedTempPath) unlinkGuarded(uploadedTempPath).catch(() => {}); };
+  let cleanupPromise;
+  const cleanup = () => cleanupPromise ||= Promise.allSettled([
+    Promise.resolve().then(() => cleanupPromptFile({ throwOnError: true })),
+    Promise.resolve().then(() => rmGuarded(scratchDir, { recursive: true, force: true })),
+    Promise.resolve().then(() => uploadedTempPath && unlinkGuarded(uploadedTempPath)),
+  ]).then(results => {
+    for (const result of results) {
+      if (result.status === 'rejected' && result.reason?.code !== 'ENOENT') retainOwnership(result.reason);
+    }
+  });
 
   if (useStdin) {
     proc.stdin.on('error', () => {});
@@ -233,12 +247,19 @@ async function runGrokVideo(job, jobId, bin, args, {
     }
   }, GROK_VIDEO_TIMEOUT_MS);
 
+  let terminalStarted = false;
+  let processError;
   proc.on('error', (err) => {
+    if (terminalStarted) return;
+    processError = err;
+    // A failed kill/send can report error while the child is still alive.
+    // Keep its cancel handle (including SIGKILL escalation) until close.
+    if (proc.pid) return;
+    terminalStarted = true;
     clearTimeout(timeoutTimer);
-    cleanupPromptFile();
-    removeScratch();
-    removeUpload();
-    finalizeJobFailure(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
+    cleanup().then(() => {
+      finalizeJobFailure(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
+    }).catch(retainOwnership);
   });
 
   proc.stdout.on('data', (chunk) => {
@@ -259,27 +280,25 @@ async function runGrokVideo(job, jobId, bin, args, {
   });
 
   proc.on('close', async (code, signal) => {
+    if (terminalStarted) return;
+    terminalStarted = true;
     clearTimeout(timeoutTimer);
-    cleanupPromptFile();
     try {
-      if (code !== 0) {
-        const reason = signal ? `Killed by signal ${signal}` : `Exit code ${code}`;
+      if (code !== 0 || processError) {
+        const reason = processError?.message || (signal ? `Killed by signal ${signal}` : `Exit code ${code}`);
         const tail = stderrTail.trim().split('\n').slice(-6).join('\n');
-        removeScratch();
-        removeUpload();
+        await cleanup();
         return finalizeJobFailure(job, jobId, proc, `Grok video generation failed: ${reason}\n${tail}`);
       }
       const harvested = await harvestStagedVideo(stagingPath, harvestTimeoutMs);
       if (!harvested.found) {
-        removeScratch();
-        removeUpload();
+        await cleanup();
         const prefix = harvested.invalid ? 'Grok wrote a non-MP4 file at the directed path. ' : '';
         return finalizeJobFailure(job, jobId, proc, `${prefix}${noVideoReason(stdoutTail)}`);
       }
       await copyFileGuarded(stagingPath, outputPath);
-      await unlinkGuarded(stagingPath).catch(() => {});
-      removeScratch();
-      removeUpload();
+      // Removing the scratch directory also removes the harvested staging file.
+      await cleanup();
       if (activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
       activeJobs.delete(jobId);
       // Shared finalizer: faststart optimization, thumbnail, history entry,
@@ -289,8 +308,8 @@ async function runGrokVideo(job, jobId, bin, args, {
       await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed: null, mutateHistory: mutateVideoHistory });
       closeJobAfterDelay(jobs, jobId);
     } catch (err) {
-      removeScratch();
-      removeUpload();
+      await cleanup();
+      retainOwnership(err);
       // finalizeGeneratedVideo marks job.status='complete' BEFORE its async
       // post-processing (faststart/thumbnail/history) — a throw there must
       // still surface as a terminal failure or the queue's job stays

@@ -24,6 +24,7 @@ const looseRecord = z.record(z.string(), z.unknown()).nullish();
 
 export const spawnTuiBodySchema = z.object({
   agentId: optionalString,
+  maintenanceParentId: z.string().uuid().nullish(),
   taskId: optionalString,
   sessionId: optionalString,
   command: optionalString,
@@ -38,6 +39,7 @@ export const spawnTuiBodySchema = z.object({
 
 export const spawnBodySchema = z.object({
   agentId: optionalString,
+  maintenanceParentId: z.string().uuid().nullish(),
   taskId: optionalString,
   prompt: optionalString,
   workspacePath: optionalString,

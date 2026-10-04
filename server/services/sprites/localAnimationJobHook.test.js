@@ -387,6 +387,21 @@ describe('backup admission', () => {
 });
 
 describe('reconcileSettledSpriteJobs (boot pass)', () => {
+  it('counts recovered publication before its first await under a persisted hold', async () => {
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const status = maintenance.begin({ reason: 'sprite recovery test', owner: 'test' });
+    let finishAttach;
+    attachTuiWalkResult.mockImplementationOnce(() => new Promise(resolve => { finishAttach = resolve; }));
+    queuedJobs = [walkJob()];
+    const reconciliation = reconcileSettledSpriteJobs();
+    expect(maintenance.status().state).toBe('draining');
+    await vi.waitFor(() => expect(finishAttach).toBeTypeOf('function'));
+    finishAttach();
+    await reconciliation;
+    expect(maintenance.status().state).toBe('ready');
+    maintenance.resume({ id: status.hold.id, revision: status.hold.revision });
+  });
+
   it('files jobs that reached a terminal state while the process was DOWN', async () => {
     // These emit nothing — they are simply sitting in the restored archive. The
     // live subscription can never see them, so without this pass the run is only

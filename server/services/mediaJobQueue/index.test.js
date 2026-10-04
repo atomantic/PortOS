@@ -216,6 +216,12 @@ const remoteVideoMediaParams = () => ({
 
 beforeEach(async () => {
   tempDataDir = mkdtempSync(join(tmpdir(), 'mediaJobQueue-test-'));
+  // Queue fixtures deliberately abandon active work when simulating a crash.
+  // Give each test its own real journal, retaining it across importFresh()
+  // within that test so restart recovery still exercises durable ownership.
+  const admissionModule = await vi.importActual('../../lib/maintenanceAdmission.js');
+  const admission = admissionModule.createMaintenanceAdmission(tempDataDir);
+  vi.doMock('../../lib/maintenanceAdmission.js', () => ({ ...admissionModule, maintenance: admission }));
   Object.values(stubs).forEach((fn) => fn.mockReset());
   const { getDefaultVideoModelId } = await import('../../lib/mediaModels.js');
   getDefaultVideoModelId.mockImplementation(() => 'example-mlx');
@@ -284,6 +290,72 @@ describe('mediaJobQueue', () => {
     await flush();
     expect(changed).toHaveBeenCalledWith({});
     mediaJobQueue.mediaJobEvents.off('changed', changed);
+  });
+
+  it('maintenance preserves queued work and refuses Run now while active work finishes', async () => {
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const first = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'first' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    const { hold } = maintenance.begin({ reason: 'Work', owner: 'Operator' });
+    try {
+      const second = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'next' } });
+      expect(mediaJobQueue.runJobNow(second.jobId)).toMatchObject({ ok: false, code: 'MAINTENANCE_HELD' });
+      expect(mediaJobQueue.getJob(second.jobId).status).toBe('queued');
+      expect(maintenance.status().state).toBe('draining');
+      videoGenEvents.emit('completed', { generationId: first.jobId, filename: 'example.mp4' });
+      await waitFor(() => maintenance.status().state === 'ready');
+      expect(stubs.generateImageCodex).not.toHaveBeenCalled();
+      expect(mediaJobQueue.getJob(second.jobId).status).toBe('queued');
+    } finally { maintenance.resume({ id: hold.id, revision: hold.revision }); }
+  });
+
+  it.each(['local', 'remote'])('keeps maintenance draining through terminal and archive writes for a %s render', async (route) => {
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const generate = route === 'remote' ? stubs.generateVideoRemote : stubs.generateVideo;
+    generate.mockResolvedValueOnce({});
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: {
+      prompt: 'Synthetic settlement', ...(route === 'remote' ? { remoteMedia: remoteVideoMediaParams() } : {}),
+    } });
+    await waitFor(() => generate.mock.calls.length === 1);
+    await flush();
+    const { hold } = maintenance.begin({ reason: 'Verify durable settlement', owner: 'Operator' });
+    const realWrite = atomicWriteSpy.getMockImplementation();
+    let releaseTerminal;
+    let releaseArchive;
+    const terminalWrite = new Promise(resolve => { releaseTerminal = resolve; });
+    const archiveWrite = new Promise(resolve => { releaseArchive = resolve; });
+    let completedWrites = 0;
+    atomicWriteSpy.mockImplementation(async (path, data) => {
+      if (data?.jobs?.some(job => job.id === jobId && job.status === 'completed')) {
+        completedWrites += 1;
+        if (completedWrites === 1) await terminalWrite;
+        if (completedWrites === 2) await archiveWrite;
+      }
+      return realWrite(path, data);
+    });
+    try {
+      videoGenEvents.emit('completed', { generationId: jobId, filename: 'example.mp4' });
+      await waitFor(() => completedWrites === 1);
+      expect(maintenance.status()).toMatchObject({ state: 'draining', blockers: [expect.objectContaining({ kind: 'media', resource: jobId })] });
+      expect(mediaJobQueue.getJob(jobId).status).toBe('running');
+      expect(persistedJobs().find(job => job.id === jobId).status).toBe('running');
+
+      releaseTerminal();
+      await waitFor(() => completedWrites === 2);
+      expect(mediaJobQueue.getJob(jobId).status).toBe('completed');
+      expect(persistedJobs().find(job => job.id === jobId).status).toBe('completed');
+      expect(maintenance.status().state).toBe('draining');
+
+      releaseArchive();
+      await waitFor(() => maintenance.status().state === 'ready');
+      expect(generate).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseTerminal();
+      releaseArchive();
+      atomicWriteSpy.mockImplementation(realWrite);
+      await flush();
+      maintenance.resume({ id: hold.id, revision: hold.revision });
+    }
   });
 
   it('enqueueJob returns jobId + queued status + position', async () => {
@@ -1160,25 +1232,78 @@ describe('mediaJobQueue', () => {
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
   });
 
-  it('watchdog fires and marks the job failed when gen never emits a terminal event', async () => {
-    // Use a very short watchdog for this test by overriding the env var before
-    // the module is loaded. Re-import the module with MEDIA_JOB_WATCHDOG_VIDEO_MS=50.
+  it('keeps maintenance and the lane owned after watchdog cancellation until provider teardown settles', async () => {
+    vi.useFakeTimers();
     process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS = '50';
     await importFresh();
-    // generateVideo hangs forever — never emits completed/failed.
-    stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
-
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    // A real local provider returns its job id after spawn, before child exit.
+    stubs.generateVideo.mockResolvedValue({ jobId: 'provider-started' });
     const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'hang' } });
-    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    let hold;
+    try {
+      await vi.waitFor(() => expect(stubs.generateVideo).toHaveBeenCalledTimes(1), { interval: 1 });
+      ({ hold } = maintenance.begin({ reason: 'Wait for physical teardown', owner: 'Operator' }));
+      await vi.advanceTimersByTimeAsync(100);
+      await flush();
+      await vi.waitFor(() => expect(stubs.cancelVideo).toHaveBeenCalledTimes(1));
+      await flush();
+      expect(mediaJobQueue.getJob(job.jobId)).toMatchObject({ status: 'failed', error: expect.stringMatching(/watchdog timeout/) });
+      expect(maintenance.status()).toMatchObject({ state: 'draining', blockers: [expect.objectContaining({ resource: job.jobId })] });
+      expect(mediaJobQueue.getQueueCapacity().lanes.gpu.running).toBe(1);
 
-    // The watchdog should fire within 50 ms and fail the job.
-    await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'failed', { timeoutMs: 2000 });
+      // A cancel acknowledgment/time passing is no proof of exit or cleanup.
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(maintenance.status().state).toBe('draining');
+      videoGenEvents.emit('failed', { generationId: job.jobId, error: 'Child closed and cleanup finished' });
+      await flush();
+      await vi.waitFor(() => expect(maintenance.status().state).toBe('ready'));
+      expect(mediaJobQueue.getQueueCapacity().lanes.gpu.running).toBe(0);
+      expect(stubs.generateVideo).toHaveBeenCalledTimes(1);
+    } finally {
+      videoGenEvents.emit('failed', { generationId: job.jobId, error: 'Fixture teardown' });
+      await flush();
+      if (hold) maintenance.resume({ id: hold.id, revision: hold.revision });
+      delete process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS;
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
 
-    const failed = mediaJobQueue.getJob(job.jobId);
-    expect(failed.status).toBe('failed');
-    expect(failed.error).toMatch(/watchdog timeout/);
-
-    delete process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS;
+  it('does not start a provider after its watchdog wins during asynchronous dispatch checks', async () => {
+    vi.useFakeTimers();
+    process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS = '50';
+    await importFresh();
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const { assertVideoAttemptDispatch } = await import('../creativeDirector/videoExecution.js');
+    const dispatchCheck = Promise.withResolvers();
+    let checkEntered = false;
+    assertVideoAttemptDispatch.mockImplementationOnce(() => {
+      checkEntered = true;
+      return dispatchCheck.promise;
+    });
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: {
+      prompt: 'delayed dispatch', videoProduction: { projectId: 'example', attemptId: 'example-attempt' },
+    } });
+    let hold;
+    try {
+      await vi.waitFor(() => expect(checkEntered).toBe(true), { interval: 1 });
+      ({ hold } = maintenance.begin({ reason: 'Drain pending preparation', owner: 'Operator' }));
+      await vi.advanceTimersByTimeAsync(100);
+      await vi.waitFor(() => expect(mediaJobQueue.getJob(job.jobId).status).toBe('failed'));
+      expect(maintenance.status().state).toBe('draining');
+      dispatchCheck.resolve();
+      await vi.waitFor(() => expect(maintenance.status().state).toBe('ready'));
+      expect(stubs.generateVideo).not.toHaveBeenCalled();
+      expect(mediaJobQueue.getQueueCapacity().lanes.gpu.running).toBe(0);
+    } finally {
+      dispatchCheck.resolve();
+      await flush();
+      if (hold) maintenance.resume({ id: hold.id, revision: hold.revision });
+      delete process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS;
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 
   it('terminal handlers are idempotent: watchdog then gen emit causes only one mediaJobEvents.failed', async () => {
@@ -1331,6 +1456,25 @@ describe('mediaJobQueue', () => {
 });
 
 describe('Audio kind (#1928)', () => {
+  it('holds new peer dispatch while an admitted remote render settles locally', async () => {
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    let reconcileRemote;
+    stubs.generateAudioRemote.mockImplementationOnce(() => new Promise(resolve => { reconcileRemote = resolve; }));
+    const active = await mediaJobQueue.enqueueJob({ kind: 'audio', params: { remoteMedia: remoteMediaParams() } });
+    await waitFor(() => stubs.generateAudioRemote.mock.calls.length === 1);
+    const { hold } = maintenance.begin({ reason: 'Peer drain', owner: 'Operator' });
+    try {
+      const queued = await mediaJobQueue.enqueueJob({ kind: 'audio', params: { remoteMedia: remoteMediaParams() } });
+      audioGenEvents.emit('completed', { generationId: active.jobId, filename: `${active.jobId}.wav` });
+      await waitFor(() => mediaJobQueue.getJob(active.jobId)?.status === 'completed');
+      expect(maintenance.status().state).toBe('draining');
+      expect(stubs.generateAudioRemote).toHaveBeenCalledTimes(1);
+      reconcileRemote();
+      await waitFor(() => !maintenance.status().blockers.some(blocker => blocker.resource === active.jobId));
+      expect(mediaJobQueue.getJob(queued.jobId).status).toBe('queued');
+    } finally { maintenance.resume({ id: hold.id, revision: hold.revision }); }
+  });
+
   it('dispatches an audio job to audioGen/local.js#generateAudio and completes', async () => {
     const job = await mediaJobQueue.enqueueJob({
       kind: 'audio',
@@ -2932,24 +3076,33 @@ describe('durable execution and terminal settlement', () => {
   });
 
   it('withholds completion and its result until storage recovers without generating again', async () => {
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
     const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-cuda' } });
     await vi.advanceTimersByTimeAsync(200);
     await flush();
     const completed = vi.fn();
     mediaJobQueue.mediaJobEvents.on('completed', completed);
     const realWrite = atomicWriteSpy.getMockImplementation();
-    atomicWriteSpy.mockRejectedValue(new Error('disk full'));
-    videoGenEvents.emit('completed', { generationId: jobId, output: 'example.mp4' });
-    await flush();
-    expect(completed).not.toHaveBeenCalled();
-    expect(mediaJobQueue.getJob(jobId)).toMatchObject({ status: 'running' });
-    expect(mediaJobQueue.getJob(jobId).result).toBeUndefined();
-    expect(persistedJobs().find((j) => j.id === jobId).status).toBe('running');
-    atomicWriteSpy.mockImplementation(realWrite);
-    await expect(mediaJobQueue.flushMediaJobQueue()).resolves.toEqual({ ok: true });
-    expect(completed).toHaveBeenCalledTimes(1);
-    expect(stubs.generateVideo).toHaveBeenCalledTimes(1);
-    expect(mediaJobQueue.getJob(jobId)).toMatchObject({ status: 'completed', result: { output: 'example.mp4' } });
+    const { hold } = maintenance.begin({ reason: 'Storage recovery', owner: 'Operator' });
+    try {
+      atomicWriteSpy.mockRejectedValue(new Error('disk full'));
+      videoGenEvents.emit('completed', { generationId: jobId, output: 'example.mp4' });
+      await flush();
+      expect(completed).not.toHaveBeenCalled();
+      expect(mediaJobQueue.getJob(jobId)).toMatchObject({ status: 'running' });
+      expect(mediaJobQueue.getJob(jobId).result).toBeUndefined();
+      expect(persistedJobs().find((j) => j.id === jobId).status).toBe('running');
+      expect(maintenance.status()).toMatchObject({ state: 'draining', blockers: [expect.objectContaining({ resource: jobId })] });
+      atomicWriteSpy.mockImplementation(realWrite);
+      await expect(mediaJobQueue.flushMediaJobQueue()).resolves.toEqual({ ok: true });
+      expect(completed).toHaveBeenCalledTimes(1);
+      expect(stubs.generateVideo).toHaveBeenCalledTimes(1);
+      expect(mediaJobQueue.getJob(jobId)).toMatchObject({ status: 'completed', result: { output: 'example.mp4' } });
+      await vi.waitFor(() => expect(maintenance.status().state).toBe('ready'));
+    } finally {
+      atomicWriteSpy.mockImplementation(realWrite);
+      maintenance.resume({ id: hold.id, revision: hold.revision });
+    }
     vi.clearAllTimers();
     mediaJobQueue.__resetForTests();
     await importFresh();

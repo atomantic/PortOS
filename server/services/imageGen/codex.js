@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Image Gen — Codex CLI provider.
  *
@@ -367,7 +368,11 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cle
     if (bannerBuf.length > BANNER_BUF_MAX) bannerBuf = bannerBuf.slice(-BANNER_BUF_MAX);
   };
 
+  let processError;
   proc.on('error', (err) => {
+    processError = err;
+    // A failed kill/send on a live child is not physical exit.
+    if (proc.pid) return;
     clearTimeout(timeoutTimer);
     finalizeJobFailure(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
   });
@@ -404,8 +409,8 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cle
     // unhandled rejection (process-killing on Node ≥15) and the job would
     // be stuck in 'running' forever with no SSE error to the client.
     try {
-      if (code !== 0) {
-        const reason = signal ? `Killed by signal ${signal}` : `Exit code ${code}`;
+      if (code !== 0 || processError) {
+        const reason = processError?.message || (signal ? `Killed by signal ${signal}` : `Exit code ${code}`);
         const tail = stderrTail.trim().split('\n').slice(-6).join('\n');
         return finalizeJobFailure(job, jobId, proc, `Codex generation failed: ${reason}\n${tail}`);
       }
@@ -438,7 +443,7 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cle
       // `job.renderStartedAtMs` is the queue-ingestion instant generateImage
       // captured, so the spread measures the render itself — not the time the
       // job spent queued behind other renders.
-      await atomicWrite(sidecar, { ...meta, codexSessionId: sessionId, ...renderTimingFields(job.renderStartedAtMs) }).catch(() => {});
+      await atomicWrite(sidecar, { ...meta, codexSessionId: sessionId, ...renderTimingFields(job.renderStartedAtMs) }).catch(() => maintenance.markCurrentUnsettled());
       // Cleaners run BEFORE the SSE complete + completed events so subscribers
       // see the cleaned bytes. codex output is the highest-value target for
       // C2PA stripping because gpt-image is the one provider that embeds

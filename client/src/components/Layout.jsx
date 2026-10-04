@@ -1,3 +1,4 @@
+import MaintenanceBanner from './MaintenanceBanner.jsx';
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
 import useFocusTrap from '../hooks/useFocusTrap.js';
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router';
@@ -1088,6 +1089,7 @@ export default function Layout() {
         <UpdateBanners />
         <SetupBanner />
         <PasswordRiskWarning />
+        <MaintenanceBanner />
 
         {/* Main content */}
         {(() => {

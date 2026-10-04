@@ -1645,7 +1645,7 @@ describe('close-handler skip-finalization — source contract', () => {
   // which moved into `completeUntrackedAgentFromCosState` in #3872 and would
   // silently make this test vacuous (indexOf → -1) if it were still named here.
   it('runner handleAgentCompletion guards with pausedAgents.has and returns before either completion path', () => {
-    const fnBody = extractFunctionBody(AGENT_LIFECYCLE_SRC, 'export async function handleAgentCompletion');
+    const fnBody = extractFunctionBody(AGENT_LIFECYCLE_SRC, 'async function handleAdmittedAgentCompletion');
     expect(fnBody, 'handleAgentCompletion must exist and be extractable').toBeTruthy();
 
     // Guard present
@@ -1666,7 +1666,7 @@ describe('close-handler skip-finalization — source contract', () => {
 
   it('runner pause guard also cleans up runnerAgents entry before returning', () => {
     // After returning early, the runner agent map entry must not be leaked.
-    const fnBody = extractFunctionBody(AGENT_LIFECYCLE_SRC, 'export async function handleAgentCompletion');
+    const fnBody = extractFunctionBody(AGENT_LIFECYCLE_SRC, 'async function handleAdmittedAgentCompletion');
 
     const guardPos = fnBody.indexOf('pausedAgents.has(agentId)');
     const returnAfterGuard = fnBody.indexOf('return', guardPos);

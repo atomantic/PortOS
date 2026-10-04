@@ -19,6 +19,7 @@ import { join, basename, dirname } from 'path';
 import { platform } from 'os';
 import { PATHS, ensureDir, atomicWrite, shortId, copyFileGuarded, writeFileGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { v4 as uuidv4 } from '../../lib/uuid.js';
 import { hfChildEnv } from '../hfToken.js';
 import { spawnDetached, reapDetached, reattachDetached, isReattachable } from '../../lib/detachedSpawn.js';
@@ -404,7 +405,7 @@ const flipDatasetAfterRun = (run, { trained, loraFilename = null }) => {
         ...(trained ? { loraFilename, completedAt: new Date().toISOString() } : {}),
       },
     };
-  }).catch((err) => console.error(`❌ dataset post-run stamp failed: ${err?.message}`));
+  });
 };
 
 // When a trained LoRA artifact is deleted (DELETE /runs/:id?deleteLora=true),
@@ -451,6 +452,15 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
   const settings = await getSettings();
   const dir = runDir(runId);
   let heavyClaim = null;
+  const retainOwnership = () => {
+    maintenance.markCurrentUnsettled();
+    maintenance.markResourceUnsettled('media', jobId);
+  };
+  let claimRelease;
+  const releaseClaim = () => claimRelease ||= Promise.resolve().then(() => heavyClaim?.release()).catch(err => {
+    retainOwnership();
+    console.error(`❌ training [${shortId(jobId)}] claim release failed: ${err.message}`);
+  });
 
   // Terminal failure BEFORE the child spawns: flip the run record to failed
   // AND release the dataset's `training` status, then emit the failed event.
@@ -458,11 +468,11 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
   // stuck `running` (lingering until the next boot reconcile) or the dataset
   // stuck on its `training` chip.
   const failBeforeSpawn = async (message) => {
-    await heavyClaim?.release().catch((err) => console.error(`❌ training [${shortId(jobId)}] claim release failed: ${err.message}`));
+    await releaseClaim();
     await runsDb.updateRun(runId, {
       status: 'failed', error: message, completedAt: new Date().toISOString(),
-    }).catch(() => {});
-    await flipDatasetAfterRun(run, { trained: false });
+    }).catch(retainOwnership);
+    await flipDatasetAfterRun(run, { trained: false }).catch(retainOwnership);
     return fail(message);
   };
 
@@ -853,13 +863,18 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
     stallTimer.unref?.();
   }
 
+  let terminalStarted = false;
+  let processError;
   proc.on('error', (err) => {
+    if (terminalStarted) return;
+    processError = err;
+    // Detached handles can report failed signals while their trainer is live.
+    // Preserve its cancel handle and claim until physical close.
+    if (proc.pid) return;
+    terminalStarted = true;
     stopStallWatchdog();
     if (activeProcess === proc) { activeProcess = null; activeJobId = null; }
-    // Terminal too (no 'close' follows an 'error'), so wake the display here as
-    // well — no-op unless we actually slept it (proc.pid was set). Without this,
-    // a pid-bearing process that errors instead of closing would leave the
-    // display asleep.
+    // A no-PID launch failure owns no running trainer.
     wakeDisplay(settings);
     // A launch failure after the run was marked `running` — a genuine spawn
     // error, or (with spawnDetached) the control dir failing to create/clear.
@@ -868,10 +883,15 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
     // released; `fail()` alone only logs + emits. Async + guarded since this
     // runs outside the request lifecycle.
     Promise.resolve(failBeforeSpawn(`trainer spawn failed: ${err.message}`))
-      .catch((e) => console.error(`❌ training [${shortId(jobId)}] failure cleanup failed: ${e?.message}`));
+      .catch((e) => {
+        retainOwnership();
+        console.error(`❌ training [${shortId(jobId)}] failure cleanup failed: ${e?.message}`);
+      });
   });
 
   proc.on('close', (code, signal) => {
+    if (terminalStarted) return;
+    terminalStarted = true;
     stopStallWatchdog();
     if (activeProcess === proc) { activeProcess = null; activeJobId = null; }
     // Flush the debounced progress (final checkpoint + last sample) BEFORE
@@ -880,10 +900,11 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
     // escape the event handler (unhandled rejection kills the process on Node ≥15).
     // The trainer has exited, so release before finalization can enqueue an
     // automatic checkpoint resume; that successor must acquire a fresh claim.
-    Promise.resolve(heavyClaim?.release())
-      .catch((err) => console.error(`❌ training [${shortId(jobId)}] claim release failed: ${err.message}`))
+    releaseClaim()
       .then(() => flushProgress())
-      .then(() => finalizeTraining({ jobId, runId, code, signal, state: getState(), stallKilled }))
+      .then(() => processError
+        ? failBeforeSpawn(`trainer process failed: ${processError.message}`)
+        : finalizeTraining({ jobId, runId, code, signal, state: getState(), stallKilled }))
       .then((resumed) => {
         // Wake the display now the run is over so the user sees the result —
         // but NOT when finalize actually enqueued a stall-watchdog auto-resume
@@ -894,6 +915,7 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
         if (!resumed) wakeDisplay(settings);
       })
       .catch((err) => {
+        retainOwnership();
         // A finalize/flush rejection is still a terminal end with no auto-resume
         // enqueued, so wake the display here too — otherwise this error path
         // would leave it asleep (no .then ran). No-op unless we slept it.
@@ -992,8 +1014,7 @@ async function finalizeTraining({ jobId, runId, code, signal, state, stallKilled
   if (canceled) {
     // Queue's cancelRequested flips the failed event into a clean cancel;
     // record keeps the checkpoint lineage for a future resume.
-    await runsDb.updateRun(runId, { status: 'canceled', completedAt: new Date().toISOString(), error: 'Canceled' })
-      .catch(() => {});
+    await runsDb.updateRun(runId, { status: 'canceled', completedAt: new Date().toISOString(), error: 'Canceled' });
     await flipDatasetAfterRun(run, { trained: false });
     trainingEvents.emit('failed', { generationId: jobId, error: 'Canceled' });
     return;
@@ -1009,7 +1030,7 @@ async function finalizeTraining({ jobId, runId, code, signal, state, stallKilled
     await runsDb.updateRun(runId, {
       status: 'failed', completedAt: new Date().toISOString(),
       error: message, errorCode: state.userError?.kind || 'NO_RESULT',
-    }).catch(() => {});
+    });
     await flipDatasetAfterRun(run, { trained: false });
     console.error(`❌ training [${shortId(jobId)}] no-result: ${message}`);
     trainingEvents.emit('failed', { generationId: jobId, error: message });
@@ -1023,7 +1044,7 @@ async function finalizeTraining({ jobId, runId, code, signal, state, stallKilled
     status: 'failed', completedAt: new Date().toISOString(), error: message, errorCode: failCode,
     // Gated-repo deep-link target for the UI banner (HF_AUTH only); null otherwise.
     errorRepo: failRepo,
-  }).catch(() => {});
+  });
   await flipDatasetAfterRun(run, { trained: false });
   console.error(`❌ training [${shortId(jobId)}] ${failCode}: ${message}`);
   trainingEvents.emit('failed', { generationId: jobId, error: message, code: failCode, repo: failRepo });

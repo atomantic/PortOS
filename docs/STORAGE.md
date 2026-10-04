@@ -6,6 +6,34 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 
 > For the full domain-by-domain inventory (every current table and `data/` store, with Postgres-fit notes), see the plan doc: [`docs/plans/2026-06-06-create-postgres-storage-inventory.md`](./plans/2026-06-06-create-postgres-storage-inventory.md). This page covers the **contract and decision rules**, not the exhaustive list.
 
+Graceful maintenance uses `data/workflow-maintenance/state.json` as a **file-primary,
+machine-local runtime journal**. It must fence both the API and standalone CoS runner
+before either can use PostgreSQL or start work. Its bounded live-operation set and
+operator hold are not app records, never federate, and are included in the data backup.
+The schema is versioned; an absent file starts Normal, while corrupt/future state or
+an interrupted transaction fails closed. Replacement uses exclusive directory locking,
+file/directory fsync and atomic rename. No seed or DB migration is required.
+
+Ready means every admitted agent, persistent-mind turn, provider run, media render
+(including its browser/export preparation), and scheduled shell/script has released
+ownership after its final saving and cleanup. This includes federated jobs dispatched
+by this instance, through remote completion and verified local publication; a peer
+being unreachable is not completion. New peer dispatch stays held. A held restart
+retains unresolved remote ownership without replaying an unknown submission.
+Idle daemons, queued work, independently
+operated browser sessions and unrelated host apps do not count. Maintenance never
+cancels work, replays a paid submission, or enables a previously disabled policy.
+Resume removes the identified hold only; a stale request cannot remove a later hold.
+
+Operation age or a dead PID is not proof of saved output. On restart, the journal keeps
+unresolved ownership; runner survivors reconnect to their existing operation. A lost
+worker, failed save, or interrupted journal transaction needs recovery through its owning
+service and inspection of durable output before readiness can be certified. There is no
+force-Ready/expiry button. Resuming an unresolved hold permits new work but does not
+certify the old work finished. Do not delete this journal to claim readiness; preserve it
+with the related run/job records for recovery. A backup restored on another installation
+therefore starts conservatively if it contains a hold or outstanding operations.
+
 ## The Four Storage Classes
 
 | Class | Bytes live | Searchable metadata | Use when | PortOS examples |

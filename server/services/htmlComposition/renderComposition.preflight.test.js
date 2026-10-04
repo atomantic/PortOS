@@ -13,6 +13,7 @@ vi.mock('../../lib/fileUtils.js', async importOriginal => makePathsProxy(await i
   dataRoot: () => lazyTempDataRoot('portos-html-composition-preflight-'),
 }));
 
+const closeComposition = vi.fn(async () => {});
 const CONTRACT = { durationSec: 15, fps: 12, width: 1280, height: 720, motionBlur: 1, layout: false };
 
 vi.mock('./browser.js', () => ({
@@ -23,7 +24,7 @@ vi.mock('./browser.js', () => ({
       ['/caption.txt', Buffer.from('Make a clear plan.')],
       ['/storyboard.json', Buffer.from(JSON.stringify({ posterSec: 11, scenes: [{ durationSec: 15, lines: [] }] }))],
     ]));
-    return { evaluate: async () => CONTRACT, check: () => {}, close: async () => {} };
+    return { evaluate: async () => CONTRACT, check: () => {}, close: closeComposition };
   },
 }));
 
@@ -36,6 +37,30 @@ const { PATHS } = await import('../../lib/fileUtils.js');
 const { renderComposition } = await import('./index.js');
 
 describe('renderComposition delivery preflight', () => {
+  it('releases ownership after an ordinary render failure finishes cleanup', async () => {
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const jobId = randomUUID();
+    const directory = `compositions/${jobId}`;
+    await mkdir(join(PATHS.data, directory), { recursive: true });
+    await writeFile(join(PATHS.data, directory, 'index.html'), '<html></html>');
+    await expect(renderComposition({ directory, jobId })).rejects.toThrow('encodeComposition must not run');
+    expect(closeComposition).toHaveBeenLastCalledWith();
+    expect(maintenance.status().blockers).not.toContainEqual(expect.objectContaining({ resource: jobId }));
+    encodeComposition.mockClear();
+  });
+
+  it('retains ownership when a failed render cannot finish browser cleanup', async () => {
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const jobId = randomUUID();
+    const directory = `compositions/${jobId}`;
+    await mkdir(join(PATHS.data, directory), { recursive: true });
+    await writeFile(join(PATHS.data, directory, 'index.html'), '<html></html>');
+    closeComposition.mockRejectedValueOnce(new Error('Context cleanup failed'));
+    await expect(renderComposition({ directory, jobId })).rejects.toThrow();
+    expect(maintenance.status().blockers).toContainEqual(expect.objectContaining({ kind: 'composition', resource: jobId, unsettled: true }));
+    encodeComposition.mockClear();
+  });
+
   it('refuses with EEXIST before encoding when a delivery file already exists', async () => {
     const runId = randomUUID();
     const directory = `launch-videos/example/${runId}/composition`;

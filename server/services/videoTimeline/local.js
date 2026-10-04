@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Video Timeline — non-linear editor backend.
  *
@@ -593,7 +594,13 @@ export function cancelRender(jobId) {
   return true;
 }
 
-export async function renderProject(projectId, { posterSec } = {}) {
+export async function renderProject(projectId, options = {}) {
+  const permit = maintenance.admit('timeline', projectId, { continuation: true, parentKinds: ['media'] });
+  try { return await permit.run(() => renderAdmittedProject(projectId, options, permit)); }
+  catch (err) { permit.finish(); throw err; }
+}
+
+async function renderAdmittedProject(projectId, { posterSec } = {}, permit) {
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
 
@@ -688,6 +695,7 @@ export async function renderProject(projectId, { posterSec } = {}) {
       broadcastSse(job, { type: 'error', error: reason });
       projectRenders.delete(projectId);
       closeJobAfterDelay(jobs, jobId);
+      permit.finish();
     },
     onClose: async (code, signal) => {
       // Runs outside the request lifecycle — an uncaught throw from
@@ -707,10 +715,11 @@ export async function renderProject(projectId, { posterSec } = {}) {
           // A cancel is a user action (stdout); a non-zero exit is a failure (#7945).
           const logClose = canceled ? console.log : console.error;
           logClose(`${canceled ? '🛑' : '❌'} Timeline render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
-          await unlink(outputPath).catch(() => {});
+          await unlink(outputPath).catch((err) => { if (err.code !== 'ENOENT') maintenance.markCurrentUnsettled(); });
           broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
           projectRenders.delete(projectId);
           closeJobAfterDelay(jobs, jobId);
+          permit.finish();
           return;
         }
         job.status = 'complete';
@@ -742,7 +751,9 @@ export async function renderProject(projectId, { posterSec } = {}) {
         broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });
         projectRenders.delete(projectId);
         closeJobAfterDelay(jobs, jobId);
+        permit.finish();
       } catch (err) {
+        permit.markUnsettled();
         const reason = `Post-render failed: ${err.message}`;
         job.status = 'error';
         job.lastError = reason;
@@ -750,6 +761,7 @@ export async function renderProject(projectId, { posterSec } = {}) {
         broadcastSse(job, { type: 'error', error: reason });
         projectRenders.delete(projectId);
         closeJobAfterDelay(jobs, jobId);
+        permit.finish();
       }
     },
   });

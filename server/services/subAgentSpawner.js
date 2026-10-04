@@ -1,3 +1,4 @@
+import { maintenance, isMaintenanceHold } from '../lib/maintenanceAdmission.js';
 /**
  * Sub-Agent Spawner Service — the agent cluster's EVENT WIRING.
  *
@@ -168,6 +169,7 @@ async function handleTaskReady(task) {
   //    by the restart (its PTY/child process is a child of this server). The
   //    flag reads synchronously, so nothing can slip between the check and the
   //    spawn; the task runs on the other side of the restart.
+  if (maintenance.held()) return holdTask(task, 'maintenance is holding new work');
   if (isUpdateInProgress()) {
     return holdTask(task, 'a PortOS self-update is in progress');
   }
@@ -215,6 +217,7 @@ async function handleTaskReady(task) {
     try {
       await spawnAgentForTask(task);
     } catch (err) {
+      if (isMaintenanceHold(err)) return holdTask(task, 'maintenance is holding new work');
       emitLog('error', `Failed to spawn agent for task ${task.id}: ${err?.message || err}`, { taskId: task.id });
       const jobId = task.metadata?.jobId;
       if (jobId) {

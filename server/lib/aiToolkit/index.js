@@ -51,6 +51,7 @@ export function createAIToolkit(config = {}) {
     // thrown errors still produce the canonical envelope (not Express 5's HTML
     // error page). PortOS injects its own asyncHandler (→ errorMiddleware).
     asyncHandler = defaultAsyncHandler,
+    withRunAdmission = handler => handler,
     // Host-injected HTTP error class (PortOS passes its `ServerError` so route
     // errors normalize into `{ error, code, timestamp, context? }`). Threaded
     // to every router; routes default to the toolkit's own ToolkitHttpError
@@ -129,7 +130,7 @@ export function createAIToolkit(config = {}) {
   // `ServerError: undefined` lets the router's own default (ToolkitHttpError)
   // apply — destructuring defaults fire for undefined values.
   const providersRouter = createProvidersRoutes(providerService, { asyncHandler, ServerError });
-  const runsRouter = createRunsRoutes(runnerService, { asyncHandler, io, ServerError });
+  const runsRouter = createRunsRoutes(runnerService, { asyncHandler, io, ServerError, withRunAdmission });
   const promptsRouter = createPromptsRoutes(promptsService, { asyncHandler, ServerError });
 
   let providerStatusRouter = null;

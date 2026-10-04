@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Image Gen — xAI Grok Build CLI provider.
  *
@@ -320,7 +321,12 @@ async function runGrok(job, jobId, bin, args, {
   // scratch-dir spawn telling the child one consistent story about where it is.
   const proc = spawn(spawnBin, spawnArgs, { cwd: scratchDir, env: withSpawnCwdEnv(process.env, scratchDir), shell: false, stdio: [useStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
   activeProcs.set(jobId, proc);
-  const removeScratch = () => rmGuarded(scratchDir, { recursive: true, force: true }).catch(() => {});
+  const removeScratch = () => maintenance.continueSettlement(
+    () => rmGuarded(scratchDir, { recursive: true, force: true }),
+  ).catch((err) => {
+    maintenance.markCurrentUnsettled();
+    console.error(`❌ grok scratch cleanup failed: ${err.message}`);
+  });
 
   if (useStdin) {
     // POSIX: grok reads the prompt via --prompt-file /dev/stdin. EPIPE fires
@@ -342,7 +348,11 @@ async function runGrok(job, jobId, bin, args, {
     }
   }, GROK_TIMEOUT_MS);
 
+  let processError;
   proc.on('error', (err) => {
+    processError = err;
+    // A failed kill/send on a live child is not physical exit.
+    if (proc.pid) return;
     clearTimeout(timeoutTimer);
     cleanupPromptFile();
     removeScratch();
@@ -367,8 +377,8 @@ async function runGrok(job, jobId, bin, args, {
     // a throw from the harvest/copy would surface as an unhandled rejection
     // and the job would be stuck in 'running' forever with no SSE error.
     try {
-      if (code !== 0) {
-        const reason = signal ? `Killed by signal ${signal}` : `Exit code ${code}`;
+      if (code !== 0 || processError) {
+        const reason = processError?.message || (signal ? `Killed by signal ${signal}` : `Exit code ${code}`);
         const tail = stderrTail.trim().split('\n').slice(-6).join('\n');
         removeScratch();
         return finalizeJobFailure(job, jobId, proc, `Grok generation failed: ${reason}\n${tail}`);
@@ -414,7 +424,7 @@ async function runGrok(job, jobId, bin, args, {
       // `job.renderStartedAtMs` is the queue-ingestion instant generateImage
       // captured, so the spread measures the render itself — not the time the
       // job spent queued behind other renders.
-      await atomicWrite(sidecar, { ...meta, ...renderTimingFields(job.renderStartedAtMs) }).catch(() => {});
+      await atomicWrite(sidecar, { ...meta, ...renderTimingFields(job.renderStartedAtMs) }).catch(() => maintenance.markCurrentUnsettled());
       // Cleaners run BEFORE the SSE complete + completed events so
       // subscribers see the cleaned bytes.
       await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: IMAGE_GEN_MODE.GROK });

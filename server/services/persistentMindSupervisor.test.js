@@ -117,6 +117,7 @@ vi.mock('./persistentMindMaintainerInference.js', async (importOriginal) => {
   };
 });
 
+const { maintenance } = await import('../lib/maintenanceAdmission.js');
 const supervisor = await import('./persistentMindSupervisor.js');
 
 const makeRoot = () => ({
@@ -177,6 +178,23 @@ describe('persistent mind supervisor', () => {
     mock.prepareContext.mockClear();
     __resetCosAdmissionReservations();
     supervisor.__resetPersistentMindSupervisorForTests();
+  });
+
+  it('maintenance rejects manual wakes without changing the saved paused policy', async () => {
+    const prepare = vi.fn(); const run = vi.fn();
+    await supervisor.registerPersistentMindTurnAdapter({ prepare, run });
+    await supervisor.startPersistentMind();
+    await supervisor.pausePersistentMind();
+    const saved = structuredClone(mock.root.persistentMind);
+    const { hold } = maintenance.begin({ reason: 'Work', owner: 'Operator' });
+    try {
+      await expect(supervisor.wakePersistentMind()).rejects.toMatchObject({ code: 'MAINTENANCE_HELD' });
+      await expect(supervisor.resumePersistentMind()).rejects.toMatchObject({ code: 'MAINTENANCE_HELD' });
+      expect(mock.root.persistentMind).toEqual(saved);
+      expect(run).not.toHaveBeenCalled();
+    } finally { maintenance.resume({ id: hold.id, revision: hold.revision }); }
+    await supervisor.recheckPersistentMindSchedule();
+    expect(mock.root.persistentMind).toEqual(saved);
   });
 
   it('is silent on boot and enables the runtime only when explicitly started', async () => {

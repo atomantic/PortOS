@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Creative Director — server-side scene render orchestrator.
  *
@@ -296,14 +297,14 @@ export async function runSceneRender(project, scene) {
     if (settled || job.id !== jobId) return;
     settled = true;
     cleanup();
-    settleReceipt('completed').then(() => handleRenderCompleted(project.id, scene.sceneId, jobId, { continuationFellBack, workRevision: project.workspace === 'video' ? scene.workRevision || 0 : undefined }))
+    maintenance.continueSettlement(() => settleReceipt('completed').then(() => handleRenderCompleted(project.id, scene.sceneId, jobId, { continuationFellBack, workRevision: project.workspace === 'video' ? scene.workRevision || 0 : undefined })))
       .catch(error => console.error(`❌ CD render completion failed: ${error.message}`));
   };
   const onFailed = (job) => {
     if (settled || job.id !== jobId) return;
     settled = true;
     cleanup();
-    settleReceipt(/timeout|timed out|interrupted/i.test(job.error || '') ? 'uncertain' : 'failed').then(() => handleRenderFailed(project.id, scene.sceneId, job.error || 'render failed', { workRevision: project.workspace === 'video' ? scene.workRevision || 0 : undefined }))
+    maintenance.continueSettlement(() => settleReceipt(/timeout|timed out|interrupted/i.test(job.error || '') ? 'uncertain' : 'failed').then(() => handleRenderFailed(project.id, scene.sceneId, job.error || 'render failed', { workRevision: project.workspace === 'video' ? scene.workRevision || 0 : undefined })))
       .catch(error => console.error(`❌ CD render failure handling failed: ${error.message}`));
   };
   const onCanceled = (job) => {
@@ -315,7 +316,7 @@ export async function runSceneRender(project, scene) {
     // CD_MAX_SCENE_RETRIES); the user explicitly stopped this. Mark the scene
     // failed and let the completionHook flag the project so the user can
     // resume from the UI.
-    settleReceipt(job.params?.videoProduction?.submissionUncertain ? 'uncertain' : 'canceled').then(() => handleRenderCanceled(project.id, scene.sceneId, project.workspace === 'video' ? scene.workRevision || 0 : undefined))
+    maintenance.continueSettlement(() => settleReceipt(job.params?.videoProduction?.submissionUncertain ? 'uncertain' : 'canceled').then(() => handleRenderCanceled(project.id, scene.sceneId, project.workspace === 'video' ? scene.workRevision || 0 : undefined)))
       .catch(error => console.error(`❌ CD render cancellation handling failed: ${error.message}`));
   };
   function cleanup() {

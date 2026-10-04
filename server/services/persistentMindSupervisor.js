@@ -1,3 +1,4 @@
+import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
  * Persistent CoS mind supervisor.
  *
@@ -187,6 +188,7 @@ function armWatchdog() {
 }
 
 async function scheduleNextWake() {
+  if (maintenance.held()) return;
   const root = await loadState();
   const state = normalizePersistentMindState(root.persistentMind);
   cancel(PERSISTENT_MIND_WAKE_EVENT_ID);
@@ -678,6 +680,14 @@ function resolveTurnProfile({ selfThinkingRequest, thinkingPresetId, thinkingSel
 }
 
 async function runOnePersistentMindTurn() {
+  const permit = maintenance.tryAdmit('mind-turn', 'persistent-mind');
+  if (!permit) return;
+  try { return await permit.run(runAdmittedPersistentMindTurn); }
+  catch (err) { permit.markUnsettled(); throw err; }
+  finally { await permit.finish(); }
+}
+
+async function runAdmittedPersistentMindTurn() {
   if (supervisorStopping || !isDaemonRunning()) return;
   if (!turnAdapter) {
     return deferUnclaimedWake({
@@ -1166,6 +1176,7 @@ export async function setPersistentMindEnabled(enabled) {
 }
 
 export async function startPersistentMind() {
+  maintenance.assertOpen();
   const result = await mutateMindState((mind) => {
     if (mind.started) return { mind, value: { success: true, alreadyStarted: true } };
     return {
@@ -1191,6 +1202,7 @@ export async function startPersistentMind() {
 
 /** A deliberate user wake retries now through the normal admission gates. */
 export async function wakePersistentMind() {
+  maintenance.assertOpen();
   const result = await mutateMindState((mind) => {
     // A running turn already satisfies this request; never interrupt or queue
     // an extra billable turn for repeated clicks while it is thinking.
@@ -1234,6 +1246,7 @@ export async function pausePersistentMind(reason = 'Paused by user') {
 }
 
 export async function resumePersistentMind() {
+  maintenance.assertOpen();
   const result = await mutateMindState((mind) => {
     if (!mind.enabled || !mind.started) return { mind, value: { success: false, error: 'Persistent mind is not started' } };
     if (mind.status !== 'paused') return { mind, value: { success: true, alreadyRunning: true } };
@@ -1684,3 +1697,5 @@ export function __resetPersistentMindSupervisorForTests() {
   cancel(PERSISTENT_MIND_WATCHDOG_EVENT_ID);
   cancel(PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID);
 }
+
+export const recheckPersistentMindSchedule = () => scheduleNextWake();

@@ -4,10 +4,11 @@ import { armForceKill } from './forceKill.js';
 // Owns processes until their actual exit AND asynchronous finalization, even
 // when a terminate route has already removed them from the public agent map.
 export function createRunnerShutdown({
-  stopIntake, closeTransports, drainState, exit, logError = console.error,
+  admission, stopIntake, closeTransports, drainState, exit, logError = console.error,
   deadlineMs = 25_000, graceMs = 5000,
 }) {
   const owned = new Set();
+  const spawnPermits = new Map();
   const pending = new Set();
   let stopping = false;
   let failed = false;
@@ -35,10 +36,30 @@ export function createRunnerShutdown({
 
   const spawnRoute = (handler) => (req, res) => {
     if (rejectSpawn(res)) return;
-    return trackWork(() => handler(req, res));
+    if (!admission) return trackWork(() => handler(req, res));
+    let permit;
+    try {
+      permit = admission.admit('runner', String(req.body?.agentId ?? '').slice(0, 256), {
+        parentId: req.body?.maintenanceParentId ?? null,
+      });
+    } catch (err) { return res.status(err.status || 503).json({ error: err.message, code: err.code }); }
+    const entry = { permit, handedOff: false };
+    spawnPermits.set(permit.id, entry);
+    return trackWork(() => permit.run(async () => {
+      try {
+        const result = await handler(req, res);
+        if (!entry.handedOff) permit.finish();
+        return result;
+      } finally {
+        if (!entry.handedOff) await permit.finish();
+        spawnPermits.delete(permit.id);
+      }
+    }));
   };
 
   const agentExit = (agentId, agent, finalize) => {
+    const lease = spawnPermits.get(admission?.currentId());
+    if (lease) lease.handedOff = true;
     const ownership = { agentId, agent };
     owned.add(ownership);
     let finish;
@@ -50,7 +71,10 @@ export function createRunnerShutdown({
       owned.delete(ownership);
       if (agent.killTimer) clearTimeout(agent.killTimer);
       agent.killTimer = null;
-      finalization = trackWork(() => finalize(...args)).catch(() => {}).finally(() => {
+      finalization = trackWork(() => finalize(...args)).then(result => {
+        if (result === false) lease?.permit.markUnsettled();
+        else return lease?.permit.finish();
+      }).catch(() => { lease?.permit.markUnsettled(); }).finally(() => {
         pending.delete(completed);
         finish();
       });

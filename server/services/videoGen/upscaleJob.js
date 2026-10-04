@@ -25,6 +25,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 import {
   safeUnder, generateThumbnail, probeVideoStreamInfo, probeVideoDuration,
 } from '../../lib/ffmpeg.js';
@@ -277,6 +278,7 @@ const runUpscaleChild = async ({ jobId, bin, args, runtime, entry }) => {
   proc.stderr.on('data', (c) => errReader.push(c));
   return new Promise((resolve) => {
     let settled = false;
+    let processError;
     const settle = (result) => {
       if (settled) return;
       settled = true;
@@ -284,8 +286,12 @@ const runUpscaleChild = async ({ jobId, bin, args, runtime, entry }) => {
       errReader.flush();
       resolve(result);
     };
-    proc.on('error', (err) => settle({ ok: false, reason: `spawn failed: ${err.message}` }));
+    proc.on('error', (err) => {
+      processError = err;
+      if (!proc.pid) settle({ ok: false, reason: `spawn failed: ${err.message}` });
+    });
     proc.on('close', (code, signal) => {
+      if (processError) { settle({ ok: false, reason: `upscale process failed: ${processError.message}` }); return; }
       if (code === 0) { settle({ ok: true, ...provenance }); return; }
       const tail = stderrTail.slice(-4).join(' | ');
       const how = signal ? `killed (${signal})` : `exit ${code}`;
@@ -313,6 +319,17 @@ export async function runVideoUpscale({
   const scratch = [];
   let deliverablePath = null;
   let thumbnailPath = null;
+  let result = null;
+  let failureReason;
+  const removeOwnedFile = async path => {
+    if (!path) return;
+    await unlinkGuarded(path).catch(error => {
+      if (error.code === 'ENOENT') return;
+      maintenance.markCurrentUnsettled();
+      maintenance.markResourceUnsettled('media', jobId);
+      console.error(`❌ Video upscale cleanup failed [${jobId.slice(0, 8)}]: ${error.message}`);
+    });
+  };
   try {
     // Re-read the row rather than trusting the enqueue-time snapshot: a queued
     // job can wait behind a long render, and the user may have deleted or
@@ -460,20 +477,21 @@ export async function runVideoUpscale({
     };
     await mutateVideoHistory((h) => { h.unshift(newEntry); return h; });
     console.log(`✅ Upscaled [${newId.slice(0, 8)}]: ${newFilename} (${newEntry.width}×${newEntry.height}, ${Math.round((newEntry.renderMs ?? 0) / 1000)}s)`);
-    videoGenEvents.emit('completed', { generationId: jobId, ...newEntry });
-    return newEntry;
+    result = newEntry;
   } catch (err) {
     // The history row is written LAST, so nothing here can orphan one — only a
     // partial file can exist, and it is removed before the failure is reported.
     for (const path of [deliverablePath, thumbnailPath]) {
-      if (path) await unlinkGuarded(path).catch(() => {});
+      await removeOwnedFile(path);
     }
     const reason = entry.canceled ? 'Canceled while running' : (err.message || 'Upscale failed');
     console.error(`❌ Video upscale ${entry.canceled ? 'canceled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
-    videoGenEvents.emit('failed', { generationId: jobId, error: reason });
-    return null;
+    failureReason = reason;
   } finally {
-    for (const path of scratch) await unlinkGuarded(path).catch(() => {});
+    for (const path of scratch) await removeOwnedFile(path);
     activeUpscales.delete(jobId);
   }
+  if (failureReason) videoGenEvents.emit('failed', { generationId: jobId, error: failureReason });
+  else videoGenEvents.emit('completed', { generationId: jobId, ...result });
+  return result;
 }

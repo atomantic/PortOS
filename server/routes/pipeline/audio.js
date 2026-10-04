@@ -39,6 +39,7 @@ import { deriveAudioCues, preserveRenderedCues } from '../../services/pipeline/a
 import { uploadSingle } from '../../lib/multipart.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { mapServiceError } from './shared.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 
 const router = Router();
 
@@ -380,7 +381,7 @@ const musicGenerateSchema = z.object({
   durationSec: z.number().min(1).max(MAX_ENGINE_DURATION).optional(),
   modelId: z.enum(ALL_MODEL_IDS).optional(),
 });
-router.post('/issues/:id/stages/audio/music/generate', asyncHandler(async (req, res) => {
+router.post('/issues/:id/stages/audio/music/generate', asyncHandler((req, res) => maintenance.run('pipeline-audio', req.params.id, async () => {
   const body = validateRequest(musicGenerateSchema, req.body ?? {});
   // Guard the (expensive) generation behind a 404 check first — generating a
   // multi-second clip only to discover the issue is gone wastes GPU time and
@@ -395,7 +396,8 @@ router.post('/issues/:id/stages/audio/music/generate', asyncHandler(async (req, 
   }).catch((err) => { throw mapServiceError(err); });
   // The sidecar wrote the WAV in place and may still have been writing while a
   // cut ran. The row that first names it waits for any open cut, so a dump can
-  // never name a track its file copy did not reach (#9982).
+  // never name a track its file copy did not reach (#9982). The shared publication
+  // boundary retains maintenance settlement through that wait and the row save.
   const { issue: updatedIssue, stage } = await withBackupAssetPublication(() => issuesSvc.updateStageWithLatest(
     req.params.id,
     'audio',
@@ -407,7 +409,7 @@ router.post('/issues/:id/stages/audio/music/generate', asyncHandler(async (req, 
     }),
   )).catch((err) => { throw mapServiceError(err); });
   res.json({ issue: updatedIssue, stage, music: stage.music, durationSec: gen.durationSec, modelId: gen.modelId, engine: gen.engine });
-}));
+})));
 
 router.post('/issues/:id/stages/audio/music/upload', musicUpload, asyncHandler(async (req, res) => {
   if (!req.file) {
@@ -549,7 +551,7 @@ const cueRenderSchema = z.object({
   durationSec: z.number().min(1).max(MAX_ENGINE_DURATION).optional(),
   modelId: z.enum(ALL_MODEL_IDS).optional(),
 });
-router.post('/issues/:id/stages/audio/cues/:cueIdx/render', asyncHandler(async (req, res) => {
+router.post('/issues/:id/stages/audio/cues/:cueIdx/render', asyncHandler((req, res) => maintenance.run('pipeline-audio', req.params.id, async () => {
   const cueIdx = Number(req.params.cueIdx);
   if (!Number.isInteger(cueIdx) || cueIdx < 0) {
     throw new ServerError('cueIdx must be a non-negative integer', {
@@ -590,6 +592,7 @@ router.post('/issues/:id/stages/audio/cues/:cueIdx/render', asyncHandler(async (
   // Merge against the freshest persisted cue inside the write queue so a
   // concurrent re-derive can't clobber the render (the cue list is re-read here).
   // The row that first names the WAV waits for any open backup cut (#9982).
+  // The shared publication boundary also owns its maintenance settlement.
   const { issue: updatedIssue, stage } = await withBackupAssetPublication(() => issuesSvc.updateStageWithLatest(
     req.params.id,
     'audio',
@@ -615,7 +618,7 @@ router.post('/issues/:id/stages/audio/cues/:cueIdx/render', asyncHandler(async (
     engine: gen.engine,
     modelId: gen.modelId,
   });
-}));
+})));
 
 // Deleting from the library leaves stale `music.trackFilename` pointers on
 // issues so the user sees the broken playback and re-picks. Auto-purging

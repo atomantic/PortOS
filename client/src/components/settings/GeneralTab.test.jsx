@@ -3,6 +3,8 @@ import { StrictMode } from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 
+vi.mock('./MaintenancePanel.jsx', () => ({ default: () => null }));
+
 vi.mock('../../services/api', () => ({
   getSettings: vi.fn(),
   updateSettings: vi.fn(),

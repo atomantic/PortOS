@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { cp, lstat, mkdtemp, open, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -81,7 +82,10 @@ export async function stageMusicVideoComposition(sourceDirectory, jobId, song, {
     if (prepare) await prepare(compositionDir);
     return { directory: `${MUSIC_VIDEO_SCRATCH_DIR}/${jobId}/composition`, scratchRoot };
   } catch (error) {
-    await rm(scratchRoot, { recursive: true, force: true });
+    await rm(scratchRoot, { recursive: true, force: true }).catch(cleanupError => {
+      maintenance.markCurrentUnsettled();
+      throw cleanupError;
+    });
     throw error;
   }
 }
@@ -130,7 +134,11 @@ function deliveryNames(targets) {
   return names;
 }
 
-export async function renderComposition({ jobId, owner, audio, maxDurationSec, song, ...input }) {
+export async function renderComposition(options) {
+  return maintenance.run('composition', options.jobId, () => renderCompositionAdmitted(options), { continuation: true });
+}
+
+async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, song, ...input }) {
   const job = { controller: new AbortController(), committing: false };
   active.set(jobId, job);
   const { signal } = job.controller;
@@ -336,17 +344,23 @@ export async function renderComposition({ jobId, owner, audio, maxDurationSec, s
         ...(formats ? { videos: rendered.map(video => ({ format: video.format, ...summary(video) })) } : {}) };
     }
   } catch (error) {
+    if (job.committing) maintenance.markCurrentUnsettled();
     failure = error;
   } finally {
-    await page?.close();
+    if (page) await page.close().catch(error => {
+      maintenance.markCurrentUnsettled();
+      failure ||= error;
+    });
     if (audioDirectory) await rm(audioDirectory, { recursive: true, force: true }).catch(() => {
+      maintenance.markCurrentUnsettled();
       console.warn('⚠️ Could not remove temporary composition audio');
     });
     if (scratchRoot) await rm(scratchRoot, { recursive: true, force: true }).catch(() => {
+      maintenance.markCurrentUnsettled();
       console.warn('⚠️ Could not remove temporary music-video composition');
     });
     if (!success) {
-      for (const path of ownedPaths) await unlinkGuarded(path).catch(() => {});
+      for (const path of ownedPaths) await unlinkGuarded(path).catch(error => { if (error.code !== 'ENOENT') maintenance.markCurrentUnsettled(); });
     }
     active.delete(jobId);
   }

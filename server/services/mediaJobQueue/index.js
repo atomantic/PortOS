@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Media Job Queue — lane-aware FIFO for media generation jobs.
  *
@@ -626,9 +627,22 @@ export async function initMediaJobQueue() {
     // re-attached (#1332), and only a genuinely-dead one is reaped+failed in
     // initLoraTraining.) This runs before the worker starts, so every dir
     // present is an orphan from the prior process.
-    const videoReap = await reapAndCleanDetachedDirs(join(PATHS.videos, '.detached')).catch(() => ({ reaped: 0 }));
+    const videoReap = maintenance.held() ? { reaped: 0 }
+      : await reapAndCleanDetachedDirs(join(PATHS.videos, '.detached')).catch(() => ({ reaped: 0 }));
     if (videoReap.reaped) console.log(`🧹 reaped ${videoReap.reaped} surviving render(s) on boot`);
     for (const j of persistedJobs) {
+      if (j.status === 'running' && maintenance.held()) {
+        maintenance.recoverOwned('media', j.id);
+        if (j.kind === 'training' && j.params?.runId && await jobHasSurvivingTrainer(j.params.runId)) {
+          recoveringJobs.add(j.id);
+          reattachJobs.push({ ...j, status: 'queued', params: { ...j.params, reattach: true } });
+        } else {
+          // Preserve uncertain work and staged inputs; no paid replay or orphan
+          // kill is safe merely because the observer process restarted.
+          archive.push({ ...j, params: restoredParams(j) });
+        }
+        continue;
+      }
       // Explicit Video Start grants one process lifetime. Restored jobs wait for
       // project reconciliation; replaying an unknown paid submit could charge twice.
       if (j.params?.videoProduction && ['queued', 'running'].includes(j.status)) {
@@ -643,6 +657,7 @@ export async function initMediaJobQueue() {
         // the remote adapter replay the submission, recover the provider job,
         // and continue polling (or deliver a persisted cancellation intent).
         if (isRemoteMediaJob(j)) {
+          maintenance.recoverOwned('media', j.id);
           const marker = j.params?.remoteMedia;
           queue.push({
             ...j,
@@ -778,6 +793,10 @@ function startLaneJob(job, { lane }) {
     console.log(`⚠️ media-job [${job.id.slice(0, 8)}] startLaneJob: already removed from queue, skipping`);
     return false;
   }
+  const permit = recoveringJobs.has(job.id)
+    ? maintenance.recoverOwned('media', job.id)
+    : maintenance.tryAdmit('media', job.id, { reconnect: isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true });
+  if (!permit) return false;
   queue.splice(idx, 1);
   job.status = 'running';
   job.startedAt = new Date().toISOString();
@@ -796,8 +815,9 @@ function startLaneJob(job, { lane }) {
     ? (job.params?.mode || 'cloud')
     : lane === 'remote' ? `remote ${job.kind}` : job.kind;
   let finalized = false;
+  let archiveWrite;
   function finalizeLane() {
-    if (finalized) return;
+    if (finalized) return archiveWrite;
     finalized = true;
     // Count once, after every terminal path (including pre-dispatch throws),
     // and before releasing the lane. Boot reconciliation never comes here.
@@ -817,11 +837,13 @@ function startLaneJob(job, { lane }) {
     // the UI's recent-reel cap (recentLimit) handles in-memory display.
     archive.push(job);
     recomputeQueuePositions();
-    persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on ${label} done failed: ${e.message}`));
+    archiveWrite = persist();
+    archiveWrite.catch((e) => console.log(`⚠️ mediaJobQueue persist on ${label} done failed: ${e.message}`));
+    return archiveWrite;
   }
   let markRunning;
   trackOperation(dispatchOperations, new Promise((resolve) => { markRunning = resolve; }));
-  (async () => {
+  permit.run(async () => {
     try {
       await persist();
       // Cancellation can win while the running snapshot is blocked.
@@ -853,8 +875,12 @@ function startLaneJob(job, { lane }) {
         await trackTerminalOperation(persistTerminalTransition(job));
       }
     }
-    finalizeLane();
-  })().catch((error) => console.error(`❌ media-job [${job.id.slice(0, 8)}] storage settlement pending: ${error.message}`));
+    await finalizeLane();
+    const settled = await flushMediaJobQueue();
+    recoveringJobs.delete(job.id);
+    if (settled.ok) permit.finish();
+    else permit.markUnsettled();
+  }).catch((error) => console.error(`❌ media-job [${job.id.slice(0, 8)}] storage settlement pending: ${error.message}`));
   return true;
 }
 
@@ -899,9 +925,14 @@ async function prepareQueuedVideos(jobs = queue.filter((job) => !job.admitting))
   }
 }
 
+// IDs proven by the boot probe to have an existing trainer; request params cannot grant this.
+const recoveringJobs = new Set();
+
 async function drainLoop() {
   while (!dispatchQuiesced) {
-    const candidates = queue.filter((job) => !job.admitting);
+    const held = maintenance.held();
+    const candidates = queue.filter((job) => !job.admitting && (!held || recoveringJobs.has(job.id)));
+    if (held && !candidates.length) { await sleep(150); continue; }
     await prepareQueuedVideos(candidates);
     // Shutdown may have begun while cohorts resolved; exit without promoting.
     if (dispatchQuiesced) break;
@@ -971,7 +1002,9 @@ export function runJobNow(jobId) {
   if (dispatchQuiesced) {
     return { ok: false, code: MEDIA_QUEUE_SHUTTING_DOWN, error: 'The server is shutting down; the job stays queued and resumes after restart' };
   }
-  startLaneJob(job, { lane: 'cloud' });
+  if (!startLaneJob(job, { lane: 'cloud' })) {
+    return { ok: false, code: 'MAINTENANCE_HELD', error: 'Maintenance is holding new renders; this job stays queued' };
+  }
   return { ok: true, status: 'running' };
 }
 
@@ -1125,6 +1158,9 @@ async function runJobLifecycle(job, markDispatched) {
   const sseEntry = ensureSseEntry(job.id);
   let resolveTerminalState;
   const terminalState = new Promise((resolve) => { resolveTerminalState = resolve; });
+  let resolveProviderSettlement;
+  const providerSettlement = new Promise(resolve => { resolveProviderSettlement = resolve; });
+  let watchdogNeedsProviderSettlement = false;
   let progressPersistDirty = false;
   let progressPersistTimer = null;
   let progressPersisting = null;
@@ -1308,7 +1344,14 @@ async function runJobLifecycle(job, markDispatched) {
     : job.kind === 'training' ? trainingEvents
     : job.kind === 'audio' || job.kind === 'supercollider' ? audioGenEvents
     : imageGenEvents;
-  const dispatcher = makeGenDispatcher(emitter, job, handlers);
+  // A watchdog outcome records why the job failed; it does not prove that
+  // cancellation has reached physical exit and provider cleanup. Only a real
+  // provider terminal event can release that additional wait.
+  const dispatcher = makeGenDispatcher(emitter, job, {
+    ...handlers,
+    completed: payload => { resolveProviderSettlement(); handlers.completed(payload); },
+    failed: payload => { resolveProviderSettlement(); handlers.failed(payload); },
+  });
   dispatcher.attach();
 
   // Thread #2: per-job idle watchdog — fires when the gen has been silent
@@ -1371,7 +1414,8 @@ async function runJobLifecycle(job, markDispatched) {
       // draining to disk with job.status still 'running') during the import.
       if (!canRequestCancellation(job)) return;
       console.log(`⏱️ media-job [${job.id.slice(0, 8)}] watchdog fired after ${idleFor}ms idle (limit ${idleTimeoutMs}ms) — marking failed`);
-      if (mod?.cancel) mod.cancel(job.id);
+      watchdogNeedsProviderSettlement ||= job.providerInvoked === true;
+      if (mod?.cancel) await mod.cancel(job.id);
       handlers.failed({ error: `watchdog timeout: no runner output for ${Math.round(idleFor / 1000)}s (limit ${Math.round(idleTimeoutMs / 1000)}s)` });
     } catch (err) {
       // Don't take down the server over a watchdog tick that couldn't
@@ -1421,6 +1465,9 @@ async function runJobLifecycle(job, markDispatched) {
     if (job.cancelRequested && !isRemoteMediaJob(job)) {
       throw new Error('Canceled before provider dispatch');
     }
+    // A watchdog can win during the awaited policy/module preparation above.
+    // Its terminal outcome must prevent that delayed provider from starting.
+    if (!canRequestCancellation(job)) throw new Error('Provider dispatch stopped after the job reached a terminal outcome');
     // Transient, like terminating: no await between this flag and invocation.
     job.providerInvoked = true;
     const request = { ...safeParams, jobId: job.id };
@@ -1435,6 +1482,9 @@ async function runJobLifecycle(job, markDispatched) {
     markDispatched();
     await kickoff;
   } catch (err) {
+    // Policy/auth refusal still stands, but it cannot prove a previously
+    // admitted peer render finished before this recovery attempt.
+    if (isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true) maintenance.markCurrentUnsettled();
     // generateVideo / generateChainedVideo / generateImage threw before
     // reaching their proc.on cleanup hooks (e.g. PYTHON not configured,
     // validation fail). Clean up multipart upload temp files the route
@@ -1458,6 +1508,7 @@ async function runJobLifecycle(job, markDispatched) {
   // the explicit terminal signal rather than polling every 100ms; this makes
   // lane release immediate and gives tests a deterministic lifecycle to drain.
   await terminalState;
+  if (watchdogNeedsProviderSettlement) await providerSettlement;
   dispatcher.detach();
 }
 

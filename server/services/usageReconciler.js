@@ -1,3 +1,4 @@
+import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
  * Replace PortOS's estimated per-run token counts with the CLI's own measured
  * counts, read from the transcripts the coding CLIs already write to disk.
@@ -893,6 +894,7 @@ export async function recordCompletedRunUsage(metadata, output, { home = homedir
       await atomicWrite(metadataPath, persisted);
     })
     .catch((err) => {
+      maintenance.markCurrentUnsettled();
       console.error(`❌ Failed to record usage: ${err.message}`);
     });
 }

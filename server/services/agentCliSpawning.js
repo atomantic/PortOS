@@ -1,3 +1,4 @@
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 /**
  * Agent CLI Spawning
@@ -519,7 +520,10 @@ export async function spawnDirectly({
           const lines = streamParser.processChunk(text);
           for (const line of lines) outputBuffer += line + '\n';
           outputBatcher.push(lines);
-          await writeFileGuarded(outputFile, outputBuffer).catch((err) => transcriptWriteReporter.report('output.txt', err));
+          await writeFileGuarded(outputFile, outputBuffer).catch((err) => {
+            maintenance.markResourceUnsettled('agent', agentId);
+            transcriptWriteReporter.report('output.txt', err);
+          });
         } else {
           // Non-stream providers: emit stdout as-is once decolored. A chunk that
           // was purely terminal control has nothing left to show. Unlike stderr
@@ -527,7 +531,10 @@ export async function spawnDirectly({
           // formatting when it isn't wearing an `[stderr]` tag.
           if (!text) return;
           outputBuffer += text;
-          await writeFileGuarded(outputFile, outputBuffer).catch((err) => transcriptWriteReporter.report('output.txt', err));
+          await writeFileGuarded(outputFile, outputBuffer).catch((err) => {
+            maintenance.markResourceUnsettled('agent', agentId);
+            transcriptWriteReporter.report('output.txt', err);
+          });
           outputBatcher.push(text);
         }
       });
@@ -549,7 +556,10 @@ export async function spawnDirectly({
           const lines = codexStderrFormatter.processChunk(text);
           for (const line of lines) outputBuffer += line + '\n';
           outputBatcher.push(lines);
-          await writeFileGuarded(outputFile, outputBuffer).catch((err) => transcriptWriteReporter.report('output.txt', err));
+          await writeFileGuarded(outputFile, outputBuffer).catch((err) => {
+            maintenance.markResourceUnsettled('agent', agentId);
+            transcriptWriteReporter.report('output.txt', err);
+          });
           return;
         }
         // A chunk that decolors down to whitespace was pure terminal control
@@ -558,7 +568,10 @@ export async function spawnDirectly({
         const trimmed = text.trim();
         if (!trimmed || isKnownCliStderrNoise(trimmed)) return;
         outputBuffer += `[stderr] ${text}`;
-        await writeFileGuarded(outputFile, outputBuffer).catch((err) => transcriptWriteReporter.report('output.txt', err));
+        await writeFileGuarded(outputFile, outputBuffer).catch((err) => {
+          maintenance.markResourceUnsettled('agent', agentId);
+          transcriptWriteReporter.report('output.txt', err);
+        });
         outputBatcher.push(`[stderr] ${text}`);
       });
     } catch (err) {
@@ -601,7 +614,9 @@ export async function spawnDirectly({
       await completeAgentRun(runId, isPrivateSecurityTask(task) ? 'Private security assessment failed; inspect its local assessment archive.' : outputBuffer, 1, 0, { message: err.message, category: 'spawn-error' });
       unregisterSpawnedAgent(claudeProcess.pid);
       activeAgents.delete(agentId);
+      if (!claudeProcess.pid) await maintenance.finishResource('agent', agentId);
     } catch (handlerErr) {
+      maintenance.markResourceUnsettled('agent', agentId);
       console.error(`❌ Agent ${agentId} error handler failed: ${handlerErr.message}`);
       activeAgents.delete(agentId);
     }
@@ -721,7 +736,10 @@ export async function spawnDirectly({
     // below too, since output.txt is written next).
     await outputBatcher.flush();
 
-    await writeFileGuarded(outputFile, outputBuffer).catch((err) => transcriptWriteReporter.report('output.txt', err));
+    await writeFileGuarded(outputFile, outputBuffer).catch((err) => {
+      maintenance.markResourceUnsettled('agent', agentId);
+      transcriptWriteReporter.report('output.txt', err);
+    });
 
     // The teardown both in-process spawners share: paused early return, then
     // the host-shutdown abandon gate, the user-termination consume, the
@@ -741,7 +759,7 @@ export async function spawnDirectly({
       sentinelPresent: completionSentinelPresent,
     });
 
-    if (finalizeOutcome.outcome === 'paused') return;
+    if (finalizeOutcome.outcome === 'paused') { await maintenance.finishResource('agent', agentId); return; }
 
     if (finalizeOutcome.outcome === 'abandoned') {
       outputBatcher.push('🛑 PortOS restarted while this agent was running — the run was interrupted, not completed. Its worktree is preserved and the task will resume.');
@@ -826,12 +844,17 @@ export async function spawnDirectly({
         prClaimVerified,
         branchProvenEmpty,
         outputBuffer,
-      }).catch(err => console.error(`❌ CLI completion cleanup failed for ${agentId}: ${err.message}`));
+      }).catch(err => {
+        maintenance.markResourceUnsettled('agent', agentId);
+        console.error(`❌ CLI completion cleanup failed for ${agentId}: ${err.message}`);
+      });
 
       unregisterSpawnedAgent(agentData?.pid || claudeProcess.pid);
       activeAgents.delete(agentId);
     }
+    maintenance.finishResource('agent', agentId);
     } catch (handlerErr) {
+      maintenance.markResourceUnsettled('agent', agentId);
       await recoverFromCloseHandlerFailure(handlerErr, { code, laneReleased, outputBuffer });
     }
   };

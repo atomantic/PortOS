@@ -1,3 +1,4 @@
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { getPendingTaskIds as readPendingTaskIds } from './cosTaskStore.js';
 import { mergePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
 /**
@@ -698,6 +699,7 @@ export async function isPaused() {
  * Force-spawn a pending task by ID, bypassing cooldowns and evaluation intervals.
  */
 export async function forceSpawnTask(taskId) {
+  maintenance.assertOpen();
   const task = await getTaskById(taskId);
   if (!task) return { error: 'Task not found' };
   if (task.status !== 'pending') return { error: `Task is ${task.status}, not pending` };
@@ -1204,6 +1206,7 @@ const scheduleDequeue = (options = {}) => setImmediate(() => {
  * other caller runs outside that window and correctly leaves it null.
  */
 export async function dequeueNextTask({ ignoreTaskId = null } = {}) {
+  if (maintenance.held()) return;
   if (!isDaemonRunning()) return;
 
   // In runner mode the cos-runner app owns every agent process, so a cycle run

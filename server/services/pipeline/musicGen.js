@@ -60,6 +60,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { stripMarkdownEmphasis } from '../../lib/markdownText.js';
 import { recommendMinimaxDurationSec } from '../../lib/musicDuration.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -674,10 +675,15 @@ export function buildMusicGenArgs({ pythonPath, scriptPath = SIDECAR_SCRIPT, run
  * generic idle watchdog resets its timer off it via the audio job-kind
  * adapter (server/services/audioGen/local.js), the same way the image/video
  * sidecars' stderr lines do, so a slow first-run model download doesn't trip a
- * flat timeout. Callers outside the queue (the Pipeline Audio routes) omit it
- * and behave exactly as before.
+ * flat timeout. Callers outside the queue (the Pipeline Audio routes) omit it.
+ * All callers honor maintenance admission; already-admitted work may continue.
  */
-export async function generateMusic({ prompt, lyrics, engine: engineId = DEFAULT_ENGINE_ID, durationSec, durationMode, modelId, repo, provenance, signal, onActivity } = {}) {
+export async function generateMusic(options = {}) {
+  return maintenance.run('music-render', options.engine || DEFAULT_ENGINE_ID,
+    () => generateMusicAdmitted(options), { continuation: true });
+}
+
+async function generateMusicAdmitted({ prompt, lyrics, engine: engineId = DEFAULT_ENGINE_ID, durationSec, durationMode, modelId, repo, provenance, signal, onActivity }) {
   const text = (prompt || '').trim();
   if (!text) {
     throw new ServerError('prompt is required', { status: 400, code: 'PIPELINE_MUSIC_EMPTY_PROMPT' });
@@ -769,7 +775,7 @@ export async function generateMusic({ prompt, lyrics, engine: engineId = DEFAULT
     ? parsed.executionProfile
     : null;
   if (!result.ok || !parsed || !wroteFile) {
-    await unlink(outputPath).catch(() => {});
+    await unlink(outputPath).catch(error => { if (error.code !== 'ENOENT') maintenance.markCurrentUnsettled(); });
     const reason = !result.ok ? result.reason : (!wroteFile ? 'sidecar wrote no audio' : 'sidecar returned no result');
     throw new ServerError(`Music generation failed: ${reason}`, {
       status: 500, code: 'PIPELINE_MUSIC_GEN_FAILED',

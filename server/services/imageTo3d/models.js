@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Image-to-3D model orchestration (issue #2952) — gallery-image lineage, target
  * dispatch, guarded local render, persistence, and GLB export.
@@ -107,7 +108,7 @@ const usdzDiskPath = (id) => join(recordDir(id), 'model.usdz');
  */
 async function cleanupRenderDir(id) {
   await rmGuarded(recordDir(id), { recursive: true, force: true })
-    .catch((err) => console.error(`❌ Image-to-3D cleanup failed for ${id}: ${err.message}`));
+    .catch((err) => { maintenance.markCurrentUnsettled(); console.error(`❌ Image-to-3D cleanup failed for ${id}: ${err.message}`); });
 }
 
 /**
@@ -177,6 +178,7 @@ async function failGeneration(id, operationId, error) {
       }),
     };
   }, { includeDeleted: true }).catch((persistError) => {
+    maintenance.markCurrentUnsettled();
     console.error(`❌ Image-to-3D model ${id} failure could not be persisted: ${persistError.message}`);
     return null;
   });
@@ -399,6 +401,12 @@ export async function startGeneration(id, { caps, options } = {}) {
  * values the subprocess receives — the truthful, reproducible record.
  */
 async function beginRender(record, adapter, sourcePath, caps, requestOptions) {
+  const permit = maintenance.admit('image-to-3d', record.id);
+  try { return await permit.run(() => beginAdmittedRender(record, adapter, sourcePath, caps, requestOptions, permit)); }
+  catch (err) { permit.finish(); throw err; }
+}
+
+async function beginAdmittedRender(record, adapter, sourcePath, caps, requestOptions, permit) {
   const { id } = record;
   const operationId = randomUUID();
   const startedAt = new Date().toISOString();
@@ -448,7 +456,8 @@ async function beginRender(record, adapter, sourcePath, caps, requestOptions) {
   if (next?.status === 'generating') noteImageTo3d('start');
   activeOperations.add(operationId);
   setImmediate(() => {
-    void executeRender({ id, operationId, adapter, sourcePath, caps, options });
+    void executeRender({ id, operationId, adapter, sourcePath, caps, options }).then(() => permit.finish())
+      .catch(err => console.error(`❌ Image-to-3D maintenance settlement pending: ${err.message}`));
   });
   return next;
 }
