@@ -114,7 +114,7 @@ describe('DatabaseTab sync and replacement', () => {
     render(<DatabaseTab />);
     await waitFor(() => expect(getDatabaseStatus).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByRole('button', { name: /Replace data from Docker/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Replace data from Docker/i }));
 
     expect(screen.getByText(/Replace Native data with Docker data\?/i)).toBeTruthy();
     expect(screen.getByText(/This replaces matching tables and their records/i)).toBeTruthy();
@@ -133,7 +133,7 @@ describe('DatabaseTab sync and replacement', () => {
     render(<DatabaseTab />);
     await waitFor(() => expect(getDatabaseStatus).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByRole('button', { name: /Replace data from Docker/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Replace data from Docker/i }));
 
     expect(screen.getByRole('button', { name: /Replace Native data/i })).toBeTruthy();
   });
@@ -149,7 +149,7 @@ describe('DatabaseTab sync and replacement', () => {
     render(<DatabaseTab />);
     await waitFor(() => expect(getDatabaseStatus).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByRole('button', { name: /Destroy$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Destroy$/i }));
 
     expect(screen.getByRole('button', { name: /Delete Docker database/i })).toBeTruthy();
   });
@@ -167,7 +167,7 @@ describe('DatabaseTab sync and replacement', () => {
     render(<DatabaseTab />);
     await waitFor(() => expect(getDatabaseStatus).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByRole('button', { name: /Replace data from Docker/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Replace data from Docker/i }));
     fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
 
     expect(syncDatabaseMock).not.toHaveBeenCalled();
