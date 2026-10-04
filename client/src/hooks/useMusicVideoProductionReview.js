@@ -56,7 +56,7 @@ export default function useMusicVideoProductionReview({ project, replaceProject 
     } catch (err) { if (latest.current === owner) setError(err.message); return null; }
     finally { setBusy(false); }
   };
-  const readiness = project?.productionReadiness || (state?.id === project?.id ? state.readiness : null);
+  const readiness = project?.productionReadiness || (state && state.id === project?.id ? state.readiness : null);
   return { readiness, readinessError: readiness ? null : readinessError, busy, error, proof: { ...proof, occupied: proof.active, active: proof.active && proof.context === project?.id },
     feedback: body => call(() => addMusicVideoProductionFeedback(project.id, { ...body, basis: readiness?.basis[body.stage] }, { silent: true })),
     resolveFeedback: (feedbackId, resolution) => call(() => resolveMusicVideoProductionFeedback(project.id, { feedbackId, resolution }, { silent: true })),

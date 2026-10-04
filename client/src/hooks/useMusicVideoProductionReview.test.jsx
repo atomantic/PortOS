@@ -33,6 +33,11 @@ describe('useMusicVideoProductionReview readiness source (#10136)', () => {
     expect(result.current.readiness).toBeNull();
   });
 
+  it('renders with no project loaded yet', () => {
+    const { result } = run(null);
+    expect(result.current.readiness).toBeNull();
+  });
+
   it('surfaces a failed readiness fetch instead of silently reading not done', async () => {
     api.getMusicVideoProductionReview.mockRejectedValue(new Error('boom'));
     const { result } = run({ id: 'a' });
