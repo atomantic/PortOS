@@ -917,6 +917,8 @@ export const socialAccountSchema = z.object({
   notes: z.string().max(2000).optional().default('')
 });
 
+// Bulk create: each entry is validated per-account (a bad one is reported, not fatal).
+export const socialAccountBulkBodySchema = z.object({ accounts: z.array(z.unknown()).min(1, 'accounts array is required') });
 export const socialAccountUpdateSchema = partialWithoutDefaults(socialAccountSchema);
 
 // =============================================================================
@@ -2318,6 +2320,7 @@ export * from './agentValidation.js';
 export * from './cosValidation.js';
 export * from './mediaValidation.js';
 export * from './pipelineValidation.js';
+import { stageConfigUpdateSchema } from './pipelineValidation.js';
 export * from './quotaBurnValidation.js';
 export * from './spriteValidation.js';
 export * from './agentContextValidation.js';
@@ -2723,6 +2726,17 @@ export const brainJournalReplaceBodySchema = z.object({ content: z.string(), ifM
 
 // Prompts (routes/prompts.js)
 export const promptVariableUpdateBodySchema = z.object({ name: optionalString, category: optionalString, content: optionalString });
+export const promptVariableCreateBodySchema = z.object({ key: promptVariableKeySchema, name: optionalString, category: optionalString, content: nonEmptyString });
+export const promptStageCreateBodySchema = z.object({
+  stageName: promptStageNameSchema,
+  name: nonEmptyString,
+  description: optionalString,
+  model: z.string().default('default'),
+  returnsJson: z.boolean().default(false),
+  variables: z.array(z.string()).default([]),
+  template: z.string().default(''),
+});
+export const promptStageUpdateBodySchema = stageConfigUpdateSchema.extend({ template: z.string().optional() });
 export const promptJobSkillBodySchema = z.object({ content: nonEmptyString });
 export const promptPreviewBodySchema = z.object({ testData: z.record(z.string(), z.unknown()).default({}) });
 

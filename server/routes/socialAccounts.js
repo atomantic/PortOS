@@ -7,7 +7,7 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validate, validateRequest, socialAccountSchema, socialAccountUpdateSchema } from '../lib/validation.js';
+import { validate, validateRequest, socialAccountSchema, socialAccountBulkBodySchema, socialAccountUpdateSchema } from '../lib/validation.js';
 import * as socialAccounts from '../services/socialAccounts.js';
 
 const router = Router();
@@ -58,13 +58,7 @@ router.post('/', asyncHandler(async (req, res) => {
 
 // POST /bulk - Create multiple social accounts at once
 router.post('/bulk', asyncHandler(async (req, res) => {
-  const { accounts: accountsData } = req.body;
-  if (!Array.isArray(accountsData) || accountsData.length === 0) {
-    throw new ServerError('accounts array is required', {
-      status: 400,
-      code: 'VALIDATION_ERROR'
-    });
-  }
+  const { accounts: accountsData } = validateRequest(socialAccountBulkBodySchema, req.body);
 
   const results = [];
   for (const accountData of accountsData) {
