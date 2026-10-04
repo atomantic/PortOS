@@ -6,6 +6,21 @@ import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { browserExecutablePath } from '../../lib/browserConfig.js';
 
+// Chrome helpers (crashpad, GPU) can still be writing into the profile for a
+// moment after the browser's close event, so a recursive rm may lose the race
+// with ENOTEMPTY/EBUSY. Retry until the directory is really gone, so a resolved
+// close always means the profile no longer exists.
+const TRANSIENT_RM = new Set(['ENOTEMPTY', 'EBUSY', 'EPERM', 'EMFILE']);
+async function removeProfile(profile, attempts = 20, delayMs = 50) {
+  for (let attempt = 1; ; attempt++) {
+    try { return await rm(profile, { recursive: true, force: true }); }
+    catch (error) {
+      if (attempt >= attempts || !TRANSIENT_RM.has(error?.code)) throw error;
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
 // Only this child/profile belong to the render. Never discover processes by
 // name, attach to a user profile, or restart the managed browsing service.
 export async function launchCompositionBrowser({ signal, startupMs = 20000, shutdownMs = 5000 } = {}) {
@@ -50,7 +65,7 @@ export async function launchCompositionBrowser({ signal, startupMs = 20000, shut
       // Wait for the process and our pipe to close before removing its profile.
       if (!proc || closed) {
         proc?.removeListener('error', onError);
-        await rm(profile, { recursive: true, force: true });
+        await removeProfile(profile);
       }
     }
   })();
