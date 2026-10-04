@@ -53,6 +53,7 @@ vi.mock('../services/promptRunner.js', () => ({
 }));
 vi.mock('../services/mediaJobQueue/index.js', () => ({
   enqueueJob: vi.fn(async () => ({ jobId: 'media-export', position: 1, status: 'queued' })),
+  listJobs: vi.fn(() => []),
 }));
 
 import { emitCodeAnimationChanged } from '../services/socket.js';
