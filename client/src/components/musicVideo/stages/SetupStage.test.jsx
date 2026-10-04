@@ -8,7 +8,7 @@ vi.mock('../ProjectOptionsPanel.jsx', () => ({ default: () => null, projectOptio
 vi.mock('../CreativeSetupPanel.jsx', () => ({ default: () => null }));
 vi.mock('../StyleReferencesPanel.jsx', () => ({ default: () => null }));
 vi.mock('../VisualSpecPanel.jsx', () => ({ default: () => null }));
-vi.mock('../TreatmentPanel.jsx', () => ({ default: () => null }));
+vi.mock('../TreatmentPanel.jsx', () => ({ default: () => null, treatmentSummary: () => 'Not started' }));
 vi.mock('../VocalStemControl.jsx', () => ({ default: () => <div>vocal-stem</div> }));
 vi.mock('../SoundBedControl.jsx', () => ({ default: () => <div>sound-bed</div> }));
 vi.mock('../SongRevisionPanel.jsx', () => ({ default: () => <div>song-revision</div> }));

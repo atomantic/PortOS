@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ScrollText, Sparkles, Wand2, AlertTriangle, Plus, Trash2 } from 'lucide-react';
+import { Sparkles, Wand2, AlertTriangle, Plus, Trash2 } from 'lucide-react';
 import useFieldDraft from '../../hooks/useFieldDraft.js';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
@@ -43,14 +43,36 @@ function BeatObjective({ beat, idFor, onSave }) {
   );
 }
 
+/** One-line state for the section header: revision, applied state and capability gaps. */
+export function treatmentSummary(project) {
+  const t = project.treatment;
+  if (!t) return 'Not started';
+  const parts = [`rev ${t.revision}`];
+  if (t.arc) {
+    parts.push(`${t.shotDirections.length} directed ${t.shotDirections.length === 1 ? 'shot' : 'shots'}`);
+    parts.push(t.appliedRevision != null && t.appliedRevision === t.revision ? 'applied' : 'not applied');
+  }
+  const gaps = t.capabilityGaps?.length || 0;
+  if (gaps) parts.push(`${gaps} capability ${gaps === 1 ? 'gap' : 'gaps'}`);
+  return parts.join(' · ');
+}
+
 /**
  * The pre-production treatment (#8980): a structured brief, the compiled
  * whole-song arc (beats by section, motifs, balance), per-shot direction, the
  * proof checklist and the Apply review. Compiling is always an explicit click —
  * "Draft without AI" makes no provider call at all. Keyed by project id at the
  * call site so a field draft never carries across projects.
+ *
+ * `part` splits it by what each piece depends on: the brief (what the planner
+ * reads) belongs in Setup, while compile / arc / shot direction / Apply need
+ * scenes and live on the Board. Omit it to render both. The caller supplies
+ * the collapsible section, so there is no fold of its own here.
  */
-export default function TreatmentPanel({ project, treatment: api }) {
+export default function TreatmentPanel({ project, treatment: api, part = 'all' }) {
+  const showBrief = part !== 'direction';
+  const showDirection = part !== 'brief';
+  const hasScenes = (project.scenes || []).length > 0;
   const t = project.treatment || null;
   const brief = t?.brief || {};
   const arc = t?.arc || null;
@@ -73,7 +95,6 @@ export default function TreatmentPanel({ project, treatment: api }) {
     providers, selectedProviderId, selectedModel, availableModels, setSelectedProviderId, setSelectedModel,
   } = useProviderModels({ allowDefault: true, silent: true });
   const analyzed = !!project.audioAnalysis;
-  const applied = t?.appliedRevision != null && t.appliedRevision === t.revision;
 
   const addNote = () => {
     if (notesSaving || (!noteText.trim() && !noteUrl.trim()) || !urlValid) return;
@@ -86,17 +107,9 @@ export default function TreatmentPanel({ project, treatment: api }) {
   };
 
   return (
-    <details className="mt-2 rounded border border-port-border bg-port-bg/40 p-2">
-      <summary className="cursor-pointer text-xs text-port-text-muted select-none min-h-[44px] sm:min-h-[32px] flex flex-wrap items-center gap-2">
-        <ScrollText size={13} />
-        <span>Treatment</span>
-        {t ? <span>· rev {t.revision}</span> : <span>· not started</span>}
-        {arc && <span>· {t.shotDirections.length} directed shots</span>}
-        {arc && <span className={applied ? 'text-port-success' : 'text-port-warning'}>· {applied ? 'applied' : 'not applied'}</span>}
-        {t?.capabilityGaps?.length > 0 && <span className="text-port-warning">· {t.capabilityGaps.length} capability gap{t.capabilityGaps.length === 1 ? '' : 's'}</span>}
-      </summary>
-
-      <div className="mt-2 space-y-3">
+    <div className="space-y-3">
+      {showBrief && (
+        <>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
           <BriefField id={idFor('audience')} label="Audience" value={brief.audience} maxLength={500}
             placeholder="Who this is for — e.g. late-night city pop fans" onCommit={(v) => saveBrief({ audience: v })} />
@@ -161,8 +174,21 @@ export default function TreatmentPanel({ project, treatment: api }) {
             </button>
           </div>
         </div>
+        {part === 'brief' && (
+          <p className="text-xs text-port-text-muted">
+            The planner reads this brief when it plans shots. Compile the arc, direct each shot and apply it on the Board.
+          </p>
+        )}
+        </>
+      )}
 
-        <div className="flex flex-wrap items-center gap-2 border-t border-port-border pt-2">
+      {showDirection && !hasScenes && (
+        <p className="text-sm text-port-text-muted">Plan shots on the Board to direct them — the treatment's shot direction needs scenes to direct.</p>
+      )}
+
+      {showDirection && hasScenes && (
+        <>
+        <div className="flex flex-wrap items-center gap-2">
           {providers.length > 0 && (
             <ProviderModelSelector
               providers={providers}
@@ -246,7 +272,8 @@ export default function TreatmentPanel({ project, treatment: api }) {
             <TreatmentApplyReview project={project} api={api} />
           </div>
         )}
-      </div>
-    </details>
+        </>
+      )}
+    </div>
   );
 }
