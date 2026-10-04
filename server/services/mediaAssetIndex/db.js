@@ -388,6 +388,9 @@ async function readListStrict(fn) {
  */
 export async function reconcileMediaAssets(deps = {}) {
   const now = new Date().toISOString();
+  // Rows indexed after this instant (a generation/upload/peer sync landing
+  // mid-reconcile) are absent from the disk snapshot but must not be pruned.
+  const startedAt = now;
 
   const imageRead = await readListStrict(
     deps.listGallery || (await import('../imageGen/local.js')).listGallery,
@@ -410,8 +413,8 @@ export async function reconcileMediaAssets(deps = {}) {
   // Per-kind prune, gated on a successful read for that kind. Pruning one kind
   // never touches the other's rows (an image-read failure can't wipe videos).
   let pruned = 0;
-  if (imageRead.ok) pruned += await pruneKind('image', imageRows.map((r) => r.mediaKey));
-  if (videoRead.ok) pruned += await pruneKind('video', videoRows.map((r) => r.mediaKey));
+  if (imageRead.ok) pruned += await pruneKind('image', imageRows.map((r) => r.mediaKey), startedAt);
+  if (videoRead.ok) pruned += await pruneKind('video', videoRows.map((r) => r.mediaKey), startedAt);
 
   const skipped = [!imageRead.ok && 'images', !videoRead.ok && 'videos'].filter(Boolean);
   const skipNote = skipped.length ? ` — SKIPPED prune for ${skipped.join('+')} (disk read failed)` : '';
@@ -423,12 +426,15 @@ export async function reconcileMediaAssets(deps = {}) {
 // liveKeys set legitimately means "this kind has no assets on disk" — safe to
 // prune all of that kind — but the CALLER only reaches here when the read for
 // that kind succeeded, so empty is trustworthy.
-async function pruneKind(kind, liveKeys) {
+async function pruneKind(kind, liveKeys, startedAt) {
   const res = liveKeys.length === 0
-    ? await query(`DELETE FROM media_assets WHERE kind = $1`, [kind])
+    ? await query(
+      `DELETE FROM media_assets WHERE kind = $1 AND indexed_at < $2::timestamptz`,
+      [kind, startedAt],
+    )
     : await query(
-      `DELETE FROM media_assets WHERE kind = $1 AND media_key <> ALL($2::text[])`,
-      [kind, liveKeys],
+      `DELETE FROM media_assets WHERE kind = $1 AND indexed_at < $2::timestamptz AND media_key <> ALL($3::text[])`,
+      [kind, startedAt, liveKeys],
     );
   return res.rowCount || 0;
 }

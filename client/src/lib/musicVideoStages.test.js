@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  MUSIC_VIDEO_STAGES, currentProductionRun, deriveNextAction, deriveStages, projectSpend, listPreviewSources, describeProjectStatus, resolveStageParam, stageChecklist,
+  MUSIC_VIDEO_STAGES, currentProductionRun, deriveNextAction, deriveStages, projectSpend, listPreviewSources, describeProjectStatus, resolveStageParam, stageChecklist, compareMusicVideoProjectsNewestFirst,
 } from './musicVideoStages.js';
 
 const APPROVED = { art: { approved: true }, storyboard: { approved: true }, proof: { approved: true }, readyForProduction: true };
@@ -287,5 +287,30 @@ describe('stageChecklist', () => {
     // A code render draws its own picture: no footage item.
     expect(stageChecklist('produce', castProject({ composition: { mode: 'code' } }), APPROVED).map((i) => i.id)).toEqual(['approve-proof']);
     expect(stageChecklist('compose', castProject({ composition: { mode: 'composed', textCues: [] } }), APPROVED).map((i) => i.done)).toEqual([true, false]);
+  });
+});
+
+describe('compareMusicVideoProjectsNewestFirst', () => {
+  it('sorts projects by createdAt descending so newest is first', () => {
+    const p1 = { id: 'p1', createdAt: '2026-09-01T00:00:00.000Z' };
+    const p2 = { id: 'p2', createdAt: '2026-10-01T00:00:00.000Z' };
+    const p3 = { id: 'p3', createdAt: '2026-09-15T00:00:00.000Z' };
+    const sorted = [p1, p2, p3].sort(compareMusicVideoProjectsNewestFirst);
+    expect(sorted.map((p) => p.id)).toEqual(['p2', 'p3', 'p1']);
+  });
+
+  it('falls back to updatedAt descending when createdAt is absent or identical', () => {
+    const p1 = { id: 'p1', createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' };
+    const p2 = { id: 'p2', createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-02T00:00:00.000Z' };
+    const pNoCreated = { id: 'p3', updatedAt: '2026-09-03T00:00:00.000Z' };
+    const sorted = [p1, p2, pNoCreated].sort(compareMusicVideoProjectsNewestFirst);
+    expect(sorted.map((p) => p.id)).toEqual(['p3', 'p2', 'p1']);
+  });
+
+  it('preserves order when neither project has timestamps', () => {
+    const p1 = { id: 'p1', name: 'First' };
+    const p2 = { id: 'p2', name: 'Second' };
+    const sorted = [p1, p2].sort(compareMusicVideoProjectsNewestFirst);
+    expect(sorted.map((p) => p.id)).toEqual(['p1', 'p2']);
   });
 });

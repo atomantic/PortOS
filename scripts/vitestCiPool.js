@@ -11,10 +11,19 @@
  * independent files. The DB suite already serializes files because those
  * tests share one Postgres.
  *
+ * `PORTOS_CI_MAX_WORKERS` (CI only) lowers the cap for one job, e.g. Windows.
+ *
  * Vitest 5 exposes `maxWorkers` only — there is no `minWorkers` / `minThreads`.
  */
 export function vitestCiPool({ maxWorkers = 4 } = {}) {
-  if (process.env.CI) return { maxWorkers };
+  if (process.env.CI) {
+    // The Windows server job lowers the cap (#10114): one process per test file
+    // exhausts Windows process-creation resources on the runner (0xC0000142).
+    // Like the pregate budget, it can only lower the proven cap.
+    const raw = process.env.PORTOS_CI_MAX_WORKERS;
+    const ci = /^[1-9]\d*$/.test(raw ?? '') ? Number(raw) : null;
+    return { maxWorkers: ci === null ? maxWorkers : Math.min(maxWorkers, ci) };
+  }
   const raw = process.env.PORTOS_PREGATE_MAX_WORKERS;
   const pregate = /^[1-9]\d*$/.test(raw ?? '') ? Number(raw) : null;
   return pregate === null ? {} : { maxWorkers: Math.min(maxWorkers, pregate) };
