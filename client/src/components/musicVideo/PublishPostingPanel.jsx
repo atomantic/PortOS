@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { ExternalLink, X as XIcon, LogIn, Link as LinkIcon } from 'lucide-react';
 
 // Where the release goes, in posting order: the full video first so every
@@ -135,6 +136,7 @@ function TargetRow({ project, kit, entry, publishing }) {
     return {};
   });
   const setOption = (key, value) => setOptions((prev) => ({ ...prev, [key]: value }));
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const draft = publishing.drafts[target];
   const busy = publishing.busy[target];
   const error = publishing.errors[target];
@@ -179,10 +181,23 @@ function TargetRow({ project, kit, entry, publishing }) {
               <div key={k} className="contents"><dt className="text-port-text-muted">{k}</dt><dd className="min-w-0 break-words whitespace-pre-wrap">{v}</dd></div>
             ))}
           </dl>}
-          <button type="button" onClick={() => publishing.discard(target)} disabled={!!busy}
-            className="flex items-center gap-1 border border-port-border disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
-            <XIcon size={13} /> Discard
-          </button>
+          {confirmDiscard ? (
+            <ConfirmButtonPair
+              prompt="Discard this draft?"
+              confirmText="Discard"
+              ariaLabel={`Confirm discard ${label} draft`}
+              confirmAriaLabel={`Confirm discard ${label} draft`}
+              largeTouchTargets
+              busy={!!busy}
+              onConfirm={() => { setConfirmDiscard(false); publishing.discard(target); }}
+              onCancel={() => setConfirmDiscard(false)}
+            />
+          ) : (
+            <button type="button" onClick={() => setConfirmDiscard(true)} disabled={!!busy}
+              className="flex items-center gap-1 border border-port-border disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
+              <XIcon size={13} /> Discard
+            </button>
+          )}
         </div>
       )}
     </li>
