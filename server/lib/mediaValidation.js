@@ -86,6 +86,9 @@ export const beeperSettingsSchema = z.object({
   baseUrl: z.string().trim().min(1).max(500).optional(),
   attachmentBudgetGb: z.number().min(0.1).max(1000).optional(),
   allowNonLoopbackBaseUrl: z.boolean().optional(),
+  // Opt-in real read receipts (#9985): when true, opening a thread also tells
+  // Beeper the chat was read. Absent/false = PortOS-local "seen" only.
+  sendReadReceipts: z.boolean().optional(),
 }).strict().superRefine((value, ctx) => {
   if (value.baseUrl === undefined) return;
   const parsed = parseBrowserOrigin(value.baseUrl);
@@ -517,3 +520,19 @@ export const mediaCollectionBulkItemsSchema = z.object({
   (d) => (Array.isArray(d.add) && d.add.length > 0) || (Array.isArray(d.remove) && d.remove.length > 0),
   { message: 'bulk update requires at least one item in add or remove' },
 );
+
+// Bounded, machine-local Beeper view preferences; filters query the mirror.
+export const beeperScopeInputSchema = z.object({
+  name: z.string().trim().min(1).max(60),
+  filters: z.object({
+    network: z.string().trim().min(1).max(200).optional(),
+    archived: z.boolean().optional(),
+    lowPriority: z.boolean().optional(),
+    snoozed: z.boolean().optional(),
+    unreadOnly: z.boolean().optional(),
+    search: z.string().trim().max(200).optional(),
+  }).strict(),
+}).strict();
+export const beeperSavedScopesSchema = z.array(beeperScopeInputSchema.extend({
+  id: z.string().uuid(),
+})).max(50);

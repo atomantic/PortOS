@@ -94,6 +94,20 @@ partition pruning, cold start), `api-contract` (framework-neutral; spec drift,
 breaking changes, idempotency keys, pagination bounds), `observability`
 (correlation, alertable metrics, truthful health, audit trails) and
 `data-safety` (backup restorability, bulk/backfill safety, retention reach).
+
+Two gap lenses cover defects every page-walking and code-shape audit reads as
+intentional or never reaches:
+
+| Category | Owns | Distinct from |
+| --- | --- | --- |
+| `feature-completeness` | Work started and never finished: stubs and 501s reachable from the UI, permanently disabled or "coming soon" controls, UI/doc promises the code does not keep, settings nothing reads, capabilities with no entry point, server events nobody hears, deferred work with no live tracker item. Decides finish, hide, or remove | `simplify` (code with no user meaning), `ui-bugs` (finished controls that fail) |
+| `workflow-recovery` | Multi-step workflows judged from the server's in-progress states: a visible resume/cancel/reattach exit after a failed follow-up step or a reload, busy refusals that carry the holder's id, waits that time out, duplicate-preventing markers kept on the server | `ui-bugs` (one click on a fresh page), `error-handling` (per-call failures), `reliability` (process restart) |
+
+Both default to file-issues and apply to any repository. Deterministic
+contract breaks in untyped client code (a call to a member the imported module
+lacks, a test mock defining members the real module lacks, a browser
+`confirm()`) are not left to an audit: `client/src/moduleContractConventions.test.js`
+fails CI on them.
 Real-user product outcomes such as retention or satisfaction cannot be inferred
 reliably from a source audit and are not fabricated into this codebase score.
 A future distinct category must register both its scheduled prompt and a

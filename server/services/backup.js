@@ -16,11 +16,13 @@ import { hostname, tmpdir } from 'os';
 import { basename, join, resolve, relative, isAbsolute } from 'path';
 import { PATHS, ensureDir, readJSONFile, readJSONFileStrict, atomicWrite, sha256File } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { acquireBackupSnapshotCut } from '../lib/backupSnapshotBoundary.js';
+import { assertDatabaseAdmission } from '../lib/databaseMaintenanceJournal.js';
 import { createLineReader } from '../lib/streamLines.js';
 import { getEvent } from './eventScheduler.js';
 import { POOL_CONFIG, checkHealth, databaseRestoreRecovery, getServerMajorVersion, query, withDatabaseMaintenance } from '../lib/db.js';
 import { withPgToolEnv, resolvePgDumpBinary } from '../lib/pgTools.js';
-import { inspectDatabaseDump } from './backupDatabaseDump.js';
+import { inspectDatabaseDump, prepareDatabaseReplay } from './backupDatabaseDump.js';
 import {
   captureSyncFeedPositions, pendingRecoveryResult, repairCommittedRestore, restoreApplicationName, restoreReceiptSql,
   restoreRecoveryRefusal, settleReplayOutcome,
@@ -576,6 +578,9 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
   };
 
   try {
+    // Refuse before reserving a snapshot while database maintenance is fenced;
+    // the cut below repeats this check after it drains.
+    assertDatabaseAdmission();
     await access(destPath).catch((cause) => {
       // Never expose the filesystem message: it can include private paths.
       const code = ['ENOENT', 'EACCES', 'EPERM', 'EIO'].includes(cause.code) ? cause.code : 'UNKNOWN';
@@ -626,18 +631,25 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     await writeFile(markerPath(snapshotDir), '');
     dashboardEvents.emit('backup:changed');
 
-    const excludeFlags = effectiveExcludes.flatMap(p => ['--exclude', p]);
-    changedFiles = await runRsync(PATHS.data, dataDestDir, excludeFlags);
-    console.log(`💾 Backup rsync complete: ${changedFiles.length} files changed (exit 0)`);
+    // Freeze admitted file-plus-row publications across both stores. A writer
+    // that started first drains completely; new writers wait until the dump
+    // and manifest are published. Rendering/provider work is outside admission.
+    const releaseSnapshotCut = await acquireBackupSnapshotCut();
+    let pgResult;
+    try {
+      const excludeFlags = effectiveExcludes.flatMap(p => ['--exclude', p]);
+      changedFiles = await runRsync(PATHS.data, dataDestDir, excludeFlags);
+      console.log(`💾 Backup rsync complete: ${changedFiles.length} files changed (exit 0)`);
 
-    // Dump PostgreSQL alongside the file backup. Result is NO LONGER swallowed —
-    // a configured-but-failed dump must degrade the backup and alert the user.
-    const pgDumpPath = join(snapshotDir, 'portos-db.sql');
-    const pgResult = await dumpPostgres(pgDumpPath);
-
-    manifest = await generateManifest(dataDestDir, join(snapshotDir, 'manifest.json'), pgDumpPath, {
-      allowMissingDump: pgResult.status === 'skipped' || pgResult.status === 'failed'
-    });
+      // A configured-but-failed dump degrades the backup and alerts the user.
+      const pgDumpPath = join(snapshotDir, 'portos-db.sql');
+      pgResult = await dumpPostgres(pgDumpPath);
+      manifest = await generateManifest(dataDestDir, join(snapshotDir, 'manifest.json'), pgDumpPath, {
+        allowMissingDump: pgResult.status === 'skipped' || pgResult.status === 'failed'
+      });
+    } finally {
+      releaseSnapshotCut();
+    }
 
     const status = backupStatusForPg(pgResult);
     const lastRun = new Date().toISOString();
@@ -754,6 +766,7 @@ export async function dumpPostgres(outputPath) {
       '-d', pgDb,
       '--no-owner',
       '--no-acl',
+      '--no-comments',
       '--clean',
       '--if-exists',
       // Machine-local replay receipts (#9725) describe this install's past
@@ -1266,6 +1279,7 @@ function manifestDataEntries(manifest, srcDir, subdirFilter) {
     if (dataPaths.has(normalized)) return null;
     dataPaths.add(normalized);
 
+    if (isRestorePreservedPath(normalized)) continue;
     if (!subdirFilter || normalized === subdirFilter || normalized.startsWith(`${subdirFilter}/`)) {
       selected.push({ filePath, expectedHash });
     }
@@ -1293,6 +1307,34 @@ const isOsMetadataFile = (name) => OS_METADATA_FILES.has(name) || name.startsWit
  * into any directory, so matching at every depth is the point, not a bug.
  */
 const OS_METADATA_RSYNC_EXCLUDES = [...OS_METADATA_FILES, '._*'].map(name => `--exclude=${name}`);
+
+/**
+ * Data-root files a restore never installs, though a snapshot keeps them as
+ * recovery evidence. `database-authority.json` names which database backend a
+ * completed cutover retired ON THE MACHINE THAT RAN IT. Installing another
+ * machine's record (or an older snapshot's, after a reverse cutover) would fence
+ * a healthy local backend as `DATABASE_RETIRED_BACKEND`, including across
+ * restarts. The destination keeps whatever authority it already has,
+ * byte-for-byte: absent stays absent, damaged stays damaged. Root-anchored
+ * relative names, like `DEFAULT_EXCLUDES`; this one list feeds the rsync
+ * filter, the manifest selection and the scope inventory so preview,
+ * verification and execution cannot disagree.
+ */
+const RESTORE_PRESERVED_FILES = Object.freeze(['database-authority.json']);
+// Matched case-insensitively (rsync has no such flag, so each letter becomes a
+// `[xX]` class): on a case-insensitive volume a `Database-Authority.json` entry
+// would otherwise overwrite the destination's lowercase record.
+const caseInsensitiveGlob = (name) => name.replace(/[a-z]/gi, ch => `[${ch.toLowerCase()}${ch.toUpperCase()}]`);
+const RESTORE_PRESERVED_RSYNC_EXCLUDES = RESTORE_PRESERVED_FILES.map(name => `--exclude=/${caseInsensitiveGlob(name)}`);
+const isRestorePreservedPath = (relativePath) => RESTORE_PRESERVED_FILES.includes(relativePath.toLowerCase());
+
+// A filter naming a preserved file would otherwise be a silent no-op restore.
+// Compared case-insensitively after dropping empty/`.` segments, so
+// `./Database-Authority.json/` cannot slip past on a case-insensitive volume.
+const restoreScopeIsPreservedFile = (subdirFilter) => {
+  const normalized = subdirFilter?.split('/').filter(part => part && part !== '.').join('/').toLowerCase();
+  return RESTORE_PRESERVED_FILES.includes(normalized);
+};
 
 const snapshotFileIntegrityError = (snapshotId, unmanifestedPath = null) => new ServerError(
   // Name the offending entry: without it the operator is told their only backup
@@ -1338,6 +1380,8 @@ async function snapshotScopeInventory(srcDir, subdirFilter) {
     // OS metadata never reaches rsync (OS_METADATA_RSYNC_EXCLUDES), so it must
     // not inflate the digest floor either.
     if (isOsMetadataFile(basename(filePath))) continue;
+    const scopedPath = relative(srcDir, filePath).replaceAll('\\', '/');
+    if (isRestorePreservedPath(scopedPath)) continue;
     if (info.size > largestFileBytes) largestFileBytes = info.size;
 
     const normalized = relative(srcDir, filePath).replaceAll('\\', '/');
@@ -1447,6 +1491,14 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   if (subdirFilter != null && !isSafeSubdirFilter(subdirFilter)) {
     throw new Error(`Invalid subdirFilter: ${subdirFilter}`);
   }
+  // Refused for previews too, before any verification or transfer, so a preview
+  // never promises a restore that execution would silently skip.
+  if (restoreScopeIsPreservedFile(subdirFilter)) {
+    throw new ServerError(
+      'database-authority.json is machine-local and is never restored from a snapshot: it records which database backend a cutover completed on THIS machine, and installing another copy would fence the healthy local database. Restore your records with a data or database restore instead; to change the authority, run a database cutover (see docs/STORAGE.md, retired backend).',
+      { status: 400, code: 'BACKUP_RESTORE_MACHINE_LOCAL' },
+    );
+  }
 
   // Run the preflight independently for preview and execution. A preview is an
   // aid to confirmation, not an integrity lease: snapshot bytes may change
@@ -1478,7 +1530,10 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   // exclude placed after `--include=/<filter>/***` would never be consulted.
   // These are the files `snapshotScopeInventory` skips — keeping the two in
   // step is what preserves "everything transferred was verified".
-  const flags = ['-ii', '--checksum', ...OS_METADATA_RSYNC_EXCLUDES];
+  // Same placement rule: excluded before the include chain, and kept out of the
+  // manifest selection and inventory above, so what rsync may write is exactly
+  // what the preflight verified.
+  const flags = ['-ii', '--checksum', ...OS_METADATA_RSYNC_EXCLUDES, ...RESTORE_PRESERVED_RSYNC_EXCLUDES];
   if (dryRun) flags.push('--dry-run');
   if (subdirFilter) {
     // Anchored with a leading `/` — rsync matches an unanchored pattern against
@@ -1520,14 +1575,24 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
     return { dryRun, snapshotId, subdirFilter, changedFiles: transfer.value, verification };
   };
   const scope = subdirFilter?.split('/').filter(part => part && part !== '.').join('/');
-  const restoreWithCosBoundary = async () => {
-    if (!dryRun && (!scope || ['cos', 'cos/config.json', 'cos/state.json'].includes(scope))) {
-      const { withLiveCosRestore } = await import('./cosState.js');
-      return withLiveCosRestore(restoreFiles);
+  // Innermost boundary: the media registry has no queue other boundaries wait
+  // on, and acquiring it last keeps its write fence from outliving a refused
+  // CoS restore.
+  const restoreWithMediaBoundary = async () => {
+    if (!dryRun && (!scope || scope === 'media-models.json')) {
+      const { withLiveMediaModelsRestore } = await import('../lib/mediaModels.js');
+      return withLiveMediaModelsRestore(restoreFiles);
     }
     return restoreFiles();
   };
-  // Fixed acquisition order: settings -> CoS config -> CoS runtime. Settings
+  const restoreWithCosBoundary = async () => {
+    if (!dryRun && (!scope || ['cos', 'cos/config.json', 'cos/state.json'].includes(scope))) {
+      const { withLiveCosRestore } = await import('./cosState.js');
+      return withLiveCosRestore(restoreWithMediaBoundary);
+    }
+    return restoreWithMediaBoundary();
+  };
+  // Fixed acquisition order: settings -> CoS config -> CoS runtime -> media registry. Settings
   // writers drain before any CoS queue is held, and remain fenced until both
   // the transfer and all cache reconciliation (including CoS) have settled.
   if (!dryRun && (!scope || scope === 'settings.json')) {
@@ -1547,7 +1612,7 @@ const DUMP_UNREADABLE = Object.freeze({ status: 'failed', reason: 'dump_unreadab
  *   { status: 'ok', dryRun, sizeBytes, tableCount }   (dry-run or applied)
  *   { status: 'skipped', reason: 'no_dump' }           (no sql file in snapshot)
  *   { status: 'skipped', reason: 'not_configured' }    (real restore, PG unreachable)
- *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'dump_unreadable'|'dump_incomplete'|'restore_preflight'|'restore_journal'|'restore_error'|'timeout', error? }
+ *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'dump_unreadable'|'dump_incomplete'|'restore_compatibility'|'restore_preflight'|'restore_journal'|'backup_snapshot_busy'|'restore_error'|'timeout', error? }
  *     (nothing changed; a failed replay is reported only once proven rolled back)
  *   { status: 'failed', reason: 'restore_recovery_pending'|'restore_commit_unknown'|'restore_schema_reconciliation'|'restore_sync_resync'|'restore_recovery_release', error, recovery }
  *     (a restore awaits recovery: ordinary database work stays fenced until
@@ -1593,7 +1658,7 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true, sou
   }
   const expectedHash = manifestRead.value?.files?.['../portos-db.sql'];
   // Execution replays a private copy written by the same read that admits the
-  // dump, so the bytes checked are exactly the bytes psql replays even if the
+  // dump, so replay derives only from the checked bytes even if the
   // snapshot changes afterwards (#8782). Preview only inspects.
   const spoolDir = dryRun ? null : await mkdtemp(join(tmpdir(), 'portos-restore-')).catch((err) => {
     console.error(`❌ restore: cannot stage dump for snapshot ${snapshotId}: ${err.message}`);
@@ -1613,7 +1678,8 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true, sou
 async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotId, dryRun, sizeBytes }) {
   // One streamed read supplies the checksum and the completeness proof. A read
   // failure is refused here — never mistaken for an empty dump.
-  const dump = await inspectDatabaseDump(sqlPath, { spoolTo: spoolPath }).catch((err) => {
+  const targetServerMajor = await getServerMajorVersion().catch(() => null);
+  const dump = await inspectDatabaseDump(sqlPath, { spoolTo: spoolPath, targetServerMajor }).catch((err) => {
     console.error(`❌ restore: dump unreadable for snapshot ${snapshotId}: ${err.message}`);
     return null;
   });
@@ -1636,11 +1702,27 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
     return { status: 'failed', reason: 'dump_incomplete', error: `The snapshot database dump is incomplete (missing ${missing}). Restore was refused without changing data.` };
   }
   const { tableCount } = dump;
+  const health = await checkHealth();
+  if (!health.connected) return { status: 'skipped', reason: 'not_configured' };
+  if (!Number.isInteger(targetServerMajor) || targetServerMajor <= 0) {
+    return {
+      status: 'failed',
+      reason: 'restore_compatibility',
+      error: 'Cannot establish the target PostgreSQL major version. Check database connectivity and permission to SHOW server_version_num, then retry preview before restoring. No data was changed.',
+    };
+  }
+  // Admission checks above always cover the original bytes. Only the private
+  // replay copy omits extension comments and clean-dump extension drops,
+  // whose ownership may belong to a provisioning role, plus the exact PG17
+  // transaction_timeout header when replaying to an older target.
+  const replayPath = dryRun ? null : await prepareDatabaseReplay(spoolPath, dump.extensionMetadata).catch(err => {
+    console.error(`❌ restore: cannot normalize admitted dump for snapshot ${snapshotId}: ${err.message}`);
+    return null;
+  });
+  if (!dryRun && !replayPath) return DUMP_UNREADABLE;
 
   // Preview remains read-only. Recheck inside the replay transaction as well,
   // so a changed catalog cannot turn a previously safe preview into a cascade.
-  const health = await checkHealth();
-  if (!health.connected) return { status: 'skipped', reason: 'not_configured' };
   const { getDatabaseResetPlan } = await import('./backupDatabaseReset.js');
   const { preflight, reset } = await getDatabaseResetPlan();
   const preflightError = await query(preflight).then(() => null, error => error);
@@ -1649,6 +1731,29 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
   }
   if (dryRun) return { status: 'ok', dryRun: true, sizeBytes, tableCount };
 
+  // The replay replaces every row. Take the backup boundary first so no admitted
+  // file-plus-row publication is half done underneath it and no backup cut is
+  // capturing the database mid-replay. Only this restore's own cut is released.
+  let releaseSnapshotCut;
+  try {
+    releaseSnapshotCut = await acquireBackupSnapshotCut();
+  } catch (err) {
+    if (err.code !== 'BACKUP_SNAPSHOT_BUSY') throw err;
+    console.warn(`⚠️ restore: refused for snapshot ${snapshotId}: ${err.message}`);
+    return {
+      status: 'failed',
+      reason: 'backup_snapshot_busy',
+      error: 'A backup is capturing the database or an asset publication did not finish draining. Restore was refused without changing data; retry when it finishes.',
+    };
+  }
+  try {
+    return await replayAdmittedDump({ tableCount, sizeBytes, snapshotId, dump, reset, replayPath });
+  } finally {
+    releaseSnapshotCut();
+  }
+}
+
+async function replayAdmittedDump({ tableCount, sizeBytes, snapshotId, dump, reset, replayPath }) {
   return withDatabaseMaintenance(async ({ adoptRestoreRecovery }) => {
     // Read before the replay rewinds them, then make them durable together
     // with this operation's identity BEFORE anything destructive runs: a
@@ -1685,7 +1790,7 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
         '-X', '-v', 'ON_ERROR_STOP=1',
         '--single-transaction',
         '--echo-all',
-        '-h', pgHost, '-p', pgPort, '-U', pgUser, '-d', pgDb, '-c', reset, '-f', spoolPath,
+        '-h', pgHost, '-p', pgPort, '-U', pgUser, '-d', pgDb, '-c', reset, '-f', replayPath,
         '-c', restoreReceiptSql(record),
       ], { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: { ...pgEnv, PGAPPNAME: restoreApplicationName(record.id) } });
 

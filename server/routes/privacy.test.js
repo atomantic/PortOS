@@ -17,6 +17,7 @@ vi.mock('../services/privacyVault.js', () => ({
   updateVaultRecord: vi.fn(async (id, patch) => ({ id, ...patch })),
   deleteVaultRecord: vi.fn(async () => ({ ok: true })),
   revealValue: vi.fn(async (id) => ({ id, type: 'email', value: 'plain@example.com' })),
+  listScanEligibleValues: vi.fn(async () => [{ type: 'legal_name', value: 'Example Person' }, { type: 'email', value: 'example@example.com' }]),
   getVaultStatus: vi.fn(async () => ({ keyConfigured: true, recordCounts: { email: 1 } })),
 }));
 
@@ -55,7 +56,8 @@ vi.mock('../services/settings.js', () => ({
   updateSettingsWith: vi.fn(async (mutate) => mutate({ privacy: { recheck: {} } })),
 }));
 
-vi.mock('../services/privacyScan.js', () => ({
+vi.mock('../services/privacyScan.js', async (importOriginal) => ({
+  buildSearchVectors: (await importOriginal()).buildSearchVectors,
   runScanPass: vi.fn(async (opts) => ({ scanned: 2, verdicts: { found: 1, not_found: 1 }, skipped: 0, brokers: 20, _opts: opts })),
 }));
 
@@ -77,6 +79,8 @@ vi.mock('../services/privacyChanges.js', () => ({
 // Household subjects (#3658) — mocked so the route layer is exercised without a DB.
 const SELF = '00000000-0000-4000-8000-000000000001';
 vi.mock('../services/privacySubjects.js', () => ({
+  resolveSubjectId: id => id || SELF,
+  assertSubjectConsent: vi.fn(async () => ({ id: SELF })),
   listSubjects: vi.fn(async () => [{ id: SELF, displayName: 'Me', relationship: 'self', isSelf: true, consentCount: 1, recordCount: 2 }]),
   getSubject: vi.fn(async (id) => (id === SELF ? { id, displayName: 'Me', relationship: 'self', isSelf: true } : null)),
   createSubject: vi.fn(async (input) => ({ id: 'c0ffee00-0000-4000-8000-0000000000a1', ...input, isSelf: false })),
@@ -483,7 +487,31 @@ describe('POST /api/privacy/scan', () => {
 
 // ─── Opt-out automation engine (issue #2145) ────────────────────────────────
 
+vi.mock('../services/messageAccounts.js', () => ({ listAccounts: vi.fn() }));
+vi.mock('../services/messageDrafts.js', () => ({ createDraft: vi.fn(), approveDraft: vi.fn() }));
+
 describe('POST /api/privacy/optout', () => {
+  it('keeps the real opt-out workflow at found with only a Playwright account, even with auto-approve', async () => {
+    const accounts = await import('../services/messageAccounts.js');
+    const drafts = await import('../services/messageDrafts.js');
+    const brokers = await import('../services/privacyBrokers.js');
+    const settings = await import('../services/settings.js');
+    const actual = await vi.importActual('../services/privacyOptOut.js');
+    drafts.createDraft.mockResolvedValueOnce({ id: 'draft-example', status: 'draft' });
+    drafts.approveDraft.mockResolvedValueOnce({ id: 'draft-example', status: 'approved' });
+    accounts.listAccounts.mockResolvedValueOnce([{ id: 'outlook', type: 'outlook', canSend: false }]);
+    brokers.listBrokers.mockResolvedValueOnce([{ id: 'email-broker', name: 'Example broker', optout: { method: 'email', email: 'privacy@example.com' }, disclosureFields: ['full_name', 'email'] }]);
+    brokers.listBrokerCases.mockResolvedValueOnce([{ id: 'case-1', brokerId: 'email-broker', state: 'found' }]);
+    settings.getSettings.mockResolvedValueOnce({ privacy: { recheck: { autoApproveOptOutEmails: true } } });
+    optOutService.runOptOutPass.mockImplementationOnce(actual.runOptOutPass);
+    const res = await request(makeApp()).post('/api/privacy/optout').send({ runVerification: false });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ submitted: [], skipped: 1, nextActions: ['Connect a Gmail or Outlook account to send opt-out emails'] });
+    expect(brokers.transitionCase).not.toHaveBeenCalled();
+    expect(drafts.createDraft).not.toHaveBeenCalled();
+    expect(drafts.approveDraft).not.toHaveBeenCalled();
+  });
+
   it('runs an opt-out pass and returns the summary', async () => {
     const res = await request(makeApp()).post('/api/privacy/optout').send({});
     expect(res.status).toBe(200);

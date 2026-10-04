@@ -8,7 +8,7 @@ import { promisify } from 'util';
 import { platform } from 'os';
 import { createApp, getReservedPorts, notifyAppsChanged } from '../services/apps.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, scaffoldSchema } from '../lib/validation.js';
+import { validateRequest, scaffoldSchema, scaffoldTemplateCreateBodySchema } from '../lib/validation.js';
 import { ensureDir, expandHome } from '../lib/fileUtils.js';
 import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
 import { scaffoldVite } from './scaffoldVite.js';
@@ -162,14 +162,7 @@ router.get('/templates', asyncHandler(async (req, res) => {
 
 // POST /api/scaffold/templates/create - User-friendly template creation
 router.post('/templates/create', asyncHandler(async (req, res) => {
-  const { templateId, name, targetPath } = req.body;
-
-  if (!templateId || !name || !targetPath) {
-    throw new ServerError('templateId, name, and targetPath are required', {
-      status: 400,
-      code: 'VALIDATION_ERROR'
-    });
-  }
+  const { templateId, name, targetPath } = validateRequest(scaffoldTemplateCreateBodySchema, req.body);
 
   // Map to scaffold endpoint format
   const scaffoldData = {

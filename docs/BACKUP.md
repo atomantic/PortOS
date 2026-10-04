@@ -5,6 +5,120 @@ PortOS backs up two things together, into a single timestamped snapshot:
 1. **Filesystem data** — an rsync mirror of `./data/` (with SHA-256 manifest).
 2. **PostgreSQL** — a `pg_dump` logical dump (`portos-db.sql`) written alongside the snapshot.
 
+### Consistency while assets are changing
+
+The backup service closes a process-local publication boundary before copying
+`data/`, drains music-track take publications already in progress, and keeps
+new take publications waiting through the SQL dump and manifest write. Browser
+code takes, SuperCollider takes, chiptune renders, and painted-waveform renders
+stage encoding outside that boundary, then publish their final audio bytes and
+track row together inside it. Manual and scheduled backups use the same cut.
+If an admitted take does not drain within two minutes, or the cut cannot be
+released, the snapshot is marked failed (never published or used for retention
+pruning) and take publication reopens.
+
+**Media-job completion (#9981).** A render's completion holds the same admission
+from staging its terminal queue row (`media-jobs.json`) through the `completed`
+event fan-out; it is never held while rendering, waiting in the queue, calling a
+provider, or for failure and cancellation outcomes. Each attach hook that names
+the render's file in a row takes its own admission synchronously inside that
+fan-out, so a cut already waiting to drain still waits for it. A completion that
+arrives during the cut leaves the job `running` in the queue snapshot (the
+finished file is an unreferenced extra, never a dangling reference) and
+publishes once the cut releases; the lane stays occupied meanwhile, but the
+renderer is not stopped and cancellation is unchanged. A terminal write that
+fails inside the admission is retried inside it and releases it when it gives
+up.
+
+Database maintenance shares the same boundary and never terminates a render or
+stops PM2 to obtain it:
+
+- **A database restore (execution only; preview takes no cut)** acquires the cut before
+  it publishes its recovery journal. Admitted file-plus-row publications drain
+  completely first, so the replay never lands under a half-published pair. If a
+  backup owns the cut, or a publication does not drain within two minutes, the
+  restore returns `backup_snapshot_busy` without changing anything.
+- **Accepting a backend cutover** takes the cut around publishing the maintenance
+  fence (it waits up to 30 seconds to drain, and refuses with
+  `DATABASE_PREFLIGHT_BUSY` while a backup owns it). The fence is published
+  before any new publication can be admitted, and every admitted one has already
+  finished. Once it exists, a backup refuses to start or to take its cut
+  (`DATABASE_MAINTENANCE`) — one that already reserved a snapshot marks it failed
+  and preserves older recovery points — and ordinary database writes are
+  refused, so no row can reference a file the fence stranded. Cancelling the
+  operation reopens everything; nothing stays held.
+- Every release is owner-scoped: a failed or cancelled operation releases only the
+  cut it acquired and leaves the maintenance journal and restore-recovery
+  incomplete guards exactly as they were. The boundary is process-local; the
+  detached cutover worker runs only after the server stops.
+
+Admission inventory (`withBackupAssetPublication`):
+
+| Owner | Status |
+| --- | --- |
+| Music Designer take publication (`musicTakePublication.js`) | Covered (#9980) |
+| Media-job completion: queue terminal row + `completed` fan-out (`mediaJobQueue/index.js`) | Covered |
+| Attach hooks on `completed` via `mediaJobImageHook.js` (writers-room, catalog, music-video scene image/video/cast-sets, CD scene image/music bed, FableLoom scene image/video, sprite references, deck cards, music studio) | Covered |
+| Pipeline filename hooks (`filenameHookFactory.js` comic pages and storyboards, `seasonCoverFilenameHook.js`) | Covered |
+| Recovery commit of a completion whose terminal write failed (the next queue write acknowledges it outside any admission) | Outstanding |
+| Other `mediaJobEvents` `completed` subscribers that write rows (universe-builder collection hook, character sheet, sprite animation, Creative Director scene runner/plan advance/seed settle, music-video production) | Outstanding |
+| Direct gallery upload, image prompt/visibility sidecar replacement, and image deletion (`imageGen/local.js`) | Covered as one file/sidecar/index workflow (#9982 partial) |
+| Video-history deletion, including downloaded-video deletion (`videoGen/historyOps.js`) | Covered through file/history/index removal (#9982 partial) |
+| LoRA dataset uploads, gallery imports, reference-sheet crops, generated completion/recovery copies, image/dataset deletion, and queued record edits (`loraDatasets.js`, `loraDatasetGenerate.js`) | Covered as complete file/record workflows (#9982 partial) |
+| Voice Studio audition and character assignment (`voice/studio.js`) | Covered from source-file write/copy through profile-row commit and failed-write cleanup (#9982 partial) |
+| Music Video development artifact import/generated save and vocal-stem attachment (`musicVideo/devArtifactService.js`, `musicVideo/vocalStem.js`) | Covered from final file copy/write through project-record commit and failed-write cleanup (#9982 partial) |
+| Music-library deletion (`pipeline/musicLibrary.js`) | Outstanding: its route intentionally leaves existing issue/project references to the removed file (#9982) |
+| Other voice artifact owners (fine-tune and benchmark outputs) and Music Video asset workflows | Outstanding (#9982) |
+| Other durable replacement/deletion owners and final global readiness/invariant check | Outstanding (#9982) |
+| Database restore execution and backend-cutover acceptance (`backup.js`, `databasePreflight.js`) | Covered (#9983) |
+
+Direct gallery uploads encode before admission, then publish the final image,
+sidecar, and derived index row under one lease. Prompt/visibility edits and
+image/video deletions take admission before their first read or removal and
+hold it through the index update. A snapshot requested halfway through one of
+these workflows drains it; a mutation arriving during a snapshot waits until the
+file copy, SQL dump, and manifest are done. These leases do not make the two
+stores transactional: existing best-effort index failures can still leave
+stale derived rows for reconciliation, and a delete can leave other records
+that referenced the asset. The admission timeout/failure path still refuses the
+snapshot and preserves older recovery points.
+
+LoRA datasets keep their metadata beside their images rather than in PostgreSQL.
+Their admitted workflows prevent rsync from capturing a half-applied image/record
+mutation too: upload/import normalization, reference-sheet cropping, generated
+image copies and recovery replacements, and image/dataset removal each hold one
+lease through their final metadata or file operation. Record edits acquire
+admission before joining the dataset write queue. Completion listeners acquire
+their own lease synchronously during queue fan-out; rendering, queue waits,
+captioning, and the vision crop proposal stay outside admission. Local image
+normalization/cropping and copying are included in the lease. Pending `rendering`
+entries can still name files that do not exist yet, and admission does not repair
+pre-existing missing files or make failed writes transactional.
+
+Voice Studio holds admission after inference has produced its WAV and before
+creating or copying final source assets, until the corresponding profile row
+commits or failed-write cleanup finishes. Music Video development artifacts
+validate their media policy outside admission, then hold one lease from the
+versioned file write through project-record mutation and cleanup. Vocal stems
+probe the master and upload outside admission, then hold one lease from library
+copy through the project update. A failed row write can still leave an
+unreferenced library stem; it cannot make a completed snapshot point at absent
+bytes.
+
+The remaining inventory includes music-library deletion, other voice artifacts,
+direct render/index completion listeners, and the other completion paths above.
+Their persistence adapters and direct filesystem calls still need workflow-level classification;
+independently locking `fileCore` or SQL primitives would not cover the gap
+between writes. No domain is newly excluded by this slice, and the final global
+readiness check is still pending.
+
+This is part of [the cross-store consistency work](https://github.com/atomantic/PortOS/issues/9923).
+Until every owner is covered, `status: ok` reports that the file
+copy, manifest, and database dump completed; it does not assert that every
+database asset reference resolves to the captured filesystem bytes. A restore
+operator should verify affected assets before treating a snapshot as a complete
+recovery point.
+
 Now that PostgreSQL is a **required** dependency (it owns the creative catalog, memory, and a growing set of app-native records — see [Storage Classification Contract](./STORAGE.md)), **the database dump is part of required system state, not an optional extra.** A snapshot that captured `data/` but failed to capture the DB is incomplete, and PortOS surfaces that explicitly.
 
 The dump includes the machine-local `cos_pending_agent_feedback` reference index and `review_queue_triage` presentation markers. The queue's source records remain in their owning stores; restoring the dump therefore preserves snooze/dismissal decisions without exporting them through federation or duplicating source payloads.
@@ -161,11 +275,17 @@ Snapshots from PortOS versions that predate `manifest.json` remain restorable as
 
 After the preflight, rsync copies `<snapshot>/data/` back to `./data/`. Restore always passes `--checksum`, so rsync compares file contents even when the live file has the same size and modification time as the snapshot; equal-content files remain skippable, while differing bytes appear in previews and are restored. This applies to dry-run and live restores, including selective subdirectory restores and legacy snapshots without a manifest. `dryRun: true` (the default) reports what would change without writing; an optional `subdirFilter` limits the restore to one subdirectory.
 
+#### Database authority is not restored
+
+`data/database-authority.json` is backed up as cutover evidence but is never installed by a file restore. It records which database backend a completed cutover retired on the machine that ran it, so restoring it from another machine's snapshot (or from an older snapshot after a reverse cutover) would make PortOS refuse its own healthy database with `DATABASE_RETIRED_BACKEND`, including after a restart. Every file restore therefore excludes it, in preview and execution alike, and the integrity preflight ignores it too. The destination's existing file stays byte-for-byte as it was: an absent record stays absent and a damaged one stays fail-closed. Other records in the snapshot restore normally. Selecting `database-authority.json` itself is refused with `BACKUP_RESTORE_MACHINE_LOCAL` before anything is transferred. This does not touch an active maintenance journal (`database-maintenance/`): its recovery semantics are unchanged, and another machine's cutover endpoints are never imported. To change which backend is authoritative, run a database cutover.
+
 ### Database — `restorePostgres()`
 
 Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ERROR_STOP=1 --single-transaction`, so the **SQL replay is atomic**: a failed replay rolls back.
 
-**Dump admission (#8782).** Because the replay starts by resetting every application table, a dump that parses but stops early would commit an empty database — `ON_ERROR_STOP` cannot see a file that simply ends between complete statements, and historical snapshots carry no checksum to catch it. Before preview or execution touch the database, PortOS streams the dump once and requires the plain `pg_dump` envelope: the terminal `-- PostgreSQL database dump complete` block as the last content (only the `\unrestrict` line newer `pg_dump` writes may follow it) and the `CREATE TABLE` definitions for `memories` and `memory_links`, which every PortOS dump has contained. Tables introduced later are not required, and a complete dump of empty tables is valid. A header-only or truncated dump is refused as `dump_incomplete`, and a read failure as `dump_unreadable` — never as an empty successful restore. The same streamed read supplies the manifest checksum. For execution it also writes the bytes it checked to an owner-only copy in a fresh `portos-restore-*` directory under the OS temp dir, and `psql` replays that copy rather than the snapshot path, so a dump that changes on the backup media after admission cannot be what gets restored. The copy is removed when the restore finishes, whatever the outcome; staging it needs free temp space about the size of the dump. After replay commits, PortOS forces the current additive schema upgrades and then runs ordered DB migrations using the restored `schema_migrations` ledger. Already-applied migrations are skipped. Success is returned only after both phases finish and peer sync is repaired (below); dry-run performs neither replay nor schema changes.
+**Client/server compatibility (#9925).** Preview and execution check the target PostgreSQL major version. A PG17-client dump made from PG16 can be replayed to PG16: the private replay copy omits only the exact top-level `SET transaction_timeout = 0;` header, which [PostgreSQL 17 introduced](https://www.postgresql.org/docs/17/release-17.html). PG17+ targets retain it. COPY rows, quoted functions/strings, comments, and psql `\restrict` / `\unrestrict` commands remain intact. Source bytes, manifest hashes and recovery receipts are unchanged; extension normalization and transactional rollback remain in effect. An unresolvable target major returns `restore_compatibility` with a connectivity/version-check instruction before mutation. This narrow compatibility fix does not make arbitrary newer SQL features portable to older servers.
+
+**Dump admission (#8782).** Because the replay starts by resetting every application table, a dump that parses but stops early would commit an empty database — `ON_ERROR_STOP` cannot see a file that simply ends between complete statements, and historical snapshots carry no checksum to catch it. Before preview or execution perform reset preflight or mutations, PortOS streams the dump once and requires the plain `pg_dump` envelope: the terminal `-- PostgreSQL database dump complete` block as the last content (only the `\unrestrict` line newer `pg_dump` writes may follow it) and the `CREATE TABLE` definitions for `memories` and `memory_links`, which every PortOS dump has contained. Tables introduced later are not required, and a complete dump of empty tables is valid. A header-only or truncated dump is refused as `dump_incomplete`, and a read failure as `dump_unreadable` — never as an empty successful restore. The same streamed read supplies the manifest checksum. For execution it also writes the bytes it checked to an owner-only copy in a fresh `portos-restore-*` directory under the OS temp dir, and `psql` replays that copy rather than the snapshot path, so a dump that changes on the backup media after admission cannot be what gets restored. The copy is removed when the restore finishes, whatever the outcome; staging it needs free temp space about the size of the dump. After replay commits, PortOS forces the current additive schema upgrades and then runs ordered DB migrations using the restored `schema_migrations` ledger. Already-applied migrations are skipped. Success is returned only after both phases finish and peer sync is repaired (below); dry-run performs neither replay nor schema changes.
 
 | Result | Meaning |
 |---|---|
@@ -176,7 +296,9 @@ Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ER
 | `{ status: 'failed', reason: 'manifest_mismatch' }` | Snapshot's `portos-db.sql` hash disagrees with `manifest.json` — dump considered untrustworthy |
 | `{ status: 'failed', reason: 'dump_unreadable', error }` | `portos-db.sql` could not be read, or its private restore copy could not be written — refused before any reset |
 | `{ status: 'failed', reason: 'dump_incomplete', error }` | The dump lacks the `pg_dump` completion marker or a core PortOS table (header-only or truncated) — refused before any reset |
+| `{ status: 'failed', reason: 'restore_compatibility', error }` | Target PostgreSQL major cannot be established — repair the version check and retry preview before execution |
 | `{ status: 'failed', reason: 'restore_journal', error }` | The recovery journal could not be written — refused before any reset |
+| `{ status: 'failed', reason: 'backup_snapshot_busy', error }` | A backup cut is active, or admitted asset publications did not drain — refused before the recovery journal or any reset; retry later |
 | `{ status: 'failed', reason: 'restore_error' \| 'timeout', error }` | `psql` replay failed (stderr captured) and was **proven rolled back** from its receipt (below) |
 | `{ status: 'failed', reason: 'restore_commit_unknown', error, recovery }` | `psql` did not report success and the receipt could not settle whether the replay committed — recovery pending |
 | `{ status: 'failed', reason: 'restore_schema_reconciliation', error, recovery }` | The dump committed, but current schema recovery failed; **not rolled back**, recovery pending |
@@ -190,7 +312,8 @@ Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ER
 
 - While the journal exists, every ordinary database operation in the server is refused with `503 DATABASE_RESTORE_RECOVERY` (`server/lib/db.js`); only the maintenance context that owns that operation may inspect or repair. The fence survives restart.
 - `psql` exit 0 means the replay committed (stage `repairing`). Any other outcome — an SQL error, a timeout kill, a lost connection at `COMMIT` — is settled from the receipt: no live `portos-restore-<id>` session and no receipt is a **proven rollback**, which clears the journal and reopens admission with current rows intact; a receipt is a commit; anything else (a replay session still alive, an unreachable database) stays fenced as `restore_commit_unknown`.
-- Repair runs forced schema upgrades, ordered migrations, feed-sequence flooring at the **recorded** positions (never re-read after the replay) and the inbound cursor rewind. All steps are idempotent. Admission reopens only after every step succeeds and the journal is removed.
+- Repair runs forced schema upgrades, ordered migrations, feed-sequence flooring at the **recorded** positions (never re-read after the replay) and the inbound cursor rewind. All steps are idempotent. Admission reopens only after every step succeeds, the journal is removed, and its parent directory is synced.
+- If journal unlink fails, the durable record remains pending. If unlink succeeds but directory sync fails, the journal instance retains the operation and original feed positions in memory: status and ordinary database admission stay pending, and same-operation recovery retries finish directory sync. On a fresh process, a surviving journal invokes idempotent repair; if deletion persisted, completed repair needs no destructive replay. This process-local retry cannot provide stronger crash guarantees than the filesystem.
 - **Resume**, never repeat. Settings → Backup shows the pending operation with a **Resume recovery** action (`POST /api/backup/restore-db/recover` with the operation `id`), and `GET /api/backup/status` reports it as `restoreRecovery`. Restarting PortOS resumes it automatically before any route, scheduler or writer loads (`server/start.js`); if recovery still fails, boot is refused with the reason in the server log and the fence stays closed. Recovery never runs the reset or the dump again, and starting another restore is refused (`restore_recovery_pending`) until this one finishes.
 - An unreadable or damaged journal fails closed: the database stays fenced and boot is refused. Inspect the file and the logs; do not delete it unless you have established how the restore ended (with the database reachable, `SELECT * FROM restore_receipts WHERE operation_id = '<id>'` answers whether it committed).
 
@@ -265,8 +388,8 @@ queue while retaining the existing restore diagnostics. Malformed restored
 settings still invalidate the cache rather than broadcasting empty defaults.
 Dry runs and unrelated selective restores do not acquire this settings boundary.
 
-A full restore acquires queues in this order: settings, CoS configuration, CoS
-runtime state. The settings queue remains held through CoS reconciliation. A
+A full restore acquires boundaries in this order: settings, CoS configuration, CoS
+runtime state, media model registry. The settings queue remains held through CoS reconciliation. A
 restore callback must never call a queued settings write API; cache reload reads
 directly and does not re-enter the queue.
 
@@ -321,7 +444,7 @@ node scripts/database-maintenance.mjs cancel <operation-id>
 
 Cancellation supports only the initial accepted stage, preserves the journal in the machine-local cancelled archive, and never switches mode or reverses direction. Restart managed processes through the existing PM2 ecosystem workflow after cancellation if their normal boot was refused. CLI configuration follows the ecosystem's environment precedence; run from the same configured operator environment. Changed source configuration, a different operation ID, an unknown stage/version, and a competing operation are refused.
 
-An incomplete publication or interrupted cancellation remains fenced. Do not remove the active directory, steal its cancellation claim, or guess a backend from `.env`: retain the journal for recovery. There is no rollback, force or skip command. Cancellation clears an ownerless `accepted` fence; `node scripts/database-maintenance.mjs recover <operation-id>` is a different case: it only resumes the same recorded, coordinator-owned operation (identity preserved) after its worker exited. The offline transfer, its retained `data/db-dumps/portos-maintenance-<operation-id>.sql` recovery dump, mode commit, verified restart and release are described in [offline transfer](STORAGE.md#offline-transfer) and [mode commit, verified restart, and release](STORAGE.md#mode-commit-verified-restart-and-release); Settings (Database tab) surfaces the interrupted state and its Resume control from the same journal. `data/database-authority.json` and `data/database-maintenance-completed/` are local records of a finished cutover — restoring an older backup without them lifts the retired-backend guard. Normal startup and migration must not be re-enabled by treating this preparatory operation as a completed cutover.
+An incomplete publication or interrupted cancellation remains fenced. Do not remove the active directory, steal its cancellation claim, or guess a backend from `.env`: retain the journal for recovery. There is no rollback, force or skip command. Cancellation clears an ownerless `accepted` fence; `node scripts/database-maintenance.mjs recover <operation-id>` is a different case: it only resumes the same recorded, coordinator-owned operation (identity preserved) after its worker exited. The offline transfer, its retained `data/db-dumps/portos-maintenance-<operation-id>.sql` recovery dump, mode commit, verified restart and release are described in [offline transfer](STORAGE.md#offline-transfer) and [mode commit, verified restart, and release](STORAGE.md#mode-commit-verified-restart-and-release); Settings (Database tab) surfaces the interrupted state and its Resume control from the same journal. `data/database-authority.json` and `data/database-maintenance-completed/` are local records of a finished cutover. Snapshots keep them as recovery evidence, but a file restore never installs `database-authority.json` (see [Database authority is not restored](#database-authority-is-not-restored)), so restoring another machine's or an older backup can neither lift nor impose the retired-backend guard. Normal startup and migration must not be re-enabled by treating this preparatory operation as a completed cutover.
 
 Coordinator stage publication uses immutable, atomically linked records. A same-operation retry with the existing owner token can confirm its last transition after a lost response; abandoned temporary files do not advance the stage, and a delayed retry cannot overwrite later progress. Interrupted claims from the older publication protocol still fail closed. This does not permit replacing a coordinator, reopening admission, or retrying SQL import: those require the offline recovery protocol.
 
@@ -357,3 +480,17 @@ restart**. The offline coordinator still must own shutdown/drain, transfer,
 interruption recovery, and a verified admission-release handshake (#8816).
 Do not advance journal stages manually to make this diagnostic run; unsupported
 or damaged operations must stay fenced with both database copies preserved.
+
+### Restoring the media model registry in a running server
+
+A full live file restore or a selective `media-models.json` restore fences the
+cached media registry (`withLiveMediaModelsRestore` in `server/lib/mediaModels.js`).
+From the moment the restore is requested, availability toggles, adds, patches and
+removes are refused with `MEDIA_MODELS_RESTORE_BUSY` before any disk or cache
+change; competing restores are serialized. After the transfer — including a
+partial rsync failure — the registry is reloaded from the resulting file before
+the fence is released, so a later toggle can no longer write the pre-restore
+registry back over the restored one. If the reload cannot read the file, edits stay
+refused with `MEDIA_MODELS_UNAVAILABLE` until a later restore reconciles it or
+PortOS restarts. Dry runs and unrelated selective restores do not acquire this
+boundary.

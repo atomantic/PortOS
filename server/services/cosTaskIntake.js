@@ -273,6 +273,16 @@ export function buildTaskMetadata(taskData, taskType, { now = Date.now() } = {})
     delete metadata.reviewStopMode;
     delete metadata.reviewerApplies;
   }
+  // Recovery owns the actual checkout and every preservation PR. Do not let
+  // generic delivery defaults create a coordinator worktree or publish it.
+  if (taskData.workflow === 'app-checkout-recovery' && !planOnly) {
+    metadata.analysisType = taskData.workflow;
+    metadata.useWorktree = false;
+    metadata.openPR = false;
+    metadata.simplify = false;
+    metadata.reviewLoop = false;
+    delete metadata.whenDone;
+  }
   // Content-edit timestamp for cross-peer newest-edit-wins LWW (#1714). Stamped
   // at creation so a freshly-added task always carries a stamp; the merge treats
   // an absent stamp as oldest, so this also keeps a stamped task from losing a

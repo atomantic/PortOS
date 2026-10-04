@@ -721,6 +721,22 @@ describe('cosToolRegistry', () => {
       expect(after).toContain('"name":"mind.cleanup"');
     });
 
+    it.each([
+      { families: ['mind'], toolNames: ['eidoverse.augment'] },
+      { families: ['eidoverse'], toolNames: ['eidoverse.augment'] },
+      { families: ['mind'], toolNames: ['missing.tool'] },
+      { families: ['mind'], toolNames: Array(6).fill('mind.cleanup') },
+    ])('rejects unauthorized, mismatched, unknown, or unbounded targets before changing leases: %j', async (arguments_) => {
+      const result = await executeCosToolCall({
+        call: { requestId: 'invalid-target', name: 'tools.activate', arguments: arguments_ },
+        authority: { scope: 'mind', capabilities: { manageMind: true } },
+      }).catch((error) => ({ state: 'failed', error: error.message }));
+      expect(result).toMatchObject({ state: 'failed' });
+      expect(mocks.root.persistentMind.toolActivation.leases).toEqual({});
+      const prompt = await buildPersistentMindToolPrompt({ manageMind: true }, [], { requestedToolNames: ['eidoverse.augment'] });
+      expect(prompt).not.toContain('eidoverse.augment');
+    });
+
     it('never exposes an ungranted tool at full schema even with a live lease for its family (fail-closed)', async () => {
       mocks.root.persistentMind.toolActivation = { leases: { mind: 3 }, lastAgedTurnId: 'turn-1' };
       const prompt = await buildPersistentMindToolPrompt({ manageMind: false, readPortos: true }, [], { turnId: 'turn-1' });

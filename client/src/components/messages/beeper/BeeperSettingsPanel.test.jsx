@@ -427,7 +427,7 @@ describe('BeeperSettingsPanel — settings', () => {
     fireEvent.click(saveButton);
     await waitFor(() => expect(api.updateSettings).toHaveBeenCalledWith({
       beeper: {
-        enabled: true, intervalMinutes: 5, baseUrl: 'http://127.0.0.1:23373', attachmentBudgetGb: 5, allowNonLoopbackBaseUrl: false,
+        enabled: true, intervalMinutes: 5, baseUrl: 'http://127.0.0.1:23373', attachmentBudgetGb: 5, allowNonLoopbackBaseUrl: false, sendReadReceipts: false,
       },
     }));
     expect(toast.success).toHaveBeenCalled();
@@ -452,9 +452,50 @@ describe('BeeperSettingsPanel — settings', () => {
 
     await waitFor(() => expect(api.updateSettings).toHaveBeenCalledWith({
       beeper: {
-        enabled: false, intervalMinutes: 5, baseUrl: 'http://127.0.0.1:23373', attachmentBudgetGb: 5, allowNonLoopbackBaseUrl: true,
+        enabled: false, intervalMinutes: 5, baseUrl: 'http://127.0.0.1:23373', attachmentBudgetGb: 5, allowNonLoopbackBaseUrl: true, sendReadReceipts: false,
       },
     }));
+  });
+
+  // #9985: real read receipts are OFF by default and only turn on after an
+  // explicit consent step; cancelling the step changes nothing.
+  it('keeps read receipts off until the consent modal is confirmed, then saves the opt-in', async () => {
+    api.getBeeperStatus.mockResolvedValue({ tokenConfigured: false, reachable: null, accounts: [] });
+    api.updateSettings.mockResolvedValue({ beeper: {} });
+    await renderPanel();
+
+    const checkbox = await screen.findByLabelText(/Send read receipts to Beeper/);
+    expect(checkbox).not.toBeChecked();
+
+    fireEvent.click(checkbox);
+    expect(await screen.findByRole('heading', { name: 'Send read receipts?' })).toBeInTheDocument();
+    expect(checkbox).not.toBeChecked();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('heading', { name: 'Send read receipts?' })).toBeNull();
+    expect(checkbox).not.toBeChecked();
+
+    fireEvent.click(checkbox);
+    fireEvent.click(await screen.findByRole('button', { name: 'Enable read receipts' }));
+    expect(checkbox).toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.updateSettings).toHaveBeenCalledWith({
+      beeper: expect.objectContaining({ sendReadReceipts: true }),
+    }));
+  });
+
+  it('turns read receipts off immediately without a consent step', async () => {
+    api.getSettings.mockResolvedValue({ beeper: { ...BASE_SETTINGS.beeper, sendReadReceipts: true } });
+    api.getBeeperStatus.mockResolvedValue({ tokenConfigured: false, reachable: null, accounts: [] });
+    await renderPanel();
+
+    const checkbox = await screen.findByLabelText(/Send read receipts to Beeper/);
+    expect(checkbox).toBeChecked();
+    fireEvent.click(checkbox);
+    expect(checkbox).not.toBeChecked();
+    expect(screen.queryByRole('heading', { name: 'Send read receipts?' })).toBeNull();
   });
 
   it('disables Retry while the form has unsaved edits, per the save-gating convention', async () => {

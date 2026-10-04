@@ -17,6 +17,9 @@ const mock = vi.hoisted(() => ({
   readMaintenance: vi.fn(),
   resolveLocalPromptBudget: vi.fn(),
   toolPromptPadding: '',
+  realToolExposure: false,
+  recipeCatalog: [],
+  realRegistry: null,
   createPersistentMindMemoryFromCandidate: vi.fn(async ({ candidateId, ...candidate }) => ({
     success: true,
     duplicate: false,
@@ -24,7 +27,15 @@ const mock = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock('./cosState.js', () => ({ loadState: vi.fn(async () => mock.root) }));
+vi.mock('./cosState.js', () => ({
+  loadState: vi.fn(async () => mock.root),
+  saveState: vi.fn(async () => {}),
+  withStateLock: vi.fn(async (fn) => fn()),
+}));
+vi.mock('./mindToolRecipeRuntime.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  readMindRecipeTools: async () => mock.recipeCatalog,
+}));
 vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
   ...(await importOriginal()),
   resolveScreenshot: vi.fn((filename) => filename ? `/tmp/portos-screenshots/${filename}` : null),
@@ -67,16 +78,23 @@ vi.mock('./persistentMindCallCapability.js', () => ({
 vi.mock('./persistentMindPlaybookSignals.js', () => ({
   resolvePersistentMindPlaybookPhase: (...args) => mock.resolvePlaybookPhase(...args),
 }));
-vi.mock('./cosToolRegistry.js', () => ({
-  readPersistentMindRecipeCatalog: vi.fn(async () => []),
-  // Honors maxChars like the real builder, so local-window narrowing is visible.
-  buildPersistentMindToolPrompt: ({ readPortos, writePortos }, _recipes, { maxChars = Infinity } = {}) => {
-    const rendered = `PortOS tools: read=${Boolean(readPortos)} write=${Boolean(writePortos)}${mock.toolPromptPadding}`;
-    return rendered.length > maxChars ? rendered.slice(0, maxChars) : rendered;
-  },
-  executeCosToolCall: (...args) => mock.executeToolCall(...args),
-  isCosTaskToolName: (name) => name === 'cos.create-task' || name === 'cos_create_task',
-}));
+vi.mock('./cosToolRegistry.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  mock.realRegistry = actual;
+  return {
+    readPersistentMindRecipeCatalog: vi.fn(async () => mock.realToolExposure ? mock.recipeCatalog : []),
+    // Honors maxChars like the real builder, so local-window narrowing is visible.
+    buildPersistentMindToolPrompt: (capabilities, recipes, options = {}) => {
+      if (mock.realToolExposure) return actual.buildPersistentMindToolPrompt(capabilities, recipes, options);
+      const { readPortos, writePortos } = capabilities;
+      const { maxChars = Infinity } = options;
+      const rendered = `PortOS tools: read=${Boolean(readPortos)} write=${Boolean(writePortos)}${mock.toolPromptPadding}`;
+      return rendered.length > maxChars ? rendered.slice(0, maxChars) : rendered;
+    },
+    executeCosToolCall: (...args) => mock.executeToolCall(...args),
+    isCosTaskToolName: (name) => name === 'cos.create-task' || name === 'cos_create_task',
+  };
+});
 
 const { createPersistentMindTurnAdapter, persistentMindHarnessInfo, persistentMindResponseSchema} = await import('./persistentMindAdapter.js');
 
@@ -99,6 +117,9 @@ beforeEach(() => {
   mock.assertVision.mockImplementation((result, provider) => result?.provider || provider);
   mock.resolveLocalPromptBudget.mockResolvedValue(null);
   mock.toolPromptPadding = '';
+  mock.realToolExposure = false;
+  mock.recipeCatalog = [];
+  mock.root.persistentMind = { toolActivation: { leases: {}, lastAgedTurnId: null } };
   mock.runPrompt.mockResolvedValue({ text: JSON.stringify({
     thinkingSummary: 'I connected the new request to the durable fact.',
     message: 'Here is the answer.',
@@ -1008,5 +1029,111 @@ describe('local-window tool result compaction', () => {
     for (const id of ['r-1', 'r-2', 'r-3']) {
       expect(prompt).toContain(`{"requestId":"${id}","name":"catalog.search","state":"completed","compacted":true}`);
     }
+  });
+});
+
+// A synthetic granted building catalog reproduces schema pressure without a
+// live world, provider call, DB recipe, or private instance record.
+describe('targeted activation through the public turn adapter', () => {
+  const buildingTool = (name, schemaChars, capability = 'manageToolRecipes') => ({
+    type: 'portos_tool', name, version: 1, providerName: name.replaceAll('.', '_'), aliases: [],
+    description: 'Build an example structure.',
+    input_schema: { type: 'object', properties: { material: { type: 'string', description: 'Example material option. '.repeat(Math.ceil(schemaChars / 25)) } }, required: ['material'], additionalProperties: false },
+    output_schema: { type: 'object' },
+    policy: { scopes: ['mind'], requiredCapabilities: [capability], sideEffect: 'write' },
+    adapter: { kind: 'recipe' },
+  });
+  const schemasIn = (prompt) => JSON.parse(prompt.split('# PortOS semantic tools\n')[1].split('\n\n')[1]);
+
+  it.each([
+    { schemaChars: 18_000, contextChars: 0, exposed: true },
+    { schemaChars: 30_000, contextChars: 0, exposed: false },
+    { schemaChars: 18_000, contextChars: 38_000, exposed: false },
+  ])('exposes a complete requested schema or explains its catalog/local-window limit: %j', async ({ schemaChars, contextChars, exposed }) => {
+    mock.realToolExposure = true;
+    if (contextChars) mock.resolveLocalPromptBudget.mockResolvedValue({ contextWindow: 16_384, outputReserveTokens: 2_048, maxPromptTokens: 14_336 });
+    mock.root.config.persistentMindCapabilities = { manageToolRecipes: true };
+    mock.recipeCatalog = [buildingTool('recipe.first', 12_000), buildingTool('recipe.build', schemaChars), buildingTool('recipe.denied', 500, 'manageEidoverse')];
+    mock.root.persistentMind.toolActivation.leases = { recipes: 3 };
+    const before = await mock.realRegistry.buildPersistentMindToolPrompt(mock.root.config.persistentMindCapabilities, mock.recipeCatalog, { maxChars: 24_000 });
+    expect(schemasIn(before).map(({ name }) => name)).not.toContain('recipe.build');
+    const prompts = [];
+    mock.runPrompt.mockImplementation(async ({ prompt }) => {
+      prompts.push(prompt);
+      const schemas = schemasIn(prompt);
+      const names = schemas.map(({ name }) => name);
+      expect(names).not.toContain('recipe.denied');
+      if (prompts.length === 1) return { text: JSON.stringify({ toolCalls: [{ requestId: 'activate-build', name: 'tools.activate', arguments: { families: ['recipes'], toolNames: ['recipe.build'] } }] }) };
+      if (!exposed) {
+        expect(names).not.toContain('recipe.build');
+        expect(prompt).toContain('"omittedToolNames":["recipe.build"]');
+        expect(prompt).toContain('Identical reactivation will not fix this');
+      } else if (prompts.length === 2) {
+        const selected = schemas.find(({ name }) => name === 'recipe.build');
+        expect(selected.input_schema).toEqual(mock.recipeCatalog[1].input_schema);
+        expect(prompt).toContain('"exposedToolNames":["recipe.build"]');
+        return { text: JSON.stringify({ toolCalls: [{ requestId: 'build-once', name: 'recipe.build', arguments: { material: 'example-stone' } }] }) };
+      } else {
+        expect(prompt).toContain('"requestId":"build-once","name":"recipe.build","state":"completed"');
+      }
+      return { text: JSON.stringify({ message: 'Finished.', toolCalls: [] }) };
+    });
+    mock.executeToolCall.mockImplementation(async (request) => request.call.name === 'tools.activate'
+      ? mock.realRegistry.executeCosToolCall(request)
+      : { state: 'completed', name: request.call.name, result: { ok: true } });
+    await createPersistentMindTurnAdapter().run({ ...profile, turnId: `target-build-${schemaChars}`, wake: { kind: 'self' }, context: { text: 'C'.repeat(contextChars) || 'Build an example structure.' } });
+    expect(prompts).toHaveLength(exposed ? 3 : 2);
+    if (contextChars) for (const prompt of prompts) expect(prompt.length).toBeLessThanOrEqual(Math.floor(14_336 * 0.9) * 4);
+    expect(mock.executeToolCall.mock.calls.filter(([request]) => request.call.name === 'recipe.build')).toHaveLength(exposed ? 1 : 0);
+    for (const prompt of prompts.slice(1)) expect(prompt.match(/# PortOS semantic tools[\s\S]*?Supply distinct requestId values only when two intentionally identical actions must both run\./)[0].length).toBeLessThanOrEqual(24_000);
+  });
+});
+
+
+describe('family activation through the public turn adapter', () => {
+  const namesIn = (prompt) => prompt.includes('Semantic tool access is OFF.') ? [] : JSON.parse(prompt.split('# PortOS semantic tools\n')[1].split('\n\n')[1]).map(({ name }) => name);
+  const activate = { name: 'tools.activate', arguments: { families: ['mind'] } };
+
+  it('keeps zero-retention family schemas across continuations but not another user or self turn', async () => {
+    mock.realToolExposure = true;
+    mock.root.config.persistentMindCapabilities = { manageMind: true, toolExposureRetentionTurns: 0 };
+    mock.executeToolCall.mockImplementation((request) => mock.realRegistry.executeCosToolCall(request));
+    let round = 0;
+    mock.runPrompt.mockImplementation(async ({ prompt }) => {
+      const names = namesIn(prompt);
+      expect(names).not.toContain('eidoverse.visit');
+      expect(names.includes('mind.cleanup')).toBe(round > 0);
+      round += 1;
+      return { text: JSON.stringify({ message: 'Example response.', toolCalls: round <= 2 ? [{ ...activate, requestId: `activate-${round}` }] : [] }) };
+    });
+    const adapter = createPersistentMindTurnAdapter();
+    await adapter.run({ ...profile, turnId: 'zero-retention', wake: { kind: 'message' }, context: { text: 'Example request.' } });
+    expect(round).toBe(3);
+    expect(mock.root.persistentMind.toolActivation.leases).toEqual({});
+    mock.runPrompt.mockImplementation(async ({ prompt }) => {
+      expect(namesIn(prompt)).not.toContain('mind.cleanup');
+      return { text: JSON.stringify({ message: 'Example response.', toolCalls: [] }) };
+    });
+    for (const kind of ['self', 'message']) await adapter.run({ ...profile, turnId: `next-${kind}`, wake: { kind }, context: { text: 'Example next request.' } });
+  });
+
+  it.each(['deactivate', 'revoke'])('removes turn-local schemas after %s', async (change) => {
+    mock.realToolExposure = true;
+    mock.root.config.persistentMindCapabilities = { manageMind: true, toolExposureRetentionTurns: 0 };
+    mock.executeToolCall.mockImplementation(async (request) => {
+      const receipt = await mock.realRegistry.executeCosToolCall(request);
+      if (change === 'revoke' && mock.executeToolCall.mock.calls.length === 2) mock.root.config.persistentMindCapabilities.manageMind = false;
+      return receipt;
+    });
+    let round = 0;
+    mock.runPrompt.mockImplementation(async ({ prompt }) => {
+      expect(namesIn(prompt).includes('mind.cleanup')).toBe(round === 1);
+      round += 1;
+      const call = round === 1 ? { ...activate, requestId: 'initial' } : round === 2
+        ? { ...(change === 'deactivate' ? { name: 'tools.deactivate', arguments: {} } : activate), requestId: 'change' } : null;
+      return { text: JSON.stringify({ message: 'Example response.', toolCalls: call ? [call] : [] }) };
+    });
+    await createPersistentMindTurnAdapter().run({ ...profile, turnId: `zero-${change}`, wake: { kind: 'self' }, context: { text: 'Example request.' } });
+    expect(round).toBe(3);
   });
 });

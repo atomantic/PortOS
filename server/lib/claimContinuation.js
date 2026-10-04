@@ -17,6 +17,7 @@
 import { resolve } from 'path';
 import { isPathInsideDir } from './pathSafety.js';
 import { isHumanClaimWorktree, worktreeAgentId } from './worktreeOwnership.js';
+import { isTruthyMeta } from './metadataFlags.js';
 
 const CASE_FOLD = process.platform === 'win32';
 
@@ -38,6 +39,73 @@ function samePath(a, b) {
 }
 
 /**
+ * The claim ownership a claim-flow run registers on its agent record. PortOS does
+ * not provision the `claim-*` directory the agent cuts, so `workspacePath` never
+ * names it; the branch is the only identity both sides know:
+ *   - a run pinned to a target owns exactly `claim/…` for that target;
+ *   - an unpinned run (the issue picker, including a swarm orchestrator whose
+ *     fan-out children cut their own trees) owns a branch it chooses later, so
+ *     it is registered as possibly owning ANY claim branch in its repository.
+ * Null for a task that is not a claim flow. Pure.
+ *
+ * @returns {{ claimBranch: string|null, claimPicksOwnBranch: boolean }|null}
+ */
+export function claimOwnershipBinding(task) {
+  if (!isTruthyMeta(task?.metadata?.claimFlow)) return null;
+  const claimBranch = claimContinuationBranch(task?.metadata?.claimTarget);
+  return { claimBranch, claimPicksOwnBranch: !claimBranch };
+}
+
+function isLiveAgent(agent) {
+  return agent?.status === 'running' || agent?.status === 'paused';
+}
+
+function agentWorkspace(agent) {
+  return agent.workspacePath || agent.metadata?.workspacePath;
+}
+
+function agentRepository(agent) {
+  return agent.sourceWorkspace || agent.metadata?.sourceWorkspace || agentWorkspace(agent);
+}
+
+// Conservative: an agent whose repository cannot be read is treated as being in
+// this one, because the alternative is to wave a possible owner through.
+function inRepository(agent, sourceWorkspace) {
+  const repository = agentRepository(agent);
+  return !repository || !sourceWorkspace || samePath(repository, sourceWorkspace);
+}
+
+function registeredClaimBranch(agent) {
+  return agent?.claimBranch ?? agent?.metadata?.claimBranch;
+}
+
+/**
+ * Whether a running or paused agent other than `ignoreIds` holds, or may hold,
+ * the claim checkout:
+ *   - `active`: it works inside the directory, or registered this exact branch
+ *     in this repository;
+ *   - `ambiguous`: it is a claim run that picks its own branch, in this same
+ *     repository, so it might be the one that cut this tree — unprovable from
+ *     the registry alone.
+ * `active` outranks `ambiguous` across the whole list.
+ *
+ * @returns {'active'|'ambiguous'|null}
+ */
+function claimHolderOccupancy({ agents, holderPath, branchName, sourceWorkspace, ignoreIds }) {
+  let ambiguous = false;
+  const claimHolder = /^(claim|next)\//.test(branchName) || isHumanClaimWorktree(worktreeAgentId(holderPath));
+  for (const agent of agents) {
+    if (!agent || ignoreIds.has(agent.id) || !isLiveAgent(agent)) continue;
+    const workspace = agentWorkspace(agent);
+    if (samePath(workspace, holderPath) || (holderPath && workspace && isPathInsideDir(holderPath, workspace))) return 'active';
+    if (!inRepository(agent, sourceWorkspace)) continue;
+    if (registeredClaimBranch(agent) === branchName) return 'active';
+    if (claimHolder && isTruthyMeta(agent.claimPicksOwnBranch ?? agent.metadata?.claimPicksOwnBranch)) ambiguous = true;
+  }
+  return ambiguous ? 'ambiguous' : null;
+}
+
+/**
  * The claim worktree this task's previous run left on its own branch, when
  * PortOS may hand it to the relaunch. Null when there is nothing to continue:
  * not a claim task, no pinned target, no holder, a lock, a tree outside the
@@ -47,12 +115,13 @@ function samePath(a, b) {
  *   task: object,
  *   agentId: string,
  *   worktrees?: Array<{path?: string, branch?: string, locked?: boolean, prunable?: boolean}>,
- *   agents?: Array<{id?: string, status?: string, workspacePath?: string, metadata?: {workspacePath?: string}}>,
+ *   agents?: Array<{id?: string, status?: string, workspacePath?: string, metadata?: object}>,
  *   worktreesRoot: string,
+ *   sourceWorkspace?: string,
  * }} input
  * @returns {{ existingBranch: string, resumedFromAgentId: string, resumeWorktreePath: string, claimResumeInPlace: true }|null}
  */
-export function claimContinuationPointer({ task, agentId, worktrees = [], agents = [], worktreesRoot }) {
+export function claimContinuationPointer({ task, agentId, worktrees = [], agents = [], worktreesRoot, sourceWorkspace }) {
   if (task?.metadata?.claimFlow !== true && task?.metadata?.claimFlow !== 'true') return null;
   const branchName = claimContinuationBranch(task?.metadata?.claimTarget);
   if (!branchName || !agentId || !worktreesRoot) return null;
@@ -66,13 +135,13 @@ export function claimContinuationPointer({ task, agentId, worktrees = [], agents
   if (!isHumanClaimWorktree(worktreeAgentId(holder.path))) return null;
   if (!isPathInsideDir(worktreesRoot, holder.path)) return null;
 
-  const occupied = agents.some((agent) => {
-    if (!agent || agent.id === agentId) return false;
-    if (agent.status !== 'running' && agent.status !== 'paused') return false;
-    const workspace = agent.workspacePath || agent.metadata?.workspacePath;
-    return samePath(workspace, holder.path);
+  // Only a definite owner withholds the pointer. A possible one (a picker run
+  // in the same repository) is left to `claimContinuationAdmission`, which sees
+  // the checkout's activity at the moment of launch.
+  const occupancy = claimHolderOccupancy({
+    agents, holderPath: holder.path, branchName, sourceWorkspace, ignoreIds: new Set([agentId]),
   });
-  if (occupied) return null;
+  if (occupancy === 'active') return null;
 
   return {
     existingBranch: branchName,
@@ -107,4 +176,66 @@ export function claimContinuationWorkspace({ metadata, pathExists = () => false,
       claimResumeInPlace: true,
     },
   };
+}
+
+/**
+ * Shared admission for coordinator adoption/release and claim continuations.
+ * A missing cache may discover the holder; a supplied cache must still match.
+ * With no holder, branch/repository owners still prevent a new checkout from
+ * taking over publication while the original run is between worktrees.
+ */
+export function claimBranchAdmission({ branchName, preferredPath, agentId, sourceWorkspace, worktrees, agents, ignoreIds = [] }) {
+  if (!Array.isArray(worktrees) || !Array.isArray(agents)) return { admit: false, reason: 'ownership-unreadable' };
+  if (!branchName) return { admit: false, reason: 'pointer-incomplete' };
+  const holder = preferredPath
+    ? worktrees.find(wt => samePath(wt?.path, preferredPath))
+    : worktrees.find(wt => String(wt?.branch || '').replace(/^refs\/heads\//, '') === branchName);
+  if (preferredPath && !holder) return { admit: false, reason: 'holder-missing' };
+  if (holder && String(holder.branch || '').replace(/^refs\/heads\//, '') !== branchName) {
+    return { admit: false, reason: 'branch-changed' };
+  }
+  if (holder?.locked || holder?.prunable) return { admit: false, reason: 'holder-locked' };
+  const occupancy = claimHolderOccupancy({
+    agents, holderPath: holder?.path, branchName, sourceWorkspace,
+    ignoreIds: new Set([agentId, ...ignoreIds].filter(Boolean)),
+  });
+  if (occupancy === 'active') return { admit: false, reason: 'owner-active' };
+  if (occupancy === 'ambiguous') return { admit: false, reason: 'owner-ambiguous' };
+  return { admit: true };
+}
+
+/**
+ * Launch-time ownership admission for an in-place continuation. A pointer is a
+ * cached answer from when the previous run died; another owner can appear after
+ * that, so the pointer alone is not authority to enter the checkout. Re-reads
+ * the holder and the agent registry as supplied by the caller and admits only
+ * when the same branch is still checked out in the same directory and no other
+ * live owner holds it. Anything unreadable or changed refuses — the caller
+ * defers the launch and touches neither ref nor tree.
+ *
+ * A live claim run that picks its own branch (a swarm orchestrator whose
+ * children cut trees PortOS never sees) might own this tree. Nothing observable
+ * proves it does not — git activity, the continued run's own registration, and
+ * the absence of a process inside the tree can all be true of a live owner — so
+ * the launch stays deferred until that run ends, which is its explicit release.
+ *
+ * @param {{
+ *   metadata?: object,
+ *   agentId: string,
+ *   sourceWorkspace?: string,
+ *   worktrees: Array<object>|null,
+ *   agents: Array<object>|null,
+ * }} input
+ * @returns {{ admit: true }|{ admit: false, reason: string }}
+ */
+export function claimContinuationAdmission({ metadata, agentId, sourceWorkspace, worktrees, agents }) {
+  if (!Array.isArray(worktrees) || !Array.isArray(agents)) return { admit: false, reason: 'ownership-unreadable' };
+  const branchName = metadata?.existingBranch;
+  const worktreePath = metadata?.resumeWorktreePath;
+  if (!branchName || !worktreePath) return { admit: false, reason: 'pointer-incomplete' };
+
+  return claimBranchAdmission({
+    branchName, preferredPath: worktreePath, agentId, sourceWorkspace, worktrees, agents,
+    ignoreIds: [metadata?.resumedFromAgentId],
+  });
 }

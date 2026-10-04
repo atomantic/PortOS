@@ -194,6 +194,7 @@ describe('owned test Chrome cleanup', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -259,6 +260,36 @@ describe('owned test Chrome cleanup', () => {
     expect(cleanup).toHaveBeenCalledOnce();
     expect(proc.stderr.destroy).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    ['accepted but running', true, null, 'none', 'accepted'],
+    ['rejected with a delivery error', false, null, 'EPERM', 'rejected'],
+    ['exit state without an observed event', true, 'SIGKILL', 'none', 'accepted'],
+  ])('distinguishes %s at the unchanged termination deadline', async (_name, accepted, signalCode, errorCode, result) => {
+    const proc = child();
+    proc.pid = 123456;
+    proc.kill.mockImplementation(signal => {
+      if (errorCode !== 'none') proc.emit('error', Object.assign(new Error('/private/example-secret'), { code: errorCode }));
+      if (signal === 'SIGKILL') proc.signalCode = signalCode;
+      return accepted;
+    });
+    const cleanup = vi.fn();
+    const pending = _cleanupTestBrowser({ proc, cleanup });
+    const rejected = expect(pending).rejects.toThrow(
+      `child termination exceeded 10000ms deadline; teardown: stage=child-termination term=${result} kill=${result}`
+        + ` exitCode=none signal=${signalCode ?? 'none'} exitObserved=false signalError=${errorCode}`,
+    );
+    await vi.advanceTimersByTimeAsync(10000);
+    await rejected;
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(proc.stderr.destroy).toHaveBeenCalledOnce();
+    expect(proc.listenerCount('exit')).toBe(0);
+    expect(proc.listenerCount('error')).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    const logs = console.error.mock.calls.flat().join('\n');
+    expect(logs).not.toContain('123456');
+    expect(logs).not.toContain('example-secret');
   });
 
   it('reports both deadlines and cleans data even if disconnect and child exit never settle', async () => {

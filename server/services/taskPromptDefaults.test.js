@@ -84,11 +84,53 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it('ux filings use tracker IDs instead of title slugs', () => {
     const current = DEFAULT_TASK_PROMPTS.ux;
 
-    expect(PROMPT_VERSIONS.ux).toBe(4);
+    expect(PROMPT_VERSIONS.ux).toBe(6);
     expect(current).toContain('{trackerInstructions}');
     expect(current).toContain('short, human-readable title');
     expect(current).not.toContain('[ux-…]');
     expect(current).not.toContain('slug-tagged title');
+  });
+
+  it('ux checks wordy instructions, duplicate controls, and information hidden when needed', () => {
+    const current = DEFAULT_TASK_PROMPTS.ux;
+
+    expect(current).toContain('**Text earns its space.**');
+    expect(current).toContain('**One control per action.**');
+    expect(current).toContain('**What the user needs now is visible now.**');
+    expect(current).toContain('checklist item (1–13)');
+    expect(current).toContain('Items 9–13 are not aesthetic preferences');
+  });
+
+  // v6: the Music Video editor shipped double-padded with no "where it stands"
+  // line and no render preview, and no run caught it — the audit only walked
+  // top-level nav routes and had no item for record state or page framing.
+  it('ux v6 reaches record pages mid-workflow and checks record state and page framing', () => {
+    const current = DEFAULT_TASK_PROMPTS.ux;
+
+    expect(current).toMatch(/detail or editor\s+route/);
+    expect(current).toMatch(/partway through its workflow/);
+    expect(current).toContain('Rotate coverage');
+    expect(current).toContain('**A record page says where it stands.**');
+    expect(current).toContain('**Same kind of page, same frame.**');
+  });
+
+  it('ui-bugs v4 hunts unhappy paths and statically provable crashes', () => {
+    const current = DEFAULT_TASK_PROMPTS['ui-bugs'];
+
+    expect(PROMPT_VERSIONS['ui-bugs']).toBe(4);
+    expect(current).toContain('**Unhappy paths of primary actions**');
+    expect(current).toContain('**Statically provable crashes**');
+    expect(current).toContain('workflow-recovery work');
+  });
+
+  it.each([
+    ['feature-completeness', ['Stubs reachable from the interface', 'Decide, do not defer', 'Static evidence is enough']],
+    ['workflow-recovery', ['Work from server state, not from views', 'Disabled controls say why', 'id of what holds it']],
+  ])('%s v1 states what makes it its own lane', (key, markers) => {
+    const current = DEFAULT_TASK_PROMPTS[key];
+    expect(PROMPT_VERSIONS[key]).toBe(1);
+    expect(current).toContain('{modeInstructions}');
+    for (const marker of markers) expect(current, key).toContain(marker);
   });
 
   it('module-hygiene v1 is generic, evidence-led, and bounded', () => {
@@ -161,7 +203,8 @@ describe('taskPromptDefaults integrity snapshot', () => {
     ['better-dev-environment', ['Measure, do not only read', 'before and after', 'Prefer a guard to a patch', 'Not yours']],
   ])('%s states the discipline that makes it its own lane', (key, markers) => {
     const current = DEFAULT_TASK_PROMPTS[key];
-    expect(PROMPT_VERSIONS[key]).toBe(['better-complexity', 'better-runtime-safety'].includes(key) ? 2 : 1);
+    const versions = { 'better-complexity': 2, 'better-runtime-safety': 3, 'better-test-quality': 2 };
+    expect(PROMPT_VERSIONS[key]).toBe(versions[key] ?? 1);
     for (const marker of markers) expect(current, key).toContain(marker);
   });
 

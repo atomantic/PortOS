@@ -25,11 +25,11 @@ import { pointerFocusSuppressedElement } from '../lib/a11yKeyboard.js';
 // so without this filter the trap's computed last element diverges from the
 // browser's real tab order and Tab fails to wrap, letting focus escape.
 const FOCUSABLE_SELECTOR = [
-  'a[href]',
-  'button:not([disabled])',
-  'textarea:not([disabled])',
-  'input:not([disabled]):not([type="hidden"])',
-  'select:not([disabled])',
+  'a[href]:not([tabindex="-1"])',
+  'button:not([disabled]):not([tabindex="-1"])',
+  'textarea:not([disabled]):not([tabindex="-1"])',
+  'input:not([disabled]):not([type="hidden"]):not([tabindex="-1"])',
+  'select:not([disabled]):not([tabindex="-1"])',
   '[tabindex]:not([tabindex="-1"])',
 ].join(',');
 

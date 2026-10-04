@@ -44,6 +44,7 @@ const {
   isPreexistingRefError,
   isBranchCheckedOutElsewhereError,
   removeWorktree,
+  removePersistentWorktree,
   adoptWorktree,
   findAdoptableWorktreeForBranch,
   createWorktree,
@@ -622,8 +623,25 @@ describe('findAdoptableWorktreeForBranch (take over the tree that holds the bran
   it('adopts a human /claim worktree when the caller opts into allowLiveClaim', async () => {
     scriptWorktrees([{ path: cosTree('claim-issue-42'), branch: `refs/heads/${BRANCH}` }]);
 
-    expect(await findAdoptableWorktreeForBranch(REPO, BRANCH, { allowLiveClaim: true }))
+    expect(await findAdoptableWorktreeForBranch(REPO, BRANCH, { allowLiveClaim: true, agents: [] }))
       .toEqual({ path: cosTree('claim-issue-42'), agentId: 'claim-issue-42' });
+  });
+
+  it('keeps a swarm claim through the child-idle merge handoff, then allows inactive-owner recovery', async () => {
+    const path = cosTree('claim-issue-42');
+    scriptWorktrees([{ path, branch: `refs/heads/${BRANCH}` }]);
+    const parent = { id: 'agent-parent', status: 'running', sourceWorkspace: REPO, claimPicksOwnBranch: true };
+    const child = { id: 'agent-child', status: 'completed', sourceWorkspace: REPO, claimBranch: BRANCH };
+    const opts = { allowLiveClaim: true, activeAgentIds: new Set([parent.id]), agents: [parent, child] };
+    expect(await findAdoptableWorktreeForBranch(REPO, BRANCH, opts)).toBeNull();
+    expect(await findAdoptableWorktreeForBranch(REPO, BRANCH, { ...opts, agents: null })).toBeNull();
+    expect(await findAdoptableWorktreeForBranch(REPO, BRANCH, {
+      ...opts, agents: [{ ...parent, status: 'completed' }, child],
+    })).toEqual({ path, agentId: 'claim-issue-42' });
+    // A stale pointer must not silently select a different claim holder.
+    expect(await findAdoptableWorktreeForBranch(REPO, BRANCH, {
+      ...opts, agents: [], preferredPath: cosTree('claim-issue-99'),
+    })).toBeNull();
   });
 
   it('refuses a non-agent directory in the managed root', async () => {
@@ -669,10 +687,14 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
       if (sub === 'rev-parse' && args[1] === '--verify' && String(args[2]).startsWith('origin/')) {
         return Promise.resolve({ stdout: remoteTargetResolves ? 'deadbeef' : '', stderr: '', exitCode: remoteTargetResolves ? 0 : 1 });
       }
+      if (sub === 'rev-parse' && args[1] === '--abbrev-ref' && args[2] === 'HEAD') {
+        return Promise.resolve({ stdout: 'main', stderr: '', exitCode: 0 });
+      }
       if (sub === 'rev-parse' && args[1] === '--show-toplevel') {
         return Promise.resolve({ stdout: detectedToplevel ?? cwd, stderr: '', exitCode: 0 });
       }
       if (sub === 'status') return Promise.resolve({ stdout: porcelain, stderr: '', exitCode: 0 });
+      if (sub === 'rev-list') return Promise.resolve({ stdout: '0\n', stderr: '', exitCode: 0 });
       return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
     });
   }
@@ -688,12 +710,165 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     hasBranchMergeEvidenceMock.mockResolvedValue(false);
     existsSync.mockReset().mockReturnValue(true);
     realpathSync.mockReset().mockImplementation(p => p);
+    // Removal is verified against the real directory afterwards; scripted removals
+    // succeed, so the worktree directory reads as gone (and `worktree list` as empty).
+    lstat.mockReset().mockRejectedValue(Object.assign(new Error('gone'), { code: 'ENOENT' }));
     rm.mockClear();
     scriptGit();
   });
 
+  it.each([
+    ['a rejected ref read', () => Promise.reject(new Error('git command timed out'))],
+    ['a nonzero ref read', () => Promise.resolve({ stdout: '1', stderr: 'bad ref', exitCode: 128 })],
+    ['an empty ref count', () => Promise.resolve({ stdout: '', stderr: '', exitCode: 0 })],
+    ['a malformed ref count', () => Promise.resolve({ stdout: 'unknown', stderr: '', exitCode: 0 })],
+  ])('preserves the worktree and branch when merge preflight returns %s', async (_description, readCount) => {
+    const scripted = execGitMock.getMockImplementation();
+    execGitMock.mockImplementation((args, ...rest) =>
+      args[0] === 'rev-list' ? readCount() : scripted(args, ...rest));
+
+    // This is the scheduled caller's option shape: merge enabled, with no
+    // optional branch-preservation flag.
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: true });
+
+    expect(result).toMatchObject({ merged: false, removed: false, uncommittedSaved: false });
+    expect(result.warnings.join(' ')).toMatch(/preserved.*retry/i);
+    expect(rm).not.toHaveBeenCalled();
+    expect(calledWith(['worktree', 'remove', join(PATHS.worktrees, 'agent-x'), '--force'])).toBe(false);
+    expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(false);
+    expect(calledWith(['merge', 'cos/task-1/agent-x', '--no-edit'])).toBe(false);
+  });
+
+  it('still removes an empty branch after a verified zero commit count', async () => {
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: true });
+
+    expect(result.removed).toBe(true);
+    expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(true);
+  });
+
+  it('attempts and records a merge after a verified positive commit count', async () => {
+    const scripted = execGitMock.getMockImplementation();
+    execGitMock.mockImplementation((args, ...rest) =>
+      args[0] === 'rev-list'
+        ? Promise.resolve({ stdout: '2\n', stderr: '', exitCode: 0 })
+        : scripted(args, ...rest));
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: true });
+
+    expect(result).toMatchObject({ merged: true, removed: true });
+    expect(calledWith(['merge', 'cos/task-1/agent-x', '--no-edit'])).toBe(true);
+    expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(true);
+  });
+
+  it('preserves a branch after a verified positive count and failed merge', async () => {
+    const scripted = execGitMock.getMockImplementation();
+    execGitMock.mockImplementation((args, ...rest) => {
+      if (args[0] === 'rev-list') return Promise.resolve({ stdout: '1\n', stderr: '', exitCode: 0 });
+      if (args[0] === 'merge' && args[1] !== '--abort') return Promise.reject(new Error('merge conflict'));
+      return scripted(args, ...rest);
+    });
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: true });
+
+    expect(result.removed).toBe(true);
+    expect(result.merged).toBe(false);
+    expect(calledWith(['merge', 'cos/task-1/agent-x', '--no-edit'])).toBe(true);
+    expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(false);
+  });
+
   afterEach(() => {
     realpathSync.mockReset().mockImplementation(p => p);
+    lstat.mockReset().mockResolvedValue({});
+  });
+
+  describe('when the checkout survives removal (#9909)', () => {
+    const present = () => lstat.mockReset().mockResolvedValue({});
+    const failRemoval = () => {
+      const scripted = execGitMock.getMockImplementation();
+      execGitMock.mockImplementation((args, ...rest) => (args[0] === 'worktree' && args[1] === 'remove'
+        ? Promise.reject(new Error('Permission denied'))
+        : scripted(args, ...rest)));
+      rm.mockRejectedValue(new Error('EPERM: operation not permitted'));
+    };
+    afterEach(() => { rm.mockReset().mockResolvedValue(undefined); });
+
+    it('reports removed:false with a retryable warning, keeps the branch, and flags cleanupIncomplete', async () => {
+      present();
+      failRemoval();
+
+      const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: false });
+
+      expect(result).toMatchObject({ merged: false, removed: false, cleanupIncomplete: true });
+      expect(result.warnings.join(' ')).toMatch(/cleanup incomplete.*directory still present.*retryable/);
+      expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(false);
+    });
+
+    it('keeps `merged` accurate for the publication outcome while still refusing to claim removal', async () => {
+      present();
+      failRemoval();
+      const scripted = execGitMock.getMockImplementation();
+      execGitMock.mockImplementation((args, ...rest) => (args[0] === 'rev-list' ? Promise.resolve({ stdout: '2', stderr: '', exitCode: 0 })
+        : (args[0] === 'rev-parse' && args[1] === '--abbrev-ref' ? Promise.resolve({ stdout: 'main' }) : scripted(args, ...rest))));
+      getDefaultBranchMock.mockResolvedValue('main');
+
+      const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: true });
+
+      expect(result.removed).toBe(false);
+      expect(result.merged).toBe(true);
+      expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(false);
+    });
+
+    it('verifies a missing directory whose registration is stale instead of assuming it is gone', async () => {
+      existsSync.mockReturnValue(false);
+      const path = join(PATHS.worktrees, 'agent-x');
+      let pruned = false;
+      execGitMock.mockImplementation((args) => {
+        if (args[0] === 'worktree' && args[1] === 'prune') pruned = true;
+        if (args[0] === 'worktree' && args[1] === 'remove') return Promise.reject(new Error('is not a working tree'));
+        if (args[0] === 'worktree' && args[1] === 'list') {
+          return Promise.resolve({ stdout: pruned ? '' : `worktree ${path}\nHEAD abc\nbranch refs/heads/cos/task-1/agent-x\nprunable\n` });
+        }
+        return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
+      });
+
+      const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: false });
+
+      expect(result.removed).toBe(true);
+      expect(pruned).toBe(true);
+      expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(true);
+    });
+
+    it('does not report an already-gone directory as removed while its registration survives', async () => {
+      existsSync.mockReturnValue(false);
+      const path = join(PATHS.worktrees, 'agent-x');
+      execGitMock.mockImplementation((args) => {
+        if (args[0] === 'worktree' && args[1] === 'list') return Promise.resolve({ stdout: `worktree ${path}\nHEAD abc\nbranch refs/heads/b\nlocked\n` });
+        if (args[0] === 'worktree' && args[1] === 'remove') return Promise.reject(new Error('locked'));
+        return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
+      });
+
+      const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: false });
+
+      expect(result).toMatchObject({ removed: false, cleanupIncomplete: true });
+      expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(false);
+    });
+
+    it('persistent removal reports the survivor and keeps the branch', async () => {
+      present();
+      failRemoval();
+
+      const result = await removePersistentWorktree('fa-1', '/repo', 'feature/x');
+
+      expect(result).toMatchObject({ removed: false, cleanupIncomplete: true });
+      expect(result.warnings.join(' ')).toMatch(/cleanup incomplete/);
+      expect(calledWith(['branch', '-D', 'feature/x'])).toBe(false);
+    });
+
+    it('persistent removal still reports a verified removal', async () => {
+      const result = await removePersistentWorktree('fa-1', '/repo', 'feature/x');
+      expect(result).toEqual({ removed: true, warnings: [] });
+      expect(calledWith(['branch', '-D', 'feature/x'])).toBe(true);
+    });
   });
 
   it('removes a broken tree resolving to the parent without trusting its dirty status', async () => {
@@ -1267,12 +1442,16 @@ describe('cleanupOrphanedWorktrees ownership and removal', () => {
   beforeEach(() => {
     existsSync.mockReset().mockReturnValue(true);
     readdir.mockReset().mockResolvedValue([]);
+    lstat.mockReset().mockRejectedValue(Object.assign(new Error('gone'), { code: 'ENOENT' }));
     rm.mockClear();
     getDefaultBranchMock.mockResolvedValue('main');
     execGitMock.mockReset();
   });
 
-  afterEach(() => { readdir.mockReset().mockResolvedValue([]); });
+  afterEach(() => {
+    readdir.mockReset().mockResolvedValue([]);
+    lstat.mockReset().mockResolvedValue({});
+  });
 
   it('removes only the clean inactive agent and preserves active, human, locked and dirty trees', async () => {
     const entries = [
@@ -1284,7 +1463,10 @@ describe('cleanupOrphanedWorktrees ownership and removal', () => {
       { path: tree('agent-dead'), branch: 'cos/task/agent-dead' },
       { path: tree('agent-dirty'), branch: 'cos/task/agent-dirty' },
     ];
-    const stdout = entries.flatMap(entry => [
+    // `worktree list` reflects removals made so far, as real git does — removal is
+    // verified against the registration afterwards.
+    const removedPaths = new Set();
+    const listing = () => entries.filter(entry => !removedPaths.has(entry.path)).flatMap(entry => [
       'worktree ' + entry.path, 'HEAD abc123', 'branch refs/heads/' + entry.branch,
       ...(entry.locked ? ['locked protected'] : []), '',
     ]).join('\n');
@@ -1294,10 +1476,11 @@ describe('cleanupOrphanedWorktrees ownership and removal', () => {
       name: win32.basename(entry.path), isDirectory: () => true,
     })));
     execGitMock.mockImplementation((args, cwd) => {
-      if (args[0] === 'worktree' && args[1] === 'list') return Promise.resolve({ stdout });
+      if (args[0] === 'worktree' && args[1] === 'list') return Promise.resolve({ stdout: listing() });
+      if (args[0] === 'worktree' && args[1] === 'remove') removedPaths.add(args[2]);
       if (args[0] === 'rev-parse') return Promise.resolve({ stdout: args[1] === '--show-toplevel' ? cwd : 'main' });
       if (args[0] === 'status') return Promise.resolve({ stdout: cwd === tree('agent-dirty') ? ' M src/work.js' : '' });
-      if (args[0] === 'rev-list') return Promise.resolve({ stdout: '0' });
+      if (args[0] === 'rev-list') return Promise.resolve({ stdout: '0', stderr: '', exitCode: 0 });
       return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
     });
 

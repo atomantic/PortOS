@@ -22,7 +22,8 @@ vi.mock('../lib/db.js', () => ({
   withTransaction: vi.fn(),
   ensureSchema: vi.fn(async () => {}),
 }));
-vi.mock('./beeperClient.js', () => ({ updateChat: vi.fn() }));
+vi.mock('./beeperClient.js', () => ({ updateChat: vi.fn(), markRead: vi.fn() }));
+vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 // `beeperTribe.js` imports `./tribe.js` at the top level for its own
 // touchpoint/roster logic, unrelated to the parity test below — stubbed so
 // importing it here doesn't drag in tribe.js's own real (and much heavier)
@@ -30,7 +31,8 @@ vi.mock('./beeperClient.js', () => ({ updateChat: vi.fn() }));
 vi.mock('./tribe.js', () => ({ listPeople: vi.fn(async () => []) }));
 
 import { query, withTransaction } from '../lib/db.js';
-import { updateChat } from './beeperClient.js';
+import { markRead, updateChat } from './beeperClient.js';
+import { getSettings } from './settings.js';
 import * as beeperTribe from './beeperTribe.js';
 import {
   listConversations,
@@ -78,6 +80,17 @@ const callFor = (fragment) => vi.mocked(query).mock.calls.find(([sql]) => flat(s
 beforeEach(() => vi.clearAllMocks());
 
 describe('listConversations — filters are tri-state by omission', () => {
+  it('filters Later by a future snooze deadline and exposes its mirrored value', async () => {
+    const snoozeUntil = '2030-09-01T00:00:00.000Z';
+    vi.mocked(query).mockResolvedValue({ rows: [] });
+    vi.mocked(query).mockResolvedValueOnce({ rows: [conversationRow({ snooze_until: snoozeUntil })] });
+    const page = await listConversations({ snoozed: true });
+    expect(flat(vi.mocked(query).mock.calls[0][0])).toContain('c.snooze_until IS NOT NULL AND c.snooze_until > NOW()');
+    expect(page.conversations[0].snoozeUntil).toBe(snoozeUntil);
+    vi.mocked(query).mockClear();
+    await listConversations({ snoozed: false });
+    expect(flat(vi.mocked(query).mock.calls[0][0])).toContain('NOT (c.snooze_until IS NOT NULL AND c.snooze_until > NOW())');
+  });
   it('applies no archived/low-priority predicate when the caller omits them', async () => {
     vi.mocked(query).mockResolvedValue({ rows: [] });
     await listConversations({});
@@ -108,6 +121,22 @@ describe('listConversations — filters are tri-state by omission', () => {
       'c.unread_count > 0 AND (c.seen_at IS NULL OR c.seen_at < COALESCE(c.last_activity, c.created_at))',
     );
     expect(params).toEqual(['examplenet', 51]);
+  });
+});
+
+describe('listConversations — title search', () => {
+  it('binds a case-insensitive substring pattern with LIKE metacharacters escaped', async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [] });
+    await listConversations({ search: '  50%_off  ' });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(flat(sql)).toContain('c.title ILIKE $1');
+    expect(params).toEqual(['%50\\%\\_off%', 51]);
+  });
+
+  it('applies no title predicate for a blank search', async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [] });
+    await listConversations({ search: '   ' });
+    expect(flat(vi.mocked(query).mock.calls[0][0])).not.toContain('ILIKE');
   });
 });
 
@@ -613,6 +642,47 @@ describe('markConversationSeen — the local watermark write, never a Beeper cal
     expect(update[1]).toEqual([CONV_A]);
     expect(conversation.id).toBe(CONV_A);
     expect(updateChat).not.toHaveBeenCalled();
+  });
+
+  // #9985: the opt-in read receipt is the only path from this write to Beeper.
+  describe('opt-in read receipt', () => {
+    const stubSeenWrite = (existing) => {
+      vi.mocked(query)
+        .mockResolvedValueOnce({ rows: [existing] })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [conversationRow()] })
+        .mockResolvedValueOnce({ rows: [] });
+    };
+    const unseen = { id: CONV_A, source_chat_id: 'chat-example-1', seen_at: null, last_activity: '2026-09-01T10:00:00.000Z', created_at: '2026-08-01T10:00:00.000Z' };
+
+    it('sends nothing to Beeper by default', async () => {
+      stubSeenWrite(unseen);
+      await markConversationSeen(CONV_A);
+      expect(markRead).not.toHaveBeenCalled();
+    });
+
+    it('marks the chat read in Beeper when enabled and the thread had unseen activity', async () => {
+      vi.mocked(getSettings).mockResolvedValueOnce({ beeper: { sendReadReceipts: true } });
+      stubSeenWrite(unseen);
+      await markConversationSeen(CONV_A);
+      expect(markRead).toHaveBeenCalledWith('chat-example-1');
+    });
+
+    it('does not repeat the receipt for a thread already seen locally', async () => {
+      vi.mocked(getSettings).mockResolvedValueOnce({ beeper: { sendReadReceipts: true } });
+      stubSeenWrite({ ...unseen, seen_at: '2026-09-02T00:00:00.000Z' });
+      await markConversationSeen(CONV_A);
+      expect(markRead).not.toHaveBeenCalled();
+    });
+
+    it('still stamps and returns the conversation when Beeper rejects the receipt', async () => {
+      vi.mocked(getSettings).mockResolvedValueOnce({ beeper: { sendReadReceipts: true } });
+      vi.mocked(markRead).mockRejectedValueOnce(new Error('Beeper unreachable'));
+      stubSeenWrite(unseen);
+      const conversation = await markConversationSeen(CONV_A);
+      expect(conversation.id).toBe(CONV_A);
+      expect(callFor('UPDATE beeper_conversations SET seen_at = NOW()')).toBeDefined();
+    });
   });
 
   it('404s on an unknown conversation without writing anything', async () => {

@@ -265,7 +265,26 @@ describe('Messages Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.newMessages).toBe(5);
+      // An omitted mode is left for syncAccount to resolve against the account's supported default.
+      expect(messageSync.syncAccount).toHaveBeenCalledWith(VALID_UUID, undefined, { mode: undefined });
+    });
+
+    it('forwards an explicit mode and surfaces an unsupported-mode rejection as 400', async () => {
+      messageSync.syncAccount.mockResolvedValue({ error: 'teams accounts do not support unread sync', status: 400 });
+
+      const response = await request(app).post(`/api/messages/sync/${VALID_UUID}`).send({ mode: 'unread' });
+
       expect(messageSync.syncAccount).toHaveBeenCalledWith(VALID_UUID, undefined, { mode: 'unread' });
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain('unread');
+    });
+
+    it('rejects an unknown sync mode instead of silently syncing unread', async () => {
+      const response = await request(app).post(`/api/messages/sync/${VALID_UUID}`).send({ mode: 'everything' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('VALIDATION_ERROR');
+      expect(messageSync.syncAccount).not.toHaveBeenCalled();
     });
 
     it('should return 400 for invalid UUID', async () => {

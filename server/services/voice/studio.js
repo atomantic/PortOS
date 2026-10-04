@@ -2,6 +2,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { mkdir, writeFile, copyFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { withTransaction } from '../../lib/db.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { synthesizeAuk } from './aukRuntime.js';
@@ -16,7 +17,6 @@ export async function createStudioVoice({ label, instructions, text, seed = 42, 
   }
   const id = randomUUID();
   const directory = profileArtifactDirectory(id);
-  await mkdir(join(directory, 'source'), { recursive: true });
   const filename = 'reference.wav';
   const now = new Date().toISOString();
   const profile = sanitizeVoiceProfile({
@@ -32,9 +32,16 @@ export async function createStudioVoice({ label, instructions, text, seed = 42, 
       engine: 'auk', modelRevision: result.modelRevision, effectiveControls: result.effectiveControls }] },
     createdAt: now, updatedAt: now,
   });
-  return writeFile(join(directory, 'source', filename), result.wav)
-    .then(() => persistVoiceProfile(profile))
-    .catch(async error => { await rm(directory, { recursive: true, force: true }); throw error; });
+  return withBackupAssetPublication(async () => {
+    await mkdir(join(directory, 'source'), { recursive: true });
+    try {
+      await writeFile(join(directory, 'source', filename), result.wav);
+      return await persistVoiceProfile(profile);
+    } catch (error) {
+      await rm(directory, { recursive: true, force: true });
+      throw error;
+    }
+  });
 }
 
 export async function assignStudioVoice(profileId, { universeId, characterId, enableInteractive = false }) {
@@ -48,7 +55,6 @@ export async function assignStudioVoice(profileId, { universeId, characterId, en
   }
   const id = randomUUID();
   const directory = profileArtifactDirectory(id);
-  await mkdir(join(directory, 'source'), { recursive: true });
   const now = new Date().toISOString();
   const assigned = sanitizeVoiceProfile({ ...source, id, library: false,
     binding: { universeId, characterId }, originProfileId: source.originProfileId || source.id,
@@ -71,5 +77,13 @@ export async function assignStudioVoice(profileId, { universeId, characterId, en
       return persistVoiceProfile(assigned, client.query.bind(client));
     });
   };
-  return save().catch(async error => { await rm(directory, { recursive: true, force: true }); throw error; });
+  return withBackupAssetPublication(async () => {
+    await mkdir(join(directory, 'source'), { recursive: true });
+    try {
+      return await save();
+    } catch (error) {
+      await rm(directory, { recursive: true, force: true });
+      throw error;
+    }
+  });
 }

@@ -522,7 +522,7 @@ describe('claim-flow completion handoff', () => {
     const lightPrompt = buildLightContextPrompt(
       makeTask({ metadata: { claimFlow: true, useWorktree: false, openPR: false, prCompletion: 'merge-on-green' } }),
       '/repo', null,
-      { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' },
+      { isTui: true, providerId: 'codex-tui', providerCommand: 'codex', agentId: 'parent-example' },
     );
 
     expect(lightPrompt).toMatch(/## Claim Workflow Handoff/);
@@ -532,13 +532,17 @@ describe('claim-flow completion handoff', () => {
 
     const apiPrompt = await buildAgentPrompt(
       makeTask({ metadata: { claimFlow: true, useWorktree: false, openPR: false, prCompletion: 'merge-on-green' } }),
-      {}, '/repo', null, { providerType: 'api' },
+      {}, '/repo', null, { providerType: 'api', agentId: 'parent-example' },
     );
 
     expect(apiPrompt).toMatch(/## Claim Workflow Handoff/);
     expect(apiPrompt).toContain('PR completion policy: MERGE ON GREEN (no code review)');
     expect(apiPrompt).not.toContain('## Reviewer pin');
     expect(apiPrompt).not.toContain('Required-review publication rule');
+    for (const prompt of [lightPrompt, apiPrompt]) {
+      expect(prompt).toContain('"agentId":"parent-example","action":"acquire"');
+      expect(prompt).toContain('never a fan-out child');
+    }
   });
 
   it('keeps the full API no-change prompt coupled to the normal change workflow', async () => {
@@ -916,6 +920,9 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --delete-branch/);
       expect(prompt).not.toMatch(/gh pr merge[^\n]*--auto/);
       expect(prompt).toMatch(/gh pr view "<PR_URL>" --json state -q \.state/);
+      expect(prompt).toContain('If it returns `MERGED`, publication succeeded even when the CLI failed during local cleanup');
+      expect(prompt).toContain('Continue to the completion sentinel when this workflow requires one');
+      expect(prompt).toContain('Only while the PR is still unmerged');
       // ...and the gate is CI, not a review-loop status.
       expect(prompt).not.toMatch(/review loop reports/);
     });
@@ -1530,7 +1537,10 @@ describe('buildLightContextPrompt', () => {
       // 40KB recipe itself must still stay in the staged file — which is the
       // only thing this ceiling is measuring, so it carries growth headroom
       // rather than pinning today's byte count.
-      expect(prompt.replace(MANDATORY_DISPATCH_HINT_GUIDANCE, '').length).toBeLessThan(27_000);
+      // #9837 adds remote-state-first recovery and managed-cleanup ownership.
+      // Keep bounded headroom for that safety prose while the explicit recipe
+      // omission above and this ceiling still reject inlining the 40KB recipe.
+      expect(prompt.replace(MANDATORY_DISPATCH_HINT_GUIDANCE, '').length).toBeLessThan(29_000);
     });
 
     it('quotes a hostile branch ref inert in the PR-create command line', () => {
@@ -3522,6 +3532,60 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
       expect(prompt).not.toContain('## Simplify Step');
       if (providerType === 'tui') expect(prompt).toContain('.agent-done-better-test');
     });
+  });
+
+  // Read the actual UI request as data: a renamed/stripped workflow must fail
+  // the end-to-end intake/composed-prompt regression, not just a helper test.
+  it.each(['tui', 'cli', 'api'])('preserves UI checkout recovery ownership on %s', async (providerType) => {
+    const { readFile } = await import('fs/promises');
+    const { parse } = await import('@babel/parser');
+    const { createCosTaskSchema } = await import('../lib/cosValidation.js');
+    const { buildQueuedTask } = await import('./cosTaskIntake.js');
+    const source = await readFile(join(PATHS.root, 'client/src/components/apps/tabs/GitRecoveryAction.jsx'), 'utf8');
+    const ast = parse(source, { sourceType: 'module', plugins: ['jsx'] });
+    let request;
+    const walk = node => {
+      if (!node || typeof node !== 'object') return;
+      if (node.type === 'CallExpression' && node.callee?.object?.name === 'api'
+        && node.callee?.property?.name === 'addCosTask') request = node.arguments[0];
+      Object.values(node).forEach(value => {
+        if (Array.isArray(value)) value.forEach(walk);
+        else if (value && typeof value === 'object') walk(value);
+      });
+    };
+    walk(ast);
+    expect(request?.type).toBe('ObjectExpression');
+    const payload = { app: 'example-app', provider: 'example-provider' };
+    for (const property of request.properties) {
+      const value = property.value;
+      if (['StringLiteral', 'BooleanLiteral'].includes(value.type)) payload[property.key.name] = value.value;
+      if (value.type === 'TemplateLiteral') payload[property.key.name] = value.quasis.map(part => part.value.cooked).join('Example App');
+    }
+    const task = buildQueuedTask(createCosTaskSchema.parse(payload), 'user');
+    expect(task.metadata).toMatchObject({ analysisType: 'app-checkout-recovery', useWorktree: false, openPR: false });
+    expect(task.metadata).not.toHaveProperty('whenDone');
+    const prompt = await buildAgentPrompt(task, {}, '/r', null, {
+      providerType, providerId: 'codex', providerCommand: 'codex', agentId: 'checkout-recovery-test',
+    });
+    expect(prompt).toContain('## App Checkout Recovery Handoff');
+    expect(prompt).toContain('actual configured checkout');
+    expect(prompt).toContain('Existing commits may be preserved and published without making a new commit');
+    expect(prompt).toContain('named branch with an open or merged PR');
+    expect(prompt).toContain('current-head required CI');
+    expect(prompt).toContain('stash accounting');
+    expect(prompt).toContain('keep private paths and data out of public artifacts');
+    expect(prompt).toContain('.agent-done-checkout-recovery-test');
+    expect(prompt).toContain('Writing that one file is ALWAYS permitted');
+    expect(prompt).not.toMatch(/Do NOT push|do NOT push|PortOS will (?:push|merge)|commit directly to the current branch|[Cc]ommit only —/);
+    expect(prompt).not.toContain('## Completion Workflow');
+    expect(prompt).not.toContain('## Simplify Step');
+    expect(prompt).not.toContain('## Branch Reconciliation Handoff');
+    if (providerType === 'api') {
+      expect(prompt).toContain('Never create or pop a stash');
+      expect(prompt).toContain('preserve every unaccounted entry');
+      expect(prompt).not.toContain('Only commit files YOU changed');
+      expect(prompt).not.toContain('NEVER use `git stash`');
+    }
   });
 
   // Assert the composed prompt: individually correct sections can contradict.

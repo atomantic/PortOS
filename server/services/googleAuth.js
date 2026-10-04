@@ -2,6 +2,7 @@ import { auth } from '@googleapis/calendar';
 import { join } from 'path';
 import { atomicWrite, ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { PORTS } from '../lib/ports.js';
 
 const { OAuth2: OAuth2Client } = auth;
 const AUTH_DIR = join(PATHS.calendar, 'google-auth');
@@ -11,7 +12,7 @@ const SCOPES = [
   'https://www.googleapis.com/auth/calendar',
   'https://www.googleapis.com/auth/gmail.modify'
 ];
-export const OAUTH_REDIRECT_URI = `http://${process.env.PUBLIC_HOST || 'localhost'}:${process.env.PORT || 5555}/api/calendar/google/oauth/callback`;
+export const OAUTH_REDIRECT_URI = `http://${process.env.PUBLIC_HOST || 'localhost'}:${process.env.PORT || PORTS.API}/api/calendar/google/oauth/callback`;
 
 let oAuth2Client = null;
 

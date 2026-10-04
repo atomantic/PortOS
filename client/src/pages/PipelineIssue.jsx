@@ -3,18 +3,20 @@
  *
  * Tab-driven stage navigation per /pipeline/issues/:issueId/:stage. Top action
  * bar exposes the auto-run-text button which kicks off idea→prose→(comicScript
- * + teleplay) and streams progress via SSE.
+ * + teleplay) and streams progress via SSE; a status line under the title names
+ * where the issue stands and the one next action.
  */
 
 import { useEffect, useRef, useState, useMemo } from 'react';
-import { Link, useParams, useNavigate } from 'react-router';
+import { Link, useParams, useNavigate, useSearchParams } from 'react-router';
 import {
-  ArrowLeft, Sparkles, Loader2, X, Lightbulb, BookOpen, FileText, Film as FilmIcon,
+  ArrowLeft, Sparkles, Loader2, Lightbulb, BookOpen, FileText, Film as FilmIcon,
   LayoutGrid, Image as ImageIcon, Clapperboard, Users, Settings, Mic, Lock, Unlock,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import PageSkeleton from '../components/ui/PageSkeleton';
-import Modal from '../components/ui/Modal';
+import Drawer from '../components/Drawer';
+import RecordStatusLine from '../components/ui/RecordStatusLine';
 import TabPills from '../components/ui/TabPills';
 import {
   getPipelineConfig, getPipelineIssue, getPipelineSeries, updatePipelineIssue,
@@ -38,11 +40,11 @@ import LengthProfilePicker from '../components/pipeline/LengthProfilePicker';
 import ArcRolePicker from '../components/pipeline/ArcRolePicker';
 import CatalogCastPanel from '../components/CatalogCastPanel';
 import { VisualGenSettingsPanel } from '../components/pipeline/stages/VisualGenSettings';
-import { formatCount } from '../utils/formatters';
+import { describePipelineIssueStatus } from '../lib/pipelineIssueStatus';
 
 // Stages that surface a header-level settings gear. The Comic editor
 // (`comicScript`) owns its own image-gen drawer inside ComicScriptStage,
-// so it stays off this list — only Storyboards needs the shared modal.
+// so it stays off this list — only Storyboards needs the shared drawer.
 const VISUAL_STAGE_LABELS = {
   storyboards: 'Storyboards',
 };
@@ -105,13 +107,18 @@ export default function PipelineIssue() {
   const [loading, setLoading] = useState(true);
   const [autoRunStarting, setAutoRunStarting] = useState(false);
   const [autoRunActive, setAutoRunActive] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Deep-linkable open state for the per-stage generation settings drawer; the
+  // stage tabs navigate without a query string, so switching stage closes it.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const settingsOpen = searchParams.get('settings') === '1';
+  const setSettingsOpen = (next) => setSearchParams((prev) => {
+    const params = new URLSearchParams(prev);
+    if (next) params.set('settings', '1'); else params.delete('settings');
+    return params;
+  }, { replace: !next });
   const [lengthProfileSaving, setLengthProfileSaving] = useState(false);
   const [arcRoleSaving, setArcRoleSaving] = useState(false);
   const [genConfigSaving, setGenConfigSaving] = useState(false);
-  // Close the settings modal whenever the active stage changes so it doesn't
-  // reopen unexpectedly when the user returns to a previously-visited stage.
-  useEffect(() => { setSettingsOpen(false); }, [stageId]);
   const { latest, frames } = usePipelineProgress(pipelineAutoRunSseUrl, [issueId], { enabled: autoRunActive });
 
   useEffect(() => {
@@ -200,7 +207,7 @@ export default function PipelineIssue() {
       .finally(() => setArcRoleSaving(false));
   };
 
-  // Persist genConfig changes from the header settings modal. The active
+  // Persist genConfig changes from the header settings drawer. The active
   // visual stage owns the config record (we keep per-stage genConfig so a
   // user can pin "codex" for comicPages but "local" for storyboards).
   const handleGenConfigChange = async (next) => {
@@ -303,6 +310,19 @@ export default function PipelineIssue() {
     ? `${PIPELINE_STAGE_LABELS[stageId]} stage is locked — unlock it to regenerate`
     : ambientLockHint;
 
+  const statusStages = stageTabs.map((tab) => tab.id).filter((id) => id !== 'nouns');
+  const status = describePipelineIssueStatus(issue, {
+    stages: statusStages,
+    labels: PIPELINE_STAGE_LABELS,
+    autoRunActive,
+    latest,
+    activeStage: stageId,
+  });
+  const runNext = () => {
+    if (status?.next?.id === 'cancel-auto-run') handleCancelAutoRun();
+    else if (status?.next?.id === 'goto') navigate(`/pipeline/issues/${issueId}/${status.next.stage}`);
+  };
+
   if (loading) {
     return (
       <PageSkeleton
@@ -371,15 +391,6 @@ export default function PipelineIssue() {
                 disabled={autoRunStarting || autoRunActive}
               />
             ) : null}
-            {autoRunActive && (
-              <button
-                type="button"
-                onClick={handleCancelAutoRun}
-                className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-port-card border border-port-border text-port-error text-sm"
-              >
-                <X size={14} /> Cancel auto-run
-              </button>
-            )}
             <button
               type="button"
               onClick={() => handleAutoRun({})}
@@ -435,16 +446,7 @@ export default function PipelineIssue() {
           </div>
         </div>
 
-        {autoRunActive && latest ? (
-          <div className="text-xs text-gray-400">
-            {latest.type === 'stage:start' && <>Generating <span className="text-white">{PIPELINE_STAGE_LABELS[latest.stage]}</span>…</>}
-            {latest.type === 'stage:complete' && latest.stage === 'episodeVideo' && <>{PIPELINE_STAGE_LABELS[latest.stage]} kicked off — {latest.scenes} scene{latest.scenes === 1 ? '' : 's'} queued in Creative Director</>}
-            {latest.type === 'stage:complete' && latest.stage !== 'episodeVideo' && <>{PIPELINE_STAGE_LABELS[latest.stage]} ready ({formatCount(latest.length)} chars)</>}
-            {latest.type === 'stage:error' && <>{PIPELINE_STAGE_LABELS[latest.stage]} error — {latest.error}</>}
-            {latest.type === 'skip' && <>{PIPELINE_STAGE_LABELS[latest.stage]} skipped — {latest.reason}</>}
-            {latest.type === 'start' && <>Starting auto-run…</>}
-          </div>
-        ) : null}
+        <RecordStatusLine status={status} nextAction={status?.next} onNextAction={runNext} />
       </div>
 
       {/* Stage tabs */}
@@ -484,10 +486,10 @@ export default function PipelineIssue() {
         {['prose', 'comicScript', 'teleplay'].includes(stageId) ? (
           <IssueJudgePanel issue={issue} stageId={stageId} />
         ) : null}
-        {/* Frames log for debugging during auto-run — collapsed but available. */}
+        {/* Raw auto-run progress frames — the only place JSON renders, collapsed. */}
         {frames.length > 0 ? (
           <details className="mt-6 text-xs text-gray-600">
-            <summary className="cursor-pointer text-gray-500">Auto-run frames ({frames.length})</summary>
+            <summary className="cursor-pointer text-gray-500">Debug details · auto-run frames ({frames.length})</summary>
             <pre className="mt-2 p-3 bg-port-bg border border-port-border rounded overflow-auto max-h-64">{frames.map((f) => JSON.stringify(f)).join('\n')}</pre>
           </details>
         ) : null}
@@ -495,29 +497,20 @@ export default function PipelineIssue() {
 
       {/* Per-stage generation settings — only available on visual stages. */}
       {isVisualStage && (
-        <Modal open={settingsOpen} onClose={() => setSettingsOpen(false)} size="lg" ariaLabel="Generation settings">
-          <div className="bg-port-card border border-port-border rounded-lg p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-base font-semibold text-white">
-                {VISUAL_STAGE_LABELS[stageId]} — Generation settings
-              </h2>
-              <button
-                type="button"
-                onClick={() => setSettingsOpen(false)}
-                className="p-1 text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"
-                aria-label="Close"
-              >
-                <X size={16} />
-              </button>
-            </div>
-            <VisualGenSettingsPanel
-              value={issue.stages?.[stageId]?.genConfig || null}
-              onChange={handleGenConfigChange}
-              stageLabel={VISUAL_STAGE_LABELS[stageId]}
-              series={series}
-            />
-          </div>
-        </Modal>
+        <Drawer
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          title={`${VISUAL_STAGE_LABELS[stageId]} — Generation settings`}
+          size="md"
+          closeLabel="Close generation settings"
+        >
+          <VisualGenSettingsPanel
+            value={issue.stages?.[stageId]?.genConfig || null}
+            onChange={handleGenConfigChange}
+            stageLabel={VISUAL_STAGE_LABELS[stageId]}
+            series={series}
+          />
+        </Drawer>
       )}
     </div>
   );

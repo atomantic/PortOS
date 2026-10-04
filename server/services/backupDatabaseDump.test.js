@@ -4,11 +4,11 @@
  * restore-level contracts live in backup.test.js / backup.db.test.js.
  */
 import { afterAll, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createHash } from 'crypto';
-import { inspectDatabaseDump } from './backupDatabaseDump.js';
+import { inspectDatabaseDump, prepareDatabaseReplay } from './backupDatabaseDump.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'portos-dump-inspect-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -65,6 +65,67 @@ describe('inspectDatabaseDump', () => {
   it('rejects a trailer embedded in an unterminated SQL value', async () => {
     const sql = `CREATE TABLE public.memories (\n);\nCREATE TABLE public.memory_links (\n);\nSELECT $body$${TRAILER}`;
     expect((await inspectDatabaseDump(write('unterminated.sql', sql))).complete).toBe(false);
+  });
+
+  // #9887: only real top-level extension metadata can be omitted. Stored
+  // SQL-looking data and ordinary comments must remain byte-for-byte intact.
+  it('stages extension comments across chunks without changing data or original integrity', async () => {
+    const ordinary = "COMMENT ON TABLE public.memories IS '\nCOMMENT ON EXTENSION vector IS ''stored'';\n';\n";
+    const routine = "CREATE FUNCTION public.example() RETURNS text AS $body$\nCOMMENT ON EXTENSION vector IS 'function';\n$body$ LANGUAGE sql;\n";
+    const copy = Buffer.concat([Buffer.from("COPY public.memories (id) FROM stdin;\nCOMMENT ON EXTENSION vector IS 'row';\n"),
+      Buffer.alloc(3 * CHUNK, 0xe9), Buffer.from("\n\\.\n")]);
+    const extension = `DROP EXTENSION IF EXISTS vector; COMMENT ON EXTENSION "example""name" IS 'first; ''quoted''\n${'x\n'.repeat(CHUNK)}last';`;
+    const prefix = Buffer.concat([Buffer.from("CREATE TABLE public.memories (\n);\nCREATE TABLE public.memory_links (\n);\n" + ordinary + routine), copy]);
+    const suffix = Buffer.from("\nDROP TABLE public.example; DROP EXTENSION vector CASCADE;\nCOMMENT ON EXTENSION vector IS NULL; SELECT 42;\n" + TRAILER);
+    const sql = Buffer.concat([prefix, Buffer.from(extension), suffix]);
+    const original = write('comments.sql', sql);
+    const spoolTo = join(dir, 'comments-spool.sql');
+    const dump = await inspectDatabaseDump(original, { spoolTo });
+    expect(dump).toMatchObject({ complete: true, missingTables: [],
+      sha256: createHash('sha256').update(sql).digest('hex'), sizeBytes: sql.length });
+    expect(dump.extensionMetadata).toHaveLength(3);
+    const replayPath = await prepareDatabaseReplay(spoolTo, dump.extensionMetadata);
+    expect(readFileSync(original)).toEqual(sql);
+    expect(readFileSync(spoolTo)).toEqual(sql);
+    expect(readFileSync(replayPath)).toEqual(Buffer.concat([prefix, Buffer.from(" \nDROP TABLE public.example; DROP EXTENSION vector CASCADE;\n SELECT 42;\n" + TRAILER)]));
+    if (process.platform !== 'win32') expect(statSync(replayPath).mode & 0o777).toBe(0o600);
+  });
+
+  // #9925: version normalization must never rewrite stored SQL-looking data.
+  it.each([16, 17, 18])('normalizes only the exact top-level PG17 header for target %s', async targetServerMajor => {
+    const header = 'SET transaction_timeout = 0;\r\n';
+    const stored = [
+      '-- SET transaction_timeout = 0;\r\n',
+      '/*\r\nSET transaction_timeout = 0;\r\n*/\r\n',
+      "COMMENT ON TABLE public.memories IS '\r\nSET transaction_timeout = 0;\r\n';\r\n",
+      'CREATE FUNCTION public.example() RETURNS text AS $body$\r\nSET transaction_timeout = 0;\r\n$body$ LANGUAGE sql;\r\n',
+      'COPY public.memories (id) FROM stdin;\r\nSET transaction_timeout = 0;\r\n\\.\r\n',
+      'SET transaction_timeout = 1;\r\n',
+      'SET transaction_timeout = 0; SELECT 42;\r\n',
+    ].join('');
+    const sql = Buffer.from('\\restrict fixturekey\r\n' + header
+      + 'CREATE TABLE public.memories (\r\n);\r\nCREATE TABLE public.memory_links (\r\n);\r\n'
+      + stored + TRAILER.replaceAll('\n', '\r\n') + '\\unrestrict fixturekey\r\n');
+    const original = write(`target-${targetServerMajor}.sql`, sql);
+    const spoolTo = join(dir, `target-${targetServerMajor}-spool.sql`);
+    const dump = await inspectDatabaseDump(original, { spoolTo, targetServerMajor });
+    expect(dump).toMatchObject({ complete: true, missingTables: [], sha256: createHash('sha256').update(sql).digest('hex') });
+    const replayPath = await prepareDatabaseReplay(spoolTo, dump.extensionMetadata);
+    expect(readFileSync(original)).toEqual(sql);
+    expect(readFileSync(spoolTo)).toEqual(sql);
+    const expected = targetServerMajor < 17 ? Buffer.from(sql.toString().replace(header, '')) : sql;
+    expect(readFileSync(replayPath)).toEqual(expected);
+  });
+
+  it('retains an oversized statement prefix so invalid SQL still reaches transactional replay', async () => {
+    const sql = "CREATE TABLE public.memories (\n);\nCREATE TABLE public.memory_links (\n);\n"
+      + `COMMENT ON EXTENSION vector IS NULL${' \n'.repeat(CHUNK)}INVALID SQL;\n` + TRAILER;
+    const spoolTo = join(dir, 'invalid-comment-spool.sql');
+    const dump = await inspectDatabaseDump(write('invalid-comment.sql', sql), { spoolTo });
+    expect(dump.complete).toBe(true);
+    expect(dump.extensionMetadata).toEqual([]);
+    const replayPath = await prepareDatabaseReplay(spoolTo, dump.extensionMetadata);
+    expect(readFileSync(replayPath, 'utf8')).toBe(sql);
   });
 
   it('rejects a read failure rather than reporting an empty dump', async () => {

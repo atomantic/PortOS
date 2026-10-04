@@ -1243,6 +1243,37 @@ and no conversation with its author required.
   all as new on the next observation — a flap that repeats for as long as the
   source keeps failing intermittently.
 
+### Local attention reasons
+
+Each place includes `attentionSignals` and `attentionTruncated`. Contributors
+identify the enabled, successfully read `source`, its actual `severity`
+(`attention` or `error`), its contributing `signalCount` (rows), and `reasons`.
+The district's total `signalCount` includes healthy rows and is not a fault count.
+An app group is one signal row even when it represents many applications.
+Each reason contains an allowlisted `code` and `affectedCount`, an aggregate
+number of affected records when known, otherwise `null`.
+
+Use `app_not_started`, `app_stopped`, and `app_unknown` to distinguish registry
+conditions before choosing a process diagnostic; not-started is not proof of a
+crash. Nexus can report `runtime_data_disk_pressure` or
+`runtime_data_disk_critical` (capacity of the filesystem holding runtime data),
+`memory_pressure` or `memory_critical`, `backup_failure`, `review_alerts`, and
+`cos_paused`. These come from the same predicates that determine source status;
+health does not alarm on not-started apps, while App Arcade does. Other sources
+and older reason-less inputs use `source_attention` or `source_error`: these
+say only that a coarse source status requires attention, without inventing a
+cause. Error sources remain identifiable even though district status is attention.
+
+Reasons are ordered by source, severity (error first), then code and capped at
+24 entries per district. `attentionTruncated: true` means some entries were
+omitted. Healthy recovery removes reasons on the next collection; disabled and
+unreadable sources emit none, and unavailable inputs never reuse previous causes.
+Diagnostics contain no app names, record identities, paths or raw errors. They
+are collected only for local observation under the existing mind
+`manageEidoverse` grant, without new routes, grants, world logs, renderer
+payloads or peer exports. A subsequent observe still advances the visit marker;
+use the internal `commit: false` form to inspect without consuming its delta.
+
 ### The visit marker
 
 "What is new since I last looked" has to cross a **wake boundary**: a mind

@@ -10,6 +10,12 @@ const lyricAt = (cues, t) => {
   return line?.text || '';
 };
 
+// A phone's collapsed mini-player has no picture to show, so it must not pull
+// every scene take into memory up front — iOS Safari kills the tab and offers
+// only "A problem repeatedly occurred". Without matchMedia, load eagerly.
+const DESKTOP_QUERY = '(min-width: 1024px)';
+const startsDeferred = (collapsed) => collapsed && window.matchMedia?.(DESKTOP_QUERY).matches === false;
+
 /**
  * Live preview of the project's composition document: the sandboxed iframe,
  * the song, play/scrub and the lyric line being sung. The iframe runs in an
@@ -29,6 +35,17 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const [preview, setPreview] = useState(null);
   const [previewError, setPreviewError] = useState('');
   const [status, setStatus] = useState('');
+  const [wanted, setWanted] = useState(() => !startsDeferred(collapsed));
+  useEffect(() => {
+    if (!collapsed) { setWanted(true); return undefined; }
+    const desktop = window.matchMedia?.(DESKTOP_QUERY);
+    // The desktop dock is always visible and has no expand button. A preview
+    // deferred on a phone must therefore load when its viewport becomes wide.
+    const reveal = () => { if (!desktop || desktop.matches) setWanted(true); };
+    reveal();
+    desktop?.addEventListener?.('change', reveal);
+    return () => desktop?.removeEventListener?.('change', reveal);
+  }, [collapsed]);
   const [t, setT] = useState(0);
   const [playing, setPlaying] = useState(false);
   const iframeRef = useRef(null);
@@ -43,12 +60,12 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     setPreview(null);
     setPreviewError('');
     seekState.current = { inFlight: false, pending: null, ready: false };
-    if (!refresh) return () => { active = false; };
+    if (!refresh || !wanted) return () => { active = false; };
     getMusicVideoCompositionPreview(project.id, { silent: true, draft })
       .then((next) => { if (active) setPreview(next); })
       .catch((err) => { if (active) setPreviewError(err?.message || 'Could not build the preview'); });
     return () => { active = false; };
-  }, [project.id, refresh, draft]);
+  }, [project.id, refresh, draft, wanted]);
 
   const postSeek = useCallback((time) => {
     const frame = iframeRef.current?.contentWindow;
@@ -154,14 +171,14 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className={buttonCls} onClick={togglePlay} disabled={!preview || !audioUrl}>
+        <button type="button" className={buttonCls} onClick={togglePlay} disabled={!preview || !audioUrl || (!!previewError && !playing)}>
           {playing ? <Pause size={14} /> : <Play size={14} />} {playing ? 'Pause' : 'Play'}
         </button>
         <label htmlFor={scrubId} className="sr-only">{draft ? 'Scrub the composition candidate' : 'Scrub the composition preview'}</label>
-        <input id={scrubId} type="range" min={0} max={duration || 0} step={1 / fps} value={Math.min(t, duration || 0)}
+        <input disabled={!preview || !!previewError} id={scrubId} type="range" min={0} max={duration || 0} step={1 / fps} value={Math.min(t, duration || 0)}
           onChange={(e) => { audioRef.current?.pause(); setPlaying(false); seek(Number(e.target.value)); }}
           className="min-w-0 flex-1" />
-        <span className="text-xs text-port-text-muted tabular-nums">{t.toFixed(2)}s / {duration.toFixed(1)}s</span>
+        <span className="text-xs text-port-text-muted tabular-nums">{previewError ? 'Preview unavailable' : preview ? `${t.toFixed(2)}s / ${duration.toFixed(1)}s` : !wanted ? 'Expand to load preview' : 'Loading preview…'}</span>
       </div>
       {lyric && <p className="text-xs italic break-words" aria-live="off" data-testid="preview-lyric">♪ {lyric}</p>}
       {audioUrl && <audio ref={audioRef} src={audioUrl} preload="none" className="hidden" onEnded={() => setPlaying(false)} />}

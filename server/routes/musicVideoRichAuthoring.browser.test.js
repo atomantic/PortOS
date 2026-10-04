@@ -21,7 +21,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('mv-rich-ui-browser-') }));
 vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: async () => 'synthetic-instance' }));
 vi.mock('../services/settings.js', () => ({ getSettings: async () => ({}) }));
-vi.mock('../services/auth.js', () => ({ isAuthEnabled: async () => true, verifyPassword: async p => p === 'synthetic-password' }));
+vi.mock('../services/auth.js', () => ({ isAuthEnabled: async () => true, verifyRequestSessionIdentity: async () => ({ kind: 'session', sessionId: 'synthetic-browser', label: null }) }));
 let endpoint;
 vi.mock('../services/browserService.js', () => ({ cdpRequest: path => fetch(`${endpoint}${path}`) }));
 const { findFfmpeg } = await import('../lib/ffmpeg.js');
@@ -134,11 +134,10 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     ]);
     expect(savedPlan.status()).toBe(200);
     expect((await store.getProject(p.id)).productionReview.draft.motionLanguage).toBe(choreography);
-    const password = page.getByLabel('Instance password for this approval');
+    expect(await page.locator('input[type=password]').count()).toBe(0);
     // Each approval is awaited: the next step is gated on it server-side, and a click that races its
     // own approval request fails silently (this harness mounts no Toaster to show the rejection).
     const approve = async (name, options = {}) => {
-      await password.fill('synthetic-password');
       const [approved] = await Promise.all([
         page.waitForResponse(response => response.url().endsWith('/production-review/approve') && response.request().method() === 'POST'),
         page.getByRole('button', { name, ...options }).click(),
@@ -161,7 +160,7 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     await page.getByText('Move the operator behind the threshold at the exit.', { exact: true }).waitFor();
     expect(await page.getByRole('button', { name: 'Approve lyric-timed storyboard' }).isDisabled()).toBe(true);
     await page.getByLabel('Resolution for shot: chorus / operator').fill('Reviewed the updated staging in the storyboard.');
-    await password.fill('synthetic-password'); await page.getByRole('button', { name: 'Resolve feedback after review' }).click();
+    await page.getByRole('button', { name: 'Resolve feedback after review' }).click();
     await page.getByText('Resolution: Reviewed the updated staging in the storyboard.', { exact: true }).waitFor();
     const beforeBoard = await page.evaluate(async id => (await fetch('/api/music-video/' + id + '/production-review')).json(), p.id);
     expect(beforeBoard.readiness.storyboard.problems).toEqual([]);
@@ -195,7 +194,6 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     await page.locator('video').evaluate(async video => { await video.play(); await new Promise(r => setTimeout(r, 400)); video.pause(); });
     expect(await page.locator('video').evaluate(v => v.videoWidth)).toBeGreaterThan(0);
     expect(await page.getByRole('region', { name: 'Saved choreography for proof comparison' }).textContent()).toContain(choreography);
-    await password.fill('synthetic-password');
     expect(await page.getByRole('button', { name: 'Approve animated proof' }).isDisabled()).toBe(true);
     await page.getByLabel('Playback energy compared with the saved plan').fill('The synthetic fixture demonstrates a driving chorus: the modeled subject changes pose and travels while the camera moves through the scene.');
     await page.getByLabel('Timecoded playback notes').fill('0:02 — subject enters the frame; 0:07 — pose and camera position differ and readable type remains clear. This is a synthetic workflow test, not artistic approval of a production video.');

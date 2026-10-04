@@ -188,9 +188,6 @@ export default function VideoGen() {
   // entry) still surfaces the backend switcher below.
   const falEnabled = status?.falEnabled === true;
   const reactorEnabled = status?.reactorEnabled === true;
-  // The jobId of the render this tab's Generate button currently owns —
-  // threaded into cancelVideoGen so cancellation is job-scoped.
-  const activeJobIdRef = useRef(null);
   const models = useMemo(() => modelContext?.models || [], [modelContext]);
   const refreshGrokEnabled = useCallback(() => {
     getSettings({ silent: true })
@@ -602,15 +599,10 @@ export default function VideoGen() {
   // than as a hang.
   const [phase, setPhase] = useState(null);
   const [renderStartedAt, setRenderStartedAt] = useState(null);
-  const { attach, eventSourceRef } = useMediaJobSse('video');
-  // Hold the reject() of the in-flight runGeneration Promise so cancel can
-  // settle it. Without this, handleCancel() closes the EventSource but the
-  // outstanding Promise dangles forever.
-  const runRejectRef = useRef(null);
-  // Per-run abort token. Bumped at the start of each runGeneration() and
-  // again on cancel; runGeneration captures the value at start and bails
-  // when the token has moved on (e.g. POST resolves after cancel).
-  const runTokenRef = useRef(0);
+  // One run owner for the displayed render: its identity (the acquired OR
+  // resumed job), stream, cancellation and unmount detach all live in the hook,
+  // so Cancel is job-scoped on both the start and the reload-resume path.
+  const { start: startRun, cancel: cancelRun } = useMediaJobSse('video', { cancelJob: cancelVideoGen });
 
   const refreshStatus = useCallback(() => {
     setStatusLoading(true);
@@ -635,16 +627,14 @@ export default function VideoGen() {
   useEffect(() => {
     refreshStatus();
     refreshModelContext();
-    return () => eventSourceRef.current?.close();
-  }, [refreshStatus, refreshModelContext, eventSourceRef]);
+  }, [refreshStatus, refreshModelContext]);
 
-  // SSE subscriber shared by the in-flight POST path and the mount-time
+  // Presentation handlers shared by the in-flight POST path and the mount-time
   // resume path. `withToast: false` on resume suppresses the success/error
   // toast — the user already saw it the first time and a page reload
   // shouldn't replay it.
-  const attachJobEvents = (jobId, { isCurrent = () => true, settleResolve = () => {}, settleReject = () => {}, withToast = true } = {}) => {
-    return attach(jobId, {
-      isCurrent,
+  const videoRunHandlers = (withToast) => {
+    return {
       onQueued: (msg) => {
         setPhase('queued');
         setStatusMsg(typeof msg.position === 'number' ? `Queued (position ${msg.position})` : 'Queued');
@@ -698,7 +688,7 @@ export default function VideoGen() {
         setError('Lost connection to server');
         setGenerating(false);
       },
-    }).then(settleResolve, settleReject);
+    };
   };
 
   // Resume an in-flight (or queued) render so a page reload doesn't lose
@@ -706,38 +696,36 @@ export default function VideoGen() {
   // so re-attaching replays the most recent status/progress immediately.
   // Mirrors the ImageGen `getActiveImageJob` mount path.
   useEffect(() => {
-    getActiveVideoJob().then((data) => {
-      const job = data?.activeJob;
-      if (!job?.jobId) return;
-      // Bail if the user already started a render in this tab. `generating`
-      // would be stale here (effect deps are []), so gate on the live ref:
-      // runTokenRef is bumped at the top of every runGeneration() and stays
-      // > 0 for the session afterward. eventSourceRef is also checked as a
-      // belt-and-suspenders signal for the in-flight POST window before
-      // attachJobEvents runs.
-      if (runTokenRef.current > 0 || eventSourceRef.current) return;
-      applyResumedParams(job.params || {});
-      // The form hook doesn't own this page-level toggle — restore it directly
-      // so a reload mid-render shows the choice that render is actually keeping.
-      if (job.params?.displaySleep !== undefined) setDisplaySleepOverride(!!job.params.displaySleep);
-      setGenerating(true);
-      setPhase(job.status === 'queued' ? 'queued' : null);
-      // The worker's own start time, so a reload keeps a truthful elapsed clock
-      // instead of restarting it and reading as a fresh render. A job still in
-      // the queue has no start time yet and gets no clock — the same rule the
-      // live path follows.
-      setRenderStartedAt(job.startedAt ? new Date(job.startedAt).getTime() : null);
-      // Skip a forced setProgress(0) here — attachJobEvents will replay the
-      // server's last SSE payload synchronously after EventSource open, and
-      // a job mid-render would otherwise visibly flash 0% before jumping
-      // back to its real progress.
-      setStatusMsg(job.status === 'queued'
-        ? (typeof job.position === 'number' ? `Queued (position ${job.position})` : 'Queued')
-        : 'Resuming…');
-      const myToken = ++runTokenRef.current;
-      const isCurrent = () => myToken === runTokenRef.current;
-      attachJobEvents(job.jobId, { isCurrent, withToast: false });
-    }).catch(() => {});
+    // `ifIdle`: bail when the user already started a render in this tab. The
+    // owner also drops this run if one starts while the read is in flight, and
+    // creates no stream (or presentation) if the page unmounts first — the
+    // accepted job stays durable for the next resume.
+    startRun(
+      () => getActiveVideoJob().then((data) => data?.activeJob),
+      {
+        ...videoRunHandlers(false),
+        onAcknowledged: (job) => {
+          applyResumedParams(job.params || {});
+          // The form hook doesn't own this page-level toggle — restore it directly
+          // so a reload mid-render shows the choice that render is actually keeping.
+          if (job.params?.displaySleep !== undefined) setDisplaySleepOverride(!!job.params.displaySleep);
+          setGenerating(true);
+          setPhase(job.status === 'queued' ? 'queued' : null);
+          // The worker's own start time, so a reload keeps a truthful elapsed clock
+          // instead of restarting it and reading as a fresh render. A job still in
+          // the queue has no start time yet and gets no clock — the same rule the
+          // live path follows.
+          setRenderStartedAt(job.startedAt ? new Date(job.startedAt).getTime() : null);
+          // Skip a forced setProgress(0) here — the stream replays the server's
+          // last SSE payload right after open, and a job mid-render would
+          // otherwise visibly flash 0% before jumping back to its real progress.
+          setStatusMsg(job.status === 'queued'
+            ? (typeof job.position === 'number' ? `Queued (position ${job.position})` : 'Queued')
+            : 'Resuming…');
+        },
+      },
+      { ifIdle: true, jobIdOf: (job) => job?.jobId },
+    ).catch(() => {});
   }, []);
 
   const handleSavePythonPath = useCallback(async (path) => {
@@ -857,17 +845,10 @@ export default function VideoGen() {
   // separate queue-submit path below deliberately does not attach SSE: the
   // shared MediaJobsQueue is the live view for work submitted in parallel.
   //
-  // Per-run abort token: the user can press Cancel during the brief window
-  // between generateVideo() POST and its `.then()` resolving with a jobId.
-  // Without a guard, the late `.then()` would still open an EventSource and
-  // start applying SSE updates for a job the UI considers cancelled, AND
-  // could clobber a queue item that's already advanced. handleCancel bumps
-  // runTokenRef; runGeneration captures the token at start and ignores the
-  // POST response (and any SSE messages) when the token no longer matches.
-  const runGeneration = (payload) => new Promise((resolve, reject) => {
-    // A new run owns no job yet — clear the previous run's id so a Cancel
-    // racing the POST can't target a stale (completed) job.
-    activeJobIdRef.current = null;
+  // The run owner (useMediaJobSse) holds the abort/identity bookkeeping: Cancel
+  // pressed between the POST and its acknowledgement cancels the eventual job
+  // by id without opening a stream, and an unmount detaches without one.
+  const runGeneration = (payload) => {
     setGenerating(true);
     setProgress({ progress: 0 });
     setStatusMsg('Starting...');
@@ -877,44 +858,14 @@ export default function VideoGen() {
     // lands, so it measures the render rather than the queue wait.
     setPhase(null);
     setRenderStartedAt(null);
-
-    const myToken = ++runTokenRef.current;
-    const isCurrent = () => myToken === runTokenRef.current;
-
-    // Wrap settle so the cancel ref is cleared exactly once when the Promise
-    // transitions to a final state and stale rejects can't fire after a
-    // successful complete.
-    const settleResolve = (value) => { runRejectRef.current = null; activeJobIdRef.current = null; resolve(value); };
-    const settleReject = (err) => { runRejectRef.current = null; activeJobIdRef.current = null; reject(err); };
-    runRejectRef.current = settleReject;
-
-    generateVideo(payload).then((data) => {
-      // The user cancelled while we were waiting for the POST to return —
-      // don't open an EventSource at all, and don't touch any state. The
-      // earlier handleCancel() already settled the Promise via runRejectRef.
-      const jobId = data.jobId || data.generationId;
-      if (!isCurrent()) {
-        // The user cancelled while this POST was in flight — the job was
-        // still created server-side, so cancel it by id now (handleCancel
-        // couldn't: it had no id yet, and an unscoped cancel could have
-        // killed an unrelated parallel render instead).
-        if (jobId) cancelVideoGen(jobId).catch(() => {});
-        return;
-      }
-      // Remember which job this run owns — with the cloud lane, video
-      // renders are no longer single-flight, so Cancel must target exactly
-      // this job instead of "the first running video" (which could be an
-      // unrelated local or grok render).
-      activeJobIdRef.current = jobId;
-      attachJobEvents(jobId, { isCurrent, settleResolve, settleReject, withToast: true });
-    }).catch((err) => {
-      if (!isCurrent()) return;
-      setError(err.message || 'Video generation failed');
-      setGenerating(false);
-      toast.error(err.message || 'Video generation failed');
-      settleReject(err);
+    return startRun(() => generateVideo(payload), videoRunHandlers(true), {
+      onKickoffError: (err) => {
+        setError(err.message || 'Video generation failed');
+        setGenerating(false);
+        toast.error(err.message || 'Video generation failed');
+      },
     });
-  });
+  };
 
   const handleGenerate = async (e) => {
     e?.preventDefault?.();
@@ -957,28 +908,12 @@ export default function VideoGen() {
   };
 
   const handleCancel = async () => {
-    // Bump the run token FIRST so any late `.then()` from the in-flight
-    // generateVideo() POST sees a stale token and bails before opening an
-    // EventSource for a job we've already declared cancelled.
-    runTokenRef.current += 1;
-    eventSourceRef.current?.close();
-    // Only cancel by id. When the id isn't known yet (Cancel raced the
-    // generation POST), skip the server call entirely — the POST's stale-
-    // token branch cancels the freshly-created job by id when it lands.
-    // An unscoped cancel here could kill an unrelated parallel render.
-    if (activeJobIdRef.current) {
-      await cancelVideoGen(activeJobIdRef.current).catch(() => {});
-      activeJobIdRef.current = null;
-    }
+    // Cancel targets only the run this page owns — started here or resumed
+    // after a reload. With nothing owned there is no job id to name, and an
+    // unscoped cancel could kill an unrelated parallel render.
+    await cancelRun();
     setGenerating(false);
     setStatusMsg('Cancelled');
-    // Settle the in-flight runGeneration Promise so callers waiting on the
-    // active render do not retain a dangling promise after cancellation.
-    if (runRejectRef.current) {
-      const reject = runRejectRef.current;
-      runRejectRef.current = null;
-      reject(new Error('Cancelled'));
-    }
   };
 
   // `status.connected` reflects the LEGACY mlx_video pythonPath health. BYOV

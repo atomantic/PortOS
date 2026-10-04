@@ -98,16 +98,14 @@ export async function bindProductionShot(id, shotId) {
   return changed(project);
 }
 
-/** The existing password is reverified; agent session tokens are not approval authority.
- * This protects against delegated agents, not an adversary controlling the host or password.
- * No password is persisted and password-free installs fail closed for approvals.
+/** Creative decisions use an existing authenticated session, including agents.
+ * Auth-off, peer credentials and caller-supplied identities confer no authority.
  */
-export async function requireProductionOperator(req) {
-  const { isAuthEnabled, verifyPassword } = await import('../auth.js');
-  if (!await isAuthEnabled()) throw new ServerError('Set an instance password in Settings > Security before approving production. Draft editing remains available.', { status: 403, code: 'OPERATOR_PASSWORD_REQUIRED' });
-  if (req.headers?.authorization || !await verifyPassword(req.body?.password)) {
-    throw new ServerError('Enter the instance password yourself to approve this revision. Agent/API credentials cannot approve it.', { status: 403, code: 'OPERATOR_REAUTH_REQUIRED' });
-  }
+export async function requireProductionReviewer(req) {
+  const { isAuthEnabled, verifyRequestSessionIdentity } = await import('../auth.js');
+  const reviewer = await isAuthEnabled() && await verifyRequestSessionIdentity(req);
+  if (!reviewer) throw new ServerError('Sign in to PortOS before approving production or granting automatic planning approvals.', { status: 401, code: 'AUTH_REQUIRED' });
+  return reviewer;
 }
 
 export async function saveProductionDraft(id, draft) {
@@ -119,6 +117,19 @@ export async function saveProductionDraft(id, draft) {
       alignmentBasis: draft.timingStatus === 'verified'
         ? (current.productionReview?.draft?.timingStatus !== 'verified' ? productionAlignmentBasis(current) : current.productionReview?.alignmentBasis)
         : null } } };
+  });
+  return changed(project);
+}
+
+/** Only the explicit authenticated action can rebind already-verified timings. */
+export async function reverifyProductionAlignment(id, { basis, notes, reviewer }) {
+  const { project } = await mutateProjectRecord(id, current => {
+    if (basis !== productionAlignmentBasis(current)) throw new ServerError('The word timings changed while you were reviewing. Inspect them again.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
+    const draft = current.productionReview?.draft;
+    if (!draft || draft.lyricsMode !== 'vocal') throw new ServerError('Save a vocal planning draft before verifying alignment.', { status: 409, code: 'PLANNING_DRAFT_REQUIRED' });
+    return { project: { ...current, productionReview: { ...current.productionReview,
+      draft: { ...draft, timingStatus: 'verified', timingNotes: notes }, alignmentBasis: basis,
+      alignmentReview: { basis, reviewer, reviewedAt: new Date().toISOString() } } } };
   });
   return changed(project);
 }

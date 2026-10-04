@@ -59,6 +59,7 @@
  */
 
 import { mediaJobEvents } from './mediaJobQueue/index.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { createNewestWinsGuard } from '../lib/createNewestWinsGuard.js';
 
@@ -135,7 +136,9 @@ export function createMediaJobImageHook(config) {
     if (completedHandler) return;
 
     completedHandler = (job) => {
-      void (async () => {
+      // Admitted synchronously (before any await) so the attach — a durable
+      // row write that points at the render's file — is never split by a backup cut.
+      void withBackupAssetPublication(async () => {
         const ctx = decode(job);
         if (!ctx) return;
         const sKey = sceneKey ? sceneKey(ctx) : null;
@@ -162,7 +165,7 @@ export function createMediaJobImageHook(config) {
         });
 
         if (result != null) onAttached(ctx, result);
-      })().catch((err) => {
+      }).catch((err) => {
         // Last-resort net for synchronous throws (unexpected job shape, etc).
         console.log(`⚠️ ${label} hook crashed: ${err?.message || err}`);
       });

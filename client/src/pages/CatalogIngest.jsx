@@ -29,7 +29,6 @@ import {
   ingestCatalogVoice,
   ingestCatalogBrain,
 } from '../services/apiCatalog';
-import { markBrainInboxSentToCatalog } from '../services/apiBrain';
 import { listUniverseNames } from '../services/apiUniverseBuilder';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
 
@@ -131,10 +130,11 @@ export default function CatalogIngest() {
   const universesRef = useRef([]);
   const [universeRef, setUniverseRef] = useState(UNASSIGNED_UNIVERSE);
   const brainHandledRef = useRef(false);
-  // Creative inbox note ids handed off from the Brain batch-send. Once the
-  // commit below succeeds we stamp these consumed so they drop out of the
-  // inbox's "ready to become ingredients" banner (issue #1722). Held in a ref so
-  // it survives the history-state clear and the extract/review re-renders.
+  // Creative inbox note ids handed off from the Brain batch-send. They ride the
+  // commit request, and the server stamps them consumed in that same request so
+  // they drop out of the inbox's "ready to become ingredients" banner (issue
+  // #1722) — no follow-up call a reload could lose (#9943). Held in a ref so it
+  // survives the history-state clear and the extract/review re-renders.
   const creativeNoteIdsRef = useRef([]);
   // The scrap id the handoff ids are bound to — set only when the PREFILLED
   // paste is ingested. Commit consumes the notes ONLY when it commits this exact
@@ -371,7 +371,7 @@ export default function CatalogIngest() {
     if (!file) return;
     const name = (file.name || '').toLowerCase();
     if (name.endsWith('.pdf')) {
-      toast.error('PDF text extraction is not supported yet — paste the text or upload a .txt/.md file.');
+      toast.error('PDFs are not accepted — paste the text or upload a .txt/.md file.');
       return;
     }
     const text = await file.text().catch(() => '');
@@ -572,12 +572,18 @@ export default function CatalogIngest() {
       universeRef: universeRef === UNASSIGNED_UNIVERSE ? undefined : universeRef,
       relationships: relsToCommit,
     };
+    // Only a commit of the exact scrap built from the Brain handoff consumes its
+    // notes. Not part of `submission` below: they are bookkeeping about the
+    // source, not the reviewed content whose identity the operation key tracks.
+    const noteIds = creativeNoteIdsRef.current;
+    const consumesNotes = noteIds.length > 0 && scrapId === creativeNoteScrapIdRef.current;
     const submission = JSON.stringify({ scrapId, accepted, ...commitOptions });
     if (commitOperationRef.current?.submission !== submission) {
       commitOperationRef.current = { submission, key: uuidv4() };
     }
     const result = await commitCatalogScrapDraft(scrapId, accepted, {
       ...commitOptions,
+      ...(consumesNotes ? { creativeNoteIds: noteIds } : {}),
       operationKey: commitOperationRef.current.key,
       silent: true,
     }).catch((err) => {
@@ -586,22 +592,16 @@ export default function CatalogIngest() {
     });
     if (!result) { setCommitting(false); return; }
     commitOperationRef.current = null;
-    // Keep `committing` true through the mark request + navigate: re-enabling the
-    // Commit button before the awaited follow-up finishes would open a
-    // double-submit window that re-commits the same scrap and duplicates
-    // ingredients. We navigate away on success, so it never needs clearing.
+    // Keep `committing` true through the navigate: re-enabling the Commit button
+    // would open a double-submit window that re-commits the same scrap and
+    // duplicates ingredients. We navigate away on success, so it never needs
+    // clearing.
     const n = Array.isArray(result.ingredients) ? result.ingredients.length : accepted.length;
     toast.success(`Added ${n} ingredient${n === 1 ? '' : 's'} to the catalog.`);
-    // Best-effort: mark the source creative notes consumed so the inbox banner
-    // stops offering them. Only fires when this ingest came from the Brain
-    // batch-send (ids present). Failure is non-fatal — the notes just stay
-    // re-sendable (the prior behavior) — so swallow it silently rather than
-    // toasting a confusing error after a successful commit.
-    const noteIds = creativeNoteIdsRef.current;
-    if (noteIds.length && scrapId && scrapId === creativeNoteScrapIdRef.current) {
+    // The server already stamped the source notes consumed; drop the handoff.
+    if (consumesNotes) {
       creativeNoteIdsRef.current = [];
       creativeNoteScrapIdRef.current = null;
-      await markBrainInboxSentToCatalog(noteIds, { silent: true }).catch(() => {});
     }
     navigate('/catalog');
   };

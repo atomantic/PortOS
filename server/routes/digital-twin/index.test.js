@@ -172,6 +172,86 @@ describe('Digital Twin Routes', () => {
     });
   });
 
+  describe('POST /tests/run-multi progress delivery (#10063)', () => {
+    const pairs = [
+      { providerId: 'p1', model: 'fast' },
+      { providerId: 'p2', model: 'slow' },
+    ];
+
+    const deferred = () => {
+      let resolve;
+      const promise = new Promise((r) => { resolve = r; });
+      return { promise, resolve };
+    };
+
+    it('emits the first model\'s result, tagged with the batch id, before the slow model finishes', async () => {
+      const io = { emit: vi.fn() };
+      app.set('io', io);
+      const slow = deferred();
+      digitalTwinService.runTests.mockImplementation((providerId) => (
+        providerId === 'p1' ? Promise.resolve({ score: 1 }) : slow.promise
+      ));
+
+      let settled = false;
+      const pending = request(app)
+        .post('/api/digital-twin/tests/run-multi')
+        .send({ providers: pairs, requestId: 'batch-1' })
+        .then((res) => { settled = true; return res; });
+
+      await vi.waitFor(() => expect(io.emit).toHaveBeenCalledTimes(1));
+      expect(io.emit).toHaveBeenCalledWith('digital-twin:test-progress', {
+        requestId: 'batch-1', providerId: 'p1', model: 'fast', result: { score: 1 },
+      });
+      expect(settled).toBe(false);
+
+      slow.resolve({ score: 0.5 });
+      const res = await pending;
+      expect(res.status).toBe(200);
+      // Final response keeps its array contract: one entry per selected pair.
+      expect(res.body).toEqual([
+        { providerId: 'p1', model: 'fast', score: 1 },
+        { providerId: 'p2', model: 'slow', score: 0.5 },
+      ]);
+    });
+
+    it('reports a provider failure as an error frame and entry, not a success', async () => {
+      const io = { emit: vi.fn() };
+      app.set('io', io);
+      digitalTwinService.runTests.mockImplementation((providerId) => (
+        providerId === 'p1' ? Promise.reject(new Error('quota exceeded')) : Promise.resolve({ score: 1 })
+      ));
+
+      const res = await request(app)
+        .post('/api/digital-twin/tests/run-multi')
+        .send({ providers: pairs, requestId: 'batch-2' });
+
+      expect(res.body[0]).toEqual({ providerId: 'p1', model: 'fast', error: 'quota exceeded' });
+      expect(io.emit).toHaveBeenCalledWith('digital-twin:test-progress', expect.objectContaining({
+        requestId: 'batch-2', providerId: 'p1', result: { providerId: 'p1', model: 'fast', error: 'quota exceeded' },
+      }));
+    });
+
+    it('still serves callers that send no requestId with the same final array', async () => {
+      const io = { emit: vi.fn() };
+      app.set('io', io);
+      digitalTwinService.runTests.mockResolvedValue({ score: 1 });
+
+      const res = await request(app).post('/api/digital-twin/tests/run-multi').send({ providers: pairs });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveLength(2);
+      expect(io.emit.mock.calls[0][1].requestId).toBeUndefined();
+    });
+
+    it('400s on an over-long requestId', async () => {
+      const res = await request(app)
+        .post('/api/digital-twin/tests/run-multi')
+        .send({ providers: pairs, requestId: 'x'.repeat(101) });
+      expect(res.status).toBe(400);
+      expect(digitalTwinService.runTests).not.toHaveBeenCalled();
+    });
+  });
+
   describe('export', () => {
     it('POST /export 400s on an invalid format', async () => {
       const res = await request(app).post('/api/digital-twin/export').send({ format: 'invalid-format' });

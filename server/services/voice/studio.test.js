@@ -7,14 +7,19 @@ let root;
 let records;
 let statements;
 let rejectInsert;
+let beforeInsert;
 const synthesizeAuk = vi.fn();
 const getUniverse = vi.fn();
 vi.mock('./aukRuntime.js', () => ({ synthesizeAuk: (...args) => synthesizeAuk(...args) }));
 vi.mock('../universeBuilder/crud.js', () => ({ getUniverse: (...args) => getUniverse(...args) }));
-vi.mock('../../lib/paths.js', () => ({ PATHS: { get voiceProfiles() { return root; } } }));
+vi.mock('../../lib/paths.js', async () => {
+  const actual = await vi.importActual('../../lib/paths.js');
+  return { ...actual, PATHS: { ...actual.PATHS, get voiceProfiles() { return root; } } };
+});
 async function execute(sql, args = []) {
   statements.push(sql);
   if (sql.includes('INSERT INTO voice_profiles')) {
+    if (beforeInsert) await beforeInsert();
     if (rejectInsert) throw new Error('database unavailable');
     records.set(args[0], JSON.parse(args[4]));
   }
@@ -34,13 +39,14 @@ vi.mock('../../lib/db.js', () => ({ query: (...args) => execute(...args), withTr
 } }));
 const { createStudioVoice, assignStudioVoice } = await import('./studio.js');
 const { resolveCharacterVoice } = await import('./profiles.js');
+const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
 const input = { label: 'Example voice', instructions: 'Warm alto', text: 'Hello there.', seed: 42, genSeconds: 4, pitchSemitones: -2 };
 const wav = Buffer.alloc(48);
 wav.write('RIFF', 0); wav.write('WAVE', 8);
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'voice-studio-test-'));
-  records = new Map(); statements = []; rejectInsert = false;
+  records = new Map(); statements = []; rejectInsert = false; beforeInsert = null;
   synthesizeAuk.mockReset().mockResolvedValue({ wav, latencyMs: 3200, modelRevision: 'test-auK' });
   getUniverse.mockReset().mockResolvedValue({ characters: [{ id: 'character-1' }, { id: 'character-2' }] });
 });
@@ -83,5 +89,46 @@ describe('Voice Studio audition and casting workflow', () => {
     const library = await createStudioVoice(input);
     await expect(assignStudioVoice(library.id, { universeId: 'universe-1', characterId: 'missing' })).rejects.toThrow('existing character');
     expect(records.size).toBe(1);
+  });
+  it('drains a voice file and its row before a snapshot can copy either store', async () => {
+    let reachInsert;
+    let finishInsert;
+    const atInsert = new Promise(resolve => { reachInsert = resolve; });
+    const insertGate = new Promise(resolve => { finishInsert = resolve; });
+    beforeInsert = async () => { reachInsert(); await insertGate; };
+    const creating = createStudioVoice(input);
+    await atInsert;
+    expect(records.size).toBe(0);
+    expect(await readdir(root)).toHaveLength(1);
+
+    let cutAcquired = false;
+    const cut = acquireBackupSnapshotCut().then(release => {
+      cutAcquired = true;
+      return release;
+    });
+    await Promise.resolve();
+    expect(cutAcquired).toBe(false);
+
+    finishInsert();
+    const profile = await creating;
+    const release = await cut;
+    expect(records.get(profile.id).sourceAssets[0].filename).toBe('reference.wav');
+    expect(await readFile(join(root, profile.id, 'source/reference.wav'))).toEqual(wav);
+    release();
+  });
+  it('waits to copy an assigned voice until an active snapshot releases its cut', async () => {
+    const library = await createStudioVoice(input);
+    const release = await acquireBackupSnapshotCut();
+    try {
+      const assigning = assignStudioVoice(library.id, { universeId: 'universe-1', characterId: 'character-1' });
+      await vi.waitFor(() => expect(statements.some(sql => sql.includes('SELECT data FROM voice_profiles WHERE id'))).toBe(true));
+      expect(await readdir(root)).toEqual([library.id]);
+      release();
+      const assigned = await assigning;
+      expect(records.get(assigned.id).sourceAssets[0].filename).toBe('reference.wav');
+      expect(await readFile(join(root, assigned.id, 'source/reference.wav'))).toEqual(wav);
+    } finally {
+      release();
+    }
   });
 });

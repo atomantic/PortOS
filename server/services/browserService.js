@@ -8,6 +8,7 @@ import { readdir, stat, unlink } from 'fs/promises';
 import { join, basename, dirname, resolve, extname } from 'path';
 import { EventEmitter } from 'events';
 import { ensureDir, safeJSONParse, PATHS, tryReadFile, atomicWrite, sleep } from '../lib/fileUtils.js';
+import { PORTS } from '../lib/ports.js';
 import { normalizeBrowserConfig } from '../lib/browserConfig.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
@@ -32,9 +33,9 @@ const DEFAULT_PROFILE_DIR = PATHS.browserProfile;
 const DEFAULT_DOWNLOAD_DIR = PATHS.browserDownloads;
 
 const DEFAULT_CONFIG = {
-  cdpPort: 5556,
+  cdpPort: PORTS.CDP,
   cdpHost: process.env.CDP_HOST || '127.0.0.1',
-  healthPort: 5557,
+  healthPort: PORTS.CDP_HEALTH,
   autoConnect: true,
   // Default HEADED — the managed CDP browser is meant to be visible (see
   // browser/server.js, which already launches headed unless `headless === true`).

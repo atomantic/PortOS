@@ -50,7 +50,7 @@ vi.mock('../hooks/useProviderModels', () => ({
 
 vi.mock('../components/ui/Toast', () => {
   const toast = Object.assign(vi.fn(), {
-    success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn(), custom: vi.fn()
+    success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn()
   });
   return { default: toast };
 });
@@ -295,7 +295,7 @@ describe('SystemHealthPage remediation links', () => {
 // means to render, and that every manifest tab has a presentation entry (icon)
 // in SystemHealthPage.jsx, which would otherwise only surface as a thrown
 // import-time error. The short labels come from the manifest's `tabLabel`; ⌘K
-// and voice still show "System Resources Overview"/"Storage Report"/"Active
+// and voice still show "System Resources"/"Storage Report"/"Active
 // Queues" so each is unambiguous out of page context.
 describe('RESOURCE_TABS ↔ nav manifest', () => {
   it('renders the system-resources tabGroup in page order with a presentation entry each', () => {
@@ -327,4 +327,20 @@ describe('SystemHealthPage — no dangling aria-controls/aria-labelledby', () =>
     await waitFor(() => expect(screen.getByRole('tabpanel')).toBeInTheDocument());
     expectNoDanglingAriaRefs(container);
   });
+});
+
+
+it('shows labelled root and data capacity on the overview', async () => {
+  api.getSystemHealth.mockResolvedValue({ ...HEALTH, system: { ...HEALTH.system, dataDisk: { usagePercent: 99, usedFormatted: '99 GB', totalFormatted: '100 GB' } } });
+  renderPage();
+  expect(await screen.findByText('Runtime data disk')).toBeInTheDocument();
+  expect(screen.getByText('Root disk')).toBeInTheDocument();
+  expect(screen.getByText('99%')).toBeInTheDocument();
+});
+
+it('shows unavailable data without substituting root capacity', async () => {
+  api.getSystemHealth.mockResolvedValue({ ...HEALTH, system: { ...HEALTH.system, dataDisk: null } });
+  renderPage();
+  expect(await screen.findByLabelText('Runtime data disk status unavailable')).toHaveTextContent('Unavailable');
+  expect(screen.getByText('92%')).toBeInTheDocument();
 });

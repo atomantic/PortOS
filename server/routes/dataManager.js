@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, dataPurgeSchema } from '../lib/validation.js';
+import { validateRequest, dataPurgeSchema, dataArchiveBodySchema } from '../lib/validation.js';
 import {
   getDataOverview,
   getCategoryDetail,
@@ -70,11 +70,7 @@ router.get('/:category', asyncHandler(async (req, res) => {
 
 // POST /api/data/:category/archive — archive a category to backup
 router.post('/:category/archive', asyncHandler(async (req, res) => {
-  const rawDays = req.body?.daysToKeep;
-  const daysToKeep = rawDays != null ? Number(rawDays) : undefined;
-  if (daysToKeep != null && (!Number.isFinite(daysToKeep) || daysToKeep < 0)) {
-    throw new ServerError('daysToKeep must be a non-negative number', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { daysToKeep } = validateRequest(dataArchiveBodySchema, req.body ?? {});
   const result = await archiveCategory(req.params.category, { daysToKeep });
   res.json(result);
 }));

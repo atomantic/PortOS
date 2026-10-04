@@ -6,6 +6,7 @@ import FormField from '../ui/FormField';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosition.js';
 import useEscapeKey from '../../hooks/useEscapeKey';
 import useClickOutside from '../../hooks/useClickOutside.js';
+import useFocusTrap from '../../hooks/useFocusTrap.js';
 import { IMAGE_ACCEPT, validateImageFile } from '../../utils/fileUpload';
 import { formatBytes } from '../../utils/formatters';
 import toast from '../ui/Toast';
@@ -122,7 +123,10 @@ export default function ShellImageDrop({ onSend, placement = 'below' }) {
     if (ok && draftGenRef.current === gen) close();
   }, [picked, message, onSend, sending, close]);
 
-  useEscapeKey(open, close);
+  useEscapeKey(open, () => { close(); triggerRef.current?.focus(); });
+  // The panel is portaled to <body>, so Tab from the trigger would otherwise
+  // skip its controls. Wait for measurement so the hidden panel can take focus.
+  useFocusTrap(open && !!style, popoverRef);
 
   // This panel is portaled to <body>, so it isn't a descendant of the trigger
   // container — a single-ref containment check would read every click on the
@@ -142,6 +146,7 @@ export default function ShellImageDrop({ onSend, placement = 'below' }) {
         }`}
         title="Send a photo to this session"
         aria-label="Send a photo to this session"
+        aria-haspopup="dialog"
         aria-expanded={open}
       >
         <ImageUp size={14} />
@@ -151,6 +156,9 @@ export default function ShellImageDrop({ onSend, placement = 'below' }) {
       {open && createPortal(
         <div
           ref={popoverRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Send photo to session"
           onPaste={handlePaste}
           onDrop={handleDrop}
           onDragOver={(e) => e.preventDefault()}

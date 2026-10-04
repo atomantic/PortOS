@@ -241,11 +241,18 @@ router.get('/:id', asyncHandler(async (req, res) => {
 // literal segment can't be read as a round id. The kickoff returns 202 + a
 // jobId; progress streams over SSE; the client persists the returned filename
 // on the reference via the normal PATCH on Save.
-const referenceAudioImportSchema = z.object({ url: str(2048).min(1) });
+// `roundId` + `referenceId` (both or neither) name the saved reference the file is
+// for, so the server attaches it when the download finishes instead of leaving
+// it in the editor's draft until Save (#9943).
+const referenceAudioImportSchema = z.object({
+  url: str(2048).min(1),
+  roundId: str(svc.ID_MAX_LENGTH).min(1).optional(),
+  referenceId: str(svc.ID_MAX_LENGTH).min(1).optional(),
+}).refine((v) => !v.roundId === !v.referenceId, { message: 'roundId and referenceId must be sent together' });
 
 router.post('/reference-audio/import', asyncHandler(async (req, res) => {
-  const { url } = validateRequest(referenceAudioImportSchema, req.body || {});
-  res.status(202).json(await startReferenceAudioImport(url));
+  const { url, roundId, referenceId } = validateRequest(referenceAudioImportSchema, req.body || {});
+  res.status(202).json(await startReferenceAudioImport(url, { roundId, referenceId }));
 }));
 
 router.get('/reference-audio/import/:jobId/events', (req, res) => {

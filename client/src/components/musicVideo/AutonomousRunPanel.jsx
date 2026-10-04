@@ -5,6 +5,8 @@ import {
   AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LYRICS_STEP_LABELS, AUTONOMOUS_SONG_STEP_LABELS, AUTONOMOUS_STATUS_LABELS, AUTONOMOUS_VIEWABLE_STAGES,
   autonomousStageOutput, autonomousStageRows, isAutonomousLive,
 } from '../../lib/musicVideoAutonomous.js';
+import { productionReviewStopGuidance } from '../../lib/musicVideoStages.js';
+import AutoApproveFields from './AutoApproveFields.jsx';
 
 // The stages that report a sub-step while they run (the server's `stages[id].step`).
 const STEP_LABELS = { lyrics: AUTONOMOUS_LYRICS_STEP_LABELS, song: AUTONOMOUS_SONG_STEP_LABELS };
@@ -54,11 +56,17 @@ function StageOutput({ run, row, editableBelow }) {
  * read-only from its checklist row; the open row is the caller's URL state
  * (`selectedStage` / `onSelectStage`). Progress arrives over `music-video:autonomous` through
  * `useAutonomousMusicVideo`; this panel only renders the run it is given.
+ * `framed={false}` drops the card chrome and title for a host that supplies them.
  */
-export default function AutonomousRunPanel({ project, auto, selectedStage = null, onSelectStage }) {
+export default function AutonomousRunPanel({ project, auto, readiness, selectedStage = null, onSelectStage, framed = true }) {
   const run = project?.autonomousRun;
   const [edit, setEdit] = useState(null); // { for: stage, value } — the director's edit at a checkpoint
+  // Planning approval authority is granted with the next explicit resume.
+  const [autoApproveEdit, setAutoApproveEdit] = useState(null);
+  const autoApprove = autoApproveEdit && autoApproveEdit.runId === run?.id ? autoApproveEdit.value : (run?.brief?.autoApprove || []).filter(stage => stage !== 'proof');
+  const [grantError, setGrantError] = useState(null);
   if (!run) return null;
+  const guidance = productionReviewStopGuidance(run, readiness);
   const rows = autonomousStageRows(run);
   const live = isAutonomousLive(run);
   const awaiting = run.status === 'awaiting-approval' ? run.awaiting : null;
@@ -73,11 +81,19 @@ export default function AutonomousRunPanel({ project, auto, selectedStage = null
   // A stale or hand-edited `?run-stage=` that names no finished, viewable stage opens nothing.
   const selectedRow = rows.find((row) => row.id === selectedStage && row.status === 'done' && AUTONOMOUS_VIEWABLE_STAGES.includes(row.id)) || null;
   const selected = selectedRow?.id || null;
+  // Every resume path carries the selected grant and shows authorization failures inline.
+  const resume = (edits = {}) => {
+    if (!autoApproveEdit || autoApproveEdit.runId !== run.id) return auto.resume(edits);
+    setGrantError(null);
+    return auto.resume({ ...edits, autoApprove }, { inline: true })
+      .then((res) => { setAutoApproveEdit(null); return res; })
+      .catch((err) => { setGrantError(err?.message || 'Could not grant auto-approval'); });
+  };
 
   return (
-    <section className="bg-port-card border border-port-border rounded-lg p-3 space-y-3 min-w-0" aria-label="Autonomous run">
+    <section className={`${framed ? 'bg-port-card border border-port-border rounded-lg p-3 ' : ''}space-y-3 min-w-0`} aria-label="Autonomous run">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span className="flex items-center gap-1 text-sm font-medium"><Wand2 size={15} className="text-port-accent" aria-hidden="true" /> Autonomous run</span>
+        {framed && <span className="flex items-center gap-1 text-sm font-medium"><Wand2 size={15} className="text-port-accent" aria-hidden="true" /> Autonomous run</span>}
         <span className={`text-sm ${tone}`}>{run.interrupted ? 'Interrupted — resume to continue' : AUTONOMOUS_STATUS_LABELS[run.status] || run.status}</span>
         {run.brief?.origin?.kind === 'schedule' && (
           <span className="text-xs text-port-text-muted">Scheduled{run.brief.origin.ideaTitle ? ` · from “${run.brief.origin.ideaTitle}”` : ''}</span>
@@ -125,9 +141,11 @@ export default function AutonomousRunPanel({ project, auto, selectedStage = null
 
       {run.error && (
         <p role="status" className="flex items-start gap-1 text-xs text-port-warning break-words min-w-0">
-          <AlertTriangle size={13} className="mt-0.5 shrink-0" aria-hidden="true" /> <span className="min-w-0">{run.error}</span>
+          <AlertTriangle size={13} className="mt-0.5 shrink-0" aria-hidden="true" /> <span className="min-w-0">{guidance?.current || run.error}</span>
         </p>
       )}
+
+      {guidance?.historical && <p className="text-xs text-port-text-muted break-words">Historical stop reason: {guidance.historical}</p>}
 
       {awaiting && (
         <div className="rounded border border-port-border p-2 space-y-2">
@@ -147,12 +165,12 @@ export default function AutonomousRunPanel({ project, auto, selectedStage = null
             </div>
           )}
           <div className="flex flex-wrap gap-2">
-            <button type="button" disabled={auto.busy} onClick={() => auto.resume(changed ? { [editable.key]: draft } : {})} className={`${buttonClass} bg-port-accent text-white border-port-accent`}>
+            <button type="button" disabled={auto.busy} onClick={() => resume(changed ? { [editable.key]: draft } : {})} className={`${buttonClass} bg-port-accent text-white border-port-accent`}>
               <Play size={14} aria-hidden="true" /> {changed ? 'Save edit & approve' : 'Approve & continue'}
             </button>
             {awaiting === 'song' && (
               // Discards this song and makes a new one (a new Suno generation spends credits), then pauses here again.
-              <button type="button" disabled={auto.busy} onClick={() => auto.resume({ retakeSong: true })} className={buttonClass}>
+              <button type="button" disabled={auto.busy} onClick={() => resume({ retakeSong: true })} className={buttonClass}>
                 <RotateCcw size={14} aria-hidden="true" /> Retake song
               </button>
             )}
@@ -160,10 +178,20 @@ export default function AutonomousRunPanel({ project, auto, selectedStage = null
         </div>
       )}
 
+      {(awaiting || canRetry) && (live || run.status === 'failed') && (
+        <AutoApproveFields
+          idPrefix="mv-run"
+          value={autoApprove}
+          onChange={(next) => { setAutoApproveEdit({ runId: run.id, value: next }); setGrantError(null); }}
+          error={grantError}
+          granted={run.brief?.autoApprove || []}
+        />
+      )}
+
       {live || run.status === 'failed' ? (
         <div className="flex flex-wrap gap-2">
           {canRetry && !awaiting && (
-            <button type="button" disabled={auto.busy} onClick={() => auto.resume()} className={buttonClass}>
+            <button type="button" disabled={auto.busy} onClick={() => resume()} className={buttonClass}>
               <Play size={14} aria-hidden="true" /> {run.status === 'failed' ? 'Retry' : 'Resume'}
             </button>
           )}

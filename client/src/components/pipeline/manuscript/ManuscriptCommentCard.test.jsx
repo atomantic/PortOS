@@ -116,9 +116,10 @@ describe('ManuscriptCommentCard keyboard shortcuts (#1603)', () => {
     expect(screen.getByText('accept')).toBeTruthy();
     expect(screen.getByText('regenerate')).toBeTruthy();
     pressKey('a');
-    expect(acceptPipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'c1', expect.objectContaining({
+    // The request waits on the page's settle-and-snapshot step first (#9954).
+    await waitFor(() => expect(acceptPipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'c1', expect.objectContaining({
       edits: expect.arrayContaining([expect.objectContaining({ replace: 'new text' })]),
-    }), { silent: true });
+    }), { silent: true }));
     await settle();
   });
 
@@ -203,7 +204,9 @@ describe('ManuscriptCommentCard — accept toast offers Undo (#1609)', () => {
     acceptPipelineManuscriptFix.mockResolvedValue({ comment: { ...withFix, status: 'accepted' }, sections: [] });
     undoPipelineManuscriptFix.mockResolvedValue({ comment: { ...withFix, status: 'open' }, sections: [] });
     const onAccepted = vi.fn();
-    renderCard({ comment: withFix, onAccepted });
+    const snapshot = new Map([['iss-1:prose', 'before']]);
+    const onBeginMutation = vi.fn().mockResolvedValue(snapshot);
+    renderCard({ comment: withFix, onAccepted, onBeginMutation });
 
     pressKey('a');
     await waitFor(() => expect(acceptPipelineManuscriptFix).toHaveBeenCalled());
@@ -214,9 +217,11 @@ describe('ManuscriptCommentCard — accept toast offers Undo (#1609)', () => {
     fireEvent.click(undoBtn);
     await waitFor(() => expect(undoPipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'c1', { silent: true }));
     // The undo result is re-applied through onAccepted (re-opens the finding).
+    // …with a snapshot taken at Undo time, so edits typed since survive it.
     await waitFor(() => expect(onAccepted).toHaveBeenCalledWith(expect.objectContaining({
       comment: expect.objectContaining({ status: 'open' }),
-    })));
+    }), snapshot));
+    expect(onBeginMutation).toHaveBeenCalledTimes(2);
     expect(await screen.findByText(/Fix undone/i)).toBeTruthy();
   });
 });

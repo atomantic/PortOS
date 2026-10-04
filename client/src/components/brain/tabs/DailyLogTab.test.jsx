@@ -156,7 +156,7 @@ const typeThenReceiveVoiceSegment = async (typed, spoken = 'spoken words') => {
 describe('DailyLogTab deep linking', () => {
   it('opens the day named by a ?date= param instead of today', async () => {
     await renderTab([`/?date=${YESTERDAY}`]);
-    expect(api.getDailyLog).toHaveBeenCalledWith(YESTERDAY);
+    expect(api.getDailyLog).toHaveBeenCalledWith(YESTERDAY, { silent: true });
     expect(editor().value).toBe('old day');
   });
 

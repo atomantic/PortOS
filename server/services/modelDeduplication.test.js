@@ -37,6 +37,7 @@ it('verifies contents, preserves HF snapshot links and links multiple copies to 
   const wrongPath = await weight(join(roots.external[0], 'wrong'), 'example.safetensors', Buffer.alloc(bytes.length, 8));
   const report = await scanModelDuplicates({ roots });
   expect(report.items).toHaveLength(2);
+  expect(report.items[0].sizeBytes).toBe(bytes.length);
   expect(report.totalReclaimableBytes).toBe((await fs.stat(targetPath)).blocks * 1024);
   const rename = vi.spyOn(fs, 'rename');
   const result = await rectifyModelDuplicates(report.items, { roots });
@@ -78,7 +79,7 @@ it('does not count target aliases and rejects cross-device replacement', async (
   const stat = fs.stat.bind(fs);
   vi.spyOn(fs, 'stat').mockImplementation(async (path, ...args) => {
     const info = await stat(path, ...args);
-    if (path === targetPath) info.dev += 1;
+    if (path === targetPath) info.dev += 1n;
     return info;
   });
   await expect(rectifyModelDuplicates([{ sourcePath, targetPath }], { roots })).rejects.toThrow('span filesystems');
@@ -112,4 +113,27 @@ it('discovers peer drives, app models and the separate HF cache from configured 
   const report = await scanModelDuplicates();
   expect(report.pinokioDetected).toBe(true);
   expect(report.items).toHaveLength(3);
+});
+
+// Windows inode identifiers can exceed Number's exact integer range. Distinct
+// files must still reach hash verification and atomic replacement.
+it('does not mistake rounded inode identifiers for already-linked files', async () => {
+  const sourcePath = await weight(roots.local[0]);
+  const targetPath = await weight(roots.external[0]);
+  const stat = fs.stat.bind(fs);
+  const sourceInode = 2n ** 60n;
+  const targetInode = sourceInode + 1n;
+  expect(Number(sourceInode)).toBe(Number(targetInode));
+  vi.spyOn(fs, 'stat').mockImplementation(async (path, options) => {
+    const info = await stat(path, options);
+    if (path === sourcePath || path === targetPath) {
+      const inode = path === sourcePath ? sourceInode : targetInode;
+      info.ino = options?.bigint ? inode : Number(inode);
+    }
+    return info;
+  });
+  vi.spyOn(fs, 'rename').mockRejectedValue(new Error('rename failed'));
+  await expect(rectifyModelDuplicates([{ sourcePath, targetPath }], { roots })).rejects.toThrow('rename failed');
+  expect(await fs.readdir(roots.external[0])).toEqual(['example.safetensors']);
+  expect((await fs.readFile(targetPath)).equals(bytes)).toBe(true);
 });

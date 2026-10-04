@@ -1,3 +1,5 @@
+import { isForgeMaintenanceTask, hasCurrentForgeMaintenanceEvidence, LEGACY_FORGE_MAINTENANCE_REASON } from '../lib/forgeMaintenanceTasks.js';
+import { getSkipReason } from './cosTaskClaim.js';
 /**
  * CoS Task Store Module
  *
@@ -1028,6 +1030,52 @@ export async function deleteTask(taskId, taskType = 'user') {
 
   cosEvents.emit('tasks:changed', { type: taskType, action: 'deleted', taskId });
   return { success: true, taskId };
+  });
+}
+
+/**
+ * Recover the scalar-version mismatch and retire genuinely unscreened system
+ * tasks before they can occupy the scheduler's dedup slots. History remains;
+ * a retired prompt is never upgraded by stamping it with a screening marker.
+ * Ownership and fresh queue state are checked under the same lock as writes.
+ */
+export async function reconcileLegacyForgeMaintenanceTasks({ instanceId, now = Date.now() } = {}) {
+  return withStateLock(async () => {
+    const state = await loadState();
+    const filePath = join(ROOT_DIR, state.config.cosTasksFile);
+    if (!existsSync(filePath)) return { recovered: 0, retired: 0 };
+    const tasks = await readTaskFile(filePath);
+    let recovered = 0;
+    let retired = 0;
+    const resetApps = new Set();
+    for (const task of tasks) {
+      if (!isForgeMaintenanceTask(task) || getSkipReason(task.metadata, instanceId, now)
+        || hasActiveTaskOwner(task.id, state.agents)) continue;
+      const erroneousBlock = task.status === 'blocked'
+        && task.metadata?.blockedCategory === 'provider-config'
+        && task.metadata?.blockedReason === LEGACY_FORGE_MAINTENANCE_REASON;
+      if (task.status !== 'pending' && !erroneousBlock) continue;
+      const screened = hasCurrentForgeMaintenanceEvidence(task);
+      if (screened && !erroneousBlock) continue;
+      // Unknown future versions belong to their own compatibility contract.
+      if (!screened && task.metadata?.forgeMaintenanceVersion != null) continue;
+      if (!screened && task.metadata.analysisType === 'pr-watcher' && task.metadata.app
+        && !resetApps.has(task.metadata.app)) {
+        const { persistPrWatcherState } = await import('./prWatcher.js');
+        // Old discovery may have acknowledged the PRs before screening existed.
+        // Keep the baseline; empty activity makes current open PRs retryable.
+        await persistPrWatcherState(task.metadata.app, { activityByPr: {} });
+        resetApps.add(task.metadata.app);
+      }
+      await writeTaskUpdateLocked(task.id, {
+        status: screened ? 'pending' : 'completed',
+        metadata: screened
+          ? { maintenanceRecoveredAt: new Date(now).toISOString() }
+          : { resolution: 'superseded', supersededReason: 'unscreened-forge-maintenance', supersededAt: new Date(now).toISOString() }
+      }, 'internal', { now, suppressDequeue: true });
+      if (screened) recovered++; else retired++;
+    }
+    return { recovered, retired };
   });
 }
 

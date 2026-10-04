@@ -144,7 +144,7 @@ export function createProviderCatalogService({
         }
         fetched = await this._withCachedCheckpoints(provider, probe);
       } catch (error) {
-        console.error(`Failed to refresh models for ${provider.name}:`, error.message);
+        console.error(`❌ Failed to refresh models for ${provider.name}:`, error.message);
         error.status = error.status || 502;
         throw error;
       }

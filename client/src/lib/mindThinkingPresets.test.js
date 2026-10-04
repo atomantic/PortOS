@@ -60,7 +60,13 @@ describe('formatMindCallUsage', () => {
   it('renders a reported zero cost as a real measured value', () => {
     expect(formatMindCallUsage({
       state: 'reported', source: 'provider-reported', inputTokens: 10, outputTokens: 5, totalTokens: 15, costUsd: 0,
-    })).toBe('15 tokens · $0.0000');
+    })).toBe('15 tokens · $0.00');
+  });
+
+  it('keeps sub-cent precision on a small reported cost', () => {
+    expect(formatMindCallUsage({
+      state: 'reported', source: 'provider-reported', inputTokens: 10, outputTokens: 5, totalTokens: 15, costUsd: 0.0123,
+    })).toBe('15 tokens · $0.0123');
   });
 });
 

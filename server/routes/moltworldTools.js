@@ -7,7 +7,7 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, moltworldJoinSchema, moltworldBuildSchema, moltworldExploreSchema, moltworldThinkSchema, moltworldSaySchema, moltworldQueueAddSchema } from '../lib/validation.js';
+import { validateRequest, moltworldJoinSchema, moltworldBuildSchema, moltworldExploreSchema, moltworldThinkSchema, moltworldSaySchema, moltworldQueueAddSchema, moltworldQueueFailBodySchema } from '../lib/validation.js';
 import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agentPersonalities.js';
 import * as agentActivity from '../services/agentActivity.js';
@@ -277,7 +277,7 @@ router.post('/queue/:id/complete', asyncHandler(async (req, res) => {
 // POST /queue/:id/fail — Mark queue item as failed (used by explore script)
 router.post('/queue/:id/fail', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { error } = req.body || {};
+  const { error } = validateRequest(moltworldQueueFailBodySchema, req.body ?? {});
   const item = moltworldQueue.markFailed(id, error || 'Unknown error');
   if (!item) {
     throw new ServerError('Queue item not found', { status: 404, code: 'NOT_FOUND' });

@@ -45,6 +45,50 @@ describe('CompositionPreviewPlayer', () => {
     expect(screen.queryByText(/Loading preview media/)).not.toBeInTheDocument();
   });
 
+  it('does not build the preview behind a collapsed phone mini-player until it is expanded', async () => {
+    const original = window.matchMedia;
+    window.matchMedia = vi.fn(() => ({ matches: false }));
+    try {
+      const { rerender } = render(<CompositionPreviewPlayer project={project} audioUrl={null} collapsed />);
+      await act(async () => {});
+      expect(api.getMusicVideoCompositionPreview).not.toHaveBeenCalled();
+      expect(screen.getByText('Expand to load preview')).toBeInTheDocument();
+      expect(screen.getByLabelText('Scrub the composition preview')).toBeDisabled();
+      expect(screen.queryByText('0.00s / 0.0s')).not.toBeInTheDocument();
+      rerender(<CompositionPreviewPlayer project={project} audioUrl={null} collapsed={false} />);
+      await screen.findByTitle('Composition document preview');
+      expect(api.getMusicVideoCompositionPreview).toHaveBeenCalledTimes(1);
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+
+  it('loads a deferred preview when resizing to desktop without expanding the mobile dock', async () => {
+    const original = window.matchMedia;
+    const desktop = Object.assign(new EventTarget(), { matches: false });
+    window.matchMedia = vi.fn(() => desktop);
+    try {
+      render(<CompositionPreviewPlayer project={project} audioUrl="/data/music/song.mp3" collapsed />);
+      await act(async () => {});
+      expect(api.getMusicVideoCompositionPreview).not.toHaveBeenCalled();
+      await act(async () => {
+        desktop.matches = true;
+        desktop.dispatchEvent(new Event('change'));
+      });
+      await screen.findByTitle('Composition document preview');
+      expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
+      expect(api.getMusicVideoCompositionPreview).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        desktop.matches = false;
+        desktop.dispatchEvent(new Event('change'));
+      });
+      expect(screen.getByTitle('Composition document preview')).toBeInTheDocument();
+      expect(api.getMusicVideoCompositionPreview).toHaveBeenCalledTimes(1);
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+
   it('runs the document in an opaque-origin sandbox and renders nothing without one', async () => {
     const { container, rerender } = render(<CompositionPreviewPlayer project={{ ...project, composition: { mode: 'document' } }} audioUrl={null} />);
     expect(container).toBeEmptyDOMElement();

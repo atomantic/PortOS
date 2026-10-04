@@ -32,9 +32,9 @@ function DeliveryReconciliation({ draft, onReconciled }) {
   return (
     <div className="rounded border border-port-warning/40 p-3 space-y-3 text-sm">
       <p className="text-port-warning">
-        Delivery is unknown because this send was interrupted. It may already have
-        reached the recipient. Check your sent mailbox or conversation before recording
-        the outcome. PortOS will not resend it automatically.
+        Delivery is unknown because this send was interrupted or the provider never
+        confirmed it. It may already have reached the recipient. Check your sent mailbox
+        or conversation before recording the outcome. PortOS will not resend it automatically.
       </p>
       <label className="flex items-start gap-2" htmlFor={`checked-mailbox-${draft.id}`}>
         <input id={`checked-mailbox-${draft.id}`} type="checkbox"
@@ -103,7 +103,12 @@ export default function DraftsTab({ accounts }) {
       sendingRef.current.delete(id);
       setSendingIds(new Set(sendingRef.current));
     });
-    if (!result || result.success === false) return;
+    if (!result || result.success === false) {
+      // The server has already moved the draft out of "approved" — to failed, or to
+      // delivery unknown when the provider never confirmed — so show that state now.
+      if (!result) fetchDrafts();
+      return;
+    }
     setDrafts(prev => prev.map(d => d.id === id ? { ...d, status: 'sent' } : d));
     toast.success('Message sent');
   };
@@ -121,6 +126,9 @@ export default function DraftsTab({ accounts }) {
     if (!account) return accountId ? 'Unknown' : 'Tribe outreach';
     return account.name;
   };
+
+  const isCopyOnly = draft => draft.sendVia === 'review' ||
+    accounts.find(account => account.id === draft.accountId)?.canSend === false;
 
   const statusColors = {
     draft: 'bg-gray-700 text-gray-300',
@@ -170,7 +178,7 @@ export default function DraftsTab({ accounts }) {
                 )}
               </div>
               <div className="flex items-center gap-2">
-                {draft.status === 'draft' && draft.sendVia !== 'review' && (
+                {draft.status === 'draft' && !isCopyOnly(draft) && (
                   <button
                     onClick={() => handleApprove(draft.id)}
                     className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-success transition-colors"
@@ -183,7 +191,7 @@ export default function DraftsTab({ accounts }) {
                     which have no programmatic send channel) never offer Send —
                     messageSender can't deliver them, so the button would only
                     fail. Send them yourself from the Messages/Signal app. */}
-                {draft.status === 'approved' && draft.sendVia !== 'review' && (
+                {draft.status === 'approved' && !isCopyOnly(draft) && (
                   <button
                     onClick={() => handleSend(draft.id)}
                     className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-accent transition-colors"
@@ -195,10 +203,10 @@ export default function DraftsTab({ accounts }) {
                     {sendingIds.has(draft.id) ? <RefreshCw size={16} className="animate-spin" /> : <Send size={16} />}
                   </button>
                 )}
-                {draft.sendVia === 'review' && (
+                {isCopyOnly(draft) && (
                   <>
                     <span className="text-xs text-gray-500" title="No programmatic send — copy and send from your messaging app">
-                      Review only
+                      {draft.sendVia === 'review' ? 'Review only' : "Sending from this account isn't supported yet — copy the draft"}
                     </span>
                     <button
                       onClick={() => handleCopy(draft)}
@@ -213,7 +221,7 @@ export default function DraftsTab({ accounts }) {
                 {/* Review-only drafts never reach a 'sent' state (there's no send
                     channel), so keep Delete available at any status — otherwise an
                     approved iMessage/Signal draft would be stuck with no action. */}
-                {(['draft', 'pending_review', 'failed'].includes(draft.status) || draft.sendVia === 'review') && (
+                {(['draft', 'pending_review', 'failed'].includes(draft.status) || isCopyOnly(draft)) && (
                   <button
                     onClick={() => requestDelete(draft.id)}
                     className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-error transition-colors"
@@ -230,7 +238,7 @@ export default function DraftsTab({ accounts }) {
             )}
             {/* Review-only drafts are sent by hand, so show the full body (not
                 clamped) — it's the text the user copies into their messaging app. */}
-            <div className={`text-sm text-gray-400 whitespace-pre-wrap ${draft.sendVia === 'review' ? '' : 'line-clamp-3'}`}>
+            <div className={`text-sm text-gray-400 whitespace-pre-wrap ${isCopyOnly(draft) ? '' : 'line-clamp-3'}`}>
               {draft.body}
             </div>
             {draft.status === 'delivery_unknown' && (

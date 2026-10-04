@@ -29,7 +29,7 @@ vi.mock('./privacyOrgs.js', () => ({
   getOrg: vi.fn(async (id) => ({ id, name: 'Acme Bank', contact: { email: 'ops@acme.example' } })),
 }));
 vi.mock('./messageAccounts.js', () => ({
-  listAccounts: vi.fn(async () => [{ id: 'acct-1', type: 'gmail', name: 'Primary' }]),
+  listAccounts: vi.fn(async () => [{ id: 'acct-1', type: 'gmail', canSend: true, name: 'Primary' }]),
 }));
 vi.mock('./messageDrafts.js', () => ({
   createDraft: vi.fn(async (data) => ({ id: 'draft-1', status: 'draft', ...data })),
@@ -43,6 +43,7 @@ const {
 const privacyVault = await import('./privacyVault.js');
 const privacyOrgs = await import('./privacyOrgs.js');
 const messageAccounts = await import('./messageAccounts.js');
+const messageDrafts = await import('./messageDrafts.js');
 
 beforeEach(() => {
   queryMock.mockReset();
@@ -271,6 +272,28 @@ describe('listChangeEvents', () => {
 });
 
 describe('draftUpdateEmail', () => {
+  it('refuses an unsupported account before revealing the replacement or creating a draft', async () => {
+    queryMock.mockResolvedValue({ rows: [eventRow()] });
+    messageAccounts.listAccounts.mockResolvedValueOnce([{ id: 'outlook', type: 'outlook', canSend: false }]);
+    await expect(draftUpdateEmail('ev1', 'o1')).rejects.toMatchObject({ code: 'NO_MESSAGE_ACCOUNT' });
+    expect(privacyVault.revealValue).not.toHaveBeenCalled();
+  });
+
+  it('drafts over the chosen account\'s real transport and never from a Teams chat', async () => {
+    queryMock.mockImplementation(async (sql) => {
+      if (/FROM privacy_change_events WHERE id/.test(sql)) return { rows: [eventRow()] };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    messageAccounts.listAccounts.mockResolvedValueOnce([
+      { id: 'teams-1', type: 'teams', canSend: true, name: 'Chat' },
+      { id: 'outlook-1', type: 'outlook', canSend: true, name: 'Work' }
+    ]);
+    await draftUpdateEmail('ev1', 'o1');
+    expect(messageDrafts.createDraft).toHaveBeenLastCalledWith(expect.objectContaining({ accountId: 'outlook-1', sendVia: 'playwright' }));
+    messageAccounts.listAccounts.mockResolvedValueOnce([{ id: 'teams-1', type: 'teams', canSend: true, name: 'Chat' }]);
+    await expect(draftUpdateEmail('ev1', 'o1')).rejects.toMatchObject({ code: 'NO_MESSAGE_ACCOUNT' });
+  });
+
   it('creates an UNAPPROVED draft (status draft) to the org contact email', async () => {
     queryMock.mockImplementation(async (sql) => {
       if (/FROM privacy_change_events WHERE id/.test(sql)) return { rows: [eventRow()] };

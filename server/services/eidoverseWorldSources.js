@@ -6,6 +6,7 @@
  * readings, prompts, journals, and transcripts never leave this module.
  */
 
+import { PATHS } from '../lib/paths.js';
 import { statfs } from 'node:fs/promises';
 import { parseFilesystemStats } from '../lib/fileCore.js';
 import { getAllApps } from './apps.js';
@@ -59,7 +60,7 @@ function waitWithSignal(promise, signal) {
 }
 
 async function getDiskUsagePercent() {
-  const stats = await statfs('/').catch(() => null);
+  const stats = await statfs(PATHS.data).catch(() => null);
   return parseFilesystemStats(stats)?.usagePercent ?? null;
 }
 
@@ -84,7 +85,7 @@ async function projectedJira(appConfig, featuresState) {
   return projectedJiraTickets(batches.flatMap((batch) => batch.tickets));
 }
 
-export async function collectEidoverseWorldSources({ signal } = {}) {
+export async function collectEidoverseWorldSources({ signal, includeAttentionReasons = false } = {}) {
   throwIfAborted(signal);
   const reads = await waitWithSignal(Promise.all([
     getAppStatuses().catch(() => null),
@@ -119,5 +120,5 @@ export async function collectEidoverseWorldSources({ signal } = {}) {
     backupState, notifications, character, voiceConfig, memory, diskPercent,
     todayActivity, activityCalendar, goalsData, memoryGraph,
     inboxCounts, introspection, jira, destinations,
-  });
+  }, { includeAttentionReasons });
 }

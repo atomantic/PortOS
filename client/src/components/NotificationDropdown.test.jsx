@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { readFileSync } from 'node:fs';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -260,9 +261,19 @@ describe('NotificationDropdown', () => {
       expect(remove.className).toContain('min-w-[44px]');
       expect(remove.className).toContain('min-h-[44px]');
       expect(remove.className).toContain('shrink-0');
-      // Hover-to-reveal is sm+ only — touch has no hover to reveal it with.
-      expect(remove.className).toContain('sm:opacity-0');
-      expect(remove.className).not.toMatch(/(^|\s)opacity-/);
+      // Compact sizing and reveal require both hover and a fine primary pointer.
+      expect(remove.className).toContain('notification-action');
+      expect(remove.className).toContain('group-focus-within:opacity-100');
+      expect(remove.className).not.toMatch(/(^|\s)sm:opacity-/);
+
+      const markRead = screen.getByRole('button', { name: 'Mark notification as read: Notification 0' });
+      expect(markRead.className).toContain('min-h-[44px]');
+      expect(markRead.className).toContain('notification-mark-read');
+
+      const styles = readFileSync('src/index.css', 'utf8');
+      expect(styles).toMatch(/@media \(hover: hover\) and \(pointer: fine\) and \(min-width: 640px\)/);
+      expect(styles).toContain('.group:hover .notification-action');
+      expect(styles).toContain('.group:focus-within .notification-action');
     });
 
     it('gives the bell trigger a 44px touch target on mobile and compact size on desktop', () => {

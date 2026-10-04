@@ -24,7 +24,9 @@ function isPreviewableImage(mimeType) {
 
 export default function Uploads() {
   const [uploads, setUploads] = useState([]);
-  const [stats, setStats] = useState({ count: 0, totalSizeFormatted: '0 B' });
+  // null until a read succeeds — a failed read must never read as "0 files".
+  const [stats, setStats] = useState(null);
+  const [inventoryError, setInventoryError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
@@ -34,10 +36,13 @@ export default function Uploads() {
   const fetchUploads = useCallback(async () => {
     const data = await api.listUploads({ silent: true }).catch(err => {
       toast.error(err.message);
-      return { uploads: [], count: 0, totalSizeFormatted: '0 B' };
+      return null;
     });
-    setUploads(data.uploads || []);
-    setStats({ count: data.count || 0, totalSizeFormatted: data.totalSizeFormatted || '0 B' });
+    if (data) {
+      setUploads(data.uploads || []);
+      setStats({ count: data.count || 0, totalSizeFormatted: data.totalSizeFormatted || '0 B' });
+    }
+    setInventoryError(!data);
     setLoading(false);
   }, []);
 
@@ -126,7 +131,9 @@ export default function Uploads() {
         <div>
           <h2 className="text-2xl font-bold text-white">File Uploads</h2>
           <p className="text-gray-500 text-sm sm:text-base">
-            {stats.count} file{stats.count !== 1 ? 's' : ''} ({stats.totalSizeFormatted})
+            {stats
+              ? `${stats.count} file${stats.count !== 1 ? 's' : ''} (${stats.totalSizeFormatted})`
+              : 'Upload totals unavailable'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -192,7 +199,28 @@ export default function Uploads() {
       </div>
 
       {/* Files List */}
-      {uploads.length === 0 ? (
+      {inventoryError && (
+        <div role="alert" className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-port-warning/40 bg-port-card p-4 text-sm text-port-warning">
+          <div className="flex-1 min-w-0">
+            {stats ? (
+              <p>Upload inventory could not be refreshed. Showing the last loaded files; retry to check for changes.</p>
+            ) : (
+              <>
+                <p className="font-medium">Uploads could not be loaded</p>
+                <p>The upload inventory is unavailable. Check the connection and retry; your stored files have not been checked.</p>
+              </>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={fetchUploads}
+            className="px-3 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg transition-colors"
+          >
+            Retry upload inventory
+          </button>
+        </div>
+      )}
+      {!stats ? null : uploads.length === 0 ? (
         <div className="bg-port-card border border-port-border rounded-lg p-8 text-center">
           <FolderOpen size={48} className="mx-auto mb-4 text-gray-500" />
           <p className="text-gray-500">No files uploaded yet</p>

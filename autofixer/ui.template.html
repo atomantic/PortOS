@@ -881,9 +881,45 @@
         const resultEl = document.createElement('div');
         const succeeded = h.success === true;
         resultEl.classList.add('result', succeeded ? 'success' : 'failed');
-        resultEl.textContent = succeeded ? 'Fixed successfully' : 'Fix failed';
+        resultEl.textContent = h.staged ? 'Staged for review' : h.disposition === 'discarded' ? 'Discarded' : h.promoted ? 'Applied and restarted' : h.disposition === 'recovery-required' ? 'Recovery required — inspect checkout' : succeeded ? 'Fix produced' : 'Fix failed';
 
         item.append(timeEl, processEl, resultEl);
+        if (h.staged) {
+          const view = document.createElement('button');
+          view.textContent = 'Review patch';
+          view.addEventListener('click', async () => {
+            view.disabled = true;
+            const res = await apiFetch('/api/fixes/' + encodeURIComponent(h.sessionId)).catch(() => null);
+            view.disabled = false;
+            if (!res) return;
+            const fix = await res.json();
+            if (!res.ok) { showToast(fix.error || 'Unable to load patch', 'error'); return; }
+            view.remove();
+            const diff = document.createElement('pre');
+            diff.textContent = fix.patch;
+            diff.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;max-height:24rem;overflow:auto';
+            item.appendChild(diff);
+            const controls = [];
+            for (const action of ['apply', 'discard']) {
+              const button = document.createElement('button');
+              button.textContent = action === 'apply' ? 'Apply and restart' : 'Discard';
+              controls.push(button);
+              button.addEventListener('click', async () => {
+                controls.forEach(control => { control.disabled = true; });
+                const result = await apiFetch('/api/fixes/' + encodeURIComponent(h.sessionId) + '/' + action, { method: 'POST' }).catch(() => null);
+                controls.forEach(control => { control.disabled = false; });
+                if (!result) { showToast('Action failed — check connection', 'error'); return; }
+                const body = await result.json();
+                if (!result.ok) { showToast(body.error || 'Action failed', 'error'); return; }
+                resultEl.textContent = body.disposition === 'applied' ? 'Applied and restarted' : 'Discarded';
+                controls.forEach(control => control.remove());
+                if (body.disposition === 'applied') fetchStatus();
+              });
+              item.appendChild(button);
+            }
+          });
+          item.appendChild(view);
+        }
         historyPanel.appendChild(item);
       });
     }

@@ -25,6 +25,19 @@ export const documentStoryboardBasis = project => hash({
   shots: project.productionReview?.draft?.storyboard,
 });
 
+// Share the evidence contract between new decisions and persisted approvals:
+// a legacy automatic waiver must not become production-ready after an upgrade.
+function hasProofEvidence(review) {
+  if (!review || review.autoApproved || !text(review.energyComparison) || !text(review.timecodedNotes)
+    || !/(?:\b\d{1,2}:\d{2}(?:\.\d+)?\b|\b\d+(?:\.\d+)?s\b)/.test(review.timecodedNotes)) return false;
+  if (review.method === 'machine') {
+    const evidence = review.machineEvidence;
+    return review.watchedWithAudio === false && text(evidence?.visualReview) && evidence.visualReview.trim().length >= 40
+      && text(evidence?.audioReview) && evidence.audioReview.trim().length >= 40 && text(evidence?.limitations);
+  }
+  return (review.method == null || review.method === 'playback') && review.watchedWithAudio === true;
+}
+
 export function productionReviewBasis(project) {
   const draft = project.productionReview?.draft || {};
   const art = hash({ projectId: project.id, mediaMode: project.mediaMode, authoringRenderer: project.composition?.authoringRenderer, mode: project.composition?.mode, policy: project.productionPolicy,
@@ -52,6 +65,7 @@ export function productionReadiness(project) {
   const review = project.productionReview || {};
   const draft = review.draft || {};
   const basis = productionReviewBasis(project);
+  const alignmentBasis = productionAlignmentBasis(project);
   const unresolved = stage => (review.feedback || []).filter(f => f.stage === stage && f.decision === 'request-changes' && !f.resolvedAt);
   const artProblems = unresolved('art').map(f => `Resolve art feedback for ${f.target}: ${f.text}`);
   for (const [key, label] of [['cast', 'Cast guide'], ['environments', 'Environment guide'],
@@ -71,7 +85,7 @@ export function productionReadiness(project) {
     if (!text(draft.timingNotes)) boardProblems.push('Explain and confirm the instrumental exception.');
   } else {
     if (!cues.length) boardProblems.push('Import lyrics and align them to the current vocal; missing lyrics are not an instrumental.');
-    if (draft.timingStatus !== 'verified' || review.alignmentBasis !== productionAlignmentBasis(project)) boardProblems.push('Lyric alignment is provisional or changed. Listen and verify the current word timings.');
+    if (draft.timingStatus !== 'verified' || review.alignmentBasis !== alignmentBasis) boardProblems.push('Lyric alignment is provisional or changed. Listen and verify the current word timings.');
     if (!text(draft.timingNotes)) boardProblems.push('Record how the vocal timings were checked.');
     if (cues.some(c => !(Number.isFinite(c.startSec) && c.endSec > c.startSec && c.endSec <= duration)
       || !c.words?.length || c.words.some(w => !(Number.isFinite(w.startSec) && w.endSec > w.startSec)
@@ -116,8 +130,9 @@ export function productionReadiness(project) {
   if (!proof || proof.basis !== basis.proof || excerpt?.status !== 'complete' || !excerpt?.filename) {
     proofProblems.push('Render and watch a current animated chorus proof with the master song.');
   }
-  const proofApproved = !proofProblems.length && review.approvals?.proof?.basis === hash({ basis: basis.proof, excerptId: excerpt.id, filename: excerpt.filename });
-  return { basis, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: productionAlignmentBasis(project) }, art: { approved: artApproved, problems: [...new Set(artProblems)] },
+  const proofApproved = !proofProblems.length && hasProofEvidence(review.approvals?.proof?.proofReview) && review.approvals?.proof?.basis === hash({ basis: basis.proof, excerptId: excerpt.id, filename: excerpt.filename });
+  return { basis, alignment: { basis: alignmentBasis, status: draft.lyricsMode === 'instrumental' ? 'instrumental'
+    : draft.timingStatus !== 'verified' ? 'provisional' : review.alignmentBasis === alignmentBasis ? 'verified' : 'stale' }, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: alignmentBasis }, art: { approved: artApproved, problems: [...new Set(artProblems)] },
     storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)] },
     proof: { approved: proofApproved, problems: proofProblems, excerptId: excerpt?.id || null },
     readyForProduction: proofApproved };
@@ -126,11 +141,13 @@ export function productionReadiness(project) {
 export function assertProductionApproval(project, stage = 'proof') {
   const readiness = productionReadiness(project);
   if (!readiness[stage].approved) throw new ServerError(
-    readiness[stage].problems[0] || `A human must approve the current ${stage === 'art' ? 'art direction' : stage} in Production review.`,
+    readiness[stage].problems[0] || `A reviewer must approve the current ${stage === 'art' ? 'art direction' : stage} in Production review.`,
     { status: 409, code: 'MUSIC_VIDEO_APPROVAL_REQUIRED', context: { stage, readiness } });
 }
 
-export function approveProductionStage(project, { stage, basis, proofReview }) {
+/** Evidence is bound to the exact revision and excerpt. Machine review never
+ * claims human playback; rendering alone is not a review. */
+export function approveProductionStage(project, { stage, basis, proofReview, approvedBy, reviewer }) {
   const readiness = productionReadiness(project);
   const expected = stage === 'proof'
     ? hash({ basis: readiness.basis.proof, excerptId: project.productionReview?.proof?.excerptId,
@@ -140,17 +157,20 @@ export function approveProductionStage(project, { stage, basis, proofReview }) {
   if (readiness[stage].problems.length) throw new ServerError(readiness[stage].problems.join(' '), { status: 409, code: 'MUSIC_VIDEO_REVIEW_INCOMPLETE' });
   if (stage === 'proof') {
     const excerpt = project.excerpts?.find(e => e.id === project.productionReview?.proof?.excerptId);
-    if (proofReview?.watchedWithAudio !== true || !text(proofReview.energyComparison)
-      || !text(proofReview.timecodedNotes) || !/(?:\b\d{1,2}:\d{2}(?:\.\d+)?\b|\b\d+(?:\.\d+)?s\b)/.test(proofReview.timecodedNotes)) {
-      throw new ServerError('Play this proof with audio and record the energy comparison and timecoded choreography notes before approving.', { status: 409, code: 'MUSIC_VIDEO_PROOF_REVIEW_REQUIRED' });
+    if (!hasProofEvidence(proofReview)) {
+      throw new ServerError('Review this proof with audio and record the energy comparison and timecoded choreography notes. Machine reviews also require visual, audio and limitation evidence.', { status: 409, code: 'MUSIC_VIDEO_PROOF_REVIEW_REQUIRED' });
     }
-    if (proofReview.excerptId !== excerpt?.id || proofReview.filename !== excerpt?.filename) {
+    if (proofReview.excerptId !== excerpt?.id || proofReview.filename !== excerpt?.filename || !excerpt?.filename) {
       throw new ServerError('The rendered proof changed. Play and review the new excerpt before approving.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
     }
   }
+  const decision = { stage, basis: expected, approvedAt: new Date().toISOString(),
+    ...(approvedBy ? { approvedBy } : {}), ...(reviewer ? { reviewer: structuredClone(reviewer) } : {}),
+    ...(stage === 'proof' ? { proofReview: structuredClone(proofReview) } : {}) };
   return { ...project, productionReview: { ...project.productionReview,
+    approvalHistory: [...(project.productionReview?.approvalHistory || []), decision],
     reviewedRevisions: { ...project.productionReview?.reviewedRevisions, [basis]: { draft: structuredClone(project.productionReview?.draft || {}), scenes: structuredClone(project.scenes || []), proof: structuredClone(project.productionReview?.proof || null), capturedAt: new Date().toISOString() } },
-    approvals: { ...project.productionReview?.approvals, [stage]: { basis: expected, approvedAt: new Date().toISOString(), ...(stage === 'proof' ? { proofReview: structuredClone(proofReview) } : {}) } } } };
+    approvals: { ...project.productionReview?.approvals, [stage]: decision } } };
 }
 
 /** Comments retain the exact reviewed draft, even after a replacement import. */
@@ -171,17 +191,17 @@ export function recordProductionFeedback(project, input) {
     feedback: [...(review.feedback || []), entry] } };
 }
 
-export function resolveProductionFeedback(project, { feedbackId, resolution }) {
+export function resolveProductionFeedback(project, { feedbackId, resolution, reviewer }) {
   const review = project.productionReview || {};
   const entry = review.feedback?.find(f => f.id === feedbackId);
   if (!entry || entry.resolvedAt) throw new ServerError('Open feedback not found.', { status: 409, code: 'MUSIC_VIDEO_FEEDBACK_CLOSED' });
   return { ...project, productionReview: { ...review, feedback: review.feedback.map(f => f.id === feedbackId
-    ? { ...f, resolution, resolvedAt: new Date().toISOString(), resolvedBasis: productionReviewBasis(project)[f.stage] } : f) } };
+    ? { ...f, resolution, ...(reviewer ? { resolvedBy: structuredClone(reviewer) } : {}), resolvedAt: new Date().toISOString(), resolvedBasis: productionReviewBasis(project)[f.stage] } : f) } };
 }
 
 export function productionFeedbackContext(project) {
   const feedback = (project.productionReview?.feedback || []).filter(f => !f.resolvedAt);
-  return feedback.length ? `\nUNRESOLVED REVIEW FEEDBACK (retain until a human resolves it):\n${feedback.map(f => `${f.stage} / ${f.target} / ${f.decision}: ${f.text}`).join('\n')}` : '';
+  return feedback.length ? `\nUNRESOLVED REVIEW FEEDBACK (retain until an authenticated reviewer resolves it):\n${feedback.map(f => `${f.stage} / ${f.target} / ${f.decision}: ${f.text}`).join('\n')}` : '';
 }
 
 

@@ -405,23 +405,35 @@ export async function processPendingMergePrs(app) {
 
     let withheldReason = null;
     if (isPendingMergeReady(prView)) {
-      const { assessPullRequestForAction } = await import('./prReviewerSecurity.js');
-      const readDiff = () => execGh(['pr', 'diff', String(entry.prNumber), '--repo', repoSpec],
-        undefined, { ...forgeExec, backoffKey: repoSpec }).catch(() => null);
-      const assessment = await assessPullRequestForAction({
-        pr: prView, diff: await readDiff(), repoFullName: origin.fullName,
-        readPr: () => readPendingPullRequest(repoSpec, entry.prNumber, forgeExec),
-        readDiff,
-        readIssue: async (number) => safeJSONParse(await execGh([
-          'api', '--hostname', githubApiHost(origin.host), `repos/${origin.fullName}/issues/${number}`,
-        ], undefined, { ...forgeExec, backoffKey: repoSpec }).catch(() => null), null),
-      }).catch(() => ({ ok: false }));
-      withheldReason = assessment.ok ? null : 'the complete current contribution assessment was unavailable or withheld';
-      const merge = assessment.ok
-        ? await git.mergePR(app.repoPath, entry.prNumber, {
-          forgeAccount: app?.forgeAccount || null, expectedHeadSha: prView.headRefOid,
-        }).catch((err) => ({ success: false, error: err.message }))
-        : { success: false, error: withheldReason };
+      const { withPendingMergeAdmission } = await import('./cosMergeAdmission.js');
+      const admitted = await withPendingMergeAdmission(origin, async () => {
+        const currentPr = await readPendingPullRequest(repoSpec, entry.prNumber, forgeExec);
+        if (!currentPr || !isPendingMergeReady(currentPr)) return { success: false, error: 'Current head is not merge-ready' };
+        const { assessPullRequestForAction } = await import('./prReviewerSecurity.js');
+        const readDiff = () => execGh(['pr', 'diff', String(entry.prNumber), '--repo', repoSpec],
+          undefined, { ...forgeExec, backoffKey: repoSpec }).catch(() => null);
+        const assessment = await assessPullRequestForAction({
+          pr: currentPr, diff: await readDiff(), repoFullName: origin.fullName,
+          readPr: () => readPendingPullRequest(repoSpec, entry.prNumber, forgeExec),
+          readDiff,
+          readIssue: async (number) => safeJSONParse(await execGh([
+            'api', '--hostname', githubApiHost(origin.host), `repos/${origin.fullName}/issues/${number}`,
+          ], undefined, { ...forgeExec, backoffKey: repoSpec }).catch(() => null), null),
+        }).catch(() => ({ ok: false }));
+        withheldReason = assessment.ok ? null : 'the complete current contribution assessment was unavailable or withheld';
+        return assessment.ok
+          ? await git.mergePR(app.repoPath, entry.prNumber, {
+            forgeAccount: app?.forgeAccount || null, expectedHeadSha: currentPr.headRefOid,
+          }).catch((err) => ({ success: false, error: err.message }))
+          : { success: false, error: withheldReason };
+      });
+      if (!admitted.admitted) {
+        result.waiting = (result.waiting || 0) + 1;
+        outcomes.set(key, entry);
+        console.log(`⏳ Pending merge deferred for PR #${entry.prNumber}: ${admitted.reason}`);
+        continue;
+      }
+      const merge = admitted.result;
       if (merge.success) {
         outcomes.set(key, null);
         result.merged += 1;

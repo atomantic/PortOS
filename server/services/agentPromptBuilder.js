@@ -42,6 +42,7 @@ import {
   claimResumeContext,
   buildReleaseFlowCompletionSection,
   buildReconcileFlowCompletionSection,
+  buildCheckoutRecoveryCompletionSection,
   buildAuditFlowCompletionSection,
   buildCliCompletionSection,
   buildCompletionGuidelineBullet,
@@ -515,7 +516,7 @@ You are working in an **isolated git worktree** to avoid conflicts with other ag
 - **Worktree Path**: \`${worktreeInfo.worktreePath}\`
 ${worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\` (latest from origin)` : ''}
 
-**Important**: ${worktreeCommitNote} ${[COMPLETION_MODES.RELEASE_FLOW, COMPLETION_MODES.AUDIT_FLOW, COMPLETION_MODES.RECONCILE_FLOW].includes(completionMode) ? 'Follow the bundled workflow branch instructions while preserving unrelated work.' : 'Do NOT manually switch branches or modify the worktree configuration.'}
+**Important**: ${worktreeCommitNote} ${[COMPLETION_MODES.RELEASE_FLOW, COMPLETION_MODES.AUDIT_FLOW, COMPLETION_MODES.RECONCILE_FLOW, COMPLETION_MODES.CHECKOUT_RECOVERY].includes(completionMode) ? 'Follow the bundled workflow branch instructions while preserving unrelated work.' : 'Do NOT manually switch branches or modify the worktree configuration.'}
 ${buildResumeSection(task, worktreeInfo)}` : '';
 
   const simplifySection = buildSimplifySection({
@@ -550,9 +551,11 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
       leavePrOpen: resolvePrCompletion(task.metadata) === PR_COMPLETIONS.LEAVE_OPEN || leavesPrForHuman(task),
       prCompletion: task.metadata?.prCompletion || null,
       claimResume: claimResumeContext(task, worktreeInfo),
+      agentId,
     }),
     [COMPLETION_MODES.AUDIT_FLOW]: () => buildAuditFlowCompletionSection({ isTui, sentinelPath }),
     [COMPLETION_MODES.RECONCILE_FLOW]: () => buildReconcileFlowCompletionSection({ sentinelPath }),
+    [COMPLETION_MODES.CHECKOUT_RECOVERY]: () => buildCheckoutRecoveryCompletionSection({ sentinelPath }),
     [COMPLETION_MODES.RELEASE_FLOW]: () => buildReleaseFlowCompletionSection({ isTui, sentinelPath }),
   }[completionMode] || (() => ''))();
   const tuiCompletionSection = [completionSection, buildAuditOutputCompletionSection(task, sentinelPath)]
@@ -587,7 +590,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     issueFilingSection, simplifySection, tuiCompletionSection,
     reviewLoopSection, reviewLoopFollowUpSection, compactionSection, skillSection,
     toolsSection, planningContextSection, uiAuditRuntimeSection,
-    completionBullet, completionInstructions, noChangeSuccess,
+    completionBullet, completionInstructions, noChangeSuccess, completionMode,
   });
 }
 
@@ -659,7 +662,7 @@ function buildSimplifySection({
     ? 'run `/simplify` to review the changed code for reuse, quality, and efficiency'
     : SIMPLIFY_INLINE_REVIEW;
   // Discard tasks don't commit, so the simplify-before-commit step is moot.
-  const simplifySection = ![COMPLETION_MODES.RELEASE_FLOW, COMPLETION_MODES.AUDIT_FLOW, COMPLETION_MODES.RECONCILE_FLOW].includes(mode) && simplifyEnabled && !isTui && !discardWorktree && !claimFlow ? `
+  const simplifySection = ![COMPLETION_MODES.RELEASE_FLOW, COMPLETION_MODES.AUDIT_FLOW, COMPLETION_MODES.RECONCILE_FLOW, COMPLETION_MODES.CHECKOUT_RECOVERY].includes(mode) && simplifyEnabled && !isTui && !discardWorktree && !claimFlow ? `
 ## Simplify Step
 After completing your work and before committing, ${simplifyInstruction}. Fix any issues found, then ${worktreeInfo && willOpenPR ? 'commit your changes (do NOT push — on a successful run the system will push and open the PR after you exit; if the run fails, no push or PR happens)' : portosMergesBranch ? 'commit your changes (do NOT push — PortOS merges this branch back into the source checkout after you exit; a pushed copy would only be left behind on origin)' : 'commit and push using `/do:push`'}.
 ` : '';
@@ -789,7 +792,7 @@ function buildFullAgentPrompt({
   issueFilingSection, simplifySection, tuiCompletionSection,
   reviewLoopSection, reviewLoopFollowUpSection, compactionSection, skillSection,
   toolsSection, planningContextSection, uiAuditRuntimeSection,
-  completionBullet, completionInstructions, noChangeSuccess,
+  completionBullet, completionInstructions, noChangeSuccess, completionMode,
 }) {
 const taskBlock = buildTaskBlock(task, { screenshotsAsList: false });
 
@@ -830,9 +833,10 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${too
 ${completionBullet}
 
 ## Git Hygiene (CRITICAL)
-- **Before starting work**, run \`git status\` to verify a clean working tree. Do NOT stash or discard uncommitted changes — other agents may be working concurrently and expecting those changes to be present. If the tree is dirty, only commit files YOU changed for this task.
+${completionMode === COMPLETION_MODES.CHECKOUT_RECOVERY ? `- Inspect pending work and active ownership before changing the checkout. Account for pre-existing unique work only within this recovery task's scope, with verified backups and explicit preservation branches. Stage specific files; never use \`git add -A\` or \`git add .\`.
+- Never create or pop a stash. Inspect existing stashes and retire only entries accounted for by SHA after publication or proven redundancy; preserve every unaccounted entry and active owner's work.` : `- **Before starting work**, run \`git status\` to verify a clean working tree. Do NOT stash or discard uncommitted changes — other agents may be working concurrently and expecting those changes to be present. If the tree is dirty, only commit files YOU changed for this task.
 - **NEVER use \`git stash\`** in any form (\`git stash push\`, \`git stash pop\`, etc.). This is a multi-agent system — stashing can silently destroy or corrupt another agent's or the user's in-progress work. Work around uncommitted changes instead. (Note: the backend may use \`--autostash\` in user-triggered pull operations — that is safe because those are single-user UI actions, not concurrent agent operations.)
-- **Only commit files YOU changed** for this task. Never use \`git add -A\` or \`git add .\` — always stage specific files by name.
+- **Only commit files YOU changed** for this task. Never use \`git add -A\` or \`git add .\` — always stage specific files by name.`}
 ${noChangeSuccess ? `- **No-change audits may exit cleanly.** ${NO_CHANGE_AUDIT_GUIDANCE}` : ''}
 ${completionInstructions.gitHygiene}
 ${completionInstructions.commitTarget}
@@ -937,7 +941,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
   // a JIRA run be told to open a PR whose merge section was suppressed — and
   // PortOS opened that PR too. `inlineSection` also names WHICH section follows,
   // so the completion step's cross-reference can't name the wrong one.
-  const inlineSection = claimFlow || [COMPLETION_MODES.RELEASE_FLOW, COMPLETION_MODES.AUDIT_FLOW, COMPLETION_MODES.RECONCILE_FLOW].includes(completionMode) ? null : inlinePrLifecycleSection(task, {
+  const inlineSection = claimFlow || [COMPLETION_MODES.RELEASE_FLOW, COMPLETION_MODES.AUDIT_FLOW, COMPLETION_MODES.RECONCILE_FLOW, COMPLETION_MODES.CHECKOUT_RECOVERY].includes(completionMode) ? null : inlinePrLifecycleSection(task, {
     providerType: isTui ? PROVIDER_TYPES.TUI : PROVIDER_TYPES.CLI,
     providerId, providerCommand, leanMode, worktreeInfo,
   });
@@ -1059,6 +1063,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
       leavePrOpen: resolvePrCompletion(task.metadata) === PR_COMPLETIONS.LEAVE_OPEN || leavesPrForHuman(task),
       prCompletion: task.metadata?.prCompletion || null,
       claimResume: claimResumeContext(task, worktreeInfo),
+      agentId,
     })),
     [COMPLETION_MODES.READ_ONLY]: () => contractSections.push(buildReadOnlyCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.REVIEW_LOOP_FOLLOW_UP]: () => {
@@ -1075,6 +1080,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
     },
     [COMPLETION_MODES.AUDIT_FLOW]: () => contractSections.push(buildAuditFlowCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.RECONCILE_FLOW]: () => contractSections.push(buildReconcileFlowCompletionSection({ sentinelPath: lightSentinelPath() })),
+    [COMPLETION_MODES.CHECKOUT_RECOVERY]: () => contractSections.push(buildCheckoutRecoveryCompletionSection({ sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.RELEASE_FLOW]: () => contractSections.push(buildReleaseFlowCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.TUI_SLASHDO_FREE]: pushTuiCompletion,
     [COMPLETION_MODES.TUI]: pushTuiCompletion,
@@ -1131,7 +1137,7 @@ function buildLightTaskContextSections({
       worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\`` : null,
       '',
       worktreeCommitGuidance({ isTui, mode, canTypeSlashCommands, rendersInlinePrLifecycle, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow, noChangeSuccess }),
-      [COMPLETION_MODES.RELEASE_FLOW, COMPLETION_MODES.AUDIT_FLOW, COMPLETION_MODES.RECONCILE_FLOW].includes(mode)
+      [COMPLETION_MODES.RELEASE_FLOW, COMPLETION_MODES.AUDIT_FLOW, COMPLETION_MODES.RECONCILE_FLOW, COMPLETION_MODES.CHECKOUT_RECOVERY].includes(mode)
         ? 'Follow the bundled workflow branch instructions while preserving unrelated work.'
         : 'Do NOT manually switch branches or modify the worktree configuration.',
       // Resuming a previous failed agent's branch: establish what's already done

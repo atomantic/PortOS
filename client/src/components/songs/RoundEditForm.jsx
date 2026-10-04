@@ -307,7 +307,7 @@ export default function RoundEditForm({
                 <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-port-border/60">
                   {isHttpUrl(r.url) ? (
                     <>
-                      <ReferenceAudioAttach reference={r} onUpdate={(key, value) => updateReference(r.id, key, value)} />
+                      <ReferenceAudioAttach reference={r} roundId={song.id} onUpdate={(key, value) => updateReference(r.id, key, value)} />
                       {r.audioFilename && (
                         <button
                           type="button"

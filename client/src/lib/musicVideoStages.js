@@ -5,6 +5,10 @@
  * strip and the tests all read the same answer.
  */
 import { isLayeredComposition, sceneRenderReady } from './musicVideoLayers.js';
+import {
+  AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LYRICS_STEP_LABELS, AUTONOMOUS_SONG_STEP_LABELS, AUTONOMOUS_STATUS_LABELS,
+} from './musicVideoAutonomous.js';
+import { formatCount, formatTimecode } from '../utils/formatters.js';
 
 export const MUSIC_VIDEO_STAGES = [
   { id: 'setup', label: 'Setup', title: 'Setup' },
@@ -16,8 +20,6 @@ export const MUSIC_VIDEO_STAGES = [
   { id: 'publish', label: 'Publish', title: 'Publish' },
 ];
 
-// Stages whose tab keeps the preview player docked beside the content.
-export const PREVIEW_STAGES = new Set(['board', 'compose', 'review']);
 
 export const isStageId = (value) => MUSIC_VIDEO_STAGES.some((stage) => stage.id === value);
 
@@ -32,6 +34,27 @@ export const currentProductionRun = (project) => {
   const runs = Array.isArray(project?.productionRuns) ? project.productionRuns : [];
   return runs.find((r) => RESUMABLE_RUN_STATUSES.has(r.status)) || runs[runs.length - 1] || null;
 };
+
+/** Current review guidance for a stopped approval-gated run; retain other failures. */
+export function productionReviewStopGuidance(run, readiness, through = 'proof') {
+  const reason = run?.stopReason || run?.error;
+  if (!readiness || !reason || !['blocked', 'needs-human', 'stopped', 'failed'].includes(run.status)) return null;
+  const approvalStop = run.errorCode === 'MUSIC_VIDEO_APPROVAL_REQUIRED'
+    || /^(?:Review and approve the current art direction|A reviewer must approve the current|Lyric alignment is provisional or changed|Production review needs human approval)/.test(reason);
+  if (!approvalStop) return null;
+  const stages = ['art', 'storyboard', 'proof'];
+  const stage = stages.slice(0, stages.indexOf(through) + 1).find(key => !readiness[key]?.approved);
+  const current = stage ? readiness[stage].problems?.[0]
+    || `Review and approve the current ${stage === 'art' ? 'art direction' : stage}.` : 'Review requirements are satisfied — ready to resume explicitly.';
+  return { current, historical: current !== reason ? reason : null };
+}
+
+export function projectShotSummary(project) {
+  const draft = project?.productionReview?.draft;
+  const document = project?.composition?.mode === 'document' && draft?.storyboardSource === 'document';
+  const count = (document ? draft.storyboard : project?.scenes)?.length || 0;
+  return `${formatCount(count)} ${document ? 'document shot' : 'scene'}${count === 1 ? '' : 's'}`;
+}
 
 export const projectHasAudio = (project) => !!(project?.trackId || project?.uploadedAudioFilename);
 
@@ -54,14 +77,94 @@ export function projectSpend(project) {
 }
 
 /**
- * What the docked preview plays: the composition document when the project
- * renders as one, otherwise the newest finished draft excerpt, otherwise
- * nothing (the dock stays out of the way).
+ * Everything the docked preview can play, in the order it picks a default:
+ * the final render (its resolved `finalVideoSrc`), the composition document,
+ * then each finished draft excerpt, newest first. Each entry has a stable `id`
+ * (the `?play=` value) and a `label` for the source picker.
  */
-export function resolvePreviewSource(project) {
-  if (project?.composition?.mode === 'document' && project.composition.document) return { kind: 'document' };
-  const excerpt = [...(project?.excerpts || [])].reverse().find((e) => e.status === 'complete' && e.filename);
-  return excerpt ? { kind: 'excerpt', excerpt } : null;
+export function listPreviewSources(project, { finalVideoSrc = null } = {}) {
+  const sources = [];
+  if (project?.renderHistoryId && finalVideoSrc) {
+    sources.push({ id: 'final', kind: 'video', label: 'Final render', src: finalVideoSrc, startSec: 0, endSec: null });
+  }
+  if (project?.composition?.mode === 'document' && project.composition.document) {
+    sources.push({ id: 'document', kind: 'document', label: 'Composition (live)' });
+  }
+  const excerpts = (project?.excerpts || []).filter((e) => e.status === 'complete' && e.filename).reverse();
+  for (const excerpt of excerpts) {
+    sources.push({
+      id: `excerpt:${excerpt.id}`, kind: 'video', src: `/data/videos/${excerpt.filename}`,
+      startSec: excerpt.startSec, endSec: excerpt.endSec,
+      label: `${excerpt.dependencyState?.status === 'stale' ? 'Older draft' : 'Draft'} ${formatTimecode(excerpt.startSec)}–${formatTimecode(excerpt.endSec)} · ${excerpt.id.slice(-6)}`,
+    });
+  }
+  return sources;
+}
+
+// A stopped run can be resumed as is; the others need the director first.
+const PRODUCTION_RUN_LABELS = {
+  running: 'Production running', stopped: 'Production paused', blocked: 'Production blocked',
+  'limit-reached': 'Production at its limit', 'needs-replan': 'Production needs a replan',
+};
+
+const APPROVAL_LABELS = { art: 'art', storyboard: 'storyboard', proof: 'proof' };
+
+/** One line for the production-approval gate: which of the three approvals the current revision holds. */
+export function approvalSummary(readiness) {
+  if (!readiness) return null;
+  const keys = Object.keys(APPROVAL_LABELS);
+  const approved = keys.filter((key) => readiness[key]?.approved).length;
+  const missing = keys.filter((key) => !readiness[key]?.approved).map((key) => APPROVAL_LABELS[key]);
+  return approved === keys.length ? 'All 3 approved' : `${approved} of 3 approved · needs ${missing.join(', ')}`;
+}
+
+/**
+ * The project's "where does it stand" line for the sticky header: the stage it
+ * is in (and whether that stage is waiting on the director), plus short facts
+ * for the autopilot run, the production run, the approvals and what there is to
+ * watch. `progress` is `deriveStages(…)`; `nextAction` is `deriveNextAction(…)`.
+ * Fact tones are `ok`, `warn` or `muted`.
+ */
+export function describeProjectStatus(project, { progress, nextAction = null, readiness = project?.productionReadiness } = {}) {
+  if (!project || !progress) return null;
+  const index = MUSIC_VIDEO_STAGES.findIndex((stage) => stage.id === progress.current);
+  const entry = progress.stages.find((stage) => stage.id === progress.current);
+  const allDone = progress.stages.every((stage) => stage.state === 'done');
+  // A goto into Production review is a human approval, not something the app does by itself.
+  const needsYou = entry?.state === 'blocked' || nextAction?.id === 'review-production' || nextAction?.id === 'approve-cast-sets';
+  const activeEvidence = ['draft-progress', 'proof-progress'].includes(nextAction?.id);
+  const headline = activeEvidence ? 'Review render in progress' : allDone
+    ? 'Published'
+    : `Stage ${index + 1} of ${MUSIC_VIDEO_STAGES.length}: ${entry?.label || ''}${needsYou ? ' · needs you' : ''}`;
+  const facts = [];
+  const auto = project.autonomousRun;
+  if (auto && nextAction?.id !== 'review-production' && !activeEvidence) {
+    let label;
+    if (auto.status === 'running' && !auto.interrupted) {
+      const step = auto.stages?.[auto.stage]?.step;
+      const stepDetail = (auto.stage === 'lyrics' && AUTONOMOUS_LYRICS_STEP_LABELS[step])
+        || (auto.stage === 'song' && AUTONOMOUS_SONG_STEP_LABELS[step])
+        || (AUTONOMOUS_CHECKPOINT_LABELS[auto.stage] ? AUTONOMOUS_CHECKPOINT_LABELS[auto.stage].toLowerCase() : null);
+      label = stepDetail ? `Autopilot: ${stepDetail.toLowerCase()}` : 'Autopilot running';
+    } else {
+      const statusLabel = auto.interrupted ? 'interrupted' : (AUTONOMOUS_STATUS_LABELS[auto.status] || auto.status).toLowerCase();
+      label = `Autopilot ${statusLabel}`;
+    }
+    const tone = auto.status === 'completed' ? 'ok' : auto.status === 'running' && !auto.interrupted ? 'muted' : 'warn';
+    facts.push({ id: 'autopilot', label, tone });
+  }
+  const run = currentProductionRun(project);
+  if (run && RESUMABLE_RUN_STATUSES.has(run.status)) {
+    facts.push({ id: 'production', label: PRODUCTION_RUN_LABELS[run.status] || 'Production paused', tone: run.status === 'running' ? 'muted' : 'warn' });
+  }
+  const approvals = approvalSummary(readiness);
+  const showApprovals = progress.current !== 'setup' || (project.scenes || []).length > 0;
+  if (approvals && showApprovals) facts.push({ id: 'approvals', label: `Approvals: ${approvals}`, tone: readiness.readyForProduction ? 'ok' : 'warn' });
+  const drafts = (project.excerpts || []).filter((e) => e.status === 'complete' && e.filename).length;
+  if (project.renderHistoryId) facts.push({ id: 'render', label: 'Final render ready', tone: 'ok' });
+  else if (drafts) facts.push({ id: 'render', label: `${drafts} draft ${drafts === 1 ? 'excerpt' : 'excerpts'}, no final render`, tone: 'muted' });
+  else facts.push({ id: 'render', label: 'Nothing rendered yet', tone: 'muted' });
+  return { headline, tone: activeEvidence ? 'muted' : allDone ? 'ok' : needsYou ? 'warn' : 'muted', facts };
 }
 
 /** Resolve the `:stage` route param; an unknown or missing value is null. */
@@ -128,7 +231,7 @@ export function deriveStages(project, readiness = project?.productionReadiness) 
  * over the stage: they own the project until they settle.
  */
 export function deriveNextAction(project, {
-  renderActive = false, renderProgress = 0, renderPending = false, renderBlockedByOther = false,
+  draftActive = false, proofActive = false, renderActive = false, renderProgress = 0, renderPending = false, renderBlockedByOther = false,
   kickoffRunning = false, kickoffStep = '', kickoffBlockedReason = null,
   planning = false, analyzing = false, readiness = project?.productionReadiness,
 } = {}) {
@@ -138,9 +241,11 @@ export function deriveNextAction(project, {
   const cast = project.castAndSets || null;
   const scenes = project.scenes || [];
 
+  if (proofActive) return { id: 'proof-progress', kind: 'goto', stage: 'review', anchor: 'mv-review-render', label: 'View review render' };
+  if (draftActive) return { id: 'draft-progress', kind: 'goto', stage: 'review', anchor: 'mv-draft-excerpts', label: 'View draft render' };
   if (projectHasAudio(project) && project.audioAnalysis && !CAST_WORKING.has(cast?.status) && !readiness?.readyForProduction && run?.status !== 'running' && !renderActive && !kickoffRunning) {
     return { id: 'review-production', kind: 'goto', stage: !readiness?.art.approved ? 'cast-sets' : !readiness?.storyboard.approved ? 'board' : 'review',
-      anchor: 'mv-production-review', label: !readiness?.art.approved ? 'Review art direction' : !readiness?.storyboard.approved ? 'Review timed storyboard' : 'Review animated proof' };
+      anchor: !readiness?.art.approved ? 'mv-review-art' : !readiness?.storyboard.approved ? 'mv-review-storyboard' : 'mv-review-proof', label: !readiness?.art.approved ? 'Review art direction' : !readiness?.storyboard.approved ? 'Review timed storyboard' : 'Review animated proof' };
   }
   if (run && RESUMABLE_RUN_STATUSES.has(run.status)) {
     if (run.status === 'running' && !run.interrupted) return { id: 'stop-production', kind: 'run', label: 'Stop production', runId: run.id };
@@ -157,6 +262,27 @@ export function deriveNextAction(project, {
   }
   if (kickoffRunning || analyzing || planning) {
     return { id: 'busy', kind: 'run', label: kickoffStep || (planning ? 'Planning…' : 'Working…'), disabled: true };
+  }
+
+  const auto = project.autonomousRun;
+  if (auto && auto.status !== 'completed' && auto.status !== 'canceled') {
+    if (auto.status === 'running' && !auto.interrupted) {
+      const step = auto.stages?.[auto.stage]?.step;
+      const stepText = (auto.stage === 'lyrics' && AUTONOMOUS_LYRICS_STEP_LABELS[step])
+        || (auto.stage === 'song' && AUTONOMOUS_SONG_STEP_LABELS[step])
+        || (AUTONOMOUS_CHECKPOINT_LABELS[auto.stage] ? `${AUTONOMOUS_CHECKPOINT_LABELS[auto.stage]}…` : 'Autopilot running…');
+      return { id: 'busy', kind: 'run', label: stepText.endsWith('…') ? stepText : `${stepText}…`, disabled: true };
+    }
+    if (auto.status === 'awaiting-approval') {
+      const target = AUTONOMOUS_CHECKPOINT_LABELS[auto.awaiting] || auto.awaiting || 'checkpoint';
+      return { id: 'review-autonomous', kind: 'goto', stage: 'setup', anchor: 'mv-auto-edit', label: `Review ${target}` };
+    }
+    if (auto.interrupted || auto.status === 'stopped' || auto.status === 'needs-human') {
+      return { id: 'resume-autonomous', kind: 'run', label: 'Resume autopilot' };
+    }
+    if (auto.status === 'failed') {
+      return { id: 'retry-autonomous', kind: 'run', label: 'Retry autopilot' };
+    }
   }
 
   switch (current) {

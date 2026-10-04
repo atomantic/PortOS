@@ -4,8 +4,10 @@ import {Trash2, X, Check, XCircle, Pencil, AlertTriangle, Brain, Bot} from 'luci
 import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
 import * as api from '../../../services/api';
+import socket from '../../../services/socket';
+import { useSocketSubscription } from '../../../hooks/useSocketSubscription';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
-import { getAppName, formatDateNumeric } from '../../../utils/formatters';
+import { getAppName, formatDateNumeric, formatPercent } from '../../../utils/formatters';
 import MemoryTimeline from './MemoryTimeline';
 // Lazy: MemoryGraph pulls the three.js stack; load it only when rendered.
 const MemoryGraph = lazy(() => import('./MemoryGraph'));
@@ -110,6 +112,25 @@ export default function MemoryTab({ apps = [] }) {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // New approvals are pushed by the server (`cos:memory:approval-needed`); refresh
+  // only the pending queue + counts so an open tab never flashes its full loading
+  // state, and reconcile after a reconnect that may have dropped an event.
+  const refreshPending = useCallback(async () => {
+    const appId = sourceFilter === 'brain' ? 'brain' : sourceFilter === 'cos' ? '__not_brain' : undefined;
+    const [pendingRes, statsRes] = await Promise.all([
+      api.getMemories({ status: 'pending_approval', limit: 50, appId }).catch(() => null),
+      api.getMemoryStats().catch(() => null)
+    ]);
+    if (pendingRes) setPendingMemories(pendingRes.memories || []);
+    if (statsRes) setStats(statsRes);
+  }, [sourceFilter]);
+
+  useSocketSubscription('cos', { onResubscribe: refreshPending });
+  useEffect(() => {
+    socket.on('cos:memory:approval-needed', refreshPending);
+    return () => socket.off('cos:memory:approval-needed', refreshPending);
+  }, [refreshPending]);
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) {
@@ -271,7 +292,7 @@ export default function MemoryTab({ apps = [] }) {
                     </span>
                     <span className="text-xs text-gray-500">{memory.category}</span>
                     <span className="text-xs text-yellow-400">
-                      {((memory.confidence || 0) * 100).toFixed(0)}% confidence
+                      {formatPercent((memory.confidence || 0) * 100, { decimals: 0 })} confidence
                     </span>
                   </div>
                   <p className="text-white text-sm whitespace-pre-wrap">{memory.summary || memory.content}</p>
@@ -412,7 +433,7 @@ export default function MemoryTab({ apps = [] }) {
                         </span>
                       )}
                       {memory.similarity && (
-                        <span className="text-xs text-port-accent">{(memory.similarity * 100).toFixed(0)}% match</span>
+                        <span className="text-xs text-port-accent">{formatPercent(memory.similarity * 100, { decimals: 0 })} match</span>
                       )}
                     </div>
                     <p className="text-white text-sm whitespace-pre-wrap">{memory.summary || memory.content}</p>
@@ -428,7 +449,7 @@ export default function MemoryTab({ apps = [] }) {
                     <div className="text-xs text-gray-500 mt-2 flex flex-wrap items-center gap-2">
                       <span>{formatDateNumeric(memory.createdAt)}</span>
                       <span>*</span>
-                      <span>importance: {((memory.importance || 0.5) * 100).toFixed(0)}%</span>
+                      <span>importance: {formatPercent((memory.importance || 0.5) * 100, { decimals: 0 })}</span>
                       {getAppName(memory.sourceAppId, apps) && (
                         <>
                           <span>*</span>
@@ -461,7 +482,7 @@ export default function MemoryTab({ apps = [] }) {
                 {isConfirming(memory.id) && (
                   <InlineConfirmRow
                     className="mt-3"
-                    question="Archive this memory? This cannot be undone."
+                    question="Archive this memory? It will be hidden from active memory and search. Its contents remain stored."
                     confirmText="Archive"
                     confirmTitle="Confirm archive"
                     cancelTitle="Cancel archive"

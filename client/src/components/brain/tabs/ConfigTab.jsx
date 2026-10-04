@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import * as api from '../../../services/api';
 import { filterSelectableModels } from '../../../utils/providers';
 import ProviderModelSelector from '../../ProviderModelSelector';
-import { formatDateTime } from '../../../utils/formatters';
+import { formatDateTime, formatPercent } from '../../../utils/formatters';
 import {Settings,
   Save,
   Zap,
@@ -357,7 +357,7 @@ export default function ConfigTab({ onRefresh }) {
 
         <div>
           <label htmlFor="confidence" className="block text-sm font-medium text-gray-300 mb-2">
-            Confidence Threshold: {(confidenceThreshold * 100).toFixed(0)}%
+            Confidence Threshold: {formatPercent(confidenceThreshold * 100, { decimals: 0 })}
           </label>
           <div className="flex items-center gap-4">
             <input
@@ -371,7 +371,7 @@ export default function ConfigTab({ onRefresh }) {
               className="flex-1 h-2 bg-port-bg rounded-lg appearance-none cursor-pointer accent-port-accent"
             />
             <span className="text-sm text-gray-400 w-12 text-right">
-              {(confidenceThreshold * 100).toFixed(0)}%
+              {formatPercent(confidenceThreshold * 100, { decimals: 0 })}
             </span>
           </div>
           <p className="mt-2 text-xs text-gray-500">

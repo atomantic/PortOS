@@ -93,9 +93,16 @@ PIPER_LIB="${PIPER_DIR}/lib"
 if [[ "$TTS_ENGINE" == "piper" ]]; then
   OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
   ARCH="$(uname -m)"
-  [[ "$OS" == "darwin" ]] && OS="macos"
-  [[ "$ARCH" == "arm64" ]] && ARCH="aarch64"
-  [[ "$ARCH" == "x86_64" ]] && ARCH="x64"
+  case "$OS/$ARCH" in
+    darwin/x86_64) OS="macos"; ARCH="x64" ;;
+    darwin/arm64|darwin/aarch64) OS="macos"; ARCH="aarch64" ;;
+    linux/x86_64) ARCH="x86_64" ;;
+    linux/arm64|linux/aarch64) ARCH="aarch64" ;;
+    *)
+      echo "❌ Unsupported Piper platform: ${OS}/${ARCH}" >&2
+      exit 1
+      ;;
+  esac
 
   if [[ ! -x "${PIPER_DIR}/piper" ]]; then
     PIPER_VERSION="2023.11.14-2"

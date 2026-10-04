@@ -4,7 +4,7 @@ import { getRiggingReadiness, rigImageTo3dModel, listRiggingClips, retargetImage
 import { riggingReasonLabel } from '../../lib/riggingReasons.js';
 import useMounted from '../../hooks/useMounted';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures';
-import { formatBytes, formatCount } from '../../utils/formatters';
+import { formatBytes, formatCount, formatPercent } from '../../utils/formatters';
 import toast from '../ui/Toast';
 
 /**
@@ -157,8 +157,8 @@ export default function RigPanel({ record, onRecordChange }) {
           </p>
           <p>
             Automatic weighting left{' '}
-            {`${((rig.summary?.unweightedFractionAfterHeat ?? 0) * 100).toFixed(1)}%`} unweighted
-            {' '}(ceiling {`${((rig.summary?.unweightedCeiling ?? 0) * 100).toFixed(1)}%`}); the nearest-bone pass
+            {formatPercent((rig.summary?.unweightedFractionAfterHeat ?? 0) * 100)} unweighted
+            {' '}(ceiling {formatPercent((rig.summary?.unweightedCeiling ?? 0) * 100)}); the nearest-bone pass
             completed {rig.summary?.nearestBoneCompleted ?? 0}.
           </p>
           <a

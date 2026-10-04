@@ -1,5 +1,6 @@
 import CodeAuthoringPicker from './CodeAuthoringPicker.jsx';
 import MediaModePicker from './MediaModePicker.jsx';
+import AutoApproveFields from './AutoApproveFields.jsx';
 import { useState } from 'react';
 import { Wand2 } from 'lucide-react';
 import Drawer from '../Drawer.jsx';
@@ -32,6 +33,9 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
   const [authoringReady, setAuthoringReady] = useState(false);
   const llm = useProviderModels({ allowDefault: true, silent: true, withEffort: true });
   const [effort, setEffort] = useState('');
+  // An explicit per-run grant, authorized by the signed-in session.
+  const [autoApprove, setAutoApprove] = useState([]);
+  const [grantError, setGrantError] = useState(null);
   const patch = (next) => setDraft((d) => ({ ...d, ...next }));
   const toggleCheckpoint = (id) => patch({
     checkpoints: AUTONOMOUS_CHECKPOINT_IDS.filter((c) => (c === id ? !draft.checkpoints.includes(c) : draft.checkpoints.includes(c))),
@@ -44,16 +48,24 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
     e.preventDefault();
     if (!valid || submitting) return;
     setSubmitting(true);
+    setGrantError(null);
     startAutonomousMusicVideo(
-      autonomousRequestFromDraft(draft, { providerId: llm.selectedProviderId || undefined, model: llm.selectedModel || undefined, effort: effort || undefined }),
+      {
+        ...autonomousRequestFromDraft(draft, { providerId: llm.selectedProviderId || undefined, model: llm.selectedModel || undefined, effort: effort || undefined }),
+        ...(autoApprove.length ? { autoApprove } : {}),
+      },
       { silent: true },
     )
       .then(({ project }) => {
         setDraft(emptyAutonomousDraft());
+        setAutoApprove([]);
         toast.success('Autonomous music video started');
         onStarted(project);
       })
-      .catch((err) => toast.error(err?.message || 'Failed to start the autonomous music video'))
+      .catch((err) => {
+        if (err?.code === 'AUTH_REQUIRED') setGrantError(err.message);
+        else toast.error(err?.message || 'Failed to start the autonomous music video');
+      })
       .finally(() => setSubmitting(false));
   };
 
@@ -84,7 +96,7 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
           </p>
         </div>
 
-        <SongSourcePicker idPrefix="mv-auto" songSource={draft.songSource} localFallback={draft.localFallback} onChange={patch} />
+        <SongSourcePicker idPrefix="mv-auto" songSource={draft.songSource} localFallback={draft.localFallback} localMusic={draft.localMusic} onChange={patch} />
 
         {draft.songSource === 'suno' && (
           <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,10rem),16rem))] gap-3">
@@ -162,8 +174,15 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
               />
             ))}
           </div>
-          <p className="text-[11px] text-port-text-muted mt-1">Production still pauses for your art, storyboard and animated proof approvals.</p>
+          <p className="text-[11px] text-port-text-muted mt-1">Select automatic planning approvals below if desired. The animated proof always needs a recorded review.</p>
         </fieldset>
+
+        <AutoApproveFields
+          idPrefix="mv-auto"
+          value={autoApprove}
+          onChange={(next) => { setAutoApprove(next); setGrantError(null); }}
+          error={grantError}
+        />
 
         {llm.providers.length > 0 && (
           <ProviderModelSelector

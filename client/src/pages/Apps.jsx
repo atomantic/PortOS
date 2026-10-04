@@ -196,11 +196,10 @@ export default function Apps() {
   }
 
   return (
-    <div>
+    <div className="flex h-full min-h-0 flex-col">
       <PageHeader
         title="Apps"
         subtitle="Manage registered applications"
-        className="mb-6"
         actions={(
           <>
             {/* Archive Toggle — stays mounted while the archived view is open even
@@ -228,284 +227,286 @@ export default function Apps() {
         )}
       />
 
-      {loadError && (
-        <div role="alert" className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-port-warning/40 bg-port-warning/10 p-3 text-sm">
-          <AlertTriangle size={16} aria-hidden="true" className="shrink-0 text-port-warning" />
-          <span className="min-w-0 flex-1 text-gray-300">
-            Apps are unavailable — showing the last loaded collection. {loadError.message || 'Retry when the connection recovers.'}
-          </span>
-          <button
-            onClick={() => fetchApps({ retry: true })}
-            disabled={retrying}
-            aria-busy={retrying}
-            className="inline-flex min-h-[40px] items-center gap-2 rounded-lg bg-port-border px-3 py-1.5 text-xs text-white hover:bg-port-border/80 disabled:opacity-50"
-          >
-            <RefreshCw size={14} aria-hidden="true" className={retrying ? 'animate-spin' : ''} />
-            {retrying ? 'Retrying…' : 'Retry'}
-          </button>
-        </div>
-      )}
-
-      {/* In-flight update/standardize — page-level so it survives collapsing
-          the row and remounting the page. */}
-      {operationBanners}
-
-      {/* App List */}
-      {displayedApps.length === 0 ? (
-        <div className="bg-port-card border border-port-border rounded-xl p-12 text-center">
-          <div className="text-4xl mb-4">{showArchived ? '📦' : '🗂️'}</div>
-          <h2 className="text-xl font-semibold text-white mb-2">
-            {showArchived ? 'No archived apps' : 'No apps registered'}
-          </h2>
-          <p className="text-gray-500 mb-6">
-            {showArchived ? 'Archived apps will appear here' : 'Register your first app to monitor its health, restart it, and surface it on your dashboard.'}
-          </p>
-          {showArchived ? (
+      <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
+        {loadError && (
+          <div role="alert" className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-port-warning/40 bg-port-warning/10 p-3 text-sm">
+            <AlertTriangle size={16} aria-hidden="true" className="shrink-0 text-port-warning" />
+            <span className="min-w-0 flex-1 text-gray-300">
+              Apps are unavailable — showing the last loaded collection. {loadError.message || 'Retry when the connection recovers.'}
+            </span>
             <button
-              onClick={() => setShowArchived(false)}
-              className="inline-block px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
+              onClick={() => fetchApps({ retry: true })}
+              disabled={retrying}
+              aria-busy={retrying}
+              className="inline-flex min-h-[40px] items-center gap-2 rounded-lg bg-port-border px-3 py-1.5 text-xs text-white hover:bg-port-border/80 disabled:opacity-50"
             >
-              Back to active apps
+              <RefreshCw size={14} aria-hidden="true" className={retrying ? 'animate-spin' : ''} />
+              {retrying ? 'Retrying…' : 'Retry'}
             </button>
-          ) : (
-            <Link
-              to="/apps/create"
-              className="inline-block px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
-            >
-              Add App
-            </Link>
-          )}
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {displayedApps.map(app => {
-            const isNonPm2 = NON_PM2_TYPES.has(app.type);
-            const launchUrls = getLaunchUrls(app);
-            const primaryLaunchUrl = launchUrls.https || launchUrls.http;
-            return (
-            <div
-              key={app.id}
-              className="bg-port-card border border-port-border rounded-xl overflow-hidden"
-            >
-              {/* Main App Row */}
-              <div className="p-4">
-                <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-                  {/* Identity + Status */}
-                  <div className="flex items-center gap-3 flex-1 min-w-0">
-                    <div className={`w-8 h-8 rounded-[22%] shrink-0 overflow-hidden ${
-                      app.appIconPath ? '' : `flex items-center justify-center ${app.archived ? 'bg-port-border/50 text-gray-500' : 'bg-port-border text-port-accent'}`
-                    }`}>
-                      <AppIcon icon={app.icon || 'package'} appId={app.id} hasAppIcon={!!app.appIconPath} size={18} ariaLabel={app.name} fillContainer />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Link
-                          to={`/apps/${app.id}`}
-                          className={`font-medium underline decoration-dotted underline-offset-4 hover:decoration-solid transition-colors ${
-                            app.archived
-                              ? 'text-gray-400 decoration-gray-600 hover:text-gray-200'
-                              : 'text-port-accent decoration-port-accent/50 hover:text-white'
-                          }`}
-                        >
-                          {app.name}
-                        </Link>
-                        {app.archived && (
-                          <span className="px-1.5 py-0.5 bg-port-warning/20 text-port-warning text-xs rounded">
-                            Archived
-                          </span>
-                        )}
-                        {isNonPm2 ? (
-                          <span className="px-1.5 py-0.5 bg-port-accent/20 text-port-accent text-xs rounded">
-                            {getAppTypeLabel(app.type)}
-                          </span>
-                        ) : (
-                          <StatusBadge status={app.overallStatus} size="sm" />
-                        )}
-                      </div>
-                      <AppQuality app={app} />
-                      <div className="text-xs text-gray-500 flex flex-wrap gap-x-2 mt-1">
-                        {isNonPm2 ? (
-                          <span className="break-all">{app.repoPath}</span>
-                        ) : (
-                          (app.pm2ProcessNames || []).map((procName, i) => {
-                            const procInfo = app.processes?.find(p => p.name === procName);
-                            const ports = procInfo?.ports || {};
-                            const portEntries = Object.entries(ports);
-                            const portDisplay = portEntries.length > 1
-                              ? ` (${portEntries.map(([label, port]) => `${label}:${port}`).join(', ')})`
-                              : portEntries.length === 1
-                                ? `:${portEntries[0][1]}`
-                                : '';
-                            return (
-                              <span key={i}>
-                                {procName}<span className="text-port-accent">{portDisplay}</span>
-                                {i < (app.pm2ProcessNames?.length || 0) - 1 ? ',' : ''}
-                              </span>
-                            );
-                          })
-                        )}
-                      </div>
-                    </div>
-                  </div>
+          </div>
+        )}
 
-                  {/* Controls */}
-                  <div className="flex flex-wrap items-center gap-2">
-                    {/* Start/Stop/Restart Button Group - only for PM2 apps */}
-                    {!isNonPm2 && (
-                    <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
-                      {app.overallStatus === 'online' ? (
-                        <>
-                          <button
-                            onClick={() => handleStop(app)}
-                            disabled={actionLoading[app.id]}
-                            className="px-3 py-1.5 min-h-[44px] bg-port-error/20 text-port-error enabled:hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-error"
-                            aria-label={`Stop ${app.name}`}
-                            aria-busy={actionLoading[app.id] === 'stop'}
-                          >
-                            <Square size={14} aria-hidden="true" />
-                            <span className="text-xs">{actionLoading[app.id] === 'stop' ? 'Stopping...' : 'Stop'}</span>
-                          </button>
-                          <button
-                            onClick={() => handleRestart(app)}
-                            disabled={actionLoading[app.id]}
-                            className="px-3 py-1.5 min-h-[44px] bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 border-l border-port-border flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-warning"
-                            aria-label={`Restart ${app.name}`}
-                            aria-busy={actionLoading[app.id] === 'restart'}
-                          >
-                            <RotateCcw size={14} aria-hidden="true" className={actionLoading[app.id] === 'restart' ? 'animate-spin' : ''} />
-                            <span className="text-xs">{actionLoading[app.id] === 'restart' ? 'Restarting...' : 'Restart'}</span>
-                          </button>
-                        </>
-                      ) : (app.degraded || app.overallStatus === 'unknown') ? (
-                        // PM2 read failed — status is genuinely unknown, so don't
-                        // offer a misleading Start. Surface "Status unavailable"
-                        // and let the user re-check rather than act on bad info.
-                        <button
-                          onClick={() => fetchApps()}
-                          disabled={actionLoading[app.id]}
-                          className="px-3 py-1.5 min-h-[44px] bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-warning"
-                          aria-label={`${app.name} status unavailable — refresh`}
-                          title="PM2 status could not be read — refresh to retry"
-                        >
-                          <RefreshCw size={14} aria-hidden="true" />
-                          <span className="text-xs">Status unavailable</span>
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => handleStart(app)}
-                          disabled={actionLoading[app.id]}
-                          className="px-3 py-1.5 min-h-[44px] bg-port-success/20 text-port-success enabled:hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-success"
-                          aria-label={`Start ${app.name}`}
-                          aria-busy={actionLoading[app.id] === 'start'}
-                        >
-                          <Play size={14} aria-hidden="true" />
-                          <span className="text-xs">{actionLoading[app.id] === 'start' ? 'Starting...' : 'Start'}</span>
-                        </button>
-                      )}
-                    </div>
-                    )}
+        {/* In-flight update/standardize — page-level so it survives collapsing
+            the row and remounting the page. */}
+        {operationBanners}
 
-                    {/* Launch buttons grouped together */}
-                    {(app.nativeLaunch || (app.overallStatus === 'online' && (primaryLaunchUrl || launchUrls.dev))) && (
-                      <div className="inline-flex rounded-lg overflow-hidden border border-port-border divide-x divide-port-border">
-                        {app.overallStatus === 'online' && primaryLaunchUrl && (
-                          <button
-                            onClick={() => handleWebLaunch(primaryLaunchUrl)}
-                            className="px-3 py-1.5 min-h-[44px] bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 transition-colors flex items-center gap-1"
-                            aria-label={`Launch ${app.name} UI`}
+        {/* App List */}
+        {displayedApps.length === 0 ? (
+          <div className="bg-port-card border border-port-border rounded-xl p-12 text-center">
+            <div className="text-4xl mb-4">{showArchived ? '📦' : '🗂️'}</div>
+            <h2 className="text-xl font-semibold text-white mb-2">
+              {showArchived ? 'No archived apps' : 'No apps registered'}
+            </h2>
+            <p className="text-gray-500 mb-6">
+              {showArchived ? 'Archived apps will appear here' : 'Register your first app to monitor its health, restart it, and surface it on your dashboard.'}
+            </p>
+            {showArchived ? (
+              <button
+                onClick={() => setShowArchived(false)}
+                className="inline-block px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
+              >
+                Back to active apps
+              </button>
+            ) : (
+              <Link
+                to="/apps/create"
+                className="inline-block px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
+              >
+                Add App
+              </Link>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {displayedApps.map(app => {
+              const isNonPm2 = NON_PM2_TYPES.has(app.type);
+              const launchUrls = getLaunchUrls(app);
+              const primaryLaunchUrl = launchUrls.https || launchUrls.http;
+              return (
+              <div
+                key={app.id}
+                className="bg-port-card border border-port-border rounded-xl overflow-hidden"
+              >
+                {/* Main App Row */}
+                <div className="p-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                    {/* Identity + Status */}
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                      <div className={`w-8 h-8 rounded-[22%] shrink-0 overflow-hidden ${
+                        app.appIconPath ? '' : `flex items-center justify-center ${app.archived ? 'bg-port-border/50 text-gray-500' : 'bg-port-border text-port-accent'}`
+                      }`}>
+                        <AppIcon icon={app.icon || 'package'} appId={app.id} hasAppIcon={!!app.appIconPath} size={18} ariaLabel={app.name} fillContainer />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Link
+                            to={`/apps/${app.id}`}
+                            className={`font-medium underline decoration-dotted underline-offset-4 hover:decoration-solid transition-colors ${
+                              app.archived
+                                ? 'text-gray-400 decoration-gray-600 hover:text-gray-200'
+                                : 'text-port-accent decoration-port-accent/50 hover:text-white'
+                            }`}
                           >
-                            <ExternalLink size={14} aria-hidden="true" />
-                            <span className="text-xs">Launch</span>
-                          </button>
-                        )}
-                        {app.overallStatus === 'online' && launchUrls.dev && (
-                          <button
-                            onClick={() => handleWebLaunch(launchUrls.dev)}
-                            className="px-3 py-1.5 min-h-[44px] bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors flex items-center gap-1"
-                            aria-label={`Launch ${app.name} Dev UI`}
-                          >
-                            <ExternalLink size={14} aria-hidden="true" />
-                            <span className="text-xs">Dev UI</span>
-                          </button>
-                        )}
-                        {app.nativeLaunch && (
-                          <button
-                            onClick={() => handleNativeLaunch(app)}
-                            disabled={nativeLaunchLoading[app.id]}
-                            className="px-3 py-1.5 min-h-[44px] bg-port-success/20 text-port-success enabled:hover:bg-port-success/30 transition-colors flex items-center gap-1 disabled:opacity-50"
-                            aria-label={`Launch ${app.nativeLaunch.label} for ${app.name}`}
-                            aria-busy={nativeLaunchLoading[app.id]}
-                          >
-                            <Gamepad2 size={14} aria-hidden="true" />
-                            <span className="text-xs">
-                              {nativeLaunchLoading[app.id] ? 'Launching…' : app.nativeLaunch.label}
+                            {app.name}
+                          </Link>
+                          {app.archived && (
+                            <span className="px-1.5 py-0.5 bg-port-warning/20 text-port-warning text-xs rounded">
+                              Archived
                             </span>
+                          )}
+                          {isNonPm2 ? (
+                            <span className="px-1.5 py-0.5 bg-port-accent/20 text-port-accent text-xs rounded">
+                              {getAppTypeLabel(app.type)}
+                            </span>
+                          ) : (
+                            <StatusBadge status={app.overallStatus} size="sm" />
+                          )}
+                        </div>
+                        <AppQuality app={app} />
+                        <div className="text-xs text-gray-500 flex flex-wrap gap-x-2 mt-1">
+                          {isNonPm2 ? (
+                            <span className="break-all">{app.repoPath}</span>
+                          ) : (
+                            (app.pm2ProcessNames || []).map((procName, i) => {
+                              const procInfo = app.processes?.find(p => p.name === procName);
+                              const ports = procInfo?.ports || {};
+                              const portEntries = Object.entries(ports);
+                              const portDisplay = portEntries.length > 1
+                                ? ` (${portEntries.map(([label, port]) => `${label}:${port}`).join(', ')})`
+                                : portEntries.length === 1
+                                  ? `:${portEntries[0][1]}`
+                                  : '';
+                              return (
+                                <span key={i}>
+                                  {procName}<span className="text-port-accent">{portDisplay}</span>
+                                  {i < (app.pm2ProcessNames?.length || 0) - 1 ? ',' : ''}
+                                </span>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Controls */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      {/* Start/Stop/Restart Button Group - only for PM2 apps */}
+                      {!isNonPm2 && (
+                      <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
+                        {app.overallStatus === 'online' ? (
+                          <>
+                            <button
+                              onClick={() => handleStop(app)}
+                              disabled={actionLoading[app.id]}
+                              className="px-3 py-1.5 min-h-[44px] bg-port-error/20 text-port-error enabled:hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-error"
+                              aria-label={`Stop ${app.name}`}
+                              aria-busy={actionLoading[app.id] === 'stop'}
+                            >
+                              <Square size={14} aria-hidden="true" />
+                              <span className="text-xs">{actionLoading[app.id] === 'stop' ? 'Stopping...' : 'Stop'}</span>
+                            </button>
+                            <button
+                              onClick={() => handleRestart(app)}
+                              disabled={actionLoading[app.id]}
+                              className="px-3 py-1.5 min-h-[44px] bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 border-l border-port-border flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-warning"
+                              aria-label={`Restart ${app.name}`}
+                              aria-busy={actionLoading[app.id] === 'restart'}
+                            >
+                              <RotateCcw size={14} aria-hidden="true" className={actionLoading[app.id] === 'restart' ? 'animate-spin' : ''} />
+                              <span className="text-xs">{actionLoading[app.id] === 'restart' ? 'Restarting...' : 'Restart'}</span>
+                            </button>
+                          </>
+                        ) : (app.degraded || app.overallStatus === 'unknown') ? (
+                          // PM2 read failed — status is genuinely unknown, so don't
+                          // offer a misleading Start. Surface "Status unavailable"
+                          // and let the user re-check rather than act on bad info.
+                          <button
+                            onClick={() => fetchApps()}
+                            disabled={actionLoading[app.id]}
+                            className="px-3 py-1.5 min-h-[44px] bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-warning"
+                            aria-label={`${app.name} status unavailable — refresh`}
+                            title="PM2 status could not be read — refresh to retry"
+                          >
+                            <RefreshCw size={14} aria-hidden="true" />
+                            <span className="text-xs">Status unavailable</span>
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleStart(app)}
+                            disabled={actionLoading[app.id]}
+                            className="px-3 py-1.5 min-h-[44px] bg-port-success/20 text-port-success enabled:hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-success"
+                            aria-label={`Start ${app.name}`}
+                            aria-busy={actionLoading[app.id] === 'start'}
+                          >
+                            <Play size={14} aria-hidden="true" />
+                            <span className="text-xs">{actionLoading[app.id] === 'start' ? 'Starting...' : 'Start'}</span>
                           </button>
                         )}
                       </div>
-                    )}
-
-                    {/* Manage is the row's single primary action; the rare and
-                        destructive ones (Archive/Remove) live behind the "…"
-                        menu so removal isn't the loudest control on the card. */}
-                    <div className="flex items-center gap-2">
-                      <Link
-                        to={`/apps/${app.id}/overview`}
-                        className="px-4 py-1.5 min-h-[44px] inline-flex items-center rounded-lg bg-port-accent text-white hover:bg-port-accent/80 transition-colors text-xs font-medium focus:outline-hidden focus:ring-2 focus:ring-port-accent"
-                        aria-label={`Manage ${app.name}`}
-                      >
-                        Manage
-                      </Link>
-                      {/* Archive + Remove are withheld for the PortOS baseline app */}
-                      {app.id !== api.PORTOS_APP_ID && (
-                        <OverflowMenu
-                          label={`More actions for ${app.name}`}
-                          triggerRef={menuTriggerRef(app.id)}
-                          items={[
-                            {
-                              id: 'archive',
-                              label: archiving[app.id] ? 'Working…' : app.archived ? 'Unarchive' : 'Archive',
-                              icon: app.archived ? ArchiveRestore : Archive,
-                              disabled: !!archiving[app.id],
-                              onSelect: () => (app.archived ? handleUnarchive(app) : handleArchive(app)),
-                            },
-                            {
-                              id: 'remove',
-                              label: 'Remove from PortOS',
-                              icon: Trash2,
-                              tone: 'danger',
-                              onSelect: () => setConfirmingDelete(app.id),
-                            },
-                          ]}
-                        />
                       )}
+
+                      {/* Launch buttons grouped together */}
+                      {(app.nativeLaunch || (app.overallStatus === 'online' && (primaryLaunchUrl || launchUrls.dev))) && (
+                        <div className="inline-flex rounded-lg overflow-hidden border border-port-border divide-x divide-port-border">
+                          {app.overallStatus === 'online' && primaryLaunchUrl && (
+                            <button
+                              onClick={() => handleWebLaunch(primaryLaunchUrl)}
+                              className="px-3 py-1.5 min-h-[44px] bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 transition-colors flex items-center gap-1"
+                              aria-label={`Launch ${app.name} UI`}
+                            >
+                              <ExternalLink size={14} aria-hidden="true" />
+                              <span className="text-xs">Launch</span>
+                            </button>
+                          )}
+                          {app.overallStatus === 'online' && launchUrls.dev && (
+                            <button
+                              onClick={() => handleWebLaunch(launchUrls.dev)}
+                              className="px-3 py-1.5 min-h-[44px] bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors flex items-center gap-1"
+                              aria-label={`Launch ${app.name} Dev UI`}
+                            >
+                              <ExternalLink size={14} aria-hidden="true" />
+                              <span className="text-xs">Dev UI</span>
+                            </button>
+                          )}
+                          {app.nativeLaunch && (
+                            <button
+                              onClick={() => handleNativeLaunch(app)}
+                              disabled={nativeLaunchLoading[app.id]}
+                              className="px-3 py-1.5 min-h-[44px] bg-port-success/20 text-port-success enabled:hover:bg-port-success/30 transition-colors flex items-center gap-1 disabled:opacity-50"
+                              aria-label={`Launch ${app.nativeLaunch.label} for ${app.name}`}
+                              aria-busy={nativeLaunchLoading[app.id]}
+                            >
+                              <Gamepad2 size={14} aria-hidden="true" />
+                              <span className="text-xs">
+                                {nativeLaunchLoading[app.id] ? 'Launching…' : app.nativeLaunch.label}
+                              </span>
+                            </button>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Manage is the row's single primary action; the rare and
+                          destructive ones (Archive/Remove) live behind the "…"
+                          menu so removal isn't the loudest control on the card. */}
+                      <div className="flex items-center gap-2">
+                        <Link
+                          to={`/apps/${app.id}/overview`}
+                          className="px-4 py-1.5 min-h-[44px] inline-flex items-center rounded-lg bg-port-accent text-white hover:bg-port-accent/80 transition-colors text-xs font-medium focus:outline-hidden focus:ring-2 focus:ring-port-accent"
+                          aria-label={`Manage ${app.name}`}
+                        >
+                          Manage
+                        </Link>
+                        {/* Archive + Remove are withheld for the PortOS baseline app */}
+                        {app.id !== api.PORTOS_APP_ID && (
+                          <OverflowMenu
+                            label={`More actions for ${app.name}`}
+                            triggerRef={menuTriggerRef(app.id)}
+                            items={[
+                              {
+                                id: 'archive',
+                                label: archiving[app.id] ? 'Working…' : app.archived ? 'Unarchive' : 'Archive',
+                                icon: app.archived ? ArchiveRestore : Archive,
+                                disabled: !!archiving[app.id],
+                                onSelect: () => (app.archived ? handleUnarchive(app) : handleArchive(app)),
+                              },
+                              {
+                                id: 'remove',
+                                label: 'Remove from PortOS',
+                                icon: Trash2,
+                                tone: 'danger',
+                                onSelect: () => setConfirmingDelete(app.id),
+                              },
+                            ]}
+                          />
+                        )}
+                      </div>
                     </div>
                   </div>
+
+                  {confirmingDelete === app.id && (
+                    <InlineConfirmRow
+                      className="mt-3"
+                      autoFocus
+                      question={`Remove ${app.name} from PortOS? Its repository will stay on disk.`}
+                      confirmText="Remove"
+                      cancelText="Keep"
+                      aria-label={`Confirm removal of ${app.name} from PortOS`}
+                      onConfirm={() => handleDelete(app)}
+                      onCancel={() => {
+                        setConfirmingDelete(null);
+                        menuTriggerRef(app.id).current?.focus();
+                      }}
+                    />
+                  )}
                 </div>
 
-                {confirmingDelete === app.id && (
-                  <InlineConfirmRow
-                    className="mt-3"
-                    autoFocus
-                    question={`Remove ${app.name} from PortOS? Its repository will stay on disk.`}
-                    confirmText="Remove"
-                    cancelText="Keep"
-                    aria-label={`Confirm removal of ${app.name} from PortOS`}
-                    onConfirm={() => handleDelete(app)}
-                    onCancel={() => {
-                      setConfirmingDelete(null);
-                      menuTriggerRef(app.id).current?.focus();
-                    }}
-                  />
-                )}
               </div>
+            );
+            })}
+          </div>
+        )}
 
-            </div>
-          );
-          })}
-        </div>
-      )}
-
+      </div>
     </div>
   );
 }

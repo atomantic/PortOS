@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
+import { toastWorkflowError } from '../components/musicVideo/workflowErrorToast.jsx';
 import {
+  getMusicVideoProject,
   startMusicVideoProduction,
   resumeMusicVideoProduction,
   stopMusicVideoProduction,
@@ -50,6 +52,10 @@ export default function useMusicVideoProduction({ project, replaceProject } = {}
     return () => socket.off('music-video:production', onProduction);
   }, [projectId]);
 
+  // A refusal for an open revision links to it; reload so the banner can show
+  // a revision this tab never saw.
+  const reload = () => getMusicVideoProject(projectId, { silent: true }).then((next) => replaceRef.current?.(next));
+
   const call = (request) => {
     setBusy(true);
     return request()
@@ -58,7 +64,7 @@ export default function useMusicVideoProduction({ project, replaceProject } = {}
         if (res?.run) lastStatus.current.set(res.run.id, res.run.status);
         return res;
       })
-      .catch((err) => { toast.error(err?.message || 'Production request failed'); return null; })
+      .catch((err) => { toastWorkflowError(err, 'Production request failed', { reload }); return null; })
       .finally(() => setBusy(false));
   };
 

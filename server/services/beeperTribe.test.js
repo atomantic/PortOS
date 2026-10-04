@@ -787,3 +787,150 @@ describe('unlinkIdentity (#99)', () => {
     expect(db.participants.get(pKey(CONVERSATION, 'user-1')).tribe_person_id).toBeNull();
   });
 });
+
+
+describe('logSenderTouchpoints batch deduplication', () => {
+  const candidate = (overrides = {}) => ({
+    conversationId: CONVERSATION, senderId: 'user-1',
+    sentAt: '2026-10-03T12:00:00.000Z', network: 'discord', ...overrides,
+  });
+
+  beforeEach(() => {
+    tribeService.autoCreateTouchpoint.mockReset();
+    seedParticipant({ tribePersonId: CACHED_PERSON });
+  });
+
+  it.each([null, { id: 'example-touchpoint' }])('attempts 25 repeated candidates once, including a confirmed duplicate (%j)', async (touchpoint) => {
+    tribeService.autoCreateTouchpoint.mockResolvedValue(touchpoint);
+    const first = candidate({ sentAt: new Date('2026-10-03T12:00:00.000Z'), channel: 'Example channel' });
+    const batch = [first, ...Array.from({ length: 24 }, () => candidate({ channel: 'Later channel' }))];
+
+    expect(await beeperTribe.logSenderTouchpoints(batch)).toEqual({
+      matched: 25, created: touchpoint ? 1 : 0,
+    });
+    expect(tribeService.autoCreateTouchpoint).toHaveBeenCalledTimes(1);
+    expect(tribeService.autoCreateTouchpoint).toHaveBeenCalledWith(CACHED_PERSON, {
+      happenedAt: first.sentAt, channel: 'Example channel', summary: '',
+      source: 'message', dedupeKey: 'beeper:2026-10-03',
+      metadata: { network: 'discord', conversationId: CONVERSATION },
+    });
+  });
+
+  it('shares a person/day across sender identities while keeping people and UTC days separate', async () => {
+    seedParticipant({ sourceUserId: 'alias', tribePersonId: CACHED_PERSON });
+    seedParticipant({ sourceUserId: 'other', tribePersonId: CLAIMING_PERSON });
+    tribeService.autoCreateTouchpoint.mockResolvedValue({ id: 'example-touchpoint' });
+    const result = await beeperTribe.logSenderTouchpoints([
+      candidate(), candidate({ senderId: 'alias' }),
+      candidate({ senderId: 'other' }),
+      candidate({ sentAt: '2026-10-04T01:00:00.000Z' }),
+      candidate({ sentAt: '2026-10-03T23:30:00-02:00' }),
+    ]);
+    expect(result).toEqual({ matched: 5, created: 3 });
+    expect(tribeService.autoCreateTouchpoint.mock.calls.map(([personId, data]) => [personId, data.dedupeKey]))
+      .toEqual([
+        [CACHED_PERSON, 'beeper:2026-10-03'],
+        [CLAIMING_PERSON, 'beeper:2026-10-03'],
+        [CACHED_PERSON, 'beeper:2026-10-04'],
+      ]);
+  });
+
+  it('ignores deleted and unmatched people without suppressing a later matched sender', async () => {
+    db.people.get(CLAIMING_PERSON).deleted = true;
+    seedParticipant({ sourceUserId: 'deleted', tribePersonId: CLAIMING_PERSON });
+    tribeService.autoCreateTouchpoint.mockResolvedValue(null);
+    expect(await beeperTribe.logSenderTouchpoints([
+      candidate({ senderId: 'deleted' }), candidate({ senderId: 'unknown' }), candidate(),
+    ])).toEqual({ matched: 1, created: 0 });
+    expect(tribeService.autoCreateTouchpoint).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates failed writes and retries through the database boundary in a later invocation', async () => {
+    tribeService.autoCreateTouchpoint.mockRejectedValueOnce(new Error('example database failure'));
+    const batch = [candidate(), candidate()];
+    await expect(beeperTribe.logSenderTouchpoints(batch)).rejects.toThrow('example database failure');
+    tribeService.autoCreateTouchpoint.mockResolvedValue(null);
+    expect(await beeperTribe.logSenderTouchpoints(batch)).toEqual({ matched: 2, created: 0 });
+    expect(tribeService.autoCreateTouchpoint).toHaveBeenCalledTimes(2);
+  });
+
+  it('consults the database once per batch across 20 batches of 25 messages', async () => {
+    tribeService.autoCreateTouchpoint.mockResolvedValue(null)
+      .mockResolvedValueOnce({ id: 'example-touchpoint' });
+    const batch = Array.from({ length: 25 }, () => candidate());
+    const results = await Promise.all(Array.from({ length: 20 }, () => beeperTribe.logSenderTouchpoints(batch)));
+    expect(results.reduce((total, result) => ({
+      matched: total.matched + result.matched, created: total.created + result.created,
+    }), { matched: 0, created: 0 })).toEqual({ matched: 500, created: 1 });
+    expect(tribeService.autoCreateTouchpoint).toHaveBeenCalledTimes(20);
+  });
+});
+
+describe('touchpoint roster reuse', () => {
+  const candidate = (conversationId = CONVERSATION) => ({
+    conversationId, senderId: 'user-1', sentAt: '2026-09-02T10:00:00.000Z', network: 'whatsapp',
+  });
+
+  beforeEach(() => {
+    tribeService.autoCreateTouchpoint.mockReset();
+    tribeService.autoCreateTouchpoint.mockResolvedValue({ id: 'example-touchpoint' });
+  });
+
+  it('reuses a sweep index while preserving authoritative claims and deleted cache handling', async () => {
+    listPeople.mockResolvedValue([{ id: LEGACY_PHONE_PERSON, name: 'Example', phones: [PHONE_NORMALIZED] }]);
+    seedParticipant({ handle: PHONE_RAW, tribePersonId: CACHED_PERSON, network: 'whatsapp' });
+    seedParticipant({ conversationId: OTHER_CONVERSATION, handle: '', tribePersonId: CACHED_PERSON });
+    db.identities.set(iKey('phone', '', PHONE_NORMALIZED), CLAIMING_PERSON);
+    db.people.get(CACHED_PERSON).deleted = true;
+    const personIndex = await beeperTribe.loadRosterIndex();
+
+    expect(await beeperTribe.logSenderTouchpoints([candidate(), candidate(OTHER_CONVERSATION)], { personIndex }))
+      .toEqual({ created: 1, matched: 1 });
+    expect(tribeService.autoCreateTouchpoint).toHaveBeenCalledWith(CLAIMING_PERSON, expect.objectContaining({ dedupeKey: 'beeper:2026-09-02' }));
+    expect(listPeople).toHaveBeenCalledTimes(1);
+  });
+
+  it('loads phone fallbacks afresh for standalone calls', async () => {
+    seedParticipant({ handle: PHONE_RAW, network: 'whatsapp' });
+    listPeople.mockResolvedValueOnce([{ id: LEGACY_PHONE_PERSON, name: 'Example', phones: [PHONE_NORMALIZED] }])
+      .mockResolvedValueOnce([]);
+    expect(await beeperTribe.logSenderTouchpoints([candidate()])).toEqual({ created: 1, matched: 1 });
+    expect(await beeperTribe.logSenderTouchpoints([candidate()])).toEqual({ created: 0, matched: 0 });
+    expect(listPeople).toHaveBeenCalledTimes(2);
+  });
+
+  it('reduces a synthetic 1000-person, 20-chat pass from 21 roster loads to one with identical outcomes', async () => {
+    const roster = Array.from({ length: 1000 }, (_, i) => ({
+      id: i === 0 ? LEGACY_PHONE_PERSON : `example-person-${i}`, name: `Example ${i}`, notes: 'x'.repeat(8192),
+      phones: i === 0 ? [PHONE_NORMALIZED] : [],
+    }));
+    listPeople.mockResolvedValue(roster);
+    const batches = Array.from({ length: 20 }, (_, i) => {
+      const conversationId = `example-chat-${i}`;
+      seedParticipant({ conversationId, handle: PHONE_RAW, network: 'whatsapp' });
+      return Array.from({ length: 25 }, () => candidate(conversationId));
+    });
+    const run = async (reuse) => {
+      listPeople.mockClear();
+      tribeService.autoCreateTouchpoint.mockClear();
+      const touched = new Set();
+      tribeService.autoCreateTouchpoint.mockImplementation(async (personId, { dedupeKey }) => {
+        const key = `${personId}:${dedupeKey}`;
+        if (touched.has(key)) return null;
+        touched.add(key);
+        return { id: 'example-touchpoint' };
+      });
+      const personIndex = await beeperTribe.loadRosterIndex();
+      let created = 0, matched = 0;
+      for (const batch of batches) {
+        // eslint-disable-next-line no-await-in-loop -- mirrors sequential sweep batches
+        const result = await beeperTribe.logSenderTouchpoints(batch, reuse ? { personIndex } : {});
+        created += result.created;
+        matched += result.matched;
+      }
+      return { created, matched, reads: listPeople.mock.calls.length, attempts: tribeService.autoCreateTouchpoint.mock.calls.length };
+    };
+    expect(await run(false)).toEqual({ created: 1, matched: 500, reads: 21, attempts: 20 });
+    expect(await run(true)).toEqual({ created: 1, matched: 500, reads: 1, attempts: 20 });
+  });
+});

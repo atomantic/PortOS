@@ -3,6 +3,7 @@ import toast from '../ui/Toast';
 import { RefreshCw, Terminal, Play, Settings } from 'lucide-react';
 import * as api from '../../services/api';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
+import ProgressBar from '../ui/ProgressBar.jsx';
 
 const STATUS_COLORS = {
   active: 'bg-port-accent text-port-accent',
@@ -64,24 +65,22 @@ export default function GsdProjectHeader({ project, appId, repoPath, onRefresh }
                 <span>Phases</span>
                 <span>{completedPhases}/{phases.length}</span>
               </div>
-              <div className="h-1.5 bg-port-bg rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-port-success rounded-full transition-all"
-                  style={{ width: phases.length ? `${(completedPhases / phases.length) * 100}%` : '0%' }}
-                />
-              </div>
+              <ProgressBar
+                percent={phases.length ? (completedPhases / phases.length) * 100 : 0}
+                tone="success"
+                label="Completed phases"
+              />
             </div>
             <div>
               <div className="flex justify-between text-xs text-gray-500 mb-1">
                 <span>Planned</span>
                 <span>{phasesWithPlans}/{phases.length}</span>
               </div>
-              <div className="h-1.5 bg-port-bg rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-port-accent rounded-full transition-all"
-                  style={{ width: phases.length ? `${(phasesWithPlans / phases.length) * 100}%` : '0%' }}
-                />
-              </div>
+              <ProgressBar
+                percent={phases.length ? (phasesWithPlans / phases.length) * 100 : 0}
+                tone="accent"
+                label="Planned phases"
+              />
             </div>
           </div>
 

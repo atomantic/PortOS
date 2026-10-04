@@ -1,5 +1,5 @@
 import os from 'os';
-import { statfs } from 'fs/promises';
+import { stat, statfs } from 'fs/promises';
 import { listProcessesStrict } from './pm2.js';
 import { getAppStatusSummary, annotateExpectedExit } from './appProcessStatus.js';
 import * as cos from './cos.js';
@@ -7,7 +7,7 @@ import { getSelf } from './instanceIdentity.js';
 import { checkHealth } from '../lib/db.js';
 import { getCurrentVersion } from './updateChecker.js';
 import { getMemoryStats } from '../lib/memoryStats.js';
-import { formatBytes, formatDuration } from '../lib/fileUtils.js';
+import { formatBytes, formatDuration, PATHS } from '../lib/fileUtils.js';
 import { parseFilesystemStats } from '../lib/fileCore.js';
 import { getSettingsWithStatus, updateSettingsWith } from './settings.js';
 import { checkGhHealth } from './github.js';
@@ -87,7 +87,7 @@ export async function getSystemHealthSnapshot() {
   const failedProbe = Symbol('failed health probe');
 
   // Gather data in parallel
-  const [pm2Processes, appStatusSummary, cosStatus, cosPendingTaskIds, cosAgents, self, dbHealth, version, diskStats, memStats, healthSettings, forgeHealth, mediaCapacity, reviewerConfigHealth] = await Promise.all([
+  const [pm2Processes, appStatusSummary, cosStatus, cosPendingTaskIds, cosAgents, self, dbHealth, version, diskStats, dataDiskStats, filesystemDevices, memStats, healthSettings, forgeHealth, mediaCapacity, reviewerConfigHealth] = await Promise.all([
     listProcessesStrict().catch(() => null),
     getAppStatusSummary().catch((error) => {
       const code = typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]{0,31}$/.test(error.code) ? error.code : 'unknown';
@@ -95,7 +95,7 @@ export async function getSystemHealthSnapshot() {
       return failedProbe;
     }),
     cos.getStatus().catch((error) => {
-      console.error('Chief of Staff health probe failed', error);
+      console.error(`❌ Chief of Staff health probe failed: ${error.message}`);
       return failedProbe;
     }),
     // Queue depth is read here rather than taken off `getStatus()`, which has no
@@ -114,9 +114,11 @@ export async function getSystemHealthSnapshot() {
     checkHealth().catch(() => ({ connected: false, hasSchema: false, error: 'Health check failed' })),
     getCurrentVersion().catch(() => null),
     statfs('/').catch((error) => {
-      console.error('Root filesystem health probe failed', error);
+      console.error(`❌ Root filesystem health probe failed: ${error.message}`);
       return failedProbe;
     }),
+    statfs(PATHS.data).catch(() => null),
+    Promise.all(['/', PATHS.data].map(path => stat(path).then(result => result.dev).catch(() => null))),
     getMemoryStats(),
     loadHealthSettings(),
     checkGhHealth().catch(() => ({ status: 'error', ok: false, detail: 'Health check failed', remedy: null, checkedAt: null })),
@@ -145,6 +147,10 @@ export async function getSystemHealthSnapshot() {
     free: parsedDisk.free,
     usagePercent: parsedDisk.usagePercent,
   };
+
+  const dataDisk = parseFilesystemStats(dataDiskStats);
+  const sameFilesystem = filesystemDevices.every(device => device != null)
+    ? filesystemDevices[0] === filesystemDevices[1] : null;
 
   // Process status summary from PM2. Processes whose exit is expected (a desktop
   // app the user closed) are excluded from the FAILURE-bearing counts: a quit game
@@ -209,6 +215,9 @@ export async function getSystemHealthSnapshot() {
   if (diskStats === failedProbe) {
     rawWarnings.push({ type: 'probe-unavailable', source: 'disk', status: 'unavailable', severity: 'warning', message: 'Disk status unavailable', dismissible: false });
   }
+  if (!dataDisk) {
+    rawWarnings.push({ type: 'probe-unavailable', source: 'data-disk', status: 'unavailable', severity: 'warning', message: 'Runtime data disk status unavailable', dismissible: false });
+  }
   if (cosStatus === failedProbe) {
     rawWarnings.push({ type: 'probe-unavailable', source: 'cos', status: 'unavailable', severity: 'warning', message: 'Chief of Staff status unavailable', dismissible: false });
   }
@@ -226,11 +235,24 @@ export async function getSystemHealthSnapshot() {
     rawWarnings.push({ type: 'probe-unavailable', source: 'pm2', status: 'unavailable', severity: 'warning', message: 'Process manager (PM2) status unavailable', dismissible: false });
   }
 
-  if (disk) {
-    if (disk.usagePercent >= thresholds.diskCritical) {
+  // Concurrent probes may sample a shared volume on either side of a threshold.
+  // Keep one legacy warning identity and use the more severe available reading.
+  const warningDisk = sameFilesystem === true && disk && dataDisk
+    ? (disk.usagePercent >= dataDisk.usagePercent ? disk : dataDisk) : disk;
+  if (warningDisk) {
+    if (warningDisk.usagePercent >= thresholds.diskCritical) {
       rawWarnings.push({ type: 'disk', severity: 'critical', message: `Disk usage at or above ${thresholds.diskCritical}%` });
-    } else if (disk.usagePercent >= thresholds.diskWarn) {
+    } else if (warningDisk.usagePercent >= thresholds.diskWarn) {
       rawWarnings.push({ type: 'disk', severity: 'warning', message: `Disk usage at or above ${thresholds.diskWarn}%` });
+    }
+  }
+
+  // Preserve the root warning identity and its saved dismissals on a shared volume.
+  if (dataDisk && !(sameFilesystem === true && disk)) {
+    if (dataDisk.usagePercent >= thresholds.diskCritical) {
+      rawWarnings.push({ type: 'data-disk', severity: 'critical', message: `Runtime data disk usage at or above ${thresholds.diskCritical}%` });
+    } else if (dataDisk.usagePercent >= thresholds.diskWarn) {
+      rawWarnings.push({ type: 'data-disk', severity: 'warning', message: `Runtime data disk usage at or above ${thresholds.diskWarn}%` });
     }
   }
 
@@ -411,7 +433,17 @@ export async function getSystemHealthSnapshot() {
         totalFormatted: formatBytes(disk.total),
         usedFormatted: formatBytes(disk.used),
         freeFormatted: formatBytes(disk.free)
-      } : null
+      } : null,
+      dataDisk: dataDisk ? {
+        total: dataDisk.total,
+        used: dataDisk.used,
+        free: dataDisk.free,
+        usagePercent: dataDisk.usagePercent,
+        totalFormatted: formatBytes(dataDisk.total),
+        usedFormatted: formatBytes(dataDisk.used),
+        freeFormatted: formatBytes(dataDisk.free)
+      } : null,
+      sameFilesystem
     },
     processes: processStats,
     apps: appStats,

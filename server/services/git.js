@@ -1382,7 +1382,7 @@ export async function hasBranchMergeEvidence(dir, branch, target) {
   // Rebase/cherry-pick path: does target contain every branch commit as an
   // individual patch-equivalent commit?
   const individualCherry = await execGit(['cherry', targetSha, branchSha], dir, { ignoreExitCode: true })
-    .then(r => r.stdout.trim())
+    .then(r => r.exitCode === 0 ? r.stdout.trim() : null)
     .catch(() => null);
   if (individualCherry === null) return false;
   if (individualCherry !== '' && individualCherry.split('\n').every(line => line.startsWith('-'))) {
@@ -1411,7 +1411,7 @@ export async function hasBranchMergeEvidence(dir, branch, target) {
   if (!synthesized) return false;
 
   const combinedCherry = await execGit(['cherry', targetSha, synthesized], dir, { ignoreExitCode: true })
-    .then(r => r.stdout.trim())
+    .then(r => r.exitCode === 0 ? r.stdout.trim() : null)
     .catch(() => null);
   if (combinedCherry === null) return false;
   if (combinedCherry === '') return true; // empty patch (tree already matches) ⇒ merged
@@ -1645,7 +1645,8 @@ const WORKTREE_HOLD_REASONS = {
   'worktree-locked': 'worktree is locked',
   'worktree-active-agent': 'worktree is in use by a running agent',
   'worktree-agent-liveness-unknown': 'agent liveness unknown',
-  'worktree-human-claim': 'worktree is a claimed session'
+  'worktree-human-claim': 'worktree is a claimed session',
+  'remove-failed': 'worktree removal failed and the checkout is still present'
 };
 const worktreeHoldReason = (reason) => WORKTREE_HOLD_REASONS[reason] || 'checked out in a worktree';
 

@@ -62,9 +62,29 @@ vi.mock('../lib/db.js', async () => ({
   getServerMajorVersion: vi.fn(() => null),
 }));
 
+// The real journal reads the install's data root, never this suite's temp tree.
+const maintenanceFence = vi.hoisted(() => ({ fenced: false }));
+vi.mock('../lib/databaseMaintenanceJournal.js', () => ({
+  assertDatabaseAdmission: () => {
+    if (maintenanceFence.fenced) throw Object.assign(new Error('Persistent database maintenance is active'), { status: 503, code: 'DATABASE_MAINTENANCE' });
+  },
+}));
+
 vi.mock('../scripts/run-db-migrations.js', () => ({
   runDbMigrations: vi.fn().mockResolvedValue(0),
 }));
+// Passthrough seam: the snapshot-cut failure tests wrap acquisition to shorten the
+// drain timeout or fail release. Left unset, runBackup uses the real boundary.
+const snapshotCutSeam = vi.hoisted(() => ({ wrap: null }));
+vi.mock('../lib/backupSnapshotBoundary.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    acquireBackupSnapshotCut: (...args) => snapshotCutSeam.wrap
+      ? snapshotCutSeam.wrap(actual.acquireBackupSnapshotCut, ...args)
+      : actual.acquireBackupSnapshotCut(...args),
+  };
+});
 import { ensureSchema, query, withDatabaseMaintenance } from '../lib/db.js';
 vi.mock('./backupDatabaseReset.js', () => ({
   getDatabaseResetPlan: async () => ({ preflight: 'SELECT 1', reset: 'RESET_APPROVED_SCHEMA' }),
@@ -136,6 +156,7 @@ vi.mock('./brainStorage.js', async (importOriginal) => ({
   invalidateAllCaches: vi.fn(),
 }));
 import { reloadSettings, withLiveSettingsRestore } from './settings.js';
+import { createDatabaseAuthority } from '../lib/databaseAuthority.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
 import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, openSnapshotStream, restoreSnapshot, resolveRsyncBinary, deleteSnapshot } from './backup.js';
 import { EXCLUDE_PATTERN_MAX_LENGTH, anchorUserExclude, anchorUserExcludes, isSafeExcludePattern } from '../lib/sharedSchemas.js';
@@ -169,6 +190,7 @@ function fakeProc() {
 // The restore/dump helpers await filesystem and health checks before calling
 // spawn() and attaching child-process listeners. Wait for the mocked spawn
 // call itself so CI scheduling cannot emit into an uninitialized fake process.
+const settle = () => new Promise(resolve => setTimeout(resolve, 25));
 const flush = () => vi.waitFor(() => expect(spawn).toHaveBeenCalled());
 
 const overridable = DEFAULT_EXCLUDES.filter(e => e.overridable).map(e => e.path);
@@ -999,7 +1021,7 @@ describe('dumpPostgres status classification', () => {
       await flush();
       proc.emit('close', 0);
       await p;
-      expect(spawn).toHaveBeenCalledWith('/custom/bin/pg_dump', expect.any(Array), expect.any(Object));
+      expect(spawn).toHaveBeenCalledWith('/custom/bin/pg_dump', expect.arrayContaining(['--no-comments']), expect.any(Object));
     } finally {
       delete process.env.PORTOS_PGDUMP;
       // clearAllMocks() doesn't reset implementations — restore the null default
@@ -1224,7 +1246,22 @@ describe('restorePostgres', () => {
     rmSync(RECOVERY_JOURNAL(), { force: true });
     query.mockReset().mockImplementation(restoreDbAnswer());
     checkHealth.mockResolvedValue({ connected: true });
+    getServerMajorVersion.mockResolvedValue(16);
     ({ restorePostgres } = await import('./backup.js'));
+  });
+
+  it.each([null, 0, NaN])('refuses an unknown target major %s equally in preview and execution before mutation', async major => {
+    getServerMajorVersion.mockResolvedValue(major);
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+    mockLegacyDumpRead();
+    for (const dryRun of [true, false]) {
+      expect(await restorePostgres('/dest', 'snap-1', { dryRun }))
+        .toMatchObject({ status: 'failed', reason: 'restore_compatibility', error: expect.stringContaining('SHOW server_version_num') });
+    }
+    expect(query).not.toHaveBeenCalled();
+    expect(withDatabaseMaintenance).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(readRecoveryJournal()).toBeNull();
   });
 
   it('rejects a path-traversal snapshotId', async () => {
@@ -1302,6 +1339,52 @@ describe('restorePostgres', () => {
     const result = await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false });
     expect(result).toEqual({ status: 'skipped', reason: 'not_configured' });
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('refuses a real restore while a backup cut is active and releases only its own admission', async () => {
+    const { acquireBackupSnapshotCut, withBackupAssetPublication } = await import('../lib/backupSnapshotBoundary.js');
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+    mockLegacyDumpRead();
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    const releaseBackupCut = await acquireBackupSnapshotCut();
+    try {
+      expect(await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false }))
+        .toMatchObject({ status: 'failed', reason: 'backup_snapshot_busy' });
+      expect(withDatabaseMaintenance).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+      expect(readRecoveryJournal()).toBeNull();
+      // The refused restore never owned the cut: the backup's remains closed.
+      let admitted = false;
+      const waiting = withBackupAssetPublication(() => { admitted = true; });
+      await settle();
+      expect(admitted).toBe(false);
+      releaseBackupCut();
+      await waiting;
+    } finally {
+      releaseBackupCut();
+    }
+  });
+
+  it('starts a real restore only after an admitted file-plus-row publication drains, then reopens publication', async () => {
+    const { withBackupAssetPublication } = await import('../lib/backupSnapshotBoundary.js');
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+    mockLegacyDumpRead();
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    let finishRow;
+    const halfPublished = withBackupAssetPublication(() => new Promise(resolve => { finishRow = resolve; }));
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const restore = restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false });
+    await settle();
+    expect(withDatabaseMaintenance).not.toHaveBeenCalled();
+
+    finishRow();
+    await halfPublished;
+    await flush();
+    expect(withDatabaseMaintenance).toHaveBeenCalledTimes(1);
+    proc.emit('close', 0);
+    expect(await restore).toMatchObject({ status: 'ok', dryRun: false });
+    await expect(withBackupAssetPublication(() => 'admitted')).resolves.toBe('admitted');
   });
 
   it('treats a 0-byte dump as no_dump (does not restore a truncated snapshot)', async () => {
@@ -1628,6 +1711,34 @@ describe('restorePostgres', () => {
 
     // A later swap on the backup media must not reach psql: it replays the
     // private copy the admission read wrote, and the copy is removed afterwards.
+    it('verifies original integrity and receipts while normalizing extension metadata and the PG17 header', async () => {
+      const comment = "COMMENT ON EXTENSION vector IS 'provisioned extension';";
+      const extensionDrop = 'DROP EXTENSION IF EXISTS vector;';
+      const sql = DUMP_HEADER + 'SET transaction_timeout = 0;\n'
+        + extensionDrop + '\n' + comment + '\n' + DUMP_TABLES + DUMP_TRAILER;
+      const originalHash = createHash('sha256').update(sql).digest('hex');
+      vi.spyOn(fs, 'readFile').mockImplementation(async path => {
+        if (String(path).endsWith('manifest.json')) return JSON.stringify({ files: { '../portos-db.sql': originalHash } });
+        throw new Error('Unexpected read');
+      });
+      mockDumpStream(sql);
+      const proc = fakeProc();
+      let replayed;
+      spawn.mockImplementation((_bin, args) => {
+        const path = args[args.indexOf('-f') + 1];
+        replayed = { path, sql: readFileSync(path, 'utf8') };
+        expect(args.at(-1)).toContain(originalHash);
+        expect(readRecoveryJournal().dumpSha256).toBe(originalHash);
+        return proc;
+      });
+      const pending = restorePostgres('/dest', 'snap-1', { dryRun: false });
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+      proc.emit('close', 0);
+      expect(await pending).toMatchObject({ status: 'ok', dryRun: false });
+      expect(replayed.sql).toBe(sql.replace(comment, '').replace(extensionDrop, '').replace('SET transaction_timeout = 0;\n', ''));
+      expect(existsSync(replayed.path)).toBe(false);
+    });
+
     it('replays exactly the admitted bytes from a private spool, never the snapshot path', async () => {
       mockLegacyDumpRead(COMPLETE_DUMP, `${DUMP_HEADER}COMMIT;\n${DUMP_TRAILER}`);
       const proc = fakeProc();
@@ -1962,6 +2073,7 @@ describe('restoreSnapshot manifest verification', () => {
   afterEach(async () => {
     await realFs?.rm(tmpRoot, { recursive: true, force: true });
     await realFs?.rm(joinPath(PATHS.data, 'restore-integrity'), { recursive: true, force: true });
+    await realFs?.rm(joinPath(PATHS.data, 'database-authority.json'), { force: true });
   });
 
   async function writeSnapshotFile(relativePath, content) {
@@ -2187,6 +2299,136 @@ describe('restoreSnapshot manifest verification', () => {
       else process.env.PORTOS_RSYNC = previousRsync;
       spawn.mockReset();
     }
+  });
+
+  // #10064: database-authority.json is machine-local admission state. A snapshot
+  // keeps it as recovery evidence, but a restore must never install it: another
+  // machine's (or an older cutover's) record would fence a healthy local backend
+  // as DATABASE_RETIRED_BACKEND, including across restarts. Real rsync + the real
+  // authority adapter, because a mocked transfer cannot show the fence.
+  describe('machine-local database authority (#10064)', () => {
+    const native = { mode: 'native', host: '127.0.0.1', port: 5432, database: 'example_db', user: 'example_user' };
+    const docker = { mode: 'docker', host: '127.0.0.1', port: 5561, database: 'example_db', user: 'example_user' };
+    const authorityDoc = (operationId, source, target) => JSON.stringify({
+      version: 1, operationId, releasedAt: '2026-09-01T00:00:00.000Z', source, target,
+    }, null, 2) + '\n';
+    const SNAPSHOT_AUTHORITY = authorityDoc('11111111-1111-4111-8111-111111111111', native, docker);
+    const NEWER_LOCAL_AUTHORITY = authorityDoc('22222222-2222-4222-8222-222222222222', docker, native);
+    const poolFor = endpoint => ({ host: endpoint.host, port: endpoint.port, database: endpoint.database, user: endpoint.user });
+    const authorityPath = () => joinPath(PATHS.data, 'database-authority.json');
+    const RECORD = 'brain/authority-neighbor.json';
+
+    async function seedSnapshot({ withManifest = true } = {}) {
+      const recordHash = await writeSnapshotFile(RECORD, '{"value":"snapshot"}');
+      const authorityHash = await writeSnapshotFile('database-authority.json', SNAPSHOT_AUTHORITY);
+      if (withManifest) await writeManifest({ [RECORD]: recordHash, 'database-authority.json': authorityHash });
+    }
+
+    async function withRealRsync(context, run) {
+      if (process.platform === 'win32' && spawnSync('rsync', ['--version']).error?.code === 'ENOENT') {
+        context.skip('Windows runner has no rsync executable; real rsync remains required on Linux/macOS.');
+        return;
+      }
+      const previousRsync = process.env.PORTOS_RSYNC;
+      delete process.env.PORTOS_RSYNC;
+      spawn.mockImplementation((...args) => spawnChild(...args));
+      try {
+        await run();
+      } finally {
+        if (previousRsync === undefined) delete process.env.PORTOS_RSYNC;
+        else process.env.PORTOS_RSYNC = previousRsync;
+        spawn.mockReset();
+        await realFs.rm(joinPath(PATHS.data, 'brain', 'authority-neighbor.json'), { force: true });
+      }
+    }
+
+    it.for([
+      { name: 'full restore', options: {} },
+      { name: 'brain-scoped restore', options: { subdirFilter: 'brain' } },
+    ])('a $name keeps an absent destination authority absent, so a healthy native backend is still admitted', async ({ options }, context) => {
+      await withRealRsync(context, async () => {
+        for (const manifest of [true, false]) {
+          await realFs.rm(joinPath(snapshotDir, 'manifest.json'), { force: true });
+          await seedSnapshot({ withManifest: manifest });
+          await realFs.rm(authorityPath(), { force: true });
+          await realFs.rm(joinPath(PATHS.data, RECORD), { force: true });
+
+          const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true, ...options });
+          expect(preview.changedFiles.some(line => line.includes('database-authority.json'))).toBe(false);
+          expect(preview.changedFiles.some(line => line.includes(RECORD))).toBe(true);
+
+          await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, ...options });
+          expect(existsSync(authorityPath())).toBe(false);
+          expect(await realFs.readFile(joinPath(PATHS.data, RECORD), 'utf8')).toBe('{"value":"snapshot"}');
+          expect(createDatabaseAuthority(PATHS.data).assertPool(poolFor(native))).toBeNull();
+        }
+      });
+    });
+
+    it('keeps a newer reverse-cutover authority over an older snapshot\'s, and still refuses the genuinely retired backend', async context => {
+      await withRealRsync(context, async () => {
+        await seedSnapshot();
+        await realFs.writeFile(authorityPath(), NEWER_LOCAL_AUTHORITY);
+
+        await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+
+        expect(await realFs.readFile(authorityPath(), 'utf8')).toBe(NEWER_LOCAL_AUTHORITY);
+        const authority = createDatabaseAuthority(PATHS.data);
+        expect(authority.assertPool(poolFor(native))).toMatchObject({ operationId: '22222222-2222-4222-8222-222222222222' });
+        expect(() => authority.assertPool(poolFor(docker))).toThrow(expect.objectContaining({ code: 'DATABASE_RETIRED_BACKEND' }));
+      });
+    });
+
+    it('leaves a damaged destination authority byte-identical and still fail-closed', async context => {
+      await withRealRsync(context, async () => {
+        await seedSnapshot();
+        await realFs.writeFile(authorityPath(), '{ not json');
+
+        await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+
+        expect(await realFs.readFile(authorityPath(), 'utf8')).toBe('{ not json');
+        expect(() => createDatabaseAuthority(PATHS.data).assertPool(poolFor(native)))
+          .toThrow(expect.objectContaining({ code: 'DATABASE_MAINTENANCE' }));
+      });
+    });
+
+    it('also keeps a mixed-case authority entry from replacing the destination record', async context => {
+      await withRealRsync(context, async () => {
+        await seedSnapshot();
+        await writeSnapshotFile('Database-Authority.json', SNAPSHOT_AUTHORITY);
+        await realFs.rm(joinPath(snapshotDataDir, 'database-authority.json'));
+        await writeManifest({ [RECORD]: createHash('sha256').update('{"value":"snapshot"}').digest('hex') });
+        await realFs.writeFile(authorityPath(), NEWER_LOCAL_AUTHORITY);
+
+        await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+
+        expect(await realFs.readFile(authorityPath(), 'utf8')).toBe(NEWER_LOCAL_AUTHORITY);
+        expect(await realFs.readFile(joinPath(PATHS.data, RECORD), 'utf8')).toBe('{"value":"snapshot"}');
+        await realFs.rm(joinPath(PATHS.data, 'Database-Authority.json'), { force: true });
+      });
+    });
+
+    it('does not fail integrity for an authority file the restore never transfers', async () => {
+      await seedSnapshot();
+      await realFs.writeFile(joinPath(snapshotDataDir, 'database-authority.json'), 'edited after sealing');
+      spawn.mockReturnValueOnce(fakeProc());
+      const pending = restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true });
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      spawn.mock.results[0].value.emit('close', 0);
+      await expect(pending).resolves.toMatchObject({ verification: { status: 'verified', checkedFiles: 1 } });
+    });
+
+    it.each(['database-authority.json', './database-authority.json', 'database-authority.json/', 'Database-Authority.json'])(
+      'refuses an explicit %s selection before verification or transfer, for preview and execution alike',
+      async subdirFilter => {
+        await seedSnapshot();
+        for (const dryRun of [true, false]) {
+          await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun, subdirFilter }))
+            .rejects.toMatchObject({ status: 400, code: 'BACKUP_RESTORE_MACHINE_LOCAL', message: expect.stringMatching(/machine-local/) });
+        }
+        expect(spawn).not.toHaveBeenCalled();
+      },
+    );
   });
 
   // #7299: `--checksum` makes rsync digest BOTH copies of every file in scope,
@@ -2652,6 +2894,8 @@ describe('getState and saveState', () => {
 // is a data-loss-adjacent contract, not a style nit (issue #3917).
 vi.mock('./cosState.js', () => ({ withLiveCosRestore: vi.fn(fn => fn()) }));
 import { withLiveCosRestore } from './cosState.js';
+vi.mock('../lib/mediaModels.js', () => ({ withLiveMediaModelsRestore: vi.fn(fn => fn()) }));
+import { withLiveMediaModelsRestore } from '../lib/mediaModels.js';
 
 describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () => {
   beforeEach(() => {
@@ -2659,6 +2903,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
     reloadSettings.mockClear();
     invalidateBrainCaches.mockClear();
     withLiveCosRestore.mockClear();
+    withLiveMediaModelsRestore.mockClear();
     withLiveSettingsRestore.mockClear();
   });
 
@@ -2734,6 +2979,8 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=Thumbs.db',
         '--exclude=desktop.ini',
         '--exclude=._*',
+        // Machine-local admission state is never installed by a restore (#10064).
+        '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
         '--dry-run',
         // Leading `/` is load-bearing: rsync matches an unanchored pattern
         // against the end of every path, so `brain/***` would also restore
@@ -2759,6 +3006,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=Thumbs.db',
         '--exclude=desktop.ini',
         '--exclude=._*',
+        '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
       ]);
     });
 
@@ -2781,6 +3029,41 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       withLiveCosRestore.mockRejectedValueOnce(new Error('Stop CoS before restoring'));
       await expect(restoreSnapshot('/dest', 'snap-1', { dryRun: false, subdirFilter: 'cos' })).rejects.toThrow('Stop CoS');
       expect(spawn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('media registry restore ownership boundary', () => {
+    it.each([undefined, 'media-models.json'])('holds the boundary for affected live scope %s', async subdirFilter => {
+      await runRestore('/dest', 'snap-1', { dryRun: false, subdirFilter });
+      expect(withLiveMediaModelsRestore).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([{ dryRun: true }, { dryRun: true, subdirFilter: 'media-models.json' }, { dryRun: false, subdirFilter: 'images' }, { dryRun: false, subdirFilter: 'cos' }, { dryRun: false, subdirFilter: 'settings.json' }])('leaves unaffected scope alone: %j', async options => {
+      await runRestore('/dest', 'snap-1', options);
+      expect(withLiveMediaModelsRestore).not.toHaveBeenCalled();
+    });
+
+    it('acquires the registry after settings and CoS and releases it when the transfer fails', async () => {
+      const order = [];
+      withLiveSettingsRestore.mockImplementationOnce(async fn => { order.push('settings'); return fn(); });
+      withLiveCosRestore.mockImplementationOnce(async fn => { order.push('cos'); return fn(); });
+      withLiveMediaModelsRestore.mockImplementationOnce(async fn => {
+        order.push('media');
+        try { return await fn(); } finally { order.push('media:released'); }
+      });
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      proc.emit('close', 1);
+      await expect(pending).rejects.toThrow();
+      expect(order).toEqual(['settings', 'cos', 'media', 'media:released']);
+    });
+
+    it('does not fence the registry when CoS refuses a full restore', async () => {
+      withLiveCosRestore.mockRejectedValueOnce(Object.assign(new Error('Stop CoS before restoring'), { code: 'COS_RESTORE_BUSY' }));
+      await expect(restoreSnapshot('/dest', 'snap-1', { dryRun: false })).rejects.toMatchObject({ code: 'COS_RESTORE_BUSY' });
+      expect(withLiveMediaModelsRestore).not.toHaveBeenCalled();
     });
   });
 
@@ -3207,6 +3490,150 @@ describe('runBackup lifecycle', () => {
         pgBackup: SKIPPED_PG,
       }],
     ]);
+  });
+
+  it('keeps a newly admitted music take out of both halves of a snapshot', async () => {
+    const fsp = await actualFs();
+    const { withBackupAssetPublication } = await import('../lib/backupSnapshotBoundary.js');
+    const sourceMusic = joinPath(dataRoot, 'music');
+    await fsp.mkdir(sourceMusic, { recursive: true });
+    await fsp.writeFile(joinPath(sourceMusic, 'old.wav'), 'old audio');
+    let rowFilename = 'old.wav';
+    const rsync = fakeProc();
+    const pg = fakeProc();
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    spawn.mockReturnValueOnce(rsync).mockReturnValueOnce(pg);
+
+    const pending = runBackup(destRoot);
+    await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+    const snapshotDir = await findSnapshotDir();
+    const capturedMusic = joinPath(snapshotDir, 'data', 'music');
+    await fsp.mkdir(capturedMusic, { recursive: true });
+    await fsp.copyFile(joinPath(sourceMusic, rowFilename), joinPath(capturedMusic, rowFilename));
+
+    let published = false;
+    const newTake = withBackupAssetPublication(async () => {
+      await fsp.writeFile(joinPath(sourceMusic, 'new.wav'), 'new audio');
+      rowFilename = 'new.wav';
+      published = true;
+    });
+    await Promise.resolve();
+    expect(published).toBe(false);
+
+    rsync.emit('close', 0);
+    await waitFor(() => spawn.mock.calls.length === 2, 'pg_dump spawn');
+    const capturedRow = rowFilename;
+    const dumpPath = spawn.mock.calls[1][1][spawn.mock.calls[1][1].indexOf('-f') + 1];
+    await fsp.writeFile(dumpPath, `CREATE TABLE public.tracks (audio_filename text);\nCOPY public.tracks (audio_filename) FROM stdin;\n${capturedRow}\n\\.\n`);
+    pg.emit('close', 0);
+    await pending;
+    await newTake;
+
+    expect(capturedRow).toBe('old.wav');
+    expect(await fsp.readFile(joinPath(capturedMusic, capturedRow), 'utf8')).toBe('old audio');
+    await expect(fsp.access(joinPath(capturedMusic, 'new.wav'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(rowFilename).toBe('new.wav');
+    expect(published).toBe(true);
+  });
+
+  describe('snapshot cut failures', () => {
+    const OLD_IDS = ['2020-01-01T00-00-00', '2020-01-02T00-00-00'];
+
+    // Two completed snapshots with retentionCount 1: a run that wrongly reached
+    // retention pruning would delete the older one.
+    async function seedCompletedSnapshots() {
+      const fsp = await actualFs();
+      for (const id of OLD_IDS) {
+        const dir = joinPath(destRoot, 'snapshots', machineHost, id);
+        await fsp.mkdir(joinPath(dir, 'data'), { recursive: true });
+        await fsp.writeFile(joinPath(dir, 'manifest.json'), JSON.stringify({ generatedAt: `${id.slice(0, 10)}T00:00:00.000Z`, fileCount: 0 }));
+      }
+    }
+
+    async function expectFailedSnapshotWithoutPruning() {
+      const { listSnapshots, getState } = await import('./backup.js');
+      const snapshots = await listSnapshots(destRoot);
+      expect(snapshots.map(snapshot => snapshot.id)).toEqual(expect.arrayContaining(OLD_IDS));
+      expect(snapshots).toHaveLength(OLD_IDS.length + 1);
+      const [failed, ...rest] = [...snapshots].sort((a, b) => Number(Boolean(b.failed)) - Number(Boolean(a.failed)));
+      expect(failed).toMatchObject({ failed: true, incomplete: false });
+      expect(rest.every(snapshot => !snapshot.failed && !snapshot.incomplete)).toBe(true);
+      expect((await getState()).status).toBe('error');
+      expect(isBackupInProgress()).toBe(false);
+    }
+
+    afterEach(() => { snapshotCutSeam.wrap = null; maintenanceFence.fenced = false; });
+
+    it('fails the snapshot without copying, publishing or pruning when admitted takes cannot drain, then reopens admission', async () => {
+      const { withBackupAssetPublication } = await import('../lib/backupSnapshotBoundary.js');
+      await seedCompletedSnapshots();
+      let finishTake;
+      const stuckTake = withBackupAssetPublication(() => new Promise(resolve => { finishTake = resolve; }));
+      snapshotCutSeam.wrap = (acquire) => acquire({ timeoutMs: 20 });
+
+      await expect(runBackup(destRoot, null, { retentionCount: 1 }))
+        .rejects.toThrow('Timed out draining asset publications');
+
+      expect(spawn).not.toHaveBeenCalled();
+      await expectFailedSnapshotWithoutPruning();
+      await expect(withBackupAssetPublication(() => 'admitted')).resolves.toBe('admitted');
+      finishTake();
+      await stuckTake;
+    });
+
+    it('refuses to start while database maintenance is fenced, without reserving a snapshot or pruning', async () => {
+      await seedCompletedSnapshots();
+      maintenanceFence.fenced = true;
+      try {
+        await expect(runBackup(destRoot, null, { retentionCount: 1 })).rejects.toMatchObject({ code: 'DATABASE_MAINTENANCE' });
+      } finally {
+        maintenanceFence.fenced = false;
+      }
+      expect(spawn).not.toHaveBeenCalled();
+      const { listSnapshots, getState } = await import('./backup.js');
+      expect((await listSnapshots(destRoot)).map(snapshot => snapshot.id).sort()).toEqual(OLD_IDS);
+      expect((await getState()).status).toBe('error');
+      expect(isBackupInProgress()).toBe(false);
+    });
+
+    it('closes the cut when maintenance fences while admitted takes drain, leaving the admitted take intact', async () => {
+      const { withBackupAssetPublication } = await import('../lib/backupSnapshotBoundary.js');
+      await seedCompletedSnapshots();
+      let finishTake;
+      let takeCompleted = false;
+      const admittedTake = withBackupAssetPublication(() => new Promise(resolve => { finishTake = resolve; })).then(() => { takeCompleted = true; });
+      const pending = runBackup(destRoot, null, { retentionCount: 1 }).catch(error => error);
+      await new Promise(resolve => setTimeout(resolve, 25));
+      maintenanceFence.fenced = true;
+      finishTake();
+      await admittedTake;
+      expect(await pending).toMatchObject({ code: 'DATABASE_MAINTENANCE' });
+      maintenanceFence.fenced = false;
+      expect(takeCompleted).toBe(true);
+      expect(spawn).not.toHaveBeenCalled();
+      await expectFailedSnapshotWithoutPruning();
+      await expect(withBackupAssetPublication(() => 'admitted')).resolves.toBe('admitted');
+    });
+
+    it('fails the snapshot without pruning when the cut cannot be released', async () => {
+      await seedCompletedSnapshots();
+      snapshotCutSeam.wrap = async (acquire, ...args) => {
+        const release = await acquire(...args);
+        return () => {
+          release();
+          throw new Error('cut release failed');
+        };
+      };
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+
+      const pending = runBackup(destRoot, null, { retentionCount: 1 }).catch(error => error);
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      proc.emit('close', 0);
+
+      expect(await pending).toMatchObject({ message: 'cut release failed' });
+      await expectFailedSnapshotWithoutPruning();
+    });
   });
 
   it.each([

@@ -73,12 +73,12 @@ export function useSseProgress(url, { enabled = true } = {}) {
       }
     };
     es.onerror = () => {
+      setIsOpen(false);
       // EventSource fails (no auto-retry) on a non-2xx / non-event-stream
       // response — readyState CLOSED. Surface that as a terminal close so the
       // consumer stops waiting; transient errors (readyState CONNECTING) are
       // left alone so the browser's own retry can recover.
       if (es.readyState === EventSource.CLOSED) {
-        setIsOpen(false);
         setClosed(true);
       }
     };

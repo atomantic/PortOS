@@ -20,6 +20,7 @@ import { join, basename } from 'path';
 import sharp from 'sharp';
 import { PATHS, ensureDir, shortId, copyFileGuarded } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { buildVariationMatrix } from '../lib/loraDataset.js';
 import { extractJson } from '../lib/jsonExtract.js';
@@ -348,13 +349,17 @@ export async function generateDatasetImages(datasetId, options = {}) {
       if (unsubscribe) { unsubscribe(); unsubscribe = null; }
     };
     const handlers = {
-      onCompleted: async (job) => {
+      onCompleted: (job) => {
         detach();
-        await onRenderComplete({
-          datasetId, imageId, file, sourceFilename: job.result?.filename,
-        }).catch(async (err) => {
-          await setImageStatus(datasetId, imageId, 'failed');
-          console.error(`❌ Dataset render post-completion failed [${shortId(jobId)}]: ${err?.message}`);
+        // Acquire synchronously in the queue's fan-out so a cut already
+        // draining completion waits for this listener's full copy + record.
+        return withBackupAssetPublication(async () => {
+          await onRenderComplete({
+            datasetId, imageId, file, sourceFilename: job.result?.filename,
+          }).catch(async (err) => {
+            await setImageStatus(datasetId, imageId, 'failed');
+            console.error(`❌ Dataset render post-completion failed [${shortId(jobId)}]: ${err?.message}`);
+          });
         });
       },
       onFailed: async (job) => {
@@ -560,31 +565,35 @@ export async function sliceReferenceSheet(datasetId, {
     }
   }
 
-  await ensureDir(datasetImagesDir(datasetId));
-  const entries = [];
-  for (const rect of rects) {
-    const imageId = uuidv4();
-    const file = `${imageId}.png`;
-    await sharp(sheetPath)
-      .extract(rect)
-      .png()
-      .toFile(datasetImagePath(datasetId, file));
-    entries.push({
-      id: imageId,
-      file,
-      caption: '',
-      captionSource: null,
-      captionedAt: null,
-      source: 'refsheet-slice',
-      sourceJobId: null,
-      variation: null,
-      status: 'ready',
-      width: rect.width,
-      height: rect.height,
-      createdAt: new Date().toISOString(),
-    });
-  }
-  await updateDataset(datasetId, (current) => ({ ...current, images: [...current.images, ...entries] }));
-  console.log(`✂️ Dataset ${shortId(datasetId)} ← ${entries.length} crops from ${basename(sheetFilename)} (${method}${method === 'grid' ? ` ${cols}×${rows}` : ''})`);
-  return { images: entries, sheet: basename(sheetFilename), method };
+  // Vision/provider work above stays outside admission. Keep the complete
+  // local crop publication together, including its final dataset record.
+  return withBackupAssetPublication(async () => {
+    await ensureDir(datasetImagesDir(datasetId));
+    const entries = [];
+    for (const rect of rects) {
+      const imageId = uuidv4();
+      const file = `${imageId}.png`;
+      await sharp(sheetPath)
+        .extract(rect)
+        .png()
+        .toFile(datasetImagePath(datasetId, file));
+      entries.push({
+        id: imageId,
+        file,
+        caption: '',
+        captionSource: null,
+        captionedAt: null,
+        source: 'refsheet-slice',
+        sourceJobId: null,
+        variation: null,
+        status: 'ready',
+        width: rect.width,
+        height: rect.height,
+        createdAt: new Date().toISOString(),
+      });
+    }
+    await updateDataset(datasetId, (current) => ({ ...current, images: [...current.images, ...entries] }));
+    console.log(`✂️ Dataset ${shortId(datasetId)} ← ${entries.length} crops from ${basename(sheetFilename)} (${method}${method === 'grid' ? ` ${cols}×${rows}` : ''})`);
+    return { images: entries, sheet: basename(sheetFilename), method };
+  });
 }

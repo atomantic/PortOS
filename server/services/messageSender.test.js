@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { join } from 'path';
 
 const doubles = vi.hoisted(() => ({
-  files: new Map(), failTerminal: false, getAccount: vi.fn(), sendGmail: vi.fn(), sendPlaywright: vi.fn()
+  files: new Map(), failTerminal: false, getAccount: vi.fn(), listAccounts: vi.fn(), getMessage: vi.fn(), sendGmail: vi.fn(), sendPlaywright: vi.fn()
 }));
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { messages: '/mock/messages' },
@@ -14,7 +14,8 @@ vi.mock('../lib/fileUtils.js', () => ({
   },
   safeJSONParse: JSON.parse
 }));
-vi.mock('./messageAccounts.js', () => ({ getAccount: doubles.getAccount }));
+vi.mock('./messageAccounts.js', () => ({ getAccount: doubles.getAccount, listAccounts: doubles.listAccounts }));
+vi.mock('./messageSync.js', () => ({ getMessage: doubles.getMessage }));
 vi.mock('./messageGmailSync.js', () => ({ sendGmail: doubles.sendGmail }));
 vi.mock('./messagePlaywrightSync.js', () => ({ sendPlaywright: doubles.sendPlaywright }));
 
@@ -38,11 +39,21 @@ beforeEach(() => {
   doubles.files.clear();
   doubles.failTerminal = false;
   doubles.getAccount.mockResolvedValue({ id: 'account-1', type: 'gmail' });
+  doubles.listAccounts.mockResolvedValue([{ id: 'account-1', type: 'gmail' }]);
+  doubles.getMessage.mockResolvedValue(null);
   doubles.sendGmail.mockResolvedValue({ success: true });
   doubles.sendPlaywright.mockResolvedValue({ success: true });
 });
 
 describe('draft send workflow', () => {
+  it('refuses unsupported sends without consuming approval or dispatching', async () => {
+    seed({ id: 'outlook-draft', sendVia: 'playwright' });
+    doubles.getAccount.mockResolvedValueOnce({ id: 'account-1', type: 'outlook', canSend: false });
+    expect(await sendDraft('outlook-draft')).toMatchObject({ status: 501, code: 'SEND_NOT_SUPPORTED' });
+    expect(await getDraft('outlook-draft')).toMatchObject({ status: 'approved' });
+    expect(doubles.sendPlaywright).not.toHaveBeenCalled();
+  });
+
   it('claims once after overlapping reads and prevents edits from reopening the send', async () => {
     seed({ id: 'draft-1' });
     const bothRead = barrier();
@@ -104,8 +115,9 @@ describe('draft send workflow', () => {
   });
 
   it.each(['returned', 'thrown'])('persists a %s dispatch failure and permits explicit reapproval', async kind => {
-    seed({ id: 'draft-1', sendVia: 'playwright' });
+    seed({ id: 'draft-1', sendVia: 'playwright', to: ['alice@example.com'], subject: 'Example subject' });
     doubles.getAccount.mockResolvedValue({ id: 'account-1', type: 'outlook' });
+    doubles.listAccounts.mockResolvedValue([{ id: 'account-1', type: 'outlook' }]);
     if (kind === 'thrown') doubles.sendPlaywright.mockRejectedValueOnce(new Error('Example transport failure'));
     else doubles.sendPlaywright.mockResolvedValueOnce({ success: false, status: 502, code: 'SEND_FAILED', error: 'Example transport failure' });
     expect(await sendDraft('draft-1')).toMatchObject({ success: false, code: 'SEND_FAILED' });
@@ -144,6 +156,79 @@ describe('draft send workflow', () => {
     expect((await getDraft('mismatch')).status).toBe('approved');
     expect(doubles.sendGmail).not.toHaveBeenCalled();
     expect(doubles.sendPlaywright).not.toHaveBeenCalled();
+  });
+});
+
+const OUTLOOK = { id: 'account-1', type: 'outlook', enabled: true };
+const browserDraft = (overrides = {}) => ({ sendVia: 'playwright', to: ['alice@example.com'], subject: 'Example subject', ...overrides });
+const cachedMessage = (overrides = {}) => ({
+  id: 'msg-1', threadId: 'thread-1', providerRowId: 'row-1', subject: 'Example', from: { name: 'Bob Example', email: 'bob@example.com' }, ...overrides
+});
+
+describe('browser draft delivery', () => {
+  beforeEach(() => {
+    doubles.getAccount.mockResolvedValue(OUTLOOK);
+    doubles.listAccounts.mockResolvedValue([OUTLOOK]);
+  });
+
+  it('dispatches an approved draft once and returns the provider confirmation', async () => {
+    seed({ id: 'draft-1', ...browserDraft() });
+    doubles.sendPlaywright.mockResolvedValueOnce({ success: true, confirmed: true });
+    expect(await sendDraft('draft-1')).toEqual({ success: true, confirmed: true });
+    expect((await getDraft('draft-1')).status).toBe('sent');
+    expect(doubles.sendPlaywright).toHaveBeenCalledWith(OUTLOOK, expect.objectContaining({ id: 'draft-1', status: 'sending' }), { replyTarget: null, requireIdentity: false });
+    expect(await sendDraft('draft-1')).toMatchObject({ status: 409 });
+    expect(doubles.sendPlaywright).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves the reply target inside the draft\'s own account only', async () => {
+    seed({ id: 'reply', replyToMessageId: 'msg-1', threadId: 'thread-1', ...browserDraft({ to: [] }) });
+    doubles.getMessage.mockResolvedValueOnce(cachedMessage());
+    expect(await sendDraft('reply')).toEqual({ success: true });
+    expect(doubles.getMessage).toHaveBeenCalledWith('account-1', 'msg-1');
+    expect(doubles.sendPlaywright).toHaveBeenCalledWith(OUTLOOK, expect.anything(), expect.objectContaining({ replyTarget: expect.objectContaining({ id: 'msg-1', providerRowId: 'row-1' }) }));
+  });
+
+  it.each([
+    ['a reply target that belongs to another account', { replyToMessageId: 'msg-1' }, null, 'REPLY_TARGET_NOT_FOUND'],
+    ['a reply whose thread differs from its target', { replyToMessageId: 'msg-1', threadId: 'thread-2' }, cachedMessage(), 'THREAD_MISMATCH'],
+    ['a draft with no recipient', { to: [] }, null, 'DRAFT_NOT_DELIVERABLE'],
+    ['a recipient that is not an email address', { to: ['Alice'] }, null, 'DRAFT_NOT_DELIVERABLE']
+  ])('refuses %s without consuming approval or touching the provider', async (_label, overrides, target, code) => {
+    seed({ id: 'draft-1', ...browserDraft(overrides) });
+    doubles.getMessage.mockResolvedValue(target);
+    expect(await sendDraft('draft-1')).toMatchObject({ success: false, code });
+    expect((await getDraft('draft-1')).status).toBe('approved');
+    expect(doubles.sendPlaywright).not.toHaveBeenCalled();
+  });
+
+  it('flags a shared browser sign-in when several accounts of the provider are enabled', async () => {
+    seed({ id: 'draft-1', ...browserDraft() });
+    doubles.listAccounts.mockResolvedValue([OUTLOOK, { id: 'account-2', type: 'outlook', enabled: true }, { id: 'account-3', type: 'gmail' }]);
+    await sendDraft('draft-1');
+    expect(doubles.sendPlaywright).toHaveBeenCalledWith(OUTLOOK, expect.anything(), { replyTarget: null, requireIdentity: true });
+  });
+
+  it('parks an unconfirmed delivery for reconciliation instead of a re-approvable failure', async () => {
+    seed({ id: 'draft-1', ...browserDraft() });
+    const io = { emit: vi.fn() };
+    doubles.sendPlaywright.mockResolvedValueOnce({ success: false, deliveryUnknown: true, status: 502, code: 'DELIVERY_UNKNOWN', error: 'Example unconfirmed' });
+    expect(await sendDraft('draft-1', io)).toEqual({ success: false, status: 502, code: 'DELIVERY_UNKNOWN', error: 'Example unconfirmed' });
+    const unknown = await getDraft('draft-1');
+    expect(unknown.status).toBe('delivery_unknown');
+    expect(unknown.sendAttempts).toEqual([expect.objectContaining({ id: unknown.sendAttemptId, outcome: 'delivery_unknown', finishedAt: expect.any(String) })]);
+    expect(io.emit).toHaveBeenCalledWith('messages:changed', {});
+    expect(io.emit).not.toHaveBeenCalledWith('messages:draft:sent', expect.anything());
+
+    // Neither a second send nor a re-approval can duplicate it; only a mailbox-checked reconciliation reopens it.
+    expect(await sendDraft('draft-1')).toMatchObject({ status: 409 });
+    await expect(approveDraft('draft-1')).rejects.toMatchObject({ status: 409 });
+    expect(doubles.sendPlaywright).toHaveBeenCalledTimes(1);
+    await reconcileDraftSend('draft-1', { attemptId: unknown.sendAttemptId, outcome: 'not_sent' });
+    await approveDraft('draft-1');
+    doubles.sendPlaywright.mockResolvedValueOnce({ success: true, confirmed: true });
+    expect(await sendDraft('draft-1')).toMatchObject({ success: true });
+    expect(doubles.sendPlaywright).toHaveBeenCalledTimes(2);
   });
 });
 

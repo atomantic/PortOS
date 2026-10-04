@@ -22,6 +22,20 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
   cancelAutonomousMusicVideo: vi.fn(),
 }));
 vi.mock('../../services/apiMoodBoard.js', () => ({ listMoodBoardNames: vi.fn(async () => [{ id: 'mb-1', name: 'Neon Rain' }]) }));
+vi.mock('../../services/apiMusic.js', () => ({
+  listMusicEngines: vi.fn(async () => ({ engines: [{ id: 'acestep', name: 'ACE-Step', ready: true, lyrics: true }] })),
+}));
+vi.mock('../../services/apiSystem.js', () => ({ getSettings: vi.fn(async () => ({ imageGen: { local: { modelId: 'example-image' } } })) }));
+vi.mock('../../services/apiImageVideo.js', () => ({
+  listImageModels: vi.fn(async () => [{ id: 'example-image', name: 'Example image' }]),
+  getVideoGenModelContext: vi.fn(async () => ({
+    models: [
+      { id: 'example-ltx', name: 'Example LTX' },
+      { id: 'example-wan', name: 'Example Wan' },
+    ],
+    defaultModel: 'example-ltx',
+  })),
+}));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 vi.mock('../../hooks/useProviderModels.js', () => ({
   default: ({ filter } = {}) => ({
@@ -38,6 +52,7 @@ import AutonomousRunPanel from './AutonomousRunPanel.jsx';
 import AutonomousStartDrawer from './AutonomousStartDrawer.jsx';
 import useAutonomousMusicVideo from '../../hooks/useAutonomousMusicVideo.js';
 import * as api from '../../services/apiMusicVideo.js';
+import { getVideoGenModelContext } from '../../services/apiImageVideo.js';
 
 const stages = (overrides = {}) => ({
   brief: { status: 'done' }, lyrics: { status: 'done' }, style: { status: 'pending' }, song: { status: 'pending' },
@@ -233,7 +248,8 @@ describe('AutonomousStartDrawer', () => {
     render(<AutonomousStartDrawer open onClose={() => {}} onStarted={() => {}} />);
     fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'p' } });
     fireEvent.click(screen.getByLabelText('Lyrics', { selector: '#mv-auto-checkpoint-lyrics' }));
-    fireEvent.change(screen.getByLabelText(/local image gen model/i), { target: { value: 'flux2-dev' } });
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Example image' })).toBeTruthy());
+    fireEvent.change(screen.getByLabelText(/local image gen model/i), { target: { value: 'example-image' } });
     fireEvent.change(screen.getByLabelText(/budget cap/i), { target: { value: '12' } });
     await waitFor(() => expect(screen.getByRole('option', { name: 'Neon Rain' })).toBeTruthy());
     fireEvent.change(screen.getByLabelText('Mood board'), { target: { value: 'mb-1' } });
@@ -241,7 +257,7 @@ describe('AutonomousStartDrawer', () => {
     fireEvent.click(screen.getByRole('button', { name: /start autonomous video/i }));
     await waitFor(() => expect(api.startAutonomousMusicVideo).toHaveBeenCalled());
     expect(api.startAutonomousMusicVideo.mock.calls[0][0]).toMatchObject({
-      checkpoints: ['lyrics'], models: { 'image:local': 'flux2-dev' }, budgetUsd: 12, moodBoardId: 'mb-1',
+      checkpoints: ['lyrics'], models: { 'image:local': 'example-image' }, budgetUsd: 12, moodBoardId: 'mb-1',
     });
   });
 
@@ -259,6 +275,38 @@ describe('AutonomousStartDrawer', () => {
     fireEvent.click(submit);
     await waitFor(() => expect(api.startAutonomousMusicVideo).toHaveBeenCalledTimes(1));
     expect(api.startAutonomousMusicVideo.mock.calls[0][0].suno).toEqual({ excludeStyles: 'metal', vocalGender: 'female', model: 'v6' });
+  });
+
+  it('offers local video models in a menu and pins only the one the director picks', async () => {
+    api.startAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-new' }, run: baseRun() });
+    render(<AutonomousStartDrawer open onClose={() => {}} onStarted={() => {}} />);
+    const model = screen.getByLabelText(/local video gen model/i);
+    expect(model.tagName).toBe('SELECT');
+    expect(await screen.findByRole('option', { name: 'Install default (Example LTX)' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'Example Wan' })).toBeTruthy();
+    expect(model.value).toBe('');
+
+    fireEvent.change(model, { target: { value: 'example-wan' } });
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'p' } });
+    fireEvent.change(screen.getByLabelText('Code authoring provider'), { target: { value: 'fixture-api' } });
+    fireEvent.click(screen.getByRole('button', { name: /start autonomous video/i }));
+    await waitFor(() => expect(api.startAutonomousMusicVideo).toHaveBeenCalledTimes(1));
+    expect(api.startAutonomousMusicVideo.mock.calls[0][0].models).toEqual({ 'video:local': 'example-wan' });
+  });
+
+  it('keeps the local video field a menu when the catalog cannot load or is empty', async () => {
+    getVideoGenModelContext.mockRejectedValueOnce(new Error('offline'));
+    const { unmount } = render(<AutonomousStartDrawer open onClose={() => {}} onStarted={() => {}} />);
+    const failed = await screen.findByLabelText(/local video gen model/i);
+    expect(failed.tagName).toBe('SELECT');
+    expect(await screen.findByText('Could not load local video models.')).toBeTruthy();
+    expect(screen.queryByRole('option', { name: 'Example Wan' })).toBeNull();
+    unmount();
+
+    getVideoGenModelContext.mockResolvedValueOnce({ models: [], defaultModel: null });
+    render(<AutonomousStartDrawer open onClose={() => {}} onStarted={() => {}} />);
+    expect(await screen.findByText('No local video models are compatible with this machine.')).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'Install default (no compatible local model)' })).toBeTruthy();
   });
 
   it('offers the local song source, and the Suno-only fallback opt-in only while Suno is the source', async () => {
@@ -279,5 +327,65 @@ describe('AutonomousStartDrawer', () => {
     await waitFor(() => expect(api.startAutonomousMusicVideo).toHaveBeenCalledTimes(2));
     // The stale fallback tick must not ride along once Suno is no longer the source.
     expect(api.startAutonomousMusicVideo.mock.calls[1][0]).toMatchObject({ songSource: 'local', localFallback: false });
+  });
+});
+
+describe('auto-approve the rest', () => {
+  const refusal = () => Object.assign(new Error('Sign in to grant automatic planning approvals.'), { status: 401, code: 'AUTH_REQUIRED' });
+
+  it('starts with selected planning grants using the session and shows sign-in failures inline', async () => {
+    api.startAutonomousMusicVideo.mockRejectedValueOnce(refusal()).mockResolvedValue({ project: { id: 'mv-new' }, run: baseRun() });
+    render(<AutonomousStartDrawer open onClose={() => {}} onStarted={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'p' } });
+    fireEvent.change(screen.getByLabelText('Code authoring provider'), { target: { value: 'fixture-api' } });
+    expect(screen.queryByLabelText('Instance password to grant this')).toBeNull();
+    expect(screen.queryByLabelText('Proof', { selector: '#mv-auto-auto-approve-proof' })).toBeNull();
+    fireEvent.click(screen.getByLabelText('Art', { selector: '#mv-auto-auto-approve-art' }));
+    const submit = screen.getByRole('button', { name: /start autonomous video/i });
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Sign in to grant automatic planning approvals'));
+    expect(api.startAutonomousMusicVideo.mock.calls[0][0]).toMatchObject({ autoApprove: ['art'] });
+    fireEvent.click(submit);
+    await waitFor(() => expect(api.startAutonomousMusicVideo).toHaveBeenCalledTimes(2));
+    expect(api.startAutonomousMusicVideo.mock.calls[1][0]).toMatchObject({ autoApprove: ['art'] });
+  });
+
+  it('shows existing planning grants and sends an explicit empty list when revoked', async () => {
+    api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
+    render(<Harness initial={baseRun({ status: 'needs-human', stage: 'produce', brief: { autoApprove: ['art'] } })} />);
+    const art = screen.getByLabelText('Art', { selector: '#mv-run-auto-approve-art' });
+    expect(art.checked).toBe(true);
+    fireEvent.click(art);
+    fireEvent.click(screen.getByRole('button', { name: /resume/i }));
+    await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', { autoApprove: [] }, { silent: true }));
+  });
+
+  it('resumes a parked run with session-authorized planning grants and shows sign-in failures', async () => {
+    api.resumeAutonomousMusicVideo.mockRejectedValueOnce(refusal()).mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
+    render(<Harness initial={baseRun({ status: 'needs-human', stage: 'produce', error: 'Review and approve the current art direction first.', brief: { origin: { kind: 'manual' }, autoApprove: [] } })} />);
+    for (const stage of ['storyboard', 'art']) fireEvent.click(screen.getByLabelText(stage[0].toUpperCase() + stage.slice(1), { selector: `#mv-run-auto-approve-${stage}` }));
+    const resume = screen.getByRole('button', { name: /resume/i });
+    expect(resume.disabled).toBe(false);
+    fireEvent.click(resume);
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Sign in to grant automatic planning approvals'));
+    expect(api.resumeAutonomousMusicVideo).toHaveBeenLastCalledWith('mv-1', { autoApprove: ['art', 'storyboard'] }, { silent: true });
+    fireEvent.click(resume);
+    await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenLastCalledWith('mv-1', { autoApprove: ['art', 'storyboard'] }, { silent: true }));
+  });
+});
+
+describe('Current autonomous review guidance', () => {
+  it('keeps an approval failure historical as the current review gate advances', () => {
+    const error = 'Review and approve the current art direction first.';
+    const project = { id: 'history-fixture', autonomousRun: baseRun({ status: 'needs-human', stage: 'produce', error, errorCode: 'MUSIC_VIDEO_APPROVAL_REQUIRED' }) };
+    const auto = { busy: false, resume: vi.fn(), cancel: vi.fn() };
+    const readiness = { art: { approved: true, problems: [] }, storyboard: { approved: true, problems: [] }, proof: { approved: false, problems: ['Render and watch a current animated chorus proof with the master song.'] } };
+    const view = render(<MemoryRouter><AutonomousRunPanel project={project} auto={auto} readiness={readiness} /></MemoryRouter>);
+    expect(screen.getByRole('status')).toHaveTextContent('Render and watch a current animated chorus proof');
+    expect(screen.getByText(`Historical stop reason: ${error}`)).toBeTruthy();
+    view.rerender(<MemoryRouter><AutonomousRunPanel project={project} auto={auto} readiness={{ ...readiness, proof: { approved: true, problems: [] } }} /></MemoryRouter>);
+    expect(screen.getByRole('status')).toHaveTextContent('ready to resume explicitly');
+    expect(auto.resume).not.toHaveBeenCalled();
   });
 });

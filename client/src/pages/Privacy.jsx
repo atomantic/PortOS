@@ -110,7 +110,7 @@ export default function Privacy() {
   };
 
   return (
-    <div className="flex flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <PageHeader
         icon={Shield}
         title="Privacy Center"
@@ -123,23 +123,25 @@ export default function Privacy() {
         mobileCompact
         ariaLabel="Privacy Center sections"
       />
-      <div className="pt-4">
-        <SubjectSwitcher
-          subjects={subjects}
-          subjectId={subjectId}
-          onChange={selectSubject}
-          onManage={() => setDrawerOpen(true)}
-        />
-      </div>
-      {/* Keying on the subject remounts the tab when the scope changes, so ALL
-          of its local state resets at once — revealed plaintext, open drawers,
-          expanded rows, filters. Clearing those by hand inside each tab's
-          `load()` both missed some and fired on ordinary post-mutation
-          refetches, collapsing rows the user had just opened. */}
-      <div className="pt-4" key={subjectId}>
-        {renderTab()}
-      </div>
+      <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
+        <div>
+          <SubjectSwitcher
+            subjects={subjects}
+            subjectId={subjectId}
+            onChange={selectSubject}
+            onManage={() => setDrawerOpen(true)}
+          />
+        </div>
+        {/* Keying on the subject remounts the tab when the scope changes, so ALL
+            of its local state resets at once — revealed plaintext, open drawers,
+            expanded rows, filters. Clearing those by hand inside each tab's
+            `load()` both missed some and fired on ordinary post-mutation
+            refetches, collapsing rows the user had just opened. */}
+        <div className="pt-4" key={subjectId}>
+          {renderTab()}
+        </div>
 
+      </div>
       <SubjectsDrawer
         open={drawerOpen}
         subjects={subjects}

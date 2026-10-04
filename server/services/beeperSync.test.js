@@ -83,6 +83,7 @@ vi.mock('./beeperTribe.js', () => ({
 
 const {
   runBeeperSweep,
+  createBeeperConversation,
   reconcileBeeperEvent, isBeeperIngestionArmed, getBeeperSyncConfig, chatNeedsSweep,
   normalizeAccountRow, normalizeMessageRow, normalizeAttachmentRows, DEFAULT_INTERVAL_MINUTES,
 } = await import('./beeperSync.js');
@@ -455,6 +456,29 @@ describe('watermark-bounded sweep', () => {
     const params = new URL(messageRequests()[0]).searchParams;
     expect(params.get('cursor')).toBeNull();
     expect(params.get('direction')).toBe('before');
+  });
+
+  it('shares one roster across chats and touchpoints, then refreshes it for the next sweep', async () => {
+    installFetch({
+      chatPages: [{ items: CHAT_PAGE.items.slice(0, 2), hasMore: false }],
+      messagePages: Object.fromEntries(['chat-1', 'chat-2'].map((chatId) => [chatId, {
+        items: [{ id: 'msg-1', senderID: 'user-1', timestamp: '2026-09-02T10:00:00.000Z', sortKey: '1', text: 'hi' }],
+        hasMore: false,
+      }])),
+    });
+
+    await runBeeperSweep({ reason: 'manual' });
+    expect(loadRosterIndexMock).toHaveBeenCalledTimes(1);
+    const firstIndex = await loadRosterIndexMock.mock.results[0].value;
+    expect(logSenderTouchpointsMock).toHaveBeenCalledTimes(2);
+    expect(logSenderTouchpointsMock.mock.calls.every(([, options]) => options.personIndex === firstIndex)).toBe(true);
+    expect(upsertParticipantMock.mock.calls.every(([input]) => input.personIndex === firstIndex)).toBe(true);
+
+    await runBeeperSweep({ reason: 'manual' });
+    expect(loadRosterIndexMock).toHaveBeenCalledTimes(2);
+    const nextIndex = await loadRosterIndexMock.mock.results[1].value;
+    expect(nextIndex).not.toBe(firstIndex);
+    expect(logSenderTouchpointsMock.mock.calls.slice(2).every(([, options]) => options.personIndex === nextIndex)).toBe(true);
   });
 
   it('relates senders and participants through beeperTribe rather than writing identity rows itself', async () => {
@@ -1228,5 +1252,76 @@ describe('stored-message event reconciliation', () => {
     await reconcileBeeperEvent({ kind: 'message.deleted', chatID: 'example-chat', ids: ['unknown-message'] });
     expect(fetchedUrls).toEqual([]);
     expect(txWrites).toEqual([]);
+  });
+});
+
+
+describe('Later scope mirror', () => {
+  it('mirrors and clears snoozes on caught-up chats without rereading message history', async () => {
+    const lastActivity = '2026-09-01T00:00:00.000Z';
+    const snoozeUntil = '2030-09-01T00:00:00.000Z';
+    storedCursorRows = [{ chat_id: 'chat-later', cursor: 'cursor-later', last_activity: lastActivity }];
+    const chat = { id: 'chat-later', accountID: 'acct-a', network: 'Example Net', lastActivity,
+      snooze: { snoozeUntil } };
+    installFetch({ chatPages: [{ items: [chat], hasMore: false }] });
+    await runBeeperSweep({ reason: 'manual' });
+    let writes = dbCalls.filter(({ text }) => text.includes('UPDATE beeper_conversations SET snooze_until'));
+    expect(writes.at(-1).text).toContain('snooze_until IS DISTINCT FROM $3::timestamptz');
+    expect(writes.at(-1).params).toEqual(['acct-a', 'chat-later', snoozeUntil]);
+    expect(messageRequests()).toHaveLength(0);
+
+    installFetch({ chatPages: [{ items: [{ ...chat, snooze: null }], hasMore: false }] });
+    await runBeeperSweep({ reason: 'manual' });
+    writes = dbCalls.filter(({ text }) => text.includes('UPDATE beeper_conversations SET snooze_until'));
+    expect(writes.at(-1).params[2]).toBeNull();
+    expect(messageRequests()).toHaveLength(0);
+  });
+});
+
+describe('user-triggered direct chat creation', () => {
+  it.each(['modern', 'legacy'])('creates once and mirrors the retrieved chat (%s response)', async (version) => {
+    queryMock.mockResolvedValueOnce({ rows: [{ account_id: 'account-example' }] });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(version === 'modern'
+        ? { id: 'chat-example' } : { chatID: 'chat-example', status: 'created' }))
+      .mockResolvedValueOnce(jsonResponse({
+        id: 'chat-example', accountID: 'account-example', network: 'Example', title: 'Recipient',
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await createBeeperConversation({ accountId: 'account-example', participantId: 'user-example' });
+    expect(result).toEqual({ id: 'conv-chat-example' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      accountID: 'account-example', participantIDs: ['user-example'], type: 'single',
+    });
+    expect(fetchMock.mock.calls[0][1].method).toBe('POST');
+    expect(dbCalls.find(({ text }) => text.includes('INSERT INTO beeper_conversations')).params.slice(0, 4))
+      .toEqual(['account-example', 'Example', 'chat-example', 'Recipient']);
+  });
+
+  it('rejects an unknown local account before any remote write', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(createBeeperConversation({ accountId: 'missing', participantId: 'user-example' }))
+      .rejects.toMatchObject({ code: 'CONVERSATION_NOT_FOUND' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects mismatched remote identity without inserting a mirror row', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [{ account_id: 'account-example' }] });
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ id: 'chat-example' }))
+      .mockResolvedValueOnce(jsonResponse({ id: 'chat-example', accountID: 'wrong-account' })));
+    await expect(createBeeperConversation({ accountId: 'account-example', participantId: 'user-example' }))
+      .rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' });
+    expect(dbCalls.some(({ text }) => text.includes('INSERT INTO beeper_conversations'))).toBe(false);
+  });
+
+  it('never retries a failed creation request', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [{ account_id: 'account-example' }] });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 503, text: async () => JSON.stringify({ error: 'unavailable' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(createBeeperConversation({ accountId: 'account-example', participantId: 'user-example' })).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

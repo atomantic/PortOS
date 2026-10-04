@@ -1,7 +1,7 @@
 import express from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, parsePagination } from '../lib/validation.js';
+import { validateRequest, parsePagination, calendarAutoConfigureBodySchema } from '../lib/validation.js';
 import { UUID_RE } from '../lib/fileUtils.js';
 import { MEETING_URL_MAX } from '../lib/meetingUrl.js';
 import * as calendarAccounts from '../services/calendarAccounts.js';
@@ -381,7 +381,7 @@ router.post('/google/auto-configure/capture', asyncHandler(async (req, res) => {
 
 router.post('/google/auto-configure/run', asyncHandler(async (req, res) => {
   const io = req.app.get('io');
-  const email = req.body?.email || '';
+  const { email = '' } = validateRequest(calendarAutoConfigureBodySchema, req.body ?? {});
   const result = await googleOAuthAutoConfig.runAutomatedSetup(email, io);
   res.json(result);
 }));

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import {
   getMusicVideoProject,
@@ -29,6 +29,8 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
     getMusicVideoProject(id, { silent: true }).then(replaceProject).catch(() => {});
   };
 
+  const attachedJobs = useRef(new Set());
+
   const job = useSseJobSlot({
     startRequest: () => buildMusicVideoPublishKit(projectId, { silent: true }),
     eventsUrl: musicVideoPublishKitEventsUrl,
@@ -36,6 +38,11 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
     readPercent,
     onComplete: (_frame, id) => reload(id),
     onKickoffError: (err) => {
+      // A build is already running (another tab, or this one before a reload): adopt it.
+      if (err?.code === 'PUBLISH_KIT_BUILD_IN_PROGRESS' && err.context?.jobId) {
+        job.attach(err.context.jobId, projectId);
+        return true;
+      }
       if (err?.status === 409) { toast.error(err.message || 'The publishing kit cannot be built yet'); return true; }
       return false;
     },
@@ -45,6 +52,14 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
     lostConnectionMessage: 'Lost connection to the publishing kit build',
     startErrorFallback: 'Failed to start the publishing kit build',
   });
+
+  // Reload or second tab: adopt the build the server says is running. Each jobId is
+  // adopted once, so the stale record can't re-adopt a build that already finished.
+  const runningJobId = project?.activePublishKitBuild?.jobId || null;
+  useEffect(() => {
+    if (!runningJobId || !projectId || attachedJobs.current.has(runningJobId)) return;
+    if (job.attach(runningJobId, projectId)) attachedJobs.current.add(runningJobId);
+  }, [runningJobId, projectId]);
 
   const apply = (res) => { if (res?.project) replaceProject(res.project); return res?.project || null; };
 

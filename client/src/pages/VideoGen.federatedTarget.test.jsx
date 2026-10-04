@@ -54,7 +54,6 @@ describe('VideoGen federated render target', () => {
     state.getVideoGenModelContext.mockResolvedValue(videoGenModelContext([MODEL]));
     state.modelStatuses = { [MODEL.id]: { id: MODEL.id, repo: MODEL.repo, cached: true, sizeBytes: 100 } };
     state.generateVideo.mockReturnValue(new Promise(() => {}));
-    state.attach.mockReturnValue(new Promise(() => {}));
   });
 
   // The whole point of the picker: a peer's model reaches the generate route as

@@ -280,7 +280,7 @@ const toolsActivateTool = Object.freeze({
   version: COS_TOOL_SCHEMA_VERSION,
   providerName: providerToolName('tools.activate'),
   aliases: [providerToolName('tools.activate')],
-  description: `Expand full schemas for one or more tool families (${TOOL_ACTIVATION_FAMILIES.join(', ')}) for the rest of this turn, plus a short retention window afterward. This only changes which schemas you are shown here — it never grants a capability this mind does not already hold.`,
+  description: `Expand full schemas for one or more tool families (${TOOL_ACTIVATION_FAMILIES.join(', ')}) for the rest of this turn, plus a short retention window afterward. Supply up to five exact toolNames from those granted families to prioritize the next actions when family schemas are budget-limited; repeating family activation alone does not resolve that limit. This only changes which schemas you are shown here — it never grants a capability this mind does not already hold.`,
   input_schema: zodToOpenApiSchema(toolsActivateInputSchema),
   output_schema: objectOutputSchema,
   policy: {
@@ -492,7 +492,7 @@ const eidoverseObserveTool = Object.freeze({
   version: COS_TOOL_SCHEMA_VERSION,
   providerName: providerToolName('eidoverse.observe'),
   aliases: [providerToolName('eidoverse.observe')],
-  description: 'Tour this install\'s own Eidoverse and see what is already standing — start here, before eidoverse.say, eidoverse.chat, or a peer visit. Returns `places` (the eight districts: what feeds each, how many live PortOS signals it currently reports, and whether any want attention), `peers` (opaque travel ids usable with eidoverse.visit, each with how many foundations this install inherited through it), `foundations.inherited` (a peer\'s contributions, newest first, with the peer they arrived through and the instance that authored them), `controllers.needsAttention` (only installs that are disarmed or failing — a controller that has never ticked yet is not an alarm), and `changes` (what is new since you last observed). `signalCount` counts what a district\'s sources report, not placed entities: the world holds a capped sample of them. A null section means that source could not be read, which is NOT the same as empty. Observing STAMPS a visit marker, so it is not idempotent — the next call\'s `changes` is measured from this one, and your first ever observation reports `firstObservation: true` with no new items rather than calling a settled world new.',
+  description: 'Tour this install\'s own Eidoverse and see what is already standing — start here, before eidoverse.say, eidoverse.chat, or a peer visit. Returns `places` (the eight districts: what feeds each, how many live PortOS signals it currently reports, and whether any want attention), `peers` (opaque travel ids usable with eidoverse.visit, each with how many foundations this install inherited through it), `foundations.inherited` (a peer\'s contributions, newest first, with the peer they arrived through and the instance that authored them), `controllers.needsAttention` (only installs that are disarmed or failing — a controller that has never ticked yet is not an alarm), and `changes` (what is new since you last observed). `signalCount` counts what a district\'s sources report, not placed entities: the world holds a capped sample of them. Each place also returns local-only `attentionSignals`: contributing source, actual severity (`error` or `attention`), contributing signal-row count, and allowlisted reason codes with `affectedCount` (null when unknown). Use these to choose a diagnostic action: app_not_started is not proof of a crash; runtime_data_disk_pressure/critical concern the runtime-data filesystem; review_alerts concern pending review alerts. Other codes cover app_stopped, app_unknown, backup_failure, cos_paused and memory_pressure/critical; source_attention/error are explicitly coarse fallbacks. District totals are not fault counts. At most 24 reason entries per district are returned; `attentionTruncated` indicates omissions. A null section means that source could not be read, which is NOT the same as empty. Observing STAMPS a visit marker, so it is not idempotent — the next call\'s `changes` is measured from this one, and your first ever observation reports `firstObservation: true` with no new items rather than calling a settled world new.',
   input_schema: zodToOpenApiSchema(z.object({}).strict()),
   output_schema: objectOutputSchema,
   policy: {
@@ -768,7 +768,7 @@ const TOOL_PURPOSE_MAX_CHARS = 160;
 
 const renderToolPrompt = (tools, discoverableLines = []) => {
   const discoverableBlock = discoverableLines.length
-    ? `\n\nDiscoverable-only families (schemas hidden to save context; call tools.activate with a "families" array to expand one for this turn and a short retention window after):\n${discoverableLines.join('\n')}`
+    ? `\n\nDiscoverable-only families (schemas hidden to save context; call tools.activate with a "families" array to expand one for this turn and a short retention window after; include "toolNames" to prioritize specific budget-limited actions):\n${discoverableLines.join('\n')}`
     : '';
   return `# PortOS semantic tools
 ${TOOL_EXPOSURE_HEADER}
@@ -822,6 +822,7 @@ const logToolExposureTrace = (stats) => {
  */
 export const buildPersistentMindToolPrompt = async (capabilities, recipes = [], {
   turnId = null, isUserTurn = false, trace = false, maxChars = Infinity, requiredToolNames = [],
+  requestedToolNames = [], activatedFamilies = [], onSelection,
 } = {}) => {
   const grants = normalizePersistentMindCapabilities(capabilities);
   const catalog = getCosToolCatalog({ scope: 'mind', capabilities, recipes });
@@ -848,6 +849,7 @@ Semantic tool access is OFF. Return an empty toolCalls array. Never invent a too
         excludedByReason: { ungranted: catalog.tools.length - granted.length },
       });
     }
+    onSelection?.(granted.map((tool) => tool.name));
     return renderToolPrompt(granted.map(fullSchemaShape));
   }
 
@@ -867,12 +869,13 @@ Semantic tool access is OFF. Return an empty toolCalls array. Never invent a too
     });
   }
 
-  const exposedFamilies = new Set(Object.keys(activation.leases));
+  const requested = new Set(requestedToolNames);
+  const exposedFamilies = new Set([...Object.keys(activation.leases), ...activatedFamilies]);
   const controlTools = granted.filter((tool) => ['tools.activate', 'tools.deactivate'].includes(tool.name));
   const exposedTools = [];
   const discoverableByFamily = new Map();
   for (const tool of meaningful) {
-    if (tool.family === 'core' || exposedFamilies.has(tool.family)) {
+    if (tool.family === 'core' || exposedFamilies.has(tool.family) || requested.has(tool.name)) {
       exposedTools.push(tool);
     } else {
       if (!discoverableByFamily.has(tool.family)) discoverableByFamily.set(tool.family, []);
@@ -901,15 +904,15 @@ Semantic tool access is OFF. Return an empty toolCalls array. Never invent a too
 
   const required = new Set(requiredToolNames);
   const prioritized = [...exposedTools].sort((left, right) => {
-    const leftRequired = required.has(left.name) ? 1 : 0;
-    const rightRequired = required.has(right.name) ? 1 : 0;
+    const leftRequired = requested.has(left.name) ? 2 : required.has(left.name) ? 1 : 0;
+    const rightRequired = requested.has(right.name) ? 2 : required.has(right.name) ? 1 : 0;
     return rightRequired - leftRequired;
   });
   const selectedTools = [];
   let selectedChars = 0;
   for (const tool of prioritized) {
     const rendered = JSON.stringify(fullSchemaShape(tool));
-    if (selectedTools.length > 0 && selectedChars + rendered.length > maxChars) continue;
+    if (selectedChars + rendered.length > maxChars) continue;
     selectedTools.push(tool);
     selectedChars += rendered.length;
   }
@@ -928,11 +931,12 @@ Semantic tool access is OFF. Return an empty toolCalls array. Never invent a too
   };
 
   while (selectedTools.length > 0 && renderSelection().length > maxChars) {
-    const removableIndex = [...selectedTools].reverse().findIndex((tool) => !required.has(tool.name));
-    if (removableIndex < 0) break;
-    selectedTools.splice(selectedTools.length - 1 - removableIndex, 1);
+    // Priorities never override the complete schema budget. Completed action
+    // receipts still identify earlier calls even when their schemas no longer fit.
+    selectedTools.pop();
   }
 
+  onSelection?.([...controlTools, ...selectedTools].map((tool) => tool.name));
   return renderSelection();
 };
 
@@ -992,6 +996,19 @@ const executeAdapter = async (tool, args, context, authority) => {
   if (tool.adapter.kind === 'tools-activate' || tool.adapter.kind === 'tools-deactivate') {
     const { loadState, saveState, withStateLock } = await import('./cosState.js');
     const grants = normalizePersistentMindCapabilities(authority?.capabilities);
+    const targeted = tool.adapter.kind === 'tools-activate' && args.toolNames
+      ? [...new Set(args.toolNames)] : [];
+    let targetFamilies;
+    if (targeted.length) {
+      const recipes = targeted.some((name) => name.startsWith('recipe.'))
+        ? await readPersistentMindRecipeCatalog(authority?.capabilities) : [];
+      const catalog = getCosToolCatalog({ scope: 'mind', capabilities: authority?.capabilities, recipes });
+      targetFamilies = Object.fromEntries(catalog.tools.filter((entry) => targeted.includes(entry.name)).map((entry) => [entry.name, entry.family]));
+      if (targeted.some((name) => !catalog.tools.some((entry) => entry.name === name
+        && entry.granted && args.families.includes(entry.family)))) {
+        throw new ServerError('Requested tool names must belong to the selected granted families', { status: 403, code: 'TOOL_CAPABILITY_DENIED' });
+      }
+    }
     return withStateLock(async () => {
       const root = await loadState();
       const current = normalizePersistentMindToolActivation(root.persistentMind.toolActivation);
@@ -1001,8 +1018,10 @@ const executeAdapter = async (tool, args, context, authority) => {
       root.persistentMind = { ...root.persistentMind, toolActivation: { leases, lastAgedTurnId: current.lastAgedTurnId } };
       await saveState(root);
       return tool.adapter.kind === 'tools-activate'
-        ? { ok: true, activated: args.families, retentionTurns: grants.toolExposureRetentionTurns, families: Object.keys(leases) }
-        : { ok: true, deactivated: args.families || Object.keys(current.leases), families: Object.keys(leases) };
+        ? { ok: true, activated: args.families, retentionTurns: grants.toolExposureRetentionTurns, families: Object.keys(leases),
+          ...(targeted.length ? { requestedToolNames: targeted, targetFamilies } : {}),
+          schemaNote: 'Family activation is budget-limited. Target exact toolNames for the next action; identical reactivation does not change the schema budget.' }
+        : { ok: true, deactivated: args.families || TOOL_ACTIVATION_FAMILIES, families: Object.keys(leases) };
     });
   }
   if (tool.adapter.kind.startsWith('thinking-')) {

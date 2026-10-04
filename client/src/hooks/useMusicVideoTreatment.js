@@ -121,16 +121,26 @@ export default function useMusicVideoTreatment({ project, onProjectPatch, replac
     setApplying(true);
     // Apply joins the same write chain, so an edit or proof review started
     // meanwhile runs after it (with the revision it leaves) instead of racing it.
+    // `.then(onApplied, onRefused)`, never `.then(…).catch(…)`: the second
+    // handler is only for the SERVER refusing. A throw in this tab's own
+    // follow-up runs after the server already applied the direction, so it
+    // must not read as "Apply failed" and invite re-applying (#9940).
     const run = chainRef.current
       .then(() => applyMusicVideoTreatment(id, { revision, overwrite, addTextCues }, { silent: true }))
       .then(({ project: next, result }) => {
-        replaceProject?.(next);
-        if (id === projectRef.current) setPreview(null);
-        const kept = result.promptsKept.length + result.conflicted.length;
-        toast.success(`Applied direction to ${result.directed} scene${result.directed === 1 ? '' : 's'}${kept ? ` — ${kept} hand-edited prompt${kept === 1 ? '' : 's'} kept` : ''}${result.textCuesAdded ? `, ${result.textCuesAdded} text cues added` : ''}`);
+        try {
+          replaceProject?.(next);
+          if (id === projectRef.current) setPreview(null);
+          const kept = result.promptsKept.length + result.conflicted.length;
+          toast.success(`Applied direction to ${result.directed} scene${result.directed === 1 ? '' : 's'}${kept ? ` — ${kept} hand-edited prompt${kept === 1 ? '' : 's'} kept` : ''}${result.textCuesAdded ? `, ${result.textCuesAdded} text cues added` : ''}`);
+        } catch (err) {
+          console.error(`❌ Music Video treatment apply follow-up failed: ${err?.message || 'unknown error'}`);
+          toast.info('The direction was applied — the board was refreshed.');
+          getMusicVideoProject(id, { silent: true }).then((fresh) => replaceProject?.(fresh)).catch(() => {});
+          if (id === projectRef.current) setPreview(null);
+        }
         return result;
-      })
-      .catch((err) => {
+      }, (err) => {
         // A stale review re-reads the preview so the director sees what changed.
         if (err?.status === 409) loadPreview();
         toast.error(err?.message || 'Apply failed');

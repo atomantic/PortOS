@@ -399,7 +399,7 @@ describe('Layout — System Resources location state', () => {
     await renderLayout('/system-resources/storage');
 
     const link = screen.getByRole('link', { name: 'System Resources' });
-    expect(link).toHaveAttribute('href', '/system-resources');
+    expect(link).toHaveAttribute('href', '/system-resources/overview');
     expect(link.className).toContain('text-port-accent');
   });
 });
@@ -608,7 +608,12 @@ describe('Layout — isFullWidthRoute classification', () => {
     ['/shell', true], ['/shell/abc', true], ['/shellx', false],
     ['/ask', true], ['/ask/1', true], ['/asking', false],
     ['/timeline', true], ['/timeline/2026-08-12', true],
-    ['/tribe', true], ['/rapid-reader', true], ['/openclaw', true],
+    ['/tribe', true], ['/rapid-reader', true], ['/rapid-reader/r1', true], ['/openclaw', true],
+    ['/review', true], ['/review/a1', true], ['/reviewing', false],
+    ['/stacker-news', true], ['/stacker-news/a1/review', true], ['/x', true], ['/x/a1/posts', true], ['/xyz', false],
+    ['/privacy', true], ['/privacy/vault', true], ['/privacy-policy', false],
+    ['/code-animation', true], ['/code-animation/j1', true], ['/code-animation/production/p1', true],
+    ['/code-animations', false], ['/apps', true],
     ['/eidoverse', true], ['/eidoverse/world', false],
     // Index page stays padded+scrolling; only the DETAIL route is full-width.
     ['/catalog', false], ['/catalog/book/1', true],
@@ -620,9 +625,9 @@ describe('Layout — isFullWidthRoute classification', () => {
     ['/ai', true], ['/ai/presets', true], ['/ai/presets/codex', true], ['/ai/harnesses', true], ['/ai/services/ollama', true], ['/ai/edit/codex', true], ['/airlock', false],
     ['/pipeline', false], ['/pipeline/series/s1', true],
     ['/local-llm', false], ['/local-llm/m', true],
-    // Music owns the same full-bleed title/tab/body shell as Media Gen, but
-    // its similarly named Music Video route is classified independently.
-    ['/music', true], ['/music/generate', true], ['/music-video', false],
+    // Music owns the same full-bleed title/tab/body shell as Media Gen; Music
+    // Video has its own full-width rule, which a sibling prefix must not hit.
+    ['/music', true], ['/music/generate', true], ['/music-video', true], ['/music-video/p1/board', true], ['/music-videos', false],
     // Video workspace index owns its own scroll; Generate Video uses the
     // Media Gen tab shell and must stay full-width with it. `/video-gen` is
     // a legacy redirect, not a page with an internal scroller.

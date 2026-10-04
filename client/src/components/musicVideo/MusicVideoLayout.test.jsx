@@ -20,6 +20,16 @@ describe('music-video stage navigation', () => {
     expect(screen.getByText(/\$3\.00 \/ \$10\.00/)).toBeInTheDocument();
   });
 
+  it('says where the project stands under its name', () => {
+    render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project' }} stage="cast-sets"
+      onStageChange={() => {}} progress={{ current: 'cast-sets', stages: MUSIC_VIDEO_STAGES.map((stage) => ({ ...stage, state: 'todo' })) }}
+      spend={{ spentUsd: 0 }}
+      status={{ headline: 'Stage 2 of 7: Cast & Sets · needs you', tone: 'warn', facts: [{ id: 'render', label: 'Nothing rendered yet', tone: 'muted' }] }} />);
+    const status = screen.getByRole('status', { name: 'Project status' });
+    expect(status).toHaveTextContent('Stage 2 of 7: Cast & Sets · needs you');
+    expect(status).toHaveTextContent('Nothing rendered yet');
+  });
+
   it('keeps every fixed stage in the compact icon row after adding Publish', () => {
     render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project' }} stage="publish"
       onStageChange={() => {}} progress={{ current: 'publish', stages: MUSIC_VIDEO_STAGES.map((stage) => ({ ...stage, state: 'todo' })) }}

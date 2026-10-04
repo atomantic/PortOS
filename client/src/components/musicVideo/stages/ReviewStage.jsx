@@ -18,7 +18,7 @@ export default function ReviewStage({ board }) {
   return (
     <fieldset disabled={locked} className="min-w-0 space-y-3">
       <RenderFailure project={project} renderJob={renderJob} />
-      <DependencyImpactPanel project={project} busy={revisions.busy} onRepair={revisions.repair} />
+      <StageSection title="Dependency changes and repair"><DependencyImpactPanel project={project} busy={revisions.busy} onRepair={revisions.repair} /></StageSection>
       <section id="mv-final-video" aria-label="Final render" className="rounded-lg border border-port-border bg-port-card p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-medium">Final render</h3>
@@ -37,7 +37,10 @@ export default function ReviewStage({ board }) {
         <ExcerptPanel
           project={project}
           rendering={excerpts.rendering}
+          occupied={excerpts.occupied}
           progress={excerpts.progress}
+          activeRenderId={excerpts.activeRenderId}
+          connected={excerpts.connected}
           excerpts={project.excerpts || []}
           deletingId={excerpts.deletingId}
           noteBusyId={excerpts.noteBusyId}
@@ -52,12 +55,14 @@ export default function ReviewStage({ board }) {
         />
       </div>
 
+      <StageSection title="Development files" summary="Guides, storyboards and contact sheets">
       <DevArtifactsPanel
         project={project}
         busy={devArtifacts.busy}
         onOpen={board.openArtifact}
         onUpload={board.onUploadArtifact}
       />
+      </StageSection>
 
       <StageSection title="External handoff" summary="Export prompts, import files made in other tools">
         <HandoffControls

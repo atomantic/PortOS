@@ -533,13 +533,6 @@ function FastCodeAnimation() {
 
   return (
     <div className="mx-auto max-w-7xl space-y-4">
-      <PageHeader
-        icon={FileCode2}
-        title="Code Animation"
-        subtitle="Prompt an LLM to code an animated film, with no assets, in a universe's style, then preview it and record it to video."
-        className="rounded-xl border border-port-border bg-port-card"
-      />
-
       <section className="space-y-3 rounded-xl border border-port-border bg-port-card p-4" aria-labelledby="ca-gallery-heading">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -766,7 +759,7 @@ function FastCodeAnimation() {
           <section className="space-y-3 rounded-xl border border-port-border bg-port-card p-4" aria-labelledby="ca-prompt-heading">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 id="ca-prompt-heading" className="text-sm font-semibold text-white">Prompt</h2>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex shrink-0 flex-wrap gap-2 border-b border-port-border px-4 py-2">
                 <button type="button" onClick={handleBuild} disabled={!canBuild} className={buttonPrimary}>
                   {building ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
                   {built ? 'Rebuild prompt' : 'Build prompt'}
@@ -787,7 +780,7 @@ function FastCodeAnimation() {
                 {built.attachments?.length > 0 && (
                   <div>
                     <p className="mb-1 text-xs text-gray-400">Attach these images, in order, when you paste the prompt into another LLM:</p>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex shrink-0 flex-wrap gap-2 border-b border-port-border px-4 py-2">
                       {built.attachments.map((attachment, index) => (
                         <a key={attachment.url} href={attachment.url} target="_blank" rel="noreferrer" title={`${index + 1}. ${attachment.label} (${attachment.origin})`} className="relative block h-14 w-14 overflow-hidden rounded border border-port-border">
                           <img src={attachment.url} alt={attachment.label} className="h-full w-full object-cover" />
@@ -871,11 +864,21 @@ function FastCodeAnimation() {
 export default function CodeAnimation() {
   const { pathname } = useLocation();
   const production = pathname.startsWith('/code-animation/production');
-  return <div className="space-y-4">
-    <nav aria-label="Animation mode" className="flex flex-wrap gap-2">
+  return <div className="flex h-full min-h-0 flex-col">
+      <PageHeader
+        icon={FileCode2}
+        title="Code Animation"
+        subtitle="Prompt an LLM to code an animated film, with no assets, in a universe's style, then preview it and record it to video."
+      />
+
+    <nav aria-label="Animation mode" className="flex shrink-0 flex-wrap gap-2 border-b border-port-border px-4 py-2">
       <Link to="/code-animation" className={buttonSecondary} aria-current={!production ? 'page' : undefined}>Fast HTML</Link>
       <Link to="/code-animation/production" className={buttonSecondary} aria-current={production ? 'page' : undefined}>Production</Link>
     </nav>
-    {production ? <ProductionProjects /> : <FastCodeAnimation />}
+    <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
+      <div className="mx-auto max-w-7xl">
+        {production ? <ProductionProjects /> : <FastCodeAnimation />}
+      </div>
+    </div>
   </div>;
 }

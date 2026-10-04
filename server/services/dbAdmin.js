@@ -10,6 +10,8 @@ import { resolveBashBinary, toBashPath } from '../lib/bashResolver.js';
 import { resolvePostgresPort } from '../lib/ports.js';
 import { assertDatabaseAdmission, createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJournal.js';
 
+import { withDatabaseImport } from './databaseImport.js';
+
 import { acceptDatabaseMaintenance } from './databasePreflight.js';
 import { createDatabaseAuthority } from '../lib/databaseAuthority.js';
 
@@ -333,13 +335,6 @@ const pgEnv = (port) => ({
   PGDATABASE: pgDb
 });
 
-// pg17-only directives that older psql chokes on. The legacy import piped the
-// dump through `sed -e '/^\restrict /d' …` to strip them; we filter the same
-// lines in-process instead (see importDumpFile) so no `sed`/`bash -c` shell is
-// involved. Exported for unit testing.
-const PG17_ONLY_DIRECTIVES = [/^\\restrict /, /^\\unrestrict /, /^SET transaction_timeout/];
-export const isPg17OnlyDirective = (line) => PG17_ONLY_DIRECTIVES.some((re) => re.test(line));
-
 // Abort escalation bounds for importDumpFile's read-failure path: after
 // SIGTERM, wait this long for the child's 'close' before escalating to
 // SIGKILL, then this much longer before reporting failure without a confirmed
@@ -355,8 +350,8 @@ const ABORT_KILL_GRACE_MS = 2_000;
  * into the shell — any shell metacharacter in those values (or in a hostile
  * export line surfacing through the pipeline) was injectable. Here psql runs via
  * spawn with an argv array (no shell), the dump is streamed on stdin, and the
- * pg17-only directives are stripped in-process by isPg17OnlyDirective(),
- * replacing the `sed` stage entirely.
+ * replay is staged privately before spawning; extension metadata and version
+ * directives are omitted only outside stored SQL/COPY data.
  *
  * Runs outside the Express request lifecycle (spawn/stream callbacks), so every
  * async boundary resolves rather than throws — an uncaught throw here would
@@ -368,7 +363,16 @@ const ABORT_KILL_GRACE_MS = 2_000;
  * that psql would commit as a finished --single-transaction script, and the
  * promise waits for 'close' or the bounded abort deadline (see abort()).
  */
-export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
+export async function importDumpFile(dumpFile, port, env, timeout = 120_000) {
+  try {
+    return await withDatabaseImport(dumpFile, replay => _importReplayFile(replay, port, env, timeout));
+  } catch (err) {
+    return { stdout: '', stderr: err.message, exitCode: 1 };
+  }
+}
+
+// Separate process boundary so read-error escalation can be exercised precisely.
+export function _importReplayFile(dumpFile, port, env, timeout = 120_000) {
   return new Promise((resolve) => {
     const psql = spawn('psql', [
       '-h', 'localhost', '-p', String(port), '-U', pgUser, '-d', pgDb,
@@ -478,13 +482,13 @@ export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
     // resulting EPIPE would otherwise crash the process.
     psql.stdin.on('error', () => {});
 
-    // Byte-transparent line filter: buffer latin1 chars, split on '\n', drop the
-    // pg17-only directive lines, and forward every other line's original bytes
+    // Byte-transparent replay pump: buffer latin1 chars, split on '\n',
+    // and forward every staged line's original bytes
     // (its trailing '\n' re-appended) to psql's stdin. Backpressure pauses the
     // source; a drain resumes it and re-drains any buffered lines.
     let pending = '';
     const writeLine = (line) => {
-      if (isPg17OnlyDirective(line) || !psql.stdin.writable) return true;
+      if (!psql.stdin.writable) return true;
       return psql.stdin.write(line + '\n', 'latin1');
     };
     const pump = () => {
@@ -514,7 +518,7 @@ export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
       if (finished || aborting) return; // the success EOF must never follow an abort
       // Flush a final line that lacked a trailing newline, then close stdin so
       // psql runs the script and emits 'close'.
-      if (pending.length) { writeLine(pending); pending = ''; }
+      if (pending.length && psql.stdin.writable) { psql.stdin.write(pending, 'latin1'); pending = ''; }
       if (psql.stdin.writable) psql.stdin.end();
     });
   });
@@ -736,7 +740,7 @@ async function exportDatabaseImpl(backend) {
     }
     const result = await runCmd(pgDumpBin, [
       '-h', 'localhost', '-p', String(port), '-U', pgUser, '-d', pgDb,
-      '--no-owner', '--no-privileges', '--if-exists', '--clean', '-f', dumpFile
+      '--no-owner', '--no-privileges', '--no-comments', '--if-exists', '--clean', '-f', dumpFile
     ], 120_000, env);
     if (result.exitCode !== 0) {
       throw new ServerError('Export failed', { status: 500, context: { details: result.stderr || result.stdout } });

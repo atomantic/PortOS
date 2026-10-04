@@ -14,7 +14,7 @@ import { checkHealth, ensureSchema, query, close } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 
 vi.mock('./messageAccounts.js', () => ({
-  listAccounts: vi.fn(async () => [{ id: 'acct-test', type: 'gmail', name: 'Test' }]),
+  listAccounts: vi.fn(async () => [{ id: 'acct-test', type: 'gmail', name: 'Test', canSend: true }]),
 }));
 vi.mock('./messageDrafts.js', () => ({
   createDraft: vi.fn(async (data) => ({ id: 'draft-test', status: 'draft', ...data })),
@@ -145,7 +145,7 @@ describe.skipIf(!runDb)('privacy changes DB round-trip', () => {
     expect(list[0].progress).toHaveProperty('total');
   });
 
-  it('drafts an unapproved update email to the org contact', async () => {
+  it('refuses an unsupported account then drafts an unapproved update email to the org contact', async () => {
     const oldRec = await vault.createVaultRecord({ type: 'email', label: 'Old email', value: 'old@me.example' });
     createdVaultRecords.push(oldRec.id);
     const org = await orgs.createOrg({ name: 'Subscription Co', contact: { email: 'support@sub.example' } });
@@ -159,9 +159,16 @@ describe.skipIf(!runDb)('privacy changes DB round-trip', () => {
     createdEvents.push(event.id);
     createdVaultRecords.push(event.replacementRecordId);
 
+    const { listAccounts } = await import('./messageAccounts.js');
+    const { createDraft } = await import('./messageDrafts.js');
+    const draftsBefore = createDraft.mock.calls.length;
+    listAccounts.mockResolvedValueOnce([{ id: 'outlook-test', type: 'outlook', canSend: false }]);
+    await expect(changes.draftUpdateEmail(event.id, org.id)).rejects.toMatchObject({ code: 'NO_MESSAGE_ACCOUNT' });
+    expect(createDraft).toHaveBeenCalledTimes(draftsBefore);
+    expect((await changes.getChangeProgress(event.id)).pending.map(item => item.orgId)).toEqual([org.id]);
+
     const result = await changes.draftUpdateEmail(event.id, org.id);
     expect(result.status).toBe('draft'); // unapproved
-    const { createDraft } = await import('./messageDrafts.js');
     const draftArg = createDraft.mock.calls.at(-1)[0];
     expect(draftArg.to).toEqual(['support@sub.example']);
     expect(draftArg.body).toContain('new@me.example'); // new value plaintext for the org

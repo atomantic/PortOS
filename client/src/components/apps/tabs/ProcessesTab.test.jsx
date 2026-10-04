@@ -15,13 +15,13 @@ vi.mock('../../../hooks/useProcessSnapshot', () => ({
 }));
 
 vi.mock('../../../hooks/useProcessLogs', () => ({
-  useProcessLogs: vi.fn(() => ({ logs: [], subscribed: false, clear: vi.fn() })),
+  useProcessLogs: vi.fn(() => ({ logs: [], status: 'connecting', retry: vi.fn(), clear: vi.fn() })),
 }));
 
 vi.mock('../../../lib/clipboard', () => ({ copyToClipboard: vi.fn() }));
 vi.mock('../../BrailleSpinner', () => ({ default: () => null }));
 vi.mock('../../ui/FormField', () => ({ FormField: ({ children }) => children }));
-vi.mock('../../ui/ProcessLogLines', () => ({ default: () => null }));
+vi.mock('../../ui/ProcessLogLines', () => ({ default: () => null, LogStreamBadge: () => null }));
 // `formatCount` is deliberately NOT stubbed — a stub that returns the raw
 // number would make the "N lines" assertions blind to a grouping regression.
 vi.mock('../../../utils/formatters', async (importOriginal) => ({
@@ -38,7 +38,7 @@ import ProcessesTab from './ProcessesTab';
 describe('ProcessesTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    useProcessLogs.mockReturnValue({ logs: [], subscribed: false, clear: vi.fn() });
+    useProcessLogs.mockReturnValue({ logs: [], status: 'connecting', retry: vi.fn(), clear: vi.fn() });
   });
 
   it('passes its app id to the expanded process log subscription', () => {
@@ -55,7 +55,7 @@ describe('ProcessesTab', () => {
         { line: 'boot ok', type: 'stdout', timestamp: 100 },
         { line: 'failed once', type: 'stderr', timestamp: 200 },
       ],
-      subscribed: true,
+      status: 'live',
       clear: vi.fn(),
     });
     render(<ProcessesTab appId="app-1" pm2ProcessNames={['example-api']} />);
@@ -139,7 +139,7 @@ describe('ProcessesTab', () => {
   it('fullscreen log viewer traps focus within the modal', () => {
     useProcessLogs.mockReturnValue({
       logs: [{ line: 'test', type: 'stdout', timestamp: 100 }],
-      subscribed: false,
+      status: 'connecting',
       clear: vi.fn(),
     });
     render(<ProcessesTab appId="app-1" pm2ProcessNames={['example-api']} />);

@@ -132,7 +132,7 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
     if (result) {
       // Execution re-verifies the snapshot; report its status after the preview closes.
       const suffix = result.verification?.status === 'unverified' ? ' (unverified legacy snapshot)' : '';
-      toast.success(`Restore complete — ${result.changedFiles?.length ?? 0} file(s) restored${suffix}`);
+      toast.success(`File restore complete — ${result.changedFiles?.length ?? 0} file(s) restored${suffix}`);
       onClose();
     }
   }, [acceptedPreview, onClose, onRestoreStateChange, previewMatchesCurrentRequest, restoring, snapshot]);
@@ -143,7 +143,7 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
     <div className="mt-3 p-3 bg-port-bg rounded-lg border border-port-border space-y-3">
       <div className="flex items-center justify-between">
         <span className="text-xs font-semibold text-gray-300">
-          Restore snapshot: {snapshot.id}
+          Restore files from snapshot: {snapshot.id}
         </span>
         <button
           onClick={onClose}
@@ -159,7 +159,7 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
       {/* Subdirectory filter */}
       <div>
         <label htmlFor={filterId} className="block text-xs text-gray-500 mb-1">
-          Selective restore (optional)
+          File restore folder (optional)
         </label>
         <input
           id={filterId}
@@ -171,8 +171,11 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
           className="w-full bg-port-card border border-port-border rounded px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent"
         />
         <p className="mt-1 text-xs text-gray-600">
-          Leave blank to restore all data from this snapshot.
+          Leave blank to restore all backed-up files in the data directory. Existing files may be overwritten; files absent from the snapshot are kept. PostgreSQL records are not restored here.
         </p>
+        <Link to="/settings/backup" className="mt-1 inline-block text-xs text-port-accent hover:underline">
+          Restore PostgreSQL records in Backup settings
+        </Link>
       </div>
 
       {/* Preview button */}
@@ -214,7 +217,7 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
               ))}
             </div>
           ) : (
-            <p className="text-xs text-port-success">No changes — data is already up to date.</p>
+            <p className="text-xs text-port-success">No backed-up files need copying in this scope. PostgreSQL data was not checked.</p>
           )}
         </div>
       )}

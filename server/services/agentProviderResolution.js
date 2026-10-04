@@ -1,3 +1,4 @@
+import { isForgeMaintenanceTask, hasCurrentForgeMaintenanceEvidence, LEGACY_FORGE_MAINTENANCE_REASON } from '../lib/forgeMaintenanceTasks.js';
 import { isProcessProvider } from '../lib/providerTypes.js';
 import { isCompositeProviderId } from '../lib/providerRef.js';
 import { isPrivateSecurityTask, PRIVATE_SECURITY_DELIVERY } from '../lib/privateSecurityPolicy.js';
@@ -73,9 +74,9 @@ export async function resolveAgentProviderAndModel(task) {
     return { ok: false, permanent: true,
       error: 'This legacy issue-watcher task cannot run in an agent. Run Issue Watcher again from the schedule to use screened, tool-free analysis.' };
   }
-  if (['pr-watcher', 'issue-reconcile'].includes(task?.metadata?.analysisType) && task.metadata.forgeMaintenanceVersion !== 1) {
+  if (isForgeMaintenanceTask(task) && !hasCurrentForgeMaintenanceEvidence(task)) {
     return { ok: false, permanent: true,
-      error: 'This legacy forge maintenance task has not passed the current author and discussion gates. Run its schedule again to gather fresh screened evidence.' };
+      error: LEGACY_FORGE_MAINTENANCE_REASON };
   }
   if (task?.metadata?.analysisType === 'pr-reviewer' && !isPublicReviewNoToolProfile(task.metadata.executionProfile)) {
     return { ok: false, permanent: true,

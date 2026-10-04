@@ -47,6 +47,7 @@ vi.mock('./worktreeManager.js', async (importOriginal) => ({
   unlinkWorktreeDependencies: vi.fn().mockResolvedValue(undefined),
   findAdoptableWorktreeForBranch: vi.fn().mockResolvedValue(null),
   releaseIdleSiblingNextHolder: vi.fn().mockResolvedValue(null),
+  listWorktrees: vi.fn().mockResolvedValue([]),
   mergeBaseIntoFeatureWorktree: vi.fn(),
 }));
 vi.mock('./agentAppWorkspace.js', () => ({
@@ -71,11 +72,11 @@ import { ensureLatest } from './git.js';
 import { execGit } from '../lib/execGit.js';
 import { detectConflicts } from './taskConflict.js';
 import { getAppWorkspace } from './agentAppWorkspace.js';
-import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
+import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, listWorktrees, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 
-beforeEach(() => { vi.clearAllMocks(); });
+beforeEach(() => { vi.clearAllMocks(); listWorktrees.mockResolvedValue([]); });
 
 describe('prepareAgentWorkspace — Creative Director scratch cwd (#4650)', () => {
   it('pins a CD no-worktree task to an isolated scratch dir and skips the git pull', async () => {
@@ -473,11 +474,25 @@ describe('prepareAgentWorkspace — resuming an interrupted run', () => {
     expect(r.outcome).toBe('blocked');
   });
 
-  it('continues a relaunched claim inside the existing claim worktree', async () => {
-    claimContinuationWorkspace.mockReturnValueOnce({
-      workspacePath: '/mock/worktrees/claim-portos-issue-42',
+  describe('a relaunched claim continuing in place', () => {
+    const CLAIM_DIR = '/mock/worktrees/claim-portos-issue-42';
+    const claimTask = (extra = {}) => ({
+      id: 't-claim', taskType: 'user',
+      metadata: {
+        claimFlow: true,
+        claimTarget: '42',
+        claimResumeInPlace: true,
+        existingBranch: 'claim/issue-42',
+        resumedFromAgentId: 'agent-dead',
+        resumeWorktreePath: CLAIM_DIR,
+        useWorktree: false,
+        ...extra,
+      },
+    });
+    const pointerWorkspace = () => ({
+      workspacePath: CLAIM_DIR,
       worktreeInfo: {
-        worktreePath: '/mock/worktrees/claim-portos-issue-42',
+        worktreePath: CLAIM_DIR,
         branchName: 'claim/issue-42',
         baseBranch: null,
         existingBranch: true,
@@ -485,26 +500,92 @@ describe('prepareAgentWorkspace — resuming an interrupted run', () => {
         claimResumeInPlace: true,
       },
     });
-    const task = {
-      id: 't-claim', taskType: 'user',
-      metadata: {
-        claimFlow: true,
-        claimTarget: '42',
-        claimResumeInPlace: true,
-        existingBranch: 'claim/issue-42',
-        resumeWorktreePath: '/mock/worktrees/claim-portos-issue-42',
-        useWorktree: false,
-      },
-    };
+    const holder = { path: CLAIM_DIR, branch: 'refs/heads/claim/issue-42' };
 
-    const r = await prepareAgentWorkspace({ agentId: 'agent-new', task });
+    beforeEach(() => {
+      claimContinuationWorkspace.mockReturnValueOnce(pointerWorkspace());
+      listWorktrees.mockResolvedValue([holder]);
+    });
 
-    expect(r.outcome).toBe('ready');
-    expect(r.workspacePath).toBe('/mock/worktrees/claim-portos-issue-42');
-    expect(r.worktreeInfo.claimResumeInPlace).toBe(true);
-    expect(createWorktree).not.toHaveBeenCalled();
-    expect(adoptWorktree).not.toHaveBeenCalled();
-    expect(ensureLatest).not.toHaveBeenCalled();
+    it('continues inside the existing claim worktree when no other owner holds it', async () => {
+      const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: claimTask() });
+
+      expect(r.outcome).toBe('ready');
+      expect(r.workspacePath).toBe(CLAIM_DIR);
+      expect(r.worktreeInfo.claimResumeInPlace).toBe(true);
+      expect(createWorktree).not.toHaveBeenCalled();
+      expect(adoptWorktree).not.toHaveBeenCalled();
+      expect(ensureLatest).not.toHaveBeenCalled();
+    });
+
+    it('defers the launch when a live owner registered the branch after the pointer was made', async () => {
+      getAgents.mockResolvedValue([
+        { id: 'agent-other', status: 'running', metadata: { claimBranch: 'claim/issue-42' } },
+      ]);
+
+      const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: claimTask() });
+
+      expect(r.outcome).toBe('blocked');
+      expect(r.workspacePath).toBeUndefined();
+      expect(updateTask).toHaveBeenCalledWith('t-claim', expect.objectContaining({
+        status: 'blocked',
+        metadata: expect.objectContaining({
+          blockedCategory: 'worktree-busy',
+          worktreeBusyAttempts: 1,
+          existingBranch: 'claim/issue-42',
+          claimResumeInPlace: true,
+        }),
+      }), 'user');
+      expect(createWorktree).not.toHaveBeenCalled();
+      expect(adoptWorktree).not.toHaveBeenCalled();
+    });
+
+    it('defers while a live picker run in the repository might own the tree, and continues once it ends', async () => {
+      getAgents.mockResolvedValue([{ id: 'agent-picker', status: 'running', metadata: { claimPicksOwnBranch: true } }]);
+      const deferred = await prepareAgentWorkspace({ agentId: 'agent-new', task: claimTask() });
+      expect(deferred.outcome).toBe('blocked');
+      expect(createWorktree).not.toHaveBeenCalled();
+
+      getAgents.mockResolvedValue([{ id: 'agent-picker', status: 'completed', metadata: { claimPicksOwnBranch: true } }]);
+      claimContinuationWorkspace.mockReturnValueOnce(pointerWorkspace());
+      const resumed = await prepareAgentWorkspace({ agentId: 'agent-new', task: claimTask() });
+      expect(resumed.outcome).toBe('ready');
+      expect(resumed.workspacePath).toBe(CLAIM_DIR);
+    });
+
+    it('fails closed when the agent registry cannot be read', async () => {
+      getAgents.mockRejectedValue(new Error('state unreadable'));
+
+      const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: claimTask() });
+
+      expect(r.outcome).toBe('blocked');
+      expect(updateTask).toHaveBeenCalledWith('t-claim', expect.objectContaining({
+        metadata: expect.objectContaining({ blockedCategory: 'worktree-busy' }),
+      }), 'user');
+    });
+
+    it('fails closed when the checkout now holds a different branch', async () => {
+      listWorktrees.mockResolvedValue([{ path: CLAIM_DIR, branch: 'refs/heads/claim/issue-43' }]);
+
+      const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: claimTask() });
+
+      expect(r.outcome).toBe('blocked');
+      expect(createWorktree).not.toHaveBeenCalled();
+    });
+
+    it('stops waiting after the retry budget and blocks for a human instead of entering', async () => {
+      listWorktrees.mockResolvedValue([]);
+
+      const r = await prepareAgentWorkspace({
+        agentId: 'agent-new', task: claimTask({ worktreeBusyAttempts: 5 }),
+      });
+
+      expect(r.outcome).toBe('blocked');
+      expect(updateTask).toHaveBeenCalledWith('t-claim', expect.objectContaining({
+        metadata: expect.objectContaining({ blockedCategory: 'worktree-failed' }),
+      }), 'user');
+      expect(createWorktree).not.toHaveBeenCalled();
+    });
   });
 
   it('ignores a stale worktree pointer with no branch to resume', async () => {
@@ -619,7 +700,7 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
 
     const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: followUpTask() });
 
-    expect(releaseIdleSiblingNextHolder).toHaveBeenCalledWith(expect.any(String), 'cos/task-x/agent-y', { activeWorkspacePaths: ['/elsewhere/live'] });
+    expect(releaseIdleSiblingNextHolder).toHaveBeenCalledWith(expect.any(String), 'cos/task-x/agent-y', expect.objectContaining({ activeWorkspacePaths: ['/elsewhere/live'], agents: expect.any(Array), requestingAgentId: 'agent-new' }));
     expect(r.outcome).toBe('ready');
     expect(updateTask).not.toHaveBeenCalled();
   });
@@ -664,6 +745,50 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
     expect(findAdoptableWorktreeForBranch).not.toHaveBeenCalled();
     expect(adoptWorktree).toHaveBeenCalledTimes(0);
     expect(r.outcome).toBe('blocked');
+  });
+
+  it('recovers an unrelated ordinary agent branch while a swarm owns claim branches', async () => {
+    const path = '/mock/worktrees/agent-y';
+    const branch = 'cos/task-x/agent-y';
+    listWorktrees.mockResolvedValue([{ path, branch: `refs/heads/${branch}` }]);
+    getAgents.mockResolvedValue([{ id: 'agent-parent', status: 'running', claimPicksOwnBranch: true }]);
+    findAdoptableWorktreeForBranch.mockResolvedValue({ path, agentId: 'agent-y' });
+    adoptWorktree.mockResolvedValue({ worktreePath: '/mock/worktrees/agent-new', branchName: branch, adopted: true });
+    const result = await prepareAgentWorkspace({ agentId: 'agent-new', task: followUpTask() });
+    expect(result.outcome).toBe('ready');
+    expect(adoptWorktree).toHaveBeenCalled();
+  });
+
+  it.each(['claim/issue-42', 'next/issue-42'])('defers coordinator takeover of %s through the child completion and merge window', async branch => {
+    const path = '/mock/worktrees/claim-issue-42';
+    listWorktrees.mockResolvedValue([{ path, branch: `refs/heads/${branch}` }]);
+    getAgents.mockResolvedValue([
+      { id: 'agent-parent', status: 'running', claimPicksOwnBranch: true },
+      { id: 'agent-child', status: 'completed', claimBranch: branch },
+    ]);
+    // Without owner admission this route moves the selected checkout, or
+    // detaches a sibling holder and creates a new one. Neither is authorized.
+    findAdoptableWorktreeForBranch.mockResolvedValue({ path, agentId: 'claim-issue-42' });
+    adoptWorktree.mockResolvedValue({ worktreePath: '/mock/worktrees/agent-new', branchName: branch, adopted: true });
+    const result = await prepareAgentWorkspace({
+      agentId: 'agent-new', task: followUpTask({ reviewLoopPRBranch: branch }),
+    });
+    expect(result).toMatchObject({ outcome: 'blocked', reason: expect.stringContaining('owner-ambiguous') });
+    expect(adoptWorktree).not.toHaveBeenCalled();
+    expect(releaseIdleSiblingNextHolder).not.toHaveBeenCalled();
+    expect(createWorktree).not.toHaveBeenCalled();
+  });
+
+  it.each(['unreadable', 'missing', 'changed'])('refuses %s coordinator ownership without taking a fallback', async fault => {
+    const path = '/mock/worktrees/claim-issue-42';
+    listWorktrees.mockResolvedValue(fault === 'unreadable' ? null : fault === 'missing' ? [] : [{ path, branch: 'refs/heads/claim/issue-99' }]);
+    const result = await prepareAgentWorkspace({ agentId: 'agent-new', task: followUpTask({
+      reviewLoopPRBranch: 'claim/issue-42', resumeWorktreePath: path,
+    }) });
+    expect(result.outcome).toBe('blocked');
+    expect(adoptWorktree).not.toHaveBeenCalled();
+    expect(releaseIdleSiblingNextHolder).not.toHaveBeenCalled();
+    expect(createWorktree).not.toHaveBeenCalled();
   });
 
   it('falls back to the cooldown pause when the adoption is refused', async () => {

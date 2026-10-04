@@ -21,6 +21,7 @@ export const TOOL_ACTIVATION_FAMILIES = Object.freeze(['tasks', 'issues', 'repor
 export const TOOL_ACTIVATION_LIMITS = Object.freeze({
   MIN_RETENTION_TURNS: 0,
   MAX_RETENTION_TURNS: 20,
+  MAX_TARGET_TOOLS: 5,
 });
 
 // 0 is deliberately "one-turn behaviour": activating a family only expands it
@@ -31,6 +32,7 @@ export const toolActivationFamilySchema = z.enum(TOOL_ACTIVATION_FAMILIES);
 
 export const toolsActivateInputSchema = z.object({
   families: z.array(toolActivationFamilySchema).min(1).max(TOOL_ACTIVATION_FAMILIES.length),
+  toolNames: z.array(z.string().trim().min(1).max(200)).min(1).max(TOOL_ACTIVATION_LIMITS.MAX_TARGET_TOOLS).optional(),
 }).strict();
 
 export const toolsDeactivateInputSchema = z.object({
@@ -91,8 +93,8 @@ export function agePersistentMindToolActivation(leases) {
 /**
  * Activate one or more families for a fresh `retentionTurns`-turn window.
  * `retentionTurns <= 0` persists nothing — the family is still exposed for
- * whatever turn calls this (the caller re-reads `leases` afterward), but
- * ages away immediately rather than surviving into the next user turn.
+ * whatever turn calls this via the adapter's turn-local selection, without
+ * surviving into the next user or self-directed turn.
  */
 export function activatePersistentMindToolActivationFamilies(leases, families, retentionTurns) {
   const normalized = normalizePersistentMindToolActivation({ leases }).leases;

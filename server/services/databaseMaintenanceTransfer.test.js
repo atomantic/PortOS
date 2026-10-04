@@ -140,7 +140,7 @@ describe.skipIf(process.platform === 'win32')('offline database transfer', () =>
     expect(alive(writer.pid)).toBe(false);
     const [dump] = stubs.invocations('pg_dump');
     const [load] = stubs.invocations('psql');
-    expect(dump).toBe(`pg_dump ${endpointArgs(source)} --no-owner --no-privileges --if-exists --clean`);
+    expect(dump).toBe(`pg_dump ${endpointArgs(source)} --no-owner --no-privileges --no-comments --if-exists --clean`);
     expect(load).toBe(`psql ${endpointArgs(target)} -v ON_ERROR_STOP=1 --single-transaction`);
     // Inherited libpq endpoint/option variables never reach the client tools.
     expect(stubs.receivedVariables()).toEqual(['PGPASSWORD']);
@@ -159,6 +159,26 @@ describe.skipIf(process.platform === 'win32')('offline database transfer', () =>
     // One-use worker entry: the same owner cannot transfer twice.
     await expect(transfer()).rejects.toThrow();
     expect(stubs.invocations('psql')).toHaveLength(1);
+  }, 30_000);
+
+  it.each(['ok', 'fail'])('preserves original dump and receipt identity when extension metadata is normalized (%s)', async mode => {
+    const legacy = "DROP EXTENSION IF EXISTS vector;\nCOMMENT ON EXTENSION vector IS 'legacy';\n" + STUB_DUMP_COMPLETE;
+    writeFileSync(join(stubs.dir, 'dump.sql'), legacy);
+    begin();
+    stubs.setMode('import', mode);
+    if (mode === 'fail') {
+      await expect(transfer()).rejects.toThrow(/target import failed/);
+      expect(journal.transferStatus(operation.id)).toEqual({ dump: 'recorded', import: 'pending' });
+      successor();
+      stubs.setMode('import', 'ok');
+    }
+    expect(await transfer()).toMatchObject({ importCommitted: true });
+    expect(stubs.invocations('pg_dump')).toHaveLength(1);
+    expect(stubs.imported()).toBe('\n\n' + STUB_DUMP_COMPLETE);
+    expect(readFileSync(dumpPath(), 'utf8')).toBe(legacy);
+    expect(journal.readTransferDump(operation.id)).toMatchObject({ sha256: sha256(legacy), bytes: Buffer.byteLength(legacy) });
+    expect(journal.readTransferImport(operation.id)).toMatchObject({ id: operation.id, target: docker, sha256: sha256(legacy) });
+    expect(() => journal.assertAdmission()).toThrow();
   }, 30_000);
 
   it('refuses ordinary writes and spawns while export and import are paused', async () => {

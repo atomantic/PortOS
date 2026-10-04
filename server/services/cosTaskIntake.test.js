@@ -48,6 +48,7 @@ const METADATA_SAMPLES = {
   jiraTicketUrl: 'https://example.com/browse/EX-1',
   useWorktree: true,
   isInvestigation: true,
+  workflow: 'app-checkout-recovery',
   whenDone: 'commit-push',
   planOnly: true,
   openPR: true,
@@ -122,5 +123,18 @@ describe('buildTaskMetadata worktree PR defaults', () => {
 
     expect(metadata.openPR).toBe(true);
     expect(metadata.prCompletion).toBe(PR_COMPLETIONS.REVIEW_THEN_MERGE);
+  });
+});
+
+// A stale client's generic delivery flags cannot override recovery ownership.
+describe('checkout recovery intake', () => {
+  it('keeps recovery on the real checkout and removes generic delivery steps', () => {
+    expect(buildTaskMetadata(createCosTaskSchema.parse({
+      description: 'recover', workflow: 'app-checkout-recovery',
+      useWorktree: true, openPR: true, simplify: true, reviewLoop: true, whenDone: 'commit-push',
+    }), 'user')).toMatchObject({
+      analysisType: 'app-checkout-recovery', useWorktree: false,
+      openPR: false, simplify: false, reviewLoop: false,
+    });
   });
 });

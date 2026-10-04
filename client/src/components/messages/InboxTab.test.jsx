@@ -16,6 +16,7 @@ const api = vi.hoisted(() => ({
 const toast = vi.hoisted(() => Object.assign(vi.fn(), {
   error: vi.fn(),
   success: vi.fn(),
+  warning: vi.fn(),
 }));
 const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
 
@@ -187,6 +188,84 @@ describe('InboxTab empty state', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /open config/i }));
     expect(await screen.findByText('CONFIG SCREEN')).toBeInTheDocument();
+  });
+});
+
+describe('InboxTab sync capability (#9968)', () => {
+  const gmail = { ...syncedAccount, syncModes: ['unread', 'full'], hasReadState: true };
+  const teams = {
+    ...syncedAccount, id: '33333333-3333-3333-3333-333333333333', name: 'Chat', type: 'teams',
+    syncModes: ['full'], hasReadState: false,
+  };
+
+  it('skips Teams in an aggregate unread sync and says so', async () => {
+    renderInbox([gmail, teams]);
+    await screen.findByText('Your inbox is empty');
+
+    fireEvent.click(screen.getAllByRole('button', { name: /sync unread/i })[0]);
+
+    await waitFor(() => expect(api.syncMessageAccount).toHaveBeenCalledTimes(1));
+    expect(api.syncMessageAccount).toHaveBeenCalledWith(gmail.id, 'unread', { silent: true });
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('Skipping Chat'));
+  });
+
+  it('runs Full Sync on every account, Teams included', async () => {
+    renderInbox([gmail, teams]);
+    await screen.findByText('Your inbox is empty');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Full Sync' }));
+
+    await waitFor(() => expect(api.syncMessageAccount).toHaveBeenCalledTimes(2));
+    expect(api.syncMessageAccount).toHaveBeenCalledWith(gmail.id, 'full', { silent: true });
+    expect(api.syncMessageAccount).toHaveBeenCalledWith(teams.id, 'full', { silent: true });
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
+
+  it('offers only Full Sync, in the toolbar and the empty state, when only Teams is in scope', async () => {
+    renderInbox([{ ...teams, lastSyncAt: null }]);
+
+    expect(await screen.findByText('Nothing synced yet')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /sync unread/i })).not.toBeInTheDocument();
+    const fullSyncButtons = screen.getAllByRole('button', { name: 'Full Sync' });
+    expect(fullSyncButtons).toHaveLength(2); // toolbar + empty-state action
+
+    fireEvent.click(fullSyncButtons.at(-1));
+    await waitFor(() => expect(api.syncMessageAccount).toHaveBeenCalledWith(teams.id, 'full', { silent: true }));
+  });
+
+  it('restores the unread action when the account filter narrows to a capable account', async () => {
+    renderInbox([gmail, teams]);
+    await screen.findByText('Your inbox is empty');
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: teams.id } });
+    await act(async () => {});
+    expect(screen.queryByRole('button', { name: /sync unread/i })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: gmail.id } });
+    await act(async () => {});
+    expect(screen.getAllByRole('button', { name: /sync unread/i }).length).toBeGreaterThan(0);
+  });
+
+  it('renders unknown read state neutrally, distinct from read and unread rows', async () => {
+    const row = (id, flags) => ({
+      id, accountId: gmail.id, threadId: null, subject: `Subject ${id}`, bodyText: 'preview',
+      from: { name: `Sender ${id}`, email: `${id}@example.com` }, date: HOUR_AGO, ...flags,
+    });
+    api.getMessageInbox.mockResolvedValue({ total: 3, messages: [
+      row('unread', { isRead: false, isUnread: true }),
+      row('read', { isRead: true, isUnread: false }),
+      row('unknown', { isRead: null, isUnread: null }),
+    ] });
+    renderInbox([gmail]);
+
+    const sender = async (id) => (await screen.findByText(`Sender ${id}`));
+    expect((await sender('unread')).className).toContain('font-medium');
+    expect((await sender('read')).className).toContain('text-gray-400');
+    const unknown = await sender('unknown');
+    expect(unknown.className).not.toContain('font-medium');
+    expect(unknown.className).not.toContain('text-gray-400');
+    expect(unknown.closest('div.group').className).not.toContain('opacity-70');
+    expect((await sender('read')).closest('div.group').className).toContain('opacity-70');
   });
 });
 

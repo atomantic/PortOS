@@ -167,7 +167,7 @@ export function resolveTaskHookType(task) {
  * buckets these already poisoned on existing installs.
  */
 export const NON_COMMITTING_COORDINATOR_TASK_TYPES = new Set([
-  'branch-reconcile', 'issue-reconcile', 'branch-cleanup', 'jira-status-report', 'do-release',
+  'app-checkout-recovery', 'branch-reconcile', 'issue-reconcile', 'branch-cleanup', 'jira-status-report', 'do-release',
   'stash-cleanup', 'repo-sync', 'pr-reviewer', 'model-comparison-refresh',
   // Pre-rename name of do-release (migration 417): queued and archived tasks
   // still carry it, and their buckets must keep the coordinator exemption.

@@ -56,12 +56,6 @@ export const updateBrainInboxEntry = (id, capturedText, options = {}) => request
 });
 export const deleteBrainInboxEntry = (id, options = {}) => request(`/brain/inbox/${id}`, { method: 'DELETE', ...options });
 export const markBrainInboxDone = (id, options = {}) => request(`/brain/inbox/${id}/done`, { method: 'POST', ...options });
-// Stamp a batch of creative notes as consumed once their catalog ingest commits.
-export const markBrainInboxSentToCatalog = (ids, options) => request('/brain/inbox/sent-to-catalog', {
-  method: 'POST',
-  body: JSON.stringify({ ids }),
-  ...options
-});
 
 // Brain - People
 export const getBrainPeople = (options = {}) => {
@@ -251,15 +245,15 @@ export const getChatgptArchive = (name, { preview, ...options } = {}) =>
   request(`/brain/import/chatgpt/archive/${encodeURIComponent(name)}${preview === 'images' ? '?preview=images' : ''}`, options);
 
 // Brain - Digests & Reviews
-export const getBrainLatestDigest = () => request('/brain/digest/latest');
-export const getBrainDigests = (limit = 10) => request(`/brain/digests?limit=${limit}`);
+export const getBrainLatestDigest = (options = {}) => request('/brain/digest/latest', options);
+export const getBrainDigests = (limit = 10, options = {}) => request(`/brain/digests?limit=${limit}`, options);
 export const runBrainDigest = (providerOverride, modelOverride, options = {}) => request('/brain/digest/run', {
   method: 'POST',
   body: JSON.stringify({ providerOverride, modelOverride }),
   ...options
 });
-export const getBrainLatestReview = () => request('/brain/review/latest');
-export const getBrainReviews = (limit = 10) => request(`/brain/reviews?limit=${limit}`);
+export const getBrainLatestReview = (options = {}) => request('/brain/review/latest', options);
+export const getBrainReviews = (limit = 10, options = {}) => request(`/brain/reviews?limit=${limit}`, options);
 export const runBrainReview = (providerOverride, modelOverride, options = {}) => request('/brain/review/run', {
   method: 'POST',
   body: JSON.stringify({ providerOverride, modelOverride }),
@@ -363,9 +357,9 @@ export const getBrainGraph = ({ focus, limit } = {}, options = {}) => {
   return request(`/brain/graph${qs ? `?${qs}` : ''}`, options);
 };
 // Lightweight {id,label,brainType} list of every node, for the search box.
-export const getBrainGraphSearchIndex = () => request('/brain/graph/search-index');
+export const getBrainGraphSearchIndex = (options = {}) => request('/brain/graph/search-index', options);
 // Count of active records missing an embedding (powers "Embed missing").
-export const getEmbeddingsStatus = () => request('/brain/embeddings/status');
+export const getEmbeddingsStatus = (options = {}) => request('/brain/embeddings/status', options);
 
 // Brain - Bridge Sync (brain data to CoS memory system).
 // refresh:true re-embeds already-mapped records to heal memory entries that
@@ -387,7 +381,7 @@ export const listDailyLogs = (options = {}) => {
   if (options.offset) params.set('offset', options.offset);
   return request(`/brain/daily-log?${params}`);
 };
-export const getDailyLog = (date = 'today') => request(`/brain/daily-log/${encodeURIComponent(date)}`);
+export const getDailyLog = (date = 'today', options = {}) => request(`/brain/daily-log/${encodeURIComponent(date)}`, options);
 export const appendDailyLog = (date, text, source = 'text', options = {}) => request(
   `/brain/daily-log/${encodeURIComponent(date)}/append`,
   { method: 'POST', body: JSON.stringify({ text, source }), ...options }

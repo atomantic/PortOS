@@ -29,6 +29,7 @@ import {
   resolveChallengeSchema,
   goalFidelityFalsePositiveSchema,
   validateRequest,
+  cosTaskReorderBodySchema,
   isPaginationRequested,
   parsePagination,
 } from '../lib/validation.js';
@@ -228,11 +229,7 @@ router.post('/tasks/refresh', asyncHandler(async (req, res) => {
 
 // POST /api/cos/tasks/reorder - Reorder tasks
 router.post('/tasks/reorder', asyncHandler(async (req, res) => {
-  const { taskIds } = req.body;
-
-  if (!taskIds || !Array.isArray(taskIds)) {
-    throw new ServerError('taskIds array is required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { taskIds } = validateRequest(cosTaskReorderBodySchema, req.body);
 
   const result = await cos.reorderTasks(taskIds);
   res.json(result);

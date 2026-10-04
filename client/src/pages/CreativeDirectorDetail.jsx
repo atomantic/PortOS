@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router';
-import { ArrowLeft, ClipboardList, Eye, Film, FileText, LayoutList, Package, Play, Pause, RefreshCw, ScrollText, SlidersHorizontal, Square, Trash2 } from 'lucide-react';
+import { ArrowLeft, Clapperboard, ClipboardList, Eye, Film, FileText, LayoutList, Package, Pause, ScrollText, SlidersHorizontal, Square, Trash2 } from 'lucide-react';
+import PageHeader from '../components/PageHeader.jsx';
+import RecordStatusLine from '../components/ui/RecordStatusLine.jsx';
 import TabPills from '../components/ui/TabPills.jsx';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
@@ -30,6 +32,7 @@ import { getCosAgents } from '../services/apiAgents.js';
 import { useSocketResource } from '../hooks/useSocketResource';
 import { useValidTab } from '../hooks/useValidTab';
 import useMediaJobProgress from '../hooks/useMediaJobProgress';
+import { describeCreativeDirectorStatus } from '../lib/creativeDirectorStatus.js';
 
 const PROJECT_EVENTS = ['creative-director:project:changed'];
 const AGENT_EVENTS = ['cos:agent:spawned', 'cos:agent:completed', 'cos:agent:updated'];
@@ -192,103 +195,101 @@ function CreativeDirectorProject({ id, basePath }) {
   if (!project || project.id !== id) return <div className="p-6 text-port-error">Project not found.</div>;
 
   const goTo = (tabId) => navigate(`${basePath}/${id}/${tabId}`);
+  const status = describeCreativeDirectorStatus(project, { activeAgents: activeAgents.length, activeTab });
+  const runNext = () => {
+    switch (status.next?.id) {
+      case 'start': case 'resume': return handleAction(status.next.id);
+      case 'edit-draft': return setEditingDraft(true);
+      case 'goto': return goTo(status.next.tab);
+      case 'open-final': return navigate(`/media/history?selected=${encodeURIComponent(project.finalVideoId)}`);
+      default: return undefined;
+    }
+  };
+  // Every tab keeps the assembled cut in view once there is one; the Overview
+  // renders it itself (with the "final assembly" placeholder before then).
+  const showCutAbove = project.workspace === 'video' && activeTab !== 'overview' && !!(project.videoFinalCut || project.videoRoughCut)?.filename;
 
   return (
     <div className="flex flex-col h-full">
-      <div className="shrink-0 px-6 pt-6 pb-3 border-b border-port-border">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
-            <Link to={basePath} className="text-port-text-muted hover:text-port-text"><ArrowLeft className="w-4 h-4" /></Link>
-            <div className="min-w-0">
-              <h1 className="line-clamp-2 break-words text-xl font-semibold" title={project.name}>{project.name}</h1>
-              <div className="text-xs text-port-text-muted truncate">
-                {project.id} • status: <span className="text-port-text">{project.status}</span>
-              </div>
-            </div>
-          </div>
-          <div className="flex flex-wrap justify-end gap-1">
-            <button onClick={fetchProject} className="flex items-center gap-1 px-2 py-1 bg-port-card border border-port-border rounded text-xs">
-              <RefreshCw className="w-3 h-3" /> Refresh
+      <PageHeader
+        icon={Clapperboard}
+        title={project.name}
+        actions={<>
+          <button onClick={() => setModelsOpen(true)} title="AI provider + model for this project's treatment, plan, and scene evaluation" className="flex items-center gap-1 px-2 py-1 bg-port-card border border-port-border rounded text-xs">
+            <SlidersHorizontal className="w-3 h-3" /> Models
+          </button>
+          {!['paused', 'complete', 'failed', 'draft'].includes(project.status) && (
+            <button onClick={() => handleAction('pause')} className="flex items-center gap-1 px-2 py-1 bg-port-card border border-port-border rounded text-xs">
+              <Pause className="w-3 h-3" /> Pause
             </button>
-            <button onClick={() => setModelsOpen(true)} title="AI provider + model for this project's treatment, plan, and scene evaluation" className="flex items-center gap-1 px-2 py-1 bg-port-card border border-port-border rounded text-xs">
-              <SlidersHorizontal className="w-3 h-3" /> Models
-            </button>
-            {project.workspace !== 'video' && (project.status === 'draft' || project.status === 'failed') && (
-              <button onClick={() => handleAction('start')} className="flex items-center gap-1 px-2 py-1 bg-port-accent/30 text-port-accent rounded text-xs">
-                <Play className="w-3 h-3" /> Start
-              </button>
-            )}
-            {project.workspace !== 'video' && project.status === 'paused' && (
-              <button onClick={() => handleAction('resume')} className="flex items-center gap-1 px-2 py-1 bg-port-accent/30 text-port-accent rounded text-xs">
-                <Play className="w-3 h-3" /> Resume
-              </button>
-            )}
-            {!['paused', 'complete', 'failed', 'draft'].includes(project.status) && (
-              <button onClick={() => handleAction('pause')} className="flex items-center gap-1 px-2 py-1 bg-port-card border border-port-border rounded text-xs">
-                <Pause className="w-3 h-3" /> Pause
-              </button>
-            )}
-            {!['complete', 'failed', 'draft'].includes(project.status) && (
-              isConfirmingStop(project.id) ? (
-                <ConfirmButtonPair
-                  prompt="Stop?"
-                  confirmText="Stop"
-                  ariaLabel={`Confirm stop project ${project.name}`}
-                  onConfirm={() => confirmStop(() => handleAction('stop'))}
-                  onCancel={cancelStop}
-                />
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => requestStop(project.id)}
-                  title="Stop: kill the running agent, retire its queued tasks, and cancel pending renders. Pause only stops NEW work being queued."
-                  aria-label={`Stop project ${project.name}`}
-                  className="flex items-center gap-1 px-2 py-1 bg-port-card border border-port-border rounded text-xs hover:text-port-error"
-                >
-                  <Square className="w-3 h-3" /> Stop
-                </button>
-              )
-            )}
-            {isConfirmingDelete(project.id) ? (
+          )}
+          {!['complete', 'failed', 'draft'].includes(project.status) && (
+            isConfirmingStop(project.id) ? (
               <ConfirmButtonPair
-                prompt="Delete?"
-                confirmText="Delete"
-                ariaLabel={`Confirm delete project ${project.name}`}
-                onConfirm={() => confirmDelete(handleDelete)}
-                onCancel={cancelDelete}
+                prompt="Stop?"
+                confirmText="Stop"
+                ariaLabel={`Confirm stop project ${project.name}`}
+                onConfirm={() => confirmStop(() => handleAction('stop'))}
+                onCancel={cancelStop}
               />
             ) : (
               <button
                 type="button"
-                onClick={() => requestDelete(project.id)}
-                disabled={deleting}
-                title={deleting ? 'Deleting Creative Director project…' : 'Delete this Creative Director project'}
-                aria-label={`${deleting ? 'Deleting' : 'Delete'} project ${project.name}`}
-                aria-busy={deleting}
-                className="flex items-center gap-1 px-2 py-1 bg-port-card border border-port-border rounded text-xs hover:bg-port-error/20 hover:text-port-error disabled:opacity-50"
+                onClick={() => requestStop(project.id)}
+                title="Stop: kill the running agent, retire its queued tasks, and cancel pending renders. Pause only stops NEW work being queued."
+                aria-label={`Stop project ${project.name}`}
+                className="flex items-center gap-1 px-2 py-1 bg-port-card border border-port-border rounded text-xs hover:text-port-error"
               >
-                <Trash2 className="w-3 h-3" /> {deleting ? 'Deleting…' : 'Delete'}
+                <Square className="w-3 h-3" /> Stop
               </button>
-            )}
-          </div>
-        </div>
-        <TabPills tabs={tabs} activeTab={activeTab} onChange={goTo} mobileCompact ariaLabel="Video project sections" className="mt-3" />
+            )
+          )}
+          {isConfirmingDelete(project.id) ? (
+            <ConfirmButtonPair
+              prompt="Delete?"
+              confirmText="Delete"
+              ariaLabel={`Confirm delete project ${project.name}`}
+              onConfirm={() => confirmDelete(handleDelete)}
+              onCancel={cancelDelete}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => requestDelete(project.id)}
+              disabled={deleting}
+              title={deleting ? 'Deleting Creative Director project…' : 'Delete this Creative Director project'}
+              aria-label={`${deleting ? 'Deleting' : 'Delete'} project ${project.name}`}
+              aria-busy={deleting}
+              className="flex items-center gap-1 px-2 py-1 bg-port-card border border-port-border rounded text-xs hover:bg-port-error/20 hover:text-port-error disabled:opacity-50"
+            >
+              <Trash2 className="w-3 h-3" /> {deleting ? 'Deleting…' : 'Delete'}
+            </button>
+          )}
+        </>}
+      />
+      <div className="shrink-0 space-y-2 border-b border-port-border px-3 py-2 sm:px-4">
+        <RecordStatusLine
+          status={status}
+          nextAction={status.next}
+          onNextAction={runNext}
+          leading={<Link to={basePath} aria-label="Back to projects" className="text-port-text-muted hover:text-port-text"><ArrowLeft className="w-4 h-4" /></Link>}
+        />
+        <TabPills tabs={tabs} activeTab={activeTab} onChange={goTo} mobileCompact ariaLabel="Video project sections" />
       </div>
 
       <div className="flex-1 overflow-auto p-6">
+        {showCutAbove && <div className="mb-4"><VideoCutPanel project={project} /></div>}
         {project.workspace === 'video' && activeTab === 'review' && <VideoReviewPanel key={project.id} project={project} onChange={fetchProject} />}
 
         <ActiveAgentsBanner agents={activeAgents} />
         {project.workspace === 'video' && activeTab === 'overview' && <section className="space-y-4">
           <h2 className="text-lg font-medium">Video production</h2>
-          <p className="text-port-text-muted">Stage: {project.status}. Start authorizes the saved choices within your limits. Enabled review checkpoints pause for your approval.</p>
+          <p className="text-port-text-muted">Start authorizes the saved choices within your limits. Enabled review checkpoints pause for your approval.</p>
           <p className="whitespace-pre-wrap">{project.userStory || 'Add a brief to describe this video.'}</p>
           <p className="text-sm">Exact target: {project.targetDurationSeconds} seconds (requested: {project.videoDraft?.durationRange?.min}–{project.videoDraft?.durationRange?.max} seconds) · {project.aspectRatio} · {project.quality}</p>
           <p className="text-sm">Review: {project.videoDraft?.reviewPolicy || 'review'} · Checkpoints: {(project.videoDraft?.checkpoints || []).join(', ')}</p>
-          {['draft', 'paused', 'failed'].includes(project.status) && <button onClick={() => setEditingDraft(true)} className="px-3 py-2 rounded bg-port-accent text-white">{project.status === 'draft' ? 'Edit draft' : 'Edit production settings'}</button>}
           <VideoCutPanel project={project} />
           <VideoExecutionPanel key={project.id} project={project} onChange={fetchProject} basePath={basePath} />
-          <VideoDraftDrawer open={editingDraft} onClose={() => setEditingDraft(false)} project={project} onSaved={saved => setProject(prev => ({ ...prev, ...saved }))} />
         </section>}
         {project.workspace !== 'video' && activeTab === 'overview' && (
           <OverviewTab
@@ -308,6 +309,9 @@ function CreativeDirectorProject({ id, basePath }) {
         {activeTab === 'segments' && <SegmentsTab project={project} activeAgents={activeAgents} basePath={basePath} onChange={fetchProject} />}
         {activeTab === 'runs' && <RunsTab project={project} />}
       </div>
+
+      {/* Page-level, not inside the Overview: the status line's "Edit draft" opens it from any tab. */}
+      {project.workspace === 'video' && <VideoDraftDrawer open={editingDraft} onClose={() => setEditingDraft(false)} project={project} onSaved={saved => setProject(prev => ({ ...prev, ...saved }))} />}
 
       <CreativeDirectorModelsDrawer
         open={modelsOpen}

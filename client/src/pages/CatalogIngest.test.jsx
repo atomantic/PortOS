@@ -377,3 +377,36 @@ it('retains the operation key after a lost response and rotates it for edited re
   await waitFor(() => expect(commit()).not.toBeDisabled());
   expect(commitCatalogScrapDraft.mock.lastCall[2].operationKey).not.toBe(firstKey);
 });
+
+// #9943: the Brain notes are consumed by the commit request itself. A follow-up
+// client call after the commit is lost on a reload, leaving the notes
+// re-sendable; riding the commit leaves no gap for that to happen in.
+it('sends the Brain handoff note ids with the commit of the scrap built from them', async () => {
+  const noteIds = ['3f1c0c52-8d5e-4b8e-9d3c-111111111111', '3f1c0c52-8d5e-4b8e-9d3c-222222222222'];
+  createCatalogScrap.mockResolvedValue({ scrap: { id: 'notes-scrap' } });
+  extractFromCatalogScrap.mockResolvedValue({
+    scrap: { id: 'notes-scrap' },
+    draft: { ideas: [{ name: 'A captured idea', summary: 'A useful fragment.' }] },
+  });
+  commitCatalogScrapDraft.mockResolvedValue({ ingredients: [{ id: 'cat-idea-1' }] });
+
+  render(
+    <MemoryRouter initialEntries={[{
+      pathname: '/catalog/ingest',
+      state: { prefill: { title: 'Creative notes from Brain', rawText: 'A captured idea.', creativeNoteIds: noteIds } },
+    }]}>
+      <CatalogIngest />
+    </MemoryRouter>,
+  );
+
+  await screen.findByDisplayValue('A captured idea.');
+  fireEvent.click(screen.getByRole('button', { name: 'Ingest' }));
+  await screen.findByDisplayValue('A captured idea');
+  fireEvent.click(screen.getByRole('button', { name: /Commit/ }));
+
+  await waitFor(() => expect(commitCatalogScrapDraft).toHaveBeenCalledWith(
+    'notes-scrap',
+    expect.any(Array),
+    expect.objectContaining({ creativeNoteIds: noteIds, operationKey: expect.any(String) }),
+  ));
+});

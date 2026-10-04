@@ -27,8 +27,10 @@ vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({}))
 vi.mock('../services/musicVideo/productionReviewService.js', async load => ({
   ...await load(), prepareProductionReview: vi.fn(async () => {}),
 }));
+const auth = vi.hoisted(() => ({ authenticated: true }));
 vi.mock('../services/auth.js', () => ({
   isAuthEnabled: async () => true,
+  verifyRequestSessionIdentity: async req => auth.authenticated ? { kind: 'session', sessionId: 'fixture-session', label: req.headers.authorization ? 'agent' : null } : null,
   verifyPassword: async password => password === 'synthetic-operator-password',
 }));
 
@@ -216,6 +218,26 @@ describe('POST /api/music-video/autonomous', () => {
       status: 'awaiting-approval', awaiting: 'song', stages: { song: { status: 'done' } },
       brief: { suno: { excludeStyles: 'metal', vocalGender: 'male', model: 'v6' } },
     });
+  });
+
+  it('requires a session for approval grants and audits an agent grant without storing legacy passwords', async () => {
+    const res = await begin({ prompt: 'p', checkpoints: ['lyrics'] });
+    const id = res.body.project.id;
+    await settle();
+    auth.authenticated = false;
+    const denied = await request(app).post(`/api/music-video/${id}/autonomous/resume`).send({ autoApprove: ['art'], password: 'synthetic-operator-password' });
+    expect(denied.status).toBe(401);
+    expect((await request(app).post(`/api/music-video/${id}/autonomous/resume`).send({ autoApprove: [] })).status).toBe(401);
+    expect((await get(id))).toMatchObject({ status: 'awaiting-approval', brief: { autoApprove: [] } });
+    auth.authenticated = true;
+    const granted = await request(app).post(`/api/music-video/${id}/autonomous/resume`).set('authorization', 'Bearer synthetic-agent')
+      .send({ autoApprove: ['storyboard', 'art', 'art'], password: 'synthetic-operator-password' });
+    expect(granted.status).toBe(200);
+    await settle();
+    const stored = await projects.getProject(id);
+    expect(stored.autonomousRun.brief).toMatchObject({ autoApprove: ['art', 'storyboard'], autoApproveAuthorizedAt: expect.any(String),
+      autoApproveAuthorizedBy: { kind: 'session', sessionId: 'fixture-session', label: 'agent' } });
+    expect(JSON.stringify(stored)).not.toContain('synthetic-operator-password');
   });
 
   it('cancels a live run, and refuses to cancel or resume one that is finished or absent', async () => {

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { StrictMode } from 'react';
 import { render, screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -81,6 +82,63 @@ beforeEach(() => {
 
 afterEach(() => {
   window.matchMedia = originalMatchMedia;
+});
+
+describe('overview loading outcomes', () => {
+  it('keeps a failed read visible and retries once without reloading optional data', async () => {
+    const user = userEvent.setup();
+    let resolveRetry;
+    api.getBrainGraph.mockRejectedValueOnce(new Error('Unavailable'))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveRetry = resolve; }));
+    await renderGraph();
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load the Brain graph');
+    expect(screen.queryByText(/No brain entities/)).not.toBeInTheDocument();
+    expect(api.getBrainGraph).toHaveBeenCalledWith({}, { silent: true });
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(api.getBrainGraph).toHaveBeenCalledTimes(2);
+    await act(async () => { resolveRetry(GRAPH); });
+
+    expect(screen.getByTestId('graph-canvas')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(api.getBrainGraphSearchIndex).toHaveBeenCalledTimes(1);
+    expect(api.getEmbeddingsStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the empty message only for a successful empty overview', async () => {
+    api.getBrainGraph.mockResolvedValue({ nodes: [], edges: [] });
+    await renderGraph();
+    expect(screen.getByText(/No brain entities to graph/)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+  });
+
+  it('renders the overview while optional reads are pending and preserves it when they reject', async () => {
+    let rejectIndex, rejectStatus;
+    api.getBrainGraphSearchIndex.mockImplementation(() => new Promise((_, reject) => { rejectIndex = reject; }));
+    api.getEmbeddingsStatus.mockImplementation(() => new Promise((_, reject) => { rejectStatus = reject; }));
+    await renderGraph();
+    expect(screen.getByTestId('graph-canvas')).toBeInTheDocument();
+    await act(async () => {
+      rejectIndex(new Error('Unavailable'));
+      rejectStatus(new Error('Unavailable'));
+    });
+    expect(screen.getByTestId('graph-canvas')).toBeInTheDocument();
+    expect(screen.queryByText(/No brain entities/)).not.toBeInTheDocument();
+  });
+
+  it('drops an obsolete mount response after effect cleanup', async () => {
+    let resolveObsolete;
+    api.getBrainGraph.mockImplementationOnce(() => new Promise(resolve => { resolveObsolete = resolve; }))
+      .mockResolvedValueOnce(GRAPH);
+    render(<StrictMode><BrainGraph /></StrictMode>);
+    await act(async () => {});
+    expect(screen.getByTestId('graph-canvas')).toBeInTheDocument();
+    await act(async () => { resolveObsolete({ nodes: [], edges: [] }); });
+    expect(screen.getByTestId('graph-canvas')).toBeInTheDocument();
+    expect(screen.queryByText(/No brain entities/)).not.toBeInTheDocument();
+  });
 });
 
 describe('reduced motion', () => {

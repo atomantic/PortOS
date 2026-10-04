@@ -18,6 +18,7 @@
  * stamps `filename` only when the jobId is still ours.
  */
 
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { mediaJobEvents } from '../mediaJobQueue/index.js';
 import { parseSeasonCoverOwner, slotKeyForVariant } from './owners.js';
 import * as seriesSvc from './series.js';
@@ -31,7 +32,8 @@ let registeredHandler = null;
 const runs = createHookRunTracker();
 
 const handler = (job) => {
-  void runs.track((async () => {
+  // Admitted synchronously so the stamp and cover filing are never split by a backup cut.
+  void runs.track(withBackupAssetPublication(async () => {
     if (!job || job.kind !== 'image') return;
     const filename = job.result?.filename;
     if (typeof filename !== 'string' || !filename) return;
@@ -74,7 +76,7 @@ const handler = (job) => {
       // cover never becomes the thumbnail, so skip the recompute for it.
       if (target === 'cover') await refreshSeriesCoverImage(seriesId);
     }
-  })().catch((err) => {
+  }).catch((err) => {
     console.error(`❌ seasonCover filename hook crashed: ${err?.message || err}`);
   }));
 };

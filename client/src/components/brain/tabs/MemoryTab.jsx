@@ -183,7 +183,10 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     setDetailResult(null);
     fetchRecord();
     return () => { active = false; };
-  }, [recordId, selectedType, listedRecord, records]);
+    // Deliberately not keyed on `records`: usePagedCollection hands out a new array on
+    // every reset/page landing, and each one would reset a resolved detail back to loading
+    // (dropping an open editor) even though the URL-selected record did not change.
+  }, [recordId, selectedType, listedRecord]);
 
   const detailResolved = detailResult?.id === recordId && detailResult?.type === selectedType;
   const viewerRecord = recordId ? ((detailResolved ? detailResult.record : null) || listedRecord) : null;

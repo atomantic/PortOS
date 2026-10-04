@@ -88,7 +88,7 @@ export const toolFreeLocalSelectionPolicy = (
  * Never infer CLI support from a command name, and never admit a TUI session.
  */
 export const supportsToolFreeOneShot = (provider) => provider?.enabled !== false
-  && (provider?.type === 'api' || provider?.type === 'cli' && provider.toolFreeOneShot === true);
+  && (provider?.type === 'api' || provider?.type === 'cli' && (provider.toolFreeOneShot === true || provider.authoringOneShot === true));
 
 // No compose modes: an unmaterialized CLI combination has no server capability
 // annotation yet. Existing pins still render through the selector's saved-value

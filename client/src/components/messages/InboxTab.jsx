@@ -8,6 +8,7 @@ import socket from '../../services/socket';
 import { timeAgo, formatDateNumeric } from '../../utils/formatters';
 import MessageDetail from './MessageDetail';
 import AddToThreadButton from '../threads/AddToThreadButton';
+import { messageReadState, partitionAccountsBySyncMode } from '../../lib/messageSyncModes';
 
 const ACTION_CONFIG = {
   reply:   { icon: Reply,   color: 'text-port-accent',  bg: 'bg-port-accent/10',  hoverBg: 'hover:bg-port-accent/20',  label: 'Reply' },
@@ -35,6 +36,9 @@ const TRIAGE_TABS = [
   { key: 'delete',    label: 'Delete',    icon: Trash2,  filter: m => m.evaluation?.action === 'delete' },
   { key: 'untriaged', label: 'Untriaged', icon: Mail,    filter: m => !m.evaluation },
 ];
+
+const READ_STATE_FROM_CLASS = { unread: 'text-white font-medium', unknown: 'text-gray-300', read: 'text-gray-400' };
+const READ_STATE_SUBJECT_CLASS = { unread: 'text-gray-300', unknown: 'text-gray-400', read: 'text-gray-500' };
 
 const EMPTY_ACTION_CLASS = 'inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm transition-colors disabled:opacity-50';
 
@@ -73,8 +77,10 @@ export function latestSyncAt(accounts) {
  * from `[]` ("loaded, and there are genuinely no accounts"); likewise a null
  * `lastSyncAt` means "never synced", not "synced and found nothing".
  */
-export function InboxEmptyState({ accounts, lastSyncAt, hasFilters, syncing, onSync, onClearFilters }) {
+export function InboxEmptyState({ accounts, lastSyncAt, hasFilters, syncing, onSync, onClearFilters, syncMode = 'unread' }) {
   const navigate = useNavigate();
+  // The label names the mode `onSync` will actually run — a Teams-only view has no unread sync.
+  const syncLabel = syncMode === 'full' ? 'Full Sync' : 'Sync Unread';
 
   const body = (() => {
     if (!Array.isArray(accounts)) return {
@@ -118,7 +124,7 @@ export function InboxEmptyState({ accounts, lastSyncAt, hasFilters, syncing, onS
           className={`${EMPTY_ACTION_CLASS} bg-port-accent/10 text-port-accent hover:bg-port-accent/20`}
         >
           <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
-          {syncing ? 'Syncing...' : 'Sync Unread'}
+          {syncing ? 'Syncing...' : syncLabel}
         </button>
       )
     };
@@ -149,7 +155,7 @@ export function InboxEmptyState({ accounts, lastSyncAt, hasFilters, syncing, onS
           className={`${EMPTY_ACTION_CLASS} bg-port-accent/10 text-port-accent hover:bg-port-accent/20`}
         >
           <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
-          {syncing ? 'Syncing...' : 'Sync Unread'}
+          {syncing ? 'Syncing...' : syncLabel}
         </button>
       )
     };
@@ -291,10 +297,12 @@ export default function InboxTab({ accounts }) {
   }, []);
 
   const handleSync = async (mode) => {
-    const targets = selectedAccount
-      ? accountList.filter(a => a.id === selectedAccount && a.enabled)
-      : accountList.filter(a => a.enabled);
-    if (targets.length === 0) return toast.error('No enabled accounts to sync');
+    if (syncTargets.length === 0) return toast.error('No enabled accounts to sync');
+    // Aggregate unread sync only runs on accounts that can measure read state; say
+    // which were left out so a skipped account never looks like a synced one.
+    const { supported: targets, excluded } = partitionAccountsBySyncMode(syncTargets, mode);
+    if (targets.length === 0) return toast.error(`Unread sync isn't available for ${excluded.map(a => a.name).join(', ')} — use Full Sync`);
+    if (excluded.length > 0) toast.warning(`Skipping ${excluded.map(a => a.name).join(', ')} — unread sync isn't available for ${excluded.length === 1 ? 'it' : 'them'}; use Full Sync`);
     setSyncing(true);
     let totalNew = 0;
     let totalPruned = 0;
@@ -406,6 +414,11 @@ export default function InboxTab({ accounts }) {
   // show — with an account filter on, another account's sync says nothing about
   // this one. A sync that landed in this session wins over the (not-yet-refetched)
   // account timestamps; absent both, these accounts have genuinely never synced.
+  // Enabled accounts a sync action in the current view would run on, and which
+  // sync actions that scope still offers (no unread action for a Teams-only view).
+  const syncTargets = useMemo(() => accountList.filter(a => a.enabled && (!selectedAccount || a.id === selectedAccount)), [accountList, selectedAccount]);
+  const unreadSyncExcluded = useMemo(() => partitionAccountsBySyncMode(syncTargets, 'unread').excluded, [syncTargets]);
+  const offerUnreadSync = syncTargets.length === 0 || unreadSyncExcluded.length < syncTargets.length;
   const lastSyncAt = useMemo(() => {
     const scoped = selectedAccount
       ? accountList.filter(a => a.id === selectedAccount)
@@ -477,15 +490,19 @@ export default function InboxTab({ accounts }) {
           <Sparkles size={14} className={evaluating ? 'animate-pulse' : ''} />
           {evaluating ? 'Evaluating...' : 'Triage'}
         </button>
-        <button
-          onClick={() => handleSync('unread')}
-          disabled={syncing}
-          className={`${toolbarBtn} bg-port-accent/10 text-port-accent hover:bg-port-accent/20`}
-          title="Sync unread messages from all enabled accounts"
-        >
-          <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
-          {syncing ? 'Syncing...' : 'Sync Unread'}
-        </button>
+        {offerUnreadSync && (
+          <button
+            onClick={() => handleSync('unread')}
+            disabled={syncing}
+            className={`${toolbarBtn} bg-port-accent/10 text-port-accent hover:bg-port-accent/20`}
+            title={unreadSyncExcluded.length > 0
+              ? `Sync unread messages — skips ${unreadSyncExcluded.map(a => a.name).join(', ')} (read state unavailable; use Full Sync)`
+              : 'Sync unread messages from all enabled accounts'}
+          >
+            <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
+            {syncing ? 'Syncing...' : 'Sync Unread'}
+          </button>
+        )}
         <button
           onClick={() => handleSync('full')}
           disabled={syncing}
@@ -551,7 +568,8 @@ export default function InboxTab({ accounts }) {
           lastSyncAt={lastSyncAt}
           hasFilters={hasFilters}
           syncing={syncing}
-          onSync={() => handleSync('unread')}
+          syncMode={offerUnreadSync ? 'unread' : 'full'}
+          onSync={() => handleSync(offerUnreadSync ? 'unread' : 'full')}
           onClearFilters={clearFilters}
         />
       )}
@@ -559,11 +577,13 @@ export default function InboxTab({ accounts }) {
       <div className="space-y-1">
         {visibleMessages.map((msg) => {
           const ev = msg.evaluation;
+          // 'unknown' (provider can't measure read state) renders neutrally, never as read or unread.
+          const readState = messageReadState(msg);
           return (
             <div
               key={msg.id}
               className={`flex flex-col gap-2 p-3 rounded-lg transition-colors hover:bg-port-card group min-w-0 sm:flex-row sm:items-center sm:gap-3 ${
-                msg.isRead && !msg.isUnread ? 'opacity-70' : ''
+                readState === 'read' ? 'opacity-70' : ''
               }`}
             >
               <div className="flex items-start gap-2 min-w-0 sm:items-center sm:gap-3 sm:flex-1">
@@ -580,14 +600,14 @@ export default function InboxTab({ accounts }) {
                 className="flex-1 min-w-0 text-left"
               >
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className={`text-sm truncate min-w-0 ${msg.isUnread || !msg.isRead ? 'text-white font-medium' : 'text-gray-400'}`}>
+                  <span className={`text-sm truncate min-w-0 ${READ_STATE_FROM_CLASS[readState]}`}>
                     {msg.from?.name || msg.from?.email || 'Unknown'}
                   </span>
                   <span className="text-xs text-gray-600 shrink-0">
                     {formatDateNumeric(msg.date)}
                   </span>
                 </div>
-                <div className={`text-sm truncate ${msg.isUnread || !msg.isRead ? 'text-gray-300' : 'text-gray-500'}`}>
+                <div className={`text-sm truncate ${READ_STATE_SUBJECT_CLASS[readState]}`}>
                   {msg.subject || '(no subject)'}
                 </div>
                 <div className="text-xs text-gray-600 truncate">

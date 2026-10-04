@@ -32,7 +32,11 @@ case "$1" in
           empty) exit 1 ;;
           *) printf '%s' "$FULL_DUMP"; exit 0 ;;
         esac ;;
-      *psql*) echo IMPORT >> "$STUB_LOG"; cat >> "$IMPORT_LOG"; exit 0 ;;
+      *psql*)
+        echo IMPORT >> "$STUB_LOG"
+        # docker exec forwards stdin only when interactive mode is enabled.
+        case " $* " in *" -i "*) cat >> "$IMPORT_LOG" ;; esac
+        exit 0 ;;
     esac ;;
 esac
 exit 0
@@ -84,8 +88,14 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     root = mkdtempSync(join(tmpdir(), 'portos-db-sh-'));
     mkdirSync(join(root, 'scripts'));
     copyFileSync(join(here, 'db.sh'), join(root, 'scripts', 'db.sh'));
+    copyFileSync(join(here, 'prepare-database-replay.mjs'), join(root, 'scripts', 'prepare-database-replay.mjs'));
+    mkdirSync(join(root, 'server', 'services'), { recursive: true });
+    copyFileSync(join(here, '../server/services/backupDatabaseDump.js'), join(root, 'server/services/backupDatabaseDump.js'));
+    copyFileSync(join(here, '../server/services/databaseImport.js'), join(root, 'server/services/databaseImport.js'));
+    writeFileSync(join(root, 'package.json'), '{"type":"module"}');
     const binDir = join(root, 'bin');
     mkdirSync(binDir);
+    symlinkSync(process.execPath, join(binDir, 'node'));
     writeStub(binDir, 'docker', DOCKER_STUB);
     writeStub(binDir, 'psql', PSQL_STUB);
     writeStub(binDir, 'pg_dump', PG_DUMP_STUB);
@@ -222,6 +232,44 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     expect(invoke(['import', ...endpoint, dump]).status).not.toBe(0);
     expect(readFileSync(stubLog, 'utf8')).toBe('');
     expect(dumps()).toEqual([]);
+  });
+
+  it('imports legacy extension metadata through a private copy without changing stored data', async () => {
+    const { databaseImportFixture } = await import('../server/test/fixtures/databaseImportDump.js');
+    const { original, replay } = databaseImportFixture();
+    const file = join(root, 'legacy.sql');
+    writeFileSync(file, original);
+    const result = run(['import', '--endpoint', 'example.invalid', '6543', 'example', 'example_test', file], 'ok');
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(importLog)).toEqual(replay);
+    expect(readFileSync(file)).toEqual(original);
+    // A changed original identity must fail before the target sees any bytes.
+    rmSync(importLog);
+    const rejected = run(['import', '--endpoint', 'example.invalid', '6543', 'example', 'example_test', file], 'ok', {
+      PORTOS_IMPORT_SHA256: '0'.repeat(64),
+    });
+    expect(rejected.status).not.toBe(0);
+    expect(existsSync(importLog)).toBe(false);
+  });
+
+  it('forwards the complete staged replay through Docker when host psql is absent', () => {
+    const isolated = join(root, 'docker-only-bin');
+    mkdirSync(isolated);
+    for (const name of ['bash', 'cat', 'dirname', 'mktemp', 'rm', 'grep', 'cut', 'tr']) {
+      const binary = ['/usr/bin', '/bin'].map(dir => join(dir, name)).find(existsSync);
+      symlinkSync(binary, join(isolated, name));
+    }
+    for (const name of ['node', 'docker', 'uname']) {
+      symlinkSync(join(root, 'bin', name), join(isolated, name));
+    }
+    const dump = join(root, 'docker-import.sql');
+    writeFileSync(dump, FULL_DUMP);
+    const result = run(['import', dump], 'ok', { PATH: isolated });
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(importLog), 'Docker must receive SQL on stdin').toBe(true);
+    expect(readFileSync(importLog, 'utf8')).toBe(FULL_DUMP);
+    expect(result.stdout).toContain('Import complete');
+    expect(readFileSync(dump, 'utf8')).toBe(FULL_DUMP);
   });
 
   it('rejects incomplete endpoints and connection-string database overrides before any database command', () => {

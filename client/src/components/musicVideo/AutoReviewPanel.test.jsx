@@ -1,9 +1,9 @@
 /**
  * Auto-review panel (#8988) rendered with the real useMusicVideoAutoReview
  * hook over a mocked API and socket: a run starts only with the director's
- * explicit limits, the board submits exactly the sections a run hands out for
- * its own project, and a run stopped at a limit resumes only with the limits
- * the director raised.
+ * explicit limits, the board only REPORTS the sections the server submitted for
+ * its own project (the server generates them, #10014), and a run stopped at a
+ * limit resumes only with the limits the director raised.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useState } from 'react';
@@ -41,9 +41,9 @@ const limitRun = {
   attempts: [{ n: 1, excerptId: 'mve-1', review: null, revisionId: null }],
 };
 
-function Harness({ initial, submitSections }) {
+function Harness({ initial }) {
   const [project, setProject] = useState(initial);
-  const autoReview = useMusicVideoAutoReview({ project, replaceProject: setProject, submitSections });
+  const autoReview = useMusicVideoAutoReview({ project, replaceProject: setProject });
   return <AutoReviewPanel project={project} startSec={0} endSec={10} rangeValid rendering={false} autoReview={autoReview} />;
 }
 
@@ -54,7 +54,7 @@ beforeEach(() => {
 describe('AutoReviewPanel (#8988)', () => {
   it('starts a run with the limits the director set, and refuses to start without valid ones', async () => {
     api.startMusicVideoAutoReview.mockResolvedValue({ project: baseProject, run: { id: 'mvar-1', status: 'running' } });
-    render(<Harness initial={baseProject} submitSections={vi.fn()} />);
+    render(<Harness initial={baseProject} />);
     const start = screen.getByRole('button', { name: /start auto-review/i });
 
     fireEvent.change(screen.getByLabelText('Max reviews'), { target: { value: '0' } });
@@ -68,24 +68,22 @@ describe('AutoReviewPanel (#8988)', () => {
     ));
   });
 
-  it('submits exactly the sections a run hands out for THIS project', async () => {
-    const submitSections = vi.fn(async () => 1);
-    render(<Harness initial={baseProject} submitSections={submitSections} />);
+  it('reports the sections the server itself submitted for THIS project, and never submits from the board (#10014)', async () => {
+    render(<Harness initial={baseProject} />);
     const running = { ...limitRun, status: 'running', stopReason: null };
     const project = { ...baseProject, autoReviews: [running] };
-    const handout = { type: 'generate', revisionId: 'mvr-1', sections: [{ sceneId: 's2', kind: 'video' }] };
+    const submitted = { type: 'wait', on: 'generation', revisionId: 'mvr-1', submitted: [{ sceneId: 's2', kind: 'video', jobId: 'job-1' }] };
 
-    act(() => listeners.get('music-video:auto-review')({ projectId: 'mv-other', run: running, project, action: handout }));
-    expect(submitSections).not.toHaveBeenCalled();
+    act(() => listeners.get('music-video:auto-review')({ projectId: 'mv-other', run: running, project, action: submitted }));
+    expect(screen.queryByText(/Generating 1 revised section/)).not.toBeInTheDocument();
 
-    act(() => listeners.get('music-video:auto-review')({ projectId: 'mv-1', run: running, project, action: handout }));
-    expect(submitSections).toHaveBeenCalledWith(project, handout.sections, 'mvr-1');
+    act(() => listeners.get('music-video:auto-review')({ projectId: 'mv-1', run: running, project, action: submitted }));
     expect(await screen.findByText(/Generating 1 revised section/)).toBeInTheDocument();
   });
 
   it('a run stopped at a limit resumes with the raised limit only', async () => {
     api.resumeMusicVideoAutoReview.mockResolvedValue({ project: baseProject, run: { ...limitRun, status: 'running' } });
-    render(<Harness initial={{ ...baseProject, autoReviews: [limitRun] }} submitSections={vi.fn()} />);
+    render(<Harness initial={{ ...baseProject, autoReviews: [limitRun] }} />);
     expect(screen.getByText('Reached the 1-review attempt limit')).toBeInTheDocument();
 
     fireEvent.change(screen.getAllByLabelText('Max reviews')[0], { target: { value: '3' } });

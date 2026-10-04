@@ -16,7 +16,7 @@ import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import BrailleSpinner from '../../BrailleSpinner';
 import useGraphNodeDetail from '../../../hooks/useGraphNodeDetail';
 import usePrefersReducedMotion from '../../../hooks/usePrefersReducedMotion';
-import { formatDateNumeric } from '../../../utils/formatters';
+import { formatDateNumeric, formatPercent } from '../../../utils/formatters';
 
 const EDGE_COLORS = {
   similar: '#3b82f6',
@@ -82,6 +82,9 @@ export const recordBody = (record) => {
 export default function BrainGraph() {
   const [graphData, setGraphData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [overviewError, setOverviewError] = useState(false);
+  const overviewRequest = useRef(0);
+  const overviewPending = useRef(false);
   const [subLoading, setSubLoading] = useState(false);
   const [selectedNode, setSelectedNode] = useState(null);
   const detailLoader = TYPE_GETTERS[selectedNode?.brainType];
@@ -107,19 +110,43 @@ export default function BrainGraph() {
 
   const focusId = currentFocusId(focusTrail);
 
-  // Initial load: bounded overview + lightweight search index + embedding gaps.
+  // Mount and retry share request ownership; cleanup invalidates late responses.
+  const loadOverview = useCallback(async () => {
+    if (overviewPending.current) return;
+    overviewPending.current = true;
+    const request = ++overviewRequest.current;
+    setLoading(true);
+    setOverviewError(false);
+    try {
+      const graph = await api.getBrainGraph({}, { silent: true });
+      if (request === overviewRequest.current) setGraphData(graph);
+    } catch {
+      if (request === overviewRequest.current) setOverviewError(true);
+    } finally {
+      if (request === overviewRequest.current) {
+        overviewPending.current = false;
+        setLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    loadOverview();
+    return () => {
+      overviewRequest.current += 1;
+      overviewPending.current = false;
+    };
+  }, [loadOverview]);
+
+  // Optional reads must not delay or replace the overview.
   useEffect(() => {
     let cancelled = false;
-    Promise.all([
-      api.getBrainGraph().catch(() => null),
-      api.getBrainGraphSearchIndex().catch(() => ({ nodes: [] })),
-      api.getEmbeddingsStatus().catch(() => null)
-    ]).then(([graph, index, status]) => {
-      if (cancelled) return;
-      setGraphData(graph);
-      setSearchIndex(index?.nodes || []);
-      setEmbeddingStatus(status);
-    }).finally(() => { if (!cancelled) setLoading(false); });
+    api.getBrainGraphSearchIndex({ silent: true }).catch(() => null).then(index => {
+      if (!cancelled) setSearchIndex(index?.nodes || []);
+    });
+    api.getEmbeddingsStatus({ silent: true }).catch(() => null).then(status => {
+      if (!cancelled) setEmbeddingStatus(status);
+    });
     return () => { cancelled = true; };
   }, []);
 
@@ -281,6 +308,17 @@ export default function BrainGraph() {
     return (
       <div className="flex items-center justify-center py-12">
         <BrailleSpinner text="Loading" />
+      </div>
+    );
+  }
+
+  if (overviewError) {
+    return (
+      <div className="text-center py-12 space-y-3">
+        <p role="alert" className="text-port-error">Could not load the Brain graph. Please try again.</p>
+        <button type="button" onClick={loadOverview} className="min-h-[44px] px-4 py-2 rounded-lg bg-port-accent text-white">
+          Retry
+        </button>
       </div>
     );
   }
@@ -690,7 +728,7 @@ export default function BrainGraph() {
                     <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: BRAIN_TYPE_HEX[cn.brainType] }} />
                     <span className="text-xs text-gray-300 truncate flex-1">{cn.label}</span>
                     <span className="text-[10px] text-gray-600 shrink-0">
-                      {cn.edgeType === 'linked' ? 'linked' : cn.edgeType === 'shared_tag' ? 'tag' : `${((cn.weight || 0) * 100).toFixed(0)}%`}
+                      {cn.edgeType === 'linked' ? 'linked' : cn.edgeType === 'shared_tag' ? 'tag' : formatPercent((cn.weight || 0) * 100, { decimals: 0 })}
                     </span>
                   </button>
                 ))}

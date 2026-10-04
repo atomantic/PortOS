@@ -671,6 +671,39 @@ describe('host-control authority', () => {
     expect(await handshake('192.0.2.10', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' })).toBe(false);
     expect(socketHasHostControl({ handshake: { address: '127.0.0.1' } })).toBe(false);
   });
+
+  it('revalidates live socket sessions at dispatch and preserves password-free locality', async () => {
+    const auth = await import('./auth.js');
+    const { token: cookieToken } = await auth.setPassword({ newPassword: 'correct-horse' });
+    const bearerSession = await auth.createSession();
+    const { socketHasCurrentHostControl } = await import('./authGate.js');
+    const socketFor = (headers = {}, disconnected = false) => ({
+      handshake: { headers },
+      disconnected,
+    });
+
+    expect(await socketHasCurrentHostControl(socketFor({ cookie: `portos_auth=${cookieToken}` }))).toBe(true);
+    expect(await socketHasCurrentHostControl(socketFor({ authorization: `Bearer ${bearerSession.token}` }))).toBe(true);
+    expect(await socketHasCurrentHostControl(socketFor())).toBe(false);
+    expect(await socketHasCurrentHostControl(socketFor({ authorization: 'Basic fixture' }))).toBe(false);
+    expect(await socketHasCurrentHostControl(socketFor({ 'x-portos-peer-token': 'fixture' }))).toBe(false);
+    expect(await socketHasCurrentHostControl(socketFor({ authorization: `Bearer ${bearerSession.token}` }, true))).toBe(false);
+
+    await auth.revokeSession(bearerSession.token);
+    expect(await socketHasCurrentHostControl(socketFor({ authorization: `Bearer ${bearerSession.token}` }))).toBe(false);
+
+    const expiringSession = await auth.createSession();
+    vi.setSystemTime(expiringSession.expiresAt + 1);
+    expect(await socketHasCurrentHostControl(socketFor({ authorization: `Bearer ${expiringSession.token}` }))).toBe(false);
+    vi.useRealTimers();
+  });
+
+  it('keeps password-free socket host control limited to connected local sockets', async () => {
+    const { socketHasCurrentHostControl } = await import('./authGate.js');
+    expect(await socketHasCurrentHostControl({ data: { portosLocalConnection: true } })).toBe(true);
+    expect(await socketHasCurrentHostControl({ data: { portosLocalConnection: false } })).toBe(false);
+    expect(await socketHasCurrentHostControl({ data: { portosLocalConnection: true }, disconnected: true })).toBe(false);
+  });
 });
 
 describe('mounted host-control trailing slashes (#8950)', () => {

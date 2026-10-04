@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
+import { toastWorkflowError } from '../components/musicVideo/workflowErrorToast.jsx';
 import {
+  getMusicVideoProject,
   startMusicVideoAutoReview,
   resumeMusicVideoAutoReview,
   stopMusicVideoAutoReview,
@@ -19,24 +21,22 @@ const OUTCOME_TOASTS = {
  * Opt-in automatic review/retries (#8988). A run is started only by the
  * director, with explicit limits on reviews (`maxAttempts`) and paid
  * generations (`maxGenerations`); the server then renders the draft window,
- * reviews it, and revises only the flagged sections, reporting each step over
- * the `music-video:auto-review` socket event. This hook applies the pushed
- * project, and — while the board is open — submits the sections a run hands
- * out through the board's normal scene lanes (`submitSections`, from
- * `useMusicVideoRevisions`), tagged with the run's revision so the server's
- * enqueue guard charges them against the spend limit.
+ * reviews it, revises only the flagged sections and generates them itself
+ * (#10014) — so a run completes with no tab open and a tab never submits a
+ * second copy. It reports each step over the `music-video:auto-review` socket
+ * event; this hook only applies the pushed project and surfaces outcomes.
  *
  * Returns `{ busy, action, start(startSec, endSec, limits, reviewer), resume(runId, limits?), stop(runId), cancel(runId) }`
  * — `action` is the latest step the server reported for this project's run.
  */
-export default function useMusicVideoAutoReview({ project, replaceProject, submitSections } = {}) {
+export default function useMusicVideoAutoReview({ project, replaceProject } = {}) {
   const projectId = project?.id || null;
   const [busy, setBusy] = useState(false);
   const [action, setAction] = useState(null);
-  const handlers = useRef({ replaceProject, submitSections });
+  const handlers = useRef({ replaceProject });
   const lastStatus = useRef(new Map());
   useEffect(() => {
-    handlers.current = { replaceProject, submitSections };
+    handlers.current = { replaceProject };
   });
 
   useEffect(() => {
@@ -44,17 +44,8 @@ export default function useMusicVideoAutoReview({ project, replaceProject, submi
     setAction(null);
     const onAutoReview = (data) => {
       if (data?.projectId !== projectId) return;
-      const { replaceProject: replace, submitSections: submit } = handlers.current;
-      if (data.project) replace?.(data.project);
+      if (data.project) handlers.current.replaceProject?.(data.project);
       setAction(data.action || null);
-      // Only a RUNNING run's hand-out is submitted — never one that raced a pause.
-      // A run a production owns (#9066) is dispatched by the server, not the board.
-      if (data.action?.type === 'generate' && data.run?.status === 'running' && !data.run.productionRunId
-        && data.action.sections?.length && submit) {
-        submit(data.project, data.action.sections, data.action.revisionId).then((n) => {
-          if (n) toast.info(`Auto-review: generating ${n} revised section${n === 1 ? '' : 's'}`);
-        });
-      }
       const run = data.run;
       if (run?.id && lastStatus.current.get(run.id) !== run.status) {
         const seen = lastStatus.current.has(run.id);
@@ -66,6 +57,10 @@ export default function useMusicVideoAutoReview({ project, replaceProject, submi
     return () => socket.off('music-video:auto-review', onAutoReview);
   }, [projectId]);
 
+  // A refusal for an open revision links to it; reload so the banner can show
+  // a revision this tab never saw.
+  const reload = () => getMusicVideoProject(projectId, { silent: true }).then((next) => handlers.current.replaceProject?.(next));
+
   const call = (request) => {
     setBusy(true);
     return request()
@@ -74,7 +69,7 @@ export default function useMusicVideoAutoReview({ project, replaceProject, submi
         if (res?.run) lastStatus.current.set(res.run.id, res.run.status);
         return res;
       })
-      .catch((err) => { toast.error(err?.message || 'Auto-review request failed'); return null; })
+      .catch((err) => { toastWorkflowError(err, 'Auto-review request failed', { reload }); return null; })
       .finally(() => setBusy(false));
   };
 

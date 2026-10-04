@@ -9,9 +9,21 @@ import * as cos from '../services/cos.js';
 import * as agentOrchestrator from '../services/agentOrchestrator.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { toAgentListItems } from '../lib/cosAgentListProjection.js';
-import { validateRequest, resumeCosAgentSchema, relaunchCosAgentSchema } from '../lib/validation.js';
+import { validateRequest, resumeCosAgentSchema, relaunchCosAgentSchema, cosAgentFeedbackBodySchema, cosAgentBtwBodySchema } from '../lib/validation.js';
 
 const router = Router();
+
+const mergeAdmissionSchema = z.object({
+  agentId: z.string().min(1).max(200),
+  action: z.enum(['acquire', 'check', 'release']),
+  token: z.string().uuid().optional(),
+  outcome: z.enum(['merged', 'leave-open']).optional(),
+});
+router.post('/merge-admission', asyncHandler(async (req, res) => {
+  const input = validateRequest(mergeAdmissionSchema, req.body ?? {});
+  const { claimMergeAdmission } = await import('../services/cosMergeAdmission.js');
+  res.json(await claimMergeAdmission(input));
+}));
 
 // `reason` is persisted into task metadata + interpolated into logs; guard the
 // shape so a non-string body can't store `[object Object]`.
@@ -210,11 +222,7 @@ router.delete('/agents/:id', asyncHandler(async (req, res) => {
 
 // POST /api/cos/agents/:id/feedback - Submit feedback for completed agent
 router.post('/agents/:id/feedback', asyncHandler(async (req, res) => {
-  const { rating, comment } = req.body;
-
-  if (rating === undefined || !['positive', 'negative', 'neutral'].includes(rating)) {
-    throw new ServerError('rating must be positive, negative, or neutral', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { rating, comment } = validateRequest(cosAgentFeedbackBodySchema, req.body);
 
   // The service throws a ServerError — 404 when the agent is missing, 400
   // (INVALID_STATE) when it isn't completed — so no result-shape mapping here.
@@ -224,20 +232,12 @@ router.post('/agents/:id/feedback', asyncHandler(async (req, res) => {
 
 // POST /api/cos/agents/:id/btw - Send additional context to a running agent
 router.post('/agents/:id/btw', asyncHandler(async (req, res) => {
-  const { message } = req.body;
-
-  if (!message || typeof message !== 'string' || message.trim().length === 0) {
-    throw new ServerError('message is required and must be a non-empty string', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-
-  if (message.length > 5000) {
-    throw new ServerError('message must be 5000 characters or less', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { message } = validateRequest(cosAgentBtwBodySchema, req.body);
 
   // The service throws a ServerError — 404 when the agent is missing, 400
   // (INVALID_STATE) for the not-running / not-a-Claude-TUI refusals — so no
   // result-shape string-matching here.
-  const result = await cos.sendBtwToAgent(req.params.id, message.trim());
+  const result = await cos.sendBtwToAgent(req.params.id, message);
   res.json(result);
 }));
 

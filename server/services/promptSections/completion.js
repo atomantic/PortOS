@@ -13,6 +13,9 @@ import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../../lib
 import { LIGHT_CONTEXT_PROVIDER_TYPES, SIMPLIFY_INLINE_REVIEW } from './constants.js';
 import { buildCiMergeGateSteps, buildReviewLoopFollowUpSection, reviewPolicyToLoopMetadata, LEAVE_PR_OPEN_STEP } from './reviewLifecycle.js';
 
+import { localApiBaseUrl } from '../../lib/networkExposure.js';
+import { agentApiCurl } from '../../lib/agentApiToken.js';
+
 import { isTruthyMeta } from '../../lib/metadataFlags.js';
 export const NO_CHANGE_AUDIT_GUIDANCE = 'This audit may legitimately conclude that no change is needed. First verify the data this audit owns against authoritative sources. If the audited data is current, leave the worktree clean and do not run the commit, push, PR, or review steps below; write the completion sentinel when this provider uses one, or exit without committing when it does not. If a change is needed, continue through the normal workflow below.';
 
@@ -25,6 +28,8 @@ function withNoChangeAuditGuidance(guidance, noChangeSuccess) {
 const AUDIT_FLOW_GUIDANCE = 'Follow the bundled Better audit workflow through remediation, verification, PR publication, and cleanup. You own delivery: open the category PRs and merge into the repository default branch when current-head CI and configured reviews pass. If no external reviewers are configured, complete the internal review and merge after CI passes. This launch authorizes that merge by default; honor explicit --scan-only, --no-merge, and read-only constraints. Use plain git and the forge CLI when slash commands are unavailable. Do not stop at local commits or hand publication back to PortOS. A clean audit needs no PR. If any required gate is unavailable or fails, retain the work and report INCOMPLETE with the PR or branch and first unverified checkpoint.';
 
 const RECONCILE_FLOW_GUIDANCE = 'Follow the branch reconciliation task above for the named branches only, including its branch allowlist, author checks, review-only and superseded no-mutation rules, configured reviews, current-head CI, and merge gates. The task owns any authorized commit, push, PR creation, merge, and cleanup of those branches. There is no implicit commit, push, or merge-back of the coordinator checkout. Report each verified outcome or the retained branch and first unverified checkpoint before signaling completion.';
+
+const CHECKOUT_RECOVERY_GUIDANCE = 'Follow the app checkout recovery task above in the actual configured checkout. You own verified backups, backup refs, preservation branches and PRs, configured reviews, current-head required CI and merge gates, stash accounting, and final checkout verification against the latest origin default branch. Preserve active work and retain backups when blocked. Publish every unique change on a named branch with an open or merged PR; never push preservation work directly to the default branch. Existing commits may be preserved and published without making a new commit. PortOS performs no implicit commit, push, or worktree merge-back for this task. Report verified outcomes and PR URLs, or INCOMPLETE with retained work and the first unverified checkpoint; keep private paths and data out of public artifacts.';
 
 const RELEASE_FLOW_GUIDANCE = 'Follow the bundled release workflow through its final verification and report. It owns release delivery; do not stop at a prepared commit or hand publication back to PortOS. If it cannot complete, report INCOMPLETE and the first unverified checkpoint instead of claiming a successful release.';
 
@@ -128,6 +133,7 @@ export function buildCompletionGuidelineBullet({
     [COMPLETION_MODES.CLAIM_FLOW]: () => '**This is a self-managed claim flow.** Follow the claim prompt above through its phase-specific worktree, PR/MR, review, merge or human-handoff, and cleanup steps. Do NOT stop after committing or hand the lifecycle back to PortOS.',
     [COMPLETION_MODES.AUDIT_FLOW]: () => AUDIT_FLOW_GUIDANCE,
     [COMPLETION_MODES.RECONCILE_FLOW]: () => RECONCILE_FLOW_GUIDANCE,
+    [COMPLETION_MODES.CHECKOUT_RECOVERY]: () => CHECKOUT_RECOVERY_GUIDANCE,
     [COMPLETION_MODES.RELEASE_FLOW]: () => RELEASE_FLOW_GUIDANCE,
     [COMPLETION_MODES.READ_ONLY]: () => '**This is a read-only task.** Do NOT commit, push, or modify any files in the repository. Only read data and generate reports.',
     // A PR follow-up already carries its own PRIMARY OBJECTIVE section with the
@@ -172,6 +178,7 @@ const NO_COMMIT_TARGET_MODES = new Set([
   COMPLETION_MODES.DISCARD_WORKTREE,
   COMPLETION_MODES.CLAIM_FLOW,
   COMPLETION_MODES.RECONCILE_FLOW,
+  COMPLETION_MODES.CHECKOUT_RECOVERY,
   COMPLETION_MODES.RELEASE_FLOW,
   COMPLETION_MODES.AUDIT_FLOW,
   COMPLETION_MODES.READ_ONLY,
@@ -238,6 +245,10 @@ export function buildFallbackCompletionInstructions({
     [COMPLETION_MODES.AUDIT_FLOW]: () => ({
       step4: AUDIT_FLOW_GUIDANCE,
       gitHygiene: `- ${AUDIT_FLOW_GUIDANCE}`,
+    }),
+    [COMPLETION_MODES.CHECKOUT_RECOVERY]: () => ({
+      step4: CHECKOUT_RECOVERY_GUIDANCE,
+      gitHygiene: `- ${CHECKOUT_RECOVERY_GUIDANCE}`,
     }),
     [COMPLETION_MODES.RECONCILE_FLOW]: () => ({
       step4: RECONCILE_FLOW_GUIDANCE,
@@ -439,6 +450,17 @@ export function buildActionOutputCompletionSection({ isTui = false, sentinelPath
   );
 }
 
+export function buildCheckoutRecoveryCompletionSection({ sentinelPath } = {}) {
+  return [
+    '## App Checkout Recovery Handoff',
+    CHECKOUT_RECOVERY_GUIDANCE,
+    '',
+    'After recovery reaches its verified final outcome or a precise blocker, write the completion sentinel and stop:',
+    '',
+    ...buildSentinelWriteSteps(1, sentinelPath, '   ## Recovery outcome\n   <verified checkout and preservation PR outcomes, or INCOMPLETE with the first unverified checkpoint>'),
+  ].join('\n');
+}
+
 export function buildReconcileFlowCompletionSection({ sentinelPath } = {}) {
   return [
     '## Branch Reconciliation Handoff',
@@ -547,13 +569,34 @@ export function buildClaimResumeOverride({ priorAgentId, branchName, worktreePat
   ].join('\n');
 }
 
-export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', leavePrOpen = false, prCompletion = null, claimResume = null } = {}) {
+/** Only the registered parent acquires; swarm workers keep authoring in parallel. */
+function buildMergeAdmissionSection(agentId) {
+  if (!agentId) return 'Merge admission requires a registered parent agent ID. If none was supplied, leave the reviewed PR open and report this missing ownership binding; do not merge.';
+  const command = (action, extra = {}) => agentApiCurl({ apiBase: localApiBaseUrl(), path: '/api/cos/merge-admission',
+    payload: JSON.stringify({ agentId, action, ...extra }) });
+  return [
+    '## Repository merge admission',
+    'After local review and PR publication, the parent orchestrator (never a fan-out child) must acquire admission immediately BEFORE the final base sync, pregate/push, current-head CI wait and merge. This applies to a single issue and separately to each ready PR in a swarm. Implementation/review and initial PR publication stay concurrent.',
+    'Run the following and require a parsed JSON response with admitted:true and a nonempty token; retain that token privately for check/release:',
+    '```bash', command('acquire'), '```',
+    'If admitted:false, report the reason and wait retryAfterMs (15 seconds), with a progress update at least every minute. Retry for at most 30 minutes, then record a leave-open outcome and finish with the PR and claim intact. An HTTP/auth/transport error, unreadable JSON, or missing admission is a refusal, never permission to proceed. Do not modify another owner’s branch, checkout or lease.',
+    'Keep admission through final sync, pregate, push, CI, merge and cleanup. Replace TOKEN below with the returned token; check admission before each push or merge, and require admitted:true:',
+    '```bash', command('check', { token: 'TOKEN' }), '```',
+    'Admission coordinates participating runs on this install only. Manual merges and other installs can still advance the base: re-read the live default-branch SHA before merging; if it moved, sync again, rerun pregate and require fresh CI on the resulting head. Never bypass CI, infer success from absent checks, or treat auto-merge/queued as MERGED.',
+    'After a verified remote MERGED result and cleanup, release with outcome merged. On a recorded failure or leave-open handoff, release with outcome leave-open instead. Require released:true; report a failed release without deleting or overwriting ownership state:',
+    '```bash', command('release', { token: 'TOKEN', outcome: 'merged' }), '```',
+    'A completed child, empty cwd process list, old timestamp, or CI wait is not proof that the parent has stopped. Only the server may recover a lease after verifying its registered owner completed.',
+  ].join('\n');
+}
+
+export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', leavePrOpen = false, prCompletion = null, claimResume = null, agentId = null } = {}) {
   const isMergeOnGreen = prCompletion === PR_COMPLETIONS.MERGE_ON_GREEN;
   const pin = isMergeOnGreen ? '' : buildReviewerPinNote(reviewersCsv);
   const resumeOverride = buildClaimResumeOverride(claimResume || {});
   const lines = [
     ...(resumeOverride ? [resumeOverride, ''] : []),
     ...(pin ? [pin, ''] : []),
+    ...(!leavePrOpen ? [buildMergeAdmissionSection(agentId), ''] : []),
     '## Claim Workflow Handoff',
     ...(leavePrOpen ? [
       'PR completion policy: LEAVE OPEN for further human review. This overrides any merge, auto-merge, issue-close, or merged-branch cleanup instruction in the claim prompt and delegated slashdo commands. Do not pass --merge, enable auto-merge, merge the PR/MR, or close the issue/ticket.',
@@ -618,6 +661,7 @@ export function buildAutoMergeCommitStep(baseBranch = null) {
 export function worktreeCommitGuidance({ isTui, mode = null, canTypeSlashCommands = false, rendersInlinePrLifecycle = false, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow = false, noChangeSuccess = false }) {
   if (mode === COMPLETION_MODES.AUDIT_FLOW) return AUDIT_FLOW_GUIDANCE;
   if (mode === COMPLETION_MODES.RECONCILE_FLOW) return RECONCILE_FLOW_GUIDANCE;
+  if (mode === COMPLETION_MODES.CHECKOUT_RECOVERY) return CHECKOUT_RECOVERY_GUIDANCE;
   if (mode === COMPLETION_MODES.RELEASE_FLOW) return RELEASE_FLOW_GUIDANCE;
   if (discardWorktree) return DISCARD_WORKTREE_NOTE;
   if (claimFlow) return 'The claim workflow in the Completion section owns the push, PR/MR, review, merge or human-handoff, and cleanup steps.';

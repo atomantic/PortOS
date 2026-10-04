@@ -31,12 +31,13 @@ accessibility). Feature-specific components live under their own feature directo
 | `OverflowMenu` | "…" menu that demotes rare or destructive row actions out of the visible control set. |
 | `PageSkeleton` | Full-page loading skeleton that reserves the loaded layout so the first paint doesn't reflow. |
 | `Pill` | Inline label badge — semantic tone, optional icon, `sm`/`xs` sizes. |
-| `ProcessLogLines` | Renders a PM2 process's log lines (the body of a log pane). |
+| `ProcessLogLines` | Renders a PM2 process's log lines (the body of a log pane) from `useProcessLogs` `status`, with an unavailable notice + Retry for ended streams; also exports `LogStreamBadge`. |
 | `ProcessLogModal` | Self-contained viewer for a PM2 process's system log. |
 | `ProgressBar` | Horizontal progress meter — `percent` (or `null` for indeterminate), semantic `tone`, and the ARIA trio with an accessible name from `label`. |
 | `ProseEditor` | Prose-writing textarea — serif face, relaxed leading, spellcheck. Markdown string in/out. |
 | `ProvenanceChip` | Chip + popover showing where a generated value came from. |
 | `SideBySideDiff` | Columnar word-level diff — old left, new right. |
+| `RecordStatusLine` | One status row under a multi-stage record's title — stage in words (toned for waiting / failed), short facts, and a single next-action button (the Music Video status-line pattern, #9858). |
 | `Skeleton` | Loading-placeholder primitives (`SkeletonBlock` / `Lines` / `Card` / `Rows` / `Region`) — what `PageSkeleton` is built from, and what a sub-region loader should reserve its shape with instead of a bare spinner. |
 | `TabPills` | Shared tab nav — `underline` / `pills` / `filter` (toggle chips) families; `mobileCompact` collapses it to an icon row under `sm` (labelled `<select>` when a tab has no icon). |
 | `Toast` | Toast notification system (`toast()`, `.success()`, `.error()`, `.loading()`, `<Toaster />`). |

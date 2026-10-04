@@ -25,7 +25,6 @@ describe('VideoGen compose-while-busy', () => {
     state.getVideoGenModelContext.mockResolvedValue(videoGenModelContext([MODEL]));
     state.modelStatuses = { [MODEL.id]: { id: MODEL.id, repo: MODEL.repo, cached: true, sizeBytes: 100 } };
     state.generateVideo.mockReturnValue(new Promise(() => {}));
-    state.attach.mockReturnValue(new Promise(() => {}));
     vi.stubGlobal('open', vi.fn());
     Object.defineProperty(globalThis.navigator, 'clipboard', {
       configurable: true,

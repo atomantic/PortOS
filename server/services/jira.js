@@ -690,23 +690,6 @@ export async function getTransitions(instanceId, ticketId) {
 }
 
 /**
- * Delete a JIRA ticket
- */
-export async function deleteTicket(instanceId, ticketId) {
-  const config = await getInstances();
-  const instance = config.instances[instanceId];
-
-  if (!instance) {
-    throw instanceNotFound(instanceId);
-  }
-
-  const client = createJiraClient(instance);
-  await client.delete(`/rest/api/2/issue/${encodeURIComponent(ticketId)}`);
-
-  return { success: true, ticketId };
-}
-
-/**
  * Transition JIRA ticket (change status)
  */
 export async function transitionTicket(instanceId, ticketId, transitionId) {
@@ -1094,7 +1077,6 @@ export default {
   updateTicket,
   addComment,
   getTransitions,
-  deleteTicket,
   transitionTicket,
   getMyCurrentSprintTickets,
   fetchMyCurrentSprintTickets,

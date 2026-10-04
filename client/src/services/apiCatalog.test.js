@@ -112,3 +112,14 @@ it('serializes the commit operation key into the HTTP body while retaining reque
   expect(options.silent).toBe(true);
   expect(options).not.toHaveProperty('operationKey');
 });
+
+it('serializes the source note ids so the server can consume them in the commit request', async () => {
+  const { commitCatalogScrapDraft } = await import('./apiCatalog.js');
+  const creativeNoteIds = ['3f1c0c52-8d5e-4b8e-9d3c-111111111111'];
+  await commitCatalogScrapDraft('example-scrap', [], { creativeNoteIds, silent: true });
+  const [, options] = request.mock.lastCall;
+  expect(JSON.parse(options.body)).toEqual({ accepted: [], creativeNoteIds });
+  expect(options).not.toHaveProperty('creativeNoteIds');
+  await commitCatalogScrapDraft('example-scrap', [], { creativeNoteIds: [], silent: true });
+  expect(JSON.parse(request.mock.lastCall[1].body)).toEqual({ accepted: [] });
+});

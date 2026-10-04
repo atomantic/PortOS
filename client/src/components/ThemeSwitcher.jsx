@@ -19,7 +19,7 @@ export default function ThemeSwitcher({ position = 'above', className = '' }) {
     triggerRef,
     popoverRef: menuRef,
     style: menuStyle,
-  } = usePopoverPosition({ open, width: MENU_WIDTH, minWidth: 180, gap: 8, position });
+  } = usePopoverPosition({ open, width: MENU_WIDTH, minWidth: 180, gap: 8, position, constrainHeight: true });
 
   const close = useCallback((refocus) => {
     setOpen(false);
@@ -108,11 +108,12 @@ export default function ThemeSwitcher({ position = 'above', className = '' }) {
           role="menu"
           aria-label="Interface theme"
           onKeyDown={handleMenuKeyDown}
-          className="fixed max-w-[calc(100vw-1rem)] bg-port-card border border-port-border rounded-xl shadow-xl z-[100] p-2"
+          className="fixed max-w-[calc(100vw-1rem)] overflow-y-auto bg-port-card border border-port-border rounded-xl shadow-xl z-[100] p-2"
           style={{
             left: menuStyle?.left ?? `${VIEWPORT_PADDING}px`,
             top: menuStyle?.top ?? `${VIEWPORT_PADDING}px`,
             width: menuStyle?.width ?? `${MENU_WIDTH}px`,
+            maxHeight: menuStyle?.maxHeight,
             visibility: menuStyle ? 'visible' : 'hidden',
           }}
         >

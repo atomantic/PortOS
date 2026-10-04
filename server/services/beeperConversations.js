@@ -25,7 +25,8 @@
 import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { resolveLinkedPersonId } from '../lib/tribeMatch.js';
-import { updateChat } from './beeperClient.js';
+import { markRead, updateChat } from './beeperClient.js';
+import { getSettings } from './settings.js';
 import {
   getConversationAttachmentBytes,
   purgeConversationAttachments,
@@ -135,6 +136,7 @@ function shapeConversation(row) {
     isArchived: row.is_archived === true,
     isLowPriority: row.is_low_priority === true,
     isMuted: row.is_muted === true,
+    snoozeUntil: toIso(row.snooze_until),
     lastActivity: toIso(row.last_activity),
     unreadCount: isSeenLocally(row) ? 0 : (Number(row.unread_count) || 0),
     // `null` = this conversation has no mirrored message yet, which is
@@ -270,7 +272,7 @@ async function attachParticipants(conversations, { cap = LIST_PARTICIPANT_CAP } 
  * happens to choose (audit cluster 06, indexes and query plans).
  */
 export async function listConversations({
-  network, unreadOnly, archived, lowPriority, limit, cursor,
+  network, unreadOnly, archived, lowPriority, snoozed, search, limit, cursor,
 } = {}) {
   const pageSize = clampLimit(limit, DEFAULT_CONVERSATION_LIMIT, MAX_CONVERSATION_LIMIT);
   const params = [];
@@ -292,6 +294,19 @@ export async function listConversations({
   if (typeof lowPriority === 'boolean') {
     params.push(lowPriority);
     where.push(`c.is_low_priority = $${params.length}`);
+  }
+
+  if (typeof snoozed === 'boolean') {
+    const activeSnooze = '(c.snooze_until IS NOT NULL AND c.snooze_until > NOW())';
+    where.push(snoozed ? activeSnooze : `NOT ${activeSnooze}`);
+  }
+
+  // Title search: a case-insensitive substring match with LIKE metacharacters
+  // escaped, so a query of `50%` finds "50%" rather than everything.
+  const term = typeof search === 'string' ? search.trim() : '';
+  if (term) {
+    params.push(`%${term.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`);
+    where.push(`c.title ILIKE $${params.length}`);
   }
 
   const decoded = decodeCursor(cursor, { idPattern: UUID_PATTERN });
@@ -500,23 +515,39 @@ export async function listNetworks() {
  * time only moves forward across calls to the same row, so the two are
  * equivalent here and the plain assignment says that more plainly.
  *
- * TODO(#83): a settings toggle to also send a real read receipt through
- * Beeper's own API is the natural next wave — it would PATCH-then-mirror the
- * same way `setConversationFlag` does, gated behind that toggle and its own
- * consent step, and default OFF. Out of scope for this change.
+ * The ONE exception is the opt-in read receipt (#9985): when
+ * `settings.beeper.sendReadReceipts` is true (default OFF, enabled only through
+ * the settings consent step) and the thread had unseen activity, a best-effort
+ * `markRead` also tells Beeper the chat was read. The local stamp is written
+ * FIRST and is the source of truth for the badge, so a Beeper failure is logged
+ * and swallowed — it must never un-see a thread the user is looking at, and the
+ * route is called silently on every thread open.
  */
 export async function markConversationSeen(conversationId) {
   const found = await query(
-    'SELECT id FROM beeper_conversations WHERE id = $1',
+    'SELECT id, source_chat_id, seen_at, last_activity, created_at FROM beeper_conversations WHERE id = $1',
     [conversationId],
   );
-  if (!found?.rows?.[0]) throw new ServerError('Conversation not found', { status: 404, code: 'NOT_FOUND' });
+  const row = found?.rows?.[0];
+  if (!row) throw new ServerError('Conversation not found', { status: 404, code: 'NOT_FOUND' });
+  const hadUnseenActivity = !isSeenLocally(row);
 
   await query(
     'UPDATE beeper_conversations SET seen_at = NOW(), updated_at = NOW() WHERE id = $1',
     [conversationId],
   );
+  if (hadUnseenActivity) await sendReadReceiptIfEnabled(row);
   return getConversation(conversationId);
+}
+
+async function sendReadReceiptIfEnabled(row) {
+  const settings = await getSettings().catch(() => null);
+  if (settings?.beeper?.sendReadReceipts !== true) return;
+  try {
+    await markRead(row.source_chat_id);
+  } catch (err) {
+    console.warn(`⚠️ Beeper read receipt failed for conversation ${row.id}: ${err.message}`);
+  }
 }
 
 // ---------------------------------------------------------------------------

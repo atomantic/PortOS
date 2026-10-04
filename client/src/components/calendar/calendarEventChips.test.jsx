@@ -29,6 +29,7 @@ import MonthView from './MonthView';
 import WeekView from './WeekView';
 import DayView from './DayView';
 import ChronotypeOverlay from './ChronotypeOverlay';
+import { formatDateFull } from '../../utils/formatters';
 
 // A pale entry from Google's own subcalendar palette — the class of color that
 // rendered near-invisible on the day themes.
@@ -73,23 +74,35 @@ it('keeps all-day membership consistent across Day, Week, and Month views', asyn
     allDay('previous', 'Previous day only', 22, 23),
     allDay('spanning', 'Spanning days', 21, 25),
     allDay('tomorrow', 'Tomorrow only', 24, 25),
+    { ...TIMED, id: 'overnight', title: 'Example overnight appointment', startTime: new Date(2026, 8, 22, 23).toISOString(), endTime: new Date(2026, 8, 23, 1).toISOString() },
   ]));
+  const checkDayList = async name => {
+    fireEvent.click(screen.getByRole('button', { name: name === 'Day' ? 'View day events' : `View day events for ${formatDateFull(new Date(2026, 8, 23))}` }));
+    const drawer = screen.getByRole('dialog');
+    expect(within(drawer).getByRole('button', { name: /Spanning days/ })).toBeInTheDocument();
+    expect(within(drawer).getByRole('button', { name: /Example overnight appointment/ })).toBeInTheDocument();
+    expect(within(drawer).queryByRole('button', { name: /Previous day only|Tomorrow only/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close day events' }));
+  };
 
   const mounted = render(<MemoryRouter><DayView accounts={ACCOUNTS} /></MemoryRouter>);
   await act(async () => {});
   expect(screen.getAllByRole('button', { name: 'Spanning days' })).toHaveLength(1);
   expect(screen.queryByRole('button', { name: 'Previous day only' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Tomorrow only' })).not.toBeInTheDocument();
+  await checkDayList('Day');
   mounted.unmount();
 
   const week = render(<MemoryRouter><WeekView accounts={ACCOUNTS} /></MemoryRouter>);
   await act(async () => {});
   expect(screen.getAllByRole('button', { name: 'Spanning days' })).toHaveLength(4);
+  await checkDayList('Week');
   week.unmount();
 
   render(<MemoryRouter><MonthView accounts={ACCOUNTS} /></MemoryRouter>);
   await act(async () => {});
   expect(screen.getAllByRole('button', { name: 'Spanning days' })).toHaveLength(4);
+  await checkDayList('Month');
 });
 
 /** The graded color for the ACTIVE mode, and for the other one. */
@@ -517,17 +530,18 @@ describe('Calendar window completeness', () => {
     }
   );
 
-  it('preserves partial Month events, retries the failed offset and deduplicates within each account', async () => {
+  it.each([['Day', DayView], ['Week', WeekView], ['Month', MonthView]])('%s day list preserves partial events, retries the failed offset and deduplicates within each account', async (name, View) => {
     const first = firstPage();
     let finishRetry;
     api.getCalendarEvents
       .mockResolvedValueOnce({ events: first, total: 203 })
       .mockRejectedValueOnce(new Error('Example page failure'))
       .mockImplementationOnce(() => new Promise(resolve => { finishRetry = resolve; }));
-    await mount(MonthView);
+    await mount(View);
     expect(screen.getByRole('alert')).toHaveTextContent(/incomplete.*empty times may still be busy/);
     expect(api.getCalendarEvents).toHaveBeenCalledTimes(2);
-    openDay();
+    if (name === 'Month') openDay();
+    else fireEvent.click(screen.getByRole('button', { name: name === 'Day' ? 'View day events' : `View day events for ${formatDateFull(new Date(2026, 8, 23))}` }));
     let drawer = screen.getByRole('dialog');
     expect(within(drawer).getByText('200 events loaded')).toBeInTheDocument();
     expect(within(drawer).getByRole('button', { name: /example-199$/ })).toBeInTheDocument();
@@ -592,4 +606,76 @@ describe('Calendar window completeness', () => {
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
     expect(api.getCalendarEvents).toHaveBeenCalledTimes(1);
   });
+});
+
+function CalendarHistory({ View }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  return <>
+    <button onClick={() => navigate(-1)}>Browser Back</button>
+    <output data-testid="calendar-url">{location.search}</output>
+    <View accounts={ACCOUNTS} />
+  </>;
+}
+
+// Uniquely catches short overlapping events being reachable only through tiny
+// blocks, plus loss of a non-current calendar window on detail/reload/Back.
+describe.each([
+  ['month', MonthView, 'month=2027-01', 'January 2027'],
+  ['week', WeekView, 'week=2027-01-10', null],
+  ['day', DayView, 'date=2027-01-12', formatDateFull(new Date(2027, 0, 12))],
+])('%s contextual event selection', (name, View, context, heading) => {
+  const events = Array.from({ length: 3 }, (_, i) => ({
+    ...TIMED, id: `short-${i}`, title: `Example simultaneous appointment ${i} with a long wrapped title`,
+    startTime: new Date(2027, 0, 12, 10).toISOString(),
+    endTime: new Date(2027, 0, 12, 10, 15).toISOString(),
+  }));
+  const openDay = () => fireEvent.click(screen.getByRole('button', {
+    name: name === 'day' ? 'View day events' : `View day events for ${formatDateFull(new Date(2027, 0, 12))}`,
+  }));
+
+  it('opens every short overlapping appointment and retains day and calendar context through reload and Back', async () => {
+    api.getCalendarEvents.mockResolvedValue(calendarPage(events));
+    const mounted = render(<MemoryRouter initialEntries={[`/calendar/${name}?${context}`]}><CalendarHistory View={View} /></MemoryRouter>);
+    await act(async () => {});
+    if (heading) expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
+    openDay();
+    expect(within(screen.getByRole('dialog')).getByText('3 events')).toBeInTheDocument();
+    for (const event of events) {
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: new RegExp(event.title) }));
+      expect(screen.getAllByRole('dialog')).toHaveLength(1);
+      expect(screen.getByRole('dialog', { name: event.title })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Browser Back' }));
+      expect(within(screen.getByRole('dialog')).getByText('3 events')).toBeInTheDocument();
+    }
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: new RegExp(events[2].title) }));
+    const reloadUrl = screen.getByTestId('calendar-url').textContent;
+    expect(reloadUrl).toContain(context);
+    expect(reloadUrl).toContain('day=2027-01-12');
+    mounted.unmount();
+    render(<MemoryRouter initialEntries={[`/calendar/${name}${reloadUrl}`]}><CalendarHistory View={View} /></MemoryRouter>);
+    await act(async () => {});
+    expect(screen.getByRole('dialog', { name: events[2].title })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close', exact: true }));
+    expect(within(screen.getByRole('dialog')).getByText('3 events')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close day events' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: `Next ${name}` }));
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Browser Back' }));
+    await act(async () => {});
+    expect(screen.getByTestId('calendar-url')).toHaveTextContent(context);
+    if (heading) expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
+  });
+});
+
+it('exposes a sparse Month date separately while preserving direct chip activation', async () => {
+  api.getCalendarEvents.mockResolvedValue(calendarPage([{
+    ...TIMED, startTime: new Date(2027, 0, 12, 10).toISOString(), endTime: new Date(2027, 0, 12, 10, 15).toISOString(),
+  }]));
+  await act(async () => render(<MemoryRouter initialEntries={['/calendar/month?month=2027-01']}><MonthView accounts={ACCOUNTS} /></MemoryRouter>));
+  fireEvent.click(screen.getByRole('button', { name: `View day events for ${formatDateFull(new Date(2027, 0, 12))}` }));
+  expect(within(screen.getByRole('dialog')).getByText('1 events')).toBeInTheDocument();
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /Design Review/ }));
+  expect(screen.getByRole('dialog', { name: 'Design Review' })).toBeInTheDocument();
 });

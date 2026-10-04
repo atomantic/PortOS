@@ -86,6 +86,8 @@ import {
   listChatsPage,
   listMessagesPage,
   getMessage,
+  getChat,
+  createChat,
 } from './beeperClient.js';
 import { upsertParticipant, logSenderTouchpoints, loadRosterIndex } from './beeperTribe.js';
 import { isInstanceFeatureEnabled } from './instanceFeatures.js';
@@ -219,6 +221,7 @@ export function normalizeChatRow(chat) {
     isArchived: chat?.isArchived === true,
     isLowPriority: chat?.isLowPriority === true,
     isMuted: chat?.isMuted === true,
+    snoozeUntil: toIsoOrNull(chat?.snooze?.snoozeUntil),
     lastActivity: toIsoOrNull(chat?.lastActivity),
     unreadCount: Number.isFinite(chat?.unreadCount) ? Math.max(0, Math.trunc(chat.unreadCount)) : 0,
   };
@@ -430,21 +433,44 @@ async function refreshAccounts(clientOptions) {
 async function upsertConversation(chat) {
   const result = await query(
     `INSERT INTO beeper_conversations (account_id, network, source_chat_id, title, type, is_group,
-       is_pinned, is_archived, is_low_priority, is_muted, last_activity, unread_count)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       is_pinned, is_archived, is_low_priority, is_muted, last_activity, unread_count, snooze_until)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
      ON CONFLICT (account_id, source_chat_id) DO UPDATE SET network = EXCLUDED.network,
        title = EXCLUDED.title, type = EXCLUDED.type, is_group = EXCLUDED.is_group,
        is_pinned = EXCLUDED.is_pinned, is_archived = EXCLUDED.is_archived,
        is_low_priority = EXCLUDED.is_low_priority, is_muted = EXCLUDED.is_muted,
        last_activity = COALESCE(EXCLUDED.last_activity, beeper_conversations.last_activity),
-       unread_count = EXCLUDED.unread_count, updated_at = NOW()
+       unread_count = EXCLUDED.unread_count, snooze_until = EXCLUDED.snooze_until, updated_at = NOW()
      RETURNING id`,
     [
       chat.accountId, chat.network, chat.sourceChatId, chat.title, chat.type, chat.isGroup,
-      chat.isPinned, chat.isArchived, chat.isLowPriority, chat.isMuted, chat.lastActivity, chat.unreadCount,
+      chat.isPinned, chat.isArchived, chat.isLowPriority, chat.isMuted, chat.lastActivity, chat.unreadCount, chat.snoozeUntil,
     ],
   );
   return result.rows[0]?.id ?? null;
+}
+
+/** User-triggered direct-chat creation. Reuse the sweep's mirror writer. */
+export async function createBeeperConversation({ accountId, participantId }) {
+  // Require a mirrored account before a remote write: the conversation FK
+  // would otherwise fail after Beeper had already created the chat.
+  const account = await query('SELECT account_id FROM beeper_accounts WHERE account_id = $1', [accountId]);
+  if (!account.rows.length) throw new BeeperApiError('Unknown Beeper account', { status: 404, code: 'CONVERSATION_NOT_FOUND' });
+  const options = await resolveBeeperConfig();
+  const created = await createChat(accountId, participantId, options);
+  // Older Desktop versions return only chatID; newer ones return the Chat.
+  const sourceId = created?.id || created?.chatID;
+  if (typeof sourceId !== 'string' || !sourceId) {
+    throw new BeeperApiError('Beeper returned no chat ID', { code: 'MALFORMED_RESPONSE' });
+  }
+  const chat = await getChat(sourceId, options);
+  if (chat?.id !== sourceId || chat?.accountID !== accountId) {
+    throw new BeeperApiError('Beeper returned a mismatched chat', { code: 'MALFORMED_RESPONSE' });
+  }
+  const id = await upsertConversation(normalizeChatRow(chat));
+  if (!id) throw new BeeperApiError('Could not mirror the created chat', { code: 'MALFORMED_RESPONSE' });
+  beeperSocketEvents.emit('invalidate', { kind: 'chats', chatID: sourceId });
+  return { id };
 }
 
 /** Shared transaction writer: source edit versions outrank fetch-start time.
@@ -659,7 +685,7 @@ async function sweepChat({
       senderId: message.senderId,
       sentAt: message.sentAt,
       network: normalized.network,
-    })));
+    })), { personIndex });
 
   await commitMessages({
     conversationId,
@@ -740,7 +766,24 @@ async function sweepAccount(account, clientOptions, observedAt, personIndex) {
 
     for (const chat of page.items) {
       const stored = cursors.get(String(chat?.id ?? ''));
-      if (!chatNeedsSweep(chat, stored)) continue;
+      if (!chatNeedsSweep(chat, stored)) {
+        // Snooze state can change without message activity. Refresh it on every
+        // enumerated chat without refetching history or rewriting unchanged rows.
+        const normalized = normalizeChatRow(chat);
+        if (normalized.accountId && normalized.sourceChatId) {
+          // eslint-disable-next-line no-await-in-loop -- one mirrored chat at a time
+          await query(
+            `UPDATE beeper_conversations SET snooze_until = $3, updated_at = NOW()
+              WHERE account_id = $1 AND source_chat_id = $2
+                AND snooze_until IS DISTINCT FROM $3::timestamptz`,
+            [normalized.accountId, normalized.sourceChatId, normalized.snoozeUntil],
+          ).catch((err) => {
+            failedChats++;
+            console.error(`❌ ${LOG_PREFIX}: chat state refresh failed: ${err.message}`);
+          });
+        }
+        continue;
+      }
       // eslint-disable-next-line no-await-in-loop -- one chat at a time; each is its own transaction
       const result = await sweepChat({
         chat, stored, clientOptions, observedAt, personIndex,

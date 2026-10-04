@@ -27,7 +27,7 @@ import { useProcessLogs } from '../../hooks/useProcessLogs';
  * @param {() => void} props.onDismiss Close the panel (does not stop the app).
  */
 export default function DesktopLaunchProgress({ appId, processName, online, relaunchLabel = 'Start', onDismiss }) {
-  const { logs, subscribed } = useProcessLogs(processName, { lines: 200, appId });
+  const { logs, status, statusDetail, retry } = useProcessLogs(processName, { lines: 200, appId });
   const scrollRef = useRef(null);
   // `online` is two-state, but the panel has three phases. Without remembering
   // that the process was ever up, a panel still open when the user closes the game
@@ -73,7 +73,7 @@ export default function DesktopLaunchProgress({ appId, processName, online, rela
         ref={scrollRef}
         className="m-4 mt-2 p-3 bg-port-bg border border-port-border rounded-lg font-mono text-xs h-48 overflow-y-auto"
       >
-        <ProcessLogLines logs={logs} subscribed={subscribed} />
+        <ProcessLogLines logs={logs} status={status} statusDetail={statusDetail} onRetry={retry} />
       </div>
     </div>
   );

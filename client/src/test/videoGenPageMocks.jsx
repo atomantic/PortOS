@@ -25,6 +25,7 @@
 import { act, render } from '@testing-library/react';
 import { MemoryRouter, useNavigate } from 'react-router';
 import { vi } from 'vitest';
+import { MockEventSource } from './mockEventSource';
 
 /** Universe style the stub picker hands to the page when its button is clicked. */
 const DEFAULT_UNIVERSE_STYLE = {
@@ -48,8 +49,6 @@ export const state = {
    */
   getVideoGenModelContext: vi.fn(),
   generateVideo: vi.fn(),
-  attach: vi.fn(),
-  eventSourceRef: { current: null },
   activeJob: null,
   /** Cache-status entries keyed by download id, read by the default `getModelStatus`. */
   modelStatuses: {},
@@ -93,7 +92,7 @@ export const state = {
   navigate: null,
 };
 
-const SPIES = ['getVideoGenStatus', 'getVideoGenModelContext', 'generateVideo', 'attach', 'start', 'startWhenIdle', 'repair', 'cancel', 'refresh', 'listVideoHistory', 'listLorasFull'];
+const SPIES = ['getVideoGenStatus', 'getVideoGenModelContext', 'generateVideo', 'start', 'startWhenIdle', 'repair', 'cancel', 'refresh', 'listVideoHistory', 'listLorasFull'];
 
 /** Restore every documented default, including fresh spies. Call it first in `beforeEach`. */
 export function resetVideoGenMockState() {
@@ -107,7 +106,10 @@ export function resetVideoGenMockState() {
   state.queuedModelId = null;
   state.runtimeInstallComplete = null;
   state.universeStyle = DEFAULT_UNIVERSE_STYLE;
-  state.eventSourceRef.current = null;
+  // The real media-run hook opens this for a resumed/started render; a test
+  // drives its frames through `lastEventSource()`.
+  MockEventSource.reset();
+  globalThis.EventSource = MockEventSource;
   state.advancedParams = null;
   state.loraPicker = null;
   state.galleryProps = null;
@@ -222,9 +224,6 @@ vi.mock('../hooks/useModelDownloadStatus', async (importOriginal) => ({
   }),
 }));
 
-vi.mock('../hooks/useMediaJobSse', () => ({
-  useMediaJobSse: () => ({ attach: state.attach, eventSourceRef: state.eventSourceRef }),
-}));
 vi.mock('../hooks/useMediaCompletionRefresh', () => ({
   useMediaCompletionRefresh: (options) => { state.completionRefresh = options; },
 }));

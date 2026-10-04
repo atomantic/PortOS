@@ -1165,6 +1165,16 @@ const DEFAULT_REGISTRY = {
 };
 
 let cached = null;
+// Whether the most recent fresh load parsed the file (false = fell back to the
+// in-memory defaults). Read only by withLiveMediaModelsRestore's reconciliation.
+let lastLoadReadOk = true;
+// Live-restore ownership: `restoreFences` counts restores that have been
+// requested and not yet reconciled; `restoreTail` serializes them;
+// `reconcileFailure` pins the registry read-only after a reload that could not
+// establish what the restored bytes say.
+let restoreFences = 0;
+let restoreTail = Promise.resolve();
+let reconcileFailure = null;
 
 const ensureDir = (file) => {
   const dir = dirname(file);
@@ -1744,6 +1754,7 @@ export const loadMediaModels = () => {
       );
     }
   }
+  lastLoadReadOk = readOk;
   cached = normalizeRegistry(parsed);
   // Persist _shippedDefaults back to disk whenever it was absent or gained new
   // ids (bootstrap run or a new built-in model shipped in this release). This
@@ -1790,6 +1801,60 @@ export const loadMediaModels = () => {
 export const reloadMediaModels = () => {
   cached = null;
   return loadMediaModels();
+};
+
+// Registry mutators are synchronous, so checking this at their top refuses a
+// write before any disk or cache change while a live restore owns the file (or
+// after a restore whose reload failed — persisting the stale/default cache then
+// would overwrite the restored bytes).
+const assertRegistryWritable = () => {
+  if (restoreFences > 0) {
+    throw new ServerError('The media model registry is being restored from a snapshot — retry once the restore finishes.', { status: 409, code: 'MEDIA_MODELS_RESTORE_BUSY' });
+  }
+  if (reconcileFailure) {
+    throw new ServerError(`The media model registry could not be reloaded after a snapshot restore (${reconcileFailure.message}). Restart PortOS before editing it.`, { status: 503, code: 'MEDIA_MODELS_UNAVAILABLE' });
+  }
+};
+
+/**
+ * Own data/media-models.json across an out-of-band live restore. Registry
+ * mutations are refused from the moment the restore is requested until the
+ * cache has been reloaded from the resulting file — including after a partial
+ * transfer, which may already have overwritten it. Competing restores are
+ * serialized. A reload that cannot parse the file leaves the registry
+ * read-only until a later restore reconciles it (or the process restarts).
+ * The callback must not call a registry mutator.
+ */
+export const withLiveMediaModelsRestore = (transfer) => {
+  restoreFences += 1;
+  const run = restoreTail.then(async () => {
+    try {
+      const [result] = await Promise.allSettled([Promise.resolve().then(transfer)]);
+      let reloadError = null;
+      try {
+        reloadMediaModels();
+        if (!lastLoadReadOk) throw new Error('media-models.json is unreadable or not valid JSON');
+        reconcileFailure = null;
+      } catch (err) {
+        reloadError = err;
+        reconcileFailure = err;
+      }
+      if (result.status === 'rejected') {
+        if (!reloadError) throw result.reason;
+        const error = new Error(`${result.reason.message}. Media model registry reload failed: ${reloadError.message}. Restart PortOS before editing media models.`, { cause: result.reason });
+        if (result.reason?.code) error.code = result.reason.code;
+        throw error;
+      }
+      if (reloadError) {
+        throw new Error(`Media model registry reload failed: ${reloadError.message}. Restart PortOS before editing media models.`, { cause: reloadError });
+      }
+      return result.value;
+    } finally {
+      restoreFences -= 1;
+    }
+  });
+  restoreTail = run.catch(() => {});
+  return run;
 };
 
 // Persist a registry object to disk and swap it in as the cache. The cache is
@@ -1854,6 +1919,7 @@ export const addUserModelEntry = (entry, { kind }) => {
   if (kind !== 'video' && kind !== 'image') {
     throw new ServerError(`Unknown model kind "${kind}" — expected "image" or "video".`, { status: 400, code: 'BAD_MODEL_KIND' });
   }
+  assertRegistryWritable();
   const reg = loadMediaModels();
   const listKey = kind === 'video' ? activeVideoBucket() : 'image';
   // Conflict-check against the ACTIVE-on-this-install lists — the current
@@ -1905,6 +1971,7 @@ const requireUserEntry = (reg, id, verb) => {
 // built-ins and unknown ids. Persists + hot-reloads. Returns the updated entry.
 const USER_EDITABLE_FIELDS = new Set(['name', 'steps', 'guidance']);
 export const patchUserModelEntry = (id, patch) => {
+  assertRegistryWritable();
   const reg = loadMediaModels();
   const loc = requireUserEntry(reg, id, 'edited');
   const cleanPatch = {};
@@ -1921,6 +1988,7 @@ export const patchUserModelEntry = (id, patch) => {
 // Availability is install configuration, including for shipped entries. Keep
 // disabled rows in the registry so they can be re-enabled without reinstalling.
 export const setMediaModelEnabled = (id, enabled) => {
+  assertRegistryWritable();
   const reg = loadMediaModels();
   const loc = findModelLocation(reg, id);
   if (!loc) throw new ServerError(`Unknown model id: ${id}`, { status: 404, code: 'NOT_FOUND' });
@@ -1933,6 +2001,7 @@ export const setMediaModelEnabled = (id, enabled) => {
 // Remove a USER model entry. Refuses built-ins and unknown ids. Persists +
 // hot-reloads. Returns `{ ok, id }`.
 export const removeUserModelEntry = (id) => {
+  assertRegistryWritable();
   const reg = loadMediaModels();
   const loc = requireUserEntry(reg, id, 'removed');
   const nextList = loc.list.filter((_, i) => i !== loc.idx);

@@ -184,6 +184,67 @@ describe('mcpDiscoverCalendars CLI exit-status agreement (#5302)', () => {
   });
 });
 
+// #9926: exercise extraction at the service boundary before any destructive write.
+describe('MCP transcript extraction', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getAccount.mockResolvedValue(account());
+    loadCache.mockResolvedValue({ events: cachedEvents() });
+  });
+
+  it('skips metadata and every echoed prompt, preserving fenced event string content', async () => {
+    const event = rawEvent('new-event', 'Review [draft] {v2}');
+    event.description = 'Keep ```json {"example":[]} ``` in the notes.';
+    runCliProviderPrompt.mockImplementation(async ({ prompt }) => ({
+      text: `${prompt}\nMetadata: {"request":"complete"}\n${prompt}\nActual: \`\`\`json\n${JSON.stringify({ calendars: [{ calendarId: CAL_ID, events: [event] }] })}\n\`\`\``,
+      exitCode: 0, partial: false,
+    }));
+
+    const result = await mcpSyncAccount(ACCOUNT_ID, null);
+
+    expect(result.status).toBe('success');
+    expect(savedCache().events).toEqual([expect.objectContaining({ title: event.summary, description: event.description })]);
+  });
+
+  it('accepts an empty event snapshot and an empty calendar response', async () => {
+    runCliProviderPrompt.mockResolvedValue({ text: JSON.stringify({ calendars: [{ calendarId: CAL_ID, events: [] }] }), exitCode: 0 });
+    expect((await mcpSyncAccount(ACCOUNT_ID, null)).pruned).toBe(1);
+    expect(savedCache().events).toEqual([]);
+    saveCache.mockClear();
+    runCliProviderPrompt.mockResolvedValue({ text: '{"calendars":[]}', exitCode: 0 });
+    expect((await mcpSyncAccount(ACCOUNT_ID, null)).calendars).toEqual([]);
+    expect(saveCache).not.toHaveBeenCalled();
+  });
+
+  it.each(['{"calendars":{}}', '{"calendars":[{"calendarId":"example","events":[null]}]}', 'not JSON', 'prompt only'])('rejects invalid sync payload %s before touching events', async text => {
+    runCliProviderPrompt.mockImplementation(async ({ prompt }) => ({ text: text === 'prompt only' ? `${prompt}\n${prompt}` : text, exitCode: 0 }));
+    await expect(mcpSyncAccount(ACCOUNT_ID, null)).rejects.toMatchObject({ status: 502 });
+    expect(saveCache).not.toHaveBeenCalled();
+    expect(updateSyncStatus).toHaveBeenCalledWith(ACCOUNT_ID, 'error');
+  });
+
+  it('skips discovery banners and repeated schema echoes before merging the actual list', async () => {
+    const discovered = [{ id: CAL_ID, name: 'Work [draft] {v2}', color: '#123456' }];
+    runCliProviderPrompt.mockImplementation(async ({ prompt }) => ({
+      text: `${prompt}\n[workdir, example]\n${prompt}\n\`\`\`json\n${JSON.stringify(discovered)}\n\`\`\``, exitCode: 0,
+    }));
+    expect((await mcpDiscoverCalendars(ACCOUNT_ID, null)).calendars).toEqual(discovered);
+    expect(updateSubcalendars).toHaveBeenCalledWith(ACCOUNT_ID, discovered);
+  });
+
+  it('preserves a valid empty discovered list', async () => {
+    runCliProviderPrompt.mockResolvedValue({ text: '```json\n[]\n```', exitCode: 0 });
+    expect((await mcpDiscoverCalendars(ACCOUNT_ID, null)).calendars).toEqual([]);
+    expect(updateSubcalendars).toHaveBeenCalledWith(ACCOUNT_ID, []);
+  });
+
+  it.each(['[{"name":"Missing identity"}]', '["not a calendar"]', 'not JSON', 'prompt only'])('refuses invalid discovery %s without replacing subcalendars', async text => {
+    runCliProviderPrompt.mockImplementation(async ({ prompt }) => ({ text: text === 'prompt only' ? `${prompt}\n${prompt}` : text, exitCode: 0 }));
+    await expect(mcpDiscoverCalendars(ACCOUNT_ID, null)).rejects.toMatchObject({ status: 502 });
+    expect(updateSubcalendars).not.toHaveBeenCalled();
+  });
+});
+
 // #6289: a Google event's join link is projected into a single cached
 // `meetingUrl`. The regressions these pin are (a) caching something that is not
 // a usable video link, and (b) an older producer that omits the conference

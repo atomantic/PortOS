@@ -32,15 +32,19 @@ import {
   MUSIC_VIDEO_CHECKIN_MODES,
 } from './musicVideoAutomation.js';
 import {
+  AUTONOMOUS_AUTO_APPROVE_STAGES,
   AUTONOMOUS_CHECKPOINT_IDS,
   AUTONOMOUS_LIMIT_BOUNDS,
   AUTONOMOUS_NAME_MAX,
   AUTONOMOUS_ORIGINS,
   AUTONOMOUS_PROMPT_MAX,
   AUTONOMOUS_SONG_SOURCES,
+  LOCAL_MUSIC_CODE_LANGUAGES,
+  LOCAL_MUSIC_TYPES,
   SUNO_LIMITS,
   SUNO_MODEL_PATTERN,
   SUNO_VOCAL_GENDERS,
+  normalizeAutoApprove,
 } from './musicVideoAutonomous.js';
 import { MUSCRIPTOR_MODELS } from './muscriptorModels.js';
 import { IMAGE_GEN_MODES, VIDEO_GEN_MODES } from './generationModes.js';
@@ -772,6 +776,13 @@ const musicVideoSunoOptionsSchema = z.object({
   maxMode: z.boolean().nullable().optional(),
 }).strict();
 
+// Local Music Studio options: model (with optional engine) or code (with chosen language).
+export const musicVideoLocalMusicOptionsSchema = z.object({
+  type: z.enum(LOCAL_MUSIC_TYPES).optional(),
+  engine: z.string().trim().max(64).nullable().optional(),
+  language: z.enum(LOCAL_MUSIC_CODE_LANGUAGES).nullable().optional(),
+}).strict();
+
 // A provider/model/effort pin for a Music Video text stage. Effort is the union
 // of every accepted level; the runner clamps it to the chosen provider's ladder.
 export const musicVideoLlmSchema = z.object({
@@ -786,6 +797,16 @@ export const musicVideoLlmStagesSchema = z.object(Object.fromEntries(
   MUSIC_VIDEO_LLM_STAGES.map((stage) => [stage, musicVideoLlmSchema.nullable().optional()]),
 )).strict();
 
+// Production review stages the run may approve by itself (de-duplicated, in
+// review order). A non-empty list is approval authority, so the request must
+// use an authenticated session (checked by the route); an
+// empty list on resume clears the grant.
+const musicVideoAutoApproveFields = {
+  autoApprove: z.array(z.enum(AUTONOMOUS_AUTO_APPROVE_STAGES)).max(AUTONOMOUS_AUTO_APPROVE_STAGES.length * 4)
+    .transform(normalizeAutoApprove).optional(),
+  password: z.string().min(1).max(1024).optional(),
+};
+
 // The alternate entry point: no track, style or board is picked up front. Tool
 // ids are the same catalog the autopilot brief uses; `checkpoints` names the
 // stages that park for approval (none = fully unattended).
@@ -795,6 +816,7 @@ export const musicVideoAutonomousStartSchema = z.object({
   mediaMode: z.enum(MUSIC_VIDEO_MEDIA_MODES).optional(),
   songSource: z.enum(AUTONOMOUS_SONG_SOURCES).optional(),
   localFallback: z.boolean().optional(),
+  localMusic: musicVideoLocalMusicOptionsSchema.nullable().optional(),
   instrumental: z.boolean().optional(),
   guidance: z.string().max(4000).optional(),
   tools: z.array(z.enum(MUSIC_VIDEO_AUTOMATION_TOOL_IDS)).max(MUSIC_VIDEO_AUTOMATION_TOOL_IDS.length).optional(),
@@ -826,6 +848,7 @@ export const musicVideoAutonomousStartSchema = z.object({
     ideaTitle: z.string().max(200).nullable().optional(),
   }).strict().optional(),
   suno: musicVideoSunoOptionsSchema.nullable().optional(),
+  ...musicVideoAutoApproveFields,
 }).strict();
 
 // Resume a parked/failed run, or approve the checkpoint it is waiting on.
@@ -835,8 +858,12 @@ export const musicVideoAutonomousResumeSchema = z.object({
   style: z.string().max(AUTONOMOUS_PROMPT_MAX).optional(),
   // Patch the brief's Suno options, key by key (null clears one).
   suno: musicVideoSunoOptionsSchema.optional(),
+  // Patch the brief's local Music Studio options.
+  localMusic: musicVideoLocalMusicOptionsSchema.nullable().optional(),
   // At the song checkpoint: discard the song and generate a new one.
   retakeSong: z.boolean().optional(),
+  // Replace the brief's auto-approve grant ("auto-approve the rest").
+  ...musicVideoAutoApproveFields,
 }).strict();
 
 // A generation kickoff that failed before reaching the queue (#9011) — names
@@ -1039,6 +1066,9 @@ export const musicVideoProductionDraftSchema = z.object({
     camera: z.string().max(4000), transition: z.string().max(4000),
   }).strict()).max(2000),
 }).strict();
+export const musicVideoAlignmentReviewSchema = z.object({
+  basis: z.string().min(1).max(128), notes: z.string().trim().min(1).max(4000),
+}).strict();
 export const musicVideoDocumentShotsSchema = z.object({
   documentDirectory: z.string().min(1).max(500), audioBasis: z.string().min(1).max(128),
   sourceFile: z.string().min(1).max(200),
@@ -1056,9 +1086,15 @@ export const musicVideoDocumentShotsSchema = z.object({
 export const musicVideoProductionImportSchema = z.object({ source: z.string().min(2).max(250000) }).strict();
 export const musicVideoProductionApprovalSchema = z.object({
   stage: z.enum(['art', 'storyboard', 'proof']), basis: z.string().min(1).max(128),
-  password: z.string().min(1).max(1024),
+  password: z.string().max(1024).optional(),
   proofReview: z.object({
-    watchedWithAudio: z.literal(true),
+    method: z.enum(['playback', 'machine']).optional(),
+    watchedWithAudio: z.boolean(),
+    machineEvidence: z.object({
+      visualReview: z.string().trim().min(40).max(8000),
+      audioReview: z.string().trim().min(40).max(8000),
+      limitations: z.string().trim().min(1).max(4000),
+    }).strict().optional(),
     excerptId: z.string().min(1).max(200), filename: z.string().min(1).max(200),
     energyComparison: z.string().trim().min(1).max(4000),
     timecodedNotes: z.string().trim().min(1).max(4000)
@@ -1265,5 +1301,5 @@ export const musicVideoProductionFeedbackSchema = z.object({
   decision: z.enum(['comment', 'structure-accepted', 'request-changes']),
 }).strict();
 export const musicVideoProductionFeedbackResolutionSchema = z.object({
-  feedbackId: z.string().min(1).max(128), resolution: z.string().trim().min(1).max(8000), password: z.string().min(1).max(1024),
+  feedbackId: z.string().min(1).max(128), resolution: z.string().trim().min(1).max(8000), password: z.string().max(1024).optional(),
 }).strict();

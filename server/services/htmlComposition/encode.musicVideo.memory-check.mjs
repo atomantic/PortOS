@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events';
 import { encodeComposition } from './encode.js';
 
 if (typeof global.gc !== 'function') {
-  console.error('forced GC is required');
+  console.error('❌ forced GC is required');
   process.exit(2);
 }
 
@@ -45,7 +45,7 @@ await encodeComposition(page, { fps: 12, durationSec: 600, width: 1280, height: 
 
 const delta = samples.length === 2 ? samples[1] - samples[0] : Number.POSITIVE_INFINITY;
 if (!(bytes > 0) || samples.length !== 2 || delta >= 12 * 1024 * 1024) {
-  console.error(`retained-heap delta=${delta} bytes=${bytes} samples=${samples.length}`);
+  console.error(`❌ retained-heap delta=${delta} bytes=${bytes} samples=${samples.length}`);
   process.exit(1);
 }
-console.log(`retained-heap delta=${delta}`);
+console.log(`✅ retained-heap delta=${delta}`);

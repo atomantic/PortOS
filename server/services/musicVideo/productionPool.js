@@ -36,6 +36,12 @@ import { isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { RUNNER_FAMILIES } from '../../lib/runners.js';
 import { poolHasRoute, routeKey } from './production.js';
 
+async function localImageModel(route, env) {
+  if (route.model) return (env.imageModels || []).find((model) => model.id === route.model);
+  const { selectLocalImageModelFromSettings } = await import('../imageGen/prepareParams.js');
+  return selectLocalImageModelFromSettings(env.settings, '', env.imageModels || []);
+}
+
 const describe = (route) => `${route.kind} ${route.mode}${route.model ? ` (${route.model})` : ''}`;
 const isMetered = (route) => MUSIC_VIDEO_AUTOMATION_TOOLS.some((t) => t.id === `${route.kind}:${route.mode}` && t.metered);
 
@@ -134,9 +140,9 @@ async function routeEligibility(route, env) {
     }
     if (route.mode === 'local') {
       if (!settings?.imageGen?.local?.pythonPath) return { ok: false, reason: 'The local image runtime is not configured in Settings' };
-      const model = (env.imageModels || []).find((m) => m.id === route.model);
-      if (!route.model || !model) return { ok: false, reason: `Local image model "${route.model || '(none)'}" is not installed` };
-      if (!isHardwareCompatible(model.hardwareCompatibility)) return { ok: false, reason: `Local image model "${route.model}" cannot run on this hardware` };
+      const model = await localImageModel(route, env);
+      if (!model) return { ok: false, reason: `Local image model "${route.model || '(none)'}" is not installed` };
+      if (!isHardwareCompatible(model.hardwareCompatibility)) return { ok: false, reason: `Local image model "${model.id}" cannot run on this hardware` };
       return { ok: true, reason: null };
     }
     if (settings?.imageGen?.[route.mode]?.enabled !== true) {
@@ -157,16 +163,19 @@ async function routeEligibility(route, env) {
   }
   if (route.mode === 'local') {
     if (!settings?.imageGen?.local?.pythonPath) return { ok: false, reason: 'The local video runtime is not configured in Settings' };
-    if (!route.model) return { ok: false, reason: 'A local video route must name its model' };
-    const { model } = await env.resolveVideoModel(route.model);
-    if (!model) return { ok: false, reason: `Local video model "${route.model}" is not installed` };
-    if (!isHardwareCompatible(model.hardwareCompatibility)) return { ok: false, reason: `Local video model "${route.model}" cannot run on this hardware` };
+    // A blank pin is the install default. The renderer resolves that same
+    // omission, so refusing it here made "Install default" fail at Start.
+    const requested = typeof route.model === 'string' ? route.model.trim() : '';
+    const { model, modelId } = await env.resolveVideoModel(requested);
+    const label = requested || modelId || '(none)';
+    if (!model) return { ok: false, reason: `Local video model "${label}" is not installed` };
+    if (!isHardwareCompatible(model.hardwareCompatibility)) return { ok: false, reason: `Local video model "${label}" cannot run on this hardware` };
   }
   return { ok: true, reason: null };
 }
 
 /** Why `route` cannot serve this scene requirement, or null when it can. */
-function routeIncapableReason(route, requirement, env) {
+async function routeIncapableReason(route, requirement, env) {
   if (route.kind !== requirement.kind) return `${describe(route)} does not generate ${requirement.kind === 'image' ? 'frames' : 'clips'}`;
   if (requirement.kind === 'image' && requirement.conditioning > 0) {
     const limit = route.mode === 'local' ? null : maxInputImages(route.mode);
@@ -174,9 +183,9 @@ function routeIncapableReason(route, requirement, env) {
       return `${describe(route)} takes at most ${limit} reference image${limit === 1 ? '' : 's'}; the visual spec conditions on ${requirement.conditioning}`;
     }
     if (route.mode === 'local') {
-      const model = (env.imageModels || []).find((m) => m.id === route.model);
+      const model = await localImageModel(route, env);
       if (model?.runner !== RUNNER_FAMILIES.FLUX2 && model?.pipelineClass !== 'QwenImage21Pipeline') {
-        return `Local model "${route.model}" cannot use reference images (FLUX.2 and Qwen Image 2.1 only)`;
+        return `Local model "${model?.id || route.model || '(none)'}" cannot use reference images (FLUX.2 and Qwen Image 2.1 only)`;
       }
     }
   }
@@ -184,6 +193,16 @@ function routeIncapableReason(route, requirement, env) {
     return performanceBlockedReason(route.mode);
   }
   return null;
+}
+
+/**
+ * Why `route` cannot generate `requirement` on this install right now, or null
+ * — the eligibility + capability checks a production step passes, for a caller
+ * with no pool to choose from (a standalone auto-review run, #10014).
+ */
+export async function routeUnavailableReason(route, requirement, env) {
+  const { ok, reason } = await routeEligibility(route, env);
+  return ok ? routeIncapableReason(route, requirement, env) : reason;
 }
 
 /** Start-time check: every route in the pool must be eligible now. Throws 409 with every reason. */
@@ -209,7 +228,7 @@ export async function assertRouteAllowed(run, route, requirement, env) {
   }
   const { ok, reason } = await routeEligibility(route, env);
   if (!ok) throw new ServerError(reason, { status: 409, code: 'PRODUCTION_ROUTE_INELIGIBLE' });
-  const incapable = routeIncapableReason(route, requirement, env);
+  const incapable = await routeIncapableReason(route, requirement, env);
   if (incapable) throw new ServerError(incapable, { status: 409, code: 'PRODUCTION_ROUTE_INCAPABLE' });
 }
 
@@ -225,7 +244,7 @@ export async function chooseProductionRoute(run, requirement, env) {
   for (const route of candidates) {
     const { ok, reason } = await routeEligibility(route, env);
     if (!ok) { reasons.push(reason); continue; }
-    const incapable = routeIncapableReason(route, requirement, env);
+    const incapable = await routeIncapableReason(route, requirement, env);
     if (incapable) { reasons.push(incapable); continue; }
     const skipped = reasons.length ? ` (skipped ${reasons.length} earlier route${reasons.length === 1 ? '' : 's'}: ${reasons.join('; ')})` : '';
     const need = requirement.kind === 'image'

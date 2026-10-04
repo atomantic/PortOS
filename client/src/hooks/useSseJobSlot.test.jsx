@@ -12,7 +12,7 @@ beforeEach(() => {
   MockEventSource.reset();
   vi.stubGlobal('EventSource', MockEventSource);
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 // Direct starts in the same React turn uniquely exercise the synchronous guard;
 // a rendered disabled button cannot cover a retained callback invoked twice.
@@ -80,4 +80,44 @@ describe('unmounted kickoff ownership', () => {
     expect(toast.error).not.toHaveBeenCalled();
     expect(MockEventSource.instances).toHaveLength(0);
   });
+});
+
+
+it.each(['complete', 'error', 'canceled', 'disconnected'])('settles %s once against the captured project for a persisted-state refresh', async (reason) => {
+  const onSettled = vi.fn();
+  const { result } = renderHook(() => useSseJobSlot({ eventsUrl: id => `/events/${id}`, onSettled }));
+  act(() => result.current.attach('synthetic-render', 'synthetic-project'));
+  act(() => { lastEventSource().onopen(); });
+  expect(result.current.connected).toBe(true);
+  act(() => {
+    if (reason === 'disconnected') lastEventSource().fail();
+    else lastEventSource().emit({ type: reason });
+  });
+  expect(result.current.active).toBe(false);
+  expect(onSettled).toHaveBeenCalledExactlyOnceWith(reason, 'synthetic-project');
+});
+
+// A real terminal SSE frame must release the slot without unmounting its
+// consumer even when the consumer's completion follow-up fails.
+it.each(['throw', 'reject'])('recovers a completion callback %s and accepts the next job', async (failure) => {
+  const error = new Error('Synthetic update failure');
+  const onComplete = vi.fn(() => {
+    if (failure === 'throw') throw error;
+    return Promise.reject(error);
+  });
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const { result } = renderHook(() => useSseJobSlot({
+    eventsUrl: id => `/events/${id}`, onComplete, successToast: () => 'Finished',
+  }), { wrapper: StrictMode });
+  act(() => result.current.attach('first-job', 'first-target'));
+  await act(async () => { lastEventSource().emit({ type: 'complete' }); });
+  expect(result.current.active).toBe(false);
+  expect(result.current.jobId).toBeNull();
+  expect(onComplete).toHaveBeenCalledExactlyOnceWith({ type: 'complete' }, 'first-target');
+  expect(log).toHaveBeenCalledWith('❌ Job completion follow-up failed: Synthetic update failure');
+  expect(toast.error).toHaveBeenCalledWith('Finished, but the page could not update — reload to see the result');
+  expect(toast.success).not.toHaveBeenCalled();
+  act(() => { expect(result.current.attach('next-job', 'next-target')).toBe(true); });
+  expect(result.current.active).toBe(true);
+  expect(lastEventSource().url).toBe('/events/next-job');
 });

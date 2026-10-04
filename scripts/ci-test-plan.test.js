@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { staticImportClosure } from '../server/lib/staticImportGraph.js';
 
 import {
@@ -306,6 +307,77 @@ it('resolves local client imports of present untracked modules and still fails c
     const missing = inspect();
     expect(missing.full).toBe(true);
     expect(missing.reason).toBe('client dependency discovery unresolved');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it('requests DB verification for every suite in the real canonical inventory without widening the matrix', () => {
+  const cwd = fileURLToPath(new URL('../', import.meta.url));
+  const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [], cwd });
+  const dbTests = resolveDbTestFiles(inputs.trackedFiles);
+  expect(dbTests.length).toBeGreaterThan(50);
+  for (const suite of dbTests) {
+    const plan = buildCiTestPlan([suite], inputs);
+    expect(plan, suite).toMatchObject({ full: false, db: true, server: { mode: 'files' } });
+    expect(plan.server.files, suite).toContain(suite);
+  }
+});
+
+it('requests DB verification for the real deck, model pin and backup source contracts', () => {
+  const cwd = fileURLToPath(new URL('../', import.meta.url));
+  for (const source of ['server/routes/decks.js', 'server/services/modelPinRecords.js', 'server/services/backup.js']) {
+    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd });
+    expect(buildCiTestPlan(inputs.changedFiles, inputs), source).toMatchObject({ full: false, db: true });
+  }
+});
+
+it('follows DB-only deferred dependencies through the pre-install CLI and preserves conservative and unrelated plans', () => {
+  const root = mkdtempSync(join(tmpdir(), 'portos-ci-db-deps-'));
+  const planner = fileURLToPath(new URL('./ci-test-plan.js', import.meta.url));
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const write = (path, source) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), source);
+  };
+  const leaf = 'server/services/example/leaf.js';
+  const contract = 'server/routes/decks.db.test.js';
+  const plan = (changedFiles) => JSON.parse(execFileSync(process.execPath, [planner], {
+    cwd: root,
+    encoding: 'utf8',
+    env: { ...process.env, CI_BASE_SHA: 'HEAD', CI_BASE_REF: 'main', CI_FORCE_FULL: 'false',
+      CI_CHANGED_FILES: JSON.stringify(changedFiles), GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
+  }));
+  try {
+    git('init', '-q');
+    write(leaf, 'export const value = 1;\n');
+    write('server/services/bridge.js', "export const load = () => import('./example/leaf.js');\n");
+    write(contract, "import '../services/bridge.js';\n");
+    write('server/services/unrelated.js', 'export const value = 2;\n');
+    git('add', '--all');
+
+    // The contract neither names leaf.js nor shares its feature; only the
+    // dependency walk can request the otherwise excluded database suite.
+    const related = plan([leaf]);
+    expect(related).toMatchObject({ full: false, db: true, server_mode: 'related' });
+    expect(JSON.parse(related.server_files)).not.toContain(contract);
+    expect(plan(['server/services/unrelated.js'])).toMatchObject({ full: false, db: false });
+    expect(plan(['docs/README.md'])).toMatchObject({ full: false, db: false });
+
+    // Basename and feature selectors must trigger DB coverage too.
+    write('server/services/bridge.js', 'export const value = 2;\n');
+    write(contract, '// Reads leaf.js as text.\n');
+    expect(plan([leaf])).toMatchObject({ full: false, db: true });
+    write(contract, '// A deck contract.\n');
+    write('server/services/decks/leaf.js', 'export const value = 1;\n');
+    git('add', '--all');
+    expect(plan(['server/services/decks/leaf.js'])).toMatchObject({ full: false, db: true });
+
+    for (const importExpression of ["'./missing.js'", 'modulePath']) {
+      write(contract, "import '../services/bridge.js';\n");
+      write('server/services/bridge.js', `export const load = () => import(${importExpression});\n`);
+      expect(plan([leaf])).toMatchObject({ full: false, db: true });
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -948,6 +1020,43 @@ describe('CI test impact planner', () => {
       expect(plan.full, path).toBe(true);
       expect(plan.reason, path).toMatch(/CI pipeline script changed/);
     }
+  });
+
+  it('routes worktree-manager source to a full plan instead of a broad nominal scoped plan (#9999)', () => {
+    const plan = buildCiTestPlan(['server/services/worktreeManager.js'], { trackedFiles: TRACKED });
+    expect(plan.full).toBe(true);
+    expect(plan.reason).toMatch(/worktree manager source changed/);
+    expect(plan.server.mode).toBe('full');
+    expect(plan.client.mode).toBe('full');
+    expect(plan.windowsMode).toBe('full');
+    // Its test file alone stays a scoped plan.
+    expect(buildCiTestPlan(['server/services/worktreeManager.test.js'], { trackedFiles: TRACKED }).full).toBe(false);
+  });
+
+  it('routes log socket source to full sharded CI while nearby socket sources stay scoped (#10030)', () => {
+    const trackedFiles = [
+      ...TRACKED,
+      'server/sockets/logs.js',
+      'server/sockets/logs.test.js',
+      'server/sockets/apps.js',
+      'server/sockets/apps.test.js',
+    ];
+    const logs = buildCiTestPlan(['server/sockets/logs.js'], { trackedFiles });
+    expect(logs.full).toBe(true);
+    expect(logs.reason).toMatch(/log socket source changed \(broad import fanout\)/);
+    expect(logs.server.mode).toBe('full');
+    expect(logs.client.mode).toBe('full');
+    expect(logs.windowsMode).toBe('full');
+    expect(logs.shards).toEqual({
+      server: shardIndexes('full', FULL_SUITE_SHARDS.server),
+      client: shardIndexes('full', FULL_SUITE_SHARDS.client),
+      windows: shardIndexes('full', FULL_SUITE_SHARDS.windows),
+    });
+
+    const nearbySocket = buildCiTestPlan(['server/sockets/apps.js'], { trackedFiles });
+    expect(nearbySocket.full).toBe(false);
+    expect(nearbySocket.server.mode).toBe('related');
+    expect(nearbySocket.shards).toEqual({ server: [1], client: [1], windows: [1] });
   });
 
   it('honors an explicit full-CI request', () => {

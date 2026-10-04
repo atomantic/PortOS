@@ -35,7 +35,7 @@ import { isTruthyMeta, isFalsyMeta, protectedAgentIds } from './agentState.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import * as git from './git.js';
 import { detectConflicts } from './taskConflict.js';
-import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
+import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, listWorktrees, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
 import { resolveSpawnCwd, usesCreativeDirectorScratchCwd, creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
@@ -44,7 +44,7 @@ import { getAppWorkspace, getAppDataForTask } from './agentAppWorkspace.js';
 import { createJiraTicketForTask } from './promptSections/appContext.js';
 import { INVESTIGATION_TASK_DELIVERY, isInvestigationTask } from '../lib/investigationTasks.js';
 import { isNonCommittingCoordinatorTask, resolveTaskHookType } from './taskTypeHooks.js';
-import { claimContinuationWorkspace } from '../lib/claimContinuation.js';
+import { claimBranchAdmission, claimContinuationAdmission, claimContinuationWorkspace } from '../lib/claimContinuation.js';
 
 const ROOT_DIR = PATHS.root;
 
@@ -104,10 +104,10 @@ export { resolveTaskTargetBranch as resolveTaskExistingBranch } from '../lib/tas
  * The one caller-gated exception is `allowLiveClaim`: a non-committing
  * coordinator follow-up (`isNonCommittingCoordinatorTask` — a review-loop
  * resolve-and-merge or a PR-remediation follow-up) may take over a `claim-*`
- * holder too, because its whole deliverable names that exact branch as the one
- * to finish and land.
+ * holder too, but only after branch/repository admission verifies that no
+ * running or paused claim owner still controls publication and cleanup.
  *
- * @returns {Promise<{ worktreeInfo: object, adoptedFrom: string }|null>}
+ * @returns {Promise<{ worktreeInfo: object, adoptedFrom: string }|{ refused: string }|null>}
  */
 async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, preferredPath = null, taskId, allowLiveClaim = false }) {
   // Fail CLOSED on an unreadable agent list: an empty protected set would read as
@@ -118,10 +118,16 @@ async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, 
     emitLog('warn', `🌳 Skipping worktree adoption for task ${taskId} — could not read the agent list: ${err.message}`, { taskId });
     return null;
   });
-  if (!agents) return null;
+  if (!Array.isArray(agents)) return { refused: 'ownership-unreadable' };
+  const worktrees = await listWorktrees(workspacePath).catch(() => null);
+  const admission = claimBranchAdmission({
+    branchName, preferredPath: allowLiveClaim ? preferredPath : null,
+    agentId, sourceWorkspace: workspacePath, agents, worktrees,
+  });
+  if (!admission.admit) return { refused: admission.reason };
   const activeAgentIds = protectedAgentIds(agents);
 
-  const holder = await findAdoptableWorktreeForBranch(workspacePath, branchName, { activeAgentIds, preferredPath, allowLiveClaim });
+  const holder = await findAdoptableWorktreeForBranch(workspacePath, branchName, { activeAgentIds, agents, requestingAgentId: agentId, preferredPath, allowLiveClaim });
   if (!holder) {
     // Not adoptable, but a coordinator follow-up may still free the branch from an
     // idle `/do:next` sibling tree by detaching it in place — `createWorktree`
@@ -130,7 +136,7 @@ async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, 
       const activeWorkspacePaths = agents
         .filter(a => activeAgentIds.has(a.id))
         .map(a => a.workspacePath || a.metadata?.workspacePath);
-      const released = await releaseIdleSiblingNextHolder(workspacePath, branchName, { activeWorkspacePaths }).catch(err => {
+      const released = await releaseIdleSiblingNextHolder(workspacePath, branchName, { activeWorkspacePaths, agents, requestingAgentId: agentId }).catch(err => {
         emitLog('warn', `🌳 Could not release ${branchName} for task ${taskId}: ${err.message}`, { taskId });
         return null;
       });
@@ -173,16 +179,8 @@ async function prepareRequestedWorktree({
   // same safe adoption path review-loop follow-ups use, rather than cutting a
   // fresh branch merely because a cached path could not be moved.
   const resumeWorktreePath = existingBranch ? task.metadata?.resumeWorktreePath : null;
-  // A review-loop / PR-remediation follow-up's whole purpose is landing THIS
-  // branch, and the user's own "resolve and merge" trigger (or pr-reviewer's own
-  // dispatch) is the signal to finish whatever a `/do:next` claim left on it — so
-  // these are the callers allowed to take over a `claim-*` holder instead of
-  // retrying against it until the task gives up (#6243). `isNonCommittingCoordinatorTask`
-  // is the shared predicate for exactly this "same shape" set (taskTypeHooks.js) —
-  // reused here rather than re-listing the flags, so a future follow-up type of the
-  // same shape inherits the carve-out too. A plain resume never targets a claim tree
-  // (its pointer names a CoS `agent-*` worktree) and doesn't set either follow-up
-  // flag, so the predicate is a no-op there.
+  // Coordinator follow-ups may recover a claim directory only after its owner
+  // releases it. Review-only posture never grants another run's merge ownership.
   const takeoverPromise = existingBranch
     ? adoptWorktreeHoldingBranch({
       agentId,
@@ -206,14 +204,19 @@ async function prepareRequestedWorktree({
   }
 
   const takeover = await takeoverPromise;
-
-  // Both read only by the block/pause decision below: the failure REASON
-  // decides whether the task is unrunnable or merely early, and `attempt` is
-  // which branch-busy wait this would be (TASKS.md round-trips metadata as
-  // strings, hence the coercion; never reset on revive, so the cap is the
-  // task's whole patience budget rather than a per-attempt one).
-  let worktreeError = null;
   const attempt = (Number(task.metadata?.worktreeBusyAttempts) || 0) + 1;
+  if (takeover?.refused) {
+    const reason = `Branch ownership prevents worktree takeover (${takeover.refused}); retrying after a short cooldown`;
+    await blockTask(task, reason, attempt <= WORKTREE_BUSY_MAX_ATTEMPTS ? 'worktree-busy' : 'worktree-failed',
+      attempt <= WORKTREE_BUSY_MAX_ATTEMPTS ? {
+        cooldownUntil: new Date(Date.now() + WORKTREE_BUSY_COOLDOWN_MS).toISOString(),
+        worktreeBusyAttempts: attempt,
+      } : {});
+    return { outcome: 'blocked', reason };
+  }
+
+  // The failure reason decides whether the task is unrunnable or merely early.
+  let worktreeError = null;
   const worktreeInfo = takeover?.worktreeInfo || await createWorktree(agentId, workspacePath, task.id, {
     baseBranch: detectedBase || undefined,
     existingBranch: existingBranch || undefined,
@@ -280,6 +283,22 @@ async function prepareRequestedWorktree({
   emitLog('warn', `🌳 ${reason}`, { taskId: task.id });
   await blockTask(task, `Worktree creation failed — isolation was required${worktreeError?.message ? `: ${worktreeError.message}` : ''}`, 'worktree-failed');
   return { outcome: 'blocked', reason };
+}
+
+/**
+ * Re-check, at launch, that the claim worktree a cached continuation pointer names
+ * is still free to enter. The pointer was written when the previous run died;
+ * another owner may have taken the checkout since. Every read fails closed — an
+ * unreadable agent list or worktree list is "unknown", never "nobody is there".
+ * Read-only: nothing here rebases, commits, pushes, moves or removes.
+ */
+async function admitClaimContinuation({ task, agentId, sourceWorkspace, claimWorkspace }) {
+  const { getAgents } = await import('./cos.js');
+  const [agents, worktrees] = await Promise.all([
+    getAgents().catch(() => null),
+    listWorktrees(sourceWorkspace).catch(() => null),
+  ]);
+  return claimContinuationAdmission({ metadata: task.metadata, agentId, sourceWorkspace, worktrees, agents });
 }
 
 /**
@@ -403,6 +422,25 @@ export async function prepareAgentWorkspace({ agentId, task }) {
     worktreesRoot: PATHS.worktrees,
   });
   if (claimWorkspace) {
+    // The pointer is a cached answer, not authority: confirm the holder, the
+    // branch and the absence of another live owner NOW, and wait (bounded) when
+    // that cannot be established rather than entering someone's checkout.
+    const admission = await admitClaimContinuation({ task, agentId, sourceWorkspace: workspacePath, claimWorkspace });
+    if (!admission.admit) {
+      const attempt = (Number(task.metadata?.worktreeBusyAttempts) || 0) + 1;
+      const detail = `The claim worktree for ${claimWorkspace.worktreeInfo.branchName} cannot be confirmed free (${admission.reason}); nothing in it was touched`;
+      if (attempt <= WORKTREE_BUSY_MAX_ATTEMPTS) {
+        emitLog('info', `🌳 ${detail}; retrying after a short cooldown (attempt ${attempt}/${WORKTREE_BUSY_MAX_ATTEMPTS})`, { taskId: task.id, branch: claimWorkspace.worktreeInfo.branchName, reason: admission.reason });
+        await blockTask(task, `${detail}; retrying after a short cooldown`, 'worktree-busy', {
+          cooldownUntil: new Date(Date.now() + WORKTREE_BUSY_COOLDOWN_MS).toISOString(),
+          worktreeBusyAttempts: attempt,
+        });
+        return { outcome: 'blocked', reason: detail };
+      }
+      emitLog('warn', `🌳 ${detail}; giving up after ${WORKTREE_BUSY_MAX_ATTEMPTS} attempts`, { taskId: task.id, branch: claimWorkspace.worktreeInfo.branchName, reason: admission.reason });
+      await blockTask(task, `${detail}. Resolve who owns the checkout, then re-run this task.`, 'worktree-failed');
+      return { outcome: 'blocked', reason: detail };
+    }
     workspacePath = claimWorkspace.workspacePath;
     worktreeInfo = claimWorkspace.worktreeInfo;
     emitLog('info', `🌳 Agent ${agentId} is continuing the claim worktree ${worktreeInfo.branchName}`, {

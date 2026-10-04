@@ -307,3 +307,50 @@ describe('CreativeDirectorDetail realtime project lifecycle', () => {
     expect(screen.getByRole('heading', { name: 'Started project' })).toBeInTheDocument();
   });
 });
+
+describe('CreativeDirectorDetail status line', () => {
+  const statusLine = () => screen.getByRole('status', { name: 'Record status' });
+  beforeEach(() => vi.clearAllMocks());
+
+  it('says a draft waits on the user and offers Start above the fold, with no Refresh button or raw id', async () => {
+    cdApi.getCreativeDirectorProject.mockResolvedValue(PROJECT);
+    await renderPage();
+    expect(statusLine()).toHaveTextContent('Draft · waiting for you to start');
+    expect(screen.getByRole('button', { name: 'Start' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Refresh/ })).not.toBeInTheDocument();
+    // The raw id is no longer part of the header (the location probe is the test's own).
+    expect(screen.getByRole('heading', { name: PROJECT.name }).closest('div[class*="border-b"]')).not.toHaveTextContent(PROJECT.id);
+  });
+
+  it('names a running project and its scene progress without offering a start action', async () => {
+    cdApi.getCreativeDirectorProject.mockResolvedValue({
+      ...PROJECT, status: 'rendering', treatment: { scenes: [{ status: 'accepted' }, { status: 'rendering' }] },
+    });
+    await renderPage();
+    expect(statusLine()).toHaveTextContent('Rendering · 1 of 2 scenes accepted');
+    expect(screen.queryByRole('button', { name: /^(Start|Resume|Retry)$/ })).not.toBeInTheDocument();
+  });
+
+  it('reports a failed project with its reason and retries through the same start action', async () => {
+    const user = userEvent.setup();
+    cdApi.getCreativeDirectorProject.mockResolvedValue({ ...PROJECT, status: 'failed', failureReason: 'Render queue unavailable' });
+    cdApi.startCreativeDirectorProject.mockResolvedValue({ ok: true, project: { ...PROJECT, status: 'planning' } });
+    await renderPage();
+    expect(statusLine()).toHaveTextContent('Failed · Render queue unavailable');
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(cdApi.startCreativeDirectorProject).toHaveBeenCalledWith(PROJECT.id, { silent: true });
+  });
+
+  it('keeps the assembled video in view on every tab once a cut exists', async () => {
+    const cut = { videoId: 'job-example', filename: 'example.mp4', durationSeconds: 12, audioMode: 'music' };
+    cdApi.getCreativeDirectorProject.mockResolvedValue({ ...PROJECT, workspace: 'video', status: 'stitching', videoRoughCut: cut });
+    render(
+      <MemoryRouter initialEntries={['/video/cd-example/runs']}>
+        <Routes><Route path="/video/:id/:tab" element={<CreativeDirectorDetail basePath="/video" />} /></Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole('region', { name: 'Assembled video' })).toBeInTheDocument();
+    expect(statusLine()).toHaveTextContent('Cut ready · waiting for your review');
+    expect(screen.getByRole('button', { name: 'Review the cut' })).toBeInTheDocument();
+  });
+});

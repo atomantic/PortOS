@@ -30,6 +30,7 @@ import toast from '../ui/Toast';
 import FilePickerButton from '../ui/FilePickerButton';
 import ScoreSheet from './ScoreSheet.jsx';
 import { uploadFile, getUploadUrl } from '../../services/api';
+import { TEMP_ID_RE } from '../../lib/roundDraft.js';
 import {
   transcribeReferenceMidi,
   referenceMidiTranscriptionEventsUrl,
@@ -89,7 +90,7 @@ function SecondsInput({ valueMs, onCommit, ariaLabel }) {
  * reference fields); the file itself is uploaded immediately so it exists,
  * matching the recordings flow (upload now, persist the filename on Save).
  */
-export function ReferenceAudioAttach({ reference, onUpdate }) {
+export function ReferenceAudioAttach({ reference, onUpdate, roundId }) {
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
   const [url, setUrl] = useState('');
@@ -101,9 +102,15 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
 
   // "Download audio from URL" (#2120) — best-effort yt-dlp fetch straight onto
   // the reference. On completion the returned uploads-dir filename is set on the
-  // draft (flipping to the attached state); the user Saves to keep it, same as
-  // upload/mic capture.
+  // draft (flipping to the attached state). A SAVED reference also gets the file
+  // attached server-side as the download finishes, so a reload before Save keeps
+  // it (#9943); a row still carrying a temp id exists only in this draft, so for
+  // that one the user Saves to keep it, same as upload/mic capture.
+  const savedTarget = roundId && !TEMP_ID_RE.test(reference.id)
+    ? { roundId, referenceId: reference.id }
+    : null;
   const audioImport = useReferenceAudioImport({
+    target: savedTarget,
     onComplete: (filename) => { setUrl(''); onUpdate('audioFilename', filename); },
   });
 

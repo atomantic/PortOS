@@ -283,6 +283,27 @@ describe('Cast & Sets production accounting', () => {
   });
 });
 
+describe('Cast & Sets restart presentation (#9940)', () => {
+  it('project reads mark a working stage a restart unpinned as interrupted — but never store the flag', async () => {
+    const project = await seed();
+    const pin = (processId) => projects.mutateProjectRecord(project.id, (record) => ({
+      project: { ...record, castAndSets: { ...(record.castAndSets || { revision: 1, status: 'imaging' }), processId } },
+    }));
+    await pin('proc-before-restart');
+    // The client has no way to know the server's process id, so the read must say it.
+    const one = await request(app).get(`/api/music-video/${project.id}`);
+    expect(one.body.castAndSets).toMatchObject({ status: 'imaging', interrupted: true });
+    const list = await request(app).get('/api/music-video');
+    expect(list.body.find((p) => p.id === project.id).castAndSets.interrupted).toBe(true);
+
+    await pin(service.__castAndSetsProcessId());
+    const live = await request(app).get(`/api/music-video/${project.id}`);
+    expect(live.body.castAndSets.interrupted).toBe(false);
+    // Derived for the reader only: the record on disk stays the source of truth.
+    expect((await current(project.id)).castAndSets).not.toHaveProperty('interrupted');
+  });
+});
+
 describe('Cast & Sets check-in', () => {
   it('directs, renders the character sheet first, builds the sheet, waits for review, and applies the approval', async () => {
     const project = await seed();

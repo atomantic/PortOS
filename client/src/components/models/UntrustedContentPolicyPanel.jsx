@@ -3,6 +3,7 @@ import { getSettings, updateSettings } from '../../services/api';
 import useProviderModels from '../../hooks/useProviderModels';
 import ProviderModelSelector from '../ProviderModelSelector';
 import toast from '../ui/Toast';
+import { isLocalEndpoint } from '../../utils/providerEndpoints';
 import {
   PRIVATE_UNTRUSTED_CONTENT_SOURCES,
   UNTRUSTED_CONTENT_SOURCES,
@@ -15,12 +16,7 @@ const SOURCES = [
 ];
 const PRIVATE_SOURCES = PRIVATE_UNTRUSTED_CONTENT_SOURCES;
 const apiProvider = provider => provider.type === 'api';
-const localApiProvider = provider => {
-  if (!apiProvider(provider) || !URL.canParse(provider.endpoint)) return false;
-  const endpoint = new URL(provider.endpoint);
-  return ['http:', 'https:'].includes(endpoint.protocol) && !endpoint.username && !endpoint.password
-    && ['localhost', '127.0.0.1', '[::1]'].includes(endpoint.hostname.toLowerCase());
-};
+const localApiProvider = provider => apiProvider(provider) && isLocalEndpoint(provider.endpoint);
 const INPUT_CLASS = 'w-full min-w-0 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white';
 
 export default function UntrustedContentPolicyPanel() {

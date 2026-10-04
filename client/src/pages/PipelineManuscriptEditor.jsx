@@ -42,6 +42,7 @@ import useUnsavedChangesGuard from '../hooks/useUnsavedChangesGuard';
 import { filterGenerationModels, mergeModelLists, localBackendForProvider, modelOptionLabel } from '../utils/providers';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import useLocalModels from '../hooks/useLocalModels';
+import useMounted from '../hooks/useMounted';
 import { locateAnchors } from '../lib/manuscriptAnchors';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
 import ManuscriptLiveSection from '../components/pipeline/manuscript/ManuscriptLiveSection';
@@ -51,6 +52,7 @@ import ManuscriptIssueTabs from '../components/pipeline/manuscript/ManuscriptIss
 import ManuscriptImpactPreview from '../components/pipeline/manuscript/ManuscriptImpactPreview';
 import ManuscriptReadAloud from '../components/pipeline/manuscript/ManuscriptReadAloud';
 import { MANUSCRIPT_TYPES, STAGE_LABEL } from '../components/pipeline/manuscript/constants';
+import { acceptedSectionsOf } from '../components/pipeline/manuscript/ManuscriptCommentCard';
 import {
   getPipelineSeries, updatePipelineSeries, getPipelineManuscript, getPipelineManuscriptReview,
   savePipelineManuscriptSection, reformatPipelineManuscriptText, restorePipelineStageVersion,
@@ -80,6 +82,12 @@ const isSectionDirty = (baselines, section) => {
 };
 
 export default function PipelineManuscriptEditor() {
+  const { seriesId } = useParams();
+  // Series changes dispose every draft and callback; issue tabs keep this owner.
+  return <SeriesManuscriptEditor key={seriesId} />;
+}
+
+function SeriesManuscriptEditor() {
   const params = useParams();
   const { seriesId } = params;
   const navigate = useNavigate();
@@ -94,6 +102,13 @@ export default function PipelineManuscriptEditor() {
   const [series, setSeries] = useState(null);
   const [sections, setSections] = useState([]);
   const [viewType, setViewType] = useState(null);          // format currently shown
+  const mountedRef = useMounted();
+  // Each format activation owns its callbacks, even if we later return to the
+  // same format. An old card/Undo toast must not apply into a replacement view.
+  const viewOwnerRef = useRef({ stageId: viewType });
+  if (viewOwnerRef.current.stageId !== viewType) viewOwnerRef.current = { stageId: viewType };
+  const viewOwner = viewOwnerRef.current;
+  const ownsView = () => mountedRef.current && viewOwnerRef.current === viewOwner;
   const [pinnedPrimary, setPinnedPrimary] = useState(null);
   const [availableTypes, setAvailableTypes] = useState([]);
   const [comments, setComments] = useState([]);
@@ -125,8 +140,9 @@ export default function PipelineManuscriptEditor() {
   // Per-comment fix-edit drafts, keyed by comment id and shared across every
   // place the card renders (sidebar reveal, in-context card, impact preview).
   const [fixDrafts, setFixDrafts] = useState({});
-  const setCommentDraft = (commentId, entry) =>
-    setFixDrafts((prev) => ({ ...prev, [commentId]: entry }));
+  const setCommentDraft = (commentId, entry) => {
+    if (ownsView()) setFixDrafts((prev) => ({ ...prev, [commentId]: entry }));
+  };
   // textarea elements keyed by issue number, for reveal-to-section scroll/focus.
   const sectionRefs = useRef(new Map());
   // Last server-confirmed content per section, as STATE so the issue tabs can
@@ -149,15 +165,19 @@ export default function PipelineManuscriptEditor() {
     commitBaselines(next);
   };
 
-  const patchSection = (issueId, fields) =>
-    setSections((prev) => prev.map((s) => (s.issueId === issueId ? { ...s, ...fields } : s)));
+  const patchSection = (section, fields) => {
+    if (!ownsView()) return;
+    setSections((prev) => prev.map((s) => (
+      s.issueId === section.issueId && s.stageId === section.stageId ? { ...s, ...fields } : s
+    )));
+  };
 
   // Live mirror of `sections` so async handlers (e.g. the slow AI reformat) can
   // read the CURRENT content at resolution time and detect a mid-call edit
   // instead of clobbering it via a stale closure.
   const liveSectionsRef = useRef([]);
   liveSectionsRef.current = sections;
-  const liveContentFor = (issueId) => liveSectionsRef.current.find((s) => s.issueId === issueId)?.content ?? '';
+  const liveContentFor = (section) => liveSectionsRef.current.find((s) => s.issueId === section.issueId && s.stageId === section.stageId)?.content ?? '';
 
   // Issue numbers holding an unsaved edit, for the tab dirty dots. Sections save
   // onBlur, so tabbing away from a pending edit leaves it unsaved with no cue
@@ -288,6 +308,7 @@ export default function PipelineManuscriptEditor() {
   const [runEditorialReview, reviewing] = useAsyncAction(
     async (mode = 'merge') => {
       const result = await analyzePipelineManuscriptCompleteness(seriesId, { providerOverride, modelOverride, mode }, { silent: true });
+      if (!ownsView()) return;
       const next = Array.isArray(result?.review?.comments) ? result.review.comments : [];
       setComments(next);
       setReviewMeta({ chunked: !!result?.chunked, chunkCount: result?.chunkCount || 1 });
@@ -324,6 +345,7 @@ export default function PipelineManuscriptEditor() {
   const reloadReviewAfterRun = (meta = null, { recovered = false } = {}) =>
     getPipelineManuscriptReview(seriesId, { silent: true })
       .then((review) => {
+        if (!ownsView()) return;
         const next = Array.isArray(review?.comments) ? review.comments : [];
         setComments(next);
         if (meta) setReviewMeta({ chunked: !!meta.chunked, chunkCount: meta.chunkCount || 1 });
@@ -336,7 +358,7 @@ export default function PipelineManuscriptEditor() {
           ? `Editorial review complete — ${openCount} open notes with drafted edits (reviewed in ${meta.chunkCount} chunks)`
           : `Editorial review complete — ${openCount} open notes with drafted edits`);
       })
-      .catch((err) => toast.error(err.message || 'Failed to load review'));
+      .catch((err) => { if (ownsView()) toast.error(err.message || 'Failed to load review'); });
 
   // Terminal-frame handler for the streamed run: refresh comments + toast, then
   // tear the subscription down. Per-chunk frames only drive the button label.
@@ -376,7 +398,9 @@ export default function PipelineManuscriptEditor() {
       toast.error(err.message || 'Failed to start editorial review');
       return null;
     });
+    if (!mountedRef.current) return;
     setReviewStarting(false);
+    if (!ownsView()) return;
     if (!result) return;
     setReviewActive(true);
   };
@@ -420,7 +444,9 @@ export default function PipelineManuscriptEditor() {
   const changeView = async (type) => {
     if (type === viewType || switching) return;
     setSwitching(true);
-    if (!(await flushPendingSectionSaves())) {
+    const flushed = await flushPendingSectionSaves();
+    if (!ownsView()) return;
+    if (!flushed) {
       setSwitching(false);
       toast('Kept this format open — your unsaved edit could not be saved');
       return;
@@ -429,6 +455,7 @@ export default function PipelineManuscriptEditor() {
       toast.error(err.message || 'Failed to load that format');
       return null;
     });
+    if (!ownsView()) return;
     setSwitching(false);
     if (!manuscript) return;
     // Editing remains available during the GET. Recheck the live owners before
@@ -452,13 +479,15 @@ export default function PipelineManuscriptEditor() {
     setPinning(true);
     const updated = await updatePipelineSeries(seriesId, { primaryManuscriptType: viewType }, { silent: true })
       .catch((err) => { toast.error(err.message || 'Failed to set primary format'); return null; });
+    if (!mountedRef.current) return;
     setPinning(false);
+    if (!ownsView()) return;
     if (!updated) return;
     setPinnedPrimary(updated.primaryManuscriptType || viewType);
     toast.success(`${STAGE_LABEL[viewType] || viewType} set as the primary manuscript`);
   };
 
-  const setSectionContent = (issueId, content) => patchSection(issueId, { content });
+  const setSectionContent = (section, content) => patchSection(section, { content });
 
   // Tail of each section's save chain, keyed by section. Two paths can target
   // the same section at once — the onBlur save and the flush below (clicking the
@@ -469,7 +498,7 @@ export default function PipelineManuscriptEditor() {
   const persistSection = async (section, key, content) => {
     // Re-checked HERE, not before queueing: by the time this link runs, the save
     // ahead of it may have already persisted this exact text.
-    if (baselineRef.current.get(key) === content) return;
+    if (!ownsView() || baselineRef.current.get(key) === content) return;
     setSaveState((prev) => ({ ...prev, [section.issueId]: 'saving' }));
     const result = await savePipelineManuscriptSection(
       seriesId,
@@ -480,9 +509,10 @@ export default function PipelineManuscriptEditor() {
       toast.error(err.message || 'Failed to save manuscript edit');
       return null;
     });
+    if (!ownsView()) return result;
     if (result?.section) {
       setBaseline(key, result.section.content);
-      patchSection(section.issueId, { versions: result.section.versions });
+      patchSection(section, { versions: result.section.versions });
     }
     setSaveState((prev) => ({ ...prev, [section.issueId]: result ? 'saved' : undefined }));
     return result;
@@ -509,16 +539,19 @@ export default function PipelineManuscriptEditor() {
   // out from under them. Returns false when a save FAILED, so the caller aborts
   // rather than discarding the user's text — `undefined` means the save was a
   // no-op (an in-flight save already persisted it), which is not a failure.
-  const flushPendingSectionSaves = async () => {
+  // `keys` (baselineKey values) scopes the flush to the sections a mutation is
+  // about to touch; omitted means every section.
+  const flushPendingSectionSaves = async (keys = null) => {
     // Drain what's already queued first: a section can be mid-save while its
     // live text happens to match the baseline (typed, blurred, then typed back),
     // which reads as "clean" — switching formats under that in-flight save would
     // swap `sections` out from under it and land its result on the new format's
     // badge. Re-derive dirty afterwards, so a queued save that FAILED shows up
     // here and gets retried rather than silently passing the gate.
-    const queued = [...pendingSaves.current.values()];
+    const wanted = keys ? new Set(keys) : null;
+    const queued = [...pendingSaves.current].filter(([key]) => !wanted || wanted.has(key)).map(([, tail]) => tail);
     if (queued.length) await Promise.all(queued);
-    const dirty = liveSectionsRef.current.filter((s) => isSectionDirty(baselineRef.current, s));
+    const dirty = liveSectionsRef.current.filter((s) => (!wanted || wanted.has(baselineKey(s))) && isSectionDirty(baselineRef.current, s));
     if (dirty.length === 0) return true;
     const results = await Promise.all(dirty.map((s) => saveSectionContent(s, s.content)));
     return results.every((r) => r !== null);
@@ -537,7 +570,7 @@ export default function PipelineManuscriptEditor() {
       toast('Already well-formatted — nothing to clean up');
       return;
     }
-    setSectionContent(section.issueId, formatted);
+    setSectionContent(section, formatted);
     // Only claim success once the save lands — saveSectionContent swallows its
     // own error (toasts "Failed to save…") and resolves null, so an
     // unconditional success toast would stack a green toast on the red one.
@@ -566,8 +599,8 @@ export default function PipelineManuscriptEditor() {
       toast.error(err.message || 'AI reformat failed');
       return null;
     });
-    if (!result || typeof result.text !== 'string') return;
-    if (liveContentFor(section.issueId) !== sent) {
+    if (!ownsView() || !result || typeof result.text !== 'string') return;
+    if (liveContentFor(section) !== sent) {
       toast('Section changed while reformatting — discarded the AI result');
       return;
     }
@@ -575,21 +608,77 @@ export default function PipelineManuscriptEditor() {
       toast('Already well-formatted — nothing to clean up');
       return;
     }
-    setSectionContent(section.issueId, result.text);
+    setSectionContent(section, result.text);
     const saved = await saveSectionContent(section, result.text);
     if (saved) toast.success('Reformatted with AI');
   };
 
+  // Server-side mutations (revert, accept, undo) rewrite persisted section text
+  // while the textareas stay editable. Two halves keep a keystroke typed after
+  // the action started from being erased by its response (#9954):
+  //   beginSectionMutation — settle the touched sections' unsaved drafts so the
+  //     server mutates the text the writer sees (null = a save failed; abort),
+  //     then snapshot every section's current text.
+  //   adoptSectionResult  — the server's text becomes the saved baseline; it
+  //     replaces the editable buffer only if that buffer is still exactly what
+  //     the mutation started from. A newer draft is kept (dirty against the new
+  //     baseline) and is NOT auto-saved over the server change — so a kept draft
+  //     also blocks the next mutation on its section until the writer has dealt
+  //     with it, because settling it first would save it over that change.
+  const retainedDrafts = useRef(new Set());
+  const beginSectionMutation = async (keys = null) => {
+    if (!ownsView()) return null;
+    for (const key of [...retainedDrafts.current]) {
+      const live = liveSectionsRef.current.find((s) => baselineKey(s) === key);
+      if (!live || !isSectionDirty(baselineRef.current, live)) retainedDrafts.current.delete(key);
+      else if (!keys || keys.includes(key)) {
+        toast('Not applied — review and save your kept draft first; this action would otherwise save it over the earlier server change');
+        return null;
+      }
+    }
+    const flushed = await flushPendingSectionSaves(keys);
+    if (!ownsView()) return null;
+    if (!flushed) {
+      toast('Not applied — your unsaved edit could not be saved first');
+      return null;
+    }
+    return new Map(liveSectionsRef.current.map((s) => [baselineKey(s), s.content]));
+  };
+
+  // Returns true when a newer local draft was retained instead of replaced.
+  const adoptSectionResult = ({ issueId, stageId, content, versions }, snapshot) => {
+    if (!ownsView()) return false;
+    const key = `${issueId}:${stageId}`;
+    const live = liveSectionsRef.current.find((s) => baselineKey(s) === key);
+    const retain = !!live && (isSectionDirty(baselineRef.current, live)
+      || (snapshot?.has(key) && snapshot.get(key) !== live.content));
+    setBaseline(key, content);
+    if (retain) {
+      retainedDrafts.current.add(key);
+      patchSection({ issueId, stageId }, { versions });
+      return true;
+    }
+    retainedDrafts.current.delete(key);
+    patchSection({ issueId, stageId }, { content, versions });
+    setSaveState((prev) => ({ ...prev, [issueId]: 'saved' }));
+    return false;
+  };
+
+  const RETAINED_MESSAGE = 'Server change applied — your newer draft was kept; review it before saving';
+
   const revertSection = async (section, runId) => {
+    const snapshot = await beginSectionMutation([baselineKey(section)]);
+    if (!snapshot) return null;
     const result = await restorePipelineStageVersion(section.issueId, section.stageId, runId, { silent: true })
       .catch((err) => { toast.error(err.message || 'Failed to revert'); return null; });
-    if (!result?.stage) return null;
-    const content = result.stage.output || '';
+    if (!ownsView() || !result?.stage) return null;
     const versions = (result.stage.runHistory || []).map((h) => ({ runId: h.runId, createdAt: h.createdAt }));
-    setBaseline(baselineKey(section), content);
-    patchSection(section.issueId, { content, versions });
-    setSaveState((prev) => ({ ...prev, [section.issueId]: 'saved' }));
-    toast.success('Reverted to the selected version');
+    const retained = adoptSectionResult(
+      { issueId: section.issueId, stageId: section.stageId, content: result.stage.output || '', versions },
+      snapshot,
+    );
+    if (retained) toast(RETAINED_MESSAGE);
+    else toast.success('Reverted to the selected version');
     return result;
   };
 
@@ -599,6 +688,7 @@ export default function PipelineManuscriptEditor() {
   // a cross-issue jump, or immediately when it's the active issue. A story-level
   // note with no issueNumber has no tab, so it expands inline in the sidebar.
   const advanceTo = (comment) => {
+    if (!ownsView()) return;
     setOpenCommentId(comment.id);
     setEditingIssueId(null); // make sure it's the card showing, not the editor
     if (comment.issueNumber == null) return; // unanchored — expands in the sidebar
@@ -623,6 +713,7 @@ export default function PipelineManuscriptEditor() {
   // is one action per note with no scroll-back in between. `openOrder` is
   // declared below; by the time these handlers run it's populated.
   const updateCommentLocal = (next) => {
+    if (!ownsView()) return;
     setComments((prev) => prev.map((c) => (c.id === next.id ? next : c)));
     if (next.id !== openCommentId || next.status === 'open') return;
     const idx = openOrder.findIndex((c) => c.id === next.id);
@@ -631,16 +722,17 @@ export default function PipelineManuscriptEditor() {
     else setOpenCommentId(null);
   };
 
-  const applyAccepted = ({ comment, section, sections: changedSections }) => {
-    const list = Array.isArray(changedSections) && changedSections.length ? changedSections : [section].filter(Boolean);
-    list.forEach((changed) => {
-      if (changed?.issueId && changed.stageId === viewType) {
-        patchSection(changed.issueId, { content: changed.content, versions: changed.versions });
-        setBaseline(baselineKey(changed), changed.content);
-        setSaveState((prev) => ({ ...prev, [changed.issueId]: 'saved' }));
+  const applyAccepted = (result, snapshot) => {
+    if (!ownsView()) return false;
+    let retained = false;
+    acceptedSectionsOf(result).forEach((changed) => {
+      if (changed?.issueId && changed.stageId === viewOwnerRef.current.stageId) {
+        retained = adoptSectionResult(changed, snapshot) || retained;
       }
     });
-    if (comment) updateCommentLocal(comment);
+    if (retained) toast(RETAINED_MESSAGE);
+    if (result.comment) updateCommentLocal(result.comment);
+    return true;
   };
 
   // Open editorial comments anchorable to the on-screen format, grouped by issue
@@ -725,6 +817,7 @@ export default function PipelineManuscriptEditor() {
     modelOverride,
     onCommentChange: updateCommentLocal,
     onAccepted: applyAccepted,
+    onBeginMutation: beginSectionMutation,
     fixDrafts,
     setCommentDraft,
     openNav: {
@@ -894,7 +987,7 @@ export default function PipelineManuscriptEditor() {
                   openCommentId,
                   onOpenComment: setOpenCommentId,
                   onCloseComment: () => setOpenCommentId(null),
-                  onContentChange: (content) => setSectionContent(section.issueId, content),
+                  onContentChange: (content) => setSectionContent(section, content),
                   onBlurSave: () => saveSection(section),
                   onFormat: () => formatSection(section),
                   onReformat: () => reformatSection(section),
@@ -902,13 +995,13 @@ export default function PipelineManuscriptEditor() {
                   registerRef: registerSectionRef(section.number),
                   commentCardProps,
                 };
-                // Key on issueId so switching issues mounts a fresh section —
+                // Key on issue + stage so a replacement section owns its controls —
                 // the card-scroll-into-view effect then fires on arrival.
                 return viewMode === 'live' ? (
-                  <ManuscriptLiveSection key={section.issueId} {...common} />
+                  <ManuscriptLiveSection key={baselineKey(section)} {...common} />
                 ) : (
                   <AnnotatedManuscriptSection
-                    key={section.issueId}
+                    key={baselineKey(section)}
                     {...common}
                     editing={editingIssueId === section.issueId}
                     onToggleEdit={() => setEditingIssueId((cur) => (cur === section.issueId ? null : section.issueId))}
@@ -1039,9 +1132,12 @@ export default function PipelineManuscriptEditor() {
         comments={comments.filter((c) => c.status === 'open' && c.fix)}
         fixDrafts={fixDrafts}
         onAccepted={applyAccepted}
+        onBeginMutation={beginSectionMutation}
+        isCurrentOwner={ownsView}
       />
 
       <ManuscriptReadAloud
+        key={activeSection ? baselineKey(activeSection) : 'empty'}
         open={showReadAloud}
         onClose={() => setShowReadAloud(false)}
         section={activeSection}

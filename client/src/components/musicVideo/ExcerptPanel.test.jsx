@@ -47,3 +47,40 @@ describe('ExcerptPanel social cuts (#9280)', () => {
     expect(start).toHaveBeenCalledWith(0, 15, undefined);
   });
 });
+
+
+it('keeps the current draft visible while retaining stale and failed attempts behind history', () => {
+  const current = { id: 'current', status: 'complete', filename: 'current.mp4', startSec: 0, endSec: 12, dependencyState: { status: 'current' } };
+  render(<ExcerptPanel project={documentProject} rendering={false} progress={0} excerpts={[
+    { ...current, id: 'older', filename: 'older.mp4', dependencyState: { status: 'stale' } }, current,
+    { id: 'failed', status: 'error', error: 'Render interrupted: encoder input closed', startSec: 0, endSec: 12 },
+  ]} startExcerpt={vi.fn()} />);
+  expect(screen.getByRole('list', { name: 'Current draft and active renders' })).toHaveTextContent('Matches current inputs');
+  const history = screen.getByText('Earlier and failed attempts (2)').closest('details');
+  expect(history.open).toBe(false);
+  expect(screen.getByRole('status')).toBeVisible();
+  expect(screen.getByRole('status')).toHaveTextContent('Latest draft attempt failed: Render interrupted');
+  fireEvent.click(screen.getByText('Earlier and failed attempts (2)'));
+  expect(history.open).toBe(true);
+  expect(screen.getByText('Earlier inputs — retained for reference')).toBeVisible();
+  expect(screen.getByRole('alert')).toHaveTextContent('Render interrupted');
+});
+
+it('explains an occupied render slot without attributing another project’s progress to this project', () => {
+  const start = vi.fn();
+  render(<ExcerptPanel project={documentProject} occupied rendering={false} progress={0} excerpts={[]} startExcerpt={start} />);
+  const button = screen.getByRole('button', { name: /Render excerpt/ });
+  expect(button).toBeDisabled();
+  fireEvent.click(button);
+  expect(start).not.toHaveBeenCalled();
+  expect(screen.getByRole('status')).toHaveTextContent('another project');
+  expect(screen.queryByText(/Rendering draft/)).toBeNull();
+});
+
+it('does not mislabel current footage after it has been approved as production proof', () => {
+  render(<ExcerptPanel project={{ ...documentProject, productionReview: { proof: { excerptId: 'proof' }, approvals: { proof: { excerptId: 'proof' } } } }} rendering={false} progress={0} excerpts={[
+    { id: 'proof', status: 'complete', filename: 'example.mp4', startSec: 0, endSec: 12, dependencyState: { status: 'current' } },
+  ]} startExcerpt={vi.fn()} />);
+  expect(screen.getByText(/Matches current inputs/)).toHaveTextContent('production approval is separate');
+  expect(screen.queryByText(/unapproved draft/)).toBeNull();
+});

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { promptStageNameSchema, promptVariableKeySchema, stageConfigUpdateSchema, validateRequest } from '../lib/validation.js';
+import { promptStageNameSchema, promptVariableKeySchema, promptStageCreateBodySchema, promptStageUpdateBodySchema, promptVariableCreateBodySchema, validateRequest, promptVariableUpdateBodySchema, promptJobSkillBodySchema, promptPreviewBodySchema } from '../lib/validation.js';
 import {
   SYSTEM_STAGE_KEYS,
   isProtectedStage,
@@ -61,11 +61,7 @@ export function createPortOSPromptsRoutes(aiToolkit) {
 
   // POST /api/prompts/variables - Create a variable
   router.post('/variables', asyncHandler(async (req, res) => {
-    const { key, name, category, content } = req.body;
-    if (!key || !content) {
-      throw new ServerError('key and content are required', { status: 400, code: 'VALIDATION_ERROR' });
-    }
-    validateRequest(promptVariableKeySchema, key);
+    const { key, name, category, content } = validateRequest(promptVariableCreateBodySchema, req.body);
     if (promptsService.getVariable(key)) {
       throw new ServerError(`Variable ${key} already exists`, { status: 409, code: 'CONFLICT' });
     }
@@ -75,7 +71,7 @@ export function createPortOSPromptsRoutes(aiToolkit) {
 
   // PUT /api/prompts/variables/:key - Update a variable
   router.put('/variables/:key', asyncHandler(async (req, res) => {
-    const { name, category, content } = req.body;
+    const { name, category, content } = validateRequest(promptVariableUpdateBodySchema, req.body);
     await promptsService.updateVariable(req.params.key, { name, category, content });
     res.json({ success: true });
   }));
@@ -117,10 +113,7 @@ export function createPortOSPromptsRoutes(aiToolkit) {
 
   // PUT /api/prompts/skills/jobs/:name - Update a job skill template
   router.put('/skills/jobs/:name', asyncHandler(async (req, res) => {
-    const { content } = req.body;
-    if (!content) {
-      throw new ServerError('content is required', { status: 400, code: 'VALIDATION_ERROR' });
-    }
+    const { content } = validateRequest(promptJobSkillBodySchema, req.body);
     await saveJobSkillTemplate(req.params.name, content);
     res.json({ success: true });
   }));
@@ -153,11 +146,7 @@ export function createPortOSPromptsRoutes(aiToolkit) {
 
   // POST /api/prompts - Create a new stage
   router.post('/', asyncHandler(async (req, res) => {
-    const { stageName, name, description, model = 'default', returnsJson = false, variables = [], template = '' } = req.body;
-    if (!stageName || !name) {
-      throw new ServerError('stageName and name are required', { status: 400, code: 'VALIDATION_ERROR' });
-    }
-    validateRequest(promptStageNameSchema, stageName);
+    const { stageName, name, description, model, returnsJson, variables, template } = validateRequest(promptStageCreateBodySchema, req.body);
     if (promptsService.getStage(stageName)) {
       throw new ServerError(`Stage ${stageName} already exists`, { status: 409, code: 'CONFLICT' });
     }
@@ -176,13 +165,10 @@ export function createPortOSPromptsRoutes(aiToolkit) {
     if (!promptsService.getStage(req.params.stage)) {
       throw new ServerError('Stage not found', { status: 404, code: 'NOT_FOUND' });
     }
-    const { template, ...rawConfig } = req.body;
+    const { template, ...config } = validateRequest(promptStageUpdateBodySchema, req.body ?? {});
 
-    if (Object.keys(rawConfig).length > 0) {
-      const config = validateRequest(stageConfigUpdateSchema, rawConfig);
-      if (Object.keys(config).length > 0) {
-        await promptsService.updateStageConfig(req.params.stage, config);
-      }
+    if (Object.keys(config).length > 0) {
+      await promptsService.updateStageConfig(req.params.stage, config);
     }
     if (template !== undefined) {
       await promptsService.updateStageTemplate(req.params.stage, template);
@@ -232,7 +218,7 @@ export function createPortOSPromptsRoutes(aiToolkit) {
 
   // POST /api/prompts/:stage/preview - Preview compiled prompt
   router.post('/:stage/preview', asyncHandler(async (req, res) => {
-    const { testData = {} } = req.body;
+    const { testData } = validateRequest(promptPreviewBodySchema, req.body ?? {});
     const preview = await promptsService.previewPrompt(req.params.stage, testData);
     res.json({ preview });
   }));

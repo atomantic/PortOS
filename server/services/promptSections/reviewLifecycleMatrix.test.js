@@ -272,6 +272,14 @@ describe('buildReviewLoopFollowUpSection — load-bearing lines stay with their 
     expect(section).toContain('gh pr merge "https://github.com/example-org/example-repo/pull/42" --merge --delete-branch');
     expect(section).toContain('(Equivalent: `gh pr merge 42 --repo example-org/example-repo --merge --delete-branch`.)');
     expect(section).toContain('`gh pr view "https://github.com/example-org/example-repo/pull/42" --json state -q .state` must return `MERGED`');
+    expect(section).toContain('If it returns `MERGED`, publication succeeded even when the CLI failed during local cleanup');
+    expect(section).toContain('Do not retry a successful merge');
+    expect(section).toContain('Leave the active managed local worktree and its branch to PortOS cleanup');
+    expect(section).toContain('never checkout the default branch');
+    expect(section).toContain('a failed lookup is not proof of absence');
+    expect(section).toContain('retry remote deletion only for that verified task branch');
+    expect(section).toContain('Only while the PR is still unmerged');
+    expect(section).toContain('a failed state lookup is inconclusive, never success');
     expect(section).toContain('8. Exit. Do **not** run `/do:push` or open a new PR — the merge handles everything.');
     expect(section).not.toContain('**Cross-phase stop-mode gate:**');
     expect(section).not.toContain('Do NOT push or open a PR/MR');

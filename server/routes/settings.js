@@ -26,7 +26,7 @@ import { storableAutoUpdateConfig } from '../lib/sharedSchemas.js';
 import { DEFAULT_UNTRUSTED_CONTENT_POLICY, untrustedContentSettingsSchema } from '../lib/untrustedContent.js';
 import { agentContextSettingsSchema } from '../lib/agentContextValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
-import { privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, autoUpdateSettingsSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, beeperSettingsSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, imageGenFalSettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, subscriptionPlanTiersMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, harnessSettingsSchema, credentialBootstrapsSettingsSchema, validateRequest } from '../lib/validation.js';
+import { privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, autoUpdateSettingsSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, beeperSettingsSchema, beeperSavedScopesSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, imageGenFalSettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, subscriptionPlanTiersMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, harnessSettingsSchema, credentialBootstrapsSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -511,6 +511,9 @@ router.put('/', asyncHandler(async (req, res) => {
   // `.partial()` was a no-op), and the schema's `superRefine` (SEC-2's
   // loopback-only `baseUrl` gate) returns a `ZodEffects`, which has no
   // `.partial()` method at all.
+  if (req.body?.beeperSavedScopes !== undefined) {
+    validateRequest(beeperSavedScopesSchema, req.body.beeperSavedScopes);
+  }
   if (req.body?.beeper !== undefined) {
     validateRequest(beeperSettingsSchema, req.body.beeper);
   }
@@ -674,8 +677,14 @@ router.put('/', asyncHandler(async (req, res) => {
     previousBeeperIntervalMinutes = current?.beeper?.intervalMinutes;
     previousBeeperConnection = JSON.stringify([current?.beeper?.baseUrl, current?.beeper?.allowNonLoopbackBaseUrl]);
     previousBeeperGates = JSON.stringify([current?.instanceFeatures?.beeper, current?.instanceFeatureGroups?.comms]);
+    // Provider picker and promotion controls save independent keys in this
+    // slice. Merge while holding the settings write queue to retain both.
+    const next = { ...current, ...settingsPatch };
+    if (settingsPatch.autofixer !== undefined) {
+      next.autofixer = { ...current.autofixer, ...settingsPatch.autofixer };
+    }
     return preserveExternallyOwnedKeys(
-      mergeFederationSlice({ ...current, ...settingsPatch }, current),
+      mergeFederationSlice(next, current),
       current,
     );
   }, { actor: 'user' });

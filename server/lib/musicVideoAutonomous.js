@@ -51,12 +51,52 @@ export const AUTONOMOUS_CHECKPOINT_IDS = Object.freeze([...AUTONOMOUS_STAGE_CHEC
 // and credits) or the on-device Music Designer engines (free, no browser).
 export const AUTONOMOUS_SONG_SOURCES = Object.freeze(['suno', 'local']);
 
+// Local Music Studio options: audio models or generative code.
+export const LOCAL_MUSIC_TYPES = Object.freeze(['model', 'code']);
+export const LOCAL_MUSIC_TYPE_LABELS = Object.freeze({
+  model: 'Audio model',
+  code: 'Code',
+});
+export const LOCAL_MUSIC_CODE_LANGUAGES = Object.freeze(['strudel', 'tonejs', 'supercollider']);
+export const LOCAL_MUSIC_CODE_LANGUAGE_LABELS = Object.freeze({
+  strudel: 'Strudel',
+  tonejs: 'Tone.js',
+  supercollider: 'SuperCollider',
+});
+
+/**
+ * The brief's local Music Studio options: model (with optional engine pin) or
+ * code (with chosen language). Returns null when no option is configured.
+ */
+export function normalizeLocalMusicOptions(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const hasType = LOCAL_MUSIC_TYPES.includes(raw.type);
+  const type = hasType ? raw.type : (raw.language ? 'code' : 'model');
+  const engine = isStr(raw.engine) ? clean(raw.engine, 64) || null : null;
+  const language = isStr(raw.language) && LOCAL_MUSIC_CODE_LANGUAGES.includes(raw.language) ? raw.language : null;
+  if (!hasType && !engine && !language) return null;
+  return {
+    type,
+    ...(engine ? { engine } : {}),
+    ...(type === 'code' ? { language: language || 'strudel' } : {}),
+  };
+}
+
 // A run in one of these states can still be resumed / approved.
 export const AUTONOMOUS_LIVE_STATUSES = Object.freeze(['running', 'awaiting-approval', 'needs-human', 'stopped']);
 
 export const AUTONOMOUS_PROMPT_MAX = 4000;
 export const AUTONOMOUS_NAME_MAX = 200;
 export const AUTONOMOUS_ORIGINS = Object.freeze(['manual', 'schedule']);
+
+// The Production review stages a run may approve by itself once the operator
+// grants it (`brief.autoApprove`, set with the instance password on start or
+// resume). In review order; readiness checks still gate every one.
+export const AUTONOMOUS_AUTO_APPROVE_STAGES = Object.freeze(['art', 'storyboard', 'proof']);
+
+/** Known auto-approve stages, de-duplicated, in review order. */
+export const normalizeAutoApprove = (list) => AUTONOMOUS_AUTO_APPROVE_STAGES
+  .filter((stage) => Array.isArray(list) && list.includes(stage));
 
 export const AUTONOMOUS_DEFAULT_LIMITS = Object.freeze({ maxGenerations: 40, maxReviewAttempts: 3 });
 export const AUTONOMOUS_LIMIT_BOUNDS = Object.freeze({
@@ -141,6 +181,7 @@ function normalizeAutonomousSettings(raw = {}) {
     // Suno only: when it cannot even take the request (signed out, no credits,
     // page changed), render the song locally instead of parking the run.
     localFallback: raw.localFallback === true,
+    localMusic: normalizeLocalMusicOptions(raw.localMusic),
     instrumental: raw.instrumental === true,
     guidance: clean(raw.guidance, 4000),
     tools,

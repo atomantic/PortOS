@@ -37,8 +37,8 @@ const { sseState, ytSseStates, getYtSseState } = vi.hoisted(() => {
 
 // This page suite exercises existing controls with production approvals already granted.
 // ProductionReviewPanel and route integration suites exercise the real approval refusals.
-vi.mock('../hooks/useMusicVideoProductionReview.js', () => ({ default: () => ({
-  readiness: { readyForProduction: true, basis: {}, art: { approved: true, problems: [] }, storyboard: { approved: true, problems: [] }, proof: { approved: true, problems: [] } },
+vi.mock('../hooks/useMusicVideoProductionReview.js', () => ({ default: ({ project }) => ({
+  readiness: project?.productionReadiness || { readyForProduction: true, basis: {}, art: { approved: true, problems: [] }, storyboard: { approved: true, problems: [] }, proof: { approved: true, problems: [] } },
   busy: false, error: null, proof: { active: false }, save: vi.fn(), prepare: vi.fn(), approve: vi.fn(), renderProof: vi.fn(),
 }) }));
 
@@ -65,6 +65,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   separateMusicVideoVocals: vi.fn(async () => ({ jobId: 'sep-job-1' })),
   musicVideoVocalSeparationEventsUrl: (jobId) => `/api/music-video/vocal-stem/separate/${jobId}/events`,
   cancelMusicVideoVocalSeparation: vi.fn(async () => ({ ok: true })),
+  getMusicVideoActiveRender: vi.fn(async () => ({ jobId: null })),
   renderMusicVideoProject: vi.fn(async () => ({ jobId: 'job-1' })),
   musicVideoRenderEventsUrl: (jobId) => `/api/music-video/render/${jobId}/events`,
   cancelMusicVideoRender: vi.fn(async () => ({ ok: true })),
@@ -232,7 +233,7 @@ import {
   selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff,
   addMusicVideoSceneTake, getMusicVideoHandoffBundle,
   renderMusicVideoExcerpt, deleteMusicVideoExcerpt, addMusicVideoExcerptNote,
-  updateMusicVideoExcerptNote, deleteMusicVideoExcerptNote, getMusicVideoProject,
+  updateMusicVideoExcerptNote, deleteMusicVideoExcerptNote, getMusicVideoProject, getMusicVideoActiveRender,
   startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision,
   startMusicVideoCastAndSets, approveMusicVideoCastAndSets, stopMusicVideoProduction,
   getMusicVideoPublishPlatforms, draftMusicVideoPublishCopy,
@@ -320,8 +321,26 @@ const openProject = async (project, stage = null) => {
   if (stage) await openStage(stage);
 };
 
-const openCreateForm = async () => {
+// The header hides New project / Autonomous while a project is open, so step
+// back to the project list via the picker first.
+const clickNewProject = async () => {
+  const picker = screen.getByLabelText('Project');
+  const previous = picker.value;
+  if (!screen.queryByRole('button', { name: /New project/i })) {
+    fireEvent.change(picker, { target: { value: '' } });
+  }
   fireEvent.click(await screen.findByRole('button', { name: /New project/i }));
+  // Keep the drawer open and return to the project the test was on.
+  if (previous) fireEvent.change(picker, { target: { value: previous } });
+};
+
+const openCreateForm = clickNewProject;
+
+// Mocked useSseProgress mutates shared state without re-rendering; toggling the
+// rename form is a harmless page-level state change that forces a render.
+const forceRerender = () => {
+  fireEvent.click(screen.getByRole('button', { name: 'Rename project' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 };
 
 // Probes/harness for the URL-nav backstop test: a location readout plus a
@@ -329,7 +348,7 @@ const openCreateForm = async () => {
 // Back / ⌘K jump, which bypass the in-app selectProject guard).
 function LocationProbe() {
   const loc = useLocation();
-  return <div data-testid="loc">{loc.pathname}</div>;
+  return <div data-testid="loc">{loc.pathname}{loc.hash}</div>;
 }
 function NavTo({ to }) {
   const navigate = useNavigate();
@@ -343,6 +362,8 @@ const renderMVWithNav = (to) => render(
   </MemoryRouter>,
 );
 
+afterEach(() => vi.restoreAllMocks());
+
 beforeEach(() => {
   // Keep the real artifact iframe and src assertions without navigating to its API URL.
   window.happyDOM.settings.navigation.disableChildFrameNavigation = true;
@@ -350,6 +371,7 @@ beforeEach(() => {
   getMusicVideoProject.mockImplementation(async id => (await listMusicVideoProjects()).find(project => project.id === id));
   sseState.latest = null;
   sseState.closed = false;
+  sseState.isOpen = true;
   ytSseStates.clear();
 });
 
@@ -406,6 +428,19 @@ describe('MusicVideo project load recovery (#9761)', () => {
   });
 });
 
+describe('MusicVideo project header', () => {
+  it('hides New project / Autonomous inside a project and renames it from the header', async () => {
+    await openProject(PROJECT_WITH_CLIP);
+    expect(screen.queryByRole('button', { name: /New project/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Autonomous/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Rename project' }));
+    fireEvent.change(screen.getByLabelText('Project title'), { target: { value: 'Renamed Video' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(PROJECT_WITH_CLIP.id, { name: 'Renamed Video' }));
+    await screen.findByRole('heading', { level: 2, name: 'Renamed Video' });
+  });
+});
+
 describe('MusicVideo render control (#1760)', () => {
   it('enables Render and kicks off the job when a scene has a clip', async () => {
     await openProject(PROJECT_WITH_CLIP, 'review');
@@ -454,7 +489,7 @@ describe('MusicVideo render control (#1760)', () => {
 
     // A metadata frame omits progress; the final-render adapter keeps 38%.
     sseState.latest = { type: 'status', message: 'Finishing output' };
-    fireEvent.click(screen.getByRole('button', { name: /New project/i }));
+    await clickNewProject();
     await openStage('review');
     expect(screen.getByTitle('Cancel render')).toHaveTextContent('38%');
     await selectProject(other.id);
@@ -485,8 +520,10 @@ describe('MusicVideo render control (#1760)', () => {
     expect(cancelMusicVideoRender).toHaveBeenCalledWith('existing-render', { silent: true });
     expect(toast.error).toHaveBeenCalledTimes(1);
     sseState.latest = { type: 'canceled' };
-    fireEvent.click(screen.getByRole('button', { name: /New project/i }));
+    forceRerender();
     expect(toast.info).toHaveBeenCalledWith('Render cancelled');
+    // A cancelled render says nothing about the project's status: the page asks the server (#9940).
+    await waitFor(() => expect(getMusicVideoProject).toHaveBeenCalledWith('mv-1', { silent: true }));
     expect(screen.getByRole('button', { name: /^Render final$/ })).toBeEnabled();
   });
 
@@ -501,7 +538,7 @@ describe('MusicVideo render control (#1760)', () => {
     await selectProject(other.id);
     await openStage('review');
     sseState.latest = { type: 'error', error: 'Renderer stopped' };
-    fireEvent.click(screen.getByRole('button', { name: /New project/i }));
+    await clickNewProject();
     expect(toast.error).toHaveBeenCalledWith('Renderer stopped');
     expect(screen.getByLabelText('Project').querySelector('option[value="mv-1"]')).toHaveTextContent('failed');
     expect(screen.getByLabelText('Project').querySelector('option[value="mv-other"]')).toHaveTextContent('ready');
@@ -523,7 +560,33 @@ describe('MusicVideo render control (#1760)', () => {
     sseState.closed = true;
     fireEvent.change(screen.getByPlaceholderText('Project name'), { target: { value: 'Draft updated' } });
     expect(toast.info).toHaveBeenCalledWith('Lost connection to the render — check Media History for the result');
+    await waitFor(() => expect(getMusicVideoProject).toHaveBeenCalledWith('mv-other', { silent: true }));
     expect(screen.getByRole('button', { name: /^Render final$/ })).toBeEnabled();
+  });
+
+  it('re-attaches a live final render on load without a Render click (#9940)', async () => {
+    getMusicVideoActiveRender.mockResolvedValue({ jobId: 'render-live' });
+    sseState.latest = { type: 'progress', progress: 0.5 };
+    await openProject({ ...PROJECT_WITH_CLIP, status: 'rendering' }, 'review');
+    await screen.findByTitle('Cancel render');
+    await waitFor(() => expect(screen.getByTitle('Cancel render')).toHaveTextContent('50%'));
+    expect(getMusicVideoActiveRender).toHaveBeenCalledWith('mv-1', { silent: true });
+    // A page load only READS the render — it never starts one.
+    expect(renderMusicVideoProject).not.toHaveBeenCalled();
+    // It is on screen, so the header does not flag it as an unwatched render.
+    expect(screen.queryByRole('button', { name: 'Reattach to the final render' })).not.toBeInTheDocument();
+  });
+
+  it('flags a rendering project nobody is watching and reattaches on request (#9940)', async () => {
+    getMusicVideoActiveRender.mockResolvedValueOnce({ jobId: null }).mockResolvedValueOnce({ jobId: 'render-late' });
+    sseState.latest = { type: 'progress', progress: 0.25 };
+    await openProject({ ...PROJECT_WITH_CLIP, status: 'rendering' }, 'review');
+    const reattach = await screen.findByRole('button', { name: 'Reattach to the final render' });
+    fireEvent.click(reattach);
+    await screen.findByTitle('Cancel render');
+    await waitFor(() => expect(screen.getByTitle('Cancel render')).toHaveTextContent('25%'));
+    expect(renderMusicVideoProject).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Reattach to the final render' })).not.toBeInTheDocument());
   });
 
   it('disables Render when no scene has a generated clip', async () => {
@@ -541,6 +604,35 @@ describe('MusicVideo render control (#1760)', () => {
   });
 });
 
+describe('MusicVideo needs-attention banner (#9940)', () => {
+  const stranded = {
+    ...PROJECT_WITH_CLIP,
+    revisions: [{ id: 'mvrev-1', status: 'open', sections: [{ sceneId: 's1', kind: 'video', verdict: 'rejected', layer: 'footage' }] }],
+  };
+
+  it('keeps a stranded revision\'s Resume and Cancel in the header on every stage after a reload', async () => {
+    resumeMusicVideoRevision.mockResolvedValue({ project: stranded, revision: stranded.revisions[0], needsGeneration: [], generating: [] });
+    cancelMusicVideoRevision.mockResolvedValue({ project: { ...stranded, revisions: [{ ...stranded.revisions[0], status: 'canceled' }] }, canceledJobIds: [] });
+    await openProject(stranded, 'board');
+    const banner = await screen.findByRole('region', { name: 'Needs attention' });
+    expect(banner).toHaveTextContent('A section revision is open');
+    await openStage('review');
+    expect(screen.getByRole('region', { name: 'Needs attention' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resume the open revision' }));
+    await waitFor(() => expect(resumeMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mvrev-1', { silent: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel the open revision' }));
+    await waitFor(() => expect(cancelMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mvrev-1', { silent: true }));
+    // Cancelling clears the banner: production is unblocked.
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Needs attention' })).not.toBeInTheDocument());
+  });
+
+  it('shows no banner for a healthy project', async () => {
+    await openProject(PROJECT_WITH_CLIP, 'board');
+    expect(screen.queryByRole('region', { name: 'Needs attention' })).not.toBeInTheDocument();
+  });
+});
+
 describe('MusicVideo draft excerpt render (#8986)', () => {
   it('kicks off an excerpt render with the typed range and shows progress', async () => {
     await openProject(PROJECT_WITH_CLIP, 'review');
@@ -555,8 +647,8 @@ describe('MusicVideo draft excerpt render (#8986)', () => {
     // `sseState` object rather than its own React state, so nothing re-renders
     // the component until something else does — force one (mirrors the
     // existing render-job tests' use of this same mock).
-    fireEvent.click(screen.getByRole('button', { name: /New project/i }));
-    await screen.findByText(/Rendering excerpt — 50%/);
+    forceRerender();
+    await screen.findByText(/Rendering draft — 50%/);
   });
 
   it('reloads the project on a completed excerpt render and shows the player + contact sheet + notes', async () => {
@@ -573,7 +665,7 @@ describe('MusicVideo draft excerpt render (#8986)', () => {
     await waitFor(() => expect(renderMusicVideoExcerpt).toHaveBeenCalled());
     await settle();
     sseState.latest = { type: 'complete', result: { excerptId: 'mve-1', filename: 'excerpt-1.mp4' } };
-    fireEvent.click(screen.getByRole('button', { name: /New project/i }));
+    forceRerender();
 
     await screen.findByLabelText(/Play excerpt/i);
     expect(screen.getByText('lip-sync drifts here')).toBeInTheDocument();
@@ -682,7 +774,7 @@ describe('MusicVideo selective section revision (#8987)', () => {
 
     fireEvent.click(await findEnabledByRole('button', { name: /Render revised draft/i }));
     await waitFor(() => expect(resumeMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mvr-1', { silent: true }));
-    await screen.findByText(/Rendering excerpt/);
+    await screen.findByText(/Rendering draft/);
     expect(generateVideo).not.toHaveBeenCalled();
     expect(generateImage).not.toHaveBeenCalled();
   });
@@ -1188,6 +1280,42 @@ describe('MusicVideo autonomous shot planner (#1855)', () => {
 
     fireEvent.click(planBtn);
     await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalledWith('mv-3', { seedPrompts: true }, { silent: true }));
+  });
+});
+
+describe('MusicVideo autonomous mode setup experience', () => {
+  it('renders autonomous run at top of setup, hides lyrics fork callout when no lyrics exist, and reflects progress in next action', async () => {
+    const autoProject = {
+      id: 'mv-auto-1',
+      name: 'Autonomous MV',
+      mode: 'autonomous',
+      status: 'draft',
+      trackId: null,
+      uploadedAudioFilename: null,
+      audioAnalysis: null,
+      scenes: [],
+      autonomousRun: {
+        id: 'run-1',
+        status: 'running',
+        stage: 'lyrics',
+        stages: { lyrics: { step: 'draft' } },
+        output: {},
+        brief: { prompt: 'A synthwave adventure' },
+      },
+    };
+    await openProject(autoProject, 'setup');
+
+    const runRegion = screen.getByRole('region', { name: 'Autonomous run' });
+    expect(runRegion).toBeInTheDocument();
+
+    expect(screen.queryByRole('heading', { name: 'Revise lyrics & song' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Fork & revise song' })).toBeNull();
+
+    expect(screen.queryByRole('button', { name: 'Attach a track' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Writing the lyric draft…' })).toBeDisabled();
+
+    expect(screen.queryByText(/Approvals: 0 of 3 approved/)).toBeNull();
+    expect(screen.getByText(/Autopilot: writing the lyric draft/i)).toBeInTheDocument();
   });
 });
 
@@ -1780,6 +1908,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
   });
 
   it('opens a development file from its deep link in a sandboxed viewer', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true });
     const sheet = {
       id: 'mvd-1', kind: 'cast-sets', title: 'Cast & Sets — Nova', status: 'approved', version: 2, mimeType: 'text/html', updatedAt: '2026-01-02T00:00:00Z',
       versions: [{ version: 1, mimeType: 'text/html', source: 'upload', createdAt: '2026-01-01T00:00:00Z' }, { version: 2, mimeType: 'text/html', source: 'upload', createdAt: '2026-01-02T00:00:00Z' }],
@@ -2307,13 +2436,13 @@ describe('MusicVideo stage tabs (#9243)', () => {
       ],
     };
 
-    it('seeks the player to a scene\'s start when its card is opened, and mounts only once a preview stage is visited', async () => {
+    it('docks the preview on every stage and seeks it to a scene\'s start when its card is opened', async () => {
       listTracks.mockResolvedValue([{ id: 't1', title: 'Neon Song', audioFilename: 'neon.mp3' }]);
       await openProject(docProject, 'setup');
-      expect(screen.queryByTitle('Composition document preview')).toBeNull();
+      expect(await screen.findByTitle('Composition document preview')).toBeTruthy();
 
       await openStage('board');
-      expect(await screen.findByTitle('Composition document preview')).toBeTruthy();
+      expect(screen.getByTitle('Composition document preview')).toBeTruthy();
       await waitFor(() => expect(screen.getByText('0.00s / 60.0s')).toBeTruthy());
       fireEvent.click(screen.getByText('Scene 2'));
       await waitFor(() => expect(screen.getByText('4.00s / 60.0s')).toBeTruthy());
@@ -2330,9 +2459,28 @@ describe('MusicVideo stage tabs (#9243)', () => {
         ],
       };
       await openProject(project, 'board');
-      const player = await screen.findByLabelText('Latest draft excerpt preview');
+      const player = await screen.findByLabelText('Draft excerpt preview');
       expect(player.getAttribute('src')).toBe('/data/videos/excerpt-new.mp4');
       expect(screen.queryByTitle('Composition document preview')).toBeNull();
+      // Every finished draft stays reachable from the dock's source picker.
+      fireEvent.change(screen.getByLabelText('Preview source'), { target: { value: 'excerpt:mve-1' } });
+      await waitFor(() => expect(screen.getByLabelText('Draft excerpt preview').getAttribute('src')).toBe('/data/videos/excerpt-old.mp4'));
+    });
+
+    it('plays the final render first and keeps a picked draft across stage tabs', async () => {
+      const project = {
+        ...PROJECT_WITH_CLIP,
+        renderHistoryId: 'rh-9',
+        excerpts: [{ id: 'mve-1', startSec: 0, endSec: 10, status: 'complete', filename: 'excerpt-old.mp4', notes: [] }],
+      };
+      await openProject(project, 'setup');
+      const final = await screen.findByLabelText('Final render preview');
+      expect(final.getAttribute('src')).toBe('/data/videos/final.mp4');
+      fireEvent.change(screen.getByLabelText('Preview source'), { target: { value: 'excerpt:mve-1' } });
+      await waitFor(() => expect(screen.getByLabelText('Draft excerpt preview').getAttribute('src')).toBe('/data/videos/excerpt-old.mp4'));
+      await openStage('board');
+      expect(screen.getByLabelText('Draft excerpt preview').getAttribute('src')).toBe('/data/videos/excerpt-old.mp4');
+      expect(screen.queryByLabelText('Final render preview')).toBeNull();
     });
 
     it('offers no preview when the project has neither a document nor a finished excerpt', async () => {
@@ -2462,5 +2610,50 @@ describe('MusicVideo main page project cards', () => {
       fireEvent.click(confirmBtn);
     });
     expect(deleteMusicVideoProject).toHaveBeenCalledWith(PROJECT_WITH_CLIP.id, { silent: true });
+  });
+});
+
+
+describe('direct production review navigation', () => {
+  it('focuses the exact step on repeated clicks and restores its deep link with Back/Forward without approval', async () => {
+    const project = { ...PROJECT_ANALYZED, scenes: [], composition: { mode: 'document' },
+      productionReview: { draft: { storyboardSource: 'document', storyboard: [{ id: 'shot-1' }, { id: 'shot-2' }] } },
+      productionReadiness: { readyForProduction: false, basis: {}, art: { approved: false, problems: [] },
+        storyboard: { approved: false, problems: ['Approve art first'] }, proof: { approved: false, problems: ['Approve storyboard first'] } } };
+    listMusicVideoProjects.mockResolvedValue([project]);
+    render(<MemoryRouter initialEntries={['/music-video/mv-3/review']}><LocationProbe /><NavTo to={-1} /><NavTo to={1} />{MV_ROUTES}</MemoryRouter>);
+    const action = await screen.findByRole('button', { name: 'Review art direction' });
+    expect(screen.getByLabelText('Project')).toHaveTextContent('2 document shots');
+    fireEvent.click(action);
+    const art = document.getElementById('mv-review-art');
+    await waitFor(() => expect(art).toHaveFocus());
+    expect(art.closest('details').open).toBe(true);
+    expect(screen.getByTestId('loc')).toHaveTextContent('/cast-sets#mv-review-art');
+    fireEvent.click(screen.getByRole('button', { name: 'Review art direction' }));
+    expect(art).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Approve art direction' })).toBeDisabled();
+    expect(screen.getByText('No current visual guide selected. Choose a Development file in the planning editor below.')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Instance password for this approval')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'go--1' }));
+    expect(screen.getByTestId('loc')).toHaveTextContent('/review');
+    fireEvent.click(screen.getByRole('button', { name: 'go-1' }));
+    await waitFor(() => expect(art).toHaveFocus());
+  });
+});
+
+describe('Autopilot collapsed review summary', () => {
+  it('shows the current blocker in the summary while retaining the historical error in run details', async () => {
+    const error = 'Review and approve the current art direction first.';
+    const project = { ...PROJECT_ANALYZED, autonomousRun: { id: 'history-run', status: 'needs-human', stage: 'produce',
+      error, errorCode: 'MUSIC_VIDEO_APPROVAL_REQUIRED', brief: { autoApprove: [] }, stages: {}, output: {} },
+      productionReadiness: { basis: {}, art: { approved: true, problems: [] }, storyboard: { approved: true, problems: [] },
+        proof: { approved: false, problems: ['Render and watch a current animated chorus proof with the master song.'] } } };
+    listMusicVideoProjects.mockResolvedValue([project]);
+    render(<MemoryRouter initialEntries={['/music-video/mv-3/review']}>{MV_ROUTES}</MemoryRouter>);
+    await screen.findByText(`Historical stop reason: ${error}`);
+    const summary = screen.getByText('Autopilot run').closest('summary');
+    fireEvent.click(summary);
+    expect(summary).toHaveTextContent('Render and watch a current animated chorus proof');
+    expect(summary.textContent).not.toContain(error);
   });
 });

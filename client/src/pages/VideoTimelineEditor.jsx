@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
-import { formatTimecode, clamp } from '../utils/formatters';
+import { formatTimecode, clamp, formatPercent } from '../utils/formatters';
 import { useSseProgress, isTerminalSseFrame } from '../hooks/useSseProgress';
 import {
   TimelineBlock, FloatingLane, LibraryTile, StillTile, AudioRow, BedAudio,
@@ -921,7 +921,7 @@ function TimelineProjectEditor({ projectId }) {
             className="flex items-center gap-2 px-3 py-1.5 bg-port-success hover:bg-port-success/80 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm rounded-md"
           >
             {renderJobId ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-            {renderJobId ? `Rendering ${(renderProgress * 100).toFixed(0)}%` : 'Render'}
+            {renderJobId ? `Rendering ${formatPercent(renderProgress * 100, { decimals: 0 })}` : 'Render'}
           </button>
         </div>
       </div>

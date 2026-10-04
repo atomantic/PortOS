@@ -22,7 +22,7 @@ vi.mock('../services/api', () => ({
 }));
 
 vi.mock('../components/ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn(), custom: vi.fn() }
+  default: { success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn() }
 }));
 
 import CreateApp from './CreateApp';

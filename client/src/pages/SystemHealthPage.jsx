@@ -3,6 +3,7 @@ import { Link, Navigate, useParams } from 'react-router';
 import { Activity, AlertTriangle, HardDrive, Cpu, Database, ListOrdered, RefreshCw, ServerCog, X, Zap } from 'lucide-react';
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
+import { formatPercent } from '../utils/formatters';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import Banner from '../components/ui/Banner';
 import { useSocketResource } from '../hooks/useSocketResource';
@@ -26,6 +27,7 @@ const READINESS_EVENTS = ['system:health:changed'];
 // `forge` is intentionally absent — its message already embeds gh's own remedy
 // text and there is no in-app page that fixes it.
 const REMEDIATION = {
+  'data-disk': { to: '/system-resources/storage', label: 'Runtime data disk usage breakdown' },
   disk: { to: '/system-resources/storage', label: 'Disk usage breakdown' },
   memory: { to: '/devtools/processes', label: 'All processes' },
   cpu: { to: '/devtools/processes', label: 'All processes' },
@@ -44,7 +46,7 @@ const DRILL_INS = ['disk', 'process', 'apps'].map(type => REMEDIATION[type]);
 
 // Icon per tab id. The manifest (`tabGroup: 'system-resources'`) owns
 // id/label/order — this page owns only how each tab looks; the short page-local
-// labels (vs the manifest's "System Resources Overview"/"Storage Report"/
+// labels (vs the manifest's "System Resources"/"Storage Report"/
 // "Active Queues", which need the qualifier to be unambiguous in ⌘K) come from
 // the manifest's `tabLabel`. The downloaded-model inventory used to be a fourth
 // tab here. It answered the same question Models → Status answers, in a
@@ -274,21 +276,24 @@ function SystemHealthOverview() {
             pct={Math.min(100, health.system.cpu.usagePercent)}
             sub={`${health.system.cpu.cores} cores · ${health.system.cpu.loadAvg1m.toFixed(2)} load`}
           />
-          {health.system.disk ? (
+          {[{ disk: health.system.disk, label: 'Root disk', unavailable: health.warnings?.some(warning => warning.type === 'probe-unavailable' && warning.source === 'disk') },
+            ...(Object.hasOwn(health.system, 'dataDisk') ? [{ disk: health.system.dataDisk, label: 'Runtime data disk', unavailable: true }] : [])
+          ].map(({ disk, label, unavailable }) => (disk ? (
             <ResourceCard
+              key={label}
               icon={Database}
-              label="Disk"
-              pct={health.system.disk.usagePercent}
+              label={label}
+              pct={disk.usagePercent}
               warn={t.diskWarn}
               critical={t.diskCritical}
-              sub={`${health.system.disk.usedFormatted} / ${health.system.disk.totalFormatted}`}
+              sub={`${disk.usedFormatted} / ${disk.totalFormatted}`}
             />
-          ) : health.warnings?.some(warning => warning.type === 'probe-unavailable' && warning.source === 'disk') ? (
-            <div className="bg-port-card border border-port-border rounded-xl p-4" aria-label="Disk status unavailable">
-              <div className="text-xs uppercase tracking-wide text-gray-500 mb-2">Disk</div>
+          ) : unavailable ? (
+            <div className="bg-port-card border border-port-border rounded-xl p-4" key={label} aria-label={label === 'Root disk' ? 'Disk status unavailable' : `${label} status unavailable`}>
+              <div className="text-xs uppercase tracking-wide text-gray-500 mb-2">{label}</div>
               <div className="text-3xl font-bold text-port-warning">Unavailable</div>
             </div>
-          ) : null}
+          ) : null))}
         </section>
 
         {error && <p role="status" className="text-port-warning">Health refresh failed. Showing the last available reading.</p>}
@@ -312,7 +317,7 @@ function SystemHealthOverview() {
                 <div key={p.name} className="flex items-center gap-3 px-3 py-2 rounded-lg bg-port-bg/40 hover:bg-port-bg/60 text-sm">
                   <span className={`w-2 h-2 rounded-full ${p.status === 'online' ? 'bg-port-success' : p.status === 'errored' ? 'bg-port-error' : 'bg-gray-500'}`} />
                   <span className="flex-1 text-gray-200 font-mono text-xs truncate">{p.name}</span>
-                  <span className="text-gray-400 tabular-nums">{p.cpu.toFixed(0)}% CPU</span>
+                  <span className="text-gray-400 tabular-nums">{formatPercent(p.cpu, { decimals: 0 })} CPU</span>
                   <span className="text-gray-100 tabular-nums w-24 text-right">{p.memoryFormatted}</span>
                   {p.unstableRestarts > 0 && (
                     <span className="text-port-warning text-xs">{p.unstableRestarts} crash-loop</span>

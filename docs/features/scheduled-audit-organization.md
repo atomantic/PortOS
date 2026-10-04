@@ -13,7 +13,8 @@ better-error-handling, better-typing, better-console-errors, better-ux,
 better-data-safety, better-simplify, better-module-hygiene, better-api-contract,
 better-ui-lifecycle, better-observability, and better-copy, plus the service
 and data-platform lenses better-infrastructure, better-data-integrity,
-better-reliability, better-privacy, and better-cost-efficiency. The existing
+better-reliability, better-privacy, and better-cost-efficiency, and the gap
+lenses better-feature-completeness and better-workflow-recovery. The existing
 better-* names, including better-dev-environment, remain unchanged.
 
 Operational tasks (claims, review pipelines, reconciliation, releases, repo sync),

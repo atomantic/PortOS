@@ -28,9 +28,9 @@ export const syncBeeperNow = (options = {}) => request('/beeper/sync', { method:
 // as the literal "true"/"false" otherwise: the server reads an absent filter as
 // "do not filter", which is a different query from `false`.
 export const getBeeperConversations = ({
-  network, unreadOnly, archived, lowPriority, limit, cursor,
+  network, unreadOnly, archived, lowPriority, snoozed, search, limit, cursor,
 } = {}, options = {}) =>
-  request(`/beeper/conversations${queryString({ network, unreadOnly, archived, lowPriority, limit, cursor })}`, options);
+  request(`/beeper/conversations${queryString({ network, unreadOnly, archived, lowPriority, snoozed, search, limit, cursor })}`, options);
 
 export const getBeeperConversation = (conversationId, options = {}) =>
   request(`/beeper/conversations/${encodeURIComponent(conversationId)}`, options);
@@ -169,3 +169,18 @@ export const discardOutboxEntry = (id, options = {}) => request(`/beeper/outbox/
 
 /** Read delivery state and finish local persistence, without sending again. */
 export const reconcileOutboxEntry = (id, options = {}) => request(`/beeper/outbox/${encodeURIComponent(id)}/reconcile`, { method: 'POST', ...options });
+
+// Saved machine-local conversation filters (#9985).
+export const getBeeperScopes = (options = {}) => request('/beeper/scopes', options);
+export const createBeeperScope = (scope, options = {}) => request('/beeper/scopes', {
+  method: 'POST', body: JSON.stringify(scope), ...options,
+});
+export const updateBeeperScope = (id, scope, options = {}) => request(`/beeper/scopes/${encodeURIComponent(id)}`, {
+  method: 'PATCH', body: JSON.stringify(scope), ...options,
+});
+export const deleteBeeperScope = (id, options = {}) => request(`/beeper/scopes/${encodeURIComponent(id)}`, {
+  method: 'DELETE', ...options,
+});
+
+export const createBeeperConversation = (input, options = {}) =>
+  request('/beeper/conversations', { ...options, method: 'POST', body: JSON.stringify(input) });

@@ -168,8 +168,11 @@ async function agentDataCleanup() {
   })
 
   const mergedCount = merged?.reaped?.length || 0
-  console.log(`🧹 Agent data cleanup: removed ${cleaned} dir(s) older than 7 days, ${sentinelsRemoved} stale sentinel(s), reaped ${mergedCount} merged + ${worktreesReaped} orphaned worktree(s)`)
-  return { cleaned, sentinelsRemoved, mergedReaped: mergedCount, worktreesReaped }
+  // Reaps whose checkout survived removal: not counted above, surfaced here so a
+  // retryable failure is visible in the job log instead of reading as a clean day.
+  const removalFailures = merged?.skipped?.filter(s => s.reason === 'remove-failed').length || 0
+  console.log(`🧹 Agent data cleanup: removed ${cleaned} dir(s) older than 7 days, ${sentinelsRemoved} stale sentinel(s), reaped ${mergedCount} merged + ${worktreesReaped} orphaned worktree(s)${removalFailures ? `, ${removalFailures} worktree removal(s) failed (retry next run)` : ''}`)
+  return { cleaned, sentinelsRemoved, mergedReaped: mergedCount, worktreesReaped, removalFailures }
 }
 
 /**

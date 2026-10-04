@@ -73,6 +73,17 @@ export default function MediaCollectionDetail() {
   const [pickerMode, setPickerMode] = useState(null);
   const moveBtnRef = useRef(null);
   const copyBtnRef = useRef(null);
+  const pageFocusRef = useRef(null);
+  const returningBulkFocus = useRef(false);
+  // Bulk selection disables its opener, then removes that toolbar on success.
+  // The page region survives loading and selection changes as a safe fallback.
+  useEffect(() => {
+    if (!returningBulkFocus.current) return;
+    if (document.activeElement === document.body || document.activeElement?.disabled) {
+      pageFocusRef.current?.focus({ preventScroll: true });
+    }
+    if (!bulkBusy) returningBulkFocus.current = false;
+  }, [bulkBusy, loading]);
   const { annotations, toggleStar, updateAnnotation, getCardProps } = useMediaAnnotations();
 
   const page = useGalleryPage({ collectionId: id, kind: 'all' }, { media: true });
@@ -252,6 +263,7 @@ export default function MediaCollectionDetail() {
   const bulkMoveOrCopy = async (targetId, targetName) => {
     if (selectedItems.length === 0 || !pickerMode) return;
     const mode = pickerMode;
+    returningBulkFocus.current = true;
     setPickerMode(null);
     setBulkBusy(true);
     const placedKeys = new Set();
@@ -337,13 +349,15 @@ export default function MediaCollectionDetail() {
 
   if (loading || (page.loading && page.items.length === 0)) {
     return (
-      <PageSkeleton
-        label="Loading collection"
-        titleWidthClass="w-56"
-        layout="grid"
-        cards={10}
-        gridColsClass="grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
-      />
+      <div ref={pageFocusRef} tabIndex={-1} role="region" aria-label="Media collection">
+        <PageSkeleton
+          label="Loading collection"
+          titleWidthClass="w-56"
+          layout="grid"
+          cards={10}
+          gridColsClass="grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
+        />
+      </div>
     );
   }
   if (!collection) return (
@@ -407,7 +421,7 @@ export default function MediaCollectionDetail() {
   };
 
   return (
-    <div className="space-y-4">
+    <div ref={pageFocusRef} tabIndex={-1} role="region" aria-label="Media collection" className="space-y-4">
       <div className="flex items-center gap-3">
         <Link to="/media/collections" className="text-gray-400 hover:text-white" title="Back">
           <ArrowLeft className="w-5 h-5" />

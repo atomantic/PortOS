@@ -11,7 +11,7 @@
  * is excluded from `npm run test:fast` (`VITEST_FAST=1`).
  */
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir } from 'fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, chmod } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -262,6 +262,32 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('reapMergedWorktrees', () => {
     expect(skipReason(result, path)).toBe('uncommitted');
     expect(existsSync(path)).toBe(true);
   });
+
+  // A checkout git cannot remove (here: its parent directory is read-only) is not a
+  // reap — it must not be counted, and its branch must not be deleted out from
+  // under the surviving checkout (#9909).
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'holds a merged worktree whose removal fails instead of counting it as reaped',
+    async () => {
+      const path = await addWorktree(dir, 'stuck', 'stuck-br');
+      await execGit(['merge', '--no-ff', 'stuck-br', '--no-edit'], dir);
+      await chmod(claudeRoot(dir), 0o555);
+
+      let result;
+      try {
+        result = await reapMergedWorktrees(dir, { includeClaudeTrees: true });
+      } finally {
+        await chmod(claudeRoot(dir), 0o755);
+      }
+
+      expect(result.reaped.map(r => r.branch)).not.toContain('stuck-br');
+      expect(skipReason(result, path)).toBe('remove-failed');
+      expect(result.skipped.find(entry => entry.reason === 'remove-failed').warning).toMatch(/cleanup incomplete/);
+      expect(existsSync(path)).toBe(true);
+      const branches = (await execGit(['branch', '--format=%(refname:short)'], dir)).stdout.trim().split('\n');
+      expect(branches).toContain('stuck-br');
+    },
+  );
 
   it('preserves a locked merged worktree', async () => {
     const path = await addWorktree(dir, 'locked', 'locked-br');

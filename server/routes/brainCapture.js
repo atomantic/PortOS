@@ -8,7 +8,7 @@ import { Router } from 'express';
 import * as brainService from '../services/brain.js';
 import { recordUserAction } from '../services/userActions.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest, brainInboxRetryBodySchema } from '../lib/validation.js';
 import {
   captureInputSchema,
   resolveReviewInputSchema,
@@ -109,7 +109,7 @@ router.post('/fix', asyncHandler(async (req, res) => {
  * Retry AI classification for a needs_review item
  */
 router.post('/inbox/:id/retry', asyncHandler(async (req, res) => {
-  const { providerOverride, modelOverride } = req.body || {};
+  const { providerOverride, modelOverride } = validateRequest(brainInboxRetryBodySchema, req.body ?? {});
   const result = await brainService.retryClassification(req.params.id, providerOverride, modelOverride);
   res.json(result);
 }));

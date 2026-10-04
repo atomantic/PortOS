@@ -113,6 +113,15 @@ export const createProviderPreset = (body, options) => request('/providers/prese
 }).then(invalidateAfter);
 export const testProvider = (id) => request(`/providers/${id}/test`, { method: 'POST' });
 
+// Vision diagnostics run only after an explicit user action.
+export const getProviderVisionHealth = (id, options) => request(`/providers/${encodeURIComponent(id)}/vision-health`, options);
+export const testProviderVision = (id, body, options = {}) => request(`/providers/${encodeURIComponent(id)}/test-vision`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+export const runProviderVisionSuite = (id, body = {}, options = {}) => request(`/providers/${encodeURIComponent(id)}/vision-suite`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
 // --- the composed axes the AI Providers page manages (#7567, epic #7561) -----
 // Harness enablement (the read rides the composition catalog above), services
 // (instances of a definition: plan + credential + catalog), and
@@ -194,7 +203,7 @@ export const serveProviderModel = (id, options) => request(
 );
 
 // Provider status (usage limits, availability)
-export const getProviderStatuses = () => request('/providers/status');
+export const getProviderStatuses = (options) => request('/providers/status', options);
 export const recoverProvider = (id, options) => request(`/providers/${id}/status/recover`, { method: 'POST', ...options });
 
 // Codex / ChatGPT subscription account (#5589). The Codex app-server owns the

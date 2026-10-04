@@ -8,6 +8,8 @@ vi.mock('../services/genome.js', () => ({
 }));
 
 vi.mock('../services/clinvar.js', () => ({
+  syncClinvar: vi.fn(),
+  invalidateClinvarCache: vi.fn(),
   deleteClinvar: vi.fn(async () => undefined),
 }));
 
@@ -23,7 +25,7 @@ vi.mock('../services/epigenetic.js', () => ({
 }));
 
 const { deleteGenome } = await import('../services/genome.js');
-const { deleteClinvar } = await import('../services/clinvar.js');
+const { deleteClinvar, syncClinvar } = await import('../services/clinvar.js');
 const { logEntry } = await import('../services/epigenetic.js');
 const { default: genomeRoutes } = await import('./genome.js');
 
@@ -91,5 +93,31 @@ describe('POST /api/meatspace/genome/epigenetic/:id/log', () => {
       error: 'Intervention not found',
       code: 'INTERVENTION_NOT_FOUND',
     });
+  });
+});
+
+
+describe('ClinVar sync progress', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([undefined, { requestId: '11111111-1111-4111-8111-111111111111' }])('preserves legacy POST and correlates progress for %j', async (body) => {
+    const app = makeApp();
+    const emit = vi.fn();
+    app.set('io', { emit });
+    syncClinvar.mockImplementationOnce(async (onProgress) => {
+      onProgress('Indexing variants');
+      return { synced: true, variantCount: 12 };
+    });
+    const req = request(app).post('/api/meatspace/genome/clinvar/sync');
+    const response = await (body ? req.send(body) : req);
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ synced: true, variantCount: 12 });
+    expect(emit).toHaveBeenCalledWith('genome:clinvar-progress', { message: 'Indexing variants', ...body });
+  });
+
+  it('rejects malformed correlation IDs before starting a sync', async () => {
+    const response = await request(makeApp()).post('/api/meatspace/genome/clinvar/sync').send({ requestId: 123 });
+    expect(response.status).toBe(400);
+    expect(syncClinvar).not.toHaveBeenCalled();
   });
 });

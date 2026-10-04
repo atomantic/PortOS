@@ -606,6 +606,7 @@ export * from './vaultCrypto.js';
 
 // === Model & config ===
 export * from './backupConfig.js';
+export * from './backupSnapshotBoundary.js';
 export * from './systemIdle.js';
 export * from './browserConfig.js';
 export * from './buildId.js';
@@ -774,6 +775,8 @@ export * from './launchVideoValidation.js';
 export * from './styleSourcePrompt.js';
 
 export * from './messageBrowserIdentity.js';
+export * from './messageBrowserCompose.js';
+export * from './messageTransport.js';
 
 export * from './databaseAuthority.js';
 
@@ -823,3 +826,5 @@ export * from './codeAnimationSound.js';
 
 export * from './musicVideoMediaPolicy.js';
 export * from './sandboxDelegation.js';
+
+export * from './forgeMaintenanceTasks.js';

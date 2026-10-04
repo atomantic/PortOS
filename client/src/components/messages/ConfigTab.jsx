@@ -26,19 +26,6 @@ Additional instructions: {{instructions}}
 
 Write a professional, concise reply. Match the tone of the original message.`;
 
-const DEFAULT_FORWARD_TEMPLATE = `You are a professional email assistant. Draft a forwarding message for the following email.
-
-Original From: {{from}}
-Subject: {{subject}}
-Body:
-{{body}}
-
-{{#instructions}}
-Additional instructions: {{instructions}}
-{{/instructions}}
-
-Write a brief forwarding note to introduce the email to the recipient.`;
-
 export default function ConfigTab({ accounts, setAccounts }) {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: '', type: 'gmail', email: '' });
@@ -83,7 +70,8 @@ export default function ConfigTab({ accounts, setAccounts }) {
     const replyConfig = msgConfig.reply || {};
     setConfig({
       replyTemplate: msgConfig.replyTemplate || DEFAULT_REPLY_TEMPLATE,
-      forwardTemplate: msgConfig.forwardTemplate || DEFAULT_FORWARD_TEMPLATE,
+      // Unsupported legacy setting: no runtime consumer, preserved opaquely so saves do not discard it
+      ...(Object.hasOwn(msgConfig, "forwardTemplate") ? { legacyForwardTemplate: msgConfig.forwardTemplate } : {}),
       voiceMode: msgConfig.voiceMode ?? false
     });
     // Restore saved provider/model - per-action configs with legacy fallback
@@ -190,7 +178,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
           model: replySelectedModel
         },
         replyTemplate: config.replyTemplate,
-        forwardTemplate: config.forwardTemplate,
+        ...(Object.hasOwn(config, "legacyForwardTemplate") ? { forwardTemplate: config.legacyForwardTemplate } : {}),
         voiceMode: config.voiceMode
       }
     };
@@ -663,18 +651,6 @@ export default function ConfigTab({ accounts, setAccounts }) {
                 value={config.replyTemplate}
                 onChange={(e) => updateTemplate('replyTemplate', e.target.value)}
                 rows={8}
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white font-mono placeholder-gray-500 focus:outline-none focus:border-port-accent resize-y"
-              />
-            </FormField>
-            <FormField
-              label="Forward Template"
-              className="p-4 bg-port-card rounded-lg border border-port-border"
-              labelClassName="block text-sm font-medium text-gray-300 mb-2"
-            >
-              <textarea
-                value={config.forwardTemplate}
-                onChange={(e) => updateTemplate('forwardTemplate', e.target.value)}
-                rows={6}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white font-mono placeholder-gray-500 focus:outline-none focus:border-port-accent resize-y"
               />
             </FormField>

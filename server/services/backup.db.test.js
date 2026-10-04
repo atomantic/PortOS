@@ -66,29 +66,39 @@ afterAll(async () => {
   // Vitest timing out an assertion does not cancel the real restore. Drain it
   // before cleanup queries, which otherwise race its maintenance fence.
   await Promise.allSettled([...pendingRestores]);
-  if (ready) {
-    await query('DROP SCHEMA IF EXISTS restore_external CASCADE');
-    await query('DROP TABLE IF EXISTS public.unexpected_restore_record');
-    await ensureSchema({ force: true });
-    await query('DELETE FROM writers_room_folders WHERE id = $1', [folderId]);
-    await query('DELETE FROM pipeline_issues WHERE id = $1', [issueId]);
-    await query("DELETE FROM tribe_people WHERE id = $1 OR id = '00000000-0000-4000-8000-000000000863'", [personId]);
-    await query("DELETE FROM app_quality_measurements WHERE app_id = 'restore-probe'");
-    await runDbMigrations();
+  runDbMigrationsFault.next = null;
+  try {
+    if (ready) {
+      await query('DROP SCHEMA IF EXISTS restore_external CASCADE');
+      await query('DROP TABLE IF EXISTS public.unexpected_restore_record');
+      await ensureSchema({ force: true });
+      await query('DELETE FROM writers_room_folders WHERE id = $1', [folderId]);
+      await query('DELETE FROM pipeline_issues WHERE id = $1', [issueId]);
+      await query("DELETE FROM tribe_people WHERE id = $1 OR id = '00000000-0000-4000-8000-000000000863'", [personId]);
+      await query("DELETE FROM app_quality_measurements WHERE app_id = 'restore-probe'");
+      await runDbMigrations();
+    }
+  } finally {
+    // Resource release must survive an earlier replay/repair/cleanup failure.
+    await Promise.all([
+      close(),
+      dest && rm(dest, { recursive: true, force: true }),
+      dataRoot.path && rm(dataRoot.path, { recursive: true, force: true }),
+    ]);
   }
-  await close();
-  if (dest) await rm(dest, { recursive: true, force: true });
-  if (dataRoot.path) await rm(dataRoot.path, { recursive: true, force: true });
 });
 
-async function restore(dryRun = false, snapshotId = 'old-schema') {
-  const pending = restorePostgres(dest, snapshotId, { source: 'fixture-source', dryRun });
+async function trackRestore(pending) {
   pendingRestores.add(pending);
   try {
     return await pending;
   } finally {
     pendingRestores.delete(pending);
   }
+}
+
+function restore(dryRun = false, snapshotId = 'old-schema') {
+  return trackRestore(restorePostgres(dest, snapshotId, { source: 'fixture-source', dryRun }));
 }
 
 describe.skipIf(!ready)('restore older database schema', () => {
@@ -100,6 +110,7 @@ describe.skipIf(!ready)('restore older database schema', () => {
   // query the shared database; a failed drain hook skips that case's body.
   beforeEach(async () => {
     await Promise.all([...pendingRestores]);
+    runDbMigrationsFault.next = null;
   });
 
   // Prepare the shared snapshot in a hook so setup failures stop dependent
@@ -124,6 +135,7 @@ describe.skipIf(!ready)('restore older database schema', () => {
     const { binary } = await resolvePgDumpBinary(await getServerMajorVersion());
     const dump = spawnSync(binary, [...connectionArgs, '--no-owner', '--no-acl', '--clean', '--if-exists', '-f', dumpPath], { env: childEnv, encoding: 'utf8' });
     expect(dump.status, dump.stderr).toBe(0);
+    expect(await readFile(dumpPath, 'utf8')).toContain('COMMENT ON EXTENSION');
 
     // Boot current schema, including its new inbound foreign key. An empty
     // newer table is sufficient to break the old direct-replay implementation.
@@ -160,6 +172,23 @@ describe.skipIf(!ready)('restore older database schema', () => {
     expect(await runDbMigrations()).toBe(0);
   });
 
+  // #9925: replay a complete real dump with the exact newer-client header
+  // against the guarded test target. On PG16 this previously rolled back.
+  it('restores a newer-client transaction_timeout header without changing its source or receipt identity', async () => {
+    const dir = join(dest, 'snapshots', 'fixture-source', 'newer-client');
+    await mkdir(dir);
+    const original = await readFile(dumpPath, 'utf8');
+    const sql = original.includes('SET transaction_timeout = 0;')
+      ? original : original.replace('SET statement_timeout = 0;', 'SET statement_timeout = 0;\nSET transaction_timeout = 0;');
+    const path = join(dir, 'portos-db.sql');
+    await writeFile(path, sql);
+    await query("UPDATE tribe_people SET name = 'Changed after newer-client backup' WHERE id = $1", [personId]);
+    expect(await restore(true, 'newer-client')).toMatchObject({ status: 'ok', dryRun: true });
+    expect(await restore(false, 'newer-client')).toMatchObject({ status: 'ok', dryRun: false });
+    expect((await query('SELECT name FROM tribe_people WHERE id = $1', [personId])).rows).toEqual([{ name: 'Snapshot person' }]);
+    expect(await readFile(path, 'utf8')).toBe(sql);
+  });
+
   // #9725: a committed replay whose repair fails keeps ordinary work fenced
   // with its receipt and ORIGINAL floors, and recovery repairs without replay.
   it('fences a committed replay whose migrations fail, then recovers from the receipt and original floors', async () => {
@@ -176,7 +205,9 @@ describe.skipIf(!ready)('restore older database schema', () => {
     await expect(query('SELECT 1')).rejects.toMatchObject({ code: 'DATABASE_RESTORE_RECOVERY' });
     expect(await restore(true)).toMatchObject({ status: 'failed', reason: 'restore_recovery_pending' });
 
-    expect(await resumeDatabaseRestore(journal.id)).toMatchObject({ status: 'ok', outcome: 'repaired' });
+    // Recovery owns the same maintenance fence and pool as replay. If this
+    // assertion times out, later cases and teardown must drain it too.
+    expect(await trackRestore(resumeDatabaseRestore(journal.id))).toMatchObject({ status: 'ok', outcome: 'repaired' });
     expect(databaseRestoreRecovery.read()).toBeNull();
     // The receipt committed with the replay, inside its transaction.
     expect((await query('SELECT dump_sha256 FROM restore_receipts WHERE operation_id = $1', [journal.id])).rows)

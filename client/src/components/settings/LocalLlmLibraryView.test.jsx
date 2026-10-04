@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 
@@ -534,5 +534,30 @@ describe('LocalLlmLibraryView measured fit badge', () => {
     await renderLibrary();
 
     expect(await screen.findByText(/backend refused it \(measured\)/)).toBeInTheDocument();
+  });
+});
+
+describe('audio library installation terminal evidence', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it.each([
+    ['data: {"type":"progress","progress":0.5}\n\n', false],
+    ['data: {"type":"error","message":"Download failed"}\n\n', false],
+    ['data: {"type":"complete"}\n\n', true],
+  ])('reports installation result only from terminal evidence %j', async (body, succeeds) => {
+    const api = await import('../../services/api');
+    const { installAudioModel } = await import('../../services/apiMusic.js');
+    const { default: toast } = await import('../ui/Toast');
+    api.installAudioModel.mockImplementation(installAudioModel);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, body: new ReadableStream({ start(c) {
+      c.enqueue(new TextEncoder().encode(body)); c.close();
+    } }) }));
+    getLocalLlmCatalog.mockResolvedValue({ models: [{ id: 'example/audio', key: 'example-audio', name: 'Example audio',
+      repository: 'example/audio', engine: 'musicgen', category: 'audio', size: '1 GB', params: '1B' }] });
+    await renderLibrary();
+    const card = (await screen.findByText('Example audio')).closest('.flex-col');
+    fireEvent.click(within(card).getByRole('button', { name: /^Install$/ }));
+    await waitFor(() => expect(api.installAudioModel).toHaveBeenCalled());
+    await waitFor(() => expect(succeeds ? toast.success : toast.error).toHaveBeenCalledTimes(1));
+    expect(succeeds ? toast.error : toast.success).not.toHaveBeenCalled();
   });
 });

@@ -12,7 +12,7 @@ import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { Router } from 'express';
 import { musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema } from '../lib/musicVideoValidation.js';
-import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionOperator, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback } from '../services/musicVideo/productionReviewService.js';
+import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest,
@@ -111,13 +111,13 @@ import {
 } from '../services/audioMidiTranscription.js';
 import { analyzeAudioFileManual, buildManualAnalysisFromCached } from '../services/musicVideo/audioAnalysis.js';
 import { analyzeProjectSong, resolveProjectAudioPath } from '../services/musicVideo/projectAudio.js';
-import { renderMusicVideo, attachRenderSseClient, cancelRender } from '../services/musicVideo/render.js';
+import { renderMusicVideo, attachRenderSseClient, cancelRender, getActiveRenderJobId } from '../services/musicVideo/render.js';
 import { prepareCodeRender } from '../services/musicVideo/codeRender.js';
 import { generateMusicVideoCode, regenerateMusicVideoCodeSection } from '../services/musicVideo/codeGeneration.js';
 import { startExcerptRender, attachExcerptRenderSseClient, cancelExcerptRender } from '../services/musicVideo/excerptRender.js';
 import { deleteExcerpt, addReviewNote, editReviewNote, deleteReviewNote } from '../services/musicVideo/excerptService.js';
 import { suggestSocialCuts } from '../services/musicVideo/socialCuts.js';
-import { startPublishKitBuild, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, selectPublishKitThumbnail } from '../services/musicVideo/publishKit.js';
+import { getActivePublishKitBuild, startPublishKitBuild, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, selectPublishKitThumbnail } from '../services/musicVideo/publishKit.js';
 import { preparePublishDraft, submitPublishDraft, discardPublishDraft, recordPublishPost } from '../services/musicVideo/publish/index.js';
 import { getPublishPlatforms, updatePublishPlatforms, publishHistory } from '../services/musicVideo/publish/platforms.js';
 import {
@@ -132,7 +132,7 @@ import {
   startProduction, resumeProduction, stopProduction, cancelProduction, getProduction,
 } from '../services/musicVideo/productionService.js';
 import {
-  startAutonomousVideo, getAutonomousRun, resumeAutonomousVideo, stopAutonomousVideo, cancelAutonomousVideo,
+  startAutonomousVideo, getAutonomousRun, presentProjectAutonomousRun, resumeAutonomousVideo, stopAutonomousVideo, cancelAutonomousVideo,
 } from '../services/musicVideo/autonomousService.js';
 import { planProject } from '../services/musicVideo/planner.js';
 import {
@@ -180,6 +180,7 @@ import {
   approveCastAndSets,
   skipCastAndSets,
   getCastAndSets,
+  presentProjectCastAndSets,
 } from '../services/musicVideo/castAndSetsService.js';
 
 const router = Router();
@@ -199,8 +200,11 @@ const projectUpdateSchema = musicVideoProjectUpdateSchema.extend(recordRenderPin
 // Backward-compatible by default: returns the full projects array. When a client
 // passes `limit`/`offset`, the response becomes the bounded
 // `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
+// Both pins are process-local, so only the server can say which stages a restart orphaned.
+const presentProjectForRead = (project) => presentProjectAutonomousRun(presentProjectCastAndSets(project));
+
 router.get('/', asyncHandler(async (req, res) => {
-  const projects = await listProjects();
+  const projects = (await listProjects()).map(presentProjectForRead);
   if (!isPaginationRequested(req.query)) {
     return res.json(projects);
   }
@@ -210,7 +214,10 @@ router.get('/', asyncHandler(async (req, res) => {
 router.get('/:id', asyncHandler(async (req, res) => {
   const p = await getProject(req.params.id);
   if (!p) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  res.json(p);
+  // Transient (never persisted): lets a reloaded page reattach to a running publishing-kit build.
+  const activePublishKitBuild = getActivePublishKitBuild(p.id);
+  const presented = presentProjectForRead(p);
+  res.json(activePublishKitBuild ? { ...presented, activePublishKitBuild } : presented);
 }));
 
 router.post('/', asyncHandler(async (req, res) => {
@@ -497,13 +504,19 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
   res.json(await renderMusicVideo(req.params.id));
 }));
 
+// Read-only: the live final-render job for a project (null when none runs on
+// this instance), so a reloaded page re-attaches without POSTing a new render.
+router.get('/:id/render', (req, res) => {
+  res.json({ jobId: getActiveRenderJobId(req.params.id) });
+});
+
 router.post('/:id/production-review/feedback', asyncHandler(async (req, res) => {
   res.json(await addProductionFeedback(req.params.id, validateRequest(musicVideoProductionFeedbackSchema, req.body)));
 }));
 router.post('/:id/production-review/feedback/resolve', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoProductionFeedbackResolutionSchema, req.body);
-  await requireProductionOperator(req);
-  res.json(await closeProductionFeedback(req.params.id, { feedbackId: input.feedbackId, resolution: input.resolution }));
+  const reviewer = await requireProductionReviewer(req);
+  res.json(await closeProductionFeedback(req.params.id, { feedbackId: input.feedbackId, resolution: input.resolution, reviewer }));
 }));
 router.get('/:id/production-review', asyncHandler(async (req, res) => {
   res.json(await getProductionReview(req.params.id));
@@ -529,10 +542,17 @@ router.post('/:id/production-review/prepare', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoCastAndSetsStartSchema, req.body || {});
   res.json(await prepareProductionReview(req.params.id, input));
 }));
+router.post('/:id/production-review/alignment', asyncHandler(async (req, res) => {
+  const { musicVideoAlignmentReviewSchema } = await import('../lib/musicVideoValidation.js');
+  const input = validateRequest(musicVideoAlignmentReviewSchema, req.body);
+  const reviewer = await requireProductionReviewer(req);
+  const { reverifyProductionAlignment } = await import('../services/musicVideo/productionReviewService.js');
+  res.json(await reverifyProductionAlignment(req.params.id, { ...input, reviewer }));
+}));
 router.post('/:id/production-review/approve', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoProductionApprovalSchema, req.body);
-  await requireProductionOperator(req);
-  res.json(await approveProductionReview(req.params.id, { stage: input.stage, basis: input.basis, proofReview: input.proofReview }));
+  const reviewer = await requireProductionReviewer(req);
+  res.json(await approveProductionReview(req.params.id, { stage: input.stage, basis: input.basis, proofReview: input.proofReview, reviewer }));
 }));
 router.post('/:id/production-review/proof', asyncHandler(async (req, res) => {
   res.status(202).json(await renderProductionProof(req.params.id, validateRequest(musicVideoProductionProofSchema, req.body)));
@@ -748,7 +768,7 @@ router.put('/:id/publish/posts/:target', asyncHandler(async (req, res) => {
 
 router.post('/:id/publish/:target/prepare', asyncHandler(async (req, res) => {
   const target = validateRequest(musicVideoPublishTargetSchema, req.params.target);
-  await requireProductionOperator(req);
+  await requireProductionReviewer(req);
   const { password: _password, ...body } = req.body || {};
   const options = validateRequest(musicVideoPublishPrepareSchema, body);
   res.json(await preparePublishDraft(req.params.id, target, options));
@@ -897,9 +917,16 @@ router.post('/:id/production-runs/:runId/cancel', asyncHandler(async (req, res) 
 // (brief → lyrics → mood board → Suno → analysis → production) and reports over
 // `music-video:autonomous`. Optional checkpoints park it for approval. Only these
 // explicit requests (or the scheduled task) begin work — nothing at boot does.
+// A non-empty `autoApprove` lets the run approve those Production review stages
+// itself. Bind the grant to the authenticated session; proof still needs review evidence.
+const authorizeAutoApprove = async (req, autoApprove) => {
+  if (autoApprove === undefined) return false;
+  return requireProductionReviewer(req);
+};
 router.post('/autonomous', asyncHandler(async (req, res) => {
-  const input = validateRequest(musicVideoAutonomousStartSchema, req.body || {});
-  res.status(202).json(await startAutonomousVideo(input));
+  const { password: _password, ...input } = validateRequest(musicVideoAutonomousStartSchema, req.body || {});
+  const autoApproveAuthorized = await authorizeAutoApprove(req, input.autoApprove);
+  res.status(202).json(await startAutonomousVideo(input, { autoApproveAuthorized }));
 }));
 
 router.get('/:id/autonomous', asyncHandler(async (req, res) => {
@@ -908,8 +935,9 @@ router.get('/:id/autonomous', asyncHandler(async (req, res) => {
 
 // Resume a parked/failed/interrupted run, or approve the checkpoint it waits on.
 router.post('/:id/autonomous/resume', asyncHandler(async (req, res) => {
-  const edits = validateRequest(musicVideoAutonomousResumeSchema, req.body || {});
-  res.json(await resumeAutonomousVideo(req.params.id, edits));
+  const { password: _password, ...edits } = validateRequest(musicVideoAutonomousResumeSchema, req.body || {});
+  const autoApproveAuthorized = await authorizeAutoApprove(req, edits.autoApprove);
+  res.json(await resumeAutonomousVideo(req.params.id, edits, { autoApproveAuthorized }));
 }));
 
 router.post('/:id/autonomous/stop', asyncHandler(async (req, res) => {

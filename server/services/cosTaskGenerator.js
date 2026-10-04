@@ -44,7 +44,7 @@ import { remainingActionBudget } from '../lib/domainBudgets.js';
 import { getDomainBudgetStatus } from './domainUsage.js';
 import { pendingCosActionReservations } from './cosAdmissionReservations.js';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { addTask, updateTask, getAllTasks, getCosTasks } from './cosTaskStore.js';
+import { addTask, updateTask, getAllTasks, getCosTasks, reconcileLegacyForgeMaintenanceTasks } from './cosTaskStore.js';
 import { PRIORITY_VALUES } from '../lib/taskParser.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, markIdleReviewStarted, getNextAppForReview, loadAppActivity, isAppActivityOnCooldown } from './appActivity.js';
@@ -1192,6 +1192,10 @@ export async function evaluateTasks(options) {
   // can skip tasks a peer holds a live lease on (#1650). Warm path is the cheap
   // cached read; only the cold boot creates the identity.
   const instanceId = await ensureInstanceId();
+
+  if (!paused && getDomainMode(state.config, 'cos') === 'execute') {
+    await reconcileLegacyForgeMaintenanceTasks({ instanceId });
+  }
 
   // Get both user and CoS tasks
   const { user: userTaskData, cos: cosTaskData } = await getAllTasks();

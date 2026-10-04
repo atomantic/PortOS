@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { importMusicVideoDocumentShots, getMusicVideoProductionReview, saveMusicVideoProductionDraft, prepareMusicVideoProductionReview,
+import { reverifyMusicVideoAlignment, importMusicVideoDocumentShots, getMusicVideoProductionReview, saveMusicVideoProductionDraft, prepareMusicVideoProductionReview,
   approveMusicVideoProductionReview, renderMusicVideoProductionProof, musicVideoExcerptRenderEventsUrl,
   cancelMusicVideoExcerptRender, importMusicVideoProductionPlanning, bindMusicVideoProductionShot, addMusicVideoProductionFeedback, resolveMusicVideoProductionFeedback } from '../services/apiMusicVideo.js';
 import useSseJobSlot from './useSseJobSlot.js';
@@ -30,7 +30,7 @@ export default function useMusicVideoProductionReview({ project, replaceProject 
     eventsUrl: musicVideoExcerptRenderEventsUrl, cancelRequest: cancelMusicVideoExcerptRender,
     readPercent: frame => Number.isFinite(frame.progress) ? frame.progress * 100 : undefined,
     onKickoffSuccess: (job, { id }) => { seenProofJobs.current.add(job); refresh(id).catch(err => setError(err.message)); },
-    onComplete: (_frame, id) => { refresh(id).catch(err => setError(err.message)); },
+    onSettled: (_reason, id) => { refresh(id).catch(err => setError(err.message)); },
     errorFallback: 'The proof render failed',
   });
   useEffect(() => {
@@ -49,16 +49,17 @@ export default function useMusicVideoProductionReview({ project, replaceProject 
     } catch (err) { if (latest.current === owner) setError(err.message); return null; }
     finally { setBusy(false); }
   };
-  return { readiness: state?.owner === project ? state.readiness : null, busy, error, proof,
+  return { readiness: state?.owner === project ? state.readiness : null, busy, error, proof: { ...proof, occupied: proof.active, active: proof.active && proof.context === project?.id },
     feedback: body => call(() => addMusicVideoProductionFeedback(project.id, { ...body, basis: state?.readiness.basis[body.stage] }, { silent: true })),
-    resolveFeedback: (feedbackId, resolution, password) => call(() => resolveMusicVideoProductionFeedback(project.id, { feedbackId, resolution, password }, { silent: true })),
+    resolveFeedback: (feedbackId, resolution) => call(() => resolveMusicVideoProductionFeedback(project.id, { feedbackId, resolution }, { silent: true })),
     importDocumentShots: body => call(() => importMusicVideoDocumentShots(project.id, body, { silent: true })),
     importPlanning: source => call(() => importMusicVideoProductionPlanning(project.id, source, { silent: true })),
     bindShot: shotId => call(() => bindMusicVideoProductionShot(project.id, shotId, { silent: true })),
+    reverifyAlignment: notes => call(() => reverifyMusicVideoAlignment(project.id, { basis: state?.readiness.alignment.basis, notes }, { silent: true })),
     save: draft => call(() => saveMusicVideoProductionDraft(project.id, draft, { silent: true })),
     prepare: () => call(() => prepareMusicVideoProductionReview(project.id, {}, { silent: true })),
-    approve: (stage, password, proofReview) => call(() => approveMusicVideoProductionReview(project.id,
-      { stage, password, basis: state?.readiness.basis[stage], ...(stage === 'proof' ? { proofReview } : {}) }, { silent: true })),
+    approve: (stage, proofReview) => call(() => approveMusicVideoProductionReview(project.id,
+      { stage, basis: state?.readiness.basis[stage], ...(stage === 'proof' ? { proofReview } : {}) }, { silent: true })),
     renderProof: window => proof.start({ id: project.id, window }, project.id),
   };
 }

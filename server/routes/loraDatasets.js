@@ -27,7 +27,9 @@ import {
   updateImageCaption,
 } from '../services/loraDatasets.js';
 import { generateDatasetImages, getDatasetVariationAxes, sliceReferenceSheet } from '../services/loraDatasetGenerate.js';
-import { attachCaptionSseClient, startCaptionRun } from '../services/loraDatasetCaption.js';
+import {
+  attachCaptionSseClient, cancelCaptionRun, getActiveCaptionRun, startCaptionRun,
+} from '../services/loraDatasetCaption.js';
 import { LORA_DATASET_ENTRY_KINDS, computeDatasetReadiness } from '../lib/loraDataset.js';
 
 const router = Router();
@@ -65,7 +67,9 @@ router.get('/:id', asyncHandler(async (req, res) => {
   // Heal any images stuck in 'rendering' (server restart dropped the live
   // completion hook) before returning — the grid then shows truth.
   const dataset = await reconcileRenderingImages(req.params.id);
-  res.json({ ...dataset, readiness: computeDatasetReadiness(dataset) });
+  // `captionRun` is the in-flight caption batch (or null) — how a reloaded page
+  // or a second tab discovers, observes and cancels work the server is still doing.
+  res.json({ ...dataset, readiness: computeDatasetReadiness(dataset), captionRun: getActiveCaptionRun(req.params.id) });
 }));
 
 // Live variation axes (expressions/outfits for characters; lighting/settings
@@ -171,9 +175,16 @@ router.post('/:id/caption', asyncHandler(async (req, res) => {
 }));
 
 router.get('/:id/caption-runs/:runId/events', asyncHandler(async (req, res) => {
-  if (!attachCaptionSseClient(req.params.runId, res)) {
+  if (!attachCaptionSseClient(req.params.id, req.params.runId, res)) {
     throw new ServerError(`Caption run not found: ${req.params.runId}`, { status: 404, code: 'NOT_FOUND' });
   }
+}));
+
+// Run-scoped cancel: the id must match the dataset's CURRENT run, so a stale tab
+// can't stop a newer batch. Returns the (now `canceling`) run projection; the
+// terminal `canceled` frame follows over SSE once the run settles.
+router.post('/:id/caption-runs/:runId/cancel', asyncHandler(async (req, res) => {
+  res.status(202).json(cancelCaptionRun(req.params.id, req.params.runId));
 }));
 
 // Bulk caption lint — strip the identity fragments shared across most captions

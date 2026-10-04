@@ -75,7 +75,8 @@ describe('DraftsTab pending sends', () => {
     fireEvent.click(first);
     await waitFor(() => expect(screen.getAllByRole('button', { name: 'Send' })).toHaveLength(1));
     expect(screen.getByText('sent')).toBeInTheDocument();
-    expect(api.getMessageDrafts).toHaveBeenCalledTimes(1);
+    // The initial load plus the one reload after the failed send; the successful retry applies its response locally.
+    expect(api.getMessageDrafts).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -129,5 +130,55 @@ describe('DraftsTab interrupted delivery', () => {
     expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
     expect(api.sendMessageDraft).not.toHaveBeenCalled();
+  });
+});
+
+describe('DraftsTab send capabilities', () => {
+  it('offers approval and send for browser-delivered accounts the server reports as sendable', async () => {
+    api.getMessageDrafts.mockResolvedValue([
+      { id: 'outlook-draft', status: 'draft', accountId: 'outlook', sendVia: 'playwright', body: 'Outlook text' },
+      { id: 'teams-draft', status: 'approved', accountId: 'teams', sendVia: 'playwright', body: 'Teams text' }
+    ]);
+    render(<DraftsTab accounts={[
+      { id: 'outlook', name: 'Outlook', canSend: true },
+      { id: 'teams', name: 'Teams', canSend: true }
+    ]} />);
+    expect(await screen.findByRole('button', { name: 'Approve' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument();
+    expect(screen.queryByText(/Sending from this account isn't supported yet/)).not.toBeInTheDocument();
+  });
+
+  it('reloads drafts after a failed send so a provider-unconfirmed draft shows its reconciliation state', async () => {
+    api.getMessageDrafts.mockResolvedValueOnce([
+      { id: 'd1', status: 'approved', accountId: 'outlook', sendVia: 'playwright', body: 'Outlook text' }
+    ]);
+    api.getMessageDrafts.mockResolvedValueOnce([
+      { id: 'd1', status: 'delivery_unknown', accountId: 'outlook', sendVia: 'playwright', sendAttemptId: 'attempt-1', body: 'Outlook text' }
+    ]);
+    api.sendMessageDraft.mockRejectedValueOnce(new Error('Example provider did not confirm delivery'));
+    render(<DraftsTab accounts={[{ id: 'outlook', name: 'Outlook', canSend: true }]} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Send' }));
+    expect(await screen.findByText(/the provider never\s+confirmed it/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
+  });
+
+  it('offers copy instead of approval/send for Outlook and Teams while Gmail still sends', async () => {
+    api.getMessageDrafts.mockResolvedValue([
+      { id: 'outlook-draft', status: 'draft', accountId: 'outlook', sendVia: 'playwright', body: 'Outlook text' },
+      { id: 'teams-draft', status: 'approved', accountId: 'teams', sendVia: 'playwright', body: 'Teams text' },
+      { id: 'gmail-draft', status: 'approved', accountId: 'gmail', sendVia: 'api', body: 'Gmail text' }
+    ]);
+    render(<DraftsTab accounts={[
+      { id: 'outlook', name: 'Outlook', canSend: false },
+      { id: 'teams', name: 'Teams', canSend: false },
+      { id: 'gmail', name: 'Gmail', canSend: true }
+    ]} />);
+    expect(await screen.findAllByText(/Sending from this account isn't supported yet/)).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'Copy message' })).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Send' })).toHaveLength(1);
+    api.sendMessageDraft.mockResolvedValueOnce({ success: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(api.sendMessageDraft).toHaveBeenCalledWith('gmail-draft'));
   });
 });

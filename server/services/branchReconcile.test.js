@@ -23,7 +23,7 @@ vi.mock('./worktreeManager.js', async () => {
   const { AGENT_SCRATCH_PATHS, matchesScratchRoot } = await import('../lib/agentScratchPaths.js');
   return {
     listWorktrees: vi.fn(async () => []),
-    forceRemoveWorktreeDir: vi.fn(async () => {}),
+    forceRemoveWorktreeDir: vi.fn(async () => ({ removed: true, warning: null })),
     reapMergedWorktrees: vi.fn(async () => ({ reaped: [], skipped: [] })),
     // Real pure classifier semantics: empty porcelain = clean, and every non-empty
     // line is a real change path (the suite never feeds it lockfile churn) EXCEPT
@@ -134,7 +134,7 @@ beforeEach(() => {
   });
   git.getDefaultBranch.mockResolvedValue('main');
   git.deleteBranch.mockResolvedValue({ branch: 'x', results: { local: 'deleted' } });
-  wt.forceRemoveWorktreeDir.mockResolvedValue(undefined);
+  wt.forceRemoveWorktreeDir.mockResolvedValue({ removed: true, warning: null });
   wt.reapMergedWorktrees.mockResolvedValue({ reaped: [], skipped: [] });
   execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
   tryReadFileMock.mockResolvedValue(null);
@@ -345,6 +345,15 @@ describe('cleanupMerged', () => {
     expect(res.cleaned).toEqual(['next/issue-2190']);
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', '/wt/2190', expect.any(Object));
     expect(git.deleteBranch).toHaveBeenCalledWith('/repo', 'next/issue-2190', { local: true });
+  });
+
+  it('does not delete the branch or report it cleaned when the worktree survives removal', async () => {
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean worktree
+    wt.forceRemoveWorktreeDir.mockResolvedValue({ removed: false, warning: 'Worktree cleanup incomplete — retryable' });
+    const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath: '/wt/2190' }]);
+    expect(res.cleaned).toEqual([]);
+    expect(git.deleteBranch).not.toHaveBeenCalled();
   });
 
   it('skips when re-check says not merged (fail closed)', async () => {
@@ -1376,7 +1385,7 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
       order.push('backup');
       return { dir: '/backups/x', manifest: 'manifest.json', untracked: [] };
     });
-    wt.forceRemoveWorktreeDir.mockImplementation(async () => { order.push('remove'); });
+    wt.forceRemoveWorktreeDir.mockImplementation(async () => { order.push('remove'); return { removed: true, warning: null }; });
     git.deleteBranch.mockImplementation(async () => { order.push('delete'); return { results: { local: 'deleted' } }; });
 
     await reconcile('/repo', { activeAgentIds: new Set() });

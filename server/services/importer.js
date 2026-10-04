@@ -40,6 +40,9 @@ import { IMPORTER_CONTENT_TYPES, IMPORTER_PROSE_EXCERPT_MAX } from '../lib/valid
 export { IMPORTER_PROSE_EXCERPT_MAX };
 import { mergeExtractedBible, BIBLE_KIND } from '../lib/storyBible.js';
 import { isStr } from '../lib/textUtils.js';
+import {
+  deriveImportId, getImportSession, recordImportProgress, withImportLock, SESSION_STATUS,
+} from './importerSessions.js';
 
 // Surfaced to the route layer so the importer's policy errors become 400s
 // with stable codes.
@@ -700,6 +703,25 @@ export async function classifyImportContent({ source, providerOverride, modelOve
 }
 
 /**
+ * The recorded progress of this manuscript's import into this series (#9943),
+ * or null when there is none worth honoring. A `committed` session only counts
+ * while at least one issue it created still exists: a user who deleted the
+ * imported issues and re-imports the same text is starting over, and treating
+ * that as a replay would silently create nothing.
+ */
+async function resolveImportSession(importId, seriesId) {
+  const session = await getImportSession(importId);
+  if (!session || session.seriesId !== seriesId) return null;
+  if (session.status !== SESSION_STATUS.COMMITTED) return session;
+  const live = new Set((await listIssues({ seriesId })).map((issue) => issue.id));
+  return session.createdIssueIds.some((id) => live.has(id)) ? session : null;
+}
+
+const summarizeImportSession = (session) => (session
+  ? { status: session.status, createdIssueIds: session.createdIssueIds }
+  : null);
+
+/**
  * Phase 1: analyze. Runs canon-extract + arc-extract in parallel (both read
  * source independently); after arc resolves, runs issue-proposal with the
  * arc summary in scope so the issue boundaries align with the arc's beats.
@@ -908,6 +930,20 @@ export async function analyzeImport({
 
   const arcPreview = buildArcPreview(arcRun.content);
 
+  // Progress this manuscript's earlier commit left behind (#9943). A series
+  // created a moment ago has none, so only a pre-existing one is looked up. The
+  // id travels back on commit; `importSession` tells the client to resume
+  // instead of re-sending a payload the server already applied.
+  const importId = deriveImportId({ seriesId: series.id, source });
+  // Best-effort here: an unreadable ledger must not throw away the canon + arc
+  // passes that just ran. The commit reads it again and refuses on its own.
+  const importSession = isExistingSeries
+    ? await resolveImportSession(importId, series.id).catch((err) => {
+        console.error(`❌ importer session lookup failed for series ${series.id}: ${err.message}`);
+        return null;
+      })
+    : null;
+
   // Terminal frame: clears the live snapshot so a tab that opens after this
   // run finishes isn't replayed a stale (all-done) checklist. A throw before
   // here (an LLM timeout on canon/arc, a series-create failure) leaves the
@@ -921,6 +957,8 @@ export async function analyzeImport({
     series,
     isExistingUniverse,
     isExistingSeries,
+    importId,
+    importSession: summarizeImportSession(importSession),
     canonPreview: {
       characters: Array.isArray(canonRun.content?.characters) ? canonRun.content.characters : [],
       places: Array.isArray(canonRun.content?.places) ? canonRun.content.places : [],
@@ -998,10 +1036,22 @@ export async function retryIssueSplit({
  * writes the arc + seasons onto the series, then creates one issue per
  * proposal with prose pre-seeded. Validates the locked-arc guard one more
  * time (the series could have been locked between analyze + commit).
+ *
+ * `importId` (from analyze, #9943) makes the commit resumable: its server-side
+ * session records how far an earlier attempt got, so a repeat — a double click,
+ * a second tab, a retry after a reload dropped the client's own markers —
+ * replays the recorded result or resumes at the issues instead of re-sending
+ * canon/arc and duplicating the issue set. Absent, the commit behaves as before.
  */
-export async function commitImport({
+export async function commitImport(args = {}) {
+  const { importId = null } = args;
+  return importId ? withImportLock(importId, () => commitImportOnce(args)) : commitImportOnce(args);
+}
+
+async function commitImportOnce({
   universeId,
   seriesId,
+  importId = null,
   canonSelections = {},
   arc = null,
   seasons = [],
@@ -1054,6 +1104,30 @@ export async function commitImport({
       `Series "${series.name}" has no universeId — commit refused. Link the series to a universe explicitly before importing.`,
       ERR_VALIDATION,
     );
+  }
+
+  // An earlier attempt at this same import (#9943). Replace mode wipes and
+  // rewrites the series, so it is idempotent by construction and never consults
+  // the session; additive mode would duplicate, so it does.
+  const session = importId && !replaceMode ? await resolveImportSession(importId, series.id) : null;
+  if (session?.status === SESSION_STATUS.COMMITTED) {
+    // Answered before the locked-arc gate: nothing is written, so a lock added
+    // since the commit cannot turn a recorded success into an error.
+    return {
+      universe,
+      series,
+      createdIssueIds: session.createdIssueIds,
+      remappedIssues: session.remappedIssues,
+      replayed: true,
+    };
+  }
+  if (session?.status === SESSION_STATUS.ARC_PERSISTED) {
+    // The server kept canon/arc/seasons from the attempt whose issues rolled
+    // back. Resending them would overwrite edits made since, so the server
+    // drops them itself rather than trusting the client to have remembered.
+    canonSelections = {};
+    arc = null;
+    seasons = [];
   }
 
   if (series.locked?.arc === true) {
@@ -1395,6 +1469,17 @@ export async function commitImport({
   const fallbackSeason = sortedSeasons[0] || null;
   const fallbackSeasonId = fallbackSeason?.id || null;
 
+  // Canon, arc and seasons are on disk. Mark that BEFORE the issue loop and let a
+  // failure here stop the commit: issues created without a way to find them
+  // again are exactly what a retry would duplicate.
+  if (importId) {
+    await recordImportProgress(importId, {
+      universeId: updatedUniverse.id,
+      seriesId: updatedSeries.id,
+      status: SESSION_STATUS.ARC_PERSISTED,
+    });
+  }
+
   const createdIssueIds = [];
   // Surface season-remap events so the UI can warn "issue 3 wanted season 5
   // but landed in S2 — Diaspora." Each entry carries the actual landed
@@ -1513,6 +1598,17 @@ export async function commitImport({
   }
   if (updatedSeries.importDraft === true) {
     promotedSeries = await updateSeries(updatedSeries.id, { ephemeral: false, importDraft: false });
+  }
+
+  // The issues exist now, so a failure to record that must not fail the commit:
+  // the client would retry and duplicate them. Worst case the next re-analyze
+  // finds no session and the import is guarded only by the client, as before.
+  if (importId) {
+    await recordImportProgress(importId, {
+      status: SESSION_STATUS.COMMITTED,
+      createdIssueIds,
+      remappedIssues,
+    }).catch((err) => console.error(`❌ importer session ${importId} not marked committed: ${err.message}`));
   }
 
   return {

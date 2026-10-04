@@ -2,6 +2,8 @@ import { createPortal } from 'react-dom';
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { parseTabSheet, TAB_ARTICULATIONS, chordLineSegments, pairedLineChunks, chordLyricRows } from '../../lib/tabNotation.js';
 import usePopoverPosition from '../../hooks/usePopoverPosition.js';
+import useFocusTrap from '../../hooks/useFocusTrap.js';
+import useEscapeKey from '../../hooks/useEscapeKey.js';
 import ChordDiagram from './ChordDiagram.jsx';
 import { activeCtrlClass, ctrlBtnClass } from './constants.js';
 
@@ -155,6 +157,11 @@ function TabSheetView({
     // re-measure so the dialog moves to the newly-tapped token.
     contentDeps: [popover?.key, popover?.name, instrumentView],
   });
+  useFocusTrap(Boolean(popover && popoverStyle), popoverRef);
+  useEscapeKey(Boolean(popover), () => {
+    setPopover(null);
+    anchorElRef.current?.focus();
+  });
   // Tabstaff blocks explicitly expanded while in a non-guitar view.
   const [expandedStaffs, setExpandedStaffs] = useState(() => new Set());
 
@@ -172,12 +179,9 @@ function TabSheetView({
     });
   }, []);
 
-  // Escape / tap-outside close while the popover is open.
+  // Tap-outside close while the popover is open.
   useEffect(() => {
     if (!popover) return undefined;
-    const onKeyDown = (e) => {
-      if (e.key === 'Escape') setPopover(null);
-    };
     const onPointerDown = (e) => {
       if (popoverRef.current?.contains(e.target)) return;
       // Chord tokens manage their own open/toggle in onClick — closing here on
@@ -185,10 +189,8 @@ function TabSheetView({
       if (e.target.closest?.('[aria-haspopup="dialog"]')) return;
       setPopover(null);
     };
-    document.addEventListener('keydown', onKeyDown);
     document.addEventListener('pointerdown', onPointerDown);
     return () => {
-      document.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('pointerdown', onPointerDown);
     };
   }, [popover]);

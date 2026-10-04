@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { CheckCircle2, RotateCcw, Trash2, ExternalLink, MessageSquarePlus } from 'lucide-react';
 import Drawer from '../Drawer.jsx';
+import DevArtifactPreview from './DevArtifactPreview.jsx';
 import Pill from '../ui/Pill.jsx';
 import { musicVideoDevArtifactFileUrl } from '../../services/apiMusicVideo.js';
 import { timeAgo } from '../../utils/formatters.js';
@@ -19,27 +20,6 @@ function castAndSetsTargets(stage) {
     ...(direction.sets || []).map((s) => ({ id: `set:${s.id}`, label: `Set: ${s.name}` })),
     ...Object.values(stage?.plan || {}).filter((p) => p.kind === 'test').map((p) => ({ id: p.key, label: `In-set test: ${p.label}` })),
   ];
-}
-
-function Viewer({ projectId, artifact, version }) {
-  const entry = (artifact.versions || []).find((v) => v.version === version) || artifact;
-  const url = musicVideoDevArtifactFileUrl(projectId, artifact.id, version === artifact.version ? null : version);
-  const title = `${artifact.title} v${entry.version || version}`;
-  if (entry.mimeType?.startsWith('image/')) return <img src={url} alt={title} className="w-full h-auto rounded border border-port-border" />;
-  if (entry.mimeType?.startsWith('video/')) return <video src={url} controls className="w-full rounded border border-port-border" aria-label={title} />;
-  // HTML and Markdown: an opaque-origin frame (no allow-same-origin), so a
-  // sheet's own script can run but can never reach PortOS. The server's CSP
-  // enforces the same sandbox and blocks every network fetch.
-  return (
-    <iframe
-      key={url}
-      src={url}
-      title={title}
-      sandbox="allow-scripts"
-      referrerPolicy="no-referrer"
-      className="w-full h-[60vh] lg:h-[calc(100vh-9rem)] rounded border border-port-border bg-white"
-    />
-  );
 }
 
 /**
@@ -98,7 +78,7 @@ export default function DevArtifactDrawer({
               <ExternalLink size={12} aria-hidden="true" /> Open in a tab
             </a>
           </div>
-          <Viewer projectId={project.id} artifact={artifact} version={shown} />
+          <DevArtifactPreview projectId={project.id} artifact={artifact} version={shown} />
         </div>
 
         <aside className="lg:w-80 shrink-0 space-y-3 min-w-0" aria-label="Review">

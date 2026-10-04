@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import {
-  Archive, BellOff, Clock, Filter, Inbox, Loader2, Mail, MoreHorizontal,
-  PenSquare, Plus, RefreshCw, Search, Settings, TrendingDown,
+  Archive, BellOff, Bookmark, Filter, Inbox, Loader2, MoreHorizontal, Plus,
+  RefreshCw, Search, Settings, Clock, TrendingDown, X,
 } from 'lucide-react';
 import NetworkLogo, { networkLabel } from './BeeperNetworkLogo';
 import BeeperThread from './BeeperThread';
+import BeeperNewConversation from './BeeperNewConversation';
 import ConnectionStatusDot from '../../ui/ConnectionStatusDot';
 import toast from '../../ui/Toast';
 import useMounted from '../../../hooks/useMounted';
+import { useSocketResource } from '../../../hooks/useSocketResource';
 import useBeeperOutbox from '../../../hooks/useBeeperOutbox';
 import { messagePreviewText } from '../../../lib/beeperMessageBody';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../../lib/safeStorage';
@@ -26,13 +28,12 @@ import * as api from '../../../services/api';
  *    Inside a single-network scope the rail already states the network, so a
  *    per-row badge is noise and is dropped entirely. This is the one rule a
  *    from-scratch design would most likely have got wrong, in either direction.
- *  - **The rail is one entry per network the MIRROR holds**, never a hardcoded
- *    roster and never the reference's user-curated saved scopes at mixed grain
- *    (a Discord-DMs chip beside a single-server chip). Those are deferred.
+ *  - **The rail includes each network the MIRROR holds and saved scopes.**
+ *    Saved scopes retain named filters in machine-local settings.
  *  - **`Archive` and `Low priority` are wired**, because `isArchived` and
- *    `isLowPriority` are real fields on every chat row. `Requests`, `Later`,
- *    `add scope` and the overflow menu render INERT with a tooltip saying so —
- *    an inert control that looks live is worse than an absent one.
+ *    `isLowPriority` are real fields on every chat row. Requests is omitted
+ *    until its source state can be mirrored (#9985) — an inert control
+ *    that looks live is worse than an absent one.
  *  - **The pinned grid is Beeper's own `isPinned`, mirrored.** PortOS never
  *    stores a pin of its own; a second source of truth for it is the whole
  *    thing #27 was designed to avoid.
@@ -48,18 +49,17 @@ import * as api from '../../../services/api';
  * rendered over the newer one.
  */
 
-// Fixed system scopes, in the reference's own order. `live: false` entries
-// render disabled with a tooltip rather than being omitted, so the deferral is
-// visible instead of silently missing (#9).
+// Fixed system scopes. Requests is omitted until implemented
+// (tracked in the Beeper enhancements issue, #9985).
+const SCOPE_EVENTS = ['beeper:invalidate'];
 const SYSTEM_SCOPES = [
-  { id: 'inbox', label: 'Inbox', icon: Inbox, live: true },
-  { id: 'archive', label: 'Archive', icon: Archive, live: true },
-  { id: 'requests', label: 'Requests', icon: Mail, live: false },
-  { id: 'low', label: 'Low priority', icon: TrendingDown, live: true },
-  { id: 'later', label: 'Later', icon: Clock, live: false },
+  { id: 'inbox', label: 'Inbox', icon: Inbox },
+  { id: 'later', label: 'Later', icon: Clock },
+  { id: 'archive', label: 'Archive', icon: Archive },
+  { id: 'low', label: 'Low priority', icon: TrendingDown },
 ];
 
-const LIVE_SYSTEM_SCOPES = new Set(SYSTEM_SCOPES.filter((scope) => scope.live).map((scope) => scope.id));
+const LIVE_SYSTEM_SCOPES = new Set(SYSTEM_SCOPES.map((scope) => scope.id));
 const NETWORK_SCOPE_PREFIX = 'net:';
 const PINNED_GRID_CAP = 6;
 const DRAFTS_STORAGE_KEY = 'portos-beeper-drafts';
@@ -86,8 +86,9 @@ const INVALIDATION_MAX_WAIT_MS = 2000;
 const RECENT_ACTIVITY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /** The filter set one scope means. Absent keys are absent FILTERS, not `false`. */
-function filtersForScope(scope, unreadOnly) {
-  const base = unreadOnly ? { unreadOnly: true } : {};
+function filtersForScope(scope, unreadOnly, search) {
+  const base = { ...(unreadOnly ? { unreadOnly: true } : {}), ...(search ? { search } : {}) };
+  if (scope === 'later') return { ...base, snoozed: true };
   if (scope === 'archive') return { ...base, archived: true };
   if (scope === 'low') return { ...base, lowPriority: true };
   if (typeof scope === 'string' && scope.startsWith(NETWORK_SCOPE_PREFIX)) {
@@ -172,24 +173,10 @@ function SyncStrip({ sweep }) {
   );
 }
 
-function InertControl({ icon: Icon, label, className }) {
-  return (
-    <button
-      type="button"
-      disabled
-      aria-label={label}
-      title={`${label} — not available yet`}
-      className={`${className} cursor-not-allowed opacity-35`}
-    >
-      <Icon size={17} />
-    </button>
-  );
-}
-
 /* ------------------------------------------------------------------ rail -- */
 
 function Rail({
-  networks, scope, onScope, totalUnread, onOpenSettings,
+  networks, scope, onScope, totalUnread, onOpenSettings, savedScopes, onAddScope, scopesReady,
 }) {
   const item = 'relative flex size-11 shrink-0 items-center justify-center rounded-xl transition';
   return (
@@ -197,9 +184,6 @@ function Rail({
       {SYSTEM_SCOPES.map((systemScope) => {
         const Icon = systemScope.icon;
         const active = scope === systemScope.id;
-        if (!systemScope.live) {
-          return <InertControl key={systemScope.id} icon={Icon} label={systemScope.label} className={`${item} text-gray-500`} />;
-        }
         return (
           <button
             key={systemScope.id}
@@ -219,6 +203,16 @@ function Rail({
           </button>
         );
       })}
+
+      {savedScopes.map((entry) => (
+        <button key={entry.id} type="button" title={entry.name} aria-label={entry.name}
+          aria-pressed={scope === `saved:${entry.id}`} onClick={() => onScope(`saved:${entry.id}`)}
+          className={`${item} ${scope === `saved:${entry.id}` ? 'bg-port-card text-white' : 'text-gray-500 hover:text-white'}`}>
+          <Bookmark size={19} />
+        </button>
+      ))}
+      <button type="button" title="Save current scope" aria-label="Add scope" disabled={!scopesReady} onClick={onAddScope}
+        className={`${item} text-gray-500 hover:text-white`}><Plus size={19} /></button>
 
       <div className="mx-1 h-7 w-px shrink-0 bg-port-border sm:mx-0 sm:my-1.5 sm:h-px sm:w-7" />
 
@@ -247,8 +241,6 @@ function Rail({
       })}
 
       <div className="mx-1 h-7 w-px shrink-0 bg-port-border sm:mx-0 sm:my-1.5 sm:h-px sm:w-7" />
-      <InertControl icon={Plus} label="Add scope" className={`${item} border border-dashed border-port-border text-gray-500`} />
-      <InertControl icon={MoreHorizontal} label="More scope options" className={`${item} text-gray-500`} />
 
       <button
         type="button"
@@ -363,14 +355,34 @@ function ConversationRow({ conversation, unified, selected, onSelect }) {
 
 export default function BeeperChatSurface({
   conversationId = null, realtime = null, invalidationSeq = 0, invalidationFrames = null, breaker = null,
-  sweep = null, tokenConfigured = false, onOpenSettings,
+  sweep = null, tokenConfigured = false, accounts = [], onOpenSettings,
 }) {
   const navigate = useNavigate();
   const mountedRef = useMounted();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const scopeParam = searchParams.get('scope') || 'inbox';
-  const unreadOnly = searchParams.get('unread') === '1';
+
+  const scopesResource = useSocketResource(async () => {
+    const data = await api.getBeeperScopes({ silent: true });
+    if (!Array.isArray(data?.scopes)) throw new Error('Invalid saved scopes response');
+    return data.scopes;
+  }, { events: SCOPE_EVENTS, matchesEvent: (payload) => payload?.kind === 'scopes' });
+  const savedScopes = scopesResource.data;
+  const savedScope = savedScopes?.find((entry) => `saved:${entry.id}` === scopeParam);
+  // Missing URL overrides inherit the saved filter. Explicit empty/zero values
+  // clear it, so the search and unread controls always describe effective state.
+  const unreadOnly = searchParams.has('unread')
+    ? searchParams.get('unread') === '1' : savedScope?.filters.unreadOnly === true;
+  const searchRaw = searchParams.get('q') ?? savedScope?.filters.search ?? '';
+  const search = searchRaw.trim();
+  const [searchOpen, setSearchOpen] = useState(Boolean(search));
+  const [creatingConversation, setCreatingConversation] = useState(false);
+  const setSavedScopes = scopesResource.updateData;
+  const [scopeEditor, setScopeEditor] = useState(null);
+  const [scopeName, setScopeName] = useState('');
+  const [scopeSaving, setScopeSaving] = useState(false);
+  const scopeWriteRef = useRef(false);
 
   const [networks, setNetworks] = useState([]);
   const [conversations, setConversations] = useState([]);
@@ -405,12 +417,16 @@ export default function BeeperChatSurface({
   const listGenRef = useRef(0);
   const threadGenRef = useRef(0);
 
-  const scope = LIVE_SYSTEM_SCOPES.has(scopeParam) || scopeParam.startsWith(NETWORK_SCOPE_PREFIX)
+  const scope = savedScope || LIVE_SYSTEM_SCOPES.has(scopeParam) || scopeParam.startsWith(NETWORK_SCOPE_PREFIX)
     ? scopeParam
     : 'inbox';
-  const activeNetwork = scopeNetwork(scope);
+  const activeNetwork = savedScope?.filters.network || scopeNetwork(scope);
   const unified = !activeNetwork;
-  const filters = useMemo(() => filtersForScope(scope, unreadOnly), [scope, unreadOnly]);
+  const filters = useMemo(() => {
+    if (!savedScope) return filtersForScope(scope, unreadOnly, search);
+    const { search: _savedSearch, unreadOnly: _savedUnread, ...base } = savedScope.filters;
+    return { ...base, ...(unreadOnly ? { unreadOnly: true } : {}), ...(search ? { search } : {}) };
+  }, [savedScope, scope, unreadOnly, search]);
 
   const setParam = useCallback((key, value) => {
     setSearchParams((prev) => {
@@ -427,7 +443,9 @@ export default function BeeperChatSurface({
     setNetworks(Array.isArray(data?.networks) ? data.networks : []);
   }, [mountedRef]);
 
+  const scopePending = scopeParam.startsWith('saved:') && savedScopes === null;
   const loadList = useCallback(async () => {
+    if (scopePending) return;
     const generation = ++listGenRef.current;
     setListLoading(true);
     const [data, error] = await api.getBeeperConversations(filters, { silent: true })
@@ -442,7 +460,7 @@ export default function BeeperChatSurface({
       setListCursor(data?.nextCursor || null);
     }
     setListLoading(false);
-  }, [filters, mountedRef]);
+  }, [filters, mountedRef, scopePending]);
 
   // "Sync now" (#79): the list-header action used to be a pure re-fetch of
   // whatever the mirror already held (`loadList` + `loadNetworks`), which is
@@ -871,7 +889,7 @@ export default function BeeperChatSurface({
     () => networks.reduce((sum, entry) => sum + (entry.unreadCount || 0), 0),
     [networks],
   );
-  const scopeLabel = activeNetwork
+  const scopeLabel = savedScope ? savedScope.name : activeNetwork
     ? networkLabel(activeNetwork)
     : (SYSTEM_SCOPES.find((entry) => entry.id === scope)?.label || 'Inbox');
 
@@ -880,7 +898,16 @@ export default function BeeperChatSurface({
       <Rail
         networks={networks}
         scope={scope}
-        onScope={(next) => setParam('scope', next)}
+        onScope={(next) => setSearchParams((prev) => {
+          const params = new URLSearchParams(prev);
+          params.set('scope', next);
+          params.delete('q');
+          params.delete('unread');
+          return params;
+        }, { replace: true })}
+        savedScopes={savedScopes || []}
+        scopesReady={savedScopes !== null}
+        onAddScope={() => { setScopeEditor({ filters }); setScopeName(''); }}
         totalUnread={totalUnread}
         onOpenSettings={onOpenSettings}
       />
@@ -910,13 +937,40 @@ export default function BeeperChatSurface({
                 than an absent one — the file's own governing rule. */}
             <span className="truncate">{scopeLabel}</span>
           </span>
+          {savedScope && (
+            <button type="button" aria-label="More scope options" title="More scope options"
+              onClick={() => { setScopeEditor(savedScope); setScopeName(savedScope.name); }}
+              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center text-gray-500 hover:text-white">
+              <MoreHorizontal size={15} />
+            </button>
+          )}
           <button
             type="button"
-            onClick={() => setParam('unread', unreadOnly ? null : '1')}
+            onClick={() => {
+              if (searchOpen || search) setParam('q', savedScope ? '' : null);
+              setSearchOpen(!(searchOpen || search));
+            }}
+            title="Search conversations"
+            aria-label="Search conversations"
+            aria-pressed={searchOpen || Boolean(search)}
+            className={`ml-auto inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded p-1.5 ${searchOpen || search ? 'bg-port-accent text-port-bg' : 'text-gray-500 hover:text-white'}`}
+          >
+            <Search size={15} />
+          </button>
+          {tokenConfigured && accounts.length > 0 && (
+            <button type="button" aria-label="New conversation" title="New conversation"
+              onClick={() => setCreatingConversation(true)}
+              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded text-gray-500 hover:text-white">
+              <Plus size={15} />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setParam('unread', unreadOnly ? (savedScope ? '0' : null) : '1')}
             title="Unread only"
             aria-label="Unread only"
             aria-pressed={unreadOnly}
-            className={`ml-auto inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded p-1.5 ${unreadOnly ? 'bg-port-accent text-port-bg' : 'text-gray-500 hover:text-white'}`}
+            className={`inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded p-1.5 ${unreadOnly ? 'bg-port-accent text-port-bg' : 'text-gray-500 hover:text-white'}`}
           >
             <Filter size={15} />
           </button>
@@ -930,10 +984,99 @@ export default function BeeperChatSurface({
           >
             <RefreshCw size={15} className={syncing || listLoading ? 'animate-spin' : undefined} />
           </button>
-          <InertControl icon={Search} label="Search conversations" className="rounded p-1.5 text-gray-500" />
-          <InertControl icon={PenSquare} label="New conversation" className="rounded p-1.5 text-gray-500" />
         </div>
 
+        {creatingConversation && (
+          <BeeperNewConversation accounts={accounts} onCancel={() => setCreatingConversation(false)}
+            onCreated={(id) => { setCreatingConversation(false); navigate(`/messages/beeper/${encodeURIComponent(id)}`); }} />
+        )}
+
+        {scopeEditor && (
+          <form className="space-y-2 border-b border-port-border p-3" onSubmit={async (event) => {
+            event.preventDefault();
+            if (scopeWriteRef.current || !scopeName.trim()) return;
+            scopeWriteRef.current = true;
+            setScopeSaving(true);
+            const input = { name: scopeName.trim(), filters: scopeEditor.filters };
+            const result = await (scopeEditor.id
+              ? api.updateBeeperScope(scopeEditor.id, input, { silent: true })
+              : api.createBeeperScope(input, { silent: true })).catch((err) => {
+                toast.error(err?.message || 'Could not save scope'); return null;
+              });
+            scopeWriteRef.current = false;
+            if (!mountedRef.current) return;
+            setScopeSaving(false);
+            if (!result) return;
+            setSavedScopes((prev) => [...(prev || []).filter((entry) => entry.id !== result.id), result]);
+            setScopeEditor(null);
+            setSearchParams((prev) => {
+              const params = new URLSearchParams(prev);
+              params.set('scope', `saved:${result.id}`);
+              params.delete('q'); params.delete('unread');
+              return params;
+            }, { replace: true });
+          }}>
+            <label htmlFor="beeper-scope-name" className="block text-xs text-gray-300">Scope name</label>
+            <input id="beeper-scope-name" value={scopeName} maxLength={60} required
+              onChange={(event) => setScopeName(event.target.value)}
+              className="w-full rounded border border-port-border bg-port-bg p-2 text-sm text-white" />
+            <p className="text-[11px] text-gray-500">Saves this conversation filter, including search and unread preferences.</p>
+            <div className="flex flex-wrap gap-2 text-xs">
+              <button type="submit" disabled={scopeSaving} className="min-h-[36px] rounded border border-port-border px-2">Save scope</button>
+              <button type="button" disabled={scopeSaving} onClick={() => setScopeEditor(null)} className="min-h-[36px] px-2">Cancel</button>
+              {scopeEditor.id && <button type="button" disabled={scopeSaving} className="min-h-[36px] px-2 text-port-error"
+                onClick={async () => {
+                  if (scopeWriteRef.current) return;
+                  scopeWriteRef.current = true; setScopeSaving(true);
+                  const id = scopeEditor.id;
+                  const result = await api.deleteBeeperScope(id, { silent: true }).catch((err) => {
+                    toast.error(err?.message || 'Could not delete scope'); return null;
+                  });
+                  scopeWriteRef.current = false;
+                  if (!mountedRef.current) return;
+                  setScopeSaving(false);
+                  if (!result) return;
+                  setSavedScopes((prev) => (prev || []).filter((entry) => entry.id !== id));
+                  setScopeEditor(null);
+                  setSearchParams((prev) => {
+                    const params = new URLSearchParams(prev);
+                    params.set('scope', 'inbox'); params.delete('q'); params.delete('unread');
+                    return params;
+                  }, { replace: true });
+                }}>Delete scope</button>}
+            </div>
+          </form>
+        )}
+
+        {(searchOpen || search) && (
+          <div className="relative shrink-0 px-3 pb-2">
+            <input
+              type="search"
+              value={searchRaw}
+              onChange={(event) => setParam('q', event.target.value || (savedScope ? '' : null))}
+              placeholder="Search conversations"
+              aria-label="Search conversations by name"
+              autoFocus
+              className="w-full rounded border border-port-border bg-port-bg px-2 py-1.5 pr-8 text-xs text-white placeholder:text-gray-500 focus:border-port-accent focus:outline-none"
+            />
+            {searchRaw && (
+              <button
+                type="button"
+                onClick={() => setParam('q', savedScope ? '' : null)}
+                aria-label="Clear search"
+                className="absolute right-4 top-1/2 -translate-y-1/2 -mt-1 text-gray-500 hover:text-white"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+        )}
+
+        {scopesResource.error && (
+          <div role="alert" className="px-3 py-2 text-xs text-port-error">
+            Could not load saved scopes. <button type="button" onClick={scopesResource.refetch} className="underline">Retry scopes</button>
+          </div>
+        )}
         {listError && (
           <p role="alert" className="mx-3 mb-2 rounded border border-port-error/40 bg-port-error/10 px-2 py-1.5 text-[11px] text-port-error">
             {listError}

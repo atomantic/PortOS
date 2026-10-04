@@ -1,3 +1,4 @@
+import AutonomousRunPanel from '../AutonomousRunPanel.jsx';
 import SongRevisionPanel from '../SongRevisionPanel.jsx';
 import StyleReferencesPanel from '../StyleReferencesPanel.jsx';
 import AutoSizeTextarea from '../../ui/AutoSizeTextarea';
@@ -18,9 +19,21 @@ export default function SetupStage({ board }) {
   const {
     project, tracks, trackName, audioFilename, locked, youtube, separation, midi, midiBound, renderBound, tempo, busy,
     conceptDraft, styleDraft, importingLyrics, aligningLyrics, treatment,
+    autopilotRun, autonomous, runStage, onSelectStage,
   } = board;
   return (
     <>
+      {autopilotRun && (
+        <AutonomousRunPanel
+          key={`autonomous-${project.id}`}
+          project={project}
+          auto={autonomous}
+          readiness={board.productionReadiness}
+          selectedStage={runStage}
+          onSelectStage={onSelectStage}
+          framed
+        />
+      )}
       <SongRevisionPanel key={`song-${project.id}`} project={project} tracks={tracks} onUpdated={board.replaceProject} onFork={board.onForkSong} disabled={locked || renderBound || midiBound} />
       <CreativeSetupPanel
         key={`creative-${project.id}`}

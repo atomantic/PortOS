@@ -8,6 +8,7 @@ import useProviderModels from '../../hooks/useProviderModels.js';
 import { formatBytes, formatDateTime } from '../../utils/formatters.js';
 import * as api from '../../services/api.js';
 import toast from '../ui/Toast.jsx';
+import ProgressBar from '../ui/ProgressBar.jsx';
 
 const RISK_STYLE = {
   low: 'bg-port-success/10 text-port-success',
@@ -39,18 +40,20 @@ function ReportEmpty({ loading, onRun }) {
   );
 }
 
-function DiskGauge({ filesystem }) {
-  if (!filesystem) return null;
+function DiskGauge({ filesystem, label }) {
+  if (!filesystem) return <section className="rounded-2xl border border-port-border bg-port-card p-5" aria-label={`${label} status unavailable`}><h3>{label}</h3><p className="text-port-warning">Unavailable</p></section>;
   const pct = Math.min(100, Math.max(0, filesystem.usagePercent));
   const color = pct >= 98 ? '#ef4444' : pct >= 90 ? '#f59e0b' : '#22c55e';
   return (
     <section className="rounded-2xl border border-port-border bg-port-card p-5">
+      <h3 className="mb-3 font-semibold">{label}</h3>
+      {label === 'Runtime data disk' && <p className="mb-3 text-xs text-gray-500">Capacity of the filesystem holding PortOS runtime data. PostgreSQL and external model stores may use other filesystems.</p>}
       <div className="grid items-center gap-5 md:grid-cols-[160px_1fr]">
         <div
           className="relative mx-auto grid h-36 w-36 place-items-center rounded-full"
           style={{ background: `conic-gradient(${color} ${pct}%, rgba(75,85,99,.25) ${pct}% 100%)` }}
           role="meter"
-          aria-label={`${pct}% disk used`}
+          aria-label={`${label}: ${pct}% disk used`}
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={pct}
@@ -87,7 +90,7 @@ function Metric({ label, value, tone = 'text-white', className = '' }) {
 }
 
 function StorageAreas({ areas }) {
-  const max = Math.max(1, ...(areas || []).map((area) => area.sizeBytes || 0));
+  const max = Math.max(1, ...(areas || []).map((area) => Number.isFinite(area.sizeBytes) ? area.sizeBytes : 0));
   return (
     <section className="rounded-2xl border border-port-border bg-port-card p-4 sm:p-5">
       <div className="mb-4 flex items-center gap-2">
@@ -107,12 +110,17 @@ function StorageAreas({ areas }) {
               </div>
               <div className="shrink-0 text-sm font-semibold tabular-nums text-white">{storageSize(area.sizeBytes)}</div>
             </div>
-            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-port-border/60">
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-port-accent to-cyan-400"
-                style={{ width: area.status === 'unavailable' ? '0%' : `${Math.max(1, ((area.sizeBytes || 0) / max) * 100)}%` }}
-              />
-            </div>
+            <ProgressBar
+              className="mt-2"
+              track="borderMuted"
+              fillClassName="bg-gradient-to-r from-port-accent to-cyan-400"
+              percent={area.status === 'unavailable' || !Number.isFinite(area.sizeBytes)
+                ? null
+                : (area.sizeBytes / max) * 100}
+              indeterminateAnimation={false}
+              label={`${area.label} storage area size relative to largest known area`}
+              valueText={area.status === 'unavailable' || !Number.isFinite(area.sizeBytes) ? 'Unavailable' : undefined}
+            />
             {area.managePath && (
               <Link to={area.managePath} className="mt-2 inline-block text-xs text-port-accent hover:text-port-accent/80">
                 Manage {area.label.toLowerCase()} →
@@ -293,7 +301,8 @@ export default function StoragePanel({ report, loading, onRunReport, onReport, c
       {report.sourceErrors.length > 0 && (
         <Banner tone="warning" icon={AlertTriangle}>Some sources were unavailable: {report.sourceErrors.join(', ')}. Other totals remain usable.</Banner>
       )}
-      <DiskGauge filesystem={report.filesystem} />
+      <DiskGauge filesystem={report.filesystem} label="Root disk" />
+      {Object.hasOwn(report, 'dataFilesystem') && <DiskGauge filesystem={report.dataFilesystem} label="Runtime data disk" />}
       <div className="grid gap-4 xl:grid-cols-2">
         <StorageAreas areas={report.storageAreas} />
         <CandidateRows candidates={report.cleanupCandidates} cleanup={cleanup} />

@@ -1,5 +1,9 @@
 import { z } from 'zod';
 
+export const genomeClinvarSyncSchema = z.object({
+  requestId: z.string().uuid().optional()
+});
+
 export const genomeUploadSchema = z.object({
   content: z.string().min(100, 'Genome file content too short'),
   filename: z.string().min(1, 'Filename required')

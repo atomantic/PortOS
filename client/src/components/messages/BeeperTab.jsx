@@ -92,6 +92,7 @@ export default function BeeperTab() {
   // as it goes (see beeperSync.js's `emitSweepInvalidation`).
   const [sweep, setSweep] = useState(null);
   const [tokenConfigured, setTokenConfigured] = useState(false);
+  const [accounts, setAccounts] = useState([]);
 
   // Seeded from the page, not from the settings drawer: `beeper:subscribe`
   // does not push the current transport state, and the drawer's own status
@@ -107,6 +108,7 @@ export default function BeeperTab() {
         setBreaker(status?.outbox?.breaker || null);
         setSweep(status?.sweep || null);
         setTokenConfigured(status?.tokenConfigured === true);
+        setAccounts(Array.isArray(status?.accounts) ? status.accounts : []);
       })
       .catch(() => {});
   }, [seedRealtime, mountedRef]);
@@ -157,6 +159,7 @@ export default function BeeperTab() {
         breaker={breaker}
         sweep={sweep}
         tokenConfigured={tokenConfigured}
+        accounts={accounts}
         onOpenSettings={() => setSettingsParam('1')}
       />
 

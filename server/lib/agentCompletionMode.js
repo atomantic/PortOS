@@ -71,6 +71,8 @@ export const COMPLETION_MODES = Object.freeze({
   AUDIT_FLOW: 'audit-flow',
   /** Reconciliation owns delivery of named branches, never the coordinator checkout. */
   RECONCILE_FLOW: 'reconcile-flow',
+  /** Recovery owns preservation and reconciliation of the actual app checkout. */
+  CHECKOUT_RECOVERY: 'checkout-recovery',
   /** TUI host that cannot type a `/do:*` command — commit, then hand off. */
   TUI_SLASHDO_FREE: 'tui-slashdo-free',
   /** TUI host that drives its own `/do:pr` | `/do:push` completion workflow. */
@@ -116,6 +118,7 @@ const COMPLETION_MODE_RULES = Object.freeze([
   [COMPLETION_MODES.REVIEW_LOOP_FOLLOW_UP, (f) => f.isReviewLoopFollowUp],
   [COMPLETION_MODES.RELEASE_FLOW, (f) => f.slashdoCommand === 'release'],
   [COMPLETION_MODES.AUDIT_FLOW, (f) => ['better', 'better-swift'].includes(f.slashdoCommand)],
+  [COMPLETION_MODES.CHECKOUT_RECOVERY, (f) => f.taskHookType === 'app-checkout-recovery'],
   [COMPLETION_MODES.RECONCILE_FLOW, (f) => f.taskHookType === 'branch-reconcile'],
   [COMPLETION_MODES.TUI_SLASHDO_FREE, (f) => f.isTui && !f.canRunSlashCommands],
   [COMPLETION_MODES.TUI, (f) => f.isTui],

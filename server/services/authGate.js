@@ -243,7 +243,7 @@ export const requestHasHostControl = (req) => hasHostControl(
 export const socketHasCurrentHostControl = async (socket) => {
   if (socket.disconnected === true) return false;
   if (await isAuthEnabled()) {
-    return await verifyRequestSession({ headers: socket.handshake?.headers || {} }) === true;
+    return Boolean(await verifyRequestSession({ headers: socket.handshake?.headers || {} }));
   }
   return socketHasHostControl(socket);
 };

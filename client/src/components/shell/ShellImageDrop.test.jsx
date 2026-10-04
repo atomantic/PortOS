@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import ShellImageDrop from './ShellImageDrop';
 import { findEnabledByRole } from '../../test/enabledBarrier.js';
 
@@ -33,6 +34,28 @@ describe('ShellImageDrop', () => {
     expect(screen.queryByLabelText(/choose a photo/i)).toBeNull();
     openComposer();
     expect(screen.getByLabelText(/choose a photo/i)).toBeTruthy();
+  });
+
+  it('announces a dialog, moves keyboard focus into it, and restores focus on Escape', async () => {
+    const user = userEvent.setup();
+    render(<ShellImageDrop onSend={vi.fn()} />);
+    const trigger = screen.getByRole('button', { name: /send a photo/i });
+
+    expect(trigger).toHaveAttribute('aria-haspopup', 'dialog');
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    trigger.focus();
+    await user.keyboard('{Enter}');
+
+    const dialog = screen.getByRole('dialog', { name: 'Send photo to session' });
+    const picker = screen.getByLabelText('Choose a photo to send to this session');
+    await waitFor(() => expect(document.activeElement).toBe(picker));
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(document.activeElement).toBe(trigger);
   });
 
   it('sends the picked file with the typed message', async () => {

@@ -12,7 +12,7 @@
  * READ of the already-loaded provider record, not a capability call.
  */
 
-import { formatCount, formatRuntime } from '../utils/formatters.js';
+import { formatCount, formatRuntime, formatUsd } from '../utils/formatters.js';
 import {
   credentialSource,
   isApiProvider,
@@ -170,7 +170,7 @@ export function formatMindCallUsage(usage) {
     parts.push(`${formatCount(usage.inputTokens)} in`);
   }
   if (usage.costUsd !== null && usage.costUsd !== undefined) {
-    parts.push(`$${usage.costUsd.toFixed(4)}`);
+    parts.push(formatUsd(usage.costUsd, { maximumFractionDigits: 4 }));
   }
   return parts.length > 0 ? parts.join(' · ') : 'Usage unknown';
 }

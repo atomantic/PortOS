@@ -404,18 +404,24 @@ export default function AudioStage({ issue, onStageUpdate }) {
   // serializing avoids thrashing the single sidecar).
   const handleRenderAllCues = async () => {
     setRenderingAllCues(true);
-    let rendered = 0;
-    for (let i = 0; i < cues.length; i += 1) {
-      const effectivePrompt = cuePromptDrafts[i] !== undefined ? cuePromptDrafts[i] : (cues[i]?.prompt || '');
-      if (!effectivePrompt.trim()) continue;
-      // Skip cues whose engine isn't installed — the per-cue button would block
-      // them, so render-all should too rather than firing a doomed request.
-      if (!engineForCue(cues[i])?.ready) continue;
-      const ok = await renderOneCue(i, cuePromptDrafts[i]);
-      if (ok) rendered += 1;
+    try {
+      let rendered = 0;
+      for (let i = 0; i < cues.length; i += 1) {
+        const effectivePrompt = cuePromptDrafts[i] !== undefined ? cuePromptDrafts[i] : (cues[i]?.prompt || '');
+        if (!effectivePrompt.trim()) continue;
+        // Skip cues whose engine isn't installed — the per-cue button would block
+        // them, so render-all should too rather than firing a doomed request.
+        if (!engineForCue(cues[i])?.ready) continue;
+        const ok = await renderOneCue(i, cuePromptDrafts[i]);
+        if (ok) rendered += 1;
+      }
+      if (rendered > 0) toast.success(`Rendered ${rendered} cue${rendered === 1 ? '' : 's'}`);
+    } catch (err) {
+      console.error(`❌ Render all cues follow-up failed: ${err?.message || 'Unknown error'}`);
+      toast.error('Could not finish updating audio cues — reload to see the result');
+    } finally {
+      setRenderingAllCues(false);
     }
-    setRenderingAllCues(false);
-    if (rendered > 0) toast.success(`Rendered ${rendered} cue${rendered === 1 ? '' : 's'}`);
   };
 
   const loadMusicLibrary = async () => {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import useUrlParams from '../../../hooks/useUrlParams';
 import {BookOpen, ChevronLeft, ChevronRight, Mic, MicOff, Save, Volume2, Settings,
-  Plus, Trash2, CloudUpload, Menu, X, Sparkles} from 'lucide-react';
+  Plus, Trash2, CloudUpload, Menu, X, Sparkles, RefreshCw} from 'lucide-react';
 import * as api from '../../../services/api';
 import { getNotesVaults } from '../../../services/apiNotes';
 import toast from '../../ui/Toast';
@@ -102,6 +102,7 @@ export default function DailyLogTab() {
   const [entry, setEntry] = useState(null);
   const [content, setContent] = useState('');
   const [loading, setLoading] = useState(true);
+  const [readState, setReadState] = useState({ date: null, status: 'pending' });
   const [saving, setSaving] = useState(false);
   const [quickAppend, setQuickAppend] = useState('');
   const [appending, setAppending] = useState(false);
@@ -140,6 +141,12 @@ export default function DailyLogTab() {
   // the new entry loads, so this is the only safe answer to "what am I about
   // to overwrite?" — see the guard in saveRef.
   const loadedDateRef = useRef(null);
+  // Only a complete, successful read can admit full-content replacement.
+  // Loading, failed reads, and append deltas never acquire this authority.
+  const successfulReadDateRef = useRef(null);
+  const selectedDateRef = useRef(date);
+  selectedDateRef.current = date;
+  const pendingReadRef = useRef(null);
   // Monotonic counter of outstanding loadEntry() calls so an older fetch
   // resolving after a newer one can't overwrite the entry state for the
   // wrong date (common when prev/next is mashed or the server-today fetch
@@ -155,17 +162,35 @@ export default function DailyLogTab() {
 
   const dirty = content !== (entry?.content || '');
 
-  const loadEntry = useCallback(async (d, { silent = false } = {}) => {
-    if (!silent) setLoading(true);
+  const readReady = readState.date === date && readState.status === 'ready';
+
+  const loadEntry = useCallback(async (d) => {
+    if (pendingReadRef.current?.date === d) return;
     const reqId = ++loadRequestRef.current;
-    const res = await api.getDailyLog(d).catch(() => null);
-    if (reqId !== loadRequestRef.current) return;
-    const data = res?.entry || null;
-    loadedDateRef.current = d;
-    setEntry(data);
-    setContent(data?.content || '');
-    if (!silent) setLoading(false);
-  }, []);
+    pendingReadRef.current = { date: d, reqId };
+    successfulReadDateRef.current = null;
+    setReadState({ date: d, status: 'pending' });
+    setLoading(true);
+    const res = await api.getDailyLog(d, { silent: true }).catch(() => null);
+    if (reqId !== loadRequestRef.current || selectedDateRef.current !== d || !mountedRef.current) return;
+    pendingReadRef.current = null;
+    const data = res?.entry;
+    const valid = res?.date === d && (data === null || (
+      data && data.date === d && typeof data.content === 'string'
+      && typeof data.updatedAt === 'string' && data.updatedAt.length > 0
+    ));
+    if (valid) {
+      loadedDateRef.current = d;
+      successfulReadDateRef.current = d;
+      setEntry(data);
+      setContent(data?.content || '');
+      setReadState({ date: d, status: 'ready' });
+    } else {
+      // Keep the last good buffer, but leave all replacement-save paths shut.
+      setReadState({ date: d, status: 'error' });
+    }
+    setLoading(false);
+  }, [mountedRef]);
 
   const loadHistory = useCallback(async () => {
     const res = await api.listDailyLogs({ limit: 60 }).catch(() => null);
@@ -202,7 +227,7 @@ export default function DailyLogTab() {
   // serverToday and follows it the moment this resolves.
   useEffect(() => {
     let cancelled = false;
-    api.getDailyLog('today').then((res) => {
+    api.getDailyLog('today', { silent: true }).then((res) => {
       if (cancelled || !res?.date) return;
       setServerToday(res.date);
     }).catch(() => null);
@@ -257,7 +282,7 @@ export default function DailyLogTab() {
             };
         return upsertHistory(prev, patched);
       });
-      if (appendedDate === date) {
+      if (appendedDate === date && successfulReadDateRef.current === date) {
         setEntry((prev) => patchFullEntry(prev));
         // Always fold the segment into the textarea — including when the user
         // has unsaved edits. Replacing wholesale used to drop typed text; the
@@ -339,7 +364,7 @@ export default function DailyLogTab() {
   // and the caller is told via the return value so it can toast where the
   // write actually landed instead of losing it silently.
   const applyEntry = (next, expectedDate) => {
-    if (loadedDateRef.current !== expectedDate || next.date !== expectedDate) {
+    if (successfulReadDateRef.current !== expectedDate || selectedDateRef.current !== expectedDate || next.date !== expectedDate) {
       setHistory((prev) => upsertHistory(prev, next));
       return false;
     }
@@ -373,7 +398,7 @@ export default function DailyLogTab() {
     // `content` belongs to loadedDateRef, not necessarily `date`: changing the
     // day flips `date` immediately while the new entry is still loading.
     // Saving in that window would write this day's text into another day.
-    if (loadedDateRef.current !== date) return;
+    if (successfulReadDateRef.current !== date || loadedDateRef.current !== date) return;
     const targetDate = date;
     let body = content;
     // Optimistic concurrency token — the last entry.updatedAt we observed.
@@ -393,13 +418,14 @@ export default function DailyLogTab() {
     // autosave tick (or explicit Save) retries with a fresh clock.
     let res = null;
     for (let attempt = 0; attempt < STALE_JOURNAL_MAX_ATTEMPTS; attempt += 1) {
+      if (successfulReadDateRef.current !== targetDate || selectedDateRef.current !== targetDate) break;
       res = await putDailyLog(targetDate, body, ifMatch);
       if (!res?.stale) break;
       if (attempt === STALE_JOURNAL_MAX_ATTEMPTS - 1) break;
       const serverEntry = res.entry;
       body = mergeMissingVoiceSegments(body, serverEntry);
       ifMatch = serverEntry.updatedAt || null;
-      if (loadedDateRef.current === targetDate && mountedRef.current) {
+      if (successfulReadDateRef.current === targetDate && selectedDateRef.current === targetDate && mountedRef.current) {
         setEntry(serverEntry);
         setHistory((prev) => upsertHistory(prev, serverEntry));
         // Fold the segment into the live textarea too when the user hasn't
@@ -424,7 +450,7 @@ export default function DailyLogTab() {
     // when the user typed during the in-flight PUT — those keystrokes stay in
     // `content` and stay dirty against res.entry.content, so the next tick
     // saves them. applyEntry() would revert them to the server's echo.
-    if (loadedDateRef.current === targetDate) {
+    if (successfulReadDateRef.current === targetDate && selectedDateRef.current === targetDate) {
       setEntry(res.entry);
       setHistory((prev) => upsertHistory(prev, res.entry));
     }
@@ -437,7 +463,7 @@ export default function DailyLogTab() {
   // restarts the debounce, and `saving` flipping back to false re-checks for
   // work that arrived mid-PUT (or was skipped by the single-flight gate).
   useEffect(() => {
-    if (!dirty || loadedDateRef.current !== date) {
+    if (!dirty || !readReady || successfulReadDateRef.current !== date) {
       firstDirtyAtRef.current = null;
       return undefined;
     }
@@ -453,7 +479,7 @@ export default function DailyLogTab() {
     const wait = Math.max(0, Math.min(AUTOSAVE_DEBOUNCE_MS, AUTOSAVE_MAX_WAIT_MS - waited));
     const timer = setTimeout(() => saveRef.current?.({ auto: true }), wait);
     return () => clearTimeout(timer);
-  }, [content, dirty, saving, date]);
+  }, [content, dirty, saving, date, readReady]);
 
   // Flush when the tab/app is backgrounded. Mobile browsers can freeze or
   // discard the page without firing blur on the textarea, so the pending
@@ -597,10 +623,11 @@ export default function DailyLogTab() {
   const digestProvider = providers.find((p) => p.id === digestSettings?.provider) || null;
 
   const isToday = date === serverToday;
-  const segmentCount = entry?.segments?.length ?? entry?.segmentCount ?? 0;
+  const segmentCount = loadedDateRef.current === date ? (entry?.segments?.length ?? entry?.segmentCount ?? 0) : 0;
 
   // Autosave is silent, so the toolbar carries the feedback the toast used to.
-  const saveStatus = saving ? 'Saving…'
+  const saveStatus = !readReady ? (loading ? 'Loading…' : 'Unavailable')
+    : saving ? 'Saving…'
     : dirty ? 'Unsaved…'
     : entry ? 'Saved' : '';
 
@@ -618,8 +645,9 @@ export default function DailyLogTab() {
   // still reachable, just not costing a wrapped row each (#3526).
   const mobileToolbarActions = [
     { id: 'draft', label: drafting ? 'Drafting…' : 'Draft activity digest', icon: Sparkles, disabled: drafting, onSelect: handleDraft },
-    { id: 'read-back', label: 'Read back', icon: Volume2, onSelect: readBack },
-    { id: 'delete', label: 'Delete entry', icon: Trash2, tone: 'danger', disabled: !entry, onSelect: () => setConfirmDelete(true) },
+    { id: 'read-back', label: 'Read back', icon: Volume2, disabled: !readReady, onSelect: readBack },
+    { id: 'refresh', label: 'Refresh entry', icon: RefreshCw, disabled: loading || saving || dirty, onSelect: () => loadEntry(date) },
+    { id: 'delete', label: 'Delete entry', icon: Trash2, tone: 'danger', disabled: !readReady || !entry, onSelect: () => setConfirmDelete(true) },
   ];
 
   return (
@@ -858,6 +886,7 @@ export default function DailyLogTab() {
             </button>
             <button
               onClick={readBack}
+              disabled={!readReady}
               className="hidden sm:flex shrink-0 items-center gap-1 px-3 min-h-[40px] rounded bg-port-card text-gray-300 text-sm hover:text-white"
               title="Have the voice agent read this log back to you"
               aria-label="Read back"
@@ -878,8 +907,16 @@ export default function DailyLogTab() {
               <span className="hidden sm:inline">{dictation ? 'Dictating' : 'Dictate'}</span>
             </button>
             <button
+              onClick={() => loadEntry(date)}
+              disabled={loading || saving || dirty}
+              className="hidden sm:flex shrink-0 min-h-[40px] min-w-[40px] items-center justify-center rounded hover:bg-port-card text-gray-400 disabled:opacity-30"
+              aria-label="Refresh entry"
+            >
+              <RefreshCw size={14} />
+            </button>
+            <button
               onClick={handleSave}
-              disabled={saving || !dirty}
+              disabled={!readReady || saving || !dirty}
               className="flex shrink-0 items-center gap-1 px-3 min-h-[44px] min-w-[44px] sm:min-h-[40px] sm:min-w-0 justify-center rounded bg-port-accent text-white text-sm hover:bg-port-accent/80 disabled:opacity-50"
               aria-label="Save"
             >
@@ -888,7 +925,7 @@ export default function DailyLogTab() {
             </button>
             <button
               onClick={() => setConfirmDelete(true)}
-              disabled={!entry}
+              disabled={!readReady || !entry}
               className="hidden sm:flex shrink-0 min-h-[40px] min-w-[40px] items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-port-error disabled:opacity-30"
               title="Delete this entry"
               aria-label="Delete entry"
@@ -922,6 +959,14 @@ export default function DailyLogTab() {
           />
         )}
 
+        {readState.date === date && readState.status === 'error' && (
+          <div role="alert" className="px-3 sm:px-4 py-2 border-b border-port-border text-sm text-port-error flex items-center gap-3">
+            <span className="flex-1">Daily log unavailable. Editing and autosave are paused until the entry loads.</span>
+            <button type="button" onClick={() => loadEntry(date)} disabled={loading}
+              className="min-h-[44px] px-3 rounded bg-port-card text-white disabled:opacity-50">Retry</button>
+          </div>
+        )}
+
         {loading ? (
           <div className="flex items-center justify-center flex-1">
             <BrailleSpinner text="Loading" />
@@ -931,10 +976,12 @@ export default function DailyLogTab() {
             <textarea
               aria-label="Log entry"
               ref={editorRef}
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
+              value={loadedDateRef.current === date ? content : ''}
+              readOnly={!readReady}
+              aria-disabled={!readReady}
+              onChange={(e) => { if (readReady) setContent(e.target.value); }}
               onBlur={() => saveRef.current?.({ auto: true })}
-              placeholder={isToday
+              placeholder={!readReady ? 'Entry unavailable — retry to load this day.' : isToday
                 ? "What's on your mind today? Type freely, append voice segments, or toggle dictation above…"
                 : 'This day\'s entry is empty.'}
               className="flex-1 w-full p-3 sm:p-4 bg-port-bg text-gray-200 text-sm resize-none focus:outline-none font-sans"

@@ -354,6 +354,15 @@ export const verifyRequestSession = async (req) => {
   return null;
 };
 
+// Audit identity for a verified session. Never expose its token or hash; a shared
+// agent session identifies the credential, not an individual agent or a human.
+export const verifyRequestSessionIdentity = async (req) => {
+  const token = await verifyRequestSession(req);
+  if (!token) return null;
+  const entry = sessions.get(hashToken(token));
+  return entry ? { kind: 'session', sessionId: entry.id, label: entry.label || null } : null;
+};
+
 export const revokeSession = async (token) => {
   await ensureLoaded();
   if (sessions.delete(hashToken(token))) {

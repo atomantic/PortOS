@@ -15,13 +15,18 @@ vi.mock('../services/promptRunner.js', () => ({
   },
 }));
 
+const prepareExternalDraft = vi.hoisted(() => vi.fn(async () => ({ draftId: 'synthetic-external-draft' })));
+vi.mock('../services/musicVideo/publish/index.js', async original => ({ ...await original(), preparePublishDraft: prepareExternalDraft }));
+
 const ROOT = () => lazyTempDataRoot('mv-production-review-');
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: ROOT }));
 vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 const planner = vi.hoisted(() => vi.fn());
 vi.mock('../services/musicVideo/planner.js', () => ({ planProject: planner }));
-const auth = vi.hoisted(() => ({ enabled: true }));
-vi.mock('../services/auth.js', () => ({ isAuthEnabled: async () => auth.enabled, verifyPassword: async password => password === 'synthetic-operator-password' }));
+const auth = vi.hoisted(() => ({ enabled: true, authenticated: true }));
+vi.mock('../services/auth.js', () => ({ isAuthEnabled: async () => auth.enabled, verifyPassword: async password => password === 'synthetic-operator-password',
+  verifyRequestSessionIdentity: async req => auth.authenticated && req.headers.authorization !== 'Bearer expired'
+    ? { kind: 'session', sessionId: req.headers.authorization ? 'shared-agent-session' : 'browser-session', label: req.headers.authorization ? 'agent' : null } : null }));
 vi.mock('../services/musicVideo/excerptRender.js', async original => ({ ...await original(),
   startExcerptRender: vi.fn(async (id, window, options) => {
     const store = await import('../services/musicVideo/projects.js');
@@ -36,7 +41,7 @@ vi.mock('../services/musicVideo/excerptRender.js', async original => ({ ...await
 const { default: router } = await import('./musicVideo.js');
 const store = await import('../services/musicVideo/projects.js');
 const { saveGeneratedDevArtifact } = await import('../services/musicVideo/devArtifactService.js');
-const { assertProductionApproval } = await import('../services/musicVideo/productionReview.js');
+const { assertProductionApproval, approveProductionStage, productionReviewBasis } = await import('../services/musicVideo/productionReview.js');
 const app = express();
 app.use(express.json()); app.use('/api/music-video', router); app.use(errorMiddleware);
 let project, base, draft;
@@ -49,11 +54,11 @@ async function approve(stage, extra = {}) {
     energyComparison: 'The playful energy target reads clearly in the subject and camera action.',
     timecodedNotes: '0:04 doorway opens on the accent; 0:12 the second gesture grows in scale.' } : undefined;
   return request(app).post(`${base}/production-review/approve`).send({ stage, proofReview,
-    basis: status.body.readiness.basis[stage], password: 'synthetic-operator-password', ...extra });
+    basis: status.body.readiness.basis[stage], ...extra });
 }
 
 beforeEach(async () => {
-  auth.enabled = true;
+  auth.enabled = true; auth.authenticated = true;
   author.calls = 0; author.sections = [];
   project = await store.createProject({ name: 'Example animation', uploadedAudioFilename: 'synthetic-song.wav', composition: { mode: 'code' } });
   base = `/api/music-video/${project.id}`;
@@ -103,14 +108,22 @@ describe('human-reviewed Music Video workflow', () => {
     expect(repeated.scenes).toEqual(beforeRepeat.scenes);
   });
 
-  it('refuses API credentials, password-free approval, stale revisions and final-render bypasses', async () => {
+  it('accepts authenticated browser and agent sessions, denies missing/expired/auth-off authority and stale revisions', async () => {
     const status = await read();
-    const body = { stage: 'art', basis: status.body.readiness.basis.art, password: 'synthetic-operator-password' };
-    expect((await request(app).post(`${base}/production-review/approve`).set('authorization', 'Bearer synthetic-agent').send(body)).status).toBe(403);
-    expect((await approve('art', { password: 'wrong' })).status).toBe(403);
+    const body = { stage: 'art', basis: status.body.readiness.basis.art };
+    auth.authenticated = false;
+    expect((await approve('art', { password: 'synthetic-operator-password' })).status).toBe(401);
+    auth.authenticated = true;
+    expect((await request(app).post(`${base}/production-review/approve`).set('authorization', 'Bearer expired').send(body)).status).toBe(401);
     auth.enabled = false;
-    expect((await approve('art')).body.code).toBe('OPERATOR_PASSWORD_REQUIRED');
+    expect((await approve('art')).body.code).toBe('AUTH_REQUIRED');
     auth.enabled = true;
+    expect((await approve('art')).status).toBe(200);
+    expect((await request(app).post(`${base}/production-review/approve`).set('authorization', 'Bearer synthetic-agent').send(body)).status).toBe(200);
+    const reviewed = await store.getProject(project.id);
+    expect(reviewed.productionReview.approvalHistory.map(a => a.reviewer.sessionId)).toEqual(['browser-session', 'shared-agent-session']);
+    expect(reviewed.productionReview.approvals.art.reviewer).toMatchObject({ kind: 'session', label: 'agent' });
+    expect((await approve('art', { reviewer: { kind: 'human' } })).status).toBe(400);
     await save({ ...draft, motionLanguage: 'A different motion direction' });
     expect((await request(app).post(`${base}/production-review/approve`).send(body)).status).toBe(409);
     expect((await request(app).patch(base).send({ productionReview: { approvals: { proof: true } } })).status).toBe(400);
@@ -153,6 +166,62 @@ describe('human-reviewed Music Video workflow', () => {
     await save({ ...draft, visualLanguage: 'New orange direction' });
     expect((await read()).body.readiness.readyForProduction).toBe(false);
     expect((await request(app).post(`${base}/render`).send({})).status).toBe(409);
+  });
+
+  it('records substantive machine proof evidence without claiming human playback and refuses automatic waivers', async () => {
+    await approve('art'); await approve('storyboard');
+    await request(app).post(`${base}/production-review/proof`).send({ startSec: 0, endSec: 20 });
+    const machine = { method: 'machine', watchedWithAudio: false, excerptId: 'proof-fixture', filename: 'synthetic-proof.mp4',
+      energyComparison: 'The doorway expansion matches the rising chorus energy.', timecodedNotes: '0:04 doorway opens on the accent; 0:12 the second gesture grows.',
+      machineEvidence: { visualReview: 'Continuous synthetic sequence review: the doorway expands and the figure travels without jumps.',
+        audioReview: 'Synthetic master comparison: the doorway opening coincides with the chorus accent at 0:04.',
+        limitations: 'Synthetic test observations; not a review of any user video.' } };
+    expect((await approve('proof', { proofReview: { ...machine, machineEvidence: undefined } })).body.code).toBe('MUSIC_VIDEO_PROOF_REVIEW_REQUIRED');
+    expect((await approve('proof', { proofReview: { ...machine, watchedWithAudio: true } })).status).toBe(409);
+    expect((await approve('proof', { proofReview: { ...machine, filename: 'older.mp4' } })).body.code).toBe('MUSIC_VIDEO_REVIEW_STALE');
+    const current = await store.getProject(project.id);
+    expect(() => approveProductionStage(current, { stage: 'proof', basis: productionReviewBasis(current).proof,
+      proofReview: { ...machine, autoApproved: true } })).toThrow(expect.objectContaining({ code: 'MUSIC_VIDEO_PROOF_REVIEW_REQUIRED' }));
+    expect((await request(app).post(`${base}/production-review/approve`).set('authorization', 'Bearer synthetic-agent')
+      .send({ stage: 'proof', basis: productionReviewBasis(current).proof, proofReview: machine })).status).toBe(200);
+    const accepted = await store.getProject(project.id);
+    expect(accepted.productionReview.approvals.proof).toMatchObject({ reviewer: { sessionId: 'shared-agent-session', label: 'agent' }, proofReview: machine });
+    expect(() => assertProductionApproval(accepted)).not.toThrow();
+    const legacy = structuredClone(accepted);
+    legacy.productionReview.approvals.proof.proofReview = { ...machine, autoApproved: true, machineEvidence: undefined };
+    expect(() => assertProductionApproval(legacy)).toThrow(expect.objectContaining({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' }));
+    expect(legacy.productionReview.approvals.art).toEqual(accepted.productionReview.approvals.art);
+  });
+
+  it('keeps changed word timings stale across draft saves and reverifies only the authenticated current basis', async () => {
+    await approve('art');
+    const prior = await read();
+    expect(prior.body.readiness.alignment.status).toBe('verified');
+    await store.updateProject(project.id, { lyricCues: [{ id: 'line-a', text: 'Example chorus', startSec: 1, endSec: 3,
+      words: [{ w: 'Example', startSec: 1, endSec: 1.5, conf: 'matched' }, { w: 'chorus', startSec: 1.5, endSec: 3, conf: 'matched' }] }] });
+    const saved = await save({ ...draft, timingNotes: 'Checked the updated fixture word onsets.', implementationPlan: 'Keep the existing renderer.' });
+    expect(saved.body.readiness.alignment.status).toBe('stale');
+    expect(saved.body.readiness.storyboard.problems.join(' ')).toContain('Lyric alignment is provisional or changed');
+    const reverify = (basis = saved.body.readiness.alignment.basis, notes = saved.body.project.productionReview.draft.timingNotes) =>
+      request(app).post(`${base}/production-review/alignment`).set('authorization', 'Bearer synthetic-agent').send({ basis, notes });
+    auth.authenticated = false;
+    expect((await reverify()).status).toBe(401);
+    auth.authenticated = true; auth.enabled = false;
+    expect((await reverify()).status).toBe(401);
+    auth.enabled = true;
+    expect((await request(app).post(`${base}/production-review/alignment`).set('authorization', 'Bearer expired')
+      .send({ basis: saved.body.readiness.alignment.basis, notes: draft.timingNotes })).status).toBe(401);
+    expect((await reverify(prior.body.readiness.alignment.basis)).body.code).toBe('MUSIC_VIDEO_REVIEW_STALE');
+    expect((await reverify(undefined, ' ')).status).toBe(400);
+    expect((await read()).body.readiness.alignment.status).toBe('stale');
+    const reviewed = await reverify();
+    expect(reviewed.status).toBe(200);
+    expect(reviewed.body.readiness.alignment.status).toBe('verified');
+    expect(reviewed.body.readiness.storyboard.approved).toBe(false);
+    expect(reviewed.body.project.productionReview.draft.timingNotes).toBe('Checked the updated fixture word onsets.');
+    expect(reviewed.body.project.productionReview.alignmentReview.reviewer).toMatchObject({ kind: 'session', sessionId: 'shared-agent-session' });
+    expect((await approve('art')).status).toBe(200);
+    expect((await approve('storyboard')).status).toBe(200);
   });
 
   it('distinguishes provisional/zero-length/missing lyrics from an explicit instrumental', async () => {
@@ -263,8 +332,8 @@ describe('human-reviewed Music Video workflow', () => {
     expect(revised.body.project.productionReview.feedback.at(-1).resolvedAt).toBeUndefined();
     expect(revised.body.readiness.art.approved).toBe(true);
     expect(revised.body.readiness.storyboard.approved).toBe(false);
-    const resolution = { feedbackId: entry.id, resolution: 'Reviewed the revised staging.', password: 'synthetic-operator-password' };
-    expect((await request(app).post(`${base}/production-review/feedback/resolve`).set('authorization', 'Bearer synthetic-agent').send(resolution)).status).toBe(403);
+    const resolution = { feedbackId: entry.id, resolution: 'Reviewed the revised staging.' };
+    expect((await request(app).post(`${base}/production-review/feedback/resolve`).set('authorization', 'Bearer expired').send(resolution)).status).toBe(401);
     expect((await request(app).post(`${base}/production-review/feedback/resolve`).send(resolution)).status).toBe(200);
     expect((await read()).body.readiness.readyForProduction).toBe(false);
     await request(app).post(`${base}/production-review/import`).send({ source: JSON.stringify({ cast: 'Another proposal', storyboard: [] }) });
@@ -278,7 +347,11 @@ describe('human-reviewed Music Video workflow', () => {
     const result = await request(app).post(`${base}/publish/drafts/any-draft/submit`).set('authorization', 'Bearer synthetic-agent').send({ approved: true, password: 'synthetic-operator-password' });
     expect(result.status).toBe(403);
     expect(result.body.code).toBe('PUBLISH_MANUAL_REQUIRED');
-    expect((await request(app).post(`${base}/publish/youtube/prepare`).send({ approved: true })).status).toBe(403);
+    auth.authenticated = false;
+    expect((await request(app).post(`${base}/publish/youtube/prepare`).send({})).status).toBe(401);
+    auth.authenticated = true;
+    expect((await request(app).post(`${base}/publish/youtube/prepare`).set('authorization', 'Bearer synthetic-agent').send({})).status).toBe(200);
+    expect(prepareExternalDraft).toHaveBeenCalledWith(project.id, 'youtube', expect.any(Object));
   });
 });
 

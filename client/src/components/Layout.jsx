@@ -133,6 +133,16 @@ const navRowForPath = (path) => {
 
 const presentedNavRows = Object.keys(NAV_PRESENTATION).map(navRowForPath);
 
+// A row whose destination is one tab of a group stays active across the whole
+// group by declaring the prefix its sibling tabs share.
+const activePrefixByPath = new Map(
+  presentedNavRows.filter((row) => row.activePathPrefix).map((row) => [row.to, row.activePathPrefix])
+);
+const pathWithinRow = (pathname, rowPath) => {
+  const prefix = activePrefixByPath.get(rowPath) ?? rowPath;
+  return pathname === prefix || pathname.startsWith(prefix + '/');
+};
+
 const sectionNavItem = (section) => {
   const children = presentedNavRows
     .filter((row) => row.section === section && !row.single)
@@ -491,7 +501,7 @@ export default function Layout() {
     resolvedNavItems.forEach(item => {
       if (item.children) {
         const isChildActive = item.children.some(child =>
-          child.to && (location.pathname === child.to || location.pathname.startsWith(child.to + '/'))
+          child.to && pathWithinRow(location.pathname, child.to)
         );
         if (isChildActive) {
           setExpandedSections(prev => ({ ...prev, [item.label]: true }));
@@ -536,7 +546,7 @@ export default function Layout() {
       const owningTab = getSectionNavTabForPath('Models', location.pathname);
       return owningTab?.to === path || matchedCommand.path === path;
     }
-    return location.pathname === path || location.pathname.startsWith(path + '/');
+    return pathWithinRow(location.pathname, path);
   };
 
   const isSectionActive = (item) => {

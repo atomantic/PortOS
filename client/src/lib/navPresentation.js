@@ -213,7 +213,8 @@ export const NAV_PRESENTATION = {
   '/devtools/quota-burn': { icon: Flame },
   '/security': { icon: Camera },
   '/shell': { icon: SquareTerminal },
-  '/system-resources': { icon: Activity },
+  // Stays lit on every System Resources tab, not only the Overview it links to.
+  '/system-resources/overview': { icon: Activity, activePathPrefix: '/system-resources' },
   '/uploads': { icon: Upload },
   '/devtools/usage': { icon: BarChart3 },
   '/devtools/video-download': { icon: Film },

@@ -1841,6 +1841,8 @@ CREATE TABLE IF NOT EXISTS beeper_conversations (
   -- to decide whether the unread badge still shows. Mirrors the ALTER in
   -- server/lib/db/schema/beeper.js (for existing installs).
   seen_at TIMESTAMPTZ,
+  -- Beeper-owned snooze deadline; NULL on older Desktop API versions.
+  snooze_until TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE (account_id, source_chat_id)

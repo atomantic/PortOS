@@ -520,6 +520,85 @@ describe('runSpawnerCompletionCleanup — the in-process spawners\' dispatch', (
     ...overrides,
   });
 
+  it('leaves recovery-owned preservation and publication to the agent even with stale delivery flags', async () => {
+    const task = { id: 't', taskType: 'user', description: 'recover checkout', metadata: {
+      analysisType: 'app-checkout-recovery', openPR: true,
+      jiraTicketId: 'EX-1', jiraBranch: 'preserved-work', jiraCreatePR: true,
+    } };
+    await runSpawnerCompletionCleanup(spawnerArgs({ task }));
+    expect(cleanupAgentWorktree).not.toHaveBeenCalled();
+    expect(git.push).not.toHaveBeenCalled();
+    expect(git.createPR).not.toHaveBeenCalled();
+  });
+
+  // Real Git preservation/checkout fixture; forge publication is a controlled
+  // adapter so this regression never touches a live repo or external account.
+  it('preserves an existing unique commit on a published PR branch and leaves the live checkout current', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const root = mkdtempSync(join(tmpdir(), 'portos-checkout-recovery-'));
+    const remote = join(root, 'origin.git');
+    const checkout = join(root, 'checkout');
+    const writer = join(root, 'remote-writer');
+    const runGit = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, GIT_AUTHOR_NAME: 'Fixture', GIT_COMMITTER_NAME: 'Fixture',
+        GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' },
+    }).trim();
+    try {
+      runGit(root, 'init', '--bare', '--initial-branch=main', remote);
+      runGit(root, 'clone', remote, checkout);
+      writeFileSync(join(checkout, 'base.txt'), 'base');
+      runGit(checkout, 'add', 'base.txt');
+      runGit(checkout, 'commit', '-m', 'fixture base');
+      runGit(checkout, 'push', 'origin', 'main');
+      runGit(root, 'clone', remote, writer);
+      writeFileSync(join(checkout, 'unique.txt'), 'unique pending work');
+      runGit(checkout, 'add', 'unique.txt');
+      runGit(checkout, 'commit', '-m', 'fixture unique work');
+      const unique = runGit(checkout, 'rev-parse', 'HEAD');
+      writeFileSync(join(writer, 'remote.txt'), 'remote advancement');
+      runGit(writer, 'add', 'remote.txt');
+      runGit(writer, 'commit', '-m', 'fixture remote advance');
+      runGit(writer, 'push', 'origin', 'main');
+      const latest = runGit(writer, 'rev-parse', 'HEAD');
+      runGit(checkout, 'update-ref', 'refs/backup/recovery-original', unique);
+      expect(runGit(checkout, 'rev-parse', 'refs/backup/recovery-original')).toBe(unique);
+      runGit(checkout, 'switch', '-c', 'recovery/preserved-work');
+      runGit(checkout, 'push', 'origin', 'recovery/preserved-work');
+      const forge = { createPR: vi.fn(async head => {
+        // The fake forge admits only a branch already present on origin.
+        expect(runGit(remote, 'rev-parse', `refs/heads/${head}`)).toBe(unique);
+        return { state: 'OPEN', head, url: 'https://example.invalid/pull/1' };
+      }) };
+      const pr = await forge.createPR('recovery/preserved-work');
+      expect(pr.state).toBe('OPEN');
+      runGit(checkout, 'fetch', 'origin', 'main');
+      // Move only the accounted-for default branch; the original commit is
+      // verified on both the backup ref and the published preservation ref.
+      runGit(checkout, 'branch', '-f', 'main', 'origin/main');
+      runGit(checkout, 'switch', 'main');
+      const task = { id: 't', taskType: 'user', metadata: {
+        analysisType: 'app-checkout-recovery', useWorktree: false, openPR: false,
+      } };
+      await runSpawnerCompletionCleanup(spawnerArgs({ task,
+        prOwnership: { taskOpenPR: false, agentOpensOwnPr: false },
+      }));
+      expect(cleanupAgentWorktree).not.toHaveBeenCalled();
+      expect(git.push).not.toHaveBeenCalled();
+      expect(git.createPR).not.toHaveBeenCalled();
+      expect(runGit(checkout, 'branch', '--show-current')).toBe('main');
+      expect(runGit(checkout, 'status', '--porcelain')).toBe('');
+      expect(runGit(checkout, 'stash', 'list')).toBe('');
+      expect(runGit(checkout, 'rev-parse', 'HEAD')).toBe(latest);
+      expect(runGit(remote, 'rev-parse', 'refs/heads/recovery/preserved-work')).toBe(unique);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('advances a running pipeline, cleans the worktree with the PR disposition, then releases the hold', async () => {
     const order = [];
     updateTask.mockImplementationOnce(async () => { order.push('pipeline'); });

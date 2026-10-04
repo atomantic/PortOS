@@ -412,6 +412,7 @@ function AppDetail() {
                   <button
                     onClick={handleStop}
                     disabled={actionLoading}
+                    aria-busy={actionLoading === 'stop'}
                     className="px-2 py-1 bg-port-error/20 text-port-error enabled:hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1"
                   >
                     <Square size={14} />
@@ -420,6 +421,7 @@ function AppDetail() {
                   <button
                     onClick={handleRestart}
                     disabled={actionLoading}
+                    aria-busy={actionLoading === 'restart'}
                     className="px-2 py-1 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 border-l border-port-border flex items-center gap-1"
                   >
                     <RotateCcw size={14} className={actionLoading === 'restart' ? 'animate-spin' : ''} />
@@ -442,6 +444,7 @@ function AppDetail() {
                 <button
                   onClick={handleStart}
                   disabled={actionLoading}
+                  aria-busy={actionLoading === 'start'}
                   className="px-2 py-1 bg-port-success/20 text-port-success enabled:hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1"
                 >
                   <Play size={14} />

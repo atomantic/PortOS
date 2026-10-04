@@ -114,7 +114,7 @@ async function resolveDesign() {
 export async function observeEidoverseWorld({ signal, commit = true, source: collectedSource = null, now = () => new Date().toISOString() } = {}) {
   const [source, ledger, controllers, design] = await Promise.all([
     collectedSource ?? import('./eidoverseWorldSources.js')
-      .then((module) => module.collectEidoverseWorldSources({ signal }))
+      .then((module) => module.collectEidoverseWorldSources({ signal, includeAttentionReasons: true }))
       .catch(() => ({})),
     import('./eidoverseFoundationLedger.js')
       .then((module) => module.listEidoverseFoundations())

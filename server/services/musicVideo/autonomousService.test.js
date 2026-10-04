@@ -723,3 +723,101 @@ it('parks standalone code at real human gates and replaces a stale proof before 
   expect(doubles.generateDocument).toHaveBeenCalledOnce();
   expect(doubles.startProduction).not.toHaveBeenCalled();
 });
+
+describe('auto-approve the rest (brief.autoApprove)', () => {
+  let actual;
+  beforeEach(async () => {
+    creativeReview.real = true;
+    actual = await vi.importActual('./productionReview.js');
+    // The service's persistence path, minus the operator check the route owns.
+    doubles.approveProductionReview = stub('approve', async (id, input) => {
+      store.set(id, clone(actual.approveProductionStage(clone(store.get(id)), input)));
+    });
+    doubles.wait = vi.fn(async () => {});
+    service.__setAutonomousDepsForTests(doubles);
+  });
+  const reviewFixture = (draft = {}) => doubles.analyzeSong.mockImplementation(async () => {
+    Object.assign(store.get('mv-auto'), {
+      audioAnalysis: { durationSec: 20, sections: [{ id: 'chorus', label: 'Chorus', startSec: 0, endSec: 20 }] },
+      scenes: [{ sceneId: 'shot', startSec: 0, endSec: 20, label: 'Chorus' }],
+      devArtifacts: [{ id: 'guide', version: 1, file: 'guide.html', mimeType: 'text/html' }],
+      productionReview: { draft: {
+        cast: 'Paper dancer', environments: 'Theatre', visualLanguage: 'Ink silhouettes', motionLanguage: 'Slow orbit',
+        guideArtifactId: 'guide', lyricsMode: 'instrumental', timingNotes: 'Synthetic instrumental master checked.',
+        storyboard: [{ sceneId: 'shot', lyricCueIds: [], action: 'Dancer unfolds', staging: 'Wide theatre', camera: 'Orbit', transition: 'Fade' }],
+        ...draft,
+      } },
+    });
+  });
+  const approvals = () => store.get('mv-auto').productionReview.approvals || {};
+
+  it('is granted only with operator authority, on start or on a resume of a parked run, and then approves clean art and storyboard itself', async () => {
+    reviewFixture();
+    await expect(service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], autoApprove: ['art'] }))
+      .rejects.toMatchObject({ status: 403, code: 'AUTH_REQUIRED' });
+    expect(store.size).toBe(0);
+
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'] });
+    await settled('needs-human');
+    expect(runOf()).toMatchObject({ errorCode: 'MUSIC_VIDEO_APPROVAL_REQUIRED', brief: { autoApprove: [], autoApproveAuthorizedAt: null } });
+    await expect(service.resumeAutonomousVideo('mv-auto', { autoApprove: ['art', 'storyboard'] }))
+      .rejects.toMatchObject({ status: 403, code: 'AUTH_REQUIRED' });
+    expect(runOf()).toMatchObject({ status: 'needs-human', brief: { autoApprove: [] } });
+    expect(doubles.approveProductionReview).not.toHaveBeenCalled();
+
+    await service.resumeAutonomousVideo('mv-auto', { autoApprove: ['art', 'storyboard'] }, { autoApproveAuthorized: true });
+    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+    expect(runOf().brief).toMatchObject({ autoApprove: ['art', 'storyboard'], autoApproveAuthorizedAt: expect.any(String) });
+    expect(doubles.approveProductionReview.mock.calls.map(([, input]) => input.stage)).toEqual(['art', 'storyboard']);
+    expect(approvals()).toMatchObject({ art: { approvedBy: 'autopilot' }, storyboard: { approvedBy: 'autopilot' } });
+    expect(approvals().proof).toBeUndefined();
+    expect(actual.productionReadiness(store.get('mv-auto')).storyboard.approved).toBe(true);
+  });
+
+  it('never approves past a readiness problem: the run parks for a human at that stage', async () => {
+    reviewFixture({ timingNotes: '' });
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], autoApprove: ['art', 'storyboard'] }, { autoApproveAuthorized: true });
+    await settled('needs-human');
+    expect(runOf()).toMatchObject({ errorCode: 'MUSIC_VIDEO_APPROVAL_REQUIRED', error: 'Explain and confirm the instrumental exception.' });
+    expect(approvals().art).toMatchObject({ approvedBy: 'autopilot' });
+    expect(approvals().storyboard).toBeUndefined();
+    expect(doubles.startProduction).not.toHaveBeenCalled();
+  });
+
+  const proofRenders = async (outcome) => {
+    const { renderProductionProof } = await import('./productionReviewService.js');
+    renderProductionProof.mockImplementation(async (_id, window) => {
+      const project = store.get('mv-auto');
+      project.excerpts = [{ id: 'proof-1', status: 'rendering', filename: null }];
+      project.productionReview.proof = { ...window, excerptId: 'proof-1' };
+      project.productionReview.proof.basis = actual.productionReviewBasis(project).proof;
+      return { jobId: 'proof-1' };
+    });
+    // The excerpt job settles while the run waits between polls.
+    doubles.wait.mockImplementation(async () => { Object.assign(store.get('mv-auto').excerpts[0], outcome); });
+    return renderProductionProof;
+  };
+
+  it('waits for the proof render then parks for substantive review even with a legacy proof grant', async () => {
+    reviewFixture();
+    await proofRenders({ status: 'complete', filename: 'proof-1.mp4' });
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['code:render'], authoring: { providerId: 'example', model: 'example-code' },
+      autoApprove: ['art', 'storyboard', 'proof'] }, { autoApproveAuthorized: true });
+    await settled('needs-human');
+    expect(doubles.wait).toHaveBeenCalledWith(5000);
+    expect(approvals().proof).toBeUndefined();
+    expect(actual.productionReadiness(store.get('mv-auto')).readyForProduction).toBe(false);
+    expect(doubles.renderVideo).not.toHaveBeenCalled();
+  });
+
+  it('fails the run with the excerpt error when the proof render fails', async () => {
+    reviewFixture();
+    await proofRenders({ status: 'error', error: 'Synthetic encoder failure' });
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['code:render'], authoring: { providerId: 'example', model: 'example-code' },
+      autoApprove: ['art', 'storyboard', 'proof'] }, { autoApproveAuthorized: true });
+    await settled('failed');
+    expect(runOf()).toMatchObject({ errorCode: 'PROOF_RENDER_FAILED', error: 'The proof render failed: Synthetic encoder failure' });
+    expect(approvals().proof).toBeUndefined();
+    expect(doubles.renderVideo).not.toHaveBeenCalled();
+  });
+});

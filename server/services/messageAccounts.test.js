@@ -39,6 +39,31 @@ function holdNextWrite({ fail = false } = {}) {
 afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
 
 describe('messageAccounts', () => {
+  it('derives send capabilities on read without trusting persisted capability flags', async () => {
+    await messageAccounts.createAccount({ name: 'Gmail', type: 'gmail' });
+    uuid.mockReturnValueOnce('outlook-id');
+    await messageAccounts.createAccount({ name: 'Outlook', type: 'outlook' });
+    uuid.mockReturnValueOnce('teams-id');
+    await messageAccounts.createAccount({ name: 'Teams', type: 'teams' });
+    expect((await messageAccounts.listAccounts()).map(({ type, canSend }) => ({ type, canSend }))).toEqual([
+      { type: 'gmail', canSend: true }, { type: 'outlook', canSend: true }, { type: 'teams', canSend: true }
+    ]);
+    expect(await messageAccounts.getAccount('teams-id')).toMatchObject({ type: 'teams', canSend: true, provider: 'playwright' });
+  });
+
+  it('derives the offered sync modes and read-state capability per provider (#9968)', async () => {
+    await messageAccounts.createAccount({ name: 'Gmail', type: 'gmail' });
+    uuid.mockReturnValueOnce('outlook-id');
+    await messageAccounts.createAccount({ name: 'Outlook', type: 'outlook' });
+    uuid.mockReturnValueOnce('teams-id');
+    await messageAccounts.createAccount({ name: 'Teams', type: 'teams' });
+    expect((await messageAccounts.listAccounts()).map(({ type, syncModes, hasReadState }) => ({ type, syncModes, hasReadState }))).toEqual([
+      { type: 'gmail', syncModes: ['unread', 'full'], hasReadState: true },
+      { type: 'outlook', syncModes: ['unread', 'full'], hasReadState: true },
+      { type: 'teams', syncModes: ['full'], hasReadState: false }
+    ]);
+  });
+
   beforeEach(() => {
     atomicWrite.mockReset().mockImplementation(persist);
     uuid.mockReset().mockReturnValue('msg-uuid-5678');

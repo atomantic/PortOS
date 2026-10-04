@@ -14,6 +14,9 @@ const DEFAULTS = {
   // off is the only safe default — this is an explicit opt-in, never inferred
   // from the baseUrl the user typed.
   allowNonLoopbackBaseUrl: false,
+  // Opt-in real read receipts (#9985): default OFF, enabled only through the
+  // consent step in the settings panel.
+  sendReadReceipts: false,
 };
 
 // `value === ''` (a cleared field) falls back to the default; any other
@@ -37,7 +40,7 @@ const clampBudget = (value) => Math.max(0.1, Math.min(1000, toFiniteNumber(value
 // dedicated connect routes (#31) — the Beeper card's Connect / paste /
 // Disconnect actions, never this settings save.
 //
-// `save()` always PUTs the complete five-field object, never a diff — same
+// `save()` always PUTs the complete settings object, never a diff — same
 // convention as `useSyncSourceSettings` for iMessage/Signal/Spotify/YouTube —
 // so a partial edit can never silently drop a sibling field on the server's
 // generic top-level shallow merge.
@@ -68,6 +71,7 @@ export function useBeeperSettings() {
           attachmentBudgetGb: Number.isFinite(config.attachmentBudgetGb) ? config.attachmentBudgetGb : DEFAULTS.attachmentBudgetGb,
           allowNonLoopbackBaseUrl: typeof config.allowNonLoopbackBaseUrl === 'boolean'
             ? config.allowNonLoopbackBaseUrl : DEFAULTS.allowNonLoopbackBaseUrl,
+          sendReadReceipts: config.sendReadReceipts === true,
         };
         setForm(next);
         setSaved(next);
@@ -92,6 +96,7 @@ export function useBeeperSettings() {
       attachmentBudgetGb: clampBudget(form.attachmentBudgetGb),
       baseUrl: (form.baseUrl || '').trim() || DEFAULTS.baseUrl,
       allowNonLoopbackBaseUrl: Boolean(form.allowNonLoopbackBaseUrl),
+      sendReadReceipts: form.sendReadReceipts === true,
     };
     setSaving(true);
     const settings = await updateSettings({ beeper: next }).catch(() => null);

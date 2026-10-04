@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {Play,
   CheckCircle,
   XCircle,
@@ -15,6 +15,8 @@ import {Play,
 import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
+import socket from '../../../services/socket';
+import { uuidv4 } from '../../../lib/uuid';
 
 import ValuesAlignmentPanel from './ValuesAlignmentPanel';
 import AdversarialBoundaryPanel from './AdversarialBoundaryPanel';
@@ -23,12 +25,18 @@ import PersonaBadge from '../PersonaBadge';
 import { TEST_STATUS } from '../constants';
 import { timeAgo } from '../../../utils/formatters';
 
+const pairKey = (providerId, model) => `${providerId}:${model}`;
+
 export default function TestTab({ onRefresh }) {
   const [tests, setTests] = useState([]);
   const [providers, setProviders] = useState([]);
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
+  // The in-flight multi-model batch: { id, order: [pairKey…], received: Map<pairKey, entry> }.
+  // null when nothing is running, so a late/duplicate/foreign frame is dropped.
+  const activeBatchRef = useRef(null);
+  const [batchProgress, setBatchProgress] = useState(null); // { completed, total } | null
 
   // Test configuration
   const [selectedProviders, setSelectedProviders] = useState([]);
@@ -51,6 +59,27 @@ export default function TestTab({ onRefresh }) {
 
   useEffect(() => {
     loadData();
+  }, []);
+
+  // Merge each provider/model result into the visible set as the server reports
+  // it, instead of waiting for the slowest model's HTTP response. Frames are
+  // matched on the batch id this tab minted, each pair is accepted once, and
+  // the visible rows stay in selected-model order regardless of finish order.
+  useEffect(() => {
+    const onProgress = (payload) => {
+      const batch = activeBatchRef.current;
+      if (!batch || payload?.requestId !== batch.id) return;
+      const key = pairKey(payload.providerId, payload.model);
+      if (!batch.order.includes(key) || batch.received.has(key)) return;
+      batch.received.set(key, { providerId: payload.providerId, model: payload.model, ...payload.result });
+      setResults(batch.order.filter(k => batch.received.has(k)).map(k => batch.received.get(k)));
+      setBatchProgress({ completed: batch.received.size, total: batch.order.length });
+    };
+    socket.on('digital-twin:test-progress', onProgress);
+    return () => {
+      socket.off('digital-twin:test-progress', onProgress);
+      activeBatchRef.current = null;
+    };
   }, []);
 
   const loadData = async () => {
@@ -134,6 +163,7 @@ export default function TestTab({ onRefresh }) {
 
     setRunning(true);
     setResults([]);
+    setBatchProgress(null);
 
     const testIds = selectedTests.length > 0 ? selectedTests : null;
     const personaId = selectedPersonaId || null;
@@ -145,8 +175,20 @@ export default function TestTab({ onRefresh }) {
         const result = await api.runSoulTests(providerId, model, testIds, personaId);
         setResults([{ providerId, model, ...result }]);
       } else {
-        // Multi-provider test
-        const multiResults = await api.runSoulMultiTests(selectedProviders, testIds, personaId);
+        // Multi-provider test. The listener is always mounted, so arming the
+        // batch before dispatch is enough to catch the fastest model's frame.
+        const batch = {
+          id: uuidv4(),
+          order: selectedProviders.map(p => pairKey(p.providerId, p.model)),
+          received: new Map()
+        };
+        activeBatchRef.current = batch;
+        setBatchProgress({ completed: 0, total: batch.order.length });
+        const multiResults = await api.runSoulMultiTests(selectedProviders, testIds, personaId, batch.id);
+        // Settle the batch BEFORE installing the final array: a progress frame
+        // can still arrive after the HTTP response and must not overwrite it.
+        // The final array is authoritative (one entry per selected pair).
+        activeBatchRef.current = null;
         setResults(multiResults);
       }
 
@@ -161,6 +203,8 @@ export default function TestTab({ onRefresh }) {
         handlePersonaNotFound();
       }
     } finally {
+      activeBatchRef.current = null;
+      setBatchProgress(null);
       // Always clear the spinner — without this an error (e.g. the 404 above)
       // would strand the tab on "Running Tests...".
       setRunning(false);
@@ -331,7 +375,7 @@ export default function TestTab({ onRefresh }) {
           {running ? (
             <>
               <BrailleSpinner />
-              Running Tests...
+              Running Tests...{batchProgress ? ` ${batchProgress.completed} of ${batchProgress.total} models done` : ''}
             </>
           ) : (
             <>
@@ -487,15 +531,23 @@ export default function TestTab({ onRefresh }) {
                   <td className="px-4 py-3 font-medium text-white">Total Score</td>
                   {results.map(r => (
                     <td key={`${r.providerId}-${r.model}-score`} className="px-4 py-3">
-                      <span className={`text-lg font-bold ${
-                        r.score >= 0.8 ? 'text-port-success' :
-                        r.score >= 0.5 ? 'text-port-warning' : 'text-port-error'
-                      }`}>
-                        {Math.round((r.score || 0) * 100)}%
-                      </span>
-                      <span className="text-sm text-gray-500 ml-2">
-                        ({r.passed || 0}/{r.total || 0})
-                      </span>
+                      {r.error ? (
+                        <span className="text-sm font-medium text-port-error" title={r.error}>
+                          Failed: {r.error}
+                        </span>
+                      ) : (
+                        <>
+                          <span className={`text-lg font-bold ${
+                            r.score >= 0.8 ? 'text-port-success' :
+                            r.score >= 0.5 ? 'text-port-warning' : 'text-port-error'
+                          }`}>
+                            {Math.round((r.score || 0) * 100)}%
+                          </span>
+                          <span className="text-sm text-gray-500 ml-2">
+                            ({r.passed || 0}/{r.total || 0})
+                          </span>
+                        </>
+                      )}
                     </td>
                   ))}
                 </tr>

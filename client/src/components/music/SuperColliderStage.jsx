@@ -77,7 +77,6 @@ export default function SuperColliderStage({
     await setupSuperCollider({ rebuild }, (frame) => {
       if (!mountedRef.current) return;
       if (frame.type === 'log') setSetupLog((log) => [...(log || []), frame.message].slice(-200));
-      else if (frame.type === 'error') failed = frame.message || 'SuperCollider setup failed';
       else if (frame.type === 'complete') setStatus(frame.status);
     }).catch((err) => { failed = err?.message || 'SuperCollider setup failed'; });
     if (!mountedRef.current) return;

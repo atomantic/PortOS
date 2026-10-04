@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Save, Loader2, MessageCircle, ShieldCheck, ShieldAlert, RefreshCw, Clock, Link2, Unlink, HardDrive, Download } from 'lucide-react';
+import { Save, Loader2, MessageCircle, ShieldCheck, ShieldAlert, RefreshCw, Clock, Link2, Unlink, HardDrive, Download, CheckCheck } from 'lucide-react';
 import toast from '../../ui/Toast';
 import Modal from '../../ui/Modal';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -53,6 +53,7 @@ export default function BeeperSettingsPanel({ realtime: realtimeProp = null, onR
   const [savingToken, setSavingToken] = useState(false);
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [consentingReceipts, setConsentingReceipts] = useState(false);
   const mountedRef = useMounted();
 
   const loadStatus = useCallback(async () => {
@@ -273,6 +274,28 @@ export default function BeeperSettingsPanel({ realtime: realtimeProp = null, onR
             </span>
           </label>
 
+          {/* Real read receipts (#9985): default OFF. Turning ON goes through
+              the consent modal below; turning OFF is immediate. Like every
+              field here it only takes effect on Save. */}
+          <label htmlFor="beeper-read-receipts" className="flex items-start gap-2 text-sm text-gray-200 cursor-pointer">
+            <input
+              id="beeper-read-receipts"
+              type="checkbox"
+              checked={form.sendReadReceipts}
+              onChange={(e) => {
+                if (e.target.checked) setConsentingReceipts(true);
+                else setForm((prev) => ({ ...prev, sendReadReceipts: false }));
+              }}
+              className="w-4 h-4 mt-0.5 accent-port-accent"
+            />
+            <span>
+              Send read receipts to Beeper
+              <span className="block text-xs text-gray-500">
+                Off by default — opening a conversation here only marks it seen in PortOS. When on, it also marks the chat read in Beeper.
+              </span>
+            </span>
+          </label>
+
           <div className="pt-1">
             <button
               type="button"
@@ -297,6 +320,15 @@ export default function BeeperSettingsPanel({ realtime: realtimeProp = null, onR
       <BeeperOutboxBreakerBanner
         breaker={status?.outbox?.breaker}
         onCleared={() => { loadStatus(); onBreakerCleared?.(); }}
+      />
+
+      <ReadReceiptConsentModal
+        open={consentingReceipts}
+        onCancel={() => setConsentingReceipts(false)}
+        onConfirm={() => {
+          setForm((prev) => ({ ...prev, sendReadReceipts: true }));
+          setConsentingReceipts(false);
+        }}
       />
 
       <AttachmentMirrorCard budgetGb={form.attachmentBudgetGb} settingsDirty={dirty || saving} />
@@ -929,6 +961,49 @@ function BackfillConsentModal({ open, summary, onCancel, onConfirm }) {
           >
             <Download size={12} />
             Mirror {summary.pendingCount} attachment(s)
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// The explicit consent step (#9985) for real read receipts. Read receipts are
+// the one Beeper-visible side effect of simply opening a conversation — the
+// people on the other end see the chat as read — so enabling them is a
+// deliberate second step rather than a bare checkbox.
+function ReadReceiptConsentModal({ open, onCancel, onConfirm }) {
+  if (!open) return null;
+  return (
+    <Modal open={open} onClose={onCancel} size="sm" ariaLabel="Send read receipts to Beeper">
+      <div className="bg-port-card border border-port-border rounded-lg p-5 space-y-4">
+        <div className="flex items-center gap-2">
+          <CheckCheck size={18} className="text-port-accent" />
+          <h3 className="text-white font-medium">Send read receipts?</h3>
+        </div>
+        <p className="text-sm text-gray-400">
+          When you open a conversation with new activity in PortOS, PortOS will also mark that chat as
+          read in Beeper. On networks that support them, the people you are talking to may see that you
+          have read their messages.
+        </p>
+        <p className="text-xs text-gray-500">
+          You can turn this off again at any time. Until you save, nothing changes.
+        </p>
+        <div className="flex flex-wrap justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="min-h-[36px] px-3 text-xs text-gray-400 transition-colors hover:text-gray-200"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg bg-port-accent/20 px-3 text-xs text-port-accent transition-colors hover:bg-port-accent/30"
+          >
+            <CheckCheck size={12} />
+            Enable read receipts
           </button>
         </div>
       </div>

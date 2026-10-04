@@ -144,6 +144,10 @@ export default function PrivacyBrokersTab({ subjectId, consentScopes, onManageCo
   const [optOutNow, optOutRunning] = useAsyncAction(async () => {
     const r = await runPass(runPrivacyOptOut, 'broker_optout');
     load();
+    if (r?.nextActions?.length) {
+      toast.error(r.nextActions.join('. '));
+      return r;
+    }
     toast.success(r?.reason === 'no_disclosure_identity'
       ? 'Add a scan-eligible name to the vault to run an opt-out pass'
       : `Opt-out pass: ${r?.submitted?.length || 0} actioned, ${r?.skipped || 0} skipped`);

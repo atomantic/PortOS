@@ -2,6 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 
+vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(), updateSettingsWith: vi.fn() }));
+import { getSettings, updateSettingsWith } from '../services/settings.js';
+import { beeperSocketEvents } from '../services/beeperSocketEvents.js';
+
 vi.mock('../services/beeperStatus.js', () => ({
   getBeeperStatus: vi.fn(),
   checkBeeperConnection: vi.fn(),
@@ -12,7 +16,7 @@ vi.mock('../services/beeperOAuth.js', () => ({
   connectWithPastedToken: vi.fn(),
   disconnectBeeper: vi.fn(),
 }));
-vi.mock('../services/beeperSync.js', () => ({ runBeeperSweep: vi.fn() }));
+vi.mock('../services/beeperSync.js', () => ({ runBeeperSweep: vi.fn(), createBeeperConversation: vi.fn() }));
 vi.mock('../services/beeperOutbox.js', () => ({
   createOutboxEntry: vi.fn(),
   sendOutboxEntry: vi.fn(),
@@ -54,7 +58,7 @@ import { getBeeperStatus, checkBeeperConnection } from '../services/beeperStatus
 import {
   completeBeeperOAuth, connectWithPastedToken, disconnectBeeper, startBeeperOAuth,
 } from '../services/beeperOAuth.js';
-import { runBeeperSweep } from '../services/beeperSync.js';
+import { runBeeperSweep, createBeeperConversation } from '../services/beeperSync.js';
 import {
   clearOutboxBreaker, createOutboxEntry, discardOutboxEntry, listOutboxEntries, sendOutboxEntry, reconcileOutboxEntry,
 } from '../services/beeperOutbox.js';
@@ -568,6 +572,13 @@ describe('GET /api/beeper/outbox and the breaker reset', () => {
 const CONV_ID = '11111111-1111-4111-8111-111111111111';
 
 describe('GET /api/beeper/conversations — filters', () => {
+  it('validates and forwards the Later filter', async () => {
+    vi.mocked(listConversations).mockResolvedValue({ conversations: [], nextCursor: null });
+    const app = buildApp();
+    expect((await request(app).get('/api/beeper/conversations?snoozed=true')).status).toBe(200);
+    expect(listConversations).toHaveBeenCalledWith({ snoozed: true });
+    expect((await request(app).get('/api/beeper/conversations?snoozed=invalid')).status).toBe(400);
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(listConversations).mockResolvedValue({ conversations: [], nextCursor: null });
@@ -589,6 +600,15 @@ describe('GET /api/beeper/conversations — filters', () => {
 
   it('rejects a non-boolean filter value instead of coercing it', async () => {
     const res = await request(buildApp()).get('/api/beeper/conversations?archived=yes');
+    expect(res.status).toBe(400);
+    expect(listConversations).not.toHaveBeenCalled();
+  });
+
+  it('trims and forwards the title search, rejecting an oversized one', async () => {
+    await request(buildApp()).get('/api/beeper/conversations?search=%20alice%20');
+    expect(listConversations).toHaveBeenCalledWith({ search: 'alice' });
+    vi.mocked(listConversations).mockClear();
+    const res = await request(buildApp()).get(`/api/beeper/conversations?search=${'a'.repeat(201)}`);
     expect(res.status).toBe(400);
     expect(listConversations).not.toHaveBeenCalled();
   });
@@ -899,5 +919,72 @@ describe('POST /api/beeper/outbox/:id/reconcile', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ id: ENTRY_ID, state: 'sent' });
     expect(sendOutboxEntry).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('saved Beeper scopes routes', () => {
+  let settings;
+  const input = { name: 'Example unread scope', filters: { network: 'signal', unreadOnly: true, archived: false, snoozed: true } };
+  beforeEach(() => {
+    settings = { beeper: { enabled: true, sendReadReceipts: false }, unrelated: 'preserved' };
+    vi.mocked(getSettings).mockImplementation(async () => settings);
+    vi.mocked(updateSettingsWith).mockImplementation(async (mutate) => { settings = await mutate(settings); return settings; });
+  });
+
+  it('creates, lists, renames and deletes a scope while preserving connection preferences', async () => {
+    const event = vi.fn();
+    beeperSocketEvents.on('invalidate', event);
+    try {
+      const app = buildApp();
+      expect((await request(app).get('/api/beeper/scopes')).body).toEqual({ scopes: [] });
+      const created = await request(app).post('/api/beeper/scopes').send(input);
+      expect(created.status).toBe(201);
+      const id = created.body.id;
+      expect((await request(app).get('/api/beeper/scopes')).body.scopes).toEqual([{ id, ...input }]);
+      const renamed = await request(app).patch(`/api/beeper/scopes/${id}`).send({ ...input, name: 'Renamed example' });
+      expect(renamed.body.name).toBe('Renamed example');
+      expect((await request(app).delete(`/api/beeper/scopes/${id}`)).status).toBe(200);
+      expect(settings).toEqual({ beeper: { enabled: true, sendReadReceipts: false }, unrelated: 'preserved', beeperSavedScopes: [] });
+      expect(event).toHaveBeenCalledTimes(3);
+      expect(event).toHaveBeenLastCalledWith({ kind: 'scopes' });
+    } finally { beeperSocketEvents.off('invalidate', event); }
+  });
+
+  it('rejects unbounded/foreign filters and missing rename targets before persisting', async () => {
+    const app = buildApp();
+    expect((await request(app).post('/api/beeper/scopes').send({ ...input, filters: { token: 'example' } })).status).toBe(400);
+    expect((await request(app).post('/api/beeper/scopes').send({ ...input, name: 'x'.repeat(61) })).status).toBe(400);
+    expect((await request(app).patch('/api/beeper/scopes/11111111-1111-4111-8111-111111111111').send(input)).status).toBe(404);
+    expect(settings.beeperSavedScopes).toBeUndefined();
+  });
+});
+
+describe('new direct conversations', () => {
+  it('validates input before invoking creation and returns the mirrored identity', async () => {
+    vi.mocked(createBeeperConversation).mockResolvedValue({ id: CONV_ID });
+    const app = buildApp();
+    const result = await request(app).post('/api/beeper/conversations').send({
+      accountId: 'account-example', participantId: 'user-example',
+    });
+    expect(result.status).toBe(201);
+    expect(result.body).toEqual({ id: CONV_ID });
+    expect(createBeeperConversation).toHaveBeenCalledWith({
+      accountId: 'account-example', participantId: 'user-example',
+    });
+    vi.mocked(createBeeperConversation).mockClear();
+    const invalid = await request(app).post('/api/beeper/conversations').send({
+      accountId: 'account-example', participantId: ' ', messageText: 'must not send',
+    });
+    expect(invalid.status).toBe(400);
+    expect(createBeeperConversation).not.toHaveBeenCalled();
+  });
+
+  it('surfaces upstream failures without pretending a chat was created', async () => {
+    vi.mocked(createBeeperConversation).mockRejectedValue(new BeeperApiError('offline', { code: 'NETWORK_ERROR' }));
+    const result = await request(buildApp()).post('/api/beeper/conversations').send({
+      accountId: 'account-example', participantId: 'user-example',
+    });
+    expect(result.status).toBe(503);
   });
 });

@@ -21,7 +21,7 @@
  *
  * Route ordering is safe across sub-routers: every param route is either the
  * single-segment `/:id` or a deeper `/:id/...`, and the static routes
- * (`/detect-icons`, `/bulk-task-type/:taskType`) differ from `/:id` by method or
+ * (`/bulk-task-type/:taskType`) differ from `/:id` by method or
  * segment count, so no sub-router can shadow another's routes. The only
  * order-sensitive pair (`/:id/task-types/all` before `/:id/task-types/:taskType`)
  * lives entirely inside `taskTypes.js`.
