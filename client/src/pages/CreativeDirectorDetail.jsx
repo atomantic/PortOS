@@ -284,11 +284,10 @@ function CreativeDirectorProject({ id, basePath }) {
         <ActiveAgentsBanner agents={activeAgents} />
         {project.workspace === 'video' && activeTab === 'overview' && <section className="space-y-4">
           <h2 className="text-lg font-medium">Video production</h2>
-          <p className="text-port-text-muted">Stage: {project.status}. Start authorizes the saved choices within your limits. Enabled review checkpoints pause for your approval.</p>
+          <p className="text-port-text-muted">Start authorizes the saved choices within your limits. Enabled review checkpoints pause for your approval.</p>
           <p className="whitespace-pre-wrap">{project.userStory || 'Add a brief to describe this video.'}</p>
           <p className="text-sm">Exact target: {project.targetDurationSeconds} seconds (requested: {project.videoDraft?.durationRange?.min}–{project.videoDraft?.durationRange?.max} seconds) · {project.aspectRatio} · {project.quality}</p>
           <p className="text-sm">Review: {project.videoDraft?.reviewPolicy || 'review'} · Checkpoints: {(project.videoDraft?.checkpoints || []).join(', ')}</p>
-          {['draft', 'paused', 'failed'].includes(project.status) && <button onClick={() => setEditingDraft(true)} className="px-3 py-2 rounded bg-port-accent text-white">{project.status === 'draft' ? 'Edit draft' : 'Edit production settings'}</button>}
           <VideoCutPanel project={project} />
           <VideoExecutionPanel key={project.id} project={project} onChange={fetchProject} basePath={basePath} />
         </section>}
