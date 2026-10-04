@@ -43,7 +43,7 @@ describe('deriveStages / deriveNextAction', () => {
     const waiting = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, automation: {}, castAndSets: { status: 'review' }, scenes: [] };
     expect(deriveStages(waiting).current).toBe('cast-sets');
     expect(stateOf(waiting)).toMatchObject({ setup: 'done', 'cast-sets': 'active', board: 'todo' });
-    expect(deriveNextAction(waiting)).toMatchObject({ id: 'review-production', kind: 'goto', stage: 'cast-sets' });
+    expect(deriveNextAction(waiting)).toMatchObject({ id: 'review-production', kind: 'goto', stage: 'cast-sets', shortLabel: 'Art' });
 
     const interrupted = { ...waiting, castAndSets: { status: 'imaging', interrupted: true } };
     expect(stateOf(interrupted)['cast-sets']).toBe('blocked');

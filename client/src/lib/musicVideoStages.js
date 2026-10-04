@@ -246,9 +246,10 @@ export function deriveStages(project, readiness = project?.productionReadiness) 
 /**
  * The single primary action the sticky header offers. `kind: 'run'` calls a
  * handler the page owns (keyed by `id`); `kind: 'goto'` opens a stage (and
- * optionally scrolls to `anchor`). `disabled` carries the reason it can't run
- * yet. A live production run, a render in flight and a running kickoff win
- * over the stage: they own the project until they settle.
+ * optionally scrolls to `anchor`). `label` is the full control name; `shortLabel`
+ * is what a phone shows so the project name keeps room. `disabled` carries the
+ * reason it can't run yet. A live production run, a render in flight and a
+ * running kickoff win over the stage: they own the project until they settle.
  */
 export function deriveNextAction(project, {
   draftActive = false, proofActive = false, renderActive = false, renderProgress = 0, renderPending = false, renderBlockedByOther = false,
@@ -261,27 +262,31 @@ export function deriveNextAction(project, {
   const cast = project.castAndSets || null;
   const scenes = project.scenes || [];
 
-  if (proofActive) return { id: 'proof-progress', kind: 'goto', stage: 'review', anchor: 'mv-review-render', label: 'View review render' };
-  if (draftActive) return { id: 'draft-progress', kind: 'goto', stage: 'review', anchor: 'mv-draft-excerpts', label: 'View draft render' };
+  if (proofActive) return { id: 'proof-progress', kind: 'goto', stage: 'review', anchor: 'mv-review-render', label: 'View review render', shortLabel: 'Review' };
+  if (draftActive) return { id: 'draft-progress', kind: 'goto', stage: 'review', anchor: 'mv-draft-excerpts', label: 'View draft render', shortLabel: 'Draft' };
   if (projectHasAudio(project) && project.audioAnalysis && !CAST_WORKING.has(cast?.status) && !readiness?.readyForProduction && run?.status !== 'running' && !renderActive && !kickoffRunning) {
-    return { id: 'review-production', kind: 'goto', stage: !readiness?.art.approved ? 'cast-sets' : !readiness?.storyboard.approved ? 'board' : 'review',
-      anchor: !readiness?.art.approved ? 'mv-review-art' : !readiness?.storyboard.approved ? 'mv-review-storyboard' : 'mv-review-proof', label: !readiness?.art.approved ? 'Review art direction' : !readiness?.storyboard.approved ? 'Review timed storyboard' : 'Review animated proof' };
+    const art = !readiness?.art.approved;
+    const board = !readiness?.storyboard.approved;
+    return { id: 'review-production', kind: 'goto', stage: art ? 'cast-sets' : board ? 'board' : 'review',
+      anchor: art ? 'mv-review-art' : board ? 'mv-review-storyboard' : 'mv-review-proof',
+      label: art ? 'Review art direction' : board ? 'Review timed storyboard' : 'Review animated proof',
+      shortLabel: art ? 'Art' : board ? 'Board' : 'Proof' };
   }
   if (run && RESUMABLE_RUN_STATUSES.has(run.status)) {
-    if (run.status === 'running' && !run.interrupted) return { id: 'stop-production', kind: 'run', label: 'Stop production', runId: run.id };
+    if (run.status === 'running' && !run.interrupted) return { id: 'stop-production', kind: 'run', label: 'Stop production', shortLabel: 'Stop', runId: run.id };
     return {
       id: 'resume-production', kind: 'run', runId: run.id, acceptBasis: run.status === 'needs-replan',
       label: run.status === 'needs-replan' ? 'Resume with new setup' : 'Resume production',
+      shortLabel: 'Resume',
     };
   }
   if (renderActive) {
-    return {
-      id: 'render-progress', kind: 'run', label: renderPending ? 'Preparing…' : `Rendering… ${Math.round(renderProgress)}%`,
-      disabled: true,
-    };
+    const label = renderPending ? 'Preparing…' : `Rendering… ${Math.round(renderProgress)}%`;
+    return { id: 'render-progress', kind: 'run', label, shortLabel: label, disabled: true };
   }
   if (kickoffRunning || analyzing || planning) {
-    return { id: 'busy', kind: 'run', label: kickoffStep || (planning ? 'Planning…' : 'Working…'), disabled: true };
+    const label = kickoffStep || (planning ? 'Planning…' : 'Working…');
+    return { id: 'busy', kind: 'run', label, shortLabel: label, disabled: true };
   }
 
   const auto = project.autonomousRun;
@@ -291,50 +296,51 @@ export function deriveNextAction(project, {
       const stepText = (auto.stage === 'lyrics' && AUTONOMOUS_LYRICS_STEP_LABELS[step])
         || (auto.stage === 'song' && AUTONOMOUS_SONG_STEP_LABELS[step])
         || (AUTONOMOUS_CHECKPOINT_LABELS[auto.stage] ? `${AUTONOMOUS_CHECKPOINT_LABELS[auto.stage]}…` : 'Autonomous run running…');
-      return { id: 'busy', kind: 'run', label: stepText.endsWith('…') ? stepText : `${stepText}…`, disabled: true };
+      const busyLabel = stepText.endsWith('…') ? stepText : `${stepText}…`;
+      return { id: 'busy', kind: 'run', label: busyLabel, shortLabel: busyLabel, disabled: true };
     }
     if (auto.status === 'awaiting-approval') {
       const target = AUTONOMOUS_CHECKPOINT_LABELS[auto.awaiting] || auto.awaiting || 'checkpoint';
-      return { id: 'review-autonomous', kind: 'goto', stage: 'setup', anchor: 'mv-auto-edit', label: `Review ${target}` };
+      return { id: 'review-autonomous', kind: 'goto', stage: 'setup', anchor: 'mv-auto-edit', label: `Review ${target}`, shortLabel: 'Review' };
     }
     if (auto.interrupted || auto.status === 'stopped' || auto.status === 'needs-human') {
-      return { id: 'resume-autonomous', kind: 'run', label: 'Resume autonomous run' };
+      return { id: 'resume-autonomous', kind: 'run', label: 'Resume autonomous run', shortLabel: 'Resume' };
     }
     if (auto.status === 'failed') {
-      return { id: 'retry-autonomous', kind: 'run', label: 'Retry autonomous run' };
+      return { id: 'retry-autonomous', kind: 'run', label: 'Retry autonomous run', shortLabel: 'Retry' };
     }
   }
 
   switch (current) {
     case 'setup':
-      if (!projectHasAudio(project)) return { id: 'goto-setup', kind: 'goto', stage: 'setup', anchor: 'mv-track', label: 'Attach a track' };
+      if (!projectHasAudio(project)) return { id: 'goto-setup', kind: 'goto', stage: 'setup', anchor: 'mv-track', label: 'Attach a track', shortLabel: 'Track' };
       if (project.automation && scenes.length === 0) {
-        return { id: 'kickoff', kind: 'run', label: 'Run autopilot', disabled: !!kickoffBlockedReason, reason: kickoffBlockedReason || undefined };
+        return { id: 'kickoff', kind: 'run', label: 'Run autopilot', shortLabel: 'Autopilot', disabled: !!kickoffBlockedReason, reason: kickoffBlockedReason || undefined };
       }
-      return { id: 'analyze', kind: 'run', label: 'Analyze song' };
+      return { id: 'analyze', kind: 'run', label: 'Analyze song', shortLabel: 'Analyze' };
     case 'cast-sets':
-      if (cast?.status === 'review') return { id: 'approve-cast-sets', kind: 'run', label: 'Approve cast & sets' };
-      if (cast && (cast.interrupted || cast.status === 'failed')) return { id: 'resume-cast-sets', kind: 'run', label: 'Resume cast & sets' };
-      if (cast && CAST_WORKING.has(cast.status)) return { id: 'busy', kind: 'run', label: 'Building cast & sets…', disabled: true };
-      return { id: 'kickoff', kind: 'run', label: 'Run autopilot', disabled: !!kickoffBlockedReason, reason: kickoffBlockedReason || undefined };
+      if (cast?.status === 'review') return { id: 'approve-cast-sets', kind: 'run', label: 'Approve cast & sets', shortLabel: 'Approve' };
+      if (cast && (cast.interrupted || cast.status === 'failed')) return { id: 'resume-cast-sets', kind: 'run', label: 'Resume cast & sets', shortLabel: 'Resume' };
+      if (cast && CAST_WORKING.has(cast.status)) return { id: 'busy', kind: 'run', label: 'Building cast & sets…', shortLabel: 'Building…', disabled: true };
+      return { id: 'kickoff', kind: 'run', label: 'Run autopilot', shortLabel: 'Autopilot', disabled: !!kickoffBlockedReason, reason: kickoffBlockedReason || undefined };
     case 'board':
-      return { id: 'plan', kind: 'run', label: 'Plan the shots', disabled: !project.audioAnalysis, reason: project.audioAnalysis ? undefined : 'Analyze the track first' };
+      return { id: 'plan', kind: 'run', label: 'Plan the shots', shortLabel: 'Plan', disabled: !project.audioAnalysis, reason: project.audioAnalysis ? undefined : 'Analyze the track first' };
     case 'produce':
-      if (run?.status === 'needs-human') return { id: 'goto-review', kind: 'goto', stage: 'review', label: 'Review the draft' };
-      return { id: 'goto-produce', kind: 'goto', stage: 'produce', anchor: 'mv-production-start', label: 'Set up production' };
-    case 'compose':
-      return {
-        id: 'goto-compose', kind: 'goto', stage: 'compose',
-        label: { document: 'Attach a composition', eidoverse: 'Save the Eidoverse scene', code: 'Generate the code video' }[project.composition?.mode] || 'Add typography',
-      };
+      if (run?.status === 'needs-human') return { id: 'goto-review', kind: 'goto', stage: 'review', label: 'Review the draft', shortLabel: 'Review' };
+      return { id: 'goto-produce', kind: 'goto', stage: 'produce', anchor: 'mv-production-start', label: 'Set up production', shortLabel: 'Produce' };
+    case 'compose': {
+      const label = { document: 'Attach a composition', eidoverse: 'Save the Eidoverse scene', code: 'Generate the code video' }[project.composition?.mode] || 'Add typography';
+      const shortLabel = { document: 'Attach', eidoverse: 'Save', code: 'Generate' }[project.composition?.mode] || 'Type';
+      return { id: 'goto-compose', kind: 'goto', stage: 'compose', label, shortLabel };
+    }
     case 'publish':
       return project.publishKit?.builtAt
-        ? { id: 'goto-publish', kind: 'goto', stage: 'publish', label: 'Publish the release' }
-        : { id: 'goto-publish', kind: 'goto', stage: 'publish', label: 'Build the publishing kit' };
+        ? { id: 'goto-publish', kind: 'goto', stage: 'publish', label: 'Publish the release', shortLabel: 'Publish' }
+        : { id: 'goto-publish', kind: 'goto', stage: 'publish', label: 'Build the publishing kit', shortLabel: 'Kit' };
     default:
-      if (project.renderHistoryId) return { id: 'goto-final', kind: 'goto', stage: 'review', anchor: 'mv-final-video', label: 'Watch final video' };
+      if (project.renderHistoryId) return { id: 'goto-final', kind: 'goto', stage: 'review', anchor: 'mv-final-video', label: 'Watch final video', shortLabel: 'Watch' };
       return {
-        id: 'render-final', kind: 'run', label: 'Render final video',
+        id: 'render-final', kind: 'run', label: 'Render final video', shortLabel: 'Render',
         disabled: renderBlockedByOther, reason: renderBlockedByOther ? 'Wait for the other project render to finish' : undefined,
       };
   }

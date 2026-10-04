@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { AlertTriangle, Link2, Play, X } from 'lucide-react';
 import { Link } from 'react-router';
 import { ATTENTION_ANCHOR_ID } from '../../lib/musicVideoAttention.js';
@@ -64,42 +65,54 @@ function ItemActions({ item, busy, actions }) {
  * there is nothing to attend to.
  */
 export default function NeedsAttentionBanner({ items, busy = false, actions = {} }) {
+  const [open, setOpen] = useState(false);
   if (!items?.length) return null;
+  const countLabel = items.length === 1 ? '1 needs attention' : `${items.length} need attention`;
   return (
     <section
       id={ATTENTION_ANCHOR_ID}
       aria-label="Needs attention"
-      className="max-h-[40vh] space-y-1.5 overflow-y-auto rounded border border-port-warning/40 bg-port-warning/5 p-2 text-xs"
+      className="text-xs sm:max-h-[40vh] sm:space-y-1.5 sm:overflow-y-auto sm:rounded sm:border sm:border-port-warning/40 sm:bg-port-warning/5 sm:p-2"
     >
-      <h3 className="flex items-center gap-1 font-medium text-port-warning">
-        <AlertTriangle size={12} aria-hidden="true" /> Needs attention
-      </h3>
-      <ul className="space-y-1.5">
-        {items.map((item) => (
-          <li key={item.id} className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-            <span className="min-w-0 flex-1 basis-60">
-              <span className="font-medium">{item.title}</span>
-              <span className="block text-port-text-muted">{item.detail}</span>
-              {item.scenes?.length > 0 && (
-                <span className="mt-1 flex flex-wrap gap-1.5">
-                  {item.scenes.map((s) => (
-                    <Link
-                      key={s.sceneId}
-                      to={`/music-video/${item.projectId || ''}/board/scene/${s.sceneId}`}
-                      className="rounded bg-port-accent/10 px-1.5 py-0.5 text-[11px] text-port-accent hover:underline"
-                    >
-                      {s.label || `Scene ${(s.order ?? 0) + 1}`}
-                    </Link>
-                  ))}
-                </span>
-              )}
-            </span>
-            <span className="flex flex-wrap items-center gap-2">
-              <ItemActions item={item} busy={busy} actions={actions} />
-            </span>
-          </li>
-        ))}
-      </ul>
+      <button
+        type="button"
+        className="inline-flex h-8 items-center gap-1 rounded border border-port-warning/40 bg-port-warning/5 px-2 font-medium text-port-warning sm:hidden"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <AlertTriangle size={12} aria-hidden="true" /> {countLabel}
+      </button>
+      <div className={open ? 'max-sm:mt-1.5 max-sm:max-h-[40vh] max-sm:space-y-1.5 max-sm:overflow-y-auto max-sm:rounded max-sm:border max-sm:border-port-warning/40 max-sm:bg-port-warning/5 max-sm:p-2' : 'max-sm:hidden'}>
+        <h3 className="flex items-center gap-1 font-medium text-port-warning">
+          <AlertTriangle size={12} aria-hidden="true" /> Needs attention
+        </h3>
+        <ul className="space-y-1.5">
+          {items.map((item) => (
+            <li key={item.id} className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="min-w-0 flex-1 basis-60">
+                <span className="font-medium">{item.title}</span>
+                <span className="block text-port-text-muted">{item.detail}</span>
+                {item.scenes?.length > 0 && (
+                  <span className="mt-1 flex flex-wrap gap-1.5">
+                    {item.scenes.map((s) => (
+                      <Link
+                        key={s.sceneId}
+                        to={`/music-video/${item.projectId || ''}/board/scene/${s.sceneId}`}
+                        className="rounded bg-port-accent/10 px-1.5 py-0.5 text-[11px] text-port-accent hover:underline"
+                      >
+                        {s.label || `Scene ${(s.order ?? 0) + 1}`}
+                      </Link>
+                    ))}
+                  </span>
+                )}
+              </span>
+              <span className="flex flex-wrap items-center gap-2">
+                <ItemActions item={item} busy={busy} actions={actions} />
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
     </section>
   );
 }
