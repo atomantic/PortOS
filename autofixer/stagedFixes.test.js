@@ -6,6 +6,9 @@ import { execFileSync } from 'child_process';
 import { createStagedFixStore } from './stagedFixes.js';
 let root, repo, store, restart;
 const id = 'autofixer_example_123';
+// git apply/checkout on Windows applies autocrlf, so compare with LF endings.
+const readExample = async (repo) => (await readFile(join(repo, 'example.txt'), 'utf8')).replace(/\r\n/g, '\n');
+
 const patch = 'diff --git a/example.txt b/example.txt\nindex 3367afd..3e75765 100644\n--- a/example.txt\n+++ b/example.txt\n@@ -1 +1 @@\n-old\n+new\n';
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'autofixer-staged-'));
@@ -28,7 +31,7 @@ describe('staged repair lifecycle', () => {
     expect((await store.read(id)).patch).toBe(patch);
     const results = await Promise.all([store.mutate(id, 'apply'), store.mutate(id, 'apply')]);
     expect(results.map(result => result.status || 200)).toEqual([200, 404]);
-    expect((await readFile(join(repo, 'example.txt'), 'utf8')).replace(/\r\n/g, '\n')).toBe('new\n');
+    expect(await readExample(repo)).toBe('new\n');
     expect(restart).toHaveBeenCalledExactlyOnceWith(['restart', 'example-process']);
     expect(await store.decorateHistory([{ sessionId: id, staged: true }])).toEqual([
       { sessionId: id, staged: false, promoted: true, disposition: 'applied' },
@@ -37,20 +40,20 @@ describe('staged repair lifecycle', () => {
   it('rejects a stale patch without changing files or restarting', async () => {
     await writeFile(join(repo, 'example.txt'), 'newer edit\n');
     expect((await store.mutate(id, 'apply')).status).toBe(409);
-    expect(await readFile(join(repo, 'example.txt'), 'utf8')).toBe('newer edit\n');
+    expect(await readExample(repo)).toBe('newer edit\n');
     expect(restart).not.toHaveBeenCalled();
   });
   it('rolls back on restart failure and retains the staged proposal', async () => {
     restart.mockRejectedValue(new Error('example restart failure'));
     expect((await store.mutate(id, 'apply')).status).toBe(500);
-    expect(await readFile(join(repo, 'example.txt'), 'utf8')).toBe('old\n');
+    expect(await readExample(repo)).toBe('old\n');
     expect((await store.read(id)).patch).toBe(patch);
   });
   it('discards without applying and rejects traversal IDs', async () => {
     expect((await store.read('../outside')).status).toBe(404);
     expect(await store.mutate(id, 'discard')).toEqual({ success: true, disposition: 'discarded' });
     expect((await store.read(id)).status).toBe(404);
-    expect(await readFile(join(repo, 'example.txt'), 'utf8')).toBe('old\n');
+    expect(await readExample(repo)).toBe('old\n');
     expect(restart).not.toHaveBeenCalled();
   });
 });
