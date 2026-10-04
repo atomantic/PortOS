@@ -89,7 +89,7 @@ async function runApiSyncAccount(accountId, io) {
   }));
 
   for (const { sc, allEvents } of fetchResults) {
-    const syncResult = await pushSyncEvents(accountId, sc.calendarId, sc.name, allEvents, null);
+    const syncResult = await pushSyncEvents(accountId, sc.calendarId, sc.name, allEvents, null, { dateRange: { pastDate, futureDate } });
     totalNew += syncResult.newEvents;
     totalUpdated += syncResult.updated;
     totalPruned += syncResult.pruned;

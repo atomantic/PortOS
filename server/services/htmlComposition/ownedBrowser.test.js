@@ -126,4 +126,12 @@ describe('owned composition capture browser lifecycle', () => {
     }
     await expect(access(profile)).rejects.toThrow();
   });
+
+  it('retries a transient profile removal failure so a resolved close means the profile is gone', async () => {
+    const owner = await launchCompositionBrowser();
+    vi.mocked(rm).mockRejectedValueOnce(Object.assign(new Error('busy'), { code: 'ENOTEMPTY' }));
+    await owner.close();
+    expect(rm).toHaveBeenCalledTimes(2);
+    await expect(access(profile)).rejects.toThrow();
+  });
 });
