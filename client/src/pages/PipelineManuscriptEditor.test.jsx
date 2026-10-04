@@ -287,10 +287,11 @@ describe('PipelineManuscriptEditor', () => {
     comment: { ...comment, status: 'accepted' },
     section: { issueId: 'iss-1', number: 1, stageId: 'prose', content: 'Accepted prose.', versions: [] },
   };
-  const expectTeleplayUnchanged = () => {
+  const expectTeleplayUnchanged = async () => {
     const textarea = screen.getByDisplayValue('INT. ROOM - DAY');
     expect(screen.queryByText('saved')).not.toBeInTheDocument();
-    fireEvent.blur(textarea);
+    expect(screen.queryByLabelText('Issue 1 has unsaved edits')).not.toBeInTheDocument();
+    await act(async () => { fireEvent.blur(textarea); });
     expect(api.savePipelineManuscriptSection).not.toHaveBeenCalled();
   };
 
@@ -336,7 +337,7 @@ describe('PipelineManuscriptEditor', () => {
     await screen.findByText('INT. ROOM - DAY');
     fireEvent.click(screen.getByRole('button', { name: /Live/ }));
     await act(async () => { pending.resolve(acceptedProse); });
-    expectTeleplayUnchanged();
+    await expectTeleplayUnchanged();
     expect(screen.getByText(/1 open/)).toBeInTheDocument();
   });
 
@@ -357,7 +358,7 @@ describe('PipelineManuscriptEditor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Teleplay' }));
     await screen.findByDisplayValue('INT. ROOM - DAY');
     await act(async () => { pending.resolve({ stage: { output: 'Restored prose.', runHistory: [] } }); });
-    expectTeleplayUnchanged();
+    await expectTeleplayUnchanged();
     expect(api.restorePipelineStageVersion).toHaveBeenCalledWith('iss-1', 'prose', 'v1', { silent: true });
   });
 
@@ -380,7 +381,7 @@ describe('PipelineManuscriptEditor', () => {
     await screen.findByText('INT. ROOM - DAY');
     fireEvent.click(screen.getByRole('button', { name: /Live/ }));
     await act(async () => { pending.resolve({ ...acceptedProse, comment, section: { ...acceptedProse.section, content: 'Original prose.' } }); });
-    expectTeleplayUnchanged();
+    await expectTeleplayUnchanged();
     expect(api.undoPipelineManuscriptFix).toHaveBeenCalledWith('ser-1', comment.id, { silent: true });
   });
 
@@ -397,7 +398,7 @@ describe('PipelineManuscriptEditor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Teleplay' }));
     await screen.findByDisplayValue('INT. ROOM - DAY');
     await act(async () => { pending.resolve(acceptedProse); });
-    expectTeleplayUnchanged();
+    await expectTeleplayUnchanged();
     expect(api.acceptPipelineManuscriptFix).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('dialog', { name: 'Manuscript impact preview' })).toBeInTheDocument();
   });
