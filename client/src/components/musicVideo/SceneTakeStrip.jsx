@@ -60,7 +60,7 @@ export default function SceneTakeStrip({
                 className={`relative block w-full rounded overflow-hidden border focus:outline-none focus:ring-2 focus:ring-port-accent ${isSelected ? 'border-port-accent ring-2 ring-port-accent' : 'border-port-border'} ${rejected ? 'opacity-40' : ''}`}
               >
                 <img src={takeThumbUrl(take)} alt="" loading="lazy" className="w-full aspect-video object-cover block bg-black" />
-                {playing && <video src={takeClipUrl(take)} autoPlay muted loop playsInline aria-hidden="true" className="absolute inset-0 w-full h-full object-cover bg-black" />}
+                {playing && <video src={takeClipUrl(take)} autoPlay muted loop playsInline className="absolute inset-0 w-full h-full object-cover bg-black" />}
               </button>
               <div className="text-[10px] text-port-text-muted truncate" title={take.originalName || take.prompt || takeProvenance(take)}>
                 {verdict && <span className={`mr-1 rounded px-1 ${VERDICT_TONE[verdict.tone]}`} title="Plate preflight verdict">{verdict.label}</span>}
