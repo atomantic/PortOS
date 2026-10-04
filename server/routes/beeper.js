@@ -1,4 +1,7 @@
 import { Router } from 'express';
+import { randomUUID } from 'node:crypto';
+import { beeperSocketEvents } from '../services/beeperSocketEvents.js';
+import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { z } from 'zod';
 import { asyncHandler, createServiceErrorMapper, ServerError } from '../lib/errorHandler.js';
 import { resolveOAuthOrigin } from '../lib/beeperOAuthOrigin.js';
@@ -7,6 +10,7 @@ import { serveLocalFile } from '../lib/fileUtils.js';
 import { basename, dirname } from 'path';
 import {
   beeperOAuthCallbackSchema, beeperOutboxCreateSchema, beeperOutboxListSchema,
+  beeperScopeInputSchema, beeperSavedScopesSchema,
   beeperOutboxParamsSchema, beeperOutboxSendSchema, beeperPastedTokenSchema, validateRequest,
 } from '../lib/validation.js';
 import { getBeeperStatus, checkBeeperConnection } from '../services/beeperStatus.js';
@@ -137,6 +141,49 @@ const redirectUriFrom = (origin) => (origin ? `${origin}/api/beeper/oauth/callba
 // The browser's own origin. Optional, so an older client (or a caller with no
 // window) still gets today's request-derived behaviour.
 const oauthStartSchema = z.object({ origin: z.string().min(1).max(2048).optional() }).strict();
+
+// Saved scopes are small machine-local view preferences in the existing
+// settings store. Each mutation reads within its write queue, preserving
+// concurrent changes to both scopes and unrelated connection settings.
+const scopesFrom = (settings) => validateRequest(beeperSavedScopesSchema, settings.beeperSavedScopes ?? []);
+const scopeIdSchema = z.object({ id: z.string().uuid() });
+
+router.get('/scopes', asyncHandler(async (_req, res) => {
+  res.json({ scopes: scopesFrom(await getSettings()) });
+}));
+
+router.post('/scopes', asyncHandler(async (req, res) => {
+  const input = validateRequest(beeperScopeInputSchema, req.body ?? {});
+  const scope = { id: randomUUID(), ...input };
+  await updateSettingsWith((current) => ({
+    ...current,
+    beeperSavedScopes: validateRequest(beeperSavedScopesSchema, [...scopesFrom(current), scope]),
+  }));
+  beeperSocketEvents.emit('invalidate', { kind: 'scopes' });
+  res.status(201).json(scope);
+}));
+
+router.patch('/scopes/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(scopeIdSchema, req.params);
+  const input = validateRequest(beeperScopeInputSchema, req.body ?? {});
+  const scope = { id, ...input };
+  await updateSettingsWith((current) => {
+    const scopes = scopesFrom(current);
+    if (!scopes.some((entry) => entry.id === id)) throw new ServerError('Scope not found', { status: 404, code: 'NOT_FOUND' });
+    return { ...current, beeperSavedScopes: scopes.map((entry) => entry.id === id ? scope : entry) };
+  });
+  beeperSocketEvents.emit('invalidate', { kind: 'scopes' });
+  res.json(scope);
+}));
+
+router.delete('/scopes/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(scopeIdSchema, req.params);
+  await updateSettingsWith((current) => ({
+    ...current, beeperSavedScopes: scopesFrom(current).filter((entry) => entry.id !== id),
+  }));
+  beeperSocketEvents.emit('invalidate', { kind: 'scopes' });
+  res.json({ deleted: true });
+}));
 
 // GET /api/beeper/status — the status card's read model (#30): whether a
 // token is configured (never the token), how it was obtained, its expiry, a

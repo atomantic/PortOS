@@ -520,3 +520,18 @@ export const mediaCollectionBulkItemsSchema = z.object({
   (d) => (Array.isArray(d.add) && d.add.length > 0) || (Array.isArray(d.remove) && d.remove.length > 0),
   { message: 'bulk update requires at least one item in add or remove' },
 );
+
+// Bounded, machine-local Beeper view preferences; filters query the mirror.
+export const beeperScopeInputSchema = z.object({
+  name: z.string().trim().min(1).max(60),
+  filters: z.object({
+    network: z.string().trim().min(1).max(200).optional(),
+    archived: z.boolean().optional(),
+    lowPriority: z.boolean().optional(),
+    unreadOnly: z.boolean().optional(),
+    search: z.string().trim().max(200).optional(),
+  }).strict(),
+}).strict();
+export const beeperSavedScopesSchema = z.array(beeperScopeInputSchema.extend({
+  id: z.string().uuid(),
+})).max(50);

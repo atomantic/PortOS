@@ -20,6 +20,10 @@ import { awaitEnabled } from '../../test/enabledBarrier.js';
 
 const api = vi.hoisted(() => ({
   getBeeperStatus: vi.fn(),
+  getBeeperScopes: vi.fn(),
+  createBeeperScope: vi.fn(),
+  updateBeeperScope: vi.fn(),
+  deleteBeeperScope: vi.fn(),
   syncBeeperNow: vi.fn(),
   getBeeperNetworks: vi.fn(),
   getBeeperConversations: vi.fn(),
@@ -149,6 +153,7 @@ const awaitThreadLoaded = () => screen.findAllByText('Example Conversation');
 
 beforeEach(() => {
   vi.clearAllMocks();
+  api.getBeeperScopes.mockResolvedValue({ scopes: [] });
   socketMock.handlers.clear();
   socketMock.emitted.length = 0;
   api.getBeeperStatus.mockResolvedValue({ tokenConfigured: true, reachable: true, accounts: [], realtime: { state: 'connected' } });
@@ -526,11 +531,11 @@ describe('the pinned grid is Beeper’s own isPinned, mirrored', () => {
 });
 
 describe('unimplemented controls are absent rather than inert', () => {
-  it('renders no Requests, Later, add-scope, overflow or new-conversation control', async () => {
+  it('renders no Requests, Later or new-conversation placeholder', async () => {
     renderTab();
     await screen.findByText('Nothing here');
 
-    for (const label of ['Requests', 'Later', 'Add scope', 'More scope options', 'New conversation']) {
+    for (const label of ['Requests', 'Later', 'More scope options', 'New conversation']) {
       expect(screen.queryByRole('button', { name: label })).toBeNull();
     }
   });
@@ -839,7 +844,7 @@ describe('realtime', () => {
     await screen.findByText('Nothing here');
     expect(socketMock.emitted.filter(([event]) => event === 'beeper:subscribe')).toHaveLength(2);
 
-    act(() => { for (const fn of socketMock.handlers.get('connect') || []) fn(); });
+    await act(async () => { for (const fn of socketMock.handlers.get('connect') || []) fn(); });
     expect(socketMock.emitted.filter(([event]) => event === 'beeper:subscribe')).toHaveLength(4);
   });
 
@@ -1669,5 +1674,71 @@ describe('fixture hygiene', () => {
     expect(corpus).not.toMatch(/\/(?:home|Users)\/[a-z]/i);
     // Every human-readable label is explicitly a placeholder.
     expect(conversation().title).toMatch(/Example/);
+  });
+});
+
+
+describe('saved conversation scopes', () => {
+  const saved = { id: CONV_B, name: 'Example focused scope', filters: { network: 'signal', archived: false, search: 'Example', unreadOnly: true } };
+
+  it('restores the persisted filter from a saved-scope deep link, then renames and deletes it', async () => {
+    api.getBeeperScopes.mockResolvedValue({ scopes: [saved] });
+    api.updateBeeperScope.mockResolvedValue({ ...saved, name: 'Renamed example' });
+    api.deleteBeeperScope.mockResolvedValue({ deleted: true });
+    renderTab(`/messages/beeper?scope=saved:${CONV_B}`);
+    await waitFor(() => expect(api.getBeeperConversations).toHaveBeenCalledWith(saved.filters, { silent: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'More scope options' }));
+    fireEvent.change(screen.getByLabelText('Scope name'), { target: { value: 'Renamed example' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save scope' }));
+    expect(await screen.findByRole('button', { name: 'Renamed example' })).toBeInTheDocument();
+    expect(api.updateBeeperScope).toHaveBeenCalledWith(CONV_B, { name: 'Renamed example', filters: saved.filters }, { silent: true });
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'Changed example' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Unread only' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More scope options' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete scope' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Renamed example' })).not.toBeInTheDocument());
+    await waitFor(() => expect(api.getBeeperConversations).toHaveBeenLastCalledWith({ archived: false, lowPriority: false }, { silent: true }));
+  });
+
+  it('lets the reader clear a saved search and disable its unread filter without editing the saved scope', async () => {
+    api.getBeeperScopes.mockResolvedValue({ scopes: [saved] });
+    renderTab(`/messages/beeper?scope=saved:${CONV_B}`);
+    expect(await screen.findByRole('button', { name: saved.name })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Unread only' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('searchbox')).toHaveValue('Example');
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Unread only' }));
+    await waitFor(() => expect(api.getBeeperConversations).toHaveBeenLastCalledWith({ network: 'signal', archived: false }, { silent: true }));
+    expect(screen.getByRole('button', { name: 'Unread only' })).toHaveAttribute('aria-pressed', 'false');
+    expect(api.updateBeeperScope).not.toHaveBeenCalled();
+  });
+
+  it('reconciles saved scopes on remote invalidation and reports failed reads without inventing an empty set', async () => {
+    api.getBeeperScopes.mockRejectedValueOnce(new Error('Example read failure')).mockResolvedValue({ scopes: [saved] });
+    renderTab();
+    expect(await screen.findByText(/Could not load saved scopes/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add scope' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry scopes' }));
+    expect(await screen.findByRole('button', { name: saved.name })).toBeInTheDocument();
+    api.getBeeperScopes.mockResolvedValue({ scopes: [] });
+    await act(async () => {
+      for (const fn of socketMock.handlers.get('beeper:invalidate') || []) fn({ kind: 'scopes' });
+    });
+    await waitFor(() => expect(screen.queryByRole('button', { name: saved.name })).not.toBeInTheDocument());
+  });
+
+  it('saves the active query and keeps the editor open after a rejected write', async () => {
+    api.createBeeperScope.mockRejectedValueOnce(new Error('Example save failure')).mockResolvedValueOnce(saved);
+    renderTab('/messages/beeper?scope=net:signal&q=Example&unread=1');
+    await screen.findByRole('button', { name: 'Add scope' });
+    await awaitEnabled(screen.getByRole('button', { name: 'Add scope' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add scope' }));
+    fireEvent.change(screen.getByLabelText('Scope name'), { target: { value: saved.name } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save scope' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Example save failure'));
+    expect(screen.getByLabelText('Scope name')).toHaveValue(saved.name);
+    fireEvent.click(screen.getByRole('button', { name: 'Save scope' }));
+    expect(await screen.findByRole('button', { name: saved.name })).toBeInTheDocument();
+    expect(api.createBeeperScope).toHaveBeenLastCalledWith({ name: saved.name, filters: saved.filters }, { silent: true });
   });
 });
