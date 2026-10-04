@@ -190,21 +190,18 @@ describe('claimContinuationAdmission', () => {
       id: 'agent-swarm', status: 'running', metadata: { claimPicksOwnBranch: true, sourceWorkspace: SOURCE },
     };
 
-    it('refuses unless a process listing ran and found nothing in the checkout', () => {
+    it('refuses however the checkout looks, because a live owner can be quiet in every observable way', () => {
       expect(admit({ agents: [orchestrator] })).toEqual({ admit: false, reason: 'owner-ambiguous' });
-      expect(admit({ agents: [orchestrator], holderOccupied: null })).toEqual({ admit: false, reason: 'owner-ambiguous' });
-      expect(admit({ agents: [orchestrator], holderOccupied: true })).toEqual({ admit: false, reason: 'owner-ambiguous' });
     });
 
     it('is not cleared by the continued run having registered the branch, since that does not prove it cut the tree', () => {
       expect(admit({
         agents: [orchestrator, { id: 'agent-dead', status: 'completed', metadata: { claimBranch: 'claim/issue-42' } }],
-        holderOccupied: null,
       })).toEqual({ admit: false, reason: 'owner-ambiguous' });
     });
 
-    it('admits when nothing is inside the checkout', () => {
-      expect(admit({ agents: [orchestrator], holderOccupied: false })).toEqual({ admit: true });
+    it('admits once the picker run has ended', () => {
+      expect(admit({ agents: [{ ...orchestrator, status: 'completed' }] })).toEqual({ admit: true });
     });
 
     it('does not suspect an orchestrator working in a different repository', () => {

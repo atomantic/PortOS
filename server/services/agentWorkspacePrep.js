@@ -44,7 +44,6 @@ import { getAppWorkspace, getAppDataForTask } from './agentAppWorkspace.js';
 import { createJiraTicketForTask } from './promptSections/appContext.js';
 import { INVESTIGATION_TASK_DELIVERY, isInvestigationTask } from '../lib/investigationTasks.js';
 import { isNonCommittingCoordinatorTask, resolveTaskHookType } from './taskTypeHooks.js';
-import { worktreeHasLiveProcess } from './worktreeOccupancy.js';
 import { claimContinuationAdmission, claimContinuationWorkspace } from '../lib/claimContinuation.js';
 
 const ROOT_DIR = PATHS.root;
@@ -296,14 +295,7 @@ async function admitClaimContinuation({ task, agentId, sourceWorkspace, claimWor
     getAgents().catch(() => null),
     listWorktrees(sourceWorkspace).catch(() => null),
   ]);
-  const input = { metadata: task.metadata, agentId, sourceWorkspace, worktrees, agents };
-  const admission = claimContinuationAdmission(input);
-  if (admission.reason !== 'owner-ambiguous') return admission;
-  // A live picker run in this repository may own the tree. Ask the OS whether
-  // anything is actually inside it; only a listing that ran and found nothing
-  // clears the doubt.
-  const holderOccupied = await worktreeHasLiveProcess(claimWorkspace.workspacePath).catch(() => null);
-  return claimContinuationAdmission({ ...input, holderOccupied });
+  return claimContinuationAdmission({ metadata: task.metadata, agentId, sourceWorkspace, worktrees, agents });
 }
 
 /**

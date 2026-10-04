@@ -187,11 +187,10 @@ export function claimContinuationWorkspace({ metadata, pathExists = () => false,
  * defers the launch and touches neither ref nor tree.
  *
  * A live claim run that picks its own branch (a swarm orchestrator whose
- * children cut trees PortOS never sees) might own this tree, and neither git
- * activity nor the predecessor's own registration proves it does not. That doubt
- * clears only on checkout-specific evidence: `holderOccupied === false`, a
- * process listing that ran and found nothing inside the tree. `true` and `null`
- * (could not be established) both keep the launch deferred.
+ * children cut trees PortOS never sees) might own this tree. Nothing observable
+ * proves it does not — git activity, the continued run's own registration, and
+ * the absence of a process inside the tree can all be true of a live owner — so
+ * the launch stays deferred until that run ends, which is its explicit release.
  *
  * @param {{
  *   metadata?: object,
@@ -199,11 +198,10 @@ export function claimContinuationWorkspace({ metadata, pathExists = () => false,
  *   sourceWorkspace?: string,
  *   worktrees: Array<object>|null,
  *   agents: Array<object>|null,
- *   holderOccupied?: boolean|null,
  * }} input
  * @returns {{ admit: true }|{ admit: false, reason: string }}
  */
-export function claimContinuationAdmission({ metadata, agentId, sourceWorkspace, worktrees, agents, holderOccupied = null }) {
+export function claimContinuationAdmission({ metadata, agentId, sourceWorkspace, worktrees, agents }) {
   if (!Array.isArray(worktrees) || !Array.isArray(agents)) return { admit: false, reason: 'ownership-unreadable' };
   const branchName = metadata?.existingBranch;
   const worktreePath = metadata?.resumeWorktreePath;
@@ -219,6 +217,6 @@ export function claimContinuationAdmission({ metadata, agentId, sourceWorkspace,
   const ignoreIds = new Set([agentId, metadata?.resumedFromAgentId].filter(Boolean));
   const occupancy = claimHolderOccupancy({ agents, holderPath: holder.path, branchName, sourceWorkspace, ignoreIds });
   if (occupancy === 'active') return { admit: false, reason: 'owner-active' };
-  if (occupancy === 'ambiguous' && holderOccupied !== false) return { admit: false, reason: 'owner-ambiguous' };
+  if (occupancy === 'ambiguous') return { admit: false, reason: 'owner-ambiguous' };
   return { admit: true };
 }

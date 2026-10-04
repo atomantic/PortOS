@@ -50,7 +50,6 @@ vi.mock('./worktreeManager.js', async (importOriginal) => ({
   listWorktrees: vi.fn().mockResolvedValue([]),
   mergeBaseIntoFeatureWorktree: vi.fn(),
 }));
-vi.mock('./worktreeOccupancy.js', () => ({ worktreeHasLiveProcess: vi.fn().mockResolvedValue(null) }));
 vi.mock('./agentAppWorkspace.js', () => ({
   getAppWorkspace: vi.fn().mockResolvedValue('/repos/app-x'),
   getAppDataForTask: vi.fn().mockResolvedValue(null),
@@ -74,7 +73,6 @@ import { execGit } from '../lib/execGit.js';
 import { detectConflicts } from './taskConflict.js';
 import { getAppWorkspace } from './agentAppWorkspace.js';
 import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, listWorktrees, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
-import { worktreeHasLiveProcess } from './worktreeOccupancy.js';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 
@@ -542,30 +540,17 @@ describe('prepareAgentWorkspace — resuming an interrupted run', () => {
       expect(adoptWorktree).not.toHaveBeenCalled();
     });
 
-    describe('while a live picker run in the repository might own the tree', () => {
-      const picker = { id: 'agent-picker', status: 'running', metadata: { claimPicksOwnBranch: true } };
+    it('defers while a live picker run in the repository might own the tree, and continues once it ends', async () => {
+      getAgents.mockResolvedValue([{ id: 'agent-picker', status: 'running', metadata: { claimPicksOwnBranch: true } }]);
+      const deferred = await prepareAgentWorkspace({ agentId: 'agent-new', task: claimTask() });
+      expect(deferred.outcome).toBe('blocked');
+      expect(createWorktree).not.toHaveBeenCalled();
 
-      it('defers unless the OS confirms nothing is inside the checkout', async () => {
-        getAgents.mockResolvedValue([picker]);
-        for (const [i, answer] of [true, null].entries()) {
-          if (i > 0) claimContinuationWorkspace.mockReturnValueOnce(pointerWorkspace()); // beforeEach queued the first
-          worktreeHasLiveProcess.mockResolvedValueOnce(answer);
-          const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: claimTask() });
-          expect(r.outcome).toBe('blocked');
-        }
-        expect(createWorktree).not.toHaveBeenCalled();
-      });
-
-      it('continues in place once a process listing found nothing inside the checkout', async () => {
-        getAgents.mockResolvedValue([picker]);
-        worktreeHasLiveProcess.mockResolvedValueOnce(false);
-
-        const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: claimTask() });
-
-        expect(r.outcome).toBe('ready');
-        expect(r.workspacePath).toBe(CLAIM_DIR);
-        expect(worktreeHasLiveProcess).toHaveBeenCalledWith(CLAIM_DIR);
-      });
+      getAgents.mockResolvedValue([{ id: 'agent-picker', status: 'completed', metadata: { claimPicksOwnBranch: true } }]);
+      claimContinuationWorkspace.mockReturnValueOnce(pointerWorkspace());
+      const resumed = await prepareAgentWorkspace({ agentId: 'agent-new', task: claimTask() });
+      expect(resumed.outcome).toBe('ready');
+      expect(resumed.workspacePath).toBe(CLAIM_DIR);
     });
 
     it('fails closed when the agent registry cannot be read', async () => {
