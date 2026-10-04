@@ -4,7 +4,7 @@ import { Maximize2, X } from 'lucide-react';
 import { applyProcessAction } from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import { FormField } from '../../ui/FormField';
-import ProcessLogLines from '../../ui/ProcessLogLines';
+import ProcessLogLines, { LogStreamBadge } from '../../ui/ProcessLogLines';
 import { useProcessSnapshot } from '../../../hooks/useProcessSnapshot';
 import { useProcessLogs } from '../../../hooks/useProcessLogs';
 import useFocusTrap from '../../../hooks/useFocusTrap';
@@ -35,7 +35,7 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
 
   // Socket log lifecycle lives in the shared hook so this tab and the desktop
   // launch-progress panel can't drift.
-  const { logs, subscribed, clear: clearLogs } = useProcessLogs(expandedProcess, { lines: tailLines, appId });
+  const { logs, status, statusDetail, retry, clear: clearLogs } = useProcessLogs(expandedProcess, { lines: tailLines, appId });
 
   const { data, loading, error, refetch, applySnapshot } = useProcessSnapshot(appId);
   const processes = data ?? [];
@@ -185,9 +185,7 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
                           <div className="flex items-center justify-between px-4 py-2 border-b border-port-border">
                             <div className="flex items-center gap-3">
                               <span className="text-xs text-gray-400">Live logs for {proc.name}</span>
-                              {subscribed && (
-                                <span className="text-xs text-port-success">● streaming</span>
-                              )}
+                              <LogStreamBadge status={status} />
                             </div>
                             <div className="flex items-center gap-3">
                               <FormField className="flex items-center gap-2" label="Tail lines:" labelClassName="text-xs text-gray-500">
@@ -232,7 +230,7 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
                             ref={logsRef}
                             className="h-[32rem] overflow-auto p-3 font-mono text-xs"
                           >
-                            <ProcessLogLines logs={logs} subscribed={subscribed} showTimestamps />
+                            <ProcessLogLines logs={logs} status={status} statusDetail={statusDetail} onRetry={retry} showTimestamps />
                           </div>
                         </div>
                       </td>
@@ -276,9 +274,7 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-4 sm:px-6 py-3 sm:py-4 border-b border-port-border bg-port-card">
             <div className="flex flex-wrap items-center gap-2 sm:gap-4">
               <span className="text-lg font-medium text-white">Logs: {expandedProcess}</span>
-              {subscribed && (
-                <span className="text-sm text-port-success">● streaming</span>
-              )}
+              <LogStreamBadge status={status} className="text-sm" />
             </div>
             <div data-testid="fullscreen-log-controls" className="flex flex-wrap items-center gap-2 sm:gap-4">
               <FormField className="flex items-center gap-2" label="Tail lines:" labelClassName="text-sm text-gray-500">
@@ -321,7 +317,7 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
             ref={fullscreenLogsRef}
             className="flex-1 overflow-auto p-4 font-mono text-sm"
           >
-            <ProcessLogLines logs={logs} subscribed={subscribed} showTimestamps timestampGap="mr-3" />
+            <ProcessLogLines logs={logs} status={status} statusDetail={statusDetail} onRetry={retry} showTimestamps timestampGap="mr-3" />
           </div>
         </div>,
         document.body

@@ -29,17 +29,37 @@ const FLUSH_MS = 250;
 // this registry mirrors that existing invariant rather than introducing one.
 const registry = new Map(); // processName -> entry
 
+// Stream lifecycle, shared by every consumer of an entry. `live` is only set by
+// the server's matching `logs:subscribed` ack; the three terminal states keep
+// the captured lines but must never render as an active stream (#9959).
+export const LOG_STREAM_STATUS = Object.freeze({
+  CONNECTING: 'connecting',
+  LIVE: 'live',
+  CLOSED: 'closed', // the PM2 tail child exited
+  ERROR: 'error', // the server reported a stream error
+  DISCONNECTED: 'disconnected', // the socket transport dropped
+});
+const { CONNECTING, LIVE, CLOSED, ERROR, DISCONNECTED } = LOG_STREAM_STATUS;
+const isTerminal = (status) => status === CLOSED || status === ERROR || status === DISCONNECTED;
+
 const createEntry = (processName, lines, appId) => ({
   processName,
   appId,
   lines,
-  consumers: new Set(), // Set<{ onLine, onSubscribed, onReset }>
+  consumers: new Set(), // Set<{ onLine, onStatus, onReset }>
   buffer: [], // shared tail buffer for late joiners, capped at MAX_LINES
-  subscribed: false,
+  status: CONNECTING,
+  detail: null, // human-readable reason for a terminal status
 });
 
+const setEntryStatus = (entry, status, detail = null) => {
+  entry.status = status;
+  entry.detail = detail;
+  entry.consumers.forEach((consumer) => consumer.onStatus(status, detail));
+};
+
 const subscribeEntry = (entry) => {
-  entry.subscribed = false;
+  setEntryStatus(entry, CONNECTING);
   socket.emit('logs:subscribe', {
     processName: entry.processName,
     lines: entry.lines,
@@ -65,14 +85,34 @@ socket.on('logs:line', (data) => {
 socket.on('logs:subscribed', (data) => {
   const entry = registry.get(data.processName);
   if (!entry) return;
-  entry.subscribed = true;
-  entry.consumers.forEach((consumer) => consumer.onSubscribed());
+  setEntryStatus(entry, LIVE);
 });
 
 socket.on('logs:error', (data) => {
   const entry = registry.get(data.processName);
   if (!entry) return;
   appendToEntry(entry, { line: `Error: ${data.error}`, type: 'stderr', timestamp: Date.now() });
+  setEntryStatus(entry, ERROR, String(data.error));
+});
+
+// The server flushes the final buffered lines BEFORE this frame (and suppresses
+// a replaced predecessor's close), so it is a real, terminal end of the stream.
+// With the socket still connected nothing else would ever re-subscribe, so the
+// entry stays closed until the user retries. An earlier `logs:error` keeps its
+// more specific detail.
+socket.on('logs:close', (data) => {
+  const entry = registry.get(data.processName);
+  if (!entry || entry.status === ERROR) return;
+  const code = data.code == null ? '' : ` (exit code ${data.code})`;
+  setEntryStatus(entry, CLOSED, `Log stream closed${code}`);
+});
+
+socket.on('disconnect', (reason) => {
+  registry.forEach((entry) => {
+    if (entry.consumers.size > 0) {
+      setEntryStatus(entry, DISCONNECTED, `Connection to the server was lost${reason ? ` (${reason})` : ''}`);
+    }
+  });
 });
 
 // The server drops every stream owned by a disconnected socket
@@ -91,11 +131,29 @@ socket.on('connect', () => {
   });
 });
 
+// Manual recovery. Acts only on a terminal entry, so several consumers (or a
+// double click) of one shared stream produce exactly ONE replacement subscribe.
+// A dropped transport reconnects first: its `connect` handler above performs the
+// resubscribe, so emitting here too would subscribe twice.
+const retryEntry = (entry) => {
+  if (!isTerminal(entry.status)) return;
+  if (entry.status === DISCONNECTED && socket.connected === false) {
+    setEntryStatus(entry, CONNECTING);
+    socket.connect?.();
+    return;
+  }
+  // The server replays the PM2 tail on every subscription — drop the old tail
+  // so the replay cannot duplicate history.
+  entry.buffer = [];
+  entry.consumers.forEach((consumer) => consumer.onReset());
+  subscribeEntry(entry);
+};
+
 /**
  * Subscribe to one PM2 process's live log stream over the shared socket.
  *
  * Wraps the `logs:subscribe` / `logs:line` / `logs:subscribed` / `logs:error`
- * dance so callers only deal with `{ logs, subscribed }`. Every frame is
+ * dance so callers only deal with `{ logs, status, ... }`. Every frame is
  * filtered by `processName` before it lands — the server emits the name on each
  * line, and a stale frame from a just-unsubscribed process would otherwise be
  * appended to the new one's buffer.
@@ -112,22 +170,31 @@ socket.on('connect', () => {
  * @param {number} [options.lines=500] Tail depth requested on subscribe.
  * @param {string} [options.appId] App whose custom PM2_HOME holds the process.
  *   Omit for processes in the default home.
- * @returns {{ logs: Array<{line: string, type: string, timestamp: number}>, subscribed: boolean, clear: () => void }}
+ * @returns {{ logs: Array<{line: string, type: string, timestamp: number}>, subscribed: boolean,
+ *   status: 'connecting'|'live'|'closed'|'error'|'disconnected', statusDetail: string|null,
+ *   retry: () => void, clear: () => void }}
+ *   `status` is shared by every consumer of the process; `subscribed` is just
+ *   `status === 'live'`. A `closed`/`error`/`disconnected` stream keeps its
+ *   captured lines but is no longer receiving — render it as unavailable and
+ *   offer `retry()`, which resubscribes the shared stream once (never an
+ *   automatic respawn loop).
  *   `clear()` empties the local buffer only — the stream stays subscribed, so
  *   new lines keep arriving (this backs a "Clear" button, not an unsubscribe).
  *   It never mutates the shared entry buffer, so it does not affect any other
  *   consumer's view of the same process.
  */
+const INITIAL_STREAM = { status: CONNECTING, detail: null };
+
 export function useProcessLogs(processName, options = {}) {
   const { lines = 500, appId } = options;
   const [logs, setLogs] = useState([]);
-  const [subscribed, setSubscribed] = useState(false);
+  const [stream, setStream] = useState(INITIAL_STREAM);
   const pendingRef = useRef([]);
   const flushTimerRef = useRef(null);
 
   useEffect(() => {
     setLogs([]);
-    setSubscribed(false);
+    setStream(INITIAL_STREAM);
     if (!processName) return undefined;
 
     const flush = () => {
@@ -154,13 +221,14 @@ export function useProcessLogs(processName, options = {}) {
 
     const consumer = {
       onLine: queueLine,
-      onSubscribed: () => setSubscribed(true),
+      onStatus: (status, detail) => setStream((prev) => (
+        prev.status === status && prev.detail === detail ? prev : { status, detail }
+      )),
       onReset: () => {
         pendingRef.current = [];
         if (flushTimerRef.current != null) clearTimeout(flushTimerRef.current);
         flushTimerRef.current = null;
         setLogs([]);
-        setSubscribed(false);
       },
     };
     entry.consumers.add(consumer);
@@ -182,7 +250,9 @@ export function useProcessLogs(processName, options = {}) {
       // consumer's own `lines`) instead of re-subscribing, which would
       // replay the tail into every consumer already watching this stream. An
       // expanded stream was reset above and will seed from its replay instead.
-      if (entry.subscribed) setSubscribed(true);
+      // This also carries a terminal state to the newcomer instead of a false
+      // "connecting"/"live" read off a dead stream.
+      setStream({ status: entry.status, detail: entry.detail });
       const seeded = entry.buffer.slice(-lines);
       if (seeded.length > 0) setLogs(seeded);
     }
@@ -210,7 +280,19 @@ export function useProcessLogs(processName, options = {}) {
     setLogs([]);
   }, []);
 
-  return { logs, subscribed, clear };
+  const retry = useCallback(() => {
+    const entry = processName ? registry.get(processName) : null;
+    if (entry) retryEntry(entry);
+  }, [processName]);
+
+  return {
+    logs,
+    subscribed: stream.status === LIVE,
+    status: stream.status,
+    statusDetail: stream.detail,
+    retry,
+    clear,
+  };
 }
 
 export default useProcessLogs;

@@ -74,6 +74,32 @@ describe('DesktopLaunchProgress', () => {
     expect(screen.getByText(/Waiting for output/)).toBeInTheDocument();
   });
 
+  it('shows a closed empty stream as unavailable with a retry, never Waiting for output', () => {
+    renderPanel();
+    fire('logs:subscribed', { processName: 'game' });
+    fire('logs:close', { processName: 'game', code: 1 });
+
+    expect(screen.queryByText(/Waiting for output/)).toBeNull();
+    expect(screen.queryByText(/Connecting to log stream/)).toBeNull();
+    expect(screen.getByText(/Log stream unavailable — Log stream closed \(exit code 1\)/)).toBeInTheDocument();
+
+    const subscribes = () => emitted.filter(([e]) => e === 'logs:subscribe').length;
+    expect(subscribes()).toBe(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(subscribes()).toBe(2);
+    expect(screen.getByText(/Connecting to log stream/)).toBeInTheDocument();
+  });
+
+  it('keeps captured lines visible under the unavailable notice after a disconnect', () => {
+    renderPanel();
+    fire('logs:subscribed', { processName: 'game' });
+    fire('logs:line', { processName: 'game', line: 'Importing assets…', type: 'stdout', timestamp: 1 });
+    fire('disconnect', 'transport close');
+
+    expect(screen.getByText('Importing assets…')).toBeInTheDocument();
+    expect(screen.getByText(/Log stream unavailable — Connection to the server was lost/)).toBeInTheDocument();
+  });
+
   it('flips to running once the process is up, and frames a quit as normal', () => {
     renderPanel({ online: true });
     expect(screen.getByText(/Running — game/)).toBeInTheDocument();
