@@ -309,7 +309,7 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
         <div className="rounded border border-port-border p-2">
           <p className="mb-2 text-xs text-port-text-muted">Candidate preview · {candidate.providerId || 'provider'} / {candidate.model || 'default model'} · active document stays selected until accepted</p>
           <div className="grid grid-cols-1 gap-2 xl:grid-cols-2">
-            {doc?.source?.kind === 'generated' && <div><p className="text-xs text-port-text-muted">Before · accepted section</p><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={comparisonSeek} /></div>}
+            {doc?.source?.kind === 'generated' && <div><p className="text-xs text-port-text-muted">Before · accepted section</p><CompositionPreviewPlayer project={project} audioUrl={null} seekRequest={comparisonSeek} /></div>}
             <div><p className="text-xs text-port-text-muted">After · candidate section</p><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={comparisonSeek} draft /></div>
           </div>
           {(candidate.comparisons || []).filter((entry) => !selectedSection || entry.sectionId === selectedSection).map((entry) => <p key={entry.sectionId} className="mt-2 text-xs text-port-text-muted">

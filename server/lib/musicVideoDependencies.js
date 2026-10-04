@@ -159,6 +159,7 @@ export function presentMusicVideoDependencies(project) {
       reasons: [...new Set(changes.map((change) => change.reason))] };
   };
   return { ...project,
+    ...(project.renderHistoryId && project.renderDependencies ? { renderDependencyState: state(project.renderDependencies) } : {}),
     scenes: (project.scenes || []).map((scene) => ({ ...scene, takes: (scene.takes || []).map((take) => ({ ...take,
       ...(take.dependencies ? { dependencyState: state(take.dependencies) } : {}),
     })) })),

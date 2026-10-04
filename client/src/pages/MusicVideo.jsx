@@ -1026,7 +1026,7 @@ export default function MusicVideo() {
   } : null;
   const StageView = STAGE_VIEWS[activeStage];
 
-  const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src }) : [];
+  const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, liveFirst: activeStage === 'compose' }) : [];
 
   return (
     <div className="flex h-full flex-col">
