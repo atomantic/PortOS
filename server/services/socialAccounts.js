@@ -3,9 +3,9 @@
  *
  * Manages the user's social media accounts as part of the Digital Twin.
  * These are the user's OWN accounts (not agent platform accounts) used for:
- * - Content ingestion and style learning
  * - Building a communication profile
- * - Reference for content creation
+ * - Reference for content creation and profile directory
+ * - Future content ingestion and style learning (when supported)
  * - Future account management automation
  */
 

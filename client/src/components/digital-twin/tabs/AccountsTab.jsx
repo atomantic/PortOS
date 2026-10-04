@@ -94,8 +94,7 @@ const EMPTY_FORM = {
   displayName: '',
   url: '',
   bio: '',
-  notes: '',
-  ingestionEnabled: false
+  notes: ''
 };
 
 export default function AccountsTab() {
@@ -184,8 +183,7 @@ export default function AccountsTab() {
       displayName: account.displayName || '',
       url: account.url || '',
       bio: account.bio || '',
-      notes: account.notes || '',
-      ingestionEnabled: account.ingestionEnabled || false
+      notes: account.notes || ''
     });
     setEditingId(account.id);
     setShowForm(true);
@@ -233,7 +231,7 @@ export default function AccountsTab() {
         <div>
           <h2 className="text-lg font-semibold text-white">Social Accounts</h2>
           <p className="text-sm text-gray-500">
-            Your online presence for content learning and style reference
+            Your online presence directory and profile reference
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -256,14 +254,10 @@ export default function AccountsTab() {
 
       {/* Stats Summary */}
       {stats && stats.total > 0 && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div className="bg-port-card border border-port-border rounded-lg p-3">
             <div className="text-2xl font-bold text-white">{stats.total}</div>
             <div className="text-xs text-gray-500">Total Accounts</div>
-          </div>
-          <div className="bg-port-card border border-port-border rounded-lg p-3">
-            <div className="text-2xl font-bold text-port-accent">{stats.ingestionEnabled}</div>
-            <div className="text-xs text-gray-500">Ingestion Enabled</div>
           </div>
           <div className="bg-port-card border border-port-border rounded-lg p-3">
             <div className="text-2xl font-bold text-port-accent-2">{Object.keys(stats.byCategory || {}).length}</div>
@@ -386,26 +380,6 @@ export default function AccountsTab() {
             />
           </FormField>
 
-          {/* Ingestion toggle */}
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              role="switch"
-              aria-checked={!!form.ingestionEnabled}
-              aria-label="Enable content ingestion"
-              onClick={() => setForm(prev => ({ ...prev, ingestionEnabled: !prev.ingestionEnabled }))}
-              className={`relative w-10 h-5 rounded-full transition-colors ${
-                form.ingestionEnabled ? 'bg-port-accent' : 'bg-gray-600'
-              }`}
-            >
-              <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                form.ingestionEnabled ? 'left-5' : 'left-0.5'
-              }`} />
-            </button>
-            <span className="text-sm text-gray-400">
-              Enable content ingestion (future: download and learn from content)
-            </span>
-          </div>
 
           {/* Actions */}
           <div className="flex items-center gap-2 pt-2 border-t border-port-border">
@@ -437,8 +411,8 @@ export default function AccountsTab() {
           <Globe className="w-12 h-12 text-gray-600 mx-auto mb-3" />
           <h3 className="text-white font-medium mb-1">No social accounts yet</h3>
           <p className="text-sm text-gray-500 mb-4">
-            Add your social media accounts to build your digital identity profile.
-            These will be used for content learning and style reference.
+            Add your social media accounts to build your digital identity profile
+            and reference your profiles across platforms.
           </p>
           <button
             onClick={() => setShowForm(true)}
@@ -480,11 +454,6 @@ export default function AccountsTab() {
                       <span className="text-xs text-gray-500">
                         @{account.username}
                       </span>
-                      {account.ingestionEnabled && (
-                        <span className="text-[10px] px-1.5 py-0.5 bg-port-accent/20 text-port-accent rounded">
-                          ingestion
-                        </span>
-                      )}
                     </div>
                     {account.bio && (
                       <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">{account.bio}</p>
