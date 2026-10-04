@@ -15,7 +15,7 @@
 
 import { Router } from 'express';
 import { asyncHandler, failValidation } from '../lib/errorHandler.js';
-import { referenceRepoCreateSchema, referenceRepoUpdateSchema } from '../lib/validation.js';
+import { referenceRepoCreateSchema, referenceRepoUpdateSchema, referenceRepoReviewedBodySchema, validateRequest } from '../lib/validation.js';
 import {
   listReferenceRepos,
   addReferenceRepo,
@@ -82,7 +82,7 @@ router.post('/:refId/check', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:refId/reviewed', asyncHandler(async (req, res) => {
-  const sha = (req.body?.sha || '').trim();
+  const { sha } = validateRequest(referenceRepoReviewedBodySchema, req.body ?? {});
   const ref = await markReferenceRepoReviewed(req.params.appId, req.params.refId, sha);
   res.json(ref);
 }));

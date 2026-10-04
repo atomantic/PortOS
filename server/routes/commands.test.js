@@ -294,7 +294,7 @@ describe('commands routes', () => {
         .send({ workspacePath: WORKSPACE_PATH });
 
       expect(response.status).toBe(400);
-      expect(response.body.code).toBe('MISSING_COMMAND');
+      expect(response.body.code).toBe('VALIDATION_ERROR');
       expect(existsSync).not.toHaveBeenCalled();
       expect(spawnMock).not.toHaveBeenCalled();
     });

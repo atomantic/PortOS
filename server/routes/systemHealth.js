@@ -7,7 +7,7 @@ import { getSelf } from '../services/instanceIdentity.js';
 import { getCurrentVersion } from '../services/updateChecker.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
-import { validateRequest, systemHealthWarningParamsSchema, systemHealthWarningDismissSchema } from '../lib/validation.js';
+import { validateRequest, systemHealthWarningParamsSchema, systemHealthWarningDismissSchema, systemHealthThresholdsBodySchema } from '../lib/validation.js';
 import { getSettingsWithStatus, updateSettingsWith } from '../services/settings.js';
 
 import { isAuthEnabled } from '../services/auth.js';
@@ -143,18 +143,7 @@ router.delete('/health/warnings/:type/dismiss', asyncHandler(async (req, res) =>
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 router.put('/health/thresholds', asyncHandler(async (req, res) => {
-  const body = req.body || {};
-  const incoming = {
-    memoryWarn: Number(body.memoryWarn),
-    memoryCritical: Number(body.memoryCritical),
-    diskWarn: Number(body.diskWarn),
-    diskCritical: Number(body.diskCritical)
-  };
-  for (const [k, v] of Object.entries(incoming)) {
-    if (!Number.isFinite(v)) {
-      throw new ServerError(`Invalid threshold value for ${k}`, { status: 400 });
-    }
-  }
+  const incoming = validateRequest(systemHealthThresholdsBodySchema, req.body ?? {});
   const next = {
     memoryWarn: clamp(Math.round(incoming.memoryWarn), 50, 99),
     memoryCritical: clamp(Math.round(incoming.memoryCritical), 50, 99),

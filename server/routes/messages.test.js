@@ -279,6 +279,14 @@ describe('Messages Routes', () => {
       expect(response.body.error).toContain('unread');
     });
 
+    it('rejects an unknown sync mode instead of silently syncing unread', async () => {
+      const response = await request(app).post(`/api/messages/sync/${VALID_UUID}`).send({ mode: 'everything' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('VALIDATION_ERROR');
+      expect(messageSync.syncAccount).not.toHaveBeenCalled();
+    });
+
     it('should return 400 for invalid UUID', async () => {
       const response = await request(app).post(`/api/messages/sync/${INVALID_UUID}`);
 

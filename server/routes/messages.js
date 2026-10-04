@@ -2,7 +2,10 @@ import { messageInboxRead, messageDetailRead, messageParamsSchema } from './mess
 import express from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import {
+  validateRequest, MESSAGE_TOKEN_PROVIDERS, messageSyncBodySchema, messageFetchFullBodySchema,
+  messageActionBodySchema, messageTokenProviderBodySchema,
+} from '../lib/validation.js';
 import { UUID_RE } from '../lib/fileUtils.js';
 import { sendViaForAccountType } from '../lib/messageTransport.js';
 import * as messageAccounts from '../services/messageAccounts.js';
@@ -138,9 +141,9 @@ router.post('/sync/:accountId', asyncHandler(async (req, res) => {
   if (!UUID_RE.test(req.params.accountId)) {
     throw new ServerError('Invalid account ID format', { status: 400 });
   }
-  // An omitted/unrecognized mode stays undefined so syncAccount selects the account's
-  // supported default; an explicit one is validated against the account there.
-  const mode = ['unread', 'full'].includes(req.body?.mode) ? req.body.mode : undefined;
+  // An omitted mode stays undefined so syncAccount selects the account's supported
+  // default; an explicit one is validated against the account there.
+  const { mode } = validateRequest(messageSyncBodySchema, req.body ?? {});
   const io = req.app.get('io');
   const result = await messageSync.syncAccount(req.params.accountId, io, { mode });
   if (result.error) throw new ServerError(result.error, { status: result.status || 404 });
@@ -410,7 +413,7 @@ router.post('/fetch-full/:accountId', asyncHandler(async (req, res) => {
   if (!account) throw new ServerError('Account not found', { status: 404 });
   if (account.type !== 'outlook') return res.json({ updated: 0, total: 0 });
 
-  const force = req.body?.force === true;
+  const { force } = validateRequest(messageFetchFullBodySchema, req.body ?? {});
   const allResult = await messageSync.getMessages({ accountId, limit: FULL_BODY_REFRESH_LIMIT });
   const truncated = allResult.messages.length >= FULL_BODY_REFRESH_LIMIT;
   const toRefresh = force ? allResult.messages : allResult.messages.filter(m => m.bodyFull === false);
@@ -435,17 +438,14 @@ router.post('/:accountId/:messageId/action', asyncHandler(async (req, res) => {
   const parsed = messageParamsSchema.safeParse(req.params);
   if (!parsed.success) throw new ServerError('Invalid accountId or messageId format', { status: 400 });
   const { accountId, messageId } = parsed.data;
-  const action = req.body?.action;
-  if (!['archive', 'delete'].includes(action)) {
-    throw new ServerError('Invalid action — must be "archive" or "delete"', { status: 400 });
-  }
+  const { action } = validateRequest(messageActionBodySchema, req.body);
   const result = await executeAction(accountId, messageId, action);
   req.app.get('io')?.emit('messages:changed', {});
   res.json(result);
 }));
 
 // === Debug: Token Extraction & API Testing ===
-const ALLOWED_TOKEN_PROVIDERS = ['outlook', 'teams'];
+const ALLOWED_TOKEN_PROVIDERS = MESSAGE_TOKEN_PROVIDERS;
 
 router.get('/debug/token-status', asyncHandler(async (req, res) => {
   const statuses = ALLOWED_TOKEN_PROVIDERS.map(p => getTokenStatus(p));
@@ -453,7 +453,7 @@ router.get('/debug/token-status', asyncHandler(async (req, res) => {
 }));
 
 router.post('/debug/test-token', asyncHandler(async (req, res) => {
-  const provider = ALLOWED_TOKEN_PROVIDERS.includes(req.body?.provider) ? req.body.provider : 'outlook';
+  const { provider = 'outlook' } = validateRequest(messageTokenProviderBodySchema, req.body ?? {});
   const tokenResult = await getToken(provider);
   if (tokenResult.error) {
     throw new ServerError(tokenResult.message || tokenResult.error, {
@@ -489,7 +489,7 @@ router.post('/debug/test-token', asyncHandler(async (req, res) => {
 }));
 
 router.post('/debug/clear-token', asyncHandler(async (req, res) => {
-  const provider = ALLOWED_TOKEN_PROVIDERS.includes(req.body?.provider) ? req.body.provider : null;
+  const { provider = null } = validateRequest(messageTokenProviderBodySchema, req.body ?? {});
   clearTokenCache(provider);
   res.json({ cleared: true, provider: provider || 'all' });
 }));

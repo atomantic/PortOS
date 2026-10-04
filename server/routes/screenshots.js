@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { asyncHandler } from '../lib/errorHandler.js';
+import { validateRequest, screenshotUploadBodySchema } from '../lib/validation.js';
 import { PATHS, sanitizeFilename, isPathInsideDir, saveImageUpload } from '../lib/fileUtils.js';
 import { MAX_SCREENSHOT_BYTES } from '../lib/uploadLimits.js';
 
@@ -15,11 +16,7 @@ const MAX_FILE_SIZE = MAX_SCREENSHOT_BYTES;
 
 // POST /api/screenshots - Upload a screenshot (base64)
 router.post('/', asyncHandler(async (req, res) => {
-  const { data, filename } = req.body;
-
-  if (!data) {
-    throw new ServerError('data is required (base64)', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { data, filename } = validateRequest(screenshotUploadBodySchema, req.body);
 
   const id = uuidv4();
   // The server UUID always prefixes the stored name: clients (camera roll,

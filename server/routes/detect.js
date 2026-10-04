@@ -8,6 +8,7 @@ import { listProcessesStrict } from '../services/pm2.js';
 import { detectAppWithAi } from '../services/aiDetect.js';
 import { requestHasHostControl } from '../services/authGate.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { validateRequest, detectRepoBodySchema, detectPortBodySchema, detectPm2BodySchema, detectAiBodySchema } from '../lib/validation.js';
 import { safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { isWithinAllowedRoots, outsideAllowedRootsMessage, WORKSPACE_ROOTS_CONFIGURED } from '../lib/workspaceRoots.js';
 
@@ -69,11 +70,7 @@ const checkWorkspacePathAllowed = (path) => {
 // unrestricted, matching the pre-existing behavior. POST /ai enforces the same
 // allow-list via the shared `checkWorkspacePathAllowed` helper above.
 router.post('/repo', asyncHandler(async (req, res) => {
-  const { path } = req.body;
-
-  if (!path) {
-    throw new ServerError('Path is required', { status: 400, code: 'MISSING_PATH' });
-  }
+  const { path } = validateRequest(detectRepoBodySchema, req.body);
 
   // Check if path exists
   if (!existsSync(path)) {
@@ -190,23 +187,15 @@ router.post('/repo', asyncHandler(async (req, res) => {
 
 // POST /api/detect/port - Detect what process is running on a port
 router.post('/port', asyncHandler(async (req, res) => {
-  const { port } = req.body;
-
-  if (!port || isNaN(port)) {
-    throw new ServerError('Valid port number is required', { status: 400, code: 'INVALID_PORT' });
-  }
+  const { port: safePort } = validateRequest(detectPortBodySchema, req.body);
 
   const result = {
-    port: parseInt(port, 10),
+    port: safePort,
     inUse: false,
     process: null
   };
 
   // Use lsof on macOS/Linux to find process
-  const safePort = parseInt(port, 10);
-  if (!Number.isInteger(safePort) || safePort < 1 || safePort > 65535) {
-    throw new ServerError(`Invalid port number: ${port}`, { status: 400 });
-  }
   const command = process.platform === 'darwin'
     ? `lsof -i :${safePort} -P -n | grep LISTEN`
     : `ss -lntp | grep :${safePort}`;
@@ -234,11 +223,7 @@ router.post('/port', asyncHandler(async (req, res) => {
 
 // POST /api/detect/pm2 - Check if a PM2 process exists with given name
 router.post('/pm2', asyncHandler(async (req, res) => {
-  const { name } = req.body;
-
-  if (!name) {
-    throw new ServerError('Process name is required', { status: 400, code: 'MISSING_NAME' });
-  }
+  const { name } = validateRequest(detectPm2BodySchema, req.body);
 
   // `listProcessesStrict()` returns `null` when the PM2 read itself FAILED (vs
   // `[]` for a successful read with no processes) — the absent-vs-empty
@@ -272,11 +257,7 @@ router.post('/pm2', asyncHandler(async (req, res) => {
 // A provider that cannot run tool-free needs host control (#9008): a remote
 // caller on a password-free install gets 403 HOST_CONTROL_FORBIDDEN instead.
 router.post('/ai', asyncHandler(async (req, res) => {
-  const { path, providerId } = req.body;
-
-  if (!path) {
-    throw new ServerError('Path is required', { status: 400, code: 'MISSING_PATH' });
-  }
+  const { path, providerId } = validateRequest(detectAiBodySchema, req.body);
 
   const confinement = checkWorkspacePathAllowed(path);
   if (!confinement.ok) {

@@ -8,7 +8,7 @@ import { z } from 'zod';
 import * as taskSchedule from '../services/taskSchedule.js';
 import { logCosScheduleUpdate } from '../services/userActionScheduleLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination } from '../lib/validation.js';
+import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema } from '../lib/validation.js';
 import { promptSourceSchema, PROMPT_SOURCES, scheduleExecutionFieldsSchema } from '../lib/cosValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
@@ -76,8 +76,7 @@ const SCHEDULE_FIELDS = ['type', 'autoStart', 'perpetual', 'enabled', 'intervalM
  * is the row being written, so a field that must not name itself (the advisory
  * `suggestedAfter`) can be cleaned here rather than again at the call site.
  */
-function pickScheduleSettings(body, taskType) {
-  const executionFields = validateRequest(scheduleExecutionFieldsSchema, body);
+function pickScheduleSettings(body, executionFields, taskType) {
   const settings = {};
   for (const key of SCHEDULE_FIELDS) {
     if (body[key] !== undefined) settings[key] = body[key];
@@ -242,7 +241,8 @@ router.get('/schedule/task/:taskType', asyncHandler(async (req, res) => {
 // PUT /api/cos/schedule/task/:taskType - Update interval for a task type (unified)
 router.put('/schedule/task/:taskType', asyncHandler(async (req, res) => {
   const { taskType } = req.params;
-  const settings = pickScheduleSettings(req.body, taskType);
+  const executionFields = validateRequest(scheduleExecutionFieldsSchema, req.body);
+  const settings = pickScheduleSettings(req.body, executionFields, taskType);
   // Filter self-references from runAfter to prevent permanent blocking
   if (Array.isArray(settings.runAfter)) {
     settings.runAfter = settings.runAfter.filter(dep => dep !== taskType);
@@ -277,11 +277,7 @@ router.get('/schedule/due/:appId', asyncHandler(async (req, res) => {
 
 // POST /api/cos/schedule/trigger - Trigger an on-demand task
 router.post('/schedule/trigger', asyncHandler(async (req, res) => {
-  const { taskType, appId } = req.body;
-
-  if (!taskType) {
-    throw new ServerError('taskType is required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { taskType, appId } = validateRequest(cosScheduleTargetBodySchema, req.body);
 
   const request = await taskSchedule.triggerOnDemandTask(taskType, appId);
   if (request?.error) {
@@ -338,11 +334,7 @@ router.delete('/schedule/on-demand/:requestId', asyncHandler(async (req, res) =>
 
 // POST /api/cos/schedule/reset - Reset execution history for a task type
 router.post('/schedule/reset', asyncHandler(async (req, res) => {
-  const { taskType, appId } = req.body;
-
-  if (!taskType) {
-    throw new ServerError('taskType is required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { taskType, appId } = validateRequest(cosScheduleTargetBodySchema, req.body);
 
   const result = await taskSchedule.resetExecutionHistory(taskType, appId);
   if (result.error) {

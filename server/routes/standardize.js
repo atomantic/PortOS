@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { realpath } from 'fs/promises';
 import { resolve } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { standardizeApplySchema, validateRequest } from '../lib/validation.js';
+import { standardizeApplySchema, standardizeTargetBodySchema, validateRequest } from '../lib/validation.js';
 import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
 import * as pm2Standardizer from '../services/pm2Standardizer.js';
 import * as appsService from '../services/apps.js';
@@ -72,7 +72,7 @@ async function resolveStandardizeTarget({ repoPath, appId }) {
 
 // POST /api/standardize/analyze - Analyze app and generate standardization plan
 router.post('/analyze', asyncHandler(async (req, res) => {
-  const { repoPath, appId, providerId } = req.body;
+  const { repoPath, appId, providerId } = validateRequest(standardizeTargetBodySchema, req.body);
 
   const path = await resolveStandardizeTarget({ repoPath, appId });
 
@@ -126,7 +126,7 @@ router.get('/template', asyncHandler(async (req, res) => {
 
 // POST /api/standardize/backup - Create git backup only
 router.post('/backup', asyncHandler(async (req, res) => {
-  const { repoPath, appId } = req.body;
+  const { repoPath, appId } = validateRequest(standardizeTargetBodySchema, req.body);
 
   const path = await resolveStandardizeTarget({ repoPath, appId });
 
