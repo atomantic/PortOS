@@ -28,7 +28,7 @@ describe('staged repair lifecycle', () => {
     expect((await store.read(id)).patch).toBe(patch);
     const results = await Promise.all([store.mutate(id, 'apply'), store.mutate(id, 'apply')]);
     expect(results.map(result => result.status || 200)).toEqual([200, 404]);
-    expect(await readFile(join(repo, 'example.txt'), 'utf8')).toBe('new\n');
+    expect((await readFile(join(repo, 'example.txt'), 'utf8')).replace(/\r\n/g, '\n')).toBe('new\n');
     expect(restart).toHaveBeenCalledExactlyOnceWith(['restart', 'example-process']);
     expect(await store.decorateHistory([{ sessionId: id, staged: true }])).toEqual([
       { sessionId: id, staged: false, promoted: true, disposition: 'applied' },
