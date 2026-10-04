@@ -66,7 +66,8 @@ export const removeAudioModel = (engine, id, requestOptions = {}) =>
 // Install an additional audio model from HuggingFace into an engine. The server
 // streams the download as Server-Sent Events; this helper drives an EventSource
 // and invokes `onEvent({ type, progress, message, ... })` per frame, resolving
-// when the stream ends. (POST-with-SSE: we use fetch + a manual reader since
+// only after a complete frame. Error frames or interrupted streams reject.
+// (POST-with-SSE: we use fetch + a manual reader since
 // EventSource is GET-only.) Returns a Promise<void>.
 export const installAudioModel = ({ engine, repo, name }, onEvent) => postForSseFrames('/api/music/models', { engine, repo, name }, onEvent);
 
@@ -89,19 +90,37 @@ async function postForSseFrames(url, payload, onEvent) {
     throw new Error((typeof parsed?.error === 'string' ? parsed.error : parsed?.error?.message) || raw || `Request failed (${res.status})`);
   }
   const reader = res.body.getReader();
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
   let buf = '';
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const frames = buf.split('\n\n');
-    buf = frames.pop() || '';
-    for (const frame of frames) {
-      const line = frame.split('\n').find((l) => l.startsWith('data:'));
-      if (!line) continue;
-      try { onEvent?.(JSON.parse(line.slice('data:'.length).trim())); } catch { /* ignore malformed frame */ }
+  const handleFrame = (frame) => {
+    const data = frame.split(/\r?\n/).filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice('data:'.length).trimStart()).join('\n');
+    if (!data) return false;
+    const event = JSON.parse(data);
+    if (!event || typeof event !== 'object') return false;
+    onEvent?.(event);
+    if (event.type === 'error') throw new Error(event.message || event.error || 'Installation failed');
+    return event.type === 'complete';
+  };
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      try {
+        buf += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      } catch (cause) {
+        throw new Error('Installation stream contained invalid UTF-8. Check installation status before retrying.', { cause });
+      }
+      const frames = buf.split(/\r?\n\r?\n/);
+      buf = frames.pop() || '';
+      if (done && buf) frames.push(buf);
+      for (const frame of frames) {
+        if (handleFrame(frame)) return;
+      }
+      if (done) throw new Error('Installation connection ended before completion. Check installation status before retrying.');
     }
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
 }
 

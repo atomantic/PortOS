@@ -365,7 +365,6 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
       if (!mountedRef.current) return;
       if (ev.type === 'progress') setSetupProgress({ message: `${ev.file || 'downloading'} — ${Math.round((ev.progress || 0) * 100)}%`, progress: ev.progress });
       else if (ev.type === 'stage') setSetupProgress({ message: ev.stage });
-      else if (ev.type === 'error') { failed = true; toast.error(ev.message || 'Download failed'); }
     }).catch((err) => { failed = true; if (mountedRef.current) toast.error(err.message || 'Install failed'); });
     if (!mountedRef.current) return;
     setInstalling(false);
@@ -473,15 +472,13 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
     if (!repo || !engine) return;
     setInstalling(true);
     setInstallProgress({ message: `Starting ${repo}…` });
-    // Track failure across the stream: an `error` frame OR a thrown request
-    // (e.g. a 400 invalid-repo) means the install did NOT succeed, so we must
-    // not then clear the field / select the repo / report "Installed".
+    // The terminal promise rejects errors and interrupted streams; keep retry
+    // input and selection unchanged until completion is confirmed.
     let failed = false;
     await installAudioModel({ engine: engine.id, repo }, (ev) => {
       if (!mountedRef.current) return;
       if (ev.type === 'progress') setInstallProgress({ message: `${ev.file || 'downloading'} — ${Math.round((ev.progress || 0) * 100)}%`, progress: ev.progress });
       else if (ev.type === 'stage') setInstallProgress({ message: ev.stage });
-      else if (ev.type === 'error') { failed = true; toast.error(ev.message || 'Download failed'); }
     }).catch((err) => { failed = true; if (mountedRef.current) toast.error(err.message || 'Install failed'); });
     if (!mountedRef.current) return;
     setInstalling(false);

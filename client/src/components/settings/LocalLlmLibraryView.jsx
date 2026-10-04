@@ -267,9 +267,8 @@ export default function LocalLlmLibraryView() {
   // shared audio-model registry (server/services/audioModels.js) via the Music
   // studio's streaming HF-download endpoint, so the Music studio picks them up.
   // The download streams SSE frames; surface progress in the same banner as the
-  // socket-driven install progress, and treat an `error` frame as failure.
+  // socket-driven install progress; the promise owns terminal errors.
   const installAudio = (model) => {
-    let failed = false;
     return runAction(
       `install-${model.id}`,
       async () => {
@@ -278,15 +277,11 @@ export default function LocalLlmLibraryView() {
           (ev) => {
             if (ev?.type === 'stage') setProgressMsg(ev.stage || '');
             else if (ev?.type === 'progress') setProgressMsg(`${ev.file || 'downloading'} — ${Math.round((ev.progress || 0) * 100)}%`);
-            else if (ev?.type === 'error') { failed = true; toast.error(ev.message || 'Download failed'); }
           },
         );
-        // installAudioModel resolves even after an error frame (it only throws on
-        // a non-OK response) — re-throw so runAction skips the success toast.
-        if (failed) throw Object.assign(new Error('audio install failed'), { handled: true });
       },
       `${model.name} installed — available in the Music studio`,
-      { onError: (err) => { if (!err?.handled) toast.error(err?.message || 'Install failed'); }, clearConfirm: false },
+      { onError: (err) => toast.error(err?.message || 'Install failed'), clearConfirm: false },
     ).finally(() => setProgressMsg(''));
   };
   const remove = (modelId) => runAction(`delete-${modelId}`, () => deleteLocalLlmModel(selected, modelId), `${modelId} deleted`)

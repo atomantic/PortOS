@@ -1010,3 +1010,29 @@ describe('MusicGenPanel', () => {
     expect(screen.getByRole('status')).toHaveTextContent(/tens of minutes on a 24 GB GPU/i);
   });
 });
+
+// These consumers use the real transport: a fulfilled mock cannot detect EOF success.
+describe('Music installation terminal evidence', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+  it.each(['', 'data: {"type":"progress","progress":0.5}\n\n', 'data: {"type":"error","message":"Download failed"}\n\n'])(
+    'keeps custom retry input and reports one failure for %j', async (body) => {
+      vi.clearAllMocks();
+      const { installAudioModel } = await import('../../services/apiMusic.js');
+      api.installAudioModel.mockImplementation(installAudioModel);
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, body: new ReadableStream({ start(c) {
+        c.enqueue(new TextEncoder().encode(body)); c.close();
+      } }) }));
+      api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine()] });
+      api.getActiveProcessing.mockResolvedValue({ jobs: [] });
+      api.getInstances.mockResolvedValue({ peers: [] });
+      render(<MusicGenPanel prompt="ambient" lyrics="" />);
+      const field = await screen.findByPlaceholderText('org/model-repo');
+      fireEvent.change(field, { target: { value: 'example/model' } });
+      fireEvent.click(screen.getByRole('button', { name: /^Install$/i }));
+      await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+      expect(field).toHaveValue('example/model');
+      expect(toast.success).not.toHaveBeenCalled();
+      expect(api.listMusicEngines).toHaveBeenCalledTimes(1);
+    },
+  );
+});
