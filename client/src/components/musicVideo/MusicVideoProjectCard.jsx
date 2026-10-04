@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
-import { Film, Play, Music, Wand2, Sparkles, Copy, Trash2, ArrowUpRight } from 'lucide-react';
+import { Film, Play, Music, Wand2, Sparkles, Copy, Trash2, ArrowUpRight, ChevronLeft, ChevronRight } from 'lucide-react';
 import MediaImage from '../MediaImage.jsx';
 import ScenePreview from '../creative-director/ScenePreview.jsx';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { formatUsd } from '../../utils/formatters.js';
 import { selectMusicVideoPreview } from '../../lib/musicVideoPreview.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
+import { projectRunPill } from '../../lib/musicVideoProjectList.js';
 import { deriveStages, projectSpend, projectShotSummary, MUSIC_VIDEO_STAGES } from '../../lib/musicVideoStages.js';
 
 export const STATUS_COLORS = {
@@ -15,6 +16,12 @@ export const STATUS_COLORS = {
   rendering: 'bg-port-warning/30 text-port-warning',
   complete: 'bg-port-success/30 text-port-success',
   failed: 'bg-port-error/30 text-port-error',
+};
+
+const PILL_TONES = {
+  warn: 'bg-port-warning/30 text-port-warning',
+  ok: 'bg-port-success/30 text-port-success',
+  muted: 'bg-port-accent/30 text-port-accent',
 };
 
 export default function MusicVideoProjectCard({
@@ -27,6 +34,9 @@ export default function MusicVideoProjectCard({
   onConfirmDelete,
   onCancelDelete,
   cloning = false,
+  versionCount = 1,
+  versionIndex = 0,
+  onVersionStep,
 }) {
   const [playing, setPlaying] = useState(false);
   const preview = selectMusicVideoPreview(project);
@@ -50,6 +60,7 @@ export default function MusicVideoProjectCard({
   const currentStageObj = MUSIC_VIDEO_STAGES.find((s) => s.id === currentStageId);
   const stageLabel = currentStageObj?.label || currentStageId;
 
+  const pill = projectRunPill(project);
   const spend = projectSpend(project);
   const audioTitle = trackLabel || project.uploadedAudioFilename || null;
   const conceptText = project.concept?.style || project.concept?.prompt || null;
@@ -72,9 +83,34 @@ export default function MusicVideoProjectCard({
             {project.name}
           </button>
           <div className="flex items-center gap-1 shrink-0">
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-port-border text-port-text-muted font-mono">
-              v{project.version || 1}
-            </span>
+            {versionCount > 1 ? (
+              <span className="flex items-center gap-0.5 text-[10px] px-1 py-0.5 rounded bg-port-border text-port-text-muted font-mono" data-testid={`mv-version-switcher-${project.id}`}>
+                <button
+                  type="button"
+                  onClick={() => onVersionStep?.(1)}
+                  disabled={versionIndex >= versionCount - 1}
+                  aria-label="Older version"
+                  className="disabled:opacity-30"
+                ><ChevronLeft size={12} aria-hidden="true" /></button>
+                <span>v{project.version || 1} of {versionCount}</span>
+                <button
+                  type="button"
+                  onClick={() => onVersionStep?.(-1)}
+                  disabled={versionIndex <= 0}
+                  aria-label="Newer version"
+                  className="disabled:opacity-30"
+                ><ChevronRight size={12} aria-hidden="true" /></button>
+              </span>
+            ) : (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-port-border text-port-text-muted font-mono">
+                v{project.version || 1}
+              </span>
+            )}
+            {pill && (
+              <span data-testid={`mv-run-pill-${project.id}`} className={`text-[10px] font-medium px-2 py-0.5 rounded ${PILL_TONES[pill.tone]}`}>
+                {pill.label}
+              </span>
+            )}
             <span className={`text-[10px] font-medium px-2 py-0.5 rounded ${STATUS_COLORS[project.status] || 'bg-port-border'}`}>
               {project.status}
             </span>

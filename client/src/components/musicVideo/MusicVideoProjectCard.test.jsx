@@ -172,3 +172,22 @@ describe('MusicVideoProjectCard', () => {
     expect(screen.getByText('No render preview yet')).toBeInTheDocument();
   });
 });
+
+describe('MusicVideoProjectCard run pill and version switcher', () => {
+  it('shows the run pill and steps through versions', () => {
+    const onVersionStep = vi.fn();
+    render(
+      <MusicVideoProjectCard
+        project={{ ...BASE_PROJECT, autonomousRun: { status: 'awaiting-approval', awaiting: 'lyrics' } }}
+        versionCount={3}
+        versionIndex={0}
+        onVersionStep={onVersionStep}
+      />,
+    );
+    expect(screen.getByTestId('mv-run-pill-mv-card-1').textContent).toBe('Needs you');
+    expect(screen.getByText('v2 of 3')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('Older version'));
+    expect(onVersionStep).toHaveBeenCalledWith(1);
+    expect(screen.getByLabelText('Newer version').disabled).toBe(true);
+  });
+});
