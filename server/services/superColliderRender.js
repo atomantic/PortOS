@@ -192,6 +192,8 @@ export async function renderSuperColliderSource({
   if (signal?.aborted) stop.abort();
   const diagnostics = [];
   let quotaTimer = null;
+  let containerInvoked = false;
+  let containerSettled = false;
   try {
     // Exclusive: two jobs can never share a directory, and a stale one with
     // this id (an earlier process's scratch) is replaced rather than reused.
@@ -217,6 +219,7 @@ export async function renderSuperColliderSource({
 
     onPhase({ phase: 'starting', message: 'Starting the SuperCollider container', progress: 0.05 });
     const { input, output } = SUPERCOLLIDER_CONTAINER_PATHS;
+    containerInvoked = true;
     const run = await runSuperColliderContainer({
       docker,
       image: status.image.id,
@@ -245,6 +248,7 @@ export async function renderSuperColliderSource({
         }
       },
     });
+    containerSettled = run.cleanupComplete === true;
     clearInterval(quotaTimer);
     quotaTimer = null;
 
@@ -307,6 +311,12 @@ export async function renderSuperColliderSource({
   } finally {
     if (quotaTimer) clearInterval(quotaTimer);
     signal?.removeEventListener('abort', forwardAbort);
+    // A rejected runner or failed Docker removal cannot prove physical exit.
+    // Keep recovery ownership before the adapter emits its terminal event.
+    if (containerInvoked && !containerSettled) {
+      maintenance.markCurrentUnsettled();
+      maintenance.markResourceUnsettled('media', jobId);
+    }
     await rm(jobDir, { recursive: true, force: true })
       .catch((err) => {
         maintenance.markCurrentUnsettled();
@@ -324,29 +334,29 @@ export function presentSuperColliderPreview(preview) {
 
 /**
  * Media-queue entry point for `kind: 'supercollider'` jobs: renders, then
- * announces the outcome on the audio event bus the queue listens to. Throws
- * on failure (the queue turns that into failed, or canceled after a cancel).
+ * announces the outcome on the audio event bus after teardown. Also rejects
+ * on failure; the terminal event releases the queue's watchdog settlement wait.
  */
 export async function renderSuperCollider({ jobId, source, durationSec, seed }) {
   const job = { controller: new AbortController(), committing: false };
   active.set(jobId, job);
-  let preview;
-  try {
-    preview = await renderSuperColliderSource({
-      jobId,
-      source,
-      durationSec,
-      seed,
-      signal: job.controller.signal,
-      onActivity: () => audioGenEvents.emit('activity', { generationId: jobId }),
-      onPhase: ({ phase, message, progress }) => {
-        if (typeof progress === 'number') audioGenEvents.emit('progress', { generationId: jobId, progress, message, phase });
-        else audioGenEvents.emit('status', { generationId: jobId, message, phase });
-      },
-    });
-  } finally {
+  const preview = await renderSuperColliderSource({
+    jobId,
+    source,
+    durationSec,
+    seed,
+    signal: job.controller.signal,
+    onActivity: () => audioGenEvents.emit('activity', { generationId: jobId }),
+    onPhase: ({ phase, message, progress }) => {
+      if (typeof progress === 'number') audioGenEvents.emit('progress', { generationId: jobId, progress, message, phase });
+      else audioGenEvents.emit('status', { generationId: jobId, message, phase });
+    },
+  }).finally(() => {
     active.delete(jobId);
-  }
+  }).catch(err => {
+    audioGenEvents.emit('failed', { generationId: jobId, error: err.message, code: err.code });
+    throw err;
+  });
   const result = { generationId: jobId, ...presentSuperColliderPreview(preview) };
   audioGenEvents.emit('completed', result);
   return result;

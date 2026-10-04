@@ -3,7 +3,10 @@ import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
-const fixture = vi.hoisted(() => ({ admission: null, child: null, release: vi.fn(), save: vi.fn() }));
+const fixture = vi.hoisted(() => ({
+  admission: null, child: null, run: null, queueJob: null,
+  release: vi.fn(), save: vi.fn(), saveDataset: vi.fn(),
+}));
 vi.mock('../../lib/fileUtils.js', async importOriginal =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('training-maintenance-') }));
 vi.mock('../../lib/maintenanceAdmission.js', async importOriginal => ({
@@ -23,13 +26,13 @@ vi.mock('../../lib/heavyJobClaim.js', () => ({
   claimHeavyLocalJob: vi.fn(),
 }));
 vi.mock('./db.js', () => ({
-  getRun: async () => ({ id: 'example-run', jobId: 'example-job', params: { steps: 10 }, runtime: 'mflux' }),
+  getRun: async () => fixture.run,
   updateRun: (...args) => fixture.save(...args), getRunRequired: vi.fn(), listRuns: vi.fn(), deleteRun: vi.fn(),
 }));
 vi.mock('../settings.js', () => ({ getSettings: async () => ({ loraTraining: { stallWatchdog: false } }) }));
-vi.mock('../loraDatasets.js', () => ({ updateDataset: vi.fn() }));
+vi.mock('../loraDatasets.js', () => ({ updateDataset: (...args) => fixture.saveDataset(...args) }));
 vi.mock('../mediaJobQueue/index.js', () => ({
-  assertMediaQueueRoom: vi.fn(), enqueueJob: vi.fn(), getJob: vi.fn(), mediaJobEvents: new EventEmitter(),
+  assertMediaQueueRoom: vi.fn(), enqueueJob: vi.fn(), getJob: () => fixture.queueJob, mediaJobEvents: new EventEmitter(),
 }));
 vi.mock('./displayPower.js', () => ({ sleepDisplayForTraining: vi.fn(), wakeDisplay: vi.fn() }));
 
@@ -42,13 +45,82 @@ beforeEach(() => {
   fixture.child = new EventEmitter();
   Object.assign(fixture.child, { pid: 101, exitCode: null, signalCode: null,
     stdout: new EventEmitter(), stderr: new EventEmitter(), kill: vi.fn() });
+  fixture.run = { id: 'example-run', jobId: 'example-job', datasetId: 'example-dataset', params: { steps: 10 }, runtime: 'mflux' };
+  fixture.queueJob = {};
   fixture.release.mockReset().mockResolvedValue();
   fixture.save.mockReset().mockResolvedValue();
+  fixture.saveDataset.mockReset().mockResolvedValue();
 });
 afterEach(() => { vi.useRealTimers(); trainingEvents.removeAllListeners(); });
 afterAll(cleanupTempDataRoots);
 
 describe('training physical settlement under maintenance', () => {
+  it.each([
+    { terminal: 'canceled', code: 1, canceled: true, persistence: 'run' },
+    { terminal: 'no result', code: 0, canceled: false, persistence: 'run' },
+    { terminal: 'nonzero exit', code: 1, canceled: false, persistence: 'run' },
+    { terminal: 'dataset reset', code: 0, canceled: false, persistence: 'dataset' },
+  ])('retains a blocker when $terminal persistence fails after physical close', async ({ code, canceled, persistence }) => {
+    fixture.queueJob.cancelRequested = canceled;
+    const save = persistence === 'run' ? fixture.save : fixture.saveDataset;
+    save.mockRejectedValueOnce(new Error('Terminal storage unavailable'));
+    const permit = fixture.admission.admit('media', 'example-job');
+    let settlement;
+    const failed = vi.fn(() => { settlement = permit.finish(); });
+    trainingEvents.on('failed', failed);
+    await permit.run(() => runTraining({ jobId: 'example-job', runId: 'example-run', reattach: true }));
+    fixture.admission.begin({ reason: 'Drain trainer', owner: 'Operator' });
+    fixture.child.exitCode = code;
+    fixture.child.emit('close', code, null);
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+    await settlement;
+    expect(failed).toHaveBeenCalledWith(expect.objectContaining({ error: 'finalize failed: Terminal storage unavailable' }));
+    expect(fixture.admission.status()).toMatchObject({
+      state: 'draining', blockers: [expect.objectContaining({ resource: 'example-job', unsettled: true })],
+    });
+    if (persistence === 'run') expect(fixture.saveDataset).not.toHaveBeenCalled();
+    else expect(fixture.save).toHaveBeenCalledWith('example-run', expect.objectContaining({ status: 'failed' }));
+    expect(cancel('example-job')).toBe(false);
+  });
+
+  it('waits for the dataset terminal write before releasing maintenance', async () => {
+    const save = Promise.withResolvers();
+    fixture.saveDataset.mockReturnValueOnce(save.promise);
+    const permit = fixture.admission.admit('media', 'example-job');
+    let settlement;
+    const failed = vi.fn(() => { settlement = permit.finish(); });
+    trainingEvents.on('failed', failed);
+    await permit.run(() => runTraining({ jobId: 'example-job', runId: 'example-run', reattach: true }));
+    fixture.admission.begin({ reason: 'Drain trainer', owner: 'Operator' });
+    fixture.child.exitCode = 0;
+    fixture.child.emit('close', 0, null);
+    try {
+      await vi.waitFor(() => expect(fixture.saveDataset).toHaveBeenCalledTimes(1));
+      expect(failed).not.toHaveBeenCalled();
+      expect(fixture.admission.status().state).toBe('draining');
+    } finally {
+      save.resolve();
+      await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+      await settlement;
+    }
+    expect(fixture.admission.status().state).toBe('ready');
+  });
+
+  it('retains a blocker and emits failure when a pre-spawn dataset reset cannot persist', async () => {
+    fixture.child = null;
+    fixture.saveDataset.mockRejectedValueOnce(new Error('Dataset storage unavailable'));
+    const permit = fixture.admission.admit('media', 'example-job');
+    const failed = vi.fn();
+    trainingEvents.on('failed', failed);
+    fixture.admission.begin({ reason: 'Drain trainer', owner: 'Operator' });
+    await permit.run(() => runTraining({ jobId: 'example-job', runId: 'example-run', reattach: true }));
+    await permit.finish();
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(fixture.admission.status()).toMatchObject({
+      state: 'draining', blockers: [expect.objectContaining({ resource: 'example-job', unsettled: true })],
+    });
+  });
+
   it.each([false, true])('waits for physical close and claim cleanup after a live error (cleanup fails: %s)', async cleanupFails => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const cleanup = Promise.withResolvers();

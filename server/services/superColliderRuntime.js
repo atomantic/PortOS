@@ -189,7 +189,8 @@ export async function runSuperColliderContainer({
   const args = buildSuperColliderRunArgs({ image, containerName, inputDir, outputDir, script, scriptArgs, user });
   const result = await docker.stream(args, onLine, { timeoutMs, isCancelled: () => Boolean(signal?.aborted) });
   const removal = await docker.capture(['rm', '--force', containerName], { timeoutMs: DOCKER_RM_TIMEOUT_MS });
-  if (!removal.success && !/no such container/i.test(`${removal.stderr}`)) {
+  const cleanupComplete = removal.success || /no such container/i.test(`${removal.stderr}`);
+  if (!cleanupComplete) {
     console.error(`❌ SuperCollider container ${containerName} cleanup failed: ${clipDiagnostic(spawnFailureDetail(removal, 'docker rm failed'))}`);
   }
   const error = result.success ? null : clipDiagnostic(result.error);
@@ -199,6 +200,7 @@ export async function runSuperColliderContainer({
     timedOut: Boolean(error?.startsWith('timed out')),
     cancelled: error === 'cancelled',
     containerName,
+    cleanupComplete,
   };
 }
 

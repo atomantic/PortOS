@@ -7,10 +7,24 @@ import {
   SUPERCOLLIDER_RENDER_WRAPPER_SOURCE,
 } from '../lib/superColliderRuntime.js';
 import { setupSuperColliderRuntime } from './superColliderRuntime.js';
-import { readSuperColliderPreview, renderSuperColliderSource } from './superColliderRender.js';
+import { cancel, readSuperColliderPreview, renderSuperCollider, renderSuperColliderSource } from './superColliderRender.js';
+import { audioGenEvents } from './audioGen/events.js';
 import { createMaintenanceAdmission } from '../lib/maintenanceAdmission.js';
 
-const fixture = vi.hoisted(() => ({ admission: null, failedCleanupPath: null }));
+const fixture = vi.hoisted(() => ({ admission: null, failedCleanupPath: null, beforeRemove: null, docker: null, dataDir: null }));
+vi.mock('../lib/paths.js', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, PATHS: new Proxy(actual.PATHS, {
+    get: (target, property) => property === 'data' ? fixture.dataDir : target[property],
+  }) };
+});
+vi.mock('./superColliderRuntime.js', async importOriginal => ({
+  ...await importOriginal(),
+  resolveDockerCli: async () => {
+    if (!fixture.docker) throw new Error('Unexpected real Docker discovery');
+    return fixture.docker;
+  },
+}));
 vi.mock('../lib/maintenanceAdmission.js', async importOriginal => ({
   ...await importOriginal(),
   maintenance: new Proxy({}, { get: (_target, property) => fixture.admission[property] }),
@@ -18,6 +32,7 @@ vi.mock('../lib/maintenanceAdmission.js', async importOriginal => ({
 vi.mock('fs/promises', async importOriginal => {
   const actual = await importOriginal();
   return { ...actual, rm: async (path, options) => {
+    await fixture.beforeRemove?.(path);
     if (path === fixture.failedCleanupPath) throw Object.assign(new Error('Cleanup denied'), { code: 'EACCES' });
     return actual.rm(path, options);
   } };
@@ -106,6 +121,9 @@ describe('contained SuperCollider renders', () => {
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'portos-sc-render-'));
+    fixture.dataDir = dataDir;
+    fixture.docker = null;
+    fixture.beforeRemove = null;
     fixture.admission = createMaintenanceAdmission(dataDir);
     fixture.failedCleanupPath = null;
   });
@@ -204,6 +222,75 @@ describe('contained SuperCollider renders', () => {
     expect(docker.calls.removed).toContain(docker.calls.runs[0].name);
     expect(await readSuperColliderPreview('job-cancel', { dataDir })).toBeNull();
     expect(leftoverScratch()).toEqual([]);
+  });
+
+  it.each(['complete', 'failed', 'rejected'])('emits cancellation settlement after awaited teardown (container removal: %s)', async removalOutcome => {
+    const jobId = 'job-queue-cancel';
+    const containerCleanup = Promise.withResolvers();
+    const scratchCleanup = Promise.withResolvers();
+    const removalStarted = Promise.withResolvers();
+    const scratchStarted = Promise.withResolvers();
+    fixture.docker = await ready(fakeDocker({ render: async run => {
+      // Only delay terminal scratch cleanup, after the initial directory reset.
+      fixture.beforeRemove = async path => {
+        if (path !== join(jobsDir(), jobId)) return;
+        scratchStarted.resolve();
+        await scratchCleanup.promise;
+      };
+      await waitUntil(run.isCancelled);
+      return { success: false, error: 'cancelled' };
+    } }));
+    const capture = fixture.docker.capture;
+    fixture.docker.capture = async (args, ...rest) => {
+      if (args[0] === 'rm' && args[2] === fixture.docker.calls.runs[0]?.name) {
+        removalStarted.resolve();
+        await containerCleanup.promise;
+        if (removalOutcome === 'failed') return { success: false, stderr: 'Container removal unavailable' };
+        if (removalOutcome === 'rejected') throw new Error('Container removal unavailable');
+      }
+      return capture(args, ...rest);
+    };
+    const permit = fixture.admission.admit('media', jobId);
+    let settlement;
+    let cancelAfterTerminal;
+    const failed = vi.fn(() => {
+      cancelAfterTerminal = cancel(jobId);
+      settlement = permit.finish();
+    });
+    audioGenEvents.on('failed', failed);
+    const pending = permit.run(() => renderSuperCollider({ jobId, source: STOCK_SOURCE, durationSec: 4, seed: 42 }));
+    // Attach rejection handling immediately while teardown is deliberately held.
+    const rejected = expect(pending).rejects.toMatchObject(removalOutcome === 'rejected'
+      ? { message: 'Container removal unavailable' } : { code: 'SUPERCOLLIDER_CANCELED' });
+    try {
+      await waitUntil(() => fixture.docker.calls.runs.length === 1);
+      fixture.admission.begin({ reason: 'Drain canceled render', owner: 'Operator' });
+      expect(cancel(jobId)).toBe(true);
+      await removalStarted.promise;
+      expect(failed).not.toHaveBeenCalled();
+      expect(fixture.admission.status().state).toBe('draining');
+      containerCleanup.resolve();
+      await scratchStarted.promise;
+      expect(failed).not.toHaveBeenCalled();
+      expect(leftoverScratch()).toEqual([jobId]);
+      expect(fixture.admission.status().state).toBe('draining');
+      scratchCleanup.resolve();
+      await rejected;
+      expect(failed).toHaveBeenCalledTimes(1);
+      expect(failed).toHaveBeenCalledWith(expect.objectContaining({ generationId: jobId }));
+      await settlement;
+      expect(cancelAfterTerminal).toBe(false);
+      expect(leftoverScratch()).toEqual([]);
+      expect(fixture.admission.status().state).toBe(removalOutcome === 'complete' ? 'ready' : 'draining');
+      if (removalOutcome !== 'complete') expect(fixture.admission.status().blockers[0]).toMatchObject({ resource: jobId, unsettled: true });
+    } finally {
+      cancel(jobId);
+      containerCleanup.resolve();
+      scratchCleanup.resolve();
+      await pending.catch(() => {});
+      audioGenEvents.off('failed', failed);
+      await permit.finish();
+    }
   });
 
   it('stops a render that floods its output directory', async () => {

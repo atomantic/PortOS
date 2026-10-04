@@ -405,7 +405,7 @@ const flipDatasetAfterRun = (run, { trained, loraFilename = null }) => {
         ...(trained ? { loraFilename, completedAt: new Date().toISOString() } : {}),
       },
     };
-  }).catch((err) => console.error(`❌ dataset post-run stamp failed: ${err?.message}`));
+  });
 };
 
 // When a trained LoRA artifact is deleted (DELETE /runs/:id?deleteLora=true),
@@ -472,7 +472,7 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
     await runsDb.updateRun(runId, {
       status: 'failed', error: message, completedAt: new Date().toISOString(),
     }).catch(retainOwnership);
-    await flipDatasetAfterRun(run, { trained: false });
+    await flipDatasetAfterRun(run, { trained: false }).catch(retainOwnership);
     return fail(message);
   };
 
@@ -1014,8 +1014,7 @@ async function finalizeTraining({ jobId, runId, code, signal, state, stallKilled
   if (canceled) {
     // Queue's cancelRequested flips the failed event into a clean cancel;
     // record keeps the checkpoint lineage for a future resume.
-    await runsDb.updateRun(runId, { status: 'canceled', completedAt: new Date().toISOString(), error: 'Canceled' })
-      .catch(() => {});
+    await runsDb.updateRun(runId, { status: 'canceled', completedAt: new Date().toISOString(), error: 'Canceled' });
     await flipDatasetAfterRun(run, { trained: false });
     trainingEvents.emit('failed', { generationId: jobId, error: 'Canceled' });
     return;
@@ -1031,7 +1030,7 @@ async function finalizeTraining({ jobId, runId, code, signal, state, stallKilled
     await runsDb.updateRun(runId, {
       status: 'failed', completedAt: new Date().toISOString(),
       error: message, errorCode: state.userError?.kind || 'NO_RESULT',
-    }).catch(() => {});
+    });
     await flipDatasetAfterRun(run, { trained: false });
     console.error(`❌ training [${shortId(jobId)}] no-result: ${message}`);
     trainingEvents.emit('failed', { generationId: jobId, error: message });
@@ -1045,7 +1044,7 @@ async function finalizeTraining({ jobId, runId, code, signal, state, stallKilled
     status: 'failed', completedAt: new Date().toISOString(), error: message, errorCode: failCode,
     // Gated-repo deep-link target for the UI banner (HF_AUTH only); null otherwise.
     errorRepo: failRepo,
-  }).catch(() => {});
+  });
   await flipDatasetAfterRun(run, { trained: false });
   console.error(`❌ training [${shortId(jobId)}] ${failCode}: ${message}`);
   trainingEvents.emit('failed', { generationId: jobId, error: message, code: failCode, repo: failRepo });
