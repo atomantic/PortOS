@@ -2666,3 +2666,85 @@ export const jiraTicketKeySchema = z.string().max(64).regex(/^([A-Za-z][A-Za-z0-
 // variables.json key, so they must be a single safe path segment (#9152).
 export const promptStageNameSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]*$/, 'invalid stage name').max(80);
 export const promptVariableKeySchema = z.string().regex(/^[A-Za-z0-9_-]+$/, 'invalid variable key').max(80);
+
+// =============================================================================
+// ROUTE BODY SCHEMAS (#9950) — handlers that used to read `req.body` by hand.
+// `routeValidationConventions.test.js` fails any body-bearing POST/PUT/PATCH
+// handler that skips `validateRequest`. A bodyless POST (a bare "run now"
+// button) still parses an optional-field object: pass `req.body ?? {}`.
+// =============================================================================
+
+const nonEmptyString = z.string().min(1);
+const optionalString = z.string().optional();
+const nullishString = z.string().nullish();
+
+// Project detection (routes/detect.js)
+export const detectRepoBodySchema = z.object({ path: nonEmptyString });
+export const detectPortBodySchema = z.object({ port: z.coerce.number().int().min(1).max(65535) });
+export const detectPm2BodySchema = z.object({ name: nonEmptyString });
+export const detectAiBodySchema = z.object({ path: nonEmptyString, providerId: nullishString });
+
+// Messages (routes/messages.js)
+export const MESSAGE_TOKEN_PROVIDERS = ['outlook', 'teams'];
+export const messageSyncBodySchema = z.object({ mode: z.enum(['unread', 'full']).optional() });
+export const messageFetchFullBodySchema = z.object({ force: z.boolean().default(false) });
+export const messageActionBodySchema = z.object({ action: z.enum(['archive', 'delete']) });
+export const messageTokenProviderBodySchema = z.object({ provider: z.enum(MESSAGE_TOKEN_PROVIDERS).optional() });
+
+// CoS agents / tasks / schedule
+export const cosAgentFeedbackBodySchema = z.object({
+  rating: z.enum(['positive', 'negative', 'neutral']),
+  comment: nullishString,
+});
+export const cosAgentBtwBodySchema = z.object({ message: z.string().trim().min(1).max(5000) });
+export const cosTaskReorderBodySchema = z.object({ taskIds: z.array(nonEmptyString) });
+export const cosScheduleTargetBodySchema = z.object({ taskType: nonEmptyString, appId: nullishString });
+
+// Per-app task-type overrides (routes/apps/taskTypes.js)
+export const appTaskTypeToggleBodySchema = z.object({ enabled: z.boolean() });
+export const appTaskTypeOverrideBodySchema = z.object({
+  enabled: z.boolean().optional(),
+  interval: nullishString,
+  intervalMs: z.number().positive().finite().nullish(),
+  providerId: nullishString,
+  model: nullishString,
+  taskMetadata: z.record(z.string(), z.unknown()).nullish(),
+}).refine((body) => Object.values(body).some((value) => value !== undefined), {
+  message: 'enabled (boolean), interval (string|null), intervalMs (number|null), providerId (string|null), model (string|null), or taskMetadata (object|null) required',
+});
+
+// Brain journal / inbox
+export const brainInboxRetryBodySchema = z.object({ providerOverride: nullishString, modelOverride: nullishString });
+export const brainJournalAppendBodySchema = z.object({
+  text: z.string().refine((text) => text.trim().length > 0, 'text is required'),
+  source: nullishString,
+});
+export const brainJournalReplaceBodySchema = z.object({ content: z.string(), ifMatchUpdatedAt: nullishString });
+
+// Prompts (routes/prompts.js)
+export const promptVariableUpdateBodySchema = z.object({ name: optionalString, category: optionalString, content: optionalString });
+export const promptJobSkillBodySchema = z.object({ content: nonEmptyString });
+export const promptPreviewBodySchema = z.object({ testData: z.record(z.string(), z.unknown()).default({}) });
+
+// Smaller single-purpose bodies
+export const calendarAutoConfigureBodySchema = z.object({ email: optionalString });
+export const commandExecuteBodySchema = z.object({ command: nonEmptyString, workspacePath: nullishString });
+export const dataArchiveBodySchema = z.object({
+  daysToKeep: z.preprocess((value) => (value == null ? undefined : value), z.coerce.number().finite().min(0).optional()),
+});
+export const imageVisibilityBodySchema = z.object({ hidden: z.boolean().default(false) });
+export const moltworldQueueFailBodySchema = z.object({ error: nullishString });
+export const referenceRepoReviewedBodySchema = z.object({ sha: z.string().trim().default('') });
+export const scaffoldTemplateCreateBodySchema = z.object({ templateId: nonEmptyString, name: nonEmptyString, targetPath: nonEmptyString });
+export const screenshotUploadBodySchema = z.object({ data: nonEmptyString, filename: nullishString });
+export const standardizeTargetBodySchema = z.object({ repoPath: nullishString, appId: nullishString, providerId: nullishString });
+export const systemHealthThresholdsBodySchema = z.object({
+  memoryWarn: z.coerce.number().finite(),
+  memoryCritical: z.coerce.number().finite(),
+  diskWarn: z.coerce.number().finite(),
+  diskCritical: z.coerce.number().finite(),
+});
+export const voicePiperFetchBodySchema = z.object({ voice: nonEmptyString });
+export const writersRoomSceneImageBodySchema = z.object({
+  sceneId: nullishString, filename: nullishString, jobId: nullishString, prompt: nullishString,
+});

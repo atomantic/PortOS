@@ -14,7 +14,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import {
-  validateRequest, imageCancelBodySchema, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
+  validateRequest, imageCancelBodySchema, imageVisibilityBodySchema, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
 } from '../lib/validation.js';
 import { optionalUploadFields, optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
@@ -929,7 +929,7 @@ router.get('/:filename/variants', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:filename/visibility', asyncHandler(async (req, res) => {
-  res.json(await local.setImageHidden(req.params.filename, !!req.body?.hidden));
+  res.json(await local.setImageHidden(req.params.filename, validateRequest(imageVisibilityBodySchema, req.body ?? {}).hidden));
 }));
 
 router.patch('/:filename/prompt', asyncHandler(async (req, res) => {

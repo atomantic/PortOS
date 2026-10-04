@@ -29,6 +29,7 @@ import {
   writersRoomObjectCreateSchema,
   writersRoomObjectUpdateSchema,
   writersRoomWorksQuerySchema,
+  writersRoomSceneImageBodySchema,
 } from '../lib/validation.js';
 import {
   listFolders, createFolder, deleteFolder,
@@ -393,7 +394,7 @@ router.delete('/works/:id/objects/:objectId', asyncHandler(async (req, res) => {
 // `writersRoomSceneImageHook` listens to (#1363); the async local/Codex lanes
 // now file durably via that hook instead.
 router.post('/works/:id/analysis/:analysisId/scene-image', asyncHandler(async (req, res) => {
-  const { sceneId, filename, jobId, prompt } = req.body || {};
+  const { sceneId, filename, jobId, prompt } = validateRequest(writersRoomSceneImageBodySchema, req.body ?? {});
   const { analysis, collectionId } = await persistSceneImage(
     req.params.id, req.params.analysisId, { sceneId, filename, jobId, prompt },
   );

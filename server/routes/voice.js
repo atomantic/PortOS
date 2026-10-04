@@ -10,7 +10,7 @@ import { Router } from 'express';
 import { TTS_ENGINE_IDS } from '../lib/voiceEngines.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest, voicePiperFetchBodySchema } from '../lib/validation.js';
 import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
 import { getVoiceConfig, updateVoiceConfig } from '../services/voice/config.js';
 import { checkAll, invalidateHealthCache } from '../services/voice/health.js';
@@ -474,7 +474,7 @@ router.post('/qwen3/download-model', asyncHandler(async (req, res) => {
 
 // POST /api/voice/piper/fetch
 router.post('/piper/fetch', asyncHandler(async (req, res) => {
-  const voice = (req.body?.voice || '').toString();
+  const { voice } = validateRequest(voicePiperFetchBodySchema, req.body ?? {});
   if (!findPiperVoice(voice)) {
     throw new ServerError(`unknown piper voice: ${voice}`, { status: 400 });
   }
@@ -484,14 +484,15 @@ router.post('/piper/fetch', asyncHandler(async (req, res) => {
 }));
 
 // POST /api/voice/test
+const voiceTestBodySchema = z.object({
+  text: z.string().trim().min(1).max(MAX_VOICE_TEXT_LEN),
+  voice: z.string().trim().default(''),
+  engine: z.string().trim().default(''),
+});
 router.post('/test', asyncHandler(async (req, res) => {
-  const text = (req.body?.text || '').toString().trim();
-  if (!text) throw new ServerError('text is required', { status: 400 });
-  if (text.length > MAX_VOICE_TEXT_LEN) {
-    throw new ServerError(`text too long (${text.length} > ${MAX_VOICE_TEXT_LEN} chars)`, { status: 400 });
-  }
-  const voice = (req.body?.voice || '').toString().trim() || undefined;
-  const engine = validEngine((req.body?.engine || '').toString().trim());
+  const { text, voice: requestedVoice, engine: requestedEngine } = validateRequest(voiceTestBodySchema, req.body ?? {});
+  const voice = requestedVoice || undefined;
+  const engine = validEngine(requestedEngine);
   const { wav, latencyMs } = await synthesize(text, { voice, engine });
   res.setHeader('Content-Type', 'audio/wav');
   res.setHeader('X-TTS-Latency-Ms', String(latencyMs));

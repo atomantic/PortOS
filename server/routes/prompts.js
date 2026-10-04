@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { promptStageNameSchema, promptVariableKeySchema, stageConfigUpdateSchema, validateRequest } from '../lib/validation.js';
+import { promptStageNameSchema, promptVariableKeySchema, stageConfigUpdateSchema, validateRequest, promptVariableUpdateBodySchema, promptJobSkillBodySchema, promptPreviewBodySchema } from '../lib/validation.js';
 import {
   SYSTEM_STAGE_KEYS,
   isProtectedStage,
@@ -75,7 +75,7 @@ export function createPortOSPromptsRoutes(aiToolkit) {
 
   // PUT /api/prompts/variables/:key - Update a variable
   router.put('/variables/:key', asyncHandler(async (req, res) => {
-    const { name, category, content } = req.body;
+    const { name, category, content } = validateRequest(promptVariableUpdateBodySchema, req.body);
     await promptsService.updateVariable(req.params.key, { name, category, content });
     res.json({ success: true });
   }));
@@ -117,10 +117,7 @@ export function createPortOSPromptsRoutes(aiToolkit) {
 
   // PUT /api/prompts/skills/jobs/:name - Update a job skill template
   router.put('/skills/jobs/:name', asyncHandler(async (req, res) => {
-    const { content } = req.body;
-    if (!content) {
-      throw new ServerError('content is required', { status: 400, code: 'VALIDATION_ERROR' });
-    }
+    const { content } = validateRequest(promptJobSkillBodySchema, req.body);
     await saveJobSkillTemplate(req.params.name, content);
     res.json({ success: true });
   }));
@@ -232,7 +229,7 @@ export function createPortOSPromptsRoutes(aiToolkit) {
 
   // POST /api/prompts/:stage/preview - Preview compiled prompt
   router.post('/:stage/preview', asyncHandler(async (req, res) => {
-    const { testData = {} } = req.body;
+    const { testData } = validateRequest(promptPreviewBodySchema, req.body ?? {});
     const preview = await promptsService.previewPrompt(req.params.stage, testData);
     res.json({ preview });
   }));

@@ -467,7 +467,7 @@ describe('Voice Routes', () => {
     it('requires text', async () => {
       const res = await request(buildApp()).post('/api/voice/test').send({});
       expect(res.status).toBe(400);
-      expect(res.body.error).toMatch(/text is required/);
+      expect(res.body.code).toBe('VALIDATION_ERROR');
     });
 
     it('returns WAV bytes on success', async () => {

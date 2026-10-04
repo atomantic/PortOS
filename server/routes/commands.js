@@ -6,26 +6,20 @@ import * as commands from '../services/commands.js';
 import { requireHostControl } from '../services/authGate.js';
 import * as pm2Service from '../services/pm2.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { validateRequest, commandExecuteBodySchema } from '../lib/validation.js';
 import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
 
 const router = Router();
 
 // POST /api/commands/execute - Execute a command
 router.post('/execute', requireHostControl, asyncHandler(async (req, res) => {
-  const { command, workspacePath } = req.body;
-
-  if (!command) {
-    throw new ServerError('Command is required', { status: 400, code: 'MISSING_COMMAND' });
-  }
+  const { command, workspacePath } = validateRequest(commandExecuteBodySchema, req.body);
 
   // Validate workspacePath if provided: must exist, be a directory, and — after
   // symlinks are followed — resolve within an allowed root. Using realpath here
   // prevents a symlink like /tmp/escape -> /etc from tricking the containment
   // check (which only sees /tmp/escape).
   if (workspacePath !== undefined && workspacePath !== null && workspacePath !== '') {
-    if (typeof workspacePath !== 'string') {
-      throw new ServerError('workspacePath must be a string', { status: 400, code: 'INVALID_PATH' });
-    }
     const resolvedPath = resolve(workspacePath);
     if (!existsSync(resolvedPath)) {
       throw new ServerError('workspacePath does not exist', { status: 400, code: 'INVALID_PATH' });

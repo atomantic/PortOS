@@ -290,6 +290,7 @@ export const ALWAYS_RUN_TESTS = [
   'server/services/orphanedPartialGc.test.js',
   'server/services/providers.shape.test.js',
   'server/services/taskPromptDefaults.test.js',
+  'server/routeValidationConventions.test.js',
   'server/timerCallbackConventions.test.js',
 ];
 

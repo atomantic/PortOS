@@ -35,6 +35,11 @@ vi.mock('../lib/validation.js', () => ({
         : { success: false };
     }
   },
+  cosScheduleTargetBodySchema: {
+    safeParse: (body) => (typeof body?.taskType === 'string' && body.taskType
+      ? { success: true, data: { taskType: body.taskType, appId: body.appId } }
+      : { success: false }),
+  },
   validateRequest: vi.fn((schema, data) => {
     const result = schema.safeParse(data);
     if (!result.success) {

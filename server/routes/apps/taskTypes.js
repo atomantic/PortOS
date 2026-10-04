@@ -23,7 +23,7 @@ import { Router } from 'express';
 import { logCosScheduleUpdate } from '../../services/userActionScheduleLog.js';
 import * as appsService from '../../services/apps.js';
 import { PORTOS_APP_ID } from '../../services/apps.js';
-import { sanitizeTaskMetadata, ISSUE_AUTHOR_FILTERS, validateRequest, qualitySchedulePlanSchema } from '../../lib/validation.js';
+import { sanitizeTaskMetadata, ISSUE_AUTHOR_FILTERS, validateRequest, qualitySchedulePlanSchema, appTaskTypeToggleBodySchema, appTaskTypeOverrideBodySchema } from '../../lib/validation.js';
 import { buildQualitySchedulePlan, applyQualitySchedulePlan } from '../../services/appQualitySchedule.js';
 import { listWorkItems } from '../../services/workItems.js';
 import { resolveClaimWorkMetadata, resolveClaimAuthorFilter, resolveAppClaimReviewers } from '../../services/cosTaskGenerator.js';
@@ -45,10 +45,7 @@ const OUTCOMES_DASHBOARD_LIMIT = 25;
 
 // PUT /api/apps/bulk-task-type/:taskType - Enable/disable a task type for all active apps
 router.put('/bulk-task-type/:taskType', asyncHandler(async (req, res) => {
-  const { enabled } = req.body;
-  if (typeof enabled !== 'boolean') {
-    throw new ServerError('enabled (boolean) is required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { enabled } = validateRequest(appTaskTypeToggleBodySchema, req.body);
   if (!SELF_IMPROVEMENT_TASK_TYPES.includes(req.params.taskType)) {
     throw new ServerError(`Unknown task type '${req.params.taskType}'`, { status: 400, code: 'INVALID_TASK_TYPE' });
   }
@@ -262,10 +259,7 @@ router.post('/:id/quality-schedule/apply', loadApp, asyncHandler(async (req, res
 
 // PUT /api/apps/:id/task-types/all - Toggle all task types for an app
 router.put('/:id/task-types/all', loadApp, asyncHandler(async (req, res) => {
-  const { enabled } = req.body;
-  if (typeof enabled !== 'boolean') {
-    throw new ServerError('enabled must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { enabled } = validateRequest(appTaskTypeToggleBodySchema, req.body);
   const result = await appsService.toggleAllAppTaskTypes(req.params.id, enabled);
   if (!result) {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
@@ -282,44 +276,23 @@ router.put('/:id/task-types/all', loadApp, asyncHandler(async (req, res) => {
 
 // PUT /api/apps/:id/task-types/:taskType - Update a task type override for an app
 router.put('/:id/task-types/:taskType', asyncHandler(async (req, res) => {
-  const { enabled, intervalMs, providerId, model, taskMetadata } = req.body;
-  let { interval } = req.body;
   if (!SELF_IMPROVEMENT_TASK_TYPES.includes(req.params.taskType)) {
     throw new ServerError(`Unknown task type '${req.params.taskType}'`, { status: 400, code: 'INVALID_TASK_TYPE' });
   }
-  if (enabled !== undefined && typeof enabled !== 'boolean') {
-    throw new ServerError('enabled must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  if (typeof enabled !== 'boolean' && interval === undefined && intervalMs === undefined &&
-      providerId === undefined && model === undefined && taskMetadata === undefined) {
-    throw new ServerError('enabled (boolean), interval (string|null), intervalMs (number|null), providerId (string|null), model (string|null), or taskMetadata (object|null) required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-
   // Per-app scheduling fields for handler-backed tasks (layered-intelligence).
-  // `null`/'' clears back to inherit; a numeric intervalMs must be a positive
+  // `null` clears back to inherit; a numeric intervalMs must be a positive
   // finite number (a sub-daily cadence the string interval enum can't express).
-  if (intervalMs !== undefined && intervalMs !== null) {
-    if (typeof intervalMs !== 'number' || !Number.isFinite(intervalMs) || intervalMs <= 0) {
-      throw new ServerError('intervalMs must be a positive number or null', { status: 400, code: 'VALIDATION_ERROR' });
-    }
-  }
-  if (providerId !== undefined && providerId !== null && typeof providerId !== 'string') {
-    throw new ServerError('providerId must be a string or null', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  if (model !== undefined && model !== null && typeof model !== 'string') {
-    throw new ServerError('model must be a string or null', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { enabled, intervalMs, providerId, model, taskMetadata, interval: requestedInterval } =
+    validateRequest(appTaskTypeOverrideBodySchema, req.body);
+  let interval = requestedInterval;
 
-  // Validate and sanitize taskMetadata to allowed agent-option keys only
+  // Sanitize taskMetadata to allowed agent-option keys only
   let sanitizedTaskMetadata;
   if (taskMetadata === undefined) {
     sanitizedTaskMetadata = undefined;
   } else if (taskMetadata === null) {
     sanitizedTaskMetadata = null;
   } else {
-    if (typeof taskMetadata !== 'object' || Array.isArray(taskMetadata)) {
-      throw new ServerError('taskMetadata must be an object or null', { status: 400, code: 'VALIDATION_ERROR' });
-    }
     sanitizedTaskMetadata = sanitizeTaskMetadata(taskMetadata);
     if (sanitizedTaskMetadata === null) {
       throw new ServerError('Invalid taskMetadata: unrecognized keys or values', { status: 400, code: 'VALIDATION_ERROR' });
@@ -331,9 +304,6 @@ router.put('/:id/task-types/:taskType', asyncHandler(async (req, res) => {
   // custom) from an older client is rewritten onto that model rather than
   // rejected, so an install upgrading mid-session keeps working.
   if (interval !== undefined) {
-    if (interval !== null && typeof interval !== 'string') {
-      throw new ServerError('interval must be a string or null', { status: 400, code: 'VALIDATION_ERROR' });
-    }
     if (typeof interval === 'string') {
       if (isCronExpression(interval)) {
         // Syntax + field ranges only. The walker returns null (never throws) for

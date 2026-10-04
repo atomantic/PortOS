@@ -6,7 +6,7 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, parsePagination } from '../lib/validation.js';
+import { validateRequest, parsePagination, brainJournalAppendBodySchema, brainJournalReplaceBodySchema } from '../lib/validation.js';
 import { dailyLogSettingsSchema, activityDigestSettingsSchema } from '../lib/brainValidation.js';
 import * as journal from '../services/brainJournal.js';
 import * as activityDigest from '../services/activityDigest.js';
@@ -101,13 +101,10 @@ router.get('/daily-log/:date', asyncHandler(async (req, res) => {
  */
 router.post('/daily-log/:date/append', asyncHandler(async (req, res) => {
   const date = await resolveJournalDate(req.params.date);
-  const { text, source } = req.body || {};
-  // Trim-check here too so a whitespace-only payload doesn't no-op all the
+  // The schema trim-checks so a whitespace-only payload doesn't no-op all the
   // way through appendJournal() and still return a 200 — clients would read
   // that as a successful append.
-  if (typeof text !== 'string' || text.trim().length === 0) {
-    throw new ServerError('text is required', { status: 400, code: 'BAD_REQUEST' });
-  }
+  const { text, source } = validateRequest(brainJournalAppendBodySchema, req.body ?? {});
   const entry = await journal.appendJournal(date, text, { source });
   res.json({ date, entry });
 }));
@@ -136,11 +133,8 @@ router.post('/daily-log/:date/draft', asyncHandler(async (req, res) => {
  */
 router.put('/daily-log/:date', asyncHandler(async (req, res) => {
   const date = await resolveJournalDate(req.params.date);
-  const { content, ifMatchUpdatedAt } = req.body || {};
-  if (typeof content !== 'string') {
-    throw new ServerError('content is required', { status: 400, code: 'BAD_REQUEST' });
-  }
-  const match = typeof ifMatchUpdatedAt === 'string' ? ifMatchUpdatedAt : null;
+  const { content, ifMatchUpdatedAt } = validateRequest(brainJournalReplaceBodySchema, req.body ?? {});
+  const match = ifMatchUpdatedAt ?? null;
   const entry = await journal.setJournalContent(date, content, { ifMatchUpdatedAt: match });
   res.json({ date, entry });
 }));

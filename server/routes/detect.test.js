@@ -88,6 +88,16 @@ describe('POST /api/detect/pm2', () => {
     vi.clearAllMocks();
   });
 
+  it('rejects a wrong-typed process name before reading PM2', async () => {
+    const response = await request(app)
+      .post('/api/detect/pm2')
+      .send({ name: { $ne: 'x' } });
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+    expect(listProcessesStrict).not.toHaveBeenCalled();
+  });
+
   it('reports exists:false only for a successful read with no matching process', async () => {
     listProcessesStrict.mockResolvedValue([{ name: 'other-app', status: 'online', pid: 123, pm_id: 0 }]);
 
