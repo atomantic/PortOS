@@ -37,7 +37,7 @@ function timedDataLabels(project) {
  */
 export default function TrackPanel({
   project, tracks, trackName, audioFilename, youtube,
-  renderBound, midiBound, onChangeTrack, onProjectUpdated, separation = null,
+  renderBound, midiBound, onChangeTrack,
 }) {
   // A pending change that would destroy timed data waits for explicit confirm.
   const [pending, setPending] = useState(null);
@@ -59,7 +59,6 @@ export default function TrackPanel({
   const audioUrl = audioFilename ? trackAudioUrl(audioFilename) : null;
   // Where the linked track's audio came from (e.g. a Suno export, #8967).
   const sourceLabel = trackSourceLabel(tracks.find((t) => t.id === project.trackId));
-  const midiFile = project.midiTranscription?.filename;
   const optionLabels = trackOptionLabels(tracks);
   return (
     <>
@@ -112,14 +111,6 @@ export default function TrackPanel({
           </div>
         </div>
       )}
-      <VocalStemControl
-        project={project}
-        hasAudio={Boolean(project.trackId || project.uploadedAudioFilename)}
-        onUpdated={onProjectUpdated}
-        separation={separation}
-      />
-      {/* #8988: an optional, explicitly chosen bed mixed under the song. */}
-      <SoundBedControl key={project.id} project={project} tracks={tracks} disabled={renderBound} onUpdated={onProjectUpdated} />
       {/* Preview + download the project's master audio track. Both act on
           the resolved data/music/ file (linked track or uploaded audio). */}
       {audioUrl && (
@@ -132,18 +123,34 @@ export default function TrackPanel({
               <Download size={13} /> Download audio
             </a>
           </div>
-          {/* The visualization panel owns the MIDI download button, so no
-              separate Download-MIDI anchor here (#2477). Served from the
-              music dir (same static route as the master audio) so the
-              federated .mid resolves on peers too. */}
-          {midiFile && (
-            <MidiVisualization
-              url={trackAudioUrl(midiFile)}
-              filename={midiFile}
-              model={project.midiTranscription.model}
-            />
-          )}
         </div>
+      )}
+    </>
+  );
+}
+
+/**
+ * The jargon-heavy audio options, kept out of the main Song & lyrics path:
+ * the vocal stem, the sound bed and the MIDI transcription preview.
+ */
+export function AdvancedTrackControls({ project, tracks, renderBound, onProjectUpdated, separation = null }) {
+  const midiFile = project.midiTranscription?.filename;
+  return (
+    <>
+      <VocalStemControl
+        project={project}
+        hasAudio={Boolean(project.trackId || project.uploadedAudioFilename)}
+        onUpdated={onProjectUpdated}
+        separation={separation}
+      />
+      {/* #8988: an optional, explicitly chosen bed mixed under the song. */}
+      <SoundBedControl key={project.id} project={project} tracks={tracks} disabled={renderBound} onUpdated={onProjectUpdated} />
+      {midiFile && (
+        <MidiVisualization
+          url={trackAudioUrl(midiFile)}
+          filename={midiFile}
+          model={project.midiTranscription.model}
+        />
       )}
     </>
   );

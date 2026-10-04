@@ -20,8 +20,8 @@ const groupCls = 'flex min-w-0 flex-wrap items-center gap-2';
 const uniqueCount = (scenes, key) => new Set(scenes.map((scene) => scene[key]).filter(Boolean)).size;
 const noAudioOf = (project) => !project.trackId && !project.uploadedAudioFilename;
 
-/** Analyze the beat grid and transcribe the track to MIDI. */
-export function AudioActions({ project, midi, midiBound, busy, onAnalyze }) {
+/** Analyze the beat grid (Setup step 2). */
+export function AnalyzeAction({ project, busy, onAnalyze }) {
   const noAudio = noAudioOf(project);
   return (
     <div className={groupCls}>
@@ -30,6 +30,15 @@ export function AudioActions({ project, midi, midiBound, busy, onAnalyze }) {
         className={buttonCls}>
         <Activity size={15} /> {busy.analyzing ? 'Analyzing…' : 'Analyze'}
       </button>
+    </div>
+  );
+}
+
+/** Transcribe the track to MIDI (an advanced audio tool). */
+export function MidiAction({ project, midi, midiBound }) {
+  const noAudio = noAudioOf(project);
+  return (
+    <div className={groupCls}>
       {midiBound ? (
         <button onClick={midi.cancel} title="Cancel MIDI transcription"
           className="flex items-center gap-1 bg-port-warning/20 text-port-warning border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0">
