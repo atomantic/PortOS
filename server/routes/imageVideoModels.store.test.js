@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
-import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, rm, stat, symlink, utimes, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -80,8 +80,20 @@ describe('file-system model stores', () => {
     expect(await exists(join(bank, 'a'))).toBe(false);
   });
 
+  // Regression: a symlinked session-bank must not turn "clear the cache" into
+  // "delete the children of wherever the link points".
+  it('ignores a session-bank symlink instead of clearing its target', async () => {
+    const outside = join(root, 'outside');
+    await fill(join(outside, 'precious.bin'), 10);
+    await mkdir(join(root, 'mtplx'), { recursive: true });
+    await symlink(outside, join(root, 'mtplx', 'session-bank'));
+    expect((await listModelStore('mtplx')).items).toEqual([]);
+    expect((await request(app).delete('/api/image-video/models/store/mtplx/session-bank')).status).toBe(404);
+    expect(await exists(join(outside, 'precious.bin'))).toBe(true);
+  });
+
   it('clears xet chunk caches and only logs older than 7 days', async () => {
-    await fill(join(root, 'xet', 'abc', 'chunk-cache', 'c.bin'), 100);
+    await fill(join(root, 'xet', 'abc', 'chunk_cache', 'c.bin'), 100);
     await fill(join(root, 'xet', 'logs', 'old.log'), 40);
     await fill(join(root, 'xet', 'logs', 'new.log'), 30);
     const old = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
@@ -91,7 +103,7 @@ describe('file-system model stores', () => {
     expect(items).toHaveLength(1);
     expect(items[0].size).toBeGreaterThanOrEqual(140);
     expect((await request(app).delete('/api/image-video/models/store/hf-xet-cache/chunk-cache')).status).toBe(200);
-    expect(await exists(join(root, 'xet', 'abc', 'chunk-cache'))).toBe(false);
+    expect(await exists(join(root, 'xet', 'abc', 'chunk_cache'))).toBe(false);
     expect(await exists(join(root, 'xet', 'logs', 'old.log'))).toBe(false);
     expect(await exists(join(root, 'xet', 'logs', 'new.log'))).toBe(true);
   });

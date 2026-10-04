@@ -14,7 +14,7 @@
  * instead of reading it as empty and pruning the manifest.
  */
 
-import { readdir, stat } from 'fs/promises';
+import { lstat, readdir, stat } from 'fs/promises';
 import { homedir } from 'os';
 import { join, relative, isAbsolute } from 'path';
 import { dirSize, rmGuarded } from '../lib/fileUtils.js';
@@ -49,6 +49,15 @@ const subdirs = async (dir) => (await readEntries(dir))
   .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
   .map((entry) => entry.name);
 
+/** True only for a real directory — a symlink named like a store subdirectory is not one. */
+const isRealDirectory = (path) => lstat(path).then(
+  (info) => info.isDirectory(),
+  (err) => {
+    if (err?.code === 'ENOENT' || err?.code === 'ENOTDIR') return false;
+    throw err;
+  },
+);
+
 const item = ({ key, name, detail, size, root, removePaths, risk, cleanupReason }) => ({
   key, name, detail, size, root, removePaths, risk, cleanupReason,
 });
@@ -72,7 +81,7 @@ async function scanMtplx() {
     }));
   }
   const bankDir = join(root, SESSION_BANK);
-  const bankSize = await dirSize(bankDir, { strict: true });
+  const bankSize = await isRealDirectory(bankDir) ? await dirSize(bankDir, { strict: true }) : 0;
   if (bankSize > 0) {
     items.push(item({
       key: SESSION_BANK,
@@ -105,13 +114,14 @@ async function scanHy3dgen() {
   return items;
 }
 
-/** Every `chunk-cache` directory under the xet root, to a bounded depth. */
+/** Every xet chunk-cache directory under the xet root, to a bounded depth. */
 async function findChunkCaches(dir, depth = XET_SEARCH_DEPTH) {
   if (depth <= 0) return [];
   const found = [];
   for (const name of await subdirs(dir)) {
     const path = join(dir, name);
-    if (name === 'chunk-cache') found.push(path);
+    // The Hugging Face xet client writes `chunk_cache`; `chunk-cache` is accepted too.
+    if (name === 'chunk_cache' || name === 'chunk-cache') found.push(path);
     else found.push(...await findChunkCaches(path, depth - 1));
   }
   return found;
@@ -132,7 +142,8 @@ async function scanXetCache({ now = Date.now() } = {}) {
   const root = getXetRoot();
   const chunkCaches = await findChunkCaches(root);
   const chunkSizes = await Promise.all(chunkCaches.map((path) => dirSize(path, { strict: true })));
-  const logs = await staleXetLogs(join(root, 'logs'), now);
+  const logsDir = join(root, 'logs');
+  const logs = await isRealDirectory(logsDir) ? await staleXetLogs(logsDir, now) : [];
   const size = chunkSizes.reduce((sum, bytes) => sum + bytes, 0) + logs.reduce((sum, log) => sum + log.size, 0);
   if (size <= 0) return [];
   return [item({
