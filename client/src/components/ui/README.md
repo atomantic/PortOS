@@ -31,7 +31,7 @@ accessibility). Feature-specific components live under their own feature directo
 | `OverflowMenu` | "…" menu that demotes rare or destructive row actions out of the visible control set. |
 | `PageSkeleton` | Full-page loading skeleton that reserves the loaded layout so the first paint doesn't reflow. |
 | `Pill` | Inline label badge — semantic tone, optional icon, `sm`/`xs` sizes. |
-| `ProcessLogLines` | Renders a PM2 process's log lines (the body of a log pane). |
+| `ProcessLogLines` | Renders a PM2 process's log lines (the body of a log pane) from `useProcessLogs` `status`, with an unavailable notice + Retry for ended streams; also exports `LogStreamBadge`. |
 | `ProcessLogModal` | Self-contained viewer for a PM2 process's system log. |
 | `ProgressBar` | Horizontal progress meter — `percent` (or `null` for indeterminate), semantic `tone`, and the ARIA trio with an accessible name from `label`. |
 | `ProseEditor` | Prose-writing textarea — serif face, relaxed leading, spellcheck. Markdown string in/out. |

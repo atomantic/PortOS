@@ -8,9 +8,10 @@ import { renderHook, act, cleanup } from '@testing-library/react';
 // per event — unlike the earlier single-consumer version, `handlers` is never
 // cleared between tests: the module-level listeners are bound exactly once
 // for the whole file and must keep dispatching to every subsequent test.
-const { handlers, emitted } = vi.hoisted(() => ({
+const { handlers, emitted, socketState } = vi.hoisted(() => ({
   handlers: new Map(), // event -> Set<fn>
   emitted: [],
+  socketState: { connected: true, connectCalls: 0 },
 }));
 vi.mock('../services/socket', () => ({
   default: {
@@ -20,6 +21,8 @@ vi.mock('../services/socket', () => ({
     },
     off: (event, fn) => { handlers.get(event)?.delete(fn); },
     emit: (event, ...args) => { emitted.push([event, ...args]); },
+    get connected() { return socketState.connected; },
+    connect: () => { socketState.connectCalls += 1; },
   },
 }));
 
@@ -40,7 +43,12 @@ const fireRaw = (event, payload) => act(() => { handlers.get(event)?.forEach(fn 
 const emitsOf = (event) => emitted.filter(([e]) => e === event).map(([, payload]) => payload);
 
 describe('useProcessLogs', () => {
-  beforeEach(() => { emitted.length = 0; vi.useFakeTimers(); });
+  beforeEach(() => {
+    emitted.length = 0;
+    socketState.connected = true;
+    socketState.connectCalls = 0;
+    vi.useFakeTimers();
+  });
   afterEach(() => { cleanup(); vi.useRealTimers(); });
 
   it('subscribes to the named process and reports lines', () => {
@@ -311,5 +319,161 @@ describe('useProcessLogs', () => {
       { line: 'recent', type: 'stdout', timestamp: 2 },
       { line: 'resumed', type: 'stdout', timestamp: 3 },
     ]);
+  });
+
+  // --- Terminal stream states (#9959) ---------------------------------
+
+  it('logs:close ends the stream for every consumer but keeps the captured lines and refcounts', () => {
+    const first = renderHook(() => useProcessLogs('game'));
+    const second = renderHook(() => useProcessLogs('game'));
+    fire('logs:subscribed', { processName: 'game' });
+    fire('logs:line', { processName: 'game', line: 'final words', type: 'stderr', timestamp: 1 });
+    expect(first.result.current.status).toBe('live');
+
+    fire('logs:close', { processName: 'game', code: 1 });
+
+    for (const { result } of [first, second]) {
+      expect(result.current.status).toBe('closed');
+      expect(result.current.subscribed).toBe(false);
+      expect(result.current.statusDetail).toBe('Log stream closed (exit code 1)');
+      expect(result.current.logs).toEqual([{ line: 'final words', type: 'stderr', timestamp: 1 }]);
+    }
+
+    // Unmounting one consumer keeps the survivor; the last one unsubscribes once.
+    first.unmount();
+    expect(emitsOf('logs:unsubscribe')).toEqual([]);
+    expect(second.result.current.status).toBe('closed');
+    second.unmount();
+    expect(emitsOf('logs:unsubscribe')).toEqual([{ processName: 'game' }]);
+  });
+
+  it('logs:error marks the stream unavailable and keeps the error line', () => {
+    const { result } = renderHook(() => useProcessLogs('game'));
+    fire('logs:subscribed', { processName: 'game' });
+    fire('logs:error', { processName: 'game', error: 'pm2 unreachable' });
+
+    expect(result.current.status).toBe('error');
+    expect(result.current.statusDetail).toBe('pm2 unreachable');
+    expect(result.current.logs[0]).toMatchObject({ line: 'Error: pm2 unreachable', type: 'stderr' });
+
+    // A follow-up close does not erase the more specific error detail.
+    fire('logs:close', { processName: 'game', code: 1 });
+    expect(result.current.status).toBe('error');
+    expect(result.current.statusDetail).toBe('pm2 unreachable');
+  });
+
+  it('ignores close/error frames for another process', () => {
+    const { result } = renderHook(() => useProcessLogs('game'));
+    fire('logs:subscribed', { processName: 'game' });
+    fire('logs:close', { processName: 'other', code: 1 });
+    fire('logs:error', { processName: 'other', error: 'boom' });
+
+    expect(result.current.status).toBe('live');
+    expect(result.current.logs).toEqual([]);
+  });
+
+  it('a late joiner inherits the terminal state instead of a false live one', () => {
+    const first = renderHook(() => useProcessLogs('game'));
+    fire('logs:subscribed', { processName: 'game' });
+    fire('logs:line', { processName: 'game', line: 'a', type: 'stdout', timestamp: 1 });
+    fire('logs:close', { processName: 'game', code: 0 });
+
+    const late = renderHook(() => useProcessLogs('game'));
+
+    expect(late.result.current.status).toBe('closed');
+    expect(late.result.current.subscribed).toBe(false);
+    expect(late.result.current.logs).toEqual([{ line: 'a', type: 'stdout', timestamp: 1 }]);
+    // Attaching never spawned a replacement stream.
+    expect(emitsOf('logs:subscribe')).toHaveLength(1);
+
+    first.unmount();
+    late.unmount();
+  });
+
+  it('a socket disconnect clears live state across consumers and retains output', () => {
+    const first = renderHook(() => useProcessLogs('game'));
+    const second = renderHook(() => useProcessLogs('game'));
+    fire('logs:subscribed', { processName: 'game' });
+    fire('logs:line', { processName: 'game', line: 'kept', type: 'stdout', timestamp: 1 });
+
+    fire('disconnect', 'transport close');
+
+    for (const { result } of [first, second]) {
+      expect(result.current.status).toBe('disconnected');
+      expect(result.current.subscribed).toBe(false);
+      expect(result.current.logs).toHaveLength(1);
+    }
+  });
+
+  it('reconnect after a disconnect replays once and goes live only on the matching ack', () => {
+    const { result } = renderHook(() => useProcessLogs('game'));
+    fire('logs:subscribed', { processName: 'game' });
+    fire('logs:line', { processName: 'game', line: 'tail', type: 'stdout', timestamp: 1 });
+    fire('disconnect', 'transport close');
+
+    fire('connect', undefined);
+    expect(emitsOf('logs:subscribe')).toHaveLength(2);
+    expect(result.current.status).toBe('connecting');
+    expect(result.current.logs).toEqual([]);
+
+    fire('logs:line', { processName: 'game', line: 'tail', type: 'stdout', timestamp: 2 });
+    expect(result.current.status).toBe('connecting');
+    fire('logs:subscribed', { processName: 'game' });
+    expect(result.current.status).toBe('live');
+    expect(result.current.logs).toEqual([{ line: 'tail', type: 'stdout', timestamp: 2 }]);
+  });
+
+  it('retry() after a close resubscribes the shared stream exactly once, without duplicating history', () => {
+    const first = renderHook(() => useProcessLogs('game'));
+    const second = renderHook(() => useProcessLogs('game'));
+    fire('logs:subscribed', { processName: 'game' });
+    fire('logs:line', { processName: 'game', line: 'old', type: 'stdout', timestamp: 1 });
+    fire('logs:close', { processName: 'game', code: 1 });
+
+    act(() => { first.result.current.retry(); });
+    // The second consumer (or a double click) must not spawn another stream.
+    act(() => { second.result.current.retry(); });
+    act(() => { first.result.current.retry(); });
+
+    expect(emitsOf('logs:subscribe')).toHaveLength(2);
+    expect(first.result.current.status).toBe('connecting');
+    expect(second.result.current.status).toBe('connecting');
+    expect(first.result.current.logs).toEqual([]);
+
+    fire('logs:subscribed', { processName: 'game' });
+    fire('logs:line', { processName: 'game', line: 'old', type: 'stdout', timestamp: 2 });
+    expect(first.result.current.status).toBe('live');
+    expect(second.result.current.logs).toEqual([{ line: 'old', type: 'stdout', timestamp: 2 }]);
+
+    first.unmount();
+    second.unmount();
+    expect(emitsOf('logs:unsubscribe')).toEqual([{ processName: 'game' }]);
+  });
+
+  it('retry() on a live stream is a no-op', () => {
+    const { result } = renderHook(() => useProcessLogs('game'));
+    fire('logs:subscribed', { processName: 'game' });
+    act(() => { result.current.retry(); });
+
+    expect(emitsOf('logs:subscribe')).toHaveLength(1);
+    expect(result.current.status).toBe('live');
+  });
+
+  it('retry() while the transport is down reconnects instead of double-subscribing', () => {
+    const { result } = renderHook(() => useProcessLogs('game'));
+    fire('logs:subscribed', { processName: 'game' });
+    socketState.connected = false;
+    fire('disconnect', 'io server disconnect');
+
+    act(() => { result.current.retry(); });
+
+    expect(socketState.connectCalls).toBe(1);
+    expect(emitsOf('logs:subscribe')).toHaveLength(1);
+    expect(result.current.status).toBe('connecting');
+
+    // The reconnect's own `connect` handler performs the single resubscribe.
+    socketState.connected = true;
+    fire('connect', undefined);
+    expect(emitsOf('logs:subscribe')).toHaveLength(2);
   });
 });
