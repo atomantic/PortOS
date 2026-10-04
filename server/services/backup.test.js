@@ -3468,6 +3468,13 @@ describe('runBackup lifecycle', () => {
     expect(manifest.fileCount).toBe(1);
     expect(manifest.files['settings.json']).toMatch(/^[0-9a-f]{64}$/);
     expect(result.manifest).toEqual(manifest);
+    // The snapshot never claims global file-and-row consistency while the
+    // owner inventory still lists owners outside admission (#9982).
+    const { backupAssetConsistency } = await import('../lib/backupAssetOwners.js');
+    const claimed = backupAssetConsistency();
+    expect(claimed.scope).toBe('admitted-owners');
+    expect(manifest.assetConsistency).toEqual(claimed);
+    expect(result.assetConsistency).toEqual(claimed);
 
     // --- persisted state --------------------------------------------------
     const state = await readJson(joinPath(dataRoot, 'backup', 'state.json'));
@@ -3477,6 +3484,7 @@ describe('runBackup lifecycle', () => {
       status: 'ok',
       filesChanged: 2,
       pgBackup: SKIPPED_PG,
+      assetConsistency: claimed,
       error: null,
     });
 

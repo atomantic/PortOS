@@ -28,7 +28,11 @@ finished file is an unreferenced extra, never a dangling reference) and
 publishes once the cut releases; the lane stays occupied meanwhile, but the
 renderer is not stopped and cancellation is unchanged. A terminal write that
 fails inside the admission is retried inside it and releases it when it gives
-up.
+up. Only a queue snapshot written inside an admission lease commits a staged
+completion: once storage recovers, an unrelated queue write (progress, a new
+job, the shutdown flush) keeps that job `running` on disk and hands it to a
+recovery commit that takes its own lease, waiting out any open cut, so the
+terminal row and its attach hooks still publish together.
 
 Database maintenance shares the same boundary and never terminates a render or
 stops PM2 to obtain it:
@@ -60,9 +64,11 @@ Admission inventory (`withBackupAssetPublication`):
 | Media-job completion: queue terminal row + `completed` fan-out (`mediaJobQueue/index.js`) | Covered |
 | Attach hooks on `completed` via `mediaJobImageHook.js` (writers-room, catalog, music-video scene image/video/cast-sets, CD scene image/music bed, FableLoom scene image/video, sprite references, deck cards, music studio) | Covered |
 | Pipeline filename hooks (`filenameHookFactory.js` comic pages and storyboards, `seasonCoverFilenameHook.js`) | Covered |
-| Recovery commit of a completion whose terminal write failed (the next queue write acknowledges it outside any admission) | Outstanding |
+| Recovery commit of a completion whose terminal write failed (`mediaJobQueue/index.js`) | Covered: only an admitted snapshot commits it (#9982 partial) |
 | Universe Builder completion listeners: collection filing, canon entry-ref append, and sidecar enrichment (`universeBuilderCollectionHook.js`); character reference sheet copy and pointer stamp (`universeCharacterSheet.js`) | Covered (#9982 partial) |
-| Other `mediaJobEvents` `completed` subscribers that write rows (sprite animation, Creative Director scene runner/plan advance/seed settle, music-video production) | Outstanding |
+| Creative Director evaluation frames: render-completion sampling (`creativeDirector/sceneRunner.js`) and the resume pass that re-samples missing frames in place (`creativeDirector/completionHook.js`) | Covered from the first `${jobId}-fN.jpg` write through the scene row that names them (#9982 partial) |
+| Creative Director render settlement (scene status and auto-accept, plan-step settle, seed-frame wait) and Music Video production step settlement (`musicVideo/productionService.js`) | Reference-only: these write no bytes, and the render they name was on disk before its admitted completion published |
+| Sprite animation completion: clip copy, frame packaging and run record (`sprites/localAnimationJobHook.js`) | Outstanding (#9982) |
 | Direct gallery upload, image prompt/visibility sidecar replacement, and image deletion (`imageGen/local.js`) | Covered as one file/sidecar/index workflow (#9982 partial) |
 | Gallery image deletion's universe canon purge (`galleryImageDeletion.js`) and character reference sheet deletion (`universeCharacterSheet.js`) | Covered from file removal through the universe pointer purge (#9982 partial) |
 | Video-history deletion, including downloaded-video deletion (`videoGen/historyOps.js`) | Covered through file/history/index removal (#9982 partial) |
@@ -70,8 +76,9 @@ Admission inventory (`withBackupAssetPublication`):
 | Voice Studio audition and character assignment (`voice/studio.js`) | Covered from source-file write/copy through profile-row commit and failed-write cleanup (#9982 partial) |
 | Music Video development artifact import/generated save and vocal-stem attachment (`musicVideo/devArtifactService.js`, `musicVideo/vocalStem.js`) | Covered from final file copy/write through project-record commit and failed-write cleanup (#9982 partial) |
 | Music-library deletion (`pipeline/musicLibrary.js`) | Outstanding: its route intentionally leaves existing issue/project references to the removed file (#9982) |
-| Other voice artifact owners (fine-tune and benchmark outputs) and Music Video asset workflows | Outstanding (#9982) |
-| Other durable replacement/deletion owners and final global readiness/invariant check | Outstanding (#9982) |
+| Voice fine-tune and benchmark outputs (`voice/fineTuning.js`, `voice/profileBenchmarks.js`) and other Music Video asset workflows | Outstanding (#9982) |
+| Durable replacement/deletion owners not yet classified | Outstanding (#9982) |
+| Snapshot consistency claim (`backupAssetOwners.js`, see below) | Covered (#9982 partial) |
 | Database restore execution and backend-cutover acceptance (`backup.js`, `databasePreflight.js`) | Covered (#9983) |
 
 Direct gallery uploads encode before admission, then publish the final image,
@@ -118,19 +125,34 @@ so it cannot drop a concurrent prompt or visibility edit. Records outside
 universe canon that named a deleted image (media-collection items, for example)
 keep their references; only universe canon references are purged with it.
 
-The remaining inventory includes music-library deletion, other voice artifacts,
-direct render/index completion listeners, and the other completion paths above.
-Their persistence adapters and direct filesystem calls still need workflow-level classification;
-independently locking `fileCore` or SQL primitives would not cover the gap
-between writes. No domain is newly excluded by this slice, and the final global
-readiness check is still pending.
+Creative Director frame sampling holds its lease while ffmpeg decodes the
+clip, a few seconds for a typical scene; the evaluator dispatch that follows
+stays outside it.
+
+**Snapshot consistency claim.** `server/lib/backupAssetOwners.js` inventories
+each durable owner as `admitted`, `reference-only` or `outstanding`, and its
+test fails when an `admitted` entry stops taking the lease or a module that
+takes the lease is missing from the inventory. Every snapshot records the claim
+derived from it as `assetConsistency` in its `manifest.json`, the backup status
+(`GET /api/backup/status`) and the run result. `scope: "global"` is reported
+only when no owner is outstanding; until then the scope is `admitted-owners`
+and `outstanding` lists the owner ids still outside admission. An unrecognized
+status counts as outstanding, never as covered. Snapshots written before this
+field existed carry no claim and must be treated as partial.
+
+The remaining inventory includes sprite animation completion, music-library
+deletion, voice fine-tune and benchmark outputs, other Music Video asset
+workflows, and owners not yet classified. Their persistence adapters and direct
+filesystem calls still need workflow-level classification; independently
+locking `fileCore` or SQL primitives would not cover the gap between writes.
+No domain is excluded from the snapshot to satisfy the claim.
 
 This is part of [the cross-store consistency work](https://github.com/atomantic/PortOS/issues/9923).
-Until every owner is covered, `status: ok` reports that the file
-copy, manifest, and database dump completed; it does not assert that every
-database asset reference resolves to the captured filesystem bytes. A restore
-operator should verify affected assets before treating a snapshot as a complete
-recovery point.
+While `assetConsistency.scope` is `admitted-owners`, `status: ok` reports that
+the file copy, manifest, and database dump completed; it does not assert that
+every database asset reference resolves to the captured filesystem bytes. A
+restore operator should verify the outstanding owners' assets before treating
+a snapshot as a complete recovery point.
 
 Now that PostgreSQL is a **required** dependency (it owns the creative catalog, memory, and a growing set of app-native records — see [Storage Classification Contract](./STORAGE.md)), **the database dump is part of required system state, not an optional extra.** A snapshot that captured `data/` but failed to capture the DB is incomplete, and PortOS surfaces that explicitly.
 

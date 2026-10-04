@@ -53,6 +53,15 @@ export async function withBackupAssetPublication(work) {
   }
 }
 
+/**
+ * Whether the caller runs inside an active admission lease, so no cut can be
+ * active until its work settles. A listener scope created by
+ * runOutsideBackupAssetPublication is not a lease of its own.
+ */
+export function holdsBackupAssetPublication() {
+  return publicationScope.getStore()?.active === true;
+}
+
 /** Wait for already admitted workflows to settle, or reject when they do not. */
 async function awaitDrain(timeoutMs) {
   let timer;
