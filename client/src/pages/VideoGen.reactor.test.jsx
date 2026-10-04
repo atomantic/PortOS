@@ -60,7 +60,6 @@ describe('VideoGen reactor.inc lane', () => {
     state.modelStatuses = { [MODEL.id]: { id: MODEL.id, repo: MODEL.repo, cached: true, sizeBytes: 100 } };
     state.listVideoHistory.mockResolvedValue([REACTOR_RENDER, LOCAL_RENDER]);
     state.generateVideo.mockResolvedValue({ jobId: 'job-1' });
-    state.attach.mockReturnValue(new Promise(() => {}));
   });
 
   // The 800-character cap used to surface only as a 400 after Generate, naming

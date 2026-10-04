@@ -101,6 +101,8 @@ const ALLOWED = {
     'deps are [open] only — a drawer preload with no record identity to switch',
   'src/components/voice/VoiceWidget.jsx':
     'deps are [enabled, navigate] — a session toggle, not a record identity',
+  'src/hooks/useImageGenPageRuntime.js':
+    'the active-job read is adopted through useMediaJobSse.start, whose run owner drops it when superseded or unmounted (ifIdle makes a re-run a no-op)',
   'src/pages/AIProviders.jsx':
     'deps are [fleetSetupOpen] only — a modal preload with no record identity to switch',
   'src/pages/Browser.jsx':

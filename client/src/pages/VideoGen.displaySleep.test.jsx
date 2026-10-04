@@ -36,7 +36,6 @@ describe('VideoGen per-render display-sleep control', () => {
     state.getVideoGenModelContext.mockResolvedValue(videoGenModelContext([MLX_MODEL]));
     state.modelStatuses = { [MLX_MODEL.id]: { id: MLX_MODEL.id, repo: MLX_MODEL.repo, cached: true, sizeBytes: 100 } };
     state.generateVideo.mockResolvedValue({ jobId: 'job-1' });
-    state.attach.mockReturnValue(new Promise(() => {}));
   });
 
   it('defaults the checkbox to the install setting and sends the choice with the render', async () => {

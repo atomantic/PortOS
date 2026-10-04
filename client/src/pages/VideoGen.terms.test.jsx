@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { awaitEnabled } from '../test/enabledBarrier.js';
+import { lastEventSource } from '../test/mockEventSource';
 
 import {
   loadVideoGenPage,
@@ -36,10 +37,6 @@ describe('VideoGen MiniMax H3 orchestration', () => {
     state.repair.mockResolvedValue({ ok: true });
     state.getVideoGenStatus.mockResolvedValue(videoGenStatus([H3_ONE, H3_TWO]));
     state.getVideoGenModelContext.mockResolvedValue(videoGenModelContext([H3_ONE, H3_TWO]));
-    state.attach.mockImplementation(async (_jobId, handlers) => {
-      handlers.onComplete({ result: { filename: 'example.mp4' } });
-      return { filename: 'example.mp4' };
-    });
   });
 
   it('lets H3 generate and queue with no eligibility checkbox', async () => {
@@ -64,6 +61,10 @@ describe('VideoGen MiniMax H3 orchestration', () => {
       modelId: H3_ONE.id,
     })));
     expect(state.generateVideo.mock.calls[0][0]).not.toHaveProperty('termsAcceptance');
+
+    // Finish the render so the page returns to idle and Generate is offered again.
+    await waitFor(() => expect(lastEventSource()).toBeTruthy());
+    await act(async () => { lastEventSource().emit({ type: 'complete', result: { filename: 'example.mp4' } }); });
 
     fireEvent.change(screen.getByLabelText('Model'), { target: { value: H3_TWO.id } });
     await waitFor(() => expect(screen.getByLabelText('Model')).toHaveValue(H3_TWO.id));
