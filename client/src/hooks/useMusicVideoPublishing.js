@@ -55,7 +55,8 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
   // (a tab filled elsewhere, closed by hand, or discarded).
   useEffect(() => {
     if (!projectId) return undefined;
-    const apply = (list) => { for (const d of list) if (d.state !== 'discarded') setFor('drafts', d.target, d); };
+    let cancelled = false;
+    const apply = (list) => { if (cancelled) return; for (const d of list) if (d.state !== 'discarded') setFor('drafts', d.target, d); };
     getMusicVideoPublishDrafts(projectId, { silent: true }).then((res) => apply(res?.drafts || [])).catch(() => {});
     const onDraft = (e) => {
       if (e?.projectId !== projectId) return;
@@ -76,7 +77,7 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
       }
     };
     socket.on('music-video:publish-draft', onDraft);
-    return () => socket.off('music-video:publish-draft', onDraft);
+    return () => { cancelled = true; socket.off('music-video:publish-draft', onDraft); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, scope]);
 
