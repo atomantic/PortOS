@@ -10,7 +10,7 @@ import TouchDragHint from '../../graph3d/TouchDragHint';
 import BrailleSpinner from '../../BrailleSpinner';
 import useGraphNodeDetail from '../../../hooks/useGraphNodeDetail';
 import usePrefersReducedMotion from '../../../hooks/usePrefersReducedMotion';
-import { formatDateNumeric } from '../../../utils/formatters';
+import { formatDateNumeric, formatPercent } from '../../../utils/formatters';
 
 const TYPE_HEX = {
   fact: '#3b82f6',
@@ -241,7 +241,7 @@ export default function MemoryGraph() {
               <span className="text-[10px] text-gray-500">{hoveredNode.category}</span>
             </div>
             <p className="text-xs text-white leading-snug">{hoveredNode.summary}</p>
-            <p className="text-[10px] text-gray-500 mt-1">importance: {((hoveredNode.importance ?? 0.5) * 100).toFixed(0)}%</p>
+            <p className="text-[10px] text-gray-500 mt-1">importance: {formatPercent((hoveredNode.importance ?? 0.5) * 100, { decimals: 0 })}</p>
           </div>
         )}
       </div>
@@ -256,7 +256,7 @@ export default function MemoryGraph() {
                   {selectedNode.type}
                 </span>
                 <span className="text-xs text-gray-500">{selectedNode.category}</span>
-                <span className="text-xs text-gray-500">importance: {((selectedNode.importance ?? 0.5) * 100).toFixed(0)}%</span>
+                <span className="text-xs text-gray-500">importance: {formatPercent((selectedNode.importance ?? 0.5) * 100, { decimals: 0 })}</span>
               </div>
               {fullMemory ? (
                 <div className="space-y-3">
@@ -271,7 +271,7 @@ export default function MemoryGraph() {
                   <div className="text-xs text-gray-500 flex flex-wrap gap-3">
                     <span>Created: {formatDateNumeric(fullMemory.createdAt)}</span>
                     {fullMemory.accessCount > 0 && <span>Accessed: {fullMemory.accessCount}x</span>}
-                    {fullMemory.confidence != null && <span>Confidence: {(fullMemory.confidence * 100).toFixed(0)}%</span>}
+                    {fullMemory.confidence != null && <span>Confidence: {formatPercent(fullMemory.confidence * 100, { decimals: 0 })}</span>}
                   </div>
                 </div>
               ) : (
@@ -301,7 +301,7 @@ export default function MemoryGraph() {
                     <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: TYPE_HEX[cn.type] }} />
                     <span className="text-xs text-gray-300 truncate flex-1">{cn.summary}</span>
                     <span className="text-[10px] text-gray-600 shrink-0">
-                      {cn.edgeType === 'linked' ? 'linked' : `${(cn.weight * 100).toFixed(0)}%`}
+                      {cn.edgeType === 'linked' ? 'linked' : `${formatPercent(cn.weight * 100, { decimals: 0 })}`}
                     </span>
                   </button>
                 ))}

@@ -3,6 +3,7 @@ import { Film, Play, Music, Wand2, Sparkles, Copy, Trash2, ArrowUpRight } from '
 import MediaImage from '../MediaImage.jsx';
 import ScenePreview from '../creative-director/ScenePreview.jsx';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
+import { formatUsd } from '../../utils/formatters.js';
 import { selectMusicVideoPreview } from '../../lib/musicVideoPreview.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import { deriveStages, projectSpend, projectShotSummary, MUSIC_VIDEO_STAGES } from '../../lib/musicVideoStages.js';
@@ -259,7 +260,7 @@ export default function MusicVideoProjectCard({
             </span>
             {spend.capUsd != null || spend.spentUsd > 0 ? (
               <span className="font-mono text-port-text-muted">
-                ${spend.spentUsd.toFixed(2)}{spend.capUsd != null ? ` / $${spend.capUsd}` : ''}
+                {formatUsd(spend.spentUsd)}{spend.capUsd != null ? ` / ${formatUsd(spend.capUsd, { trimWhole: true })}` : ''}
               </span>
             ) : null}
           </div>

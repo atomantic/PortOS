@@ -705,7 +705,7 @@ export async function processHostedUtterance(sessionId, {
         // A torn-down turn aborts this signal. That is a cancellation, not a
         // successful empty transcription, and must not fall through as one.
         if (turn.abortController.signal.aborted) return null;
-        console.warn(`[HostedPlay] STT transcription failed: ${err.message}`);
+        console.warn(`⚠️ [HostedPlay] STT transcription failed: ${err.message}`);
         return { text: '' };
       });
       if (!sttResult || !isLive()) return abandonTurn('transcription');
@@ -756,7 +756,7 @@ export async function processHostedUtterance(sessionId, {
       // A cancelled turn has no one left to narrate to — the authored fallback
       // would only produce a reply for a room that already saw `ended`.
       if (!isLive()) return abandonTurn('story turn');
-      console.warn(`[HostedPlay] LLM turn error, using authored fallback: ${err?.message}`);
+      console.warn(`⚠️ [HostedPlay] LLM turn error, using authored fallback: ${err?.message}`);
       playResult = {
         action: 'stay',
         narration: node?.prose?.slice(0, 200) || "I hear you. Let's see what happens next.",
@@ -811,14 +811,14 @@ export async function processHostedUtterance(sessionId, {
         voice: voice || undefined,
       }).catch((err) => {
         if (turn.abortController.signal.aborted) return null;
-        console.warn(`[HostedPlay] Protagonist TTS synthesis failed: ${err.message}`);
+        console.warn(`⚠️ [HostedPlay] Protagonist TTS synthesis failed: ${err.message}`);
         return null;
       });
       if (synth?.wav) {
         ttsAudio = synth.wav;
       }
     } catch (err) {
-      console.warn(`[HostedPlay] Protagonist TTS synthesis failed: ${err.message}`);
+      console.warn(`⚠️ [HostedPlay] Protagonist TTS synthesis failed: ${err.message}`);
     }
     if (!isLive()) return abandonTurn('speech synthesis');
 
@@ -860,7 +860,7 @@ export async function processHostedUtterance(sessionId, {
     // already emitted its terminal frame, so log and swallow rather than
     // emitting `hosted:error` behind it.
     if (!isLive()) {
-      console.warn(`[HostedPlay] Hosted turn ${turn.id} failed after teardown: ${err?.message || err}`);
+      console.warn(`⚠️ [HostedPlay] Hosted turn ${turn.id} failed after teardown: ${err?.message || err}`);
       return abandonedResult;
     }
     // Emit BEFORE clearing `activeTurn` — clearing it first makes the turn

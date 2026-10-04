@@ -1,6 +1,6 @@
 import { Link } from 'react-router';
 import { Activity, Clock, Hourglass, MessageSquare, Skull, Terminal } from 'lucide-react';
-import { formatDateTime, formatDurationMs, formatMonthDay, formatTimeOfDay } from '../../../utils/formatters';
+import { formatDateTime, formatDurationMs, formatMonthDay, formatTimeOfDay, formatPercent } from '../../../utils/formatters';
 import { describeEstimateBasis } from '../../../lib/cosDurationEstimate';
 
 const ETA_PRESENTATION = {
@@ -100,7 +100,7 @@ export function AgentRuntimeStatus({
           <Activity size={10} aria-hidden="true" className="shrink-0" />
           <span className="font-mono">PID {processStats.pid}</span>
           <span className="text-port-success/70">|</span>
-          <span className="font-mono">{processStats.cpu?.toFixed(1)}%</span>
+          <span className="font-mono">{formatPercent(processStats.cpu)}</span>
           <span className="text-port-success/70">|</span>
           <span className="font-mono">{processStats.memoryMb}MB</span>
         </span>

@@ -10,7 +10,7 @@ import LifeGrid from './calendar/LifeGrid';
 import TimeStats from './calendar/TimeStats';
 import AddActivityForm from './calendar/AddActivityForm';
 import LifeEventsPanel from './calendar/LifeEventsPanel';
-import { formatCount } from '../../../utils/formatters';
+import { formatCount, formatPercent } from '../../../utils/formatters';
 
 export default function CalendarTab() {
   const [data, setData] = useState(null);
@@ -120,7 +120,7 @@ export default function CalendarTab() {
           <div className="flex-1 min-w-[140px] max-w-[300px]">
             <div className="flex justify-between text-xs text-gray-500 mb-1">
               <span>Life Progress</span>
-              <span className={pctColor}>{pctSpent.toFixed(1)}%</span>
+              <span className={pctColor}>{formatPercent(pctSpent)}</span>
             </div>
             <div className="h-2 bg-port-bg rounded-full overflow-hidden">
               <div

@@ -1,6 +1,7 @@
 /**
  * Long-running Node process guard: a failure line may not be logged through
- * `console.log`.
+ * `console.log`, and every log line carries a leading marker emoji and never a
+ * bare error object (#9951).
  *
  * ## The bug class
  *
@@ -32,9 +33,30 @@
  * version-refusal notice in `services/sharing/importer.js`, for one), and
  * re-leveling those is per-domain judgment, not a tree-wide rule.
  *
+ * ## Marker and error-object rule (#9951)
+ *
+ * The single-line-logging convention (root `AGENTS.md`) is an emoji prefix plus
+ * string interpolation, and the stream rule above only works because the marker
+ * is there to read. Two further shapes defeat it:
+ *
+ *   - A `console.log|warn|error|info|debug` whose first argument is a literal
+ *     with NO leading marker emoji — it cannot be grepped by marker and the
+ *     failure-level scan never sees it.
+ *   - A bare error object as an argument (`console.error('❌ …', err)`) — it
+ *     prints a multi-line stack and every enumerable property, breaking
+ *     one-line-per-event. Interpolate `${err.message}` instead.
+ *
+ * Judged only where the text is visible to a lexer: a literal whose body starts
+ * with `${` (the marker may live in an interpolated `LOG_PREFIX` / icon
+ * variable) and an indented continuation line (body starts with two spaces,
+ * the follow-on lines of a multi-line notice) are accepted, and a first
+ * argument that is not a literal is never judged. `server/scripts/` (one-shot
+ * operator CLIs whose output is human-formatted, not a log stream) and
+ * `server/test/` (fixtures) are exempt from this second rule.
+ *
  * ## Allowlist
  *
- * There is none, on purpose. Every site in the tree passes; a new violation is
+ * There is none for the failure-stream rule, on purpose. Every site in the tree passes; a new violation is
  * a bug to fix, not an entry to add. If you are reading this because the scan
  * just failed, change `console.log` to `console.error` (or `console.warn` for a
  * refusal) on the named line.
@@ -117,11 +139,75 @@ export function findMislabeledFailureLogs(src) {
     .map(({ line, args }) => `line ${line}: ${args.replace(/\s+/g, ' ').trim().slice(0, 120)}`);
 }
 
+const CONSOLE_CALL_OPEN = /\bconsole\s*\.\s*(log|warn|error|info|debug)\s*\(/g;
+const BARE_ERROR_ARG = /^(?:err|error|e|ex|reason)$/;
+// Shown to the reader of a failing marker scan — only literals whose first
+// character a lexer can see are judged (see the rule above).
+const LEADING_MARKER = /^\p{Extended_Pictographic}/u;
+
+/**
+ * Every `console.<level>(…)` call as `{ line, method, args }`, where `args` is the
+ * top-level argument list with comment bodies blanked and literal text kept.
+ * Argument boundaries come from the fully blanked copy, so a comma inside a
+ * string or template cannot split an argument.
+ */
+export function consoleCalls(src) {
+  const blanked = blankLiterals(src);
+  const codeOnly = blankCommentBodies(src);
+  const calls = [];
+  for (const match of blanked.matchAll(CONSOLE_CALL_OPEN)) {
+    const open = blanked.indexOf('(', match.index);
+    const close = matchBracket(blanked, open);
+    if (close === -1) continue;
+    const end = close - 1;
+    const args = [];
+    let depth = 0;
+    let start = open + 1;
+    for (let i = open + 1; i < end; i++) {
+      const c = blanked[i];
+      if ('([{'.includes(c)) depth++;
+      else if (')]}'.includes(c)) depth--;
+      else if (c === ',' && depth === 0) {
+        args.push(codeOnly.slice(start, i).trim());
+        start = i + 1;
+      }
+    }
+    const last = codeOnly.slice(start, end).trim();
+    if (last) args.push(last);
+    calls.push({ line: src.slice(0, match.index).split('\n').length, method: match[1], args });
+  }
+  return calls;
+}
+
+/** `line N: <excerpt>` for every console call whose literal message has no leading marker emoji. */
+export function findMarkerlessLogs(src) {
+  const hits = [];
+  for (const { line, args } of consoleCalls(src)) {
+    const literal = (args[0] ?? '').match(/^(['"`])([\s\S]*)/);
+    if (!literal) continue;
+    // `\n` / `\r` escapes lead a spaced-out block; they are not part of the message.
+    const body = literal[2].replace(/^(?:\\[nr])+/, '');
+    if (body.startsWith('${') || body.startsWith('  ')) continue;
+    if (!LEADING_MARKER.test(body.trimStart())) hits.push(`line ${line}: ${args[0].slice(0, 80)}`);
+  }
+  return hits;
+}
+
+/** `line N: <excerpt>` for every console call passing a bare error identifier as an argument. */
+export function findBareErrorArguments(src) {
+  return consoleCalls(src)
+    .filter(({ args }) => args.some((arg) => BARE_ERROR_ARG.test(arg)))
+    .map(({ line, args }) => `line ${line}: ${args.join(', ').slice(0, 80)}`);
+}
+
 // Every module extension the covered process trees actually ship, not just
 // `.js`. The repository root is important: using `server/` as cwd silently
 // excludes the sibling `autofixer/` daemon.
 const REPO_ROOT = dirname(SERVER_ROOT);
 const PROCESS_ROOTS = ['server/', 'autofixer/'];
+// One-shot operator CLIs print human-formatted output, and fixtures stub other
+// code; neither is a log stream a marker grep or stderr monitor reads.
+const LINE_SHAPE_EXEMPT_PREFIXES = ['server/scripts/', 'server/test/'];
 const trackedServerSources = () => execFileSync('git', ['ls-files', '*.js', '*.mjs', '*.cjs'], {
   cwd: REPO_ROOT,
   encoding: 'utf8',
@@ -175,6 +261,59 @@ describe('failure lines log at error level (#7945)', () => {
       + '`const log = ok ? console.log : console.error;` — see services/appBuilder.js.\n'
       + `Offenders:\n  ${violations.join('\n  ')}`,
     ).toEqual([]);
+  });
+});
+
+describe('log lines carry a marker and no bare error object (#9951)', () => {
+  const scanned = () => trackedServerSources()
+    .filter((file) => !LINE_SHAPE_EXEMPT_PREFIXES.some((prefix) => file.startsWith(prefix)))
+    .map((file) => ({ file, src: readFileSync(join(REPO_ROOT, file), 'utf8') }))
+    .filter(({ src }) => /\bconsole\s*\.\s*(?:log|warn|error|info|debug)\s*\(/.test(src));
+
+  it('has no console call whose message lacks a leading marker emoji', () => {
+    const violations = scanned().flatMap(({ file, src }) => findMarkerlessLogs(src).map((hit) => `${file} ${hit}`));
+    expect(
+      violations,
+      'These log lines have no leading marker emoji (root `AGENTS.md` single-line logging: '
+      + '`console.log(`🚀 …`)`, `❌` failure, `⚠️` refusal). Add the marker; the stream picks the level.\n'
+      + `Offenders:\n  ${violations.join('\n  ')}`,
+    ).toEqual([]);
+  });
+
+  it('passes no bare error object to a console call', () => {
+    const violations = scanned().flatMap(({ file, src }) => findBareErrorArguments(src).map((hit) => `${file} ${hit}`));
+    expect(
+      violations,
+      'These calls hand a whole error object to console, which prints a multi-line stack. '
+      + 'Interpolate it: `console.error(`❌ … ${err.message}`)`.\n'
+      + `Offenders:\n  ${violations.join('\n  ')}`,
+    ).toEqual([]);
+  });
+
+  it('flags a marker-less literal and accepts the shapes it cannot judge', () => {
+    expect(findMarkerlessLogs("console.warn(`Failed to read ${p}`);")).toHaveLength(1);
+    expect(findMarkerlessLogs("console.log('server started');")).toHaveLength(1);
+    expect(findMarkerlessLogs('console.error(`[Tag] failed`);')).toHaveLength(1);
+
+    expect(findMarkerlessLogs(`console.log(\`\\n${String.fromCodePoint(0x1f6d1)} stopping\`);`)).toEqual([]);
+    expect(findMarkerlessLogs("console.warn(`⚠️ refused`);")).toEqual([]);
+    // The marker may live in an interpolated prefix the scan cannot see.
+    expect(findMarkerlessLogs('console.log(`${LOG_PREFIX}: armed`);')).toEqual([]);
+    // Indented follow-on line of a multi-line notice.
+    expect(findMarkerlessLogs("console.error('   Set up the database with: npm run setup:db');")).toEqual([]);
+    // A non-literal first argument is never judged.
+    expect(findMarkerlessLogs('console.error(logMsg, stack);')).toEqual([]);
+    expect(findMarkerlessLogs("// console.log('no marker in a comment')")).toEqual([]);
+  });
+
+  it('flags a bare error argument and accepts interpolated or property access', () => {
+    expect(findBareErrorArguments("console.error('❌ failed', err);")).toHaveLength(1);
+    expect(findBareErrorArguments("console.error('❌ failed:', error);")).toHaveLength(1);
+
+    expect(findBareErrorArguments('console.error(`❌ failed: ${err.message}`);')).toEqual([]);
+    expect(findBareErrorArguments('console.error(err.stack);')).toEqual([]);
+    // A comma inside a template must not split off a fake bare argument.
+    expect(findBareErrorArguments('console.error(`❌ a, err, b`);')).toEqual([]);
   });
 });
 
