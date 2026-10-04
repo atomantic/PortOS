@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Music, Download } from 'lucide-react';
 import toast from '../ui/Toast';
 import MidiVisualization from '../songs/MidiVisualization.jsx';
@@ -7,6 +8,23 @@ import VocalStemControl from './VocalStemControl.jsx';
 import SoundBedControl from './SoundBedControl.jsx';
 import { trackSourceLabel } from '../../lib/trackProvenance.js';
 import { trackOptionLabels } from '../../utils/trackOptionLabels.js';
+
+const hasTime = (e) => Number.isFinite(e?.startSec) || Number.isFinite(e?.endSec);
+
+// What a track change would wipe from this project (mirrors the server's
+// track-change invalidation in projectsLogic.js). Empty means nothing to lose.
+function timedDataLabels(project) {
+  const cues = project.lyricCues || [];
+  const labels = [];
+  if (project.audioAnalysis) labels.push('beat/tempo analysis');
+  if (cues.some((c) => c.words?.length) || cues.some(hasTime) || (project.phrases || []).some(hasTime)) {
+    labels.push('lyric and phrase timing (including word alignment)');
+  }
+  if (project.midiTranscription) labels.push('MIDI transcription');
+  if (project.vocalStemFilename) labels.push('vocal stem');
+  if ((project.scenes || []).some((s) => s.beatAligned)) labels.push('beat-aligned shot timing');
+  return labels;
+}
 
 /**
  * The project's audio: pick an existing library track or import fresh audio from
@@ -21,6 +39,18 @@ export default function TrackPanel({
   project, tracks, trackName, audioFilename, youtube,
   renderBound, midiBound, onChangeTrack, onProjectUpdated, separation = null,
 }) {
+  // A pending change that would destroy timed data waits for explicit confirm.
+  const [pending, setPending] = useState(null);
+  const clearLabels = timedDataLabels(project);
+  const requestChange = (change) => {
+    if (clearLabels.length === 0) return runChange(change, {});
+    setPending(change);
+  };
+  const runChange = (change, opts) => {
+    setPending(null);
+    if (change.kind === 'youtube') youtube.startEdit(project.id);
+    else onChangeTrack(change.trackId, { ...opts, cleared: clearLabels });
+  };
   const blockedMessage = renderBound
     ? 'Wait for the current render to finish before changing the track'
     : midiBound
@@ -41,7 +71,7 @@ export default function TrackPanel({
           </span>
         )}
         <select value={project.trackId || ''} aria-label="Change track"
-          onChange={(e) => e.target.value && onChangeTrack(e.target.value)}
+          onChange={(e) => e.target.value && requestChange({ kind: 'track', trackId: e.target.value })}
           disabled={youtube.editJob.active || renderBound || midiBound}
           title={blockedMessage || undefined}
           className="bg-port-bg border border-port-border rounded px-1.5 py-1 disabled:opacity-50 min-h-[44px] sm:min-h-0">
@@ -56,11 +86,32 @@ export default function TrackPanel({
               toast.error(blockedMessage);
               return;
             }
-            youtube.startEdit(project.id);
+            requestChange({ kind: 'youtube' });
           }}
           compact
         />
       </div>
+      {pending && (
+        <div role="alertdialog" aria-label="Confirm track change" className="mt-2 rounded border border-port-warning/50 bg-port-warning/10 p-2 text-xs space-y-2">
+          <p>
+            {pending.kind === 'youtube' ? 'Importing new audio' : 'Changing the track'} will clear: {clearLabels.join(', ')}. Lyric text and scenes are kept. You will need to re-run Analyze and Align words.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => runChange(pending, {})}
+              className="min-h-[44px] sm:min-h-0 px-2 py-1 rounded bg-port-error text-white">
+              {pending.kind === 'youtube' ? 'Import audio' : 'Change track'}
+            </button>
+            {pending.kind === 'track' && (
+              <button type="button" onClick={() => runChange(pending, { fork: true })}
+                className="min-h-[44px] sm:min-h-0 px-2 py-1 rounded border border-port-border text-port-accent">
+                Fork &amp; change track
+              </button>
+            )}
+            <button type="button" onClick={() => setPending(null)}
+              className="min-h-[44px] sm:min-h-0 px-2 py-1 rounded border border-port-border">Cancel</button>
+          </div>
+        </div>
+      )}
       <VocalStemControl
         project={project}
         hasAudio={Boolean(project.trackId || project.uploadedAudioFilename)}

@@ -558,7 +558,7 @@ export default function MusicVideo() {
   // Re-point the selected project at a different library track (the detail
   // view's "Change track" picker — previously there was no way to relink a
   // project's audio after creation at all).
-  const handleChangeTrack = (trackId) => {
+  const handleChangeTrack = (trackId, { fork = false, cleared = [] } = {}) => {
     if (!selected) return;
     if (renderTargetsSelected) {
       toast.error('Wait for the current render to finish before changing the track');
@@ -572,8 +572,20 @@ export default function MusicVideo() {
     if (selectedTrack?.prompt && !selected.concept?.style) {
       patch.concept = { ...(patch.concept || selected.concept || {}), style: selectedTrack.prompt };
     }
-    updateMusicVideoProject(selected.id, patch, { silent: true })
-      .then((proj) => replaceProject(proj))
+    // Fork first so the original keeps its analysis/alignment; the new track is
+    // applied to the fork only.
+    const base = fork
+      ? cloneMusicVideoProject(selected.id, {}, { silent: true })
+      : Promise.resolve(selected);
+    base
+      .then((target) => updateMusicVideoProject(target.id, patch, { silent: true }).then((proj) => ({ proj, forked: target !== selected })))
+      .then(({ proj, forked }) => {
+        if (forked) {
+          setProjects((prev) => [...prev, proj]);
+          navigate(`/music-video/${proj.id}/setup`);
+        } else replaceProject(proj);
+        if (cleared.length > 0) toast.success('Track changed — re-run Analyze and Align words');
+      })
       .catch((err) => toast.error(err?.message || 'Failed to change track'));
   };
 
