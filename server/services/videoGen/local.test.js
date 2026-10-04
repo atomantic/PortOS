@@ -5561,7 +5561,7 @@ describe('generateVideo — first render child dies during the accelerator hando
   });
 
   it('reports a spawn error raised in the same window, which no exit status records', async () => {
-    const child = makeSilentProc(202);
+    const child = makeSilentProc(undefined);
     await render('first-child-error-in-handoff', child, () => child.error(new Error('detached spawn produced no PID')));
 
     // exitCode/signalCode stay null on a spawn failure — only a subscriber sees it.

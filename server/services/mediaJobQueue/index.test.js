@@ -1232,25 +1232,78 @@ describe('mediaJobQueue', () => {
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
   });
 
-  it('watchdog fires and marks the job failed when gen never emits a terminal event', async () => {
-    // Use a very short watchdog for this test by overriding the env var before
-    // the module is loaded. Re-import the module with MEDIA_JOB_WATCHDOG_VIDEO_MS=50.
+  it('keeps maintenance and the lane owned after watchdog cancellation until provider teardown settles', async () => {
+    vi.useFakeTimers();
     process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS = '50';
     await importFresh();
-    // generateVideo hangs forever — never emits completed/failed.
-    stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
-
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    // A real local provider returns its job id after spawn, before child exit.
+    stubs.generateVideo.mockResolvedValue({ jobId: 'provider-started' });
     const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'hang' } });
-    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    let hold;
+    try {
+      await vi.waitFor(() => expect(stubs.generateVideo).toHaveBeenCalledTimes(1), { interval: 1 });
+      ({ hold } = maintenance.begin({ reason: 'Wait for physical teardown', owner: 'Operator' }));
+      await vi.advanceTimersByTimeAsync(100);
+      await flush();
+      await vi.waitFor(() => expect(stubs.cancelVideo).toHaveBeenCalledTimes(1));
+      await flush();
+      expect(mediaJobQueue.getJob(job.jobId)).toMatchObject({ status: 'failed', error: expect.stringMatching(/watchdog timeout/) });
+      expect(maintenance.status()).toMatchObject({ state: 'draining', blockers: [expect.objectContaining({ resource: job.jobId })] });
+      expect(mediaJobQueue.getQueueCapacity().lanes.gpu.running).toBe(1);
 
-    // The watchdog should fire within 50 ms and fail the job.
-    await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'failed', { timeoutMs: 2000 });
+      // A cancel acknowledgment/time passing is no proof of exit or cleanup.
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(maintenance.status().state).toBe('draining');
+      videoGenEvents.emit('failed', { generationId: job.jobId, error: 'Child closed and cleanup finished' });
+      await flush();
+      await vi.waitFor(() => expect(maintenance.status().state).toBe('ready'));
+      expect(mediaJobQueue.getQueueCapacity().lanes.gpu.running).toBe(0);
+      expect(stubs.generateVideo).toHaveBeenCalledTimes(1);
+    } finally {
+      videoGenEvents.emit('failed', { generationId: job.jobId, error: 'Fixture teardown' });
+      await flush();
+      if (hold) maintenance.resume({ id: hold.id, revision: hold.revision });
+      delete process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS;
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
 
-    const failed = mediaJobQueue.getJob(job.jobId);
-    expect(failed.status).toBe('failed');
-    expect(failed.error).toMatch(/watchdog timeout/);
-
-    delete process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS;
+  it('does not start a provider after its watchdog wins during asynchronous dispatch checks', async () => {
+    vi.useFakeTimers();
+    process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS = '50';
+    await importFresh();
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const { assertVideoAttemptDispatch } = await import('../creativeDirector/videoExecution.js');
+    const dispatchCheck = Promise.withResolvers();
+    let checkEntered = false;
+    assertVideoAttemptDispatch.mockImplementationOnce(() => {
+      checkEntered = true;
+      return dispatchCheck.promise;
+    });
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: {
+      prompt: 'delayed dispatch', videoProduction: { projectId: 'example', attemptId: 'example-attempt' },
+    } });
+    let hold;
+    try {
+      await vi.waitFor(() => expect(checkEntered).toBe(true), { interval: 1 });
+      ({ hold } = maintenance.begin({ reason: 'Drain pending preparation', owner: 'Operator' }));
+      await vi.advanceTimersByTimeAsync(100);
+      await vi.waitFor(() => expect(mediaJobQueue.getJob(job.jobId).status).toBe('failed'));
+      expect(maintenance.status().state).toBe('draining');
+      dispatchCheck.resolve();
+      await vi.waitFor(() => expect(maintenance.status().state).toBe('ready'));
+      expect(stubs.generateVideo).not.toHaveBeenCalled();
+      expect(mediaJobQueue.getQueueCapacity().lanes.gpu.running).toBe(0);
+    } finally {
+      dispatchCheck.resolve();
+      await flush();
+      if (hold) maintenance.resume({ id: hold.id, revision: hold.revision });
+      delete process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS;
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 
   it('terminal handlers are idempotent: watchdog then gen emit causes only one mediaJobEvents.failed', async () => {

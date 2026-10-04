@@ -38,6 +38,7 @@ import {
 import { deriveAudioCues, preserveRenderedCues } from '../../services/pipeline/audioCues.js';
 import { uploadSingle } from '../../lib/multipart.js';
 import { mapServiceError } from './shared.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 
 const router = Router();
 
@@ -374,7 +375,7 @@ const musicGenerateSchema = z.object({
   durationSec: z.number().min(1).max(MAX_ENGINE_DURATION).optional(),
   modelId: z.enum(ALL_MODEL_IDS).optional(),
 });
-router.post('/issues/:id/stages/audio/music/generate', asyncHandler(async (req, res) => {
+router.post('/issues/:id/stages/audio/music/generate', asyncHandler((req, res) => maintenance.run('pipeline-audio', req.params.id, async () => {
   const body = validateRequest(musicGenerateSchema, req.body ?? {});
   // Guard the (expensive) generation behind a 404 check first — generating a
   // multi-second clip only to discover the issue is gone wastes GPU time and
@@ -387,7 +388,7 @@ router.post('/issues/:id/stages/audio/music/generate', asyncHandler(async (req, 
     durationSec: body.durationSec,
     modelId: body.modelId,
   }).catch((err) => { throw mapServiceError(err); });
-  const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
+  const { issue: updatedIssue, stage } = await maintenance.continueSettlement(() => issuesSvc.updateStageWithLatest(
     req.params.id,
     'audio',
     (current) => ({
@@ -396,9 +397,9 @@ router.post('/issues/:id/stages/audio/music/generate', asyncHandler(async (req, 
       music: { source: MUSIC_SOURCE.GEN, trackFilename: gen.filename, label: gen.model },
       errorMessage: '',
     }),
-  ).catch((err) => { throw mapServiceError(err); });
+  )).catch((err) => { throw mapServiceError(err); });
   res.json({ issue: updatedIssue, stage, music: stage.music, durationSec: gen.durationSec, modelId: gen.modelId, engine: gen.engine });
-}));
+})));
 
 router.post('/issues/:id/stages/audio/music/upload', musicUpload, asyncHandler(async (req, res) => {
   if (!req.file) {
@@ -540,7 +541,7 @@ const cueRenderSchema = z.object({
   durationSec: z.number().min(1).max(MAX_ENGINE_DURATION).optional(),
   modelId: z.enum(ALL_MODEL_IDS).optional(),
 });
-router.post('/issues/:id/stages/audio/cues/:cueIdx/render', asyncHandler(async (req, res) => {
+router.post('/issues/:id/stages/audio/cues/:cueIdx/render', asyncHandler((req, res) => maintenance.run('pipeline-audio', req.params.id, async () => {
   const cueIdx = Number(req.params.cueIdx);
   if (!Number.isInteger(cueIdx) || cueIdx < 0) {
     throw new ServerError('cueIdx must be a non-negative integer', {
@@ -580,7 +581,7 @@ router.post('/issues/:id/stages/audio/cues/:cueIdx/render', asyncHandler(async (
   }).catch((err) => { throw mapServiceError(err); });
   // Merge against the freshest persisted cue inside the write queue so a
   // concurrent re-derive can't clobber the render (the cue list is re-read here).
-  const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
+  const { issue: updatedIssue, stage } = await maintenance.continueSettlement(() => issuesSvc.updateStageWithLatest(
     req.params.id,
     'audio',
     (current) => {
@@ -596,7 +597,7 @@ router.post('/issues/:id/stages/audio/cues/:cueIdx/render', asyncHandler(async (
       };
       return { cues: nextCues, errorMessage: '' };
     },
-  ).catch((err) => { throw mapServiceError(err); });
+  )).catch((err) => { throw mapServiceError(err); });
   res.json({
     issue: updatedIssue, stage, cueIdx,
     cue: stage.cues[cueIdx],
@@ -605,7 +606,7 @@ router.post('/issues/:id/stages/audio/cues/:cueIdx/render', asyncHandler(async (
     engine: gen.engine,
     modelId: gen.modelId,
   });
-}));
+})));
 
 // Deleting from the library leaves stale `music.trackFilename` pointers on
 // issues so the user sees the broken playback and re-picks. Auto-purging

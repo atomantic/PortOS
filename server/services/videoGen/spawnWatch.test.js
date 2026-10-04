@@ -191,14 +191,23 @@ describe('spawnAndWatchVideo claim lifecycle', () => {
     expect(mocks.history).toEqual([]);
   });
 
-  it('handles error followed by close exactly once, including upload and preview cleanup', async () => {
+  it('waits for physical close and upload/preview cleanup after an error on a live child', async () => {
+    const cleanup = Promise.withResolvers();
+    params.cleanupTempFiles.mockReturnValue(cleanup.promise);
     await spawnAndWatchVideo(params);
     child.emit('error', new Error('renderer pipe failed'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(failed).not.toHaveBeenCalled();
+    expect(mocks.release).not.toHaveBeenCalled();
+    expect(videoJobState.activeProcess).toBe(child);
     await closeChild(1);
+    expect(failed).not.toHaveBeenCalled();
+    cleanup.resolve();
+    await vi.advanceTimersByTimeAsync(0);
 
     expectCleanup();
     expect(job.status).toBe('error');
-    expect(failed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ error: 'Failed to spawn python3: renderer pipe failed' }));
+    expect(failed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ error: 'renderer pipe failed' }));
     expect(completed).not.toHaveBeenCalled();
     expect(mocks.history).toEqual([]);
   });

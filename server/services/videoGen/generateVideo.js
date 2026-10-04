@@ -19,6 +19,7 @@ import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { ensureDir, PATHS, rmGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { wan22FrameCountError } from './wan22Controls.js';
 import {
   isDefaultI2vReferenceMode, normalizeI2vReferenceMode, resolveI2vReferenceStrength,
@@ -689,10 +690,16 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     job.status = 'error';
     const reason = err.message || 'Failed to prepare video generation';
     console.error(`❌ Video generation preparation error [${jobId.slice(0, 8)}]: ${reason}`);
+    const cleanup = await Promise.allSettled([
+      cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true }),
+      rmGuarded(stepwiseDir, { recursive: true, force: true }),
+    ]);
+    if (cleanup.some(result => result.status === 'rejected')) {
+      maintenance.markCurrentUnsettled();
+      maintenance.markResourceUnsettled('media', jobId);
+    }
     broadcastSse(job, { type: 'error', error: reason });
     videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [prompt, negativePrompt] }) });
-    void cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true });
-    void rmGuarded(stepwiseDir, { recursive: true, force: true });
     closeJobAfterDelay(videoJobState.jobs, jobId);
     throw err;
   }

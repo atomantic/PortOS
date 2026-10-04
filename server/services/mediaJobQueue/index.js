@@ -1130,6 +1130,9 @@ async function runJobLifecycle(job, markDispatched) {
   const sseEntry = ensureSseEntry(job.id);
   let resolveTerminalState;
   const terminalState = new Promise((resolve) => { resolveTerminalState = resolve; });
+  let resolveProviderSettlement;
+  const providerSettlement = new Promise(resolve => { resolveProviderSettlement = resolve; });
+  let watchdogNeedsProviderSettlement = false;
   let progressPersistDirty = false;
   let progressPersistTimer = null;
   let progressPersisting = null;
@@ -1318,7 +1321,14 @@ async function runJobLifecycle(job, markDispatched) {
     : job.kind === 'training' ? trainingEvents
     : job.kind === 'audio' || job.kind === 'supercollider' ? audioGenEvents
     : imageGenEvents;
-  const dispatcher = makeGenDispatcher(emitter, job, handlers);
+  // A watchdog outcome records why the job failed; it does not prove that
+  // cancellation has reached physical exit and provider cleanup. Only a real
+  // provider terminal event can release that additional wait.
+  const dispatcher = makeGenDispatcher(emitter, job, {
+    ...handlers,
+    completed: payload => { resolveProviderSettlement(); handlers.completed(payload); },
+    failed: payload => { resolveProviderSettlement(); handlers.failed(payload); },
+  });
   dispatcher.attach();
 
   // Thread #2: per-job idle watchdog — fires when the gen has been silent
@@ -1381,7 +1391,8 @@ async function runJobLifecycle(job, markDispatched) {
       // draining to disk with job.status still 'running') during the import.
       if (!canRequestCancellation(job)) return;
       console.log(`⏱️ media-job [${job.id.slice(0, 8)}] watchdog fired after ${idleFor}ms idle (limit ${idleTimeoutMs}ms) — marking failed`);
-      if (mod?.cancel) mod.cancel(job.id);
+      watchdogNeedsProviderSettlement ||= job.providerInvoked === true;
+      if (mod?.cancel) await mod.cancel(job.id);
       handlers.failed({ error: `watchdog timeout: no runner output for ${Math.round(idleFor / 1000)}s (limit ${Math.round(idleTimeoutMs / 1000)}s)` });
     } catch (err) {
       // Don't take down the server over a watchdog tick that couldn't
@@ -1431,6 +1442,9 @@ async function runJobLifecycle(job, markDispatched) {
     if (job.cancelRequested && !isRemoteMediaJob(job)) {
       throw new Error('Canceled before provider dispatch');
     }
+    // A watchdog can win during the awaited policy/module preparation above.
+    // Its terminal outcome must prevent that delayed provider from starting.
+    if (!canRequestCancellation(job)) throw new Error('Provider dispatch stopped after the job reached a terminal outcome');
     // Transient, like terminating: no await between this flag and invocation.
     job.providerInvoked = true;
     const request = { ...safeParams, jobId: job.id };
@@ -1471,6 +1485,7 @@ async function runJobLifecycle(job, markDispatched) {
   // the explicit terminal signal rather than polling every 100ms; this makes
   // lane release immediate and gives tests a deterministic lifecycle to drain.
   await terminalState;
+  if (watchdogNeedsProviderSettlement) await providerSettlement;
   dispatcher.detach();
 }
 
