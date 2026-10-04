@@ -24,6 +24,7 @@
  * this side of the seam: the size cap, the MIME allowlist, the digest check.
  */
 
+import { pcmAudioInfo, resolveSourceAudioPath } from './sourceAudio.js';
 import { readFile, stat } from 'node:fs/promises';
 import { z } from 'zod';
 import {
@@ -59,6 +60,7 @@ const ROLE_PARAMS = Object.freeze({
   video: Object.freeze({
     sourceImage: ['sourceImagePath', 'sourceImageFile'],
     lastImage: ['lastImagePath', 'lastImageFile'],
+    sourceAudio: ['audioFilePath'],
   }),
 });
 
@@ -101,6 +103,12 @@ export const remoteInputAssetsSchema = z.array(remoteInputAssetSchema)
  * @returns {string|null} a human-facing reason, or null when acceptable
  */
 export function inputAssetRejection(capability, assets = [], status = null) {
+  if (assets.some((asset) => asset.role === 'sourceAudio')
+    && (!status?.features?.includes('sourceAudio') || !capability?.sourceAudio)) {
+    return 'This peer/model has not negotiated supplied-audio video generation.';
+  }
+  if (assets.some((asset) => asset.role === 'sourceAudio') && capability?.sourceAudio?.requiresImage
+    && !assets.some((asset) => asset.role === 'sourceImage')) return 'Supplied audio on this model requires a source image.';
   const limits = capability?.inputAssets;
   const model = capability?.modelName || 'The selected model';
   // The remedy names the kind the caller is actually rendering. Saying
@@ -168,13 +176,13 @@ export function inputAssetRejection(capability, assets = [], status = null) {
 function createInputAssetStager({ requestJson, emitStatus }) {
   const uploads = new Map();
 
-  async function uploadInputAsset(localPath) {
+  async function uploadInputAsset(localPath, role) {
     // Re-anchored against the approved image roots on every attempt, exactly as
     // the LOCAL runner re-validates the same input. The marker is persisted,
     // user-editable queue state, so the path that becomes an outbound upload has
     // to be one this machine would have rendered from — a bare basename resolves,
     // and anything outside those roots resolves to null and is refused.
-    const resolved = resolveImageInputPath(localPath);
+    const resolved = role === 'sourceAudio' ? resolveSourceAudioPath(localPath) : resolveImageInputPath(localPath);
     const info = resolved ? await stat(resolved).catch(() => null) : null;
     if (!info?.isFile()) {
       throw inputAssetError(
@@ -214,14 +222,14 @@ function createInputAssetStager({ requestJson, emitStatus }) {
         'MEDIA_PROVIDER_INPUT_UNREADABLE',
       );
     }
-    const detected = detectImageFormat(body);
+    const detected = role === 'sourceAudio' && pcmAudioInfo(body) ? { mime: 'audio/wav' } : detectImageFormat(body);
     if (!detected || !FEDERATED_MEDIA_ASSET_MIME_TYPES.includes(detected.mime)) {
       throw inputAssetError(
         'A conditioning image for this render is not a format peers accept',
         'MEDIA_PROVIDER_ASSET_TYPE_UNSUPPORTED',
       );
     }
-    emitStatus('Sending source image to the remote provider');
+    emitStatus('Sending conditioning asset to the remote provider');
     const response = await requestJson('/api/federation/media/v1/assets', {
       method: 'POST',
       headers: { 'Content-Type': detected.mime, 'X-Content-SHA256': digest },
@@ -247,11 +255,12 @@ function createInputAssetStager({ requestJson, emitStatus }) {
   // path concurrently, so memoizing only completed uploads would let a repeated
   // path start a second transfer of the same bytes before the first could
   // populate the cache — the exact case the memo exists to collapse.
-  return function stageInputAsset(localPath) {
-    const pending = uploads.get(localPath);
+  return function stageInputAsset(localPath, role) {
+    const key = `${role}:${localPath}`;
+    const pending = uploads.get(key);
     if (pending) return pending;
-    const upload = uploadInputAsset(localPath);
-    uploads.set(localPath, upload);
+    const upload = uploadInputAsset(localPath, role);
+    uploads.set(key, upload);
     return upload;
   };
 }
@@ -283,7 +292,7 @@ export async function applyRemoteInputAssets(request, assets, ctx, schema) {
   // otherwise waiting out the last inside the run's timeout envelope. The
   // results are folded in afterwards, in the original order, because reference
   // order is conditioning order.
-  const assetIds = await Promise.all(assets.map(({ path }) => stageAsset(path)));
+  const assetIds = await Promise.all(assets.map(({ path, role }) => stageAsset(path, role)));
   const next = { ...request };
   for (const [index, { role }] of assets.entries()) {
     const assetId = assetIds[index];

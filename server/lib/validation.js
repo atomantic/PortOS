@@ -1,3 +1,4 @@
+import { federatedSourceAudioSchema } from './federatedMediaWire.js';
 import { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageLimits.js';
 export { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageLimits.js';
 import { CREDENTIALS } from './credentialRegistry.js';
@@ -1394,9 +1395,17 @@ export const federatedMediaVideoJobSubmissionBaseSchema = federatedMediaJobRouti
   seed: z.number().int().min(0).optional(),
   sourceImage: federatedMediaInputAssetRefSchema.optional(),
   lastImage: federatedMediaInputAssetRefSchema.optional(),
+  sourceAudio: federatedMediaInputAssetRefSchema.optional(),
+  audioConditioning: federatedSourceAudioSchema.optional(),
 }).strict();
 
 export const federatedMediaVideoJobSubmissionSchema = federatedMediaVideoJobSubmissionBaseSchema
+  .refine((v) => Boolean(v.sourceAudio) === Boolean(v.audioConditioning), {
+    message: 'sourceAudio and audioConditioning must be supplied together',
+  })
+  .refine((v) => !v.sourceAudio || (!v.lastImage && v.sourceAudio.assetId.endsWith(v.audioConditioning?.clipSha256 || '!')), {
+    message: 'Source audio must match its clip digest and cannot combine with an end frame',
+  })
   // First-last-frame needs both ends. A lone end frame would render a plain
   // text-to-video clip and quietly discard the frame the caller supplied.
   .refine((value) => value.lastImage === undefined || value.sourceImage !== undefined, {

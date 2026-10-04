@@ -20,6 +20,7 @@
  * state (rule 4). Neither is conditioning, and neither has a field on the wire.
  */
 
+import { pcmAudioInfo } from './sourceAudio.js';
 import { readdir, rm, stat, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -123,7 +124,7 @@ export async function storeFederatedMediaAsset({ callerId, mimeType, declaredSha
   }
   // Magic bytes, not just the declared header. The header is the caller's word
   // for what this is; the bytes are what the generator will actually open.
-  const detected = detectImageFormat(body);
+  const detected = mimeType === 'audio/wav' && pcmAudioInfo(body) ? { mime: 'audio/wav' } : detectImageFormat(body);
   if (!detected || detected.mime !== mimeType) {
     reject(
       `Conditioning image bytes are not ${mimeType}`,
@@ -190,7 +191,7 @@ export async function describeFederatedMediaAsset(callerId, assetId) {
 // The queue params a federated job reaches its conditioning through — the same
 // four the provider writes in `buildQueueParams`. Listed here because this is
 // where they have to be READ back to keep them alive.
-const CONDITIONING_PARAMS = ['initImagePath', 'referenceImagePaths', 'sourceImagePath', 'lastImagePath'];
+const CONDITIONING_PARAMS = ['initImagePath', 'referenceImagePaths', 'sourceImagePath', 'lastImagePath', 'audioFilePath'];
 
 /**
  * Basenames any queued or running job still depends on.

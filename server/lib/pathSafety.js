@@ -286,7 +286,7 @@ export const resolveImageCleanTmp = makePathResolver(() => PATHS.imageCleanTmp);
  * cannot become an arbitrary path argument to the generator.
  */
 export const resolveFederatedMediaAsset = makePathResolver(() => PATHS.federatedMediaInbox, {
-  extensions: ['png', 'jpg', 'jpeg', 'webp'],
+  extensions: ['png', 'jpg', 'jpeg', 'webp', 'wav'],
 });
 
 /**

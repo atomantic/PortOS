@@ -7,7 +7,10 @@
  * allowlisted capability/job/result projections cross the peer boundary.
  */
 
-import { stat } from 'node:fs/promises';
+import { stat, readFile } from 'node:fs/promises';
+import { totalmem, freemem } from 'node:os';
+import { evaluateHardwareRequirements } from '../lib/systemCapabilities.js';
+import { pcmAudioInfo } from './federatedMedia/sourceAudio.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { canonicalStringify } from '../lib/objects.js';
@@ -115,8 +118,9 @@ function federatedInputProfile(kind, model) {
     const modes = resolveVideoSupportedModes(model);
     if (!Array.isArray(modes) || modes.length === 0) return null;
     const roles = [];
-    if (modes.includes('image') || modes.includes('fflf')) roles.push('sourceImage');
+    if (modes.includes('image') || modes.includes('fflf') || modes.includes('a2v')) roles.push('sourceImage');
     if (modes.includes('fflf')) roles.push('lastImage');
+    if (modes.includes('a2v')) roles.push('sourceAudio');
     if (!roles.length) return null;
     return { roles, required: !modes.includes('text') };
   }
@@ -166,6 +170,7 @@ const INPUT_ASSET_FIELDS = Object.freeze({
   video: [
     { role: 'sourceImage', param: 'sourceImagePath' },
     { role: 'lastImage', param: 'lastImagePath' },
+    { role: 'sourceAudio', param: 'audioFilePath' },
   ],
 });
 
@@ -243,6 +248,18 @@ async function resolveSubmissionInputAssets({ callerId, input, capability }) {
         410,
         { assetId: missing.assetId },
       );
+    }
+    if (found.some((hit) => entry.role === 'sourceAudio' ? hit.mimeType !== 'audio/wav' : !hit.mimeType.startsWith('image/'))) {
+      unavailable('Conditioning asset type does not match its role', 'MEDIA_PROVIDER_INPUT_UNSUPPORTED', 400);
+    }
+    if (entry.role === 'sourceAudio') {
+      const info = pcmAudioInfo(await readFile(found[0].path));
+      const audio = input.audioConditioning;
+      if (!audio || !info || info.sampleCount !== audio.sampleCount
+        || await sha256File(found[0].path) !== audio.clipSha256
+        || Math.abs((input.numFrames - 1) / input.fps - info.sampleCount / info.sampleRate) > 1 / info.sampleRate) {
+        unavailable('Source audio does not match its exact sample window', 'MEDIA_PROVIDER_ASSET_INTEGRITY', 400);
+      }
     }
     const paths = found.map((hit) => hit.path);
     params[entry.param] = isMultiInputRole(entry.role) ? paths : paths[0];
@@ -442,13 +459,20 @@ async function localGeneratorCapabilities(kind, pythonPath, { models, configured
       : needsPython ? !!pythonPath
         : kind === 'video' ? await isByovRuntimeReady(model?.runtime)
           : true;
-    const held = kind === 'video' && model && isVideoModelHeld(model.id, model.runtime);
+    const requiredGb = model?.hardwareRequirements?.minMemoryGb ?? model?.memoryGb ?? null;
+    const hardware = model?.hardwareCompatibility || evaluateHardwareRequirements({
+      ...model?.hardwareRequirements, ...(requiredGb ? { minMemoryGb: requiredGb } : {}),
+    });
+    const hardwareEligible = hardware.state === 'available';
+    const memory = { requiredGb, totalGb: totalmem() / 2 ** 30, freeGb: freemem() / 2 ** 30 };
+    const held = kind === 'video'  && model && isVideoModelHeld(model.id, model.runtime);
     const reason = !isLocal ? 'unknown-engine'
       : !model ? 'unknown-model'
         : !modelSupportsInput ? 'unsupported-input'
           : !runtimeReady || held ? 'runtime-unavailable'
             : !modelReady ? 'model-unavailable'
-              : null;
+              : !hardwareEligible ? 'hardware-ineligible'
+                : null;
     const frameStride = Number.isInteger(Number(model?.frameStride)) && Number(model.frameStride) >= 1 && Number(model.frameStride) <= 64
       ? Number(model.frameStride)
       : null;
@@ -497,6 +521,10 @@ async function localGeneratorCapabilities(kind, pythonPath, { models, configured
       defaultDurationSec: null,
       lyrics: false,
       inputAssets: federatedInputAssetsBlock(kind, model),
+      hardwareEligible,
+      memory,
+      ...(kind === 'video' && resolveVideoSupportedModes(model).includes('a2v')
+        ? { sourceAudio: { requiresImage: true } } : {}),
       autoDuration: false,
       frameStride,
       maxNumFrames: Number.isFinite(maxNumFrames) && maxNumFrames > 0 ? maxNumFrames : null,
@@ -816,6 +844,12 @@ export async function submitFederatedMediaJob({ callerId, config, input, idempot
         reason: capability.unavailableReason,
       });
     }
+    if (input.sourceAudio && (!capability.sourceAudio || !input.sourceImage)) {
+      unavailable('This model requires negotiated source audio and a source image', 'MEDIA_PROVIDER_INPUT_UNSUPPORTED', 400);
+    }
+    if (input.sourceAudio && capability.memory?.requiredGb > capability.memory?.freeGb) {
+      unavailable('Insufficient free memory for supplied audio generation', 'MEDIA_PROVIDER_BUSY', 429, { retryable: true });
+    }
     validateFederatedVideoControls(input, capability._model);
     // Lyrics reach a lyric-aware model only. `input.lyrics` is checked for a
     // non-empty string rather than mere presence: a consumer that renders an
@@ -938,7 +972,8 @@ function buildQueueParams(input, capability, federatedMedia, inputAssetParams = 
     // explicit or the end frame is silently dropped and the clip comes back as
     // a plain image-to-video. 'image'/'fflf' are pipeline semantics, not
     // backend tokens, so neither diverts the dispatcher off the local runner.
-    ...(inputAssetParams.lastImagePath
+    ...(input.audioConditioning ? { audioConditioning: input.audioConditioning, audioStartSec: 0, disableAudio: true } : {}),
+    ...(inputAssetParams.audioFilePath ? { mode: 'a2v' } : inputAssetParams.lastImagePath
       ? { mode: 'fflf' }
       : inputAssetParams.sourceImagePath ? { mode: 'image' } : {}),
   };
