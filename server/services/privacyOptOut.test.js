@@ -38,7 +38,7 @@ vi.mock('./privacyScan.js', async (importOriginal) => {
 const createDraft = vi.fn(async (d) => ({ id: 'draft-1', status: 'draft', ...d }));
 const approveDraft = vi.fn(async () => ({ id: 'draft-1', status: 'approved' }));
 vi.mock('./messageDrafts.js', () => ({ createDraft, approveDraft }));
-vi.mock('./messageAccounts.js', () => ({ listAccounts: vi.fn(async () => [{ id: 'acct-1', type: 'gmail' }]) }));
+vi.mock('./messageAccounts.js', () => ({ listAccounts: vi.fn(async () => [{ id: 'acct-1', type: 'gmail', canSend: true }]) }));
 vi.mock('./messageSync.js', () => ({ getMessages: vi.fn(async () => ({ messages: [] })) }));
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({ privacy: { recheck: {} } })) }));
 

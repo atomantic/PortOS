@@ -332,10 +332,10 @@ export async function emailLane(broker, kase, {
     return { caseId: kase.id, lane: 'email', outcome: 'human_task_queued' };
   }
   const accounts = await accountsProvider();
-  const account = accounts.find((a) => a.type === 'gmail') ?? accounts[0];
+  const account = accounts.find((a) => a.canSend && a.enabled !== false);
   if (!account) {
-    await transitionCase(kase.id, 'human_task_queued', { channel: 'email', reason: 'no_message_account', now });
-    return { caseId: kase.id, lane: 'email', outcome: 'human_task_queued' };
+    return { caseId: kase.id, lane: 'email', outcome: 'account_required',
+      nextAction: 'Connect a Gmail account to send opt-out emails' };
   }
   const { subject, body, templateName } = await renderOptOutEmail({ broker, payload, disclosedFields, listingUrls, now });
   const draft = await draftCreator({
@@ -344,7 +344,7 @@ export async function emailLane(broker, kase, {
     subject,
     body,
     generatedBy: 'privacy-optout',
-    sendVia: account.type === 'gmail' ? 'api' : 'playwright',
+    sendVia: 'api',
   });
 
   await transitionCase(kase.id, 'optout_in_progress', { channel: 'email', disclosedFields, evidence: { lane: 'email', to, template: templateName, draftId: draft.id, disclosed: disclosedFields }, now });
@@ -521,6 +521,7 @@ export async function runOptOutPass({
   const { submit } = planOptOutActions(casesWithBroker);
 
   const submitted = [];
+  const nextActions = new Set();
   let skipped = 0;
   for (const { case: kase, broker } of submit) {
     // Listing URLs live in the case's sealed identity evidence (#8333).
@@ -540,7 +541,12 @@ export async function runOptOutPass({
     const result = lane === 'email'
       ? await emailLane(broker, kase, { disclosedFields, payload, listingUrls, autoApprove, now, ...(deps.email || {}) })
       : await webFormLane(broker, kase, { disclosedFields, payload, listingUrls, autoSubmit, now, ...(deps.webForm || {}) });
-    submitted.push({ brokerId: broker.id, ...result });
+    if (result.outcome === 'account_required') {
+      skipped += 1;
+      nextActions.add(result.nextAction);
+    } else {
+      submitted.push({ brokerId: broker.id, ...result });
+    }
   }
 
   const verification = runVerification
@@ -548,7 +554,7 @@ export async function runOptOutPass({
     : null;
 
   console.log(`📋 Opt-out pass: ${submitted.length} actioned, ${skipped} skipped (autoApprove=${autoApprove}, autoSubmit=${autoSubmit})`);
-  return { submitted, skipped, verification, subjectId: resolvedSubjectId, autonomy: { autoApprove, autoSubmit } };
+  return { submitted, skipped, nextActions: [...nextActions], verification, subjectId: resolvedSubjectId, autonomy: { autoApprove, autoSubmit } };
 }
 
 // ─── Human-task digest ──────────────────────────────────────────────────────
