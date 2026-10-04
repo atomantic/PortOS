@@ -69,7 +69,7 @@ describe('CatalogTypesTab', () => {
     await waitFor(() => expect(screen.getByText('Faction')).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText(/Delete Faction/i));
-    const confirm = await screen.findByRole('button', { name: /Confirm/i });
+    const confirm = await screen.findByRole('button', { name: /Delete type/i });
     await act(async () => { fireEvent.click(confirm); });
 
     expect(deleteCatalogType).toHaveBeenCalledWith('faction', { force: false, silent: true });
@@ -85,13 +85,35 @@ describe('CatalogTypesTab', () => {
     await waitFor(() => expect(screen.getByText('Faction')).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText(/Delete Faction/i));
-    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: /Confirm/i })); });
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: /Delete type/i })); });
     // First attempt was refused (non-force).
     expect(deleteCatalogType).toHaveBeenLastCalledWith('faction', { force: false, silent: true });
     expect(toast.error).toHaveBeenCalled();
+    // Persistent disclosure + stronger action name, no toast reliance.
+    expect(screen.getByText(/keeps those ingredients, removes its type filter/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Delete type definition anyway' })).toBeTruthy();
+    expect(deleteCatalogType).toHaveBeenCalledTimes(1);
 
     // Confirm again → forced delete.
-    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: /Confirm/i })); });
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: /Delete type/i })); });
     expect(deleteCatalogType).toHaveBeenLastCalledWith('faction', { force: true, silent: true });
+    expect(toast.success).toHaveBeenCalledWith('Type definition deleted; ingredient records were kept.');
+  });
+
+  it('cancelling the forced state makes no forced request', async () => {
+    listCatalogTypes.mockResolvedValue({
+      types: [{ id: 'faction', label: 'Faction', system: false, primaryContentKey: 'creed', fields: [] }],
+    });
+    deleteCatalogType.mockRejectedValueOnce(Object.assign(new Error('in use'), { code: 'CATALOG_TYPE_IN_USE' }));
+    renderTab();
+    await waitFor(() => expect(screen.getByText('Faction')).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText(/Delete Faction/i));
+    expect(screen.getByText('Delete the Faction type definition?')).toBeTruthy();
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Delete type' })); });
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: /Cancel/i })); });
+
+    expect(screen.queryByText(/keeps those ingredients/i)).toBeNull();
+    expect(deleteCatalogType).toHaveBeenCalledTimes(1);
   });
 });

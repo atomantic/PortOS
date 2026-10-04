@@ -89,7 +89,7 @@ export function CatalogTypesTab() {
       .catch((err) => {
         // 409 with the in-use code → offer a forced delete inline.
         if (err?.code === 'CATALOG_TYPE_IN_USE' || /force=true/.test(err?.message || '')) {
-          toast.error('Type has ingredients — confirm again to delete anyway');
+          toast.error('This type is still in use. Review the effects before deleting its definition.');
           setArmedDeleteId(`force:${id}`);
         } else {
           toast.error(err?.message || 'Failed to delete type');
@@ -98,7 +98,7 @@ export function CatalogTypesTab() {
       });
     setBusy(false);
     if (!ok) return;
-    toast.success('Type deleted');
+    toast.success('Type definition deleted; ingredient records were kept.');
     setArmedDeleteId(null);
     refresh();
   };
@@ -145,7 +145,7 @@ export function CatalogTypesTab() {
           )}
           <div className="space-y-2">
             {userTypes.map((t) => (
-              <div key={t.id} className="flex items-center justify-between gap-3 p-3 bg-port-bg border border-port-border rounded">
+              <div key={t.id} className="flex flex-wrap items-center justify-between gap-3 p-3 bg-port-bg border border-port-border rounded">
                 <div className="min-w-0">
                   <div className="text-white text-sm font-medium truncate">{t.label}</div>
                   <div className="text-xs text-gray-500 font-mono">{t.id} · {(t.editorFields || []).length} field(s)</div>
@@ -157,7 +157,8 @@ export function CatalogTypesTab() {
                   </button>
                   {armedDeleteId === t.id || armedDeleteId === `force:${t.id}` ? (
                     <ConfirmButtonPair
-                      confirmText="Confirm"
+                      prompt={armedDeleteId === t.id ? `Delete the ${t.label} type definition?` : undefined}
+                      confirmText={armedDeleteId === t.id ? 'Delete type' : 'Delete type definition anyway'}
                       confirmIcon={Trash2}
                       busy={busy}
                       onConfirm={() => confirmDelete(t.id, { force: armedDeleteId === `force:${t.id}` })}
@@ -171,6 +172,13 @@ export function CatalogTypesTab() {
                     </button>
                   )}
                 </div>
+                {armedDeleteId === `force:${t.id}` && (
+                  <p className="basis-full text-xs text-port-warning" role="alert">
+                    Existing ingredients use {t.label}. Deleting this type keeps those ingredients, removes its
+                    type filter, and replaces its custom-field editor with the standard editor. Their stored
+                    field values are retained.
+                  </p>
+                )}
               </div>
             ))}
           </div>
