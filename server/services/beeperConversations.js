@@ -298,7 +298,7 @@ export async function listConversations({
   // escaped, so a query of `50%` finds "50%" rather than everything.
   const term = typeof search === 'string' ? search.trim() : '';
   if (term) {
-    params.push(`%${term.replace(/[\\%_]/g, '\\$&')}%`);
+    params.push(`%${term.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`);
     where.push(`c.title ILIKE $${params.length}`);
   }
 
