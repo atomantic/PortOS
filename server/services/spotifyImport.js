@@ -80,9 +80,12 @@ export function spotifyRecordToCandidate(record) {
   // Legacy/local records carry no URI — fall back to artist+album+title (or the
   // show for episodes) so two *different* tracks that happen to share a title at
   // the same instant don't wrongly collapse into one play.
-  const identity = uri
+  // Key layout `spotify:<playedAt>:<bareId>` mirrors live sync (spotifySync.js)
+  // so an imported play collides with the same play ingested live.
+  const bareId = uri && /^spotify:(?:track|episode):([A-Za-z0-9]+)$/.exec(uri)?.[1];
+  const identity = bareId || uri
     || [artist, isEpisode ? showName : album, title].filter(Boolean).join('|');
-  const dedupeKey = `spotify:${identity}:${happenedAt}`;
+  const dedupeKey = `spotify:${happenedAt}:${identity}`;
 
   const summaryParts = isEpisode
     ? [showName].filter(Boolean)
