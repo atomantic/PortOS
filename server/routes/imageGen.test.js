@@ -88,7 +88,6 @@ vi.mock('../services/imageGen/index.js', () => ({
     listImageModels: vi.fn(() => []),
     listLoraFilenames: vi.fn(async () => []),
     listGallery: vi.fn(async () => []),
-    deleteImage: vi.fn(async () => ({ ok: true })),
     assertGalleryFilename: vi.fn(),
     readImageSidecar: vi.fn(async () => ({ path: '', metadata: {} })),
     saveUploadedGalleryImage: vi.fn(async () => ({ filename: 'upload-abcd1234.png', path: '/data/images/upload-abcd1234.png' })),

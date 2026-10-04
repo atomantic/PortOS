@@ -61,8 +61,10 @@ Admission inventory (`withBackupAssetPublication`):
 | Attach hooks on `completed` via `mediaJobImageHook.js` (writers-room, catalog, music-video scene image/video/cast-sets, CD scene image/music bed, FableLoom scene image/video, sprite references, deck cards, music studio) | Covered |
 | Pipeline filename hooks (`filenameHookFactory.js` comic pages and storyboards, `seasonCoverFilenameHook.js`) | Covered |
 | Recovery commit of a completion whose terminal write failed (the next queue write acknowledges it outside any admission) | Outstanding |
-| Other `mediaJobEvents` `completed` subscribers that write rows (universe-builder collection hook, character sheet, sprite animation, Creative Director scene runner/plan advance/seed settle, music-video production) | Outstanding |
+| Universe Builder completion listeners: collection filing, canon entry-ref append, and sidecar enrichment (`universeBuilderCollectionHook.js`); character reference sheet copy and pointer stamp (`universeCharacterSheet.js`) | Covered (#9982 partial) |
+| Other `mediaJobEvents` `completed` subscribers that write rows (sprite animation, Creative Director scene runner/plan advance/seed settle, music-video production) | Outstanding |
 | Direct gallery upload, image prompt/visibility sidecar replacement, and image deletion (`imageGen/local.js`) | Covered as one file/sidecar/index workflow (#9982 partial) |
+| Gallery image deletion's universe canon purge (`galleryImageDeletion.js`) and character reference sheet deletion (`universeCharacterSheet.js`) | Covered from file removal through the universe pointer purge (#9982 partial) |
 | Video-history deletion, including downloaded-video deletion (`videoGen/historyOps.js`) | Covered through file/history/index removal (#9982 partial) |
 | LoRA dataset uploads, gallery imports, reference-sheet crops, generated completion/recovery copies, image/dataset deletion, and queued record edits (`loraDatasets.js`, `loraDatasetGenerate.js`) | Covered as complete file/record workflows (#9982 partial) |
 | Voice Studio audition and character assignment (`voice/studio.js`) | Covered from source-file write/copy through profile-row commit and failed-write cleanup (#9982 partial) |
@@ -104,6 +106,17 @@ probe the master and upload outside admission, then hold one lease from library
 copy through the project update. A failed row write can still leave an
 unreferenced library stem; it cannot make a completed snapshot point at absent
 bytes.
+
+Universe Builder render listeners take their lease synchronously inside the
+completion fan-out, so a cut that is already draining waits for a character
+sheet's copy and pointer stamp, or a render's collection filing, entry-ref
+append and sidecar enrichment. The gallery delete route holds one lease from
+removing the image through dropping every universe canon `imageRefs` entry that
+named it, and reference-sheet deletion holds one from the pointer read through
+the pointer purge. Sidecar enrichment shares the gallery's per-image edit queue,
+so it cannot drop a concurrent prompt or visibility edit. Records outside
+universe canon that named a deleted image (media-collection items, for example)
+keep their references; only universe canon references are purged with it.
 
 The remaining inventory includes music-library deletion, other voice artifacts,
 direct render/index completion listeners, and the other completion paths above.

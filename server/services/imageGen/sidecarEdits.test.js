@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { makePathsProxy } from '../../lib/mockPathsDataRoot.js';
@@ -56,13 +56,14 @@ vi.mock('../mediaAssetIndex/index.js', () => ({
 let tmpRoot;
 let setImageHidden;
 let updateImagePrompt;
+let fillImageSidecarFields;
 
 beforeAll(async () => {
   tmpRoot = mkdtempSync(join(tmpdir(), 'portos-gallery-sidecar-test-'));
   imagesDir = join(tmpRoot, 'images');
   process.env.PORTOS_MEDIA_MODELS_FILE = join(tmpRoot, 'media-models.json');
   vi.resetModules();
-  ({ setImageHidden, updateImagePrompt } = await import('./local.js'));
+  ({ setImageHidden, updateImagePrompt, fillImageSidecarFields } = await import('./local.js'));
 });
 
 afterAll(() => {
@@ -104,6 +105,25 @@ describe('gallery sidecar edits', () => {
     await expect(setImageHidden('b.png', true)).rejects.toThrow('disk full');
     await expect(updateImagePrompt('b.png', 'later')).resolves.toEqual({ filename: 'b.png', prompt: 'later' });
     expect(read('b.png')).toEqual({ prompt: 'later', hidden: false });
+  });
+
+  it('keeps a universe tag filled while a prompt edit is in flight, without overwriting present keys', async () => {
+    seed('e.png');
+    let release;
+    writeGate = () => new Promise((r) => { release = r; });
+    const prompt = updateImagePrompt('e.png', 'after');
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    const filled = fillImageSidecarFields('e.png', { universeId: 'universe-1', prompt: 'ignored' });
+    await new Promise((r) => setTimeout(r, 20));
+    release();
+    await Promise.all([prompt, filled]);
+
+    expect(read('e.png')).toEqual({ prompt: 'after', hidden: false, universeId: 'universe-1' });
+  });
+
+  it('never creates a stub sidecar for an image that has none', async () => {
+    await expect(fillImageSidecarFields('f.png', { universeId: 'universe-1' })).resolves.toBeNull();
+    expect(existsSync(sidecar('f.png'))).toBe(false);
   });
 
   it('does not make different images wait on each other', async () => {

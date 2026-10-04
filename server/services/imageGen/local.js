@@ -1342,12 +1342,14 @@ export async function deleteImage(filename) {
 // covers both sidecar spellings, and the index refresh stays inside the turn.
 const sidecarEditQueue = createKeyCachedQueue();
 
+// `mutate` edits the metadata in place; returning null leaves the file as it was.
 function editImageSidecar(filename, mutate) {
   // Admit before joining the queue so a cut drains every already-requested
   // edit, including one waiting for an earlier edit's index refresh.
   return withBackupAssetPublication(() => sidecarEditQueue(filename, async () => {
     const { path: sidecarPath, metadata } = await readImageSidecar(filename);
     const result = mutate(metadata);
+    if (result === null) return null;
     await atomicWrite(sidecarPath, metadata);
     await refreshImageIndex(filename);
     return result;
@@ -1369,6 +1371,20 @@ export async function updateImagePrompt(filename, prompt) {
     if (trimmedPrompt) metadata.prompt = trimmedPrompt;
     else delete metadata.prompt;
     return { filename, prompt: trimmedPrompt };
+  });
+}
+
+// Fill only keys the sidecar lacks, through the same edit queue as prompt and
+// visibility edits so neither write drops the other. An image without a sidecar
+// is left alone: a stub holding only these fields would carry no prompt, seed
+// or model. Resolves true when the sidecar changed, null otherwise.
+export function fillImageSidecarFields(filename, fields) {
+  return editImageSidecar(filename, (metadata) => {
+    if (!metadata || Object.keys(metadata).length === 0) return null;
+    const missing = Object.entries(fields).filter(([key, value]) => value != null && metadata[key] == null);
+    if (missing.length === 0) return null;
+    Object.assign(metadata, Object.fromEntries(missing));
+    return true;
   });
 }
 

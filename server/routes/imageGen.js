@@ -38,7 +38,7 @@ import {
 } from '../services/imageGen/regen.js';
 import { getSketchPngPath, isValidKey as isValidSketchKey } from '../services/mediaSketches.js';
 import { itemKey } from '../lib/mediaItemKey.js';
-import { purgeImageRefFromAllUniverses } from '../services/universeCanon.js';
+import { deleteGalleryImage } from '../services/galleryImageDeletion.js';
 import * as characterService from '../services/character.js';
 import { randomUUID } from 'crypto';
 import { buildUniverseRunTag } from '../services/universeRunTag.js';
@@ -904,19 +904,10 @@ router.post('/cancel', asyncHandler(async (req, res) => {
   res.json({ ok: cancelled });
 }));
 
+// Also purges the filename from universe canon (entry `imageRefs` and style
+// references) inside the same backup admission as the file removal.
 router.delete('/:filename', asyncHandler(async (req, res) => {
-  const result = await local.deleteImage(req.params.filename);
-  // Sync universe canon — characters/settings/objects[].imageRefs on every
-  // universe is scanned and any reference to this filename is dropped.
-  // Best-effort: a purge failure must not block the gallery delete itself.
-  const universePurge = await purgeImageRefFromAllUniverses(req.params.filename).catch((err) => {
-    console.warn(`⚠️ Universe canon purge failed for ${req.params.filename}: ${err?.message || err}`);
-    return { removed: 0 };
-  });
-  if (universePurge.removed > 0) {
-    console.log(`🧹 Purged ${universePurge.removed} canon ref(s) for ${req.params.filename}`);
-  }
-  res.json({ ...result, canonRefsRemoved: universePurge.removed });
+  res.json(await deleteGalleryImage(req.params.filename));
 }));
 
 // Variant set for ONE image, for the lightbox original-vs-cleaned toggle —
