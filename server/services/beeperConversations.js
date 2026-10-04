@@ -136,6 +136,7 @@ function shapeConversation(row) {
     isArchived: row.is_archived === true,
     isLowPriority: row.is_low_priority === true,
     isMuted: row.is_muted === true,
+    snoozeUntil: toIso(row.snooze_until),
     lastActivity: toIso(row.last_activity),
     unreadCount: isSeenLocally(row) ? 0 : (Number(row.unread_count) || 0),
     // `null` = this conversation has no mirrored message yet, which is
@@ -271,7 +272,7 @@ async function attachParticipants(conversations, { cap = LIST_PARTICIPANT_CAP } 
  * happens to choose (audit cluster 06, indexes and query plans).
  */
 export async function listConversations({
-  network, unreadOnly, archived, lowPriority, search, limit, cursor,
+  network, unreadOnly, archived, lowPriority, snoozed, search, limit, cursor,
 } = {}) {
   const pageSize = clampLimit(limit, DEFAULT_CONVERSATION_LIMIT, MAX_CONVERSATION_LIMIT);
   const params = [];
@@ -293,6 +294,11 @@ export async function listConversations({
   if (typeof lowPriority === 'boolean') {
     params.push(lowPriority);
     where.push(`c.is_low_priority = $${params.length}`);
+  }
+
+  if (typeof snoozed === 'boolean') {
+    const activeSnooze = '(c.snooze_until IS NOT NULL AND c.snooze_until > NOW())';
+    where.push(snoozed ? activeSnooze : `NOT ${activeSnooze}`);
   }
 
   // Title search: a case-insensitive substring match with LIKE metacharacters

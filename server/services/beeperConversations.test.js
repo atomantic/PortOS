@@ -80,6 +80,17 @@ const callFor = (fragment) => vi.mocked(query).mock.calls.find(([sql]) => flat(s
 beforeEach(() => vi.clearAllMocks());
 
 describe('listConversations — filters are tri-state by omission', () => {
+  it('filters Later by a future snooze deadline and exposes its mirrored value', async () => {
+    const snoozeUntil = '2030-09-01T00:00:00.000Z';
+    vi.mocked(query).mockResolvedValue({ rows: [] });
+    vi.mocked(query).mockResolvedValueOnce({ rows: [conversationRow({ snooze_until: snoozeUntil })] });
+    const page = await listConversations({ snoozed: true });
+    expect(flat(vi.mocked(query).mock.calls[0][0])).toContain('c.snooze_until IS NOT NULL AND c.snooze_until > NOW()');
+    expect(page.conversations[0].snoozeUntil).toBe(snoozeUntil);
+    vi.mocked(query).mockClear();
+    await listConversations({ snoozed: false });
+    expect(flat(vi.mocked(query).mock.calls[0][0])).toContain('NOT (c.snooze_until IS NOT NULL AND c.snooze_until > NOW())');
+  });
   it('applies no archived/low-priority predicate when the caller omits them', async () => {
     vi.mocked(query).mockResolvedValue({ rows: [] });
     await listConversations({});

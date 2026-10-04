@@ -232,6 +232,7 @@ const conversationListQuerySchema = z.object({
   unreadOnly: queryBoolean,
   archived: queryBoolean,
   lowPriority: queryBoolean,
+  snoozed: queryBoolean,
   search: z.string().trim().max(200).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
   cursor: z.string().max(500).optional(),

@@ -528,6 +528,7 @@ export const beeperScopeInputSchema = z.object({
     network: z.string().trim().min(1).max(200).optional(),
     archived: z.boolean().optional(),
     lowPriority: z.boolean().optional(),
+    snoozed: z.boolean().optional(),
     unreadOnly: z.boolean().optional(),
     search: z.string().trim().max(200).optional(),
   }).strict(),

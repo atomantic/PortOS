@@ -1253,3 +1253,26 @@ describe('stored-message event reconciliation', () => {
     expect(txWrites).toEqual([]);
   });
 });
+
+
+describe('Later scope mirror', () => {
+  it('mirrors and clears snoozes on caught-up chats without rereading message history', async () => {
+    const lastActivity = '2026-09-01T00:00:00.000Z';
+    const snoozeUntil = '2030-09-01T00:00:00.000Z';
+    storedCursorRows = [{ chat_id: 'chat-later', cursor: 'cursor-later', last_activity: lastActivity }];
+    const chat = { id: 'chat-later', accountID: 'acct-a', network: 'Example Net', lastActivity,
+      snooze: { snoozeUntil } };
+    installFetch({ chatPages: [{ items: [chat], hasMore: false }] });
+    await runBeeperSweep({ reason: 'manual' });
+    let writes = dbCalls.filter(({ text }) => text.includes('UPDATE beeper_conversations SET snooze_until'));
+    expect(writes.at(-1).text).toContain('snooze_until IS DISTINCT FROM $3::timestamptz');
+    expect(writes.at(-1).params).toEqual(['acct-a', 'chat-later', snoozeUntil]);
+    expect(messageRequests()).toHaveLength(0);
+
+    installFetch({ chatPages: [{ items: [{ ...chat, snooze: null }], hasMore: false }] });
+    await runBeeperSweep({ reason: 'manual' });
+    writes = dbCalls.filter(({ text }) => text.includes('UPDATE beeper_conversations SET snooze_until'));
+    expect(writes.at(-1).params[2]).toBeNull();
+    expect(messageRequests()).toHaveLength(0);
+  });
+});

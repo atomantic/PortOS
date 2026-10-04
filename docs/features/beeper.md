@@ -48,12 +48,13 @@ The endpoints the shipped feature actually calls:
 | `GET /v1/chats/{chatID}/messages/{messageID}` | The outbox's confirmation fallback |
 | `POST /v1/chats/{chatID}/messages` | The one send call, reached only from the outbox |
 | `PATCH /v1/chats/{chatID}` | The Archive and Low priority rail controls |
+| `POST /v1/chats/{chatID}/read` | Optional read receipts, off by default and consent-gated |
 | `GET`/`HEAD /v1/assets/serve` | The attachment mirror — the stream and its size pre-flight |
 | `WS /v1/ws` | The realtime transport |
 | `/.well-known/oauth-authorization-server` and the endpoints it advertises | Connect and disconnect |
 
 `beeperClient.js` wraps more of the API than the features currently reach — chat and message
-search, read/unread state, reactions, edit and delete, `POST /v1/assets/download`, and the
+search, unread state, reactions, edit and delete, `POST /v1/assets/download`, and the
 single-chat GET all have wrappers and tests but no caller in a shipped feature path.
 
 Live verification against a real instance was done on **Beeper Desktop 4.3.89**; the
@@ -436,12 +437,20 @@ its own `COALESCE(last_activity, created_at)`, and as unread again the moment ne
 with no separate bookkeeping. Because the comparison happens at read time against a column the
 sweep never touches, the watermark survives every sweep by construction rather than by racing one.
 
-**This never writes to Beeper.** `POST /api/beeper/conversations/:id/seen` is a pure local update —
-no `PATCH`, no read receipt, nothing that reaches the source network or shows up on another device
-signed into the same account. A settings toggle to *also* send a real read receipt through Beeper's
-own API is deliberately out of scope for this change; `markConversationSeen` carries a `TODO(#83)`
-at the seam where that PATCH-then-mirror write would go, gated behind its own consent step and
-defaulting off, the same way the Archive and Low priority rail controls are wired today.
+**Read receipts are off by default.** Opening a thread only updates its local watermark
+unless **Send read receipts to Beeper** has been enabled in settings after the explicit consent
+step. With that opt-in, opening a thread with unseen activity also makes a best-effort read
+receipt call; a Beeper failure does not undo the local seen state.
+
+### Later scope
+
+The **Later** rail button shows conversations whose mirrored Beeper snooze deadline is still
+in the future. Snoozes are set or cleared in Beeper Desktop; this scope does not create a separate
+PortOS snooze state. The existing sync sweep refreshes snooze state even when a conversation has
+no new messages. Older Desktop versions that omit snooze state produce an empty Later list.
+Expired deadlines are excluded when the list refreshes through the existing sweep/invalidation
+flow. Search, unread filtering, saved scopes, pagination, and shared `?scope=later` links work
+with this scope. Other scopes keep their existing filters.
 
 ### Attachments
 
@@ -688,7 +697,7 @@ its attachments, the token, and anything on the Socket.IO relay.
 | `GET` | `/api/beeper/status` | The status card's read model: token presence/expiry/provenance/`tokenScopes` (array of strings, `[]` when unknown — a pasted token, fork issue #78), a cached reachability probe, the account roster, realtime state, outbox breaker, sweep progress (`sweep: { running, startedAt, finishedAt, reason, accountsDone, accountsTotal, chats, messages }`, fork issue #80) |
 | `POST` | `/api/beeper/status/check` | Live uncached probe with a coded error per failure mode |
 | `POST` | `/api/beeper/sync` | Run one watermark-bounded sweep now; a sweep already in flight reports `skipped: true` |
-| `GET` | `/api/beeper/conversations` | Rail list for one scope (network, unread-only, archived, low-priority), cursor-paginated |
+| `GET` | `/api/beeper/conversations` | Rail list for one scope (network, unread-only, archived, low-priority, snoozed, search), cursor-paginated |
 | `GET` | `/api/beeper/networks` | The rail's scope list, derived from the mirror |
 | `GET` | `/api/beeper/conversations/:id` | One conversation with its mirrored participant subset; 404 at `severity: 'warning'` for a stale deep link |
 | `GET` | `/api/beeper/conversations/:id/messages` | Cursor-paginated messages, newest first |
