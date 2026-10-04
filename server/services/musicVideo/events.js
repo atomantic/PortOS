@@ -37,6 +37,12 @@ import { EventEmitter } from 'events';
 //     (a stage settled, a checkpoint is waiting, it needs the director, it
 //     finished); bridged to `music-video:autonomous`.
 //
+// A final render adds:
+//   'render' → { projectId, jobId, status: 'completed'|'failed'|'canceled', error }
+//     — a final music-video render job settled and its project write landed
+//     (server-only; an autonomous run waiting on its final render finishes or
+//     fails from it).
+//
 // The Cast & Sets check-in adds:
 //   'cast-and-sets' → { projectId, stage, project } — the check-in stage
 //     advanced (direction, an image landed, the sheet is ready, approved);
