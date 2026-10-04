@@ -9,6 +9,7 @@ vi.mock('./cosState.js', () => ({
 vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() } }));
 
 const { updateClaimOwnership, checkReconcileOwnership } = await import('./cosClaimOwnership.js');
+const { claimContinuationAdmission, claimBranchAdmission } = await import('../lib/claimContinuation.js');
 
 const SOURCE = '/repos/app-x';
 const CHILD = '/repos/app-x/data/cos/worktrees/claim-issue-101';
@@ -78,5 +79,82 @@ describe('checkReconcileOwnership', () => {
     expect(await check([], {}, { appId: 'app-missing' })).toEqual({ admitted: false, reason: 'app-unknown' });
     expect(await check([], { listWorktrees: async () => [] })).toEqual({ admitted: false, reason: 'holder-changed' });
     expect(await check([], { listWorktrees: async () => [{ ...holder, locked: true }] })).toEqual({ admitted: false, reason: 'worktree-locked' });
+  });
+});
+
+// A successful check by a named coordinator is an acquire (#10096): the claim run
+// that binds mid-mutation would otherwise be handed the same checkout.
+describe('checkReconcileOwnership reservation', () => {
+  const holder = { path: CHILD, branch: 'refs/heads/claim/issue-101' };
+  const admit = (agentId, input = {}) => checkReconcileOwnership(
+    { appId: 'app-x', branch: 'claim/issue-101', worktreePath: CHILD, agentId, ...input },
+    {
+      getAppById: async (id) => ({ id, repoPath: SOURCE }),
+      listWorktrees: async () => [holder],
+      getAgents: async () => Object.values(store.state.agents),
+      getActiveAgentIds: () => [],
+    },
+  );
+  const bind = () => updateClaimOwnership({ agentId: 'agent-picker', action: 'bind', branch: 'claim/issue-101' });
+
+  beforeEach(() => {
+    store.state.agents['agent-recon'] = {
+      id: 'agent-recon', status: 'running', workspacePath: SOURCE, metadata: { sourceWorkspace: SOURCE },
+    };
+    store.state.agents['agent-picker'] = {
+      id: 'agent-picker', status: 'running', workspacePath: SOURCE,
+      metadata: { sourceWorkspace: SOURCE, claimBranch: 'claim/issue-100', claimPicksOwnBranch: false },
+    };
+    delete store.state.agents['agent-epicrun'];
+  });
+
+  it('refuses a claim bind, continuation and adoption of an admitted branch until the coordinator ends', async () => {
+    expect(await admit('agent-recon')).toEqual({ admitted: true });
+    expect(store.state.agents['agent-recon'].metadata.claimBranches).toEqual(['claim/issue-101']);
+
+    expect(await bind()).toEqual({ bound: false, reason: 'owner-active' });
+    const agents = Object.values(store.state.agents);
+    const metadata = { existingBranch: 'claim/issue-101', resumeWorktreePath: CHILD };
+    expect(claimContinuationAdmission({ metadata, agentId: 'agent-picker', sourceWorkspace: SOURCE, worktrees: [holder], agents }))
+      .toEqual({ admit: false, reason: 'owner-active' });
+    expect(claimBranchAdmission({ branchName: 'claim/issue-101', preferredPath: CHILD, agentId: 'agent-picker', sourceWorkspace: SOURCE, worktrees: [holder], agents }))
+      .toEqual({ admit: false, reason: 'owner-active' });
+
+    store.state.agents['agent-recon'].status = 'completed';
+    expect(await bind()).toEqual({ bound: true, branch: 'claim/issue-101' });
+  });
+
+  it('lets the coordinator re-admit its own branch and release it explicitly', async () => {
+    expect(await admit('agent-recon')).toEqual({ admitted: true });
+    expect(await admit('agent-recon')).toEqual({ admitted: true });
+    expect(store.state.agents['agent-recon'].metadata.claimBranches).toEqual(['claim/issue-101']);
+
+    expect(await updateClaimOwnership({ agentId: 'agent-recon', action: 'release', branch: 'claim/issue-101' }))
+      .toEqual({ released: true, branch: 'claim/issue-101' });
+    expect(await bind()).toEqual({ bound: true, branch: 'claim/issue-101' });
+  });
+
+  it('stays read-only without an agent id and writes nothing when refused', async () => {
+    const before = structuredClone(store.state);
+    expect(await admit(undefined)).toEqual({ admitted: true });
+    expect(store.state).toEqual(before);
+
+    expect(await admit('agent-gone')).toEqual({ admitted: false, reason: 'owner-unknown' });
+    store.state.agents['agent-recon'].status = 'completed';
+    expect(await admit('agent-recon')).toEqual({ admitted: false, reason: 'owner-not-running' });
+    store.state.agents['agent-recon'].status = 'running';
+    store.state.agents['agent-picker'].metadata.claimBranches = ['claim/issue-101'];
+    expect(await admit('agent-recon')).toEqual({ admitted: false, reason: 'claim-owner-active' });
+    expect(store.state.agents['agent-recon'].metadata.claimBranches).toBeUndefined();
+  });
+
+  it('reserves nothing for a branch no claim run can bind', async () => {
+    const before = structuredClone(store.state);
+    const feature = { path: '/repos/app-x/other', branch: 'refs/heads/feature/x' };
+    expect(await checkReconcileOwnership(
+      { appId: 'app-x', branch: 'feature/x', worktreePath: feature.path, agentId: 'agent-recon' },
+      { getAppById: async (id) => ({ id, repoPath: SOURCE }), listWorktrees: async () => [feature], getAgents: async () => [], getActiveAgentIds: () => [] },
+    )).toEqual({ admitted: true });
+    expect(store.state).toEqual(before);
   });
 });

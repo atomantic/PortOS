@@ -39,7 +39,7 @@ import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { ledgerPath, readVerdictLedger, partitionSuperseded, recordVerdictInstruction, recordVerdict, sameDirtyPaths } from './supersededLedger.js';
 import { backupSupersededBranch } from './supersededBackup.js';
-import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
+import { claimCheckoutOwnerReason, RECONCILE_AGENT_ID_PLACEHOLDER } from '../lib/claimContinuation.js';
 import { withClaimOwnershipLock } from './cosClaimOwnership.js';
 import { agentApiCurl } from '../lib/agentApiToken.js';
 import { localApiBaseUrl } from '../lib/networkExposure.js';
@@ -1714,14 +1714,18 @@ export async function formatInFlightForPrompt(inFlight, { defaultBranch, actions
   // This list is a scan from before dispatch; a claim run can take a branch
   // after it. Each branch's own recheck runs right before its first mutation (#10089).
   if (appId) {
-    lines.splice(lines.length - 1, 0, '', 'Ownership recheck: immediately before the FIRST edit, commit, rebase, push, merge, PR change, move or removal on a branch below (and again before its merge), run that branch\'s "Recheck" command and require a parsed JSON response with admitted:true. On admitted:false, an HTTP/auth/transport error or unreadable JSON, leave that branch and its checkout untouched and report it as held by a live owner with the returned reason — a live claim run owns it now.');
+    lines.splice(lines.length - 1, 0, '', 'Ownership recheck: immediately before the FIRST edit, commit, rebase, push, merge, PR change, move or removal on a branch below (and again before its merge), run that branch\'s "Recheck" command and require a parsed JSON response with admitted:true. On admitted:false, an HTTP/auth/transport error or unreadable JSON, leave that branch and its checkout untouched and report it as held by a live owner with the returned reason — a live claim run owns it now. A successful Recheck also reserves that branch for this run until it ends, so no claim run can take it mid-mutation.');
   }
   inFlight.forEach((b, i) => {
     const pr = b.openPr ? ` — PR #${b.openPr.number} (${b.openPr.mergeable})${b.openPr.url ? ` ${b.openPr.url}` : ''}` : ' — no PR';
     lines.push(`### \`${b.branch}\` [${b.state}]${pr}`);
     if (b.worktreePath) lines.push(`- Worktree: \`${b.worktreePath}\`${b.state === 'ABANDONED_WIP' ? ' (holds UNCOMMITTED work — read it before doing anything)' : ''}`);
     if (appId) {
-      const payload = JSON.stringify({ action: 'check', appId, branch: b.branch, ...(b.worktreePath ? { worktreePath: b.worktreePath } : {}) });
+      // `{agentId}` is filled at spawn (`injectReconcileAgentId`): the run has no id yet.
+      const payload = JSON.stringify({
+        action: 'check', appId, branch: b.branch, ...(b.worktreePath ? { worktreePath: b.worktreePath } : {}),
+        agentId: RECONCILE_AGENT_ID_PLACEHOLDER,
+      });
       lines.push(`- Recheck: \`${agentApiCurl({ apiBase: localApiBaseUrl(), path: '/api/cos/claim-ownership', payload })}\``);
     }
     // A never-pushed NEEDS_PR branch reads identically to a pushed one in this
