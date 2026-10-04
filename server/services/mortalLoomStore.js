@@ -18,6 +18,7 @@ import { randomUUID } from 'crypto';
 import { atomicWrite, safeJSONParse, readJSONFile, dataPath, ensureDir, sleep } from '../lib/fileUtils.js';
 import { ICLOUD_NOT_MATERIALIZED, isEvictedStats, materializeAndWait, readIfMaterialized, requestMaterialization } from '../lib/icloudFile.js';
 import { isPlainObject } from '../lib/objects.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { getSettings, settingsEvents } from './settings.js';
 
 const DEFAULT_ICLOUD_PATH = join(
@@ -447,8 +448,16 @@ async function writeStoreAtPath(path, data) {
   dashboardEvents.emit('goals:changed');
 }
 
-/** Atomic read → mutate → write. Ensures all array keys are initialized. */
-export async function updateStore(mutator) {
+// One tail for the whole store file: overlapping read → mutate → write cycles
+// would otherwise read the same pre-image and drop each other's mutations.
+const queueStoreWrite = createFileWriteQueue();
+
+/** Atomic read → mutate → write, serialized per store. Ensures all array keys are initialized. */
+export function updateStore(mutator) {
+  return queueStoreWrite(() => updateStoreUnqueued(mutator));
+}
+
+async function updateStoreUnqueued(mutator) {
   // Resolve the path once and pass it through to both read and write — settings
   // could change mid-call, so we'd otherwise risk reading from one path and
   // writing to another (or the overwrite-guard's existsSync looking at a
