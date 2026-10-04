@@ -4,10 +4,11 @@
  * filesystem or SQL operations. The backup closes admission before rsync and
  * keeps it closed through the database dump and manifest write.
  *
- * Database maintenance shares the boundary. A maintenance fence refuses a NEW
- * publication or cut before either store changes, and maintenance that must not
- * observe or replace a half-published pair takes the same cut around its own
- * destructive step. Every refusal that is retryable carries BACKUP_SNAPSHOT_BUSY.
+ * Database maintenance shares the boundary. A cut is refused while a maintenance
+ * fence is up, and maintenance that must not observe or replace a half-published
+ * pair takes the same cut around its own destructive step. Publication itself is
+ * never refused here: under a fence the database already rejects the row write.
+ * Every retryable refusal carries BACKUP_SNAPSHOT_BUSY.
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { assertDatabaseAdmission } from './databaseMaintenanceJournal.js';
@@ -32,14 +33,10 @@ function releasePublications() {
 export async function withBackupAssetPublication(work) {
   const scope = publicationScope.getStore();
   if (scope?.active) return work();
-  // A maintenance fence would fail the row write after the file was published.
-  // Refuse before either store changes, and again once a cut has been waited out.
-  assertDatabaseAdmission();
   // Work spawned by a still-admitted lease joins it: the cut already waits for that lease.
   const joinsAdmitted = scope?.spawnedBy?.active === true;
   while (!joinsAdmitted && (cutRequested || cutActive)) {
     await new Promise(resolve => publicationWaiters.push(resolve));
-    assertDatabaseAdmission();
   }
   admitted += 1;
   const lease = { active: true };

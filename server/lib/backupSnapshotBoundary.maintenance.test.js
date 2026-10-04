@@ -13,33 +13,6 @@ import { acquireBackupSnapshotCut, withBackupAssetPublication } from './backupSn
 const settle = () => new Promise(resolve => setTimeout(resolve, 10));
 
 describe('backup snapshot boundary under database maintenance', () => {
-  it('refuses a new publication before either store changes while maintenance is fenced', async () => {
-    fence.fenced = true;
-    const work = vi.fn();
-    try {
-      await expect(withBackupAssetPublication(work)).rejects.toMatchObject({ code: 'DATABASE_MAINTENANCE' });
-    } finally {
-      fence.fenced = false;
-    }
-    expect(work).not.toHaveBeenCalled();
-    await expect(withBackupAssetPublication(() => 'admitted')).resolves.toBe('admitted');
-  });
-
-  it('refuses a publication that waited out a cut when maintenance fenced meanwhile', async () => {
-    const release = await acquireBackupSnapshotCut();
-    const work = vi.fn();
-    const waiting = withBackupAssetPublication(work).catch(error => error);
-    await settle();
-    fence.fenced = true;
-    try {
-      release();
-      expect(await waiting).toMatchObject({ code: 'DATABASE_MAINTENANCE' });
-    } finally {
-      fence.fenced = false;
-    }
-    expect(work).not.toHaveBeenCalled();
-  });
-
   it('lets an admitted workflow finish, then refuses the cut and reopens admission when maintenance fenced while draining', async () => {
     let finishRow;
     let completed = false;

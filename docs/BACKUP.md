@@ -40,11 +40,13 @@ stops PM2 to obtain it:
   restore returns `backup_snapshot_busy` without changing anything.
 - **Accepting a backend cutover** takes the cut around publishing the maintenance
   fence (it waits up to 30 seconds to drain, and refuses with
-  `DATABASE_PREFLIGHT_BUSY` while a backup owns it). Once the fence exists, new
-  publications are refused before either store changes (`DATABASE_MAINTENANCE`),
-  and a backup refuses to start or to take its cut — a backup that already
-  reserved a snapshot marks it failed and preserves older recovery points.
-  Cancelling the operation reopens publication; nothing stays held.
+  `DATABASE_PREFLIGHT_BUSY` while a backup owns it). The fence is published
+  before any new publication can be admitted, and every admitted one has already
+  finished. Once it exists, a backup refuses to start or to take its cut
+  (`DATABASE_MAINTENANCE`) — one that already reserved a snapshot marks it failed
+  and preserves older recovery points — and ordinary database writes are
+  refused, so no row can reference a file the fence stranded. Cancelling the
+  operation reopens everything; nothing stays held.
 - Every release is owner-scoped: a failed or cancelled operation releases only the
   cut it acquired and leaves the maintenance journal and restore-recovery
   incomplete guards exactly as they were. The boundary is process-local; the

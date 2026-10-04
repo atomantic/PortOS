@@ -248,7 +248,7 @@ describe('database cutover acceptance HTTP contract', () => {
     expect(spawnDatabaseMaintenanceWorker).not.toHaveBeenCalled();
   });
 
-  it('publishes the fence only after an admitted file-plus-row publication drains, then refuses new ones', async () => {
+  it('publishes the fence only after an admitted file-plus-row publication drains, then refuses a backup cut', async () => {
     const journal = createDatabaseMaintenanceJournal(PATHS.data);
     let finishRow;
     const halfPublished = withBackupAssetPublication(() => new Promise(resolve => { finishRow = resolve; }));
@@ -260,9 +260,8 @@ describe('database cutover acceptance HTTP contract', () => {
     await halfPublished;
     expect((await accepting).status).toBe(202);
     expect(journal.read()).toMatchObject({ stage: 'accepted' });
-    const work = vi.fn();
-    await expect(withBackupAssetPublication(work)).rejects.toMatchObject({ code: 'DATABASE_MAINTENANCE' });
-    expect(work).not.toHaveBeenCalled();
+    // The fence also refuses a backup cut, so nothing can capture the stores meanwhile.
+    await expect(acquireBackupSnapshotCut()).rejects.toMatchObject({ code: 'DATABASE_MAINTENANCE' });
   });
 
   it('refuses without a fence while a backup owns the snapshot cut, and accepts once it is released', async () => {
