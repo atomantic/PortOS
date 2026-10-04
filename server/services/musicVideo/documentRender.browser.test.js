@@ -337,15 +337,19 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
       await sharp(bytes, { raw: { width, height, channels: 3 } }).png().toFile(reference);
     }
     await writeFile(join(dir, 'index.html'), `<!doctype html><style>html,body{margin:0}img{width:${width}px;height:${height}px;display:block}</style>
-      <img id="reference" src="reference.png"><script>window.portosComposition={durationSec:2,fps:${fps},width:${width},height:${height},seek:async()=>{await document.getElementById('reference').decode()}};</script>`);
+      <img id="reference" src="reference.png"><script>window.portosComposition={durationSec:1,fps:${fps},width:${width},height:${height},seek:async()=>{await document.getElementById('reference').decode()}};</script>`);
     const master = join(PATHS.music, 'grade.wav');
-    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=2', master]);
+    // A 1s timeline (12 frames) keeps every behavior under test: three scenes
+    // with distinct grades and a mid-song excerpt that crosses a scene cut.
+    // Real Chrome capture costs ~250ms per 720p frame, so frame count is the
+    // knob that keeps this far from the per-test limit on a loaded host (#10132).
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=1', master]);
     const source = join(PATHS.videos, 'grade-source.mkv');
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-loop', '1', '-i', reference, '-t', '1', '-r', String(fps), '-c:v', 'ffv1', '-pix_fmt', 'yuv420p', source]);
-    const scenes = [{ sceneId: 'a', startSec: 0, endSec: 1 }, { sceneId: 'b', startSec: 1, endSec: 1.5 }, { sceneId: 'c', startSec: 1.5, endSec: 2 }];
+    const scenes = [{ sceneId: 'a', startSec: 0, endSec: 0.5 }, { sceneId: 'b', startSec: 0.5, endSec: 0.75 }, { sceneId: 'c', startSec: 0.75, endSec: 1 }];
     const grade = { preset: 'teal-night', grain: 0.03, sections: [{ sceneId: 'b', preset: 'golden-hour' }, { sceneId: 'c', preset: 'monochrome' }] };
     const project = { id: 'mv-grade', name: 'Synthetic grade reference', scenes,
-      audioAnalysis: { durationSec: 2, sections: [] }, composition: { mode: 'document', grade, document: { directory } } };
+      audioAnalysis: { durationSec: 1, sections: [] }, composition: { mode: 'document', grade, document: { directory } } };
     const plan = await prepareDocumentRender(project);
     const document = join(PATHS.videos, 'grade-document.mp4');
     await encodeDocumentComposition({ project, plan, jobId: 'grade-document', audioPath: master, outputPath: document });
@@ -357,29 +361,29 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     const frameSize = width * height * 3;
     const documentRgb = decode(document);
     const composedRgb = decode(composed);
-    expect(documentRgb.length).toBe(frameSize * fps * 2);
+    expect(documentRgb.length).toBe(frameSize * fps);
     expect(composedRgb.length).toBe(documentRgb.length);
     const mae = (a, b) => a.reduce((sum, v, i) => sum + Math.abs(v - b[i]), 0) / a.length;
     // Browser RGB and video YUV420 differ by conversion/subsampling and H.264
     // quantization; palette parity is bounded rather than falsely byte-exact.
     expect(mae(documentRgb, composedRgb)).toBeLessThan(5);
     const excerpt = join(PATHS.videos, 'grade-excerpt.mp4');
-    await encodeDocumentComposition({ project, plan, jobId: 'grade-excerpt', audioPath: master, outputPath: excerpt, windowStart: 0.5, windowEnd: 1.5 });
+    await encodeDocumentComposition({ project, plan, jobId: 'grade-excerpt', audioPath: master, outputPath: excerpt, windowStart: 0.25, windowEnd: 0.75 });
     const excerptRgb = decode(excerpt);
     // Independently encoded H.264 portrait textures have more prediction error
     // than ramps. Retain the ramp's bound and use 3/255 for the new fixture;
     // the repeated excerpt below must still be decoded byte-identical.
     const excerptTolerance = fixture === 'ramps' ? 2 : 3;
-    const excerptError = mae(excerptRgb, documentRgb.subarray(6 * frameSize, 18 * frameSize));
+    const excerptError = mae(excerptRgb, documentRgb.subarray(3 * frameSize, 9 * frameSize));
     expect(excerptError).toBeLessThan(excerptTolerance);
     const repeat = join(PATHS.videos, 'grade-repeat.mp4');
-    await encodeDocumentComposition({ project, plan, jobId: 'grade-repeat', audioPath: master, outputPath: repeat, windowStart: 0.5, windowEnd: 1.5 });
+    await encodeDocumentComposition({ project, plan, jobId: 'grade-repeat', audioPath: master, outputPath: repeat, windowStart: 0.25, windowEnd: 0.75 });
     expect(decode(repeat).equals(excerptRgb)).toBe(true);
     const composedExcerpt = join(PATHS.videos, 'grade-composed-excerpt.mp4');
     execFileSync(ffmpeg, ['-v', 'error', ...buildMusicVideoFfmpegArgs(clips, master, composedExcerpt, {
-      grade, frameGrid: true, excerpt: { startSec: 0.5, endSec: 1.5 },
+      grade, frameGrid: true, excerpt: { startSec: 0.25, endSec: 0.75 },
     }).args], { stdio: 'pipe' });
-    const composedExcerptError = mae(decode(composedExcerpt), composedRgb.subarray(6 * frameSize, 18 * frameSize));
+    const composedExcerptError = mae(decode(composedExcerpt), composedRgb.subarray(3 * frameSize, 9 * frameSize));
     expect(composedExcerptError).toBeLessThan(excerptTolerance);
     let neutralExcerptError = null;
     if (fixture === 'generated-shots') {
@@ -387,8 +391,8 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
       const neutralFull = join(PATHS.videos, 'neutral-full.mp4');
       const neutralExcerpt = join(PATHS.videos, 'neutral-excerpt.mp4');
       await encodeDocumentComposition({ project: neutralProject, plan, jobId: 'neutral-full', audioPath: master, outputPath: neutralFull });
-      await encodeDocumentComposition({ project: neutralProject, plan, jobId: 'neutral-excerpt', audioPath: master, outputPath: neutralExcerpt, windowStart: 0.5, windowEnd: 1.5 });
-      neutralExcerptError = mae(decode(neutralExcerpt), decode(neutralFull).subarray(6 * frameSize, 18 * frameSize));
+      await encodeDocumentComposition({ project: neutralProject, plan, jobId: 'neutral-excerpt', audioPath: master, outputPath: neutralExcerpt, windowStart: 0.25, windowEnd: 0.75 });
+      neutralExcerptError = mae(decode(neutralExcerpt), decode(neutralFull).subarray(3 * frameSize, 9 * frameSize));
       expect(neutralExcerptError).toBeLessThan(3);
       // A codec baseline independently bounds the additional grading error,
       // rather than letting a textured fixture excuse arbitrary divergence.
@@ -396,14 +400,14 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     }
     const pixel = (rgb, frame, x, y) => [...rgb.subarray(frame * frameSize + (y * width + x) * 3, frame * frameSize + (y * width + x) * 3 + 3)];
     if (fixture === 'ramps') {
-      const cool = pixel(documentRgb, 6, 640, 90);
-      const warm = pixel(documentRgb, 12, 640, 90);
-      const monochrome = pixel(documentRgb, 20, 640, 270);
+      const cool = pixel(documentRgb, 3, 640, 90);
+      const warm = pixel(documentRgb, 6, 640, 90);
+      const monochrome = pixel(documentRgb, 9, 640, 270);
       expect(Math.max(...monochrome) - Math.min(...monochrome)).toBeLessThan(4);
       expect(cool[2]).toBeGreaterThan(cool[0] + 15);
       expect(warm[0]).toBeGreaterThan(warm[2] + 15);
-      expect(Math.max(...pixel(documentRgb, 6, 0, 90))).toBeLessThan(5);
-      expect(Math.min(...pixel(documentRgb, 6, width - 1, 90))).toBeGreaterThan(248);
+      expect(Math.max(...pixel(documentRgb, 3, 0, 90))).toBeLessThan(5);
+      expect(Math.min(...pixel(documentRgb, 3, width - 1, 90))).toBeGreaterThan(248);
     }
     // Optional local proof export: only synthetic fixtures, never live records.
     if (process.env.PORTOS_GRADE_PROOF_DIR) {
@@ -411,7 +415,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
       await mkdir(proof, { recursive: true });
       await copyFile(reference, join(proof, 'reference.png'));
       for (const [label, path] of [['document', document], ['composed', composed], ['excerpt', excerpt]]) {
-        execFileSync(ffmpeg, ['-v', 'error', '-y', '-i', path, '-vf', "select='eq(n,6)+eq(n,12)+eq(n,20)',scale=480:270,tile=3x1", '-frames:v', '1', join(proof, `${label}.png`)]);
+        execFileSync(ffmpeg, ['-v', 'error', '-y', '-i', path, '-vf', "select='eq(n,3)+eq(n,6)+eq(n,9)',scale=480:270,tile=3x1", '-frames:v', '1', join(proof, `${label}.png`)]);
       }
       await writeFile(join(proof, 'metrics.json'), JSON.stringify({ paletteMeanAbsoluteError: mae(documentRgb, composedRgb), excerptMeanAbsoluteError: excerptError, composedExcerptMeanAbsoluteError: composedExcerptError, neutralExcerptMeanAbsoluteError: neutralExcerptError, repeatIdentical: true }, null, 2));
     }
@@ -446,7 +450,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     expect(browser.isConnected()).toBe(true);
   }, 30000);
 
-  it('renders a generated 30-second card/still/clip document with the selected performance in-point', async () => {
+  it('renders a generated 3-second card/still/clip document with the selected performance in-point', async () => {
     await mkdir(PATHS.videos, { recursive: true });
     await mkdir(PATHS.images, { recursive: true });
     await mkdir(PATHS.music, { recursive: true });
@@ -456,12 +460,12 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
       '-filter_complex', '[0:v][1:v][2:v]concat=n=3:v=1:a=0', '-c:v', 'libvpx', '-b:v', '1M', '-g', '24', clip]);
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=yellow:s=640x360:d=1', '-frames:v', '1', join(PATHS.images, 'generated-still.png')]);
     const master = join(PATHS.music, 'generated-master.wav');
-    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=30', master]);
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=3', master]);
     const created = await projects.createProject({ name: 'Generated Example' });
     await projects.mutateProjectRecord(created.id, (current) => ({ project: {
       ...current,
-      audioAnalysis: { durationSec: 30, beats: [0, 10, 20], downbeats: [0, 10, 20], sections: [
-        { id: 'intro', startSec: 0, endSec: 10 }, { id: 'still', startSec: 10, endSec: 20 }, { id: 'clip', startSec: 20, endSec: 30 },
+      audioAnalysis: { durationSec: 3, beats: [0, 1, 2], downbeats: [0, 1, 2], sections: [
+        { id: 'intro', startSec: 0, endSec: 1 }, { id: 'still', startSec: 1, endSec: 2 }, { id: 'clip', startSec: 2, endSec: 3 },
       ] },
       productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 },
       treatment: { shotDirections: [
@@ -470,9 +474,9 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
         { sceneId: 'video', medium: 'existing-footage', mediumRationale: 'Use selected clip' },
       ] },
       scenes: [
-        { sceneId: 'card', order: 0, startSec: 0, endSec: 10 },
-        { sceneId: 'image', order: 1, startSec: 10, endSec: 20, referenceImageId: 'generated-still.png' },
-        { sceneId: 'video', order: 2, startSec: 20, endSec: 30, shotMode: 'performance', videoHistoryId: 'vh-generated', takes: [
+        { sceneId: 'card', order: 0, startSec: 0, endSec: 1 },
+        { sceneId: 'image', order: 1, startSec: 1, endSec: 2, referenceImageId: 'generated-still.png' },
+        { sceneId: 'video', order: 2, startSec: 2, endSec: 3, shotMode: 'performance', videoHistoryId: 'vh-generated', takes: [
           { kind: 'video', assetId: 'vh-generated', shotInstruction: { shotMode: 'performance', edit: { inSec: 1, outSec: 3 } } },
         ] },
       ],
@@ -508,10 +512,12 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
       await page.close();
       return pixels;
     };
-    const beforeProof = await previewFrames(project, [0, 10, 20]);
-    // The full-duration proof samples static section boundaries. A supported
-    // 12fps clock keeps all 30 seconds while halving browser capture work.
-    const plan = { ...(await prepareDocumentRender(project)), clock: documentRenderClock(30, 12), frame: { width: 1280, height: 720 } };
+    const beforeProof = await previewFrames(project, [0, 1, 2]);
+    // The full-duration proof samples static section boundaries. A 3s song at
+    // the supported 12fps minimum keeps one section per second at 36 frames of
+    // real Chrome capture (a 30s song was 360 frames, ~100s, and timed out on a
+    // loaded host: #10132).
+    const plan = { ...(await prepareDocumentRender(project)), clock: documentRenderClock(3, 12), frame: { width: 1280, height: 720 } };
     const renderAt = async (time, name) => {
       const outputPath = join(PATHS.videos, name);
       await encodeDocumentComposition({ project, plan, jobId: name.replace(/\W/g, ''), audioPath: master, outputPath, windowStart: time, windowEnd: time + 1 / 24 });
@@ -520,16 +526,16 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
       return [...frame.subarray((18 * 64 + 32) * 3, (18 * 64 + 32) * 3 + 3)];
     };
     const card = await renderAt(0, 'generated-card.mp4');
-    const still = await renderAt(10, 'generated-still.mp4');
-    const firstClip = await renderAt(20, 'generated-clip.mp4');
-    const repeated = await renderAt(20, 'generated-clip-again.mp4');
+    const still = await renderAt(1, 'generated-still.mp4');
+    const firstClip = await renderAt(2, 'generated-clip.mp4');
+    const repeated = await renderAt(2, 'generated-clip-again.mp4');
     const fullPath = join(PATHS.videos, 'generated-full.mp4');
     await encodeDocumentComposition({ project, plan, jobId: 'generated-full', audioPath: master, outputPath: fullPath });
     const fullPixel = (time) => {
       const frame = execFileSync(ffmpeg, ['-v', 'error', '-ss', String(time), '-i', fullPath, '-frames:v', '1', '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
       return [...frame.subarray((18 * 64 + 32) * 3, (18 * 64 + 32) * 3 + 3)];
     };
-    for (const [index, time] of [0, 10, 20].entries()) {
+    for (const [index, time] of [0, 1, 2].entries()) {
       const excerpt = [card, still, firstClip][index];
       const final = fullPixel(time);
       for (let channel = 0; channel < 3; channel++) {
@@ -546,7 +552,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     author.response = JSON.stringify({ sections: [{ id: 'still', source: "function render(ctx, env) { ctx.fillStyle = '#ff00ff'; ctx.fillRect(0, 0, env.width, env.height); }" }] });
     const revision = await regenerateMixedMediaSection(created.id, 'still', { expectedDraft: project.composition.document.directory });
     await acceptMixedMediaDocument(created.id, revision.document.directory);
-    const afterProof = await previewFrames(await projects.getProject(created.id), [0, 10, 20]);
+    const afterProof = await previewFrames(await projects.getProject(created.id), [0, 1, 2]);
     expect(afterProof[0]).toEqual(beforeProof[0]);
     expect(afterProof[1]).not.toEqual(beforeProof[1]);
     expect(afterProof[2]).toEqual(beforeProof[2]);
