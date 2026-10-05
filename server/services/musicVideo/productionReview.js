@@ -85,7 +85,7 @@ export function productionReviewBasis(project) {
 
 /** Labeled per-input hashes so a stale approval can name what changed since. */
 const h = v => hash(v ?? null);
-export function productionApprovalInputs(project) {
+function productionApprovalInputs(project) {
   const draft = project.productionReview?.draft || {};
   const art = {
     concept: h(project.concept), 'visual spec': h(project.visualSpec), 'style references': h(project.styleReferences),
@@ -193,7 +193,7 @@ export function productionReadiness(project) {
     proofProblems.push('Render and watch a current animated chorus proof with the master song.');
   }
   const proofApproved = !proofProblems.length && hasProofEvidence(review.approvals?.proof?.proofReview) && review.approvals?.proof?.basis === hash({ basis: basis.proof, excerptId: excerpt.id, filename: excerpt.filename });
-  return { basis, alignment: { basis: alignmentBasis, status: draft.lyricsMode === 'instrumental' ? 'instrumental'
+  return { basis, inputs, alignment: { basis: alignmentBasis, status: draft.lyricsMode === 'instrumental' ? 'instrumental'
     : draft.timingStatus !== 'verified' ? 'provisional' : review.alignmentBasis === alignmentBasis ? 'verified' : 'stale' }, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: alignmentBasis }, art: { approved: artApproved, problems: [...new Set(artProblems)], stale: artApproved ? null : staleApproval(project, 'art', basis.art, inputs) },
     storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)], stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs) },
     proof: { approved: proofApproved, problems: proofProblems, excerptId: excerpt?.id || null, stale: proofApproved ? null : staleApproval(project, 'proof', basis.proof, inputs) },

@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { productionReadiness, productionApprovalInputs } from './productionReview.js';
+import { productionReadiness } from './productionReview.js';
 
 // Approval records the labeled inputs it was granted on, so a later change can be named.
 const approvedArt = (project) => ({ ...project, productionReview: { ...project.productionReview,
-  approvals: { art: { stage: 'art', basis: productionReadiness(project).basis.art, inputs: productionApprovalInputs(project).art, approvedAt: '2026-01-01T00:00:00.000Z' } } } });
+  approvals: { art: { stage: 'art', basis: productionReadiness(project).basis.art, inputs: productionReadiness(project).inputs.art, approvedAt: '2026-01-01T00:00:00.000Z' } } } });
 
 describe('stale approval reporting', () => {
   const base = { id: 'p1', concept: 'Example concept', scenes: [{ sceneId: 's1', startSec: 0, endSec: 4, prompt: 'a' }, { sceneId: 's2', startSec: 4, endSec: 8, prompt: 'b' }], productionReview: { draft: {} } };
@@ -20,8 +20,8 @@ describe('stale approval reporting', () => {
   });
 
   it('labels per-scene edits for the storyboard stage', () => {
-    const inputs = productionApprovalInputs(base).storyboard;
-    const edited = productionApprovalInputs({ ...base, scenes: [base.scenes[0], { ...base.scenes[1], prompt: 'c' }] }).storyboard;
+    const inputs = productionReadiness(base).inputs.storyboard;
+    const edited = productionReadiness({ ...base, scenes: [base.scenes[0], { ...base.scenes[1], prompt: 'c' }] }).inputs.storyboard;
     expect(Object.keys(edited).filter(k => edited[k] !== inputs[k])).toEqual(['scene 2 prompt']);
   });
 });
