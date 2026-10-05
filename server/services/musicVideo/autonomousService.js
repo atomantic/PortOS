@@ -63,6 +63,7 @@ import {
   normalizeSunoOptions,
   sunoSongFields,
 } from '../../lib/musicVideoAutonomous.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
 
@@ -379,7 +380,9 @@ const STAGES = {
       title: fields.title, concept: run.brief.prompt, lyrics: fields.lyrics, prompt: fields.style,
     });
     const durationSec = await deps.probeDuration(song.filename);
-    await deps.attachAudio(track.id, song.filename, { source: 'suno', prompt: fields.style, lyrics: fields.lyrics, durationSec });
+    // The imported M4A is already durable; the track row that first names it
+    // commits under a backup lease (#9982).
+    await withBackupAssetPublication(() => deps.attachAudio(track.id, song.filename, { source: 'suno', prompt: fields.style, lyrics: fields.lyrics, durationSec }));
     // Linking the track seeds the project's timed lyric cues from the track lyrics.
     await deps.updateProject(project.id, { trackId: track.id });
     return { output: { trackId: track.id, sunoSongIds: song.songIds } };

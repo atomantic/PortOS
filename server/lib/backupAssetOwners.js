@@ -128,6 +128,27 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     status: 'reference-only',
     modules: ['services/musicVideo/excerptService.js'],
   },
+  {
+    // The repair's boundary frame is written in place, then the revision row
+    // that names it commits under the lease.
+    id: 'music-video-performance-repair',
+    status: 'admitted',
+    modules: ['services/musicVideo/performanceRepair.js'],
+  },
+  {
+    // The .mid copy, the project row that names it and the discard unlink are
+    // one workflow; the sidecar runs outside admission.
+    id: 'music-video-midi-transcription',
+    status: 'admitted',
+    modules: ['services/audioMidiTranscription.js'],
+  },
+  {
+    // The Suno M4A reaches the music library through its admitted import; the
+    // track row that first names it commits under the lease.
+    id: 'music-video-autonomous-song',
+    status: 'admitted',
+    modules: ['services/musicVideo/autonomousService.js'],
+  },
   // Classified by a code sweep (#9982) but still outside admission. Each entry
   // names the modules whose file-plus-record workflows are not wrapped yet, so a
   // continuation can take one and move it up. Entries are per domain, not per
@@ -141,16 +162,6 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
       'services/sprites/reference.js', 'services/sprites/walkTrims.js', 'services/sprites/atlas.js',
       'services/sprites/assets.js', 'services/sprites/importer.js', 'services/sprites/walk.js',
       'services/sprites/animationTrackWorkflow.js',
-    ],
-  },
-  {
-    // Performance repair's boundary frame, MIDI transcription and the
-    // autonomous Suno song, where the file is written in place.
-    id: 'music-video-render-and-record-owners',
-    status: 'outstanding',
-    modules: [
-      'services/musicVideo/performanceRepair.js', 'services/audioMidiTranscription.js',
-      'services/musicVideo/autonomousSuno.js', 'services/musicVideo/autonomousService.js', 'routes/musicVideo.js',
     ],
   },
   {

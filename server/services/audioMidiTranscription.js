@@ -28,6 +28,7 @@ import { unlink } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { PATHS, shortId, importFileToDir } from '../lib/fileUtils.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
 import { MUSCRIPTOR_MODELS } from '../lib/muscriptorModels.js';
@@ -224,8 +225,15 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
       }
 
       broadcastSse(job, { type: 'progress', stage: 'importing' });
-      const { filename } = await importFileToDir(tempOut, `${outputName}.mid`, destDir);
-      const extra = (await onComplete?.({ filename, model: resolvedModel })) || {};
+      // The .mid copy, the row that names it and the discard unlink are one
+      // backup-admitted workflow (#9982): a snapshot never dumps a row for a
+      // file its copy missed, nor copies a file whose row was just declined.
+      const { filename, extra } = await withBackupAssetPublication(async () => {
+        const imported = await importFileToDir(tempOut, `${outputName}.mid`, destDir);
+        const result = (await onComplete?.({ filename: imported.filename, model: resolvedModel })) || {};
+        if (result.discarded) await unlink(join(destDir, imported.filename)).catch(() => {});
+        return { filename: imported.filename, extra: result };
+      });
 
       // `onComplete` may decline the result (`discarded: true` — e.g. the music
       // video's audio source changed mid-run, so this .mid is of the OLD
@@ -233,7 +241,6 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
       // orphaned file and tell the client it was discarded, not "ready".
       if (extra.discarded) {
         console.log(`🗑️ MIDI transcription ${shortId(jobId)} discarded — ${extra.reason || 'stale result'}`);
-        await unlink(join(destDir, filename)).catch(() => {});
         broadcastSse(job, { type: 'complete', discarded: true, model: resolvedModel });
         return;
       }
