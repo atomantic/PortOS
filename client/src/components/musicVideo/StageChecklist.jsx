@@ -4,9 +4,10 @@ import { ArrowRight, CheckCircle2, Circle } from 'lucide-react';
  * The top of every stage tab: what this stage needs before it counts as done
  * (`stageChecklist(…)` items), each open item with what is still missing and,
  * where one exists, a button that scrolls to the control that settles it —
- * unless the header's next action already goes there (`headerAnchor`).
+ * unless the header's next action already goes there (`headerAnchor`). A stale
+ * approval lists a Revert button per changed input whose approved value was kept.
  */
-export default function StageChecklist({ items, onAction, headerAnchor = null }) {
+export default function StageChecklist({ items, onAction, onRevert, headerAnchor = null }) {
   if (!items?.length) return null;
   const done = items.filter((item) => item.done).length;
   return (
@@ -31,6 +32,17 @@ export default function StageChecklist({ items, onAction, headerAnchor = null })
                 <ul className="list-disc space-y-0.5 pl-4 text-xs text-port-text-muted">
                   {item.details.map((text) => <li key={text} className="break-words">{text}</li>)}
                 </ul>
+              )}
+              {!item.done && item.revert && onRevert && (
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  {item.revert.fields.map((field) => (
+                    <button key={field} type="button" onClick={() => onRevert(item.revert.stage, field)}
+                      title="Put this back to the value you approved"
+                      className="min-h-[44px] rounded border border-port-border px-2 py-1 text-xs text-port-accent sm:min-h-0">
+                      Revert {field}
+                    </button>
+                  ))}
+                </div>
               )}
             </div>
             {!item.done && item.action && onAction && item.action.anchor !== headerAnchor && (

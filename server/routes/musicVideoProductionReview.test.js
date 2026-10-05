@@ -483,3 +483,50 @@ describe('revising from review feedback', () => {
     expect(author.calls).toBe(0);
   });
 });
+
+describe('reverting a changed input to its approved value (#10241)', () => {
+  const revert = body => request(app).post(`${base}/production-review/revert`).send(body);
+
+  it('restores the concept and a scene prompt, making the approvals current again without re-approval', async () => {
+    await store.updateProject(project.id, { concept: { prompt: 'Approved idea' } });
+    expect((await approve('art')).status).toBe(200);
+    expect((await approve('storyboard')).status).toBe(200);
+    const sceneId = (await store.getProject(project.id)).scenes[0].sceneId;
+    await store.updateProject(project.id, { concept: { prompt: 'Drifted idea' } });
+    await store.mutateProjectRecord(project.id, current => ({ project: { ...current,
+      scenes: current.scenes.map(s => ({ ...s, prompt: 'A different prompt' })) } }));
+    const stale = (await read()).body.readiness;
+    expect(stale.art.approved).toBe(false);
+    expect(stale.storyboard.stale).toMatchObject({ changedFields: ['concept', 'scene 1 prompt'], revertible: ['concept', 'scene 1 prompt'] });
+
+    expect((await revert({ stage: 'storyboard', field: 'scene 1 prompt' })).status).toBe(200);
+    const done = await revert({ stage: 'art', field: 'concept' });
+    expect(done.status).toBe(200);
+    expect(done.body.project.concept).toEqual({ prompt: 'Approved idea' });
+    expect(done.body.project.scenes.find(s => s.sceneId === sceneId).prompt).toBe('A paper figure opens a painted doorway.');
+    expect(done.body.readiness.art.approved).toBe(true);
+    expect(done.body.readiness.storyboard.approved).toBe(true);
+  });
+
+  it('refuses with 409 when there is no stored value, nothing changed, or the field is invalid', async () => {
+    expect((await approve('art')).status).toBe(200);
+    expect((await revert({ stage: 'art', field: 'concept' })).body.code).toBe('MUSIC_VIDEO_REVERT_UNAVAILABLE');
+    await store.updateProject(project.id, { concept: { prompt: 'Drifted idea' } });
+    const noSnapshot = await store.mutateProjectRecord(project.id, current => ({ project: { ...current, productionReview: { ...current.productionReview,
+      approvals: { art: { ...current.productionReview.approvals.art, values: undefined } } } } }));
+    expect(noSnapshot.project.productionReview.approvals.art.values).toBeUndefined();
+    const legacy = await revert({ stage: 'art', field: 'concept' });
+    expect(legacy.status).toBe(409);
+    expect(legacy.body.code).toBe('MUSIC_VIDEO_REVERT_UNAVAILABLE');
+    expect((await store.getProject(project.id)).concept).toEqual({ prompt: 'Drifted idea' });
+    expect((await revert({ stage: 'art', field: '' })).status).toBe(400);
+    expect((await revert({ stage: 'takes', field: 'concept' })).status).toBe(400);
+  });
+
+  it('keeps no value for an input over the 8 KB cap', async () => {
+    const big = 'x'.repeat(9000);
+    await store.updateProject(project.id, { concept: { prompt: big } });
+    expect((await approve('art')).status).toBe(200);
+    expect((await store.getProject(project.id)).productionReview.approvals.art.values).not.toHaveProperty('concept');
+  });
+});

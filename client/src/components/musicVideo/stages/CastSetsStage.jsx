@@ -21,6 +21,7 @@ export default function CastSetsStage({ board }) {
           onResume={() => castSets.resume()}
           onRebuild={() => castSets.start()}
           onReconfirm={() => castSets.reconfirm()}
+          onRevert={board.onRevertApproval ? (field) => board.onRevertApproval('castAndSets', field) : undefined}
           onSkip={board.skipCastAndSets}
         />
       ) : (

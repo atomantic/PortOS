@@ -485,6 +485,8 @@ export const importMusicVideoProductionPlanning = (id, source, options = {}) => 
 export const bindMusicVideoProductionShot = (id, shotId, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/shots/${encodeURIComponent(shotId)}/bind`, { method: 'POST', ...options });
 
 export const addMusicVideoProductionFeedback = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/feedback`, { method: 'POST', body: JSON.stringify(body), ...options });
+// Write one changed input of a stale approval back to its approved value (#10241). `stage` is art | storyboard | proof | castAndSets.
+export const revertMusicVideoProductionInput = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/revert`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const reviseMusicVideoProductionFromFeedback = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/revise`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const resolveMusicVideoProductionFeedback = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/feedback/resolve`, { method: 'POST', body: JSON.stringify(body), ...options });
 // Drafting is free; generation and candidate selection are separate explicit actions.

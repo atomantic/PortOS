@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
-import { productionReadiness, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, recordProductionFeedback, resolveProductionFeedback } from './productionReview.js';
+import { productionReadiness, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput } from './productionReview.js';
 
 const reviewProcessId = randomUUID();
 
@@ -131,6 +131,13 @@ export async function reverifyProductionAlignment(id, { basis, notes, reviewer }
       draft: { ...draft, timingStatus: 'verified', timingNotes: notes }, alignmentBasis: basis,
       alignmentReview: { basis, reviewer, reviewedAt: new Date().toISOString() } } } };
   });
+  return changed(project);
+}
+
+/** Restore one changed input to the value its approval was granted on (#10241). */
+export async function revertProductionInput(id, input) {
+  await requireProject(id);
+  const { project } = await mutateProjectRecord(id, current => ({ project: revertApprovedInput(current, input) }));
   return changed(project);
 }
 
