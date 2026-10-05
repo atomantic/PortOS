@@ -483,6 +483,37 @@ describe('MusicVideo project load recovery (#9761)', () => {
   });
 });
 
+describe('MusicVideo stage-only nav URLs (#10303)', () => {
+  it('/music-video/board redirects to the newest project at that stage', async () => {
+    listMusicVideoProjects.mockResolvedValue([
+      { ...PROJECT_NO_CLIP, updatedAt: '2026-01-01T00:00:00Z' },
+      { ...PROJECT_WITH_CLIP, updatedAt: '2026-02-01T00:00:00Z' },
+    ]);
+    getMusicVideoProject.mockResolvedValue(PROJECT_WITH_CLIP);
+    render(
+      <MemoryRouter initialEntries={['/music-video/board']}>
+        <LocationProbe />
+        {MV_ROUTES}
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent('/music-video/mv-1/board'));
+    expect(screen.queryByText(/Project not found/)).not.toBeInTheDocument();
+  });
+
+  it('falls back to the project list when there are no projects', async () => {
+    listMusicVideoProjects.mockResolvedValue([]);
+    render(
+      <MemoryRouter initialEntries={['/music-video/produce']}>
+        <LocationProbe />
+        {MV_ROUTES}
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText(/No music video projects yet/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent(/^\/music-video$/));
+    expect(screen.queryByText(/Project not found/)).not.toBeInTheDocument();
+  });
+});
+
 describe('MusicVideo bounded summary index and project isolation (#10169)', () => {
   it('opening /music-video/:id makes one project GET and no full-list call', async () => {
     getMusicVideoProject.mockResolvedValue(PROJECT_WITH_CLIP);

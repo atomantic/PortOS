@@ -163,7 +163,10 @@ export default function MusicVideo() {
   const deferredPatches = useRef(new Map());
   const [tracks, setTracks] = useState([]);
   const [universes, setUniverses] = useState(null);
-  const selectedId = routeProjectId || null;
+  // A project-less stage URL (/music-video/board, from the nav manifest) names a stage, not a project:
+  // treat it as the index until the summaries resolve, then redirect to the newest project at that stage.
+  const stageOnlyParam = !routeStage && !routeSceneId && !routeArtifactId ? resolveStageParam(routeProjectId) : null;
+  const selectedId = stageOnlyParam ? null : (routeProjectId || null);
   // Summaries load for the index, or once the header picker is used on a deep link;
   // once wanted they stay loaded (disabling the hook would reset its items).
   const [summariesWanted, setSummariesWanted] = useState(!selectedId);
@@ -259,6 +262,11 @@ export default function MusicVideo() {
     if (selected) byId.set(selected.id, selected);
     return [...byId.values()].sort(compareMusicVideoProjectsNewestFirst);
   }, [selected, summaries.items]);
+  useEffect(() => {
+    if (!stageOnlyParam || !summaries.loaded || summaries.error) return;
+    const newest = sortedProjects[0];
+    navigate(newest ? `/music-video/${encodeURIComponent(newest.id)}/${stageOnlyParam}` : "/music-video", { replace: true });
+  }, [stageOnlyParam, summaries.loaded, summaries.error, sortedProjects, navigate]);
   const productionReview = useMusicVideoProductionReview({ project: selected, replaceProject });
   // Posting (#9282): fill each platform's post in the PortOS Browser, post on a second press.
   const publishing = useMusicVideoPublishing({ project: selected, replaceProject });
@@ -1339,13 +1347,13 @@ export default function MusicVideo() {
             <p>{projectsError}</p>
           </Banner>
         )}
-        {!selected && !loading && !projectsError && routeProjectId && (
+        {!selected && !loading && !projectsError && routeProjectId && !stageOnlyParam && (
           <p className="text-sm text-port-text-muted">
             Project not found — it may have been deleted.{' '}
             <button onClick={() => navigate('/music-video')} className="text-port-accent underline">Back to projects</button>
           </p>
         )}
-        {!selected && (loading || !routeProjectId) && (
+        {!selected && (loading || !routeProjectId || !!stageOnlyParam) && (
           <div className="space-y-6">
             {/* The header already carries New project / Autonomous: keep the hint, not a second pair of buttons. */}
             <p className="text-sm text-port-text-muted">Pick a project above, start a new one — seed a name, universe and board, choose the tools and a budget, and let autopilot churn — or go fully autonomous from a single prompt.</p>
