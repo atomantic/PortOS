@@ -65,3 +65,84 @@ CPU, memory and process count, removes the container on cancel/failure, validate
 its output, and muxes the master song outside the scene runtime. No uncontained
 host execution fallback is provided. Typography and grading controls for HTML
 compositions do not apply to this renderer; author those visuals in the scene.
+
+## Opt-in real acceptance (#9798)
+
+`scripts/eidoverse-acceptance.js` is a standalone synthetic acceptance harness.
+It calls production `prepareEidoverseRender` and `encodeEidoverseComposition`;
+Docker, ffmpeg, ffprobe and the renderer are never mocked. It requires a native
+Linux x86_64 host, a local Unix-socket Docker daemon, **8 GiB MemAvailable** and
+**60 GiB free on the Docker-root filesystem** before any build. An inaccessible
+or inadequate prerequisite records `unavailable`, leaves runtime criteria
+`not-run` and exits 2. Preflight success alone is not acceptance.
+
+The manual-only `.github/workflows/eidoverse-acceptance.yml` is a candidate
+free CI route using standard public-repository `ubuntu-24.04`. GitHub documents
+only [14 GB storage for that runner](https://docs.github.com/en/actions/reference/runners/github-hosted-runners),
+so it is **not yet a verified suitable execution host**. The workflow measures
+actual Docker-root space and fails unavailable when short. It never lowers the
+threshold, installs Docker, deletes runner software, changes OS/security settings,
+uses paid runners, publishes images, or saves dependency/build caches.
+It is not dispatched by pushes or pull requests. GitHub requires a manual
+workflow to exist on the default branch before it can be dispatched; a draft PR
+containing this new workflow alone cannot supply a real acceptance run.
+
+Before opting in, review the independent upstream checkout at
+`959a95c3d3963c334422d170317062e00936c573`, its
+[AGPL license](https://github.com/anima-research/eidoverse-video/blob/959a95c3d3963c334422d170317062e00936c573/LICENSE),
+[setup](https://github.com/anima-research/eidoverse-video/blob/959a95c3d3963c334422d170317062e00936c573/docs/SETUP.md)
+and [Dockerfile](https://github.com/anima-research/eidoverse-video/blob/959a95c3d3963c334422d170317062e00936c573/docker/Dockerfile).
+The base fetches GPL ffmpeg, OFL fonts, MIT SeedThree, Python/audio packages and
+Chrome, even with `AGENT=none`; no agent credentials or external rendering service
+are needed. The source commit is pinned, but `ubuntu:rolling` and several package
+downloads remain mutable. A passing run records the exact resulting image IDs
+and PortOS commit, not a claim of bit-for-bit reproducible image builds. The
+workflow's `reviewed_source` input defaults to false and must be explicitly set
+after source/license review before either image build is authorized.
+
+On a separately verified host, use a clean independent checkout at that revision:
+
+```sh
+node scripts/eidoverse-acceptance.js --preflight --report /tmp/eido-acceptance.json
+# Continue only when preflight exits 0 and source/terms review is complete.
+upstream_sha=959a95c3d3963c334422d170317062e00936c573
+portos_sha=$(git rev-parse HEAD)
+docker build --label "org.portos.eidoverse.upstream=$upstream_sha" \
+  -f <upstream-root>/docker/Dockerfile --build-arg AGENT=none \
+  -t eidoverse:render <upstream-root>/docker
+docker build --label "org.portos.eidoverse.upstream=$upstream_sha" \
+  --label "org.portos.eidoverse.portos=$portos_sha" \
+  -f docker/eidoverse-video/Dockerfile -t portos-eidoverse-video:1 <upstream-root>
+NODE_ENV=test PORTOS_EIDOVERSE_SOURCE_REVIEWED=1 PORTOS_EIDOVERSE_LIVE=1 \
+  node scripts/eidoverse-acceptance.js --live --upstream <upstream-root> \
+  --report /tmp/eido-acceptance.json
+```
+
+The two-second films retain production 1280×720 and 1080×1920 geometry at
+24 fps. Independent decoding checks 48 frames, duration, colored box/sphere
+locations and bounds at first/middle/last frames. A stateful moving primitive
+advances each simulation step; a one-second excerpt must match the corresponding
+full-film frames, including state accumulated during pre-roll. A generated
+330/880 Hz master song tests the full timeline and excerpt offset by decoding
+AAC and measuring the expected tone. Cancellation happens only after observing
+that invocation's actual running container. A deliberately failing scene must
+reach its failure marker, reject, remove its container/private scratch and leave
+no complete film. Real `docker inspect` must confirm production containment,
+cached-only dependencies, 8 GiB memory limit and no GPU device mounts.
+
+The JSON report gives each criterion `pass`, `fail`, `unavailable` or `not-run`.
+Successful decoding saves six previews (maximum dimension 320 pixels) beside
+the report in `<report-path>.frames/`; all media and report content are synthetic.
+Reports expose no Docker root, private scratch path, environment or full inspect
+dump. Harness validator tests use synthetic byte buffers to reject black frames,
+banded output, restarted state, wrong tones and unavailable prerequisites; their
+success is preparatory engineering, not real WebGPU evidence.
+The workflow retains only that redacted JSON and the six tiny previews for one
+day, with a 256 KiB total limit; it never uploads films, songs, build logs or
+container dumps. Its job summary records every criterion even when the host is
+unavailable or a build fails.
+
+Each production render has a 12-minute harness watchdog; the workflow bounds
+build time to 55 minutes and the entire job to 120 minutes. This validates Mesa
+software WebGPU/libx264 only and makes no physical-GPU or speed claim. Keep
+#9798 open and blocked until a suitable host passes **every** real criterion.
