@@ -35,6 +35,16 @@ const STDERR_TAIL_LIMIT = 500;
 
 const stderrTailOf = (stderr) => stderr.trim().slice(-STDERR_TAIL_LIMIT);
 
+// Sanitized result for a synchronous spawn exception. Only the OS error code
+// and the configured command name are echoed; `err.message` can embed argv.
+function spawnThrowResult(err, command) {
+  const code = typeof err?.code === 'string' && /^[A-Z0-9_]{2,32}$/.test(err.code) ? err.code : 'SPAWN_FAILED';
+  const error = code === 'E2BIG'
+    ? `Prompt is too large for ${command}'s command-line transport (E2BIG); the run was not started. Reduce the input size.`
+    : `Failed to spawn ${command} (${code}).`;
+  return { error, code };
+}
+
 /**
  * Resolve which CLI provider + model a feature should use from the providers
  * list and the feature's stored `{ providerId, model }` config.
@@ -184,12 +194,22 @@ export function runCliProviderPrompt(args = {}) {
     // the harness running past the run (#7496). False for every unwrapped
     // spawn — including the `sandboxed-actions` posture, which is never wrapped.
     const processGroup = needsProcessGroup(wrapped);
-    const child = spawn(spawnCommand, wrappedArgs, {
-      cwd: effectiveCwd,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: childEnv,
-      detached: processGroup,
-    });
+    let child;
+    try {
+      child = spawn(spawnCommand, wrappedArgs, {
+        cwd: effectiveCwd,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: childEnv,
+        detached: processGroup,
+      });
+    } catch (err) {
+      // spawn can THROW synchronously (E2BIG for an argv-delivered prompt over
+      // the OS limit, EINVAL, ...) which the 'error' listener below never sees.
+      // Honor the never-reject contract: release the prompt file and return a
+      // bounded diagnostic — never argv, env, or prompt text (#10273).
+      cleanupPromptFile();
+      return resolve(spawnThrowResult(err, provider.command));
+    }
     // Remember the detached group so the graceful-shutdown sweep can reach it:
     // detaching moved this child out of the server's own process group, and a
     // shutdown driven by a signal to THAT group would otherwise orphan it (#7496).
