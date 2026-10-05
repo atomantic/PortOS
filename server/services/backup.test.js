@@ -2342,6 +2342,25 @@ describe('restoreSnapshot manifest verification', () => {
       }
     }
 
+    it.for(['peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance/state.json', 'Workflow-Maintenance/state.json'])
+    ('preserves non-rewound execution authority and ownership at %s (#10127)', async (path, context) => {
+      await withRealRsync(context, async () => {
+        const localPath = joinPath(PATHS.data, path);
+        await realFs.mkdir(dirname(localPath), { recursive: true });
+        await realFs.writeFile(localPath, 'current receiver authority');
+        for (const withManifest of [true, false]) {
+          await realFs.rm(joinPath(snapshotDir, 'manifest.json'), { force: true });
+          const hash = await writeSnapshotFile(path, 'obsolete snapshot authority');
+          const neighbor = await writeSnapshotFile(RECORD, '{"value":"snapshot"}');
+          if (withManifest) await writeManifest({ [path]: hash, [RECORD]: neighbor });
+          const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true });
+          expect(preview.changedFiles.some(line => line.includes(path))).toBe(false);
+          await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+          expect(await realFs.readFile(localPath, 'utf8')).toBe('current receiver authority');
+        }
+      });
+    });
+
     it.for([
       { name: 'full restore', options: {} },
       { name: 'brain-scoped restore', options: { subdirFilter: 'brain' } },
