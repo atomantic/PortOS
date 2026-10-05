@@ -133,6 +133,8 @@ import videoTimelineRoutes from './routes/videoTimeline.js';
 import htmlCompositionRoutes from './routes/htmlComposition.js';
 import mediaJobsRoutes from './routes/mediaJobs.js';
 import federatedMediaRoutes from './routes/federatedMedia.js';
+import peerAdministrationRoutes from './routes/peerAdministration.js';
+import peerAdminOperatorRoutes from './routes/peerAdminOperator.js';
 import creativeDirectorRoutes from './routes/creativeDirector.js';
 // Side-effect import (#5920): evaluating the completion hook is what registers the
 // Creative Director project starter on `creativeDirector/projectStartSink.js`, the
@@ -432,6 +434,8 @@ app.use('/api/video-timeline', videoTimelineRoutes);
 app.use('/api/html-composition', htmlCompositionRoutes);
 app.use('/api/media-jobs', mediaJobsRoutes);
 app.use('/api/federation/media/v1', federatedMediaRoutes);
+app.use('/api/federation/admin/v1', peerAdministrationRoutes);
+app.use('/api/peer-administration', peerAdminOperatorRoutes);
 app.use('/api/creative-director', creativeDirectorRoutes);
 app.use('/api/creative-commission', creativeCommissionRoutes);
 app.use('/api/games', gamesRoutes);

@@ -167,3 +167,13 @@ Local peer configuration changes require a verified operator session. The
 one-time remote bootstrap requires the saved instance password and is restricted
 to installing a generated pair secret on the caller's matching peer record.
 Existing host-issued operator session tokens also work.
+
+## Administration planning extension (draft)
+
+The exact POST `/api/federation/admin/v1/{preflight,plans,receipt,execute}` routes
+add only [bounded administration planning](features/peer-administration.md).
+They independently require a current pair identity plus an expiring, host-local
+per-action `planning-v1` grant. Basic, a display name, sync configuration and
+network reachability do not authorize them. Execution is unavailable; paired
+credentials still cannot call ordinary host-control routes. Grant setup and
+outbound preview are operator-only under `/api/peer-administration`.

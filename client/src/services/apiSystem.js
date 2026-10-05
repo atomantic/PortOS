@@ -623,3 +623,8 @@ export const beginMaintenance = (reason, options = {}) => request('/system/maint
 export const resumeMaintenance = (hold, options = {}) => request('/system/maintenance/resume', {
   method: 'POST', body: JSON.stringify({ id: hold.id, revision: hold.revision }), ...options,
 });
+
+// Planning-only peer administration; never dispatches host operations.
+export const getPeerAdminSetup = (peerId, options) => request(`/peer-administration/peers/${encodeURIComponent(peerId)}`, options);
+export const savePeerAdminGrant = (data, options) => request('/peer-administration/grants', { ...options, method: 'POST', body: JSON.stringify(data) });
+export const previewPeerAdministration = (data, options) => request('/peer-administration/preview', { ...options, method: 'POST', body: JSON.stringify(data) });
