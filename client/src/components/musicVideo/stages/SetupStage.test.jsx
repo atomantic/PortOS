@@ -6,7 +6,6 @@ import SetupStage from './SetupStage.jsx';
 vi.mock('../../songs/MidiVisualization.jsx', () => ({ default: () => null }));
 vi.mock('../ProjectOptionsPanel.jsx', () => ({ default: () => null, projectOptionsSummary: () => '' }));
 vi.mock('../CreativeSetupPanel.jsx', () => ({ default: () => null }));
-vi.mock('../StyleReferencesPanel.jsx', () => ({ default: () => null }));
 vi.mock('../VisualSpecPanel.jsx', () => ({ default: () => null }));
 vi.mock('../TreatmentPanel.jsx', () => ({ default: () => null, treatmentSummary: () => 'Not started' }));
 vi.mock('../VocalStemControl.jsx', () => ({ default: () => <div>vocal-stem</div> }));
