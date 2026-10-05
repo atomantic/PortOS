@@ -18,6 +18,7 @@ import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import FilePickerButton from '../../ui/FilePickerButton';
 import VoicePicker from '../../voice/VoicePicker';
+import SpokenCheckChip, { countLinesNeedingListen } from '../SpokenCheckChip';
 import {
   extractPipelineAudioLines,
   renderPipelineAudioLine,
@@ -51,6 +52,7 @@ const AUDIO_MODES = [
 export default function AudioStage({ issue, onStageUpdate }) {
   const stage = issue.stages?.audio || { status: 'empty', lines: [], music: null };
   const lines = Array.isArray(stage.lines) ? stage.lines : [];
+  const needListenCount = countLinesNeedingListen(lines);
   const music = stage.music || null;
   const audioMode = AUDIO_MODES.some((m) => m.id === stage.audioMode) ? stage.audioMode : 'per-clip';
   // Memoized so the `latestCuesRef` sync effect keys on the lifted array's
@@ -582,6 +584,13 @@ export default function AudioStage({ issue, onStageUpdate }) {
     dropDraft();
   };
 
+  // "Accept as spoken": record what speech-to-text heard as the expected read so
+  // this line (and its next render) counts as matched.
+  const handleAcceptSpoken = (lineIdx) => {
+    const heard = lines[lineIdx]?.verification?.heard;
+    if (heard) void saveLinePatch(lineIdx, { expectedSpeech: heard });
+  };
+
   const handleRender = async (lineIdx) => {
     // Snapshot + await every outstanding PATCH for this line — both text
     // and voice-override saves can be in flight at once (e.g. textarea
@@ -630,6 +639,11 @@ export default function AudioStage({ issue, onStageUpdate }) {
           </span>
           {lines.length > 0 ? (
             <span className="text-xs text-gray-500">{lines.length} line{lines.length === 1 ? '' : 's'}</span>
+          ) : null}
+          {needListenCount > 0 ? (
+            <span className="text-xs text-port-warning">
+              {needListenCount} of {lines.length} line{lines.length === 1 ? '' : 's'} need a listen
+            </span>
           ) : null}
         </div>
         <div className="flex items-center gap-2">
@@ -902,6 +916,16 @@ export default function AudioStage({ issue, onStageUpdate }) {
                         previewText={textValue?.trim() ? textValue.slice(0, 200) : undefined}
                       />
                     </div>
+                    {line.audioFilename ? (
+                      <div className="mt-2">
+                        <SpokenCheckChip
+                          verification={line.verification}
+                          busy={isRendering}
+                          onRerender={() => handleRender(i)}
+                          onAccept={() => handleAcceptSpoken(i)}
+                        />
+                      </div>
+                    ) : null}
                     {line.audioFilename ? (
                       <audio
                         controls
