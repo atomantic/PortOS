@@ -31,7 +31,7 @@ function below1000(n) {
 }
 
 /** Spell a non-negative integer as English cardinal words ("12" -> "twelve"). */
-export function numberToWords(n) {
+function numberToWords(n) {
   if (!Number.isInteger(n) || n < 0 || n > MAX_NUMBER) return String(n);
   if (n === 0) return 'zero';
   const words = [];
@@ -72,11 +72,6 @@ const year = (m) => ` ${yearWords(Number(m)) ?? numberToWords(Number(m))} `;
 function tokenize(normalized) {
   if (CJK_RE.test(normalized)) return [...normalized.replace(/\s+/g, '')];
   return normalized.split(/\s+/).filter(Boolean);
-}
-
-/** Normalized token list for a line (digits spelled out, punctuation dropped). */
-export function normalizeSpeech(text) {
-  return tokenize(normalizeBase(text, cardinal));
 }
 
 function editDistance(a, b) {

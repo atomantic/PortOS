@@ -218,7 +218,7 @@ export { wavDurationMs };
  * down or slow yields `unverified` — never an error, never blocks a render.
  * @returns {Promise<{ status: 'matched'|'mismatch'|'unverified', similarity: number|null, heard: string }>}
  */
-export async function verifyRenderedLine({ wav, text, expectedSpeech, signal } = {}) {
+async function verifyRenderedLine({ wav, text, expectedSpeech, signal } = {}) {
   const heardResult = await transcribe(wav, { prompt: '', signal }).catch((err) => {
     console.warn(`⚠️ voice-over verification skipped: ${err?.message || err}`);
     return null;

@@ -317,6 +317,7 @@ vi.mock('../services/voice/tts.js', () => ({
   normalizeVoiceEngine: (engine) => engine === 'qwen3' ? 'qwen3-tts' : engine,
   VALID_ENGINES: new Set(['kokoro', 'piper', 'qwen3-tts']),
 }));
+import { compareSpeech } from '../lib/speechMatch.js';
 const transcribeMock = vi.fn();
 vi.mock('../services/voice/stt.js', () => ({ transcribe: (...a) => transcribeMock(...a) }));
 vi.mock('../services/voice/profiles.js', () => ({
@@ -2808,14 +2809,20 @@ describe('pipeline routes', () => {
 
 
     describe('spoken-text verification (#10250)', () => {
-      // Run the real verifyRenderedLine behind the mocked synthesizeToFile so the
-      // route's expectedSpeech hand-off and verification persistence are exercised.
+      // The mocked synthesizeToFile mirrors the real verify step (stubbed transcribe
+      // + compareSpeech) so the route's expectedSpeech hand-off and verification
+      // persistence are exercised; the real service path is covered in audio.test.js.
       const renderWithVerification = async (app, iss) => {
         const audio = await import('../services/pipeline/audio.js');
-        audio.synthesizeToFile.mockImplementationOnce(async ({ text, expectedSpeech }) => ({
-          filename: `vo-mock-${++uuidCounter}.wav`, latencyMs: 1, engine: 'kokoro',
-          verification: await audio.verifyRenderedLine({ wav: Buffer.from('w'), text, expectedSpeech }),
-        }));
+        audio.synthesizeToFile.mockImplementationOnce(async ({ text, expectedSpeech }) => {
+          const heard = await transcribeMock(Buffer.from('w'), { prompt: '' }).catch(() => null);
+          return {
+            filename: `vo-mock-${++uuidCounter}.wav`, latencyMs: 1, engine: 'kokoro',
+            verification: heard
+              ? { ...compareSpeech(expectedSpeech || text, heard.text), heard: heard.text }
+              : { status: 'unverified', similarity: null, heard: '' },
+          };
+        });
         return request(app).post(`/api/pipeline/issues/${iss.id}/stages/audio/lines/0/render`).send({});
       };
       const seed = async (app) => {

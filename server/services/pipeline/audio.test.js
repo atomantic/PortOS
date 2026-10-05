@@ -25,7 +25,8 @@ vi.mock('../voice/tts.js', () => ({
   VALID_ENGINES: new Set(['kokoro', 'piper', 'qwen3-tts']),
 }));
 
-vi.mock('../voice/stt.js', () => ({ transcribe: vi.fn().mockRejectedValue(new Error('stt down')) }));
+const transcribeMock = vi.fn();
+vi.mock('../voice/stt.js', () => ({ transcribe: (...a) => transcribeMock(...a) }));
 
 const { parseVoiceId, listAllVoices, synthesizeToFile, extractDialogueLines, resolveVoiceForLine, wavDurationMs } = await import('./audio.js');
 
@@ -144,6 +145,8 @@ describe('listAllVoices', () => {
 });
 
 describe('synthesizeToFile', () => {
+  beforeEach(() => { transcribeMock.mockReset().mockRejectedValue(new Error('stt down')); });
+
   it('rejects empty text with 400', async () => {
     await expect(synthesizeToFile({ text: '  ', voiceId: 'kokoro:af_heart' }))
       .rejects.toMatchObject({ status: 400 });
@@ -197,6 +200,39 @@ describe('synthesizeToFile', () => {
     synthesizeMock.mockResolvedValue({ wav: makeWav({ dataBytes: 24000 * 2 }), latencyMs: 5, engine: 'kokoro' });
     const result = await synthesizeToFile({ text: 'one second please', voiceId: 'kokoro:af_heart' });
     expect(result.durationMs).toBe(1000);
+  });
+});
+
+describe('synthesizeToFile spoken-text verification (#10250)', () => {
+  beforeEach(() => {
+    synthesizeMock.mockResolvedValue({ wav: Buffer.from('w'), latencyMs: 1, engine: 'kokoro' });
+  });
+
+  it('is matched when the transcription agrees, and bypasses the vocabulary prompt', async () => {
+    transcribeMock.mockReset().mockResolvedValue({ text: 'I have twelve apples.' });
+    const r = await synthesizeToFile({ text: 'I have 12 apples', voiceId: 'kokoro:af_heart' });
+    expect(r.verification).toEqual({ status: 'matched', similarity: 1, heard: 'I have twelve apples.' });
+    expect(transcribeMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ prompt: '' }));
+  });
+
+  it('is a mismatch carrying what was heard when the number differs', async () => {
+    transcribeMock.mockReset().mockResolvedValue({ text: 'I have fifteen apples' });
+    const r = await synthesizeToFile({ text: 'I have 12 apples', voiceId: 'kokoro:af_heart' });
+    expect(r.verification.status).toBe('mismatch');
+    expect(r.verification.heard).toBe('I have fifteen apples');
+  });
+
+  it('honors expectedSpeech as the comparison target', async () => {
+    transcribeMock.mockReset().mockResolvedValue({ text: 'Ay Ai' });
+    const r = await synthesizeToFile({ text: 'AI', expectedSpeech: 'Ay-Ai' });
+    expect(r.verification.status).toBe('matched');
+  });
+
+  it('is unverified, and still renders, when speech-to-text is unavailable', async () => {
+    transcribeMock.mockReset().mockRejectedValue(new Error('ECONNREFUSED'));
+    const r = await synthesizeToFile({ text: 'hello there' });
+    expect(r.filename).toMatch(/^vo-/);
+    expect(r.verification).toEqual({ status: 'unverified', similarity: null, heard: '' });
   });
 });
 
