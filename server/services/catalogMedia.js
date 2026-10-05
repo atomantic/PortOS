@@ -17,6 +17,7 @@ import { join } from 'path';
 import { ensureDir, PATHS, atomicWrite, resolveImageInputPath } from '../lib/fileUtils.js';
 import { extractPngGenerationMetadata, normalizeGenerationMetadata } from '../lib/pngMetadata.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { getIngredient, attachMedia } from './catalogDB.js';
 import { readImageSidecar, saveUploadedGalleryImage } from './imageGen/local.js';
 import { transcribe } from './voice/stt.js';
@@ -92,6 +93,11 @@ async function persistLibraryFile(buffer, dir, ext) {
   return filename;
 }
 
+// The media row first names bytes written just before it, so it commits under
+// the backup lease (#9982): a cut copies files before it dumps rows, and a row
+// that waits out the cut can only name a file the copy already took.
+const attachUnderLease = (attachMediaFn, ...args) => withBackupAssetPublication(() => attachMediaFn(...args));
+
 async function requireIngredient(getIngredientFn, ingredientId) {
   const ingredient = await getIngredientFn(ingredientId);
   if (!ingredient) throw new ServerError('Ingredient not found', { status: 404 });
@@ -129,7 +135,7 @@ export async function uploadIngredientMediaFile(
     const metadata = hasMetadata(saved?.metadata) ? saved.metadata : sourceMetadata;
     const mediaKey = saved.filename;
     console.log(`📎 Catalog media upload: image ${mediaKey} → ingredient ${ingredientId}`);
-    return attachMediaFn(ingredientId, mediaKey, classified.kind, mediaAttachOptions({ ...meta, metadata }));
+    return attachUnderLease(attachMediaFn, ingredientId, mediaKey, classified.kind, mediaAttachOptions({ ...meta, metadata }));
   }
 
   const buffer = Buffer.from(dataBase64, 'base64');
@@ -137,7 +143,7 @@ export async function uploadIngredientMediaFile(
   const dir = classified.category === 'audio' ? PATHS.audio : PATHS.videos;
   const mediaKey = await persistFileFn(buffer, dir, classified.ext);
   console.log(`📎 Catalog media upload: ${classified.kind} ${mediaKey} → ingredient ${ingredientId} (${(buffer.length / 1024).toFixed(0)}KB, ${filename || 'unnamed'})`);
-  return attachMediaFn(ingredientId, mediaKey, classified.kind, mediaAttachOptions(meta));
+  return attachUnderLease(attachMediaFn, ingredientId, mediaKey, classified.kind, mediaAttachOptions(meta));
 }
 
 /**
@@ -167,6 +173,6 @@ export async function recordIngredientVoiceMemo(
   const ext = AUDIO_EXT[(mimeType || '').toLowerCase().split(';')[0].trim()] || 'wav';
   const mediaKey = await persistFileFn(buffer, PATHS.audio, ext);
   console.log(`🎙️ Catalog voice memo: ${mediaKey} → ingredient ${ingredientId} (${transcript.length} chars)`);
-  const media = await attachMediaFn(ingredientId, mediaKey, 'audio', mediaAttachOptions({ role, caption: transcript || null }));
+  const media = await attachUnderLease(attachMediaFn, ingredientId, mediaKey, 'audio', mediaAttachOptions({ role, caption: transcript || null }));
   return { media, transcript };
 }

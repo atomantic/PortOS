@@ -88,7 +88,9 @@ Admission inventory (`withBackupAssetPublication`):
 | Image-to-3D mesh completion and AR export (`imageTo3d/models.js`) | Covered (#9982 partial): the runner writes `model.glb` outside admission and only the row that marks it ready takes the lease; the AR export's file write and the row stamping it are one lease |
 | Image-to-3D record deletion (`imageTo3d/models.js`) | Reference-only: the row is soft-deleted before the render directory is removed |
 | Rigging and animation retarget (`rigging/autoSkin.js`, `rigging/retarget.js`) | Covered (#9982 partial): the pair is published into its own directory and verified outside admission; the row that first names it takes the lease |
-| Remaining durable owners, classified by domain in `backupAssetOwners.js` | Outstanding (#9982): sprites, video generation, image generation tails, code animation, peer and share imports, attachments and catalog media, mood boards, archive and document imports |
+| Catalog ingredient media and voice-memo scraps, imported round reference audio, Persistent Mind screenshots and songbook attachments (`catalogMedia.js`, `catalogIngestSources.js`, `roundReferenceAudioImport.js`, `persistentMindAttachments.js`, `routes/brainSongbook.js`) | Covered (#9982 partial): the row that first names a landed file takes the lease; the file-backed Persistent Mind and songbook records hold it through their deletions too |
+| Mood board re-hosting, Pinterest and X imports, frame extraction and collages (`moodBoard/*.js`) | Covered (#9982 partial): downloads and renders run outside admission; the board row that first names them, and each in-place rewrite of a URL-keyed download, take the lease |
+| Remaining durable owners, classified by domain in `backupAssetOwners.js` | Outstanding (#9982): sprites, video generation, image generation tails, code animation, peer and share imports, archive and document imports |
 | Durable replacement/deletion owners not yet classified | Outstanding (#9982) |
 | Snapshot consistency claim (`backupAssetOwners.js`, see below) | Covered (#9982 partial) |
 | Database restore execution and backend-cutover acceptance (`backup.js`, `databasePreflight.js`) | Covered (#9983) |
@@ -192,6 +194,22 @@ as failed. Rig and retarget pairs are never replaced: the verified pair sits in
 its own directory and only the row naming it takes the lease. Deleted works and
 models keep their directories until tombstone GC or the render settles, after
 their rows stopped naming them.
+
+Catalog uploads and voice memos, a voice-memo scrap and an imported round
+reference audio land their file first; the row that first names it commits
+under the lease, so transcription, extraction and the yt-dlp download stay
+outside. Persistent Mind screenshot records and songbook attachment lists live
+in `data/` files, which one rsync pass copies at a different moment than the
+bytes, so their deletions hold the lease from the unlink through the record
+write, and a songbook upload holds it from the byte write. The Persistent
+Mind's expired-upload sweep, which runs before each message and upload, skips
+its pass while a cut is pending instead of delaying them. Mood board downloads,
+frame extraction and collage rendering run outside admission; the board row that
+first names the result commits under the lease. Re-hosted, Pinterest and X
+downloads are keyed by their source URL and rewrite the file in place on a
+repeat, so that write takes the lease too. Removing a board item or a board
+removes no bytes. A row that fails after its file landed leaves an unreferenced
+file, as before.
 
 **Snapshot consistency claim.** `server/lib/backupAssetOwners.js` inventories
 each durable owner as `admitted`, `reference-only` or `outstanding`, and its

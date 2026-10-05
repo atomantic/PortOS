@@ -33,6 +33,7 @@ import { navigateToUrlPinned } from './browserService.js';
 import { lookup } from 'dns/promises';
 import { PATHS, ensureDir, safeJSONParse, writeFileGuarded } from '../lib/fileUtils.js';
 import { isSafeIngestUrl, isBlockedIngestHost } from '../lib/catalogValidation.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 
 // Cap fetched/transcribed bodies at the scrap column boundary (the Zod
 // rawText max). A runaway page or a multi-hour memo can't blow past the DB.
@@ -54,10 +55,13 @@ const clampText = (s) => (typeof s === 'string' ? s.slice(0, RAW_TEXT_MAX) : '')
  * how they PRODUCE rawText / title / metadata; this codifies the "one pipeline"
  * contract the module header describes. `log` receives the created scrap.
  */
-async function createScrapAndExtract({ title, rawText, sourceKind, metadata, providerOverride, log }) {
+async function createScrapAndExtract({ title, rawText, sourceKind, metadata, providerOverride, log, namesNewAsset = false }) {
   // Chunk long pastes identically to the textarea flow — createChunkedScrap
   // returns the PARENT scrap; extraction budgets its complete text for the selected model.
-  const scrap = await catalogDB.createChunkedScrap({ title, rawText, sourceKind, metadata });
+  const createScrap = () => catalogDB.createChunkedScrap({ title, rawText, sourceKind, metadata });
+  // A scrap that first names bytes written just before it commits under the
+  // backup lease (#9982); the extraction that follows stays outside it.
+  const scrap = await (namesNewAsset ? withBackupAssetPublication(createScrap) : createScrap());
   const draft = await extractIngredientsForScrap({ scrapId: scrap.id, providerOverride });
   if (log) console.log(log(scrap));
   return { scrap, draft };
@@ -225,6 +229,7 @@ export async function ingestFromVoice(
     sourceKind: 'voice-memo',
     metadata: { mediaKey, mimeType },
     providerOverride,
+    namesNewAsset: true,
     log: (s) => `🎙️ Catalog voice ingest: ${mediaKey} → scrap ${s.id} (${transcript.length} chars)`,
   });
   return { scrap, draft, mediaKey };

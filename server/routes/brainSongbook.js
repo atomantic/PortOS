@@ -34,6 +34,7 @@ import { applySongPractice } from '../lib/songPractice.js';
 import * as brainStorage from '../services/brainStorage.js';
 import { importSongFromUrl } from '../services/brainSongbookImport.js';
 import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import {
   pathExists, PATHS, sanitizeFilename, isPathInsideDir,
   SONGBOOK_ATTACHMENT_EXTENSIONS, saveBase64Upload, serveLocalFile,
@@ -165,11 +166,23 @@ router.post('/:id/practice', asyncHandler(async (req, res) => {
 // ATTACHMENTS
 // =============================================================================
 
+// Song records and their attachment bytes are both files under data/brain, so
+// one backup rsync pass copies them at different moments. Each attachment
+// mutation holds the backup lease (#9982) from its first byte change through
+// the record write, so a snapshot never pairs a record with bytes from the
+// other side of that change.
+
 // POST /:id/attachments — base64 upload; writes bytes + appends meta to record
 router.post('/:id/attachments', asyncHandler(async (req, res) => {
   const song = await getSongOr404(req.params.id);
   const { filename, data, label } = validateRequest(songAttachmentUploadSchema, req.body);
 
+  const { saved, attachment } = await withBackupAssetPublication(() => saveSongAttachment(song.id, { filename, data, label }));
+  console.log(`🎸 Song attachment saved: ${saved.filename} (${saved.size} bytes)`);
+  res.status(201).json({ attachment });
+}));
+
+async function saveSongAttachment(songId, { filename, data, label }) {
   const saved = await saveBase64Upload(songbookDir(), { filename, data }, {
     allowedExtensions: SONGBOOK_ATTACHMENT_EXTENSIONS,
     maxBytes: MAX_ATTACHMENT_SIZE,
@@ -186,13 +199,11 @@ router.post('/:id/attachments', asyncHandler(async (req, res) => {
   // a concurrent upload/delete or a peer-sync apply landing between the read
   // above and this write would otherwise be clobbered (and win LWW). requireSong
   // 404s the mid-request tombstone race instead of 201-ing meta never persisted.
-  requireSong(await brainStorage.updateWith('songs', song.id, (fresh) => ({
+  requireSong(await brainStorage.updateWith('songs', songId, (fresh) => ({
     attachments: [...(Array.isArray(fresh.attachments) ? fresh.attachments : []), attachment],
   })));
-
-  console.log(`🎸 Song attachment saved: ${saved.filename} (${saved.size} bytes)`);
-  res.status(201).json({ attachment });
-}));
+  return { saved, attachment };
+}
 
 // GET /:id/attachments — synced meta + machine-local presence
 router.get('/:id/attachments', asyncHandler(async (req, res) => {
@@ -224,15 +235,17 @@ router.delete('/:id/attachments/:filename', asyncHandler(async (req, res) => {
   // Filter against the FRESH record inside the store write lock (updateWith) so
   // a concurrent upload/peer-sync apply isn't clobbered; requireSong 404s the
   // mid-request tombstone race instead of TypeError-ing on a null record.
-  const updated = requireSong(await brainStorage.updateWith('songs', song.id, (fresh) => ({
-    attachments: (Array.isArray(fresh.attachments) ? fresh.attachments : [])
-      .filter((a) => a.filename !== safeFilename),
-  })));
-
-  // Bytes may legitimately be absent on this machine (meta synced from a peer).
-  if (await pathExists(filepath)) {
-    await unlinkGuarded(filepath);
-  }
+  const updated = await withBackupAssetPublication(async () => {
+    const next = requireSong(await brainStorage.updateWith('songs', song.id, (fresh) => ({
+      attachments: (Array.isArray(fresh.attachments) ? fresh.attachments : [])
+        .filter((a) => a.filename !== safeFilename),
+    })));
+    // Bytes may legitimately be absent on this machine (meta synced from a peer).
+    if (await pathExists(filepath)) {
+      await unlinkGuarded(filepath);
+    }
+    return next;
+  });
 
   console.log(`🗑️ Song attachment deleted: ${safeFilename}`);
   res.json({ success: true, filename: safeFilename, attachments: updated.attachments });

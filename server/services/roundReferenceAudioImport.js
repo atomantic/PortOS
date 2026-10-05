@@ -21,6 +21,7 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '
 import { killWithEscalation } from '../lib/killWithEscalation.js';
 import { resolveYtDlpBinaries, downloadAudioToTempMp3, cleanupYtDlpTemp } from './ytdlpAudioImport.js';
 import { attachReferenceAudio } from './rounds.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 
 // Reference performances are short clips — bound resource use so a mistyped
 // link to a long archive/livestream can't download + transcode unbounded.
@@ -122,9 +123,11 @@ export async function startReferenceAudioImport(url, { roundId = null, reference
       const { filename } = await importFileToUploads(outPath, `${title || 'Reference Audio'}.mp3`);
 
       // A failed attach must not turn a finished download into an error frame:
-      // the file is in uploads and the client can still attach it on Save.
+      // the file is in uploads and the client can still attach it on Save. The
+      // round row first names the imported file, so it commits under the backup
+      // lease (#9982): a row that waits out a cut names only bytes it copied.
       const attached = roundId && referenceId
-        ? await attachReferenceAudio(roundId, referenceId, filename).catch((err) => {
+        ? await withBackupAssetPublication(() => attachReferenceAudio(roundId, referenceId, filename)).catch((err) => {
             console.error(`❌ Reference-audio import ${shortId(jobId)} could not attach ${filename}: ${err?.message || err}`);
             return false;
           })
