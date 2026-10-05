@@ -37,7 +37,7 @@ const routeLabel = (route) => `${toolLabel.get(`${route.kind}:${route.mode}`) ||
 
 const ROUTE_LABELS = [
   ['brief', 'Creative brief'], ['lyrics', 'Lyrics draft'], ['lyricsReview', 'Lyrics review'],
-  ['plan', 'Shot planning'], ['castAndSets', 'Cast & Sets direction'],
+  ['plan', 'Shot planning'], ['castAndSets', 'Cast & Sets direction'], ['treatment', 'Treatment compile'],
 ];
 
 const initialPool = (project) => {

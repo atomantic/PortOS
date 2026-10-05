@@ -1,4 +1,5 @@
 import { CheckCircle2, Eye, Play, RotateCcw, SkipForward, Users } from 'lucide-react';
+import LlmRouteNote from './LlmRouteNote.jsx';
 import Pill from '../ui/Pill.jsx';
 import CastAndSetsDirectionEditor from './CastAndSetsDirectionEditor.jsx';
 import CastAndSetsReferenceProgress from './CastAndSetsReferenceProgress.jsx';
@@ -47,6 +48,7 @@ export default function CastAndSetsCheckin({ project, busy, onOpenSheet, onAppro
         <span className="text-sm font-medium">Cast &amp; Sets check-in</span>
         <Pill size="xs" tone={tone}>{stage.interrupted ? 'interrupted' : stage.status}</Pill>
         {stage.revision > 1 && <span className="text-[11px] text-port-text-muted">revision {stage.revision}</span>}
+        <LlmRouteNote route={project.automation?.routes?.castAndSets} prefix="Direction ran on" />
       </div>
       <p className={`text-xs ${stage.status === 'review' ? 'text-port-warning' : 'text-port-text-muted'}`} role="status">{statusLine(stage)}</p>
       <CastAndSetsReferenceProgress stage={stage} />

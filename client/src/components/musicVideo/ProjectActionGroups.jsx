@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import LlmRouteNote from './LlmRouteNote.jsx';
 import { Film, Music, Activity, Image as ImageIcon, Video, Wand2, X } from 'lucide-react';
 import { MUSCRIPTOR_MODELS } from '../../lib/muscriptorModels.js';
 import { isLayeredComposition, sceneRenderReady, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
@@ -82,6 +83,7 @@ export function PlanActions({ project, busy, onPlan, onAutoArrange }) {
         className={buttonCls}>
         <Wand2 size={15} /> {busy.planning ? 'Planning…' : 'AI Plan'}
       </button>
+      <LlmRouteNote route={project.automation?.routes?.plan} />
       {choosing && !busy.planning && (
         <div role="group" aria-label="Plan mode" className="flex flex-wrap items-center gap-2 text-sm">
           <span className="text-gray-400">The board has {sceneCount} shot{sceneCount === 1 ? '' : 's'}.</span>
