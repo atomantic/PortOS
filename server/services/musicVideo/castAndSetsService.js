@@ -1,5 +1,5 @@
 import { musicVideoAllowsMedia, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
-import { productionFeedbackContext, seedArtDraft } from './productionReview.js';
+import { castAndSetsApprovalInputs, productionFeedbackContext, seedArtDraft } from './productionReview.js';
 import { withMusicVideoStyle } from './styleReferences.js';
 /**
  * Music Video — Cast & Sets check-in orchestrator.
@@ -46,6 +46,7 @@ import {
   dispatchableImageKeys,
   linkCastAndSetsJob,
   presentCastAndSets,
+  reconfirmCastAndSetsOnProject,
   reserveCastAndSetsImage,
   resumeCastAndSetsOnProject,
   reviseCastAndSetsOnProject,
@@ -546,7 +547,9 @@ function applyApproval(project, now) {
   if (stage.artifactId && (next.devArtifacts || []).some((a) => a.id === stage.artifactId && !a.deleted)) {
     next = reviewDevArtifact(next, stage.artifactId, { status: 'approved' }, now).project;
   }
-  return setCastAndSetsStatus(next, 'approved', {}, now);
+  // Record what the approval rests on, so a later concept/style/subject/song
+  // edit can be named as "changed since" (#10141).
+  return setCastAndSetsStatus(next, 'approved', { extra: { approvedInputs: castAndSetsApprovalInputs(next) } }, now);
 }
 
 // Settle the stage and re-base a production run waiting on it, in ONE write,
@@ -564,6 +567,20 @@ export async function approveCastAndSets(projectId) {
     return settleAndRebase(applyApproval(current, now), now);
   });
   console.log(`✅ Music Video Cast & Sets ${short(projectId)} approved (r${out.stage.revision})`);
+  publish(projectId, out.project);
+  return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
+}
+
+/**
+ * Keep an approved check-in approved on the project's current concept, style,
+ * subjects and song (#10141): clears the "changed since" note without
+ * rebuilding the sheet or re-applying its references. Returns `{ project, stage }`.
+ */
+export async function reconfirmCastAndSets(projectId) {
+  await requireProject(projectId);
+  const now = new Date().toISOString();
+  const out = await mutateProjectRecord(projectId, (current) => reconfirmCastAndSetsOnProject(current, castAndSetsApprovalInputs(current), now));
+  console.log(`✅ Music Video Cast & Sets ${short(projectId)} kept approved on current inputs`);
   publish(projectId, out.project);
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
 }

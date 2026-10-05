@@ -112,14 +112,50 @@ function productionApprovalInputs(project) {
   return { art, storyboard, proof };
 }
 
+// The labels whose hash moved (or disappeared) between two input snapshots.
+const changedInputs = (before, now) => Object.keys(now).filter(k => before[k] !== now[k])
+  .concat(Object.keys(before).filter(k => !(k in now)));
+
 /** `{ approvedAt, changedFields }` when a stage was approved on inputs that have since moved; null otherwise. */
 function staleApproval(project, stage, current, inputs) {
   const approval = project.productionReview?.approvals?.[stage];
   if (!approval || approval.basis === current) return null;
   const before = approval.inputs;
-  const changedFields = before ? Object.keys(inputs[stage]).filter(k => before[k] !== inputs[stage][k])
-    .concat(Object.keys(before).filter(k => !(k in inputs[stage]))) : [];
+  const changedFields = before ? changedInputs(before, inputs[stage]) : [];
   return { approvedAt: approval.approvedAt || null, changedFields: changedFields.length ? changedFields : (before ? ['proof render'] : []) };
+}
+
+/**
+ * The labeled inputs a Cast & Sets approval rests on — the concept, its style,
+ * the subjects (with the cast references the approval wrote) and the song —
+ * hashed per label. Stored on the stage at approval as `approvedInputs`.
+ * References hash by image only, so re-normalizing a reference's optional
+ * fields is not mistaken for a new subject.
+ */
+export function castAndSetsApprovalInputs(project) {
+  const { subjects, style, universeStyle, moodBoardStyle, ...concept } = project.concept || {};
+  const spec = project.visualSpec || {};
+  return {
+    concept: h(concept),
+    style: h([style || '', universeStyle || '', moodBoardStyle || '', spec.palette || [], spec.typography || '',
+      spec.cameraRules || '', spec.moodBoardId || null, project.styleReferences ?? null]),
+    subjects: h([subjects || [], (spec.references || []).map(r => r?.imageId || null)]),
+    song: h([project.trackId || null, project.uploadedAudioFilename || null]),
+  };
+}
+
+/**
+ * The Cast & Sets check-in as an approval: `{ approved, stale }`. An approved
+ * stage stays approved when its inputs move (its references still condition
+ * the frames) but reports what changed since. A stage approved before inputs
+ * were recorded has no basis to compare and reports no staleness.
+ */
+function castAndSetsApproval(project) {
+  const stage = project.castAndSets;
+  const approved = stage?.status === 'approved';
+  if (!approved || !stage.approvedInputs) return { approved, stale: null };
+  const changedFields = changedInputs(stage.approvedInputs, castAndSetsApprovalInputs(project));
+  return { approved, stale: changedFields.length ? { approvedAt: stage.approvedAt || null, changedFields } : null };
 }
 
 export function productionReadiness(project) {
@@ -197,6 +233,7 @@ export function productionReadiness(project) {
     : draft.timingStatus !== 'verified' ? 'provisional' : review.alignmentBasis === alignmentBasis ? 'verified' : 'stale' }, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: alignmentBasis }, art: { approved: artApproved, problems: [...new Set(artProblems)], stale: artApproved ? null : staleApproval(project, 'art', basis.art, inputs) },
     storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)], stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs) },
     proof: { approved: proofApproved, problems: proofProblems, excerptId: excerpt?.id || null, stale: proofApproved ? null : staleApproval(project, 'proof', basis.proof, inputs) },
+    castAndSets: castAndSetsApproval(project),
     readyForProduction: proofApproved };
 }
 

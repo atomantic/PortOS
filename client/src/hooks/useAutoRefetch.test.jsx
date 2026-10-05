@@ -151,8 +151,9 @@ describe('useAutoRefetch', () => {
 
     const { result } = renderHook(() => useAutoRefetch(fetchFn, 20));
     await waitFor(() => expect(result.current.data).toBe('first'));
-    await waitFor(() => expect(fetchFn.mock.calls.length).toBeGreaterThanOrEqual(4));
-    expect(result.current.data).toBe('recovered');
+    // The 4th call being issued does not mean its result has been committed to state yet.
+    await waitFor(() => expect(result.current.data).toBe('recovered'));
+    expect(fetchFn.mock.calls.length).toBeGreaterThanOrEqual(4);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });

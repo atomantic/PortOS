@@ -80,7 +80,8 @@ export default function BoardStage({ board }) {
       </div>
 
       <StageSection id="mv-board-treatment" title="Treatment" summary={scenes.length ? treatmentSummary(project) : 'Plan shots to direct them'}>
-        <TreatmentPanel key={`treatment-${project.id}`} project={project} treatment={treatment} part="direction" />
+        <TreatmentPanel key={`treatment-${project.id}`} project={project} treatment={treatment} part="direction"
+          storyboardApproved={!!board.productionReadiness?.storyboard?.approved} />
       </StageSection>
 
       {project.audioAnalysis && scenes.length > 0 && (

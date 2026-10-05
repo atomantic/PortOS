@@ -12,6 +12,7 @@ export default function CastSetsStage({ board }) {
       {project.castAndSets ? (
         <CastAndSetsCheckin
           project={project}
+          stale={board.productionReadiness?.castAndSets?.stale || null}
           busy={locked || castSets.busy || kickoff.running}
           onOpenSheet={board.openArtifact}
           onApprove={board.approveCastAndSets}
@@ -19,6 +20,7 @@ export default function CastSetsStage({ board }) {
           onEditDirection={castSets.editDirection}
           onResume={() => castSets.resume()}
           onRebuild={() => castSets.start()}
+          onReconfirm={() => castSets.reconfirm()}
           onSkip={board.skipCastAndSets}
         />
       ) : (

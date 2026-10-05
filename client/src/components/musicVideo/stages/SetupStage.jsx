@@ -237,7 +237,8 @@ export default function SetupStage({ board }) {
       </StageSection>
       <StageSection id="mv-setup-treatment" title="Treatment brief" summary={`${treatmentSummary(project)} · feeds the shot planner`}>
         <fieldset disabled={locked} className="min-w-0">
-          <TreatmentPanel key={`treatment-${project.id}`} project={project} treatment={treatment} part="brief" />
+          <TreatmentPanel key={`treatment-${project.id}`} project={project} treatment={treatment} part="brief"
+            storyboardApproved={!!board.productionReadiness?.storyboard?.approved} />
         </fieldset>
       </StageSection>
     </>

@@ -155,3 +155,24 @@ describe('parked runs (#10156)', () => {
     expect(autoReviewNeedsUser(project({ autoReviews: [run({ status: 'needs-human' })] }))).toBe(true);
   });
 });
+
+describe('stale approvals in Needs attention (#10141)', () => {
+  const readiness = {
+    castAndSets: { approved: true, stale: { changedFields: ['concept'] } },
+    art: { approved: false, stale: { changedFields: ['concept', 'cast', 'environments', 'visual language'] } },
+    storyboard: { approved: false, stale: null },
+    proof: { approved: false, stale: null },
+  };
+
+  it('names what changed per approval and opens the earliest one', () => {
+    const [item] = deriveAttentionItems(project(), { readiness });
+    expect(item).toMatchObject({ kind: 'stale-approvals', openTo: 'cast-sets', title: '2 approvals were given before later changes' });
+    expect(item.detail).toBe('Cast & Sets check-in — changed since: concept. Art direction — changed since: concept, cast, environments +1 more. Re-approve, or undo the change.');
+  });
+
+  it('stays quiet with no stale approval, and while a production run is replacing takes', () => {
+    expect(deriveAttentionItems(project(), { readiness: { art: { stale: null } } })).toEqual([]);
+    const producing = project({ productionRuns: [{ id: 'run-1', status: 'running' }], productionRunId: 'run-1' });
+    expect(deriveAttentionItems(producing, { readiness }).some((i) => i.kind === 'stale-approvals')).toBe(false);
+  });
+});

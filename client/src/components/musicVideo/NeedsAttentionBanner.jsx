@@ -83,6 +83,8 @@ function ItemActions({ item, busy, actions }) {
           </button>
         </>
       );
+    case 'stale-approvals':
+      return <OpenLink item={item} />;
     default:
       return null;
   }

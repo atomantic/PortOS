@@ -411,6 +411,9 @@ export const resumeMusicVideoCastAndSets = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/resume`, { method: 'POST', body: '{}', ...options });
 export const approveMusicVideoCastAndSets = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/approve`, { method: 'POST', ...options });
+// "Keep approved" (#10141): re-stamp an approved check-in on the project's current concept, style, subjects and song.
+export const reconfirmMusicVideoCastAndSets = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/reconfirm`, { method: 'POST', ...options });
 export const skipMusicVideoCastAndSets = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/skip`, { method: 'POST', ...options });
 

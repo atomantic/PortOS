@@ -69,8 +69,10 @@ export function treatmentSummary(project) {
  * reads) belongs in Setup, while compile / arc / shot direction / Apply need
  * scenes and live on the Board. Omit it to render both. The caller supplies
  * the collapsible section, so there is no fold of its own here.
+ * `storyboardApproved` (from the server's readiness) warns that any treatment
+ * edit will need the storyboard re-approved (#10141).
  */
-export default function TreatmentPanel({ project, treatment: api, part = 'all' }) {
+export default function TreatmentPanel({ project, treatment: api, part = 'all', storyboardApproved = false }) {
   const showBrief = part !== 'direction';
   const showDirection = part !== 'brief';
   const hasScenes = (project.scenes || []).length > 0;
@@ -109,6 +111,11 @@ export default function TreatmentPanel({ project, treatment: api, part = 'all' }
 
   return (
     <div className="space-y-3">
+      {storyboardApproved && (
+        <p role="note" className="rounded border border-port-warning/40 bg-port-warning/5 p-2 text-xs text-port-warning">
+          The storyboard is approved. Editing the treatment will need re-approval of the storyboard.
+        </p>
+      )}
       {showBrief && (
         <>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">

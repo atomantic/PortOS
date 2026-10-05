@@ -6,7 +6,7 @@ import useMusicVideoCastAndSets from '../../hooks/useMusicVideoCastAndSets';
 
 const { listeners, api, getMediaJob } = vi.hoisted(() => ({
   listeners: new Map(),
-  api: { getMusicVideoProject: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), skipMusicVideoCastAndSets: vi.fn() },
+  api: { getMusicVideoProject: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), skipMusicVideoCastAndSets: vi.fn() },
   getMediaJob: vi.fn(),
 }));
 vi.mock('../../services/socket', () => ({ default: {
@@ -226,6 +226,22 @@ describe('Cast & Sets tab: undo, regenerate and guide import', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Use My guide as visual guide' }));
     expect(useAsGuide).toHaveBeenCalledWith('guide-1');
     expect(screen.queryByRole('button', { name: 'Use A clip as visual guide' })).toBeNull();
+  });
+
+  it('names what changed since an approved sheet and keeps it approved on request (#10141)', async () => {
+    const stale = { approvedAt: '2026-01-01T00:00:00.000Z', changedFields: ['concept', 'style'] };
+    api.reconfirmMusicVideoCastAndSets.mockResolvedValue({ project: withStatus('approved') });
+    open(withStatus('approved'), { productionReadiness: { castAndSets: { approved: true, stale } } });
+    expect(screen.getByText('approved · stale')).toBeInTheDocument();
+    expect(screen.getByText(/^Approved earlier — changed since: concept, style\./)).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Keep approved' })); });
+    expect(api.reconfirmMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', { silent: true });
+  });
+
+  it('shows no stale note or Keep approved for a current approval', () => {
+    open(withStatus('approved'), { productionReadiness: { castAndSets: { approved: true, stale: null } } });
+    expect(screen.queryByRole('button', { name: 'Keep approved' })).toBeNull();
+    expect(screen.queryByText(/changed since/)).toBeNull();
   });
 
   it('marks the chosen guide instead of offering it again', () => {

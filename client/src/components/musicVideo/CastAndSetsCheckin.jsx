@@ -1,6 +1,7 @@
 import { CheckCircle2, Eye, Play, RotateCcw, SkipForward, Users } from 'lucide-react';
 import LlmRouteNote from './LlmRouteNote.jsx';
 import Pill from '../ui/Pill.jsx';
+import { staleApprovalText } from '../../lib/musicVideoStages.js';
 import CastAndSetsDirectionEditor from './CastAndSetsDirectionEditor.jsx';
 import CastAndSetsReferenceProgress from './CastAndSetsReferenceProgress.jsx';
 
@@ -32,25 +33,33 @@ function statusLine(stage) {
  * The Cast & Sets check-in's state on the Autopilot card: progress while the
  * server works, "Waiting for your check-in" with the sheet one click away,
  * and the director's actions (Approve & continue, Regenerate,
- * Edit direction on a procedural sheet, Resume, Skip).
+ * Edit direction on a procedural sheet, Resume, Skip). An approved sheet whose
+ * concept, style, subjects or song changed since (`stale`, from the server's
+ * readiness) says what changed and offers Keep approved beside Rebuild (#10141).
  */
-export default function CastAndSetsCheckin({ project, busy, onOpenSheet, onApprove, onRegenerate, onEditDirection, onResume, onRebuild, onSkip }) {
+export default function CastAndSetsCheckin({ project, stale = null, busy, onOpenSheet, onApprove, onRegenerate, onEditDirection, onResume, onRebuild, onReconfirm, onSkip }) {
   const stage = project.castAndSets;
   if (!stage) return null;
   const working = WORKING.has(stage.status) && !stage.interrupted;
   const sheet = stage.artifactId ? (project.devArtifacts || []).find((a) => a.id === stage.artifactId && !a.deleted) : null;
   const openNotes = (sheet?.notes || []).filter((n) => !n.resolvedAt).length;
-  const tone = stage.status === 'review' ? 'warning' : stage.status === 'approved' ? 'success' : stage.status === 'failed' ? 'error' : 'muted';
+  const staleText = stage.status === 'approved' ? staleApprovalText(stale) : null;
+  const tone = stage.status === 'review' || staleText ? 'warning' : stage.status === 'approved' ? 'success' : stage.status === 'failed' ? 'error' : 'muted';
   return (
     <div className={`rounded-lg border bg-port-card p-3 space-y-2 ${stage.status === 'review' ? 'border-port-warning/60' : 'border-port-border'}`} aria-label="Cast & Sets check-in">
       <div className="flex flex-wrap items-center gap-2">
         <Users size={14} className="text-port-accent shrink-0" aria-hidden="true" />
         <span className="text-sm font-medium">Cast &amp; Sets check-in</span>
-        <Pill size="xs" tone={tone}>{stage.interrupted ? 'interrupted' : stage.status}</Pill>
+        <Pill size="xs" tone={tone}>{stage.interrupted ? 'interrupted' : staleText ? 'approved · stale' : stage.status}</Pill>
         {stage.revision > 1 && <span className="text-[11px] text-port-text-muted">revision {stage.revision}</span>}
         <LlmRouteNote route={project.automation?.routes?.castAndSets} prefix="Direction ran on" />
       </div>
       <p className={`text-xs ${stage.status === 'review' ? 'text-port-warning' : 'text-port-text-muted'}`} role="status">{statusLine(stage)}</p>
+      {staleText && (
+        <p className="text-xs text-port-warning">
+          {staleText} Keep the sheet approved as it is, or rebuild it from the current inputs.
+        </p>
+      )}
       <CastAndSetsReferenceProgress stage={stage} />
       <div className="flex flex-wrap gap-2">
         {sheet && (
@@ -75,6 +84,12 @@ export default function CastAndSetsCheckin({ project, busy, onOpenSheet, onAppro
         {(stage.interrupted || stage.status === 'failed') && (
           <button type="button" disabled={busy} onClick={onResume} className={`${buttonClass} border border-port-border`}>
             <Play size={14} aria-hidden="true" /> Resume
+          </button>
+        )}
+        {staleText && onReconfirm && (
+          <button type="button" disabled={busy} onClick={onReconfirm} title="Keep this sheet approved on the current concept, style, subjects and song"
+            className={`${buttonClass} border border-port-border`}>
+            <CheckCircle2 size={14} aria-hidden="true" /> Keep approved
           </button>
         )}
         {onRebuild && ['approved', 'skipped'].includes(stage.status) && (
