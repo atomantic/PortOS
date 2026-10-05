@@ -25,6 +25,16 @@ operated browser sessions and unrelated host apps do not count. Maintenance neve
 cancels work, replays a paid submission, or enables a previously disabled policy.
 Resume removes the identified hold only; a stale request cannot remove a later hold.
 
+The same journal also has one optional exclusive-maintenance ownership slot and
+one last settlement receipt. They fence admission/resume before the DB is usable,
+bind the current operation to its hold and verified evidence, and survive restart.
+They are coordinator authority, **not a parallel execution audit/replay ledger**:
+the last receipt is bounded recovery evidence, not permanent request consumption.
+The eventual peer execution ledger remains receiver-local `db-primary` (below).
+Neither a missing verifier nor timeout/restart releases an in-flight owner.
+Older strict journal readers reject the added fields and fail closed; reverting
+to one cannot resume a claimed hold. Old unclaimed v1 journals still read normally.
+
 Operation age or a dead PID is not proof of saved output. On restart, the journal keeps
 unresolved ownership; runner survivors reconnect to their existing operation. A lost
 worker, failed save, or interrupted journal transaction needs recovery through its owning

@@ -82,13 +82,12 @@ without this protocol remain usable for their existing federation surfaces.
 
 ## Required before execution can be enabled
 
-- Integrate a **coordinator-owned exclusive claim**, bound to the maintenance
-  hold ID/revision, with fresh trusted idle evidence and a resume fence. The
-  maintenance admission foundation in PR #10122 does not yet provide that
-  atomic claim. `status().state === 'ready'` followed by execution is unsafe;
-  ordinary `admit` and a second independent lock are not substitutes. All
-  admitted agents, provider work, renders and cleanup must settle naturally;
-  no cancel, kill, forced pause or interruption fallback.
+- Wire the **coordinator-owned exclusive claim** into an authorized receiver
+  executor after the remaining requirements below are complete. The internal
+  primitive is implemented as described below; the planning protocol still
+  cannot acquire it. `status().state === 'ready'` followed by execution remains
+  unsafe; ordinary `admit` and a second independent lock are not substitutes.
+  All admitted work must settle naturally; no interruption fallback.
 - Implement a durable, receiver-local operation ledger and fixed adapters for
   the existing fork-aware PortOS update and PortOS-only restart. Recheck target
   identity/version/capability and permission at dispatch. Persist request and
@@ -113,3 +112,62 @@ without this protocol remain usable for their existing federation surfaces.
 These are dependencies, not permission to operate any peer. Enabling grants,
 credentials, live settings, machine updates/restarts and model downloads remains
 a separate later operator action.
+
+## Exclusive coordinator foundation (#10127, first slice)
+
+The coordinator now owns `observeIdle`, `claimReady`, `getExclusive`,
+`transitionExclusive` and `settleExclusive`. These are internal construction
+APIs, with no HTTP claim or recovery route, execution grant writer or adapter.
+Existing `planning-v1` grants, previews, receipts and execute refusal keep their
+current behavior. The claim's required `execution-v1` binding describes the
+future protocol; it neither creates nor verifies an execution grant today.
+
+`observeIdle` mints an opaque, process-local observation after all tracked work
+has settled. It is usable once, for at most five seconds, against the exact
+journal revision and hold ID/revision. Copies, wire objects, other coordinator
+instances' observations, backwards clock changes and intervening writes deny.
+`claimReady` rechecks that evidence and the hold under the same cross-process
+transaction used by admission and resume. A second claim or resume loses the
+race without changing ownership. Readiness displays a blocker while claimed.
+
+The bounded current ownership slot records the operation/request UUIDs, peer
+and receiver UUIDs, grant ID/generation, execution scope, pair binding digest,
+fixed intent, receiver version and preflight evidence digest. Its fingerprint
+binds those fields; changing either identity or intent cannot reconcile another
+operation. This is an ownership fence, not permission: the eventual receiver
+must authenticate and recheck current grants, pairing, capability and resource
+evidence before requesting a claim or recording a start.
+
+A reservation needs another fresh observation before it can move to
+`in-flight`. Start is durable **before** any future adapter side effect. From
+there only `awaiting-reconnect` or `uncertain` transitions are allowed; timeout,
+restart and reconnect never authorize another start. A newly observed survivor
+after start moves the claim to uncertain and invalidates stale reconciliation.
+No recovery kills or cancels that survivor.
+
+Only an unstarted reservation may be cancelled. A started/uncertain claim needs
+terminal persistence and cleanup evidence checked by a receiver-owned
+synchronous verifier supplied when constructing the coordinator. The default
+verifier denies every terminal release. Exact claim ID/revision/fingerprint
+comparison prevents stale settlement from releasing changed ownership. An
+interrupted publication retains the exclusive owner and fails closed. Settlement
+leaves the operator hold in place; explicit resume can then restore prior
+policies. The last settlement receipt makes its immediate replay idempotent;
+it is **not** permanent request replay history or the execution audit ledger.
+
+The remaining sequence stays owned by #10127, which this slice does not close:
+
+1. Add the receiver-local Postgres operation ledger and permanent request
+   idempotency/consumption records. Bind its operation identity and verified
+   terminal receipt to this coordinator slot; reconcile journal/DB crash gaps
+   without relaunching uncertain work.
+2. Add separately confirmed execution grants with generation and revocation,
+   sharing dispatch serialization so renewal/rotation during drain cannot
+   pass a stale authority snapshot. Planning grants never gain that scope.
+3. Connect fixed update/restart adapters, then catalog installation with exact
+   source/license/runtime/destination/staging/headroom/memory validation.
+4. Prove the complete receiver authorization, replay, revocation and crash
+   chain in fixtures; update receiver/sender UI before advertising execution.
+
+These are sequential implementation steps, not external blockers or authority
+to change live peers. Keep execution unavailable until all four are complete.
