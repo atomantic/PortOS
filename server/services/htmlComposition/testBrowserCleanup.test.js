@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { _cleanupTestBrowser, _waitForTestChrome, _withTestCaptureDiagnostics } from './testBrowserCleanup.js';
+import { _cleanupTestBrowser, _testChromeProcessFacts, _waitForTestChrome, _withTestCaptureDiagnostics } from './testBrowserCleanup.js';
 
 function child() {
   const proc = new EventEmitter();
@@ -34,18 +34,72 @@ function expectStartupClean(proc) {
   expect(vi.getTimerCount()).toBe(0);
 }
 
+describe('failure process observations', () => {
+  // Synthetic procfs only: no host process, command, environment or profile.
+  const stat = (state, parent, group = 777, session = 888) => `123 (example-secret (wrapper)) ${state} ${parent} ${group} ${session} 0 0 0`;
+  it('classifies owned-child waits and worker ancestry with bounded, allowlisted output', () => {
+    const read = vi.fn(path => {
+      if (path === '/proc/123/stat') return stat('D', 456);
+      if (path === '/proc/456/stat') return stat('R', 999);
+      const id = path.split('/').at(-2);
+      return { 1: 'futex_wait_queue', 2: 'ep_poll', 3: 'do_wait', 4: 'io_schedule', 5: 'pipe_read', 6: '0' }[id]
+        ?? '/private/example-secret --password=example-secret';
+    });
+    const threads = vi.fn(() => Array.from({ length: 200 }, (_, i) => String(i + 1)));
+    const result = _testChromeProcessFacts({ pid: 123 }, { platform: 'linux', workerPid: 456, read, threads });
+    expect(result).toBe('os=linux child=uninterruptible worker=runnable parent=worker group=worker session=worker threads=16 threadLimit=true waits=none:1,futex:1,poll:1,pipe:1,child:1,io:1,other:10,unavailable:0');
+    expect(read).toHaveBeenCalledTimes(18);
+    expect(read.mock.calls.every(([path]) => /^\/proc\/(123|456)\/(stat|task\/\d+\/wchan)$/.test(path))).toBe(true);
+    expect(result).not.toMatch(/123|456|777|888|999|example-secret|password|private/);
+  });
+
+  it('keeps absent, malformed and denied observations distinct from successful capture', () => {
+    const denied = () => { throw new Error('/private/example-secret'); };
+    expect(_testChromeProcessFacts({ pid: 123 }, { platform: 'linux', read: denied, threads: denied }))
+      .toContain('child=unavailable worker=unavailable parent=unavailable group=unavailable session=unavailable threads=unavailable threadLimit=unavailable');
+    const read = path => path.endsWith('/stat') ? 'malformed example-secret' : '0';
+    const result = _testChromeProcessFacts({ pid: 123 }, { platform: 'linux', read, threads: () => [] });
+    expect(result).toContain('child=unavailable');
+    expect(result).toContain('threads=0 threadLimit=false');
+    expect(result).not.toContain('example-secret');
+  });
+
+  it('separates a reparented child outside the worker group and unavailable thread waits', () => {
+    const read = path => {
+      if (path === '/proc/123/stat') return stat('Z', 1, 2, 3);
+      if (path === '/proc/456/stat') return stat('S', 999);
+      if (path.endsWith('/1/wchan')) throw new Error('denied example-secret');
+      // The permitted prefix is complete, but the excess must be discarded.
+      return '0'.padEnd(4096, ' ') + 'example-secret';
+    };
+    const result = _testChromeProcessFacts({ pid: 123 }, { platform: 'linux', workerPid: 456, read, threads: () => ['1', '2', '../example-secret'] });
+    expect(result).toBe('os=linux child=zombie worker=sleeping parent=other group=other session=other threads=2 threadLimit=false waits=none:1,futex:0,poll:0,pipe:0,child:0,io:0,other:0,unavailable:1');
+  });
+
+  it('does no reads on unsupported platforms or missing child identity', () => {
+    const read = vi.fn();
+    const threads = vi.fn();
+    expect(_testChromeProcessFacts({ pid: 123 }, { platform: 'darwin', read, threads })).toBe('os=unsupported');
+    expect(_testChromeProcessFacts({}, { platform: 'linux', read, threads })).toBe('os=linux child=unavailable');
+    expect(read).not.toHaveBeenCalled();
+    expect(threads).not.toHaveBeenCalled();
+  });
+});
+
 describe('test Chrome startup', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
   it('waits for a complete DevTools address across stderr chunks', async () => {
     const proc = startingChild();
-    const ready = _waitForTestChrome(proc);
+    const observeProcess = vi.fn();
+    const ready = _waitForTestChrome(proc, 20000, undefined, { observeProcess });
     proc.stderr.emit('data', Buffer.from('noise\nDevTools listening on ws://127.0.0.1:4'));
     proc.stderr.emit('data', Buffer.from('321/devtools/browser/example'));
     expect(proc.listenerCount('exit')).toBe(1);
     proc.stderr.emit('data', Buffer.from('\n'));
     await expect(ready).resolves.toBe('ws://127.0.0.1:4321/devtools/browser/example');
+    expect(observeProcess).not.toHaveBeenCalled();
     expectStartupClean(proc);
   });
 
@@ -62,9 +116,9 @@ describe('test Chrome startup', () => {
 
   it('reports a spawn error without exposing its raw message', async () => {
     const proc = startingChild();
-    const ready = _waitForTestChrome(proc);
+    const ready = _waitForTestChrome(proc, 20000, undefined, { observeProcess: () => { throw new Error('example-secret'); } });
     proc.emit('error', Object.assign(new Error('/private/example-secret/chrome'), { code: 'ENOENT' }));
-    await expect(ready).rejects.toThrow('failed to spawn (ENOENT; no stderr)');
+    await expect(ready).rejects.toThrow('failed to spawn (ENOENT; no stderr; process: os=unavailable)');
     await expect(ready).rejects.not.toThrow('example-secret');
     expectStartupClean(proc);
   });
@@ -87,10 +141,14 @@ describe('test Chrome startup', () => {
 
   it('keeps the startup deadline and clears listeners on timeout', async () => {
     const proc = startingChild();
-    const ready = _waitForTestChrome(proc);
-    const rejected = expect(ready).rejects.toThrow('did not start within 20000ms; no stderr');
-    await vi.advanceTimersByTimeAsync(20000);
+    const observeProcess = vi.fn(() => 'os=linux child=sleeping');
+    const ready = _waitForTestChrome(proc, 20000, undefined, { observeProcess });
+    const rejected = expect(ready).rejects.toThrow('did not start within 20000ms; no stderr; process: os=linux child=sleeping');
+    await vi.advanceTimersByTimeAsync(19999);
+    expect(observeProcess).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     await rejected;
+    expect(observeProcess).toHaveBeenCalledExactlyOnceWith(proc);
     expectStartupClean(proc);
   });
 });
@@ -220,7 +278,9 @@ describe('owned test Chrome cleanup', () => {
       proc.signalCode = signal;
       proc.emit('exit', null, signal);
     });
-    await _cleanupTestBrowser({ proc, cleanup: vi.fn() });
+    const observeProcess = vi.fn();
+    await _cleanupTestBrowser({ proc, cleanup: vi.fn(), observeProcess });
+    expect(observeProcess).not.toHaveBeenCalled();
     expect(proc.kill.mock.calls).toEqual([['SIGTERM']]);
     expect(proc.listenerCount('exit')).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
@@ -275,13 +335,17 @@ describe('owned test Chrome cleanup', () => {
       return accepted;
     });
     const cleanup = vi.fn();
-    const pending = _cleanupTestBrowser({ proc, cleanup });
+    const observeProcess = vi.fn(() => 'os=linux child=zombie worker=runnable parent=worker');
+    const pending = _cleanupTestBrowser({ proc, cleanup, observeProcess });
     const rejected = expect(pending).rejects.toThrow(
       `child termination exceeded 10000ms deadline; teardown: stage=child-termination term=${result} kill=${result}`
-        + ` exitCode=none signal=${signalCode ?? 'none'} exitObserved=false signalError=${errorCode}`,
+        + ` exitCode=none signal=${signalCode ?? 'none'} exitObserved=false signalError=${errorCode}; process: os=linux child=zombie worker=runnable parent=worker`,
     );
-    await vi.advanceTimersByTimeAsync(10000);
+    await vi.advanceTimersByTimeAsync(9999);
+    expect(observeProcess).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     await rejected;
+    expect(observeProcess).toHaveBeenCalledExactlyOnceWith(proc);
     expect(cleanup).toHaveBeenCalledOnce();
     expect(proc.stderr.destroy).toHaveBeenCalledOnce();
     expect(proc.listenerCount('exit')).toBe(0);
@@ -298,12 +362,15 @@ describe('owned test Chrome cleanup', () => {
     const cleanup = vi.fn();
     const result = _cleanupTestBrowser({
       browser: { close: () => new Promise(() => {}) }, proc, cleanup,
+      observeProcess: () => { throw new Error('example-secret'); },
     });
     const rejected = expect(result).rejects.toThrow(
       'Test Chrome browser disconnect exceeded 5000ms deadline; Test Chrome child termination exceeded 10000ms deadline',
     );
     await vi.advanceTimersByTimeAsync(15000);
     await rejected;
+    await expect(result).rejects.toThrow('process: os=unavailable');
+    await expect(result).rejects.not.toThrow('example-secret');
     expect(proc.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
     expect(cleanup).toHaveBeenCalledOnce();
     expect(proc.stderr.destroy).toHaveBeenCalledOnce();
