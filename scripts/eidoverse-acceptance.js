@@ -194,6 +194,14 @@ async function live(report, reportPath, upstream) {
 
 export async function main(args = process.argv.slice(2)) {
   const reportPath = args.includes('--report') ? args[args.indexOf('--report') + 1] : join(tmpdir(), 'eidoverse-acceptance-report.json');
+  if (args.includes('--preflight') && args.includes('--live')) {
+    const report = newReport();
+    report.status = 'fail';
+    report.reason = '--preflight and --live are mutually exclusive; no acceptance attempted.';
+    await save(report, reportPath);
+    await summarize(report, process.env.GITHUB_STEP_SUMMARY);
+    return 2;
+  }
   if (args.includes('--summary') || args.includes('--build-failed') || args.includes('--source-unavailable')) {
     const report = JSON.parse(await readFile(reportPath, 'utf8'));
     if (args.includes('--build-failed') && report.criteria.host.status === 'pass' && report.criteria.build.status !== 'pass') {
@@ -207,7 +215,7 @@ export async function main(args = process.argv.slice(2)) {
       await save(report, reportPath);
     }
     await summarize(report, process.env.GITHUB_STEP_SUMMARY);
-    return report.status === 'pass' ? 0 : 2;
+    return acceptanceExitCode(report);
   }
   const report = newReport();
   report.criteria.host = await preflight();
@@ -221,7 +229,14 @@ export async function main(args = process.argv.slice(2)) {
   }
   await save(report, reportPath);
   await summarize(report, process.env.GITHUB_STEP_SUMMARY);
-  return args.includes('--preflight') && report.criteria.host.status === 'pass' ? 0 : report.status === 'pass' ? 0 : 2;
+  return acceptanceExitCode(report, { preflightOnly: args.includes('--preflight'), live: args.includes('--live') });
+}
+
+/** A successful prerequisite must never override a failed live verdict. */
+export function acceptanceExitCode(report, { preflightOnly = false, live = false } = {}) {
+  if (live) return report.status === 'pass' ? 0 : 2;
+  if (preflightOnly) return report.criteria.host.status === 'pass' ? 0 : 2;
+  return report.status === 'pass' ? 0 : 2;
 }
 
 if (isDirectlyInvoked(import.meta.url)) main().then(code => { process.exitCode = code; }).catch(() => {
