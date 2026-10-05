@@ -29,7 +29,6 @@ jobs:
     env:
       PORTOS_EIDOVERSE_LIVE: '1'
       PORTOS_EIDOVERSE_SOURCE_REVIEWED: ${{ inputs.reviewed_source && '1' || '0' }}
-      EIDOVERSE_REPORT: ${{ runner.temp }}/eidoverse-acceptance-report.json
       NODE_ENV: test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,7 +39,10 @@ jobs:
           node-version: 24.x
 
       - name: Read-only native host and resource preflight
-        run: node scripts/eidoverse-acceptance.js --preflight --report "$EIDOVERSE_REPORT"
+        run: |
+          export EIDOVERSE_REPORT="$RUNNER_TEMP/eidoverse-acceptance-report.json"
+          printf 'EIDOVERSE_REPORT=%s\n' "$EIDOVERSE_REPORT" >> "$GITHUB_ENV"
+          node scripts/eidoverse-acceptance.js --preflight --report "$EIDOVERSE_REPORT"
 
       - name: Require source and license review
         id: source_review
