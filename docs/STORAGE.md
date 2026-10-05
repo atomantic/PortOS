@@ -809,6 +809,12 @@ evidence, streamed in bounded records/pages rather than a writable parallel stor
 Unknown DB commit outcomes retain the fence and retry the same evidence. Conflicts,
 missing capture and interrupted publication fail closed. Nonterminal records remain
 uncertain; missing DB claim evidence never proves that the journal owner did not start.
+Legacy post-replay adoption publishes a fenced exact-ID empty-adoption record
+directly, never a transient ready epoch. Its first publication has an atomic intent
+link. Only that matching intent/record plus both tables proved empty under the
+shared PostgreSQL writer lock can resume adoption or repair its interrupted file
+publication. This bounded exception cannot recover or recapture ordinary rewinds,
+replace missing permanent facts, or steal another restore's ownership by age/PID.
 
 Filesystem restore preserves both execution files and the whole
 `workflow-maintenance/` subtree, case-insensitively, including absent or damaged

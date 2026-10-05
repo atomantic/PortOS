@@ -198,6 +198,13 @@ records remain uncertain. Stronger same-owner claim evidence survives, conflicti
 owners refuse reconciliation, and the preserved journal must match and remain
 stable. Restore never releases a coordinator claim or interrupts active work.
 
+Legacy committed restores that predate this ledger may adopt only a positively
+empty pair of ledger tables. Adoption persists the exact recovery ID directly in
+a fenced capture state, with an atomic same-ID intent covering first publication.
+Database-lock waits, capture failures and interrupted publication resume only that
+empty-adoption owner after another empty-table proof. Ordinary committed rewinds
+never recapture an empty database. Downstream repair retries reuse the settled ID.
+
 Filesystem restore preserves the epoch/recovery files and maintenance-owner
 subtree, including scoped and mixed-case requests. It does not yet invalidate
 execution authority for filesystem-only identity/configuration restores.

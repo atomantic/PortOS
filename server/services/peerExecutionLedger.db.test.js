@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { checkHealth, close, ensureSchema, query, withTransaction } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { createPeerExecutionLedger } from './peerExecutionLedger.js';
+import { createPeerExecutionAuthority } from '../lib/peerExecutionAuthority.js';
 
 const health = await checkHealth().catch(() => ({ connected: false }));
 if (health.connected) await ensureSchema();
@@ -37,16 +38,71 @@ afterEach(async () => {
 afterAll(async () => { if (health.connected) await close(); });
 
 describe.skipIf(!runDb)('receiver-local permanent execution consumption', () => {
+  it.each(['acquisition', 'capture-query', 'begin-publication', 'snapshot-publication', 'completion-publication', 'directory-sync'])
+    ('resumes only the same legacy empty-adoption owner after %s failure and process reconstruction', async boundary => {
+      const { _createPeerExecutionRestore } = await import('./peerExecutionRestore.js');
+      fs.unlinkSync(join(directory, 'peer-execution-authority.json'));
+      const id = randomUUID();
+      let publications = 0, failed = false;
+      const io = { ...fs,
+        renameSync: (...args) => {
+          publications++;
+          const target = { 'begin-publication': 1, 'snapshot-publication': 2, 'completion-publication': 3 }[boundary];
+          if (!failed && publications === target) { failed = true; throw new Error('fixture publication failure'); }
+          return fs.renameSync(...args);
+        },
+        fsyncSync: fd => {
+          if (boundary === 'directory-sync' && !failed && fs.fstatSync(fd).isDirectory()) {
+            failed = true; throw new Error('fixture directory-sync failure');
+          }
+          return fs.fsyncSync(fd);
+        },
+      };
+      const faultDb = { query, withTransaction: fn => {
+        if (boundary === 'acquisition' && !failed) { failed = true; return Promise.reject(new Error('fixture acquisition failure')); }
+        return withTransaction(client => fn({ query: (sql, params) => {
+          if (boundary === 'capture-query' && !failed && sql.startsWith('SELECT * FROM peer_execution_operations')) {
+            failed = true; throw new Error('fixture capture-query failure');
+          }
+          return client.query(sql, params);
+        } }));
+      } };
+      const faulty = createPeerExecutionLedger({ db: faultDb, dataDir: directory,
+        authority: createPeerExecutionAuthority(directory, { io }) });
+      const hooks = _createPeerExecutionRestore({ receiver: async () => faulty });
+      await expect(hooks.finishPeerExecutionRestore(id)).rejects.toThrow(/fixture/);
+      expect(failed).toBe(true);
+      // A different generic restore cannot adopt or steal this ownership.
+      const restarted = createPeerExecutionLedger({ db, dataDir: directory });
+      const retry = _createPeerExecutionRestore({ receiver: async () => restarted });
+      if (boundary !== 'acquisition') await expect(retry.finishPeerExecutionRestore(randomUUID())).rejects.toThrow();
+      const completed = await retry.finishPeerExecutionRestore(id);
+      expect(completed).toMatchObject({ phase: 'ready', settledRecoveryId: id, emptyAdoptionId: id });
+      expect(await retry.finishPeerExecutionRestore(id)).toEqual(completed);
+      expect(await restarted.list()).toEqual([]);
+    });
+  it('never recaptures a normal committed rewind even if both rewound tables are empty', async () => {
+    const { _createPeerExecutionRestore } = await import('./peerExecutionRestore.js');
+    const saved = (await ledger.consume(input)).operation;
+    const id = randomUUID();
+    ledger.authority.beginRestore(id);
+    await query('DELETE FROM peer_execution_operations');
+    await query('DELETE FROM peer_execution_generation_floors');
+    const hooks = _createPeerExecutionRestore({ receiver: async () => ledger });
+    await expect(hooks.finishPeerExecutionRestore(id)).rejects.toThrow(/committed restore/);
+    expect(ledger.authority.read()).toMatchObject({ phase: 'capturing', emptyAdoptionId: null });
+    expect(await ledger.read(saved.operationId)).toBeNull();
+  });
   it('durably settles legacy empty committed-restore compatibility before downstream retries', async () => {
-    const { createPeerExecutionRestore } = await import('./peerExecutionRestore.js');
-    const hooks = createPeerExecutionRestore({ receiver: async () => ledger });
+    const { _createPeerExecutionRestore } = await import('./peerExecutionRestore.js');
+    const hooks = _createPeerExecutionRestore({ receiver: async () => ledger });
     fs.unlinkSync(join(directory, 'peer-execution-authority.json'));
     const id = randomUUID();
     const first = await hooks.finishPeerExecutionRestore(id);
     expect(first).toMatchObject({ phase: 'ready', settledRecoveryId: id });
     // Federation resync/generic-journal release can fail after this hook returns.
     await expect(Promise.reject(new Error('fixture downstream release failure'))).rejects.toThrow(/downstream/);
-    const restarted = createPeerExecutionRestore({ receiver: async () => createPeerExecutionLedger({ db, dataDir: directory }) });
+    const restarted = _createPeerExecutionRestore({ receiver: async () => createPeerExecutionLedger({ db, dataDir: directory }) });
     expect(await restarted.finishPeerExecutionRestore(id)).toEqual(first);
   });
   it('serializes duplicate first requests, retaining one operation through process reconstruction', async () => {

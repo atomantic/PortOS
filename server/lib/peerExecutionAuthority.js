@@ -10,6 +10,7 @@ const recordSchema = z.object({
   version: z.literal(1), epoch: uuid, revision: z.number().int().positive().safe(),
   phase: z.enum(['ready', 'capturing', 'reconciling']),
   settledRecoveryId: uuid.nullable(),
+  emptyAdoptionId: uuid.nullable(),
   recovery: z.object({ id: uuid, digest: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
     count: z.number().int().nonnegative().safe().nullable() }).strict().nullable(),
 }).strict().refine(value => (value.phase === 'ready') === (value.recovery === null))
@@ -31,19 +32,24 @@ export function createPeerExecutionAuthority(dataDir, { io = fs, assertWrite = a
     const fd = io.openSync(dataDir, 'r');
     try { io.fsyncSync(fd); } finally { io.closeSync(fd); }
   };
-  const read = ({ inside = false } = {}) => {
-    if (damaged || (!inside && exists(lock))) throw executionAuthorityError('Execution authority needs reconciliation.');
+  const read = ({ inside = false, recovery = false } = {}) => {
+    if ((!recovery && damaged) || (!inside && exists(lock))) throw executionAuthorityError('Execution authority needs reconciliation.');
     if (!exists(path)) return null;
     try {
       if (!io.lstatSync(path).isFile()) throw new Error('not a regular file');
       return recordSchema.parse(JSON.parse(io.readFileSync(path, 'utf8')));
     } catch { throw executionAuthorityError('Execution authority is unreadable; it cannot be reset.'); }
   };
-  const transaction = change => {
+  const transaction = (change, { emptyAdoptionId = null } = {}) => {
     assertWrite(path, 'peer execution authority');
     if (damaged) throw executionAuthorityError('Execution authority publication was interrupted.');
     io.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-    try { io.mkdirSync(lock, { mode: 0o700 }); }
+    // The first legacy adoption has no earlier record. An atomic intent link
+    // makes even a crash before its first JSON publication recoverable by ID.
+    try {
+      if (emptyAdoptionId) io.symlinkSync(`empty-adoption:${emptyAdoptionId}`, lock);
+      else io.mkdirSync(lock, { mode: 0o700 });
+    }
     catch { throw executionAuthorityError('Execution authority is being changed or needs recovery.'); }
     let publishing = false;
     try {
@@ -63,7 +69,10 @@ export function createPeerExecutionAuthority(dataDir, { io = fs, assertWrite = a
     } finally {
       // Never steal an interrupted publication by age or PID.
       if (!damaged) {
-        try { io.rmdirSync(lock); syncDirectory(); } catch { damaged = true; }
+        try {
+          if (emptyAdoptionId) io.unlinkSync(lock); else io.rmdirSync(lock);
+          syncDirectory();
+        } catch { damaged = true; }
       }
     }
   };
@@ -74,7 +83,7 @@ export function createPeerExecutionAuthority(dataDir, { io = fs, assertWrite = a
     return current;
   };
   const initialize = () => transaction(current => current ?? {
-    version: 1, epoch: makeId(), revision: 1, phase: 'ready', recovery: null, settledRecoveryId: null,
+    version: 1, epoch: makeId(), revision: 1, phase: 'ready', recovery: null, settledRecoveryId: null, emptyAdoptionId: null,
   });
   const beginRestore = id => {
     uuid.parse(id);
@@ -82,9 +91,40 @@ export function createPeerExecutionAuthority(dataDir, { io = fs, assertWrite = a
       if (!current) throw executionAuthorityError('Initialize the empty ledger before restoring execution records.');
       if (current.recovery?.id === id) return current;
       if (current.phase !== 'ready') throw executionAuthorityError('Another execution recovery is pending.');
-      return { ...current, epoch: makeId(), revision: current.revision + 1, phase: 'capturing',
+      return { ...current, emptyAdoptionId: null, epoch: makeId(), revision: current.revision + 1, phase: 'capturing',
         recovery: { id, digest: null, count: null } };
     });
+  };
+  // Internal restore primitive: caller MUST hold the ledger writer transaction
+  // lock and have positively proved BOTH tables empty. No age/PID lock stealing.
+  const recoverEmptyAdoption = id => {
+    uuid.parse(id);
+    const current = read({ inside: true, recovery: true });
+    const locked = exists(lock);
+    const intent = locked && io.lstatSync(lock).isSymbolicLink() && io.readlinkSync(lock) === `empty-adoption:${id}`;
+    if (current?.emptyAdoptionId !== id && !(intent && !current)) {
+      if (locked || damaged) throw executionAuthorityError('Interrupted authority has no matching empty-adoption proof.');
+      return current;
+    }
+    assertWrite(path, 'peer execution empty restore recovery');
+    if (locked) {
+      if (io.lstatSync(lock).isSymbolicLink()) {
+        if (!intent) throw executionAuthorityError('The empty-adoption owner changed.');
+        io.unlinkSync(lock);
+      } else io.rmdirSync(lock); // Refuses unexpected contents.
+      syncDirectory();
+    }
+    damaged = false;
+    return current;
+  };
+  const beginEmptyAdoption = id => {
+    uuid.parse(id);
+    return transaction(current => {
+      if (current?.emptyAdoptionId === id) return current;
+      if (current) throw executionAuthorityError('Existing authority cannot be replaced by legacy empty adoption.');
+      return { version: 1, epoch: makeId(), revision: 1, phase: 'capturing',
+        recovery: { id, digest: null, count: null }, settledRecoveryId: null, emptyAdoptionId: id };
+    }, { emptyAdoptionId: id });
   };
   const recordSnapshot = (id, digest, count) => transaction(current => {
     if (current?.recovery?.id !== id || current.phase !== 'capturing')
@@ -96,5 +136,6 @@ export function createPeerExecutionAuthority(dataDir, { io = fs, assertWrite = a
       throw executionAuthorityError('The execution recovery owner changed.');
     return { ...current, revision: current.revision + 1, phase: 'ready', recovery: null, settledRecoveryId: id };
   });
-  return { read, requireReady, initialize, beginRestore, recordSnapshot, completeRestore, recoveryPath, assertWrite };
+  return { read, requireReady, initialize, beginRestore, beginEmptyAdoption, recoverEmptyAdoption,
+    recordSnapshot, completeRestore, recoveryPath, assertWrite };
 }

@@ -9,7 +9,7 @@ async function receiverLedger({ repairSchema = false } = {}) {
   return createPeerExecutionLedger({ db, dataDir: PATHS.data });
 }
 
-export function createPeerExecutionRestore({ receiver = receiverLedger } = {}) {
+export function _createPeerExecutionRestore({ receiver = receiverLedger } = {}) {
   const preparePeerExecutionRestore = async id => {
     const ledger = await receiver();
     await ledger.initialize();
@@ -17,15 +17,10 @@ export function createPeerExecutionRestore({ receiver = receiverLedger } = {}) {
   };
   const finishPeerExecutionRestore = async (id, { rolledBack = false } = {}) => {
     const ledger = await receiver({ repairSchema: rolledBack });
-    const before = ledger.authority.read();
-    const current = await ledger.initialize();
-    // A generic restore started by a version predating the ledger has no capture.
-    // initialize only permits this when BOTH new tables are empty. Durably settle
-    // that empty baseline so downstream repair/release retries remain idempotent.
-    if (!before) {
-      await ledger.prepareRestore(id);
-      return ledger.reconcileRestore(id);
-    }
+    // No transient ready epoch: legacy compatibility publishes its exact ID
+    // directly as capturing under the shared PG lock, and resumes only that mode.
+    const current = await ledger.adoptEmptyRestore(id);
+    if (current.phase === 'ready' && current.settledRecoveryId === id) return current;
     if (rolledBack && current.phase === 'ready') return current;
     if (current.phase === 'capturing') {
       if (!rolledBack) throw executionAuthorityError('A committed restore lacks completed non-rewound execution capture.');
@@ -38,6 +33,6 @@ export function createPeerExecutionRestore({ receiver = receiverLedger } = {}) {
   return { preparePeerExecutionRestore, finishPeerExecutionRestore };
 }
 
-const restoreHooks = createPeerExecutionRestore();
+const restoreHooks = _createPeerExecutionRestore();
 export const preparePeerExecutionRestore = restoreHooks.preparePeerExecutionRestore;
 export const finishPeerExecutionRestore = restoreHooks.finishPeerExecutionRestore;

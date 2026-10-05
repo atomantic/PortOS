@@ -155,8 +155,7 @@ export function createPeerExecutionLedger({ db, dataDir, authority = createPeerE
       WHERE ($1::uuid IS NULL OR operation_id > $1) ORDER BY operation_id LIMIT $2`, [after, limit]);
     return rows.map(fromRow);
   };
-  const prepareRestore = id => locked(async client => {
-      const started = authority.beginRestore(id); // Invalidates old evidence BEFORE any rewind.
+  const captureRestore = async (client, id, started) => {
       if (started.phase !== 'capturing') return started; // Never recapture a rewound database on retry.
       const pending = `${authority.recoveryPath}.${makeId()}.pending`;
       authority.assertWrite(pending, 'peer execution restore evidence');
@@ -197,6 +196,20 @@ export function createPeerExecutionLedger({ db, dataDir, authority = createPeerE
         try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
       }
       return authority.recordSnapshot(id, hash.digest('hex'), count);
+  };
+  const prepareRestore = id => locked(client => captureRestore(client, id, authority.beginRestore(id)));
+  const adoptEmptyRestore = id => locked(async client => {
+    uuid.parse(id);
+    // Before any file publication/recovery, prove this receiver never had facts
+    // in the restored schema. A normal capture can NEVER take this retry path.
+    const { rows: [row] } = await client.query('SELECT EXISTS(SELECT 1 FROM peer_execution_operations) OR EXISTS(SELECT 1 FROM peer_execution_generation_floors) AS occupied');
+    let current;
+    if (!row.occupied) current = authority.recoverEmptyAdoption(id);
+    else current = authority.read();
+    if (current?.phase === 'ready' && current.settledRecoveryId === id) return current;
+    if (current && current.emptyAdoptionId !== id) return current;
+    if (row.occupied) throw executionAuthorityError('Legacy empty adoption has unexpected permanent execution facts.');
+    return captureRestore(client, id, authority.beginEmptyAdoption(id));
   });
   // Stream twice: authenticate ALL recovery bytes before applying any rows.
   const visitFacts = async visit => {
@@ -299,5 +312,5 @@ export function createPeerExecutionLedger({ db, dataDir, authority = createPeerE
     if (current?.phase === 'ready' && current.settledRecoveryId === id) return current;
     return authority.completeRestore(id);
   };
-  return { initialize, consume, read, list, transition, advanceGenerationFloor, prepareRestore, reconcileRestore, authority };
+  return { initialize, consume, read, list, transition, advanceGenerationFloor, prepareRestore, adoptEmptyRestore, reconcileRestore, authority };
 }
