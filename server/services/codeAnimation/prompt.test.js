@@ -35,6 +35,28 @@ describe('buildCodeAnimationPrompt', () => {
     expect(prompt).not.toContain('No style was specified');
   });
 
+  it('places one style grammar between the universe lines and the notes, with stated precedence, and is unchanged without one', () => {
+    const input = {
+      concept: 'x', styleNotes: 'slower camera', format,
+      universe: { name: 'Example Universe', embrace: ['ink wash'], avoid: [], styleNotes: '', styleReferences: [] },
+    };
+    const plain = buildCodeAnimationPrompt(input);
+    expect(plain).not.toContain('STYLE GRAMMAR');
+    expect(buildCodeAnimationPrompt({ ...input, styleGrammarId: null })).toBe(plain);
+    const prompt = buildCodeAnimationPrompt({ ...input, styleGrammarId: 'blueprint-draft' });
+    expect(prompt.match(/STYLE GRAMMAR:/g)).toHaveLength(1);
+    expect(prompt).toContain('Film style grammar: Blueprint draft');
+    expect(prompt).toContain('the style grammar wins on rendering technique, motion stepping, camera moves and sound');
+    const at = (text) => prompt.indexOf(text);
+    expect(at('Visual style to embrace')).toBeLessThan(at('STYLE GRAMMAR:'));
+    expect(at('STYLE GRAMMAR:')).toBeLessThan(at('Refinements for this animation'));
+    expect(at('Refinements for this animation')).toBeLessThan(at('SOUND:'));
+  });
+
+  it('rejects an unknown style grammar id', () => {
+    expect(() => buildCodeAnimationPrompt({ concept: 'x', format, styleGrammarId: 'no-such-style' })).toThrow(/Unknown film style grammar/);
+  });
+
   it('turns a character bible into rigging instructions, and omits them without one', () => {
     const withCast = buildCodeAnimationPrompt({
       concept: 'x',

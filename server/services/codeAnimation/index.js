@@ -237,6 +237,7 @@ export async function buildCodeAnimationRequest(input, { delivery = 'copy' } = {
     cast: input.cast,
     onScreenText: input.onScreenText,
     styleNotes: input.styleNotes,
+    styleGrammarId: input.styleGrammarId,
     format: input.format,
     renderer: input.renderer,
     interactive: input.interactive,
@@ -294,6 +295,7 @@ export async function generateCodeAnimationBrief(input) {
     universe,
     moodBoard: board,
     seedIdea: input.seedIdea,
+    styleGrammarId: input.styleGrammarId,
     format: input.format,
     current: input.current,
   });
