@@ -334,7 +334,8 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
                     }}
                     onBlur={() => saveCues()} className={`${inputCls} min-w-0 flex-1 basis-40`} />
                   {onAlign && (
-                    <button type="button" onClick={() => runAlign(cue.id)} disabled={aligning}
+                    <button type="button" onClick={() => runAlign(cue.id)} disabled={aligning || !hasAudio}
+                      title={hasAudio ? undefined : 'Attach a song before aligning words'}
                       aria-label={`Re-align line ${i + 1}`}
                       className="min-h-[44px] sm:min-h-0 text-port-accent disabled:opacity-50">Re-align</button>
                   )}

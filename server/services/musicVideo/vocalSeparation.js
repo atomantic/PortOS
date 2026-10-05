@@ -147,6 +147,12 @@ const activeByProject = new Map();
 
 export const attachVocalSeparationSseClient = (jobId, res) => attachSse(separationJobs, jobId, res);
 
+/** The project's running separation job id, or null. */
+export function getActiveVocalSeparationJobId(projectId) {
+  const jobId = activeByProject.get(projectId);
+  return jobId && separationJobs.get(jobId) && !separationJobs.get(jobId).settled ? jobId : null;
+}
+
 export function cancelVocalSeparation(jobId) {
   const job = separationJobs.get(jobId);
   if (!job || job.settled) return false;

@@ -300,6 +300,24 @@ describe('alignProjectLyrics', () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it('reports stages and stops without saving when cancelled mid-run (#10155)', async () => {
+    const stages = [];
+    const transcribe = vi.fn(async () => [{ text: 'walking', startSec: 0.5, endSec: 1 }]);
+    const done = harness(transcribe);
+    await done.run({ onProgress: (frame) => stages.push(frame.stage) });
+    expect(stages).toEqual(['decoding', 'loading-model', 'transcribing', 'saving']);
+
+    const stopped = harness(vi.fn(async () => [{ text: 'walking', startSec: 0.5, endSec: 1 }]));
+    let cancel = false;
+    await expect(stopped.run({
+      isCancelled: () => cancel,
+      onProgress: (frame) => { if (frame.stage === 'loading-model') cancel = true; },
+    })).rejects.toMatchObject({ canceled: true });
+    expect(stopped.transcribe).not.toHaveBeenCalled();
+    expect(stopped.updateProject).not.toHaveBeenCalled();
+    expect(stopped.release).toHaveBeenCalledOnce();
+  });
+
   it('anchors a post-silence line to the stem while transcribing only sequential mix windows', async () => {
     const record = { ...project, lyricCues: [
       { id: 'a', text: 'hello morning', startSec: null, endSec: null },

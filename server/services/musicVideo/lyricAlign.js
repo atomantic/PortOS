@@ -55,9 +55,9 @@ async function decodeSourceToWav(sourcePath) {
 }
 
 // Lazy: the runner pulls the download/spawn helpers only an alignment needs.
-async function resolveTranscriber() {
+async function resolveTranscriber(onDownloadProgress) {
   const { resolveAlignmentTranscriber } = await import('./lyricTranscriber.js');
-  return resolveAlignmentTranscriber();
+  return resolveAlignmentTranscriber({ onDownloadProgress });
 }
 
 const audioKey = (project) => `${project?.trackId ?? ''}\u0000${project?.uploadedAudioFilename ?? ''}\u0000${project?.vocalStemFilename ?? ''}`;
@@ -83,6 +83,10 @@ function relabeledAnalysis(project, cues) {
  * against the full vocal so a repeated chorus keeps its own occurrence.
  */
 export async function alignProjectLyrics(projectId, options = {}) {
+  const onProgress = options.onProgress || (() => {});
+  const checkCancel = () => {
+    if (options.isCancelled?.()) throw Object.assign(new Error('cancelled'), { canceled: true });
+  };
   const deps = {
     getProject,
     updateProject,
@@ -101,9 +105,11 @@ export async function alignProjectLyrics(projectId, options = {}) {
   const cue = cueId ? cues.find((entry) => entry.id === cueId) : null;
   if (cueId && !cue) throw new ServerError('That lyric line is no longer on the project.', { status: 404, code: 'NOT_FOUND' });
 
+  onProgress({ stage: 'decoding' });
   const { path: audioPath, source, mixPath } = await deps.resolveAudio(project);
   const wav = await deps.decodeAudio(audioPath);
   const mixWav = mixPath ? await deps.decodeAudio(mixPath) : null;
+  checkCancel();
   const windowed = cue
     && typeof cue.startSec === 'number'
     && typeof cue.endSec === 'number'
@@ -116,15 +122,22 @@ export async function alignProjectLyrics(projectId, options = {}) {
   const phrases = mixWav ? detectVocalPhrases(vocalPcm(wav)) : [];
   const windows = mixWav ? phraseWindows(phrases, wavDurationSec(mixWav)) : [];
 
-  const transcriber = await deps.resolveTranscriber();
+  onProgress({ stage: 'loading-model' });
+  const transcriber = await deps.resolveTranscriber((download) => onProgress({ stage: 'downloading-model', percent: download.percent }));
   let recognized;
   try {
     if (mixWav) {
       recognized = [];
+      const inRegion = (window) => !windowed || (window.endSec > windowed.startSec && window.startSec < windowed.endSec);
+      const total = windows.filter(inRegion).length;
+      let done = 0;
       // The runner already slices and offsets each result onto the song clock.
       // Sequential calls bound memory/GPU use and release one runner per song.
       for (const [index, window] of windows.entries()) {
-        if (windowed && (window.endSec <= windowed.startSec || window.startSec >= windowed.endSec)) continue;
+        if (!inRegion(window)) continue;
+        checkCancel();
+        onProgress({ stage: 'transcribing', current: done + 1, total, percent: Math.round((done / total) * 100) });
+        done += 1;
         const startSec = Math.max(window.startSec, windowed?.startSec ?? 0);
         const endSec = Math.min(window.endSec, windowed?.endSec ?? Infinity);
         const words = await transcriber.transcribe(mixWav, { startSec, endSec, prompt });
@@ -139,11 +152,14 @@ export async function alignProjectLyrics(projectId, options = {}) {
       }
       recognized = dropNonLyricWords(recognized);
     } else {
+      checkCancel();
+      onProgress({ stage: 'transcribing', current: 1, total: 1, percent: 0 });
       recognized = mergeTranscripts(await transcriber.transcribe(wav, { ...region, prompt }), [], promptCues.map((entry) => entry.text).join('\n'));
     }
   } finally {
     await Promise.resolve(transcriber.release?.()).catch((err) => console.error(`❌ Could not stop the alignment runner: ${err.message}`));
   }
+  checkCancel();
   if (!mixWav && !windowed && recognized.length === 0) {
     throw new ServerError(
       'Speech-to-text heard no words in this audio. Check the song has vocals, then try Align words again.',
@@ -160,6 +176,7 @@ export async function alignProjectLyrics(projectId, options = {}) {
     throw new ServerError('The lyric lines changed while they were aligning. Run Align words again.', { status: 409, code: 'LYRIC_ALIGN_TEXT_CHANGED' });
   }
 
+  onProgress({ stage: 'saving', percent: 100 });
   const align = (entries) => {
     const aligned = alignDirectorWords(entries, recognized, { phraseAnchored: Boolean(mixWav) });
     return mixWav ? snapLineStarts(aligned, phrases.map((phrase) => phrase.startSec), entries) : aligned;

@@ -48,7 +48,7 @@ function SongStep({ number, title, done, children }) {
 }
 
 /** Whole-song word alignment; the page's handler is silent, so errors surface here. */
-function AlignWords({ disabled, aligning, onAlign }) {
+function AlignWords({ disabled, aligning, status, onAlign }) {
   const [error, setError] = useState('');
   const run = () => {
     setError('');
@@ -63,6 +63,13 @@ function AlignWords({ disabled, aligning, onAlign }) {
         className="min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm text-port-accent disabled:opacity-50 sm:min-h-0">
         {aligning ? 'Aligning…' : 'Align all words'}
       </button>
+      {status && (
+        <div role="status" className="flex flex-wrap items-center gap-2 text-xs text-port-text-muted">
+          <span>{status.label}{status.percent > 0 ? ` ${status.percent}%` : ''}</span>
+          <button type="button" onClick={status.onCancel}
+            className="min-h-[44px] rounded border border-port-border px-2 text-port-error sm:min-h-0">Cancel</button>
+        </div>
+      )}
       {error && <p role="alert" className="text-xs text-port-error">{error}</p>}
     </>
   );
@@ -88,7 +95,7 @@ const directionSummary = (project) => {
 export default function SetupStage({ board }) {
   const {
     project, tracks, trackName, audioFilename, locked, youtube, separation, midi, midiBound, renderBound, tempo, busy,
-    conceptDraft, styleDraft, importingLyrics, aligningLyrics, treatment,
+    conceptDraft, styleDraft, importingLyrics, aligningLyrics, alignStatus, treatment,
     autopilotRun, autonomous, runStage, onSelectStage,
   } = board;
   const songOpen = !projectHasAudio(project) || !project.audioAnalysis || !lyricSetupState(project).ok;
@@ -166,6 +173,7 @@ export default function SetupStage({ board }) {
               <AlignWords
                 disabled={cues.length === 0 || !projectHasAudio(project)}
                 aligning={aligningLyrics}
+                status={alignStatus}
                 onAlign={board.onAlignLyrics}
               />
             </SongStep>

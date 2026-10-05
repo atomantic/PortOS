@@ -108,6 +108,7 @@ import { getHistoryItem } from '../services/videoGen/history.js';
 import {
   startMidiTranscription,
   attachMidiTranscriptionSseClient,
+  getActiveMidiTranscriptionJobId,
   cancelMidiTranscription,
 } from '../services/audioMidiTranscription.js';
 import { analyzeAudioFileManual, buildManualAnalysisFromCached } from '../services/musicVideo/audioAnalysis.js';
@@ -152,7 +153,12 @@ import { buildDocumentPreview } from '../services/musicVideo/documentPreview.js'
 import { acceptMixedMediaDocument, generateMixedMediaDocument, readMixedMediaCandidate, regenerateMixedMediaSection, reviseMixedMediaEvents } from '../services/musicVideo/documentGeneration.js';
 import { isZipUpload } from '../lib/zipStream.js';
 import { parseLyricCues } from '../services/musicVideo/timedText.js';
-import { alignProjectLyrics } from '../services/musicVideo/lyricAlign.js';
+import {
+  attachLyricAlignSseClient,
+  cancelLyricAlign,
+  getActiveLyricAlignJobId,
+  startLyricAlign,
+} from '../services/musicVideo/lyricAlignJob.js';
 import { importTrackLyrics, MAX_LYRIC_CUES } from '../services/musicVideo/trackLyrics.js';
 import { offsetLyricMarkers } from '../services/musicVideo/lyricMarkers.js';
 import {
@@ -477,13 +483,39 @@ router.post('/:id/lyrics/import-track', asyncHandler(async (req, res) => {
   res.json(await importTrackLyrics(req.params.id, { mode }));
 }));
 
-// Word-level alignment (#9074). Nothing here runs until the director clicks
-// Align words or a line's Re-align (or starts an autopilot run). The first
-// alignment downloads the music-grade whisper model; no whisper.cpp at all is
-// a 503 with install steps, not an empty timing list.
+// Word-level alignment (#9074) as a job (#10155). Nothing here runs until the
+// director clicks Align words or a line's Re-align (or starts an autopilot
+// run). Kickoff returns 202 + a jobId; stages (model download %, decoding,
+// transcribing window n/m) stream over SSE with cancel, and the terminal
+// `complete` frame carries the updated project. One job per project: a second
+// request returns the running job (`reused: true`). The first alignment
+// downloads the music-grade whisper model; no whisper.cpp at all is an error
+// frame with install steps, not an empty timing list.
 router.post('/:id/lyrics/align', asyncHandler(async (req, res) => {
   const { cueId } = validateRequest(musicVideoLyricsAlignSchema, req.body || {});
-  res.json(await alignProjectLyrics(req.params.id, { cueId }));
+  res.status(202).json(await startLyricAlign(req.params.id, { cueId }));
+}));
+
+router.get('/lyrics/align/:jobId/events', (req, res) => {
+  if (!attachLyricAlignSseClient(req.params.jobId, res)) {
+    throw new ServerError('Alignment job not found or expired', { status: 404, code: 'NOT_FOUND' });
+  }
+});
+
+router.post('/lyrics/align/:jobId/cancel', (req, res) => {
+  res.json({ ok: cancelLyricAlign(req.params.jobId) });
+});
+
+// Read-only: the project's live alignment, vocal-separation and MIDI jobs on
+// this instance (null when none), so a reloaded Setup reattaches to each
+// instead of POSTing a new run.
+router.get('/:id/active-jobs', asyncHandler(async (req, res) => {
+  const { getActiveVocalSeparationJobId } = await import('../services/musicVideo/vocalSeparation.js');
+  res.json({
+    alignment: getActiveLyricAlignJobId(req.params.id),
+    separation: getActiveVocalSeparationJobId(req.params.id),
+    midi: getActiveMidiTranscriptionJobId(req.params.id),
+  });
 }));
 
 // --- Audio → MIDI transcription (MuScriptor) ---
@@ -511,6 +543,7 @@ router.post('/:id/transcribe-midi', asyncHandler(async (req, res) => {
     audioPath,
     outputName: `${project.name || 'music-video'}-midi`,
     model,
+    ownerKey: projectId,
     // Land the .mid in the music dir (not uploads) so the peer-sync asset
     // manifest federates it with the project's other audio — the manifest
     // only ships known asset kinds/directories, and `music` is one.

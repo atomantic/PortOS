@@ -154,6 +154,7 @@ export default function useMidiTranscription({ startRequest, eventsUrl, cancelRe
     stageLabel: midiStageLabel(slot.stage),
     context: slot.context,
     start,
+    attach: slot.attach,
     cancel: slot.cancel,
     installGate,
     gatedGate,

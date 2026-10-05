@@ -69,6 +69,7 @@ export { default as useMusicVideoPublishKit } from './useMusicVideoPublishKit.js
 export { default as useMusicVideoPublishing } from './useMusicVideoPublishing.js';
 export { default as useMusicVideoKickoff } from './useMusicVideoKickoff.js';
 export { default as useMusicVideoManualTempo } from './useMusicVideoManualTempo.js';
+export { default as useMusicVideoLyricAlign } from './useMusicVideoLyricAlign.js';
 export { default as useMusicVideoMidiJob } from './useMusicVideoMidiJob.js';
 export { default as useMusicVideoModelSettings } from './useMusicVideoModelSettings.js';
 export { default as useMusicVideoProduction } from './useMusicVideoProduction.js';

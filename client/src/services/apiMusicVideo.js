@@ -66,11 +66,21 @@ export const importMusicVideoTrackLyrics = (id, body = {}, options = {}) => requ
 });
 
 // Align director lyric lines to the vocal (#9074). Body `{}` aligns every line;
-// `{ cueId }` re-aligns one line. Resolves to the updated project. Runs only
+// `{ cueId }` re-aligns one line. Kickoff resolves to { jobId, reused? } (#10155):
+// stages stream over SSE and the terminal `complete` frame carries the updated
+// project. A request while one runs for the project returns that job. Runs only
 // when the caller invokes it — there is no boot or import hook.
 export const alignMusicVideoLyrics = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/align`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
+export const musicVideoLyricAlignEventsUrl = (jobId) =>
+  `/api/music-video/lyrics/align/${encodeURIComponent(jobId)}/events`;
+export const cancelMusicVideoLyricAlign = (jobId, options = {}) =>
+  request(`/music-video/lyrics/align/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', ...options });
+// Read-only: { alignment, separation, midi } live job ids (null when none) so a
+// reloaded Setup reattaches instead of starting a new run.
+export const getMusicVideoActiveJobs = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/active-jobs`, options);
 
 // ---- Director scene board ----
 export const addMusicVideoScene = (id, scene, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes`, {

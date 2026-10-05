@@ -26,7 +26,7 @@ import {
   reorderMusicVideoScenes,
   importMusicVideoLyrics,
   importMusicVideoTrackLyrics,
-  alignMusicVideoLyrics,
+  getMusicVideoActiveJobs,
   getMusicVideoProject,
 } from '../services/apiMusicVideo.js';
 import useFieldDraft from '../hooks/useFieldDraft.js';
@@ -35,6 +35,7 @@ import useMusicVideoMidiJob from '../hooks/useMusicVideoMidiJob.js';
 import useMusicVideoKickoff from '../hooks/useMusicVideoKickoff.js';
 import useMusicVideoCastAndSets from '../hooks/useMusicVideoCastAndSets.js';
 import useMusicVideoDevArtifacts from '../hooks/useMusicVideoDevArtifacts.js';
+import useMusicVideoLyricAlign from '../hooks/useMusicVideoLyricAlign.js';
 import useMusicVideoVocalSeparation from '../hooks/useMusicVideoVocalSeparation.js';
 import useMusicVideoRenderJob from '../hooks/useMusicVideoRenderJob.js';
 import useMusicVideoExcerpts from '../hooks/useMusicVideoExcerpts.js';
@@ -215,7 +216,6 @@ export default function MusicVideo() {
   const [cloningId, setCloningId] = useState(null);
   const cloning = !!cloningId;
   const [importingLyrics, setImportingLyrics] = useState(false);
-  const [aligningLyrics, setAligningLyrics] = useState(false);
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState(emptyCreateForm);
 
@@ -320,6 +320,9 @@ export default function MusicVideo() {
   // autopilot kickoff; the terminal frame carries the project with its stem.
   const separation = useMusicVideoVocalSeparation({
     onSeparated: (projectId, project) => patchProject(projectId, { vocalStemFilename: project.vocalStemFilename, updatedAt: project.updatedAt }),
+  });
+  const lyricAlign = useMusicVideoLyricAlign({
+    onAligned: (projectId, project) => patchProject(projectId, { lyricCues: project.lyricCues, audioAnalysis: project.audioAnalysis, updatedAt: project.updatedAt }),
   });
   const midi = useMusicVideoMidiJob({
     onTranscribed: (projectId, midiTranscription) => patchProject(projectId, { midiTranscription }),
@@ -576,12 +579,7 @@ export default function MusicVideo() {
       })
       .catch((err) => { toast.error(err?.message || 'Could not import the track lyrics'); return null; }),
     separateVocals: (project) => separation.run(project.id),
-    alignLyrics: (project) => alignMusicVideoLyrics(project.id, {}, { silent: true })
-      .then((next) => {
-        patchProject(next.id, { lyricCues: next.lyricCues, audioAnalysis: next.audioAnalysis, updatedAt: next.updatedAt });
-        toast.success('Aligned words to the vocal');
-        return next;
-      })
+    alignLyrics: (project) => lyricAlign.run(project.id)
       .catch((err) => { toast.error(err?.message || 'Could not align the words — planning without word timings'); return null; }),
     castAndSets: (project) => castSets.runToCheckpoint(project),
     cancelCastAndSets: () => castSets.cancelWait(),
@@ -770,16 +768,31 @@ export default function MusicVideo() {
   };
   // Alignment is a click, never an import side effect. The panel shows the
   // whisper setup error itself, so this request stays silent.
-  const handleAlignLyrics = (cueId) => {
-    const projectId = selected.id;
-    setAligningLyrics(true);
-    return alignMusicVideoLyrics(projectId, cueId ? { cueId } : {}, { silent: true })
-      .then((project) => {
-        patchProject(projectId, { lyricCues: project.lyricCues, audioAnalysis: project.audioAnalysis, updatedAt: project.updatedAt });
-        toast.success(cueId ? 'Re-aligned that line' : 'Aligned words to the vocal');
+  const handleAlignLyrics = (cueId) => lyricAlign.run(selected.id, cueId);
+  // The slot is page-wide but the job belongs to one project: only that
+  // project's Setup shows "Aligning…".
+  const aligningLyrics = Boolean(lyricAlign.active && selected && lyricAlign.context?.projectId === selected.id);
+  const alignStatus = aligningLyrics ? { label: lyricAlign.stageLabel, percent: lyricAlign.percent, onCancel: lyricAlign.cancel } : null;
+
+  // A reload (or another tab) leaves server jobs running that this page has no
+  // slot for. Reattach alignment, vocal separation and MIDI so Setup shows them
+  // running (#10155); each attach is a no-op while its slot is already busy.
+  const reattachRef = useRef({});
+  reattachRef.current = { lyricAlign, separation, midi };
+  useEffect(() => {
+    if (!selectedId) return undefined;
+    let current = true;
+    getMusicVideoActiveJobs(selectedId, { silent: true })
+      .then(({ alignment, separation: separationJob, midi: midiJob }) => {
+        if (!current) return;
+        const slots = reattachRef.current;
+        if (alignment) slots.lyricAlign.attach(alignment, selectedId);
+        if (separationJob) slots.separation.attach(separationJob, selectedId);
+        if (midiJob) slots.midi.attach(midiJob, selectedId);
       })
-      .finally(() => setAligningLyrics(false));
-  };
+      .catch(() => {});
+    return () => { current = false; };
+  }, [selectedId]);
   // Buffered so a concept/style keystroke doesn't fire a round-trip per character,
   // and a focus-without-edit blur doesn't re-PATCH an unchanged value.
   const conceptDraft = useFieldDraft(selected?.concept?.prompt, (v) => commitConcept({ prompt: v }));
@@ -1045,6 +1058,7 @@ export default function MusicVideo() {
     styleDraft,
     importingLyrics,
     aligningLyrics,
+    alignStatus,
     autopilotBlockedReason,
     canContinueShot,
     replaceProject,
