@@ -271,8 +271,12 @@ export function buildVoMuxArgs({ inputVideoPath, voLines, musicPath, musicGain =
  * finite, >= 0 offset are dropped (un-placed lines stay silent rather than
  * stacking at t=0). With no usable lines this returns ok:false so the caller
  * can fall back to the music-only `muxMusicBed` path.
+ *
+ * `withInstall` wraps only the in-place install of the encoded file, so a
+ * caller whose video a record already names can hold the backup admission
+ * lease across that replacement without holding it through the encode.
  */
-export async function muxVoLines(inputVideoPath, { voLines = [], musicPath = null, musicGain = DEFAULT_MUSIC_GAIN, duck = DEFAULT_DUCK, signal } = {}) {
+export async function muxVoLines(inputVideoPath, { voLines = [], musicPath = null, musicGain = DEFAULT_MUSIC_GAIN, duck = DEFAULT_DUCK, signal, withInstall = install => install() } = {}) {
   if (!inputVideoPath || !existsSync(inputVideoPath)) {
     return { ok: false, reason: 'input video missing' };
   }
@@ -302,7 +306,7 @@ export async function muxVoLines(inputVideoPath, { voLines = [], musicPath = nul
     await unlink(tmpOut).catch(() => {});
     return result;
   }
-  const installed = await installEncodedVideo(tmpOut, inputVideoPath, 'VO mux');
+  const installed = await withInstall(() => installEncodedVideo(tmpOut, inputVideoPath, 'VO mux'));
   if (!installed.ok) return installed;
   return { ok: true, lineCount: placed.length, ducked: !!usableMusic, clipAudio };
 }

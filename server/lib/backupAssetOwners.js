@@ -224,6 +224,30 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
       'services/moodBoard/xPost.js', 'services/moodBoard/localize.js', 'services/moodBoard/index.js',
     ],
   },
+  {
+    // Generated HTML and the completed job row naming it are one lease. A
+    // package import or repair stages a write-once revision tree, and the
+    // revision row that first names it commits under the lease. Stage-run
+    // artifacts (frames, soundtrack WAV, Blender bake) are write-once files the
+    // run row first names, so every run-row write takes the lease. A Blender
+    // film is copied under a fresh name and its history entry commits under the
+    // lease; the soundtrack mux installs over an already-named browser render,
+    // so that in-place install takes it too.
+    id: 'code-animation-projects',
+    status: 'admitted',
+    modules: [
+      'services/codeAnimation/index.js', 'services/codeAnimation/projects.js', 'services/codeAnimation/stages.js',
+      'services/codeAnimation/sound.js', 'services/codeAnimation/blenderRender.js',
+    ],
+  },
+  {
+    // Export staging directories and contained-worker workspaces are scratch no
+    // row names. Accepting an output stamps a row naming a render whose bytes
+    // and run row were already durable.
+    id: 'code-animation-staging-and-acceptance',
+    status: 'reference-only',
+    modules: ['services/codeAnimation/export.js', 'services/codeAnimation/acceptance.js'],
+  },
   // Classified by a code sweep (#9982) but still outside admission. Each entry
   // names the modules whose file-plus-record workflows are not wrapped yet, so a
   // continuation can take one and move it up. Entries are per domain, not per
@@ -241,7 +265,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
   },
   {
     // Local, cloud and federated finalize, derived clips (stitch, upscale,
-    // timeline, HTML composition, Blender), poster replacement, upload and download.
+    // timeline, HTML composition), poster replacement, upload and download.
     id: 'video-generation-finalize-and-derived-clips',
     status: 'outstanding',
     modules: [
@@ -249,7 +273,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
       'services/videoGen/fal.js', 'services/videoGen/reactor.js', 'services/videoGen/remote.js',
       'services/videoGen/stitchVideos.js', 'services/videoGen/upscaleVideo.js', 'services/videoGen/upscaleJob.js',
       'services/videoGen/poster.js', 'services/videoTimeline/local.js', 'services/htmlComposition/index.js',
-      'services/codeAnimation/blenderRender.js', 'services/videoUpload.js', 'services/videoDownload.js',
+      'services/videoUpload.js', 'services/videoDownload.js',
     ],
   },
   {
@@ -262,16 +286,6 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
       'services/imageGen/local.js', 'services/imageGen/agy.js', 'services/imageGen/codex.js',
       'services/imageGen/grok.js', 'services/imageGen/fal.js', 'services/imageGen/external.js',
       'services/imageGen/remote.js', 'services/imageGen/variants.js', 'services/mediaSketches.js',
-    ],
-  },
-  {
-    // Generated HTML, package import and repair, run artifacts, and the final
-    // stage whose soundtrack mux rewrites the MP4 before the history append.
-    id: 'code-animation-projects',
-    status: 'outstanding',
-    modules: [
-      'services/codeAnimation/index.js', 'services/codeAnimation/projects.js', 'services/codeAnimation/stages.js',
-      'services/codeAnimation/projectFiles.js', 'services/codeAnimation/sound.js',
     ],
   },
   {

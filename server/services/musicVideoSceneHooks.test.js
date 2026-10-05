@@ -52,7 +52,9 @@ async function sceneOf(projectId, sceneId) {
 
 describe('music-video scene completion hooks → takes', () => {
   let emitted;
-  const capture = (event) => (data) => emitted.push({ event, ...data });
+  // A hook still settling from the previous test can emit after this test's
+  // listeners attach; only the current project's events count.
+  const capture = (event) => (data) => { if (project && data.projectId === project.id) emitted.push({ event, ...data }); };
   const onImage = capture('scene-image');
   const onVideo = capture('scene-video');
   const onFailure = capture('scene-failure');
@@ -60,6 +62,7 @@ describe('music-video scene completion hooks → takes', () => {
   let scene;
 
   beforeEach(async () => {
+    project = null;
     rmSync(join(TEST_DATA_ROOT, 'music-video-projects.json'), { force: true });
     imageHook.__testing.reset();
     videoHook.__testing.reset();

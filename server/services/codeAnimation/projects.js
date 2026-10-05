@@ -4,6 +4,7 @@ import { codeAnimationPackageSchema, summarizeCodeAnimationPackage } from '../..
 import { codeAnimationProjectSchema, codeAnimationProjectPatchSchema } from '../../lib/codeAnimationProjects.js';
 import { validateRequest } from '../../lib/validation.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { emitCodeAnimationChanged } from '../socket.js';
 import * as store from './projectStore.js';
 import { stageProjectFiles, readProjectFiles, sourceHashOf, ownedStorageRetained } from './projectFiles.js';
@@ -63,7 +64,9 @@ export async function importProductionPackage(projectId, input) {
       files: pkg.files.map(({ content: _content, ...file }) => file),
       storage, createdAt: new Date().toISOString(),
     };
-    const saved = await store.commitImportRecord(projectId, revision, runId);
+    // The revision row first names the write-once tree staged above, so it
+    // commits under the backup lease (#9982).
+    const saved = await withBackupAssetPublication(() => store.commitImportRecord(projectId, revision, runId));
     emitCodeAnimationChanged(projectId);
     return { project: saved, revision, runId, executed: false };
   } catch (error) {
