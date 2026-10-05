@@ -2615,6 +2615,8 @@ export const launchVideoStoryboardSchema = z.object({
 export const htmlCompositionRenderSchema = z.object({
   launchVideo: launchVideoOptionsSchema.optional(),
   synthesizeMusic: z.boolean().optional(),
+  // Master synthesized and library music to -14 LUFS / -1.5 dBTP (#10249); false keeps the bed as supplied.
+  masterLoudness: z.boolean().optional(),
   // Overrides the page's own portosComposition.motionBlur when present (#9080).
   motionBlur: htmlCompositionMotionBlurChoiceSchema.optional(),
   directory: z.string().min(1).max(1024).refine(value => !value.startsWith('/') && !value.includes('\\') && !value.includes(':') && !value.split('/').some(part => part === '..' || part === '.' || !part), 'directory must be a relative path inside data'),

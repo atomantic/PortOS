@@ -15,7 +15,7 @@ import { createAppLaunchVideo, getAppLaunchVideos, getMotionToolkit, installMoti
 import { listPipelineMusicLibrary } from '../../services/apiPipeline';
 import { uploadFile } from '../../services/apiMedia';
 import { trackAudioUrl } from '../../services/apiTracks';
-import { formatBytes, formatDateTime, formatDurationSec } from '../../utils/formatters';
+import { formatBytes, formatDateTime, formatDurationSec, formatLoudness } from '../../utils/formatters';
 import toast from '../ui/Toast';
 
 const inputClass = 'w-full rounded border border-port-border bg-port-bg p-2 text-port-text';
@@ -353,6 +353,7 @@ export default function LaunchVideoPanel({ app }) {
         <Link className="text-port-accent" to="/media/history">Media History</Link>
       </div>
       <p className="whitespace-pre-wrap">{selected.caption}</p>
+      {selected.loudness && <p className="text-sm text-port-text-muted">Audio: {formatLoudness(selected.loudness)}</p>}
       {selected.sampleHistogram && <p className="text-sm text-port-text-muted">Motion blur samples per frame: {Object.entries(selected.sampleHistogram).map(([samples, frames]) => `${samples}× → ${frames} frames`).join(', ')}</p>}
       {selected.sourceVideoId && <p className="text-sm text-port-text-muted">Revised from version {selected.sourceVideoId}</p>}
       <ReviseLaunchVideo key={`revision:${app.id}:${selected.id}`} appId={app.id} videoId={selected.id} />

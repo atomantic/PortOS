@@ -12,6 +12,9 @@
  * each caller owns its own input numbering and graph labels.
  */
 
+/** MASTER_LOUDNESS.truePeakDb (-1.5 dB) as a linear amplitude, for alimiter's `limit`. */
+export const PEAK_CEILING_LINEAR = 0.8414;
+
 /** ffmpeg-safe number formatting (six decimals, no exponent). */
 export const fmtSec = (n) => String(Math.round(Number(n) * 1e6) / 1e6);
 
@@ -24,9 +27,11 @@ export const AUDIO_NORM = 'aresample=48000,aformat=sample_fmts=fltp:channel_layo
  * @param {number} opts.firstInputIdx  ffmpeg input index the first bed will take
  * @param {string} opts.mainLabel      the main audio's filter label, e.g. `[ca]`
  * @param {string} opts.outLabel       the mixed output label, e.g. `[outa]`
+ * @param {boolean} [opts.limitPeak]   end the mix with an `alimiter` at the -1.5 dB ceiling (#10249).
+ *   Only peaks above the ceiling are touched; the main audio gets no gain change.
  * @returns {{ inputs: string[], filters: string[] }}
  */
-export function buildAudioBedMix({ beds, firstInputIdx, mainLabel, outLabel }) {
+export function buildAudioBedMix({ beds, firstInputIdx, mainLabel, outLabel, limitPeak = false }) {
   const inputs = [];
   const filters = [];
   const bedLabels = [];
@@ -52,7 +57,9 @@ export function buildAudioBedMix({ beds, firstInputIdx, mainLabel, outLabel }) {
     bedLabels.push(`[bed${j}]`);
   });
   if (bedLabels.length > 0) {
-    filters.push(`${mainLabel}${bedLabels.join('')}amix=inputs=${bedLabels.length + 1}:duration=first:dropout_transition=0:normalize=0${outLabel}`);
+    const mixed = limitPeak ? '[bedmix]' : outLabel;
+    filters.push(`${mainLabel}${bedLabels.join('')}amix=inputs=${bedLabels.length + 1}:duration=first:dropout_transition=0:normalize=0${mixed}`);
+    if (limitPeak) filters.push(`${mixed}alimiter=limit=${PEAK_CEILING_LINEAR}:level=disabled,${AUDIO_NORM}${outLabel}`);
   }
   return { inputs, filters };
 }
