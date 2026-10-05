@@ -3,6 +3,9 @@ import ContactSheetButton from '../ContactSheetButton.jsx';
 import HandoffControls from '../HandoffControls.jsx';
 import StageSection from '../StageSection.jsx';
 import { GenerationActions } from '../ProjectActionGroups.jsx';
+import ShotStatusStrip from '../ShotStatusStrip.jsx';
+import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
+import { FOOTAGE_OPTIONAL_MODES } from '../../../lib/musicVideoStages.js';
 
 /**
  * Produce: the autopilot (brief, allowed routes, generation and spend caps,
@@ -26,6 +29,17 @@ export default function ProduceStage({ board }) {
         kickoffStep={kickoff.stepLabel}
         kickoffBlockedReason={board.autopilotBlockedReason}
       />
+      {(project.scenes || []).length > 0 && (
+        <StageSection title="Shot status" defaultOpen summary="Which shots still need work — tap one to open it on the Board">
+          <ShotStatusStrip projectId={project.id} scenes={project.scenes} ctx={{
+            layered: isLayeredComposition(project),
+            footageOptional: FOOTAGE_OPTIONAL_MODES.has(project.composition?.mode || 'concat'),
+            lipSyncBackend: videoSettings.audioReactiveSelected ? 'local' : videoSettings.settings.backend,
+            songDurationSec: project.audioAnalysis?.durationSec ?? null,
+            failed: sceneMedia.failedScenes,
+          }} />
+        </StageSection>
+      )}
       <StageSection title="Generation" defaultOpen summary="Generate the frames and clips that are missing">
         <div className="mb-2 flex justify-end"><ContactSheetButton onOpen={board.openContactSheet} /></div>
         <GenerationActions project={project} videoSettings={videoSettings} sceneMedia={sceneMedia} onEditServices={() => board.goToStage('setup', 'mv-setup-options')} />

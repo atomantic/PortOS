@@ -239,7 +239,7 @@ export function publishPlatformProgress(project, publish = {}) {
 export const resolveStageParam = (value) => (isStageId(value) ? value : null);
 
 // Footage-optional modes draw their own picture, so scene footage never gates Produce.
-const FOOTAGE_OPTIONAL_MODES = new Set(['code', 'document', 'eidoverse']);
+export const FOOTAGE_OPTIONAL_MODES = new Set(['code', 'document', 'eidoverse']);
 
 // A code video is composed once it was generated or the director holds sections to render.
 const codeComposed = (project) => {
@@ -556,7 +556,7 @@ export function stageChecklist(stageId, project, readiness = project?.production
       const ready = scenes.filter((scene) => sceneRenderReady(scene, { layered })).length;
       const footageDone = scenes.length > 0 && ready === scenes.length;
       return [{ id: 'footage', label: `Footage for every shot (${formatCount(ready)} of ${formatCount(scenes.length)})`, done: footageDone,
-        action: footageDone ? null : { label: 'Set up production', anchor: 'mv-production-start' } }];
+        action: footageDone ? null : { label: 'Show shots missing footage', stage: 'board', params: { scenes: 'missing' }, anchor: 'mv-scene-board' } }];
     }
     case 'compose': {
       // The proof closes Compose: it is judged over the finished composition (see deriveStages).

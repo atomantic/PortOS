@@ -18,6 +18,7 @@ import {
 } from '../../lib/musicVideoShotTiming.js';
 import SceneRenderProgress from './SceneRenderProgress.jsx';
 import { getFalVideoModel } from '../../lib/falVideoModels.js';
+import { COVERAGE_TOLERANCE_SEC, SCENE_ATTENTION_LABELS, sceneAttention } from '../../lib/musicVideoSceneAttention.js';
 
 // "est. $0.81 (5.05s at 1080P)" — or null when the take cannot be priced.
 const falEstimate = (take) => (take?.costUsd == null ? null
@@ -25,9 +26,6 @@ const falEstimate = (take) => (take?.costUsd == null ? null
 
 // The two timeline-bound scene fields rendered as identical number inputs.
 const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
-// Mirrors render.js COVERAGE_TOLERANCE_SEC: a non-looping shot may run this far
-// past its clip (the last frame holds); beyond it the render refuses (#8964).
-const COVERAGE_TOLERANCE_SEC = 0.25;
 
 /**
  * One scene on the board: ordering/delete, the shot + reference-frame prompts
@@ -73,7 +71,7 @@ export default function SceneCard({
   onGenerateFrame, onGenerateVideo, onContinueVideo,
   onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false, layered = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
-  expanded, onToggleExpand,
+  expanded, onToggleExpand, footageOptional = false, failedScenes = null,
 }) {
   const detailsRef = useRef(null);
 
@@ -135,6 +133,9 @@ export default function SceneCard({
   const repairPlan = planPerformanceRepair({ scene, temporal: performanceReview?.shot,
     excerptStartSec: performanceReview?.excerptStartSec, backend: lipSyncBackend, videoSettings: falVideoSettings || {} });
   const shotModeId = `mv-shot-mode-${scene.sceneId}`;
+  // #10152: what needs the director's attention, visible without opening the card.
+  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec, failed: failedScenes || {} });
+  const generatingLane = generatingFrame && generatingVideo ? 'Frame + clip' : generatingFrame ? 'Frame' : generatingVideo ? 'Clip' : null;
   return (
     <details
       ref={detailsRef}
@@ -171,9 +172,21 @@ export default function SceneCard({
             {clipSec != null ? ` · clip ${clipSec.toFixed(1)}s` : ''}
           </div>
           {scene.lyricText && <div className="truncate text-[11px] italic text-port-text-muted">♪ {scene.lyricText}</div>}
+          {attention.length > 0 && (
+            <ul aria-label="Needs attention" className="mt-0.5 flex flex-wrap gap-1">
+              {attention.map((code) => (
+                <li key={code} data-attention={code} className="rounded border border-port-warning/40 bg-port-warning/10 px-1.5 text-[10px] text-port-warning">
+                  {SCENE_ATTENTION_LABELS[code]}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
-        {(generatingFrame || generatingVideo) && (
-          <Activity size={14} className="shrink-0 animate-spin text-port-accent" aria-label="Generating" />
+        {generatingLane && (
+          <span className="flex shrink-0 items-center gap-1 text-[11px] text-port-accent">
+            <Activity size={14} className="animate-spin" aria-label="Generating" />
+            {generatingLane}
+          </span>
         )}
         <SceneRenderProgress kind="Frame" generating={generatingFrame} progress={frameProgress} />
         <SceneRenderProgress kind="Video" generating={generatingVideo} progress={videoProgress} />
