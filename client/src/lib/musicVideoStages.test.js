@@ -418,3 +418,12 @@ describe('compareMusicVideoProjectsNewestFirst', () => {
     expect(sorted.map((p) => p.id)).toEqual(['p1', 'p2']);
   });
 });
+
+describe('stale approval text (#10141)', () => {
+  it('says what changed since an earlier approval and marks the checklist item stale', () => {
+    const readiness = { art: { approved: false, problems: [], stale: { approvedAt: 'x', changedFields: ['concept', 'scene 3 prompt'] } }, storyboard: { approved: false, problems: [] }, proof: { approved: false, problems: [] } };
+    const item = stageChecklist('cast-sets', { productionReview: { draft: {} } }, readiness).find((i) => i.id === 'approve-art');
+    expect(item).toMatchObject({ done: false, stale: true });
+    expect(item.detail).toMatch(/^Approved earlier — changed since: concept, scene 3 prompt\./);
+  });
+});

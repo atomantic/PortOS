@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { getMusicVideoDependencyImpact } from '../../services/apiMusicVideo.js';
 import { openRevisionOf } from '../../lib/musicVideoAttention.js';
 import { formatCount } from '../../utils/formatters.js';
@@ -10,6 +10,9 @@ export default function DependencyImpactPanel({ project, busy, onRepair }) {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [retry, setRetry] = useState(0);
+  // Refetch only when an approval basis moves, not on every project object change.
+  const basis = project.productionReadiness?.basis;
+  const basisKey = useMemo(() => basis ? `${basis.art}|${basis.storyboard}|${basis.proof}` : '', [basis]);
   useEffect(() => {
     let active = true;
     setResult(null);
@@ -20,7 +23,7 @@ export default function DependencyImpactPanel({ project, busy, onRepair }) {
       if (active) setError(err.message || 'Could not check asset dependencies');
     });
     return () => { active = false; };
-  }, [project, retry]);
+  }, [project.id, basisKey, retry]);
   const revisionActive = !!openRevisionOf(project);
   if (error) return <div role="alert" className="text-xs text-port-error">{error} <button type="button" onClick={() => setRetry((value) => value + 1)}>Retry dependency check</button></div>;
   if (!result || (!result.shots.length && !result.evidence.length)) return null;
