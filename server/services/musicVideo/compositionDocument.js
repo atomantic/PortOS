@@ -25,6 +25,7 @@ import { cp, lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, writeF
 import { dirname, extname, join, relative, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { isPathInsideDir } from '../../lib/pathSafety.js';
@@ -176,13 +177,16 @@ async function storeVersionNow(projectId, files, source, { draft = false, verify
   };
   let outcome;
   try {
-    outcome = await mutateProjectRecord(projectId, (current) => {
+    // The version folder is already in place; the row that first names it
+    // commits under a backup lease (#9982). Pruning removes only folders no
+    // row names any more, so it needs none.
+    outcome = await withBackupAssetPublication(() => mutateProjectRecord(projectId, (current) => {
       verifyCurrent(current);
       if (current.mediaMode !== initial.mediaMode) throw refuse('Media mode changed during import', 'COMPOSITION_DRAFT_STALE', 409);
       const composition = normalizeComposition({ ...(current.composition || {}), ...(!draft ? { mode: 'document' } : {}) });
       const project = { ...current, composition: { ...composition, [draft ? 'documentDraft' : 'document']: document }, updatedAt: document.updatedAt };
       return { project };
-    });
+    }));
   } catch (error) {
     await rm(finalDir, { recursive: true, force: true }).catch(() => {});
     throw error;
