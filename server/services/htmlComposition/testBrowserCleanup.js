@@ -53,12 +53,16 @@ export function _testChromeProcessFacts(proc, {
 } = {}) {
   if (platform !== 'linux') return 'os=unsupported';
   if (!Number.isSafeInteger(proc?.pid) || proc.pid <= 0) return 'os=linux child=unavailable';
+  // Once Node has reaped it, the numeric PID may belong to somebody else.
+  if (proc.exitCode != null || proc.signalCode != null) return 'os=linux child=settled';
   const stat = pid => {
     try {
       const text = read(`/proc/${pid}/stat`).slice(0, 4096);
       // comm is parenthesized and may contain spaces/parentheses; discard it.
-      const fields = text.slice(text.lastIndexOf(')') + 2).trim().split(/\s+/);
-      if (!PROCESS_STATES[fields[0]] || !fields.slice(1, 4).every(x => /^\d+$/.test(x))) return null;
+      const end = text.lastIndexOf(')');
+      if (end < 0) return null;
+      const fields = text.slice(end + 2).trim().split(/\s+/);
+      if (fields.length < 4 || !Object.hasOwn(PROCESS_STATES, fields[0]) || !fields.slice(1, 4).every(x => /^\d+$/.test(x))) return null;
       return { state: PROCESS_STATES[fields[0]], parent: fields[1], group: fields[2], session: fields[3] };
     } catch { return null; }
   };
@@ -255,7 +259,8 @@ async function terminateOwnedChrome(proc, observeProcess) {
 export async function _cleanupTestBrowser({ browser, proc, cleanup, observeProcess = _testChromeProcessFacts }) {
   const errors = [];
   try {
-    await withinDeadline(() => browser?.close(), 5000, 'browser disconnect').catch(error => errors.push(error));
+    await withinDeadline(() => browser?.close(), 5000, 'browser disconnect',
+      () => `; process: ${describeProcess(proc, observeProcess)}`).catch(error => errors.push(error));
     await terminateOwnedChrome(proc, observeProcess).catch(error => errors.push(error));
   } finally {
     proc?.stderr?.destroy();

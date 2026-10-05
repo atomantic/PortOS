@@ -57,11 +57,13 @@ describe('failure process observations', () => {
     const denied = () => { throw new Error('/private/example-secret'); };
     expect(_testChromeProcessFacts({ pid: 123 }, { platform: 'linux', read: denied, threads: denied }))
       .toContain('child=unavailable worker=unavailable parent=unavailable group=unavailable session=unavailable threads=unavailable threadLimit=unavailable');
-    const read = path => path.endsWith('/stat') ? 'malformed example-secret' : '0';
-    const result = _testChromeProcessFacts({ pid: 123 }, { platform: 'linux', read, threads: () => [] });
-    expect(result).toContain('child=unavailable');
-    expect(result).toContain('threads=0 threadLimit=false');
-    expect(result).not.toContain('example-secret');
+    for (const malformed of ['malformed example-secret', '123 (example-secret) R', '123 (example-secret) toString 1 2 3']) {
+      const read = path => path.endsWith('/stat') ? malformed : '0';
+      const result = _testChromeProcessFacts({ pid: 123 }, { platform: 'linux', read, threads: () => [] });
+      expect(result).toContain('child=unavailable');
+      expect(result).toContain('threads=0 threadLimit=false');
+      expect(result).not.toContain('example-secret');
+    }
   });
 
   it('separates a reparented child outside the worker group and unavailable thread waits', () => {
@@ -76,11 +78,13 @@ describe('failure process observations', () => {
     expect(result).toBe('os=linux child=zombie worker=sleeping parent=other group=other session=other threads=2 threadLimit=false waits=none:1,futex:0,poll:0,pipe:0,child:0,io:0,other:0,unavailable:1');
   });
 
-  it('does no reads on unsupported platforms or missing child identity', () => {
+  it('does no reads on unsupported platforms or missing/settled child identity', () => {
     const read = vi.fn();
     const threads = vi.fn();
     expect(_testChromeProcessFacts({ pid: 123 }, { platform: 'darwin', read, threads })).toBe('os=unsupported');
     expect(_testChromeProcessFacts({}, { platform: 'linux', read, threads })).toBe('os=linux child=unavailable');
+    expect(_testChromeProcessFacts({ pid: 123, exitCode: 0 }, { platform: 'linux', read, threads })).toBe('os=linux child=settled');
+    expect(_testChromeProcessFacts({ pid: 123, signalCode: 'SIGTERM' }, { platform: 'linux', read, threads })).toBe('os=linux child=settled');
     expect(read).not.toHaveBeenCalled();
     expect(threads).not.toHaveBeenCalled();
   });
@@ -127,7 +131,8 @@ describe('test Chrome startup', () => {
     const root = mkdtempSync(join(tmpdir(), 'example-secret-'));
     const proc = startingChild();
     proc.pid = 123;
-    const ready = _waitForTestChrome(proc, 20000, { source: 'playwright', executable: join(root, 'missing', 'chrome-headless-shell'), profile: join(root, 'profile') });
+    const ready = _waitForTestChrome(proc, 20000, { source: 'playwright', executable: join(root, 'missing', 'chrome-headless-shell'), profile: join(root, 'profile') },
+      { observeProcess: () => 'os=unavailable' });
     const rejected = expect(ready).rejects.toThrow(
       'no stderr; startup: source=playwright kind=headless-shell version=unavailable spawned=yes pid=yes state=running profile=missing devToolsActivePort=false',
     );
@@ -365,7 +370,7 @@ describe('owned test Chrome cleanup', () => {
       observeProcess: () => { throw new Error('example-secret'); },
     });
     const rejected = expect(result).rejects.toThrow(
-      'Test Chrome browser disconnect exceeded 5000ms deadline; Test Chrome child termination exceeded 10000ms deadline',
+      'Test Chrome browser disconnect exceeded 5000ms deadline; process: os=unavailable; Test Chrome child termination exceeded 10000ms deadline',
     );
     await vi.advanceTimersByTimeAsync(15000);
     await rejected;
