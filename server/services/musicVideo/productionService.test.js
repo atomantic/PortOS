@@ -182,6 +182,20 @@ beforeEach(() => {
 afterEach(settle);
 
 describe('music video production run (#9066)', () => {
+  it('refuses mutable peer placement before starting an immutable production budget', async () => {
+    seedProject({ videoSettings: { renderPool: { mode: 'both', peers: [{ peerId: 'example-peer', modelId: 'example-model' }] } } });
+    await expect(start()).rejects.toMatchObject({ code: 'MUSIC_VIDEO_RENDER_POOL_UNAVAILABLE' });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(current().productionRuns).toBeUndefined();
+  });
+
+  it('refuses unbound supplied-audio windows before starting or spending a production budget', async () => {
+    seedProject({ videoSettings: { generationMode: 'suppliedAudio', renderPool: { mode: 'local', peers: [] } } });
+    await expect(start()).rejects.toMatchObject({ code: 'MUSIC_VIDEO_RENDER_POOL_UNAVAILABLE' });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(current().productionRuns).toBeUndefined();
+  });
+
   it('produces a reviewed draft from one Start: frames, then clips, then the continuous-excerpt review', async () => {
     seedProject();
     await start();

@@ -1,10 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import * as fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMaintenanceAdmission } from './maintenanceAdmission.js';
 
 const roots = [];
+// Frozen pre-stamp v1 operation-reader fixture: unknown fields were rejected.
+const legacyOperation = z.object({ id: z.string().uuid(), kind: z.string().min(1), resource: z.string().max(256),
+  pid: z.number().int().positive(), startedAt: z.string().datetime(), unsettled: z.boolean().optional() }).strict();
 const gate = () => {
   const root = mkdtempSync(join(tmpdir(), 'workflow-admission-'));
   roots.push(root);
@@ -13,6 +19,142 @@ const gate = () => {
 afterEach(() => { vi.useRealTimers(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe('durable graceful maintenance', () => {
+  it('mints completion only when trusted recovery reuses an existing operation', () => {
+    const { admission } = gate();
+    expect(admission.admit('media', 'new')).not.toHaveProperty('completeRecovery');
+    expect(admission.recoverOwned('media', 'observed-new')).not.toHaveProperty('completeRecovery');
+    expect(admission.admit('media', 'reconnect-new', { reconnect: true })).not.toHaveProperty('completeRecovery');
+    expect(admission.recoverOwned('media', 'new')).toHaveProperty('completeRecovery');
+  });
+
+  it('completes only the captured recovered operation and preserves the hold and failed settlement child', async () => {
+    const { admission } = gate();
+    const original = admission.admit('media', 'peer-render');
+    await original.run(async () => admission.markCurrentUnsettled());
+    const other = admission.admit('provider', 'unrelated');
+    const hold = admission.begin({ reason: 'Drain', owner: 'Operator' }).hold;
+    await expect(original.run(() => admission.continueSettlement(async () => { throw new Error('save failed'); }))).rejects.toThrow('save failed');
+    await original.finish();
+    const recovered = admission.recoverOwned('media', 'peer-render');
+    other.markUnsettled();
+    const blockers = admission.status().blockers.filter(entry => entry.resource !== 'peer-render');
+    expect(recovered.completeRecovery()).toBe(true);
+    expect(admission.status()).toMatchObject({ state: 'draining', hold, blockers });
+    expect(blockers).toContainEqual(expect.objectContaining({ kind: 'settlement', unsettled: true }));
+    expect(blockers).toContainEqual(expect.objectContaining({ resource: 'unrelated' }));
+    expect(recovered.completeRecovery()).toBe(false);
+    await other.finish();
+    expect(admission.status().state).toBe('draining');
+  });
+
+  it('rotates every uncertainty stamp and refuses a captured capability after another mark', async () => {
+    const { admission } = gate();
+    const work = admission.admit('media', 'peer-render');
+    const readOperation = () => JSON.parse(fs.readFileSync(join(admission.directory, 'state.json'), 'utf8')).operations[0];
+    await work.run(async () => admission.markCurrentUnsettled());
+    const first = readOperation().uncertaintyStamp;
+    const recovered = admission.recoverOwned('media', 'peer-render');
+    await recovered.run(async () => admission.markCurrentUnsettled());
+    expect(readOperation().uncertaintyStamp).not.toBe(first);
+    expect(recovered.completeRecovery()).toBe(false);
+    await recovered.finish();
+    expect(admission.status().blockers).toContainEqual(expect.objectContaining({ resource: 'peer-render', unsettled: true }));
+  });
+
+  it('refuses a replacement operation with the same resource or a changed bound resource', async () => {
+    const { admission } = gate();
+    const work = admission.admit('media', 'peer-render');
+    work.markUnsettled();
+    const recovered = admission.recoverOwned('media', 'peer-render');
+    const file = join(admission.directory, 'state.json');
+    const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+    state.operations[0].id = randomUUID();
+    fs.writeFileSync(file, JSON.stringify(state));
+    expect(recovered.completeRecovery()).toBe(false);
+    const replacement = admission.recoverOwned('media', 'peer-render');
+    replacement.identify('changed-resource');
+    expect(replacement.completeRecovery()).toBe(false);
+    expect(admission.status().blockers).toContainEqual(expect.objectContaining({ resource: 'changed-resource', unsettled: true }));
+  });
+
+  it('requires fresh recovery after restart and never infers completion from old owner PID or age', async () => {
+    const { root, admission } = gate();
+    const original = admission.admit('media', 'peer-render');
+    original.markUnsettled();
+    const hold = admission.begin({ reason: 'Drain', owner: 'Operator' }).hold;
+    const restarted = createMaintenanceAdmission(root);
+    expect(restarted.status()).toMatchObject({ state: 'draining', hold, blockers: [{ unsettled: true }] });
+    const recovered = restarted.recoverOwned('media', 'peer-render');
+    expect(recovered.id).toBe(original.id);
+    await recovered.finish();
+    expect(restarted.status().state).toBe('draining');
+    expect(recovered.completeRecovery()).toBe(true);
+    expect(restarted.status()).toMatchObject({ state: 'ready', hold, blockers: [] });
+  });
+
+  it('reads legacy records but refuses to complete legacy uncertainty without a stamp', async () => {
+    const { root, admission } = gate();
+    const work = admission.admit('media', 'legacy');
+    work.markUnsettled();
+    const file = join(admission.directory, 'state.json');
+    const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+    delete state.operations[0].uncertaintyStamp;
+    fs.writeFileSync(file, JSON.stringify(state));
+    const restarted = createMaintenanceAdmission(root);
+    const recovered = restarted.recoverOwned('media', 'legacy');
+    expect(recovered.completeRecovery()).toBe(false);
+    await recovered.finish();
+    expect(restarted.status().blockers).toContainEqual(expect.objectContaining({ resource: 'legacy', unsettled: true }));
+  });
+
+  it('accounts for strict old-reader rejection instead of treating stamped v1 journals as rollback compatible', () => {
+    const { admission } = gate();
+    const work = admission.admit('media', 'peer-render');
+    const file = join(admission.directory, 'state.json');
+    const readOperation = () => JSON.parse(fs.readFileSync(file, 'utf8')).operations[0];
+    expect(legacyOperation.safeParse(readOperation()).success).toBe(true);
+    work.markUnsettled();
+    expect(legacyOperation.safeParse(readOperation()).success).toBe(false);
+    expect(admission.status().blockers).toContainEqual(expect.objectContaining({ resource: 'peer-render', unsettled: true }));
+  });
+
+  it('preserves an old writer transaction lock and refuses admission or completion after a compatible restart', () => {
+    const { root, admission } = gate();
+    const work = admission.admit('media', 'peer-render');
+    work.markUnsettled();
+    const recovered = admission.recoverOwned('media', 'peer-render');
+    const file = join(admission.directory, 'state.json');
+    const before = fs.readFileSync(file, 'utf8');
+    // The older writer acquired its lock before parsing. A parse failure kept
+    // the lock, just as an uncertain publication did; do not repair it by age.
+    fs.mkdirSync(join(admission.directory, 'transaction'));
+    expect(() => legacyOperation.parse(JSON.parse(before).operations[0])).toThrow();
+    const restarted = createMaintenanceAdmission(root);
+    expect(restarted.status().state).toBe('unavailable');
+    expect(restarted.tryAdmit('media', 'new')).toBeNull();
+    expect(() => recovered.completeRecovery()).toThrow(/needs recovery/);
+    expect(fs.existsSync(join(admission.directory, 'transaction'))).toBe(true);
+    expect(fs.readFileSync(file, 'utf8')).toBe(before);
+  });
+
+  it('keeps journal write failure unavailable without claiming recovered completion', () => {
+    const { root } = gate();
+    let fail = false;
+    const io = { ...fs, renameSync: (...args) => {
+      if (fail) throw Object.assign(new Error('fixture disk failure'), { code: 'EIO' });
+      return fs.renameSync(...args);
+    } };
+    const admission = createMaintenanceAdmission(root, { io });
+    const work = admission.admit('media', 'peer-render');
+    work.markUnsettled();
+    const recovered = admission.recoverOwned('media', 'peer-render');
+    fail = true;
+    expect(() => recovered.completeRecovery()).toThrow(/needs recovery/);
+    expect(admission.status().state).toBe('unavailable');
+    const persisted = JSON.parse(fs.readFileSync(join(admission.directory, 'state.json'), 'utf8'));
+    expect(persisted.operations.map(op => op.id)).toContain(work.id);
+  });
+
   it('reuses remote reconciliation ownership without bypassing a hold', async () => {
     const { admission } = gate();
     const existing = admission.admit('media', 'peer-render');

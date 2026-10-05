@@ -328,6 +328,12 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
       { status: 409, code: 'JOB_NOT_TERMINAL' },
     );
   }
+  if (isRemoteMediaJob(job) && job.params?.remotePeerReservation === true) {
+    throw new ServerError(
+      'This peer render has an uncertain outcome — reconcile the original job before retrying',
+      { status: 409, code: 'JOB_REMOTE_OUTCOME_UNCERTAIN' },
+    );
+  }
   // Reject retry when the original job referenced a multipart-staged upload —
   // the gen modules unlink those files on completion/failure, so re-enqueueing
   // would either fail with a missing-file error or, worse, act on a stale path
@@ -428,6 +434,12 @@ router.delete('/:id', asyncHandler(async (req, res) => {
     throw new ServerError(
       `Job is still ${job.status} — cancel it before deleting`,
       { status: 409, code: 'JOB_NOT_TERMINAL' },
+    );
+  }
+  if (isRemoteMediaJob(job) && job.params?.remotePeerReservation === true) {
+    throw new ServerError(
+      'This peer render has an uncertain outcome — reconcile the original job before deleting it',
+      { status: 409, code: 'JOB_REMOTE_OUTCOME_UNCERTAIN' },
     );
   }
   const removed = removeArchivedJob(req.params.id);

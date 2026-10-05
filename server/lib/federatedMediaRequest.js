@@ -40,6 +40,7 @@ const FIELD_MAPS = Object.freeze({
     initImageStrength: 'initImageStrength',
   }),
   video: Object.freeze({
+    audioConditioning: 'audioConditioning',
     negativePrompt: 'negativePrompt',
     width: 'width',
     height: 'height',

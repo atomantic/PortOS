@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('../../lib/maintenanceAdmission.js', () => ({ maintenance: { run: (_kind, _resource, fn) => fn() } }));
+
 const mocks = vi.hoisted(() => ({
   buildFederatedMediaRequest: vi.fn(),
   cleanupMultipartTemp: vi.fn(async () => {}),

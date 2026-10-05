@@ -214,6 +214,10 @@ const remoteVideoMediaParams = () => ({
   },
 });
 
+const remoteRecoverySettlement = (jobId, peerId = remoteVideoMediaParams().peerId) => ({
+  jobId, peerId, remoteJobId: '00000000-0000-4000-8000-000000000090', status: 'completed', executorSettled: true,
+});
+
 beforeEach(async () => {
   tempDataDir = mkdtempSync(join(tmpdir(), 'mediaJobQueue-test-'));
   // Queue fixtures deliberately abandon active work when simulating a crash.
@@ -1498,6 +1502,25 @@ describe('Audio kind (#1928)', () => {
     expect(settled.result).toEqual({ generationId: job.jobId, filename: `${job.jobId}.wav`, durationSec: 12 });
   });
 
+  it('serializes jobs per peer while distinct peers and local GPU run together, releasing the peer after cancellation', async () => {
+    stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
+    const finish = new Map();
+    stubs.generateVideoRemote.mockImplementation(({ jobId }) => new Promise((resolve) => finish.set(jobId, resolve)));
+    const submit = (peerId) => mediaJobQueue.enqueueJob({ kind: 'video', params: { remoteMedia: { ...remoteVideoMediaParams(), peerId } } });
+    const local = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'local' } });
+    const first = await submit('11111111-1111-4111-8111-111111111111');
+    const second = await submit('11111111-1111-4111-8111-111111111111');
+    const other = await submit('22222222-2222-4222-8222-222222222222');
+    await waitFor(() => mediaJobQueue.getJob(other.jobId)?.status === 'running');
+    expect(mediaJobQueue.getJob(local.jobId).status).toBe('running');
+    expect(mediaJobQueue.getJob(first.jobId).status).toBe('running');
+    expect(mediaJobQueue.getJob(second.jobId).status).toBe('queued');
+    await mediaJobQueue.cancelJob(first.jobId);
+    videoGenEvents.emit('failed', { generationId: first.jobId, error: 'Canceled', remoteInputsDisposable: true });
+    finish.get(first.jobId)();
+    await waitFor(() => mediaJobQueue.getJob(second.jobId)?.status === 'running');
+  });
+
   it('runs remote audio in its own lane without occupying the local GPU', async () => {
     stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
     stubs.generateAudioRemote.mockImplementation(() => new Promise(() => {}));
@@ -2298,7 +2321,8 @@ describe('local video failure holds', () => {
     const cloudJob = async () => (await mediaJobQueue.enqueueJob({
       kind: 'image', params: { mode: 'codex', prompt: 'example cloud image' },
     })).jobId;
-    const remoteJob = () => submit('example-mlx', { remoteMedia: remoteVideoMediaParams() });
+    let peerSequence = 0;
+    const remoteJob = () => submit('example-mlx', { remoteMedia: { ...remoteVideoMediaParams(), peerId: `11111111-1111-4111-8111-${String(++peerSequence).padStart(12, '0')}` } });
     const gpu = [await submit('example-other')];
     const cloud = [await cloudJob()];
     // Concurrent dynamic imports can bypass the module mock in this test runner;
@@ -2720,6 +2744,206 @@ const holdNextWrite = () => {
   });
   return () => release();
 };
+
+describe('durable remote source-audio settlement', () => {
+  const startAudioJob = async (suffix = '001', directory = false) => {
+    const path = join(tempDataDir, 'uploads', `mv-source-audio-00000000-0000-4000-8000-000000000${suffix}.wav`);
+    mkdirSync(join(tempDataDir, 'uploads'), { recursive: true });
+    if (directory) mkdirSync(path); else writeFileSync(path, 'owned fixture');
+    const remoteMedia = { ...remoteVideoMediaParams(), peerId: `00000000-0000-4000-8000-000000000${suffix}`,
+      inputAssets: [{ role: 'sourceAudio', path }] };
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { remoteMedia, uploadedTempPaths: [path] } });
+    await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === job.jobId));
+    return { ...job, path };
+  };
+  const restoreUnsettledAudioJob = async (directory = false) => {
+    const first = await startAudioJob('001', directory);
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    await maintenance.recoverOwned('media', first.jobId).run(async () => maintenance.markCurrentUnsettled());
+    videoGenEvents.emit('failed', { generationId: first.jobId, error: 'Unknown receipt', remoteInputsDisposable: false });
+    await waitFor(() => mediaJobQueue.getJob(first.jobId).status === 'failed');
+    await flush();
+    mediaJobQueue.quiesceMediaJobQueue();
+    mediaJobQueue.__resetForTests();
+    stubs.generateVideoRemote.mockClear();
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === first.jobId));
+    return { first, maintenance };
+  };
+
+  it('retains the slice until a durable terminal snapshot, then cleans before publishing completion', async () => {
+    const job = await startAudioJob();
+    const release = holdNextWrite();
+    const published = vi.fn(() => expect(existsSync(job.path)).toBe(false));
+    mediaJobQueue.mediaJobEvents.once('completed', published);
+    videoGenEvents.emit('completed', { generationId: job.jobId, remoteInputsDisposable: true });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(existsSync(job.path)).toBe(true);
+    expect(persistedJobs().find(entry => entry.id === job.jobId).status).toBe('running');
+    release();
+    await waitFor(() => published.mock.calls.length === 1);
+    expect(persistedJobs().find(entry => entry.id === job.jobId).status).toBe('completed');
+    expect(mediaJobQueue.getJob(job.jobId).result).not.toHaveProperty('remoteInputsDisposable');
+  });
+
+  it('retains uncertain inputs when the executor gives no safe-disposal verdict', async () => {
+    const job = await startAudioJob();
+    videoGenEvents.emit('failed', { generationId: job.jobId, error: 'Uncertain remote outcome', remoteInputsDisposable: false });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
+    expect(existsSync(job.path)).toBe(true);
+  });
+  it('reserves an uncertain peer across lane release and restart, then unblocks only after reconciliation settles', async () => {
+    const first = await startAudioJob();
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const admission = maintenance.recoverOwned('media', first.jobId);
+    await admission.run(async () => maintenance.markCurrentUnsettled());
+    videoGenEvents.emit('failed', { generationId: first.jobId, error: 'Unknown receipt', remoteInputsDisposable: false });
+    await waitFor(() => mediaJobQueue.getJob(first.jobId).status === 'failed');
+    expect(maintenance.status().blockers).toContainEqual(expect.objectContaining({ resource: first.jobId, unsettled: true }));
+    expect(mediaJobQueue.removeArchivedJob(first.jobId)).toBe(false);
+    const next = await mediaJobQueue.enqueueJob({ kind: 'video', params: { remoteMedia: remoteVideoMediaParams() } });
+    const other = await mediaJobQueue.enqueueJob({ kind: 'video', params: { remoteMedia: { ...remoteVideoMediaParams(), peerId: '00000000-0000-4000-8000-000000000002' } } });
+    await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === other.jobId));
+    expect(stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === next.jobId)).toBe(false);
+    expect(persistedJobs().find((job) => job.id === first.jobId).params.remotePeerReservation).toBe(true);
+    videoGenEvents.emit('completed', { generationId: other.jobId, remoteInputsDisposable: true });
+    await flush();
+    mediaJobQueue.quiesceMediaJobQueue();
+    mediaJobQueue.__resetForTests();
+    stubs.generateVideoRemote.mockClear();
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === first.jobId));
+    const recovery = stubs.generateVideoRemote.mock.calls.find(([params]) => params.jobId === first.jobId)[0];
+    expect(recovery.remoteMedia.reconcile).toBe(true);
+    expect(stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === next.jobId)).toBe(false);
+    videoGenEvents.emit('completed', { generationId: first.jobId, remoteInputsDisposable: true,
+      remoteRecoverySettlement: remoteRecoverySettlement(first.jobId) });
+    await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === next.jobId));
+    expect(persistedJobs().find((job) => job.id === first.jobId).params.remotePeerReservation).toBe(false);
+    expect(maintenance.status().blockers.filter((entry) => entry.resource === first.jobId)).toEqual([]);
+    expect(mediaJobQueue.getJob(first.jobId).result).not.toHaveProperty('remoteRecoverySettlement');
+    videoGenEvents.emit('completed', { generationId: next.jobId, remoteInputsDisposable: true });
+  });
+
+  it('preserves recovered uncertainty when owned cleanup creates a new mark', async () => {
+    const { first, maintenance } = await restoreUnsettledAudioJob(true);
+    const journal = () => JSON.parse(readFileSync(join(maintenance.directory, 'state.json'), 'utf8'));
+    const originalStamp = journal().operations.find(op => op.resource === first.jobId).uncertaintyStamp;
+    videoGenEvents.emit('completed', { generationId: first.jobId, remoteInputsDisposable: true,
+      remoteRecoverySettlement: remoteRecoverySettlement(first.jobId) });
+    await waitFor(() => mediaJobQueue.getJob(first.jobId).status === 'completed');
+    await flush();
+    expect(journal().operations.find(op => op.resource === first.jobId).uncertaintyStamp).not.toBe(originalStamp);
+    expect(maintenance.status().blockers).toContainEqual(expect.objectContaining({ resource: first.jobId, unsettled: true }));
+    expect(existsSync(first.path)).toBe(true);
+  });
+
+  it.each(['missing', 'wrong-job', 'wrong-peer', 'executor-live'])('requires bound termination and executor teardown (%s)', async (variant) => {
+    const { first, maintenance } = await restoreUnsettledAudioJob();
+    const proof = variant === 'missing' ? undefined : { ...remoteRecoverySettlement(first.jobId),
+      ...(variant === 'wrong-job' ? { jobId: 'another-job' } : {}),
+      ...(variant === 'wrong-peer' ? { peerId: 'another-peer' } : {}),
+      ...(variant === 'executor-live' ? { executorSettled: false } : {}),
+    };
+    videoGenEvents.emit('failed', { generationId: first.jobId, error: 'Never submitted is not prior peer termination',
+      remoteInputsDisposable: true, remoteRecoverySettlement: proof });
+    await waitFor(() => mediaJobQueue.getJob(first.jobId).status === 'failed');
+    await flush();
+    expect(maintenance.status().blockers).toContainEqual(expect.objectContaining({ resource: first.jobId, unsettled: true }));
+  });
+
+  it('retains recovery ownership through durable publication and an archive write failure', async () => {
+    const { first, maintenance } = await restoreUnsettledAudioJob();
+    const write = atomicWriteSpy.getMockImplementation();
+    let terminalWrites = 0;
+    atomicWriteSpy.mockImplementation((path, data) => {
+      if (data?.jobs?.some(entry => entry.id === first.jobId && entry.status === 'completed') && ++terminalWrites > 1) {
+        return Promise.reject(new Error('fixture archive persistence failure'));
+      }
+      return write(path, data);
+    });
+    try {
+      videoGenEvents.emit('completed', { generationId: first.jobId, remoteInputsDisposable: true,
+        remoteRecoverySettlement: remoteRecoverySettlement(first.jobId) });
+      await waitFor(() => terminalWrites > 1);
+      await flush();
+      expect(maintenance.status().blockers).toContainEqual(expect.objectContaining({ resource: first.jobId, unsettled: true }));
+      expect(existsSync(first.path)).toBe(false);
+    } finally { atomicWriteSpy.mockImplementation(write); }
+  });
+
+  it('keeps Run now from bypassing the per-peer GPU cap', async () => {
+    const first = await startAudioJob();
+    const second = await mediaJobQueue.enqueueJob({ kind: 'video', params: { remoteMedia: remoteVideoMediaParams() } });
+    expect(mediaJobQueue.runJobNow(second.jobId)).toMatchObject({ ok: false, code: 'NOT_CODEX' });
+    expect(mediaJobQueue.getJob(second.jobId).status).toBe('queued');
+    videoGenEvents.emit('completed', { generationId: first.jobId, remoteInputsDisposable: true });
+  });
+
+  it('retains the real provider cleanup verdict after a watchdog wins the durable terminal outcome', async () => {
+    process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS = '50';
+    await importFresh();
+    stubs.generateVideoRemote.mockResolvedValue({});
+    const job = await startAudioJob();
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const { hold } = maintenance.begin({ reason: 'Await peer settlement', owner: 'Operator' });
+    vi.useFakeTimers();
+    try {
+      await vi.advanceTimersByTimeAsync(100);
+      await vi.waitFor(() => expect(mediaJobQueue.getJob(job.jobId).status).toBe('failed'));
+      expect(existsSync(job.path)).toBe(true);
+      expect(maintenance.status().state).toBe('draining');
+      videoGenEvents.emit('failed', { generationId: job.jobId, error: 'Peer confirms terminal', remoteInputsDisposable: true });
+      await vi.waitFor(() => expect(existsSync(job.path)).toBe(false));
+      await vi.waitFor(() => expect(maintenance.status().state).toBe('ready'));
+      expect(persistedJobs().find(entry => entry.id === job.jobId).status).toBe('failed');
+    } finally {
+      videoGenEvents.emit('failed', { generationId: job.jobId, error: 'Fixture teardown' });
+      maintenance.resume({ id: hold.id, revision: hold.revision });
+      delete process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS;
+      vi.clearAllTimers(); vi.useRealTimers();
+    }
+  });
+
+  it('preserves replay bytes across a failed terminal write and releases them on storage recovery', async () => {
+    const job = await startAudioJob();
+    const write = atomicWriteSpy.getMockImplementation();
+    let failing = true;
+    atomicWriteSpy.mockImplementation((path, data) => failing && data?.jobs?.some(entry => entry.id === job.jobId && entry.status === 'completed')
+      ? Promise.reject(new Error('fixture storage unavailable')) : write(path, data));
+    try {
+      videoGenEvents.emit('completed', { generationId: job.jobId, remoteInputsDisposable: true });
+      await waitFor(() => mediaJobQueue.getJob(job.jobId).persistenceError === true);
+      expect(existsSync(job.path)).toBe(true);
+      expect(persistedJobs().find(entry => entry.id === job.jobId).status).toBe('running');
+      failing = false;
+      await mediaJobQueue.flushMediaJobQueue();
+      await waitFor(() => !existsSync(job.path));
+      expect(stubs.generateVideoRemote).toHaveBeenCalledTimes(1);
+    } finally { atomicWriteSpy.mockImplementation(write); }
+  });
+
+  it('attributes failed cleanup to the correct job during shared terminal persistence and still publishes both outcomes', async () => {
+    const bad = await startAudioJob('001', true);
+    const good = await startAudioJob('002');
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const published = [];
+    const receive = job => published.push(job.id);
+    mediaJobQueue.mediaJobEvents.on('completed', receive);
+    try {
+      videoGenEvents.emit('completed', { generationId: good.jobId, remoteInputsDisposable: true });
+      videoGenEvents.emit('completed', { generationId: bad.jobId, remoteInputsDisposable: true });
+      await waitFor(() => published.length === 2);
+      const blockers = maintenance.status().blockers;
+      expect(blockers).toContainEqual(expect.objectContaining({ resource: bad.jobId, unsettled: true }));
+      expect(blockers.filter(entry => entry.resource === good.jobId && entry.unsettled)).toEqual([]);
+      expect(existsSync(good.path)).toBe(false);
+      expect(existsSync(bad.path)).toBe(true);
+    } finally { mediaJobQueue.mediaJobEvents.off('completed', receive); }
+  });
+});
 
 describe('durable admission and shutdown flush', () => {
 

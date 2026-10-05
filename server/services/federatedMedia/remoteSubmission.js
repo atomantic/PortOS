@@ -227,6 +227,9 @@ export async function prepareRemoteMediaJob({ peerId, kind, request, inputAssets
   const effectiveRequest = kind === 'video'
     ? negotiateVideoConstraints(request, capability)
     : request;
+  if (request.audioConditioning && (effectiveRequest.fps !== request.fps || effectiveRequest.numFrames !== request.numFrames)) {
+    throw new ServerError('Peer frame constraints would change the supplied audio window', { status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' });
+  }
   return {
     peer,
     capability,

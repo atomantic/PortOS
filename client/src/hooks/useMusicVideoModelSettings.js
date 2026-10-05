@@ -56,6 +56,7 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
   }, []);
 
   const settings = {
+    renderPool: project?.videoSettings?.renderPool,
     // Empty means this peer resolves its own configured Video Gen default.
     // Synced projects intentionally arrive without another install's backend
     // pin, so do not turn that absence into an explicit local override.

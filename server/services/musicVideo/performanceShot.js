@@ -156,14 +156,22 @@ function legacyMasterLookup(project, masterPath) {
 async function reviewPerformanceTakes(project, masterPath) {
   const results = [];
   const selected = [];
+  let sha256 = null;
   for (const scene of Array.isArray(project?.scenes) ? project.scenes : []) {
+    const supplied = (scene.takes || []).find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId)?.shotInstruction;
+    if (scene.videoHistoryId && !['still', 'card'].includes(scene.visualLayer) && supplied?.audioConditioning) {
+      sha256 ??= await hashFile(masterPath);
+      if (supplied.audioConditioning.sourceSha256 !== sha256) results.push({ sceneId: scene.sceneId, reason: 'source-audio-changed', stale: true });
+      else if (Math.round(scene.startSec * 48000) !== supplied.audioConditioning.startSample
+        || scene.endSec !== supplied.songInterval?.endSec) results.push({ sceneId: scene.sceneId, reason: 'retimed', stale: true });
+    }
     if (!isPerformanceScene(scene) || !scene.videoHistoryId) continue;
     const instruction = selectedPerformanceInstruction(scene);
     if (instruction) selected.push({ scene, instruction });
     else results.push({ sceneId: scene.sceneId, reason: 'not-lip-synced', stale: true });
   }
   if (selected.length === 0) return results;
-  const sha256 = await hashFile(masterPath);
+  sha256 ??= await hashFile(masterPath);
   let currentEnvelope = null;
   const oldEnvelope = legacyMasterLookup(project, masterPath);
   const windowUnchanged = async (instruction) => {
@@ -213,6 +221,13 @@ export async function assertCurrentPerformanceTakes(project, masterPath) {
   if (rehashed > 0) console.log(`🎵 Music Video: ${rehashed} lip-sync take${rehashed === 1 ? '' : 's'} still match${rehashed === 1 ? 'es' : ''} the re-mastered song in ${rehashed === 1 ? 'its' : 'their'} sung window`);
   const stale = reviewed.filter((r) => r.stale).map(({ sceneId, reason }) => ({ sceneId, reason }));
   if (stale.length === 0) return;
+  if (stale.some(({ sceneId }) => {
+    const scene = project.scenes.find((entry) => entry.sceneId === sceneId);
+    return scene?.takes?.some((take) => take.assetId === scene.videoHistoryId && take.shotInstruction?.audioConditioning);
+  })) {
+    throw new ServerError('A supplied-audio shot no longer matches the selected recording or scene interval; regenerate it before rendering',
+      { status: 422, code: 'MUSIC_VIDEO_STALE_SOURCE_AUDIO_TAKES', context: { stale } });
+  }
   const counts = new Map();
   for (const { reason } of stale) counts.set(reason, (counts.get(reason) || 0) + 1);
   const why = [...counts].map(([reason, n]) => `${n} ${STALE_REASON_LABELS[reason] || reason}`).join(', ');

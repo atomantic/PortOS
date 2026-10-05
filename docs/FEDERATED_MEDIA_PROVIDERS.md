@@ -2,7 +2,58 @@
 
 PortOS can opt in to serving local media-generation capacity to another registered PortOS peer. The wire contract, `/api/federation/media/v1`, carries queued **audio, image, and video** generation through the existing durable `mediaJobQueue` and this machine's local engines.
 
-Provider-side queueing, consumer-side capacity discovery, durable remote execution, and unattended (Creative Director / Commission) routing are available for all three kinds. Interactive provider selection is exposed through the generation APIs and the Music Studio panel; Image Gen / Video Gen pickers, multi-provider scheduling, and input-asset transfer remain later slices of issue #4348.
+Provider-side queueing, consumer-side capacity discovery, durable remote execution, and unattended (Creative Director / Commission) routing are available for all three kinds. Interactive generation can select a peer and transfer supported conditioning images. Music Video also supports an explicit project pool for generated board shots and revisions, as described below.
+
+## Music Video shot pools and supplied song audio
+
+In a project's video settings, select exact models on existing opted-in peers,
+then choose **This Mac**, **Selected peers**, or **Both**. Saving a pool never
+enables a peer, installs a model, or changes a model grant. The pool is local to
+this install and is stripped from project sync. Existing projects keep their
+renderer settings until the pool is configured.
+
+Placement checks fresh provider readiness, known hardware/memory requirements,
+free memory, the existing allowlists and queue capacity, and a known-clear
+maintenance hold. Unknown or insufficient capacity excludes that node. Free
+system memory is a conservative snapshot, not a reservation or a promise about
+reclaimable GPU memory. Both requires an explicit local model. Each shot picks
+the least occupied eligible selected node once; its queued marker preserves that
+peer/model through cancellation and idempotent reconciliation. One remote job
+per peer runs from this consumer at a time; the provider's existing local GPU
+lane still serializes work from all consumers. There is no rerouting on failure
+and no fallback outside the saved pool.
+
+**Supplied song audio** conditions a generated cutaway on an exact window of the
+project recording. This first contract supports LTX-2/2.5 MLX models with native
+A2V support and a source frame. It does not assert verified lip-sync. The frame
+clock is negotiated before the recording is decoded to stereo 48 kHz 16-bit
+PCM. The wire binds original-recording SHA-256, clip SHA-256, start/end sample,
+sample count, rate, channels, fps and frame count. Windows are at most 60 seconds;
+a short source, changed recording, or uncovered scene is refused. No automatic
+padding or subsequent window changes are allowed. The original recording hash
+is consumer provenance; the provider independently verifies only the supplied
+clip bytes and their exact sample/frame span. Admission rechecks the currently
+selected recording hash, including take changes within one linked track; render
+and dependency-repair checks refuse a supplied-audio take from an older recording.
+
+The `sourceAudio` feature and per-model capability must both be negotiated.
+Older peers remain usable for their existing modes, but are ineligible for
+project pools until they report the new capacity, supported-mode and maintenance fields. Audio
+travels through the existing authenticated, caller-scoped, expiring asset store.
+The provider verifies the PCM and copies it into the existing uploads boundary;
+no inbox path exception is added to generator admission. Source clips stay
+available for uncertain remote reconciliation, and owned copies are cleaned up
+only after known settlement. No paths, credentials, prompts, maintenance owner
+or hold reason are added to status responses.
+
+**Scope:** board-generated shots and selective revisions only. Immutable
+production runs require This Mac; their approved model pools and budgets are
+not replaced by mutable project placement. They also refuse supplied song audio
+until immutable grants bind exact audio windows. Performance lip-sync, LoRA transfer,
+continuation/chain state, and remote final composition export are unsupported.
+Final export remains local. These boundaries are enforced before dispatch; the
+existing shot action, capture/evidence, revision, and budget checks still apply.
+See [the routing and audio ADR](decisions/2026-10-04-music-video-render-pools.md).
 
 ## Enable a provider
 

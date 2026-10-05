@@ -122,6 +122,7 @@ export function buildProjectRecord(input, { id, now }) {
     visualSpec: input.visualSpec ? normalizeVisualSpec(input.visualSpec) : null,
     ...(input.styleReferences ? { styleReferences: input.styleReferences } : {}),
     videoSettings: {
+      ...(videoSettings.renderPool ? { renderPool: videoSettings.renderPool } : {}),
       backend: videoSettings.backend ?? 'local',
       modelId: videoSettings.modelId ?? null,
       grokDuration: videoSettings.grokDuration ?? 10,
@@ -772,10 +773,11 @@ export function mergeProjectRecord(local, remoteRaw) {
     };
   }
   if (local.videoSettings && typeof local.videoSettings === 'object'
-    && !Array.isArray(local.videoSettings) && Object.hasOwn(local.videoSettings, 'backend')) {
+    && !Array.isArray(local.videoSettings) && ['backend', 'renderPool'].some((key) => Object.hasOwn(local.videoSettings, key))) {
     const remoteVideoSettings = remote.videoSettings && typeof remote.videoSettings === 'object'
       && !Array.isArray(remote.videoSettings) ? remote.videoSettings : {};
-    remote.videoSettings = { ...remoteVideoSettings, backend: local.videoSettings.backend };
+    remote.videoSettings = { ...remoteVideoSettings,
+      ...Object.fromEntries(['backend', 'renderPool'].filter((key) => Object.hasOwn(local.videoSettings, key)).map((key) => [key, local.videoSettings[key]])) };
   }
   const remoteWins = compareNewerWins(remote.updatedAt, local.updatedAt);
   const next = remoteWins ? remote : local;

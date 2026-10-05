@@ -269,7 +269,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
             // would force the resolver off a Grok install default. Keep the
             // shared pin saved, but omit it until this peer chooses Local.
             : { grokDuration: settings.grokDuration, disableAudio: true }),
-      mode: audioReactiveSelected ? 'a2v' : 'image',
+      mode: audioReactiveSelected || settings.generationMode === 'suppliedAudio' ? 'a2v' : 'image',
       sourceImageFile: scene.referenceImageId,
       ...(audioReactiveSelected ? {
         audioStartSec: scene.startSec || 0,

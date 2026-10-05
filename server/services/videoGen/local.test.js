@@ -5799,6 +5799,18 @@ describe('generateVideo — LTX-2.5 speed profile (#4875)', () => {
       expect(meta.stage2Steps).toBeUndefined();
     });
 
+    it('preserves the exact supplied-audio provenance in renderer history metadata', async () => {
+      const audioConditioning = { sourceSha256: 'a'.repeat(64), clipSha256: 'b'.repeat(64),
+        sampleRate: 48000, channels: 2, startSample: 96000, endSample: 144000, sampleCount: 48000 };
+      const meta = await metaFor('supplied-audio-provenance', {
+        mode: 'a2v', audioFilePath: '/mock/data/uploads/example.wav', audioStartSec: 0, audioConditioning,
+      });
+      expect(meta.audioConditioning).toEqual(audioConditioning);
+      expect(meta.mode).toBe('a2v');
+      await expect(metaFor('supplied-audio-malformed', { audioConditioning: { ...audioConditioning, endSample: 144001 } }))
+        .rejects.toThrow();
+    });
+
     it('stamps nothing when the profile was declined', async () => {
       const meta = await metaFor('sp-meta-declined', { speedProfileId: 'turbo' });
       expect(meta.speedProfileId).toBeUndefined();

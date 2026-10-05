@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const state = vi.hoisted(() => ({
@@ -13,9 +13,39 @@ const state = vi.hoisted(() => ({
   imageModels: [],
   videoModels: [],
   videoHolds: [],
+  maintenanceHeld: false,
+  failAudioCopy: false,
+  failAudioCleanup: false,
   cachedRepos: new Set(),
   laneWidthByKind: {},
 }));
+
+vi.mock('node:fs/promises', async (load) => {
+  const fs = await load();
+  return { ...fs,
+    writeFile: async (path, bytes, options) => {
+      if (state.failAudioCopy && basename(path).startsWith('federated-audio-')) {
+        await fs.writeFile(path, bytes.subarray(0, 12), options);
+        throw Object.assign(new Error('Fixture disk write failure'), { code: 'EIO' });
+      }
+      return fs.writeFile(path, bytes, options);
+    },
+    unlink: async (path) => {
+      if (state.failAudioCleanup && basename(path).startsWith('federated-audio-')) {
+        throw Object.assign(new Error('Fixture cleanup failure'), { code: 'EIO' });
+      }
+      return fs.unlink(path);
+    },
+  };
+});
+
+vi.mock('../lib/maintenanceAdmission.js', () => ({ maintenance: {
+  held: () => state.maintenanceHeld, markCurrentUnsettled: vi.fn(),
+  run: async (_kind, _resource, fn) => {
+    if (state.maintenanceHeld) throw Object.assign(new Error('Maintenance holds new work'), { code: 'MAINTENANCE_HELD' });
+    return fn();
+  },
+} }));
 
 vi.mock('./settings.js', () => ({
   getSettings: vi.fn(async () => state.settings),
@@ -156,6 +186,8 @@ beforeEach(() => {
   state.settings = { federation: { mediaProvider: config() } };
   state.peer = { instanceId: 'peer-example', name: 'Example Peer', enabled: true };
   state.jobs = [];
+  state.maintenanceHeld = false;
+  state.failAudioCopy = false; state.failAudioCleanup = false;
   state.nextId = 1;
   state.capabilities = { engines: [readyEngine()], defaultEngine: 'musicgen' };
   state.cancelResult = { ok: true, status: 'canceled' };
@@ -363,7 +395,7 @@ describe('federated media provider capacity and idempotency', () => {
     // be distinguishable from a peer whose code predates lyrical federation.
     state.capabilities.engines = [readyEngine({ lyrics: false })];
     const status = await getFederatedMediaProviderStatus(config());
-    expect(status.features).toEqual(['lyrics', 'inputAssets']);
+    expect(status.features).toEqual(['lyrics', 'inputAssets', 'sourceAudio']);
     expect(status.capabilities[0].lyrics).toBe(false);
   });
 
@@ -1023,5 +1055,90 @@ describe('federated media provider — prompt-free status and projection payload
     expect(cap.maxNumFrames).toBe(49);
     expect(cap.frameOptions).toEqual([25, 49]);
     expect(cap.resolutionOptions).toEqual([{ label: 'valid', w: 1344, h: 768 }]);
+  });
+});
+
+
+describe('supplied audio provider admission', () => {
+  it('does not negotiate A2V runtimes with a different audio-output contract', async () => {
+    const cfg = { ...config(), videoModels: [{ engine: 'local', modelId: 'other-audio-runtime' }] };
+    state.settings.imageGen = { local: { pythonPath: '/example/python' } };
+    state.videoModels = [{ id: 'other-audio-runtime', runtime: 'minimax_h3_ref2va', repo: 'example/other-audio', supportedModes: ['a2v'] }];
+    state.cachedRepos.add('example/other-audio');
+    const status = await getFederatedMediaProviderStatus(cfg, { kinds: ['video'] });
+    expect(status.capabilities[0]?.sourceAudio).toBeUndefined();
+    expect(status.capabilities[0]).toMatchObject({ ready: false, unavailableReason: 'unsupported-input' });
+  });
+
+  it('keeps maintenance private and idempotent replay available during a hold', async () => {
+    const admitted = await submitFederatedMediaJob({ callerId: 'peer-example', config: config(), input: input(), idempotencyKey: 'before-hold' });
+    state.maintenanceHeld = true;
+    const status = await getFederatedMediaProviderStatus(config());
+    expect(status.queue).toMatchObject({ accepting: false, maintenanceHeld: true });
+    expect(JSON.stringify(status)).not.toMatch(/owner|blockers|requestedAt/);
+    await expect(submitFederatedMediaJob({ callerId: 'peer-example', config: config(), input: input(), idempotencyKey: 'before-hold' }))
+      .resolves.toMatchObject({ replayed: true, job: { id: admitted.job.id } });
+    await expect(submitFederatedMediaJob({ callerId: 'peer-example', config: config(), input: input(), idempotencyKey: 'new-during-hold' }))
+      .rejects.toMatchObject({ code: 'MAINTENANCE_HELD' });
+    expect(enqueueJob).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not advertise a cached runtime as hardware eligible above its memory floor', async () => {
+    const cfg = { ...config(), videoModels: [{ engine: 'local', modelId: 'oversized' }] };
+    state.settings.imageGen = { local: { pythonPath: '/example/python' } };
+    state.videoModels = [{ id: 'oversized', repo: 'example/large', memoryGb: 100000, supportedModes: ['image'] }];
+    state.cachedRepos.add('example/large');
+    const status = await getFederatedMediaProviderStatus(cfg, { kinds: ['video'] });
+    expect(status.capabilities[0]).toMatchObject({ runtimeReady: true, ready: false, hardwareEligible: false, unavailableReason: 'hardware-ineligible' });
+  });
+
+  it('copies only verified caller-owned PCM into the uploads lane and binds idempotency to the audio provenance', async () => {
+    const { storeFederatedMediaAsset } = await import('./federatedMedia/assetStore.js');
+    const { readFileSync } = await import('node:fs');
+    const original = { uploads: PATHS.uploads, federatedMediaInbox: PATHS.federatedMediaInbox };
+    const root = mkdtempSync(join(tmpdir(), 'provider-audio-test-'));
+    PATHS.uploads = join(root, 'uploads'); PATHS.federatedMediaInbox = root;
+    try {
+      const cfg = { ...config(), videoModels: [{ engine: 'local', modelId: 'audio-model' }] };
+      state.settings.imageGen = { local: { pythonPath: '/example/python' } };
+      state.videoModels = [{ id: 'audio-model', runtime: 'ltx2', repo: 'example/audio-video', supportedModes: ['image', 'a2v'] }];
+      state.cachedRepos.add('example/audio-video');
+      const bytes = Buffer.alloc(44 + 48000 * 4);
+      bytes.write('RIFF'); bytes.writeUInt32LE(bytes.length - 8, 4); bytes.write('WAVEfmt ', 8);
+      bytes.writeUInt32LE(16, 16); bytes.writeUInt16LE(1, 20); bytes.writeUInt16LE(2, 22);
+      bytes.writeUInt32LE(48000, 24); bytes.writeUInt32LE(192000, 28); bytes.writeUInt16LE(4, 32);
+      bytes.writeUInt16LE(16, 34); bytes.write('data', 36); bytes.writeUInt32LE(48000 * 4, 40);
+      const upload = (body, mimeType) => storeFederatedMediaAsset({ callerId: 'peer-example', body, mimeType, declaredSha256: sha256Text(body) });
+      const audio = await upload(bytes, 'audio/wav');
+      const frame = await upload(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), 'image/png');
+      const body = { kind: 'video', engine: 'local', modelId: 'audio-model', prompt: 'Example light', fps: 24, numFrames: 25,
+        sourceImage: { assetId: frame.assetId }, sourceAudio: { assetId: audio.assetId },
+        audioConditioning: { sourceSha256: 'b'.repeat(64), clipSha256: audio.sha256, sampleRate: 48000, channels: 2, startSample: 0, endSample: 48000, sampleCount: 48000 } };
+      const args = { callerId: 'peer-example', config: cfg, input: body, idempotencyKey: 'audio-window' };
+      for (const field of ['fps', 'numFrames']) {
+        await expect(submitFederatedMediaJob({ ...args, input: { ...body, [field]: undefined } }))
+          .rejects.toMatchObject({ code: 'MEDIA_PROVIDER_ASSET_INTEGRITY' });
+      }
+      await expect(submitFederatedMediaJob({ ...args, input: { ...body, audioConditioning: { ...body.audioConditioning, sampleCount: 47999 } } }))
+        .rejects.toMatchObject({ code: 'MEDIA_PROVIDER_ASSET_INTEGRITY' });
+      state.failAudioCopy = true;
+      await expect(submitFederatedMediaJob(args)).rejects.toMatchObject({ code: 'EIO' });
+      expect(enqueueJob).not.toHaveBeenCalled();
+      expect(readdirSync(PATHS.uploads)).toEqual([]);
+      state.failAudioCleanup = true;
+      await expect(submitFederatedMediaJob(args)).rejects.toMatchObject({ code: 'EIO' });
+      const { maintenance } = await import('../lib/maintenanceAdmission.js');
+      expect(maintenance.markCurrentUnsettled).toHaveBeenCalled();
+      expect(enqueueJob).not.toHaveBeenCalled();
+      for (const name of readdirSync(PATHS.uploads)) rmSync(join(PATHS.uploads, name));
+      state.failAudioCopy = false; state.failAudioCleanup = false;
+      const result = await submitFederatedMediaJob(args);
+      const params = state.jobs.find((job) => job.id === result.job.id).params;
+      expect(params).toMatchObject({ mode: 'a2v', audioStartSec: 0, disableAudio: true, audioConditioning: body.audioConditioning });
+      expect(params.audioFilePath).toMatch(/federated-audio-.*\.wav$/);
+      expect(readFileSync(params.audioFilePath)).toEqual(bytes);
+      await expect(submitFederatedMediaJob({ ...args, input: { ...body, audioConditioning: { ...body.audioConditioning, startSample: 48000, endSample: 96000 } } }))
+        .rejects.toMatchObject({ code: 'MEDIA_PROVIDER_IDEMPOTENCY_CONFLICT' });
+    } finally { Object.assign(PATHS, original); rmSync(root, { recursive: true, force: true }); }
   });
 });

@@ -96,6 +96,7 @@ const executor = createRemoteMediaExecutor({
         // the federation, never a hostname, address, or credential.
         federatedPeerId: peerId,
         federatedJobId: remoteJob.id,
+        ...(request.audioConditioning ? { audioConditioning: request.audioConditioning } : {}),
         createdAt,
         provenance: provenanceForRender({
           model: {
