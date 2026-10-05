@@ -83,11 +83,51 @@ export function productionReviewBasis(project) {
   return { art, storyboard, proof };
 }
 
+/** Labeled per-input hashes so a stale approval can name what changed since. */
+const h = v => hash(v ?? null);
+export function productionApprovalInputs(project) {
+  const draft = project.productionReview?.draft || {};
+  const art = {
+    concept: h(project.concept), 'visual spec': h(project.visualSpec), 'style references': h(project.styleReferences),
+    'media mode': h([project.mediaMode, project.composition?.authoringRenderer, project.composition?.mode, project.productionPolicy]),
+    'art direction': h(project.castAndSets?.direction), cast: h(draft.cast), environments: h(draft.environments),
+    'visual language': h(draft.visualLanguage), 'motion language': h(draft.motionLanguage),
+    'implementation plan': h(draft.implementationPlan), 'visual guide': h(artifactBasis(artifact(project, draft.guideArtifactId))),
+  };
+  const scenes = {};
+  for (const [i, s] of (project.scenes || []).entries()) {
+    const n = i + 1;
+    scenes[`scene ${n} timing`] = h([s.startSec, s.endSec]);
+    scenes[`scene ${n} lyrics`] = h(s.lyricText);
+    scenes[`scene ${n} prompt`] = h([s.visualIntent, s.prompt, s.framePrompt]);
+  }
+  const storyboard = { ...art, song: h([source(project).trackId, source(project).uploadedAudioFilename, source(project).duration, source(project).beats, source(project).sections]),
+    lyrics: h([source(project).lyrics, source(project).markers, source(project).phrases]), 'lyric timing': h([draft.lyricsMode, draft.timingStatus, draft.timingNotes]),
+    'storyboard shots': h([draft.storyboard, draft.storyboardSource, project.productionReview?.documentStoryboard]), treatment: h(project.treatment), ...scenes };
+  const window = project.productionReview?.proof;
+  const proof = { ...storyboard, composition: h(project.composition), 'proof window': h(window && [window.startSec, window.endSec]),
+    takes: h((project.scenes || []).map(({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer }) =>
+      ({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer }))),
+    'sound bed': h(project.soundBed), 'video settings': h(project.videoSettings) };
+  return { art, storyboard, proof };
+}
+
+/** `{ approvedAt, changedFields }` when a stage was approved on inputs that have since moved; null otherwise. */
+function staleApproval(project, stage, current, inputs) {
+  const approval = project.productionReview?.approvals?.[stage];
+  if (!approval || approval.basis === current) return null;
+  const before = approval.inputs;
+  const changedFields = before ? Object.keys(inputs[stage]).filter(k => before[k] !== inputs[stage][k])
+    .concat(Object.keys(before).filter(k => !(k in inputs[stage]))) : [];
+  return { approvedAt: approval.approvedAt || null, changedFields: changedFields.length ? changedFields : (before ? ['proof render'] : []) };
+}
+
 export function productionReadiness(project) {
   const review = project.productionReview || {};
   const draft = review.draft || {};
   const basis = productionReviewBasis(project);
   const alignmentBasis = productionAlignmentBasis(project);
+  const inputs = productionApprovalInputs(project);
   const unresolved = stage => (review.feedback || []).filter(f => f.stage === stage && f.decision === 'request-changes' && !f.resolvedAt);
   const artProblems = unresolved('art').map(f => `Resolve art feedback for ${f.target}: ${f.text}`);
   for (const [key, label] of [['cast', 'Cast guide'], ['environments', 'Environment guide'],
@@ -154,9 +194,9 @@ export function productionReadiness(project) {
   }
   const proofApproved = !proofProblems.length && hasProofEvidence(review.approvals?.proof?.proofReview) && review.approvals?.proof?.basis === hash({ basis: basis.proof, excerptId: excerpt.id, filename: excerpt.filename });
   return { basis, alignment: { basis: alignmentBasis, status: draft.lyricsMode === 'instrumental' ? 'instrumental'
-    : draft.timingStatus !== 'verified' ? 'provisional' : review.alignmentBasis === alignmentBasis ? 'verified' : 'stale' }, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: alignmentBasis }, art: { approved: artApproved, problems: [...new Set(artProblems)] },
-    storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)] },
-    proof: { approved: proofApproved, problems: proofProblems, excerptId: excerpt?.id || null },
+    : draft.timingStatus !== 'verified' ? 'provisional' : review.alignmentBasis === alignmentBasis ? 'verified' : 'stale' }, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: alignmentBasis }, art: { approved: artApproved, problems: [...new Set(artProblems)], stale: artApproved ? null : staleApproval(project, 'art', basis.art, inputs) },
+    storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)], stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs) },
+    proof: { approved: proofApproved, problems: proofProblems, excerptId: excerpt?.id || null, stale: proofApproved ? null : staleApproval(project, 'proof', basis.proof, inputs) },
     readyForProduction: proofApproved };
 }
 
@@ -186,7 +226,7 @@ export function approveProductionStage(project, { stage, basis, proofReview, app
       throw new ServerError('The rendered proof changed. Play and review the new excerpt before approving.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
     }
   }
-  const decision = { stage, basis: expected, approvedAt: new Date().toISOString(),
+  const decision = { stage, basis: expected, inputs: productionApprovalInputs(project)[stage], approvedAt: new Date().toISOString(),
     ...(approvedBy ? { approvedBy } : {}), ...(reviewer ? { reviewer: structuredClone(reviewer) } : {}),
     ...(stage === 'proof' ? { proofReview: structuredClone(proofReview) } : {}) };
   return { ...project, productionReview: { ...project.productionReview,

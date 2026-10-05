@@ -22,9 +22,10 @@ export default function StageChecklist({ items, onAction, headerAnchor = null })
           <li key={item.id} className="flex min-w-0 items-start gap-2 text-sm">
             {item.done
               ? <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-port-success" aria-label="done" />
-              : <Circle size={16} className="mt-0.5 shrink-0 text-port-warning" aria-label="to do" />}
+              : <Circle size={16} className="mt-0.5 shrink-0 text-port-warning" aria-label={item.stale ? 'approved earlier, stale' : 'to do'} />}
             <div className="min-w-0 flex-1">
               <span className={item.done ? 'text-port-text-muted' : ''}>{item.label}</span>
+              {item.stale && <span className="ml-2 rounded bg-port-warning/10 px-1.5 py-0.5 text-xs text-port-warning">done · stale</span>}
               {!item.done && item.detail && <p className="break-words text-xs text-port-text-muted">{item.detail}</p>}
             </div>
             {!item.done && item.action && onAction && item.action.anchor !== headerAnchor && (

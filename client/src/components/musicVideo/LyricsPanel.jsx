@@ -226,6 +226,11 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
         · {phrases.length} phrase{phrases.length === 1 ? '' : 's'}
         <span className="block sm:inline sm:ml-1">— AI Plan cuts on timed lines and phrase edges; no lyrics = an instrumental plan.</span>
       </Heading>
+      {project.productionReadiness?.storyboard?.approved && (
+        <p role="note" className="mt-2 rounded border border-port-warning/40 bg-port-warning/5 p-2 text-port-warning">
+          The storyboard is approved. Editing lyrics, markers or phrases will need re-approval of the storyboard.
+        </p>
+      )}
 
       <div className="mt-2 grid grid-cols-1 gap-3 lg:grid-cols-2">
         <section className="space-y-2 min-w-0">

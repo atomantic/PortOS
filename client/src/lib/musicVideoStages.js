@@ -421,6 +421,13 @@ export function deriveNextAction(project, {
 
 // The editable art-direction fields Production approvals needs before art can be approved.
 const ART_DIRECTION_FIELDS = [['cast', 'cast'], ['environments', 'sets'], ['visualLanguage', 'visual language'], ['motionLanguage', 'motion']];
+/** "Approved earlier — changed since: concept, scene 3 prompt" for an approval whose inputs moved; null otherwise. */
+export function staleApprovalText(stale) {
+  if (!stale) return null;
+  const shown = stale.changedFields.slice(0, 4).join(', ');
+  const more = stale.changedFields.length > 4 ? ` +${stale.changedFields.length - 4} more` : '';
+  return stale.changedFields.length ? `Approved earlier — changed since: ${shown}${more}.` : 'Approved earlier — its inputs changed since.';
+}
 const APPROVAL_ANCHORS = { art: 'mv-review-art', storyboard: 'mv-review-storyboard', proof: 'mv-review-proof' };
 
 /**
@@ -441,9 +448,10 @@ export function stageChecklist(stageId, project, readiness = project?.production
   const mode = project.composition?.mode || 'concat';
   const approval = (key, label, waitingText) => {
     const approved = !!readiness?.[key]?.approved;
+    const stale = staleApprovalText(readiness?.[key]?.stale);
     return {
-      id: `approve-${key}`, label: `${label} approved`, done: approved,
-      detail: approved || !readiness ? null : (readiness[key]?.problems?.[0] || waitingText),
+      id: `approve-${key}`, label: `${label} approved`, done: approved, stale: !!stale,
+      detail: approved || !readiness ? null : (stale ? `${stale} Re-approve in Production approvals.` : readiness[key]?.problems?.[0] || waitingText),
       action: approved ? null : { label: `Review ${label.toLowerCase()}`, anchor: APPROVAL_ANCHORS[key] },
     };
   };
