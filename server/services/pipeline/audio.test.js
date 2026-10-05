@@ -25,6 +25,8 @@ vi.mock('../voice/tts.js', () => ({
   VALID_ENGINES: new Set(['kokoro', 'piper', 'qwen3-tts']),
 }));
 
+vi.mock('../voice/stt.js', () => ({ transcribe: vi.fn().mockRejectedValue(new Error('stt down')) }));
+
 const { parseVoiceId, listAllVoices, synthesizeToFile, extractDialogueLines, resolveVoiceForLine, wavDurationMs } = await import('./audio.js');
 
 // Build a minimal canonical PCM WAV header for `dataBytes` of audio at the given

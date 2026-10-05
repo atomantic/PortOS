@@ -24,6 +24,7 @@ import VoicePicker from '../../voice/VoicePicker';
 import toast from '../../ui/Toast';
 import ProgressBar from '../../ui/ProgressBar';
 import { formatDurationMs } from '../../../utils/formatters';
+import { countLinesNeedingListen } from '../SpokenCheckChip';
 import { narratePipelineProse } from '../../../services/api';
 import { STAGE_LABEL } from './constants';
 import { clickableProps, onActivateKeyDown } from '../../../lib/a11yKeyboard';
@@ -79,6 +80,7 @@ export default function ManuscriptReadAloud({ open, onClose, section }) {
     return { cumulative: cum, totalMs: acc };
   }, [segments]);
 
+  const listenCount = useMemo(() => countLinesNeedingListen(segments), [segments]);
   const hardCount = useMemo(
     () => (segments || []).filter((s) => s.readability?.hard).length,
     [segments],
@@ -195,17 +197,18 @@ export default function ManuscriptReadAloud({ open, onClose, section }) {
       const active = seg.index === currentIndex;
       const reasons = seg.readability?.reasons || [];
       const hard = seg.readability?.hard;
+      const misheard = seg.verification?.status === 'mismatch';
       nodes.push(
         <span
           key={`seg-${seg.index}`}
           {...clickableProps(() => jumpTo(seg.index))}
           onClick={() => jumpTo(seg.index)}
           onKeyDown={onActivateKeyDown(() => jumpTo(seg.index))}
-          title={hard ? `Hard to say: ${reasons.join('; ')}` : undefined}
+          title={misheard ? `Speech-to-text heard: "${seg.verification.heard || ''}"` : (hard ? `Hard to say: ${reasons.join('; ')}` : undefined)}
           className={[
             'cursor-pointer rounded transition-colors',
             active ? 'bg-port-accent/30 text-white' : 'hover:bg-port-border/40',
-            hard ? 'underline decoration-wavy decoration-port-warning/70 underline-offset-2' : '',
+            hard || misheard ? 'underline decoration-wavy decoration-port-warning/70 underline-offset-2' : '',
           ].join(' ')}
         >
           {content.slice(seg.start, seg.end)}
@@ -303,6 +306,12 @@ export default function ManuscriptReadAloud({ open, onClose, section }) {
                 </span>
                 <span>{formatDurationMs(elapsedMs)} / {formatDurationMs(totalMs)}</span>
               </div>
+              {listenCount > 0 ? (
+                <p className="flex items-center gap-1.5 text-[11px] text-port-warning">
+                  <AlertTriangle size={11} />
+                  {listenCount} of {segments.length} sentence{segments.length === 1 ? '' : 's'} need a listen — speech-to-text heard something different from the text.
+                </p>
+              ) : null}
               {hardCount > 0 ? (
                 <p className="flex items-center gap-1.5 text-[11px] text-port-warning">
                   <AlertTriangle size={11} />

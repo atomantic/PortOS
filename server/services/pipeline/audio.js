@@ -26,6 +26,8 @@ import {
 } from '../voice/tts.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { wavDurationMs } from '../../lib/wavAudioFile.js';
+import { compareSpeech } from '../../lib/speechMatch.js';
+import { transcribe } from '../voice/stt.js';
 
 const VOICE_ID_RE = /^([a-z][a-z0-9-]*):(.+)$/i;
 
@@ -196,6 +198,8 @@ export function extractDialogueLines(issue, canon, { preserveFrom = [] } = {}) {
         voiceIdOverride: carryover?.voiceIdOverride || null,
         audioJobId: carryover?.audioJobId || null,
         audioFilename: carryover?.audioFilename || null,
+        verification: carryover?.verification || null,
+        expectedSpeech: carryover?.expectedSpeech || null,
       });
       lineNumber += 1;
     }
@@ -206,7 +210,26 @@ export function extractDialogueLines(issue, canon, { preserveFrom = [] } = {}) {
 // wavDurationMs moved to lib/wavAudioFile.js (shared with the Music Designer code engine).
 export { wavDurationMs };
 
-export async function synthesizeToFile({ text, voiceId, profileId, route = 'studio', signal } = {}) {
+/**
+ * Round-trip a rendered WAV through speech-to-text and compare it with the
+ * script (#10250). The empty decoder prompt keeps vocabulary bias from masking
+ * a mispronunciation. `expectedSpeech` is the user's accepted recognizer
+ * spelling and replaces the script text as the comparison target. STT being
+ * down or slow yields `unverified` — never an error, never blocks a render.
+ * @returns {Promise<{ status: 'matched'|'mismatch'|'unverified', similarity: number|null, heard: string }>}
+ */
+export async function verifyRenderedLine({ wav, text, expectedSpeech, signal } = {}) {
+  const heardResult = await transcribe(wav, { prompt: '', signal }).catch((err) => {
+    console.warn(`⚠️ voice-over verification skipped: ${err?.message || err}`);
+    return null;
+  });
+  if (!heardResult) return { status: 'unverified', similarity: null, heard: '' };
+  const heard = heardResult.text;
+  const { status, similarity } = compareSpeech(expectedSpeech || text, heard);
+  return { status, similarity, heard };
+}
+
+export async function synthesizeToFile({ text, voiceId, profileId, route = 'studio', signal, expectedSpeech } = {}) {
   const trimmed = (text || '').trim();
   if (!trimmed) {
     throw new ServerError('text is required', { status: 400, code: 'PIPELINE_AUDIO_EMPTY_TEXT' });
@@ -229,8 +252,10 @@ export async function synthesizeToFile({ text, voiceId, profileId, route = 'stud
   // audioJobId-or-audioFilename binding lives in stages.audio.lines[].
   const filename = `vo-${randomUUID()}.wav`;
   await atomicWrite(join(PATHS.audio, filename), wav);
+  const verification = await verifyRenderedLine({ wav, text: trimmed, expectedSpeech, signal });
   return {
     filename,
+    verification,
     latencyMs,
     durationMs: wavDurationMs(wav),
     engine: usedEngine,

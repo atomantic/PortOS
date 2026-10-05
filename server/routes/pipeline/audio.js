@@ -12,6 +12,7 @@ import * as seriesSvc from '../../services/pipeline/series.js';
 import * as issuesSvc from '../../services/pipeline/issues.js';
 import { getSeriesCanon } from '../../services/pipeline/seriesCanon.js';
 import { resolveSeriesLlmOverride } from '../../lib/seriesLlmOverride.js';
+import { compareSpeech } from '../../lib/speechMatch.js';
 import { listAllVoices, synthesizeToFile, parseVoiceId, extractDialogueLines, resolveVoiceForLine } from '../../services/pipeline/audio.js';
 import { narrateProse } from '../../services/pipeline/manuscriptNarration.js';
 import { synthesize as synthesizeVoice } from '../../services/voice/tts.js';
@@ -162,6 +163,8 @@ const lineEditSchema = z.object({
   // Per-line VO start offset (seconds into the stitched episode). null clears
   // the placement so the muxer skips the line. The sanitizer clamps the range.
   offsetSec: z.number().min(0).max(7200).nullable().optional(),
+  // Accepted recognizer spelling ("Ay-Ai" for "AI"); null clears it (#10250).
+  expectedSpeech: z.string().trim().max(4000).nullable().optional(),
 });
 router.patch('/issues/:id/stages/audio/lines/:lineIdx', asyncHandler(async (req, res) => {
   const lineIdx = Number(req.params.lineIdx);
@@ -187,6 +190,14 @@ router.patch('/issues/:id/stages/audio/lines/:lineIdx', asyncHandler(async (req,
       if ('text' in body) next.text = body.text;
       if ('voiceIdOverride' in body) next.voiceIdOverride = body.voiceIdOverride;
       if ('offsetSec' in body) next.offsetSec = body.offsetSec;
+      if ('expectedSpeech' in body) {
+        next.expectedSpeech = body.expectedSpeech || null;
+        // Re-score the last heard text against the new target; no STT call.
+        if (next.verification && next.verification.status !== 'unverified') {
+          const { status, similarity } = compareSpeech(next.expectedSpeech || next.text, next.verification.heard);
+          next.verification = { ...next.verification, status, similarity };
+        }
+      }
       const nextLines = [...lines];
       nextLines[lineIdx] = next;
       return { status: 'edited', lines: nextLines };
@@ -245,6 +256,7 @@ router.post('/issues/:id/stages/audio/lines/:lineIdx/render', asyncHandler(async
     voiceId,
     profileId: profileResolution?.profileId || undefined,
     route: 'studio',
+    expectedSpeech: line.expectedSpeech || undefined,
   })
     .catch((err) => { throw mapServiceError(err); });
   // The WAV is already on disk. The render provenance row and the stage row
@@ -268,6 +280,7 @@ router.post('/issues/:id/stages/audio/lines/:lineIdx/render', asyncHandler(async
       ...line,
       audioJobId: null,
       audioFilename: synthResult.filename,
+      verification: synthResult.verification,
     };
     return issuesSvc.updateStage(req.params.id, 'audio', {
       status: 'edited',
@@ -278,6 +291,7 @@ router.post('/issues/:id/stages/audio/lines/:lineIdx/render', asyncHandler(async
   res.json({
     issue: updatedIssue, stage, lineIdx,
     filename: synthResult.filename,
+    verification: synthResult.verification,
     engine: synthResult.engine,
     voiceId: synthResult.voiceId || voiceId,
     profileId: synthResult.profileId,

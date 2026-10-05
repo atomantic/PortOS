@@ -245,6 +245,7 @@ export async function narrateProse({ text, voiceId, signal } = {}) {
       end: seg.end,
       filename: result.filename,
       durationMs: result.durationMs,
+      verification: result.verification,
       readability: analyzeSentenceReadability(seg.text),
     });
   }
