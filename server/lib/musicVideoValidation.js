@@ -509,6 +509,8 @@ const sceneLayerFields = {
   visualLayer: z.enum(MUSIC_VIDEO_VISUAL_LAYERS).optional(),
   stillMove: z.enum(MUSIC_VIDEO_STILL_MOVES).optional(),
   cardText: z.string().max(500).nullable().optional(),
+  // #10302: footage that the composition also draws code over; still counts as footage.
+  codeOverlay: z.boolean().optional(),
   cardColor: z.string().regex(/^#[0-9a-f]{6}$/i, 'card color is #rrggbb').nullable().optional(),
 };
 

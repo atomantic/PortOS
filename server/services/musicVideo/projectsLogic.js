@@ -478,6 +478,7 @@ function buildScene(input, { order }) {
     visualLayer: input.visualLayer ?? 'footage',
     stillMove: input.stillMove ?? 'hold',
     cardText: input.cardText ?? null,
+    ...(input.codeOverlay ? { codeOverlay: true } : {}),
     cardColor: input.cardColor ?? null,
     // #8977: cutaway (any image-to-video lane) unless the director asks for a
     // lip-synced performance shot, which only a source-audio provider renders.
