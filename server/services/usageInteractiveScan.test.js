@@ -109,4 +109,20 @@ describe('refreshInteractiveUsage', () => {
     const record = applied.find((c) => c.providerId === 'antigravity-cli').siblings[0];
     expect(record).toMatchObject({ source: 'estimate', tokensIn: 100, tokensOut: 50, cacheReadTokens: 100, model: 'example-agy-model' });
   });
+
+  it('bills an Antigravity conversation that history.jsonl never logged', async () => {
+    const root = join(home, '.gemini', 'antigravity-cli');
+    const logs = join(root, 'brain', 'orphan-1', '.system_generated', 'logs');
+    await mkdir(logs, { recursive: true });
+    await writeFile(join(root, 'history.jsonl'), JSON.stringify({ display: '/usage', timestamp: NOW, workspace: CWD, type: 'slash_command' }));
+    const step = (i, type, at, content) => JSON.stringify({ step_index: i, type, created_at: at, content });
+    await writeFile(join(logs, 'transcript.jsonl'), [
+      step(0, 'USER_INPUT', new Date(NOW - 2 * HOUR).toISOString(), 'u'.repeat(400)),
+      step(1, 'PLANNER_RESPONSE', new Date(NOW - 2 * HOUR + 60_000).toISOString(), 'p'.repeat(200))
+    ].join('\n'));
+
+    await refreshInteractiveUsage({ home, runsDir, providers: [AGY], now: NOW });
+    const record = applied.find((c) => c.providerId === 'antigravity-cli').siblings[0];
+    expect(record).toMatchObject({ source: 'estimate', tokensIn: 100, tokensOut: 50 });
+  });
 });
