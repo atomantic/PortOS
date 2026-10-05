@@ -1,4 +1,5 @@
 import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 /**
  * Image-to-3D model orchestration (issue #2952) — gallery-image lineage, target
  * dispatch, guarded local render, persistence, and GLB export.
@@ -281,7 +282,11 @@ async function executeRender({ id, operationId, adapter, sourcePath, caps, optio
     // includeDeleted + `deleted` guard: if the user deleted the record while the
     // render ran, complete quietly as a no-op (the GLB on disk is orphaned — full
     // kill-on-delete is tracked as a follow-up) instead of throwing NOT_FOUND.
-    const finished = await store.mutateModel(id, (current) => {
+    // The runner wrote model.glb before this commit, so the row that first names
+    // the mesh as ready takes a backup lease (#9982): a cut either follows the
+    // commit, with the mesh already on disk to copy, or precedes it, and the dumped
+    // row is still `generating` and never serves the file.
+    const finished = await withBackupAssetPublication(() => store.mutateModel(id, (current) => {
       if (current.deleted || current.generationOperationId !== operationId) return null;
       return {
         ...current,
@@ -300,7 +305,7 @@ async function executeRender({ id, operationId, adapter, sourcePath, caps, optio
           completedAt,
         }),
       };
-    }, { includeDeleted: true });
+    }, { includeDeleted: true }));
     if (finished?.status === 'ready' && !finished.deleted) noteImageTo3d('completion');
     await rmGuarded(usdzDiskPath(id), { force: true })
       .catch((err) => console.error(`❌ Image-to-3D stale USDZ cleanup failed for ${id}: ${err.message}`));
@@ -543,14 +548,19 @@ export async function saveModelUsdz(id, bytes) {
   if (!isZipArchive(bytes)) {
     throw new ServerError('Payload is not a USDZ archive', { status: 400, code: 'USDZ_INVALID' });
   }
-  await ensureDir(recordDir(id));
-  await writeFileGuarded(usdzDiskPath(id), bytes);
-  console.log(`🥽 Image-to-3D stored AR export for ${id} (${bytes.length} bytes)`);
-  return store.mutateModel(id, (current) => ({
-    ...current,
-    usdzPath: usdzUrl(id),
-    usdzGeneratedAt: new Date().toISOString(),
-  }));
+  // The export replaces model.usdz in place and the row stamps it, so the pair is
+  // one backup-admitted workflow (#9982): a cut never copies the old export beside
+  // a row that names the new one.
+  return withBackupAssetPublication(async () => {
+    await ensureDir(recordDir(id));
+    await writeFileGuarded(usdzDiskPath(id), bytes);
+    console.log(`🥽 Image-to-3D stored AR export for ${id} (${bytes.length} bytes)`);
+    return store.mutateModel(id, (current) => ({
+      ...current,
+      usdzPath: usdzUrl(id),
+      usdzGeneratedAt: new Date().toISOString(),
+    }));
+  });
 }
 
 /**

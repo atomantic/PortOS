@@ -16,7 +16,8 @@
  *   for a cut to land in. A deletion that commits the row that stops naming
  *   its bytes before it removes them belongs here too: the dump that follows a
  *   cut's file copy either sees no row, or sees one whose bytes were removed
- *   only after the copy finished.
+ *   only after the copy finished. So does a record whose bytes no row names:
+ *   the copy takes it whole or not at all, and no dumped row can dangle.
  * - `outstanding`: still changes bytes and rows outside admission.
  *
  * A snapshot claims global file-and-row consistency only when nothing is
@@ -149,6 +150,51 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     status: 'admitted',
     modules: ['services/musicVideo/autonomousService.js'],
   },
+  {
+    // A draft body replaces its .md in place and the manifest row records its new
+    // hash and segment index; a new work or version writes its .md before the
+    // row that names it. Each is one workflow, holding the lease across both.
+    id: 'writers-room-draft-bodies',
+    status: 'admitted',
+    modules: ['services/writersRoom/local.js'],
+  },
+  {
+    // Tombstone GC drops the work rows first and removes their directories after.
+    id: 'writers-room-tombstone-prune',
+    status: 'reference-only',
+    modules: ['services/writersRoom/sync.js'],
+  },
+  {
+    // Polish cycle snapshots are JSON files no row names; the revert and keep
+    // gates write the draft itself through the admitted `saveDraftBody`.
+    id: 'writers-room-polish-snapshots',
+    status: 'reference-only',
+    modules: ['services/writersRoom/polish.js'],
+  },
+  {
+    // The runner writes model.glb in place while the row still says `generating`,
+    // so only the commit that marks the mesh ready takes the lease. An AR export
+    // replaces model.usdz in place, so its file write and the row stamping it are
+    // one workflow.
+    id: 'image-to-3d-render-and-ar-export',
+    status: 'admitted',
+    modules: ['services/imageTo3d/models.js'],
+  },
+  {
+    // Deleting a model soft-deletes the row, then removes its render directory
+    // once the render has settled; the directory is never removed first.
+    id: 'image-to-3d-record-deletion',
+    status: 'reference-only',
+    modules: ['services/imageTo3d/models.js'],
+  },
+  {
+    // A rig or retarget pair is published into its own `rig/<id>` or
+    // `retarget/<id>` directory, never replaced, and verified; the row that first
+    // names it commits under the lease. A half-moved pair is named by no row.
+    id: 'rigging-published-pairs',
+    status: 'admitted',
+    modules: ['services/rigging/autoSkin.js', 'services/rigging/retarget.js'],
+  },
   // Classified by a code sweep (#9982) but still outside admission. Each entry
   // names the modules whose file-plus-record workflows are not wrapped yet, so a
   // continuation can take one and move it up. Entries are per domain, not per
@@ -190,11 +236,6 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     ],
   },
   {
-    id: 'writers-room-drafts',
-    status: 'outstanding',
-    modules: ['services/writersRoom/local.js', 'services/writersRoom/sync.js', 'services/writersRoom/polish.js'],
-  },
-  {
     // Generated HTML, package import and repair, run artifacts, and the final
     // stage whose soundtrack mux rewrites the MP4 before the history append.
     id: 'code-animation-projects',
@@ -229,11 +270,6 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
       'services/moodBoard/collage.js', 'services/moodBoard/pinterest.js', 'services/moodBoard/privatePinterest.js',
       'services/moodBoard/xPost.js', 'services/moodBoard/localize.js',
     ],
-  },
-  {
-    id: 'image-to-3d-and-rigging',
-    status: 'outstanding',
-    modules: ['services/imageTo3d/models.js', 'services/rigging/autoSkin.js', 'services/rigging/retarget.js'],
   },
   {
     // ChatGPT archive import and memory-asset deletion, YouTube ingest, and the
