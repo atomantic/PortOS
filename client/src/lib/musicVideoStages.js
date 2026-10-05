@@ -4,7 +4,7 @@
  * spend. Pure functions over the project record so the header, the progress
  * strip and the tests all read the same answer.
  */
-import { isLayeredComposition, sceneRenderReady } from './musicVideoLayers.js';
+import { isLayeredComposition, isSelfDrawnLayer, sceneRenderReady, sceneVisualLayer } from './musicVideoLayers.js';
 import {
   AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LYRICS_STEP_LABELS, AUTONOMOUS_SONG_STEP_LABELS, AUTONOMOUS_STATUS_LABELS,
 } from './musicVideoAutonomous.js';
@@ -99,10 +99,13 @@ export function projectSpend(project) {
  * What generating the rest of the board takes (#10157): scenes still missing a
  * frame or a clip, the generation limit that covers them plus a 25% review
  * allowance, and the known fal.ai price of the missing clips. A frame, or a
- * clip on a route with no quote, counts as unpriced.
+ * clip on a route with no quote, counts as unpriced. Card and code shots in a
+ * layered composition are drawn, not generated (#10297), so they need neither.
  */
 export function boardJobEstimate(project) {
-  const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
+  const layered = isLayeredComposition(project);
+  const scenes = (Array.isArray(project?.scenes) ? project.scenes : [])
+    .filter((scene) => !isSelfDrawnLayer(sceneVisualLayer(scene, { layered })));
   const settings = project?.videoSettings || {};
   const missingFrames = scenes.filter((scene) => !scene?.referenceImageId).length;
   const missingClips = scenes.filter((scene) => !scene?.videoHistoryId);

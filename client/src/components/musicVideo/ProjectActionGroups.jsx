@@ -2,7 +2,7 @@ import { useState } from 'react';
 import LlmRouteNote from './LlmRouteNote.jsx';
 import { Film, Music, Activity, Image as ImageIcon, Video, Wand2, X } from 'lucide-react';
 import { MUSCRIPTOR_MODELS } from '../../lib/muscriptorModels.js';
-import { isLayeredComposition, sceneRenderReady, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { isLayeredComposition, isSelfDrawnLayer, sceneRenderReady, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { compositionDraft, RENDER_STYLES } from './compositionDraft.js';
 import { projectServicesSummary } from '../../lib/musicVideoStages.js';
 import { batchActive, batchSummary, scenesWaitingForFrame, videoBatchPreview, videosButtonLabel } from '../../lib/musicVideoBatchPlan.js';
@@ -146,7 +146,7 @@ export function GenerationActions({ project, videoSettings, sceneMedia, onEditSe
   const mode = project.composition?.mode || 'concat';
   const layered = isLayeredComposition(project);
   const codeMode = mode === 'code' || mode === 'eidoverse';
-  const frameScenes = scenes.filter((scene) => !['card', 'code'].includes(sceneVisualLayer(scene, { layered })));
+  const frameScenes = scenes.filter((scene) => !isSelfDrawnLayer(sceneVisualLayer(scene, { layered })));
   const footageScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) === 'footage');
   const referenceFrameCount = frameScenes.filter((scene) => scene.referenceImageId).length;
   const renderableSceneCount = footageScenes.filter((scene) => scene.videoHistoryId).length;

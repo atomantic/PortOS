@@ -110,7 +110,8 @@ export async function resolveSceneMedia(project, { history = [], probe = async (
   for (const scene of Array.isArray(project?.scenes) ? project.scenes : []) {
     if (!scene?.sceneId) continue;
     const layer = documentSceneVisualLayer(project, scene, { generated: strictLayers });
-    if (strictLayers && layer === 'card') continue;
+    // A code shot (#10297) is drawn by the document itself; it is handed no media.
+    if (layer === 'code' || (strictLayers && layer === 'card')) continue;
     const entry = scene.videoHistoryId ? byId.get(scene.videoHistoryId) : null;
     const videoPath = entry?.filename ? safeUnder(PATHS.videos, entry.filename) : null;
     if ((!strictLayers || layer === 'footage') && videoPath && existsSync(videoPath)) {

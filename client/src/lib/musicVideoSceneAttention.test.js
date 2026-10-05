@@ -20,6 +20,11 @@ describe('sceneAttention', () => {
     expect(sceneAttention({ sceneId: 's', visualLayer: 'card', startSec: 1, endSec: 3 }, { layered: true })).toEqual([]);
   });
 
+  it('never asks a code shot for a frame or clip (#10297)', () => {
+    expect(sceneAttention({ sceneId: 's', visualLayer: 'code', startSec: 1, endSec: 3 }, { layered: true })).toEqual([]);
+    expect(sceneAttention({ sceneId: 's', visualLayer: 'code' }, { layered: true })).toEqual(['no-span']);
+  });
+
   it('flags a non-looping beat-aligned shot longer than its measured clip', () => {
     const shot = { ...ready, loop: false, beatAligned: true, endSec: 10 };
     expect(sceneAttention(shot, { clipSec: 5 })).toEqual(['under-covered']);

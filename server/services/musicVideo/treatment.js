@@ -56,6 +56,7 @@ import {
   MUSIC_VIDEO_PROOF_STATUSES as PROOF_STATUSES,
 } from '../../lib/musicVideoValidation.js';
 import { performanceCapability } from '../../lib/musicVideoShotTiming.js';
+import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 import { normalizeComposition } from './composition.js';
 import { hookKey, hookLines, cueWordOnsets } from './hookTypography.js';
 
@@ -622,9 +623,10 @@ const summarizePlans = (plans) => PLAN_PRIORITY.find((p) => Object.values(plans)
  *   - a performance direction becomes `shotMode: 'performance'` only when the
  *     project's backend has a verified source-audio lip-sync lane;
  *   - a code-2d route becomes a title card carrying the shot's first sung line
- *     (never invented text), or a pushed-in still when there is no line to set.
+ *     (never invented text); with no line to set it becomes a pushed-in still,
+ *     or a code shot (#10297) when the media mode allows no images.
  */
-function renderFieldPatch(scene, direction, { lipSyncAvailable }) {
+function renderFieldPatch(scene, direction, { lipSyncAvailable, imagesAllowed = true }) {
   const defaultLayer = (scene.visualLayer ?? 'footage') === 'footage';
   const defaultMode = (scene.shotMode ?? 'cutaway') === 'cutaway';
   if (!defaultLayer || !defaultMode) return {};
@@ -636,6 +638,7 @@ function renderFieldPatch(scene, direction, { lipSyncAvailable }) {
     ? scene.lyricText.split(' / ')[0].trim().slice(0, 500)
     : '';
   if (line) return { visualLayer: 'card', ...(isNonBlankStr(scene.cardText) ? {} : { cardText: line }) };
+  if (!imagesAllowed) return { visualLayer: 'code' };
   return { visualLayer: 'still', ...((scene.stillMove ?? 'hold') === 'hold' ? { stillMove: 'push' } : {}) };
 }
 
@@ -696,6 +699,7 @@ export function buildApplyPreview(project) {
   const mediumPlan = summarizeMusicVideoMediumPlan(project, treatment.shotDirections);
   const scenesById = new Map((project.scenes || []).map((s) => [s.sceneId, s]));
   const lipSyncAvailable = !!performanceCapability(project.videoSettings?.backend || null);
+  const imagesAllowed = musicVideoAllowsMedia(project, 'image');
   const planned = [];
   const directed = new Set();
   const scenes = [];
@@ -710,7 +714,7 @@ export function buildApplyPreview(project) {
     const fields = promptFieldPlans(scene, direction);
     // This slice only plans code-first execution: never reinterpret procedural
     // direction as legacy footage/card selection or switch a render mode.
-    const renderFields = mediumPlan.strategy === 'code-first' ? {} : renderFieldPatch(scene, direction, { lipSyncAvailable });
+    const renderFields = mediumPlan.strategy === 'code-first' ? {} : renderFieldPatch(scene, direction, { lipSyncAvailable, imagesAllowed });
     planned.push({ ...scene, ...renderFields });
     scenes.push({
       sceneId: scene.sceneId,

@@ -190,6 +190,7 @@ export default function BoardStage({ board }) {
               onImportTake={(target) => board.setPickerTarget({ type: 'take', sceneId: target.sceneId })}
               onImportClipTake={(target) => board.setPickerTarget({ type: 'clip', sceneId: target.sceneId })}
               layered={layered}
+              documentComposition={project.composition?.mode === 'document'}
             />
           ))}
         </div>

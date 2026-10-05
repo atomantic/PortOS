@@ -172,7 +172,7 @@ export function planMusicVideoMedia(project, directions) {
     }
     let medium = d.medium;
     let rationale = d.mediumRationale;
-    const manualLayer = scene?.visualLayer === 'still' || scene?.visualLayer === 'card' || scene?.visualLayer === 'code';
+    const manualLayer = ['still', 'card', 'code'].includes(scene?.visualLayer);
     if (manualLayer) {
       medium = scene.visualLayer === 'still' ? 'still' : 'procedural';
       rationale = 'Retain the director-selected visual layer.';

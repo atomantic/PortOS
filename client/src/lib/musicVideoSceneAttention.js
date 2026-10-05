@@ -8,7 +8,7 @@
  */
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
 import { currentPlateEvidence } from '../../../server/lib/musicVideoPlateEvidence.js';
-import { sceneVisualLayer, sceneHasAuthoredSpan } from './musicVideoLayers.js';
+import { isSelfDrawnLayer, sceneVisualLayer, sceneHasAuthoredSpan } from './musicVideoLayers.js';
 import { performanceBlockedReason, performanceCapability, planPerformanceWindow, isPerformanceScene } from './musicVideoShotTiming.js';
 import { sceneHasPendingDecision, sceneTakeList } from './musicVideoTakes.js';
 
@@ -55,7 +55,7 @@ export function sceneAttention(scene, ctx = {}) {
   const { layered = false, footageOptional = false, lipSyncBackend = '', songDurationSec = null, clipSec = null, failed = {} } = ctx;
   const layer = sceneVisualLayer(scene, { layered });
   const codes = [];
-  if (layer !== 'card' && layer !== 'code' && !scene.referenceImageId) codes.push('missing-frame');
+  if (!isSelfDrawnLayer(layer) && !scene.referenceImageId) codes.push('missing-frame');
   if (layer === 'footage' && !footageOptional && !scene.videoHistoryId) codes.push('missing-clip');
   if (layer !== 'footage' && !sceneHasAuthoredSpan(scene)) codes.push('no-span');
   if (layer === 'footage' && scene.loop === false && scene.beatAligned && clipSec != null

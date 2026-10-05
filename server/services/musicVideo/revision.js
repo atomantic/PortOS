@@ -154,7 +154,7 @@ export function startRevisionOnProject(project, excerptId, { sceneIds } = {}, no
     const scene = scenesById.get(section.sceneId);
     if (!scene) continue; // deleted since the draft — nothing left to keep or revise
     const rejected = rejectIds.has(section.sceneId);
-    if (!codeFirst(project) && section.layer === 'card') {
+    if (!codeFirst(project) && (section.layer === 'card' || section.layer === 'code')) {
       if (rejected) skippedSceneIds.push(section.sceneId);
       continue;
     }

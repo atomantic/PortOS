@@ -268,6 +268,17 @@ describe('boardJobEstimate', () => {
     expect(boardJobEstimate({ scenes })).toMatchObject({ jobs: 3, unpriced: 3, knownUsd: 0, suggestedMaxGenerations: 4 });
     expect(boardJobEstimate({ scenes: [scene()] })).toMatchObject({ jobs: 0, suggestedMaxGenerations: 1 });
   });
+
+  it('counts no generation for card or code shots in a layered composition (#10297)', () => {
+    const scenes = [
+      scene({ sceneId: 'a', visualLayer: 'code', referenceImageId: null, videoHistoryId: null }),
+      scene({ sceneId: 'b', visualLayer: 'card', referenceImageId: null, videoHistoryId: null }),
+      scene({ sceneId: 'c', referenceImageId: null, videoHistoryId: null }),
+    ];
+    expect(boardJobEstimate({ scenes, composition: { mode: 'composed' } })).toMatchObject({ jobs: 2 });
+    // A plain render plays footage for every shot, so all three still need generating.
+    expect(boardJobEstimate({ scenes })).toMatchObject({ jobs: 6 });
+  });
 });
 
 describe('stage route param', () => {
