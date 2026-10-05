@@ -151,6 +151,9 @@ export async function sweepStrayTempRoots(prefix) {
  * fixture, and `await drain()` in teardown BEFORE removing it. A body that
  * failed after cancellation (vitest is no longer listening) is rethrown from
  * `drain()` rather than dropped; a failure vitest already reported is not.
+ * A test TIMEOUT leaves its body running the same way, so a suite whose cases
+ * share external state also awaits `drain()` in `beforeEach` (#10272,
+ * `services/backup.db.test.js`).
  *
  *     const owned = ownTestBodies(vitestIt);
  *     const it = owned.it;
