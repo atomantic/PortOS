@@ -6,7 +6,6 @@ import { createMutex } from '../lib/asyncMutex.js';
 import {
   UNKNOWN_MODEL,
   decodeGrokSessionDir,
-  parseAgyHistory,
   parseAgyTranscript,
   parseGrokTurns,
   parseJsonLines,
@@ -16,6 +15,7 @@ import {
   WINDOW_SLACK_MS,
   agyEstimatedBuckets,
   cwdMatches,
+  listAgyConversations,
   listSubdirs,
   recordsFromMeasured,
   resolveFamilyProvider
@@ -109,6 +109,9 @@ async function loadRunWindows(runsDir, from, now) {
 
 const windowsFor = (byCwd, sessionCwd) => {
   const out = [];
+  // Unknown cwd (an agy conversation history never logged): any PortOS run
+  // window may own it, so subtract them all rather than risk double-billing.
+  if (!sessionCwd) return [...byCwd.values()].flat();
   for (const [workspacePath, windows] of byCwd) {
     if (cwdMatches(sessionCwd, workspacePath)) out.push(...windows);
   }
@@ -134,8 +137,7 @@ async function listSessions(family, home, from) {
     }
   } else {
     const root = join(home, '.gemini', 'antigravity-cli');
-    const historyText = await tryReadFile(join(root, 'history.jsonl'));
-    for (const conversation of historyText ? parseAgyHistory(historyText) : []) {
+    for (const conversation of await listAgyConversations(root)) {
       await add(conversation.workspace, join(root, 'brain', conversation.conversationId, '.system_generated', 'logs', 'transcript.jsonl'));
     }
   }
