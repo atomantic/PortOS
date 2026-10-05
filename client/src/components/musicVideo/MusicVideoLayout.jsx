@@ -128,7 +128,7 @@ export default function MusicVideoLayout({
     <div ref={rootRef} className={`space-y-3 ${dockVisible ? 'max-lg:pb-40' : 'max-md:pb-20'}`}>
       <header
         ref={headerRef}
-        className="sticky top-[calc(env(safe-area-inset-top)-1rem)] z-30 -mx-4 space-y-2 border-b border-port-border bg-port-bg px-4 pt-2 md:top-[calc(env(safe-area-inset-top)-1.5rem)] md:-mx-6 md:px-6"
+        className="sticky top-[calc(env(safe-area-inset-top)-1rem)] z-30 -mx-4 -mt-4 space-y-2 border-b border-port-border bg-port-bg px-4 pt-2 md:top-[calc(env(safe-area-inset-top)-1.5rem)] md:-mx-6 md:-mt-6 md:px-6"
       >
         <div className="flex min-w-0 items-center gap-3">
           <h2 className="min-w-0 flex-1 truncate text-lg font-semibold" title={project.name}>{project.name}</h2>
