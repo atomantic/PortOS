@@ -379,3 +379,30 @@ describe('runCliProviderPrompt — credential-bootstrap process-group teardown',
     expect(alive).toBe(false);
   });
 });
+
+describe('runCliProviderPrompt — synchronous spawn failure (#10273)', () => {
+  it('resolves a sanitized E2BIG failure for an argv-delivered oversized prompt, releasing prompt resources', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = await mkdtemp(join(tmpdir(), 'portos-e2big-'));
+    try {
+      // Antigravity delivers the prompt as the --print argv VALUE (no stdin).
+      const command = join(dir, 'agy');
+      await writeFile(command, '#!/bin/sh\necho ok\n', { mode: 0o755 });
+      const provider = cli('agy', { command });
+      const secret = 'SECRET-PROMPT-BODY';
+      const result = await runCliProviderPrompt({ provider, prompt: secret + 'x'.repeat(3_000_000), cwd: dir, timeoutMs: 10000 });
+      expect(result).toMatchObject({ code: 'E2BIG' });
+      expect(result.error).toMatch(/too large/i);
+      expect(JSON.stringify(result)).not.toContain(secret);
+      expect(result.error.length).toBeLessThan(300);
+
+      // Negative control: a normal prompt through the same provider launches.
+      const ok = await runCliProviderPrompt({ provider, prompt: 'hello', cwd: dir, timeoutMs: 10000 });
+      expect(ok).toMatchObject({ text: 'ok', exitCode: 0, partial: false });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
