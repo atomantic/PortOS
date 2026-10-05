@@ -689,6 +689,30 @@ describe('directed planner', () => {
     expect(project.scenes[5].framePrompt).toContain('mouth fully visible');
   });
 
+  it('plans a code-only brief as code shots with short intents and no generation prose', async () => {
+    const project = { ...directedProject(), productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } };
+    const { project: planned } = await runDirected(project);
+    const code = planned.scenes.filter((s) => s.visualLayer === 'code');
+    expect(code.length).toBeGreaterThan(0);
+    expect(planned.scenes.some((s) => s.visualLayer === 'footage')).toBe(false);
+    for (const scene of code) {
+      expect(scene.shotMode).toBe('cutaway');
+      expect(scene.framePrompt).toBeNull();
+      expect(scene.visualIntent.length).toBeLessThanOrEqual(120);
+    }
+    expect(planned.composition.mode).toBe('composed');
+  });
+
+  it('keeps footage and flags a code overlay when the brief still allows generated video', async () => {
+    const project = { ...directedProject(), productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 60 } };
+    const { project: planned } = await runDirected(project);
+    const footage = planned.scenes.filter((s) => s.visualLayer === 'footage');
+    expect(footage.length).toBeGreaterThan(0);
+    expect(footage.every((s) => s.codeOverlay === true)).toBe(true);
+    expect(planned.scenes.filter((s) => s.visualLayer === 'code')).toHaveLength(0);
+    expect(planned.scenes.filter((s) => s.visualLayer === 'card').every((s) => !s.codeOverlay)).toBe(true);
+  });
+
   it('leaves skipped-stage projects on the legacy scene path even with retained direction', async () => {
     const project = directedProject();
     project.castAndSets.status = 'skipped';

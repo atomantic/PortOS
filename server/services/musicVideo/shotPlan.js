@@ -25,6 +25,7 @@
  */
 
 import { performanceCapability } from '../../lib/musicVideoShotTiming.js';
+import { normalizeMusicVideoProductionPolicy } from '../../lib/musicVideoMediumPlan.js';
 import { deliveryNotesWithin } from './lyricMarkers.js';
 import { snapSectionsToGrid } from './audioAnalysis.js';
 
@@ -268,8 +269,34 @@ export function planShots(sections, {
   return { shots, pacing: resolved };
 }
 
+const CODE_INTENT_MAX = 120;
+const codeIntent = (shot) => (shot.visualIntent || shot.lyricText || shot.sectionLabel || 'Code-drawn beat')
+  .replace(/\s+/g, ' ').trim().slice(0, CODE_INTENT_MAX);
+
+/**
+ * A code-first brief draws its picture in code (#10302): with no generated
+ * video allowed, every footage shot becomes a code shot with a short intent
+ * (no generation prose); with generated video allowed, footage shots stay
+ * footage and carry `codeOverlay` so the composition layers code over them.
+ * Cards and stills are left alone.
+ */
+function applyCodePolicy(shots, project) {
+  const policy = normalizeMusicVideoProductionPolicy(project.productionPolicy);
+  if (policy.strategy !== 'code-first') return shots;
+  const codeOnly = policy.maxGeneratedVideoPercent <= 0;
+  return shots.map((shot) => {
+    if ((shot.visualLayer ?? 'footage') !== 'footage') return shot;
+    if (!codeOnly) return { ...shot, codeOverlay: true };
+    return { ...shot, visualLayer: 'code', shotMode: 'cutaway', performanceCandidate: false, visualIntent: codeIntent(shot) };
+  });
+}
+
 /** Enrich an already-tiled plan; never move a cut to accommodate direction. */
 export function directShots(shots, project) {
+  return applyCodePolicy(directShotsByCast(shots, project), project);
+}
+
+function directShotsByCast(shots, project) {
   const direction = project.castAndSets?.status === 'skipped' ? null : project.castAndSets?.direction;
   const cues = project.lyricCues || [];
   const markers = project.lyricMarkers || [];

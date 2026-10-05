@@ -84,10 +84,12 @@ function sceneInputsFromShots(shots) {
       loop: false,
       lyricText: shot.lyricText,
       visualIntent: shot.visualIntent,
+      ...(shot.codeOverlay ? { codeOverlay: true } : {}),
       ...(shot.visualLayer ? {
         visualLayer: shot.visualLayer, shotMode: shot.shotMode,
         ...(shot.cardText !== undefined ? { cardText: shot.cardText } : {}),
-        ...directedPrompts(shot),
+        // A code shot is drawn by the composition: it carries no generation prose.
+        ...(shot.visualLayer === 'code' ? {} : directedPrompts(shot)),
       } : {}),
     };
   });
@@ -335,6 +337,7 @@ export async function planProject(id, { seedPrompts = true, providerId, model, e
       promptsSeeded = true;
       for (const [idx, fields] of seeded) {
         if (!sceneInputs[idx]) continue;
+        if (shots[idx].visualLayer === 'code') continue;
         if (shots[idx].visualLayer) Object.assign(sceneInputs[idx], directedPrompts(shots[idx], fields));
         else {
           if (fields.framePrompt) sceneInputs[idx].framePrompt = fields.framePrompt;
@@ -353,7 +356,7 @@ export async function planProject(id, { seedPrompts = true, providerId, model, e
   // flight would otherwise be silently dropped from this response and
   // visually reverted by the client's replaceProject) and a redundant
   // second getProject round trip.
-  const hasCards = sceneInputs.some((s) => s.visualLayer === 'card');
+  const hasCards = sceneInputs.some((s) => s.visualLayer === 'card' || s.visualLayer === 'code');
   // Persist card scenes and the mode that renders them in the same transaction.
   // Read the current composition under the lock so concurrent edits survive.
   const { project: persisted, scenes } = await persistPlan(id, sceneInputs, { hasCards, replace: mode === 'replace' });
