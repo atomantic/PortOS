@@ -5,6 +5,7 @@ import {
 import { HeartPulse, Plus, X, Check, TrendingUp, TrendingDown } from 'lucide-react';
 import * as api from '../../services/api';
 import BrailleSpinner from '../BrailleSpinner';
+import LoadFailureNotice from './LoadFailureNotice';
 import useChartColors from '../../hooks/useChartColors.js';
 import { formatMonthDay } from '../../utils/formatters.js';
 import { classifyBP, bpLongevityImpact, BP_CATEGORIES } from './bpClassification';
@@ -26,13 +27,15 @@ function parseNum(v) {
 export default function BloodPressureCard() {
   const chartColors = useChartColors();
   const [readings, setReadings] = useState([]);
+  const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
 
   const fetchData = useCallback(async () => {
-    const data = await api.getBloodPressure().catch(() => ({ readings: [] }));
+    const data = await api.getBloodPressure({ silent: true }).catch(() => null);
+    setFailed(data === null);
     setReadings(data?.readings || []);
     setLoading(false);
   }, []);
@@ -155,6 +158,8 @@ export default function BloodPressureCard() {
 
       {loading ? (
         <div className="flex justify-center py-8"><BrailleSpinner text="Loading blood pressure" /></div>
+      ) : failed ? (
+        <LoadFailureNotice message="Could not load blood pressure. Retry." onRetry={fetchData} />
       ) : readings.length === 0 ? (
         <p className="text-gray-500 text-sm">
           No blood pressure data yet. Add a manual reading, or enable MortalLoom iCloud sync to share readings with the mobile app.

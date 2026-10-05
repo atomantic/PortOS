@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import toast from '../../ui/Toast';
 import {Upload, Download, Trash2, Search, Dna, AlertTriangle, Save} from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
+import LoadFailureNotice from '../LoadFailureNotice';
 import socket from '../../../services/socket';
 import { uuidv4 } from '../../../lib/uuid';
 // Native ZIP parser — replaces fflate's unzipSync/strFromU8
@@ -117,6 +118,7 @@ const SEVERITY_LABELS = {
 
 export default function GenomeTab() {
   const [summary, setSummary] = useState(null);
+  const [summaryFailed, setSummaryFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [scanning, setScanning] = useState(false);
@@ -151,9 +153,10 @@ export default function GenomeTab() {
 
   const fetchSummary = useCallback(async () => {
     const [data, cvStatus] = await Promise.all([
-      api.getGenomeSummary().catch(() => ({ uploaded: false })),
+      api.getGenomeSummary({ silent: true }).catch(() => null),
       api.getClinvarStatus().catch(() => ({ synced: false }))
     ]);
+    setSummaryFailed(data === null);
     setSummary(data);
     setClinvarStatus(cvStatus);
     setLoading(false);
@@ -366,6 +369,16 @@ export default function GenomeTab() {
       <div className="flex items-center justify-center py-20">
         <BrailleSpinner text="Loading" />
       </div>
+    );
+  }
+
+  // A failed read is not "no file stored" — never offer an upload over it.
+  if (summaryFailed) {
+    return (
+      <LoadFailureNotice
+        message="Could not load genome data. Retry before uploading — a failed load does not mean no file is stored."
+        onRetry={fetchSummary}
+      />
     );
   }
 

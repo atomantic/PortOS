@@ -1,7 +1,7 @@
 import { request } from './apiCore.js';
 
 // MeatSpace - Genome
-export const getGenomeSummary = () => request('/meatspace/genome');
+export const getGenomeSummary = (options = {}) => request('/meatspace/genome', options);
 export const uploadGenomeFile = (content, filename) => request('/meatspace/genome/upload', {
   method: 'POST',
   body: JSON.stringify({ content, filename })
@@ -57,7 +57,7 @@ export const updateMeatspaceConfig = (data) => request('/meatspace/config', {
   method: 'PUT',
   body: JSON.stringify(data)
 });
-export const getMeatspaceBirthDate = () => request('/meatspace/birth-date');
+export const getMeatspaceBirthDate = (options = {}) => request('/meatspace/birth-date', options);
 export const setMeatspaceBirthDate = (birthDate) => request('/meatspace/birth-date', {
   method: 'PUT',
   body: JSON.stringify({ birthDate })
@@ -65,11 +65,11 @@ export const setMeatspaceBirthDate = (birthDate) => request('/meatspace/birth-da
 export const getDeathClock = () => request('/meatspace/death-clock');
 export const getMeatspaceLoggingStats = (options = {}) => request('/meatspace/logging-stats', options);
 export const getAlcoholSummary = () => request('/meatspace/alcohol');
-export const getDailyAlcohol = (from, to) => {
+export const getDailyAlcohol = (from, to, options = {}) => {
   const params = new URLSearchParams();
   if (from) params.set('from', from);
   if (to) params.set('to', to);
-  return request(`/meatspace/alcohol/daily?${params}`);
+  return request(`/meatspace/alcohol/daily?${params}`, options);
 };
 export const logAlcoholDrink = (data) => request('/meatspace/alcohol/log', {
   method: 'POST',
@@ -97,11 +97,11 @@ export const removeCustomDrink = (index) => request(`/meatspace/alcohol/custom-d
   method: 'DELETE'
 });
 export const getNicotineSummary = () => request('/meatspace/nicotine');
-export const getDailyNicotine = (from, to) => {
+export const getDailyNicotine = (from, to, options = {}) => {
   const params = new URLSearchParams();
   if (from) params.set('from', from);
   if (to) params.set('to', to);
-  return request(`/meatspace/nicotine/daily?${params}`);
+  return request(`/meatspace/nicotine/daily?${params}`, options);
 };
 export const logNicotine = (data) => request('/meatspace/nicotine/log', {
   method: 'POST',
@@ -128,16 +128,16 @@ export const updateCustomNicotineProduct = (index, data, options = {}) => reques
 export const removeCustomNicotineProduct = (index) => request(`/meatspace/nicotine/custom-products/${index}`, {
   method: 'DELETE'
 });
-export const getBloodTests = () => request('/meatspace/blood');
-export const getBodyHistory = () => request('/meatspace/body');
-export const getBloodPressure = () => request('/meatspace/blood-pressure');
+export const getBloodTests = (options = {}) => request('/meatspace/blood', options);
+export const getBodyHistory = (options = {}) => request('/meatspace/body', options);
+export const getBloodPressure = (options = {}) => request('/meatspace/blood-pressure', options);
 export const addBloodPressure = (data) => request('/meatspace/blood-pressure', {
   method: 'POST',
   body: JSON.stringify(data)
 });
-export const getWorkouts = () => request('/meatspace/workouts');
-export const getEpigeneticTests = () => request('/meatspace/epigenetic');
-export const getEyeExams = () => request('/meatspace/eyes');
+export const getWorkouts = (options = {}) => request('/meatspace/workouts', options);
+export const getEpigeneticTests = (options = {}) => request('/meatspace/epigenetic', options);
+export const getEyeExams = (options = {}) => request('/meatspace/eyes', options);
 export const addEyeExam = (data) => request('/meatspace/eyes', {
   method: 'POST',
   body: JSON.stringify(data)
