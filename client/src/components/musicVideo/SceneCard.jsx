@@ -136,7 +136,12 @@ export default function SceneCard({
   // #10152: what needs the director's attention, visible without opening the card.
   const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec, failed: failedScenes || {} });
   const generatingLane = generatingFrame && generatingVideo ? 'Frame + clip' : generatingFrame ? 'Frame' : generatingVideo ? 'Clip' : null;
+  // #10154: the server-persisted failure of the last render, shown until a
+  // retry is in flight (or lands a take, which clears it server-side).
+  const failure = scene.lastFailure && !(scene.lastFailure.lane === 'video' ? generatingVideo : generatingFrame)
+    ? scene.lastFailure : null;
   return (
+    <div className="min-w-0">
     <details
       ref={detailsRef}
       id={`scene-${scene.sceneId}`}
@@ -144,7 +149,7 @@ export default function SceneCard({
       onToggle={(e) => {
         onToggleExpand?.(scene.sceneId, e.currentTarget.open);
       }}
-      className="group min-w-0 rounded-lg border border-port-border bg-port-card"
+      className="group rounded-lg border border-port-border bg-port-card"
     >
       <summary
         onClick={() => onSeek?.(scene)}
@@ -479,5 +484,19 @@ export default function SceneCard({
           onOpenPreview={onOpenPreview} />
       </div>
     </details>
+    {failure && (
+      <div className="mt-1 flex items-start gap-2 rounded border border-port-error/40 bg-port-error/10 px-2 py-1 text-xs text-port-error">
+        <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
+        <span className="min-w-0 flex-1 break-words">
+          {failure.lane === 'video' ? 'Video' : 'Frame'} failed: {failure.error}
+        </span>
+        <button type="button"
+          onClick={() => (failure.lane === 'video' ? onGenerateVideo?.(scene) : onGenerateFrame?.(scene))}
+          className="inline-flex min-h-[44px] shrink-0 items-center px-1 font-medium underline sm:min-h-0">
+          Retry
+        </button>
+      </div>
+    )}
+    </div>
   );
 }

@@ -55,6 +55,7 @@ describe('music-video scene completion hooks → takes', () => {
   const capture = (event) => (data) => emitted.push({ event, ...data });
   const onImage = capture('scene-image');
   const onVideo = capture('scene-video');
+  const onFailure = capture('scene-failure');
   let project;
   let scene;
 
@@ -67,6 +68,7 @@ describe('music-video scene completion hooks → takes', () => {
     emitted = [];
     musicVideoEvents.on('scene-image', onImage);
     musicVideoEvents.on('scene-video', onVideo);
+    musicVideoEvents.on('scene-failure', onFailure);
     project = await projects.createProject({ name: 'Example Video' });
     scene = await projects.addProjectScene(project.id, { prompt: 'a lighthouse at dusk' });
   });
@@ -76,6 +78,7 @@ describe('music-video scene completion hooks → takes', () => {
     videoHook.__testing.reset();
     musicVideoEvents.off('scene-image', onImage);
     musicVideoEvents.off('scene-video', onVideo);
+    musicVideoEvents.off('scene-failure', onFailure);
   });
 
   afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
@@ -175,5 +178,61 @@ describe('music-video scene completion hooks → takes', () => {
     expect(tombstone.deleted).toBe(true);
     expect(tombstone.scenes[0].takes.map((t) => t.assetId)).toEqual(['kept.png']);
     expect(emitted).toHaveLength(1);
+  });
+
+  // #10154 — a failed render is persisted on the scene so the board can say
+  // which scene failed and why (including after a reload), and a landed take
+  // for the same lane retires it.
+  describe('scene lastFailure (#10154)', () => {
+    it('records a failed frame and clip render on the scene and announces it', async () => {
+      mediaJobEvents.emit('failed', { ...imageJob(project.id, scene.sceneId, 'x.png'), status: 'failed', error: 'CUDA out of memory\n  at step 3' });
+      await waitFor(() => emitted.some((e) => e.event === 'scene-failure'));
+      let stored = await sceneOf(project.id, scene.sceneId);
+      expect(stored.lastFailure).toMatchObject({ lane: 'image', error: 'CUDA out of memory at step 3' });
+      expect(typeof stored.lastFailure.at).toBe('string');
+      expect(emitted.find((e) => e.event === 'scene-failure')).toMatchObject({ projectId: project.id, sceneId: scene.sceneId, lastFailure: stored.lastFailure });
+
+      mediaJobEvents.emit('failed', { ...videoJob(project.id, scene.sceneId, 'clip-x'), status: 'failed', error: 'provider timed out' });
+      await waitFor(async () => (await sceneOf(project.id, scene.sceneId)).lastFailure?.lane === 'video');
+      stored = await sceneOf(project.id, scene.sceneId);
+      expect(stored.lastFailure).toMatchObject({ lane: 'video', error: 'provider timed out' });
+    });
+
+    it('does not record a cancel as a failure', async () => {
+      mediaJobEvents.emit('canceled', { ...imageJob(project.id, scene.sceneId, 'x.png'), status: 'canceled', error: 'Canceled' });
+      // A later failure for the surviving scene proves the cancel was processed first.
+      const other = await projects.addProjectScene(project.id, { prompt: 'second' });
+      mediaJobEvents.emit('failed', { ...imageJob(project.id, other.sceneId, 'y.png'), status: 'failed', error: 'boom' });
+      await waitFor(() => emitted.some((e) => e.event === 'scene-failure'));
+      expect((await sceneOf(project.id, scene.sceneId)).lastFailure).toBeUndefined();
+      expect((await sceneOf(project.id, other.sceneId)).lastFailure).toMatchObject({ error: 'boom' });
+    });
+
+    it('a landed take for the failed lane clears it; the other lane keeps it', async () => {
+      mediaJobEvents.emit('failed', { ...videoJob(project.id, scene.sceneId, 'clip-x'), status: 'failed', error: 'clip broke' });
+      await waitFor(async () => (await sceneOf(project.id, scene.sceneId)).lastFailure?.lane === 'video');
+
+      mediaJobEvents.emit('completed', imageJob(project.id, scene.sceneId, 'frame.png'));
+      await waitFor(() => emitted.some((e) => e.event === 'scene-image'));
+      expect((await sceneOf(project.id, scene.sceneId)).lastFailure).toMatchObject({ lane: 'video' });
+      expect(emitted.find((e) => e.event === 'scene-image').lastFailure).toMatchObject({ lane: 'video' });
+
+      await projects.updateScene(project.id, scene.sceneId, { referenceImageId: 'frame.png' });
+      mediaJobEvents.emit('completed', videoJob(project.id, scene.sceneId, 'clip-ok'));
+      await waitFor(() => emitted.some((e) => e.event === 'scene-video'));
+      expect((await sceneOf(project.id, scene.sceneId)).lastFailure).toBeUndefined();
+      expect(emitted.find((e) => e.event === 'scene-video').lastFailure).toBeNull();
+    });
+
+    it('a failure for a deleted scene is dropped without resurrecting it', async () => {
+      const other = await projects.addProjectScene(project.id, { prompt: 'second' });
+      await projects.deleteScene(project.id, scene.sceneId);
+      mediaJobEvents.emit('failed', { ...imageJob(project.id, scene.sceneId, 'late.png'), status: 'failed', error: 'late' });
+      mediaJobEvents.emit('failed', { ...imageJob(project.id, other.sceneId, 'kept.png'), status: 'failed', error: 'kept' });
+      await waitFor(() => emitted.some((e) => e.event === 'scene-failure'));
+      const stored = await projects.getProject(project.id);
+      expect(stored.scenes.map((s) => s.sceneId)).toEqual([other.sceneId]);
+      expect(emitted.filter((e) => e.event === 'scene-failure')).toHaveLength(1);
+    });
   });
 });

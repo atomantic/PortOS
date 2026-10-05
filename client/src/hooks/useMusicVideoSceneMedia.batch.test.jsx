@@ -12,7 +12,10 @@ vi.mock('../services/socket', () => ({
 const generateVideo = vi.fn();
 vi.mock('../services/apiImageVideo.js', () => ({ generateVideo: (...a) => generateVideo(...a) }));
 vi.mock('../services/apiSystem.js', () => ({ generateImage: vi.fn() }));
-vi.mock('../services/apiMusicVideo.js', () => ({ addMusicVideoSceneTake: vi.fn() }));
+vi.mock('../services/apiMusicVideo.js', () => ({
+  addMusicVideoSceneTake: vi.fn(),
+  getMusicVideoSceneJobs: vi.fn(async () => ({ jobs: [] })),
+}));
 const cancelMediaJob = vi.fn(() => Promise.resolve({}));
 vi.mock('../services/apiMediaJobs', () => ({ getMediaJob: vi.fn(), cancelMediaJob: (...a) => cancelMediaJob(...a) }));
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));

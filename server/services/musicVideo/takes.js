@@ -35,6 +35,9 @@ export const TAKE_SLOT = Object.freeze({ image: 'referenceImageId', video: 'vide
 // candidate; a selected take is never pruned.
 export const MAX_SCENE_TAKES = 60;
 
+// A recorded failure reason is a one-line chip, not a log: bound it.
+export const MAX_FAILURE_ERROR_CHARS = 300;
+
 // Optional provenance text: bounded, and null (not '') when absent.
 const clip = (v, max) => (isNonBlankStr(v) ? trimTo(v, max) : null);
 
@@ -139,7 +142,30 @@ function appendToScene(scene, inputs, now) {
     if (!isNonBlankStr(next[field]) && take.status !== 'rejected' && take.use !== 'motion-reference' && !musicVideoTakeChanges({ scenes: [scene] }, scene, take).length) next[field] = take.assetId;
   }
   next.takes = pruneTakes(takes, next);
+  // A take landing for the lane a failure was recorded against is the retry
+  // succeeding — drop the "failed" chip (#10154).
+  if (next.lastFailure && appended.some((t) => t.kind === next.lastFailure.lane)) delete next.lastFailure;
   return { scene: next, appended };
+}
+
+/**
+ * Record (or, with `failure` null, clear) the last generation failure on a
+ * scene (#10154): `{ lane: 'image'|'video', error, at }`. Persisted so the
+ * board shows which scene failed and why after a reload, instead of a toast
+ * that vanishes and a card that silently returns to idle. Throws 404 for a
+ * deleted scene so a late failure can't resurrect it.
+ */
+export function setSceneLastFailure(project, sceneId, failure) {
+  const idx = findSceneIndex(project, sceneId);
+  const { lastFailure: _previous, ...rest } = project.scenes[idx];
+  const scene = failure
+    ? { ...rest, lastFailure: {
+      lane: failure.lane === 'video' ? 'video' : 'image',
+      error: trimTo(String(failure.error || '').replace(/\s+/g, ' ').trim(), MAX_FAILURE_ERROR_CHARS) || 'Render failed',
+      at: failure.at || new Date().toISOString(),
+    } }
+    : rest;
+  return { project: replaceScene(project, idx, scene), scene };
 }
 
 /** Append takes to one scene. Throws 404 for a deleted/unknown scene. */

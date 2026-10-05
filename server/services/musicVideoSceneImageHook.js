@@ -31,6 +31,7 @@
 import { createMediaJobImageHook } from './mediaJobImageHook.js';
 import { appendSceneTakes } from './musicVideo/projects.js';
 import { musicVideoEvents } from './musicVideo/events.js';
+import { recordSceneLastFailure } from './musicVideo/sceneFailure.js';
 
 const hook = createMediaJobImageHook({
   label: 'music-video scene-image',
@@ -64,10 +65,15 @@ const hook = createMediaJobImageHook({
       sceneId,
       referenceImageId: scene.referenceImageId ?? null,
       takes: scene.takes,
+      // A landed frame retires this lane's recorded failure (takes.js).
+      lastFailure: scene.lastFailure ?? null,
       takeId: appended[0]?.takeId ?? null,
     });
     console.log(`🎞️ music-video scene image take ${projectId.slice(0, 8)}/${sceneId} ← ${filename}`);
   },
+  // A render that FAILED (a cancel is not a failure) is recorded on the scene
+  // so the board can say which scene failed and why, including after a reload.
+  onTerminal: (ctx, status, job) => recordSceneLastFailure(ctx, status, job, 'image'),
 });
 
 export function initMusicVideoSceneImageHook() {

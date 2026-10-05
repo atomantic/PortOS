@@ -51,6 +51,7 @@ export default function CodeVideoPanel({ project, audioUrl, onProject, productio
   useEffect(() => {
     if (!section || requested === section.id) return undefined;
     setSearchParams((prev) => {
+      if (!requested && prev.has('section')) return prev;
       const next = new URLSearchParams(prev);
       next.set('section', section.id);
       return next;

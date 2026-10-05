@@ -120,6 +120,7 @@ describe('CodeVideoPanel section select (#10163)', () => {
   it('changes the ?section= param when a section is selected', async () => {
     renderPanel();
     const select = await screen.findByLabelText('Section to regenerate');
+    await waitFor(() => expect(select.value).toBe('a'));
     fireEvent.change(select, { target: { value: 'b' } });
     await waitFor(() => {
       expect(select.value).toBe('b');
