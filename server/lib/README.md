@@ -854,3 +854,5 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `forgeMaintenanceTasks.js` | Current forge-maintenance screening version, queue-compatible identity check, task classification, and legacy refusal reason. |
 
 | `peerAdminValidation.js` | Strict planning-only peer administration schemas, fixed actions and grant scope. |
+
+| `musicVideoReviewDraft.js` | Pure imported Animatic review candidates, newest immutable version first; exact version URLs remain separate from native production approvals. |

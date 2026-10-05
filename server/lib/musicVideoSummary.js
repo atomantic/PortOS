@@ -8,6 +8,7 @@
  * `musicVideoPreview.js`, which still derive them for a full record.
  */
 import { isLayeredComposition, sceneRenderReady } from './musicVideoLayers.js';
+import { latestMusicVideoReviewDraft } from './musicVideoReviewDraft.js';
 
 const STAGE_IDS = ['setup', 'cast-sets', 'board', 'produce', 'compose', 'review', 'publish'];
 const RESUMABLE_RUN_STATUSES = new Set(['running', 'stopped', 'limit-reached', 'blocked', 'needs-replan']);
@@ -75,7 +76,11 @@ function projectPreview(project) {
   const video = (jobId, label, src = `/data/videos/${jobId}.mp4`) => ({
     kind: 'video', jobId, src, poster: jobId ? `/data/video-thumbnails/${jobId}.jpg` : null, label,
   });
-  if (finalId) return video(finalId, 'Final video');
+  if (finalId) return { ...video(finalId, project.renderDependencyState?.status === 'stale' ? 'Previous final' : 'Final video'), source: 'final',
+    ...(project.renderDependencyState?.status === 'stale' ? { stale: true } : {}) };
+
+  const draft = latestMusicVideoReviewDraft(project);
+  if (draft) return draft;
 
   const excerpts = Array.isArray(project.excerpts) ? project.excerpts : [];
   const excerpt = [...excerpts].reverse().find((e) => e.status === 'complete' && (e.filename || e.jobId));

@@ -6,6 +6,8 @@ import MakingOfExportPanel from '../MakingOfExportPanel.jsx';
 import StageSection from '../StageSection.jsx';
 import { isFinalRenderStale } from '../../../lib/musicVideoStages.js';
 import { RenderFinalButton } from '../ProjectActionGroups.jsx';
+import ReviewDraftPanel from '../ReviewDraftPanel.jsx';
+import { latestMusicVideoReviewDraft } from '../../../../../server/lib/musicVideoReviewDraft.js';
 
 /**
  * Review & Export: the final render and its player, draft excerpts with review
@@ -16,11 +18,13 @@ export default function ReviewStage({ board }) {
   const {
     project, locked, renderJob, renderBound, finalVideo, excerpts, revisions, autoReview, sceneMedia, devArtifacts,
   } = board;
+  const hasDraft = !!latestMusicVideoReviewDraft(project);
   return (
     <fieldset disabled={locked} className="min-w-0 space-y-3">
+      {!project.renderHistoryId && <ReviewDraftPanel project={project} onOpen={board.openArtifact} draftState={board.reviewDraftState} />}
       <RenderFailure project={project} renderJob={renderJob} />
       <StageSection title="Dependency changes and repair"><DependencyImpactPanel project={project} busy={revisions.busy} onRepair={revisions.repair} /></StageSection>
-      <section id="mv-final-video" aria-label="Final render" className="rounded-lg border border-port-border bg-port-card p-3">
+      <StageSection id="mv-final-video" title="Native final render" defaultOpen={!hasDraft || !!project.renderHistoryId || renderBound}>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-medium">Final render</h3>
           <RenderFinalButton project={project} renderJob={renderJob} readiness={board.productionReadiness} />
@@ -33,9 +37,9 @@ export default function ReviewStage({ board }) {
           finalVideo={finalVideo}
           onOpenPreview={board.openPreview}
         />
-      </section>
+      </StageSection>
 
-      <div className="rounded-lg border border-port-border bg-port-card p-3">
+      <StageSection title="Excerpt and revision tools" defaultOpen={!hasDraft || excerpts.rendering}>
         <ExcerptPanel
           project={project}
           rendering={excerpts.rendering}
@@ -55,18 +59,18 @@ export default function ReviewStage({ board }) {
           revision={{ ...revisions, genScenes: sceneMedia.genScenes, genVideoScenes: sceneMedia.genVideoScenes }}
           autoReview={autoReview}
         />
-      </div>
+      </StageSection>
 
-      <StageSection title="Development files" summary="Guides, storyboards and contact sheets">
-      <DevArtifactsPanel
+      <div id="mv-review-development"><DevArtifactsPanel
         project={project}
         busy={devArtifacts.busy}
         onOpen={board.openArtifact}
         onUpload={board.onUploadArtifact}
-      />
-      </StageSection>
+      /></div>
 
+      <StageSection title="Making-of export">
       <MakingOfExportPanel project={project} />
+      </StageSection>
 
     </fieldset>
   );

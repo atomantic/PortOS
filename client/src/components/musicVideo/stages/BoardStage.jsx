@@ -1,6 +1,6 @@
-import { useEffect } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router';
-import { Plus } from 'lucide-react';
+import { Plus, Image as ImageIcon } from 'lucide-react';
 import BeatTimeline from '../BeatTimeline.jsx';
 import ContactSheetButton from '../ContactSheetButton.jsx';
 import SceneCard from '../SceneCard.jsx';
@@ -10,7 +10,9 @@ import { PlanActions } from '../ProjectActionGroups.jsx';
 import ShotPacingFields from '../ShotPacingFields.jsx';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 import { FOOTAGE_OPTIONAL_MODES } from '../../../lib/musicVideoStages.js';
-import { parseSceneFilter, sceneAttention, sceneMatchesFilter } from '../../../lib/musicVideoSceneAttention.js';
+import { parseSceneFilter, sceneAttention, sceneMatchesFilter, SCENE_ATTENTION_LABELS } from '../../../lib/musicVideoSceneAttention.js';
+import { musicVideoImageSrc } from '../../../lib/musicVideoPreview.js';
+import { formatTimecode } from '../../../utils/formatters.js';
 
 const FILTER_LABELS = [['all', 'All'], ['attention', 'Needs attention'], ['missing', 'Missing footage']];
 const isTypingTarget = (el) => !!el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
@@ -47,6 +49,20 @@ export default function BoardStage({ board }) {
   // The open scene stays listed while it is edited, even once fixing it drops it from the filter.
   const visible = scenes.filter((scene) => scene.sceneId === activeSceneId || sceneMatchesFilter(codesById.get(scene.sceneId), filter));
   const visibleIds = visible.map((scene) => scene.sceneId).join('\n');
+  const thumbnailsRef = useRef(new Map());
+  const inspectorRef = useRef(null);
+  const focusAfterNavigation = useRef(null);
+  const toggleInspector = (sceneId, open) => {
+    if (!open) focusAfterNavigation.current = { target: 'thumbnail', sceneId };
+    onToggleSceneExpand?.(sceneId, open);
+  };
+  useLayoutEffect(() => {
+    const pending = focusAfterNavigation.current;
+    if (!pending) return;
+    const target = pending.target === 'thumbnail' ? thumbnailsRef.current.get(pending.sceneId) || thumbnailsRef.current.values().next().value
+      : inspectorRef.current?.querySelector('summary');
+    if (target) { target.focus({ preventScroll: true }); focusAfterNavigation.current = null; }
+  }, [activeSceneId]);
   // j / k step through the listed scenes (opening one, which also routes to it).
   useEffect(() => {
     const ids = visibleIds ? visibleIds.split('\n') : [];
@@ -54,7 +70,11 @@ export default function BoardStage({ board }) {
       if ((e.key !== 'j' && e.key !== 'k') || e.metaKey || e.ctrlKey || e.altKey || isTypingTarget(e.target) || !ids.length) return;
       const at = ids.indexOf(activeSceneId);
       const next = e.key === 'j' ? Math.min(at + 1, ids.length - 1) : Math.max(at === -1 ? 0 : at - 1, 0);
-      if (ids[next] !== activeSceneId) { e.preventDefault(); onToggleSceneExpand?.(ids[next], true); }
+      if (ids[next] !== activeSceneId) {
+        e.preventDefault();
+        if (inspectorRef.current?.contains(document.activeElement)) focusAfterNavigation.current = { target: 'inspector' };
+        onToggleSceneExpand?.(ids[next], true);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -74,10 +94,10 @@ export default function BoardStage({ board }) {
   }
   return (
     <fieldset disabled={locked} className="min-w-0 space-y-3">
-      <div className="rounded-lg border border-port-border bg-port-card p-3">
+      <StageSection title="Planning tools">
         <PlanActions project={project} busy={busy} onPlan={board.onPlan} onAutoArrange={board.onAutoArrange} />
         <ShotPacingFields project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />
-      </div>
+      </StageSection>
 
       <StageSection id="mv-board-treatment" title="Treatment" summary={scenes.length ? treatmentSummary(project) : 'Plan shots to direct them'}>
         <TreatmentPanel key={`treatment-${project.id}`} project={project} treatment={treatment} part="direction"
@@ -85,8 +105,10 @@ export default function BoardStage({ board }) {
       </StageSection>
 
       {project.audioAnalysis && scenes.length > 0 && (
+        <StageSection title="Beat timeline">
         <BeatTimeline audioAnalysis={project.audioAnalysis} scenes={scenes} lyricCues={project.lyricCues} narrativeEvents={project.composition?.narrativeEvents}
           onSeek={(startSec) => board.seekToScene({ startSec })} onCommit={board.commitSceneTiming} />
+        </StageSection>
       )}
 
       <div id="mv-scene-board" className="flex items-center justify-between">
@@ -115,13 +137,26 @@ export default function BoardStage({ board }) {
         <p className="text-sm text-port-text-muted">No scenes match this filter.</p>
       )}
       <div className="@container">
-        <div className="grid grid-cols-1 items-start gap-3 @2xl:grid-cols-2 @5xl:grid-cols-3">
-          {scenes.map((scene, idx) => !visible.includes(scene) ? null : (
+        <div className="grid grid-cols-2 items-start gap-2 @2xl:grid-cols-3 @5xl:grid-cols-4" aria-label="Storyboard thumbnails">
+          {visible.map(scene => <button key={scene.sceneId} type="button" aria-pressed={activeSceneId === scene.sceneId}
+            ref={element => { if (element) thumbnailsRef.current.set(scene.sceneId, element); else thumbnailsRef.current.delete(scene.sceneId); }}
+            onClick={() => { board.seekToScene?.(scene); onToggleSceneExpand?.(scene.sceneId, true); }}
+            aria-label={`Open ${scene.sectionLabel || scene.label || `Scene ${scene.order + 1}`}`}
+            className={`min-w-0 rounded border p-2 text-left ${activeSceneId === scene.sceneId ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-card'}`}>
+            {scene.referenceImageId ? <img src={musicVideoImageSrc(scene.referenceImageId)} alt="" loading="lazy" className="aspect-video w-full rounded object-cover" />
+              : <span className="flex aspect-video items-center justify-center rounded bg-port-bg text-port-text-muted"><ImageIcon size={22} aria-hidden="true" /></span>}
+            <span className="mt-1 block truncate text-sm">{scene.sectionLabel || scene.label || `Scene ${scene.order + 1}`}</span>
+            <span className="block text-xs text-port-text-muted">{formatTimecode(scene.startSec)}–{formatTimecode(scene.endSec)}</span>
+            {codesById.get(scene.sceneId).length > 0 && <span className="block text-xs text-port-warning">{SCENE_ATTENTION_LABELS[codesById.get(scene.sceneId)[0]]}</span>}
+          </button>)}
+        </div>
+        <div ref={inspectorRef} className="mt-3">
+          {scenes.map((scene, idx) => scene.sceneId !== activeSceneId ? null : (
             <SceneCard
               key={scene.sceneId}
               scene={scene}
               expanded={activeSceneId === scene.sceneId}
-              onToggleExpand={onToggleSceneExpand}
+              onToggleExpand={toggleInspector}
               performanceReview={performanceReviews.get(`${scene.sceneId}:${scene.videoHistoryId}`)}
               index={idx}
               isLast={idx === scenes.length - 1}

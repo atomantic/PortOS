@@ -12,6 +12,7 @@ import { formatCount, formatTimecode } from '../utils/formatters.js';
 import { isNonBlankStr } from './textUtils';
 import { modeLabel } from './imageGenModes.js';
 import { falSceneTake } from './musicVideoShotTiming.js';
+import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
 
 export const MUSIC_VIDEO_STAGES = [
   { id: 'setup', label: 'Setup', title: 'Setup' },
@@ -171,7 +172,7 @@ export function approvalSummary(readiness) {
  * watch. `progress` is `deriveStages(…)`; `nextAction` is `deriveNextAction(…)`.
  * Fact tones are `ok`, `warn` or `muted`.
  */
-export function describeProjectStatus(project, { progress, nextAction = null, readiness = project?.productionReadiness } = {}) {
+export function describeProjectStatus(project, { progress, nextAction = null, readiness = project?.productionReadiness, reviewingDraft = false, reviewDraftState } = {}) {
   if (!project || !progress) return null;
   const index = MUSIC_VIDEO_STAGES.findIndex((stage) => stage.id === progress.current);
   const entry = progress.stages.find((stage) => stage.id === progress.current);
@@ -179,7 +180,8 @@ export function describeProjectStatus(project, { progress, nextAction = null, re
   // A goto into Production review is a human approval, not something the app does by itself.
   const needsYou = entry?.state === 'blocked' || nextAction?.id === 'review-production' || nextAction?.id === 'approve-cast-sets';
   const activeEvidence = ['draft-progress', 'proof-progress'].includes(nextAction?.id);
-  const headline = activeEvidence ? 'Review render in progress' : allDone
+  const reviewDraft = reviewingDraft && reviewDraftState ? reviewDraftState.draft : latestMusicVideoReviewDraft(project);
+  const headline = reviewingDraft ? reviewDraftState?.checking ? 'Checking review draft' : reviewDraft ? 'Imported draft for review' : 'Choose an available review file' : activeEvidence ? 'Review render in progress' : allDone
     ? 'Published'
     : `Stage ${index + 1} of ${MUSIC_VIDEO_STAGES.length}: ${entry?.label || ''}${needsYou ? ' · needs you' : ''}`;
   const facts = [];
@@ -209,9 +211,12 @@ export function describeProjectStatus(project, { progress, nextAction = null, re
   const drafts = (project.excerpts || []).filter((e) => e.status === 'complete' && e.filename).length;
   if (isFinalRenderStale(project)) facts.push({ id: 'render', label: STALE_RENDER_MESSAGE, tone: 'warn' });
   else if (project.renderHistoryId) facts.push({ id: 'render', label: 'Final render ready', tone: 'ok' });
+  else if (reviewingDraft && reviewDraftState?.checking) facts.push({ id: 'render', label: 'Checking imported media availability', tone: 'muted' });
+  else if (reviewingDraft && reviewDraftState?.unavailableCount && !reviewDraft) facts.push({ id: 'render', label: 'Imported drafts unavailable', tone: 'warn' });
+  else if (reviewDraft) facts.push({ id: 'render', label: `Imported animatic v${reviewDraft.version} · ${reviewDraft.reviewStatus === 'pending' ? 'pending review' : reviewDraft.reviewStatus === 'approved' ? 'draft reviewed' : 'changes requested'}`, tone: 'muted' });
   else if (drafts) facts.push({ id: 'render', label: `${drafts} draft ${drafts === 1 ? 'excerpt' : 'excerpts'}, no final render`, tone: 'muted' });
   else facts.push({ id: 'render', label: 'Nothing rendered yet', tone: 'muted' });
-  return { headline, tone: activeEvidence ? 'muted' : allDone ? 'ok' : needsYou ? 'warn' : 'muted', facts };
+  return { headline, tone: reviewingDraft ? 'muted' : activeEvidence ? 'muted' : allDone ? 'ok' : needsYou ? 'warn' : 'muted', facts };
 }
 
 export const STALE_RENDER_MESSAGE = 'Final render is out of date — re-render';
@@ -370,7 +375,7 @@ export function deriveNextAction(project, {
     return { id: 'review-production', kind: 'goto', stage: art ? 'cast-sets' : board ? 'board' : 'compose',
       anchor: art ? 'mv-review-art' : board ? 'mv-review-storyboard' : 'mv-review-proof',
       label: art ? 'Review art direction' : board ? 'Review timed storyboard' : 'Review animated proof',
-      shortLabel: art ? 'Art' : board ? 'Board' : 'Proof' };
+      shortLabel: art ? 'Review art' : board ? 'Review storyboard' : 'Review proof' };
   }
   if (run && RESUMABLE_RUN_STATUSES.has(run.status)) {
     if (run.status === 'running' && !run.interrupted) return { id: 'stop-production', kind: 'run', label: 'Stop production', shortLabel: 'Stop', runId: run.id };

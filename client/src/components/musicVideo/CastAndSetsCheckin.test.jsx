@@ -13,7 +13,10 @@ vi.mock('../../services/socket', () => ({ default: {
   on: (event, fn) => { if (!listeners.has(event)) listeners.set(event, new Set()); listeners.get(event).add(fn); },
   off: (event, fn) => listeners.get(event)?.delete(fn),
 } }));
-vi.mock('../../services/apiMusicVideo.js', () => api);
+vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  ...api,
+}));
 vi.mock('../../services/apiMediaJobs', () => ({ getMediaJob }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
