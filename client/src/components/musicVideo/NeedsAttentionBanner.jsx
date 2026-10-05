@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AlertTriangle, Link2, Play, X } from 'lucide-react';
+import { AlertTriangle, ExternalLink, Link2, Play, X } from 'lucide-react';
 import { Link } from 'react-router';
 import { ATTENTION_ANCHOR_ID } from '../../lib/musicVideoAttention.js';
 
@@ -47,9 +47,54 @@ function ItemActions({ item, busy, actions }) {
           <Link2 size={12} aria-hidden="true" /> Reattach
         </button>
       );
+    case 'autonomous':
+      return (
+        <>
+          {item.canResume && (
+            <button type="button" disabled={busy} aria-label={`${item.resumeLabel} the autonomous run`} onClick={() => actions.onResumeAutonomous?.()} className={PRIMARY}>
+              <Play size={12} aria-hidden="true" /> {item.resumeLabel}
+            </button>
+          )}
+          <OpenLink item={item} />
+        </>
+      );
+    case 'production':
+      return (
+        <>
+          {item.canResume && (
+            <button type="button" disabled={busy} aria-label="Resume production" onClick={() => actions.onResumeProduction?.(item.runId, item.acceptBasis ? { acceptBasis: true } : {})} className={PRIMARY}>
+              <Play size={12} aria-hidden="true" /> Resume
+            </button>
+          )}
+          <OpenLink item={item} />
+        </>
+      );
+    case 'auto-review-parked':
+      return (
+        <>
+          {item.canResume && (
+            <button type="button" disabled={busy} aria-label="Resume the stopped auto-review run" onClick={() => actions.onContinueAutoReview?.(item.runId)} className={PRIMARY}>
+              <Play size={12} aria-hidden="true" /> Resume
+            </button>
+          )}
+          <OpenLink item={item} />
+          <button type="button" disabled={busy} aria-label="Cancel the stopped auto-review run" onClick={() => actions.onCancelAutoReview?.(item.runId)} className={DANGER}>
+            <X size={12} aria-hidden="true" /> Cancel run
+          </button>
+        </>
+      );
     default:
       return null;
   }
+}
+
+// Opens the tab (and anchor) the row's state is cleared from.
+function OpenLink({ item }) {
+  return (
+    <Link to={`/music-video/${encodeURIComponent(item.projectId)}/${item.openTo}`} aria-label={`Open ${item.title}`} className={PRIMARY}>
+      <ExternalLink size={12} aria-hidden="true" /> Open
+    </Link>
+  );
 }
 
 /**
@@ -61,7 +106,8 @@ function ItemActions({ item, busy, actions }) {
  * looks permanently stuck. `items` comes from `deriveAttentionItems`; `actions`
  * are the page's handlers (`onResumeRevision(id)`, `onCancelRevision(id)`,
  * `onResumeCastAndSets()`, `onContinueAutoReview(runId)`,
- * `onCancelAutoReview(runId)`, `onReattachRender()`). Renders nothing when
+ * `onCancelAutoReview(runId)`, `onReattachRender()`, and for the parked-run
+ * rows `onResumeAutonomous()` / `onResumeProduction(runId, opts)`). Renders nothing when
  * there is nothing to attend to.
  */
 export default function NeedsAttentionBanner({ items, busy = false, actions = {} }) {

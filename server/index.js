@@ -558,6 +558,9 @@ runBootSequence({ io, httpServer, localHttpServer, httpsEnabled, port: PORT, hos
 // Opt-in listener only: restores host configuration without generating tokens.
 // The boot smoke (#8343) opens no listener beyond the API server it probes.
 if (!isSmokeBoot()) {
+  // Event-driven notifications for parked Music Video runs (#10156); zero provider calls.
+  import('./services/musicVideo/attentionNotifier.js').then(({ initMusicVideoAttentionNotifier }) => initMusicVideoAttentionNotifier())
+    .catch((err) => console.error(`❌ Music video attention notifier could not start: ${err.message}`));
   import('./services/fleetLlmHost.js').then(({ startFleetLlmHost }) => startFleetLlmHost())
     .catch(() => console.error('❌ Dedicated model host listener could not start; open AI Providers → Model host setup.'));
   // Local file scan only (no provider calls); keeps the federated Claude Code

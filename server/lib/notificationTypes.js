@@ -10,7 +10,8 @@ export const NOTIFICATION_CATALOG = {
   AGENT_WARNING: { key: 'agent_warning', label: 'Agent Warnings' },
   AUTOPILOT_PAUSED: { key: 'autopilot_paused', label: 'Autopilot Paused' },
   DAILY_POST_REMINDER: { key: 'daily_post_reminder', label: 'POST Reminders' },
-  CREATIVE_COMMISSION: { key: 'creative_commission', label: 'Creative Commissions' }
+  CREATIVE_COMMISSION: { key: 'creative_commission', label: 'Creative Commissions' },
+  MUSIC_VIDEO_ATTENTION: { key: 'music_video_attention', label: 'Music Video Attention' }
 };
 
 export const NOTIFICATION_TYPES = Object.fromEntries(

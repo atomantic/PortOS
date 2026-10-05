@@ -46,6 +46,15 @@ describe('music-video-autopilot scheduled handler', () => {
     expect(startAutonomousVideo).not.toHaveBeenCalled();
   });
 
+  it('names the parked project, why it is waiting and where to clear it, so the Schedule card can show it', async () => {
+    ideas.push(idea('a', '2026-01-01T00:00:00.000Z'));
+    projects.push({ id: 'mv-9', name: 'Parked video', autonomousRun: { status: 'awaiting-approval', awaiting: 'lyrics', stage: 'style', brief: { origin: { kind: 'schedule', ideaId: 'zzz' } } } });
+    const out = await run({ params: {} });
+    expect(out.reason).toContain('"Parked video" is waiting for your approval of lyrics');
+    expect(out.blocking).toMatchObject({ projectId: 'mv-9', status: 'awaiting-approval', link: '/music-video/mv-9/setup#mv-auto-edit' });
+    expect((await countPending({ params: {} })).detail).toContain('Parked video');
+  });
+
   it('declines with a reason when no idea is eligible, honoring the tag filter', async () => {
     ideas.push(idea('a', '2026-01-01T00:00:00.000Z', { tags: ['poem'] }));
     expect(await run({ params: { musicVideoAutopilot: { ideaTags: ['song'] } } })).toMatchObject({ dispatched: false });

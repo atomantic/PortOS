@@ -1,6 +1,7 @@
 import { GitBranch, GitMerge, ListOrdered, Users } from 'lucide-react';
 import { taskLabels, badge, statusDot, getTaskStatusGroup, pipelineStages } from './scheduleConstants';
 import IntervalBadge from './IntervalBadge';
+import MusicVideoAutopilotBlocker from './MusicVideoAutopilotBlocker';
 
 // Shared task identity row — status dot, monospace name, pipeline + swarm
 // badges, and interval badge. Used by both the schedule card and the config
@@ -84,6 +85,7 @@ export default function TaskHeader({ taskType, config, orderStep }) {
           ))}
         </p>
       )}
+      {taskType === 'music-video-autopilot' && <MusicVideoAutopilotBlocker />}
       {config.runGuidance && <p className="text-xs text-gray-500 line-clamp-2" title={config.runGuidance}>{config.runGuidance}</p>}
       {taskLabels(config).length > 0 && (
         <div className="flex flex-wrap gap-1">

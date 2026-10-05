@@ -12,6 +12,9 @@
  * `NeedsAttentionBanner` renders them and the page wires their actions.
  */
 
+import { describeAutonomousWait } from './musicVideoAutonomous.js';
+import { RESUMABLE_RUN_STATUSES, currentProductionRun } from './musicVideoStages.js';
+
 /** The DOM id of the banner, so a refusal toast can scroll to it. */
 export const ATTENTION_ANCHOR_ID = 'mv-needs-attention';
 
@@ -119,6 +122,79 @@ export function deriveAttentionItems(project, { generatingSceneIds = null, draft
       tone: 'warn',
       title: 'A final render is in progress',
       detail: 'Reattach to watch its progress or cancel it.',
+    });
+  }
+  return [...items, ...parkedRunItems(project)];
+}
+
+// Auto-review states that wait on the director (#10156): a limit, an unverifiable
+// review, or a halted run. `running` is live work, not a request for the user.
+const AUTO_REVIEW_PARKED = new Set(['needs-human', 'limit-reached', 'stopped']);
+const PRODUCTION_PARKED = new Set(['limit-reached', 'needs-human', 'blocked', 'needs-replan']);
+const AUTONOMOUS_PARKED = new Set(['awaiting-approval', 'needs-human', 'stopped', 'failed']);
+
+/** The newest board-driven auto-review run, when it is parked on the director. Older stopped runs are superseded. */
+export function parkedAutoReview(project) {
+  const run = asList(project?.autoReviews).filter((r) => !r.productionRunId).at(-1);
+  return run && AUTO_REVIEW_PARKED.has(run.status) ? run : null;
+}
+
+/** Whether the Review tab's "Revision and automatic review tools" section should open on its own: a run is live or parked. */
+export const autoReviewNeedsUser = (project) => asList(project?.autoReviews).some((r) => r.status === 'running' && !r.productionRunId) || !!parkedAutoReview(project);
+
+// Rows for runs the server holds that nobody is watching: an autonomous run
+// parked on the director, a production run stopped on a limit, an auto-review
+// that halted. Each is derived from the saved record, so it survives a reload.
+function parkedRunItems(project) {
+  const items = [];
+  const auto = project.autonomousRun;
+  const autoParked = auto && (AUTONOMOUS_PARKED.has(auto.status) || auto.interrupted);
+  if (autoParked) {
+    const interrupted = auto.interrupted && auto.status === 'running';
+    const awaiting = auto.status === 'awaiting-approval';
+    items.push({
+      id: `autonomous:${auto.id}`,
+      kind: 'autonomous',
+      tone: 'warn',
+      title: awaiting ? 'An autonomous run is waiting for your approval' : auto.status === 'failed' ? 'An autonomous run failed' : 'An autonomous run needs you',
+      detail: interrupted ? 'A restart interrupted it. Resume to continue from where it left off.' : describeAutonomousWait(project.name || 'This video', auto),
+      projectId: project.id,
+      canResume: !awaiting,
+      resumeLabel: auto.status === 'failed' ? 'Retry' : 'Resume',
+      openTo: awaiting ? 'setup#mv-auto-edit' : auto.stage === 'produce' ? 'produce' : 'setup',
+    });
+  }
+  const production = currentProductionRun(project);
+  // An autonomous run parked on this production reports the stop itself.
+  const ownedByAuto = autoParked && auto.output?.productionRunId === production?.id;
+  if (production && PRODUCTION_PARKED.has(production.status) && !ownedByAuto) {
+    const reason = production.stopReason || production.error;
+    items.push({
+      id: `production:${production.id}`,
+      kind: 'production',
+      tone: 'warn',
+      title: production.status === 'limit-reached' ? 'Production stopped at its limit' : production.status === 'needs-human' ? 'Production needs you' : 'Production is paused',
+      detail: reason || 'Open Produce to see what it is waiting on.',
+      projectId: project.id,
+      runId: production.id,
+      // Same exits as the header's next action: a needs-human run is cleared on the Produce tab.
+      canResume: RESUMABLE_RUN_STATUSES.has(production.status),
+      acceptBasis: production.status === 'needs-replan',
+      openTo: 'produce',
+    });
+  }
+  const review = parkedAutoReview(project);
+  if (review) {
+    items.push({
+      id: `auto-review-parked:${review.id}`,
+      kind: 'auto-review-parked',
+      tone: 'warn',
+      title: review.status === 'limit-reached' ? 'Auto-review stopped at its limit' : review.status === 'stopped' ? 'Auto-review is stopped' : 'Auto-review needs you',
+      detail: review.stopReason || review.error || 'Open the Review tab to resume it or take over.',
+      projectId: project.id,
+      runId: review.id,
+      canResume: review.status !== 'limit-reached',
+      openTo: 'review',
     });
   }
   return items;
