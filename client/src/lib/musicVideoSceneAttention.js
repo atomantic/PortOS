@@ -55,7 +55,7 @@ export function sceneAttention(scene, ctx = {}) {
   const { layered = false, footageOptional = false, lipSyncBackend = '', songDurationSec = null, clipSec = null, failed = {} } = ctx;
   const layer = sceneVisualLayer(scene, { layered });
   const codes = [];
-  if (layer !== 'card' && !scene.referenceImageId) codes.push('missing-frame');
+  if (layer !== 'card' && layer !== 'code' && !scene.referenceImageId) codes.push('missing-frame');
   if (layer === 'footage' && !footageOptional && !scene.videoHistoryId) codes.push('missing-clip');
   if (layer !== 'footage' && !sceneHasAuthoredSpan(scene)) codes.push('no-span');
   if (layer === 'footage' && scene.loop === false && scene.beatAligned && clipSec != null

@@ -11,7 +11,7 @@ import SceneTakeStrip from './SceneTakeStrip.jsx';
 import { MUSIC_VIDEO_VISUAL_LAYERS, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
 
 // #8985: what a composed render shows for this scene's span.
-const LAYER_LABELS = { footage: 'Footage', still: 'Still image', card: 'Title card' };
+const LAYER_LABELS = { footage: 'Footage', still: 'Still image', card: 'Title card', code: 'Code-drawn' };
 const STILL_MOVE_LABELS = [['hold', 'Hold'], ['push', 'Push in'], ['pan', 'Pan']];
 import {
   falSceneTake, grokCoverage, isPerformanceScene, performanceBlockedReason, performanceCapability, planPerformanceWindow, shotSplitLimit,
@@ -311,7 +311,7 @@ export default function SceneCard({
         )}
         {layer !== 'footage' && layered && !sceneHasAuthoredSpan(scene) && (
           <p role="alert" className="text-[11px] text-port-warning">
-            Set a start and end — a {layer === 'card' ? 'title card' : 'still'} runs for exactly its span.
+            Set a start and end — a {{ card: 'title card', code: 'code-drawn shot' }[layer] || 'still'} runs for exactly its span.
           </p>
         )}
         {performance && performanceBlocked && (

@@ -372,7 +372,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   // #8985: a composed render's title cards need no frame, and its stills need
   // no clip — the batch generators skip them.
   const layered = isLayeredComposition(project);
-  const frameScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) !== 'card');
+  const frameScenes = scenes.filter((scene) => !['card', 'code'].includes(sceneVisualLayer(scene, { layered })));
   const footageScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) === 'footage');
   const planMissingFrames = () => frameScenes.filter((scene) =>
     !scene.referenceImageId && !genScenes[scene.sceneId] && buildFramePrompt(scene));

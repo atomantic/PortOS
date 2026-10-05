@@ -3,14 +3,15 @@
  *
  * In a composed render a scene can show its generated footage (the default,
  * and every scene saved before the field existed), its selected still frame
- * with a deterministic camera move, or a code-rendered title card (a solid
- * colour whose text the typography layer draws). A plain concat render always
+ * with a deterministic camera move, a code-rendered title card (a solid
+ * colour whose text the typography layer draws), or a code shot (picture drawn
+ * by the composition code — no frame or clip is ever generated). A plain concat render always
  * uses footage. Pure and dependency-free: the server render and the client
  * board read the same rules, so the Render button's readiness matches what the
  * render preflight accepts.
  */
 
-export const MUSIC_VIDEO_VISUAL_LAYERS = ['footage', 'still', 'card'];
+export const MUSIC_VIDEO_VISUAL_LAYERS = ['footage', 'still', 'card', 'code'];
 export const MUSIC_VIDEO_STILL_MOVES = ['hold', 'push', 'pan'];
 
 /**
@@ -26,7 +27,7 @@ export const isLayeredComposition = (project) => LAYERED_COMPOSITION_MODES.inclu
 /** The layer a scene contributes; `layered` is true only for a layered composition (see isLayeredComposition). */
 export function sceneVisualLayer(scene, { layered = false } = {}) {
   const layer = scene?.visualLayer;
-  return layered && (layer === 'still' || layer === 'card') ? layer : 'footage';
+  return layered && (layer === 'still' || layer === 'card' || layer === 'code') ? layer : 'footage';
 }
 
 /** A generated document executes the explicit code-first medium plan. */
@@ -47,11 +48,11 @@ export function sceneHasAuthoredSpan(scene) {
 
 /**
  * Whether the render can include this scene as-is: footage needs its clip, a
- * still needs its reference frame and a span, and a card needs only a span.
+ * still needs its reference frame and a span, and a card or code shot needs only a span (code is drawn by the composition itself).
  */
 export function sceneRenderReady(scene, { layered = false } = {}) {
   const layer = sceneVisualLayer(scene, { layered });
   if (layer === 'footage') return Boolean(scene?.videoHistoryId);
   if (!sceneHasAuthoredSpan(scene)) return false;
-  return layer === 'card' || Boolean(scene.referenceImageId);
+  return layer === 'card' || layer === 'code' || Boolean(scene.referenceImageId);
 }

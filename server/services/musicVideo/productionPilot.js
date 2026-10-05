@@ -21,7 +21,7 @@ export function selectProductionPilots(project) {
   const seen = new Set();
   const rank = { performance: 5, interaction: 4, camera: 3, cutaway: 2, still: 1 };
   return (project.scenes || [])
-    .filter((scene) => allowed ? allowed.has(scene.sceneId) : sceneVisualLayer(scene, { layered: isLayeredComposition(project) }) !== 'card')
+    .filter((scene) => allowed ? allowed.has(scene.sceneId) : !['card', 'code'].includes(sceneVisualLayer(scene, { layered: isLayeredComposition(project) })))
     .map((scene) => ({ sceneId: scene.sceneId, operation: pilotClass(scene, project),
       missing: Number(!scene.referenceImageId) + Number(pilotClass(scene, project) !== 'still' && !scene.videoHistoryId),
       complexity: (scene.direction?.actionContract?.actions?.length || 0)

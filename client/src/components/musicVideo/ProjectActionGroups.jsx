@@ -146,7 +146,7 @@ export function GenerationActions({ project, videoSettings, sceneMedia, onEditSe
   const mode = project.composition?.mode || 'concat';
   const layered = isLayeredComposition(project);
   const codeMode = mode === 'code' || mode === 'eidoverse';
-  const frameScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) !== 'card');
+  const frameScenes = scenes.filter((scene) => !['card', 'code'].includes(sceneVisualLayer(scene, { layered })));
   const footageScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) === 'footage');
   const referenceFrameCount = frameScenes.filter((scene) => scene.referenceImageId).length;
   const renderableSceneCount = footageScenes.filter((scene) => scene.videoHistoryId).length;

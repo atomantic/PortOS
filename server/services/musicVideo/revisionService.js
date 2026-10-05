@@ -158,7 +158,7 @@ export async function cancelRevision(projectId, revisionId, { alsoOnProject = nu
 
 async function dependencyImpactFor(project) {
   const performanceScenes = (project.scenes || []).filter((scene) => scene.videoHistoryId
-    && (scene.shotMode === 'performance' || (!['still', 'card'].includes(scene.visualLayer)
+    && (scene.shotMode === 'performance' || (!['still', 'card', 'code'].includes(scene.visualLayer)
       && scene.takes?.some((take) => take.assetId === scene.videoHistoryId && take.shotInstruction?.audioConditioning))));
   let performanceChanges = [];
   if (performanceScenes.length) {
