@@ -59,6 +59,8 @@ import {
   reportReviewerFailure,
   reportReviewerSuccess,
   reviewerConfigFaultsFromHealth,
+  pickAvailableReviewerGroups,
+  REVIEWER_PAUSE_MS,
   __resetCodeReviewDefaultsCache,
   __resetReviewerCliInstalledCache,
   __resetThinkingUnsupportedCache,
@@ -380,7 +382,7 @@ describe('codeReview helpers', () => {
       }, 100)
       const diagnostics = { reason: 'invalid_json', finishReason: 'unknown', responseLengthChars: 20001, responseLengthCapped: true }
       expect(mockedSettings.current.codeReview).toEqual({ ...config, reviewerHealth: {
-        ollama: { code: 'MALFORMED_REVIEW', reason: 'malformed', lastFailureAt: 100, diagnostics },
+        ollama: { code: 'MALFORMED_REVIEW', reason: 'malformed', failureCount: 1, lastFailureAt: 100, diagnostics },
       } })
       expect(codeReviewSettingsSchema.parse(mockedSettings.current.codeReview)).toEqual(mockedSettings.current.codeReview)
       expect(await getReviewerConfigHealth()).toEqual({ status: 'warning', configFaults: {}, malformedReviews: { ollama: { lastFailureAt: 100, diagnostics } } })
@@ -416,8 +418,104 @@ describe('codeReview helpers', () => {
         reportReviewerFailure('ollama', { code: 'NO_MODEL' }, 200),
       ])
       expect(mockedSettings.current.codeReview.reviewerHealth).toEqual({
-        ollama: { code: 'NO_MODEL', reason: 'configuration', lastFailureAt: 200 },
+        ollama: { code: 'NO_MODEL', reason: 'configuration', failureCount: 1, lastFailureAt: 200 },
       })
+    })
+
+    it('recognizes free API quota limits and pauses provider for 24h', async () => {
+      mockedSettings.current = { codeReview: {
+        reviewerFallbackGroups: [['provider:opencode-orcarouter'], ['provider:nvidia-nim'], ['claude']],
+      } }
+
+      // Initial active group is tier 0
+      expect(pickAvailableReviewerGroups(mockedSettings.current.codeReview, 1000)).toEqual(['provider:opencode-orcarouter'])
+
+      // Quota limit hit: "hit our limit for the day"
+      const recorded = await reportReviewerFailure('provider:opencode-orcarouter', {
+        error: 'You have hit our limit for the day. Please upgrade or try again tomorrow.',
+      }, 1000)
+      expect(recorded).toBe(true)
+      expect(mockedSettings.current.codeReview.reviewerHealth['provider:opencode-orcarouter']).toMatchObject({
+        pausedUntil: 1000 + REVIEWER_PAUSE_MS,
+        reason: 'quota',
+        failureCount: 1,
+        lastFailureAt: 1000,
+      })
+
+      // Fallback system activates next tier
+      expect(pickAvailableReviewerGroups(mockedSettings.current.codeReview, 1000)).toEqual(['provider:nvidia-nim'])
+    })
+
+    it('recognizes orcarouter/free allowance exhaustion from error or stderr as a quota pause', async () => {
+      mockedSettings.current = { codeReview: {
+        reviewerFallbackGroups: [['provider:opencode-orcarouter'], ['provider:nvidia-nim']],
+      } }
+
+      const recorded = await reportReviewerFailure('provider:opencode-orcarouter', {
+        stderr: 'your orcarouter/free allowance is used up — top up your balance and call a specific model with wallet billing to keep going https://www.orcarouter.ai/console/billing?ref=err_free_used#add-credits (request id: 202610050240447368436058268d9d6QLnEhQ5n)',
+      }, 2000)
+      expect(recorded).toBe(true)
+      expect(mockedSettings.current.codeReview.reviewerHealth['provider:opencode-orcarouter']).toMatchObject({
+        pausedUntil: 2000 + REVIEWER_PAUSE_MS,
+        reason: 'quota',
+        failureCount: 1,
+        lastFailureAt: 2000,
+      })
+      expect(pickAvailableReviewerGroups(mockedSettings.current.codeReview, 2000)).toEqual(['provider:nvidia-nim'])
+    })
+
+    it('accepts an explicit failure reason (e.g. quota or unavailable) directly from an agent', async () => {
+      mockedSettings.current = { codeReview: {
+        reviewerFallbackGroups: [['provider:opencode-orcarouter'], ['provider:nvidia-nim']],
+      } }
+
+      const recorded = await reportReviewerFailure('provider:opencode-orcarouter', {
+        reason: 'quota',
+        error: 'Custom quota error message from agent',
+      }, 3000)
+      expect(recorded).toBe(true)
+      expect(mockedSettings.current.codeReview.reviewerHealth['provider:opencode-orcarouter']).toMatchObject({
+        pausedUntil: 3000 + REVIEWER_PAUSE_MS,
+        reason: 'quota',
+        failureCount: 1,
+        lastFailureAt: 3000,
+      })
+      expect(pickAvailableReviewerGroups(mockedSettings.current.codeReview, 3000)).toEqual(['provider:nvidia-nim'])
+    })
+
+    it('tracks repeated provider errors and marks provider temporarily unavailable on second failure', async () => {
+      mockedSettings.current = { codeReview: {
+        reviewerFallbackGroups: [['provider:opencode-zen'], ['provider:antigravity-cli']],
+      } }
+
+      // 1st failure: general provider error (e.g. 500 or timeout), not yet paused
+      const first = await reportReviewerFailure('provider:opencode-zen', {
+        error: 'Unexpected server error. Check server logs for details.',
+      }, 1000)
+      expect(first).toBe(true)
+      expect(mockedSettings.current.codeReview.reviewerHealth['provider:opencode-zen']).toMatchObject({
+        reason: 'provider_error',
+        failureCount: 1,
+        lastFailureAt: 1000,
+      })
+      expect(mockedSettings.current.codeReview.reviewerHealth['provider:opencode-zen'].pausedUntil).toBeUndefined()
+      // Still tier 0 on 1st transient failure
+      expect(pickAvailableReviewerGroups(mockedSettings.current.codeReview, 1000)).toEqual(['provider:opencode-zen'])
+
+      // 2nd failure: repeated failure triggers temporary unavailability
+      const second = await reportReviewerFailure('provider:opencode-zen', {
+        error: 'Unexpected server error. Check server logs for details.',
+      }, 1500)
+      expect(second).toBe(true)
+      expect(mockedSettings.current.codeReview.reviewerHealth['provider:opencode-zen']).toMatchObject({
+        pausedUntil: 1500 + REVIEWER_PAUSE_MS,
+        reason: 'unavailable',
+        failureCount: 2,
+        lastFailureAt: 1500,
+      })
+
+      // Next tier is now active!
+      expect(pickAvailableReviewerGroups(mockedSettings.current.codeReview, 1500)).toEqual(['provider:antigravity-cli'])
     })
   })
 

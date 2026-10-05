@@ -38,3 +38,28 @@ it('shows partial pauses, healthy later tiers, all-paused fallback and expiry wi
   expect(onChange).not.toHaveBeenCalled();
   expect(onGroupsChange).not.toHaveBeenCalled();
 });
+
+it('renders failure counts on members and tier summaries', () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1000);
+  const props = {
+    groups: [
+      { id: 'primary', reviewers: ['provider:opencode-orcarouter'] },
+      { id: 'second', reviewers: ['provider:nvidia-nim'] },
+    ],
+    onChange: vi.fn(),
+    onGroupsChange: vi.fn(),
+    reviewerHealth: {
+      'provider:opencode-orcarouter': { pausedUntil: 2000, failureCount: 3 },
+      'provider:nvidia-nim': { failureCount: 1 },
+    },
+  };
+  render(<ReviewerGroupsEditor {...props} />);
+  const primary = screen.getByRole('region', { name: 'Primary' });
+  expect(primary).toHaveTextContent('Paused members (3 failures)');
+  expect(primary).toHaveTextContent('3 failures');
+
+  const fallback = screen.getByRole('region', { name: 'Fallback 1' });
+  expect(fallback).toHaveTextContent('Active tier');
+  expect(fallback).toHaveTextContent('Unpaused · 1 failure');
+});

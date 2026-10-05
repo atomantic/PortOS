@@ -675,6 +675,12 @@ export const cliReviewerOutcomeSchema = z.discriminatedUnion('outcome', [
   }).strict(),
 ]);
 
+export const reportReviewerFailureSchema = z.object({
+  reviewer: z.string().max(80).refine(isReviewer),
+  reason: z.enum(['quota', 'unavailable', 'provider_error', 'configuration', 'malformed']).optional(),
+  error: z.string().max(2048).optional(),
+}).strict();
+
 // Global Code Review Loop defaults (settings.codeReview). Surfaced on the AI
 // Providers page; TaskAddForm + ScheduleTab seed from this when the user
 // hasn't already chosen a per-task / per-task-type reviewer list. The follow-
@@ -697,6 +703,7 @@ export const codeReviewSettingsSchema = z.object({
     reason: z.string().optional(),
     code: z.string().optional(),
     message: z.string().optional(),
+    failureCount: z.number().int().nonnegative().optional(),
     lastFailureAt: z.number().int().positive().optional(),
     diagnostics: z.object({
       reason: z.enum(MALFORMED_REVIEW_REASONS),

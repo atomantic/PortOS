@@ -59,8 +59,23 @@ import { activeReviewerGroupIndex, isReviewerConfigFault, normalizeReviewFinishR
 import { getSettings, updateSettingsWith, settingsEvents } from './settings.js'
 
 export const REVIEWER_PAUSE_MS = 24 * 60 * 60 * 1000
-const QUOTA_FAILURE = /quota|rate.?limit|usage.?limit|allowance|credit|capacity|exhausted|too many requests|429/i
-export const isReviewerQuotaFailure = (error) => QUOTA_FAILURE.test(String(error || ''))
+const QUOTA_FAILURE = /quota|rate.?limit|usage.?limit|allowance|credit|capacity|exhausted|too many requests|429|402|payment required|limit for the day|daily.?limit|session.?limit|plan.?limit|free.?limit|free.?tier|FreeTierError|err_free_used|allowance is used up|is used up|top up your balance|wallet billing|out of credits|insufficient.?(?:credits|funds|balance)|exceeded (?:your )?(?:daily |current )?(?:quota|limit|allowance)|upgrade (?:your )?subscription|Upgrade to Pro/i
+
+function isReviewerQuotaFailure(error) {
+  if (!error) return false
+  if (typeof error === 'object') {
+    if (error.status === 429 || error.status === 402 || error.statusCode === 429 || error.statusCode === 402) return true
+    if (error.name === 'FreeTierError' || error.providerErrorType === 'FreeTierError') return true
+    if (error.code === 'insufficient_quota' || error.code === 'rate_limit_exceeded' || error.code === 'err_free_used') return true
+    if (error.error && typeof error.error === 'object') {
+      if (isReviewerQuotaFailure(error.error)) return true
+    }
+  }
+  const message = typeof error === 'object'
+    ? `${error.error || ''} ${error.message || ''} ${error.code || ''} ${error.stderr || ''} ${error.text || ''} ${error.output || ''}`
+    : String(error)
+  return QUOTA_FAILURE.test(message)
+}
 
 const normalizeFallbackGroups = (groups) => Array.isArray(groups)
   ? groups.map(group => Array.from(new Set((Array.isArray(group) ? group : []).map(r => REVIEWER_ALIASES[r] || r).filter(isReviewer)))).filter(group => group.length)
@@ -76,32 +91,86 @@ export function pickAvailableReviewerGroups(raw, now = Date.now()) {
 export async function reportReviewerFailure(reviewer, error, now = Date.now()) {
   if (!isReviewer(reviewer)) return false
   const result = error && typeof error === 'object' ? error : { error }
-  const message = String(result.error || 'Reviewer failed')
+  const message = String(result.error || result.message || 'Reviewer failed')
   const code = typeof result.code === 'string' ? result.code : null
-  const isConfigFault = isReviewerConfigFault(code)
-  const isMalformed = code === 'MALFORMED_REVIEW'
-  if (!isConfigFault && !isMalformed && !isReviewerQuotaFailure(message)) return false
+  const explicitReason = typeof result.reason === 'string' ? result.reason : null
+  const isConfigFault = explicitReason === 'configuration' || isReviewerConfigFault(code)
+  const isMalformed = explicitReason === 'malformed' || code === 'MALFORMED_REVIEW'
+  const isQuota = explicitReason === 'quota' || isReviewerQuotaFailure(result)
+  const isExplicitUnavailable = explicitReason === 'unavailable'
+
+  const settings = await getSettings().catch(() => null)
+  const prior = settings?.codeReview?.reviewerHealth?.[reviewer]
+  const priorCount = Number(prior?.failureCount) || 0
+  const failureCount = priorCount + 1
+  const isRepeatedFailure = failureCount >= 2
+  const isProvider = isProviderReviewer(reviewer)
+
+  if (!isConfigFault && !isMalformed && !isQuota && !isExplicitUnavailable && !isRepeatedFailure && !isProvider) {
+    return false
+  }
+
+  const shouldPause = isQuota || isExplicitUnavailable || isRepeatedFailure || (Number(prior?.pausedUntil) > now)
+  const pauseReason = isQuota ? 'quota' : (isExplicitUnavailable ? 'unavailable' : (isRepeatedFailure ? 'unavailable' : (prior?.reason || 'unavailable')))
+
   // Reviewer telemetry is not a user action. The standalone claim bridge must
   // not initialize the live user-action database while updating local health.
-  await updateSettingsWith((settings) => ({
-    ...settings,
-    codeReview: {
-      ...(settings.codeReview || {}),
-      reviewerHealth: {
-        ...(settings.codeReview?.reviewerHealth || {}),
-        [reviewer]: isMalformed
-          ? {
-            ...(Number(settings.codeReview?.reviewerHealth?.[reviewer]?.pausedUntil) > now
-              ? { pausedUntil: settings.codeReview.reviewerHealth[reviewer].pausedUntil } : {}),
-            code, reason: 'malformed', lastFailureAt: now, diagnostics: reviewFailureDiagnostics(result.diagnostics),
-          }
-          : isConfigFault
-          ? { code, reason: 'configuration', lastFailureAt: now }
-          : { pausedUntil: now + REVIEWER_PAUSE_MS, reason: 'quota', lastFailureAt: now },
+  await updateSettingsWith((current) => {
+    const existing = current.codeReview?.reviewerHealth?.[reviewer] || {}
+    let entry
+    if (isMalformed) {
+      entry = {
+        ...(Number(existing.pausedUntil) > now
+          ? { pausedUntil: existing.pausedUntil } : {}),
+        code,
+        reason: 'malformed',
+        failureCount,
+        lastFailureAt: now,
+        diagnostics: reviewFailureDiagnostics(result.diagnostics),
+      }
+    } else if (isConfigFault) {
+      entry = { code, reason: 'configuration', failureCount, lastFailureAt: now }
+    } else if (shouldPause) {
+      entry = {
+        pausedUntil: Number(existing.pausedUntil) > now ? existing.pausedUntil : now + REVIEWER_PAUSE_MS,
+        reason: pauseReason,
+        failureCount,
+        lastFailureAt: now,
+        ...(message && message !== 'Reviewer failed' ? { message } : {}),
+      }
+    } else {
+      entry = {
+        reason: 'provider_error',
+        failureCount,
+        lastFailureAt: now,
+        ...(message && message !== 'Reviewer failed' ? { message } : {}),
+      }
+    }
+
+    return {
+      ...current,
+      codeReview: {
+        ...(current.codeReview || {}),
+        reviewerHealth: {
+          ...(current.codeReview?.reviewerHealth || {}),
+          [reviewer]: entry,
+        },
       },
-    },
-  }), { skipUserAction: true })
+    }
+  }, { skipUserAction: true })
   cachedDefaults = null
+  if (isProvider) {
+    const providerId = reviewer.slice('provider:'.length)
+    if (isQuota) {
+      import('./providerStatus.js')
+        .then(({ markProviderUsageLimit }) => markProviderUsageLimit(providerId, { message }))
+        .catch(() => {})
+    } else if (shouldPause) {
+      import('./providerStatus.js')
+        .then(({ markProviderUnavailable }) => markProviderUnavailable(providerId, { reason: pauseReason, message, waitTimeMs: REVIEWER_PAUSE_MS }))
+        .catch(() => {})
+    }
+  }
   return true
 }
 
@@ -840,16 +909,42 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
         safetyProfile, codeReview: true })
     }).catch(() => ({ error: 'Reviewer credential setup or execution failed.' }))
       .finally(() => isolatedCwd && rm(isolatedCwd, { recursive: true, force: true }))
-    if (result.partial) return { ok: false, error: 'Reviewer exited before completing its response.' }
+    if (result.partial) {
+      const errorMsg = result.stderr?.trim() || result.text?.trim() || 'Reviewer exited before completing its response.'
+      return {
+        ok: false,
+        error: errorMsg,
+        ...(result.stderr ? { stderr: result.stderr } : {}),
+        ...(result.text ? { text: result.text } : {}),
+      }
+    }
     if (!result.error && result.streamFormat === 'stream-json') {
       const { safeJSONLParse } = await import('../lib/jsonIo.js')
-      const final = safeJSONLParse(result.text).findLast(event => event.type === 'result')
-      result = final?.is_error || typeof final?.result !== 'string'
-        ? { error: 'Reviewer returned no successful final result.' }
-        : { text: final.result }
+      const events = safeJSONLParse(result.text)
+      const errorEvent = events.findLast(event => event.type === 'error' || event.is_error)
+      const final = events.findLast(event => event.type === 'result')
+      if (errorEvent && (!final || final.is_error)) {
+        result = { error: errorEvent.error || errorEvent.message || 'Reviewer returned an error event.', stderr: result.stderr, text: result.text }
+      } else {
+        result = final?.is_error || typeof final?.result !== 'string'
+          ? { error: 'Reviewer returned no successful final result.', stderr: result.stderr, text: result.text }
+          : { text: final.result }
+      }
     }
   }
-  if (result.error || !result.text?.trim()) return { ok: false, error: result.error || 'Reviewer returned no content.' }
+  if (result.error || !result.text?.trim()) {
+    const errorText = result.error || result.stderr || result.text || 'Reviewer returned no content.'
+    return {
+      ok: false,
+      error: errorText,
+      ...(result.stderr ? { stderr: result.stderr } : {}),
+      ...(result.text ? { text: result.text } : {}),
+      ...(result.status ? { status: result.status } : {}),
+      ...(result.statusCode ? { statusCode: result.statusCode } : {}),
+      ...(result.name ? { name: result.name } : {}),
+      ...(result.code ? { code: result.code } : {}),
+    }
+  }
   return { ok: true, backend, model, effort: effort || provider.effort || null, content: result.text.trim(), finishReason: normalizeReviewFinishReason(result.finishReason), responseLengthChars: result.text.length }
 }
 
