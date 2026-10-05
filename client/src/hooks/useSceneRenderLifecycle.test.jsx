@@ -152,3 +152,38 @@ describe('useSceneRenderLifecycle', () => {
     expect(result.current.genScenes.s1).toBe(true);
   });
 });
+
+describe('useSceneRenderLifecycle progress and settled outcomes (#10153)', () => {
+  beforeEach(() => { handlers.clear(); getMediaJob.mockReset(); toastError.mockReset(); });
+  afterEach(cleanup);
+
+  const PROGRESS_CFG = { startedEvent: 'image-gen:started', progressEvent: 'image-gen:progress' };
+
+  it('a scene is queued until the job reports running, then carries its progress fraction', () => {
+    const { result } = renderLane(PROGRESS_CFG);
+    act(() => { result.current.startScene('s1'); result.current.trackJob('job-1', 's1'); });
+    expect(result.current.sceneProgress.s1).toBeUndefined();
+    fire('image-gen:started', { generationId: 'job-1', totalSteps: 20 });
+    expect(result.current.sceneProgress.s1).toEqual({ progress: null });
+    fire('image-gen:progress', { generationId: 'job-1', progress: 0.4 });
+    expect(result.current.sceneProgress.s1).toEqual({ progress: 0.4 });
+    fire('image-gen:progress', { generationId: 'someone-elses', progress: 0.9 });
+    expect(result.current.sceneProgress).toEqual({ s1: { progress: 0.4 } });
+    fire('image-gen:completed', { generationId: 'job-1' });
+    expect(result.current.sceneProgress.s1).toBeUndefined();
+  });
+
+  it('reports each tracked job once with its terminal outcome, including an orphan that raced ahead', () => {
+    const onSettled = vi.fn();
+    const { result } = renderLane({ onSettled });
+    act(() => { result.current.startScene('s1'); result.current.startScene('s2'); result.current.startScene('s3'); });
+    act(() => { result.current.trackJob('a', 's1'); result.current.trackJob('b', 's2'); });
+    fire('image-gen:completed', { generationId: 'a' });
+    fire('image-gen:failed', { generationId: 'b' });
+    fire('image-gen:canceled', { generationId: 'c' }); // terminal beats trackJob
+    act(() => result.current.trackJob('c', 's3'));
+    expect(onSettled.mock.calls.map(([e]) => [e.jobId, e.sceneId, e.outcome])).toEqual([
+      ['a', 's1', 'completed'], ['b', 's2', 'failed'], ['c', 's3', 'canceled'],
+    ]);
+  });
+});
