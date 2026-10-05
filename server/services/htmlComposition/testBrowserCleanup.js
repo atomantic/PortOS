@@ -1,5 +1,5 @@
 import { execFileSync } from '../../lib/childProcess.js';
-import { existsSync } from 'node:fs';
+import { closeSync, existsSync, openSync, opendirSync, readSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 
@@ -21,6 +21,82 @@ export function _testChromeCaptureArgs(profile) {
 // that startup diagnostics can report without printing any path.
 export function _selectTestChrome(candidates) {
   return candidates.find(({ path }) => path && existsSync(path));
+}
+
+// Failure-only Linux observations of this owned child and its current worker.
+// Never read cmdline, environ, links, stacks, or arbitrary process output. A
+// fixed prefix per file and at most 16 threads bound both capture and output.
+function readProcPrefix(path) {
+  const fd = openSync(path, 'r');
+  try {
+    const bytes = Buffer.alloc(4096);
+    return bytes.subarray(0, readSync(fd, bytes, 0, bytes.length, 0)).toString();
+  } finally { closeSync(fd); }
+}
+
+function readThreadIds(path) {
+  const dir = opendirSync(path);
+  const ids = [];
+  try {
+    let entry;
+    while (ids.length < 17 && (entry = dir.readSync())) {
+      if (/^[1-9]\d*$/.test(entry.name)) ids.push(entry.name);
+    }
+  } finally { dir.closeSync(); }
+  return ids;
+}
+
+const PROCESS_STATES = { R: 'runnable', S: 'sleeping', D: 'uninterruptible', Z: 'zombie', T: 'stopped', t: 'traced', X: 'dead', I: 'idle' };
+
+export function _testChromeProcessFacts(proc, {
+  platform = process.platform, workerPid = process.pid, read = readProcPrefix, threads = readThreadIds,
+} = {}) {
+  if (platform !== 'linux') return 'os=unsupported';
+  if (!Number.isSafeInteger(proc?.pid) || proc.pid <= 0) return 'os=linux child=unavailable';
+  // Once Node has reaped it, the numeric PID may belong to somebody else.
+  if (proc.exitCode != null || proc.signalCode != null) return 'os=linux child=settled';
+  const stat = pid => {
+    try {
+      const text = read(`/proc/${pid}/stat`).slice(0, 4096);
+      // comm is parenthesized and may contain spaces/parentheses; discard it.
+      const end = text.lastIndexOf(')');
+      if (end < 0) return null;
+      const fields = text.slice(end + 2).trim().split(/\s+/);
+      if (fields.length < 4 || !Object.hasOwn(PROCESS_STATES, fields[0]) || !fields.slice(1, 4).every(x => /^\d+$/.test(x))) return null;
+      return { state: PROCESS_STATES[fields[0]], parent: fields[1], group: fields[2], session: fields[3] };
+    } catch { return null; }
+  };
+  const child = stat(proc.pid);
+  const worker = stat(workerPid);
+  const same = (a, b) => a && b ? (a === b ? 'worker' : 'other') : 'unavailable';
+  const waits = { none: 0, futex: 0, poll: 0, pipe: 0, child: 0, io: 0, other: 0, unavailable: 0 };
+  let ids;
+  try { ids = threads(`/proc/${proc.pid}/task`).filter(x => /^[1-9]\d*$/.test(x)).slice(0, 17); }
+  catch { ids = null; }
+  for (const id of ids?.slice(0, 16) ?? []) {
+    let category = 'unavailable';
+    try {
+      const wait = read(`/proc/${proc.pid}/task/${id}/wchan`).slice(0, 4096).trim();
+      // Exact kernel names only: unfamiliar text never becomes log content.
+      // Zero also occurs when the kernel hides a wait; it doesn't prove runnable.
+      category = wait === '0' ? 'none'
+        : ['futex_wait_queue', 'futex_wait_queue_me', 'futex_wait'].includes(wait) ? 'futex'
+          : ['ep_poll', 'do_epoll_wait', 'do_poll', 'poll_schedule_timeout', 'poll_schedule_timeout.constprop.0'].includes(wait) ? 'poll'
+            : wait === 'pipe_read' ? 'pipe'
+              : ['do_wait', 'kernel_wait4'].includes(wait) ? 'child'
+                : ['io_schedule', 'io_schedule_timeout', 'wait_on_page_bit_common'].includes(wait) ? 'io' : 'other';
+    } catch { /* exited, permissions, or unavailable procfs */ }
+    waits[category]++;
+  }
+  return `os=linux child=${child?.state ?? 'unavailable'} worker=${worker?.state ?? 'unavailable'}`
+    + ` parent=${same(child?.parent, String(workerPid))} group=${same(child?.group, worker?.group)} session=${same(child?.session, worker?.session)}`
+    + ` threads=${ids ? Math.min(ids.length, 16) : 'unavailable'} threadLimit=${ids ? ids.length > 16 : 'unavailable'}`
+    + ` waits=${Object.entries(waits).map(([name, count]) => `${name}:${count}`).join(',')}`;
+}
+
+function describeProcess(proc, observeProcess) {
+  try { return observeProcess(proc); }
+  catch { return 'os=unavailable'; } // Observation must never replace a lifecycle failure.
 }
 
 function executableKind(executable) {
@@ -52,7 +128,7 @@ export function _describeTestChromeStartup(proc, { source = 'unknown', executabl
 
 // Chrome writes its CDP address to stderr. Keep only a bounded tail and report
 // known failure categories: raw stderr can contain the user's profile path.
-export function _waitForTestChrome(proc, timeoutMs = 20000, startup) {
+export function _waitForTestChrome(proc, timeoutMs = 20000, startup, { observeProcess = _testChromeProcessFacts } = {}) {
   return new Promise((resolve, reject) => {
     let stderr = '';
     let timer;
@@ -68,9 +144,10 @@ export function _waitForTestChrome(proc, timeoutMs = 20000, startup) {
         ['crashpad', /crashpad/i],
       ].filter(([, pattern]) => pattern.test(stderr)).map(([name]) => name);
       const base = categories.length ? `; stderr: ${categories.join(', ')}` : stderr ? '; Chrome emitted stderr' : '; no stderr';
-      if (!startup) return base;
+      const processFacts = `; process: ${describeProcess(proc, observeProcess)}`;
+      if (!startup) return base + processFacts;
       proc.spawnedSeen = spawned;
-      return `${base}; startup: ${_describeTestChromeStartup(proc, startup)}`;
+      return `${base}; startup: ${_describeTestChromeStartup(proc, startup)}${processFacts}`;
     };
     const cleanup = () => {
       clearTimeout(timer);
@@ -120,7 +197,7 @@ async function withinDeadline(action, timeoutMs, stage, facts = () => '') {
   }
 }
 
-async function terminateOwnedChrome(proc) {
+async function terminateOwnedChrome(proc, observeProcess) {
   if (!proc || proc.exitCode !== null || proc.signalCode !== null) return;
   let escalation;
   let exitObserved = false;
@@ -166,7 +243,7 @@ async function terminateOwnedChrome(proc) {
         delayMs: 3000,
       });
       return exited;
-    }, 10000, 'child termination', facts);
+    }, 10000, 'child termination', () => `${facts()}; process: ${describeProcess(proc, observeProcess)}`);
     if (signalError !== 'none') throw new Error(`Test Chrome signal delivery error${facts()}`);
   } finally {
     clearTimeout(escalation);
@@ -179,11 +256,12 @@ async function terminateOwnedChrome(proc) {
 
 // Test-only lifecycle boundary. Disconnect failure must not strand the owned
 // child, and neither failure may prevent removal of temporary test data.
-export async function _cleanupTestBrowser({ browser, proc, cleanup }) {
+export async function _cleanupTestBrowser({ browser, proc, cleanup, observeProcess = _testChromeProcessFacts }) {
   const errors = [];
   try {
-    await withinDeadline(() => browser?.close(), 5000, 'browser disconnect').catch(error => errors.push(error));
-    await terminateOwnedChrome(proc).catch(error => errors.push(error));
+    await withinDeadline(() => browser?.close(), 5000, 'browser disconnect',
+      () => `; process: ${describeProcess(proc, observeProcess)}`).catch(error => errors.push(error));
+    await terminateOwnedChrome(proc, observeProcess).catch(error => errors.push(error));
   } finally {
     proc?.stderr?.destroy();
     await cleanup();
