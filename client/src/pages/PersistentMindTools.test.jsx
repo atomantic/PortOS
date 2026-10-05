@@ -117,9 +117,9 @@ describe('PersistentMindTools', () => {
     ));
     expect(await screen.findByText(/persistent-mind capabilities granted/)).toHaveTextContent('1 of 1');
     expect(screen.getByText('Granted')).toBeInTheDocument();
-    expect(await screen.findByText('Available task filing choices')).toBeInTheDocument();
+    expect(screen.queryByText('Coding providers, models, and effort')).not.toBeInTheDocument();
     expect(screen.getAllByText(/Implementation or Plan & File Issue/)).not.toHaveLength(0);
-    expect(screen.getByText('gpt-5 · low, high')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Example App automation' })).toHaveAttribute('href', '/apps/example-app/automation');
     expect(api.getPersistentMindTools).toHaveBeenCalledTimes(2);
   });
 
@@ -190,7 +190,7 @@ describe('PersistentMindTools', () => {
       { silent: true },
     ));
     expect(secondApp).not.toBeChecked();
-    expect(screen.getByRole('link', { name: 'Example App' })).toHaveAttribute('href', '/apps/example-app/automation');
+    expect(screen.getByRole('link', { name: 'Example App automation' })).toHaveAttribute('href', '/apps/example-app/automation');
   });
 
   it('does not let a stale catalog refresh restore a revoked grant', async () => {
@@ -218,7 +218,7 @@ describe('PersistentMindTools', () => {
     }));
 
     await waitFor(() => expect(toggle).not.toBeChecked());
-    expect(screen.queryByText('Available task filing choices')).not.toBeInTheDocument();
+    expect(screen.queryByText('Stale App')).not.toBeInTheDocument();
   });
 
   it('grants issue filing independently and scopes it with the shared managed-app roster', async () => {

@@ -59,12 +59,12 @@ export default function PersistentMindToolExposureControls({
     <div className="space-y-4 border-t border-port-border pt-4">
       <div>
         <p className="text-sm text-port-text">Progressive tool exposure</p>
-        <p className="mt-0.5 text-xs text-port-text-muted">Full tool schemas cost context. Only the small always-on core is shown by default; everything else is a one-line index until the mind calls tools.activate for its family. This changes only what is shown — every capability grant above still applies.</p>
+        <p className="mt-0.5 text-xs text-port-text-muted">Most schemas stay as a one-line index until the mind activates that family. Grants above still decide what it may call.</p>
       </div>
       <div className="flex items-start justify-between gap-4">
         <div>
           <label htmlFor={retentionId} className="text-sm text-port-text">Retention window (extra turns)</label>
-          <p className="mt-0.5 text-xs text-port-text-muted">How many additional user turns an activated family stays fully expanded after the turn that activated it. 0 is one-turn-only.</p>
+          <p className="mt-0.5 text-xs text-port-text-muted">Extra turns a family stays expanded. 0 keeps only the activating turn.</p>
         </div>
         <input
           id={retentionId}
@@ -84,8 +84,8 @@ export default function PersistentMindToolExposureControls({
       </div>
       <div className="flex items-start justify-between gap-4">
         <div>
-          <label htmlFor={allSchemasId} className="text-sm text-port-text">Send every schema on every turn (debug escape hatch)</label>
-          <p className="mt-0.5 text-xs text-port-text-muted">Restores the pre-progressive-exposure behavior: every granted tool's full schema, every turn. Use this only to debug a routing problem — it costs the most context.</p>
+          <label htmlFor={allSchemasId} className="text-sm text-port-text">Send every schema on every turn</label>
+          <p className="mt-0.5 text-xs text-port-text-muted">Debug only. Sends every granted schema on each turn.</p>
         </div>
         <input
           id={allSchemasId}
