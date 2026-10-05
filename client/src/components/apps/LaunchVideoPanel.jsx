@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { Download, Images, Upload, X } from 'lucide-react';
 import Drawer from '../Drawer';
 import ProviderModelSelector from '../ProviderModelSelector';
+import FilmStylePicker from '../codeAnimation/FilmStylePicker';
 import FilePickerButton from '../ui/FilePickerButton';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import GalleryVideoPicker from '../videoGen/GalleryVideoPicker';
@@ -50,6 +51,7 @@ function LaunchVideoForm({ appId, onQueued }) {
   const [formats, setFormats] = useState(['landscape']);
   const [duration, setDuration] = useState(20);
   const [motionStyle, setMotionStyle] = useState('walkthrough');
+  const [styleGrammarId, setStyleGrammarId] = useState('');
   const [critiqueRounds, setCritiqueRounds] = useState(2);
   const [motionBlur, setMotionBlur] = useState('');
   const [motionSkills, setMotionSkills] = useState(false);
@@ -120,6 +122,7 @@ function LaunchVideoForm({ appId, onQueued }) {
     await createAppLaunchVideo(appId, {
       // A single frame keeps the original `format` request shape.
       tone, direction, ...(formats.length === 1 ? { format: formats[0] } : { formats }), targetDurationSec: duration, motionStyle, critiqueRounds,
+      ...(styleGrammarId ? { styleGrammarId } : {}),
       ...(motionBlur ? { motionBlur } : {}),
       ...(consultSkills ? { motionSkills: true } : {}),
       ...(music ? (generateMusic ? { generateMusic: true, musicMethod } : { musicTrack }) : {}),
@@ -179,6 +182,8 @@ function LaunchVideoForm({ appId, onQueued }) {
       </select>
       <p className="text-sm text-port-text-muted">{MOTION_STYLES.find(([value]) => value === motionStyle)[2]}</p>
     </div>
+    <FilmStylePicker id="launch-film-style" value={styleGrammarId} onChange={setStyleGrammarId} inputClass={inputClass}
+      hint="optional motion, camera and sound rules; the app's palette and fonts still win" noneLabel="None (motion style only)" />
     <div>
       <label htmlFor="launch-critique-rounds">Critique rounds</label>
       <select id="launch-critique-rounds" className={inputClass} value={critiqueRounds} onChange={event => setCritiqueRounds(Number(event.target.value))}>

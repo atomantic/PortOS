@@ -17,6 +17,11 @@ const api = vi.hoisted(() => ({
   updateMusicVideoProject: vi.fn(),
 }));
 vi.mock('../../services/apiMusicVideo.js', () => api);
+// The shared Film style picker reads the catalog through the api barrel.
+vi.mock('../../services/api', () => ({
+  listFilmStyles: vi.fn(async () => [{ id: 'example-style', label: 'Example style', summary: 'A fixture style.', nativeMoves: [] }]),
+  getFilmStyle: vi.fn(async () => ({ id: 'example-style', nativeMoves: [] })),
+}));
 const authorProvider = vi.hoisted(() => ({ type: 'api', toolFreeOneShot: true }));
 vi.mock('../../hooks/useProviderModels.js', () => ({ default: () => ({
   providers: [{ id: 'stub-provider', name: 'Stub Provider', models: ['fixture-model'], ...authorProvider }],
@@ -113,6 +118,22 @@ describe('DocumentCompositionPanel', () => {
     expect(api.generateMusicVideoMixedMediaDocument).not.toHaveBeenCalled();
   });
 
+  it('saves a film style grammar on the composition and clears it by omitting the key', async () => {
+    const styled = { ...attached, composition: { ...attached.composition, styleGrammarId: 'example-style' } };
+    api.updateMusicVideoProject.mockResolvedValueOnce(styled).mockResolvedValueOnce(attached);
+    const onProject = vi.fn();
+    const view = render(<DocumentCompositionPanel project={attached} onProject={onProject} onSave={vi.fn()} />);
+    await screen.findByRole('option', { name: 'Example style' });
+    fireEvent.change(screen.getByLabelText(/^film style/i), { target: { value: 'example-style' } });
+    await waitFor(() => expect(onProject).toHaveBeenCalledWith(styled));
+    expect(api.updateMusicVideoProject.mock.calls[0][1].composition).toMatchObject({ mode: 'document', styleGrammarId: 'example-style' });
+    view.rerender(<DocumentCompositionPanel project={styled} onProject={onProject} onSave={vi.fn()} />);
+    await waitFor(() => expect(screen.getByLabelText(/^film style/i).value).toBe('example-style'));
+    fireEvent.change(screen.getByLabelText(/^film style/i), { target: { value: '' } });
+    await waitFor(() => expect(api.updateMusicVideoProject).toHaveBeenCalledTimes(2));
+    expect(api.updateMusicVideoProject.mock.calls[1][1].composition).not.toHaveProperty('styleGrammarId');
+  });
+
   it('starts from the template in one click when nothing is attached', async () => {
     const onProject = vi.fn();
     render(<DocumentCompositionPanel project={bare} onProject={onProject} onSave={vi.fn()} />);
@@ -139,9 +160,10 @@ describe('DocumentCompositionPanel', () => {
     await waitFor(() => expect(onProject).toHaveBeenLastCalledWith(bare));
   });
 
-  it('expires the replace and detach confirmations after 5 seconds without acting', () => {
+  it('expires the replace and detach confirmations after 5 seconds without acting', async () => {
     vi.useFakeTimers();
     render(<DocumentCompositionPanel project={attached} onProject={vi.fn()} onSave={vi.fn()} />);
+    await act(async () => {}); // settle the film style catalog load
 
     fireEvent.click(screen.getByRole('button', { name: /Replace with template/ }));
     expect(screen.getByRole('button', { name: /Click again to replace/ })).toBeTruthy();
