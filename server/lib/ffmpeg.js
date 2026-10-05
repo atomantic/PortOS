@@ -447,7 +447,7 @@ const parseDb = (v) => (/-\s*inf/i.test(String(v)) ? -Infinity : /inf/i.test(Str
  * Read the JSON block `loudnorm=print_format=json` writes to stderr. Returns
  * the unrounded measurement, or null when no block is present.
  */
-export function parseLoudnormJson(stderr) {
+function parseLoudnormJson(stderr) {
   const block = String(stderr ?? '').match(/\{[^{}]*"input_i"[^{}]*\}/g)?.pop();
   if (!block) return null;
   let raw;
@@ -464,7 +464,7 @@ export function parseLoudnormJson(stderr) {
  * Resolves `{ ok: true, measured }` (values rounded to 0.1 for reporting;
  * `raw` keeps full precision for the apply pass) or `{ ok: false, reason }`.
  */
-export async function measureLoudness({ bin, inputArgs, prefilter = '', durationSec, signal, run = runFfmpegProcess }) {
+async function measureLoudness({ bin, inputArgs, prefilter = '', durationSec, signal, run = runFfmpegProcess }) {
   const filter = [prefilter, `loudnorm=${loudnormTarget}:print_format=json`].filter(Boolean).join(',');
   const result = await run({
     bin, signal, returnStderr: true, stderrTailBytes: 8000,
@@ -477,7 +477,7 @@ export async function measureLoudness({ bin, inputArgs, prefilter = '', duration
 }
 
 /** Apply pass: loudnorm in linear mode fed the numbers the measurement pass found. */
-export function loudnormApplyFilter(raw) {
+function loudnormApplyFilter(raw) {
   const n = (v) => Math.round(v * 100) / 100;
   return `loudnorm=${loudnormTarget}:measured_I=${n(raw.integratedLufs)}:measured_TP=${n(raw.truePeakDb)}:measured_LRA=${n(raw.loudnessRange)}:measured_thresh=${n(raw.thresholdDb)}:offset=${n(raw.offsetDb)}:linear=true,aresample=48000`;
 }
