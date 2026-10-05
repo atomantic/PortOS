@@ -135,4 +135,23 @@ describe('X page', () => {
     expect(await screen.findByText(/This X account was not found/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Return to accounts.' })).toBeInTheDocument();
   });
+
+  it('displays a loading spinner in the draft queue while drafts are loading', async () => {
+    let resolveDrafts;
+    const draftsPromise = new Promise((resolve) => {
+      resolveDrafts = resolve;
+    });
+    api.getXDrafts.mockReturnValueOnce(draftsPromise);
+
+    renderPage(`/x/${account.id}/drafts`);
+    await screen.findByRole('heading', { name: 'Draft queue' });
+
+    expect(screen.getByLabelText('Loading drafts…')).toBeInTheDocument();
+    expect(screen.queryByText(`No drafts for @${account.username}.`)).not.toBeInTheDocument();
+
+    await resolveDrafts({ drafts: [] });
+
+    expect(await screen.findByText(`No drafts for @${account.username}.`)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Loading drafts…')).not.toBeInTheDocument();
+  });
 });
