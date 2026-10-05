@@ -383,7 +383,7 @@ describe('stageChecklist', () => {
     expect(items.map((i) => [i.id, i.done])).toEqual([['direction', true], ['guide', true], ['approve-art', false]]);
     expect(items[1].label).toBe('Visual guide chosen: Cast sheet');
     expect(items[2].detail).toMatch(/Approving a sheet file does not approve the art direction/);
-    expect(items[2].action).toEqual({ label: 'Review art direction', anchor: 'mv-review-art' });
+    expect(items[2].action).toEqual({ label: 'Review art direction', anchor: 'mv-review-art', stage: 'cast-sets' });
     // Its done answer matches the tab's own state, so the checklist and the "needs you" mark agree.
     expect(deriveStages(castProject(), NOT_APPROVED).current).toBe('cast-sets');
     const approved = stageChecklist('cast-sets', castProject(), APPROVED);

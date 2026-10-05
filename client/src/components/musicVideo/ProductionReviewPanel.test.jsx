@@ -49,17 +49,6 @@ describe('Production proof playback evidence', () => {
     });
   });
 
-  it('keeps the proof render and approval on Compose; other tabs point there instead (#10140)', () => {
-    const onOpenProof = vi.fn();
-    render(<ProductionReviewPanel project={project} review={reviewFixture()} onOpenArtifact={vi.fn()} proofHere={false} onOpenProof={onOpenProof} />);
-    expect(screen.queryByRole('button', { name: 'Render animated proof' })).toBeNull();
-    expect(screen.queryByRole('button', { name: proofAction })).toBeNull();
-    expect(screen.queryByLabelText('Animated proof with master audio')).toBeNull();
-    // Art and storyboard approvals stay on every tab.
-    expect(screen.getByRole('button', { name: 'Approve art direction' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Open the proof in Compose' }));
-    expect(onOpenProof).toHaveBeenCalledTimes(1);
-  });
 
   it('explains why a completed prototype cannot be approved and opens the missing prerequisites', () => {
     const review = reviewFixture();
@@ -314,5 +303,29 @@ describe('Stale alignment review', () => {
     expect(button.disabled).toBe(true);
     view.rerender(<ProductionReviewPanel project={vocal} review={{ ...review, busy: true }} onOpenArtifact={vi.fn()} />);
     expect(button.disabled).toBe(true);
+  });
+});
+
+describe('Per-stage approval sections (#10151)', () => {
+  it('renders only its own stage and sends a missing prerequisite to the tab that owns it', () => {
+    const review = reviewFixture();
+    review.readiness.art.approved = false;
+    const prototype = { ...project, productionReview: { ...project.productionReview, proof: null, prototype: { excerptId: 'proof-a' } } };
+    const onNavigate = vi.fn();
+    render(<ProductionReviewPanel project={prototype} review={review} onOpenArtifact={vi.fn()} stage="proof" onNavigate={onNavigate} />);
+    expect(screen.queryByText('Art direction', { selector: 'summary' })).toBeNull();
+    expect(screen.queryByText('Edit art direction and visual guide')).toBeNull();
+    fireEvent.click(screen.getByText('Review and approve art direction'));
+    expect(onNavigate).toHaveBeenCalledWith('cast-sets', 'mv-review-art');
+  });
+
+  it('keeps the art fields on the art section and the shot editor on the board section', () => {
+    const art = render(<ProductionReviewPanel project={project} review={reviewFixture()} onOpenArtifact={vi.fn()} stage="art" />);
+    expect(screen.getByLabelText('Cast guide')).toBeTruthy();
+    expect(screen.queryByLabelText('Storyboard source')).toBeNull();
+    art.unmount();
+    render(<ProductionReviewPanel project={project} review={reviewFixture()} onOpenArtifact={vi.fn()} stage="storyboard" />);
+    expect(screen.getByLabelText('Storyboard source')).toBeTruthy();
+    expect(screen.queryByLabelText('Cast guide')).toBeNull();
   });
 });
