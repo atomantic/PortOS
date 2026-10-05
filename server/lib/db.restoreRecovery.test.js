@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const fixture = vi.hoisted(() => ({ dataRoot: null, releaseFault: null }));
+const fixture = vi.hoisted(() => ({ dataRoot: null, releaseFault: null, executionFault: false }));
 vi.mock('node:fs', async (importOriginal) => {
   const fs = await importOriginal();
   return {
@@ -36,6 +36,16 @@ vi.mock('../scripts/run-db-migrations.js', () => ({
 }));
 vi.mock('../services/syncOrchestrator.js', () => ({
   rewindPostgresSyncCursors: vi.fn(async () => 2),
+}));
+// This suite isolates generic DB admission/release with a statement-free pg
+// pool. Real execution-ledger SQL/capture/retry lives in the two DB fixtures.
+vi.mock('../services/peerExecutionRestore.js', () => ({
+  finishPeerExecutionRestore: vi.fn(async () => {
+    if (fixture.executionFault) throw Object.assign(new Error('synthetic execution reconciliation failure'), {
+      code: 'PEER_EXECUTION_AUTHORITY_UNAVAILABLE', status: 503,
+    });
+    return { phase: 'ready' };
+  }),
 }));
 vi.mock('./paths.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -71,11 +81,25 @@ const FENCED = { status: 503, code: 'DATABASE_RESTORE_RECOVERY' };
 
 beforeEach(() => {
   rmSync(databaseRestoreRecovery.path, { force: true });
+  fixture.executionFault = false;
   vi.clearAllMocks();
 });
 afterAll(() => rmSync(fixture.dataRoot, { recursive: true, force: true }));
 
 describe('restore recovery admission', () => {
+  it('retains generic admission when execution reconciliation fails and releases only after same-ID retry succeeds', async () => {
+    const record = databaseRestoreRecovery.markCommitted(begin().id);
+    fixture.executionFault = true;
+    expect(await resumeDatabaseRestore(record.id)).toMatchObject({ status: 'failed', reason: 'restore_execution_reconciliation', recovery: { id: record.id } });
+    expect(databaseRestoreRecovery.read()).toEqual(record);
+    await expect(query('SELECT ordinary')).rejects.toMatchObject(FENCED);
+    const { rewindPostgresSyncCursors } = await import('../services/syncOrchestrator.js');
+    expect(rewindPostgresSyncCursors).not.toHaveBeenCalled();
+    fixture.executionFault = false;
+    expect(await resumeDatabaseRestore(record.id)).toMatchObject({ status: 'ok', outcome: 'repaired' });
+    expect(getDatabaseRestoreRecoveryStatus()).toEqual({ pending: false });
+    await expect(query('SELECT ordinary')).resolves.toEqual({ rows: [] });
+  });
   it('keeps ordinary work fenced after the restore that adopted the operation returns', async () => {
     let id;
     await withDatabaseMaintenance(async ({ adoptRestoreRecovery }) => {
