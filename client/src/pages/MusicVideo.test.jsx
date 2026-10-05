@@ -71,6 +71,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   musicVideoVocalSeparationEventsUrl: (jobId) => `/api/music-video/vocal-stem/separate/${jobId}/events`,
   cancelMusicVideoVocalSeparation: vi.fn(async () => ({ ok: true })),
   getMusicVideoActiveRender: vi.fn(async () => ({ jobId: null })),
+  getMusicVideoSceneJobs: vi.fn(async () => ({ jobs: [] })),
   renderMusicVideoProject: vi.fn(async () => ({ jobId: 'job-1' })),
   musicVideoRenderEventsUrl: (jobId) => `/api/music-video/render/${jobId}/events`,
   cancelMusicVideoRender: vi.fn(async () => ({ ok: true })),

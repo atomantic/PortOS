@@ -16,6 +16,13 @@ import { EventEmitter } from 'events';
 // synchronous external-SD-API lane (which returns the image filename inline and
 // lets the client add it as a take through the takes route; video renders
 // always ride the queue, so the clip attach is hook-only).
+//   'scene-failure' → { projectId, sceneId, lastFailure: { lane, error, at } | null }
+//
+// `scene-image` / `scene-video` also carry the scene's `lastFailure` (null once a
+// take lands for that lane). 'scene-failure' is emitted by the same hooks when a
+// render FAILS (#10154) after the failure is persisted on the scene, bridged to
+// `music-video:scene-failure`, so the board's "Frame failed: <reason> · Retry"
+// chip appears without a refetch and survives a reload.
 //
 // #8988 adds two more:
 //   'excerpt-render' → { projectId, excerptId, status } — a draft excerpt

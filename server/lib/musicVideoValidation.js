@@ -1141,6 +1141,14 @@ export const musicVideoSceneCreateSchema = z.object({
   { message: 'endSec must be >= startSec', path: ['endSec'] },
 );
 
+// The last render failure persisted on a scene by the scene image/video hooks
+// (#10154): which lane failed, why (one bounded line), and when.
+export const musicVideoSceneLastFailureSchema = z.object({
+  lane: z.enum(['image', 'video']),
+  error: z.string().max(300),
+  at: z.string().max(64),
+}).strict();
+
 // Times are nullable here so clearing a Start/End input (the UI sends `null`)
 // is accepted. The endSec >= startSec invariant can't be checked on the partial
 // patch alone (the paired value may live on the existing record), so the merged
@@ -1168,6 +1176,10 @@ export const musicVideoSceneUpdateSchema = z.object({
   performanceSpeaker: z.string().trim().max(120).nullable().optional(),
   referenceImageId: z.string().max(256).nullable().optional(),
   videoHistoryId: z.string().max(64).nullable().optional(),
+  // #10154: the last generation failure the render hooks persisted. The board
+  // may send `null` to dismiss it; a full object is accepted so a client that
+  // round-trips the scene doesn't 400.
+  lastFailure: musicVideoSceneLastFailureSchema.nullable().optional(),
 }).strict();
 
 // Reorder the board: the full set of scene ids in their new order.

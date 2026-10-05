@@ -172,6 +172,11 @@ export const renderMusicVideoProject = (id, options = {}) =>
 // stream. Never starts a render — only the POST above does (#9940).
 export const getMusicVideoActiveRender = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/render`, options);
+// Read-only: resolves { jobs: [{ jobId, lane: 'image'|'video', sceneId, status }] }
+// — the project's in-flight scene frame/clip renders on this install — so a
+// reloaded board restores its spinners instead of allowing duplicate submits (#10154).
+export const getMusicVideoSceneJobs = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/scene-jobs`, options);
 export const getMusicVideoCodeDocument = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/code/document`, options);
 export const generateMusicVideoCode = (id, body = {}, options = {}) =>

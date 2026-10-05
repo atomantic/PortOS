@@ -311,6 +311,8 @@ const SIMPLE_BRIDGES = [
   // production run advancing (#9066) — all without a client refetch.
   { emitter: musicVideoEvents, event: 'scene-image', channel: 'music-video:scene-image' },
   { emitter: musicVideoEvents, event: 'scene-video', channel: 'music-video:scene-video' },
+  // A scene render failed (or its recorded failure cleared) — #10154.
+  { emitter: musicVideoEvents, event: 'scene-failure', channel: 'music-video:scene-failure' },
   { emitter: musicVideoEvents, event: 'auto-review', channel: 'music-video:auto-review' },
   { emitter: musicVideoEvents, event: 'production', channel: 'music-video:production' },
   // A fully-autonomous run (prompt → lyrics → Suno song → video) advancing.

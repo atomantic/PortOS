@@ -112,6 +112,7 @@ import {
 } from '../services/audioMidiTranscription.js';
 import { analyzeAudioFileManual, buildManualAnalysisFromCached } from '../services/musicVideo/audioAnalysis.js';
 import { analyzeProjectSong, resolveProjectAudioPath } from '../services/musicVideo/projectAudio.js';
+import { listInFlightSceneJobs } from '../services/musicVideo/sceneJobs.js';
 import { renderMusicVideo, attachRenderSseClient, cancelRender, getActiveRenderJobId } from '../services/musicVideo/render.js';
 import { prepareCodeRender } from '../services/musicVideo/codeRender.js';
 import { generateMusicVideoCode, regenerateMusicVideoCodeSection } from '../services/musicVideo/codeGeneration.js';
@@ -553,6 +554,12 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
 // this instance), so a reloaded page re-attaches without POSTing a new render.
 router.get('/:id/render', (req, res) => {
   res.json({ jobId: getActiveRenderJobId(req.params.id) });
+});
+
+// Read-only: this project's in-flight scene frame/clip renders (#10154), so a
+// reloaded board restores its spinners instead of letting a duplicate be submitted.
+router.get('/:id/scene-jobs', (req, res) => {
+  res.json({ jobs: listInFlightSceneJobs(req.params.id) });
 });
 
 router.post('/:id/production-review/feedback', asyncHandler(async (req, res) => {

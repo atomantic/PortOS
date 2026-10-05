@@ -1,8 +1,10 @@
 import { shotActionContractProblem, shotActionPrompt } from '../../../server/lib/musicVideoActionContract.js';
 import { musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
 import { musicVideoCreativeContext } from '../../../server/lib/musicVideoCreativeContext.js';
+import { useEffect, useRef } from 'react';
+import socket from '../services/socket';
 import toast from '../components/ui/Toast';
-import { addMusicVideoSceneTake } from '../services/apiMusicVideo.js';
+import { addMusicVideoSceneTake, getMusicVideoSceneJobs } from '../services/apiMusicVideo.js';
 import { generateImage } from '../services/apiSystem.js';
 import { generateVideo } from '../services/apiImageVideo.js';
 import useSceneBatch from './useSceneBatch.js';
@@ -90,6 +92,14 @@ const sceneSpanSec = (scene) => (typeof scene.startSec === 'number' && typeof sc
 export default function useMusicVideoSceneMedia({ project, videoSettings, applyScenePatch } = {}) {
   const frameBatch = useSceneBatch();
   const videoBatch = useSceneBatch();
+  // Latest scenes for the failure toasts' scene names, read lazily (a lane
+  // callback fires long after the render that created it).
+  const projectRef = useRef(project);
+  projectRef.current = project;
+  const sceneLabel = (sceneId) => {
+    const scene = projectRef.current?.scenes?.find((s) => s.sceneId === sceneId);
+    return scene ? (scene.sectionLabel || scene.label || `Scene ${(scene.order ?? 0) + 1}`) : '';
+  };
   const frameLane = useSceneRenderLifecycle({
     attachEvent: 'music-video:scene-image',
     completedEvent: 'image-gen:completed',
@@ -98,9 +108,10 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     startedEvent: 'image-gen:started',
     progressEvent: 'image-gen:progress',
     onSettled: frameBatch.settled,
-    apply: ({ projectId, sceneId, referenceImageId, takes }) =>
-      applyScenePatch?.(projectId, sceneId, { referenceImageId, ...(Array.isArray(takes) ? { takes } : {}) }),
+    apply: ({ projectId, sceneId, referenceImageId, takes, lastFailure }) =>
+      applyScenePatch?.(projectId, sceneId, { referenceImageId, ...(Array.isArray(takes) ? { takes } : {}), ...(lastFailure !== undefined ? { lastFailure } : {}) }),
     failMessage: 'Frame render failed',
+    sceneLabel,
   });
   const videoLane = useSceneRenderLifecycle({
     attachEvent: 'music-video:scene-video',
@@ -110,10 +121,40 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     startedEvent: 'video-gen:started',
     progressEvent: 'video-gen:progress',
     onSettled: videoBatch.settled,
-    apply: ({ projectId, sceneId, videoHistoryId, takes }) =>
-      applyScenePatch?.(projectId, sceneId, { videoHistoryId, ...(Array.isArray(takes) ? { takes } : {}) }),
+    apply: ({ projectId, sceneId, videoHistoryId, takes, lastFailure }) =>
+      applyScenePatch?.(projectId, sceneId, { videoHistoryId, ...(Array.isArray(takes) ? { takes } : {}), ...(lastFailure !== undefined ? { lastFailure } : {}) }),
     failMessage: 'Scene video render failed',
+    sceneLabel,
   });
+
+  // The server persists a failed scene render on the scene (#10154); fold it in
+  // live so the card's "failed · Retry" chip appears without a refetch.
+  const applyRef = useRef(applyScenePatch);
+  applyRef.current = applyScenePatch;
+  useEffect(() => {
+    const onFailure = ({ projectId, sceneId, lastFailure }) => applyRef.current?.(projectId, sceneId, { lastFailure: lastFailure ?? null });
+    socket.on('music-video:scene-failure', onFailure);
+    return () => socket.off('music-video:scene-failure', onFailure);
+  }, []);
+
+  // After a reload the lanes' spinners (React state) are gone while the queue
+  // keeps rendering — restore them from the server so the batch actions skip
+  // those scenes and no duplicate (possibly paid) render is submitted (#10154).
+  const projectId = project?.id;
+  const { restoreJobs: restoreFrameJobs } = frameLane;
+  const { restoreJobs: restoreVideoJobs } = videoLane;
+  useEffect(() => {
+    if (!projectId) return undefined;
+    let live = true;
+    getMusicVideoSceneJobs(projectId, { silent: true })
+      .then(({ jobs }) => {
+        if (!live || !Array.isArray(jobs)) return;
+        restoreFrameJobs(jobs.filter((j) => j.lane === 'image'));
+        restoreVideoJobs(jobs.filter((j) => j.lane === 'video'));
+      })
+      .catch(() => {}); // best-effort: a failed lookup just means no restored spinners
+    return () => { live = false; };
+  }, [projectId, restoreFrameJobs, restoreVideoJobs]);
   const genScenes = frameLane.genScenes;
   const genVideoScenes = videoLane.genScenes;
   const failedScenes = { frame: frameLane.failedScenes, video: videoLane.failedScenes };
