@@ -24,8 +24,8 @@ import VoicePicker from '../../voice/VoicePicker';
 import toast from '../../ui/Toast';
 import ProgressBar from '../../ui/ProgressBar';
 import { formatDurationMs } from '../../../utils/formatters';
-import { countLinesNeedingListen } from '../SpokenCheckChip';
-import { narratePipelineProse } from '../../../services/api';
+import SpokenCheckChip, { countLinesNeedingListen } from '../SpokenCheckChip';
+import { acceptNarrationSegmentSpeech, narratePipelineProse, rerenderNarrationSegment } from '../../../services/api';
 import { STAGE_LABEL } from './constants';
 import { clickableProps, onActivateKeyDown } from '../../../lib/a11yKeyboard';
 import { safeReadStorage, safeWriteStorage } from '../../../lib/safeStorage';
@@ -43,6 +43,8 @@ export default function ManuscriptReadAloud({ open, onClose, section }) {
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [isPlaying, setIsPlaying] = useState(false);
   const [elapsedMs, setElapsedMs] = useState(0);
+  // Segment index being re-rendered / re-scored (one at a time), or null.
+  const [busyIndex, setBusyIndex] = useState(null);
 
   const audioRef = useRef(null);
   // Gates the post-synthesis state writes so a narration that resolves after the
@@ -81,6 +83,10 @@ export default function ManuscriptReadAloud({ open, onClose, section }) {
   }, [segments]);
 
   const listenCount = useMemo(() => countLinesNeedingListen(segments), [segments]);
+  const mismatchedSegments = useMemo(
+    () => (segments || []).filter((s) => s.verification?.status === 'mismatch'),
+    [segments],
+  );
   const hardCount = useMemo(
     () => (segments || []).filter((s) => s.readability?.hard).length,
     [segments],
@@ -128,6 +134,49 @@ export default function ManuscriptReadAloud({ open, onClose, section }) {
     // unmounted and the play effect would set "Pause" with nothing playing. The
     // segments still load, so reopening shows the prose ready to Play.
     if (segs.length && openRef.current) { setCurrentIndex(0); setIsPlaying(true); }
+  };
+
+  // Merge a per-segment update into the cached segments by index.
+  const patchSegment = (index, patch) => {
+    setSegments((prev) => (prev ? prev.map((seg) => (seg.index === index ? { ...seg, ...patch } : seg)) : prev));
+  };
+
+  // Re-synthesize one sentence (honoring any accepted spelling) and re-check it.
+  const rerenderSegment = async (seg) => {
+    setBusyIndex(seg.index);
+    const reqContent = content;
+    const result = await rerenderNarrationSegment(
+      reqContent.slice(seg.start, seg.end), voiceId || undefined, seg.expectedSpeech, { silent: true },
+    ).catch((err) => {
+      toast.error(err.message || 'Failed to re-render sentence');
+      return null;
+    });
+    if (!mountedRef.current) return;
+    setBusyIndex(null);
+    if (!result || contentRef.current !== reqContent) return;
+    patchSegment(seg.index, {
+      filename: result.filename,
+      durationMs: result.durationMs,
+      verification: result.verification,
+    });
+  };
+
+  // "Accept as spoken": what speech-to-text heard becomes the expected read.
+  const acceptSegment = async (seg) => {
+    const heard = seg.verification?.heard;
+    if (!heard) return;
+    setBusyIndex(seg.index);
+    const reqContent = content;
+    const result = await acceptNarrationSegmentSpeech(
+      reqContent.slice(seg.start, seg.end), heard, heard, { silent: true },
+    ).catch((err) => {
+      toast.error(err.message || 'Failed to accept as spoken');
+      return null;
+    });
+    if (!mountedRef.current) return;
+    setBusyIndex(null);
+    if (!result || contentRef.current !== reqContent) return;
+    patchSegment(seg.index, { expectedSpeech: result.expectedSpeech, verification: result.verification });
   };
 
   const togglePlay = () => {
@@ -311,6 +360,28 @@ export default function ManuscriptReadAloud({ open, onClose, section }) {
                   <AlertTriangle size={11} />
                   {listenCount} of {segments.length} sentence{segments.length === 1 ? '' : 's'} need a listen — speech-to-text heard something different from the text.
                 </p>
+              ) : null}
+              {mismatchedSegments.length > 0 ? (
+                <ul className="max-h-32 overflow-y-auto space-y-1" aria-label="Sentences that need a listen">
+                  {mismatchedSegments.map((seg) => (
+                    <li key={seg.index} className="text-[11px] text-gray-400 flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => jumpTo(seg.index)}
+                        className="truncate max-w-[16rem] text-left underline decoration-dotted hover:text-white"
+                        title={content.slice(seg.start, seg.end)}
+                      >
+                        {content.slice(seg.start, seg.end)}
+                      </button>
+                      <SpokenCheckChip
+                        verification={seg.verification}
+                        busy={busyIndex !== null}
+                        onRerender={() => rerenderSegment(seg)}
+                        onAccept={() => acceptSegment(seg)}
+                      />
+                    </li>
+                  ))}
+                </ul>
               ) : null}
               {hardCount > 0 ? (
                 <p className="flex items-center gap-1.5 text-[11px] text-port-warning">

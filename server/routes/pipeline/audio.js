@@ -117,6 +117,49 @@ router.post('/tts/narrate', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+// Re-render ONE narration segment (#10258). Narration segments are client-held
+// (the read-aloud modal never persists them), so this is stateless: the client
+// sends the segment text back and gets fresh audio + a fresh spoken-text check.
+// `expectedSpeech` is the user's accepted recognizer spelling for the segment.
+const ttsNarrateSegmentSchema = z.object({
+  text: z.string().trim().min(1).max(4000),
+  voiceId: z.string().trim().max(200).optional(),
+  expectedSpeech: z.string().trim().max(4000).nullable().optional(),
+});
+router.post('/tts/narrate/segment', asyncHandler(async (req, res) => {
+  const body = validateRequest(ttsNarrateSegmentSchema, req.body ?? {});
+  const result = await synthesizeToFile({
+    text: body.text,
+    voiceId: body.voiceId,
+    expectedSpeech: body.expectedSpeech || undefined,
+  }).catch((err) => { throw mapServiceError(err); });
+  res.json({
+    filename: result.filename,
+    durationMs: result.durationMs,
+    verification: result.verification,
+    engine: result.engine,
+    voiceId: result.voiceId || null,
+  });
+}));
+
+// "Accept as spoken" for a narration segment: re-score the segment's stored
+// `heard` text against a new `expectedSpeech` target. No STT call — mirrors the
+// audio-line PATCH. A segment with nothing heard stays `unverified`.
+const ttsNarrateSegmentRescoreSchema = z.object({
+  text: z.string().trim().min(1).max(4000),
+  heard: z.string().max(4000),
+  expectedSpeech: z.string().trim().max(4000).nullable().optional(),
+});
+router.patch('/tts/narrate/segment', asyncHandler(async (req, res) => {
+  const body = validateRequest(ttsNarrateSegmentRescoreSchema, req.body ?? {});
+  const expectedSpeech = body.expectedSpeech || null;
+  if (!body.heard.trim()) {
+    return res.json({ expectedSpeech, verification: { status: 'unverified', similarity: null, heard: '' } });
+  }
+  const { status, similarity } = compareSpeech(expectedSpeech || body.text, body.heard);
+  res.json({ expectedSpeech, verification: { status, similarity, heard: body.heard } });
+}));
+
 // Walk the issue's storyboards.scenes[].dialogue and populate
 // stages.audio.lines[]. `force: true` replaces existing lines wholesale;
 // the default refuses overwrite when lines[] is already populated so a
