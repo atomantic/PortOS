@@ -26,6 +26,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | Module | Purpose |
 |---|---|
 | `maintenanceAdmission.js` | Durable machine-local workflow drain, cross-process admission permits, continuation ownership and stale-resume fencing. |
+| `maintenanceExclusive.js` | Coordinator-owned exclusive ready claims, opaque fresh idle observations, durable ownership and verified settlement; internal only, no executor or peer authority. |
 | `appDeployFlags.js` | Shared allowlist of flags PortOS may forward to a managed app's `deploy.sh`, consumed by socket validation and deployment orchestration without reversing the lib/services dependency. |
 | `apiContractSchemas.js` | Canonical Zod request contracts for externally callable APIs plus `zodToOpenApiSchema` (plain JSON Schema — the 3.0.3 conversion happens at the OpenAPI document boundary, not here); runtime routes and OpenAPI use the same schema objects. |
 | `codeAnimationAcceptance.js` | Code Animation production acceptance: splits run evidence into technical/visual/temporal/sound (unmeasured stays unverified), decides promotability, freezes source/audio/render hashes and detects stale acceptance. Pure. |
