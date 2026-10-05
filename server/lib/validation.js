@@ -23,6 +23,7 @@ import {
 } from './sharedSchemas.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import { EFFORT_LEVELS } from './providerModels.js';
+import { knownFilmStyleIdSchema } from './filmStyleGrammars.js';
 import { MODEL_ALIAS_LIMITS } from './providerModelAliases.js';
 import { PROVIDER_HARNESS_IDS, ROUTE_MODES } from './providerHarnesses.js';
 import { parseProviderRef } from './providerRef.js';
@@ -2590,6 +2591,8 @@ export const appLaunchVideoRequestSchema = z.object({
   motionSkills: z.boolean().default(false),
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/).optional(),
   styleReference: launchVideoStyleReferenceSchema.optional(),
+  // Curated medium rulebook (#10254); only its motion/camera/sound/native-move parts reach the prompt.
+  styleGrammarId: knownFilmStyleIdSchema.optional(),
 }).strict();
 
 export const launchVideoOptionsSchema = z.object({

@@ -29,6 +29,12 @@ describe('normalizeComposition (#8984)', () => {
     expect(normalizeComposition(null)).toBeNull();
   });
 
+  it('keeps a well-formed styleGrammarId a peer sent (even one this catalog lacks) and drops a malformed one (#10254)', () => {
+    expect(normalizeComposition({ styleGrammarId: 'future-peer-medium' }).styleGrammarId).toBe('future-peer-medium');
+    expect(normalizeComposition({ styleGrammarId: 'Not A Slug' })).not.toHaveProperty('styleGrammarId');
+    expect(normalizeComposition({})).not.toHaveProperty('styleGrammarId');
+  });
+
   it('draws only timed cues, and only in composed mode, clipped to the video', () => {
     const composition = normalizeComposition({ mode: 'composed', textCues: [
       cue({ id: 'late', startSec: 40, endSec: 50 }),
