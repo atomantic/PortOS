@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { join } from 'node:path';
 
 vi.mock('./git.js', () => ({
   getBranches: vi.fn(),
@@ -75,19 +76,23 @@ vi.mock('../lib/gitRemote.js', () => ({
 // SUPERSEDED verdict cache); the default `tryReadFile` returns null = no ledger,
 // which is the fail-open "analyze everything" path the pre-#3842 suite assumes.
 const tryReadFileMock = vi.fn(async () => null);
-vi.mock('../lib/fileUtils.js', () => ({
-  // `data` added alongside `root`/`cos` because `formatInFlightForPrompt`'s
-  // dispatch-hint lookup now reaches `issueNumberFromRef` from
-  // `issueReconcile.js`, whose module graph (via jira.js) reads `PATHS.data`
-  // at import time — an incomplete PATHS here crashed with a raw TypeError
-  // rather than a test failure.
-  PATHS: { root: '/repo', cos: '/repo/data/cos', data: '/repo/data', worktrees: '/repo/data/cos/worktrees' },
-  safeJSONParse: (raw, fallback) => { try { return JSON.parse(raw); } catch { return fallback; } },
-  isPathInsideDir: (dir, candidate) => typeof dir === 'string' && typeof candidate === 'string'
-    && candidate.startsWith(`${dir}/`),
-  tryReadFile: (...args) => tryReadFileMock(...args),
-  atomicWrite: vi.fn(async () => {})
-}));
+vi.mock('../lib/fileUtils.js', async () => {
+  // Keep native separator, resolution and platform case-folding semantics while
+  // file I/O stays mocked. A raw startsWith(`${dir}/`) rejects Windows roots.
+  const { isPathInsideDir } = await vi.importActual('../lib/pathSafety.js');
+  return {
+    // `data` added alongside `root`/`cos` because `formatInFlightForPrompt`'s
+    // dispatch-hint lookup now reaches `issueNumberFromRef` from
+    // `issueReconcile.js`, whose module graph (via jira.js) reads `PATHS.data`
+    // at import time — an incomplete PATHS here crashed with a raw TypeError
+    // rather than a test failure.
+    PATHS: { root: '/repo', cos: '/repo/data/cos', data: '/repo/data', worktrees: '/repo/data/cos/worktrees' },
+    safeJSONParse: (raw, fallback) => { try { return JSON.parse(raw); } catch { return fallback; } },
+    isPathInsideDir,
+    tryReadFile: (...args) => tryReadFileMock(...args),
+    atomicWrite: vi.fn(async () => {})
+  };
+});
 
 const backupSupersededBranchMock = vi.fn(async (_repoPath, branch) => ({
   dir: `/repo/data/cos/abandoned-worktree-backups/${branch.branch.replace(/\//g, '-')}`,
@@ -338,13 +343,30 @@ describe('retired claim markers in reconcile', () => {
 });
 
 describe('cleanupMerged', () => {
-  it('removes worktree + deletes branch when merged and clean', async () => {
+  it.each([
+    ['forward-slash fixture', '/repo/.claude/worktrees/next-2190'],
+    ['native-joined fixture', join('/repo', '.claude', 'worktrees', 'next-2190')]
+  ])('removes worktree + deletes branch when merged and clean (%s)', async (_label, worktreePath) => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean worktree
-    const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath: '/repo/.claude/worktrees/next-2190' }]);
+    const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath }]);
     expect(res.cleaned).toEqual(['next/issue-2190']);
-    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', '/repo/.claude/worktrees/next-2190', expect.any(Object));
+    expect(res.skipped).toEqual([]);
+    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', worktreePath, expect.any(Object));
     expect(git.deleteBranch).toHaveBeenCalledWith('/repo', 'next/issue-2190', { local: true });
+  });
+
+  it.each([
+    '/repo/.claude/worktrees-other/next-2190',
+    '/repo/.claude/worktrees/../outside/next-2190'
+  ])('holds a merged clean worktree outside the managed root (%s)', async (worktreePath) => {
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+    const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath }]);
+    expect(res.cleaned).toEqual([]);
+    expect(res.skipped).toEqual([{ branch: 'next/issue-2190', reason: 'worktree-unmanaged-location' }]);
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    expect(git.deleteBranch).not.toHaveBeenCalled();
   });
 
   it('does not delete the branch or report it cleaned when the worktree survives removal', async () => {
