@@ -9,13 +9,16 @@ import {
   reviewMusicVideoTreatmentProof,
 } from '../services/apiMusicVideo.js';
 
-const AI_SKIP_LABELS = {
+export const AI_SKIP_LABELS = {
   'no-provider': 'no AI provider is configured',
   'provider-disabled': 'the AI provider is disabled',
   'llm-failed': 'the AI call failed',
   'unparsable-response': 'the AI answer was unusable',
   'too-many-shots': 'too many shots for one AI pass',
 };
+
+/** Friendly text for an AI skip code, falling back to the raw code. */
+export const aiSkipLabel = (code) => AI_SKIP_LABELS[code] || code;
 
 /**
  * The Music Video pre-production treatment (#8980): brief/arc/shot-direction
@@ -97,7 +100,7 @@ export default function useMusicVideoTreatment({ project, onProjectPatch, replac
         adopt(id, treatment);
         if (id === projectRef.current) setPreview(null);
         const shots = treatment.shotDirections.length;
-        if (useAi && !aiUsed) toast.error(`Drafted without AI — ${AI_SKIP_LABELS[aiSkippedReason] || aiSkippedReason}`);
+        if (useAi && !aiUsed) toast.error(`Drafted without AI — ${aiSkipLabel(aiSkippedReason)}`);
         else toast.success(`Treatment compiled for ${shots} shot${shots === 1 ? '' : 's'}${aiUsed ? ' with AI' : ''}`);
         return treatment;
       }),

@@ -35,7 +35,7 @@ describe('SetupStage Song & lyrics', () => {
     expect(advanced.contains(screen.getByText('Preview audio timing revision'))).toBe(true);
     steps.forEach((s) => expect(advanced.contains(s)).toBe(false));
     // The lyrics editor is inline in step 3, not a nested fold.
-    expect(steps[2].contains(within(steps[2]).getByText(/Lyrics, phrases & pacing/).closest('details'))).toBe(false);
+    expect(steps[2].contains(within(steps[2]).getByText(/Lyrics & phrases/).closest('details'))).toBe(false);
   });
 
   it('marks later steps to do for an empty project', () => {
