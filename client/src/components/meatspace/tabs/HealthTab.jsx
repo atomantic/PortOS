@@ -4,6 +4,7 @@ import * as api from '../../../services/api';
 import { METRIC_CATEGORIES } from '../healthMetrics';
 import HealthCategorySection from '../HealthCategorySection';
 import ActivityBloodCorrelation from '../ActivityBloodCorrelation';
+import LoadFailureNotice from '../LoadFailureNotice';
 
 const RANGES = [
   { id: '7d', label: '7d', days: 7 },
@@ -27,6 +28,7 @@ export default function HealthTab() {
   const [expandedSections, setExpandedSections] = useState(new Set());
   const [correlationData, setCorrelationData] = useState(null);
   const [workouts, setWorkouts] = useState([]);
+  const [workoutsFailed, setWorkoutsFailed] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const sectionRefs = useRef({});
 
@@ -72,11 +74,13 @@ export default function HealthTab() {
     return () => { active = false; };
   }, [from, to]);
 
-  useEffect(() => {
-    api.getWorkouts()
-      .then((data) => setWorkouts(data?.workouts || []))
-      .catch(() => setWorkouts([]));
+  const fetchWorkouts = useCallback(() => {
+    api.getWorkouts({ silent: true })
+      .then((data) => { setWorkoutsFailed(false); setWorkouts(data?.workouts || []); })
+      .catch(() => setWorkoutsFailed(true));
   }, []);
+
+  useEffect(() => { fetchWorkouts(); }, [fetchWorkouts]);
 
   const setRange = useCallback((newRange) => {
     const params = new URLSearchParams(searchParams);
@@ -123,7 +127,11 @@ export default function HealthTab() {
         <div className="px-4 py-3 border-b border-port-border bg-port-bg/40">
           <h3 className="text-sm font-medium text-white">Workouts</h3>
         </div>
-        {workouts.length === 0 ? (
+        {workoutsFailed ? (
+          <div className="p-3">
+            <LoadFailureNotice message="Could not load workouts. Retry." onRetry={fetchWorkouts} />
+          </div>
+        ) : workouts.length === 0 ? (
           <p className="px-4 py-3 text-sm text-gray-500">No workouts logged yet.</p>
         ) : (
           <div className="divide-y divide-port-border/70">

@@ -4,17 +4,20 @@ import {
 } from 'recharts';
 import * as api from '../../services/api';
 import BrailleSpinner from '../BrailleSpinner';
+import LoadFailureNotice from './LoadFailureNotice';
 import useChartColors from '../../hooks/useChartColors.js';
 import { formatMonthDay, formatPercent, formatWeight } from '../../utils/formatters.js';
 
 export default function BodyCompChart() {
   const chartColors = useChartColors();
   const [data, setData] = useState([]);
+  const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const fetchData = useCallback(async () => {
-    const history = await api.getBodyHistory().catch(() => []);
-    const chartData = history.map(entry => ({
+    const history = await api.getBodyHistory({ silent: true }).catch(() => null);
+    setFailed(history === null);
+    const chartData = (history || []).map(entry => ({
       date: entry.date,
       label: formatMonthDay(entry.date),
       weight: entry.weightLbs || null,
@@ -37,6 +40,10 @@ export default function BodyCompChart() {
         </div>
       </div>
     );
+  }
+
+  if (failed) {
+    return <LoadFailureNotice message="Could not load body composition. Retry." onRetry={fetchData} />;
   }
 
   if (data.length === 0) {

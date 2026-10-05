@@ -4,6 +4,7 @@ import {
 } from 'recharts';
 import * as api from '../../services/api';
 import BrailleSpinner from '../BrailleSpinner';
+import LoadFailureNotice from './LoadFailureNotice';
 import useChartColors from '../../hooks/useChartColors.js';
 import { formatMonthDay, localDateKey } from '../../utils/formatters';
 
@@ -29,6 +30,7 @@ const CustomTooltip = ({ active, payload, label }) => {
 export default function NicotineChart({ onRefreshKey, onViewChange }) {
   const chartColors = useChartColors();
   const [data, setData] = useState([]);
+  const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('30d');
 
@@ -39,7 +41,14 @@ export default function NicotineChart({ onRefreshKey, onViewChange }) {
     const fromStr = localDateKey(from);
     const toStr = localDateKey();
 
-    const entries = await api.getDailyNicotine(fromStr, toStr).catch(() => []);
+    const entries = await api.getDailyNicotine(fromStr, toStr, { silent: true }).catch(() => null);
+    setFailed(entries === null);
+    if (entries === null) {
+      // Do not zero-fill: a failed load must not read as zero consumption.
+      setData([]);
+      setLoading(false);
+      return;
+    }
 
     const chartData = [];
     const dateMap = {};
@@ -95,6 +104,11 @@ export default function NicotineChart({ onRefreshKey, onViewChange }) {
         <div className="flex justify-center py-8">
           <BrailleSpinner text="Loading chart" />
         </div>
+      ) : failed ? (
+        <LoadFailureNotice
+          message="Could not load daily nicotine. The chart is hidden so a failed load is not shown as zero."
+          onRetry={fetchData}
+        />
       ) : (
         <ResponsiveContainer width="100%" height={250}>
           <BarChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>

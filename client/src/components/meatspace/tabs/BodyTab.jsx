@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Scale, Eye, Plus, Pencil, Trash2, Check, X } from 'lucide-react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
+import LoadFailureNotice from '../LoadFailureNotice';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import BodyCompChart from '../BodyCompChart';
@@ -37,17 +38,22 @@ function buildEyePayload(form) {
 export default function BodyTab() {
   const [eyeData, setEyeData] = useState(null);
   const [eyeLoading, setEyeLoading] = useState(true);
+  const [eyeFailed, setEyeFailed] = useState(false);
   const [showEyeForm, setShowEyeForm] = useState(false);
   const [eyeForm, setEyeForm] = useState(EMPTY_EYE_FORM);
   const [editingEyeId, setEditingEyeId] = useState(null);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
-  useEffect(() => {
-    api.getEyeExams().catch(() => ({ exams: [] })).then(eyes => {
-      setEyeData(eyes);
-      setEyeLoading(false);
-    });
+  const fetchEyes = useCallback(async () => {
+    const eyes = await api.getEyeExams({ silent: true }).catch(() => null);
+    setEyeFailed(eyes === null);
+    setEyeData(eyes);
+    setEyeLoading(false);
   }, []);
+
+  useEffect(() => {
+    fetchEyes();
+  }, [fetchEyes]);
 
   const handleAddEye = async () => {
     if (!eyeForm.date) return;
@@ -108,7 +114,7 @@ export default function BodyTab() {
           <div className="flex items-center gap-2">
             <Eye size={18} className="text-port-accent" />
             <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">
-              Eye Prescriptions ({eyeLoading ? '...' : eyeExams.length})
+              Eye Prescriptions ({eyeLoading || eyeFailed ? '...' : eyeExams.length})
             </h3>
           </div>
           {!showEyeForm && editingEyeId == null && (
@@ -192,6 +198,8 @@ export default function BodyTab() {
           <div className="flex justify-center py-12">
             <BrailleSpinner text="Loading eye data" />
           </div>
+        ) : eyeFailed ? (
+          <LoadFailureNotice message="Could not load eye exams. Retry." onRetry={fetchEyes} />
         ) : eyeExams.length === 0 ? (
           <div className="bg-port-card border border-port-border rounded-xl p-6">
             <p className="text-gray-500 text-sm">No eye exam data. Import your health spreadsheet or add exams manually.</p>

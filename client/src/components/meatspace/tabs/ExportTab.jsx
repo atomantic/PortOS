@@ -6,6 +6,7 @@ import { copyToClipboard } from '../../../lib/clipboard';
 import { buildClinicianReport, reportToMarkdown, formatRange, STATUS_LABELS } from '../../../lib/clinicianReport';
 import { STATUS_COLORS } from '../constants';
 import BrailleSpinner from '../../BrailleSpinner';
+import LoadFailureNotice from '../LoadFailureNotice';
 import { formatDateTime } from '../../../utils/formatters';
 
 export default function ExportTab() {
@@ -14,10 +15,11 @@ export default function ExportTab() {
 
   const fetchData = useCallback(async () => {
     const [blood, config] = await Promise.all([
-      api.getBloodTests().catch(() => ({ tests: [] })),
+      api.getBloodTests({ silent: true }).catch(() => null),
       api.getMeatspaceConfig().catch(() => null),
     ]);
-    setReport(buildClinicianReport({ tests: blood?.tests || [], config }));
+    // A failed blood read must not become an empty report that can be printed.
+    setReport(blood === null ? null : buildClinicianReport({ tests: blood?.tests || [], config }));
     setLoading(false);
   }, []);
 
@@ -38,6 +40,15 @@ export default function ExportTab() {
       <div className="flex justify-center py-12">
         <BrailleSpinner text="Building clinician summary" />
       </div>
+    );
+  }
+
+  if (!report) {
+    return (
+      <LoadFailureNotice
+        message="Could not build the clinician summary. Retry. Nothing here is ready to print or copy."
+        onRetry={fetchData}
+      />
     );
   }
 
