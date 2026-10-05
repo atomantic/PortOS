@@ -70,7 +70,12 @@ describe.skipIf(!runDb)('receiver-local permanent execution consumption', () => 
       const faulty = createPeerExecutionLedger({ db: faultDb, dataDir: directory,
         authority: createPeerExecutionAuthority(directory, { io }) });
       const hooks = _createPeerExecutionRestore({ receiver: async () => faulty });
-      await expect(hooks.finishPeerExecutionRestore(id)).rejects.toThrow(/fixture/);
+      const attempt = hooks.finishPeerExecutionRestore(id);
+      if (boundary === 'directory-sync') {
+        // Intent publication precedes JSON publication; its sync failure has the
+        // same typed authority-acquisition refusal as an interrupted writer.
+        await expect(attempt).rejects.toMatchObject({ code: 'PEER_EXECUTION_AUTHORITY_UNAVAILABLE', status: 503 });
+      } else await expect(attempt).rejects.toThrow(/fixture/);
       expect(failed).toBe(true);
       // A different generic restore cannot adopt or steal this ownership.
       const restarted = createPeerExecutionLedger({ db, dataDir: directory });
