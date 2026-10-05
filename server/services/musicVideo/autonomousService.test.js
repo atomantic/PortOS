@@ -126,6 +126,21 @@ describe('startAutonomousVideo', () => {
     expect(doubles.attachAudio).toHaveBeenCalledWith('track-1', 'music-song-a.mp3', expect.objectContaining({ source: 'suno', durationSec: 187 }));
   });
 
+  it('names the imported Suno song on its track only after a backup cut is released (#9982)', async () => {
+    const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
+    const release = await acquireBackupSnapshotCut();
+    try {
+      await service.startAutonomousVideo({ prompt: 'a courier crosses a rainy city' });
+      await vi.waitFor(() => expect(calls).toContain('probe'));
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(doubles.attachAudio).not.toHaveBeenCalled();
+      release();
+      await vi.waitFor(() => expect(doubles.attachAudio).toHaveBeenCalledOnce());
+    } finally {
+      release();
+    }
+  });
+
   it.each([
     { mediaMode: 'code-images', explicit: true },
     { mediaMode: 'code-images-video', explicit: false },
