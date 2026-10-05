@@ -410,6 +410,9 @@ describe('stageChecklist', () => {
     expect(stageChecklist('produce', castProject({ scenes: [scene(), scene({ sceneId: 's2', videoHistoryId: null })] }), APPROVED)[0])
       .toMatchObject({ id: 'footage', label: 'Footage for every shot (1 of 2)', done: false,
         action: { stage: 'board', params: { scenes: 'missing' } } });
+    // A code-typed shot (#10297) is drawn by the composition, so it never reads as missing footage.
+    expect(stageChecklist('produce', castProject({ composition: { mode: 'composed' }, scenes: [scene(), scene({ sceneId: 's2', videoHistoryId: null, visualLayer: 'code', startSec: 0, endSec: 2 })] }), APPROVED)[0])
+      .toMatchObject({ id: 'footage', label: 'Footage for every shot (2 of 2)', done: true });
     // A code render draws its own picture: no footage to wait on.
     expect(stageChecklist('produce', castProject({ composition: { mode: 'code' } }), APPROVED).map((i) => [i.id, i.done])).toEqual([['footage', true]]);
     // The proof closes Compose, after the composition work it is judged over.

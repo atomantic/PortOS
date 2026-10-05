@@ -18,4 +18,12 @@ describe('musicVideoLayers', () => {
     expect(sceneRenderReady(card, { layered: true })).toBe(true);
     expect(sceneRenderReady({ visualLayer: 'still', startSec: 0, endSec: 2 }, { layered: true })).toBe(false);
   });
+
+  it('a code shot needs only an authored span — never a frame or clip', () => {
+    const code = { visualLayer: 'code', startSec: 0, endSec: 2 };
+    expect(sceneVisualLayer(code, { layered: true })).toBe('code');
+    expect(sceneVisualLayer(code, { layered: false })).toBe('footage');
+    expect(sceneRenderReady(code, { layered: true })).toBe(true);
+    expect(sceneRenderReady({ visualLayer: 'code' }, { layered: true })).toBe(false);
+  });
 });

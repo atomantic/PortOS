@@ -153,7 +153,7 @@ const present = (run, project) => {
   return { ...run, interrupted: run.status === 'running' && run.processId !== PROCESS_ID,
     accounting: {
       plannedGenerations: assets ? assets.steps.filter((s) => ['generate-image', 'generate-video'].includes(s.action)).length
-        : (project?.scenes || []).reduce((n, scene) => n + (scene.visualLayer !== 'card' && !scene.referenceImageId && (!scene.videoHistoryId || pilotClass(scene, project) === 'still') ? 1 : 0) + (!scene.videoHistoryId && pilotClass(scene, project) !== 'still' && scene.visualLayer !== 'card' ? 1 : 0), 0),
+        : (project?.scenes || []).reduce((n, scene) => n + (!['card', 'code'].includes(scene.visualLayer) && !scene.referenceImageId && (!scene.videoHistoryId || pilotClass(scene, project) === 'still') ? 1 : 0) + (!scene.videoHistoryId && pilotClass(scene, project) !== 'still' && !['card', 'code'].includes(scene.visualLayer) ? 1 : 0), 0),
       reservedUsd: reserved.reduce((n, s) => n + (s.costUsd || 0), 0),
       spentUsd: spent.reduce((n, s) => n + (s.costUsd || 0), 0),
       unpriced: counted.some((s) => s.costUsd == null),

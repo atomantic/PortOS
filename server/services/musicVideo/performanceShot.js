@@ -159,7 +159,7 @@ async function reviewPerformanceTakes(project, masterPath) {
   let sha256 = null;
   for (const scene of Array.isArray(project?.scenes) ? project.scenes : []) {
     const supplied = (scene.takes || []).find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId)?.shotInstruction;
-    if (scene.videoHistoryId && !['still', 'card'].includes(scene.visualLayer) && supplied?.audioConditioning) {
+    if (scene.videoHistoryId && !['still', 'card', 'code'].includes(scene.visualLayer) && supplied?.audioConditioning) {
       sha256 ??= await hashFile(masterPath);
       if (supplied.audioConditioning.sourceSha256 !== sha256) results.push({ sceneId: scene.sceneId, reason: 'source-audio-changed', stale: true });
       else if (Math.round(scene.startSec * 48000) !== supplied.audioConditioning.startSample

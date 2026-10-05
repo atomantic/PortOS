@@ -366,7 +366,7 @@ function productionTargets(project) {
   const layered = isLayeredComposition(project);
   const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
   return {
-    frame: scenes.filter((s) => sceneVisualLayer(s, { layered }) === 'still' || (sceneVisualLayer(s, { layered }) !== 'card' && !s.videoHistoryId)),
+    frame: scenes.filter((s) => sceneVisualLayer(s, { layered }) === 'still' || (!['card', 'code'].includes(sceneVisualLayer(s, { layered })) && !s.videoHistoryId)),
     clip: scenes.filter((s) => sceneVisualLayer(s, { layered }) === 'footage'),
   };
 }
