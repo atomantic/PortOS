@@ -189,6 +189,18 @@ describe('InboxTab empty state', () => {
     fireEvent.click(screen.getByRole('button', { name: /open config/i }));
     expect(await screen.findByText('CONFIG SCREEN')).toBeInTheDocument();
   });
+
+  it('says the message list failed to load instead of claiming an empty inbox (#10279)', async () => {
+    api.getMessageInbox.mockRejectedValueOnce(new Error('offline'));
+    renderInbox([syncedAccount]);
+
+    expect(await screen.findByText('Could not load messages.')).toBeInTheDocument();
+    expect(screen.queryByText('Your inbox is empty')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Your inbox is empty')).toBeInTheDocument();
+    expect(screen.queryByText('Could not load messages.')).not.toBeInTheDocument();
+  });
 });
 
 describe('InboxTab sync capability (#9968)', () => {
