@@ -69,6 +69,8 @@ Admission inventory (`withBackupAssetPublication`):
 | Creative Director evaluation frames: render-completion sampling (`creativeDirector/sceneRunner.js`) and the resume pass that re-samples missing frames in place (`creativeDirector/completionHook.js`) | Covered from the first `${jobId}-fN.jpg` write through the scene row that names them (#9982 partial) |
 | Creative Director render settlement (scene status and auto-accept, plan-step settle, seed-frame wait) and Music Video production step settlement (`musicVideo/productionService.js`) | Reference-only: these write no bytes, and the render they name was on disk before its admitted completion published |
 | Sprite animation completion: clip copy, frame packaging and run record (`sprites/localAnimationJobHook.js`) | Covered from clip staging through the run record that names the packaged frames (#9982 partial) |
+| Sprite reference lock and unlock, walk set finalization, unlock, reopen and anchor/turnaround revision, source-pipeline import, and the grok-TUI attach lanes for walk and named tracks (`sprites/reference.js`, `sprites/walk.js`, `sprites/importer.js`, `sprites/animationTrackWorkflow.js`) | Covered (#9982 partial): each holds one lease from its first byte through the sprite row it pairs with (or, for the attach lanes, the run record naming the packaged frames) |
+| Sprite generation starts, reference uploads, candidate and run records, selections, loop trims, atlas compile, publication history, asset deletion and the publish-binding row (`sprites/walkTrims.js`, `atlas.js`, `assets.js`, `publish.js`, and the non-lock paths of `reference.js`, `walk.js`, `animationTrackWorkflow.js`) | Reference-only: the sprite row holds no path under `data/`, the versioned artifacts are write-once, and the record naming them is written last |
 | Direct gallery upload, image prompt/visibility sidecar replacement, and image deletion (`imageGen/local.js`) | Covered as one file/sidecar/index workflow (#9982 partial) |
 | Gallery image deletion's universe canon purge (`galleryImageDeletion.js`) and character reference sheet deletion (`universeCharacterSheet.js`) | Covered from file removal through the universe pointer purge (#9982 partial) |
 | Video-history deletion, including downloaded-video deletion (`videoGen/historyOps.js`) | Covered through file/history/index removal (#9982 partial) |
@@ -96,7 +98,7 @@ Admission inventory (`withBackupAssetPublication`):
 | ChatGPT archive import and import-memory deletion (`chatgptImport.js`, `brain.js`; the ZIP's asset extraction in `chatgptZipImport.js`) | Covered (#9982 partial): assets are extracted outside admission and named only by the memory row; each conversation's archived transcript and that row commit under one lease, and deleting an import memory drops the record and unlinks its transcript and unreferenced assets under one lease |
 | YouTube ingest (`youtubeIngest.js`) | Covered (#9982 partial): downloads run outside admission; the index record that first names a transcript or audio file takes the lease, and forgetting an ingest drops the record and unlinks its files under one lease |
 | Digital twin documents and genome upload/delete (`digital-twin-documents.js`, `genome.js`) | Covered (#9982 partial): each document file or raw genome file and the meta record naming it is one lease, including deletion |
-| Remaining durable owners, classified by domain in `backupAssetOwners.js` | Outstanding (#9982): sprites, video generation, image generation tails |
+| Remaining durable owners, classified by domain in `backupAssetOwners.js` | Outstanding (#9982): video generation, image generation tails |
 | Durable replacement/deletion owners not yet classified | Outstanding (#9982) |
 | Snapshot consistency claim (`backupAssetOwners.js`, see below) | Covered (#9982 partial) |
 | Database restore execution and backend-cutover acceptance (`backup.js`, `databasePreflight.js`) | Covered (#9983) |
@@ -229,6 +231,27 @@ copied under a fresh name and muxed before its history entry commits under the
 lease. A browser render's history entry is written by the HTML-composition job
 (still outstanding with video generation), so the soundtrack mux holds the lease
 across its in-place install over that file, but not across the encode.
+
+A sprite's row holds metadata and workflow state (status, the frozen chroma key,
+the publish binding), never a path, and its bytes live under `data/sprites/<id>/`.
+The workflows whose row mirrors a file state therefore hold one lease: reference
+lock and unlock (manifest and row), walk set finalization (the set, then the
+row that says `walk-complete`), and unlock, reopen and revision (remove the set,
+then downgrade the row). A copy that predates the set paired with a row dumped
+after it would advertise a finished walk with nothing behind it, which the write
+order was chosen to prevent against a crash but cannot against a copy-then-dump
+snapshot. A source-pipeline import holds a lease per subject, a character or a
+props family, from its first copied byte through the row marking it imported, so a
+multi-subject import lets a cut in between subjects. The grok-TUI lanes run the
+terminal session outside admission and take the lease for the attach that packages
+its frames and files the run, as the local completion hook does. The leases are
+taken before the per-record write tail, so a workflow queued behind a long
+reprocess holds its lease while it waits and can stretch a cut's drain by that
+wait. Generation starts, uploads, run records, selections, loop trims, atlas
+compiles, asset deletion and the publish binding take no lease: their row names no
+bytes, versioned outputs are written once, and the record that names them lands
+last. A cut can still copy part of a multi-file sprite tree written by one of those
+workflows, as it can for any file-backed record in `data/`.
 
 **Snapshot consistency claim.** `server/lib/backupAssetOwners.js` inventories
 each durable owner as `admitted`, `reference-only` or `outstanding`, and its
