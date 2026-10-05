@@ -143,6 +143,17 @@ describe('mediaJobs routes', () => {
     expect(stubs.enqueueJob).not.toHaveBeenCalled();
   });
 
+  it('POST /:id/retry refuses a fresh key while the peer outcome is uncertain', async () => {
+    jobStore.set('j-uncertain-peer', { id: 'j-uncertain-peer', kind: 'video', owner: null, status: 'failed', params: {
+      remotePeerReservation: true,
+      remoteMedia: { wireVersion: 1, peerId: '00000000-0000-4000-8000-0000000004f1', request: { kind: 'video' } },
+    } });
+    const r = await request(makeApp()).post('/api/media-jobs/j-uncertain-peer/retry').send({});
+    expect(r.status).toBe(409);
+    expect(r.body.code).toBe('JOB_REMOTE_OUTCOME_UNCERTAIN');
+    expect(stubs.enqueueJob).not.toHaveBeenCalled();
+  });
+
   it('POST /:id/retry re-enqueues a terminal text-only job (no temp-upload params)', async () => {
     jobStore.set('j-img', {
       id: 'j-img', kind: 'image', owner: 'cd-1', status: 'failed',
@@ -568,6 +579,17 @@ describe('mediaJobs routes', () => {
     const r = await request(makeApp()).delete('/api/media-jobs/j-live');
     expect(r.status).toBe(409);
     expect(r.body.code).toBe('JOB_NOT_TERMINAL');
+    expect(stubs.removeArchivedJob).not.toHaveBeenCalled();
+  });
+
+  it('DELETE /:id refuses to remove the reservation for an uncertain peer outcome', async () => {
+    jobStore.set('j-uncertain-peer', { id: 'j-uncertain-peer', kind: 'video', owner: null, status: 'failed', params: {
+      remotePeerReservation: true,
+      remoteMedia: { wireVersion: 1, peerId: '00000000-0000-4000-8000-0000000004f1', request: { kind: 'video' } },
+    } });
+    const r = await request(makeApp()).delete('/api/media-jobs/j-uncertain-peer');
+    expect(r.status).toBe(409);
+    expect(r.body.code).toBe('JOB_REMOTE_OUTCOME_UNCERTAIN');
     expect(stubs.removeArchivedJob).not.toHaveBeenCalled();
   });
 

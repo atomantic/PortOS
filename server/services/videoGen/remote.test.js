@@ -275,7 +275,41 @@ describe('federated video consumer adapter', () => {
     transport.fetch.mockResolvedValue(jsonResponse(providerJob(status), 200));
     const terminal = captureTerminal(LOCAL_JOB_ID);
     await generateVideo(params());
-    expect(await terminal).toMatchObject({ type: 'failed', event: { remoteInputsDisposable: true } });
+    const outcome = await terminal;
+    expect(outcome).toMatchObject({ type: 'failed', event: { remoteInputsDisposable: true } });
+    expect(outcome.event).not.toHaveProperty('remoteRecoverySettlement');
+  });
+
+  it.each(['failed', 'canceled'])('certifies original-key reconciliation after a known provider %s outcome and teardown', async (status) => {
+    transport.fetch.mockResolvedValue(jsonResponse(providerJob(status), 200));
+    const input = params(); input.remoteMedia.reconcile = true;
+    const terminal = captureTerminal(LOCAL_JOB_ID);
+    await generateVideo(input);
+    expect(await terminal).toMatchObject({ type: 'failed', event: { remoteInputsDisposable: true,
+      remoteRecoverySettlement: { jobId: LOCAL_JOB_ID, peerId: PEER_ID, remoteJobId: REMOTE_JOB_ID, status, executorSettled: true },
+    } });
+    expect(transport.fetch.mock.calls[0][1].headers['Idempotency-Key']).toBe(LOCAL_JOB_ID);
+  });
+
+  it('does not certify prior termination from a never-submitted disposable-input verdict', async () => {
+    federation.resolve.mockRejectedValueOnce(Object.assign(new Error('No eligible model'), { code: 'MEDIA_PROVIDER_MODEL_NOT_ALLOWED' }));
+    const terminal = captureTerminal(LOCAL_JOB_ID);
+    await generateVideo(params());
+    const outcome = await terminal;
+    expect(outcome.event.remoteInputsDisposable).toBe(true);
+    expect(outcome.event).not.toHaveProperty('remoteRecoverySettlement');
+    expect(transport.fetch).not.toHaveBeenCalled();
+  });
+
+  it('serializes executor attempts for one original idempotency key', async () => {
+    let release;
+    transport.fetch.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const input = params(); input.remoteMedia.reconcile = true;
+    const first = generateVideo(input);
+    await vi.waitFor(() => expect(transport.fetch).toHaveBeenCalledTimes(1));
+    await expect(generateVideo(input)).rejects.toMatchObject({ code: 'MEDIA_PROVIDER_RECONCILIATION_ACTIVE' });
+    release(jsonResponse(providerJob('failed'), 200));
+    await first;
   });
 
   it('retains replay inputs after an uncertain submission or malformed recovery metadata', async () => {
@@ -297,7 +331,10 @@ describe('federated video consumer adapter', () => {
       : new Response(mp4, { headers: { 'Content-Length': String(mp4.length), 'Content-Type': 'video/mp4', 'X-Content-SHA256': digest } }));
     ffmpeg.faststart.mockRejectedValueOnce(new Error('fixture finalization failed'));
     const terminal = captureTerminal(LOCAL_JOB_ID);
-    await generateVideo(params());
-    expect(await terminal).toMatchObject({ type: 'failed', event: { remoteInputsDisposable: false } });
+    const input = params(); input.remoteMedia.reconcile = true;
+    await generateVideo(input);
+    const outcome = await terminal;
+    expect(outcome).toMatchObject({ type: 'failed', event: { remoteInputsDisposable: false } });
+    expect(outcome.event).not.toHaveProperty('remoteRecoverySettlement');
   });
 });

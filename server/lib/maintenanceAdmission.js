@@ -11,6 +11,7 @@ import { assertNotRealDataWrite } from './testDataIsolation.js';
 const operationSchema = z.object({
   id: z.string().uuid(), kind: z.string().min(1), resource: z.string().max(256),
   pid: z.number().int().positive(), startedAt: z.string().datetime(), unsettled: z.boolean().optional(),
+  uncertaintyStamp: z.string().uuid().optional(),
 }).strict();
 const schema = z.object({
   version: z.literal(1), revision: z.number().int().nonnegative(),
@@ -123,6 +124,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
   const admit = (kind, resource = '', { continuation = false, parentId = null, parentKinds = null, reconnect = false } = {}) => {
     const inheritedId = parentId ?? (continuation ? currentId() : null);
     let id = makeId();
+    let recovery;
     transaction(state => {
       const inherited = inheritedId && state.operations.some(op => op.id === inheritedId && (!op.unsettled || kind === 'settlement') && (!parentKinds || parentKinds.includes(op.kind)));
       if (state.hold && !inherited) throw error();
@@ -131,26 +133,47 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
       // Reconciliation may submit an idempotent replay, so it still obeys the
       // admission fence above; reuse ownership only after that fence passes.
       const existing = reconnect && state.operations.find(op => op.kind === kind && op.resource === resource);
-      if (existing) { id = existing.id; return; }
+      if (existing) { id = existing.id; recovery = recoverySnapshot(existing); return; }
       state.operations.push({ id, kind, resource, pid: process.pid, startedAt: new Date().toISOString() });
     });
-    return permitFor(id);
+    return permitFor(id, recovery);
   };
-  const permitFor = id => ({
+  // A capability binds one previously observed operation, including every
+  // uncertainty mark made before reconciliation. A legacy unsettled record
+  // has no stamp to compare and cannot be completed through this capability.
+  const recoverySnapshot = op => Object.freeze({ id: op.id, kind: op.kind, resource: op.resource,
+    unsettled: op.unsettled === true, uncertaintyStamp: op.uncertaintyStamp });
+  const completeRecovery = expected => {
+    if (expected.unsettled && !expected.uncertaintyStamp) return false;
+    return transaction(state => {
+      const index = state.operations.findIndex(op => op.id === expected.id && op.kind === expected.kind
+        && op.resource === expected.resource && (op.unsettled === true) === expected.unsettled
+        && op.uncertaintyStamp === expected.uncertaintyStamp);
+      if (index < 0) return false;
+      state.operations.splice(index, 1);
+      return true;
+    });
+  };
+  const permitFor = (id, recovery) => ({
     id,
     run: fn => context.run(id, fn),
     finish: () => finish(id),
     markUnsettled: () => markUnsettled(op => op.id === id),
     identify: resource => transaction(state => { const op = state.operations.find(op => op.id === id); if (op) op.resource = resource; }),
+    ...(recovery ? { completeRecovery: () => completeRecovery(recovery) } : {}),
   });
   // Trusted recovery only: this records observed existing work, never starts it.
-  const recoverOwned = (kind, resource) => permitFor(transaction(state => {
-    const existing = state.operations.find(op => op.kind === kind && op.resource === resource);
-    if (existing) return existing.id;
-    const id = makeId();
-    state.operations.push({ id, kind, resource, pid: process.pid, startedAt: new Date().toISOString() });
-    return id;
-  }));
+  const recoverOwned = (kind, resource) => {
+    let recovery;
+    const id = transaction(state => {
+      const existing = state.operations.find(op => op.kind === kind && op.resource === resource);
+      if (existing) { recovery = recoverySnapshot(existing); return existing.id; }
+      const id = makeId();
+      state.operations.push({ id, kind, resource, pid: process.pid, startedAt: new Date().toISOString() });
+      return id;
+    });
+    return permitFor(id, recovery);
+  };
   const tryAdmit = (...args) => { try { return admit(...args); } catch (err) { if (isMaintenanceHold(err)) return null; throw err; } };
   const finishing = new Map();
   const finish = id => {
@@ -183,7 +206,10 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     return operation ? context.run(operation.id, fn) : fn();
   };
   const markUnsettled = matches => {
-    try { transaction(state => { for (const op of state.operations) if (matches(op)) op.unsettled = true; }); }
+    try { transaction(state => { for (const op of state.operations) if (matches(op)) {
+      op.unsettled = true;
+      op.uncertaintyStamp = randomUUID();
+    } }); }
     catch { uncertain = true; console.error('❌ Maintenance recovery record could not be saved; readiness remains unknown.'); }
   };
   const markResourceUnsettled = (kind, resource) => markUnsettled(op => op.kind === kind && op.resource === resource);

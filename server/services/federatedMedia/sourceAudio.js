@@ -18,10 +18,10 @@ export const supportsSourceAudioWindow = (model) => isLtx2FamilyRuntime(model?.r
 /** Only this feature's owned copies may be released, never a master recording. */
 export async function discardSourceAudioWindow(path) {
   if (typeof path !== 'string' || dirname(resolve(path)) !== resolve(PATHS.uploads)
-    || !/^(mv-source-audio|federated-audio)-[a-f\d-]{36}\.wav$/.test(basename(path))) return;
-  try { await unlink(path); }
+    || !/^(mv-source-audio|federated-audio)-[a-f\d-]{36}\.wav$/.test(basename(path))) return { ok: false };
+  try { await unlink(path); return { ok: true }; }
   catch (error) {
-    if (error.code === 'ENOENT') return;
+    if (error.code === 'ENOENT') return { ok: true };
     maintenance.markCurrentUnsettled();
     throw error;
   }
