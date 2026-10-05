@@ -2481,8 +2481,11 @@ describe('MusicVideo stage tabs (#9243)', () => {
       board: { 'AI Plan': () => screen.queryByRole('button', { name: /AI Plan/ }), 'Add scene': () => screen.queryByRole('button', { name: /Add scene/ }), 'Shot prompt': () => screen.queryByLabelText('Shot prompt') },
       produce: { 'Automation brief': () => screen.queryByLabelText('Automation brief'), 'Start production': () => screen.queryByRole('button', { name: /Start production/ }) },
       compose: { Typography: () => screen.queryByText(/^Typography —/) },
-      review: { 'Render final': () => screen.queryByRole('button', { name: /^Render final$/ }), 'Render excerpt': () => screen.queryByRole('button', { name: /Render excerpt/ }), 'Import development file': () => screen.queryByLabelText('Import development file') },
+      review: { 'Render final': () => screen.queryByRole('button', { name: /^Render final$/ }), 'Render excerpt': () => screen.queryByRole('button', { name: /Render excerpt/ }) },
     };
+    // Importing a file is deliberately offered on two tabs: a guide is imported where it is chosen (Cast & Sets),
+    // and any other development file on Review.
+    const importFile = () => screen.queryByLabelText('Import development file');
     await openProject(project);
     for (const [stage, own] of Object.entries(landmarks)) {
       await openStage(stage);
@@ -2491,6 +2494,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
         if (other === stage) continue;
         for (const [name, find] of Object.entries(theirs)) expect(find(), `${name} must not be on ${stage}`).toBeFalsy();
       }
+      expect(!!importFile(), `Import development file on ${stage}`).toBe(stage === 'cast-sets' || stage === 'review');
     }
   });
 

@@ -106,6 +106,9 @@ function autopilotBlocker(project) {
 }
 
 // The panels each stage tab renders (see lib/musicVideoStages.js for the ids).
+// A saved art draft needs every field the server schema requires.
+const EMPTY_PRODUCTION_DRAFT = { cast: '', environments: '', visualLanguage: '', motionLanguage: '', guideArtifactId: null,
+  lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [] };
 const STAGE_VIEWS = {
   setup: SetupStage, 'cast-sets': CastSetsStage, board: BoardStage, produce: ProduceStage, compose: ComposeStage, review: ReviewStage, publish: PublishStage,
 };
@@ -1080,6 +1083,8 @@ export default function MusicVideo() {
     commitSceneTiming,
     approveCastAndSets,
     skipCastAndSets,
+    // Choose a Development file as the art-direction visual guide (saved with the rest of the draft).
+    useAsGuide: (artifactId) => productionReview.save({ ...EMPTY_PRODUCTION_DRAFT, ...(selected.productionReview?.draft || {}), guideArtifactId: artifactId }),
     goToStage,
     openArtifact,
     openPreview,

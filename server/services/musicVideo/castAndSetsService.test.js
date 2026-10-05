@@ -371,6 +371,59 @@ describe('Cast & Sets check-in', () => {
     ]);
   });
 
+  it('seeds the empty art-direction draft and guide on approval without overwriting typed text', async () => {
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    await projects.mutateProjectRecord(project.id, (c) => ({ project: { ...c, productionReview: { draft: { cast: 'My own cast notes', environments: '   ' } } } }));
+
+    const approved = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({});
+    expect(approved.status).toBe(200);
+    const done = await current(project.id);
+    const draft = done.productionReview.draft;
+    expect(draft.cast).toBe('My own cast notes');
+    expect(draft.environments).toContain('Lamp room');
+    expect(draft.visualLanguage).toBeTruthy();
+    expect(draft.motionLanguage).toBeTruthy();
+    expect(draft.guideArtifactId).toBe(done.castAndSets.artifactId);
+    // Seeding is editable content only: no approval is recorded.
+    expect(done.productionReview.approvals?.art).toBeUndefined();
+  });
+
+  it.each(['approved', 'skipped'])('rebuilds a %s check-in as a new revision that keeps the prior sheet as an earlier version', async (end) => {
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    const first = await current(project.id);
+    const artifactId = first.castAndSets.artifactId;
+    const finish = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/${end === 'approved' ? 'approve' : 'skip'}`).send({});
+    expect(finish.body.stage.status).toBe(end);
+
+    const rebuilt = await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    expect(rebuilt.status).toBe(202);
+    expect(rebuilt.body.stage).toMatchObject({ status: 'directing', revision: 2 });
+    await runTo(project.id, 'review');
+    const after = await current(project.id);
+    expect(after.castAndSets.status).toBe('review');
+    expect(after.castAndSets.artifactId).toBe(artifactId);
+    expect(after.devArtifacts.find((a) => a.id === artifactId).version).toBe(2);
+    // A sheet awaiting review still points the director at Regenerate.
+    const again = await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    expect(again.status).toBe(409);
+  });
+
+  it('regenerates without notes by re-rendering every image', async () => {
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    const before = jobs.length;
+    const regen = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/regenerate`).send({});
+    expect(regen.status).toBe(202);
+    await runTo(project.id, 'review');
+    expect(new Set(jobs.slice(before).map(keyOf))).toEqual(new Set(Object.keys((await current(project.id)).castAndSets.plan)));
+    expect((await current(project.id)).castAndSets.revision).toBe(2);
+  });
+
   it('regenerates only the images a note touches (and what depends on them) as a new sheet version', async () => {
     const project = await seed();
     await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});

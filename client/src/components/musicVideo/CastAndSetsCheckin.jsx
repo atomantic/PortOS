@@ -30,10 +30,10 @@ function statusLine(stage) {
 /**
  * The Cast & Sets check-in's state on the Autopilot card: progress while the
  * server works, "Waiting for your check-in" with the sheet one click away,
- * and the director's actions (Approve & continue, Regenerate with notes,
+ * and the director's actions (Approve & continue, Regenerate,
  * Edit direction on a procedural sheet, Resume, Skip).
  */
-export default function CastAndSetsCheckin({ project, busy, onOpenSheet, onApprove, onRegenerate, onEditDirection, onResume, onSkip }) {
+export default function CastAndSetsCheckin({ project, busy, onOpenSheet, onApprove, onRegenerate, onEditDirection, onResume, onRebuild, onSkip }) {
   const stage = project.castAndSets;
   if (!stage) return null;
   const working = WORKING.has(stage.status) && !stage.interrupted;
@@ -58,9 +58,9 @@ export default function CastAndSetsCheckin({ project, busy, onOpenSheet, onAppro
         )}
         {stage.status === 'review' && (
           <>
-            <button type="button" disabled={busy || !openNotes} onClick={onRegenerate} title={openNotes ? 'Re-render what your notes touch' : 'Add a note on the sheet first'}
+            <button type="button" disabled={busy} onClick={onRegenerate} title={openNotes ? 'Re-render what your notes touch' : 'Re-render every image — or add a note on the sheet to change just one'}
               className={`${buttonClass} border border-port-border`}>
-              <RotateCcw size={14} aria-hidden="true" /> Regenerate with notes
+              <RotateCcw size={14} aria-hidden="true" /> {openNotes ? 'Regenerate with notes' : 'Regenerate'}
             </button>
             {onEditDirection && stage.direction?.medium === 'procedural' && (
               <CastAndSetsDirectionEditor key={stage.revision} project={project} direction={stage.direction} busy={busy} onSave={onEditDirection} />
@@ -73,6 +73,12 @@ export default function CastAndSetsCheckin({ project, busy, onOpenSheet, onAppro
         {(stage.interrupted || stage.status === 'failed') && (
           <button type="button" disabled={busy} onClick={onResume} className={`${buttonClass} border border-port-border`}>
             <Play size={14} aria-hidden="true" /> Resume
+          </button>
+        )}
+        {onRebuild && ['approved', 'skipped'].includes(stage.status) && (
+          <button type="button" disabled={busy} onClick={onRebuild} title="Build a new sheet; the earlier one stays in the sheet's version history"
+            className={`${buttonClass} border border-port-border`}>
+            <RotateCcw size={14} aria-hidden="true" /> Rebuild
           </button>
         )}
         {!working && !['approved', 'skipped'].includes(stage.status) && (
