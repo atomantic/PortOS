@@ -2,6 +2,7 @@ import DependencyImpactPanel from '../DependencyImpactPanel.jsx';
 import RenderStatusPanel, { RenderFailure } from '../RenderStatusPanel.jsx';
 import ExcerptPanel from '../ExcerptPanel.jsx';
 import DevArtifactsPanel from '../DevArtifactsPanel.jsx';
+import MakingOfExportPanel from '../MakingOfExportPanel.jsx';
 import StageSection from '../StageSection.jsx';
 import { isFinalRenderStale } from '../../../lib/musicVideoStages.js';
 import { RenderFinalButton } from '../ProjectActionGroups.jsx';
@@ -64,6 +65,8 @@ export default function ReviewStage({ board }) {
         onUpload={board.onUploadArtifact}
       />
       </StageSection>
+
+      <MakingOfExportPanel project={project} />
 
     </fieldset>
   );

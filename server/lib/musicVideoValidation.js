@@ -12,6 +12,26 @@ import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicV
 
 import { z } from 'zod';
 
+const makingOfId = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
+export const musicVideoMakingOfSelectionSchema = z.object({
+  projects: z.array(z.object({
+    projectId: makingOfId,
+    snapshot: z.string().regex(/^[a-f0-9]{64}$/),
+    assets: z.array(z.object({
+      id: z.string().min(1).max(250),
+      rights: z.enum(['unknown', 'owned', 'licensed']).default('unknown'),
+      attribution: z.string().max(2000).default(''),
+      ownershipConfirmed: z.boolean().default(false),
+    }).strict()).max(300),
+  }).strict()).min(1).max(8),
+  previewDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+}).strict().superRefine((selection, ctx) => {
+  if (new Set(selection.projects.map(p => p.projectId)).size !== selection.projects.length
+    || selection.projects.some(p => new Set(p.assets.map(a => a.id)).size !== p.assets.length)) {
+    ctx.addIssue({ code: 'custom', message: 'Duplicate project or asset selection' });
+  }
+});
+
 export const musicVideoSongDraftSchema = z.object({
   title: z.string().trim().min(1).max(80), style: z.string().trim().min(1).max(1000),
   lyrics: z.string().max(5000), instrumental: z.boolean().default(false),
