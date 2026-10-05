@@ -1,5 +1,5 @@
 import { musicVideoAllowsMedia, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
-import { productionFeedbackContext } from './productionReview.js';
+import { productionFeedbackContext, seedArtDraft } from './productionReview.js';
 import { withMusicVideoStyle } from './styleReferences.js';
 /**
  * Music Video — Cast & Sets check-in orchestrator.
@@ -540,6 +540,9 @@ function applyApproval(project, now) {
     concept: { ...(project.concept || {}), subjects: castAndSetsSubjects(project, stage) },
   };
   assertMusicVideoMediaSelections(next);
+  // Approving the sheet seeds the art-direction draft and guide so the next
+  // approval is one click, not a re-typing of what the sheet already says.
+  next = seedArtDraft(next, stage);
   if (stage.artifactId && (next.devArtifacts || []).some((a) => a.id === stage.artifactId && !a.deleted)) {
     next = reviewDevArtifact(next, stage.artifactId, { status: 'approved' }, now).project;
   }
@@ -596,7 +599,7 @@ export async function startCastAndSets(projectId, { providerId, model, effort, p
 }
 
 /**
- * Regenerate with notes. `notes` default to the open notes on the stage's
+ * Regenerate, with notes or without. `notes` default to the open notes on the stage's
  * sheet. A note aimed at an image (`character`, `looks`, `set:<id>`,
  * `test:<n>`, …) re-renders that image and what depends on it; any other
  * note revises the direction, and only images whose prompt changed re-render.
@@ -610,7 +613,6 @@ export async function regenerateCastAndSets(projectId, { notes = null, providerI
   const reviewNotes = (project.productionReview?.feedback || []).filter(n => n.stage === 'art' && !n.resolvedAt)
     .map(n => ({ target: `production-review:${n.target}`, text: n.text }));
   const source = [...(Array.isArray(notes) ? notes : (artifact?.notes || []).filter((n) => !n.resolvedAt)), ...reviewNotes];
-  if (!source.length) throw new ServerError('Add a note first — nothing says what to change', { status: 422, code: 'CAST_SETS_NO_NOTES' });
   const imageNotes = {};
   const directionNotes = [];
   for (const note of source) {
@@ -630,7 +632,9 @@ export async function regenerateCastAndSets(projectId, { notes = null, providerI
   });
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} regenerating r${out.stage.revision} (${source.length} note(s)${redirect ? ', new direction' : ''})`);
   publish(projectId, out.project);
-  const forceKeys = Object.keys(imageNotes);
+  // With no notes the director asks for another take: every image re-renders
+  // from the current direction.
+  const forceKeys = source.length ? Object.keys(imageNotes) : Object.keys(stage.plan || {});
   inBackground('The regeneration', projectId, () => (redirect
     ? runDirection(projectId, { providerId, model, effort, notes: directionNotes, forceKeys })
     : writePlan(projectId, { forceKeys })));

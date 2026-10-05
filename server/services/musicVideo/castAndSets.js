@@ -73,15 +73,17 @@ function write(project, stage, now) {
 
 /**
  * Begin (or restart) the stage. Refuses while a working stage is live in
- * this process, and once approved (regenerate instead). Returns `{ project, stage }`.
+ * this process, and while a sheet awaits review (regenerate instead). A
+ * skipped or approved stage restarts as a Rebuild: the prior sheet's artifact
+ * keeps its versions, so the earlier sheet stays in history. Returns `{ project, stage }`.
  */
 export function startCastAndSetsOnProject(project, { processId, productionRunId = null }, now = new Date().toISOString()) {
   const current = project?.castAndSets || null;
   if (current && CAST_SETS_WORKING.includes(current.status) && current.processId === processId) {
     throw stageError(409, 'CAST_SETS_IN_PROGRESS', 'The Cast & Sets check-in is already being prepared');
   }
-  if (current?.status === 'approved' || current?.status === 'review') {
-    throw stageError(409, 'CAST_SETS_EXISTS', 'This project already has a Cast & Sets sheet — regenerate it with notes instead');
+  if (current?.status === 'review') {
+    throw stageError(409, 'CAST_SETS_EXISTS', 'This project already has a Cast & Sets sheet awaiting review — regenerate it instead');
   }
   const stage = {
     revision: (current?.revision || 0) + 1,

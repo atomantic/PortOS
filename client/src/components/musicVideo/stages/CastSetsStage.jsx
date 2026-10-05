@@ -18,6 +18,7 @@ export default function CastSetsStage({ board }) {
           onRegenerate={() => castSets.regenerate()}
           onEditDirection={castSets.editDirection}
           onResume={() => castSets.resume()}
+          onRebuild={() => castSets.start()}
           onSkip={board.skipCastAndSets}
         />
       ) : (
@@ -30,9 +31,11 @@ export default function CastSetsStage({ board }) {
         project={project}
         busy={board.devArtifacts.busy}
         onOpen={board.openArtifact}
-        kinds={['cast-sets']}
-        title="Cast & Sets sheets"
-        emptyText="The check-in sheet appears here once the cast and sets are built"
+        onUpload={board.onUploadArtifact}
+        onUseAsGuide={board.useAsGuide}
+        guideId={project.productionReview?.draft?.guideArtifactId || null}
+        title="Cast & Sets sheets and visual guides"
+        emptyText="The check-in sheet appears here once the cast and sets are built — or import your own guide"
       />
     </div>
   );

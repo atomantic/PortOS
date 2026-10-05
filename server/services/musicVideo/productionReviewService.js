@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
-import { productionReadiness, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, recordProductionFeedback, resolveProductionFeedback } from './productionReview.js';
+import { productionReadiness, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, recordProductionFeedback, resolveProductionFeedback } from './productionReview.js';
 
 const reviewProcessId = randomUUID();
 
@@ -188,20 +188,9 @@ export async function prepareProductionReview(id, options = {}) {
     await approveCastAndSets(id);
     project = await requireProject(id);
   }
-  const d = stage?.direction || {};
-  const describe = value => typeof value === 'string' ? value : JSON.stringify(value || {}, null, 2);
   // Merge against the latest draft while holding the write lock: a guide job
   // may finish while the operator is editing its text.
-  await mutateProjectRecord(id, current => {
-    if (current.productionReview?.draft?.storyboardSource === 'document') return { project: current };
-    const prior = current.productionReview?.draft || {};
-    const draft = { lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [], ...prior,
-      cast: prior.cast || describe(d.protagonist), environments: prior.environments || describe(d.sets),
-      visualLanguage: prior.visualLanguage || describe({ look: d.look, palette: d.protagonist?.palette, world: d.world }),
-      motionLanguage: prior.motionLanguage || describe({ movement: d.protagonist?.movement, camera: d.world?.camera, transitions: d.world?.transitions }),
-      guideArtifactId: prior.guideArtifactId || stage?.artifactId };
-    return { project: { ...current, productionReview: { ...current.productionReview, draft } } };
-  });
+  await mutateProjectRecord(id, current => ({ project: seedArtDraft(current, stage) }));
   project = await requireProject(id);
   if (project.productionReview?.draft?.storyboardSource === 'document' || !productionReadiness(project).art.approved) return present(project);
   if (!project.scenes?.length) {

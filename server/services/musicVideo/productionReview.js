@@ -38,6 +38,28 @@ function hasProofEvidence(review) {
   return (review.method == null || review.method === 'playback') && review.watchedWithAudio === true;
 }
 
+const describeDirection = value => typeof value === 'string' ? value : JSON.stringify(value || {}, null, 2);
+
+/**
+ * Seed the empty art-direction draft fields (and the visual guide) from a
+ * Cast & Sets sheet. Text the director already typed — and a guide already
+ * chosen — is never overwritten, and a document-shot draft is left alone.
+ * Seeding supplies editable content only; it never records an approval.
+ */
+export function seedArtDraft(project, stage = project.castAndSets) {
+  const prior = project.productionReview?.draft || {};
+  if (prior.storyboardSource === 'document' || !stage?.direction) return project;
+  const d = stage.direction;
+  const keep = (key, fallback) => text(prior[key]) ? prior[key] : fallback;
+  const draft = { lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [], ...prior,
+    cast: keep('cast', describeDirection(d.protagonist)),
+    environments: keep('environments', describeDirection(d.sets)),
+    visualLanguage: keep('visualLanguage', describeDirection({ look: d.look, palette: d.protagonist?.palette, world: d.world })),
+    motionLanguage: keep('motionLanguage', describeDirection({ movement: d.protagonist?.movement, camera: d.world?.camera, transitions: d.world?.transitions })),
+    guideArtifactId: prior.guideArtifactId || (artifact(project, stage.artifactId) ? stage.artifactId : null) };
+  return { ...project, productionReview: { ...project.productionReview, draft } };
+}
+
 export function productionReviewBasis(project) {
   const draft = project.productionReview?.draft || {};
   const art = hash({ projectId: project.id, mediaMode: project.mediaMode, authoringRenderer: project.composition?.authoringRenderer, mode: project.composition?.mode, policy: project.productionPolicy,
