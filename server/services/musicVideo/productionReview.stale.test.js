@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { productionReadiness } from './productionReview.js';
+import { castAndSetsApprovalInputs, productionReadiness } from './productionReview.js';
+
+const castAndSetsApproval = (project) => productionReadiness(project).castAndSets;
 
 // Approval records the labeled inputs it was granted on, so a later change can be named.
 const approvedArt = (project) => ({ ...project, productionReview: { ...project.productionReview,
@@ -23,5 +25,26 @@ describe('stale approval reporting', () => {
     const inputs = productionReadiness(base).inputs.storyboard;
     const edited = productionReadiness({ ...base, scenes: [base.scenes[0], { ...base.scenes[1], prompt: 'c' }] }).inputs.storyboard;
     expect(Object.keys(edited).filter(k => edited[k] !== inputs[k])).toEqual(['scene 2 prompt']);
+  });
+});
+
+describe('Cast & Sets approval basis', () => {
+  const project = { id: 'p1', trackId: 't1', concept: { prompt: 'Example concept', style: 'ink', subjects: [{ id: 's1' }] },
+    visualSpec: { palette: ['#000000'], references: [{ id: 'r1', imageId: 'a.png', role: 'character' }] } };
+  const approved = (p) => ({ ...p, castAndSets: { status: 'approved', approvedAt: '2026-01-01T00:00:00.000Z', approvedInputs: castAndSetsApprovalInputs(p) } });
+
+  it('names concept, style, subject and song changes separately', () => {
+    const base = approved(project);
+    expect(castAndSetsApproval(base)).toEqual({ approved: true, stale: null });
+    const edited = { ...base, trackId: 't2', concept: { ...project.concept, style: 'oil' }, visualSpec: { ...project.visualSpec, references: [] } };
+    expect(castAndSetsApproval(edited).stale.changedFields).toEqual(['style', 'subjects', 'song']);
+  });
+
+  it('ignores a reference re-normalized with default fields, and never flags a legacy approval without recorded inputs', () => {
+    const base = approved(project);
+    const normalized = { ...base, visualSpec: { ...project.visualSpec, typography: '', references: [{ id: 'r1', imageId: 'a.png', role: 'character', note: '', use: 'reference', condition: false }] } };
+    expect(castAndSetsApproval(normalized).stale).toBeNull();
+    const legacy = { ...project, concept: { prompt: 'Changed' }, castAndSets: { status: 'approved', approvedAt: '2026-01-01T00:00:00.000Z' } };
+    expect(castAndSetsApproval(legacy)).toEqual({ approved: true, stale: null });
   });
 });

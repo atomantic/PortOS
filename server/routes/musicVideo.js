@@ -186,6 +186,7 @@ import {
   regenerateCastAndSets,
   resumeCastAndSets,
   approveCastAndSets,
+  reconfirmCastAndSets,
   skipCastAndSets,
   getCastAndSets,
   presentProjectCastAndSets,
@@ -1170,6 +1171,12 @@ router.post('/:id/cast-and-sets/resume', asyncHandler(async (req, res) => {
 
 router.post('/:id/cast-and-sets/approve', asyncHandler(async (req, res) => {
   res.json(await approveCastAndSets(req.params.id));
+}));
+
+// "Keep approved": an approved check-in whose concept, style, subjects or song
+// changed since is re-stamped on the current inputs (#10141). No body.
+router.post('/:id/cast-and-sets/reconfirm', asyncHandler(async (req, res) => {
+  res.json(await reconfirmCastAndSets(req.params.id));
 }));
 
 router.post('/:id/cast-and-sets/skip', asyncHandler(async (req, res) => {

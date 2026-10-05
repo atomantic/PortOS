@@ -261,6 +261,12 @@ describe('TreatmentPanel split by dependency', () => {
     expect(screen.getByText('Draft without AI')).toBeTruthy();
     expect(screen.queryByLabelText('Audience')).toBeNull();
   });
+  it('warns before a treatment edit that an approved storyboard will need re-approval (#10141)', () => {
+    const { rerender } = render(<TreatmentPanel project={PROJECT} treatment={noop} part="brief" storyboardApproved />);
+    expect(screen.getByRole('note')).toHaveTextContent('Editing the treatment will need re-approval of the storyboard');
+    rerender(<TreatmentPanel project={PROJECT} treatment={noop} part="brief" />);
+    expect(screen.queryByRole('note')).toBeNull();
+  });
   it('summarizes revision, applied state and gaps for the section header', () => {
     expect(treatmentSummary({})).toBe('Not started');
     expect(treatmentSummary(PROJECT)).toBe('rev 3 · 0 directed shots · not applied · 1 capability gap');

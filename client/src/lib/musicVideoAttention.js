@@ -13,7 +13,7 @@
  */
 
 import { describeAutonomousWait } from './musicVideoAutonomous.js';
-import { RESUMABLE_RUN_STATUSES, currentProductionRun } from './musicVideoStages.js';
+import { RESUMABLE_RUN_STATUSES, changedFieldsText, currentProductionRun } from './musicVideoStages.js';
 
 /** The DOM id of the banner, so a refusal toast can scroll to it. */
 export const ATTENTION_ANCHOR_ID = 'mv-needs-attention';
@@ -40,11 +40,13 @@ function sectionProgress(project, revision) {
  * - `generatingSceneIds` — scenes with a frame/clip spinning on this board
  * - `draftRendering` — a draft excerpt render is attached to this tab
  * - `finalRenderAttached` — this tab already shows the final render's progress
+ * - `readiness` — the server's production readiness, for approvals given on
+ *   inputs that have changed since (#10141)
  *
  * Row shape: `{ id, kind, tone, title, detail, … }` plus the ids the action
  * needs — `revisionId` + `canResume` (revision), `runId` (auto-review).
  */
-export function deriveAttentionItems(project, { generatingSceneIds = null, draftRendering = false, finalRenderAttached = false } = {}) {
+export function deriveAttentionItems(project, { generatingSceneIds = null, draftRendering = false, finalRenderAttached = false, readiness = project?.productionReadiness } = {}) {
   if (!project) return [];
   const items = [];
   const spinning = (sceneId) => !!generatingSceneIds?.has?.(sceneId);
@@ -124,7 +126,38 @@ export function deriveAttentionItems(project, { generatingSceneIds = null, draft
       detail: 'Reattach to watch its progress or cancel it.',
     });
   }
-  return [...items, ...parkedRunItems(project)];
+  const stale = staleApprovalItem(project, readiness);
+  return [...items, ...parkedRunItems(project), ...(stale ? [stale] : [])];
+}
+
+// Approvals in the order they are given, with the tab (and editor) each is re-given on.
+const STALE_APPROVALS = [
+  ['castAndSets', 'Cast & Sets check-in', 'cast-sets'],
+  ['art', 'Art direction', 'cast-sets#mv-review-art'],
+  ['storyboard', 'Timed storyboard', 'board#mv-review-storyboard'],
+  ['proof', 'Animated proof', 'compose#mv-review-proof'],
+];
+
+// One row for every approval given on inputs that have changed since (#10141),
+// naming what changed per approval and opening the earliest one. A running
+// production replaces takes as its job, so it does not flag its own progress.
+function staleApprovalItem(project, readiness) {
+  if (currentProductionRun(project)?.status === 'running') return null;
+  const stale = STALE_APPROVALS.filter(([key]) => readiness?.[key]?.stale);
+  if (!stale.length) return null;
+  const describe = ([key, label]) => {
+    const fields = readiness[key].stale.changedFields || [];
+    return fields.length ? `${label} — changed since: ${changedFieldsText(fields, 3)}` : `${label} — its inputs changed`;
+  };
+  return {
+    id: 'stale-approvals',
+    kind: 'stale-approvals',
+    tone: 'warn',
+    title: stale.length === 1 ? `${stale[0][1]} was approved earlier and has changed since` : `${stale.length} approvals were given before later changes`,
+    detail: `${stale.map(describe).join('. ')}. Re-approve, or undo the change.`,
+    projectId: project.id,
+    openTo: stale[0][2],
+  };
 }
 
 // Auto-review states that wait on the director (#10156): a limit, an unverifiable

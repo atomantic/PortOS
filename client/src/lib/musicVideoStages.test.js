@@ -490,5 +490,8 @@ describe('stale approval text (#10141)', () => {
     const item = stageChecklist('cast-sets', { productionReview: { draft: {} } }, readiness).find((i) => i.id === 'approve-art');
     expect(item).toMatchObject({ done: false, stale: true });
     expect(item.detail).toMatch(/^Approved earlier — changed since: concept, scene 3 prompt\./);
+    // The owning tab carries the stale mark; tabs whose approvals are current do not.
+    const { stages } = deriveStages({ scenes: [] }, readiness);
+    expect(stages.filter((s) => s.stale).map((s) => s.id)).toEqual(['cast-sets']);
   });
 });

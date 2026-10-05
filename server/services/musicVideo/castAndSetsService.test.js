@@ -369,6 +369,17 @@ describe('Cast & Sets check-in', () => {
     expect(done.concept.subjects.map((s) => [s.id, s.kind])).toEqual([
       ['s-band', 'character'], ['cs-protagonist', 'character'], ['cs-set-lab', 'place'], ['cs-set-harbor', 'place'], ['cs-set-roof', 'place'],
     ]);
+
+    // #10141: the approval records what it rests on, so a later concept edit is
+    // named on the read; "Keep approved" re-stamps it without rebuilding the sheet.
+    const castReadiness = async () => (await request(app).get(`/api/music-video/${project.id}`)).body.productionReadiness.castAndSets;
+    expect(await castReadiness()).toEqual({ approved: true, stale: null });
+    expect((await request(app).patch(`/api/music-video/${project.id}`).send({ concept: { prompt: 'a homecoming' } })).status).toBe(200);
+    expect(await castReadiness()).toMatchObject({ approved: true, stale: { changedFields: ['concept'] } });
+    const kept = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/reconfirm`);
+    expect(kept.status).toBe(200);
+    expect(kept.body.project.concept.prompt).toBe('a homecoming');
+    expect(await castReadiness()).toEqual({ approved: true, stale: null });
   });
 
   it('seeds the empty art-direction draft and guide on approval without overwriting typed text', async () => {

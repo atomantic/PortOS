@@ -993,6 +993,7 @@ export default function MusicVideo() {
       .filter((sceneId) => sceneMedia.genScenes?.[sceneId] || sceneMedia.genVideoScenes?.[sceneId])),
     draftRendering: excerpts.rendering,
     finalRenderAttached: renderTargetsSelected,
+    readiness: productionReview.readiness,
   }) : [];
   const runNextAction = () => {
     if (!selected || !nextAction || nextAction.disabled || compositionSavePending > 0) return;

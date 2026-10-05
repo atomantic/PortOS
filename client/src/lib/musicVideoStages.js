@@ -275,7 +275,8 @@ export function lyricSetupState(project, readiness = project?.productionReadines
 /**
  * Each stage's state derived from the project record — `done`, `blocked`
  * (stopped and needs the director), `active` (the stage the project is in), or
- * `todo` — plus `current`, the first stage that is not done. A live production
+ * `todo`, with `stale` when an approval it owns was given on inputs that have
+ * changed since — plus `current`, the first stage that is not done. A live production
  * run owns the project, so it pins `current` to Produce.
  *
  * The animated proof is the last step of Compose (#10140): its basis covers the
@@ -313,6 +314,13 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
     'cast-sets': castStopped,
     produce: !!run && RUN_BLOCKED_STATUSES.has(run.status),
   };
+  // Approved earlier, inputs changed since (#10141): the tab says so rather than
+  // reading as never done. The check-in sheet stays approved while stale.
+  const stale = {
+    'cast-sets': !!readiness?.art?.stale || !!readiness?.castAndSets?.stale,
+    board: !!readiness?.storyboard?.stale,
+    compose: !!readiness?.proof?.stale,
+  };
   const current = liveRun
     ? 'produce'
     : (MUSIC_VIDEO_STAGES.find((stage) => !done[stage.id])?.id || 'publish');
@@ -320,7 +328,7 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
     let state = 'todo';
     if (done[stage.id] && !(stage.id === current && liveRun)) state = 'done';
     else if (stage.id === current) state = blocked[stage.id] ? 'blocked' : 'active';
-    return { ...stage, state };
+    return { ...stage, state, stale: !!stale[stage.id] };
   });
   return { stages, current };
 }
@@ -450,9 +458,12 @@ const ART_DIRECTION_FIELDS = [['cast', 'cast'], ['environments', 'sets'], ['visu
 /** "Approved earlier — changed since: concept, scene 3 prompt" for an approval whose inputs moved; null otherwise. */
 export function staleApprovalText(stale) {
   if (!stale) return null;
-  const shown = stale.changedFields.slice(0, 4).join(', ');
-  const more = stale.changedFields.length > 4 ? ` +${stale.changedFields.length - 4} more` : '';
-  return stale.changedFields.length ? `Approved earlier — changed since: ${shown}${more}.` : 'Approved earlier — its inputs changed since.';
+  return stale.changedFields.length ? `Approved earlier — changed since: ${changedFieldsText(stale.changedFields)}.` : 'Approved earlier — its inputs changed since.';
+}
+/** "concept, scene 3 prompt +2 more": the first `limit` changed inputs of a stale approval. */
+export function changedFieldsText(changedFields, limit = 4) {
+  const more = changedFields.length > limit ? ` +${changedFields.length - limit} more` : '';
+  return `${changedFields.slice(0, limit).join(', ')}${more}`;
 }
 const APPROVAL_ANCHORS = { art: 'mv-review-art', storyboard: 'mv-review-storyboard', proof: 'mv-review-proof' };
 const APPROVAL_STAGES = { art: 'cast-sets', storyboard: 'board', proof: 'compose' };

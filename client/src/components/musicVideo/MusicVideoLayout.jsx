@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  AlertTriangle, ArrowRight, CheckCircle2, CircleDot, Clapperboard, Film, Layers, LayoutGrid, Music, Play,
+  AlertTriangle, ArrowRight, CheckCircle2, CircleDot, Clapperboard, Film, History, Layers, LayoutGrid, Music, Play,
   Send, SlidersHorizontal, Users,
 } from 'lucide-react';
 import TabPills from '../ui/TabPills.jsx';
@@ -21,6 +21,9 @@ const STAGE_TRAILING = {
   active: <CircleDot size={12} className="shrink-0 text-port-accent max-lg:hidden" aria-label="in progress" />,
   blocked: <AlertTriangle size={12} className="shrink-0 text-port-warning" aria-label="needs you" />,
 };
+// Approved earlier, changed since (#10141): shown at every width, like "needs you",
+// because the stage's checklist names what to re-approve.
+const STALE_MARK = <History size={12} className="shrink-0 text-port-warning" aria-label="approved earlier, changed since" />;
 
 // The page's scroll body (the route is full-width, so the page owns its
 // scroll): a new tab scrolls it back to the top.
@@ -118,7 +121,7 @@ export default function MusicVideoLayout({
     id: entry.id,
     label: entry.label,
     icon: STAGE_ICONS[entry.id],
-    trailing: STAGE_TRAILING[entry.state] || null,
+    trailing: entry.state !== 'blocked' && entry.stale ? STALE_MARK : STAGE_TRAILING[entry.state] || null,
   }));
   const showSpend = spend.spentUsd > 0 || spend.capUsd != null;
   const stageEntry = progress.stages.find((entry) => entry.id === stage);
