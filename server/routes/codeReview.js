@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
-import { validateRequest, cliReviewerOutcomeSchema, isToolFreeReviewer, isProviderReviewer, isReviewerConfigFault, reviewerModelsFromDefaults, normalizeReviewerEffort, reviewerEffortLevels, reviewerEffortsFromDefaults } from '../lib/validation.js'
+import { validateRequest, cliReviewerOutcomeSchema, reportReviewerFailureSchema, isToolFreeReviewer, isProviderReviewer, isReviewerConfigFault, reviewerModelsFromDefaults, normalizeReviewerEffort, reviewerEffortLevels, reviewerEffortsFromDefaults } from '../lib/validation.js'
 import { reviewerAccessFailureCode } from '../lib/reviewerHealth.js'
 import { getSettings } from '../services/settings.js'
 import { runLocalCodeReview, getCodeReviewDefaults, getReviewerCliInstalled, getProviderReviewCapability, withoutResolvedUnsupportedFaults, reportReviewerFailure, reportReviewerSuccess } from '../services/codeReview.js'
@@ -120,6 +120,14 @@ router.post('/cli-outcome', asyncHandler(async (req, res) => {
   const code = reviewerAccessFailureCode(body.reviewer, body.failure)
   const recorded = code ? await reportReviewerFailure(body.reviewer, { code }) : false
   res.json({ recorded, code })
+}))
+
+// Universal failure reporting for agents/runners. Explicitly tracks quota limits,
+// provider outages, and unavailable reviewers to activate fallback tiers.
+router.post('/report-failure', asyncHandler(async (req, res) => {
+  const body = validateRequest(reportReviewerFailureSchema, req.body)
+  const recorded = await reportReviewerFailure(body.reviewer, { reason: body.reason, error: body.error })
+  res.json({ recorded })
 }))
 
 export default router
