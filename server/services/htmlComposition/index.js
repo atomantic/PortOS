@@ -162,7 +162,7 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
     const parsedInput = validateRequest(htmlCompositionRenderSchema, input);
     let { directory } = parsedInput;
     const sourceDirectory = directory;
-    const { musicTrack, launchVideo, synthesizeMusic, proof, formats, motionBlur: blurChoice } = parsedInput;
+    const { musicTrack, launchVideo, synthesizeMusic, proof, formats, motionBlur: blurChoice, masterLoudness } = parsedInput;
     // A music-video render may still ask for the extra frames its contract
     // declares in portosComposition.formats (renderTargets enforces that).
     if (musicVideo && (launchVideo || synthesizeMusic || musicTrack || proof)) {
@@ -265,8 +265,9 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
         const outputPath = join(PATHS.videos, filename);
         const targetFrames = frameCount(target.contract);
         ownedPaths.push(outputPath, join(PATHS.videoThumbnails, `${target.id}.jpg`));
-        const { sampleHistogram } = await encodeComposition(page, target.contract, outputPath, {
+        const { sampleHistogram, loudness } = await encodeComposition(page, target.contract, outputPath, {
           musicPath: musicVideo ? null : musicPath,
+          master: masterLoudness !== false,
           audio: musicVideo?.audio,
           signal,
           onProgress: (fraction, detail) => {
@@ -287,7 +288,7 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
         });
         framesDone += targetFrames;
         page.check();
-        rendered.push({ ...target, filename, outputPath, sampleHistogram });
+        rendered.push({ ...target, filename, outputPath, sampleHistogram, loudness });
       }
       // End script execution before post-processing and publishing the result.
       await page.close({ verify: true });
@@ -329,6 +330,7 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
         ...frameOf(video.contract), numFrames: Math.round(contract.durationSec * contract.fps),
         ...(launchMetadata ? { launchVideo: launchMetadata, appId: launchMetadata.appId, posterSec: launchPlan.posterSec } : {}),
         ...(video.sampleHistogram ? { sampleHistogram: video.sampleHistogram } : {}),
+        ...(video.loudness ? { loudness: video.loudness } : {}),
         filename: video.filename, thumbnail: video.thumbnail, createdAt,
       }));
       await mutateVideoHistory(history => { history.unshift(...metas); return history; });
@@ -337,8 +339,8 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
       // is the job. A single-format render keeps id === generationId as before.
       // A shutter-blur render reports how many output frames took each
       // sub-frame count, so the user can see where the render time went.
-      const summary = ({ id, filename, thumbnail, sampleHistogram }) => ({ id, filename, thumbnail, path: `/data/videos/${filename}`,
-        ...(sampleHistogram ? { sampleHistogram } : {}) });
+      const summary = ({ id, filename, thumbnail, sampleHistogram, loudness }) => ({ id, filename, thumbnail, path: `/data/videos/${filename}`,
+        ...(sampleHistogram ? { sampleHistogram } : {}), ...(loudness ? { loudness } : {}) });
       const [first] = rendered;
       result = { ...(launchMetadata ? { appId: launchMetadata.appId } : {}), generationId: jobId, ...summary(first),
         ...(formats ? { videos: rendered.map(video => ({ format: video.format, ...summary(video) })) } : {}) };

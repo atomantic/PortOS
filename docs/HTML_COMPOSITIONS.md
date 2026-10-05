@@ -50,6 +50,25 @@ with the same tail fade, and removes the temporary file after completion or
 failure. No music model, Python runtime, downloaded samples or music-library
 write is required. Missing or invalid audio fails the job.
 
+### Loudness mastering
+
+Audio PortOS itself produces or mixes, a `synthesizeMusic` score or a
+`musicTrack` bed, is mastered by default (#10249). The encode first runs an
+ffmpeg `loudnorm` measurement pass over the trimmed bed, then applies it in
+linear mode inside the same encode to **-14 LUFS integrated, -1.5 dBTP, LRA 11**
+(`MASTER_LOUDNESS` in `server/lib/ffmpeg.js`). A bed that measures below -50
+LUFS fails the job with a "Soundtrack is silent" error before any frame is
+captured. After the encode the finished file is measured again, and the job result
+and each Media History entry carry
+`loudness: { integratedLufs, truePeakDb, loudnessRange, masteredFrom: { integratedLufs, truePeakDb }, targetLufs }`.
+The launch-video panel and the Code Animation export show it as one line, for
+example "-14.1 LUFS, peak -1.6 dB (was -27.3 LUFS)".
+
+Submit `masterLoudness: false` to opt out: the bed is then muxed exactly as before
+and no `loudness` is reported. A Music Video's exact master (`audio.path`) is never
+mastered; when a sound-design bed is mixed under the song, the mix only ends with an
+`alimiter` at the -1.5 dB ceiling, so the song's own level is unchanged.
+
 SuperCollider is a planned optional native code-audio runtime, described in the
 [integration decision](decisions/2026-10-01-supercollider-code-audio.md). It is not
 currently installed or enabled by PortOS and cannot run through this JavaScript

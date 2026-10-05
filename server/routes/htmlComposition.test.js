@@ -70,6 +70,15 @@ describe('HTML composition admission', () => {
     expect(enqueueJob).toHaveBeenCalledWith({ kind: 'html-composition', params });
   });
 
+  it('carries the masterLoudness opt-out to the job and rejects a non-boolean', async () => {
+    const params = { directory: 'compositions/example', synthesizeMusic: true, masterLoudness: false };
+    expect((await request(app).post('/api/html-composition/render').send(params)).status).toBe(202);
+    expect(enqueueJob).toHaveBeenCalledWith({ kind: 'html-composition', params });
+    enqueueJob.mockClear();
+    expect((await request(app).post('/api/html-composition/render').send({ ...params, masterLoudness: 'no' })).status).toBe(400);
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
   it.each([{ directory: 'valid', synthesizeMusic: true, musicTrack: 'example.wav' }, { directory: '../private' }, { directory: '/etc' }, { directory: 'C:\\private' }, { directory: 'valid', musicTrack: '../track.wav' }, {}])('rejects invalid paths before queue admission: %j', async body => {
     enqueueJob.mockClear();
     const response = await request(app).post('/api/html-composition/render').send(body);

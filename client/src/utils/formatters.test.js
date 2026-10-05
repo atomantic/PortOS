@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   clamp, formatContextLength, formatDurationMin, formatDurationMs, formatEventDateTime, timeAgo, formatAgeDays,
   formatCooldown, formatCountdown, recommendedRamGb, parseTimeoutMs, formatDurationSec, middleTruncate,
-  formatWeight, formatPercent, formatUsd, formatBytes, formatCount,
+  formatLoudness, formatWeight, formatPercent, formatUsd, formatBytes, formatCount,
   formatDateNumeric, formatTimeOfDaySeconds, formatClockTime, formatHourOfDay, formatWeekdayDate,
   formatMonthDay, formatMonthYear, formatWeekdayShort, formatWeekdayTime, formatDateFull, formatDateShort, formatDateTime,
   localDateKey, shiftISODate,
@@ -731,5 +731,16 @@ describe('shortClaudeModelName', () => {
     expect(shortClaudeModelName('claude-sonnet-5-5')).toBe('sonnet-5-5');
     expect(shortClaudeModelName('claude-sonnet-4-20250514')).toBe('sonnet-4');
     expect(shortClaudeModelName(undefined)).toBe('');
+  });
+});
+
+describe('formatLoudness', () => {
+  it('reads as one line with the pre-master level', () => {
+    expect(formatLoudness({ integratedLufs: -14.1, truePeakDb: -1.6, masteredFrom: { integratedLufs: -27.3, truePeakDb: -24 } })).toBe('-14.1 LUFS, peak -1.6 dB (was -27.3 LUFS)');
+  });
+  it('omits the pre-master clause when absent and returns blank when unmeasured', () => {
+    expect(formatLoudness({ integratedLufs: -14, truePeakDb: -2 })).toBe('-14 LUFS, peak -2 dB');
+    expect(formatLoudness(null)).toBe('');
+    expect(formatLoudness({ integratedLufs: null, truePeakDb: -2 })).toBe('');
   });
 });

@@ -5,6 +5,7 @@ import toast from '../ui/Toast';
 import { cancelCodeAnimationExport, exportCodeAnimation, getCodeAnimationPackage, uploadGalleryVideo } from '../../services/api';
 import { useSseProgress } from '../../hooks/useSseProgress';
 import { downloadBlob } from '../../lib/downloadBlob';
+import { formatLoudness } from '../../utils/formatters';
 
 // Seconds past the film's own duration before a silent recording is abandoned
 // (a page that never answers the handshake must not leave Record spinning).
@@ -356,6 +357,7 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
             <a href={exportResult.path} download={`${fileBase}.mp4`} className={BUTTON_SECONDARY}>
               <Download className="h-4 w-4" /> Download MP4
             </a>
+            {exportResult.loudness && <span className="text-xs text-gray-400">Audio: {formatLoudness(exportResult.loudness)}</span>}
             <Link to="/media/history" className="text-xs text-port-accent hover:underline">Saved to Media History</Link>
           </div>
         </div>

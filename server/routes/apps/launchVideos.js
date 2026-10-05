@@ -276,11 +276,12 @@ router.get('/:id/launch-videos', loadApp, asyncHandler(async (req, res) => {
   // Never cut a multi-format run at the limit: a take the tab shows keeps all
   // of its formats (at most two past the limit).
   const keptRuns = new Set(all.slice(0, LAUNCH_VIDEO_LIST_LIMIT).map(item => item.launchVideo.runId).filter(Boolean));
-  const videos = all.filter((item, index) => index < LAUNCH_VIDEO_LIST_LIMIT || keptRuns.has(item.launchVideo.runId)).map(({ id, filename, thumbnail, createdAt, durationSec, width, height, launchVideo, sampleHistogram }) => ({
+  const videos = all.filter((item, index) => index < LAUNCH_VIDEO_LIST_LIMIT || keptRuns.has(item.launchVideo.runId)).map(({ id, filename, thumbnail, createdAt, durationSec, width, height, launchVideo, sampleHistogram, loudness }) => ({
       id, filename, thumbnail, createdAt, durationSec, caption: launchVideo.caption, ...(launchVideo.sourceVideoId ? { sourceVideoId: launchVideo.sourceVideoId } : {}),
       // runId groups a multi-format run's entries into one take in the tab.
       runId: launchVideo.runId, format: formatOf({ width, height }),
       ...(sampleHistogram ? { sampleHistogram } : {}),
+      ...(loudness ? { loudness } : {}),
     }));
   res.json({ videos });
 }));

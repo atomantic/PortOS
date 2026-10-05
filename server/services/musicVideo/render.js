@@ -522,6 +522,7 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
       firstInputIdx: audioIdx + 1 + overlays.length,
       mainLabel: '[master]',
       outLabel: '[mixa]',
+      limitPeak: true,
     });
     inputs.push(...bed.inputs);
     filters.push(...bed.filters);
