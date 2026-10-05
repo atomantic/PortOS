@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../../../hooks/useAssignableInstances', () => ({ default: () => ({ instances: [], isFederated: false }) }));
@@ -149,4 +149,16 @@ it('refreshes expanded history on completed changes without fetching it for queu
   await screen.findByText('Completed replacement');
   expect(screen.queryByText('Completed old')).not.toBeInTheDocument();
   expect(api.getCosTasks).toHaveBeenCalledTimes(3);
+});
+
+it('displays loading spinners while tasks are loading instead of empty messages', async () => {
+  renderTab({ tasks: { user: null, cos: null } });
+  await act(async () => {});
+
+  expect(screen.queryByText('No user tasks. Add one above or edit TASKS.md directly.')).not.toBeInTheDocument();
+  expect(screen.queryByText('No system tasks.')).not.toBeInTheDocument();
+  expect(screen.queryByText(/0 pending · 0 active · 0 blocked/)).not.toBeInTheDocument();
+
+  expect(screen.getAllByLabelText('Loading task queue…').length).toBeGreaterThanOrEqual(1);
+  expect(screen.getByLabelText('Loading system tasks…')).toBeInTheDocument();
 });

@@ -181,4 +181,24 @@ describe('DraftsTab send capabilities', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(api.sendMessageDraft).toHaveBeenCalledWith('gmail-draft'));
   });
+
+  it('displays a loading spinner while drafts are loading and shows empty state when done', async () => {
+    let resolveDrafts;
+    const draftsPromise = new Promise((resolve) => {
+      resolveDrafts = resolve;
+    });
+    api.getMessageDrafts.mockReturnValueOnce(draftsPromise);
+
+    render(<DraftsTab accounts={[]} />);
+
+    expect(screen.getByLabelText('Loading drafts…')).toBeInTheDocument();
+    expect(screen.queryByText('No drafts')).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveDrafts([]);
+    });
+
+    await waitFor(() => expect(screen.getByText('No drafts')).toBeInTheDocument());
+    expect(screen.queryByLabelText('Loading drafts…')).not.toBeInTheDocument();
+  });
 });

@@ -5,6 +5,7 @@ import * as api from '../../services/api';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { copyToClipboard } from '../../lib/clipboard.js';
+import BrailleSpinner from '../BrailleSpinner';
 
 function DeliveryReconciliation({ draft, onReconciled }) {
   const [checkedMailbox, setCheckedMailbox] = useState(false);
@@ -152,6 +153,12 @@ export default function DraftsTab({ accounts }) {
           <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
         </button>
       </div>
+
+      {loading && drafts.length === 0 && (
+        <div className="text-center py-12 text-gray-400">
+          <BrailleSpinner text="Loading drafts…" />
+        </div>
+      )}
 
       {drafts.length === 0 && !loading && (
         <div className="text-center py-12 text-gray-500">

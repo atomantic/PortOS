@@ -26,6 +26,7 @@ import { MicroGlyph, SchematicLabel } from '../../micrographics';
 import useAssignableInstances from '../../../hooks/useAssignableInstances';
 import { formatCount } from '../../../utils/formatters';
 import { runningAgentsByTaskId, isSpawningTask } from '../../../lib/cosSpawnWindow';
+import BrailleSpinner from '../../BrailleSpinner';
 
 // Maps a task-section status → micrographic glyph spec. Animation only on
 // states where motion communicates real work happening (running tasks).
@@ -237,6 +238,10 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
     onRefresh();
   }, [onRefresh, onTaskAdded]);
 
+  const isUserLoading = tasks?.user == null;
+  const isCosLoading = tasks?.cos == null;
+  const isQueueLoading = isUserLoading || isCosLoading;
+
   return (
     <div className="space-y-6">
       {/* User Tasks */}
@@ -246,15 +251,25 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
         </div>
 
         <p className="mb-3 text-sm text-gray-400" aria-label="Queue status">
-          {formatCount(pendingUserTasksLocal.length + pendingSystemTasks.length)} pending
-          {' · '}{formatCount(activeUserTasksLocal.length + activeSystemTasks.length)} active
-          {' · '}{formatCount(blockedUserTasksLocal.length + blockedSystemTasks.length)} blocked
+          {isQueueLoading ? (
+            <BrailleSpinner text="Loading task queue…" />
+          ) : (
+            <>
+              {formatCount(pendingUserTasksLocal.length + pendingSystemTasks.length)} pending
+              {' · '}{formatCount(activeUserTasksLocal.length + activeSystemTasks.length)} active
+              {' · '}{formatCount(blockedUserTasksLocal.length + blockedSystemTasks.length)} blocked
+            </>
+          )}
         </p>
         {/* Compact capture keeps the queue above detailed configuration. */}
         <TaskAddForm queueFirst providers={providers} providersLoaded={providersLoaded} apps={apps} onTaskAdded={handleTaskAdded} />
 
         {/* User Tasks Sections */}
-        {pendingUserTasksLocal.length === 0 && activeUserTasksLocal.length === 0 && blockedUserTasksLocal.length === 0 && (tasks.user?.completedCount ?? completedUserTasksLocal.length) === 0 ? (
+        {isUserLoading ? (
+          <div className="relative bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-400">
+            <BrailleSpinner text="Loading task queue…" />
+          </div>
+        ) : pendingUserTasksLocal.length === 0 && activeUserTasksLocal.length === 0 && blockedUserTasksLocal.length === 0 && (tasks.user?.completedCount ?? completedUserTasksLocal.length) === 0 ? (
           <div className="relative bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
             <SchematicLabel module="USER" status="EMPTY" glyph="bracket-pair" state="idle" variant="tab" />
             No user tasks. Add one above or edit TASKS.md directly.
@@ -358,7 +373,11 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
         <h3 className="text-lg font-semibold text-white mb-3">System Tasks (COS-TASKS.md)</h3>
 
         {/* System Tasks Sections */}
-        {pendingSystemTasks.length === 0 && activeSystemTasks.length === 0 && blockedSystemTasks.length === 0 && (tasks.cos?.completedCount ?? completedSystemTasks.length) === 0 ? (
+        {isCosLoading ? (
+          <div className="relative bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-400">
+            <BrailleSpinner text="Loading system tasks…" />
+          </div>
+        ) : pendingSystemTasks.length === 0 && activeSystemTasks.length === 0 && blockedSystemTasks.length === 0 && (tasks.cos?.completedCount ?? completedSystemTasks.length) === 0 ? (
           <div className="relative bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
             <SchematicLabel module="COS" status="EMPTY" glyph="bracket-pair" state="idle" variant="tab" />
             No system tasks.
