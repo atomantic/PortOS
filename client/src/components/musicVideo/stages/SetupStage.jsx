@@ -14,15 +14,20 @@ import { AnalyzeAction, MidiAction } from '../ProjectActionGroups.jsx';
 import StageSection from '../StageSection.jsx';
 import ProjectOptionsPanel, { projectOptionsSummary } from '../ProjectOptionsPanel.jsx';
 import { Check } from 'lucide-react';
-import { projectHasAudio } from '../../../lib/musicVideoStages.js';
+import { lyricSetupState, projectHasAudio } from '../../../lib/musicVideoStages.js';
 import { formatCount } from '../../../utils/formatters.js';
 
 const songSummary = (project, trackLabel) => {
   const lines = (project.lyricCues || []).length;
+  const aligned = lines > 0 && project.lyricCues.every((cue) => cue.words?.length);
+  const lyrics = lyricSetupState(project);
+  const lyricText = lines
+    ? [`${formatCount(lines)} lyric ${lines === 1 ? 'line' : 'lines'}`, aligned ? 'aligned' : null, lyrics.verified ? 'verified' : null].filter(Boolean).join(' · ')
+    : lyrics.instrumental ? 'Instrumental' : 'No lyrics';
   return [
     projectHasAudio(project) ? trackLabel || 'Track attached' : 'No track yet',
     project.audioAnalysis ? 'Analyzed' : 'Not analyzed',
-    lines ? `${formatCount(lines)} lyric ${lines === 1 ? 'line' : 'lines'}` : 'No lyrics',
+    lyricText,
   ].join(' · ');
 };
 
@@ -86,7 +91,7 @@ export default function SetupStage({ board }) {
     conceptDraft, styleDraft, importingLyrics, aligningLyrics, treatment,
     autopilotRun, autonomous, runStage, onSelectStage,
   } = board;
-  const songOpen = !projectHasAudio(project) || !project.audioAnalysis;
+  const songOpen = !projectHasAudio(project) || !project.audioAnalysis || !lyricSetupState(project).ok;
   const cues = project.lyricCues || [];
   const aligned = cues.length > 0 && cues.every((cue) => cue.words?.length);
   const trackLabel = project.trackId ? trackName(project.trackId) : audioFilename;

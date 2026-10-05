@@ -26,6 +26,11 @@ export default function StageChecklist({ items, onAction, headerAnchor = null })
             <div className="min-w-0 flex-1">
               <span className={item.done ? 'text-port-text-muted' : ''}>{item.label}</span>
               {!item.done && item.detail && <p className="break-words text-xs text-port-text-muted">{item.detail}</p>}
+              {!item.done && item.details?.length > 0 && (
+                <ul className="list-disc space-y-0.5 pl-4 text-xs text-port-text-muted">
+                  {item.details.map((text) => <li key={text} className="break-words">{text}</li>)}
+                </ul>
+              )}
             </div>
             {!item.done && item.action && onAction && item.action.anchor !== headerAnchor && (
               <button

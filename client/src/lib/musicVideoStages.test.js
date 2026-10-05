@@ -5,6 +5,8 @@ import {
 
 const APPROVED = { art: { approved: true }, storyboard: { approved: true }, proof: { approved: true }, readyForProduction: true };
 const ANALYSIS = { bpm: 120, durationSec: 30, sections: [] };
+// Setup is done only once lyrics are in and their timing is verified (or the song is instrumental).
+const LYRICS = { lyricCues: [{ id: 'l1', text: 'la la' }], productionReview: { draft: { timingStatus: 'verified' } } };
 const scene = (over = {}) => ({ sceneId: 's1', order: 0, prompt: 'a', referenceImageId: 'img', videoHistoryId: 'vid', ...over });
 const run = (over = {}) => ({
   id: 'run-1', status: 'running', interrupted: false, limits: { maxGenerations: 12, spendCapUsd: 20 }, usage: { generations: 3, spentUsd: 4.5 }, ...over,
@@ -40,7 +42,7 @@ describe('deriveStages / deriveNextAction', () => {
   });
 
   it('a project waiting on Cast & Sets approval offers the approval, a stopped check-in offers to resume, and no check-in offers to start', () => {
-    const waiting = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, automation: {}, castAndSets: { status: 'review' }, scenes: [] };
+    const waiting = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, ...LYRICS, automation: {}, castAndSets: { status: 'review' }, scenes: [] };
     expect(deriveStages(waiting).current).toBe('cast-sets');
     expect(stateOf(waiting)).toMatchObject({ setup: 'done', 'cast-sets': 'active', board: 'todo' });
     expect(deriveNextAction(waiting)).toMatchObject({ id: 'approve-cast-sets', kind: 'run' });
@@ -162,12 +164,12 @@ describe('deriveStages / deriveNextAction', () => {
   });
 
   it('requires art review for hands-on projects too', () => {
-    expect(stateOf({ id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [] })['cast-sets']).toBe('active');
+    expect(stateOf({ id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, ...LYRICS, scenes: [] })['cast-sets']).toBe('active');
   });
 });
 
 it('never promotes placeholder scenes or imported schematic documents to final production', () => {
-  const project = { id: 'example', trackId: 'song', audioAnalysis: ANALYSIS, scenes: [scene()], composition: { mode: 'document', document: { directory: 'draft' } } };
+  const project = { id: 'example', trackId: 'song', audioAnalysis: ANALYSIS, ...LYRICS, scenes: [scene()], composition: { mode: 'document', document: { directory: 'draft' } } };
   expect(stateOf(project)).toMatchObject({ 'cast-sets': 'active', board: 'todo', produce: 'todo', compose: 'todo' });
   expect(deriveNextAction(project)).toMatchObject({ id: 'review-production', stage: 'cast-sets' });
   const planned = { ...project, productionReadiness: { ...APPROVED, proof: { approved: false }, readyForProduction: false } };
@@ -308,9 +310,9 @@ describe('stageChecklist', () => {
     proof: { approved: false, problems: [] }, readyForProduction: false,
   };
   const castProject = (over = {}) => ({
-    id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [],
+    id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [], lyricCues: LYRICS.lyricCues,
     devArtifacts: [{ id: 'sheet', title: 'Cast sheet', mimeType: 'text/html' }, { id: 'gone', title: 'Rejected sheet', deleted: true }],
-    productionReview: { draft: { cast: 'c', environments: 'e', visualLanguage: 'v', motionLanguage: 'm', guideArtifactId: 'sheet' } },
+    productionReview: { draft: { cast: 'c', environments: 'e', visualLanguage: 'v', motionLanguage: 'm', guideArtifactId: 'sheet', timingStatus: 'verified' } },
     ...over,
   });
 
@@ -337,18 +339,59 @@ describe('stageChecklist', () => {
   });
 
   it('covers Setup, Board, Produce and Compose with the same done answers deriveStages uses', () => {
-    expect(stageChecklist('setup', { id: 'p' }).map((i) => i.done)).toEqual([false, false]);
+    expect(stageChecklist('setup', { id: 'p' }).map((i) => i.done)).toEqual([false, false, false, false]);
     expect(stageChecklist('setup', { id: 'p' })[0].action).toEqual({ label: 'Attach a track', anchor: 'mv-track' });
     // A running autonomous run writes the song itself, so there is nothing to attach.
     expect(stageChecklist('setup', { id: 'p', autonomousRun: { status: 'running' } })[0]).toMatchObject({ action: null, detail: 'The autonomous run is making the song.' });
     expect(stageChecklist('board', castProject({ scenes: [scene()] }), NOT_APPROVED).map((i) => [i.id, i.done]))
-      .toEqual([['shots', true], ['approve-storyboard', false]]);
+      .toEqual([['shots', true], ['board-art', false], ['approve-storyboard', false]]);
     expect(stageChecklist('produce', castProject({ scenes: [scene(), scene({ sceneId: 's2', videoHistoryId: null })] }), APPROVED)[0])
       .toMatchObject({ id: 'footage', label: 'Footage for every shot (1 of 2)', done: false });
     // A code render draws its own picture: no footage item.
     expect(stageChecklist('produce', castProject({ composition: { mode: 'code' } }), APPROVED).map((i) => i.id)).toEqual(['approve-proof']);
     expect(stageChecklist('compose', castProject({ composition: { mode: 'composed', textCues: [] } }), APPROVED).map((i) => i.done)).toEqual([true, false]);
   });
+  it('keeps Setup open until lyrics are imported and their timing verified, unless the song is instrumental', () => {
+    const base = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS };
+    const setup = (project, readiness) => deriveStages(project, readiness).stages.find((st) => st.id === 'setup').state;
+    expect(setup(base)).not.toBe('done');
+    expect(stageChecklist('setup', base).filter((i) => !i.done).map((i) => i.id)).toEqual(['lyrics', 'timing']);
+    const imported = { ...base, lyricCues: [{ id: 'l1', text: 'la' }] };
+    expect(stageChecklist('setup', imported).find((i) => i.id === 'timing')).toMatchObject({ done: false, action: { anchor: 'mv-review-storyboard' } });
+    expect(setup(imported)).not.toBe('done');
+    // The server's verdict wins over a stale draft: previously verified, timings changed since.
+    const verified = { ...imported, ...LYRICS };
+    expect(setup(verified)).toBe('done');
+    expect(stageChecklist('setup', verified, { alignment: { status: 'stale' } }).find((i) => i.id === 'timing').detail).toMatch(/verify again/);
+    expect(setup({ ...base, productionReview: { draft: { lyricsMode: 'instrumental' } } })).toBe('done');
+  });
+
+  it('lists every storyboard readiness problem on Board, grouped, each with a jump target', () => {
+    const readiness = { ...NOT_APPROVED, storyboard: { approved: false, problems: [
+      'Import lyrics and align them to the current vocal; missing lyrics are not an instrumental.',
+      'Lyric alignment is provisional or changed. Listen and verify the current word timings.',
+      'Storyboard shots must cover the master without unintended gaps or overlaps.',
+      'Complete timing, action, staging, camera and transition for Shot 1.',
+      'Review lyric anchors for Shot 1.',
+    ] } };
+    const items = stageChecklist('board', castProject({ scenes: [scene()] }), readiness).filter((i) => i.details);
+    expect(items.map((i) => i.id)).toEqual(['board-lyrics', 'board-timing', 'board-coverage', 'board-shots']);
+    expect(items.flatMap((i) => i.details)).toHaveLength(5);
+    expect(items.every((i) => i.action?.anchor)).toBe(true);
+  });
+
+  it('gives every open checklist item an action so none is a dead end', () => {
+    const stages = ['setup', 'cast-sets', 'board', 'produce', 'compose', 'review', 'publish'];
+    const modes = [undefined, 'composed', 'document', 'eidoverse', 'code'];
+    for (const mode of modes) {
+      const project = castProject({ composition: mode ? { mode } : undefined, lyricCues: [] });
+      for (const stage of stages) {
+        const open = stageChecklist(stage, project, NOT_APPROVED).filter((i) => !i.done && !i.action);
+        expect(open.map((i) => `${mode}/${stage}/${i.id}`)).toEqual([]);
+      }
+    }
+  });
+
 });
 
 describe('compareMusicVideoProjectsNewestFirst', () => {
