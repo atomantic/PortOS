@@ -73,6 +73,11 @@ vi.mock('../lib/databaseMaintenanceJournal.js', () => ({
 vi.mock('../scripts/run-db-migrations.js', () => ({
   runDbMigrations: vi.fn().mockResolvedValue(0),
 }));
+const executionRestore = vi.hoisted(() => ({ prepare: vi.fn(), finish: vi.fn() }));
+vi.mock('./peerExecutionRestore.js', () => ({
+  preparePeerExecutionRestore: executionRestore.prepare,
+  finishPeerExecutionRestore: executionRestore.finish,
+}));
 // Passthrough seam: the snapshot-cut failure tests wrap acquisition to shorten the
 // drain timeout or fail release. Left unset, runBackup uses the real boundary.
 const snapshotCutSeam = vi.hoisted(() => ({ wrap: null }));
@@ -1245,6 +1250,8 @@ describe('restorePostgres', () => {
     vi.unstubAllEnvs();
     rmSync(RECOVERY_JOURNAL(), { force: true });
     query.mockReset().mockImplementation(restoreDbAnswer());
+    executionRestore.prepare.mockReset().mockResolvedValue(undefined);
+    executionRestore.finish.mockReset().mockResolvedValue(undefined);
     checkHealth.mockResolvedValue({ connected: true });
     getServerMajorVersion.mockResolvedValue(16);
     ({ restorePostgres } = await import('./backup.js'));
@@ -1506,6 +1513,40 @@ describe('restorePostgres', () => {
       expect(atSpawn.args.indexOf('-f')).toBeLessThan(atSpawn.args.length - 2);
       expect(atSpawn.env.PGAPPNAME).toBe(`portos-restore-${atSpawn.journal.id}`);
       // Success releases admission.
+      expect(readRecoveryJournal()).toBeNull();
+      expect(executionRestore.prepare).toHaveBeenCalledWith(atSpawn.journal.id);
+      expect(executionRestore.prepare.mock.invocationCallOrder[0]).toBeLessThan(spawn.mock.invocationCallOrder[0]);
+      expect(executionRestore.finish).toHaveBeenCalledWith(atSpawn.journal.id);
+    });
+
+    it('never spawns replay when execution recovery capture fails, then recovers the proven unchanged database', async () => {
+      executionRestore.prepare.mockRejectedValueOnce(new Error('fixture capture unavailable'));
+      const result = await restorePostgres('/dest', 'snap-1', { dryRun: false });
+      expect(result).toMatchObject({ status: 'failed', reason: 'restore_execution_reconciliation' });
+      expect(spawn).not.toHaveBeenCalled();
+      const current = readRecoveryJournal();
+      expect(await resumeDatabaseRestore(current.id)).toMatchObject({ status: 'ok', outcome: 'rolled_back' });
+      expect(executionRestore.finish).toHaveBeenCalledWith(current.id, { rolledBack: true });
+      expect(readRecoveryJournal()).toBeNull();
+    });
+
+    it('keeps committed restore fenced through execution reconciliation failure and retries without replay', async () => {
+      executionRestore.finish.mockRejectedValueOnce(new Error('fixture execution evidence unavailable'));
+      const result = await runRestore();
+      expect(result).toMatchObject({ status: 'failed', reason: 'restore_execution_reconciliation' });
+      const current = readRecoveryJournal();
+      const replayCount = spawn.mock.calls.length;
+      expect(await resumeDatabaseRestore(current.id)).toMatchObject({ status: 'ok', outcome: 'repaired' });
+      expect(spawn).toHaveBeenCalledTimes(replayCount);
+      expect(readRecoveryJournal()).toBeNull();
+    });
+
+    it('retains the generic fence when rollback execution reconciliation fails', async () => {
+      executionRestore.finish.mockRejectedValueOnce(new Error('fixture rollback evidence unavailable'));
+      const result = await runRestore({ exitCode: 1 });
+      expect(result).toMatchObject({ status: 'failed', reason: 'restore_execution_reconciliation' });
+      const current = readRecoveryJournal();
+      expect(await resumeDatabaseRestore(current.id)).toMatchObject({ status: 'ok', outcome: 'rolled_back' });
       expect(readRecoveryJournal()).toBeNull();
     });
 

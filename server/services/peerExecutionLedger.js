@@ -105,13 +105,16 @@ export function createPeerExecutionLedger({ db, dataDir, authority = createPeerE
     return row ? fromRow(row) : null;
   };
   const advanceGenerationFloor = raw => {
-    const input = floorSchema.parse(raw);
+    const input = floorSchema.extend({ executionEpoch: uuid }).parse(raw);
+    authority.requireReady(input.executionEpoch);
     return locked(async client => {
+      authority.requireReady(input.executionEpoch);
       const { rows: [row] } = await client.query(`INSERT INTO peer_execution_generation_floors
         (host_instance_id, peer_instance_id, action, generation) VALUES ($1, $2, $3, $4)
         ON CONFLICT (host_instance_id, peer_instance_id, action) DO UPDATE
         SET generation = GREATEST(peer_execution_generation_floors.generation, EXCLUDED.generation) RETURNING generation`,
       [input.hostInstanceId, input.peerInstanceId, input.action, input.generation]);
+      authority.requireReady(input.executionEpoch);
       return Number(row.generation);
     });
   };
@@ -222,6 +225,21 @@ export function createPeerExecutionLedger({ db, dataDir, authority = createPeerE
     const proof = await visitFacts();
     if (proof.digest !== record.recovery.digest || proof.count !== record.recovery.count)
       throw executionAuthorityError('Execution recovery evidence is missing or conflicting.');
+    const { createMaintenanceAdmission } = await import('../lib/maintenanceAdmission.js');
+    const coordinator = createMaintenanceAdmission(dataDir);
+    const journal = coordinator.getExclusive();
+    const journalIdentity = journal && { id: journal.id, revision: journal.revision, fingerprint: journal.fingerprint };
+    const journalOperation = row => ({ operationId: row.operationId, requestId: row.binding.requestId,
+      peerInstanceId: row.binding.peerInstanceId, hostInstanceId: row.binding.hostInstanceId,
+      grantId: row.binding.grantId, grantGeneration: row.binding.grantGeneration, scope: row.binding.scope,
+      pairBinding: row.binding.pairBinding, intent: row.binding.intent, receiverVersion: row.binding.receiverVersion,
+      evidenceDigest: row.binding.evidenceDigest });
+    const mergeClaims = claims => {
+      const present = claims.filter(Boolean);
+      if (present.some(claim => claim.id !== present[0].id || claim.fingerprint !== present[0].fingerprint))
+        throw executionAuthorityError('Conflicting execution owner evidence cannot be discarded.');
+      return present.reduce((newest, claim) => !newest || claim.revision > newest.revision ? claim : newest, null);
+    };
     await locked(async client => {
       const replayed = await visitFacts(async fact => {
       if (fact.kind === 'floor') {
@@ -240,20 +258,24 @@ export function createPeerExecutionLedger({ db, dataDir, authority = createPeerE
         throw executionAuthorityError('Restored execution consumption conflicts with non-rewound evidence.');
       if (rows.some(row => terminal(row.state) && terminal(saved.state) && JSON.stringify(receiptSchema.parse(row.receipt)) !== JSON.stringify(saved.receipt)))
         throw executionAuthorityError('Restored terminal evidence conflicts with non-rewound evidence.');
-      if (rows.some(row => terminal(row.state) && !terminal(saved.state)
-        && (row.receipt.code !== 'EXECUTION_AUTHORITY_RESTORED' || row.receipt.executionEpoch !== record.epoch)))
+      if (rows.some(row => terminal(row.state) && !terminal(saved.state)))
         throw executionAuthorityError('Restored completion contradicts non-rewound unresolved ownership.');
-      const started = saved.claim || ['in-flight', 'awaiting-reconnect', 'uncertain'].includes(saved.state);
-      const state = terminal(saved.state) ? saved.state : started ? 'uncertain' : 'failed';
-      const receipt = terminal(saved.state) ? saved.receipt : state === 'failed'
-        ? { outcome: 'failed', code: 'EXECUTION_AUTHORITY_RESTORED', evidenceDigest: null, executionEpoch: record.epoch } : null;
+      if (journal?.operation.operationId === saved.operationId
+        && JSON.stringify(journal.operation) !== JSON.stringify(journalOperation(saved)))
+        throw executionAuthorityError('Preserved journal ownership conflicts with permanent request consumption.');
+      const owner = mergeClaims([saved.claim, ...rows.map(row => fromRow(row).claim),
+        journal?.operation.operationId === saved.operationId ? journalIdentity : null]);
+      // Missing DB claim is not proof of no launch: journal-start/DB-rollback
+      // can leave queued/draining storage behind an already-started owner.
+      const state = terminal(saved.state) ? saved.state : 'uncertain';
+      const receipt = terminal(saved.state) ? saved.receipt : null;
       await client.query(`INSERT INTO peer_execution_operations
         (operation_id, host_instance_id, peer_instance_id, request_id, fingerprint, binding, execution_epoch, state, revision, claim, receipt)
         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb,$11::jsonb)
         ON CONFLICT (operation_id) DO UPDATE SET state = EXCLUDED.state,
         revision = GREATEST(peer_execution_operations.revision, EXCLUDED.revision), claim = EXCLUDED.claim, receipt = EXCLUDED.receipt, updated_at = NOW()`,
       [saved.operationId, saved.binding.hostInstanceId, saved.binding.peerInstanceId, saved.binding.requestId, saved.fingerprint,
-        JSON.stringify(saved.binding), saved.binding.executionEpoch, state, saved.revision + 1, JSON.stringify(saved.claim), JSON.stringify(receipt)]);
+        JSON.stringify(saved.binding), saved.binding.executionEpoch, state, saved.revision + 1, JSON.stringify(owner), JSON.stringify(receipt)]);
       });
       if (replayed.digest !== proof.digest || replayed.count !== proof.count)
         throw executionAuthorityError('Execution recovery evidence changed during reconciliation.');
@@ -261,6 +283,14 @@ export function createPeerExecutionLedger({ db, dataDir, authority = createPeerE
     // capture. They also cannot become launchable just because generic restore ended.
       await client.query(`UPDATE peer_execution_operations SET state = 'uncertain', revision = revision + 1,
         receipt = NULL, updated_at = NOW() WHERE state IN ('queued', 'draining', 'in-flight', 'awaiting-reconnect')`);
+      if (journal) {
+        const { rows: [owner] } = await client.query('SELECT * FROM peer_execution_operations WHERE operation_id = $1', [journal.operation.operationId]);
+        if (!owner || JSON.stringify(journal.operation) !== JSON.stringify(journalOperation(fromRow(owner))))
+          throw executionAuthorityError('Preserved journal ownership has no matching permanent consumption.');
+      }
+      const latest = coordinator.getExclusive();
+      if (JSON.stringify(latest) !== JSON.stringify(journal))
+        throw executionAuthorityError('Preserved journal ownership changed during reconciliation.');
       const current = authority.read();
       if (current?.epoch !== record.epoch || current.recovery?.id !== id)
         throw executionAuthorityError('The execution recovery owner changed during reconciliation.');

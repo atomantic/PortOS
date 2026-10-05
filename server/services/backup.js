@@ -1337,6 +1337,7 @@ const RESTORE_PRESERVED_FILES = Object.freeze([
 const caseInsensitiveGlob = (name) => name.replace(/[a-z]/gi, ch => `[${ch.toLowerCase()}${ch.toUpperCase()}]`);
 const RESTORE_PRESERVED_RSYNC_EXCLUDES = RESTORE_PRESERVED_FILES.map(name => `--exclude=/${caseInsensitiveGlob(name)}`);
 const isRestorePreservedPath = (relativePath) => {
+  if (typeof relativePath !== 'string') return false;
   const normalized = relativePath.toLowerCase();
   return RESTORE_PRESERVED_FILES.some(path => normalized === path || normalized.startsWith(`${path}/`));
 };
@@ -1786,6 +1787,13 @@ async function replayAdmittedDump({ tableCount, sizeBytes, snapshotId, dump, res
         error: 'The restore recovery journal could not be written. Restore was refused without changing data.',
       };
     }
+    try {
+      const { preparePeerExecutionRestore } = await import('./peerExecutionRestore.js');
+      await preparePeerExecutionRestore(record.id);
+    } catch (err) {
+      console.error(`❌ restore: execution consumption capture failed: ${err.message}`);
+      return pendingRecoveryResult('restore_execution_reconciliation', record);
+    }
     const { host: pgHost, port, database: pgDb, user: pgUser } = POOL_CONFIG;
     const pgPort = String(port);
 
@@ -1850,7 +1858,7 @@ async function replayAdmittedDump({ tableCount, sizeBytes, snapshotId, dump, res
       // fenced instead of reopening writes or replaying again.
       const settled = await settleReplayOutcome(record);
       if (settled.outcome === 'rolled_back') return replay;
-      if (settled.outcome === 'uncertain') return pendingRecoveryResult('restore_commit_unknown', record);
+      if (settled.outcome === 'uncertain') return pendingRecoveryResult(settled.reason ?? 'restore_commit_unknown', record);
       record = settled.record;
     }
 

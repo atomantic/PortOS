@@ -58,11 +58,11 @@ describe.skipIf(!runDb)('receiver-local permanent execution consumption', () => 
   it('retains consumed identity independently of action, renewal, sender and generation floors', async () => {
     const saved = await ledger.consume(input);
     await ledger.advanceGenerationFloor({ hostInstanceId: input.hostInstanceId, peerInstanceId: input.peerInstanceId,
-      action: input.intent.action, generation: 4 });
+      action: input.intent.action, generation: 4, executionEpoch: input.executionEpoch });
     expect(await ledger.consume(input)).toMatchObject({ isNew: false, operation: saved.operation });
     await expect(ledger.consume({ ...input, requestId: randomUUID() })).rejects.toMatchObject({ code: 'PEER_EXECUTION_GENERATION_STALE' });
     expect(await ledger.advanceGenerationFloor({ hostInstanceId: input.hostInstanceId, peerInstanceId: input.peerInstanceId,
-      action: input.intent.action, generation: 2 })).toBe(4);
+      action: input.intent.action, generation: 2, executionEpoch: input.executionEpoch })).toBe(4);
     expect((await ledger.consume({ ...input, peerInstanceId: randomUUID() })).isNew).toBe(true);
   });
   it('has one-way compare-and-set states and cannot turn timeout/uncertainty into a second launch', async () => {
@@ -113,7 +113,7 @@ describe.skipIf(!runDb)('receiver-local permanent execution consumption', () => 
     const draining = await ledger.transition(owner.operationId, 1, 'draining');
     const started = await ledger.transition(owner.operationId, draining.revision, 'in-flight', { claim: claim() });
     await ledger.advanceGenerationFloor({ hostInstanceId: input.hostInstanceId, peerInstanceId: input.peerInstanceId,
-      action: input.intent.action, generation: 7 });
+      action: input.intent.action, generation: 7, executionEpoch: input.executionEpoch });
     const id = randomUUID();
     const pending = await ledger.prepareRestore(id);
     await query('DELETE FROM peer_execution_operations');
@@ -127,7 +127,7 @@ describe.skipIf(!runDb)('receiver-local permanent execution consumption', () => 
     await expect(restarted.consume(input)).rejects.toMatchObject({ code: 'PEER_EXECUTION_AUTHORITY_UNAVAILABLE' });
     const completed = await restarted.reconcileRestore(id);
     expect(await restarted.reconcileRestore(id)).toEqual(completed);
-    expect((await restarted.read(first.operationId)).state).toBe('failed');
+    expect((await restarted.read(first.operationId)).state).toBe('uncertain');
     expect(await restarted.read(owner.operationId)).toMatchObject({ state: 'uncertain', claim: started.claim });
     await expect(restarted.consume(input)).rejects.toMatchObject({ code: 'PEER_EXECUTION_AUTHORITY_UNAVAILABLE' });
     await expect(restarted.consume({ ...input, executionEpoch: completed.epoch }))
@@ -163,6 +163,26 @@ describe.skipIf(!runDb)('receiver-local permanent execution consumption', () => 
     expect(await ledger.read(saved.operationId)).toBeNull();
     expect(ledger.authority.read().phase).toBe('reconciling');
   });
+  it('refuses a generation-floor write during capture/reconciliation instead of acknowledging revocation that restore can erase', async () => {
+    await ledger.consume(input);
+    const id = randomUUID();
+    const pending = await ledger.prepareRestore(id);
+    const floor = { hostInstanceId: input.hostInstanceId, peerInstanceId: input.peerInstanceId,
+      action: input.intent.action, generation: 7 };
+    for (const executionEpoch of [input.executionEpoch, pending.epoch]) {
+      await expect(ledger.advanceGenerationFloor({ ...floor, executionEpoch }))
+        .rejects.toMatchObject({ code: 'PEER_EXECUTION_AUTHORITY_UNAVAILABLE' });
+    }
+    await query('DELETE FROM peer_execution_operations');
+    await query('DELETE FROM peer_execution_generation_floors');
+    const completed = await ledger.reconcileRestore(id);
+    expect(await ledger.advanceGenerationFloor({ ...floor, executionEpoch: completed.epoch })).toBe(7);
+    const nextRestore = randomUUID(); await ledger.prepareRestore(nextRestore);
+    await query('DELETE FROM peer_execution_generation_floors');
+    await ledger.reconcileRestore(nextRestore);
+    const { rows: [row] } = await query('SELECT generation FROM peer_execution_generation_floors');
+    expect(Number(row.generation)).toBe(7);
+  });
   it('retains the recovery fence when the database commit outcome is unknown, then reconciles the same facts', async () => {
     const saved = (await ledger.consume(input)).operation;
     const id = randomUUID(); await ledger.prepareRestore(id);
@@ -178,6 +198,47 @@ describe.skipIf(!runDb)('receiver-local permanent execution consumption', () => 
     await expect(ambiguous.reconcileRestore(id)).rejects.toThrow(/acknowledgement/);
     expect(ledger.authority.read().phase).toBe('reconciling');
     await ledger.reconcileRestore(id);
-    expect((await ledger.read(saved.operationId)).state).toBe('failed');
+    expect((await ledger.read(saved.operationId)).state).toBe('uncertain');
+  });
+  it('preserves a journal start across DB rollback and restore even when the captured DB claim is absent', async () => {
+    const { createMaintenanceAdmission } = await import('../lib/maintenanceAdmission.js');
+    const owner = createMaintenanceAdmission(directory);
+    const hold = owner.begin({ reason: 'Fixture restore crash gap', owner: 'Fixture operator' }).hold;
+    const saved = (await ledger.consume(input)).operation;
+    const draining = await ledger.transition(saved.operationId, 1, 'draining');
+    const { executionEpoch: _epoch, ...bound } = input;
+    const reserved = owner.claimReady({ id: hold.id, revision: hold.revision,
+      operation: { operationId: saved.operationId, ...bound } }, owner.observeIdle());
+    const started = owner.transitionExclusive({ id: reserved.id, revision: reserved.revision, fingerprint: reserved.fingerprint },
+      'in-flight', owner.observeIdle());
+    const expected = { id: started.id, revision: started.revision, fingerprint: started.fingerprint };
+    const rollback = createPeerExecutionLedger({ dataDir: directory, db: { query, withTransaction: fn => withTransaction(async client => {
+      await fn(client); throw new Error('fixture rollback after journal start');
+    }) } });
+    await expect(rollback.transition(saved.operationId, draining.revision, 'in-flight', { claim: expected })).rejects.toThrow(/rollback/);
+    expect(await ledger.read(saved.operationId)).toMatchObject({ state: 'draining', claim: null });
+    const id = randomUUID(); await ledger.prepareRestore(id);
+    await query('DELETE FROM peer_execution_operations');
+    await ledger.reconcileRestore(id);
+    expect(await ledger.read(saved.operationId)).toMatchObject({ state: 'uncertain', claim: expected, receipt: null });
+    expect(owner.getExclusive()).toEqual(started);
+    expect(() => owner.resume(hold)).toThrow();
+  });
+  it('preserves stronger same-owner evidence and refuses a conflicting restored owner', async () => {
+    const saved = (await ledger.consume(input)).operation;
+    const draining = await ledger.transition(saved.operationId, 1, 'draining');
+    const original = claim();
+    await ledger.transition(saved.operationId, draining.revision, 'in-flight', { claim: original });
+    const id = randomUUID(); await ledger.prepareRestore(id);
+    const stronger = { ...original, revision: original.revision + 3 };
+    await query('UPDATE peer_execution_operations SET claim = $2::jsonb WHERE operation_id = $1', [saved.operationId, JSON.stringify(stronger)]);
+    await ledger.reconcileRestore(id);
+    expect((await ledger.read(saved.operationId)).claim).toEqual(stronger);
+    const next = randomUUID(); await ledger.prepareRestore(next);
+    const conflict = { ...stronger, id: randomUUID() };
+    await query('UPDATE peer_execution_operations SET claim = $2::jsonb WHERE operation_id = $1', [saved.operationId, JSON.stringify(conflict)]);
+    await expect(ledger.reconcileRestore(next)).rejects.toThrow(/Conflicting execution owner/);
+    expect((await ledger.read(saved.operationId)).claim).toEqual(conflict);
+    expect(ledger.authority.read().phase).toBe('reconciling');
   });
 });
