@@ -9,6 +9,7 @@ import toast from '../ui/Toast';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import CompositionPreviewPlayer from './CompositionPreviewPlayer.jsx';
+import FilmStylePicker from '../codeAnimation/FilmStylePicker.jsx';
 import NarrativeEventsEditor from './NarrativeEventsEditor.jsx';
 import StageSection from './StageSection.jsx';
 import { downloadBlob } from '../../lib/downloadBlob';
@@ -197,6 +198,11 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
     downloadBlob(buffer, `${(project.name || 'music-video').replace(/[^\w.-]+/g, '-')}-composition.zip`, 'application/zip');
     return {};
   });
+  // Cleared by omitting the key: the composition body is replaced whole.
+  const setFilmStyle = (styleGrammarId) => {
+    const { styleGrammarId: _previous, ...composition } = compositionDraft(project);
+    return run('film-style', () => updateMusicVideoProject(project.id, { composition: styleGrammarId ? { ...composition, styleGrammarId } : composition }, { silent: true }).then((project) => ({ project })), 'Film style saved');
+  };
   const detach = confirmFirst('detach', () => run('detach', () => detachMusicVideoCompositionDocument(project.id, { silent: true }), 'Composition document detached'));
   const effectiveModel = selectedModel || selectedProvider?.defaultModel || '';
   const authoringValid = supportsToolFreeOneShot(providers.find((entry) => entry.id === selectedProviderId)) && Boolean(selectedProviderId && effectiveModel);
@@ -271,6 +277,9 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
       <StageSection id="mv-doc-generate" title="Generate & revise" summary={generateSummary} defaultOpen={!candidate}>
         <NarrativeEventsEditor key={`${project.id}-${JSON.stringify([project.composition?.narrativeEvents, project.composition?.reactiveSections])}`}
           project={project} sections={candidate?.sections || []} disabled={!!busy} onSave={saveEvents} onPendingChange={setEventPending} />
+        <FilmStylePicker id="mv-doc-film-style" value={project.composition?.styleGrammarId || ''} onChange={setFilmStyle} disabled={!!busy}
+          labelClass="block text-xs text-port-text-muted mb-0.5" inputClass={`${inputCls} w-full`}
+          hint="optional medium rulebook every section follows; the approved palette and lyric readability win" noneLabel="None (treatment only)" />
         <p className="text-xs text-port-text-muted">Generate from the approved treatment, song timing and selected project assets. Missing media is reported before any provider call.</p>
         {providers.length > 0 && <ProviderModelSelector
           providers={providers} selectedProviderId={selectedProviderId} selectedModel={selectedModel}

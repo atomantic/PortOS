@@ -6,6 +6,11 @@ import { createAppLaunchVideo, getAppLaunchVideos, getMotionToolkit, installMoti
 vi.mock('../../services/apiApps', () => ({ getAppLaunchVideos: vi.fn(async () => ({ videos: [] })), createAppLaunchVideo: vi.fn(), publishAppLaunchVideo: vi.fn(),
   getMotionToolkit: vi.fn(async () => ({ ffmpeg: true, skillPacks: [] })), installMotionSkills: vi.fn() }));
 vi.mock('../../services/apiPipeline', () => ({ listPipelineMusicLibrary: async () => ({ tracks: [{ filename: 'track-1a2b.wav', label: 'Example track', sizeBytes: 2048, updatedAt: '2026-01-01T00:00:00.000Z' }] }) }));
+// The shared Film style picker reads the catalog through the api barrel.
+vi.mock('../../services/api', () => ({
+  listFilmStyles: vi.fn(async () => [{ id: 'example-style', label: 'Example style', summary: 'A fixture style.', nativeMoves: [] }]),
+  getFilmStyle: vi.fn(async () => ({ id: 'example-style', nativeMoves: [] })),
+}));
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 vi.mock('../../lib/clipboard', () => ({ copyToClipboard: vi.fn() }));
 // The picker's tool-use annotation fetches from apiLocalLlm; park it unresolved.
@@ -81,6 +86,18 @@ describe('launch video drawer', () => {
     await waitFor(() => expect(createAppLaunchVideo).toHaveBeenCalledWith('example', expect.objectContaining({ formats: ['vertical', 'square'], targetDurationSec: 90, generateMusic: true, musicMethod, motionStyle: 'ui-morph', critiqueRounds: 3, motionSkills: true }), { silent: true }));
     expect(createAppLaunchVideo.mock.calls[0][1].musicTrack).toBeUndefined();
     expect(createAppLaunchVideo.mock.calls[0][1].format).toBeUndefined();
+  });
+
+  it('sends the chosen film style grammar with the launch video and omits it when None', async () => {
+    createAppLaunchVideo.mockResolvedValue({ taskId: 'task-1' });
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Make launch video' }));
+    const select = screen.getByLabelText(/^film style/i);
+    await screen.findByRole('option', { name: 'Example style' });
+    fireEvent.change(select, { target: { value: 'example-style' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Queue launch video' }));
+    await waitFor(() => expect(createAppLaunchVideo).toHaveBeenCalledTimes(1));
+    expect(createAppLaunchVideo.mock.calls.at(-1)[1]).toMatchObject({ styleGrammarId: 'example-style', motionStyle: 'walkthrough' });
   });
 
   it('previews the URL-selected take and offers it for download', async () => {

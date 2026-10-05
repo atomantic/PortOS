@@ -164,6 +164,12 @@ vi.mock('../services/socket', () => ({
 const pushSocket = (event, payload) => act(async () => {
   for (const fn of socketHandlers.get(event) || []) fn(payload);
 });
+// The Compose stage's Film style picker reads the catalog from apiCodeAnimation.
+vi.mock('../services/apiCodeAnimation.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  listFilmStyles: vi.fn(async () => []),
+  getFilmStyle: vi.fn(async () => null),
+}));
 vi.mock('../services/apiUniverseBuilder.js', () => ({ getUniverse: vi.fn(), listUniverseNames: vi.fn(() => Promise.resolve([])) }));
 vi.mock('../lib/downloadBlob.js', () => ({ downloadBlob: vi.fn() }));
 vi.mock('../services/apiSystem.js', () => ({

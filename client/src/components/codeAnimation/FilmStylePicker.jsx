@@ -1,14 +1,20 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { getFilmStyle, listFilmStyles } from '../../services/api';
 
 /**
- * "Film style" select for the Code Animation form (#10253). The catalog loads
+ * "Film style" select shared by the Code Animation form (#10253), the Launch
+ * Video form and the Music Video Compose stage (#10254); `hint` and `noneLabel`
+ * let each surface say what an empty choice falls back to. The catalog loads
  * once on mount; the full record of the chosen grammar loads on selection so
  * its native moves can be judged before an agent run is spent. A failed load
  * leaves the form usable with "None".
  */
-export default function FilmStylePicker({ id, value, onChange, labelClass, inputClass }) {
+export default function FilmStylePicker({
+  id, value, onChange, labelClass, inputClass, disabled = false,
+  hint = 'optional medium recipe: rendering, camera and sound',
+  noneLabel = 'None (derive from universe / notes)',
+}) {
   const [styles, setStyles] = useState(null);
   const [loadError, setLoadError] = useState('');
   const [detail, setDetail] = useState(null);
@@ -22,8 +28,13 @@ export default function FilmStylePicker({ id, value, onChange, labelClass, input
   }, []);
 
   // A stored choice the catalog no longer carries must not reach the server.
+  // Cleared once per value so a caller whose onChange persists (and may fail)
+  // is not re-invoked on every render.
+  const clearedRef = useRef(null);
   useEffect(() => {
-    if (styles && value && !styles.some((style) => style.id === value)) onChange('');
+    if (!styles || !value || styles.some((style) => style.id === value) || clearedRef.current === value) return;
+    clearedRef.current = value;
+    onChange('');
   }, [styles, value, onChange]);
 
   const selected = styles?.find((style) => style.id === value) || null;
@@ -41,9 +52,9 @@ export default function FilmStylePicker({ id, value, onChange, labelClass, input
 
   return (
     <div>
-      <label htmlFor={id} className={labelClass}>Film style <span className="text-gray-600">(optional medium recipe: rendering, camera and sound)</span></label>
-      <select id={id} value={selected ? value : ''} onChange={(event) => onChange(event.target.value)} className={inputClass}>
-        <option value="">None (derive from universe / notes)</option>
+      <label htmlFor={id} className={labelClass}>Film style <span className="text-gray-600">({hint})</span></label>
+      <select id={id} value={selected ? value : ''} disabled={disabled} onChange={(event) => onChange(event.target.value)} className={inputClass}>
+        <option value="">{noneLabel}</option>
         {(styles || []).map((style) => <option key={style.id} value={style.id}>{style.label}</option>)}
       </select>
       {loadError && (
