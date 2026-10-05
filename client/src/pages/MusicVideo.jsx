@@ -50,7 +50,7 @@ import useMusicVideoModelSettings from '../hooks/useMusicVideoModelSettings.js';
 import useMusicVideoManualTempo from '../hooks/useMusicVideoManualTempo.js';
 import useMusicVideoSceneMedia from '../hooks/useMusicVideoSceneMedia.js';
 import useMusicVideoTakes from '../hooks/useMusicVideoTakes.js';
-import useMusicVideoTreatment from '../hooks/useMusicVideoTreatment.js';
+import useMusicVideoTreatment, { aiSkipLabel } from '../hooks/useMusicVideoTreatment.js';
 import useHydratedPreviewRoute from '../hooks/useHydratedPreviewRoute.js';
 import { normalizeImage, normalizeVideo } from '../components/media/normalize.js';
 import { useVideoFileSrc } from '../hooks/useVideoFileSrc.js';
@@ -555,7 +555,7 @@ export default function MusicVideo() {
         replaceProject(project);
         const suffix = promptsSeeded
           ? ' with first-pass prompts'
-          : (promptsSkippedReason && promptsSkippedReason !== 'not-requested' ? ` (prompts skipped: ${promptsSkippedReason})` : '');
+          : (promptsSkippedReason && promptsSkippedReason !== 'not-requested' ? ` (prompts skipped: ${aiSkipLabel(promptsSkippedReason)})` : '');
         toast.success(`Planned ${scenesAdded} shot${scenesAdded === 1 ? '' : 's'}${suffix}`);
       })
       .catch((err) => toast.error(err?.message || 'Plan failed'))

@@ -7,6 +7,7 @@ import SceneCard from '../SceneCard.jsx';
 import TreatmentPanel, { treatmentSummary } from '../TreatmentPanel.jsx';
 import StageSection from '../StageSection.jsx';
 import { PlanActions } from '../ProjectActionGroups.jsx';
+import ShotPacingFields from '../ShotPacingFields.jsx';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 import { FOOTAGE_OPTIONAL_MODES } from '../../../lib/musicVideoStages.js';
 import { parseSceneFilter, sceneAttention, sceneMatchesFilter } from '../../../lib/musicVideoSceneAttention.js';
@@ -75,6 +76,7 @@ export default function BoardStage({ board }) {
     <fieldset disabled={locked} className="min-w-0 space-y-3">
       <div className="rounded-lg border border-port-border bg-port-card p-3">
         <PlanActions project={project} busy={busy} onPlan={board.onPlan} onAutoArrange={board.onAutoArrange} />
+        <ShotPacingFields project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />
       </div>
 
       <StageSection id="mv-board-treatment" title="Treatment" summary={scenes.length ? treatmentSummary(project) : 'Plan shots to direct them'}>
