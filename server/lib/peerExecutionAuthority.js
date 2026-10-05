@@ -112,7 +112,7 @@ export function createPeerExecutionAuthority(dataDir, { io = fs, assertWrite = a
     uuid.parse(id);
     const current = read({ inside: true, recovery: true });
     const locked = exists(lock);
-    const lockStat = locked && io.lstatSync(lock);
+    const lockStat = locked ? io.lstatSync(lock) : null;
     let intent = false;
     if (lockStat?.isFile() && lockStat.size <= 256) {
       try { intent = adoptionIntentSchema.parse(JSON.parse(io.readFileSync(lock, 'utf8'))).id === id; }
