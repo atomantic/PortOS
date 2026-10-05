@@ -152,8 +152,9 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
 
         <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,12rem),16rem))] gap-3">
           <div>
-            <label htmlFor="mv-auto-budget" className="block text-xs text-port-text-muted mb-1">Budget cap (USD)</label>
-            <input id="mv-auto-budget" type="number" min="0" step="1" value={draft.budget} onChange={(e) => patch({ budget: e.target.value })} placeholder="No cap" className={inputClass} />
+            <label htmlFor="mv-auto-budget" className="block text-xs text-port-text-muted mb-1">Video generation budget (USD)</label>
+            <input id="mv-auto-budget" type="number" min="0" step="1" value={draft.budget} onChange={(e) => patch({ budget: e.target.value })} placeholder="No cap" aria-describedby="mv-auto-budget-hint" className={inputClass} />
+            <p id="mv-auto-budget-hint" className="text-[11px] text-port-text-muted mt-1">Caps paid video and image generation only. Suno credits and LLM usage are separate.</p>
           </div>
           <div>
             <label htmlFor="mv-auto-generations" className="block text-xs text-port-text-muted mb-1">Max generations</label>

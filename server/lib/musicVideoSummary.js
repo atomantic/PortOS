@@ -24,12 +24,19 @@ const currentRun = (project) => {
 
 function projectSpend(project, run) {
   const runs = Array.isArray(project.productionRuns) ? project.productionRuns : [];
-  const spentUsd = runs.reduce((sum, r) => {
-    const spent = Number(r?.usage?.spentUsd);
-    return sum + (Number.isFinite(spent) ? spent : 0);
-  }, 0);
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const autopilot = runs.reduce((sum, r) => sum + num(r?.usage?.spentUsd), 0);
+  let manual = 0;
+  let autoReview = 0;
+  for (const scene of Array.isArray(project.scenes) ? project.scenes : []) {
+    for (const take of Array.isArray(scene?.takes) ? scene.takes : []) {
+      if (take?.spendKind === 'autoReview') autoReview += num(take.costUsd);
+      else if (take?.spendKind === 'manual') manual += num(take.costUsd);
+    }
+  }
+  const spentUsd = autopilot + manual + autoReview;
   const capUsd = run?.limits?.spendCapUsd ?? project.automation?.budgetUsd ?? null;
-  return { spentUsd, capUsd };
+  return { spentUsd, capUsd, autopilot, manual, autoReview, total: spentUsd };
 }
 
 function composeDone(project, mode) {

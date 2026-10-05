@@ -266,7 +266,7 @@ describe('AutonomousStartDrawer', () => {
     fireEvent.click(screen.getByLabelText('Lyrics', { selector: '#mv-auto-checkpoint-lyrics' }));
     await waitFor(() => expect(screen.getByRole('option', { name: 'Example image' })).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/local image gen model/i), { target: { value: 'example-image' } });
-    fireEvent.change(screen.getByLabelText(/budget cap/i), { target: { value: '12' } });
+    fireEvent.change(screen.getByLabelText(/video generation budget/i), { target: { value: '12' } });
     await waitFor(() => expect(screen.getByRole('option', { name: 'Neon Rain' })).toBeTruthy());
     fireEvent.change(screen.getByLabelText('Mood board'), { target: { value: 'mb-1' } });
     fireEvent.change(screen.getByLabelText('Code authoring provider'), { target: { value: 'fixture-api' } });

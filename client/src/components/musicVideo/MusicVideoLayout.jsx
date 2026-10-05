@@ -138,7 +138,7 @@ export default function MusicVideoLayout({
           </span>
           {showSpend && (
             <Pill size="xs" tone={spend.capUsd != null && spend.spentUsd >= spend.capUsd ? 'warning' : 'muted'}>
-              <span title="Paid generation used across this project's production runs, against the cap">
+              <span title={`Paid generation used, against the cap. Autopilot ${formatUsd(spend.autopilot ?? 0)} · manual takes ${formatUsd(spend.manual ?? 0)} · auto-review ${formatUsd(spend.autoReview ?? 0)} (estimates)`}>
                 {formatUsd(spend.spentUsd)}{spend.capUsd != null ? ` / ${formatUsd(spend.capUsd)}` : ' · no cap'}
               </span>
             </Pill>

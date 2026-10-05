@@ -280,6 +280,15 @@ describe('submitVideoGenJob', () => {
       }
     });
 
+    it('records the quoted fal estimate on a board-started clip but not on a production-run step (#10157)', async () => {
+      mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
+      mocks.getMusicVideoProject.mockResolvedValue({ id: 'mv-1', scenes: [{ sceneId: 'mvs-1', startSec: 0, endSec: 5 }] });
+      await submitVideoGenJob({ prompt: 'selected shot', backend: 'fal', musicVideo }, {});
+      expect(mocks.enqueueJob.mock.calls.at(-1)[0].params.musicVideoCostUsd).toBeGreaterThan(0);
+      await submitVideoGenJob({ prompt: 'selected shot', backend: 'fal', musicVideo: { ...musicVideo, productionRunId: 'mvpr-1', productionStepKey: 'k' } }, {});
+      expect(mocks.enqueueJob.mock.calls.at(-1)[0].params).not.toHaveProperty('musicVideoCostUsd');
+    });
+
     it('checks the current production policy after video preparation, before queueing', async () => {
       const changed = Object.assign(new Error('The approved plan changed'), { status: 409, code: 'PRODUCTION_BASIS_CHANGED' });
       const prepared = falPrepared();

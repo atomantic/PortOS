@@ -11,6 +11,7 @@ import {
 import { formatCount, formatTimecode } from '../utils/formatters.js';
 import { isNonBlankStr } from './textUtils';
 import { modeLabel } from './imageGenModes.js';
+import { falSceneTake } from './musicVideoShotTiming.js';
 
 export const MUSIC_VIDEO_STAGES = [
   { id: 'setup', label: 'Setup', title: 'Setup' },
@@ -74,15 +75,47 @@ export const projectServicesSummary = (project) => [
  */
 export function projectSpend(project) {
   const runs = Array.isArray(project?.productionRuns) ? project.productionRuns : [];
-  const spentUsd = runs.reduce((sum, run) => {
-    const spent = Number(run?.usage?.spentUsd);
-    return sum + (Number.isFinite(spent) ? spent : 0);
-  }, 0);
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const autopilot = runs.reduce((sum, run) => sum + num(run?.usage?.spentUsd), 0);
+  // #10157: board-started fal takes record the estimate they were priced at.
+  let manual = 0;
+  let autoReview = 0;
+  for (const scene of Array.isArray(project?.scenes) ? project.scenes : []) {
+    for (const take of Array.isArray(scene?.takes) ? scene.takes : []) {
+      if (take?.spendKind === 'autoReview') autoReview += num(take.costUsd);
+      else if (take?.spendKind === 'manual') manual += num(take.costUsd);
+    }
+  }
+  const spentUsd = autopilot + manual + autoReview;
   const run = currentProductionRun(project);
   const runCap = run?.limits?.spendCapUsd;
   const briefCap = project?.automation?.budgetUsd;
   const capUsd = runCap != null ? runCap : (briefCap != null ? briefCap : null);
-  return { spentUsd, capUsd };
+  return { spentUsd, capUsd, autopilot, manual, autoReview, total: spentUsd };
+}
+
+/**
+ * What generating the rest of the board takes (#10157): scenes still missing a
+ * frame or a clip, the generation limit that covers them plus a 25% review
+ * allowance, and the known fal.ai price of the missing clips. A frame, or a
+ * clip on a route with no quote, counts as unpriced.
+ */
+export function boardJobEstimate(project) {
+  const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
+  const settings = project?.videoSettings || {};
+  const missingFrames = scenes.filter((scene) => !scene?.referenceImageId).length;
+  const missingClips = scenes.filter((scene) => !scene?.videoHistoryId);
+  let knownUsd = 0;
+  let unpriced = missingFrames;
+  for (const scene of missingClips) {
+    const cost = settings.backend === 'fal'
+      ? falSceneTake({ scene, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null }).costUsd
+      : null;
+    if (Number.isFinite(cost)) knownUsd += cost;
+    else unpriced += 1;
+  }
+  const jobs = missingFrames + missingClips.length;
+  return { jobs, knownUsd, unpriced, suggestedMaxGenerations: Math.min(500, Math.max(1, Math.ceil(jobs * 1.25))) };
 }
 
 /**

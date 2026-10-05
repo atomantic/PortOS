@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  MUSIC_VIDEO_STAGES, currentProductionRun, deriveNextAction, deriveStages, projectSpend, listPreviewSources, describeProjectStatus, resolveStageParam, stageChecklist, compareMusicVideoProjectsNewestFirst,
+  MUSIC_VIDEO_STAGES, currentProductionRun, deriveNextAction, deriveStages, projectSpend, boardJobEstimate, listPreviewSources, describeProjectStatus, resolveStageParam, stageChecklist, compareMusicVideoProjectsNewestFirst,
 } from './musicVideoStages.js';
 
 const APPROVED = { art: { approved: true }, storyboard: { approved: true }, proof: { approved: true }, readyForProduction: true };
@@ -172,9 +172,29 @@ describe('projectSpend', () => {
       automation: { budgetUsd: 50 },
       productionRuns: [run({ id: 'a', status: 'completed', usage: { spentUsd: 1.25 } }), run({ id: 'b', status: 'running', usage: { spentUsd: 2 }, limits: { spendCapUsd: 10 } })],
     };
-    expect(projectSpend(project)).toEqual({ spentUsd: 3.25, capUsd: 10 });
-    expect(projectSpend({ automation: { budgetUsd: 50 }, productionRuns: [] })).toEqual({ spentUsd: 0, capUsd: 50 });
-    expect(projectSpend({})).toEqual({ spentUsd: 0, capUsd: null });
+    expect(projectSpend(project)).toMatchObject({ spentUsd: 3.25, capUsd: 10, autopilot: 3.25, manual: 0, autoReview: 0 });
+    expect(projectSpend({ automation: { budgetUsd: 50 }, productionRuns: [] })).toMatchObject({ spentUsd: 0, capUsd: 50 });
+    expect(projectSpend({})).toMatchObject({ spentUsd: 0, capUsd: null });
+  });
+
+  it('counts manual and auto-review take estimates beside autopilot spend (#10157)', () => {
+    const project = {
+      productionRuns: [run({ usage: { spentUsd: 2 } })],
+      scenes: [scene({ takes: [
+        { takeId: 'a', spendKind: 'manual', costUsd: 0.5 },
+        { takeId: 'b', spendKind: 'autoReview', costUsd: 0.25 },
+        { takeId: 'c' },
+      ] })],
+    };
+    expect(projectSpend(project)).toMatchObject({ autopilot: 2, manual: 0.5, autoReview: 0.25, total: 2.75, spentUsd: 2.75 });
+  });
+});
+
+describe('boardJobEstimate', () => {
+  it('sizes the generation limit to missing frames and clips plus a 25% allowance', () => {
+    const scenes = [scene({ sceneId: 'a', referenceImageId: null, videoHistoryId: null }), scene({ sceneId: 'b', videoHistoryId: null }), scene({ sceneId: 'c' })];
+    expect(boardJobEstimate({ scenes })).toMatchObject({ jobs: 3, unpriced: 3, knownUsd: 0, suggestedMaxGenerations: 4 });
+    expect(boardJobEstimate({ scenes: [scene()] })).toMatchObject({ jobs: 0, suggestedMaxGenerations: 1 });
   });
 });
 

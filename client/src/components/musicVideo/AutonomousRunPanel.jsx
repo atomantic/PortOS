@@ -6,6 +6,7 @@ import {
   autonomousStageOutput, autonomousStageRows, isAutonomousLive,
 } from '../../lib/musicVideoAutonomous.js';
 import { productionReviewStopGuidance } from '../../lib/musicVideoStages.js';
+import { formatCount, formatUsd } from '../../utils/formatters.js';
 import AutoApproveFields from './AutoApproveFields.jsx';
 
 // The stages that report a sub-step while they run (the server's `stages[id].step`).
@@ -78,6 +79,9 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
   const changed = editable && draft !== editable.value;
   const canRetry = ['needs-human', 'failed', 'stopped'].includes(run.status) || run.interrupted;
   const tone = STATUS_TONES[run.status] || '';
+  // #10157: what the production run has used against its limits (Suno is counted apart).
+  const spendRun = run.output?.productionRunId ? (project.productionRuns || []).find((r) => r.id === run.output.productionRunId) : null;
+  const sunoCount = Array.isArray(run.output?.sunoSongIds) ? run.output.sunoSongIds.length : 0;
   // A failed run that only has the final render left retries just that.
   const retryLabel = run.status === 'failed' && run.stage === 'produce' && (run.output?.renderJobId || run.output?.productionDone) ? 'Retry render' : run.status === 'failed' ? 'Retry' : 'Resume';
   // A stale or hand-edited `?run-stage=` that names no finished, viewable stage opens nothing.
@@ -138,6 +142,15 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
           );
         })}
       </ol>
+
+      {spendRun && (
+        <p aria-label="Run spend" className="text-xs text-port-text-muted break-words">
+          {formatCount(spendRun.usage?.generations ?? 0)}/{formatCount(spendRun.limits?.maxGenerations ?? 0)} generations
+          {' · '}{formatUsd(spendRun.usage?.spentUsd ?? 0)}{spendRun.limits?.spendCapUsd != null ? ` of ${formatUsd(spendRun.limits.spendCapUsd)} video budget` : ' video spend (no cap)'}
+          {sunoCount > 0 && ` · ${formatCount(sunoCount)} Suno generation${sunoCount === 1 ? '' : 's'} (separate)`}
+          {' · '}<Link to={`/music-video/${encodeURIComponent(project.id)}/produce`} className="text-port-accent hover:underline">View production run</Link>
+        </p>
+      )}
 
       {selectedRow && <StageOutput run={run} row={selectedRow} editableBelow={!!editable && awaiting === selectedRow.id} />}
 

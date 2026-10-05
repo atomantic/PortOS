@@ -244,6 +244,18 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
         const { captureTakeDependencies } = await import('../../lib/musicVideoDependencies.js');
         const { basename } = await import('path');
         if (scene) params.musicVideoDependencies = captureTakeDependencies(scene, prepared.sourceImagePath ? basename(prepared.sourceImagePath) : null);
+        // #10157: a board-started (manual or auto-review) fal clip records the
+        // estimate it was priced at so project spend counts it. A production-run
+        // step is already charged to the run's own usage, so it is skipped.
+        if (scene && backend === VIDEO_GEN_MODE.FAL && !body.musicVideo.productionRunId) {
+          const { falSceneTake } = await import('../../lib/musicVideoShotTiming.js');
+          const { costUsd } = falSceneTake({
+            scene,
+            videoSettings: { falModelId: body.falModelId, falDuration: body.falDuration, falResolution: body.falResolution, falLipSyncResolution: body.falResolution },
+            songDurationSec: project.audioAnalysis?.durationSec ?? null,
+          });
+          if (Number.isFinite(costUsd)) params.musicVideoCostUsd = costUsd;
+        }
       }
       // Selective section revision (#9011): checked as the LAST step before the
       // actual queue write (staging, FableLoom compilation and the performance-
