@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hostVerdict, assertVideo, inspectGeometry, toneRatio, assertContainment } from './eidoverseAcceptance.js';
 import { syntheticSong } from '../fixtures/eidoverseAcceptanceScene.js';
+import { acceptanceExitCode } from '../eidoverse-acceptance.js';
 
 const host = { platform: 'linux', arch: 'x64', docker: { OSType: 'linux', Architecture: 'x86_64' }, memAvailable: 8 * 1024 ** 3, diskFree: 60 * 1024 ** 3 };
 const probe = { streams: [{ codec_type: 'video', width: 1280, height: 720, nb_read_frames: '48', avg_frame_rate: '24/1', duration: '2' }, { codec_type: 'audio', codec_name: 'aac' }], format: { duration: '2' } };
@@ -80,6 +81,25 @@ describe('acceptance evidence guards (synthetic validator tests, never runtime a
       expect(saved.status).toBe('unavailable'); expect(saved.criteria.host.status).toBe('unavailable');
       expect(Object.entries(saved.criteria).filter(([k]) => k !== 'host').every(([, c]) => c.status === 'not-run')).toBe(true);
       expect(JSON.stringify(saved)).not.toContain(root);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  it('rejects combined CLI modes before preflight and never promotes a failed live report to success', () => {
+    const root = mkdtempSync(join(tmpdir(), 'eido-acceptance-modes-'));
+    try {
+      const report = join(root, 'report.json');
+      const script = fileURLToPath(new URL('../eidoverse-acceptance.js', import.meta.url));
+      expect(() => execFileSync(process.execPath, [script, '--preflight', '--live', '--report', report], {
+        env: { PATH: '/no-acceptance-tools', NODE_ENV: 'test' }, stdio: 'pipe', timeout: 5000,
+      })).toThrow();
+      const saved = JSON.parse(readFileSync(report, 'utf8'));
+      expect(saved.status).toBe('fail');
+      expect(saved.reason).toContain('mutually exclusive');
+      expect(Object.values(saved.criteria).every(c => c.status === 'not-run')).toBe(true);
+      const failedLive = { status: 'fail', criteria: { host: { status: 'pass' } } };
+      expect(acceptanceExitCode(failedLive, { preflightOnly: true, live: true })).toBe(2);
+      expect(acceptanceExitCode(failedLive, { live: true })).toBe(2);
+      expect(acceptanceExitCode(failedLive)).toBe(2);
+      expect(acceptanceExitCode({ status: 'pass' }, { live: true })).toBe(0);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
