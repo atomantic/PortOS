@@ -2,6 +2,7 @@ import { noteReadinessChanged } from './readinessNotify.js';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, safeJSONParse, tryReadFile, unlinkGuarded } from '../lib/fileUtils.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { CURATED_MARKERS, MARKER_CATEGORIES, classifyGenotype, formatGenotype, resolveApoeHaplotype } from '../lib/curatedGenomeMarkers.js';
 
 const GENOME_DIR = PATHS.meatspace;
@@ -112,6 +113,11 @@ export async function uploadGenome(content, filename) {
     return { error: 'File does not appear to be a valid 23andMe genome export (too few SNPs found)' };
   }
 
+  // The raw file and the metadata that names it are one backup workflow (#9982).
+  return withBackupAssetPublication(() => storeGenome(content, filename, index, build));
+}
+
+async function storeGenome(content, filename, index, build) {
   // Save raw file
   await atomicWrite(RAW_FILE, content);
 
@@ -370,8 +376,12 @@ export async function deleteMarker(id) {
  * Delete all genome data: raw file, metadata, and clear cache.
  */
 export async function deleteGenome() {
-  await unlinkGuarded(RAW_FILE).catch(() => {});
-  await unlinkGuarded(META_FILE).catch(() => {});
+  // Unlinking the raw file before the metadata would leave a copied record
+  // naming bytes that are gone, so both removals hold the lease (#9982).
+  await withBackupAssetPublication(async () => {
+    await unlinkGuarded(RAW_FILE).catch(() => {});
+    await unlinkGuarded(META_FILE).catch(() => {});
+  });
   snpIndex = null;
   indexBuiltAt = 0;
   noteReadinessChanged();

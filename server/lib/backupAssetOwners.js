@@ -300,14 +300,29 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     ],
   },
   {
-    // ChatGPT archive import and memory-asset deletion, YouTube ingest, and the
-    // digital twin and genome document stores.
-    id: 'archive-and-document-imports',
-    status: 'outstanding',
-    modules: [
-      'services/chatgptZipImport.js', 'services/chatgptImport.js', 'services/youtubeIngest.js',
-      'services/digital-twin-documents.js', 'services/genome.js',
-    ],
+    // The ChatGPT zip import extracts assets before any row names them; each
+    // conversation's archived transcript and the memory row that names it (and
+    // its assets) commit under one lease. Deleting an import memory drops the
+    // record, then its transcript and unreferenced assets, under one lease.
+    id: 'chatgpt-import-and-memory-asset-deletion',
+    status: 'admitted',
+    modules: ['services/chatgptImport.js', 'services/brain.js'],
+  },
+  {
+    // The ingest index record that first names a landed transcript or audio
+    // file commits under the lease; forgetting an ingest drops the record and
+    // unlinks its files under one lease. The long yt-dlp downloads stay outside.
+    id: 'youtube-ingest',
+    status: 'admitted',
+    modules: ['services/youtubeIngest.js'],
+  },
+  {
+    // Digital twin document files plus the meta row naming them, and the genome
+    // raw file plus its metadata: each create, edit, upload and delete is one
+    // workflow.
+    id: 'digital-twin-documents-and-genome',
+    status: 'admitted',
+    modules: ['services/digital-twin-documents.js', 'services/genome.js'],
   },
   // Anything the sweep did not reach. A new asset owner lands here until it is
   // classified; the claim cannot become `global` while this entry exists.

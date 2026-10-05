@@ -43,6 +43,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../lib/errorHandler.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFile, shortId, tryReadFile } from '../lib/fileUtils.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { findFfmpeg } from '../lib/ffmpeg.js';
 import { findYtDlp } from '../lib/ytdlp.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
@@ -155,8 +156,11 @@ async function loadIndex() {
 // everything.
 const NEW_INGEST = { transcript: null, obsidian: null, video: null, audio: null, taskId: null, agentPrompt: null, incomplete: null };
 
+// The index record is the row that first names a landed transcript or audio file,
+// so committing it takes the backup lease (#9982). Lease first, then the mutex,
+// everywhere, so the two never invert.
 async function putIngest(videoId, patch) {
-  return indexMutex(async () => {
+  return withBackupAssetPublication(() => indexMutex(async () => {
     const index = await loadIndex();
     const existing = index[videoId] || null;
     const record = {
@@ -169,7 +173,7 @@ async function putIngest(videoId, patch) {
     index[videoId] = record;
     await atomicWrite(INDEX_FILE, index);
     return record;
-  });
+  }));
 }
 
 /**
@@ -213,18 +217,24 @@ export async function deleteIngest(videoId) {
   // Read the record and drop it inside ONE lock, then clean up its files:
   // reading outside the lock would unlink paths from a record a concurrent
   // re-ingest had already replaced, and would parse the whole index twice.
-  const record = await indexMutex(async () => {
-    const index = await loadIndex();
-    const found = index[videoId] || null;
-    if (!found) return null;
-    delete index[videoId];
-    await atomicWrite(INDEX_FILE, index);
-    return found;
+  // The index is a data file a cut copies apart from the transcript and audio,
+  // so the record drop and the unlinks hold one lease (#9982).
+  const record = await withBackupAssetPublication(async () => {
+    const dropped = await indexMutex(async () => {
+      const index = await loadIndex();
+      const found = index[videoId] || null;
+      if (!found) return null;
+      delete index[videoId];
+      await atomicWrite(INDEX_FILE, index);
+      return found;
+    });
+    if (!dropped) return null;
+    if (dropped.transcript?.path) await unlink(dropped.transcript.path).catch(() => {});
+    if (dropped.audio?.path) await unlink(dropped.audio.path).catch(() => {});
+    return dropped;
   });
   if (!record) return false;
 
-  if (record.transcript?.path) await unlink(record.transcript.path).catch(() => {});
-  if (record.audio?.path) await unlink(record.audio.path).catch(() => {});
   if (record.obsidian?.path && record.obsidian?.vaultId) {
     await obsidian.deleteNote(record.obsidian.vaultId, record.obsidian.path).catch(() => {});
   }

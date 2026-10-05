@@ -19,6 +19,7 @@ import { runPromptThroughProvider } from './promptRunner.js';
 import { getDomainAutonomyMode } from './cosState.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 import { deleteMemoryAssets } from './chatgptImport.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import * as repoCloner from './repoCloner.js';
 import { deriveRepoLinkFields } from '../lib/repoLinkFields.js';
 import { parseBareUrl } from '../lib/bareUrl.js';
@@ -946,7 +947,10 @@ export const updateMemoryEntry = storage.updateMemoryEntry;
  * memories (so a shared transcript/asset still in use — e.g. the same export
  * imported twice — isn't pulled out from under them).
  */
-export async function deleteMemoryEntry(id) {
+export const deleteMemoryEntry = (id) => withBackupAssetPublication(() => deleteMemoryEntryLeased(id));
+
+// The record drop and the asset/transcript unlinks are one backup workflow (#9982).
+async function deleteMemoryEntryLeased(id) {
   const record = await storage.getMemoryEntryById(id);
   const deleted = await storage.deleteMemoryEntry(id);
   if (deleted && record?.source === 'chatgpt-import') {
