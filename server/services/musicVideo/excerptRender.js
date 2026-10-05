@@ -18,6 +18,7 @@
  */
 
 import { captureMusicVideoEvidence } from '../../lib/musicVideoDependencies.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { unlink } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
@@ -76,6 +77,13 @@ const unlinkUnder = (root, filename) => {
   const path = safeUnder(root, filename);
   return path ? unlink(path).catch(() => {}) : Promise.resolve();
 };
+
+// The encoder wrote the excerpt and its contact sheet in place; the settling
+// row that first names them commits under a backup lease (#9982), so a
+// snapshot never dumps a row naming bytes its file copy missed.
+const settleExcerptRecord = (projectId, excerptId, patch) => withBackupAssetPublication(() => mutateProjectRecord(projectId, (current) => ({
+  project: settleRevisionRender(applyExcerptPatch(current, excerptId, { ...patch, partialFilename: null, renderingOn: null }), excerptId, patch),
+})));
 
 /**
  * Kick off a draft excerpt render. Returns `{ jobId, excerptId }`.
@@ -175,9 +183,7 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
   const { signal } = job.overlayAbort;
   const finalize = async (patch) => {
     projectExcerptRenders.delete(projectId);
-    const persisted = await mutateProjectRecord(projectId, (current) => ({
-      project: settleRevisionRender(applyExcerptPatch(current, excerptId, { ...patch, partialFilename: null, renderingOn: null }), excerptId, patch),
-    })).then(() => true, (err) => {
+    const persisted = await settleExcerptRecord(projectId, excerptId, patch).then(() => true, (err) => {
       console.error(`❌ Music-video ${renderer.label} excerpt [${jobId.slice(4, 12)}] project ${projectId.slice(0, 8)} status→${patch.status} write failed: ${err.message}`);
       return false;
     });
@@ -322,9 +328,7 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
     // to refresh; boot recovery clears a record if that write also fails.
     const finalize = async (patch) => {
       projectExcerptRenders.delete(projectId);
-      const persisted = await mutateProjectRecord(projectId, (current) => ({
-        project: settleRevisionRender(applyExcerptPatch(current, excerptId, { ...patch, partialFilename: null, renderingOn: null }), excerptId, patch),
-      }))
+      const persisted = await settleExcerptRecord(projectId, excerptId, patch)
         .then(() => true, (err) => {
           console.error(`❌ Music-video excerpt render [${jobId.slice(4, 12)}] project ${projectId.slice(0, 8)} status→${patch.status} write failed: ${err.message}`);
           return false;

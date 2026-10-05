@@ -13,7 +13,10 @@
  *   neither captured.
  * - `reference-only`: writes rows naming bytes that were already durable before
  *   its trigger was published, and writes no bytes itself, so there is no gap
- *   for a cut to land in.
+ *   for a cut to land in. A deletion that commits the row that stops naming
+ *   its bytes before it removes them belongs here too: the dump that follows a
+ *   cut's file copy either sees no row, or sees one whose bytes were removed
+ *   only after the copy finished.
  * - `outstanding`: still changes bytes and rows outside admission.
  *
  * A snapshot claims global file-and-row consistency only when nothing is
@@ -106,6 +109,25 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     status: 'reference-only',
     modules: ['services/trackYoutubeImport.js'],
   },
+  {
+    // Final and excerpt renders, publishing-kit builds and composition document
+    // versions: the encoder or import writes the MP4, kit files or version
+    // folder in place, then the history entry and project row that first name
+    // them commit under one lease (the final render's poster too).
+    id: 'music-video-render-and-document-commits',
+    status: 'admitted',
+    modules: [
+      'services/musicVideo/render.js', 'services/musicVideo/excerptRender.js',
+      'services/musicVideo/publishKit.js', 'services/musicVideo/compositionDocument.js',
+    ],
+  },
+  {
+    // Excerpt deletion commits the project row without the excerpt, then
+    // unlinks its video and contact sheet once no project names them.
+    id: 'music-video-excerpt-deletion',
+    status: 'reference-only',
+    modules: ['services/musicVideo/excerptService.js'],
+  },
   // Classified by a code sweep (#9982) but still outside admission. Each entry
   // names the modules whose file-plus-record workflows are not wrapped yet, so a
   // continuation can take one and move it up. Entries are per domain, not per
@@ -122,14 +144,11 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     ],
   },
   {
-    // Final and excerpt renders, publish kit, composition document versions,
-    // performance repair, MIDI transcription, excerpt deletion and the
-    // autonomous Suno song, where the MP4 or file is written in place.
+    // Performance repair's boundary frame, MIDI transcription and the
+    // autonomous Suno song, where the file is written in place.
     id: 'music-video-render-and-record-owners',
     status: 'outstanding',
     modules: [
-      'services/musicVideo/render.js', 'services/musicVideo/excerptRender.js', 'services/musicVideo/excerptService.js',
-      'services/musicVideo/publishKit.js', 'services/musicVideo/compositionDocument.js',
       'services/musicVideo/performanceRepair.js', 'services/audioMidiTranscription.js',
       'services/musicVideo/autonomousSuno.js', 'services/musicVideo/autonomousService.js', 'routes/musicVideo.js',
     ],

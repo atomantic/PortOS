@@ -80,7 +80,9 @@ Admission inventory (`withBackupAssetPublication`):
 | Pipeline audio stage rows: generated music, cue render and voice-over line render (`routes/pipeline/audio.js`) | Covered (#9982 partial): the row that first names the WAV takes the lease; the sidecar or synthesizer writes the WAV before it |
 | Music-library upload attach: Music Designer upload, pipeline music upload and YouTube import (`routes/tracks.js`, `routes/pipeline/audio.js`, `trackYoutubeImport.js`) | Reference-only: the admitted library import copies the file first and the track or issue row commits after it |
 | LoRA training and deployed LoRAs: trained-adapter registration, checkpoint promotion over the deployed adapter, the promoted-checkpoint preview copy, the progress row naming trainer-written samples and checkpoints, run deletion, and LoRA deletion from the LoRA manager or Media Models (`loraTraining/index.js`, `loras.js`) | Covered (#9982 partial): registration and promotion hold one lease from the adapter write through the run row and dataset flag; Civitai and Hugging Face installs admit the sidecar that first names the already-linked weights |
-| Remaining durable owners, classified by domain in `backupAssetOwners.js` | Outstanding (#9982): sprites, Music Video renders and records, video generation, image generation tails, Writers Room drafts, code animation, peer and share imports, attachments and catalog media, mood boards, image-to-3D and rigging, archive and document imports |
+| Music Video final and excerpt renders, publishing-kit builds and composition document versions (`musicVideo/render.js`, `musicVideo/excerptRender.js`, `musicVideo/publishKit.js`, `musicVideo/compositionDocument.js`) | Covered (#9982 partial): the encoder or import writes the files in place; the history entry and project row that first name them commit under one lease |
+| Music Video excerpt deletion (`musicVideo/excerptService.js`) | Reference-only: the project row drops the excerpt before its unreferenced video and contact sheet are unlinked |
+| Remaining durable owners, classified by domain in `backupAssetOwners.js` | Outstanding (#9982): sprites, Music Video performance repair, MIDI transcription and autonomous Suno song, video generation, image generation tails, Writers Room drafts, code animation, peer and share imports, attachments and catalog media, mood boards, image-to-3D and rigging, archive and document imports |
 | Durable replacement/deletion owners not yet classified | Outstanding (#9982) |
 | Snapshot consistency claim (`backupAssetOwners.js`, see below) | Covered (#9982 partial) |
 | Database restore execution and backend-cutover acceptance (`backup.js`, `databasePreflight.js`) | Covered (#9983) |
@@ -162,6 +164,17 @@ lease too. A downloaded LoRA is linked under its final name before its sidecar
 is written; the sidecar write takes the lease, so a snapshot can hold weights
 without their sidecar (they list with fallback metadata) but never a sidecar
 without its weights.
+
+A Music Video render holds no lease while it encodes. Once the MP4 is on disk,
+the final render's poster, its video-history entry and the project row naming
+that entry commit under one lease; an excerpt's settling row (naming its MP4
+and contact sheet) does the same. A publishing-kit build commits the kit row
+naming its encodes, thumbnails and captions under a lease, then removes the
+previous kit's files no project still names. A composition document version is
+renamed into place before the row that selects it commits under a lease, and
+pruning removes only version folders no row names. The in-flight
+`renderPartialFilename` / excerpt `partialFilename` marks still name a file the
+encoder is writing, as before; boot recovery clears them.
 
 **Snapshot consistency claim.** `server/lib/backupAssetOwners.js` inventories
 each durable owner as `admitted`, `reference-only` or `outstanding`, and its
