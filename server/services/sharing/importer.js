@@ -26,6 +26,7 @@ import { join, basename } from 'path';
 import { readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { EventEmitter } from 'events';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { PATHS, copyFileGuarded, ensureDir, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { isSafeRecordId } from '../../lib/validation.js';
 import { logFailureWithStack } from '../../lib/failureLogging.js';
@@ -281,8 +282,17 @@ const LOCAL_TARGET_DIRS = Object.freeze({
   'image-ref': PATHS.imageRefs,
 });
 
-/** Copy bundled assets from the bucket into local data dirs. Runs in parallel. */
-async function copyAssetsLocally(bucketPath, assetRefs) {
+/**
+ * Copy bundled assets from the bucket into local data dirs. Runs in parallel.
+ * The copies and the media_assets rows that index them share one backup lease;
+ * the records naming these files merge afterwards, so a cut sees the bytes
+ * durable before any row that names them.
+ */
+function copyAssetsLocally(bucketPath, assetRefs) {
+  return withBackupAssetPublication(() => copyAssetsLocallyAdmitted(bucketPath, assetRefs));
+}
+
+async function copyAssetsLocallyAdmitted(bucketPath, assetRefs) {
   await ensureDir(PATHS.images);
   await ensureDir(PATHS.videos);
   await ensureDir(PATHS.imageRefs);
