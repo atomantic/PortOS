@@ -18,7 +18,8 @@ const FILTER_LABELS = [['all', 'All'], ['attention', 'Needs attention'], ['missi
 const isTypingTarget = (el) => !!el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
 
 /**
- * Board: plan and arrange the shots, the beat timeline, and the scene cards —
+ * Storyboard: the treatment (the brief the planner reads, then per-shot
+ * direction), planning tools, the beat timeline, and the scene cards —
  * one column on a phone, two and three as the column widens (a container
  * query, so the docked preview narrowing the column is accounted for). Cards
  * are collapsed to a thumbnail, lyric and status until tapped.
@@ -99,9 +100,12 @@ export default function BoardStage({ board }) {
         <ShotPacingFields project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />
       </StageSection>
 
-      <StageSection id="mv-board-treatment" title="Treatment" summary={scenes.length ? treatmentSummary(project) : 'Plan shots to direct them'}>
-        <TreatmentPanel key={`treatment-${project.id}`} project={project} treatment={treatment} part="direction"
-          storyboardApproved={!!board.productionReadiness?.storyboard?.approved} />
+      {/* The brief feeds the shot planner; the direction is applied per shot once they exist. */}
+      <StageSection id="mv-board-treatment" title="Treatment" summary={scenes.length ? treatmentSummary(project) : 'Write the brief the shot planner follows'}>
+        <div id="mv-setup-treatment">
+          <TreatmentPanel key={`treatment-${project.id}`} project={project} treatment={treatment}
+            storyboardApproved={!!board.productionReadiness?.storyboard?.approved} />
+        </div>
       </StageSection>
 
       {project.audioAnalysis && scenes.length > 0 && (

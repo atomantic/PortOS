@@ -8,9 +8,10 @@ import { renderStyleLabel } from '../compositionDraft.js';
 import { MUSIC_VIDEO_MEDIA_MODE_LABELS, musicVideoMediaMode } from '../../../../../server/lib/musicVideoMediaPolicy.js';
 
 /**
- * Compose: how the final render is put together — the timed typography and
- * (per render style, a project option chosen in Setup) the code-rendered or
- * composition-document panel. The preview of what this produces is docked beside these panels.
+ * The composition half of Make: how the final render is put together — grade,
+ * timed typography and (per render style, set in Project settings) the
+ * code-rendered or composition-document panel. The preview of what this
+ * produces is docked beside the step.
  */
 export default function ComposeStage({ board }) {
   const { project, locked, audioUrl } = board;
@@ -22,8 +23,8 @@ export default function ComposeStage({ board }) {
         <div className="flex flex-wrap items-center gap-2 text-xs text-port-text-muted">
           <span>Render style: <span className="text-port-text">{renderStyleLabel(mode)}</span></span>
           <span>Media: <span className="text-port-text">{MUSIC_VIDEO_MEDIA_MODE_LABELS[musicVideoMediaMode(project)]}</span></span>
-          <button type="button" onClick={() => board.goToStage('setup', 'mv-setup-options')} className="min-h-[44px] px-1 text-port-accent sm:min-h-0">
-            Change in Setup
+          <button type="button" onClick={() => board.openSettings('project')} className="min-h-[44px] px-1 text-port-accent sm:min-h-0">
+            Change
           </button>
         </div>
         {mode !== 'document' && (

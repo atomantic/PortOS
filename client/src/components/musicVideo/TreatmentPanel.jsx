@@ -66,8 +66,8 @@ export function treatmentSummary(project) {
  * call site so a field draft never carries across projects.
  *
  * `part` splits it by what each piece depends on: the brief (what the planner
- * reads) belongs in Setup, while compile / arc / shot direction / Apply need
- * scenes and live on the Board. Omit it to render both. The caller supplies
+ * reads) needs no scenes, while compile / arc / shot direction / Apply need
+ * them. The Storyboard step renders both. Omit it to render both. The caller supplies
  * the collapsible section, so there is no fold of its own here.
  * `storyboardApproved` (from the server's readiness) warns that any treatment
  * edit will need the storyboard re-approved (#10141).
@@ -184,14 +184,14 @@ export default function TreatmentPanel({ project, treatment: api, part = 'all', 
         </div>
         {part === 'brief' && (
           <p className="text-xs text-port-text-muted">
-            The planner reads this brief when it plans shots. Compile the arc, direct each shot and apply it on the Board.
+            The planner reads this brief when it plans shots.
           </p>
         )}
         </>
       )}
 
       {showDirection && !hasScenes && (
-        <p className="text-sm text-port-text-muted">Plan shots on the Board to direct them — the treatment's shot direction needs scenes to direct.</p>
+        <p className="text-sm text-port-text-muted">Plan the shots to direct them one by one.</p>
       )}
 
       {showDirection && hasScenes && (

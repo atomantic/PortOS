@@ -335,11 +335,19 @@ const selectProject = async (projectId) => {
   return picker;
 };
 
-// The page is a set of stage tabs (deep-linked as /music-video/:id/:stage); a
-// control is only on screen while its stage is open, so tests say which one.
+// The page is a set of steps (deep-linked as /music-video/:id/:stage); a
+// control is only on screen while its step is open, so tests say which one.
+// Compose is part of Make now. The phone's step bar is the tablist.
 const STAGE_TABS = {
-  setup: /^Setup/, 'cast-sets': /^Cast & Sets/, board: /^Board/, produce: /^Produce/, compose: /^Compose/, review: /^Review/,
+  setup: /^Song/, 'cast-sets': /^Look/, board: /^Storyboard/, produce: /^Make/, compose: /^Make/, review: /^Final render/,
 };
+// Project settings (render style, audio tools, autopilot, files) is a drawer over the step.
+const openSettings = async (tab = 'Project') => {
+  fireEvent.click(screen.getByRole('button', { name: 'Project settings' }));
+  const drawerTab = await screen.findByRole('tab', { name: new RegExp(`^${tab}`) });
+  fireEvent.click(drawerTab);
+};
+const closeSettings = () => fireEvent.click(screen.getByRole('button', { name: 'Close project settings' }));
 const openStage = async (stage, selectFirstScene = true) => {
   const tab = await screen.findByRole('tab', { name: STAGE_TABS[stage] });
   fireEvent.click(tab);
@@ -467,7 +475,7 @@ describe('MusicVideo project load recovery (#9761)', () => {
       expect(screen.getByTestId('mv-project-grid')).toHaveTextContent(PROJECT_NO_CLIP.name);
     } else {
       expect(screen.getByRole('heading', { level: 2, name: PROJECT_NO_CLIP.name })).toBeInTheDocument();
-      expect(screen.getByRole('tab', { name: /^Board/ })).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByRole('tab', { name: /^Storyboard/ })).toHaveAttribute('aria-selected', 'true');
     }
   });
 
@@ -749,13 +757,13 @@ describe('MusicVideo render control (#1760)', () => {
     expect(renderBtn).toHaveProperty('disabled', true);
   });
 
-  it('keeps full-quality and sharing controls together in the compact native-final disclosure', async () => {
+  it('keeps full-quality and sharing controls together in the final render section', async () => {
     await openProject({ ...PROJECT_WITH_CLIP, renderHistoryId: 'rh-9' }, 'review');
     const fullQuality = await screen.findByRole('link', { name: /Download MP4/i });
     const sharing = await screen.findByRole('button', { name: 'Prepare sharing copy' });
-    const disclosure = fullQuality.closest('details');
-    expect(disclosure).toHaveAttribute('id', 'mv-final-video');
-    expect(disclosure).toContainElement(sharing);
+    const section = fullQuality.closest('#mv-final-video');
+    expect(section).toHaveAccessibleName('Final render');
+    expect(section).toContainElement(sharing);
     expect(sharing).toHaveClass('min-h-[44px]');
     const link = await screen.findByText(/Open in Media History/i);
     // Media History matches video items by their `video:<id>` key via ?preview=.
@@ -956,9 +964,11 @@ describe('MusicVideo project video renderer', () => {
     await openProject({
       ...PROJECT_NO_CLIP,
       videoSettings: { modelId: 'ltx23_distilled_q4' },
-    }, 'setup');
+    });
+    await openSettings('Project');
 
     expect(await screen.findByLabelText('Scene video renderer')).toHaveProperty('value', '');
+    closeSettings();
     await openStage('board');
     fireEvent.click(screen.getByRole('button', { name: /^Generate video$/ }));
     await waitFor(() => expect(generateVideo).toHaveBeenCalled());
@@ -967,7 +977,8 @@ describe('MusicVideo project video renderer', () => {
   });
 
   it('clears an existing backend pin with the Install default option', async () => {
-    await openProject(PROJECT_NO_CLIP, 'setup');
+    await openProject(PROJECT_NO_CLIP);
+    await openSettings('Project');
 
     fireEvent.change(await screen.findByLabelText('Scene video renderer'), {
       target: { value: '' },
@@ -982,7 +993,8 @@ describe('MusicVideo project video renderer', () => {
 
   it('persists the local model and uses it for scene generation', async () => {
     generateVideo.mockResolvedValue({ jobId: 'video-job-1' });
-    await openProject(PROJECT_NO_CLIP, 'setup');
+    await openProject(PROJECT_NO_CLIP);
+    await openSettings('Project');
 
     const model = await screen.findByLabelText('Local video model');
     fireEvent.change(model, { target: { value: 'ltx23_distilled_q4' } });
@@ -992,6 +1004,7 @@ describe('MusicVideo project video renderer', () => {
       { silent: true },
     ));
 
+    closeSettings();
     await openStage('board');
     fireEvent.click(screen.getByRole('button', { name: /^Generate video$/ }));
     await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
@@ -1020,7 +1033,8 @@ describe('MusicVideo project video renderer', () => {
 
   it('uses project audio as no-vocals conditioning at the scene song offset', async () => {
     generateVideo.mockResolvedValue({ jobId: 'audio-reactive-job' });
-    await openProject(PROJECT_NO_CLIP, 'setup');
+    await openProject(PROJECT_NO_CLIP);
+    await openSettings('Project');
 
     fireEvent.change(await screen.findByLabelText('Scene generation mode'), {
       target: { value: 'audioReactive' },
@@ -1037,6 +1051,7 @@ describe('MusicVideo project video renderer', () => {
       { silent: true },
     ));
 
+    closeSettings();
     await openStage('board');
     fireEvent.click(screen.getByRole('button', { name: /^Generate video$/ }));
     await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
@@ -1062,7 +1077,8 @@ describe('MusicVideo project video renderer', () => {
         audioReactiveLora: 'audio-reactive-v2.safetensors',
         audioReactiveScale: 1.2,
       },
-    }, 'setup');
+    });
+    await openSettings('Project');
 
     const lora = await screen.findByLabelText('Audio reactive LoRA');
     expect(lora.value).toBe('audio-reactive-v2.safetensors');
@@ -1082,7 +1098,8 @@ describe('MusicVideo project video renderer', () => {
       falEnabled: true,
       models: [{ id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4', runtime: 'ltx2' }],
     });
-    await openProject(PROJECT_NO_CLIP, 'setup');
+    await openProject(PROJECT_NO_CLIP);
+    await openSettings('Project');
 
     fireEvent.change(await screen.findByLabelText('Scene video renderer'), {
       target: { value: 'fal' },
@@ -1121,9 +1138,11 @@ describe('MusicVideo project video renderer', () => {
     await openProject({
       ...PROJECT_NO_CLIP,
       videoSettings: { backend: 'fal', falDuration: 6 },
-    }, 'setup');
+    });
+    await openSettings('Project');
 
     expect(await screen.findByLabelText('fal.ai scene clip duration')).toHaveProperty('value', '6');
+    closeSettings();
     await openStage('board');
     // No model pin: the default Hailuo-02 image-to-video take, priced before it is paid for.
     expect((await screen.findByTestId('fal-cutaway-plan')).textContent).toContain('est. $0.27 (6s at 768P)');
@@ -1157,7 +1176,7 @@ describe('MusicVideo project video renderer', () => {
     })));
 
     // Switching model clears the resolution pin — its alphabet is per model.
-    await openStage('setup');
+    await openSettings('Project');
     fireEvent.change(await screen.findByLabelText('fal.ai cutaway model'), {
       target: { value: 'fal-ai/kling-video/v3/pro/image-to-video' },
     });
@@ -1193,9 +1212,11 @@ describe('MusicVideo project video renderer', () => {
     });
 
     it('labels Grok cutaway-only and blocks a performance shot on it without calling the provider', async () => {
-      await openProject(performanceProject({ backend: 'grok', grokDuration: 6 }), 'setup');
+      await openProject(performanceProject({ backend: 'grok', grokDuration: 6 }));
+      await openSettings('Project');
 
       expect(await screen.findByRole('option', { name: 'Grok video (cutaway only)' })).toBeTruthy();
+      closeSettings();
       await openStage('board');
       expect(await screen.findByText(/Grok video is cutaway-only/)).toBeTruthy();
       const generate = await screen.findByRole('button', { name: /^Generate video$/ });
@@ -1391,13 +1412,15 @@ describe('MusicVideo musical timeline', () => {
 
 describe('MusicVideo audio → MIDI transcription (MuScriptor)', () => {
   it('disables the MIDI button when the project has no audio source', async () => {
-    await openProject({ ...PROJECT_WITH_CLIP, trackId: null, uploadedAudioFilename: null }, 'setup');
+    await openProject({ ...PROJECT_WITH_CLIP, trackId: null, uploadedAudioFilename: null });
+    await openSettings('Audio');
     const btn = await screen.findByRole('button', { name: /^MIDI$/ });
     expect(btn).toHaveProperty('disabled', true);
   });
 
   it('kicks off a transcription for the selected project with the default model', async () => {
-    await openProject(PROJECT_WITH_CLIP, 'setup');
+    await openProject(PROJECT_WITH_CLIP);
+    await openSettings('Audio');
     const btn = await screen.findByRole('button', { name: /^MIDI$/ });
     expect(btn).toHaveProperty('disabled', false);
     fireEvent.click(btn);
@@ -1405,7 +1428,8 @@ describe('MusicVideo audio → MIDI transcription (MuScriptor)', () => {
   });
 
   it('kicks off a transcription with the chosen model size', async () => {
-    await openProject(PROJECT_WITH_CLIP, 'setup');
+    await openProject(PROJECT_WITH_CLIP);
+    await openSettings('Audio');
     fireEvent.change(await screen.findByLabelText('MuScriptor model size'), { target: { value: 'large' } });
     fireEvent.click(await screen.findByRole('button', { name: /^MIDI$/ }));
     await waitFor(() => expect(transcribeMusicVideoMidi).toHaveBeenCalledWith('mv-1', { model: 'large' }, { silent: true }));
@@ -1413,7 +1437,8 @@ describe('MusicVideo audio → MIDI transcription (MuScriptor)', () => {
 
   it('shows the MIDI download link once the project carries a transcription pointer', async () => {
     listTracks.mockResolvedValue([{ id: 't1', title: 'Neon Song', audioFilename: 'neon.mp3' }]);
-    await openProject({ ...PROJECT_WITH_CLIP, midiTranscription: { filename: 'neon-midi.mid', model: 'medium' } }, 'setup');
+    await openProject({ ...PROJECT_WITH_CLIP, midiTranscription: { filename: 'neon-midi.mid', model: 'medium' } });
+    await openSettings('Audio');
     // Two links now: the download button and the MidiVisualization panel's
     // download icon (#2477) — both serve from the music dir (same static route
     // as the master audio) so the federated .mid resolves on peers too.
@@ -1464,7 +1489,7 @@ describe('MusicVideo AI Plan on a board that already has scenes (#10144)', () =>
 });
 
 describe('MusicVideo autonomous mode setup experience', () => {
-  it('renders autonomous run at top of setup, hides lyrics fork callout when no lyrics exist, and reflects progress in next action', async () => {
+  it('opens the autonomous run from the header Autopilot button, hides the lyrics fork callout when no lyrics exist, and reflects progress in next action', async () => {
     const autoProject = {
       id: 'mv-auto-1',
       name: 'Autonomous MV',
@@ -1485,11 +1510,16 @@ describe('MusicVideo autonomous mode setup experience', () => {
     };
     await openProject(autoProject, 'setup');
 
-    const runRegion = screen.getByRole('region', { name: 'Autonomous run' });
+    // The header's Autopilot button names what the run is doing and opens its panel in Project settings › Autopilot.
+    fireEvent.click(screen.getByRole('button', { name: /Autonomous run: writing the lyric draft/i }));
+    const runRegion = await screen.findByRole('region', { name: 'Autonomous run' });
     expect(runRegion).toBeInTheDocument();
 
+    // No lyrics yet: the song fork callout (Project settings › Audio) stays hidden.
+    fireEvent.click(screen.getByRole('tab', { name: /^Audio/ }));
     expect(screen.queryByRole('heading', { name: 'Revise lyrics & song' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Fork & revise song' })).toBeNull();
+    closeSettings();
 
     expect(screen.queryByRole('button', { name: 'Attach a track' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Writing the lyric draft…' })).toBeDisabled();
@@ -1669,7 +1699,7 @@ describe('MusicVideo section layers (#8985)', () => {
 describe('MusicVideo concept & style editor (#3168)', () => {
   it('seeds the fields from the project and persists each on blur', async () => {
     const withConcept = { ...PROJECT_NO_CLIP, concept: { prompt: 'A road trip through neon ruins', style: 'Cyberpunk anime' } };
-    await openProject(withConcept, 'setup');
+    await openProject(withConcept, 'cast-sets');
 
     const conceptField = await screen.findByLabelText('Concept');
     const styleField = screen.getByLabelText('Visual style');
@@ -1695,7 +1725,7 @@ describe('MusicVideo concept & style editor (#3168)', () => {
 
   it('does not re-PATCH when a field is focused and blurred without an edit', async () => {
     const withConcept = { ...PROJECT_NO_CLIP, concept: { prompt: 'Unchanged', style: 'Unchanged' } };
-    await openProject(withConcept, 'setup');
+    await openProject(withConcept, 'cast-sets');
     const conceptField = await screen.findByLabelText('Concept');
     fireEvent.focus(conceptField);
     fireEvent.blur(conceptField);
@@ -1712,11 +1742,14 @@ describe('MusicVideo concept & style editor (#3168)', () => {
     listMusicVideoProjects.mockResolvedValue([PROJECT_NO_CLIP, projectB]);
     renderMV();
     await selectProject(PROJECT_NO_CLIP.id);
+    // Concept and style are creative direction, on the Look step.
+    await openStage('cast-sets');
 
     const conceptField = await screen.findByLabelText('Concept');
     fireEvent.change(conceptField, { target: { value: 'A unsaved draft' } });
     // No blur — switch projects while the edit is still pending.
     await selectProject(projectB.id);
+    await openStage('cast-sets');
 
     await waitFor(() => expect(screen.getByLabelText('Concept')).toHaveValue('B original'));
     fireEvent.blur(screen.getByLabelText('Concept'));
@@ -1729,7 +1762,7 @@ describe('MusicVideo concept & style editor (#3168)', () => {
   });
 
   it('starts empty and enables AI Plan to use them once set', async () => {
-    await openProject(PROJECT_ANALYZED, 'setup');
+    await openProject(PROJECT_ANALYZED, 'cast-sets');
     const conceptField = await screen.findByLabelText('Concept');
     expect(conceptField).toHaveValue('');
 
@@ -2045,7 +2078,8 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     // An instrumental track: nothing to import, so nothing to separate or align.
     importMusicVideoTrackLyrics.mockResolvedValue({ project: analyzed, imported: 0, markers: 0, skipped: 'no-track-lyrics' });
     planMusicVideoProject.mockResolvedValue({ project: analyzed, scenesAdded: 3, promptsSeeded: true });
-    await openProject(project, 'produce');
+    await openProject(project);
+    await openSettings('Autopilot');
     fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
     await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalledWith(project.id, { seedPrompts: true }, { silent: true }));
     expect(analyzeMusicVideoProject).toHaveBeenCalledWith(project.id, { silent: true });
@@ -2060,7 +2094,8 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
       automation: { tools: ['code:render'], guidance: '', budgetUsd: null, checkins: { castAndSets: 'review' } } };
     const directing = { ...project, castAndSets: { status: 'directing', revision: 1, plan: {}, images: {} } };
     startMusicVideoCastAndSets.mockResolvedValue({ project: directing, stage: directing.castAndSets });
-    await openProject(project, 'produce');
+    await openProject(project);
+    await openSettings('Autopilot');
     fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
     // The server directs it procedurally (no image backend for a code-only brief); the run still gates on it.
     await waitFor(() => expect(startMusicVideoCastAndSets).toHaveBeenCalledWith(project.id, {}, { silent: true }));
@@ -2076,11 +2111,13 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     const approved = { ...reviewing, castAndSets: { ...reviewing.castAndSets, status: 'approved' }, devArtifacts: [{ ...sheet, status: 'approved' }] };
     approveMusicVideoCastAndSets.mockResolvedValue({ project: approved, stage: approved.castAndSets });
     planMusicVideoProject.mockResolvedValue({ project: approved, scenesAdded: 2, promptsSeeded: true });
-    await openProject(project, 'produce');
+    await openProject(project);
+    await openSettings('Autopilot');
 
     fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
     await waitFor(() => expect(startMusicVideoCastAndSets).toHaveBeenCalledWith(project.id, {}, { silent: true }));
     await pushSocket('music-video:cast-and-sets', { projectId: project.id, project: reviewing, stage: reviewing.castAndSets });
+    closeSettings();
     // Existing Cast & Sets controls still apply references; Production review separately authorizes work.
     await openStage('cast-sets');
     expect(await screen.findByText('Waiting for your check-in.')).toBeTruthy();
@@ -2098,7 +2135,8 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     startMusicVideoCastAndSets.mockResolvedValue({ project: directing, stage: directing.castAndSets });
     const approved = { ...project, castAndSets: { status: 'approved', revision: 1, plan: {}, images: {} } };
     planMusicVideoProject.mockResolvedValue({ project: approved, scenesAdded: 2, promptsSeeded: true });
-    await openProject(project, 'produce');
+    await openProject(project);
+    await openSettings('Autopilot');
 
     fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
     await waitFor(() => expect(startMusicVideoCastAndSets).toHaveBeenCalled());
@@ -2322,7 +2360,9 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
       imported: [{ sceneId: 's1', takeId: 't-mj', kind: 'image', assetId: 'upload-0001.png', originalName: 'S01-s1-harbor.png' }],
       skipped: [],
     });
-    await openProject(SPEC_PROJECT, 'produce');
+    await openProject(SPEC_PROJECT);
+    // The external handoff lives in Project settings › Files.
+    await openSettings('Files');
 
     const file = new File(['png-bytes'], 'S01-s1-harbor.png', { type: 'image/png' });
     fireEvent.change(screen.getByLabelText('Import generated files'), { target: { files: [file] } });
@@ -2332,6 +2372,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     }, { silent: true }));
     expect(uploadGalleryImage).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Imported 1 take from midjourney'));
+    closeSettings();
     // The imported take filled the empty slot on the board.
     await openStage('board');
     expect(await screen.findByRole('button', { name: 'View scene 1 reference frame full size' })).toBeTruthy();
@@ -2339,7 +2380,9 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
 
   it('downloads the ZIP handoff bundle from Export bundle (#8978)', async () => {
     getMusicVideoHandoffBundle.mockResolvedValueOnce(new ArrayBuffer(8));
-    await openProject(SPEC_PROJECT, 'produce');
+    await openProject(SPEC_PROJECT);
+    // The external handoff lives in Project settings › Files.
+    await openSettings('Files');
     fireEvent.click(await screen.findByRole('button', { name: /^Export bundle$/ }));
     await waitFor(() => expect(getMusicVideoHandoffBundle).toHaveBeenCalledWith('mv-spec', { silent: true }));
     await waitFor(() => expect(downloadBlob).toHaveBeenCalledWith(
@@ -2363,7 +2406,7 @@ describe('MusicVideo pull references from universe (#8978)', () => {
       places: [{ id: 'p1', name: 'Harbor', imageRefs: ['harbor.png'] }], // already a reference
       objects: [],
     });
-    await openProject(UNIVERSE_PROJECT, 'setup');
+    await openProject(UNIVERSE_PROJECT, 'cast-sets');
 
     fireEvent.click(await screen.findByRole('button', { name: /^Pull from universe$/ }));
     await waitFor(() => expect(getUniverse).toHaveBeenCalledWith('u1', { silent: true }));
@@ -2384,7 +2427,7 @@ describe('MusicVideo pull references from universe (#8978)', () => {
     getUniverse.mockResolvedValue({
       characters: [], places: [{ id: 'p1', name: 'Harbor', imageRefs: ['harbor.png'] }], objects: [],
     });
-    await openProject(UNIVERSE_PROJECT, 'setup');
+    await openProject(UNIVERSE_PROJECT, 'cast-sets');
     fireEvent.click(await screen.findByRole('button', { name: /^Pull from universe$/ }));
     await waitFor(() => expect(getUniverse).toHaveBeenCalledTimes(1));
     expect(updateMusicVideoProject).not.toHaveBeenCalled();
@@ -2394,7 +2437,7 @@ describe('MusicVideo pull references from universe (#8978)', () => {
   it('applies the pull against the latest references, not a stale click-time snapshot (race guard)', async () => {
     let resolveUniverse;
     getUniverse.mockReturnValueOnce(new Promise((resolve) => { resolveUniverse = resolve; }));
-    await openProject(UNIVERSE_PROJECT, 'setup');
+    await openProject(UNIVERSE_PROJECT, 'cast-sets');
 
     fireEvent.click(await screen.findByRole('button', { name: /^Pull from universe$/ }));
     await waitFor(() => expect(getUniverse).toHaveBeenCalledTimes(1));
@@ -2420,7 +2463,7 @@ describe('MusicVideo pull references from universe (#8978)', () => {
   });
 
   it('does not offer Pull from universe when the project has no linked universe', async () => {
-    await openProject(PROJECT_NO_CLIP, 'setup');
+    await openProject(PROJECT_NO_CLIP, 'cast-sets');
     expect(screen.queryByRole('button', { name: /Pull from universe/i })).toBeNull();
   });
 });
@@ -2472,29 +2515,39 @@ describe('MusicVideo stage tabs (#9243)', () => {
   );
   const selectedTab = () => screen.getByRole('tab', { selected: true });
 
-  it('puts the selected stage before the shared run panel, shows only its own approval, and keeps unsaved planning edits across tabs', async () => {
+  it('puts the selected step before its own approval, keeps the run in Project settings, and keeps unsaved planning edits across steps', async () => {
     listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP,
       autonomousRun: { status: 'needs-human', stage: 'video', output: {}, brief: {} },
     }]);
     renderAt('/music-video/mv-1/cast-sets');
     await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
     const review = screen.getByRole('region', { name: 'Production review' });
-    expect(within(review).getByText('Art direction')).toBeInTheDocument();
-    expect(within(review).queryByText('Lyric-timed storyboard')).toBeNull();
+    expect(within(review).getByRole('region', { name: 'Approve: Art direction' })).toBeInTheDocument();
+    expect(within(review).queryByRole('region', { name: 'Approve: Lyric-timed storyboard' })).toBeNull();
     expect(screen.queryByText('Production approvals')).toBeNull();
     const castDraft = within(review).getByLabelText('Cast guide');
     fireEvent.change(castDraft, { target: { value: 'Example unsaved cast direction' } });
 
+    const approvals = { 'cast-sets': 'Art direction', board: 'Lyric-timed storyboard', produce: 'Animated proof' };
     for (const stage of ['board', 'produce', 'cast-sets']) {
       await openStage(stage);
       const panel = screen.getByRole('tabpanel');
       expect(within(panel).getByRole('heading', { level: 3, name: selectedTab().textContent })).toBeInTheDocument();
-      const run = screen.getByRole('region', { name: 'Autonomous run' });
-      expect(panel.contains(run)).toBe(false);
-      expect(panel.compareDocumentPosition(run) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-      if (stage === 'board') expect(within(panel).getByText('Lyric-timed storyboard')).toBeInTheDocument();
-      if (stage === 'produce') expect(screen.queryByRole('region', { name: 'Production review' })).toBeNull();
+      // The step's own work comes first; the one approval that closes it sits at the bottom.
+      const stageReview = within(panel).getByRole('region', { name: 'Production review' });
+      expect(panel.lastElementChild).toBe(stageReview);
+      expect(within(stageReview).getAllByRole('region', { name: /^Approve: / })).toHaveLength(1);
+      expect(within(stageReview).getByRole('region', { name: `Approve: ${approvals[stage]}` })).toBeInTheDocument();
+      // The run is no longer a shared panel under every step.
+      expect(screen.queryByRole('region', { name: 'Autonomous run' })).toBeNull();
     }
+    expect(screen.getByLabelText('Cast guide')).toHaveValue('Example unsaved cast direction');
+
+    // The run lives in Project settings › Autopilot, opened from the header.
+    fireEvent.click(screen.getByRole('button', { name: /^Autonomous run/ }));
+    const drawer = await screen.findByRole('dialog', { name: 'Project settings' });
+    expect(within(drawer).getByRole('region', { name: 'Autonomous run' })).toBeInTheDocument();
+    closeSettings();
     expect(screen.getByLabelText('Cast guide')).toHaveValue('Example unsaved cast direction');
   });
 
@@ -2525,12 +2578,12 @@ describe('MusicVideo stage tabs (#9243)', () => {
     listMusicVideoProjects.mockResolvedValue([PROJECT_WITH_CLIP]);
     renderAt('/music-video/mv-1/produce');
     await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
-    expect(selectedTab()).toHaveTextContent(/^Produce/);
-    expect(screen.getByRole('button', { name: 'Set up automation brief' })).toBeTruthy();
+    expect(selectedTab()).toHaveTextContent(/^Make/);
+    expect(screen.getByRole('region', { name: 'Composition' })).toBeTruthy();
 
     fireEvent.click(screen.getByRole('tab', { name: STAGE_TABS.board }));
     await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/music-video/mv-1/board'));
-    expect(selectedTab()).toHaveTextContent(/^Board/);
+    expect(selectedTab()).toHaveTextContent(/^Storyboard/);
     expect(screen.getByRole('button', { name: /Add scene/ })).toBeTruthy();
   });
 
@@ -2539,50 +2592,78 @@ describe('MusicVideo stage tabs (#9243)', () => {
     listMusicVideoProjects.mockResolvedValue([PROJECT_WITH_CLIP]);
     renderAt('/music-video/mv-1/not-a-stage');
     await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
-    expect(selectedTab()).toHaveTextContent(/^Setup/);
+    expect(selectedTab()).toHaveTextContent(/^Song/);
   });
 
   it('keeps the open tab when a stage completes, while the header moves on to the next action', async () => {
     const analyzed = { ...PROJECT_NO_CLIP, audioAnalysis: PROJECT_ANALYZED.audioAnalysis };
     analyzeMusicVideoProject.mockResolvedValue(analyzed);
     await openProject(PROJECT_NO_CLIP);
-    expect(selectedTab()).toHaveTextContent(/^Setup/);
+    expect(selectedTab()).toHaveTextContent(/^Song/);
 
     fireEvent.click(screen.getByRole('button', { name: 'Analyze song' }));
     await waitFor(() => expect(analyzeMusicVideoProject).toHaveBeenCalledWith('mv-2', { silent: true }));
-    // Analysis is done and the shot has no frame or clip: the header now points at production…
-    expect(await screen.findByRole('button', { name: 'Set up production' })).toBeTruthy();
+    // Analysis is done and the shot has no frame or clip: the header now points at making the footage…
+    expect(await screen.findByRole('button', { name: 'Make the footage' })).toBeTruthy();
     // …but the tab the director is working in is not pulled out from under them.
-    expect(selectedTab()).toHaveTextContent(/^Setup/);
+    expect(selectedTab()).toHaveTextContent(/^Song/);
   });
 
-  it('every control has exactly one home tab', async () => {
+  it('every control has exactly one home step or Project settings tab', async () => {
     const project = { ...PROJECT_WITH_CLIP, castAndSets: { status: 'review', revision: 1, plan: {}, images: {} }, audioAnalysis: PROJECT_ANALYZED.audioAnalysis };
-    const landmarks = {
+    // Each finder searches `root` (the page, or the open settings drawer).
+    const steps = {
       setup: {
-        'Change track': () => screen.queryByLabelText('Change track'), 'Concept': () => screen.queryByLabelText('Concept'), MIDI: () => screen.queryByRole('button', { name: /^MIDI$/ }),
-        // Project options: the render style and the image/video services are set once, here.
-        'Render style': () => document.getElementById('mv-toolbar-render-style'), 'Scene video renderer': () => screen.queryByLabelText('Scene video renderer'),
-        'Media': () => screen.queryByLabelText('Design and composition media'),
+        'Change track': (root) => root.queryByLabelText('Change track'),
+        'Song content': (root) => root.queryByRole('radio', { name: 'Vocal song' }),
       },
-      'cast-sets': { 'Cast & Sets check-in': () => screen.queryByLabelText('Cast & Sets check-in') },
-      board: { 'AI Plan': () => screen.queryByRole('button', { name: /AI Plan/ }), 'Add scene': () => screen.queryByRole('button', { name: /Add scene/ }), 'Shot prompt': () => screen.queryByLabelText('Shot prompt') },
-      produce: { 'Automation brief': () => screen.queryByLabelText('Automation brief'), 'Start production': () => screen.queryByRole('button', { name: /Start production/ }) },
-      compose: { Typography: () => screen.queryByText(/^Typography —/) },
-      review: { 'Render final': () => screen.queryByRole('button', { name: /^Render final$/ }), 'Render excerpt': () => screen.queryByRole('button', { name: /Render excerpt/ }) },
+      'cast-sets': {
+        'Cast & Sets check-in': (root) => root.queryByLabelText('Cast & Sets check-in'),
+        // Creative direction is what the cast and sets are built from.
+        Concept: (root) => root.queryByLabelText('Concept'),
+      },
+      board: { 'AI Plan': (root) => root.queryByRole('button', { name: /AI Plan/ }), 'Add scene': (root) => root.queryByRole('button', { name: /Add scene/ }), 'Shot prompt': (root) => root.queryByLabelText('Shot prompt') },
+      // Make: the footage, then the composition over it.
+      produce: { Footage: () => document.getElementById('mv-generation'), Typography: (root) => root.queryByText(/^Typography —/) },
+      review: { 'Render final': (root) => root.queryByRole('button', { name: /^Render final$/ }), 'Render excerpt': (root) => root.queryByRole('button', { name: /Render excerpt/ }) },
     };
-    // Importing a file is deliberately offered on two tabs: a guide is imported where it is chosen (Cast & Sets),
-    // and any other development file on Review.
-    const importFile = () => screen.queryByLabelText('Import development file');
+    const settings = {
+      // The render style and the image/video services are set once, here.
+      Project: {
+        'Render style': () => document.getElementById('mv-toolbar-render-style'), 'Scene video renderer': (root) => root.queryByLabelText('Scene video renderer'),
+        Media: (root) => root.queryByLabelText('Design and composition media'),
+      },
+      Audio: { MIDI: (root) => root.queryByRole('button', { name: /^MIDI$/ }) },
+      Autopilot: { 'Automation brief': (root) => root.queryByLabelText('Automation brief'), 'Start production': (root) => root.queryByRole('button', { name: /Start production/ }) },
+      Files: { 'Export bundle': (root) => root.queryByRole('button', { name: /^Export bundle$/ }) },
+    };
+    // Importing a file is deliberately offered twice: a guide is imported where it is chosen (Look),
+    // and any other development file in Project settings › Files.
+    const importFile = (root) => root.queryByLabelText('Import development file');
     await openProject(project);
-    for (const [stage, own] of Object.entries(landmarks)) {
+    for (const [stage, own] of Object.entries(steps)) {
       await openStage(stage);
-      for (const [name, find] of Object.entries(own)) expect(find(), `${name} on ${stage}`).toBeTruthy();
-      for (const [other, theirs] of Object.entries(landmarks)) {
+      for (const [name, find] of Object.entries(own)) expect(find(screen), `${name} on ${stage}`).toBeTruthy();
+      for (const [other, theirs] of [...Object.entries(steps), ...Object.entries(settings)]) {
         if (other === stage) continue;
-        for (const [name, find] of Object.entries(theirs)) expect(find(), `${name} must not be on ${stage}`).toBeFalsy();
+        for (const [name, find] of Object.entries(theirs)) expect(find(screen), `${name} must not be on ${stage}`).toBeFalsy();
       }
-      expect(!!importFile(), `Import development file on ${stage}`).toBe(stage === 'cast-sets' || stage === 'review');
+      expect(!!importFile(screen), `Import development file on ${stage}`).toBe(stage === 'cast-sets');
+    }
+    // The drawer opens over the last step; only the open settings tab's controls are in it.
+    for (const [tab, own] of Object.entries(settings)) {
+      await openSettings(tab);
+      const drawer = within(screen.getByRole('dialog', { name: 'Project settings' }));
+      for (const [name, find] of Object.entries(own)) expect(find(drawer), `${name} in ${tab} settings`).toBeTruthy();
+      for (const [other, theirs] of [...Object.entries(steps), ...Object.entries(settings)]) {
+        if (other === tab) continue;
+        for (const [name, find] of Object.entries(theirs)) {
+          const found = find(drawer);
+          expect(!!found && screen.getByRole('dialog', { name: 'Project settings' }).contains(found), `${name} must not be in ${tab} settings`).toBe(false);
+        }
+      }
+      expect(!!importFile(drawer), `Import development file in ${tab} settings`).toBe(tab === 'Files');
+      closeSettings();
     }
   });
 
@@ -2699,9 +2780,20 @@ describe('MusicVideo stage tabs (#9243)', () => {
       expect(screen.queryByLabelText('Final render preview')).toBeNull();
     });
 
-    it('offers no preview when the project has neither a document nor a finished excerpt', async () => {
+    it('keeps the dock with an empty state when there is nothing to play yet', async () => {
+      await openProject({ ...PROJECT_WITH_CLIP, trackId: null, uploadedAudioFilename: null }, 'board');
+      const dock = screen.getByRole('complementary', { name: 'Preview' });
+      expect(dock).toHaveTextContent('Nothing to play yet');
+      expect(within(dock).queryByLabelText('Preview source')).toBeNull();
+      expect(within(dock).queryByTitle('Composition document preview')).toBeNull();
+      expect(within(dock).queryByLabelText('Draft excerpt preview')).toBeNull();
+    });
+
+    it('plays the storyboard animatic when the project has a track and shots but no document or finished excerpt', async () => {
       await openProject(PROJECT_WITH_CLIP, 'board');
-      expect(screen.queryByLabelText('Preview')).toBeNull();
+      const dock = screen.getByRole('complementary', { name: 'Preview' });
+      expect(dock).toHaveTextContent('Storyboard animatic');
+      expect(dock).not.toHaveTextContent('Nothing to play yet');
     });
   });
 });
@@ -2791,14 +2883,14 @@ describe('MusicVideo main page project cards', () => {
     expect(await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name })).toBeInTheDocument();
   });
 
-  it('opens an existing final directly in Review from the project card', async () => {
+  it('opens an existing final directly in Final render from the project card', async () => {
     const project = { ...PROJECT_WITH_CLIP, renderHistoryId: 'example-final' };
     listMusicVideoProjects.mockResolvedValue([project]);
     render(<MemoryRouter initialEntries={['/music-video']}><LocationProbe />{MV_ROUTES}</MemoryRouter>);
     const card = await screen.findByTestId(`mv-project-card-${project.id}`);
     await act(async () => fireEvent.click(within(card).getByRole('button', { name: 'Review video' })));
     expect(screen.getByTestId('loc')).toHaveTextContent(`/music-video/${project.id}/review`);
-    expect(screen.getByRole('tab', { name: /^Review/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: /^Final render/ })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('handles forking a project directly from its card', async () => {
@@ -2867,10 +2959,13 @@ describe('direct production review navigation', () => {
     const action = await screen.findByRole('button', { name: 'Review art direction' });
     expect(screen.getByLabelText('Project')).toHaveTextContent('2 document shots');
     fireEvent.click(action);
-    // The art approval now mounts on the Cast & Sets tab, so it only exists once the jump lands.
+    // The art approval mounts at the bottom of the Look step, so it only exists once the jump lands.
     await waitFor(() => expect(document.getElementById('mv-review-art')).toHaveFocus());
     const art = document.getElementById('mv-review-art');
-    expect(art.closest('details').open).toBe(true);
+    // On its step the approval is an always-open box, never folded away.
+    expect(art).toHaveAccessibleName('Approve: Art direction');
+    expect(art.closest('details')).toBeNull();
+    expect(art).toContainElement(screen.getByRole('button', { name: 'Approve art direction' }));
     expect(screen.getByTestId('loc')).toHaveTextContent('/cast-sets#mv-review-art');
     fireEvent.click(screen.getByRole('button', { name: 'Review art direction' }));
     expect(art).toHaveFocus();
@@ -2884,7 +2979,7 @@ describe('direct production review navigation', () => {
   });
 });
 
-describe('stage checklist and Setup project options', () => {
+describe('stage checklist and project options', () => {
   it('keeps Cast & Sets on the art approval after the unwanted sheet is gone, and says an approved sheet file is not that approval', async () => {
     // The guide pick itself is covered by stageChecklist's unit test; selecting
     // one here would make the open approvals panel fetch the sheet's file.
@@ -2902,14 +2997,17 @@ describe('stage checklist and Setup project options', () => {
     expect(checklist).toHaveTextContent('Approving a sheet file does not approve the art direction');
   });
 
-  it('shows the project options in Setup and saves a media mode and an autopilot tool change', async () => {
+  it('shows the project options in Project settings and saves a media mode and an autopilot tool change', async () => {
     const project = { ...PROJECT_ANALYZED, mediaMode: 'code-images-video',
       automation: { tools: ['image:local'], guidance: 'g', budgetUsd: 5, checkins: { castAndSets: 'review' } } };
     updateMusicVideoProject.mockImplementation((_id, patch) => Promise.resolve({ ...project, ...patch }));
     await openProject(project, 'setup');
-    const options = document.getElementById('mv-setup-options');
-    expect(options.open).toBe(true);
-    expect(options.querySelector('summary')).toHaveTextContent('Autopilot · Code + images + video · Footage');
+    // The Song step holds only the song; the project options are one header button away.
+    expect(screen.queryByLabelText('Design and composition media')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Project settings' }));
+    const drawer = await screen.findByRole('dialog', { name: 'Project settings' });
+    expect(within(drawer).getByRole('tab', { name: /^Project/ })).toHaveAttribute('aria-selected', 'true');
+    expect(within(drawer).getByLabelText('Design and composition media')).toHaveValue('code-images-video');
     fireEvent.change(screen.getByLabelText('Design and composition media'), { target: { value: 'code-only' } });
     await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(project.id, { mediaMode: 'code-only' }, { silent: true }));
     fireEvent.click(screen.getByLabelText('Local video gen'));
@@ -2920,7 +3018,7 @@ describe('stage checklist and Setup project options', () => {
 });
 
 describe('Autopilot collapsed review summary', () => {
-  it('shows the current blocker in the summary while retaining the historical error in run details', async () => {
+  it('shows the current blocker on the run while retaining the historical error in run details', async () => {
     const error = 'Review and approve the current art direction first.';
     const project = { ...PROJECT_ANALYZED, autonomousRun: { id: 'history-run', status: 'needs-human', stage: 'produce',
       error, errorCode: 'MUSIC_VIDEO_APPROVAL_REQUIRED', brief: { autoApprove: [] }, stages: {}, output: {} },
@@ -2928,11 +3026,15 @@ describe('Autopilot collapsed review summary', () => {
         proof: { approved: false, problems: ['Render and watch a current animated chorus proof with the master song.'] } } };
     listMusicVideoProjects.mockResolvedValue([project]);
     render(<MemoryRouter initialEntries={['/music-video/mv-3/review']}>{MV_ROUTES}</MemoryRouter>);
-    await screen.findByText(`Historical stop reason: ${error}`);
-    const summary = screen.getByText('Autonomous run').closest('summary');
-    fireEvent.click(summary);
-    expect(summary).toHaveTextContent('Render and watch a current animated chorus proof');
-    expect(summary.textContent).not.toContain(error);
+    // Collapsed, the run is the header's Autopilot button: it never repeats the stale error.
+    const autopilot = await screen.findByRole('button', { name: /^(Autopilot|Autonomous run)/ });
+    expect(autopilot.textContent).not.toContain(error);
+    fireEvent.click(autopilot);
+    const drawer = await screen.findByRole('dialog', { name: 'Project settings' });
+    const run = within(drawer).getByRole('region', { name: 'Autonomous run' });
+    expect(within(run).getByText(`Historical stop reason: ${error}`)).toBeInTheDocument();
+    const current = within(run).getByText(/Render and watch a current animated chorus proof/);
+    expect(current.textContent).not.toContain(error);
   });
 });
 

@@ -95,7 +95,7 @@ export default function SongRevisionPanel({ project, tracks = [], onUpdated, onF
           <p>New master selected. Art and editable composition source are retained. Beat analysis, lyric alignment, shot timing, proofs and renders need fresh review.</p>
           <ol className="list-inside list-decimal space-y-1">
             <li>Analyze the new song and align its lyrics below; verify by listening.</li>
-            <li><Link className="text-port-accent" to={`/music-video/${project.id}/board`}>Review shot timing and retained or revised art on the Board.</Link></li>
+            <li><Link className="text-port-accent" to={`/music-video/${project.id}/board`}>Review shot timing and retained or revised art on the Storyboard.</Link></li>
             <li><Link className="text-port-accent" to={`/music-video/${project.id}/compose`}>Regenerate or reimport the composition against the new audio.</Link> Imported source can contain a fuller timeline than the Board; revise that source too.</li>
             <li><Link className="text-port-accent" to={`/music-video/${project.id}/review`}>Rebuild and review proofs before the full video.</Link></li>
           </ol>

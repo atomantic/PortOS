@@ -2,8 +2,6 @@ import SharingCopyPanel from '../SharingCopyPanel.jsx';
 import DependencyImpactPanel from '../DependencyImpactPanel.jsx';
 import RenderStatusPanel, { RenderFailure } from '../RenderStatusPanel.jsx';
 import ExcerptPanel from '../ExcerptPanel.jsx';
-import DevArtifactsPanel from '../DevArtifactsPanel.jsx';
-import MakingOfExportPanel from '../MakingOfExportPanel.jsx';
 import StageSection from '../StageSection.jsx';
 import { isFinalRenderStale } from '../../../lib/musicVideoStages.js';
 import { RenderFinalButton } from '../ProjectActionGroups.jsx';
@@ -11,23 +9,22 @@ import ReviewDraftPanel from '../ReviewDraftPanel.jsx';
 import { latestMusicVideoReviewDraft } from '../../../../../server/lib/musicVideoReviewDraft.js';
 
 /**
- * Review & Export: the final render and its player, draft excerpts with review
- * notes, section revision and auto-review (they act on the excerpt window, so
- * they live beside it), and every development file. The external-tool handoff lives on Produce.
+ * Final render: the full render and its player first, then draft excerpts with
+ * review notes, section revision and auto-review (they act on the excerpt
+ * window, so they live beside it), then dependency repair. Development files,
+ * the external handoff and the making-of export are in Project settings › Files.
  */
 export default function ReviewStage({ board }) {
   const {
-    project, locked, renderJob, renderBound, finalVideo, excerpts, revisions, autoReview, sceneMedia, devArtifacts,
+    project, locked, renderJob, renderBound, finalVideo, excerpts, revisions, autoReview, sceneMedia,
   } = board;
   const hasDraft = !!latestMusicVideoReviewDraft(project);
   return (
     <fieldset disabled={locked} className="min-w-0 space-y-3">
       {!project.renderHistoryId && <ReviewDraftPanel project={project} onOpen={board.openArtifact} draftState={board.reviewDraftState} />}
       <RenderFailure project={project} renderJob={renderJob} />
-      <StageSection title="Dependency changes and repair"><DependencyImpactPanel project={project} busy={revisions.busy} onRepair={revisions.repair} /></StageSection>
-      <StageSection id="mv-final-video" title="Native final render" defaultOpen={!hasDraft || !!project.renderHistoryId || renderBound}>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-sm font-medium">Final render</h3>
+      <section id="mv-final-video" aria-label="Final render" className="min-w-0 space-y-2 rounded-lg border border-port-border bg-port-card p-3">
+        <div className="flex justify-end">
           <RenderFinalButton project={project} renderJob={renderJob} readiness={board.productionReadiness} />
         </div>
         <RenderStatusPanel
@@ -39,9 +36,9 @@ export default function ReviewStage({ board }) {
           onOpenPreview={board.openPreview}
         />
         {project.renderHistoryId && <SharingCopyPanel key={`${project.id}:${project.renderHistoryId}`} projectId={project.id} />}
-      </StageSection>
+      </section>
 
-      <StageSection title="Excerpt and revision tools" defaultOpen={!hasDraft || excerpts.rendering}>
+      <StageSection title="Drafts and revisions" summary="Render any range to check it, add notes, revise sections" defaultOpen={!hasDraft || excerpts.rendering}>
         <ExcerptPanel
           project={project}
           rendering={excerpts.rendering}
@@ -63,17 +60,7 @@ export default function ReviewStage({ board }) {
         />
       </StageSection>
 
-      <div id="mv-review-development"><DevArtifactsPanel
-        project={project}
-        busy={devArtifacts.busy}
-        onOpen={board.openArtifact}
-        onUpload={board.onUploadArtifact}
-      /></div>
-
-      <StageSection title="Making-of export">
-      <MakingOfExportPanel project={project} />
-      </StageSection>
-
+      <StageSection title="Dependency changes and repair"><DependencyImpactPanel project={project} busy={revisions.busy} onRepair={revisions.repair} /></StageSection>
     </fieldset>
   );
 }
