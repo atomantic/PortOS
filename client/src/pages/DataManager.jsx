@@ -92,15 +92,15 @@ function TombstoneGcSection() {
       if (collections) parts.push(`${collections} collection${collections === 1 ? '' : 's'}`);
       toast.success(`Pruned ${parts.join(' / ')}`);
     } else if (refusedKinds.length === 0) {
-      toast('No tombstones eligible for pruning');
+      toast('Nothing is ready to clean up.');
     }
     if (refusedKinds.length > 0) {
       const refusedLabel = [...new Set(refusedKinds.map((k) => TOMBSTONE_KIND_PLURAL[k] ?? k))].join(', ');
-      toast.warning(`Refused: ${refusedLabel} — a snapshot-mode peer has no per-record subscription for this kind. Resolve to enable pruning.`);
+      toast.warning(`Still waiting on ${refusedLabel}: open Instances, select the peer, and turn on that category under Sync Categories, or turn the peer off. Cleanup stays off so a peer that has not received the deletion cannot bring the record back.`);
     }
     setRefused(refusedKinds);
     return result;
-  }, { errorMessage: 'Tombstone sweep failed' });
+  }, { errorMessage: 'Deleted-record cleanup failed' });
 
   // Every cohort refused iff `universe` (its own cohort), `series` (the
   // pipeline cohort representative — issues always travel with series), AND
@@ -110,19 +110,20 @@ function TombstoneGcSection() {
     && refused.includes('series')
     && refused.includes('mediaCollection');
   const disabled = sweeping || refused == null || allRefused;
+  const refusedLabel = [...new Set((refused ?? []).map((k) => TOMBSTONE_KIND_PLURAL[k] ?? k))].join(', ');
   const title = allRefused
-    ? 'Every kind has an enabled snapshot-mode peer with no per-record subscription — pruning would risk resurrection. Subscribe the peer or disable it to enable GC.'
-    : 'Prune tombstones acked by every subscribed peer (skips the 24h grace).';
+    ? `Still waiting on ${refusedLabel}: open Instances, select the peer, and turn on that category under Sync Categories, or turn the peer off so a peer that has not received the deletion cannot bring the record back.`
+    : 'Runs cleanup immediately instead of waiting 24 hours. It runs only for kinds every connected peer is already receiving.';
 
   return (
     <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
       <div>
         <div className="flex items-center gap-2">
           <Trash2 size={14} className="text-gray-500" />
-          <h2 className="text-gray-400 uppercase tracking-wider text-[11px] font-medium">Tombstone GC</h2>
+          <h2 className="text-gray-400 uppercase tracking-wider text-[11px] font-medium">Deleted-record cleanup</h2>
         </div>
         <p className="mt-1 text-gray-500 text-xs">
-          Run on demand instead of waiting for the 24h orchestrator sweep.
+          Remove the leftover record of Universes, Pipeline series and issues, and Media Collections you already deleted. Automatic cleanup waits 24 hours. This runs it now.
         </p>
       </div>
       <button
@@ -132,7 +133,7 @@ function TombstoneGcSection() {
         className="bg-port-accent hover:bg-port-accent/80 disabled:opacity-40 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded text-xs font-medium transition-colors flex items-center gap-1.5"
       >
         <Trash2 size={12} />
-        {sweeping ? 'Pruning…' : 'GC tombstones now'}
+        {sweeping ? 'Cleaning up…' : 'Clean up deleted records now'}
       </button>
     </div>
   );

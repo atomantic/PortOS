@@ -55,6 +55,14 @@ describe('DataManager tombstone GC peer-refusal subscription (#8110)', () => {
     socket.emit.mockClear();
   });
 
+  it('names deleted-record cleanup in plain language (#10280)', async () => {
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Deleted-record cleanup' })).toBeInTheDocument());
+    const button = screen.getByRole('button', { name: 'Clean up deleted records now' });
+    expect(button).toHaveAttribute('title', expect.stringMatching(/24 hours/));
+    expect(screen.queryByText(/tombstone|GC|orchestrator|acked|snapshot-mode/i)).not.toBeInTheDocument();
+  });
+
   it('subscribes to the instances room on mount', async () => {
     render(<DataManager />);
     await waitFor(() => expect(screen.getByText(UNKNOWN_DESCRIPTION)).toBeInTheDocument());

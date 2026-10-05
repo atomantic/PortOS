@@ -32,8 +32,10 @@ import { sweepTombstones, getSweepStatus } from '../server/services/sharing/tomb
 
 // Mirrors `TOMBSTONE_KIND_PLURAL` in the Instances UI so the CLI output
 // matches the toast wording. Dedupe handles the series/issue cohort.
-const KIND_PLURAL = { universe: 'universes', series: 'series', issue: 'issues' };
+const KIND_PLURAL = { universe: 'universes', series: 'series', issue: 'issues', mediaCollection: 'media collections' };
+const KIND_SINGULAR = { universe: 'universe', series: 'series', issue: 'issue', mediaCollection: 'media collection' };
 const labelKinds = (kinds) => [...new Set(kinds.map((k) => KIND_PLURAL[k] ?? k))].join(', ');
+const countPhrase = (count, key) => `${count} ${count === 1 ? KIND_SINGULAR[key] : KIND_PLURAL[key]}`;
 
 function parseArgs(argv) {
   const out = { apply: false };
@@ -46,7 +48,7 @@ function parseArgs(argv) {
 async function main() {
   const { apply } = parseArgs(process.argv);
   if (!apply) {
-    console.log('🧪 DRY-RUN — pass --apply to actually prune tombstones\n');
+    console.log('🧪 DRY-RUN — pass --apply to run deleted-record cleanup\n');
   } else {
     console.log('⚠️  --apply: STOP the server before continuing or prunes may be clobbered');
     console.log('⚠️  Run `pm2 stop portos-server` first, then `pm2 start portos-server` after\n');
@@ -58,10 +60,10 @@ async function main() {
   // — too easy to misread "would prune N" as "did prune N".
   const status = await getSweepStatus();
   if (status.refused.length > 0) {
-    console.log(`⚠️  Refused kinds: ${labelKinds(status.refused)}`);
-    console.log('   (a snapshot-mode peer has no per-record subscription for this kind — resurrection risk)');
+    console.log(`⚠️  Still waiting on ${labelKinds(status.refused)}: open Instances, select the peer, and turn on that category under Sync Categories, or turn the peer off.`);
+    console.log('   Cleanup stays off so a peer that has not received the deletion cannot bring the record back.');
   } else {
-    console.log('✅ No refusals — every kind has an ack horizon');
+    console.log('✅ No refusals — deleted-record cleanup can run for every kind');
   }
 
   if (!apply) {
@@ -70,9 +72,15 @@ async function main() {
   }
 
   const result = await sweepTombstones({ graceMs: 0 });
-  console.log(`\n🗑️  Pruned: ${result.universes} universe(s), ${result.series} series, ${result.issues} issue(s)`);
+  const parts = [
+    countPhrase(result.universes, 'universe'),
+    countPhrase(result.series, 'series'),
+    countPhrase(result.issues, 'issue'),
+  ];
+  if (result.collections) parts.push(countPhrase(result.collections, 'mediaCollection'));
+  console.log(`\n🗑️  Pruned ${parts.join(' / ')}`);
   if (result.refused.length > 0) {
-    console.log(`⚠️  Skipped: ${labelKinds(result.refused)} (resurrection-safety refusal)`);
+    console.log(`⚠️  Skipped ${labelKinds(result.refused)}: open Instances, select the peer, and turn on that category under Sync Categories, or turn the peer off.`);
   }
 }
 
