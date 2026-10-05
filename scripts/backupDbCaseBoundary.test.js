@@ -73,6 +73,9 @@ it('keeps a timed-out case between restores from overlapping the next case', () 
         lifecycleCases('owned', owned.it);
       });
     `);
+    // CI's github-actions reporter repeats each failure as an annotation; the
+    // fixture's own default-reporter output is what the assertions count.
+    delete options.env.GITHUB_ACTIONS;
     const result = spawnSync(process.execPath, args, options);
     const output = `${result.stdout}\n${result.stderr}`;
     expect(result.error).toBeUndefined();
