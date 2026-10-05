@@ -18,6 +18,7 @@ import { codeAnimationStageRunSchema } from '../../lib/codeAnimationProjects.js'
 import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { PATHS } from '../../lib/paths.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { htmlCompositionContractSchema, validateRequest } from '../../lib/validation.js';
 import { emitCodeAnimationChanged } from '../socket.js';
 import { analyzeEvidence, evaluateVerdict } from './evidence.js';
@@ -71,7 +72,10 @@ function snapshot(ctx) {
 
 async function persist(ctx, status = 'running', { completed = false, revisionId = null } = {}) {
   ctx.state.spent.elapsedMs = Date.now() - ctx.startedAt + ctx.state.spent.priorElapsedMs;
-  await store.saveStageRun(ctx.runId, status, snapshot(ctx), { completed, revisionId });
+  // The run row first names the write-once run artifacts (frames, soundtrack,
+  // scene bake) and the published output, so it commits under the backup
+  // lease (#9982): a cut copies files before it dumps rows.
+  await withBackupAssetPublication(() => store.saveStageRun(ctx.runId, status, snapshot(ctx), { completed, revisionId }));
   emitCodeAnimationChanged(ctx.projectId);
 }
 
@@ -347,7 +351,8 @@ async function repairStage(ctx, revision, findings) {
       files: pkg.files.map(({ content: _content, ...file }) => file), storage, createdAt: iso(),
       parentRevisionId: revision.id, repair: { runId: ctx.runId, stageRunId: entry.stageRunId, intent },
     };
-    await store.commitRepairRevision(ctx.projectId, created);
+    // The repaired revision row first names the tree staged above (#9982).
+    await withBackupAssetPublication(() => store.commitRepairRevision(ctx.projectId, created));
     ctx.state.repairs.push({ revisionId: id, fromRevisionId: revision.id, sourceHash, findingKinds: intent.findingKinds, tokens: out.tokens || 0 });
     ctx.state.currentRevisionId = id;
     return { intent, toRevisionId: id, toSourceHash: sourceHash };

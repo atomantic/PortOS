@@ -20,6 +20,7 @@ import { makePathResolver } from '../../lib/pathSafety.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
 import { UPLOAD_AUDIO_EXTENSIONS } from '../../lib/mimeTypes.js';
 import { normalizeWaveSketch } from '../../lib/waveSketch.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { SUPPORTED_AUDIO_EXTENSIONS } from '../pipeline/musicLibrary.js';
 import { resolveMoodBoardStyleSource as resolveMoodBoard, resolveUniverseStyleSource as resolveUniverse } from '../creativeStyleSources.js';
 import {
@@ -456,16 +457,21 @@ export async function startCodeAnimationGeneration(input) {
   console.log(`🎞️ Code animation generation ${id.slice(0, 8)} started on ${provider.id}`);
   runGeneration({ provider, model: input.model, effort: input.effort, prompt: built.prompt, referencePaths: built.referencePaths })
     .then(async ({ html, provider: ranOn, model, runId }) => {
-      await saveCodeAnimationHtml(id, html);
-      const completedAt = new Date().toISOString();
-      await saveCodeAnimationJobRecord({
-        ...job,
-        status: 'completed',
-        providerId: ranOn,
-        model,
-        runId,
-        completedAt,
-        updatedAt: completedAt,
+      // The HTML file and the completed row that first names it are one
+      // backup-admitted workflow (#9982), so a snapshot never dumps a
+      // completed job whose file its copy missed.
+      await withBackupAssetPublication(async () => {
+        await saveCodeAnimationHtml(id, html);
+        const completedAt = new Date().toISOString();
+        await saveCodeAnimationJobRecord({
+          ...job,
+          status: 'completed',
+          providerId: ranOn,
+          model,
+          runId,
+          completedAt,
+          updatedAt: completedAt,
+        });
       });
       emitCodeAnimationChanged(id);
       activeJobs.delete(id);

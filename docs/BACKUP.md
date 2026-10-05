@@ -90,7 +90,9 @@ Admission inventory (`withBackupAssetPublication`):
 | Rigging and animation retarget (`rigging/autoSkin.js`, `rigging/retarget.js`) | Covered (#9982 partial): the pair is published into its own directory and verified outside admission; the row that first names it takes the lease |
 | Catalog ingredient media and voice-memo scraps, imported round reference audio, Persistent Mind screenshots and songbook attachments (`catalogMedia.js`, `catalogIngestSources.js`, `roundReferenceAudioImport.js`, `persistentMindAttachments.js`, `routes/brainSongbook.js`) | Covered (#9982 partial): the row that first names a landed file takes the lease; the file-backed Persistent Mind and songbook records hold it through their deletions too |
 | Mood board re-hosting, Pinterest and X imports, frame extraction and collages (`moodBoard/*.js`) | Covered (#9982 partial): downloads and renders run outside admission; the board row that first names them, and each in-place rewrite of a URL-keyed download, take the lease |
-| Remaining durable owners, classified by domain in `backupAssetOwners.js` | Outstanding (#9982): sprites, video generation, image generation tails, code animation, peer and share imports, archive and document imports |
+| Code Animation generated HTML, package import and repair revisions, production stage-run artifacts, Blender film publication and the soundtrack mux install (`codeAnimation/index.js`, `projects.js`, `stages.js`, `blenderRender.js`, `sound.js`) | Covered (#9982 partial): write-once revision trees and run artifacts land first, and the revision, run or history row that first names them commits under the lease; the mux's in-place install over an already-named render takes it too |
+| Code Animation export staging and output acceptance (`codeAnimation/export.js`, `codeAnimation/acceptance.js`) | Reference-only: staging directories and worker workspaces are scratch no row names, and acceptance names a render that was already durable |
+| Remaining durable owners, classified by domain in `backupAssetOwners.js` | Outstanding (#9982): sprites, video generation, image generation tails, peer and share imports, archive and document imports |
 | Durable replacement/deletion owners not yet classified | Outstanding (#9982) |
 | Snapshot consistency claim (`backupAssetOwners.js`, see below) | Covered (#9982 partial) |
 | Database restore execution and backend-cutover acceptance (`backup.js`, `databasePreflight.js`) | Covered (#9983) |
@@ -210,6 +212,19 @@ downloads are keyed by their source URL and rewrite the file in place on a
 repeat, so that write takes the lease too. Removing a board item or a board
 removes no bytes. A row that fails after its file landed leaves an unreferenced
 file, as before.
+
+Code Animation writes its HTML, revision trees and run artifacts before the row
+that first names them. A generated animation's HTML and the job row marking it
+completed hold one lease. A package import or repair stages its revision into a
+fresh write-once directory outside admission, then commits the revision row
+under the lease; the import's `staging` run row names that directory before
+its bytes land, but it is never a revision and a restart marks it interrupted.
+Every production run-row write takes the lease, because the row is what first
+names the stage's frames, soundtrack WAV and Blender bake. A Blender film is
+copied under a fresh name and muxed before its history entry commits under the
+lease. A browser render's history entry is written by the HTML-composition job
+(still outstanding with video generation), so the soundtrack mux holds the lease
+across its in-place install over that file, but not across the encode.
 
 **Snapshot consistency claim.** `server/lib/backupAssetOwners.js` inventories
 each durable owner as `admitted`, `reference-only` or `outstanding`, and its
