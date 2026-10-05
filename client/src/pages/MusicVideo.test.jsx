@@ -44,6 +44,9 @@ vi.mock('../hooks/useMusicVideoProductionReview.js', () => ({ default: ({ projec
 }) }));
 
 vi.mock('../services/apiMusicVideo.js', () => ({
+  getMusicVideoMakingOfCatalog: vi.fn(async id => ({ project: { id, name: 'Example making-of project', version: 1 }, snapshot: 'a'.repeat(64), assets: [] })),
+  previewMusicVideoMakingOf: vi.fn(),
+  exportMusicVideoMakingOf: vi.fn(),
   listMusicVideoProjects: vi.fn(async () => []),
   listMusicVideoProjectSummaries: vi.fn(async (params, options) => {
     const res = await listMusicVideoProjects(params, options);
