@@ -19,6 +19,7 @@ import { normalizeMusicVideoGrade } from '../../lib/musicVideoGrade.js';
 
 import { randomUUID } from 'crypto';
 import { trimTo } from '../../lib/textUtils.js';
+import { filmStyleIdSchema } from '../../lib/filmStyleGrammarValidation.js';
 import {
   musicVideoEidoverseSceneSchema,
   MUSIC_VIDEO_COMPOSITION_MODES as COMPOSITION_MODES,
@@ -155,6 +156,8 @@ export function normalizeComposition(input) {
     version: COMPOSITION_VERSION,
     mode: pick(input.mode, COMPOSITION_MODES, 'concat'),
     ...(['canvas', 'three'].includes(input.authoringRenderer) ? { authoringRenderer: input.authoringRenderer } : {}),
+    // Kept verbatim when well-formed so a peer on an older or newer catalog round-trips it (#10254).
+    ...(filmStyleIdSchema.safeParse(input.styleGrammarId).success ? { styleGrammarId: input.styleGrammarId } : {}),
     textCues,
     style: {
       color: typeof style.color === 'string' && /^#[0-9a-f]{6}$/i.test(style.color) ? style.color.toLowerCase() : '#ffffff',

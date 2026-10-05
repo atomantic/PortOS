@@ -13,7 +13,7 @@
  */
 import { ServerError } from './errorHandler.js';
 import { trimTo } from './textUtils.js';
-import { FILM_STYLE_PARTS, filmStylePartsSchema } from './filmStyleGrammarValidation.js';
+import { FILM_STYLE_PARTS, filmStyleIdSchema, filmStylePartsSchema } from './filmStyleGrammarValidation.js';
 
 /** Upper bound for one rendered grammar prompt section, in characters. */
 export const FILM_STYLE_PROMPT_MAX_CHARS = 2500;
@@ -280,6 +280,9 @@ const GRAMMARS_BY_ID = new Map(FILM_STYLE_GRAMMARS.map(grammar => [grammar.id, g
 
 /** The grammar with this id, or null. */
 export const getFilmStyleGrammar = (id) => GRAMMARS_BY_ID.get(id) ?? null;
+
+/** A request field naming a catalog grammar: kebab-case id that exists in this build. */
+export const knownFilmStyleIdSchema = filmStyleIdSchema.refine(id => GRAMMARS_BY_ID.has(id), 'Unknown film style grammar');
 
 /** Picker projection: enough to choose a grammar without its full text. */
 export const summarizeFilmStyleGrammar = ({ id, label, category, summary, nativeMoves }) => ({

@@ -177,6 +177,27 @@ describe('treatment-driven mixed-media document authoring', () => {
     expect(await readFile(join(PATHS.data, candidate.directory, 'generated.js'), 'utf8')).toContain('function render(ctx, env)');
   });
 
+  it('carries a film style grammar in the shared style contract, reuses it for Regenerate section, and goes stale when it changes', async () => {
+    const id = await fixture();
+    await generateMixedMediaDocument(id);
+    expect(h.prompt).not.toContain('FILM STYLE GRAMMAR');
+    const plain = await projects.getProject(id);
+    await projects.updateProject(id, { composition: { ...plain.composition, styleGrammarId: 'risograph-two-ink' } });
+    const first = (await generateMixedMediaDocument(id)).document;
+    expect(h.prompt).toContain('FILM STYLE GRAMMAR');
+    expect(h.prompt).toContain('## Film style grammar: ');
+    const manifest = await manifestAt(first);
+    expect(manifest.sharedStyle.styleGrammarId).toBe('risograph-two-ink');
+    expect(manifest.sharedStyle.styleLines.join('\n')).toContain('Camera vocabulary:');
+    h.response = response({ still: '#00ff00' });
+    await regenerateMixedMediaSection(id, 'still', { expectedDraft: first.directory });
+    expect(h.prompt).toContain('## Film style grammar: ');
+    const current = await projects.getProject(id);
+    await projects.updateProject(id, { composition: { ...current.composition, styleGrammarId: 'blueprint-draft' } });
+    expect((await readMixedMediaCandidate(id)).stale).toBe(true);
+    await expect(acceptMixedMediaDocument(id, current.composition.documentDraft.directory)).rejects.toMatchObject({ code: 'COMPOSITION_DRAFT_STALE' });
+  });
+
   it('revises one section, preserves the other functions, and refuses a stale acceptance', async () => {
     const id = await fixture();
     const motionLanguage = 'Energy: playful. 0–10s unfold on downbeats; 20–30s expand the chorus gesture.';

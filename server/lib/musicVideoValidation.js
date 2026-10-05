@@ -11,6 +11,7 @@ import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicV
  */
 
 import { z } from 'zod';
+import { knownFilmStyleIdSchema } from './filmStyleGrammars.js';
 
 const makingOfId = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
 export const musicVideoMakingOfSelectionSchema = z.object({
@@ -452,6 +453,8 @@ export const musicVideoCompositionSchema = z.object({
   version: z.literal(1).optional(),
   mode: z.enum(MUSIC_VIDEO_COMPOSITION_MODES).optional(),
   authoringRenderer: z.enum(['canvas', 'three']).optional(),
+  // Curated film style grammar the document authoring prompt follows (#10254).
+  styleGrammarId: knownFilmStyleIdSchema.optional(),
   cutting: z.enum(MUSIC_VIDEO_CUTTING_MODES).optional(),
   grade: z.object({
     preset: z.enum(MUSIC_VIDEO_GRADE_PRESETS).optional(),

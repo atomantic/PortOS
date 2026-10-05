@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { parse } from '@babel/parser';
 import { ServerError } from '../../lib/errorHandler.js';
+import { getFilmStyleGrammar, renderFilmStyleGrammarPrompt } from '../../lib/filmStyleGrammars.js';
 import { resolveNarrativeEvents } from '../../lib/musicVideoNarrativeEvents.js';
 import { isDeterministicCodeSource } from '../../lib/musicVideoValidation.js';
 import { summarizeMusicVideoMediumPlan } from '../../lib/musicVideoMediumPlan.js';
@@ -93,6 +94,15 @@ function checkedFunction(source) {
   return source;
 }
 
+// The full grammar rides in the shared style contract so every section and every
+// Regenerate-section call reads the same medium rules. An id this build does not
+// know (a newer peer's catalog) is skipped rather than failing generation.
+function styleGrammarLines(project) {
+  const id = project.composition?.styleGrammarId;
+  if (!id || !getFilmStyleGrammar(id)) return [];
+  return ['FILM STYLE GRAMMAR (medium rules; the approved palette and the lyric-readability rules always win over any colour or type it implies):', renderFilmStyleGrammarPrompt(id)];
+}
+
 function basisFor(project, includeEvents = true) {
   // These are all inputs that can change which pixels or authoring directions
   // a section means. A new candidate cannot publish across such an edit.
@@ -112,6 +122,8 @@ function basisFor(project, includeEvents = true) {
     lyricMarkers: project.lyricMarkers || null,
     scenes: project.scenes || [],
     compositionStyle: project.composition?.style || { color: '#ffffff', font: 'sans' },
+    // Present only when chosen, so a project without one keeps its existing basis (#10254).
+    ...(project.composition?.styleGrammarId ? { styleGrammarId: project.composition.styleGrammarId } : {}),
     ...(includeEvents ? { eventInputs: eventInputs(project) } : {}),
   };
   return createHash('sha256').update(JSON.stringify(input)).digest('hex');
@@ -241,7 +253,8 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
     palette: context.palette,
     treatment: { brief: project.treatment?.brief || null, motifs: project.treatment?.arc?.motifs || [], arc: project.treatment?.arc?.beats || [], styleLook: project.treatment?.styleLook || null },
     visualSpec: project.visualSpec || null,
-    styleLines: await styleLinesFor(project),
+    styleLines: [...await styleLinesFor(project), ...styleGrammarLines(project)],
+    ...(project.composition?.styleGrammarId ? { styleGrammarId: project.composition.styleGrammarId } : {}),
   };
   const prompt = buildMixedMediaDocumentPrompt({
     renderer: musicVideoDocumentRenderer(project), mediaMode: musicVideoMediaMode(project),
