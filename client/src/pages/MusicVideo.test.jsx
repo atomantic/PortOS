@@ -77,6 +77,9 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   musicVideoVocalSeparationEventsUrl: (jobId) => `/api/music-video/vocal-stem/separate/${jobId}/events`,
   cancelMusicVideoVocalSeparation: vi.fn(async () => ({ ok: true })),
   getMusicVideoActiveRender: vi.fn(async () => ({ jobId: null })),
+  getMusicVideoSharingCopy: vi.fn(async () => ({ copy: null, jobId: null })),
+  prepareMusicVideoSharingCopy: vi.fn(async () => ({ jobId: 'sharing-example' })),
+  musicVideoSharingCopyDownloadUrl: id => `/api/music-video/${id}/sharing-copy/download`,
   getMusicVideoSceneJobs: vi.fn(async () => ({ jobs: [] })),
   renderMusicVideoProject: vi.fn(async () => ({ jobId: 'job-1' })),
   musicVideoRenderEventsUrl: (jobId) => `/api/music-video/render/${jobId}/events`,
@@ -715,9 +718,14 @@ describe('MusicVideo render control (#1760)', () => {
     expect(renderBtn).toHaveProperty('disabled', true);
   });
 
-  it('shows the rendered-video link once a project carries a renderHistoryId', async () => {
+  it('keeps full-quality and sharing controls together in the compact native-final disclosure', async () => {
     await openProject({ ...PROJECT_WITH_CLIP, renderHistoryId: 'rh-9' }, 'review');
-    await screen.findByText(/Download MP4/i);
+    const fullQuality = await screen.findByRole('link', { name: /Download MP4/i });
+    const sharing = await screen.findByRole('button', { name: 'Prepare sharing copy' });
+    const disclosure = fullQuality.closest('details');
+    expect(disclosure).toHaveAttribute('id', 'mv-final-video');
+    expect(disclosure).toContainElement(sharing);
+    expect(sharing).toHaveClass('min-h-[44px]');
     const link = await screen.findByText(/Open in Media History/i);
     // Media History matches video items by their `video:<id>` key via ?preview=.
     expect(link.closest('a').getAttribute('href')).toContain('preview=video%3Arh-9');

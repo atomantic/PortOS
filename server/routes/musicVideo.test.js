@@ -2,6 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { mkdtemp, open, rename, rm, symlink, writeFile } from 'fs/promises';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { request as httpRequest } from 'http';
+import { Readable } from 'stream';
+import { startLoopbackServer, closeLoopbackServer } from '../lib/testHelper.js';
+
+vi.mock('../services/musicVideo/sharingCopy.js', () => ({ getSharingCopy: vi.fn(), prepareSharingCopy: vi.fn(), sharingCopyDownload: vi.fn() }));
+import { sharingCopyDownload } from '../services/musicVideo/sharingCopy.js';
 
 vi.mock('../services/musicVideo/projects.js', () => ({
   listProjects: vi.fn(async () => [{ id: 'mv-1', name: 'A' }]),
@@ -915,4 +924,92 @@ it('validates a project moodboard as up to eight bounded gallery images', async 
   for (const refs of [[...styleReferences, styleReferences[0]], [{ imageId: '../escape.png' }], [{ imageId: 'style.png', caption: 'a'.repeat(501) }]]) {
     expect((await request(app).patch('/api/music-video/mv-1').send({ styleReferences: refs })).status).toBe(400);
   }
+});
+
+describe('sharing downloads retain verified descriptor ownership', () => {
+  const url = '/api/music-video/example/sharing-copy/download';
+  async function fixture(run, size = 32) {
+    const root = await mkdtemp(join(tmpdir(), 'sharing-http-'));
+    const path = join(root, 'copy.mp4');
+    await writeFile(path, Buffer.from('0123456789abcdef'.repeat(Math.ceil(size / 16)).slice(0, size)));
+    const file = await open(path, 'r');
+    const modifiedAt = new Date('2026-01-01T00:00:00Z');
+    const copy = { filename: 'sharing.mp4', bytes: size, hash: 'a'.repeat(64) };
+    const app = express();
+    app.use('/api/music-video', musicVideoRoutes);
+    sharingCopyDownload.mockResolvedValue({ file, copy, modifiedAt });
+    try { await run({ app, file, path, root, etag: `"${copy.hash}"` }); }
+    finally { await file.close(); await rm(root, { recursive: true, force: true }); }
+  }
+
+  it.each(['replacement', 'symlink'])('streams the verified descriptor after a %s pathname swap', async swap => fixture(async ({ app, file, path, root }) => {
+    await rename(path, `${path}.old`);
+    const different = join(root, 'different.mp4');
+    await writeFile(different, 'replacement bytes');
+    if (swap === 'symlink') await symlink(different, path);
+    else await writeFile(path, 'replacement bytes');
+    const response = await request(app).get(url);
+    expect(response.status).toBe(200);
+    expect(response.text).toBe('0123456789abcdef0123456789abcdef');
+    expect(response.headers['content-disposition']).toContain('attachment; filename="sharing.mp4"');
+    expect(response.headers['content-type']).toContain('video/mp4');
+    expect(response.headers['cache-control']).toBe('private, no-store');
+    await vi.waitFor(() => expect(file.fd).toBe(-1));
+  }));
+
+  it.each([
+    ['HEAD', {}, 200, ''],
+    ['GET', { Range: 'bytes=2-5' }, 206, '2345'],
+    ['GET', { Range: 'bytes=-4' }, 206, 'cdef'],
+    ['GET', { Range: 'bytes=999-' }, 416, ''],
+    ['GET', { Range: 'invalid' }, 200, '0123456789abcdef0123456789abcdef'],
+    ['GET', { Range: 'bytes=0-1,4-5' }, 200, '0123456789abcdef0123456789abcdef'],
+    ['GET', { Range: 'bytes=2-5', 'If-Range': '"outdated"' }, 200, '0123456789abcdef0123456789abcdef'],
+    ['GET', { 'If-Match': '"outdated"' }, 412, ''],
+    ['GET', { 'If-Unmodified-Since': 'Wed, 01 Jan 2025 00:00:00 GMT' }, 412, ''],
+  ])('supports %s %j with status %i and closes the descriptor', async (method, headers, status, text) => fixture(async ({ app, file }) => {
+    let query = method === 'HEAD' ? request(app).head(url) : request(app).get(url);
+    for (const [key, value] of Object.entries(headers)) query = query.set(key, value);
+    const response = await query;
+    expect(response.status).toBe(status);
+    expect(response.text).toBe(text);
+    if (status === 206) expect(response.headers['content-range']).toMatch(/^bytes \d+-\d+\/32$/);
+    if (status === 416) expect(response.headers['content-range']).toBe('bytes */32');
+    await vi.waitFor(() => expect(file.fd).toBe(-1));
+  }));
+
+  it('supports conditional 304 and a current If-Range without reopening the path', async () => {
+    await fixture(async ({ app, file, etag }) => {
+      const response = await request(app).get(url).set('If-None-Match', etag).set('Cache-Control', 'max-age=0');
+      expect(response.status).toBe(304);
+      expect(response.text).toBe('');
+      await vi.waitFor(() => expect(file.fd).toBe(-1));
+    });
+    await fixture(async ({ app, file, etag }) => {
+      const response = await request(app).get(url).set('Range', 'bytes=0-3').set('If-Range', etag);
+      expect(response.status).toBe(206);
+      expect(response.text).toBe('0123');
+      await vi.waitFor(() => expect(file.fd).toBe(-1));
+    });
+  });
+
+  it('closes the descriptor on client disconnect and stream error', async () => {
+    await fixture(async ({ app, file }) => {
+      const server = await startLoopbackServer(app);
+      try {
+        await new Promise((resolve, reject) => {
+          const req = httpRequest(`http://127.0.0.1:${server.address().port}${url}`, response => {
+            response.once('data', () => { req.destroy(); response.destroy(); resolve(); });
+          });
+          req.once('error', reject); req.end();
+        });
+        await vi.waitFor(() => expect(file.fd).toBe(-1));
+      } finally { server.closeAllConnections(); await closeLoopbackServer(server); }
+    }, 5_000_000);
+    await fixture(async ({ app, file }) => {
+      vi.spyOn(file, 'createReadStream').mockImplementation(() => new Readable({ read() { this.destroy(new Error('Synthetic read failure')); } }));
+      await expect(request(app).get(url)).rejects.toThrow();
+      await vi.waitFor(() => expect(file.fd).toBe(-1));
+    });
+  });
 });

@@ -1,3 +1,4 @@
+import SharingCopyPanel from '../SharingCopyPanel.jsx';
 import DependencyImpactPanel from '../DependencyImpactPanel.jsx';
 import RenderStatusPanel, { RenderFailure } from '../RenderStatusPanel.jsx';
 import ExcerptPanel from '../ExcerptPanel.jsx';
@@ -37,6 +38,7 @@ export default function ReviewStage({ board }) {
           finalVideo={finalVideo}
           onOpenPreview={board.openPreview}
         />
+        {project.renderHistoryId && <SharingCopyPanel key={`${project.id}:${project.renderHistoryId}`} projectId={project.id} />}
       </StageSection>
 
       <StageSection title="Excerpt and revision tools" defaultOpen={!hasDraft || excerpts.rendering}>

@@ -174,7 +174,7 @@ async function safeUnlinkUpload(path) {
 // edit to one of them rather than a mode string slipping through.
 // 'supercollider' (#9413) is likewise local-only: it executes untrusted source
 // inside this machine's verified container, so no peer map names it.
-export const JOB_KINDS = Object.freeze(['video', 'video-upscale', 'html-composition', 'image', 'training', 'audio', 'supercollider']);
+export const JOB_KINDS = Object.freeze(['video', 'video-upscale', 'video-sharing', 'html-composition', 'image', 'training', 'audio', 'supercollider']);
 export const JOB_STATUSES = Object.freeze(['queued', 'running', 'completed', 'failed', 'canceled']);
 
 // Returns a Promise that resolves to the gen module for the given job's
@@ -189,6 +189,7 @@ function getGenModuleForJob(job) {
   if (isRemoteMediaJob(job)) return REMOTE_MEDIA_MODULES[job.kind]();
   if (job.kind === 'html-composition') return import('../htmlComposition/index.js');
   if (job.kind === 'video-upscale') return import('../videoGen/upscaleJob.js');
+  if (job.kind === 'video-sharing') return import('../musicVideo/sharingCopy.js');
   if (job.kind === 'video' && job.params?.mode === IMAGE_GEN_MODE.GROK) return import('../videoGen/grok.js');
   if (job.kind === 'video' && job.params?.mode === VIDEO_GEN_MODE.FAL) return import('../videoGen/fal.js');
   if (job.kind === 'video' && job.params?.mode === VIDEO_GEN_MODE.REACTOR) return import('../videoGen/reactor.js');
@@ -702,6 +703,10 @@ export async function initMediaJobQueue() {
           error: 'interrupted by restart',
           completedAt: new Date().toISOString(),
         };
+        if (j.kind === 'video-sharing') {
+          const { cleanupInterruptedSharingCopy } = await import('../musicVideo/sharingCopy.js');
+          await cleanupInterruptedSharingCopy(j.id).catch(err => console.error(`❌ Interrupted sharing copy cleanup failed: ${err.message}`));
+        }
         archive.push(failed);
         restartedFailedIds.push(failed.id);
         // The failed job will never reach the worker's cleanup, so any
@@ -1408,7 +1413,7 @@ async function runJobLifecycle(job, markDispatched, permit) {
 
   await resolveLiveParams(job, safeParams);
 
-  const emitter = job.kind === 'video' || job.kind === 'video-upscale' || job.kind === 'html-composition' ? videoGenEvents
+  const emitter = job.kind === 'video' || job.kind === 'video-upscale' || job.kind === 'video-sharing' || job.kind === 'html-composition' ? videoGenEvents
     : job.kind === 'training' ? trainingEvents
     : job.kind === 'audio' || job.kind === 'supercollider' ? audioGenEvents
     : imageGenEvents;
@@ -1446,7 +1451,7 @@ async function runJobLifecycle(job, markDispatched, permit) {
     if (isCloudImageJob(job)) return WATCHDOG_CODEX_MS;
     // An upscale is a single GPU render with no chunking, so it takes the
     // video idle window flat rather than the chunk-scaled one.
-    if (job.kind === 'video-upscale') return WATCHDOG_VIDEO_MS;
+    if (job.kind === 'video-upscale' || job.kind === 'video-sharing') return WATCHDOG_VIDEO_MS;
     if (job.kind === 'video') return WATCHDOG_VIDEO_MS * Math.max(1, Number(safeParams.chunks) || 1);
     if (job.kind === 'training') return WATCHDOG_TRAINING_MS;
     if (job.kind === 'audio') return WATCHDOG_AUDIO_MS;
@@ -1552,6 +1557,7 @@ async function runJobLifecycle(job, markDispatched, permit) {
       : job.kind === 'video' ? mod.generateVideo(request)
       : job.kind === 'html-composition' ? mod.renderComposition(request)
       : job.kind === 'video-upscale' ? mod.runVideoUpscale(request)
+      : job.kind === 'video-sharing' ? mod.runSharingCopy(request)
       : job.kind === 'training' ? mod.runTraining(request)
       : job.kind === 'audio' ? mod.generateAudio(request)
       : job.kind === 'supercollider' ? mod.renderSuperCollider(request)
