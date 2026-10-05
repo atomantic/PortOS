@@ -83,7 +83,12 @@ Admission inventory (`withBackupAssetPublication`):
 | Music Video final and excerpt renders, publishing-kit builds and composition document versions (`musicVideo/render.js`, `musicVideo/excerptRender.js`, `musicVideo/publishKit.js`, `musicVideo/compositionDocument.js`) | Covered (#9982 partial): the encoder or import writes the files in place; the history entry and project row that first name them commit under one lease |
 | Music Video excerpt deletion (`musicVideo/excerptService.js`) | Reference-only: the project row drops the excerpt before its unreferenced video and contact sheet are unlinked |
 | Music Video performance repair, MIDI transcription and the autonomous Suno song (`musicVideo/performanceRepair.js`, `audioMidiTranscription.js`, `musicVideo/autonomousService.js`) | Covered (#9982 partial): the boundary frame or `.mid` is written first; the row that first names it (repair revision, project MIDI pointer, track render) commits under one lease, and a declined MIDI result is unlinked inside it |
-| Remaining durable owners, classified by domain in `backupAssetOwners.js` | Outstanding (#9982): sprites, video generation, image generation tails, Writers Room drafts, code animation, peer and share imports, attachments and catalog media, mood boards, image-to-3D and rigging, archive and document imports |
+| Writers Room draft bodies: new work, draft save and version snapshot (`writersRoom/local.js`) | Covered (#9982 partial): each holds one lease from the `.md` write through the manifest row that names it; a draft save replaces its body in place |
+| Writers Room tombstone prune (`writersRoom/sync.js`) and polish snapshots (`writersRoom/polish.js`) | Reference-only: the prune drops the rows before it removes their directories, and polish snapshots are JSON files no row names (revert writes the draft through the admitted save) |
+| Image-to-3D mesh completion and AR export (`imageTo3d/models.js`) | Covered (#9982 partial): the runner writes `model.glb` outside admission and only the row that marks it ready takes the lease; the AR export's file write and the row stamping it are one lease |
+| Image-to-3D record deletion (`imageTo3d/models.js`) | Reference-only: the row is soft-deleted before the render directory is removed |
+| Rigging and animation retarget (`rigging/autoSkin.js`, `rigging/retarget.js`) | Covered (#9982 partial): the pair is published into its own directory and verified outside admission; the row that first names it takes the lease |
+| Remaining durable owners, classified by domain in `backupAssetOwners.js` | Outstanding (#9982): sprites, video generation, image generation tails, code animation, peer and share imports, attachments and catalog media, mood boards, archive and document imports |
 | Durable replacement/deletion owners not yet classified | Outstanding (#9982) |
 | Snapshot consistency claim (`backupAssetOwners.js`, see below) | Covered (#9982 partial) |
 | Database restore execution and backend-cutover acceptance (`backup.js`, `databasePreflight.js`) | Covered (#9983) |
@@ -176,6 +181,17 @@ renamed into place before the row that selects it commits under a lease, and
 pruning removes only version folders no row names. The in-flight
 `renderPartialFilename` / excerpt `partialFilename` marks still name a file the
 encoder is writing, as before; boot recovery clears them.
+
+Writers Room draft saves hold one lease from the in-place `.md` replacement
+through the manifest row, so a cut never copies old prose beside a row that
+describes the new text; creating a work and snapshotting a version do the same
+for the new body file. A mesh the image-to-3D runner writes in place stays
+unreferenced until the row that marks it ready commits, and that commit takes the
+lease; a cut taken mid-render dumps the `generating` row, which restore recovers
+as failed. Rig and retarget pairs are never replaced: the verified pair sits in
+its own directory and only the row naming it takes the lease. Deleted works and
+models keep their directories until tombstone GC or the render settles, after
+their rows stopped naming them.
 
 **Snapshot consistency claim.** `server/lib/backupAssetOwners.js` inventories
 each durable owner as `admitted`, `reference-only` or `outstanding`, and its
