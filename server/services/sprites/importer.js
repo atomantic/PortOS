@@ -26,6 +26,7 @@ import { join, basename, dirname } from 'path';
 import { readdir } from 'fs/promises';
 import { PATHS, ensureDir, sha256File, atomicWrite, pathExists, readJSONFile, expandHome, copyFileGuarded, rmGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { upsertImportedRecord } from './records.js';
 import {
   spriteDir,
@@ -532,7 +533,13 @@ async function importPropsFamily({ sourceRoot, familyId, srcFamilyDir }) {
 }
 
 /**
- * Import approved sprite assets from `sourceRoot`. Options:
+ * Import approved sprite assets from `sourceRoot`. Each subject (a character or a
+ * props family) holds one backup admission lease from its first copied byte
+ * through the record row that marks it imported (#9982): a re-import copies over
+ * files an existing row already describes, and a snapshot taken halfway would
+ * pair them with a row that says the import finished. A multi-subject import
+ * releases the lease between subjects so a cut waits for one subject, not all.
+ * Options:
  *  - characters: limit to these character ids (default: all specs found)
  *  - includeProps: also import game/assets/sprites/ prop families (default true)
  *
@@ -583,7 +590,9 @@ export async function importFromSource({ sourceRoot, characters, includeProps = 
       allSpecCharacterIds.add(characterId);
       if (wanted && !wanted.has(characterId)) continue;
       characterIds.add(characterId);
-      results.push(await importCharacter({ sourceRoot, characterId, spec, specPath, selection }));
+      results.push(await withBackupAssetPublication(
+        () => importCharacter({ sourceRoot, characterId, spec, specPath, selection }),
+      ));
     }
   }
 
@@ -595,7 +604,9 @@ export async function importFromSource({ sourceRoot, characters, includeProps = 
       // spec-declared character, imported this run or not.
       if (allSpecCharacterIds.has(entry.name)) continue;
       if (!isValidSpriteId(entry.name)) continue;
-      results.push(await importPropsFamily({ sourceRoot, familyId: entry.name, srcFamilyDir: join(propsDir, entry.name) }));
+      results.push(await withBackupAssetPublication(
+        () => importPropsFamily({ sourceRoot, familyId: entry.name, srcFamilyDir: join(propsDir, entry.name) }),
+      ));
     }
   }
 

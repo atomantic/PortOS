@@ -43,6 +43,7 @@ import { readdir } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { atomicWrite, ensureDir, pathExists, readJSONFile, sha256File, rmGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { executeTuiRun } from '../tuiPromptRunner.js';
 import { GROK_TUI_ID } from '../../lib/grok.js';
 import { resolveGrokDuration } from '../../lib/grokVideoClip.js';
@@ -412,7 +413,11 @@ async function runTrackTuiRender(row, recordId, { runId, direction, generatedAbs
     timeout: GROK_TUI_TIMEOUT_MS,
     label: row.directional ? `sprite ${row.id} ${recordId}/${direction}` : `sprite ${row.id} ${recordId}`,
   }).catch((err) => console.error(`❌ sprite ${row.id} grok-tui run failed ${recordId}/${runId}: ${err?.message || err}`));
-  await withAnimationWriteTail(recordId, () => attachTrackTuiResult(row.id, recordId, runId, videoAbs));
+  // Lease before the tail, as in the completion hook (#9982): the clip, its decoded
+  // frames and the run record naming them are one publication.
+  await withBackupAssetPublication(() => withAnimationWriteTail(
+    recordId, () => attachTrackTuiResult(row.id, recordId, runId, videoAbs),
+  ));
 }
 
 export async function attachTrackTuiResult(trackId, recordId, runId, videoAbs) {

@@ -249,21 +249,43 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     status: 'reference-only',
     modules: ['services/codeAnimation/export.js', 'services/codeAnimation/acceptance.js'],
   },
+  {
+    // Reference lock and the three unlocks (manifest plus the row's status and
+    // frozen chroma key), walk set finalization (the walk set, then the row that
+    // says walk-complete) and the unlock, reopen and anchor/turnaround revision
+    // paths that remove it and downgrade the row, and each source-pipeline import
+    // subject (the copied tree, then the row that marks it imported). The grok-TUI
+    // lanes' attach (walk and named tracks) runs outside the completion hook, so
+    // it takes its own lease. Every one takes the lease before the per-record
+    // write tail, like the completion hook.
+    id: 'sprite-reference-walk-and-import-commits',
+    status: 'admitted',
+    modules: [
+      'services/sprites/reference.js', 'services/sprites/walk.js', 'services/sprites/importer.js',
+      'services/sprites/animationTrackWorkflow.js',
+    ],
+  },
+  {
+    // The sprite row holds metadata and workflow state only, never a path under
+    // data/ (`spriteBackupAdmission.test.js` pins its shape), so a dumped row
+    // cannot dangle at bytes these workflows write, replace or delete: generation
+    // starts and reference uploads, candidate and run records, selections, loop
+    // trims, atlas compile and its runtime pointer, publication history, asset
+    // deletion, and the publish-binding and chroma-key pin row writes. Their
+    // versioned artifacts are write-once and the record naming them is written
+    // last, so a copy that lists the record lists the files.
+    id: 'sprite-file-only-records',
+    status: 'reference-only',
+    modules: [
+      'services/sprites/reference.js', 'services/sprites/walk.js', 'services/sprites/walkTrims.js',
+      'services/sprites/atlas.js', 'services/sprites/assets.js', 'services/sprites/publish.js',
+      'services/sprites/animationTrackWorkflow.js',
+    ],
+  },
   // Classified by a code sweep (#9982) but still outside admission. Each entry
   // names the modules whose file-plus-record workflows are not wrapped yet, so a
   // continuation can take one and move it up. Entries are per domain, not per
   // function: a module listed here may also hold already-admitted workflows.
-  {
-    // Reference lock, loop trim, atlas compile, asset delete and source import,
-    // plus the grok-TUI lane's attach, which runs outside the completion hook.
-    id: 'sprite-workflows',
-    status: 'outstanding',
-    modules: [
-      'services/sprites/reference.js', 'services/sprites/walkTrims.js', 'services/sprites/atlas.js',
-      'services/sprites/assets.js', 'services/sprites/importer.js', 'services/sprites/walk.js',
-      'services/sprites/animationTrackWorkflow.js',
-    ],
-  },
   {
     // Local, cloud and federated finalize, derived clips (stitch, upscale,
     // timeline, HTML composition), poster replacement, upload and download.
