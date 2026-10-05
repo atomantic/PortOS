@@ -509,7 +509,7 @@ describe('MusicVideo stage-only nav URLs (#10303)', () => {
       </MemoryRouter>,
     );
     expect(await screen.findByText(/No music video projects yet/)).toBeInTheDocument();
-    expect(screen.getByTestId('loc')).toHaveTextContent(/^\/music-video$/);
+    await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent(/^\/music-video$/));
     expect(screen.queryByText(/Project not found/)).not.toBeInTheDocument();
   });
 });
