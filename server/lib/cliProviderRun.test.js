@@ -381,7 +381,7 @@ describe('runCliProviderPrompt — credential-bootstrap process-group teardown',
 });
 
 describe('runCliProviderPrompt — synchronous spawn failure (#10273)', () => {
-  it('resolves a sanitized E2BIG failure for an argv-delivered oversized prompt, releasing prompt resources', async () => {
+  it.skipIf(process.platform === 'win32')('resolves a sanitized E2BIG failure for an argv-delivered oversized prompt, releasing prompt resources', async () => {
     const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
