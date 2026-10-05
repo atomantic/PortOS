@@ -38,8 +38,8 @@ const firstTime = (key) => {
   return true;
 };
 
-/** The notification a stopped event warrants, or null. Pure — exported for the tests. */
-export function attentionNotificationFor(kind, { projectId, run, project } = {}) {
+/** The notification a stopped event warrants, or null. */
+function attentionNotificationFor(kind, { projectId, run, project } = {}) {
   if (!projectId || !run?.id) return null;
   const name = project?.name || 'Music video';
   const base = `/music-video/${encodeURIComponent(projectId)}`;
