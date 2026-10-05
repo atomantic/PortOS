@@ -9,6 +9,7 @@ import { safeUnder, findFfmpeg, probeVideoDuration, probeVideoStreamInfo } from 
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, listProjects, mutateProjectRecord } from './projects.js';
 import { getHistoryItem } from '../videoGen/history.js';
@@ -147,6 +148,7 @@ async function encode(bin, args, run) {
   if (run.aborted) killWithEscalation(proc, { label: 'sharing export', stillRunning: () => run.proc === proc });
   return new Promise((resolve, reject) => {
     let tail = '';
+    let processError;
     proc.stderr.on('data', chunk => {
       tail = (tail + chunk.toString()).slice(-2000);
       videoGenEvents.emit('activity', { generationId: run.jobId });
@@ -157,10 +159,17 @@ async function encode(bin, args, run) {
     }, 30 * 60_000);
     timer.unref?.();
     const cleanup = () => { clearTimeout(timer); run.proc = null; };
-    proc.once('error', error => { cleanup(); reject(error); });
+    proc.on('error', error => {
+      processError = error;
+      // An observer error with a live PID does not prove physical settlement.
+      // Retain the lane and scratch until close; cancellation still escalates.
+      if (proc.pid) killWithEscalation(proc, { label: 'sharing export observer failure', stillRunning: () => run.proc === proc });
+      else { cleanup(); reject(error); }
+    });
     proc.once('close', code => {
       cleanup();
-      if (run.aborted) reject(fail('Sharing export cancelled or timed out'));
+      if (processError) reject(processError);
+      else if (run.aborted) reject(fail('Sharing export cancelled or timed out'));
       else if (code !== 0) reject(new Error(`Sharing encode failed (${code}): ${tail}`));
       else resolve();
     });
@@ -227,23 +236,36 @@ export async function runSharingCopy({ jobId, sharingProjectId, renderHistoryId,
       published = true;
     });
     const previous = source.project.publishKit?.sharingCopy?.filename;
-    if (previous && previous !== filename) await releaseUnusedSharingCopy(previous).catch(err => console.error(`❌ Sharing copy cleanup failed: ${err.message}`));
+    if (previous && previous !== filename) await releaseUnusedSharingCopy(previous).catch(err => cleanupFailed(jobId, err));
   } catch (err) {
     error = err.message || 'Sharing export failed';
   } finally {
-    if (output && !published) await unlink(output).catch(() => {});
-    if (scratch) await rm(scratch, { recursive: true, force: true }).catch(() => {});
+    if (output && !published) await unlink(output).catch(err => {
+      if (err.code !== 'ENOENT') { cleanupFailed(jobId, err); error ||= 'Sharing export cleanup needs recovery'; }
+    });
+    if (scratch) await rm(scratch, { recursive: true, force: true }).catch(err => {
+      cleanupFailed(jobId, err); error ||= 'Sharing export cleanup needs recovery';
+    });
     running.delete(jobId);
   }
   if (error) videoGenEvents.emit('failed', { generationId: jobId, error });
   else videoGenEvents.emit('completed', { generationId: jobId, ...result });
 }
 
+function cleanupFailed(jobId, error) {
+  maintenance.markCurrentUnsettled();
+  maintenance.markResourceUnsettled('media', jobId);
+  console.error(`❌ Sharing copy cleanup needs recovery [${jobId.slice(0, 8)}]: ${error.message}`);
+}
+
 async function releaseUnusedSharingCopy(filename) {
   if (!/^music-video-sharing-[0-9a-f-]{36}\.mp4$/i.test(filename)) return;
   const projects = await listProjects();
   if (projects.some(project => project.publishKit?.sharingCopy?.filename === filename)) return;
-  const path = await ownedVideo(filename).catch(() => null);
+  const path = await ownedVideo(filename).catch(error => {
+    if (error.code === 'SHARING_COPY_UNAVAILABLE') return null;
+    throw error;
+  });
   if (path) await withBackupAssetPublication(() => unlink(path));
 }
 

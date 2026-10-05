@@ -20,6 +20,9 @@ gets one retry at a lower bitrate. Only a full-length file strictly below
 Encoding uses two threads and a 30-minute timeout per pass. Sources over one
 hour, unreadable sources and duration budgets below the minimum usable bitrate
 are refused with an actionable error.
+An observer error with a live process retains ownership until physical exit.
+If owned-file cleanup fails, maintenance retains a recovery blocker instead of
+claiming that the export has fully drained.
 
 The server resolves only the project's selected final history entry, refuses
 symlinks and unsafe filenames, and binds the copy to its history ID and SHA-256.

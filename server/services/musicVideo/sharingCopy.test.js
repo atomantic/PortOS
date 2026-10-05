@@ -4,7 +4,15 @@ import { mkdir, readFile, readdir, symlink, truncate, unlink, writeFile } from '
 import { join } from 'path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
-const state = vi.hoisted(() => ({ project: null, jobs: [], spawns: [], outputSizes: [], duringPass: null, failPass: null, realEncode: false, saveError: null, missingFfmpeg: false }));
+const state = vi.hoisted(() => ({ project: null, jobs: [], spawns: [], outputSizes: [], duringPass: null, failPass: null, realEncode: false, saveError: null, missingFfmpeg: false, cleanupError: false, observerError: null }));
+vi.mock('fs/promises', async original => {
+  const actual = await original();
+  return { ...actual, rm: async (path, options) => {
+    if (state.cleanupError && String(path).includes('sharing-work-')) throw new Error('Synthetic cleanup I/O error');
+    return actual.rm(path, options);
+  } };
+});
+vi.mock('../../lib/maintenanceAdmission.js', () => ({ maintenance: { markCurrentUnsettled: vi.fn(), markResourceUnsettled: vi.fn() } }));
 vi.mock('../../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('sharing-copy-test-') }));
 vi.mock('./projects.js', () => ({
   getProject: vi.fn(async () => state.project),
@@ -33,6 +41,13 @@ vi.mock('../../lib/detachedSpawn.js', async original => ({ spawnDetached: vi.fn(
   proc.kill = () => { queueMicrotask(() => proc.emit('close', null, 'SIGTERM')); return true; };
   proc.exitCode = null;
   proc.signalCode = null;
+  if (state.observerError) {
+    proc.pid = 123;
+    setImmediate(() => { proc.emit('error', new Error('Synthetic observer I/O error')); state.observerError(proc); });
+    // This test controls physical exit rather than the ordinary pass fixture.
+    proc.kill = vi.fn(() => true);
+    return proc;
+  }
   setImmediate(async () => {
     try {
       await state.duringPass?.(args);
@@ -56,7 +71,7 @@ const { enqueueJob } = await import('../mediaJobQueue/index.js');
 
 beforeEach(async () => {
   state.project = { id: 'mv-example', renderHistoryId: 'final-example' };
-  state.jobs = []; state.spawns = []; state.outputSizes = []; state.duringPass = null; state.failPass = null; state.realEncode = false; state.saveError = null; state.missingFfmpeg = false;
+  state.jobs = []; state.spawns = []; state.outputSizes = []; state.duringPass = null; state.failPass = null; state.realEncode = false; state.saveError = null; state.missingFfmpeg = false; state.cleanupError = false; state.observerError = null;
   vi.clearAllMocks();
   const { getProject } = await import('./projects.js');
   getProject.mockImplementation(async () => state.project);
@@ -76,6 +91,39 @@ async function runExport(jobId = '00000000-0000-4000-8000-000000000001') {
 }
 
 describe('private sharing export workflow', () => {
+  it('retains process ownership after an observer error until physical close', async () => {
+    let reportError;
+    const observed = new Promise(resolve => { reportError = resolve; });
+    state.observerError = reportError;
+    let settled = false;
+    const outcome = runExport('00000000-0000-4000-8000-000000000066').then(result => { settled = true; return result; });
+    const proc = await observed;
+    expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+    await new Promise(resolve => setImmediate(resolve));
+    expect(settled).toBe(false);
+    expect((await readdir(join(PATHS.videos, '.detached'))).some(name => name.startsWith('sharing-work-'))).toBe(true);
+    proc.exitCode = 1;
+    proc.emit('close', 1);
+    expect((await outcome).failed).toHaveBeenCalledWith(expect.objectContaining({ error: 'Synthetic observer I/O error' }));
+    expect(await readdir(join(PATHS.videos, '.detached'))).toEqual([]);
+  });
+
+  it('preserves a maintenance blocker when owned scratch cleanup cannot finish', async () => {
+    state.failPass = true;
+    state.cleanupError = true;
+    const { failed } = await runExport('00000000-0000-4000-8000-000000000067');
+    expect(failed).toHaveBeenCalled();
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    expect(maintenance.markCurrentUnsettled).toHaveBeenCalled();
+    expect(maintenance.markResourceUnsettled).toHaveBeenCalledWith('media', '00000000-0000-4000-8000-000000000067');
+    expect(state.project.publishKit).toBeUndefined();
+    state.cleanupError = false;
+    const actualFs = await vi.importActual('fs/promises');
+    for (const name of await readdir(join(PATHS.videos, '.detached'))) {
+      if (name.startsWith('sharing-work-')) await actualFs.rm(join(PATHS.videos, '.detached', name), { recursive: true, force: true });
+    }
+  });
+
   it('coalesces repeated clicks, preserves the final, and caches only the exact final bytes', async () => {
     const requests = await Promise.all([sharing.prepareSharingCopy('mv-example'), sharing.prepareSharingCopy('mv-example')]);
     expect(requests[0]).toEqual(requests[1]);
