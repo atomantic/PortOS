@@ -74,6 +74,7 @@ Admission inventory (`withBackupAssetPublication`):
 | Direct gallery upload, image prompt/visibility sidecar replacement, and image deletion (`imageGen/local.js`) | Covered as one file/sidecar/index workflow (#9982 partial) |
 | Gallery image deletion's universe canon purge (`galleryImageDeletion.js`) and character reference sheet deletion (`universeCharacterSheet.js`) | Covered from file removal through the universe pointer purge (#9982 partial) |
 | Video-history deletion, including downloaded-video deletion (`videoGen/historyOps.js`) | Covered through file/history/index removal (#9982 partial) |
+| Gallery video upload, download finalization and poster edits (`videoUpload.js`, `videoDownload.js`, `videoGen/poster.js`) | Covered (#9982 partial): uploads lease byte installation through history and rollback; downloads lease poster creation through history and rollback after yt-dlp finishes; poster edits lease creation, history and cleanup |
 | LoRA dataset uploads, gallery imports, reference-sheet crops, generated completion/recovery copies, image/dataset deletion, and queued record edits (`loraDatasets.js`, `loraDatasetGenerate.js`) | Covered as complete file/record workflows (#9982 partial) |
 | Voice Studio audition and character assignment (`voice/studio.js`) | Covered from source-file write/copy through profile-row commit and failed-write cleanup (#9982 partial) |
 | Music Video development artifact import/generated save and vocal-stem attachment (`musicVideo/devArtifactService.js`, `musicVideo/vocalStem.js`) | Covered from final file copy/write through project-record commit and failed-write cleanup (#9982 partial) |
@@ -98,7 +99,7 @@ Admission inventory (`withBackupAssetPublication`):
 | ChatGPT archive import and import-memory deletion (`chatgptImport.js`, `brain.js`; the ZIP's asset extraction in `chatgptZipImport.js`) | Covered (#9982 partial): assets are extracted outside admission and named only by the memory row; each conversation's archived transcript and that row commit under one lease, and deleting an import memory drops the record and unlinks its transcript and unreferenced assets under one lease |
 | YouTube ingest (`youtubeIngest.js`) | Covered (#9982 partial): downloads run outside admission; the index record that first names a transcript or audio file takes the lease, and forgetting an ingest drops the record and unlinks its files under one lease |
 | Digital twin documents and genome upload/delete (`digital-twin-documents.js`, `genome.js`) | Covered (#9982 partial): each document file or raw genome file and the meta record naming it is one lease, including deletion |
-| Remaining durable owners, classified by domain in `backupAssetOwners.js` | Outstanding (#9982): video generation, image generation tails |
+| Remaining durable owners, classified by domain in `backupAssetOwners.js` | Outstanding (#9982): video generation, image generation tails, derived media-index refresh |
 | Durable replacement/deletion owners not yet classified | Outstanding (#9982) |
 | Snapshot consistency claim (`backupAssetOwners.js`, see below) | Covered (#9982 partial) |
 | Database restore execution and backend-cutover acceptance (`backup.js`, `databasePreflight.js`) | Covered (#9983) |
@@ -218,6 +219,22 @@ downloads are keyed by their source URL and rewrite the file in place on a
 repeat, so that write takes the lease too. Removing a board item or a board
 removes no bytes. A row that fails after its file landed leaves an unreferenced
 file, as before.
+
+Gallery video uploads hold admission from the first byte installation through
+their thumbnail and history entry; failed history writes remove both outputs
+before releasing admission. The yt-dlp producer downloads fresh, unreferenced
+files outside admission, then the poster and history commit take one lease,
+including rollback. Failed or canceled producers remove their unreferenced
+fragments through the existing download core. Poster edits take admission before
+the shared history write tail and retain it through poster creation, history
+replacement, old-poster cleanup and failed-commit cleanup. Every new poster uses
+a fresh basename; temporary sharing copies stay outside this durable workflow.
+Upload and download completion notifications run after the durable commit, so
+a throwing listener cannot remove files that committed history already names.
+These leases do not repair dangling references or stale derived index metadata.
+The completion-hook and reconcile writes to `media_assets`, and poster edits
+leaving its old thumbnail pointer, are explicitly outstanding as
+`media-asset-index-refresh`; the final sweep must settle their restore semantics.
 
 Code Animation writes its HTML, revision trees and run artifacts before the row
 that first names them. A generated animation's HTML and the job row marking it

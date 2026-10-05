@@ -28,6 +28,7 @@ import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
 import { generateThumbnail, probeVideoDuration } from '../lib/ffmpeg.js';
 import { mutateVideoHistory } from './videoGen/history.js';
 import { videoGenEvents } from './videoGen/events.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 
 // Compatibility export for the separate remote browser-download path.
 // User uploads stream to disk without this legacy JSON transport bound.
@@ -104,31 +105,37 @@ async function persistGalleryVideo(header, originalName, size, write) {
   const filename = `${id}.${ext}`;
   await ensureDir(PATHS.videos);
   const outPath = join(PATHS.videos, filename);
-  try {
-    await write(outPath);
-    // Both best-effort: a missing ffmpeg/ffprobe degrades to a thumbnail-less
-    // entry (normalizeVideo renders a no-preview tile), never a failed upload.
-    const [thumbnail, durationSec] = await Promise.all([
-      generateThumbnail(outPath, id).catch(() => null),
-      probeVideoDuration(outPath).catch(() => null),
-    ]);
-    const title = typeof originalName === 'string' && originalName.trim()
-      ? originalName.trim().slice(0, 200)
-      : '';
-    const entry = buildUploadHistoryEntry({ id, filename, thumbnail, durationSec, title });
-    await mutateVideoHistory((history) => { history.unshift(entry); return history; });
-    // Let the live media-asset index hook index this immediately (same event
-    // the generation and download paths emit). Reconcile is the backstop.
-    videoGenEvents.emit('completed', { generationId: id, filename, path: `/data/videos/${filename}`, thumbnail });
-    console.log(`📥 Saved uploaded gallery video: ${filename} (${(size / 1024 / 1024).toFixed(1)}MB)`);
-    return entry;
-  } catch (err) {
-    // A throw between the byte write and the history write would orphan a
-    // large file in data/videos with nothing pointing at it — mirror
-    // downloadVideoIntoLibrary's cleanup-then-rethrow.
-    await unlinkGuarded(outPath).catch(() => {});
-    throw err;
-  }
+  // Take admission before the first byte and before the shared history tail.
+  // Rollback belongs to the same lease; notifications follow the durable commit.
+  const entry = await withBackupAssetPublication(async () => {
+    try {
+      await write(outPath);
+      // Both best-effort: a missing ffmpeg/ffprobe degrades to a thumbnail-less
+      // entry (normalizeVideo renders a no-preview tile), never a failed upload.
+      const [thumbnail, durationSec] = await Promise.all([
+        generateThumbnail(outPath, id).catch(() => null),
+        probeVideoDuration(outPath).catch(() => null),
+      ]);
+      if (!thumbnail) await unlinkGuarded(join(PATHS.videoThumbnails, `${id}.jpg`)).catch(() => {});
+      const title = typeof originalName === 'string' && originalName.trim()
+        ? originalName.trim().slice(0, 200)
+        : '';
+      const entry = buildUploadHistoryEntry({ id, filename, thumbnail, durationSec, title });
+      await mutateVideoHistory((history) => { history.unshift(entry); return history; });
+      return entry;
+    } catch (err) {
+      // A throw between the byte write and the history write would orphan a
+      // large file in data/videos with nothing pointing at it — mirror
+      // downloadVideoIntoLibrary's cleanup-then-rethrow.
+      await unlinkGuarded(outPath).catch(() => {});
+      await unlinkGuarded(join(PATHS.videoThumbnails, `${id}.jpg`)).catch(() => {});
+      throw err;
+    }
+  });
+  // A throwing listener must not roll back bytes already named by history.
+  videoGenEvents.emit('completed', { generationId: id, filename, path: `/data/videos/${filename}`, thumbnail: entry.thumbnail });
+  console.log(`📥 Saved uploaded gallery video: ${filename} (${(size / 1024 / 1024).toFixed(1)}MB)`);
+  return entry;
 }
 
 export async function saveUploadedGalleryVideo(base64Data, originalName = '') {
