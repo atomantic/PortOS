@@ -315,10 +315,10 @@ async function runReactorVideo(job, jobId, {
     // Durable publication owns the output from this point until it settles.
     // No await may separate the last cancellation check from this boundary.
     entry.finalizing = true;
-    await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta: { ...meta, aspect: frame.aspect, width: frame.canvas.width, height: frame.canvas.height, clipId: result.clipId, seconds: result.seconds }, actualSeed: seed ?? null, mutateHistory: mutateVideoHistory });
+    await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta: { ...meta, aspect: frame.aspect, width: frame.canvas.width, height: frame.canvas.height, clipId: result.clipId, seconds: result.seconds }, actualSeed: seed ?? null, mutateHistory: mutateVideoHistory, publication: entry });
     closeJobAfterDelay(jobs, jobId);
   } catch (err) {
-    await rm(outputPath, { force: true }).catch((cleanupError) => { console.log(`⚠️ Reactor cleanup: could not remove failed output ${outputPath} (${cleanupError.code})`); });
+    if (!entry.committed) await rm(outputPath, { force: true }).catch((cleanupError) => { console.log(`⚠️ Reactor cleanup: could not remove failed output ${outputPath} (${cleanupError.code})`); });
     // A continuation names a clip reactor rendered in an EARLIER session, and
     // reactor decides whether it still holds it. Say so on the failure rather
     // than leaving the user re-reading a prompt that was never the problem.
@@ -329,7 +329,7 @@ async function runReactorVideo(job, jobId, {
   } finally {
     await rm(`${outputPath}.capture`, { recursive: true, force: true }).catch((err) => { console.log(`⚠️ Reactor cleanup: could not remove capture dir ${outputPath}.capture (${err.code})`); });
     if (frame.fittedPath) await rm(frame.fittedPath, { force: true }).catch((err) => { console.log(`⚠️ Reactor cleanup: could not remove fitted frame ${frame.fittedPath} (${err.code})`); });
-    if (entry.aborted) await rm(outputPath, { force: true }).catch((err) => { console.log(`⚠️ Reactor cleanup: could not remove aborted output ${outputPath} (${err.code})`); });
+    if (entry.aborted && !entry.committed) await rm(outputPath, { force: true }).catch((err) => { console.log(`⚠️ Reactor cleanup: could not remove aborted output ${outputPath} (${err.code})`); });
     activeRequests.delete(jobId);
     activeJobs.delete(jobId);
   }

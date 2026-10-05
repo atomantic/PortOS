@@ -33,7 +33,7 @@ import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { killProcessTree, prepareCliSpawn } from '../../lib/bufferedSpawn.js';
 import { ensureGrokHeadlessArgs, prepareGrokPromptFile } from '../../lib/grok.js';
 import { videoGenEvents } from './events.js';
-import { finalizeGeneratedVideo, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
+import { discardUnpublishedVideo, finalizeGeneratedVideo, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
 import { mutateVideoHistory } from './history.js';
 import { noImageReason, deriveAspectRatio, GROK_ASPECT_RATIOS } from '../imageGen/grok.js';
 import { resolveGrokDuration } from '../../lib/grokVideoClip.js';
@@ -248,6 +248,7 @@ async function runGrokVideo(job, jobId, bin, args, {
   }, GROK_VIDEO_TIMEOUT_MS);
 
   let terminalStarted = false;
+  const publication = {};
   let processError;
   proc.on('error', (err) => {
     if (terminalStarted) return;
@@ -305,15 +306,14 @@ async function runGrokVideo(job, jobId, bin, args, {
       // SSE complete + videoGenEvents 'completed' — identical to local
       // renders so every downstream consumer (history grid, media index,
       // completion hooks) sees the same contract.
-      await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed: null, mutateHistory: mutateVideoHistory });
+      await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed: null, mutateHistory: mutateVideoHistory, publication });
       closeJobAfterDelay(jobs, jobId);
     } catch (err) {
       await cleanup();
+      if (!publication.committed) await discardUnpublishedVideo({ jobId, outputPath }).catch(retainOwnership);
       retainOwnership(err);
-      // finalizeGeneratedVideo marks job.status='complete' BEFORE its async
-      // post-processing (faststart/thumbnail/history) — a throw there must
-      // still surface as a terminal failure or the queue's job stays
-      // 'running' until the watchdog. Force past the idempotence guard.
+      // A dispatch failure can follow a durable commit; preserve its bytes and
+      // still surface a terminal failure past the completion idempotence guard.
       finalizeJobFailure(job, jobId, proc, `Grok video post-exit handler failed: ${err?.message || err}`, { force: true });
     }
   });

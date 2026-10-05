@@ -296,13 +296,21 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     modules: ['services/videoUpload.js', 'services/videoDownload.js', 'services/videoGen/poster.js'],
   },
   {
-    // Local, cloud and federated finalize, derived clips (stitch, upscale,
-    // timeline, HTML composition). Library imports and poster edits are above.
+    // The shared local, batch and cloud (Grok/fal/Reactor) finalize owns
+    // faststart, poster, serialized history and rollback. Caller latches keep
+    // committed outputs out of later failure/cancellation cleanup. Long fresh
+    // producers remain outside admission; only unreferenced outputs are discarded.
+    id: 'generated-video-shared-finalizer',
+    status: 'admitted',
+    modules: ['services/videoGen/generateVideoHelpers.js'],
+  },
+  {
+    // Federated replacement/replay and derived clips (stitch, upscale,
+    // timeline, HTML composition) have not yet proven their publication tails.
     id: 'video-generation-finalize-and-derived-clips',
     status: 'outstanding',
     modules: [
-      'services/videoGen/generateVideoHelpers.js', 'services/videoGen/spawnWatch.js', 'services/videoGen/grok.js',
-      'services/videoGen/fal.js', 'services/videoGen/reactor.js', 'services/videoGen/remote.js',
+      'services/videoGen/remote.js',
       'services/videoGen/stitchVideos.js', 'services/videoGen/upscaleVideo.js', 'services/videoGen/upscaleJob.js',
       'services/videoTimeline/local.js', 'services/htmlComposition/index.js',
     ],

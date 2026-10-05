@@ -236,6 +236,17 @@ The completion-hook and reconcile writes to `media_assets`, and poster edits
 leaving its old thumbnail pointer, are explicitly outstanding as
 `media-asset-index-refresh`; the final sweep must settle their restore semantics.
 
+Local generated videos (including each batch member) and Grok, fal and Reactor
+videos share an admitted finalizer. Fresh producer output is unreferenced until
+that finalizer takes admission before faststart and poster creation, then commits
+serialized history or removes the owned video, possible partial poster and
+faststart staging file before releasing the lease. A missing thumbnail retains
+the existing thumbnail-less behavior. Terminal status and notifications follow
+the durable commit. Caller publication latches keep committed outputs and earlier
+batch members out of later failure or cancellation cleanup. Federated video
+replacement/replay and derived stitch, upscale, timeline and HTML-composition
+lanes remain outstanding; this does not settle the derived media index.
+
 Code Animation writes its HTML, revision trees and run artifacts before the row
 that first names them. A generated animation's HTML and the job row marking it
 completed hold one lease. A package import or repair stages its revision into a

@@ -9,11 +9,13 @@
  */
 
 import { existsSync, statSync } from 'fs';
+import { join } from 'path';
 import { broadcastSse } from '../../lib/sseUtils.js';
 import {
   generateThumbnail, optimizeForStreaming, probeFrameCount, probeVideoDuration,
 } from '../../lib/ffmpeg.js';
-import { formatBytes } from '../../lib/fileUtils.js';
+import { formatBytes, PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
 import { videoGenEvents } from './events.js';
 
@@ -740,6 +742,18 @@ export function bufferChildExit(proc, { bufferOutput = false } = {}) {
   };
 }
 
+// Only fresh, unreferenced outputs belong here. Callers retain the publication
+// latch so a later notification failure never sends committed bytes to cleanup.
+export async function discardUnpublishedVideo({ jobId, outputPath }) {
+  return withBackupAssetPublication(async () => {
+    const results = await Promise.allSettled([
+      outputPath, `${outputPath}.fs.mp4`, join(PATHS.videoThumbnails, `${jobId}.jpg`),
+    ].map(path => unlinkGuarded(path)));
+    const failed = results.find(result => result.status === 'rejected' && result.reason?.code !== 'ENOENT');
+    if (failed) throw failed.reason;
+  });
+}
+
 /**
  * Success path of generateVideo's `close` handler: faststart-optimize the
  * output, generate a thumbnail, prepend the history entry, and emit the
@@ -755,59 +769,73 @@ export function bufferChildExit(proc, { bufferOutput = false } = {}) {
  * @param {number} ctx.actualSeed
  * @param {(mutator: (h: Array) => Array) => Promise<Array>} ctx.mutateHistory - serialized read-modify-write on the shared history file (mutateVideoHistory)
  * @param {boolean} [ctx.terminal=true] - False persists a batch member without completing its queue job.
+ * @param {object} [ctx.publication] - Caller latch; committed is set before notifications.
  * @param {number} [ctx.startedAtMs] - Date.now() captured just before the child
  *   spawned. Defaults to `job.renderStartedAtMs`, which generateVideo stamps.
  */
-export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory, startedAtMs = job?.renderStartedAtMs, terminal = true }) {
-  if (terminal) job.status = 'complete';
-  await optimizeForStreaming(outputPath);
-  const thumbnail = await generateThumbnail(outputPath, jobId);
-  // Serialized append through the shared history tail so a concurrent write
-  // path (a full-video download completing, another render finalizing) can't
-  // read the same stale array and clobber this record on save.
-  //
-  // Persist the runtime fingerprint captured from the child's startup RUNTIME:
-  // line (set on `job` by makeVideoGenLineHandler) so each history record
-  // self-documents the exact ltx/mlx/torch + chip + OS stack it rendered on.
-  // Absent (sentinel) when the runtime didn't emit one — e.g. the bare
-  // `mlx_video.generate_av` path we don't control.
-  //
-  // Wall-clock render timing (#3801) is what makes a future render estimable:
-  // videoGen/eta.js calibrates its cost model purely from these measurements.
-  // Stamped ONLY when we actually observed the spawn instant — an entry with
-  // no `renderMs` is an explicit absent sentinel that the estimator skips,
-  // which is why the timing spread is conditional rather than defaulted to 0
-  // (a zero-duration sample would drag every estimate toward "instant").
-  // The window measured is spawn → output finalized, i.e. what the user waits
-  // through, including the thumbnail/faststart tail above.
-  const timing = renderTimingFields(startedAtMs);
-  await mutateHistory((history) => {
-    history.unshift({
-      ...meta,
-      thumbnail,
-      ...timing,
-      ...(job.runtime ? { runtime: job.runtime } : {}),
-      // What the speed profile actually resolved to at render time (#4875).
-      // `meta.speedProfileId` above is the REQUEST; this is the outcome, so a
-      // render whose TeaCache or distilled adapter was unavailable reads back
-      // as degraded instead of as a full speed claim. Absent on every quality
-      // render and on runners that don't report one.
-      ...(job.speedProfile ? { speedProfileApplied: job.speedProfile } : {}),
-      // Whether the draft decoder actually decoded this clip (#5423).
-      // `meta.draftDecode` above is the REQUEST that survived every server-side
-      // gate; this is the outcome, so a render whose decoder failed to load
-      // reads back as a full decode instead of claiming a draft one. Absent on
-      // every full-decode render and on runners that don't report one.
-      ...(job.draftDecode ? { draftDecodeApplied: job.draftDecode } : {}),
-      // What block streaming actually resolved to at render time (#6499).
-      // `meta.streamingMode` above is the REQUEST; this is the outcome —
-      // whether the pinned pipeline had the parameter, the RAM-based 'auto'
-      // decision, and (when active) the render's peak MLX memory. Absent on
-      // a resident-by-default render and on runners that don't report one.
-      ...(job.streamingPolicy ? { streamingPolicyApplied: job.streamingPolicy } : {}),
-    });
-    return history;
+export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory, startedAtMs = job?.renderStartedAtMs, terminal = true, publication = {} }) {
+  const thumbnail = await withBackupAssetPublication(async () => {
+    try {
+      await optimizeForStreaming(outputPath);
+      const thumbnail = await generateThumbnail(outputPath, jobId);
+      // ffmpeg may leave a partial poster even when it returns no thumbnail.
+      if (!thumbnail) await unlinkGuarded(join(PATHS.videoThumbnails, `${jobId}.jpg`)).catch(error => {
+        if (error.code !== 'ENOENT') throw error;
+      });
+      // Serialized append through the shared history tail so a concurrent write
+      // path (a full-video download completing, another render finalizing) can't
+      // read the same stale array and clobber this record on save.
+      //
+      // Persist the runtime fingerprint captured from the child's startup RUNTIME:
+      // line (set on `job` by makeVideoGenLineHandler) so each history record
+      // self-documents the exact ltx/mlx/torch + chip + OS stack it rendered on.
+      // Absent (sentinel) when the runtime didn't emit one — e.g. the bare
+      // `mlx_video.generate_av` path we don't control.
+      //
+      // Wall-clock render timing (#3801) is what makes a future render estimable:
+      // videoGen/eta.js calibrates its cost model purely from these measurements.
+      // Stamped ONLY when we actually observed the spawn instant — an entry with
+      // no `renderMs` is an explicit absent sentinel that the estimator skips,
+      // which is why the timing spread is conditional rather than defaulted to 0
+      // (a zero-duration sample would drag every estimate toward "instant").
+      // The window measured is spawn → output finalized, i.e. what the user waits
+      // through, including the thumbnail/faststart tail above.
+      const timing = renderTimingFields(startedAtMs);
+      await mutateHistory((history) => {
+        history.unshift({
+          ...meta,
+          thumbnail,
+          ...timing,
+          ...(job.runtime ? { runtime: job.runtime } : {}),
+          // What the speed profile actually resolved to at render time (#4875).
+          // `meta.speedProfileId` above is the REQUEST; this is the outcome, so a
+          // render whose TeaCache or distilled adapter was unavailable reads back
+          // as degraded instead of as a full speed claim. Absent on every quality
+          // render and on runners that don't report one.
+          ...(job.speedProfile ? { speedProfileApplied: job.speedProfile } : {}),
+          // Whether the draft decoder actually decoded this clip (#5423).
+          // `meta.draftDecode` above is the REQUEST that survived every server-side
+          // gate; this is the outcome, so a render whose decoder failed to load
+          // reads back as a full decode instead of claiming a draft one. Absent on
+          // every full-decode render and on runners that don't report one.
+          ...(job.draftDecode ? { draftDecodeApplied: job.draftDecode } : {}),
+          // What block streaming actually resolved to at render time (#6499).
+          // `meta.streamingMode` above is the REQUEST; this is the outcome —
+          // whether the pinned pipeline had the parameter, the RAM-based 'auto'
+          // decision, and (when active) the render's peak MLX memory. Absent on
+          // a resident-by-default render and on runners that don't report one.
+          ...(job.streamingPolicy ? { streamingPolicyApplied: job.streamingPolicy } : {}),
+        });
+        return history;
+      });
+      publication.committed = true;
+      return thumbnail;
+    } catch (error) {
+      await discardUnpublishedVideo({ jobId, outputPath });
+      throw error;
+    }
   });
+  if (terminal) job.status = 'complete';
   console.log(`✅ Video generated [${jobId.slice(0, 8)}]: ${filename}`);
   if (terminal) {
     broadcastSse(job, { type: 'complete', result: { filename, seed: actualSeed, thumbnail, path: `/data/videos/${filename}` } });

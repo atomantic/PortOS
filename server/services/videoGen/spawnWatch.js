@@ -21,6 +21,7 @@ import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import {
   makeVideoGenLineHandler,
   finalizeGeneratedVideo,
+  discardUnpublishedVideo,
   isWatchdogSuccess,
   isNativeTeardownAbort,
   verifyPostCompletionOutputs,
@@ -168,6 +169,13 @@ export async function spawnAndWatchVideo({
   const expectedOutputPaths = batch
     ? batch.map((item) => join(PATHS.videos, item.filename))
     : [outputPath];
+  const publications = new Map(expectedOutputPaths.map(path => [path, {}]));
+  const discardFailedOutputs = async () => {
+    for (const [index, path] of expectedOutputPaths.entries()) {
+      if (publications.get(path).committed) continue;
+      await discardUnpublishedVideo({ jobId: batch ? batch[index].id : jobId, outputPath: path }).catch(retainOwnership);
+    }
+  };
 
   // ── one render child, fully wired ──────────────────────────────────────────
   // Everything per-CHILD lives in here — the process handle, the completion watchdog, the
@@ -321,6 +329,7 @@ export async function spawnAndWatchVideo({
       }
       receivedOutputs += 1;
       completedOutputs.add(itemPath);
+      publications.get(itemPath).started = true;
       outputTail = outputTail.then(async () => {
         const thumbnail = await finalizeGeneratedVideo({
           job, jobId: item.id, outputPath: itemPath, filename: itemFilename,
@@ -328,6 +337,7 @@ export async function spawnAndWatchVideo({
           actualSeed: item.seed, mutateHistory: mutateVideoHistory,
           // Batch timings include shared startup and cannot train single-render ETAs.
           startedAtMs: null, terminal: false,
+          publication: publications.get(itemPath),
         });
         batchResults.push({ filename: itemFilename, seed: item.seed, thumbnail, path: `/data/videos/${itemFilename}` });
         const message = `Saved ${batchResults.length}/${batch.length} videos`;
@@ -425,6 +435,10 @@ export async function spawnAndWatchVideo({
       // no terminal SSE. The catch routes any failure through the job's error
       // finalizer so the client still gets a terminal 'failed' event.
       try {
+        // Accepted batch members may still be at their history commit when the
+        // child closes. Drain every finalizer before cleanup or a recorded child
+        // error can enter the discard path; admission itself is not a mutex.
+        await outputTail;
         // Cleanup the resized temp images if we made them. Track via flags rather
         // than a path-prefix check — tmpdir() can return a symlinked path
         // (macOS /var → /private/var) so startsWith() can silently miss.
@@ -437,7 +451,6 @@ export async function spawnAndWatchVideo({
         // output file is already on disk and non-empty: the render wrote its
         // result, but the child hung during teardown. A kill with no output on
         // disk still fails loudly below.
-        await outputTail;
         if (batchError) throw batchError;
         const allOutputsFinalized = !batch || batchResults.length === batch.length;
         const watchdogSuccess = allOutputsFinalized
@@ -470,6 +483,7 @@ export async function spawnAndWatchVideo({
         }
 
         if (unforgivenExit && !teardownRecovered) {
+          await discardFailedOutputs();
           job.status = 'error';
           let reason;
           const failure = diagnostics.failure({ prompts: [meta?.prompt, meta?.negativePrompt] });
@@ -520,10 +534,11 @@ export async function spawnAndWatchVideo({
             broadcastSse(job, { type: 'complete', result });
             videoGenEvents.emit('completed', { generationId: jobId, ...result });
           } else {
-            await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory: mutateVideoHistory });
+            await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory: mutateVideoHistory, publication: publications.get(outputPath) });
           }
         }
       } catch (err) {
+        await discardFailedOutputs();
         if (err !== childError) retainOwnership();
         // Finalize/teardown threw — fail the job loudly instead of crashing the
         // process. The job may already be partway through finalize, so force the
@@ -626,6 +641,9 @@ export async function spawnAndWatchVideo({
   // excluded by construction rather than by a list that could drift.
   const maybeRelaunchForPromptEncoding = async ({ code, signal, childKilled, cancelEpochAtClose, stderr }) => {
     if (code === 0) return false;
+    // A batch member already in history must never be rendered again over its
+    // committed filename by a whole-batch prompt-encode retry.
+    if ([...publications.values()].some(publication => publication.started || publication.committed)) return false;
     // A child PortOS killed on purpose — a user cancel, or either watchdog — is
     // never a spontaneous Metal abort to recover from, whatever signal it
     // finally landed on. Without this a cancel that raced an in-flight abort
