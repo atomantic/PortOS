@@ -262,6 +262,22 @@ const composeDone = (project, mode) => {
  * `todo` — plus `current`, the first stage that is not done. A live production
  * run owns the project, so it pins `current` to Produce.
  */
+/**
+ * Lyric half of Setup: storyboard approval needs lyrics imported and their word
+ * timings verified (or an explicit instrumental exception). `readiness.alignment`
+ * is the server's verdict; the draft is the fallback before readiness loads.
+ * `ok` also holds once the storyboard is approved, which implies both.
+ */
+export function lyricSetupState(project, readiness = project?.productionReadiness) {
+  const draft = project?.productionReview?.draft || {};
+  const instrumental = draft.lyricsMode === 'instrumental';
+  const lines = (project?.lyricCues || []).filter((cue) => isNonBlankStr(cue.text)).length;
+  const alignment = readiness?.alignment?.status || (instrumental ? 'instrumental' : draft.timingStatus === 'verified' ? 'verified' : 'provisional');
+  const imported = instrumental || lines > 0;
+  const verified = alignment === 'verified' || alignment === 'instrumental';
+  return { instrumental, lines, alignment, imported, verified, ok: !!readiness?.storyboard?.approved || (imported && verified) };
+}
+
 export function deriveStages(project, readiness = project?.productionReadiness, publish = {}) {
   const scenes = project?.scenes || [];
   const mode = project?.composition?.mode || 'concat';
@@ -277,7 +293,7 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
   const produceDone = planned && (footageOptional || scenes.every((scene) => sceneRenderReady(scene, { layered })));
 
   const done = {
-    setup: projectHasAudio(project) && !!project?.audioAnalysis,
+    setup: projectHasAudio(project) && !!project?.audioAnalysis && lyricSetupState(project, readiness).ok,
     'cast-sets': castDone,
     board: planned,
     produce: produceDone && !!readiness?.proof.approved,
@@ -422,6 +438,28 @@ export function deriveNextAction(project, {
 // The editable art-direction fields Production approvals needs before art can be approved.
 const ART_DIRECTION_FIELDS = [['cast', 'cast'], ['environments', 'sets'], ['visualLanguage', 'visual language'], ['motionLanguage', 'motion']];
 const APPROVAL_ANCHORS = { art: 'mv-review-art', storyboard: 'mv-review-storyboard', proof: 'mv-review-proof' };
+const PUBLISH_ANCHOR = 'mv-publish-kit';
+
+// Storyboard readiness problems, grouped by what the user has to go fix. The
+// server returns plain sentences; the first matching rule picks the group.
+const STORYBOARD_PROBLEM_GROUPS = [
+  { id: 'art', label: 'Art direction', test: /art direction|art feedback/i, action: { label: 'Review art direction', anchor: APPROVAL_ANCHORS.art } },
+  { id: 'lyrics', label: 'Lyrics', test: /lyrics|instrumental/i, action: { label: 'Import lyrics', anchor: 'mv-lyrics-import' } },
+  { id: 'timing', label: 'Lyric timing', test: /alignment|timing|vocal|master song/i, action: { label: 'Verify timing', anchor: APPROVAL_ANCHORS.storyboard } },
+  { id: 'coverage', label: 'Shot coverage', test: /cover the master|gaps or overlaps|create a timed/i, action: { label: 'Open the treatment', anchor: 'mv-board-treatment' } },
+  { id: 'shots', label: 'Shot details', test: /./, action: { label: 'Edit the storyboard', anchor: APPROVAL_ANCHORS.storyboard } },
+];
+
+/** One open checklist item per group of storyboard readiness problems, listing every problem in it. */
+function storyboardProblemItems(readiness) {
+  const problems = readiness?.storyboard?.problems || [];
+  if (readiness?.storyboard?.approved || !problems.length) return [];
+  return STORYBOARD_PROBLEM_GROUPS.flatMap((group, index) => {
+    const earlier = STORYBOARD_PROBLEM_GROUPS.slice(0, index);
+    const mine = problems.filter((text) => group.test.test(text) && !earlier.some((g) => g.test.test(text)));
+    return mine.length ? [{ id: `board-${group.id}`, label: group.label, done: false, details: mine, action: group.action }] : [];
+  });
+}
 
 /**
  * What one stage tab needs before it counts as done, as a short checklist the
@@ -452,26 +490,40 @@ export function stageChecklist(stageId, project, readiness = project?.production
       // An autonomous run that is still going writes the song itself.
       const autoSong = !!project.autonomousRun && !['completed', 'canceled', 'failed'].includes(project.autonomousRun.status);
       const hasAudio = projectHasAudio(project);
+      const lyrics = lyricSetupState(project, readiness);
       return [
         { id: 'track', label: 'Track attached', done: hasAudio, detail: !hasAudio && autoSong ? 'The autonomous run is making the song.' : null,
           action: hasAudio || autoSong ? null : { label: 'Attach a track', anchor: 'mv-track' } },
-        { id: 'analysis', label: 'Song analyzed', done: !!project.audioAnalysis, detail: project.audioAnalysis ? null : 'Analyze the song from the header or Song & lyrics.' },
+        { id: 'analysis', label: 'Song analyzed', done: !!project.audioAnalysis, detail: project.audioAnalysis ? null : 'Analyze the song from the header or Song & lyrics.',
+          action: project.audioAnalysis ? null : { label: 'Open Song & lyrics', anchor: 'mv-setup-song' } },
+        { id: 'lyrics', label: lyrics.instrumental ? 'Instrumental — no lyrics needed' : 'Lyrics imported', done: lyrics.imported || lyrics.ok,
+          detail: 'Import the lyrics, or mark the song instrumental in Production approvals.',
+          action: autoSong ? null : { label: 'Import lyrics', anchor: 'mv-lyrics-import' } },
+        { id: 'timing', label: lyrics.instrumental ? 'Instrumental exception confirmed' : 'Lyric timing verified', done: lyrics.verified || lyrics.ok,
+          detail: lyrics.alignment === 'stale' ? 'Word timings or the master changed since you verified them; verify again.'
+            : lyrics.instrumental ? 'Explain the instrumental exception in Production approvals.'
+              : 'Align the words, listen to them against the vocal, then verify the timing in Production approvals.',
+          action: autoSong ? null : { label: 'Verify timing', anchor: APPROVAL_ANCHORS.storyboard } },
       ];
     }
     case 'cast-sets': {
       const missing = ART_DIRECTION_FIELDS.filter(([key]) => !isNonBlankStr(draft[key])).map(([, label]) => label);
       const guide = (project.devArtifacts || []).find((a) => a.id === draft.guideArtifactId && !a.deleted) || null;
       return [
-        { id: 'direction', label: 'Art direction written', done: missing.length === 0, detail: missing.length ? `Still missing: ${missing.join(', ')}.` : null },
+        { id: 'direction', label: 'Art direction written', done: missing.length === 0, detail: missing.length ? `Still missing: ${missing.join(', ')}.` : null,
+          action: missing.length ? { label: 'Write art direction', anchor: APPROVAL_ANCHORS.art } : null },
         { id: 'guide', label: guide ? `Visual guide chosen: ${guide.title || guide.filename || 'sheet'}` : 'Visual guide chosen', done: !!guide,
-          detail: guide ? null : 'Pick a Cast & Sets sheet as the visual guide in Production approvals.' },
+          detail: guide ? null : 'Pick a Cast & Sets sheet as the visual guide in Production approvals.',
+          action: guide ? null : { label: 'Choose a guide', anchor: APPROVAL_ANCHORS.art } },
         approval('art', 'Art direction', 'Ready for your review. Approving a sheet file does not approve the art direction; approve it in Production approvals.'),
       ];
     }
     case 'board': {
       const planned = scenes.length > 0 || (draft.storyboard || []).length > 0;
       return [
-        { id: 'shots', label: 'Shots planned', done: planned, detail: planned ? null : 'Plan the shots from the header, or add scenes by hand.' },
+        { id: 'shots', label: 'Shots planned', done: planned, detail: planned ? null : 'Plan the shots from the header, or add scenes by hand.',
+          action: planned ? null : { label: 'Open the treatment', anchor: 'mv-board-treatment' } },
+        ...storyboardProblemItems(readiness),
         approval('storyboard', 'Timed storyboard', 'Ready for your review in Production approvals.'),
       ];
     }
@@ -480,16 +532,19 @@ export function stageChecklist(stageId, project, readiness = project?.production
       if (!FOOTAGE_OPTIONAL_MODES.has(mode)) {
         const layered = isLayeredComposition(project);
         const ready = scenes.filter((scene) => sceneRenderReady(scene, { layered })).length;
-        items.push({ id: 'footage', label: `Footage for every shot (${formatCount(ready)} of ${formatCount(scenes.length)})`, done: scenes.length > 0 && ready === scenes.length });
+        const footageDone = scenes.length > 0 && ready === scenes.length;
+        items.push({ id: 'footage', label: `Footage for every shot (${formatCount(ready)} of ${formatCount(scenes.length)})`, done: footageDone,
+          action: footageDone ? null : { label: 'Set up production', anchor: 'mv-production-start' } });
       }
       items.push(approval('proof', 'Animated proof', 'Render the proof, watch it with sound, then approve it in Production approvals.'));
       return items;
     }
     case 'compose': {
       // Compose counts as done only behind an approved proof (see deriveStages).
-      const proof = { id: 'proof', label: 'Animated proof approved (Produce)', done: !!readiness?.proof?.approved };
-      if (mode === 'composed') return [proof, { id: 'composition', label: 'Timed typography added', done: (project.composition?.textCues || []).length > 0 }];
-      if (mode === 'document') return [proof, { id: 'composition', label: 'Composition document attached', done: !!project.composition?.document }];
+      const proof = { id: 'proof', label: 'Animated proof approved (Produce)', done: !!readiness?.proof?.approved,
+        action: readiness?.proof?.approved ? null : { label: 'Review animated proof', anchor: APPROVAL_ANCHORS.proof } };
+      if (mode === 'composed') return [proof, { id: 'composition', label: 'Timed typography added', done: (project.composition?.textCues || []).length > 0, action: { label: 'Add typography', anchor: 'mv-typo-font' } }];
+      if (mode === 'document') return [proof, { id: 'composition', label: 'Composition document attached', done: !!project.composition?.document, action: { label: 'Attach a document', anchor: 'mv-doc-folder' } }];
       if (mode === 'eidoverse') {
         const saved = !!project.composition?.eidoverseScene?.inlineScript;
         return [proof, { id: 'composition', label: 'Save the Eidoverse scene', done: saved, action: saved ? null : { label: 'Save the scene', anchor: 'mv-eidoverse-scene' } }];
@@ -497,7 +552,8 @@ export function stageChecklist(stageId, project, readiness = project?.production
       if (mode === 'code') {
         const generated = !!project.composition?.codeVideo?.generatedAt;
         return [proof, { id: 'composition', label: generated ? 'Code video generated' : 'Code video sections ready', done: codeComposed(project),
-          detail: codeComposed(project) ? null : 'Generate the code video from the Code Video panel.' }];
+          detail: codeComposed(project) ? null : 'Generate the code video from the Code Video panel.',
+          action: codeComposed(project) ? null : { label: 'Open Code Video', anchor: 'mv-code-section' } }];
       }
       return [proof, { id: 'composition', label: 'Nothing to compose for this render style', done: true }];
     }
@@ -505,7 +561,7 @@ export function stageChecklist(stageId, project, readiness = project?.production
       return [{
         id: 'final', label: 'Final video rendered', done: !!project.renderHistoryId && !isFinalRenderStale(project),
         detail: isFinalRenderStale(project) ? `${STALE_RENDER_MESSAGE}.` : null,
-        action: isFinalRenderStale(project) ? { label: 'Re-render', anchor: 'mv-final-video' } : null,
+        action: project.renderHistoryId && !isFinalRenderStale(project) ? null : { label: project.renderHistoryId ? 'Re-render' : 'Render', anchor: 'mv-final-video' },
       }];
     case 'publish': {
       const kit = project.publishKit || {};
@@ -513,13 +569,14 @@ export function stageChecklist(stageId, project, readiness = project?.production
       const progress = publishPlatformProgress(project, publish);
       const items = [
         { id: 'kit', label: 'Kit built from the current render', done: kitCurrent,
-          detail: kit.builtAt && !kitCurrent ? 'The final render changed since the kit was built; rebuild it.' : null },
-        { id: 'copy', label: 'Copy drafted', done: !!(kit.copyDraftedAt || kit.copy) },
+          detail: kit.builtAt && !kitCurrent ? 'The final render changed since the kit was built; rebuild it.' : null,
+          action: kitCurrent ? null : { label: 'Build the kit', anchor: PUBLISH_ANCHOR } },
+        { id: 'copy', label: 'Copy drafted', done: !!(kit.copyDraftedAt || kit.copy), action: kit.copyDraftedAt || kit.copy ? null : { label: 'Draft the copy', anchor: PUBLISH_ANCHOR } },
       ];
-      if (!progress.rows.length) return [...items, { id: 'posted', label: 'Posted to a platform', done: progress.done }];
-      items.push({ id: 'posted', label: `Posted to every enabled platform (${formatCount(progress.posted)} of ${formatCount(progress.total)})`, done: progress.done });
+      if (!progress.rows.length) return [...items, { id: 'posted', label: 'Posted to a platform', done: progress.done, action: progress.done ? null : { label: 'Open publishing', anchor: PUBLISH_ANCHOR } }];
+      items.push({ id: 'posted', label: `Posted to every enabled platform (${formatCount(progress.posted)} of ${formatCount(progress.total)})`, done: progress.done, action: progress.done ? null : { label: 'Open publishing', anchor: PUBLISH_ANCHOR } });
       const STATE_LABELS = { posted: 'posted', draft: 'draft filled', none: 'not started' };
-      for (const row of progress.rows) items.push({ id: `post-${row.target}`, label: `${row.label}: ${STATE_LABELS[row.state]}`, done: row.state === 'posted' });
+      for (const row of progress.rows) items.push({ id: `post-${row.target}`, label: `${row.label}: ${STATE_LABELS[row.state]}`, done: row.state === 'posted', action: row.state === 'posted' ? null : { label: 'Open publishing', anchor: PUBLISH_ANCHOR } });
       return items;
     }
     default:

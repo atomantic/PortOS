@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { ListMusic, Plus, Trash2, Upload } from 'lucide-react';
+import { lyricSetupState } from '../../lib/musicVideoStages.js';
 
 // Client-minted ids keep a freshly added row addressable across saves without
 // waiting for the server (crypto.randomUUID is unavailable on the plain-HTTP
@@ -288,6 +289,12 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
         <section className="space-y-1 min-w-0">
           <div className="flex items-center justify-between">
             <h4 className="font-medium text-port-text">Lyric lines</h4>
+            {cues.length > 0 && !lyricSetupState(project).instrumental && (
+              <span className={`text-xs ${lyricSetupState(project).verified ? 'text-port-success' : 'text-port-warning'}`}
+                title="Verify the word timing in Production approvals once you have listened to it">
+                Lyric timing: {lyricSetupState(project).verified ? 'verified' : 'provisional'}
+              </span>
+            )}
             <span className="flex items-center gap-2">
               {onAlign && (
                 <button type="button" onClick={() => runAlign()} disabled={aligning || cues.length === 0 || !hasAudio}
