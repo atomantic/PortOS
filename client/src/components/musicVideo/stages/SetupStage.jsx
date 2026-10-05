@@ -9,7 +9,7 @@ import AudioTimingPanel from '../AudioTimingPanel.jsx';
 import AnalysisPanel from '../AnalysisPanel.jsx';
 import LyricsPanel from '../LyricsPanel.jsx';
 import VisualSpecPanel from '../VisualSpecPanel.jsx';
-import TreatmentPanel from '../TreatmentPanel.jsx';
+import TreatmentPanel, { treatmentSummary } from '../TreatmentPanel.jsx';
 import { AnalyzeAction, MidiAction } from '../ProjectActionGroups.jsx';
 import StageSection from '../StageSection.jsx';
 import ProjectOptionsPanel, { projectOptionsSummary } from '../ProjectOptionsPanel.jsx';
@@ -77,7 +77,7 @@ const directionSummary = (project) => {
  * (workflow, media, render style, image/video services, autopilot tools), Song
  * & lyrics (the track, its analysis/MIDI and lyrics), Creative direction
  * (universe, cast, places, mood board, concept & style, visual spec) and the
- * Treatment. A section opens by default when it holds the next thing to do;
+ * Treatment brief. A section opens by default when it holds the next thing to do;
  * an anchor inside a folded section unfolds it (see the page's hash effect).
  */
 export default function SetupStage({ board }) {
@@ -222,9 +222,9 @@ export default function SetupStage({ board }) {
           />
         </fieldset>
       </StageSection>
-      <StageSection id="mv-setup-treatment" title="Treatment" summary="The shot-by-shot treatment the plan builds on">
+      <StageSection id="mv-setup-treatment" title="Treatment brief" summary={`${treatmentSummary(project)} · feeds the shot planner`}>
         <fieldset disabled={locked} className="min-w-0">
-          <TreatmentPanel key={`treatment-${project.id}`} project={project} treatment={treatment} />
+          <TreatmentPanel key={`treatment-${project.id}`} project={project} treatment={treatment} part="brief" />
         </fieldset>
       </StageSection>
     </>

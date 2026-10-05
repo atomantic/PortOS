@@ -27,7 +27,7 @@ vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } })
 
 import * as api from '../../services/apiMusicVideo.js';
 import useMusicVideoTreatment from '../../hooks/useMusicVideoTreatment.js';
-import TreatmentPanel from './TreatmentPanel.jsx';
+import TreatmentPanel, { treatmentSummary } from './TreatmentPanel.jsx';
 
 const TREATMENT = {
   version: 1,
@@ -239,4 +239,30 @@ it('shows union totals and explicit exceptions before Apply, and pins a director
   ));
   await waitFor(() => expect(screen.getAllByLabelText('Keep medium on recompile')[0].checked).toBe(true));
   expect(screen.getByText(/generated video 10 \/ 20 seconds/)).toBeTruthy();
+});
+
+describe('TreatmentPanel split by dependency', () => {
+  const noop = { save: vi.fn(), compile: vi.fn(), compiling: false };
+  it('Setup (brief) shows the brief without a fold or compile controls, and points to the Board', () => {
+    const { container } = render(<TreatmentPanel project={PROJECT} treatment={noop} part="brief" />);
+    expect(container.querySelector('details')).toBeNull();
+    expect(screen.getByLabelText('Audience')).toBeTruthy();
+    expect(screen.queryByText('Draft without AI')).toBeNull();
+    expect(screen.getByText(/on the Board/)).toBeTruthy();
+  });
+  it('the Board half explains what is needed instead of compiling 0 shots', () => {
+    render(<TreatmentPanel project={{ ...PROJECT, scenes: [] }} treatment={noop} part="direction" />);
+    expect(screen.getByText(/Plan shots on the Board to direct them/)).toBeTruthy();
+    expect(screen.queryByText('Draft without AI')).toBeNull();
+    expect(screen.queryByLabelText('Audience')).toBeNull();
+  });
+  it('the Board half offers compile once scenes exist', () => {
+    render(<TreatmentPanel project={PROJECT} treatment={noop} part="direction" />);
+    expect(screen.getByText('Draft without AI')).toBeTruthy();
+    expect(screen.queryByLabelText('Audience')).toBeNull();
+  });
+  it('summarizes revision, applied state and gaps for the section header', () => {
+    expect(treatmentSummary({})).toBe('Not started');
+    expect(treatmentSummary(PROJECT)).toBe('rev 3 · 0 directed shots · not applied · 1 capability gap');
+  });
 });

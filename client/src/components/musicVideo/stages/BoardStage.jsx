@@ -2,6 +2,8 @@ import { Plus } from 'lucide-react';
 import BeatTimeline from '../BeatTimeline.jsx';
 import ContactSheetButton from '../ContactSheetButton.jsx';
 import SceneCard from '../SceneCard.jsx';
+import TreatmentPanel, { treatmentSummary } from '../TreatmentPanel.jsx';
+import StageSection from '../StageSection.jsx';
 import { PlanActions } from '../ProjectActionGroups.jsx';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 
@@ -12,7 +14,7 @@ import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
  * are collapsed to a thumbnail, lyric and status until tapped.
  */
 export default function BoardStage({ board }) {
-  const { project, locked, busy, sceneMedia, videoSettings, takes, activeSceneId, onToggleSceneExpand } = board;
+  const { project, locked, busy, sceneMedia, videoSettings, takes, treatment, activeSceneId, onToggleSceneExpand } = board;
   const scenes = project.scenes || [];
   const performanceReviews = new Map();
   const attempts = (project.autoReviews || []).flatMap((run) => run.attempts || []).slice().reverse();
@@ -32,6 +34,10 @@ export default function BoardStage({ board }) {
       <div className="rounded-lg border border-port-border bg-port-card p-3">
         <PlanActions project={project} busy={busy} onPlan={board.onPlan} onAutoArrange={board.onAutoArrange} />
       </div>
+
+      <StageSection id="mv-board-treatment" title="Treatment" summary={scenes.length ? treatmentSummary(project) : 'Plan shots to direct them'}>
+        <TreatmentPanel key={`treatment-${project.id}`} project={project} treatment={treatment} part="direction" />
+      </StageSection>
 
       {project.audioAnalysis && scenes.length > 0 && (
         <BeatTimeline audioAnalysis={project.audioAnalysis} scenes={scenes} lyricCues={project.lyricCues} narrativeEvents={project.composition?.narrativeEvents}
