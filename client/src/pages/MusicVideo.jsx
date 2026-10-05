@@ -87,6 +87,8 @@ import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
 import { sceneTakeList } from '../lib/musicVideoTakes.js';
 import { deriveAttentionItems } from '../lib/musicVideoAttention.js';
+import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
+import { useMusicVideoReviewDraft } from '../hooks/useMusicVideoReviewDraft.js';
 import {
   productionReviewStopGuidance, deriveNextAction, deriveStages, projectShotSummary, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, compareMusicVideoProjectsNewestFirst,
 } from '../lib/musicVideoStages.js';
@@ -269,7 +271,7 @@ export default function MusicVideo() {
   const [openedStage, setOpenedStage] = useState({ id: null, stage: null });
   // The opened stage waits for readiness (or its failure) so a done project never pins to Cast & Sets.
   const statusKnown = !!productionReview.readiness || !!productionReview.readinessError;
-  if (selected && statusKnown && openedStage.id !== selected.id) setOpenedStage({ id: selected.id, stage: progress.current });
+  if (selected && statusKnown && openedStage.id !== selected.id) setOpenedStage({ id: selected.id, stage: latestMusicVideoReviewDraft(selected) && !selected.renderHistoryId ? 'review' : progress.current });
   const pinnedStage = openedStage.id === selected?.id ? openedStage.stage : null;
   const activeStage = resolveStageParam(routeStage) || (routeSceneId ? 'board' : (pinnedStage || progress.current));
 
@@ -427,13 +429,13 @@ export default function MusicVideo() {
   // listening for anymore) and misattribute its progress UI to whichever
   // project is now selected. Block switching until that import settles. (The
   // hook re-asserts the same invariant against URL-driven navigation.)
-  const selectProject = (id) => {
+  const selectProject = (id, stage = null) => {
     if (youtube.editJob.active && id !== selectedId) {
       toast.error(youtube.switchBlockedMessage);
       return;
     }
     const search = searchParams.toString();
-    navigate(id ? `/music-video/${id}${search ? `?${search}` : ''}` : `/music-video${search ? `?${search}` : ''}`);
+    navigate(id ? `/music-video/${id}${stage ? `/${stage}` : ''}${search ? `?${search}` : ''}` : `/music-video${search ? `?${search}` : ''}`);
   };
 
   useEffect(() => {
@@ -970,7 +972,7 @@ export default function MusicVideo() {
   const audioFilename = projectAudioFilename(selected);
   const audioUrl = audioFilename ? trackAudioUrl(audioFilename) : null;
   const autopilotRun = selected?.autonomousRun || null;
-  const nextAction = selected ? deriveNextAction(selected, {
+  const productionNextAction = selected ? deriveNextAction(selected, {
     readiness: productionReview.readiness,
     publish,
     renderActive: renderTargetsSelected,
@@ -985,6 +987,15 @@ export default function MusicVideo() {
     planning,
     analyzing,
   }) : null;
+  const reviewingDraft = activeStage === 'review' && !!latestMusicVideoReviewDraft(selected) && !selected?.renderHistoryId;
+  const reviewDraftState = useMusicVideoReviewDraft(selected, { enabled: reviewingDraft });
+  const reviewDraft = reviewDraftState.draft;
+  const nextAction = reviewingDraft ? reviewDraftState.checking
+    ? { id: 'review-imported', kind: 'goto', stage: 'review', label: 'Checking review draft', disabled: true, reason: 'Checking exact-version media availability' }
+    : reviewDraft
+      ? { id: 'review-imported', kind: 'goto', stage: 'review', label: 'Review imported draft', shortLabel: 'Review draft' }
+      : { id: 'review-files', kind: 'goto', stage: 'review', anchor: 'mv-review-development', label: 'Choose review file', shortLabel: 'Choose file' }
+    : productionNextAction;
   // What the server holds that this tab might not be showing (#9940): derived
   // from the saved record, so it survives a reload. Work this tab can see
   // progressing (spinning sections, an attached render) is not flagged.
@@ -997,6 +1008,7 @@ export default function MusicVideo() {
   }) : [];
   const runNextAction = () => {
     if (!selected || !nextAction || nextAction.disabled || compositionSavePending > 0) return;
+    if (nextAction.id === 'review-imported') { openArtifact(reviewDraft.artifactId); return; }
     if (nextAction.kind === 'goto') { goToStage(nextAction.stage, nextAction.anchor); return; }
     switch (nextAction.id) {
       case 'kickoff': handleKickoff(); break;
@@ -1020,6 +1032,7 @@ export default function MusicVideo() {
   // use, so a panel moving between tabs never changes a signature here.
   const board = selected ? {
     project: selected,
+    reviewDraftState,
     activeSceneId: routeSceneId || null,
     onToggleSceneExpand: handleToggleSceneExpand,
     autopilotRun,
@@ -1193,12 +1206,9 @@ export default function MusicVideo() {
               ))}
             </select>
             {selected && (
-              <span className="flex items-center gap-1">
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-port-border">v{selected.version || 1}</span>
-              </span>
-            )}
-            {selected && (
-              <span className="flex flex-wrap items-center gap-1">
+              <details className="min-w-0">
+                <summary className="min-h-[44px] cursor-pointer rounded border border-port-border px-2 py-1.5 text-sm">Project actions · v{selected.version || 1}</summary>
+                <div className="flex flex-wrap items-center gap-1 py-2">
                 <button
                   type="button"
                   onClick={handleRename}
@@ -1246,7 +1256,8 @@ export default function MusicVideo() {
                     <Trash2 size={15} />
                   </button>
                 )}
-              </span>
+                </div>
+              </details>
             )}
             {!selected && (
               <>
@@ -1377,6 +1388,8 @@ export default function MusicVideo() {
                         project={project}
                         trackLabel={trackName(project.trackId)}
                         onSelect={() => selectProject(project.id)}
+                        onReview={project.preview?.source === 'final' || project.preview?.source === 'animatic' || project.renderHistoryId || latestMusicVideoReviewDraft(project)
+                          ? () => selectProject(project.id, 'review') : null}
                         onClone={(options) => handleClone(project, options)}
                         isConfirmingDelete={isConfirmingDelete(project.id)}
                         onRequestDelete={() => handleDeleteRequest(project.id)}
@@ -1415,7 +1428,7 @@ export default function MusicVideo() {
             onNextAction={runNextAction}
             spend={projectSpend(selected)}
             status={statusKnown && productionReview.readiness
-              ? describeProjectStatus(selected, { progress, nextAction, readiness: productionReview.readiness })
+              ? describeProjectStatus(selected, { progress, nextAction: productionNextAction, readiness: productionReview.readiness, reviewingDraft, reviewDraftState })
               : statusKnown
                 ? { headline: `Status unavailable: ${productionReview.readinessError}`, tone: 'warn', facts: [] }
                 : { headline: 'Loading status…', tone: 'muted', facts: [] }}
@@ -1459,12 +1472,14 @@ export default function MusicVideo() {
               )}
             </div>}
           >
+            <StageSection title="Native production prerequisites">
             <StageChecklist
               items={stageChecklist(activeStage, selected, productionReview.readiness, publish)}
               onAction={(action) => goToStage(action.stage || activeStage, action.anchor, action.params)}
               onRevert={productionReview.revert}
               headerAnchor={nextAction?.kind === 'goto' ? nextAction.anchor : null}
             />
+            </StageSection>
             {APPROVAL_STAGE_BY_TAB[activeStage] && (
               <ProductionReviewPanel
                 key={`${selected.id}-${activeStage}`}

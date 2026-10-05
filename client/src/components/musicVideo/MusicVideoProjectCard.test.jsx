@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import MusicVideoProjectCard from './MusicVideoProjectCard.jsx';
 
@@ -36,8 +36,39 @@ const BASE_PROJECT = {
   ],
   renderHistoryId: null,
 };
+afterEach(() => vi.unstubAllGlobals());
 
 describe('MusicVideoProjectCard', () => {
+  it('offers a distinct review action for an existing final render', () => {
+    const onSelect = vi.fn(), onReview = vi.fn();
+    render(<MusicVideoProjectCard project={{ ...BASE_PROJECT, renderHistoryId: 'example-final' }} onSelect={onSelect} onReview={onReview} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Review video' }));
+    expect(onReview).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+  it('offers exact imported-draft playback and only says ready after media loaded', async () => {
+    let intersect;
+    vi.stubGlobal('IntersectionObserver', class {
+      constructor(callback) { intersect = callback; }
+      observe() {}
+      disconnect() {}
+    });
+    const src = '/api/music-video/example/dev-artifacts/film/file?version=2';
+    const project = { ...BASE_PROJECT, preview: { kind: 'video', source: 'animatic', artifactId: 'film', version: 2, src, poster: null, label: 'Imported draft · v2', reviewStatus: 'pending' } };
+    const { container } = render(<MusicVideoProjectCard project={project} />);
+    expect(screen.queryByText('Ready to review')).toBeNull();
+    expect(container.querySelector('video')).toBeNull(); // offscreen cards fetch no media
+    act(() => intersect([{ isIntersecting: true }]));
+    fireEvent.loadedData(container.querySelector('video'));
+    expect(screen.getByText('Ready to review')).toBeInTheDocument();
+    fireEvent.error(container.querySelector('video'));
+    expect(screen.queryByText('Ready to review')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Play Imported draft · v2' }));
+    await waitFor(() => expect(container.querySelector('video')?.getAttribute('src')).toContain(src));
+    fireEvent.error(container.querySelector('video'));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(container.querySelector('video').getAttribute('src')).toBe(`${src}&retry=1`);
+  });
   it('renders a bounded summary (no scenes/runs) the same as a full record (#10169)', () => {
     const { scenes, ...rest } = BASE_PROJECT;
     const summary = {

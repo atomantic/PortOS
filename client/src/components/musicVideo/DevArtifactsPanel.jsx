@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { FileText, Film, Image as ImageIcon, LayoutGrid, Users, Upload, FolderOpen, Check } from 'lucide-react';
 import Pill from '../ui/Pill.jsx';
+import VideoArtifactThumbnail from './VideoArtifactThumbnail.jsx';
 import FilePickerButton from '../ui/FilePickerButton.jsx';
 import { timeAgo } from '../../utils/formatters.js';
+import { musicVideoDevArtifactFileUrl } from '../../services/apiMusicVideo.js';
 
 export const DEV_ARTIFACT_KIND_LABELS = {
   'cast-sets': 'Cast & Sets',
@@ -69,17 +71,22 @@ export default function DevArtifactsPanel({
         )}
       </div>
       {artifacts.length > 0 && (
-        <ul className="divide-y divide-port-border">
+        <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
           {artifacts.map((artifact) => {
             const Icon = KIND_ICONS[artifact.kind] || ImageIcon;
             const status = DEV_ARTIFACT_STATUS[artifact.status] || DEV_ARTIFACT_STATUS.pending;
             const open = (artifact.notes || []).filter((n) => !n.resolvedAt).length;
             return (
-              <li key={artifact.id} className="flex flex-wrap items-center gap-1">
+              <li key={artifact.id} className="min-w-0 rounded border border-port-border p-2">
                 <button type="button" onClick={() => onOpen(artifact.id)}
-                  className="flex-1 min-w-0 flex flex-wrap items-center gap-2 py-2 text-left min-h-[44px] hover:bg-port-bg/60 rounded px-1">
-                  <Icon size={15} className="text-port-text-muted shrink-0" aria-hidden="true" />
-                  <span className="text-sm min-w-0 flex-1 truncate">{artifact.title}</span>
+                  className="w-full min-w-0 space-y-1 text-left min-h-[44px] hover:bg-port-bg/60 rounded"
+                  aria-label={`Open ${artifact.title} v${artifact.version}`}>
+                  <span className="flex aspect-video items-center justify-center overflow-hidden rounded bg-port-bg">
+                    {artifact.mimeType?.startsWith('image/') ? <img loading="lazy" src={musicVideoDevArtifactFileUrl(project.id, artifact.id, artifact.version)} alt="" className="h-full w-full object-cover" />
+                      : artifact.mimeType === 'video/mp4' ? <VideoArtifactThumbnail src={musicVideoDevArtifactFileUrl(project.id, artifact.id, artifact.version)} className="h-full w-full" />
+                        : <Icon size={28} className="text-port-text-muted" aria-hidden="true" />}
+                  </span>
+                  <span className="block text-sm min-w-0 truncate" title={artifact.title}>{artifact.title}</span>
                   <span className="text-[11px] text-port-text-muted">{DEV_ARTIFACT_KIND_LABELS[artifact.kind] || artifact.kind} · v{artifact.version}</span>
                   {open > 0 && <Pill size="xs" tone="accent">{open} open note{open === 1 ? '' : 's'}</Pill>}
                   <Pill size="xs" tone={status.tone}>{status.label}</Pill>

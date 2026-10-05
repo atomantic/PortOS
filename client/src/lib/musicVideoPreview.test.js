@@ -1,5 +1,53 @@
 import { describe, it, expect } from 'vitest';
 import { selectMusicVideoPreview, musicVideoImageSrc, musicVideoImageFallback } from './musicVideoPreview.js';
+import { summarizeMusicVideoProject } from '../../../server/lib/musicVideoSummary.js';
+import { deriveStages, describeProjectStatus } from './musicVideoStages.js';
+
+const animatic = (id, version = 1, over = {}) => ({ id, kind: 'animatic', status: 'pending', version,
+  file: `music-video/source-project/dev/${id}/v${version}.mp4`, mimeType: 'video/mp4', bytes: 200,
+  versions: [{ version, file: `music-video/source-project/dev/${id}/v${version}.mp4`, mimeType: 'video/mp4', bytes: 200, createdAt: '2026-01-02' }], ...over });
+
+it('surfaces a pinned imported animatic in both full and summary cards without completing production', () => {
+  const project = { id: 'review-project', devArtifacts: [animatic('draft-film', 2)], scenes: [], composition: { mode: 'composed' } };
+  const preview = selectMusicVideoPreview(project);
+  expect(preview).toMatchObject({ source: 'animatic', version: 2, ownerProjectId: 'source-project', reviewStatus: 'pending',
+    src: '/api/music-video/review-project/dev-artifacts/draft-film/file?version=2' });
+  expect(summarizeMusicVideoProject(project, {}).preview).toEqual(preview);
+  const progress = deriveStages(project, null);
+  expect(progress.stages.find(stage => stage.id === 'review').state).not.toBe('done');
+  const status = describeProjectStatus(project, { progress, reviewingDraft: true });
+  expect(status.headline).toBe('Imported draft for review');
+  expect(status.facts.find(fact => fact.id === 'render').label).toContain('pending review');
+  expect(project.renderHistoryId).toBeUndefined();
+});
+
+it('keeps the native final ahead of drafts and rejects invalid, deleted and stale draft revisions', () => {
+  const valid = animatic('good-film');
+  const candidates = [animatic('removed', 1, { deleted: true }), animatic('stale', 1, { dependencyState: { status: 'stale' } }),
+    animatic('wrong-kind', 1, { kind: 'other' }), animatic('missing-version', 1, { versions: [] }),
+    animatic('mismatch', 2, { file: 'music-video/source-project/dev/mismatch/v1.mp4' })];
+  const project = { id: 'review-project', devArtifacts: [valid, ...candidates] };
+  expect(selectMusicVideoPreview(project).artifactId).toBe(valid.id);
+  expect(selectMusicVideoPreview({ ...project, devArtifacts: candidates }).kind).toBe('none');
+  expect(selectMusicVideoPreview({ ...project, renderHistoryId: 'native-final' }).label).toBe('Final video');
+});
+
+it('uses version creation time rather than later notes to choose the latest imported draft', () => {
+  const old = animatic('old-film', 1, { updatedAt: '2026-05-01' });
+  const newer = animatic('new-film', 1, { versions: [{ ...old.versions[0], file: 'music-video/source-project/dev/new-film/v1.mp4', createdAt: '2026-02-01' }], status: 'changes-requested' });
+  expect(selectMusicVideoPreview({ id: 'review-project', devArtifacts: [newer, old] })).toMatchObject({ artifactId: 'new-film', reviewStatus: 'changes-requested' });
+});
+
+it('describes the resolved review snapshot, including missing newer drafts and all-unavailable media', () => {
+  const project = { id: 'example', devArtifacts: [animatic('new-film', 3)], scenes: [] };
+  const progress = deriveStages(project, null);
+  const resolved = { draft: { version: 2, reviewStatus: 'approved' }, unavailableCount: 1, checking: false };
+  const status = describeProjectStatus(project, { progress, reviewingDraft: true, reviewDraftState: resolved });
+  expect(status.facts.find(fact => fact.id === 'render').label).toBe('Imported animatic v2 · draft reviewed');
+  const missing = describeProjectStatus(project, { progress, reviewingDraft: true, reviewDraftState: { ...resolved, draft: null } });
+  expect(missing.headline).toBe('Choose an available review file');
+  expect(missing.facts.find(fact => fact.id === 'render').label).toBe('Imported drafts unavailable');
+});
 
 describe('selectMusicVideoPreview', () => {
   it('returns none for null or empty project', () => {
@@ -16,6 +64,7 @@ describe('selectMusicVideoPreview', () => {
     const preview = selectMusicVideoPreview(project);
     expect(preview).toEqual({
       kind: 'video',
+      source: 'final',
       jobId: 'final-job-123',
       src: '/data/videos/final-job-123.mp4',
       poster: '/data/video-thumbnails/final-job-123.jpg',

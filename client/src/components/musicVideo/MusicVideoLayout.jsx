@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  AlertTriangle, ArrowRight, CheckCircle2, CircleDot, Clapperboard, Film, History, Layers, LayoutGrid, Music, Play,
+  AlertTriangle, ArrowRight, CheckCircle2, ChevronDown, CircleDot, Clapperboard, Film, History, Layers, LayoutGrid, Music, Play,
   Send, SlidersHorizontal, Users,
 } from 'lucide-react';
 import TabPills from '../ui/TabPills.jsx';
@@ -52,12 +52,12 @@ function ProjectStatusLine({ status }) {
       <div>
         <button
           type="button"
-          className="flex min-h-8 w-full min-w-0 items-center gap-1 text-left text-xs sm:hidden"
+          className="flex min-h-[44px] w-full min-w-0 items-center gap-1 text-left text-xs sm:hidden"
           aria-expanded={facts.length > 0 ? open : undefined}
           onClick={() => { if (facts.length > 0) setOpen((value) => !value); }}
         >
-          <span className={`min-w-0 truncate font-medium ${STATUS_TONES[status.tone] || ''}`}>{status.headline}</span>
-          {facts.length > 0 && <span className="shrink-0 text-port-text-muted">· {facts.length}</span>}
+          <span className={`min-w-0 font-medium ${STATUS_TONES[status.tone] || ''}`}>{status.headline}</span>
+          {facts.length > 0 && <ChevronDown size={14} aria-hidden="true" className={`shrink-0 ${open ? 'rotate-180' : ''}`} />}
         </button>
         {open && facts.length > 0 && (
           <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
@@ -123,18 +123,18 @@ export default function MusicVideoLayout({
     icon: STAGE_ICONS[entry.id],
     trailing: entry.state !== 'blocked' && entry.stale ? STALE_MARK : STAGE_TRAILING[entry.state] || null,
   }));
-  const showSpend = spend.spentUsd > 0 || spend.capUsd != null;
+  const showSpend = spend.spentUsd > 0 || spend.capUsd > 0;
   const stageEntry = progress.stages.find((entry) => entry.id === stage);
   const ActionIcon = nextAction?.kind === 'goto' ? ArrowRight : Play;
 
   return (
-    <div ref={rootRef} className={`space-y-3 ${dockVisible ? 'max-lg:pb-40' : 'max-md:pb-20'}`}>
+    <div ref={rootRef} className={`space-y-3 ${dockVisible ? 'max-lg:pb-[calc(10rem+env(safe-area-inset-bottom))]' : 'max-md:pb-[calc(5rem+env(safe-area-inset-bottom))]'}`}>
       <header
         ref={headerRef}
         className="sticky top-[calc(env(safe-area-inset-top)-1rem)] z-30 -mx-4 -mt-4 space-y-2 border-b border-port-border bg-port-bg px-4 pt-2 md:top-[calc(env(safe-area-inset-top)-1.5rem)] md:-mx-6 md:-mt-6 md:px-6"
       >
-        <div className="flex min-w-0 items-center gap-3">
-          <h2 className="min-w-0 flex-1 truncate text-lg font-semibold" title={project.name}>{project.name}</h2>
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
+          <h2 className="min-w-0 flex-1 basis-full truncate text-lg font-semibold max-sm:whitespace-normal max-sm:break-words sm:basis-auto" title={project.name}>{project.name}</h2>
           <span className="flex min-w-0 items-center gap-1 text-xs text-port-text-muted max-sm:hidden">
             <Music size={12} className="shrink-0" aria-hidden="true" />
             <span className="truncate">{trackLabel}</span>
@@ -153,7 +153,7 @@ export default function MusicVideoLayout({
               disabled={nextAction.disabled}
               title={nextAction.reason}
               aria-label={nextAction.label}
-              className="flex h-8 shrink-0 items-center gap-1 rounded bg-port-accent px-2 text-xs text-white disabled:opacity-50 sm:h-auto sm:min-h-0 sm:px-3 sm:py-1.5 sm:text-sm"
+              className="flex min-h-[44px] shrink-0 items-center gap-1 rounded bg-port-accent px-2 text-xs text-white disabled:opacity-50 sm:min-h-0 sm:px-3 sm:py-1.5 sm:text-sm"
             >
               <ActionIcon size={14} aria-hidden="true" />
               <span className="sm:hidden">{nextAction.shortLabel || nextAction.label}</span>
@@ -162,6 +162,7 @@ export default function MusicVideoLayout({
           )}
         </div>
         {status && <ProjectStatusLine status={status} />}
+        {nextAction?.disabled && nextAction.reason && <p role="status" className="text-xs text-port-text-muted">{nextAction.reason}</p>}
         {attention}
         <nav
           aria-label="Stages"

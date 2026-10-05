@@ -205,11 +205,13 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   </>;
   return <section id="mv-production-review" aria-label="Production review" className={framed ? 'rounded-lg border border-port-border bg-port-card p-3 space-y-3' : 'space-y-3'}>
     {framed && <h3 className="font-medium">Production review</h3>}
-    <p className="text-sm text-port-text-muted">{stage ? 'Approving a development file or rendering a draft does not approve production.'
-      : 'Approve the visual direction, then the timed storyboard, then the reviewed animated proof. Approving a development file or rendering a draft does not approve production.'}</p>
+    <details><summary className="min-h-[44px] cursor-pointer text-xs text-port-text-muted">About production approvals</summary>
+      <p className="text-sm text-port-text-muted">{stage ? 'Approving a development file or rendering a draft does not approve production.'
+        : 'Approve the visual direction, then the timed storyboard, then the reviewed animated proof. Approving a development file or rendering a draft does not approve production.'}</p>
+    </details>
     {review.error && <p role="alert" className="text-port-error">{review.error}</p>}
     <ol className="space-y-3">
-      {Object.entries(labels).filter(([key]) => !stage || key === stage).map(([key, label]) => <li key={key}><details open={!!stage || window.location.hash === `#mv-review-${key}` || key === nextStage} id={`mv-review-${key}`} tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className="rounded border border-port-border p-2 focus:outline focus:outline-2 focus:outline-port-accent">
+      {Object.entries(labels).filter(([key]) => !stage || key === stage).map(([key, label]) => <li key={key}><details open={window.location.hash === `#mv-review-${key}` || (!stage && key === nextStage)} id={`mv-review-${key}`} tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className="rounded border border-port-border p-2 focus:outline focus:outline-2 focus:outline-port-accent">
         <summary className="cursor-pointer min-h-[44px] py-2 text-sm font-medium">{label}</summary>
         <p role="status" className="text-xs">{ready?.[key].approved ? 'Approved for this revision' : 'Review required'}</p>
         <div id={fieldId(`${key}-prerequisites`)}>{(ready?.[key].problems || []).map(problem => <p key={problem} className="mt-1 text-xs text-port-text-muted">{problem}</p>)}</div>
@@ -274,7 +276,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         </>}
       </li>)}</ul>
     </details>
-    {stage !== 'proof' && <details id="mv-review-planning" tabIndex={-1} open={!!stage || window.location.hash === '#mv-review-planning'} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }}>
+    {stage !== 'proof' && <details id="mv-review-planning" tabIndex={-1} open={window.location.hash === '#mv-review-planning'} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }}>
       <summary className="cursor-pointer min-h-[44px] py-2 text-sm">{!stage ? 'Edit visual guide and storyboard' : showArt ? 'Edit art direction and visual guide' : 'Edit alignment and storyboard shots'}</summary>
       <div className="space-y-3">
         {importError && <p role="alert">{importError}</p>}

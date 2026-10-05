@@ -337,10 +337,17 @@ const selectProject = async (projectId) => {
 const STAGE_TABS = {
   setup: /^Setup/, 'cast-sets': /^Cast & Sets/, board: /^Board/, produce: /^Produce/, compose: /^Compose/, review: /^Review/,
 };
-const openStage = async (stage) => {
+const openStage = async (stage, selectFirstScene = true) => {
   const tab = await screen.findByRole('tab', { name: STAGE_TABS[stage] });
   fireEvent.click(tab);
   await waitFor(() => expect(screen.getByRole('tab', { name: STAGE_TABS[stage] })).toHaveAttribute('aria-selected', 'true'));
+  // Scene controls now belong to one URL-selected inspector. The existing
+  // generation/edit tests enter it through the visible thumbnail first.
+  if (stage === 'board' && selectFirstScene) {
+    const thumbnails = screen.getByLabelText('Storyboard thumbnails');
+    const first = within(thumbnails).queryAllByRole('button')[0];
+    if (first) await act(async () => { fireEvent.click(first); });
+  }
 };
 
 const openProject = async (project, stage = null) => {
@@ -1294,7 +1301,7 @@ describe('MusicVideo project versions', () => {
 
     await waitFor(() => expect(cloneMusicVideoProject).toHaveBeenCalledWith('mv-1', {}, { silent: true }));
     await screen.findByRole('heading', { level: 2, name: 'Neon Run v2' });
-    expect(screen.getByText('v2')).toBeTruthy();
+    expect(screen.getByText('Project actions · v2')).toBeTruthy();
   });
 });
 
@@ -1529,7 +1536,7 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
     expect(screen.getAllByText(/first line/).length).toBeGreaterThan(0);
 
     const players = document.body.querySelectorAll('video[src^="/data/videos/h"]');
-    expect(players).toHaveLength(2);
+    expect(players).toHaveLength(1); // only the selected shot owns a player
     for (const player of players) {
       Object.defineProperty(player, 'duration', { configurable: true, value: 5 });
       fireEvent.loadedMetadata(player);
@@ -1541,6 +1548,14 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
     fireEvent.click(within(alerts[0]).getByRole('button', { name: 'Trim to clip' }));
     await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-1', 's1', { endSec: 7 }, { silent: true }));
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Scene 2' })));
+    const legacyPlayers = document.body.querySelectorAll('video[src^="/data/videos/h"]');
+    expect(legacyPlayers).toHaveLength(1);
+    expect(legacyPlayers[0]).toHaveAttribute('src', '/data/videos/h2.mp4');
+    Object.defineProperty(legacyPlayers[0], 'duration', { configurable: true, value: 5 });
+    fireEvent.loadedMetadata(legacyPlayers[0]);
+    expect(screen.queryByRole('alert')).toBeNull(); // legacy shots still loop to fill their span
   });
 });
 
@@ -1588,6 +1603,7 @@ describe('MusicVideo section layers (#8985)', () => {
     expect(renderBtn).toBeDisabled();
 
     await openStage('board');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Scene 2' })));
     const layer = document.getElementById('mv-scene-s2-layer');
     fireEvent.change(layer, { target: { value: 'card' } });
     await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-1', 's2', { visualLayer: 'card' }, { silent: true }));
@@ -1604,6 +1620,7 @@ describe('MusicVideo section layers (#8985)', () => {
 
   it('keeps a plain render on footage and says the layer only applies to composed renders', async () => {
     await openProject({ ...PROJECT_WITH_CLIP, scenes: [scenes[0], { ...scenes[1], visualLayer: 'card' }], composition: composition('concat') }, 'board');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Scene 2' })));
     expect(await screen.findByText(/Title card sections render in composed or document mode/)).toBeTruthy();
     await openStage('review');
     expect(screen.getByRole('button', { name: /^Render final$/ })).toBeDisabled();
@@ -2604,9 +2621,9 @@ describe('MusicVideo stage tabs (#9243)', () => {
       await openStage('board');
       expect(screen.getByTitle('Composition document preview')).toBeTruthy();
       await waitFor(() => expect(screen.getByText('0.00s / 60.0s')).toBeTruthy());
-      fireEvent.click(screen.getByText('Scene 2'));
+      fireEvent.click(screen.getByRole('button', { name: 'Open Scene 2' }));
       await waitFor(() => expect(screen.getByText('4.00s / 60.0s')).toBeTruthy());
-      fireEvent.click(screen.getByText('Scene 1'));
+      fireEvent.click(screen.getByRole('button', { name: 'Open Scene 1' }));
       await waitFor(() => expect(screen.getByText('0.00s / 60.0s')).toBeTruthy());
     });
 
@@ -2638,7 +2655,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
       expect(final.getAttribute('src')).toBe('/data/videos/final.mp4');
       fireEvent.change(screen.getByLabelText('Preview source'), { target: { value: 'excerpt:mve-1' } });
       await waitFor(() => expect(screen.getByLabelText('Draft excerpt preview').getAttribute('src')).toBe('/data/videos/excerpt-old.mp4'));
-      await openStage('board');
+      await openStage('board', false);
       expect(screen.getByLabelText('Draft excerpt preview').getAttribute('src')).toBe('/data/videos/excerpt-old.mp4');
       expect(screen.queryByLabelText('Final render preview')).toBeNull();
     });
@@ -2733,6 +2750,16 @@ describe('MusicVideo main page project cards', () => {
 
     // Navigates and loads the project board
     expect(await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name })).toBeInTheDocument();
+  });
+
+  it('opens an existing final directly in Review from the project card', async () => {
+    const project = { ...PROJECT_WITH_CLIP, renderHistoryId: 'example-final' };
+    listMusicVideoProjects.mockResolvedValue([project]);
+    render(<MemoryRouter initialEntries={['/music-video']}><LocationProbe />{MV_ROUTES}</MemoryRouter>);
+    const card = await screen.findByTestId(`mv-project-card-${project.id}`);
+    await act(async () => fireEvent.click(within(card).getByRole('button', { name: 'Review video' })));
+    expect(screen.getByTestId('loc')).toHaveTextContent(`/music-video/${project.id}/review`);
+    expect(screen.getByRole('tab', { name: /^Review/ })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('handles forking a project directly from its card', async () => {
@@ -2926,20 +2953,39 @@ describe('MusicVideo deep-linking and drawer URL routing (#10168)', () => {
     await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
     expect(screen.getByTestId('loc')).toHaveTextContent(`/music-video/${PROJECT_WITH_CLIP.id}/board`);
 
+    expect(document.getElementById('scene-s1')).toBeNull();
+    const thumbnail = screen.getByRole('button', { name: 'Open Scene 1' });
+    await act(async () => fireEvent.click(thumbnail));
     const details = document.getElementById('scene-s1');
     expect(details).toBeInTheDocument();
-    await act(async () => {
-      details.open = true;
-      fireEvent(details, new Event('toggle'));
-    });
     expect(screen.getByTestId('loc')).toHaveTextContent(`/music-video/${PROJECT_WITH_CLIP.id}/board/scene/s1`);
 
+    details.querySelector('summary').focus();
     await act(async () => {
       details.open = false;
       fireEvent(details, new Event('toggle'));
     });
     expect(screen.getByTestId('loc')).toHaveTextContent(`/music-video/${PROJECT_WITH_CLIP.id}/board`);
+    expect(document.getElementById('scene-s1')).toBeNull();
+    expect(thumbnail).toHaveFocus();
     await settle();
+  });
+
+  it('keeps scene routing and focus together when j/k switches the inspector', async () => {
+    const first = { ...PROJECT_WITH_CLIP.scenes[0], sceneId: 's1', order: 0 };
+    listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP, scenes: [first, { ...first, sceneId: 's2', order: 1 }] }]);
+    render(<MemoryRouter initialEntries={[`/music-video/${PROJECT_WITH_CLIP.id}/board/scene/s1`]}><LocationProbe />{MV_ROUTES}</MemoryRouter>);
+    await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
+    document.querySelector('#scene-s1 summary').focus();
+    await act(async () => fireEvent.keyDown(document.activeElement, { key: 'j' }));
+    expect(screen.getByTestId('loc')).toHaveTextContent(`/music-video/${PROJECT_WITH_CLIP.id}/board/scene/s2`);
+    expect(document.querySelector('#scene-s1')).toBeNull();
+    expect(document.querySelector('#scene-s2 summary')).toHaveFocus();
+    expect(document.querySelectorAll('video[src^="/data/videos/"]')).toHaveLength(1);
+    await act(async () => fireEvent.keyDown(document.activeElement, { key: 'k' }));
+    expect(screen.getByTestId('loc')).toHaveTextContent(`/music-video/${PROJECT_WITH_CLIP.id}/board/scene/s1`);
+    expect(document.querySelector('#scene-s2')).toBeNull();
+    expect(document.querySelector('#scene-s1 summary')).toHaveFocus();
   });
 
   it('closes open drawer on back navigation', async () => {

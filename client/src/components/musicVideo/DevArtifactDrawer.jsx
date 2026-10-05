@@ -138,8 +138,8 @@ export default function DevArtifactDrawer({
             </button>
           </div>
 
-          <div>
-            <h3 className="text-xs uppercase tracking-wide text-port-text-muted mb-1">Notes</h3>
+          <details>
+            <summary className="min-h-[44px] cursor-pointer text-sm">Notes and provenance · {(artifact.notes || []).length}</summary>
             {(artifact.notes || []).length === 0 && <p className="text-xs text-port-text-muted">No notes yet.</p>}
             <ul className="space-y-1.5">
               {[...(artifact.notes || [])].reverse().map((note) => (
@@ -155,10 +155,10 @@ export default function DevArtifactDrawer({
                 </li>
               ))}
             </ul>
-          </div>
+          </details>
 
-          <div>
-            <h3 className="text-xs uppercase tracking-wide text-port-text-muted mb-1">Versions</h3>
+          <details>
+            <summary className="min-h-[44px] cursor-pointer text-sm">Version history · {(artifact.versions || []).length}</summary>
             <ol className="space-y-1 text-xs">
               {[...(artifact.versions || [])].reverse().map((v) => (
                 <li key={v.version}>
@@ -169,7 +169,7 @@ export default function DevArtifactDrawer({
                 </li>
               ))}
             </ol>
-          </div>
+          </details>
 
           <div className="pt-2 border-t border-port-border">
             {confirmDelete ? (
