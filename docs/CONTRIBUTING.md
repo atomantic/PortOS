@@ -149,6 +149,13 @@ npm run setup:db:test
 npm run test:db
 ```
 
+For release validation, run `npm run test:db` after the server and client
+suites finish rather than alongside them. A concurrent run is supported —
+the database restore suite drains a timed-out case before the next one touches
+`portos_test` — but its per-case budgets assume an
+unloaded machine, so a concurrent run can time out cases a sequential run
+passes.
+
 For server watch mode, run this alternative from the repository root:
 
 ```bash
