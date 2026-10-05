@@ -316,3 +316,27 @@ describe('Stale alignment review', () => {
     expect(button.disabled).toBe(true);
   });
 });
+
+describe('Per-stage approval sections (#10151)', () => {
+  it('renders only its own stage and sends a missing prerequisite to the tab that owns it', () => {
+    const review = reviewFixture();
+    review.readiness.art.approved = false;
+    const prototype = { ...project, productionReview: { ...project.productionReview, proof: null, prototype: { excerptId: 'proof-a' } } };
+    const onNavigate = vi.fn();
+    render(<ProductionReviewPanel project={prototype} review={review} onOpenArtifact={vi.fn()} stage="proof" onNavigate={onNavigate} />);
+    expect(screen.queryByText('Art direction', { selector: 'summary' })).toBeNull();
+    expect(screen.queryByText('Edit art direction and visual guide')).toBeNull();
+    fireEvent.click(screen.getByText('Review and approve art direction'));
+    expect(onNavigate).toHaveBeenCalledWith('cast-sets', 'mv-review-art');
+  });
+
+  it('keeps the art fields on the art section and the shot editor on the board section', () => {
+    const art = render(<ProductionReviewPanel project={project} review={reviewFixture()} onOpenArtifact={vi.fn()} stage="art" />);
+    expect(screen.getByLabelText('Cast guide')).toBeTruthy();
+    expect(screen.queryByLabelText('Storyboard source')).toBeNull();
+    art.unmount();
+    render(<ProductionReviewPanel project={project} review={reviewFixture()} onOpenArtifact={vi.fn()} stage="storyboard" />);
+    expect(screen.getByLabelText('Storyboard source')).toBeTruthy();
+    expect(screen.queryByLabelText('Cast guide')).toBeNull();
+  });
+});

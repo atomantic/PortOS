@@ -87,7 +87,7 @@ import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
 import { sceneTakeList } from '../lib/musicVideoTakes.js';
 import { deriveAttentionItems } from '../lib/musicVideoAttention.js';
 import {
-  productionReviewStopGuidance, approvalSummary, deriveNextAction, deriveStages, projectShotSummary, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, compareMusicVideoProjectsNewestFirst,
+  productionReviewStopGuidance, deriveNextAction, deriveStages, projectShotSummary, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, compareMusicVideoProjectsNewestFirst,
 } from '../lib/musicVideoStages.js';
 import { groupMusicVideoProjects } from '../lib/musicVideoProjectList.js';
 import { AUTONOMOUS_STATUS_LABELS, AUTONOMOUS_VIEWABLE_STAGES } from '../lib/musicVideoAutonomous.js';
@@ -109,6 +109,8 @@ function autopilotBlocker(project) {
 // A saved art draft needs every field the server schema requires.
 const EMPTY_PRODUCTION_DRAFT = { cast: '', environments: '', visualLanguage: '', motionLanguage: '', guideArtifactId: null,
   lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [] };
+// The tab that owns each production approval (#10151).
+const APPROVAL_STAGE_BY_TAB = { 'cast-sets': 'art', board: 'storyboard', compose: 'proof' };
 const STAGE_VIEWS = {
   setup: SetupStage, 'cast-sets': CastSetsStage, board: BoardStage, produce: ProduceStage, compose: ComposeStage, review: ReviewStage, publish: PublishStage,
 };
@@ -369,6 +371,9 @@ export default function MusicVideo() {
   // picker opened for one project can never write into another.
   const [pickerTarget, setPickerTarget] = useState(null);
   useEffect(() => { setPickerTarget(null); }, [selectedId]);
+  // Unsaved planning edits live here, not in the approval section, so they survive a tab switch (each tab mounts its own section).
+  const [planningState, setPlanningState] = useState({ id: null, draft: null });
+  const planningDraft = [planningState.id === selectedId ? planningState.draft : null, (draft) => setPlanningState({ id: selectedId, draft })];
   // Contact sheet open state lives in the URL (?sheet=contact) so it survives a
   // reload and Back closes it.
   const contactSheetOpen = searchParams.get('sheet') === 'contact';
@@ -1432,22 +1437,25 @@ export default function MusicVideo() {
                   <AutonomousRunPanel project={selected} auto={autonomous} readiness={productionReview.readiness} selectedStage={runStage} onSelectStage={setRunStage} framed={false} />
                 </StageSection>
               )}
-              <StageSection
-                key={`production-review-${selected.id}`}
-                title="Production approvals"
-                summary={approvalSummary(productionReview.readiness) || 'Visual direction, timed storyboard and a watched proof'}
-                defaultOpen={nextAction?.id === 'review-production' && nextAction.stage === activeStage}
-              >
-                <ProductionReviewPanel project={selected} review={productionReview} onOpenArtifact={openArtifact} framed={false}
-                  proofHere={activeStage === 'compose'} onOpenProof={() => goToStage('compose', 'mv-review-proof')} />
-              </StageSection>
             </div>}
           >
             <StageChecklist
               items={stageChecklist(activeStage, selected, productionReview.readiness, publish)}
-              onAction={(action) => goToStage(activeStage, action.anchor)}
+              onAction={(action) => goToStage(action.stage || activeStage, action.anchor)}
               headerAnchor={nextAction?.kind === 'goto' ? nextAction.anchor : null}
             />
+            {APPROVAL_STAGE_BY_TAB[activeStage] && (
+              <ProductionReviewPanel
+                key={`${selected.id}-${activeStage}`}
+                project={selected}
+                review={productionReview}
+                onOpenArtifact={openArtifact}
+                framed={false}
+                stage={APPROVAL_STAGE_BY_TAB[activeStage]}
+                planning={planningDraft}
+                onNavigate={goToStage}
+              />
+            )}
             <StageView key={selected.id} board={board} />
           </MusicVideoLayout>
         )}

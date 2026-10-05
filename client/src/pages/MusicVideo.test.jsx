@@ -2389,14 +2389,16 @@ describe('MusicVideo stage tabs (#9243)', () => {
   );
   const selectedTab = () => screen.getByRole('tab', { selected: true });
 
-  it('puts the selected stage before shared run/review panels and preserves review drafts when tabs change', async () => {
+  it('puts the selected stage before the shared run panel, shows only its own approval, and keeps unsaved planning edits across tabs', async () => {
     listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP,
       autonomousRun: { status: 'needs-human', stage: 'video', output: {}, brief: {} },
     }]);
     renderAt('/music-video/mv-1/cast-sets');
     await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
     const review = screen.getByRole('region', { name: 'Production review' });
-    fireEvent.click(within(review).getByText('Edit visual guide and storyboard'));
+    expect(within(review).getByText('Art direction')).toBeInTheDocument();
+    expect(within(review).queryByText('Lyric-timed storyboard')).toBeNull();
+    expect(screen.queryByText('Production approvals')).toBeNull();
     const castDraft = within(review).getByLabelText('Cast guide');
     fireEvent.change(castDraft, { target: { value: 'Example unsaved cast direction' } });
 
@@ -2404,12 +2406,13 @@ describe('MusicVideo stage tabs (#9243)', () => {
       await openStage(stage);
       const panel = screen.getByRole('tabpanel');
       expect(within(panel).getByRole('heading', { level: 3, name: selectedTab().textContent })).toBeInTheDocument();
-      for (const shared of [screen.getByRole('region', { name: 'Autonomous run' }), review]) {
-        expect(panel.contains(shared)).toBe(false);
-        expect(panel.compareDocumentPosition(shared) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-      }
-      expect(within(review).getByLabelText('Cast guide')).toHaveValue('Example unsaved cast direction');
+      const run = screen.getByRole('region', { name: 'Autonomous run' });
+      expect(panel.contains(run)).toBe(false);
+      expect(panel.compareDocumentPosition(run) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      if (stage === 'board') expect(within(panel).getByText('Lyric-timed storyboard')).toBeInTheDocument();
+      if (stage === 'produce') expect(screen.queryByRole('region', { name: 'Production review' })).toBeNull();
     }
+    expect(screen.getByLabelText('Cast guide')).toHaveValue('Example unsaved cast direction');
   });
 
   it('uses the newly selected project making-of notes and links when drafting publication copy', async () => {
@@ -2771,8 +2774,9 @@ describe('direct production review navigation', () => {
     const action = await screen.findByRole('button', { name: 'Review art direction' });
     expect(screen.getByLabelText('Project')).toHaveTextContent('2 document shots');
     fireEvent.click(action);
+    // The art approval now mounts on the Cast & Sets tab, so it only exists once the jump lands.
+    await waitFor(() => expect(document.getElementById('mv-review-art')).toHaveFocus());
     const art = document.getElementById('mv-review-art');
-    await waitFor(() => expect(art).toHaveFocus());
     expect(art.closest('details').open).toBe(true);
     expect(screen.getByTestId('loc')).toHaveTextContent('/cast-sets#mv-review-art');
     fireEvent.click(screen.getByRole('button', { name: 'Review art direction' }));
@@ -2783,7 +2787,7 @@ describe('direct production review navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'go--1' }));
     expect(screen.getByTestId('loc')).toHaveTextContent('/review');
     fireEvent.click(screen.getByRole('button', { name: 'go-1' }));
-    await waitFor(() => expect(art).toHaveFocus());
+    await waitFor(() => expect(document.getElementById('mv-review-art')).toHaveFocus());
   });
 });
 
@@ -2800,7 +2804,7 @@ describe('stage checklist and Setup project options', () => {
     await openProject(project, 'cast-sets');
     const checklist = screen.getByRole('region', { name: 'What this stage needs' });
     expect(checklist).toHaveTextContent('1 of 3 done');
-    expect(checklist).toHaveTextContent('Pick a Cast & Sets sheet as the visual guide in Production approvals.');
+    expect(checklist).toHaveTextContent('Pick a Cast & Sets sheet as the visual guide in the art direction editor below.');
     expect(checklist).toHaveTextContent('Art direction approved');
     expect(checklist).toHaveTextContent('Approving a sheet file does not approve the art direction');
   });

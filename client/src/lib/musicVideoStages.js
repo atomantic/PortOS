@@ -445,7 +445,7 @@ export function deriveNextAction(project, {
   }
 }
 
-// The editable art-direction fields Production approvals needs before art can be approved.
+// The editable art-direction fields the art approval needs before art can be approved.
 const ART_DIRECTION_FIELDS = [['cast', 'cast'], ['environments', 'sets'], ['visualLanguage', 'visual language'], ['motionLanguage', 'motion']];
 /** "Approved earlier — changed since: concept, scene 3 prompt" for an approval whose inputs moved; null otherwise. */
 export function staleApprovalText(stale) {
@@ -455,6 +455,7 @@ export function staleApprovalText(stale) {
   return stale.changedFields.length ? `Approved earlier — changed since: ${shown}${more}.` : 'Approved earlier — its inputs changed since.';
 }
 const APPROVAL_ANCHORS = { art: 'mv-review-art', storyboard: 'mv-review-storyboard', proof: 'mv-review-proof' };
+const APPROVAL_STAGES = { art: 'cast-sets', storyboard: 'board', proof: 'compose' };
 const PUBLISH_ANCHOR = 'mv-publish-kit';
 
 // Storyboard readiness problems, grouped by what the user has to go fix. The
@@ -485,7 +486,7 @@ function storyboardProblemItems(readiness) {
  * header's "needs you" agree; `detail` says what is still missing (for an
  * approval, the server's first readiness problem); `action` is a
  * `{ label, anchor }` the tab can scroll to. Approvals are revision-bound and
- * live in Production approvals, never on a development file: approving a
+ * are decided on their own stage tab, never on a development file: approving a
  * Cast & Sets sheet file does not approve the art direction, so the art item
  * says so while it is open.
  */
@@ -499,8 +500,8 @@ export function stageChecklist(stageId, project, readiness = project?.production
     const stale = staleApprovalText(readiness?.[key]?.stale);
     return {
       id: `approve-${key}`, label: `${label} approved`, done: approved, stale: !!stale,
-      detail: approved || !readiness ? null : (stale ? `${stale} Re-approve in Production approvals.` : readiness[key]?.problems?.[0] || waitingText),
-      action: approved ? null : { label: `Review ${label.toLowerCase()}`, anchor: APPROVAL_ANCHORS[key] },
+      detail: approved || !readiness ? null : (stale ? `${stale} Re-approve in the editor below.` : readiness[key]?.problems?.[0] || waitingText),
+      action: approved ? null : { label: `Review ${label.toLowerCase()}`, anchor: APPROVAL_ANCHORS[key], stage: APPROVAL_STAGES[key] },
     };
   };
   switch (stageId) {
@@ -531,9 +532,9 @@ export function stageChecklist(stageId, project, readiness = project?.production
         { id: 'direction', label: 'Art direction written', done: missing.length === 0, detail: missing.length ? `Still missing: ${missing.join(', ')}.` : null,
           action: missing.length ? { label: 'Write art direction', anchor: APPROVAL_ANCHORS.art } : null },
         { id: 'guide', label: guide ? `Visual guide chosen: ${guide.title || guide.filename || 'sheet'}` : 'Visual guide chosen', done: !!guide,
-          detail: guide ? null : 'Pick a Cast & Sets sheet as the visual guide in Production approvals.',
+          detail: guide ? null : 'Pick a Cast & Sets sheet as the visual guide in the art direction editor below.',
           action: guide ? null : { label: 'Choose a guide', anchor: APPROVAL_ANCHORS.art } },
-        approval('art', 'Art direction', 'Ready for your review. Approving a sheet file does not approve the art direction; approve it in Production approvals.'),
+        approval('art', 'Art direction', 'Ready for your review. Approving a sheet file does not approve the art direction; approve it below.'),
       ];
     }
     case 'board': {
@@ -542,7 +543,7 @@ export function stageChecklist(stageId, project, readiness = project?.production
         { id: 'shots', label: 'Shots planned', done: planned, detail: planned ? null : 'Plan the shots from the header, or add scenes by hand.',
           action: planned ? null : { label: 'Open the treatment', anchor: 'mv-board-treatment' } },
         ...storyboardProblemItems(readiness),
-        approval('storyboard', 'Timed storyboard', 'Ready for your review in Production approvals.'),
+        approval('storyboard', 'Timed storyboard', 'Ready for your review below.'),
       ];
     }
     case 'produce': {
