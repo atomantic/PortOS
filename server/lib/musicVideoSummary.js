@@ -61,8 +61,9 @@ function currentStage(project, readiness, run) {
     setup: Boolean(project.trackId || project.uploadedAudioFilename) && Boolean(project.audioAnalysis),
     'cast-sets': Boolean(readiness?.art?.approved),
     board: planned,
-    produce: planned && footageReady && proofApproved,
-    compose: proofApproved && composeDone(project, mode),
+    // The proof closes Compose, not Produce (#10140) — mirrors the client's deriveStages.
+    produce: planned && footageReady,
+    compose: composeDone(project, mode) && proofApproved,
     review: Boolean(project.renderHistoryId),
     publish: Object.keys(project.publishKit?.posts || {}).length > 0,
   };

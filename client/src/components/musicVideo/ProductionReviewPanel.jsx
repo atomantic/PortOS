@@ -11,7 +11,9 @@ const EMPTY_PLAYBACK = { method: 'playback', energyComparison: '', timecodedNote
 
 /** Editable planning content and explicit operator decisions for every render mode. */
 // `framed={false}` drops the card chrome and heading for a host that supplies them (the page's collapsible section).
-export default function ProductionReviewPanel({ project, review, onOpenArtifact, framed = true }) {
+// The proof is the last step of Compose (#10140): a host showing another tab passes `proofHere={false}`
+// and `onOpenProof`, so the proof's render and approval controls live on Compose only.
+export default function ProductionReviewPanel({ project, review, onOpenArtifact, framed = true, proofHere = true, onOpenProof = null }) {
   const fieldId = key => `mv-review-${project.id}-${key}`;
   const saved = project.productionReview?.draft || EMPTY;
   const [visibleArt, setVisibleArt] = useState(null);
@@ -127,7 +129,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
     {excerpt && <p className="text-xs text-port-text-muted break-words">{excerpt.filename || excerpt.status} · {project.productionReview?.proof?.basis === ready?.basis.proof ? 'Current source revision' : 'Source changed — render a new proof'}</p>}
     {excerpt?.status === 'error' && excerpt.error && <p role="alert" className="text-sm text-port-error break-words">{excerpt.error}</p>}
 
-      <p className="text-sm">Author the approved storyboard in Compose, then render a 10–45 second chorus with its entry and exit. Watch with sound at normal speed and compare the chosen energy target and timed choreography below against the actual subject, props, camera, typography and transitions. Check accents against beat and lyric anchors, readable holds and repeated-chorus escalation. A strong static frame does not prove the motion works.</p>
+      <p className="text-sm">Finish the composition above (typography, grade, render style), then render a 10–45 second chorus with its entry and exit. Watch with sound at normal speed and compare the chosen energy target and timed choreography below against the actual subject, props, camera, typography and transitions. Check accents against beat and lyric anchors, readable holds and repeated-chorus escalation. A strong static frame does not prove the motion works.</p>
       <section aria-label="Saved choreography for proof comparison" className="rounded border border-port-border bg-port-bg p-3">
         <h4 className="text-sm font-medium">Saved energy target and timed choreography</h4>
         <p className="mt-1 whitespace-pre-wrap text-sm">{saved.motionLanguage || 'Save an energy target and timed choreography in the planning editor before judging the proof.'}</p>
@@ -196,7 +198,12 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
     <p className="text-sm text-port-text-muted">Approve the visual direction, then the timed storyboard, then the reviewed animated proof. Approving a development file or rendering a draft does not approve production.</p>
     {review.error && <p role="alert" className="text-port-error">{review.error}</p>}
     <ol className="space-y-3">
-      {Object.entries(labels).map(([key, label]) => <li key={key}><details open={window.location.hash === `#mv-review-${key}` || key === nextStage} id={`mv-review-${key}`} tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className="rounded border border-port-border p-2 focus:outline focus:outline-2 focus:outline-port-accent">
+      {Object.entries(labels).map(([key, label]) => key === 'proof' && !proofHere ? <li key={key} className="rounded border border-port-border p-2">
+        <p className="text-sm font-medium">{label}</p>
+        <p role="status" className="text-xs">{ready?.proof.approved ? 'Approved for this revision' : 'Review required'}</p>
+        <p className="mt-1 text-xs text-port-text-muted">The proof is the last step of Compose: render, watch and approve it there, over the finished typography and grade.</p>
+        {onOpenProof && <button type="button" className={`${buttonClass} mt-2`} onClick={onOpenProof}>Open the proof in Compose</button>}
+      </li> : <li key={key}><details open={window.location.hash === `#mv-review-${key}` || key === nextStage} id={`mv-review-${key}`} tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className="rounded border border-port-border p-2 focus:outline focus:outline-2 focus:outline-port-accent">
         <summary className="cursor-pointer min-h-[44px] py-2 text-sm font-medium">{label}</summary>
         <p role="status" className="text-xs">{ready?.[key].approved ? 'Approved for this revision' : 'Review required'}</p>
         <div id={fieldId(`${key}-prerequisites`)}>{(ready?.[key].problems || []).map(problem => <p key={problem} className="mt-1 text-xs text-port-text-muted">{problem}</p>)}</div>

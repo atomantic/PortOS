@@ -1438,7 +1438,8 @@ export default function MusicVideo() {
                 summary={approvalSummary(productionReview.readiness) || 'Visual direction, timed storyboard and a watched proof'}
                 defaultOpen={nextAction?.id === 'review-production' && nextAction.stage === activeStage}
               >
-                <ProductionReviewPanel project={selected} review={productionReview} onOpenArtifact={openArtifact} framed={false} />
+                <ProductionReviewPanel project={selected} review={productionReview} onOpenArtifact={openArtifact} framed={false}
+                  proofHere={activeStage === 'compose'} onOpenProof={() => goToStage('compose', 'mv-review-proof')} />
               </StageSection>
             </div>}
           >

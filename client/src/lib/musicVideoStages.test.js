@@ -140,15 +140,15 @@ describe('deriveStages / deriveNextAction', () => {
     // Eidoverse: Produce done without footage; Compose waits on a saved scene.
     expect(stateOf(withMode({ mode: 'eidoverse' })).produce).toBe('done');
     expect(deriveStages(withMode({ mode: 'eidoverse' })).current).toBe('compose');
-    expect(stageChecklist('produce', withMode({ mode: 'eidoverse' }), APPROVED).map((i) => i.id)).toEqual(['approve-proof']);
-    expect(stageChecklist('compose', withMode({ mode: 'eidoverse' }), APPROVED)[1])
+    expect(stageChecklist('produce', withMode({ mode: 'eidoverse' }), APPROVED).map((i) => [i.id, i.done])).toEqual([['footage', true]]);
+    expect(stageChecklist('compose', withMode({ mode: 'eidoverse' }), APPROVED)[0])
       .toMatchObject({ label: 'Save the Eidoverse scene', done: false, action: { anchor: 'mv-eidoverse-scene' } });
     const saved = withMode({ mode: 'eidoverse', eidoverseScene: { inlineScript: 'scene()' } });
     expect(deriveStages(saved).current).toBe('review');
-    expect(stageChecklist('compose', saved, APPROVED)[1].done).toBe(true);
+    expect(stageChecklist('compose', saved, APPROVED)[0].done).toBe(true);
     // Code: composed only once generated (or sections exist).
     expect(deriveStages(withMode({ mode: 'code' })).current).toBe('compose');
-    expect(stageChecklist('compose', withMode({ mode: 'code' }), APPROVED)[1].done).toBe(false);
+    expect(stageChecklist('compose', withMode({ mode: 'code' }), APPROVED)[0].done).toBe(false);
     expect(deriveStages(withMode({ mode: 'code', codeVideo: { generatedAt: '2026-01-01T00:00:00.000Z', sections: [] } })).current).toBe('review');
     // Document: composed once the document is attached.
     expect(deriveStages(withMode({ mode: 'document' })).current).toBe('compose');
@@ -173,7 +173,69 @@ it('never promotes placeholder scenes or imported schematic documents to final p
   expect(stateOf(project)).toMatchObject({ 'cast-sets': 'active', board: 'todo', produce: 'todo', compose: 'todo' });
   expect(deriveNextAction(project)).toMatchObject({ id: 'review-production', stage: 'cast-sets' });
   const planned = { ...project, productionReadiness: { ...APPROVED, proof: { approved: false }, readyForProduction: false } };
-  expect(deriveNextAction(planned)).toMatchObject({ id: 'review-production', stage: 'review' });
+  expect(deriveNextAction(planned)).toMatchObject({ id: 'review-production', stage: 'compose' });
+});
+
+// #10140: the proof is the last step of Compose. Following the tabs in order
+// must never send an earlier stage back to not done.
+describe('following the tab order', () => {
+  // The server's proof basis covers the whole composition (productionReview.js),
+  // so an approval holds only while the composition it was given over is unchanged.
+  const readinessFor = (project, { art = false, storyboard = false, approvedComposition = null } = {}) => {
+    const proof = approvedComposition !== null && approvedComposition === JSON.stringify(project.composition || null);
+    return { art: { approved: art, problems: [] }, storyboard: { approved: storyboard, problems: [] }, proof: { approved: proof, problems: [] }, readyForProduction: proof };
+  };
+  const doneSet = (project, readiness) => new Set(deriveStages(project, readiness).stages.filter((s) => s.state === 'done').map((s) => s.id));
+
+  it('walks setup → cast & sets → board → produce → compose → proof → render without a stage going backwards', () => {
+    let project = { id: 'p', scenes: [], composition: { mode: 'composed', textCues: [] } };
+    let approvals = {};
+    const steps = [
+      ['setup', () => { project = { ...project, trackId: 't1', audioAnalysis: ANALYSIS, ...LYRICS }; }],
+      ['cast-sets', () => { approvals = { ...approvals, art: true }; }],
+      ['board', () => { project = { ...project, scenes: [scene({ referenceImageId: null, videoHistoryId: null })] }; approvals = { ...approvals, storyboard: true }; }],
+      ['produce', () => { project = { ...project, scenes: [scene()] }; }],
+      ['compose', () => { project = { ...project, composition: { ...project.composition, textCues: [{ id: 'c1', text: 'Hello', startSec: 0, endSec: 2 }], grade: { contrast: 1.1 } } }; }],
+      ['proof', () => { approvals = { ...approvals, approvedComposition: JSON.stringify(project.composition) }; }],
+      ['review', () => { project = { ...project, renderHistoryId: 'rh-1' }; }],
+    ];
+    let before = doneSet(project, readinessFor(project, approvals));
+    for (const [step, apply] of steps) {
+      apply();
+      const readiness = readinessFor(project, approvals);
+      const after = doneSet(project, readiness);
+      for (const id of before) expect(after.has(id), `${id} regressed after ${step}`).toBe(true);
+      // Each step finishes its own stage, except that typography alone leaves
+      // Compose open: the proof over it closes the stage.
+      if (step === 'compose') expect(after.has('compose'), 'compose done before its proof').toBe(false);
+      else expect(after.has(step === 'proof' ? 'compose' : step), `${step} not done`).toBe(true);
+      before = after;
+    }
+    expect(deriveStages(project, readinessFor(project, approvals)).current).toBe('publish');
+  });
+
+  it('a typography edit after proof approval reopens Compose only and sends the header there', () => {
+    const composition = { mode: 'composed', textCues: [{ id: 'c1', text: 'Hello', startSec: 0, endSec: 2 }] };
+    const project = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [scene()], composition };
+    const approvals = { art: true, storyboard: true, approvedComposition: JSON.stringify(composition) };
+    expect(deriveStages(project, readinessFor(project, approvals)).current).toBe('review');
+
+    const edited = { ...project, composition: { ...composition, textCues: [...composition.textCues, { id: 'c2', text: 'World', startSec: 2, endSec: 4 }] } };
+    const readiness = readinessFor(edited, approvals);
+    expect(Object.fromEntries(deriveStages(edited, readiness).stages.map((s) => [s.id, s.state])))
+      .toMatchObject({ board: 'done', produce: 'done', compose: 'active', review: 'todo' });
+    expect(deriveNextAction(edited, { readiness })).toMatchObject({ id: 'review-production', stage: 'compose', anchor: 'mv-review-proof' });
+    expect(stageChecklist('produce', edited, readiness).every((i) => i.done)).toBe(true);
+    expect(stageChecklist('compose', edited, readiness).map((i) => [i.id, i.done])).toEqual([['composition', true], ['approve-proof', false]]);
+  });
+
+  it('keeps the header on Produce until the footage is in, unless a run is parked on its pilot proof', () => {
+    const project = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [scene({ videoHistoryId: null })] };
+    const readiness = readinessFor(project, { art: true, storyboard: true });
+    expect(deriveNextAction(project, { readiness })).toMatchObject({ id: 'goto-produce', stage: 'produce' });
+    const parked = { ...project, productionRuns: [run({ status: 'blocked' })] };
+    expect(deriveNextAction(parked, { readiness })).toMatchObject({ id: 'review-production', stage: 'compose' });
+  });
 });
 
 describe('projectSpend', () => {
@@ -299,7 +361,7 @@ describe('describeProjectStatus', () => {
 it('links active draft and proof jobs to their own evidence controls before offering approval', () => {
   const project = { id: 'example', trackId: 'song', audioAnalysis: {}, scenes: [] };
   expect(deriveNextAction(project, { draftActive: true })).toMatchObject({ id: 'draft-progress', anchor: 'mv-draft-excerpts' });
-  expect(deriveNextAction(project, { proofActive: true })).toMatchObject({ id: 'proof-progress', anchor: 'mv-review-render' });
+  expect(deriveNextAction(project, { proofActive: true })).toMatchObject({ id: 'proof-progress', stage: 'compose', anchor: 'mv-review-render' });
   const nextAction = deriveNextAction(project, { draftActive: true });
   expect(describeProjectStatus(project, { progress: deriveStages(project), nextAction })).toMatchObject({ headline: 'Review render in progress', tone: 'muted' });
 });
@@ -347,9 +409,11 @@ describe('stageChecklist', () => {
       .toEqual([['shots', true], ['board-art', false], ['approve-storyboard', false]]);
     expect(stageChecklist('produce', castProject({ scenes: [scene(), scene({ sceneId: 's2', videoHistoryId: null })] }), APPROVED)[0])
       .toMatchObject({ id: 'footage', label: 'Footage for every shot (1 of 2)', done: false });
-    // A code render draws its own picture: no footage item.
-    expect(stageChecklist('produce', castProject({ composition: { mode: 'code' } }), APPROVED).map((i) => i.id)).toEqual(['approve-proof']);
-    expect(stageChecklist('compose', castProject({ composition: { mode: 'composed', textCues: [] } }), APPROVED).map((i) => i.done)).toEqual([true, false]);
+    // A code render draws its own picture: no footage to wait on.
+    expect(stageChecklist('produce', castProject({ composition: { mode: 'code' } }), APPROVED).map((i) => [i.id, i.done])).toEqual([['footage', true]]);
+    // The proof closes Compose, after the composition work it is judged over.
+    expect(stageChecklist('compose', castProject({ composition: { mode: 'composed', textCues: [] } }), APPROVED).map((i) => [i.id, i.done]))
+      .toEqual([['composition', false], ['approve-proof', true]]);
   });
   it('keeps Setup open until lyrics are imported and their timing verified, unless the song is instrumental', () => {
     const base = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS };

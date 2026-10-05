@@ -49,6 +49,18 @@ describe('Production proof playback evidence', () => {
     });
   });
 
+  it('keeps the proof render and approval on Compose; other tabs point there instead (#10140)', () => {
+    const onOpenProof = vi.fn();
+    render(<ProductionReviewPanel project={project} review={reviewFixture()} onOpenArtifact={vi.fn()} proofHere={false} onOpenProof={onOpenProof} />);
+    expect(screen.queryByRole('button', { name: 'Render animated proof' })).toBeNull();
+    expect(screen.queryByRole('button', { name: proofAction })).toBeNull();
+    expect(screen.queryByLabelText('Animated proof with master audio')).toBeNull();
+    // Art and storyboard approvals stay on every tab.
+    expect(screen.getByRole('button', { name: 'Approve art direction' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Open the proof in Compose' }));
+    expect(onOpenProof).toHaveBeenCalledTimes(1);
+  });
+
   it('explains why a completed prototype cannot be approved and opens the missing prerequisites', () => {
     const review = reviewFixture();
     review.readiness.art.approved = false;
