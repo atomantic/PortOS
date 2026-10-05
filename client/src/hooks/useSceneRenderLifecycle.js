@@ -47,9 +47,10 @@ import toast from '../components/ui/Toast';
  *                        (functional setProjects update); called on `attachEvent`.
  *   - `failMessage`    — the toast string for a confirmed render failure.
  *
- * Returns `{ genScenes, sceneProgress, startScene, clearScene, trackJob }`
+ * Returns `{ genScenes, sceneProgress, failedScenes, startScene, clearScene, trackJob }`
  * (`sceneProgress`: sceneId → `{ progress }` once a job reports running; a scene
- * in `genScenes` with no entry is still queued):
+ * in `genScenes` with no entry is still queued;
+ * `failedScenes` — sceneId → true after a confirmed render failure this session, until that scene renders again):
  *   - `startScene(sceneId)` — light the spinner before the kickoff request.
  *   - `clearScene(sceneId)` — drop the spinner (sync-lane finish, or a kickoff
  *     that returns no trackable job id).
@@ -71,6 +72,14 @@ export default function useSceneRenderLifecycle({
 }) {
   const [genScenes, setGenScenes] = useState({});
   const [sceneProgress, setSceneProgress] = useState({});
+  // sceneId → true once a render for it failed this session (cleared when the scene renders again or succeeds).
+  const [failedScenes, setFailedScenes] = useState({});
+  const markFailed = useCallback((sceneId, failed) => setFailedScenes((prev) => {
+    if (!!prev[sceneId] === failed) return prev;
+    const next = { ...prev };
+    if (failed) next[sceneId] = true; else delete next[sceneId];
+    return next;
+  }), []);
   // jobId → sceneId for renders this lane is awaiting.
   const pendingRef = useRef(new Map());
   // jobId → outcome ('completed' | 'failed' | 'canceled') for terminal events that beat their kickoff's
@@ -84,8 +93,8 @@ export default function useSceneRenderLifecycle({
   cfgRef.current = { apply, failMessage, onSettled };
 
   const startScene = useCallback(
-    (sceneId) => setGenScenes((prev) => ({ ...prev, [sceneId]: true })),
-    [],
+    (sceneId) => { markFailed(sceneId, false); setGenScenes((prev) => ({ ...prev, [sceneId]: true })); },
+    [markFailed],
   );
   const clearScene = useCallback(
     (sceneId) => setGenScenes((prev) => {
@@ -110,12 +119,15 @@ export default function useSceneRenderLifecycle({
       orphanRef.current.delete(jobId);
       clearScene(sceneId);
       clearProgress(sceneId);
-      if (outcome === 'failed') toast.error(cfgRef.current.failMessage);
+      if (outcome === 'failed') {
+        markFailed(sceneId, true);
+        toast.error(cfgRef.current.failMessage);
+      }
       cfgRef.current.onSettled?.({ jobId, sceneId, outcome });
       return;
     }
     pendingRef.current.set(jobId, sceneId);
-  }, [clearScene, clearProgress]);
+  }, [clearScene, clearProgress, markFailed]);
 
   useEffect(() => {
     const onAttach = (data) => cfgRef.current.apply(data);
@@ -143,7 +155,10 @@ export default function useSceneRenderLifecycle({
       pendingRef.current.delete(jobId);
       clearScene(sceneId);
       clearProgress(sceneId);
-      if (failed) toast.error(cfgRef.current.failMessage);
+      if (failed) {
+        markFailed(sceneId, true);
+        toast.error(cfgRef.current.failMessage);
+      }
       cfgRef.current.onSettled?.({ jobId, sceneId, outcome });
     };
     const onCompleted = (data) => settle(data, false, 'completed');
@@ -168,7 +183,7 @@ export default function useSceneRenderLifecycle({
     // the failure transition) hasn't landed yet, so it re-polls a bounded number
     // of times rather than toasting prematurely (the spinner is already cleared,
     // so giving up silently never strands the UI).
-    const armFailToast = (jobId, attempt = 0) => {
+    const armFailToast = (jobId, sceneId, attempt = 0) => {
       failTimers.set(jobId, setTimeout(() => {
         failTimers.delete(jobId);
         if (!mounted) return; // navigated away before the timer fired
@@ -177,10 +192,10 @@ export default function useSceneRenderLifecycle({
             if (!mounted) return; // unmounted while the status fetch was in flight
             const status = job?.status;
             if (status === 'canceled') return; // user cancel — never a failure toast
-            if (status === 'failed' || status === 'error') { toast.error(cfgRef.current.failMessage); return; }
-            if (attempt < 2) armFailToast(jobId, attempt + 1); // non-terminal: wait, don't toast yet
+            if (status === 'failed' || status === 'error') { markFailed(sceneId, true); toast.error(cfgRef.current.failMessage); return; }
+            if (attempt < 2) armFailToast(jobId, sceneId, attempt + 1); // non-terminal: wait, don't toast yet
           })
-          .catch(() => { if (mounted) toast.error(cfgRef.current.failMessage); });
+          .catch(() => { if (mounted) { markFailed(sceneId, true); toast.error(cfgRef.current.failMessage); } });
       }, 800));
     };
     const onFailed = (data) => {
@@ -192,9 +207,10 @@ export default function useSceneRenderLifecycle({
       // orphan WITH the failure bit so a fast-fail that raced ahead of its own
       // kickoff registration is toasted by the kickoff reconciliation; an
       // unrelated job is simply capped/evicted from the orphan map unseen.
-      const owned = pendingRef.current.has(jobId);
+      const ownedScene = pendingRef.current.get(jobId);
+      const owned = !!ownedScene;
       settle(data, !owned, 'failed');
-      if (owned && !failTimers.has(jobId)) armFailToast(jobId);
+      if (owned && !failTimers.has(jobId)) armFailToast(jobId, ownedScene);
     };
     // Queued-cancel emits no `failedEvent`; running-cancel emits failed then this.
     // Either way clear the spinner and cancel any pending failure toast.
@@ -224,7 +240,7 @@ export default function useSceneRenderLifecycle({
       for (const t of failTimers.values()) clearTimeout(t);
       failTimers.clear();
     };
-  }, [attachEvent, completedEvent, failedEvent, canceledEvent, startedEvent, progressEvent, clearScene, clearProgress]);
+  }, [attachEvent, completedEvent, failedEvent, canceledEvent, startedEvent, progressEvent, clearScene, clearProgress, markFailed]);
 
-  return { genScenes, sceneProgress, startScene, clearScene, trackJob };
+  return { genScenes, sceneProgress, failedScenes, startScene, clearScene, trackJob };
 }

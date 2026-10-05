@@ -408,7 +408,8 @@ describe('stageChecklist', () => {
     expect(stageChecklist('board', castProject({ scenes: [scene()] }), NOT_APPROVED).map((i) => [i.id, i.done]))
       .toEqual([['shots', true], ['board-art', false], ['approve-storyboard', false]]);
     expect(stageChecklist('produce', castProject({ scenes: [scene(), scene({ sceneId: 's2', videoHistoryId: null })] }), APPROVED)[0])
-      .toMatchObject({ id: 'footage', label: 'Footage for every shot (1 of 2)', done: false });
+      .toMatchObject({ id: 'footage', label: 'Footage for every shot (1 of 2)', done: false,
+        action: { stage: 'board', params: { scenes: 'missing' } } });
     // A code render draws its own picture: no footage to wait on.
     expect(stageChecklist('produce', castProject({ composition: { mode: 'code' } }), APPROVED).map((i) => [i.id, i.done])).toEqual([['footage', true]]);
     // The proof closes Compose, after the composition work it is judged over.

@@ -116,6 +116,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   });
   const genScenes = frameLane.genScenes;
   const genVideoScenes = videoLane.genScenes;
+  const failedScenes = { frame: frameLane.failedScenes, video: videoLane.failedScenes };
 
   const style = project?.concept?.style?.trim();
   const direction = [musicVideoCreativeContext(project?.concept), visualDirection(project?.visualSpec)].filter(Boolean).join('; ');
@@ -383,6 +384,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   return {
     genScenes,
     genVideoScenes,
+    failedScenes,
     sceneProgress: frameLane.sceneProgress,
     videoSceneProgress: videoLane.sceneProgress,
     frameBatch,

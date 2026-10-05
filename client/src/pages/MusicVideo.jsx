@@ -936,9 +936,11 @@ export default function MusicVideo() {
     const focusable = el.matches('[tabindex], button, input, select, textarea, a') ? el : el.querySelector('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a');
     focusable?.focus?.({ preventScroll: true });
   }, [activeStage, location.key, selectedId, !!selected]);
-  const goToStage = (stage, anchor = null) => {
-    // Preserve search params (e.g. ?play=, ?new=, ?sheet=) across tabs.
-    const search = searchParams.toString();
+  const goToStage = (stage, anchor = null, params = null) => {
+    // Preserve search params (e.g. ?play=, ?new=, ?sheet=) across tabs; `params` sets more (e.g. ?scenes=missing).
+    const next = new URLSearchParams(searchParams);
+    for (const [key, value] of Object.entries(params || {})) next.set(key, value);
+    const search = next.toString();
     navigate(`/music-video/${encodeURIComponent(selected.id)}/${stage}${search ? `?${search}` : ''}${anchor ? `#${anchor}` : ''}`, { replace: activeStage === stage });
   };
 
@@ -1441,7 +1443,7 @@ export default function MusicVideo() {
           >
             <StageChecklist
               items={stageChecklist(activeStage, selected, productionReview.readiness, publish)}
-              onAction={(action) => goToStage(action.stage || activeStage, action.anchor)}
+              onAction={(action) => goToStage(action.stage || activeStage, action.anchor, action.params)}
               headerAnchor={nextAction?.kind === 'goto' ? nextAction.anchor : null}
             />
             {APPROVAL_STAGE_BY_TAB[activeStage] && (
