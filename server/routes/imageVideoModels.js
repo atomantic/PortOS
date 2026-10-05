@@ -221,14 +221,11 @@ router.delete('/lora/:filename', asyncHandler(async (req, res) => {
   if (!filename.endsWith('.safetensors') || filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
     throw new ServerError('Invalid filename', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  const filePath = join(PATHS.loras, filename);
-  if (!existsSync(filePath)) throw new ServerError('LoRA not found', { status: 404, code: 'NOT_FOUND' });
-  console.log(`🗑️ Deleting LoRA: ${filename}`);
-  await rmGuarded(filePath, { force: true });
-  // This route removes the weight file directly rather than going through
-  // `loras.deleteLora`, so it clears the manifest entry itself.
-  await recordModelUninstall({ backend: 'lora', key: filename });
-  res.json({ ok: true });
+  // The LoRA manager's delete removes the sidecar with the weights, clears the
+  // manifest entry, and holds backup admission across the unlink (#9982).
+  // Imported on use so this route's graph doesn't carry the installers.
+  const { deleteLora } = await import('../services/loras.js');
+  res.json(await deleteLora(filename));
 }));
 
 // DELETE /store/:backend/:key — remove or clear one item of a file-system model
