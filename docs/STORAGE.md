@@ -784,3 +784,42 @@ restart. No operation can run or be recovered from them. The future execution
 ledger must be `db-primary`, receiver-local, retain replay/idempotency evidence,
 and be covered by PostgreSQL backup before any executor is connected. See
 [peer administration planning](features/peer-administration.md).
+
+### Receiver execution ledger foundation (#10127)
+
+`peer_execution_operations` and `peer_execution_generation_floors` are receiver-local
+`db-primary` records. Consumption is unique on receiver UUID, authenticated sender
+UUID and request UUID, independently of action or grant renewal. Immutable binding
+fingerprints, operation identities, terminal receipts and monotonic generation
+floors are retained permanently; there is no TTL, pruning, grant/peer foreign key
+or cascade deletion. Active records are capped at 32 and lists use 100-row keyset
+pages. Strict bounded inputs contain fixed intents and evidence digests, never
+credentials, shell commands, arbitrary paths or URLs. These tables never federate.
+Boot DDL, fresh-install SQL and ordered DB migration 013 install the same schema;
+PostgreSQL dumps include it. No seed grants or legacy planning promotion occurs.
+
+`data/peer-execution-authority.json` is boot-safe, machine-local `file-primary`
+fencing metadata: a non-rewound execution epoch and the current/last restore owner.
+It is not a grant or another operation ledger. An absent authority can initialize
+only over empty execution tables; damaged authority cannot silently reset existing
+consumption. Restore rotates the epoch before replay, captures minimal request,
+owner and floor facts in `peer-execution-recovery.jsonl`, then merges those facts
+before ordinary database admission reopens. The recovery file is temporary restore
+evidence, streamed in bounded records/pages rather than a writable parallel store.
+Unknown DB commit outcomes retain the fence and retry the same evidence. Conflicts,
+missing capture and interrupted publication fail closed. Nonterminal records remain
+uncertain; missing DB claim evidence never proves that the journal owner did not start.
+
+Filesystem restore preserves both execution files and the whole
+`workflow-maintenance/` subtree, case-insensitively, including absent or damaged
+local records. Snapshot bytes cannot replace this machine's epoch, recovery facts
+or unresolved owner. PostgreSQL restore invokes capture before replay and automatic
+reconciliation before generic restore release, including proven rollback. It never
+replays a committed dump to recover execution records.
+
+This is a persistence foundation. No execution-grant writer, peer execution route,
+adapter or terminal certificate uses it. Pairing/receiver identity invalidation,
+filesystem-only restore epoch invalidation, complete shared grant/dispatch locking,
+and verified epoch-bound terminal settlement remain owned implementation steps in
+#10127 before execution can be advertised. Existing planning routes still refuse
+execution; ledger records and restore completion are not permission to launch.

@@ -9,25 +9,35 @@ async function receiverLedger({ repairSchema = false } = {}) {
   return createPeerExecutionLedger({ db, dataDir: PATHS.data });
 }
 
-export async function preparePeerExecutionRestore(id) {
-  const ledger = await receiverLedger();
-  await ledger.initialize();
-  return ledger.prepareRestore(id);
+export function createPeerExecutionRestore({ receiver = receiverLedger } = {}) {
+  const preparePeerExecutionRestore = async id => {
+    const ledger = await receiver();
+    await ledger.initialize();
+    return ledger.prepareRestore(id);
+  };
+  const finishPeerExecutionRestore = async (id, { rolledBack = false } = {}) => {
+    const ledger = await receiver({ repairSchema: rolledBack });
+    const before = ledger.authority.read();
+    const current = await ledger.initialize();
+    // A generic restore started by a version predating the ledger has no capture.
+    // initialize only permits this when BOTH new tables are empty. Durably settle
+    // that empty baseline so downstream repair/release retries remain idempotent.
+    if (!before) {
+      await ledger.prepareRestore(id);
+      return ledger.reconcileRestore(id);
+    }
+    if (rolledBack && current.phase === 'ready') return current;
+    if (current.phase === 'capturing') {
+      if (!rolledBack) throw executionAuthorityError('A committed restore lacks completed non-rewound execution capture.');
+      // Generic recovery proved no replay session can commit and no receipt exists.
+      // Capture the unchanged DB; never recapture a committed/unknown rewind.
+      await ledger.prepareRestore(id);
+    }
+    return ledger.reconcileRestore(id);
+  };
+  return { preparePeerExecutionRestore, finishPeerExecutionRestore };
 }
 
-export async function finishPeerExecutionRestore(id, { rolledBack = false } = {}) {
-  const ledger = await receiverLedger({ repairSchema: rolledBack });
-  const before = ledger.authority.read();
-  const current = await ledger.initialize();
-  // A generic restore started by a version predating the ledger has no capture.
-  // initialize only permits this when BOTH new tables are empty; no identity is lost.
-  if (!before) return current;
-  if (rolledBack && current.phase === 'ready') return current;
-  if (current.phase === 'capturing') {
-    if (!rolledBack) throw executionAuthorityError('A committed restore lacks completed non-rewound execution capture.');
-    // Generic recovery proved no replay session can commit and no receipt exists.
-    // Capture the unchanged DB; never recapture a committed/unknown rewind.
-    await ledger.prepareRestore(id);
-  }
-  return ledger.reconcileRestore(id);
-}
+const restoreHooks = createPeerExecutionRestore();
+export const preparePeerExecutionRestore = restoreHooks.preparePeerExecutionRestore;
+export const finishPeerExecutionRestore = restoreHooks.finishPeerExecutionRestore;

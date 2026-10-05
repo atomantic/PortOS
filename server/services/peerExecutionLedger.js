@@ -69,7 +69,7 @@ export function createPeerExecutionLedger({ db, dataDir, authority = createPeerE
     [binding.hostInstanceId, binding.peerInstanceId, binding.requestId]);
     return row ? fromRow(row) : null;
   };
-  const consume = raw => {
+  const consume = async raw => {
     const binding = peerExecutionBindingSchema.parse(raw);
     authority.requireReady(binding.executionEpoch);
     return locked(async client => {
@@ -104,7 +104,7 @@ export function createPeerExecutionLedger({ db, dataDir, authority = createPeerE
     const { rows: [row] } = await db.query('SELECT * FROM peer_execution_operations WHERE operation_id = $1', [id]);
     return row ? fromRow(row) : null;
   };
-  const advanceGenerationFloor = raw => {
+  const advanceGenerationFloor = async raw => {
     const input = floorSchema.extend({ executionEpoch: uuid }).parse(raw);
     authority.requireReady(input.executionEpoch);
     return locked(async client => {

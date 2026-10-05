@@ -37,6 +37,18 @@ afterEach(async () => {
 afterAll(async () => { if (health.connected) await close(); });
 
 describe.skipIf(!runDb)('receiver-local permanent execution consumption', () => {
+  it('durably settles legacy empty committed-restore compatibility before downstream retries', async () => {
+    const { createPeerExecutionRestore } = await import('./peerExecutionRestore.js');
+    const hooks = createPeerExecutionRestore({ receiver: async () => ledger });
+    fs.unlinkSync(join(directory, 'peer-execution-authority.json'));
+    const id = randomUUID();
+    const first = await hooks.finishPeerExecutionRestore(id);
+    expect(first).toMatchObject({ phase: 'ready', settledRecoveryId: id });
+    // Federation resync/generic-journal release can fail after this hook returns.
+    await expect(Promise.reject(new Error('fixture downstream release failure'))).rejects.toThrow(/downstream/);
+    const restarted = createPeerExecutionRestore({ receiver: async () => createPeerExecutionLedger({ db, dataDir: directory }) });
+    expect(await restarted.finishPeerExecutionRestore(id)).toEqual(first);
+  });
   it('serializes duplicate first requests, retaining one operation through process reconstruction', async () => {
     const results = await Promise.all([ledger.consume(input), ledger.consume(input)]);
     expect(results.map(row => row.isNew).sort()).toEqual([false, true]);

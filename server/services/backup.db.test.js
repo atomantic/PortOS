@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { checkHealth, ensureSchema, query, close, getServerMajorVersion, POOL_CONFIG } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { ownTestBodies } from '../lib/mockPathsDataRoot.js';
@@ -64,6 +65,7 @@ let dumpPath;
 const folderId = 'restore-schema-folder-probe';
 const issueId = 'restore-schema-issue-probe';
 const personId = '00000000-0000-4000-8000-000000000862';
+const executionHostId = randomUUID();
 const pendingMigration = '007-storyboard-scene-durable-ids.js';
 const connectionArgs = ['-h', POOL_CONFIG.host, '-p', String(POOL_CONFIG.port), '-U', POOL_CONFIG.user, '-d', POOL_CONFIG.database];
 const childEnv = { ...process.env, PGPASSWORD: POOL_CONFIG.password };
@@ -82,6 +84,8 @@ afterAll(async () => {
       await query('DROP SCHEMA IF EXISTS restore_external CASCADE');
       await query('DROP TABLE IF EXISTS public.unexpected_restore_record');
       await ensureSchema({ force: true });
+      await query('DELETE FROM peer_execution_operations WHERE host_instance_id = $1', [executionHostId]);
+      await query('DELETE FROM peer_execution_generation_floors WHERE host_instance_id = $1', [executionHostId]);
       await query('DELETE FROM writers_room_folders WHERE id = $1', [folderId]);
       await query('DELETE FROM pipeline_issues WHERE id = $1', [issueId]);
       await query("DELETE FROM tribe_people WHERE id = $1 OR id = '00000000-0000-4000-8000-000000000863'", [personId]);
@@ -143,7 +147,8 @@ describe.skipIf(!ready)('restore older database schema', () => {
     await mkdir(snapshotDir, { recursive: true });
     dumpPath = join(snapshotDir, 'portos-db.sql');
     const { binary } = await resolvePgDumpBinary(await getServerMajorVersion());
-    const dump = spawnSync(binary, [...connectionArgs, '--no-owner', '--no-acl', '--clean', '--if-exists', '-f', dumpPath], { env: childEnv, encoding: 'utf8' });
+    const dump = spawnSync(binary, [...connectionArgs, '--no-owner', '--no-acl', '--clean', '--if-exists',
+      '--exclude-table=peer_execution_operations', '--exclude-table=peer_execution_generation_floors', '-f', dumpPath], { env: childEnv, encoding: 'utf8' });
     expect(dump.status, dump.stderr).toBe(0);
     expect(await readFile(dumpPath, 'utf8')).toContain('COMMENT ON EXTENSION');
 
@@ -197,6 +202,27 @@ describe.skipIf(!ready)('restore older database schema', () => {
     expect(await restore(false, 'newer-client')).toMatchObject({ status: 'ok', dryRun: false });
     expect((await query('SELECT name FROM tribe_people WHERE id = $1', [personId])).rows).toEqual([{ name: 'Snapshot person' }]);
     expect(await readFile(path, 'utf8')).toBe(sql);
+  });
+
+  it('preserves execution consumption and generation floors through a real dump without ledger tables', async () => {
+    const { createPeerExecutionLedger } = await import('./peerExecutionLedger.js');
+    const { withTransaction } = await import('../lib/db.js');
+    const ledger = createPeerExecutionLedger({ db: { query, withTransaction }, dataDir: dataRoot.path });
+    const epoch = (await ledger.initialize()).epoch;
+    const input = { hostInstanceId: executionHostId, peerInstanceId: randomUUID(), requestId: randomUUID(), grantId: randomUUID(),
+      grantGeneration: 1, scope: 'execution-v1', pairBinding: 'a'.repeat(64), intent: { action: 'portos.restart' },
+      receiverVersion: 'fixture-1.0', evidenceDigest: 'b'.repeat(64), executionEpoch: epoch };
+    const saved = (await ledger.consume(input)).operation;
+    await ledger.advanceGenerationFloor({ hostInstanceId: executionHostId, peerInstanceId: input.peerInstanceId,
+      action: input.intent.action, generation: 3, executionEpoch: epoch });
+    expect(await restore()).toMatchObject({ status: 'ok', dryRun: false });
+    expect(await ledger.read(saved.operationId)).toMatchObject({ state: 'uncertain', fingerprint: saved.fingerprint });
+    const current = ledger.authority.read();
+    expect(current.epoch).not.toBe(epoch);
+    await expect(ledger.consume(input)).rejects.toMatchObject({ code: 'PEER_EXECUTION_AUTHORITY_UNAVAILABLE' });
+    await expect(ledger.consume({ ...input, executionEpoch: current.epoch })).rejects.toMatchObject({ code: 'PEER_EXECUTION_REPLAY_CONFLICT' });
+    const { rows: [floor] } = await query('SELECT generation FROM peer_execution_generation_floors WHERE host_instance_id = $1', [executionHostId]);
+    expect(Number(floor.generation)).toBe(3);
   });
 
   // #9725: a committed replay whose repair fails keeps ordinary work fenced
