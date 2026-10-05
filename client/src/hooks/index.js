@@ -59,6 +59,7 @@ export { default as useKeyboardShortcuts } from './useKeyboardShortcuts.js';
 export * from './useKeyboardShortcuts.js';
 export { default as useMediaJobProgress } from './useMediaJobProgress.js';
 export * from './useMediaJobSse.js';
+export { default as useSceneBatch } from './useSceneBatch.js';
 export { default as useSceneRenderLifecycle } from './useSceneRenderLifecycle.js';
 export { default as useMusicVideoAutoReview } from './useMusicVideoAutoReview.js';
 export { default as useMusicVideoCastAndSets } from './useMusicVideoCastAndSets.js';

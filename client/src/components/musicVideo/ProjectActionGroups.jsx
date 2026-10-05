@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Film, Music, Activity, Image as ImageIcon, Video, Wand2 } from 'lucide-react';
+import { Film, Music, Activity, Image as ImageIcon, Video, Wand2, X } from 'lucide-react';
 import { MUSCRIPTOR_MODELS } from '../../lib/muscriptorModels.js';
 import { isLayeredComposition, sceneRenderReady, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { compositionDraft, RENDER_STYLES } from './compositionDraft.js';
 import { projectServicesSummary } from '../../lib/musicVideoStages.js';
+import { batchActive, batchSummary, scenesWaitingForFrame, videoBatchPreview, videosButtonLabel } from '../../lib/musicVideoBatchPlan.js';
 
 /**
  * The board-level actions the old single toolbar carried, split by the stage
@@ -109,11 +110,33 @@ export function PlanActions({ project, busy, onPlan, onAutoArrange }) {
   );
 }
 
+// One batch's running summary: "Videos: 6 of 14 done · 2 failed" with its
+// Cancel remaining / Dismiss control. Counts arrive from socket events only.
+function BatchStatus({ noun, batch }) {
+  const { state } = batch;
+  if (!state) return null;
+  const active = batchActive(state);
+  return (
+    <div role="status" className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-port-text-muted">
+      <span className="min-w-0 break-words">{batchSummary(noun, state)}{active && state.cancelRequested ? ' · canceling…' : ''}</span>
+      {active && !state.cancelRequested && (
+        <button type="button" onClick={batch.cancel} className={`${buttonCls} !py-1 text-port-warning`}>Cancel remaining</button>
+      )}
+      {!active && (
+        <button type="button" onClick={batch.dismiss} aria-label={`Dismiss ${noun.toLowerCase()} summary`} className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center sm:min-h-0 sm:min-w-0"><X size={13} /></button>
+      )}
+    </div>
+  );
+}
+
 /**
  * The batch generators, with the image and video services they render on (a
  * project option, edited in Setup › Project options; `onEditServices` goes there).
  */
 export function GenerationActions({ project, videoSettings, sceneMedia, onEditServices }) {
+  // The first click only opens the confirm line (count + estimate); nothing is
+  // submitted until the second (#10153).
+  const [confirming, setConfirming] = useState(null);
   const scenes = project.scenes || [];
   const sceneCount = scenes.length;
   // #8985: in a composed render a still needs only its frame and a title card
@@ -129,9 +152,21 @@ export function GenerationActions({ project, videoSettings, sceneMedia, onEditSe
   const uniqueVideoCount = uniqueCount(footageScenes, 'videoHistoryId');
   const missingFrameCount = frameScenes.length - referenceFrameCount;
   const missingVideoCount = footageScenes.length - renderableSceneCount;
-  const footageFramesReady = footageScenes.every((scene) => scene.referenceImageId);
+  const waitingForFrame = scenesWaitingForFrame(footageScenes);
+  const videoCandidateCount = footageScenes.filter((scene) => scene.referenceImageId && !scene.videoHistoryId).length;
   const generatingFrames = Object.keys(sceneMedia.genScenes).length > 0;
   const generatingVideos = Object.keys(sceneMedia.genVideoScenes).length > 0;
+  const confirmFrames = confirming === 'frames' ? sceneMedia.planMissingFrames() : null;
+  const confirmVideos = confirming === 'videos' ? sceneMedia.planMissingVideos() : null;
+  const videoPreview = confirmVideos?.pending.length
+    ? videoBatchPreview({
+      scenes: confirmVideos.pending,
+      backend: videoSettings.audioReactiveSelected ? 'local' : videoSettings.settings.backend,
+      videoSettings: videoSettings.settings,
+      songDurationSec: project.audioAnalysis?.durationSec ?? null,
+    })
+    : null;
+  const submit = (run) => { setConfirming(null); run(); };
   const footageBlocked = codeMode ? 'This render style draws its own scene and does not generate footage' : '';
   return (
     <div className={groupCls}>
@@ -142,7 +177,7 @@ export function GenerationActions({ project, videoSettings, sceneMedia, onEditSe
         )}
       </span>
       <button
-        onClick={sceneMedia.generateMissingFrames}
+        onClick={() => setConfirming('frames')}
         disabled={codeMode || videoSettings.framePinSaving || sceneCount === 0 || missingFrameCount === 0 || generatingFrames}
         title={footageBlocked || (videoSettings.framePinSaving
           ? 'Saving the frame renderer…'
@@ -152,16 +187,34 @@ export function GenerationActions({ project, videoSettings, sceneMedia, onEditSe
         <ImageIcon size={15} /> Frames {referenceFrameCount}/{frameScenes.length}
       </button>
       <button
-        onClick={sceneMedia.generateMissingVideos}
-        disabled={codeMode || videoSettings.saving || footageScenes.length === 0 || missingVideoCount === 0 || !footageFramesReady || generatingVideos || !!videoSettings.videoBlockedReason}
+        onClick={() => setConfirming('videos')}
+        disabled={codeMode || videoSettings.saving || footageScenes.length === 0 || missingVideoCount === 0 || videoCandidateCount === 0 || generatingVideos || !!videoSettings.videoBlockedReason}
         title={footageBlocked || videoSettings.videoBlockedReason
-          || (!footageFramesReady
-            ? 'Generate every reference frame first'
+          || (videoCandidateCount === 0 && missingVideoCount > 0
+            ? 'Generate a reference frame first'
             : (missingVideoCount > 0 ? `Generate ${missingVideoCount} missing scene video${missingVideoCount === 1 ? '' : 's'}` : 'Every scene has a video'))}
         className={buttonCls}
       >
-        <Video size={15} /> Videos {renderableSceneCount}/{footageScenes.length}
+        <Video size={15} /> {videosButtonLabel({ renderableCount: renderableSceneCount, footageCount: footageScenes.length, waiting: waitingForFrame })}
       </button>
+      {confirmFrames && (
+        <div role="group" aria-label="Confirm frame batch" className="flex w-full min-w-0 flex-wrap items-center gap-2 text-sm">
+          <span className="min-w-0 break-words">{confirmFrames.length > 0
+            ? `Generate ${confirmFrames.length} reference frame${confirmFrames.length === 1 ? '' : 's'}`
+            : 'Nothing to generate — every scene has a frame or is already rendering'}</span>
+          {confirmFrames.length > 0 && <button type="button" onClick={() => submit(sceneMedia.generateMissingFrames)} className={`${buttonCls} bg-port-accent text-white`}>Generate</button>}
+          <button type="button" onClick={() => setConfirming(null)} className={buttonCls}>Cancel</button>
+        </div>
+      )}
+      {confirmVideos && (
+        <div role="group" aria-label="Confirm clip batch" className="flex w-full min-w-0 flex-wrap items-center gap-2 text-sm">
+          <span className="min-w-0 break-words">{videoPreview?.text || 'Nothing to generate — no waiting scene has a frame, or the lane cannot render them'}</span>
+          {videoPreview && <button type="button" onClick={() => submit(sceneMedia.generateMissingVideos)} className={`${buttonCls} bg-port-accent text-white`}>Generate</button>}
+          <button type="button" onClick={() => setConfirming(null)} className={buttonCls}>Cancel</button>
+        </div>
+      )}
+      <BatchStatus noun="Frames" batch={sceneMedia.frameBatch} />
+      <BatchStatus noun="Videos" batch={sceneMedia.videoBatch} />
       {(uniqueReferenceFrameCount < referenceFrameCount || uniqueVideoCount < renderableSceneCount) && (
         <span
           className="text-[10px] px-2 py-1.5 rounded border border-port-warning/40 bg-port-warning/10 text-port-warning"

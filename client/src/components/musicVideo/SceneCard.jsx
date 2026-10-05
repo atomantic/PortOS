@@ -16,6 +16,7 @@ const STILL_MOVE_LABELS = [['hold', 'Hold'], ['push', 'Push in'], ['pan', 'Pan']
 import {
   falSceneTake, grokCoverage, isPerformanceScene, performanceBlockedReason, performanceCapability, planPerformanceWindow, shotSplitLimit,
 } from '../../lib/musicVideoShotTiming.js';
+import SceneRenderProgress from './SceneRenderProgress.jsx';
 import { getFalVideoModel } from '../../lib/falVideoModels.js';
 
 // "est. $0.81 (5.05s at 1080P)" — or null when the take cannot be priced.
@@ -66,7 +67,7 @@ const COVERAGE_TOLERANCE_SEC = 0.25;
  * jumps to the scene's start.
  */
 export default function SceneCard({
-  scene, index, isLast, generatingFrame, generatingVideo,
+  scene, index, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null,
   settingsSaving, videoBlockedReason, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
   onGenerateFrame, onGenerateVideo, onContinueVideo,
@@ -174,6 +175,8 @@ export default function SceneCard({
         {(generatingFrame || generatingVideo) && (
           <Activity size={14} className="shrink-0 animate-spin text-port-accent" aria-label="Generating" />
         )}
+        <SceneRenderProgress kind="Frame" generating={generatingFrame} progress={frameProgress} />
+        <SceneRenderProgress kind="Video" generating={generatingVideo} progress={videoProgress} />
       </summary>
       <div className="space-y-2 p-3 pt-0">
         <div className="flex items-center justify-end gap-2">

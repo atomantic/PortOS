@@ -68,6 +68,8 @@ export default function BoardStage({ board }) {
               isLast={idx === scenes.length - 1}
               generatingFrame={sceneMedia.genScenes[scene.sceneId]}
               generatingVideo={sceneMedia.genVideoScenes[scene.sceneId]}
+              frameProgress={sceneMedia.sceneProgress?.[scene.sceneId]}
+              videoProgress={sceneMedia.videoSceneProgress?.[scene.sceneId]}
               settingsSaving={videoSettings.saving}
               videoBlockedReason={videoSettings.videoBlockedReason}
               lipSyncBackend={videoSettings.audioReactiveSelected ? 'local' : videoSettings.settings.backend}

@@ -37,11 +37,19 @@ import toast from '../components/ui/Toast';
  *   - `canceledEvent`  — job cancel (e.g. `image-gen:canceled`). A queued-cancel
  *                        emits only this (no `failedEvent`), so without it the
  *                        spinner would stick — every queue-backed lane has one.
+ *   - `startedEvent` / `progressEvent` — optional `*-gen:started` / `*-gen:progress`
+ *                        events; they feed `sceneProgress` (queued → running +
+ *                        a 0..1 fraction) for the scene whose job they name.
+ *   - `onSettled({ jobId, sceneId, outcome })` — optional; called once per
+ *                        tracked job with `'completed' | 'failed' | 'canceled'`
+ *                        (the batch counter in `useSceneBatch` listens here).
  *   - `apply(data)`    — fold the finished asset onto the matching scene
  *                        (functional setProjects update); called on `attachEvent`.
  *   - `failMessage`    — the toast string for a confirmed render failure.
  *
- * Returns `{ genScenes, startScene, clearScene, trackJob }`:
+ * Returns `{ genScenes, sceneProgress, startScene, clearScene, trackJob }`
+ * (`sceneProgress`: sceneId → `{ progress }` once a job reports running; a scene
+ * in `genScenes` with no entry is still queued):
  *   - `startScene(sceneId)` — light the spinner before the kickoff request.
  *   - `clearScene(sceneId)` — drop the spinner (sync-lane finish, or a kickoff
  *     that returns no trackable job id).
@@ -55,21 +63,25 @@ export default function useSceneRenderLifecycle({
   completedEvent,
   failedEvent,
   canceledEvent,
+  startedEvent,
+  progressEvent,
+  onSettled,
   apply,
   failMessage,
 }) {
   const [genScenes, setGenScenes] = useState({});
+  const [sceneProgress, setSceneProgress] = useState({});
   // jobId → sceneId for renders this lane is awaiting.
   const pendingRef = useRef(new Map());
-  // jobId → failed(bool) for terminal events that beat their kickoff's
+  // jobId → outcome ('completed' | 'failed' | 'canceled') for terminal events that beat their kickoff's
   // trackJob registration. Capped so unrelated jobs across the app can't grow
   // it unbounded; the kickoff reconciles its own entry on arrival.
   const orphanRef = useRef(new Map());
   // Latest `apply` / `failMessage` without re-subscribing the socket every
   // render — the effect keys on the (static) event names and reads the mutable
   // callbacks through this ref, mirroring the original `[]`-deps effects.
-  const cfgRef = useRef({ apply, failMessage });
-  cfgRef.current = { apply, failMessage };
+  const cfgRef = useRef({ apply, failMessage, onSettled });
+  cfgRef.current = { apply, failMessage, onSettled };
 
   const startScene = useCallback(
     (sceneId) => setGenScenes((prev) => ({ ...prev, [sceneId]: true })),
@@ -83,19 +95,27 @@ export default function useSceneRenderLifecycle({
     }),
     [],
   );
+  const clearProgress = useCallback((sceneId) => setSceneProgress((prev) => {
+    if (!(sceneId in prev)) return prev;
+    const next = { ...prev };
+    delete next[sceneId];
+    return next;
+  }), []);
 
   // The orphan-reconcile helper used by the kickoff `.then`: if the terminal
   // event already raced ahead, settle it now; otherwise register the pending job.
   const trackJob = useCallback((jobId, sceneId) => {
     if (orphanRef.current.has(jobId)) {
-      const failed = orphanRef.current.get(jobId);
+      const outcome = orphanRef.current.get(jobId);
       orphanRef.current.delete(jobId);
       clearScene(sceneId);
-      if (failed) toast.error(cfgRef.current.failMessage);
+      clearProgress(sceneId);
+      if (outcome === 'failed') toast.error(cfgRef.current.failMessage);
+      cfgRef.current.onSettled?.({ jobId, sceneId, outcome });
       return;
     }
     pendingRef.current.set(jobId, sceneId);
-  }, [clearScene]);
+  }, [clearScene, clearProgress]);
 
   useEffect(() => {
     const onAttach = (data) => cfgRef.current.apply(data);
@@ -105,7 +125,9 @@ export default function useSceneRenderLifecycle({
     // cleanup so a `getMediaJob` promise still in flight (or a re-arm) can't pop
     // a "render failed" toast onto whatever page the user navigated to.
     let mounted = true;
-    const settle = (data, failed) => {
+    // `failed` is the toast bit (an orphan failure still owes its kickoff a
+    // toast); `outcome` is what actually happened, for the batch counter.
+    const settle = (data, failed, outcome) => {
       const jobId = data?.generationId || data?.jobId;
       if (!jobId) return;
       const sceneId = pendingRef.current.get(jobId);
@@ -114,15 +136,28 @@ export default function useSceneRenderLifecycle({
         // unrelated job). Stash it so a slightly-late registration can
         // reconcile; cap so other pages' renders can't grow this unbounded.
         const orphans = orphanRef.current;
-        orphans.set(jobId, !!failed);
+        orphans.set(jobId, outcome);
         evictOldest(orphans, ORPHAN_BUFFER_MAX);
         return;
       }
       pendingRef.current.delete(jobId);
       clearScene(sceneId);
+      clearProgress(sceneId);
       if (failed) toast.error(cfgRef.current.failMessage);
+      cfgRef.current.onSettled?.({ jobId, sceneId, outcome });
     };
-    const onCompleted = (data) => settle(data, false);
+    const onCompleted = (data) => settle(data, false, 'completed');
+    // started / progress: a tracked job is running; keep the fraction for its card.
+    const onRunning = (data) => {
+      const jobId = data?.generationId || data?.jobId;
+      const sceneId = jobId && pendingRef.current.get(jobId);
+      if (!sceneId) return;
+      const progress = typeof data.progress === 'number' && Number.isFinite(data.progress)
+        ? Math.min(1, Math.max(0, data.progress)) : null;
+      setSceneProgress((prev) => (prev[sceneId]?.progress === progress && sceneId in prev
+        ? prev
+        : { ...prev, [sceneId]: { progress: progress ?? prev[sceneId]?.progress ?? null } }));
+    };
     // Deferred failure toast for an owned render. A render canceled WHILE RUNNING
     // reaches us as `failedEvent` (SIGTERM) just before `canceledEvent` — and
     // before the queue flips the job to 'canceled' — so neither the failed event
@@ -158,7 +193,7 @@ export default function useSceneRenderLifecycle({
       // kickoff registration is toasted by the kickoff reconciliation; an
       // unrelated job is simply capped/evicted from the orphan map unseen.
       const owned = pendingRef.current.has(jobId);
-      settle(data, !owned);
+      settle(data, !owned, 'failed');
       if (owned && !failTimers.has(jobId)) armFailToast(jobId);
     };
     // Queued-cancel emits no `failedEvent`; running-cancel emits failed then this.
@@ -169,15 +204,19 @@ export default function useSceneRenderLifecycle({
         const t = failTimers.get(jobId);
         if (t) { clearTimeout(t); failTimers.delete(jobId); }
       }
-      settle(data, false);
+      settle(data, false, 'canceled');
     };
 
     socket.on(attachEvent, onAttach);
+    if (startedEvent) socket.on(startedEvent, onRunning);
+    if (progressEvent) socket.on(progressEvent, onRunning);
     socket.on(completedEvent, onCompleted);
     socket.on(failedEvent, onFailed);
     socket.on(canceledEvent, onCanceled);
     return () => {
       socket.off(attachEvent, onAttach);
+      if (startedEvent) socket.off(startedEvent, onRunning);
+      if (progressEvent) socket.off(progressEvent, onRunning);
       socket.off(completedEvent, onCompleted);
       socket.off(failedEvent, onFailed);
       socket.off(canceledEvent, onCanceled);
@@ -185,7 +224,7 @@ export default function useSceneRenderLifecycle({
       for (const t of failTimers.values()) clearTimeout(t);
       failTimers.clear();
     };
-  }, [attachEvent, completedEvent, failedEvent, canceledEvent, clearScene]);
+  }, [attachEvent, completedEvent, failedEvent, canceledEvent, startedEvent, progressEvent, clearScene, clearProgress]);
 
-  return { genScenes, startScene, clearScene, trackJob };
+  return { genScenes, sceneProgress, startScene, clearScene, trackJob };
 }
