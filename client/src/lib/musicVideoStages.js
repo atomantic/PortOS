@@ -257,12 +257,6 @@ const composeDone = (project, mode) => {
 };
 
 /**
- * Each stage's state derived from the project record — `done`, `blocked`
- * (stopped and needs the director), `active` (the stage the project is in), or
- * `todo` — plus `current`, the first stage that is not done. A live production
- * run owns the project, so it pins `current` to Produce.
- */
-/**
  * Lyric half of Setup: storyboard approval needs lyrics imported and their word
  * timings verified (or an explicit instrumental exception). `readiness.alignment`
  * is the server's verdict; the draft is the fallback before readiness loads.
@@ -278,6 +272,18 @@ export function lyricSetupState(project, readiness = project?.productionReadines
   return { instrumental, lines, alignment, imported, verified, ok: !!readiness?.storyboard?.approved || (imported && verified) };
 }
 
+/**
+ * Each stage's state derived from the project record — `done`, `blocked`
+ * (stopped and needs the director), `active` (the stage the project is in), or
+ * `todo` — plus `current`, the first stage that is not done. A live production
+ * run owns the project, so it pins `current` to Produce.
+ *
+ * The animated proof is the last step of Compose (#10140): its basis covers the
+ * whole composition (typography, grade), so it can only be judged once that
+ * work exists. Produce is done on footage alone; Compose needs the composition
+ * work and an approved proof over it. A later typography or grade edit makes
+ * the proof stale on Compose without reopening Produce.
+ */
 export function deriveStages(project, readiness = project?.productionReadiness, publish = {}) {
   const scenes = project?.scenes || [];
   const mode = project?.composition?.mode || 'concat';
@@ -296,8 +302,8 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
     setup: projectHasAudio(project) && !!project?.audioAnalysis && lyricSetupState(project, readiness).ok,
     'cast-sets': castDone,
     board: planned,
-    produce: produceDone && !!readiness?.proof.approved,
-    compose: !!readiness?.proof.approved && composeDone(project || {}, mode),
+    produce: produceDone,
+    compose: composeDone(project || {}, mode) && !!readiness?.proof.approved,
     // A render made before later scene edits no longer counts as the final video.
     review: !!project?.renderHistoryId && !isFinalRenderStale(project),
     // #9281/#9282: published once every enabled platform has a recorded post.
@@ -338,7 +344,7 @@ export function deriveNextAction(project, {
   const cast = project.castAndSets || null;
   const scenes = project.scenes || [];
 
-  if (proofActive) return { id: 'proof-progress', kind: 'goto', stage: 'review', anchor: 'mv-review-render', label: 'View review render', shortLabel: 'Review' };
+  if (proofActive) return { id: 'proof-progress', kind: 'goto', stage: 'compose', anchor: 'mv-review-render', label: 'View review render', shortLabel: 'Review' };
   if (draftActive) return { id: 'draft-progress', kind: 'goto', stage: 'review', anchor: 'mv-draft-excerpts', label: 'View draft render', shortLabel: 'Draft' };
   const art = !readiness?.art.approved;
   const board = !readiness?.storyboard.approved;
@@ -347,9 +353,13 @@ export function deriveNextAction(project, {
   // or interrupted check-in offers Approve / Resume — those come from the stage switch below.
   const castNeedsOwnAction = art && ((!cast && scenes.length === 0) || (cast && (cast.status === 'review' || cast.interrupted || cast.status === 'failed')));
   const boardNeedsOwnAction = !art && board && scenes.length === 0;
-  if (projectHasAudio(project) && project.audioAnalysis && !CAST_WORKING.has(cast?.status) && !readiness?.readyForProduction && run?.status !== 'running' && !renderActive && !kickoffRunning
+  // The proof closes Compose, so it waits until Produce is done — unless a
+  // production run is parked on its pilot proof, which only the approval frees.
+  const proofDue = current !== 'produce' || (!!run && RESUMABLE_RUN_STATUSES.has(run.status));
+  if (projectHasAudio(project) && project.audioAnalysis && !CAST_WORKING.has(cast?.status) && !readiness?.readyForProduction && (art || board || proofDue)
+    && run?.status !== 'running' && !renderActive && !kickoffRunning
     && !castNeedsOwnAction && !boardNeedsOwnAction) {
-    return { id: 'review-production', kind: 'goto', stage: art ? 'cast-sets' : board ? 'board' : 'review',
+    return { id: 'review-production', kind: 'goto', stage: art ? 'cast-sets' : board ? 'board' : 'compose',
       anchor: art ? 'mv-review-art' : board ? 'mv-review-storyboard' : 'mv-review-proof',
       label: art ? 'Review art direction' : board ? 'Review timed storyboard' : 'Review animated proof',
       shortLabel: art ? 'Art' : board ? 'Board' : 'Proof' };
@@ -536,34 +546,34 @@ export function stageChecklist(stageId, project, readiness = project?.production
       ];
     }
     case 'produce': {
-      const items = [];
-      if (!FOOTAGE_OPTIONAL_MODES.has(mode)) {
-        const layered = isLayeredComposition(project);
-        const ready = scenes.filter((scene) => sceneRenderReady(scene, { layered })).length;
-        const footageDone = scenes.length > 0 && ready === scenes.length;
-        items.push({ id: 'footage', label: `Footage for every shot (${formatCount(ready)} of ${formatCount(scenes.length)})`, done: footageDone,
-          action: footageDone ? null : { label: 'Set up production', anchor: 'mv-production-start' } });
+      if (FOOTAGE_OPTIONAL_MODES.has(mode)) {
+        const planned = !!readiness?.storyboard?.approved;
+        return [{ id: 'footage', label: 'No footage needed for this render style', done: planned,
+          action: planned ? null : { label: 'Review timed storyboard', anchor: APPROVAL_ANCHORS.storyboard } }];
       }
-      items.push(approval('proof', 'Animated proof', 'Render the proof, watch it with sound, then approve it in Production approvals.'));
-      return items;
+      const layered = isLayeredComposition(project);
+      const ready = scenes.filter((scene) => sceneRenderReady(scene, { layered })).length;
+      const footageDone = scenes.length > 0 && ready === scenes.length;
+      return [{ id: 'footage', label: `Footage for every shot (${formatCount(ready)} of ${formatCount(scenes.length)})`, done: footageDone,
+        action: footageDone ? null : { label: 'Set up production', anchor: 'mv-production-start' } }];
     }
     case 'compose': {
-      // Compose counts as done only behind an approved proof (see deriveStages).
-      const proof = { id: 'proof', label: 'Animated proof approved (Produce)', done: !!readiness?.proof?.approved,
-        action: readiness?.proof?.approved ? null : { label: 'Review animated proof', anchor: APPROVAL_ANCHORS.proof } };
-      if (mode === 'composed') return [proof, { id: 'composition', label: 'Timed typography added', done: (project.composition?.textCues || []).length > 0, action: { label: 'Add typography', anchor: 'mv-typo-font' } }];
-      if (mode === 'document') return [proof, { id: 'composition', label: 'Composition document attached', done: !!project.composition?.document, action: { label: 'Attach a document', anchor: 'mv-doc-folder' } }];
-      if (mode === 'eidoverse') {
-        const saved = !!project.composition?.eidoverseScene?.inlineScript;
-        return [proof, { id: 'composition', label: 'Save the Eidoverse scene', done: saved, action: saved ? null : { label: 'Save the scene', anchor: 'mv-eidoverse-scene' } }];
+      // The proof closes Compose: it is judged over the finished composition (see deriveStages).
+      const proof = approval('proof', 'Animated proof', 'Render the proof over this composition, watch it with sound, then approve it below.');
+      const composition = project.composition || {};
+      let work = { id: 'composition', label: 'Nothing to compose for this render style', done: true };
+      if (mode === 'composed') work = { id: 'composition', label: 'Timed typography added', done: (composition.textCues || []).length > 0, action: { label: 'Add typography', anchor: 'mv-typo-font' } };
+      else if (mode === 'document') work = { id: 'composition', label: 'Composition document attached', done: !!composition.document, action: { label: 'Attach a document', anchor: 'mv-doc-folder' } };
+      else if (mode === 'eidoverse') {
+        const saved = !!composition.eidoverseScene?.inlineScript;
+        work = { id: 'composition', label: 'Save the Eidoverse scene', done: saved, action: saved ? null : { label: 'Save the scene', anchor: 'mv-eidoverse-scene' } };
+      } else if (mode === 'code') {
+        const done = codeComposed(project);
+        work = { id: 'composition', label: composition.codeVideo?.generatedAt ? 'Code video generated' : 'Code video sections ready', done,
+          detail: done ? null : 'Generate the code video from the Code Video panel.',
+          action: done ? null : { label: 'Open Code Video', anchor: 'mv-code-section' } };
       }
-      if (mode === 'code') {
-        const generated = !!project.composition?.codeVideo?.generatedAt;
-        return [proof, { id: 'composition', label: generated ? 'Code video generated' : 'Code video sections ready', done: codeComposed(project),
-          detail: codeComposed(project) ? null : 'Generate the code video from the Code Video panel.',
-          action: codeComposed(project) ? null : { label: 'Open Code Video', anchor: 'mv-code-section' } }];
-      }
-      return [proof, { id: 'composition', label: 'Nothing to compose for this render style', done: true }];
+      return [work, proof];
     }
     case 'review':
       return [{
