@@ -117,7 +117,7 @@ jobs:
 
       - name: Save only bounded synthetic report and decoded previews
         if: always() && steps.evidence_bound.outcome == 'success'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: eidoverse-synthetic-evidence
           retention-days: 1
