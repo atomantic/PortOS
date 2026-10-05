@@ -296,3 +296,31 @@ export function pickBrainIdea(ideas, { usedIdeaIds = [], tags = [] } = {}) {
 export function ideaToPrompt(idea) {
   return [idea?.title, idea?.oneLiner, idea?.notes].map((v) => clean(v, 2000)).filter(Boolean).join('\n\n').slice(0, AUTONOMOUS_PROMPT_MAX);
 }
+
+// ---- "needs the director" (#10156) ------------------------------------------------
+
+/** Autonomous-run statuses that raise a PortOS notification: the run needs the director or has finished. */
+export const AUTONOMOUS_ATTENTION_STATUSES = Object.freeze(['awaiting-approval', 'needs-human', 'failed', 'completed']);
+
+const STAGE_TAB = Object.freeze({ brief: 'setup', lyrics: 'setup', style: 'setup', song: 'setup', analyze: 'setup', produce: 'produce' });
+
+/** The Music Video route a parked autonomous run is cleared from: the checkpoint editor, the failed stage's tab, or the finished video. */
+export function autonomousAttentionLink(projectId, run) {
+  const base = `/music-video/${encodeURIComponent(projectId)}`;
+  if (run?.status === 'awaiting-approval') return `${base}/setup#mv-auto-edit`;
+  if (run?.status === 'completed') return `${base}/review`;
+  return `${base}/${STAGE_TAB[run?.stage] || 'setup'}`;
+}
+
+/** One line naming a parked run and why it is waiting — the scheduled task's result and notification text. */
+export function describeAutonomousWait(name, run) {
+  const label = AUTONOMOUS_STAGES.find((s) => s.id === (run?.awaiting || run?.stage))?.label || 'a step';
+  const detail = run?.error ? `: ${trimTo(run.error, 200)}` : '';
+  switch (run?.status) {
+    case 'awaiting-approval': return `"${name}" is waiting for your approval of ${label.toLowerCase()}`;
+    case 'needs-human': return `"${name}" needs you${detail}`;
+    case 'stopped': return `"${name}" was stopped at ${label.toLowerCase()}`;
+    case 'failed': return `"${name}" failed at ${label.toLowerCase()}${detail}`;
+    default: return `"${name}" is still in progress`;
+  }
+}

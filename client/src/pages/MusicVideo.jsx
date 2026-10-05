@@ -1406,7 +1406,7 @@ export default function MusicVideo() {
             attention={(
               <NeedsAttentionBanner
                 items={attentionItems}
-                busy={revisions.busy || castSets.busy || autoReview.busy || renderJob.reattaching}
+                busy={revisions.busy || castSets.busy || autoReview.busy || autonomous.busy || production.busy || renderJob.reattaching}
                 actions={{
                   onResumeRevision: revisions.resume,
                   onCancelRevision: revisions.cancel,
@@ -1414,6 +1414,8 @@ export default function MusicVideo() {
                   onContinueAutoReview: (runId) => autoReview.resume(runId),
                   onCancelAutoReview: (runId) => autoReview.cancel(runId),
                   onReattachRender: () => renderJob.reattach(selected.id),
+                  onResumeAutonomous: () => autonomous.resume(),
+                  onResumeProduction: (runId, opts) => production.resume(runId, opts),
                 }}
               />
             )}

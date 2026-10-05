@@ -20,7 +20,7 @@
 
 import { getIdeas } from '../brainStorage.js';
 import { listProjects } from '../musicVideo/projects.js';
-import { AUTONOMOUS_LIVE_STATUSES, ideaToPrompt, normalizeAutopilotParams, pickBrainIdea } from '../../lib/musicVideoAutonomous.js';
+import { AUTONOMOUS_LIVE_STATUSES, autonomousAttentionLink, describeAutonomousWait, ideaToPrompt, normalizeAutopilotParams, pickBrainIdea } from '../../lib/musicVideoAutonomous.js';
 
 const USED_STATUSES = new Set([...AUTONOMOUS_LIVE_STATUSES, 'completed']);
 
@@ -37,6 +37,15 @@ function priorRuns(projects) {
   return { usedIdeaIds, live };
 }
 
+/** The live project this task is waiting on, named for the task result and the Schedule card. */
+const blockingOf = (project) => ({
+  projectId: project.id,
+  name: project.name,
+  status: project.autonomousRun.status,
+  link: autonomousAttentionLink(project.id, project.autonomousRun),
+  summary: describeAutonomousWait(project.name, project.autonomousRun),
+});
+
 async function inspect(params) {
   const settings = normalizeAutopilotParams(params?.musicVideoAutopilot) || normalizeAutopilotParams({});
   const [ideas, projects] = await Promise.all([getIdeas(), listProjects()]);
@@ -47,13 +56,16 @@ async function inspect(params) {
 
 export async function countPending({ params } = {}) {
   const { idea, live } = await inspect(params);
-  if (live) return { count: 0, detail: `"${live.name}" is still in progress` };
+  if (live) return { count: 0, detail: `waiting on ${blockingOf(live).summary}`, blocking: blockingOf(live) };
   return { count: idea ? 1 : 0, detail: idea ? `Next idea: ${idea.title}` : 'No unused active Brain ideas' };
 }
 
 export async function run({ params } = {}) {
   const { settings, idea, live } = await inspect(params);
-  if (live) return { dispatched: false, reason: `a previous autonomous music video ("${live.name}") is still in progress` };
+  if (live) {
+    const blocking = blockingOf(live);
+    return { dispatched: false, reason: `waiting on a previous autonomous music video: ${blocking.summary}`, blocking };
+  }
   if (!idea) return { dispatched: false, reason: 'no unused active Brain ideas to turn into a music video' };
   const { ideaTags: _ideaTags, ...runSettings } = settings;
   const { startAutonomousVideo } = await import('../musicVideo/autonomousService.js');

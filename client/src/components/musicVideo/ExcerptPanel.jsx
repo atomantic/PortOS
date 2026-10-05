@@ -5,6 +5,7 @@ import { getMusicVideoSocialCuts } from '../../services/apiMusicVideo.js';
 import RevisionPanel, { currentRevision } from './RevisionPanel.jsx';
 import AutoReviewPanel from './AutoReviewPanel.jsx';
 import { formatCount } from '../../utils/formatters.js';
+import { autoReviewNeedsUser } from '../../lib/musicVideoAttention.js';
 
 const VERDICT_STYLES = {
   flagged: 'bg-port-error/20 text-port-error',
@@ -300,7 +301,7 @@ export default function ExcerptPanel({ project, rendering, occupied = rendering,
       {['error', 'canceled'].includes(latestAttempt?.status) && <p role="status" className="text-sm text-port-warning">
         {latestAttempt.status === 'error' ? `Latest draft attempt failed: ${latestAttempt.error || 'No error details recorded.'}` : 'Latest draft attempt was cancelled.'} Completed drafts are retained. Details are in Earlier and failed attempts.
       </p>}
-      <details><summary className="cursor-pointer min-h-[44px] py-2 text-sm">Revision and automatic review tools</summary>
+      <details open={autoReviewNeedsUser(project) || undefined}><summary className="cursor-pointer min-h-[44px] py-2 text-sm">Revision and automatic review tools</summary>
       {revision && (
         <RevisionPanel project={project} busy={revision.busy || occupied}
           genScenes={revision.genScenes} genVideoScenes={revision.genVideoScenes}
