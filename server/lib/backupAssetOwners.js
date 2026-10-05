@@ -287,17 +287,35 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
   // continuation can take one and move it up. Entries are per domain, not per
   // function: a module listed here may also hold already-admitted workflows.
   {
+    // Gallery uploads hold one lease from byte installation through their
+    // history entry and rollback. Downloads run yt-dlp outside admission, then
+    // lease the poster and history commit with rollback. Poster edits acquire
+    // before the history tail and keep creation, commit and cleanup together.
+    id: 'video-library-import-and-poster-publication',
+    status: 'admitted',
+    modules: ['services/videoUpload.js', 'services/videoDownload.js', 'services/videoGen/poster.js'],
+  },
+  {
     // Local, cloud and federated finalize, derived clips (stitch, upscale,
-    // timeline, HTML composition), poster replacement, upload and download.
+    // timeline, HTML composition). Library imports and poster edits are above.
     id: 'video-generation-finalize-and-derived-clips',
     status: 'outstanding',
     modules: [
       'services/videoGen/generateVideoHelpers.js', 'services/videoGen/spawnWatch.js', 'services/videoGen/grok.js',
       'services/videoGen/fal.js', 'services/videoGen/reactor.js', 'services/videoGen/remote.js',
       'services/videoGen/stitchVideos.js', 'services/videoGen/upscaleVideo.js', 'services/videoGen/upscaleJob.js',
-      'services/videoGen/poster.js', 'services/videoTimeline/local.js', 'services/htmlComposition/index.js',
-      'services/videoUpload.js', 'services/videoDownload.js',
+      'services/videoTimeline/local.js', 'services/htmlComposition/index.js',
     ],
+  },
+  {
+    // Async completion hooks and full reconciliation read file-backed media
+    // metadata before their derived Postgres writes, outside workflow admission.
+    // Poster edits also leave old thumbnail metadata in this derived mirror.
+    // Classify and verify the mirror's restore semantics in the final sweep;
+    // admitting authoritative history alone does not settle these DB pointers.
+    id: 'media-asset-index-refresh',
+    status: 'outstanding',
+    modules: ['services/mediaAssetIndex/index.js', 'services/mediaAssetIndex/db.js'],
   },
   {
     // The post-exit tails of the generation lanes (upscale, sidecar, auto-clean),

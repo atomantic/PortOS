@@ -7,6 +7,7 @@ import { PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { safeUnder, generateThumbnail, probeVideoDuration, probeVideoStreamInfo, findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import { getHistoryItem, mutateVideoHistory } from './history.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 
 function sourcePath(item) {
   const path = item && safeUnder(PATHS.videos, item.filename);
@@ -15,36 +16,42 @@ function sourcePath(item) {
 }
 
 export async function updateVideoPoster(id, atSec) {
-  let result;
-  let generated;
-  let previous;
-  try {
-    await mutateVideoHistory(async history => {
-      const item = history.find(item => item.id === id);
-      const path = sourcePath(item);
-      let posterSec;
-      if (atSec !== null) {
-        const [duration, stream] = await Promise.all([probeVideoDuration(path), probeVideoStreamInfo(path)]);
-        if (!duration) throw new ServerError('Could not read video duration', { status: 422 });
-        posterSec = Math.max(0, Math.min(atSec, duration - (stream.fps > 0 ? 1 / stream.fps : Math.min(duration, 0.001))));
-      }
-      // A new basename prevents browser caching and leaves the old poster intact on failure.
-      generated = await generateThumbnail(path, `${id}-poster-${randomUUID()}`, { atSec: posterSec });
-      if (!generated) throw new ServerError('Could not generate poster', { status: 422 });
-      previous = item.thumbnail;
-      item.thumbnail = generated;
-      if (posterSec === undefined) delete item.posterSec;
-      else item.posterSec = posterSec;
-      result = { id, thumbnail: generated, posterSec: posterSec ?? null };
-      return history;
-    });
-  } catch (error) {
-    if (generated) await unlinkGuarded(join(PATHS.videoThumbnails, generated)).catch(() => {});
-    throw error;
-  }
-  const old = previous && safeUnder(PATHS.videoThumbnails, previous);
-  if (old) await unlinkGuarded(old).catch(() => {});
-  return result;
+  // Acquire before the history tail: poster creation, commit and cleanup must
+  // drain together, including a failed commit that removes its new poster.
+  return withBackupAssetPublication(async () => {
+    let result;
+    let generated;
+    let previous;
+    try {
+      await mutateVideoHistory(async history => {
+        const item = history.find(item => item.id === id);
+        const path = sourcePath(item);
+        let posterSec;
+        if (atSec !== null) {
+          const [duration, stream] = await Promise.all([probeVideoDuration(path), probeVideoStreamInfo(path)]);
+          if (!duration) throw new ServerError('Could not read video duration', { status: 422 });
+          posterSec = Math.max(0, Math.min(atSec, duration - (stream.fps > 0 ? 1 / stream.fps : Math.min(duration, 0.001))));
+        }
+        // A new basename prevents browser caching and leaves the old poster intact on failure.
+        const posterId = `${id}-poster-${randomUUID()}`;
+        generated = `${posterId}.jpg`;
+        const thumbnail = await generateThumbnail(path, posterId, { atSec: posterSec });
+        if (!thumbnail) throw new ServerError('Could not generate poster', { status: 422 });
+        previous = item.thumbnail;
+        item.thumbnail = generated;
+        if (posterSec === undefined) delete item.posterSec;
+        else item.posterSec = posterSec;
+        result = { id, thumbnail: generated, posterSec: posterSec ?? null };
+        return history;
+      });
+    } catch (error) {
+      if (generated) await unlinkGuarded(join(PATHS.videoThumbnails, generated)).catch(() => {});
+      throw error;
+    }
+    const old = previous && safeUnder(PATHS.videoThumbnails, previous);
+    if (old) await unlinkGuarded(old).catch(() => {});
+    return result;
+  });
 }
 
 export async function createSharingCopy(id, { signal } = {}) {

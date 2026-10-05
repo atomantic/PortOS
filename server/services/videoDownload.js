@@ -25,7 +25,8 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../lib/errorHandler.js';
-import { shortId, PATHS } from '../lib/fileUtils.js';
+import { shortId, PATHS, unlinkGuarded } from '../lib/fileUtils.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { findFfmpeg, generateThumbnail, probeVideoDuration } from '../lib/ffmpeg.js';
 import { findYtDlp } from '../lib/ytdlp.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
@@ -157,8 +158,9 @@ export async function downloadVideoIntoLibrary({
   maxDurationSec = VIDEO_DOWNLOAD_MAX_DURATION_SEC, onProgress, registerProcess,
 }) {
   const jobId = id || randomUUID();
+  let result;
   try {
-    const result = await downloadVideoToDir({
+    result = await downloadVideoToDir({
       url,
       ytDlp,
       ffmpeg,
@@ -169,33 +171,43 @@ export async function downloadVideoIntoLibrary({
       onProgress,
       registerProcess,
     });
-    if (result.outcome !== 'complete') return result;
-
-    const { filename, title } = result;
-    const outPath = join(PATHS.videos, filename);
-    onProgress?.({ percent: 100, stage: 'finalizing' });
-    const [thumbnail, durationSec] = await Promise.all([
-      generateThumbnail(outPath, jobId),
-      probeVideoDuration(outPath).catch(() => null),
-    ]);
-
-    // Derived, not a generation: a `source: 'download'` video-history entry so
-    // the existing videoToRow / onVideoCompleted media-index path and the
-    // gallery pick it up unmodified. Serialized read-modify-write so two
-    // near-simultaneous downloads can't clobber each other's entry.
-    const entry = buildDownloadHistoryEntry({ jobId, filename, thumbnail, durationSec, title, sourceUrl: url });
-    await mutateVideoHistory((history) => { history.unshift(entry); return history; });
-
-    // Let the live media-asset index hook index this immediately (it loads
-    // history by generationId and upserts one row). Reconcile is the backstop.
-    videoGenEvents.emit('completed', { generationId: jobId, filename, path: `/data/videos/${filename}`, thumbnail });
-    return { outcome: 'complete', entry };
   } catch (err) {
-    // A throw between the download and the history write would otherwise orphan
-    // a multi-GB file in data/videos with nothing pointing at it.
     await cleanupDownloadFiles(jobId);
     throw err;
   }
+  if (result.outcome !== 'complete') return result;
+  // The long producer writes fresh, unreferenced bytes outside admission.
+  // Its poster and the history commit (including rollback) share one lease.
+  const entry = await withBackupAssetPublication(async () => {
+    try {
+      const { filename, title } = result;
+      const outPath = join(PATHS.videos, filename);
+      onProgress?.({ percent: 100, stage: 'finalizing' });
+      const [thumbnail, durationSec] = await Promise.all([
+        generateThumbnail(outPath, jobId),
+        probeVideoDuration(outPath).catch(() => null),
+      ]);
+      if (!thumbnail) await unlinkGuarded(join(PATHS.videoThumbnails, `${jobId}.jpg`)).catch(() => {});
+
+      // Derived, not a generation: a `source: 'download'` video-history entry so
+      // the existing videoToRow / onVideoCompleted media-index path and the
+      // gallery pick it up unmodified. Serialized read-modify-write so two
+      // near-simultaneous downloads can't clobber each other's entry.
+      const entry = buildDownloadHistoryEntry({ jobId, filename, thumbnail, durationSec, title, sourceUrl: url });
+      await mutateVideoHistory((history) => { history.unshift(entry); return history; });
+
+      return entry;
+    } catch (err) {
+      // A throw between the download and the history write would otherwise orphan
+      // a multi-GB file in data/videos with nothing pointing at it.
+      await cleanupDownloadFiles(jobId);
+      await unlinkGuarded(join(PATHS.videoThumbnails, `${jobId}.jpg`)).catch(() => {});
+      throw err;
+    }
+  });
+  // Notify only after publication; a listener failure cannot remove committed bytes.
+  videoGenEvents.emit('completed', { generationId: jobId, filename: entry.filename, path: `/data/videos/${entry.filename}`, thumbnail: entry.thumbnail });
+  return { outcome: 'complete', entry };
 }
 
 /**
