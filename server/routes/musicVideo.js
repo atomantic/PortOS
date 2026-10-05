@@ -209,14 +209,20 @@ const projectUpdateSchema = musicVideoProjectUpdateSchema.extend(recordRenderPin
 // newest first, with a `nextCursor` — for the project index and header picker, so
 // they never load every project's scenes, runs and reviews.
 // Both pins are process-local, so only the server can say which stages a restart orphaned.
-const presentProjectForRead = (project) => presentProjectAutonomousRun(presentProjectCastAndSets(project));
+// Approvals decide stage completion and only the server computes them (#10136), so the read
+// response carries `productionReadiness` — stages derive from one record, never "not done" while a
+// second request is in flight. GET /:id/production-review still serves the full review payload.
+const presentProjectForRead = (project) => {
+  const presented = presentProjectAutonomousRun(presentProjectCastAndSets(project));
+  return { ...presented, productionReadiness: productionReadiness(presented) };
+};
 
 router.get('/', asyncHandler(async (req, res) => {
   const query = validateRequest(musicVideoProjectListQuerySchema, req.query);
   const projects = (await listProjects()).map(presentProjectForRead);
   if (query.summary === '1' || query.summary === 'true') {
     const summaries = projects.sort(compareMusicVideoProjectsNewestFirst)
-      .map((project) => summarizeMusicVideoProject(project, productionReadiness(project)));
+      .map((project) => summarizeMusicVideoProject(project, project.productionReadiness));
     // The cursor is the next page's offset; `cursor` wins over `offset`.
     const cursor = parseInt(query.cursor, 10);
     const page = paginateArray(summaries, Number.isInteger(cursor) && cursor >= 0 ? { ...query, offset: String(cursor) } : query,
