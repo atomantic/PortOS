@@ -25,7 +25,7 @@ import toast from '../../ui/Toast';
 import AutoSizeTextarea from '../../ui/AutoSizeTextarea';
 import * as api from '../../../services/api';
 import { effectiveModelFor, effortAwareModelOptions, effortSurvivingModel, seedModelEffort } from '../../../utils/providers';
-import { formatDurationMin, formatBytes } from '../../../utils/formatters';
+import { formatDurationMin, formatBytes, shortClaudeModelName } from '../../../utils/formatters';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import Modal from '../../ui/Modal';
@@ -551,7 +551,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
                   >
                     <option value="">Auto</option>
                     {editModels.map(m => (
-                      <option key={m} value={m}>{m.replace('claude-', '').replace(/-\d+$/, '')}</option>
+                      <option key={m} value={m}>{shortClaudeModelName(m)}</option>
                     ))}
                   </select>
                 )}

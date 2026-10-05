@@ -724,3 +724,12 @@ it('retains sub-cent token costs and fractional intelligence scores when precisi
   expect(formatUsd(0.0045)).toBe('$0.00');
   expect(formatCount(37.26, { maximumFractionDigits: 1 })).toBe('37.3');
 });
+
+describe('shortClaudeModelName', () => {
+  it('keeps a two-part version but drops a date stamp', async () => {
+    const { shortClaudeModelName } = await import('./formatters.js');
+    expect(shortClaudeModelName('claude-sonnet-5-5')).toBe('sonnet-5-5');
+    expect(shortClaudeModelName('claude-sonnet-4-20250514')).toBe('sonnet-4');
+    expect(shortClaudeModelName(undefined)).toBe('');
+  });
+});
