@@ -410,6 +410,19 @@ function roundForDisplay(value, decimals) {
 }
 
 /**
+ * One-line readout of a mastered render's measured audio (#10249).
+ * @param {{integratedLufs:number, truePeakDb:number, masteredFrom?:{integratedLufs:number}}|null|undefined} loudness
+ * @returns {string} e.g. "-14.1 LUFS, peak -1.6 dB (was -27.3 LUFS)", or '' when unmeasured
+ */
+export function formatLoudness(loudness) {
+  const lufs = roundForDisplay(loudness?.integratedLufs, 1);
+  const peak = roundForDisplay(loudness?.truePeakDb, 1);
+  if (lufs == null || peak == null) return '';
+  const was = roundForDisplay(loudness.masteredFrom?.integratedLufs, 1);
+  return `${lufs} LUFS, peak ${peak} dB${was == null ? '' : ` (was ${was} LUFS)`}`;
+}
+
+/**
  * Format a body weight for display. Unit-converted weights arrive as raw
  * binary floats (e.g. 170.35000000000002), which read as false precision and
  * blow out a tile's line — round to one decimal by default and suffix the unit.
@@ -859,4 +872,13 @@ export function clamp(n, min, max) {
  */
 export function capitalize(s) {
   return typeof s === 'string' && s.length ? s[0].toUpperCase() + s.slice(1) : s;
+}
+
+/**
+ * Short display name for a Claude model id: drops the `claude-` prefix and a
+ * trailing 8-digit date stamp only, so `claude-sonnet-5-5` stays "sonnet-5-5"
+ * (a bare `-\d+` strip would collapse it to "sonnet-5").
+ */
+export function shortClaudeModelName(model) {
+  return String(model ?? '').replace(/^claude-/, '').replace(/-\d{8}$/, '');
 }

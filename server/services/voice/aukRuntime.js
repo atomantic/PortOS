@@ -92,8 +92,15 @@ function ensureWorker() {
   worker = child;
   // Drain diagnostics without copying prompts, paths, or model data into shared logs.
   child.stderr.on('data', () => {});
-  child.stdin.on('error', () => { if (pending?.child === child) pending.reject(new ServerError('AuK input stream closed.', { status: 502 })); });
   const lines = createInterface({ input: child.stdout });
+  // A broken stdin or failed spawn leaves a dead handle; tear it down so the next call re-spawns.
+  const teardown = (message, status) => {
+    lines.close();
+    if (worker === child) worker = null;
+    if (pending?.child === child) pending.reject(new ServerError(message, { status }));
+    child.kill('SIGKILL');
+  };
+  child.stdin.on('error', () => teardown('AuK input stream closed.', 502));
   lines.on('line', line => {
     if (!pending || pending.child !== child) return;
     let response;
@@ -101,7 +108,7 @@ function ensureWorker() {
     if (response.ok) pending.resolve(response);
     else pending.reject(new ServerError(`AuK inference failed (${response.error || 'runtime error'}).`, { status: 502 }));
   });
-  child.on('error', () => pending?.child === child && pending.reject(new ServerError('AuK could not start. Run setup again.', { status: 503 })));
+  child.on('error', () => teardown('AuK could not start. Run setup again.', 503));
   child.on('close', () => {
     lines.close();
     if (worker === child) worker = null;
@@ -140,7 +147,10 @@ export async function synthesizeAuk(text, opts = {}, signal) {
     child.stdin.write(`${JSON.stringify({ segments, instructions: opts.instructions || 'Natural, clear speaking voice',
       referenceAudio: opts.referenceAudio || null, seed: opts.seed ?? 42,
       pitchSemitones: opts.pitchSemitones || 0, output })}\n`, error => {
-      if (error) reject(new ServerError('AuK request could not be sent.', { status: 502 }));
+      if (!error) return;
+      if (worker === child) worker = null;
+      reject(new ServerError('AuK request could not be sent.', { status: 502 }));
+      child.kill('SIGKILL');
     });
   });
   return result.then(async meta => ({ ...meta, wav: await readFile(output), engine: 'auk',

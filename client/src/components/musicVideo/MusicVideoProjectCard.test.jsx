@@ -38,6 +38,28 @@ const BASE_PROJECT = {
 };
 
 describe('MusicVideoProjectCard', () => {
+  it('renders a bounded summary (no scenes/runs) the same as a full record (#10169)', () => {
+    const { scenes, ...rest } = BASE_PROJECT;
+    const summary = {
+      ...rest,
+      audioAnalysis: { bpm: 128 },
+      midiTranscription: true,
+      stage: 'board',
+      spend: { spentUsd: 1.5, capUsd: 5 },
+      shotSummary: '2 scenes',
+      sceneCount: 2,
+      clipCount: 1,
+      frameCount: 2,
+      preview: { kind: 'none', label: 'No render yet' },
+    };
+    render(<MusicVideoProjectCard project={summary} onSelect={vi.fn()} />);
+    expect(screen.getByText('Board')).toBeInTheDocument();
+    expect(screen.getByText('128 BPM')).toBeInTheDocument();
+    expect(screen.getByText(/2 scenes · 1 clip/)).toBeInTheDocument();
+    expect(screen.getByTitle('50% clips rendered')).toBeInTheDocument();
+    expect(screen.getByText(/\$1\.50/)).toBeInTheDocument();
+  });
+
   it('renders richly detailed metadata and configuration options', () => {
     const onSelect = vi.fn();
     render(
@@ -170,5 +192,24 @@ describe('MusicVideoProjectCard', () => {
     };
     render(<MusicVideoProjectCard project={emptyProj} />);
     expect(screen.getByText('No render preview yet')).toBeInTheDocument();
+  });
+});
+
+describe('MusicVideoProjectCard run pill and version switcher', () => {
+  it('shows the run pill and steps through versions', () => {
+    const onVersionStep = vi.fn();
+    render(
+      <MusicVideoProjectCard
+        project={{ ...BASE_PROJECT, autonomousRun: { status: 'awaiting-approval', awaiting: 'lyrics' } }}
+        versionCount={3}
+        versionIndex={0}
+        onVersionStep={onVersionStep}
+      />,
+    );
+    expect(screen.getByTestId('mv-run-pill-mv-card-1').textContent).toBe('Needs you');
+    expect(screen.getByText('v2 of 3')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('Older version'));
+    expect(onVersionStep).toHaveBeenCalledWith(1);
+    expect(screen.getByLabelText('Newer version').disabled).toBe(true);
   });
 });

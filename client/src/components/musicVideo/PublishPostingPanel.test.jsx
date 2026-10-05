@@ -35,6 +35,24 @@ describe('PublishPostingPanel (#9282)', () => {
     expect(publishing.prepare).toHaveBeenCalledWith('reddit', { subreddit: 'SunoAI', kind: 'link' });
   });
 
+  it('lets the director pick which 9:16 cut a Shorts draft posts (#10150)', () => {
+    const publishing = hook();
+    const p = { ...project({ master: { renderHistoryId: 'r1' }, exports: [{ kind: 'vertical-9x16', filename: 'v.mp4', startSec: 10, endSec: 40 }] }),
+      renderHistoryId: 'r1', excerpts: [{ id: 'ex-1', status: 'complete', aspect: '9:16', filename: 'e.mp4', startSec: 60, endSec: 90 }, { id: 'ex-2', status: 'complete', aspect: '16:9', filename: 'w.mp4' }] };
+    render(<PublishPostingPanel project={p} publishing={publishing} />);
+    const shorts = row('YouTube Shorts');
+    const select = within(shorts).getByLabelText('Vertical cut to post');
+    expect(within(select).getAllByRole('option').map((o) => o.value)).toEqual(['', 'ex-1', 'kit-vertical']);
+    fireEvent.change(select, { target: { value: 'kit-vertical' } });
+    fireEvent.click(within(shorts).getByRole('button', { name: 'Fill draft' }));
+    expect(publishing.prepare).toHaveBeenCalledWith('shorts', { cutId: 'kit-vertical' });
+  });
+
+  it('shows no cut picker when there is only one 9:16 cut', () => {
+    render(<PublishPostingPanel project={project()} publishing={hook()} />);
+    expect(within(row('TikTok')).queryByLabelText('Vertical cut to post')).toBeNull();
+  });
+
   it('shows the filled draft and requires manual platform publication', () => {
     const publishing = hook({ drafts: { stackerNews: { draftId: 'd1', summary: { title: 'Song', territory: 'art' }, screenshot: 'data:image/jpeg;base64,AA' } } });
     render(<PublishPostingPanel project={project()} publishing={publishing} />);
@@ -43,8 +61,10 @@ describe('PublishPostingPanel (#9282)', () => {
     expect(within(sn).getByText('Song')).toBeInTheDocument();
     expect(publishing.submit).not.toHaveBeenCalled();
     expect(within(sn).queryByRole('button', { name: /Post to Stacker News/ })).toBeNull();
-    expect(within(sn).getByText(/PortOS cannot submit this draft/)).toBeInTheDocument();
+    expect(within(sn).getByRole('button', { name: /Discard/ })).toBeInTheDocument();
     fireEvent.click(within(sn).getByRole('button', { name: /Discard/ }));
+    expect(publishing.discard).not.toHaveBeenCalled();
+    fireEvent.click(within(sn).getByRole('button', { name: /Confirm discard Stacker News draft/ }));
     expect(publishing.discard).toHaveBeenCalledWith('stackerNews');
   });
 

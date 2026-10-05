@@ -78,4 +78,16 @@ describe('runner TUI exit handoff', () => {
     expect(run.state.stats).toEqual({ completed: 1, failed: 0 });
     expect(run.state.agents).toEqual({});
   });
+
+  it('never persists the raw terminal repaint stream as the transcript', async () => {
+    const noSummary = setup({ completedBySentinel: true, outputBuffer: '\x1b[1;38;2;1;2;3mrepaint\x1b[m\x1b[K' });
+    await noSummary.onExit({ exitCode: 0, signal: 0 });
+    const [, written] = noSummary.persistCompletion.mock.calls[0];
+    expect(written).not.toContain('\x1b');
+    expect(written).toContain('Agent signaled completion');
+
+    const failed = setup({ outputBuffer: '\x1b[31mUsage limit reached\x1b[m' });
+    await failed.onExit({ exitCode: 1, signal: 0 });
+    expect(failed.persistCompletion.mock.calls[0][1]).toBe('Usage limit reached');
+  });
 });

@@ -15,6 +15,7 @@
  */
 
 import { readFile } from 'fs/promises';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { describeFetchError } from '../lib/fetchErrorChain.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
@@ -72,7 +73,18 @@ export const createFalRequestEntry = (apiKey) => ({
 // never fires once the remote request already reached a fal-reported
 // terminal state (COMPLETED/ERROR) — there is nothing left to cancel there.
 export async function cancelFalRequest(entry) {
-  if (!entry || entry.canceledRemote || entry.remoteTerminal || !entry.cancelUrl || !entry.apiKey) return;
+  if (!entry) return;
+  if (entry.cancelPromise) await entry.cancelPromise;
+  else {
+    if (entry.remoteTerminal || !entry.cancelUrl || !entry.apiKey) return;
+    entry.cancelPromise = sendFalCancel(entry);
+    await entry.cancelPromise;
+  }
+  // An accepted cancel request does not prove the paid remote render stopped.
+  if (!entry.remoteTerminal) maintenance.markCurrentUnsettled();
+}
+
+async function sendFalCancel(entry) {
   entry.canceledRemote = true;
   try {
     const res = await fetchWithTimeout(entry.cancelUrl, {
@@ -80,6 +92,7 @@ export async function cancelFalRequest(entry) {
       headers: { Authorization: `Key ${entry.apiKey}` },
     }, FAL_POLL_TIMEOUT_MS);
     if (!res.ok) console.error(`❌ fal.ai cancellation request failed: HTTP ${res.status}`);
+    await res.body?.cancel?.();
   } catch (err) {
     console.error(`❌ fal.ai cancellation request failed: ${err?.message || err}`);
   }
@@ -95,9 +108,14 @@ export async function submitFalRequest({ apiKey, modelId, body }) {
     method: 'POST',
     headers: { Authorization: `Key ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  }, FAL_SUBMIT_TIMEOUT_MS);
+  }, FAL_SUBMIT_TIMEOUT_MS).catch(err => {
+    // A lost POST response is not proof that the paid request was rejected.
+    maintenance.markCurrentUnsettled();
+    throw err;
+  });
   const payload = await res.json().catch(() => null);
   if (!res.ok || !payload?.request_id) {
+    if (res.ok || res.status >= 500) maintenance.markCurrentUnsettled();
     const reason = payload?.detail ? JSON.stringify(payload.detail) : `HTTP ${res.status}`;
     throw new ServerError(`fal.ai rejected the request: ${reason}`, { status: 502, code: 'FAL_SUBMIT_FAILED' });
   }
@@ -161,12 +179,16 @@ export async function awaitFalCompletion({
     }
     if (status.status === 'ERROR') {
       entry.remoteTerminal = true;
+      await cancelFalRequest(entry);
       return { outcome: 'failed', reason: `fal.ai render failed: ${status.error || 'unknown error'}` };
     }
     onStatus(status.status);
     await new Promise((r) => setTimeout(r, FAL_POLL_INTERVAL_MS));
   }
-  if (entry.aborted) return { outcome: 'canceled' };
+  if (entry.aborted) {
+    await cancelFalRequest(entry);
+    return { outcome: 'canceled' };
+  }
   if (Date.now() >= deadline) {
     await cancelFalRequest(entry);
     return { outcome: 'failed', reason: `fal.ai did not finish within ${Math.round(timeoutMs / 1000)}s` };

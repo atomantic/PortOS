@@ -1,10 +1,27 @@
 import { request } from './apiCore.js';
 
+export const getMusicVideoMakingOfCatalog = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/making-of/catalog`, options);
+export const previewMusicVideoMakingOf = (selection, options = {}) => request('/music-video/making-of/preview', {
+  method: 'POST', body: JSON.stringify(selection), ...options,
+});
+export const exportMusicVideoMakingOf = (selection, options = {}) => request('/music-video/making-of/export', {
+  method: 'POST', body: JSON.stringify(selection), responseType: 'arraybuffer', ...options,
+});
+
 // Music Video production mode (#1760). Director scene-board project CRUD + the
 // offline beat/tempo/section analysis. `options` lets a caller suppress
 // request()'s auto-toast with `{ silent: true }` when it owns its own error UI.
 
-export const listMusicVideoProjects = (options = {}) => request('/music-video', options);
+// Bounded, newest-first summary page (#10169) — `{ items, total, nextCursor }`
+// for the index and header picker, never the full project records.
+export const listMusicVideoProjectSummaries = ({ cursor, limit } = {}, options = {}) => {
+  const query = new URLSearchParams({ summary: '1' });
+  if (limit != null) query.set('limit', String(limit));
+  if (cursor != null) query.set('cursor', String(cursor));
+  return request(`/music-video?${query}`, options);
+};
+// Newest MIDI transcription per track — bounded projection for the Tracks page (#10203).
+export const listMusicVideoMidiSources = (options = {}) => request('/music-video/midi-sources', options);
 export const createMusicVideoProject = (data, options = {}) => request('/music-video', {
   method: 'POST', body: JSON.stringify(data), ...options,
 });
@@ -57,11 +74,21 @@ export const importMusicVideoTrackLyrics = (id, body = {}, options = {}) => requ
 });
 
 // Align director lyric lines to the vocal (#9074). Body `{}` aligns every line;
-// `{ cueId }` re-aligns one line. Resolves to the updated project. Runs only
+// `{ cueId }` re-aligns one line. Kickoff resolves to { jobId, reused? } (#10155):
+// stages stream over SSE and the terminal `complete` frame carries the updated
+// project. A request while one runs for the project returns that job. Runs only
 // when the caller invokes it — there is no boot or import hook.
 export const alignMusicVideoLyrics = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/align`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
+export const musicVideoLyricAlignEventsUrl = (jobId) =>
+  `/api/music-video/lyrics/align/${encodeURIComponent(jobId)}/events`;
+export const cancelMusicVideoLyricAlign = (jobId, options = {}) =>
+  request(`/music-video/lyrics/align/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', ...options });
+// Read-only: { alignment, separation, midi } live job ids (null when none) so a
+// reloaded Setup reattaches instead of starting a new run.
+export const getMusicVideoActiveJobs = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/active-jobs`, options);
 
 // ---- Director scene board ----
 export const addMusicVideoScene = (id, scene, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes`, {
@@ -163,6 +190,11 @@ export const renderMusicVideoProject = (id, options = {}) =>
 // stream. Never starts a render — only the POST above does (#9940).
 export const getMusicVideoActiveRender = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/render`, options);
+// Read-only: resolves { jobs: [{ jobId, lane: 'image'|'video', sceneId, status }] }
+// — the project's in-flight scene frame/clip renders on this install — so a
+// reloaded board restores its spinners instead of allowing duplicate submits (#10154).
+export const getMusicVideoSceneJobs = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/scene-jobs`, options);
 export const getMusicVideoCodeDocument = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/code/document`, options);
 export const generateMusicVideoCode = (id, body = {}, options = {}) =>
@@ -214,11 +246,12 @@ export const selectMusicVideoPublishThumbnail = (id, filename, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish-kit/thumbnail`, { method: 'PUT', body: JSON.stringify({ filename }), ...options });
 // ---- Posting (#9282) ----
 // Prepare fills the platform's post in the PortOS Browser → { draftId, target,
-// summary, screenshot }; submit posts that live draft → { project, post }.
+// summary, screenshot }. Manual posting is handled outside this wrapper.
 export const prepareMusicVideoPublishDraft = (id, target, options = {}, reqOptions = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish/${encodeURIComponent(target)}/prepare`, { method: 'POST', body: JSON.stringify(options || {}), ...reqOptions });
-export const submitMusicVideoPublishDraft = (id, draftId, options = {}) =>
-  request(`/music-video/${encodeURIComponent(id)}/publish/drafts/${encodeURIComponent(draftId)}/submit`, { method: 'POST', ...options });
+// A project's live drafts (state 'open' | 'closed') so a reloaded card rehydrates → { drafts }.
+export const getMusicVideoPublishDrafts = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish/drafts`, options);
 export const discardMusicVideoPublishDraft = (id, draftId, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish/drafts/${encodeURIComponent(draftId)}`, { method: 'DELETE', ...options });
 // Where the director posts (#9287): { platforms, history } and platform toggles;
@@ -378,6 +411,9 @@ export const resumeMusicVideoCastAndSets = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/resume`, { method: 'POST', body: '{}', ...options });
 export const approveMusicVideoCastAndSets = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/approve`, { method: 'POST', ...options });
+// "Keep approved" (#10141): re-stamp an approved check-in on the project's current concept, style, subjects and song.
+export const reconfirmMusicVideoCastAndSets = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/reconfirm`, { method: 'POST', ...options });
 export const skipMusicVideoCastAndSets = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/skip`, { method: 'POST', ...options });
 
@@ -449,6 +485,9 @@ export const importMusicVideoProductionPlanning = (id, source, options = {}) => 
 export const bindMusicVideoProductionShot = (id, shotId, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/shots/${encodeURIComponent(shotId)}/bind`, { method: 'POST', ...options });
 
 export const addMusicVideoProductionFeedback = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/feedback`, { method: 'POST', body: JSON.stringify(body), ...options });
+// Write one changed input of a stale approval back to its approved value (#10241). `stage` is art | storyboard | proof | castAndSets.
+export const revertMusicVideoProductionInput = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/revert`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const reviseMusicVideoProductionFromFeedback = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/revise`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const resolveMusicVideoProductionFeedback = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/feedback/resolve`, { method: 'POST', body: JSON.stringify(body), ...options });
 // Drafting is free; generation and candidate selection are separate explicit actions.
 export const saveMusicVideoSongRevision = (id, fields, options = {}) => request(`/music-video/${encodeURIComponent(id)}/song-revision`, { method: 'POST', body: JSON.stringify(fields), ...options });

@@ -1,3 +1,5 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
 import { assertProductionApproval, productionReviewBasis } from './productionReview.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
@@ -86,6 +88,15 @@ export const isLocalRenderMark = (renderingOn, instanceId) => !renderingOn || re
 // Every terminal project write clears the in-flight mark's stamp and the
 // partial-output pointer alongside the status.
 const settledRender = (status, extra = {}) => ({ status, ...extra, renderingOn: null, renderPartialFilename: null });
+
+// Tell listeners (the autonomous run waiting on its final render) that a render
+// job reached a terminal state. Emitted after the project record's terminal
+// write, with the outcome read off the job the caller already settled.
+const emitRenderSettled = (projectId, job) => musicVideoEvents.emit('render', {
+  projectId, jobId: job.id,
+  status: job.status === 'complete' ? 'completed' : job.status === 'canceled' ? 'canceled' : 'failed',
+  error: job.lastError || null,
+});
 
 export const attachRenderSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
@@ -511,6 +522,7 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
       firstInputIdx: audioIdx + 1 + overlays.length,
       mainLabel: '[master]',
       outLabel: '[mixa]',
+      limitPeak: true,
     });
     inputs.push(...bed.inputs);
     filters.push(...bed.filters);
@@ -704,17 +716,23 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
   handOff();
   const priorStatus = project.status && project.status !== 'rendering' ? project.status : 'ready';
   await updateProject(projectId, { status: 'rendering', renderingOn, renderPartialFilename: filename, renderError: null }).catch((err) => {
+    maintenance.markCurrentUnsettled();
     console.error(`❌ Music-video ${renderer.label} render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→rendering write failed: ${err.message}`);
   });
   console.log(`🎬 Rendering ${renderer.label} music video [${jobId.slice(0, 8)}]: project=${projectId.slice(0, 8)} frames=${Math.round(plan.durationSec * plan.fps)} footage=off`);
   const { signal } = job.overlayAbort;
-  const finish = async (patch) => {
+  const writeSettled = (patch) => updateProject(projectId, settledRender(patch.status, { renderError: patch.status === 'failed' ? job.lastError?.slice(0, 2000) || 'Render failed' : null, ...patch.extra })).catch((err) => {
+    maintenance.markCurrentUnsettled();
+    console.error(`❌ Music-video ${renderer.label} render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${patch.status} write failed: ${err.message}`);
+  });
+  // `written`: the success path already committed the row inside its backup lease.
+  const finish = async (patch, { written = false } = {}) => {
     projectRenders.delete(projectId);
-    await updateProject(projectId, settledRender(patch.status, { renderError: patch.status === 'failed' ? job.lastError?.slice(0, 2000) || 'Render failed' : null, ...patch.extra })).catch((err) => {
-      console.error(`❌ Music-video ${renderer.label} render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${patch.status} write failed: ${err.message}`);
-    });
+    if (!written) await writeSettled(patch);
+    emitRenderSettled(projectId, job);
     if (options.productionRunId) musicVideoEvents.emit('document-render', { projectId, runId: options.productionRunId, attemptId: options.productionRenderAttemptId, jobId, status: patch.status === 'complete' ? 'completed' : 'failed', error: job.lastError || null });
     closeJobAfterDelay(jobs, jobId);
+    options.maintenancePermit?.finish();
   };
   Promise.resolve().then(async () => {
     await assertCurrentRenderApproval(projectId, project, options);
@@ -736,22 +754,29 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
       console.warn(`⚠️ Music-video ${renderer.label} proof sheet failed [${jobId.slice(0, 8)}]: ${err.message}`);
     }
     const atSec = typeof project.composition?.posterSec === 'number' ? project.composition.posterSec : (encoded.boundaryTimes[0] || 0);
-    const thumb = await generateThumbnail(outputPath, jobId, { atSec });
-    await appendToVideoHistory({
-      id: jobId,
-      prompt: `Music Video: ${project.name}`,
-      modelId: renderer.modelId,
-      seed: 0,
-      width: encoded.width,
-      height: encoded.height,
-      numFrames: Math.round(encoded.durationSec * encoded.fps),
-      fps: encoded.fps,
-      filename,
-      thumbnail: thumb,
-      createdAt: new Date().toISOString(),
-      musicVideoProjectId: projectId,
+    const completed = { status: 'complete', extra: { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project) } };
+    // The encoder wrote the MP4 in place; the poster, the history entry naming
+    // it and the project row naming that entry publish under one lease (#9982).
+    const thumb = await withBackupAssetPublication(async () => {
+      const poster = await generateThumbnail(outputPath, jobId, { atSec });
+      await appendToVideoHistory({
+        id: jobId,
+        prompt: `Music Video: ${project.name}`,
+        modelId: renderer.modelId,
+        seed: 0,
+        width: encoded.width,
+        height: encoded.height,
+        numFrames: Math.round(encoded.durationSec * encoded.fps),
+        fps: encoded.fps,
+        filename,
+        thumbnail: poster,
+        createdAt: new Date().toISOString(),
+        musicVideoProjectId: projectId,
+      });
+      await writeSettled(completed);
+      return poster;
     });
-    await finish({ status: 'complete', extra: { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project) } });
+    await finish(completed, { written: true });
     console.log(`✅ ${renderer.label[0].toUpperCase()}${renderer.label.slice(1)} music video rendered [${jobId.slice(0, 8)}]: ${filename}`);
     broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}`, proof: proof ? `/data/video-thumbnails/${proof}` : null } });
   }).catch(async (err) => {
@@ -778,6 +803,12 @@ async function assertCurrentRenderApproval(projectId, preparedProject, options) 
 }
 
 export async function renderMusicVideo(projectId, options = {}) {
+  const permit = maintenance.admit('music-video', projectId, { continuation: true, parentKinds: ['media'] });
+  try { return await permit.run(() => renderAdmittedMusicVideo(projectId, options, permit)); }
+  catch (err) { permit.finish(); throw err; }
+}
+
+async function renderAdmittedMusicVideo(projectId, options, permit) {
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   assertProductionApproval(project);
@@ -799,7 +830,7 @@ export async function renderMusicVideo(projectId, options = {}) {
   try {
     const seeked = seekedRendererFor(project);
     if (seeked) {
-      return await renderSeekedMode(projectId, project, () => { handedOff = true; }, seeked, options);
+      return await renderSeekedMode(projectId, project, () => { handedOff = true; }, seeked, { ...options, maintenancePermit: permit });
     }
     const { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed } = await planMusicVideoRender(project);
     await ensureDir(PATHS.videos);
@@ -834,12 +865,14 @@ export async function renderMusicVideo(projectId, options = {}) {
     // it alone, and record the output file so OUR boot recovery can delete the
     // partial a restart mid-encode leaves behind.
     await updateProject(projectId, { status: 'rendering', renderingOn, renderPartialFilename: filename, renderError: null }).catch((err) => {
+      maintenance.markCurrentUnsettled();
       console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→rendering write failed: ${err.message}`);
     });
 
     console.log(`🎬 Rendering music video [${jobId.slice(0, 8)}]: project=${projectId.slice(0, 8)} clips=${clips.length} cues=${cues.length} duration=${totalDuration.toFixed(2)}s`);
 
     const releaseScratch = () => (composition ? removeCompositionScratch(jobId).catch((err) => {
+      maintenance.markCurrentUnsettled();
       console.warn(`⚠️ Music-video render [${jobId.slice(0, 8)}] could not remove its overlay scratch: ${err.message}`);
     }) : null);
 
@@ -895,10 +928,13 @@ export async function renderMusicVideo(projectId, options = {}) {
           broadcastSse(job, { type: 'error', error: reason });
           projectRenders.delete(projectId);
           await updateProject(projectId, settledRender('failed')).catch((updateErr) => {
+            maintenance.markCurrentUnsettled();
             console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→failed write failed: ${updateErr.message}`);
           });
+          emitRenderSettled(projectId, job);
           await releaseScratch();
           closeJobAfterDelay(jobs, jobId);
+          permit.finish();
         },
         onClose: async (code, signal) => {
           job.process = null;
@@ -917,10 +953,13 @@ export async function renderMusicVideo(projectId, options = {}) {
             // 'complete' project stays 'complete'); a real failure marks it 'failed'.
             const targetStatus = canceled ? priorStatus : 'failed';
             await updateProject(projectId, settledRender(targetStatus)).catch((updateErr) => {
+              maintenance.markCurrentUnsettled();
               console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${targetStatus} write failed: ${updateErr.message}`);
             });
+            emitRenderSettled(projectId, job);
             await releaseScratch();
             closeJobAfterDelay(jobs, jobId);
+            permit.finish();
             return;
           }
           // Success finalization runs in an event callback (no request to bubble
@@ -937,39 +976,49 @@ export async function renderMusicVideo(projectId, options = {}) {
             const posterSec = project.composition?.posterSec;
             const atSec = typeof posterSec === 'number' && posterSec < totalDuration ? posterSec
               : section ? (section.startSec + Math.min(section.endSec, totalDuration)) / 2 : undefined;
-            const thumb = await generateThumbnail(outputPath, jobId, { atSec });
-            const meta = {
-              id: jobId,
-              prompt: `Music Video: ${project.name}`,
-              modelId: 'music-video',
-              seed: 0,
-              width: canonW,
-              height: canonH,
-              numFrames: Math.round(totalDuration * (fps || 24)),
-              fps: fps || 24,
-              filename,
-              thumbnail: thumb,
-              createdAt: new Date().toISOString(),
-              musicVideoProjectId: projectId,
-            };
-            await appendToVideoHistory(meta);
-            await updateProject(projectId, settledRender('complete', { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project) })).catch((updateErr) => {
-              console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→complete write failed: ${updateErr.message}`);
+            // ffmpeg wrote the MP4 in place; the poster, the history entry naming
+            // it and the project row naming that entry publish under one lease (#9982).
+            const thumb = await withBackupAssetPublication(async () => {
+              const poster = await generateThumbnail(outputPath, jobId, { atSec });
+              await appendToVideoHistory({
+                id: jobId,
+                prompt: `Music Video: ${project.name}`,
+                modelId: 'music-video',
+                seed: 0,
+                width: canonW,
+                height: canonH,
+                numFrames: Math.round(totalDuration * (fps || 24)),
+                fps: fps || 24,
+                filename,
+                thumbnail: poster,
+                createdAt: new Date().toISOString(),
+                musicVideoProjectId: projectId,
+              });
+              await updateProject(projectId, settledRender('complete', { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project) })).catch((updateErr) => {
+                maintenance.markCurrentUnsettled();
+                console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→complete write failed: ${updateErr.message}`);
+              });
+              return poster;
             });
+            emitRenderSettled(projectId, job);
             console.log(`✅ Music video rendered [${jobId.slice(0, 8)}]: ${filename}`);
             broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });
           } catch (err) {
+            permit.markUnsettled();
             job.status = 'error';
             job.lastError = `Finalize failed: ${err.message}`;
             console.error(`❌ Music-video render finalize failed [${jobId.slice(0, 8)}]: ${err.message}`);
             broadcastSse(job, { type: 'error', error: 'Render finalize failed' });
             await updateProject(projectId, settledRender('failed')).catch((updateErr) => {
+              maintenance.markCurrentUnsettled();
               console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→failed write failed: ${updateErr.message}`);
             });
+            emitRenderSettled(projectId, job);
           } finally {
             projectRenders.delete(projectId);
             await releaseScratch();
             closeJobAfterDelay(jobs, jobId);
+            permit.finish();
           }
         },
       });
@@ -1007,17 +1056,20 @@ export async function renderMusicVideo(projectId, options = {}) {
       projectRenders.delete(projectId);
       const targetStatus = canceled ? priorStatus : 'failed';
       await updateProject(projectId, settledRender(targetStatus)).catch((updateErr) => {
+        maintenance.markCurrentUnsettled();
         console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${targetStatus} write failed: ${updateErr.message}`);
       });
+      emitRenderSettled(projectId, job);
       await releaseScratch();
       closeJobAfterDelay(jobs, jobId);
+      permit.finish();
     });
 
     return { jobId };
   } finally {
     // Prep threw (or we never handed off to the job lifecycle) — release the
     // reserved slot so a stale PENDING can't 409 every future render.
-    if (!handedOff) projectRenders.delete(projectId);
+    if (!handedOff) { projectRenders.delete(projectId); permit.finish(); }
   }
 }
 

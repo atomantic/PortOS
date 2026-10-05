@@ -51,6 +51,8 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 
 ## Feature deep dives (`features/`)
 
+- [Music Video making-of export](./features/music-video-making-of.md) — local multi-variant planning packages, inventory previews, source planning retention and publication boundaries
+
 Start with the [product surface map](./features/product-surfaces.md) for a complete, user-facing inventory of the application. The focused guides below explain the features with their own operating contracts.
 
 App management: [app-wizard](./features/app-wizard.md) · [autofixer](./features/autofixer.md) · [browser](./features/browser.md) · [error-handling](./features/error-handling.md) · [jira-sprint-manager](./features/jira-sprint-manager.md)
@@ -69,6 +71,7 @@ Comms & voice: [beeper](./features/beeper.md) · [messages-browser-send](./featu
 ## Point-in-time records
 
 - [Music Video render-grade validation](validation/9302-music-video-grade.md) — synthetic encoder parity, visual references, and remaining generated-shot acceptance.
+- [Explicit Music Video render pools](decisions/2026-10-04-music-video-render-pools.md) — proposed initial shot placement and supplied-audio conditioning; final composition export remains local.
 
 - **[plans/](./plans/README.md)** — dated design plans (`YYYY-MM-DD-<slug>.md`), archived on approval before implementation. Historical records, not living docs. See [provider connections and harnesses](./plans/2026-09-06-provider-connections-and-harnesses.md) for stable executable routes, migration and management flows.
 - **decisions/** — ADRs (`YYYY-MM-DD-<slug>.md`), e.g. the [Postgres-as-primary-datastore decision](./decisions/2026-06-07-postgres-as-primary-datastore.md) and what may cross the federation layer ([user-controlled federation](./decisions/2026-09-19-user-controlled-federation.md), [Privacy Center storage](./decisions/2026-08-08-privacy-records-machine-local.md), [federated visual prompts](./decisions/2026-08-20-federated-visual-prompts.md), [conditioning crosses to an allowlisted peer](./decisions/2026-08-22-federated-media-input-assets.md), [AI usage metrics federate on by default](./decisions/2026-09-01-federated-usage-metrics.md), [Eidoverse guest chat](./decisions/2026-09-05-eidoverse-guest-chat.md), [numeric PortOS quality federation](./decisions/2026-09-10-portos-quality-federation.md), [federated Eidoverse foundations](./decisions/2026-09-18-federated-eidoverse-foundations.md)), why H3 [ships the draft-decode gates without an asset](./decisions/2026-08-30-h3-draft-decoder-asset.md), and why closed-set decisions run on a [local entailment model that abstains](./decisions/2026-09-18-local-jev-decision-service.md).

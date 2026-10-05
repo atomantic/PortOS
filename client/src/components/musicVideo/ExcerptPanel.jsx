@@ -5,6 +5,7 @@ import { getMusicVideoSocialCuts } from '../../services/apiMusicVideo.js';
 import RevisionPanel, { currentRevision } from './RevisionPanel.jsx';
 import AutoReviewPanel from './AutoReviewPanel.jsx';
 import { formatCount } from '../../utils/formatters.js';
+import { autoReviewNeedsUser } from '../../lib/musicVideoAttention.js';
 
 const VERDICT_STYLES = {
   flagged: 'bg-port-error/20 text-port-error',
@@ -19,6 +20,23 @@ const PLAYER_FRAME = {
   '1:1': 'aspect-square max-h-[50vh] mx-auto',
 };
 const ASPECT_LABELS = { '16:9': '16:9 (YouTube)', '9:16': '9:16 (Shorts, TikTok, Reels)', '1:1': '1:1 (square)' };
+
+const ROLE_LABELS = { proof: 'Proof', prototype: 'Prototype', pilot: 'Pilot', social: 'Social cut', draft: 'Draft' };
+
+/**
+ * Role of an excerpt (#10148), derived from where the project registers it:
+ * the production-review proof/prototype slots, an auto-review pilot attempt,
+ * or its frame (a cut in another aspect than the project's is a social cut).
+ */
+export function excerptRole(project, excerpt) {
+  const review = project?.productionReview;
+  if (review?.proof?.excerptId === excerpt.id) return 'proof';
+  if (review?.prototype?.excerptId === excerpt.id) return 'prototype';
+  const pilotReviewIds = new Set((project?.productionRuns || []).flatMap(r => (r.pilot?.scenes || []).map(p => p.reviewRunId)));
+  if ((project?.autoReviews || []).some(r => pilotReviewIds.has(r.id) && r.attempts?.some(a => a.excerptId === excerpt.id))) return 'pilot';
+  if (excerpt.aspect && excerpt.aspect !== musicVideoAspect(project)) return 'social';
+  return 'draft';
+}
 
 const fmt = (sec) => {
   const s = Math.max(0, Math.round(sec * 10) / 10);
@@ -56,7 +74,7 @@ function NoteRow({ excerptId, note, busy, onEdit, onDelete, onSeek }) {
           disabled={busy} className={`p-1 rounded min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 ${note.verdict === 'flagged' ? 'text-port-error' : 'text-port-text-muted'}`}>
           <Flag size={12} />
         </button>
-        <button type="button" title="Approve" aria-label="Approve"
+        <button type="button" title="Looks good" aria-label="Looks good"
           onClick={() => onEdit(excerptId, note.id, { verdict: note.verdict === 'approved' ? null : 'approved' })}
           disabled={busy} className={`p-1 rounded min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 ${note.verdict === 'approved' ? 'text-port-success' : 'text-port-text-muted'}`}>
           <CheckCircle2 size={12} />
@@ -72,9 +90,10 @@ function NoteRow({ excerptId, note, busy, onEdit, onDelete, onSeek }) {
   );
 }
 
-function ExcerptCard({ excerpt, activeRenderId, connected, deleting, noteBusy, onDelete, onCancel, onAddNote, onEditNote, onDeleteNote, canRevise, onRevise }) {
+function ExcerptCard({ excerpt, role, proofApproved, activeRenderId, connected, deleting, noteBusy, onDelete, onCancel, onAddNote, onEditNote, onDeleteNote, canRevise, onRevise }) {
   const videoRef = useRef(null);
   const [draft, setDraft] = useState('');
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const seek = (t) => { if (videoRef.current) { videoRef.current.currentTime = t; videoRef.current.play?.().catch(() => {}); } };
   const addNoteHere = () => {
     if (!draft.trim()) return;
@@ -89,6 +108,7 @@ function ExcerptCard({ excerpt, activeRenderId, connected, deleting, noteBusy, o
     <li className="rounded border border-port-border p-2 space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
         <span className="font-medium">{fmt(excerpt.startSec)} – {fmt(excerpt.endSec)} <span className="text-port-text-muted">({excerpt.status === 'rendering' && (activeRenderId !== excerpt.id || connected === false) ? 'Checking render status' : STATUS_LABELS[excerpt.status] || excerpt.status})</span>
+          <span className="ml-1.5 px-1.5 py-0.5 rounded bg-port-border text-port-text-muted text-[10px]">{ROLE_LABELS[role]}{role === 'proof' && proofApproved ? ' (approved)' : ''}</span>
           {excerpt.aspect && excerpt.aspect !== '16:9' && <span className="ml-1.5 px-1.5 py-0.5 rounded bg-port-accent/20 text-port-accent text-[10px]">{excerpt.aspect}</span>}</span>
         <div className="flex items-center gap-2">
           {/* #8987: regenerate ONLY the sections holding a flagged note; the rest stay as approved. */}
@@ -99,7 +119,14 @@ function ExcerptCard({ excerpt, activeRenderId, connected, deleting, noteBusy, o
           )}
           {excerpt.status === 'rendering'
             ? <button type="button" onClick={() => onCancel(excerpt.id)} className="text-port-error flex items-center gap-1 min-h-[44px] sm:min-h-0"><X size={12} /> Cancel</button>
-            : <button type="button" disabled={deleting} onClick={() => onDelete(excerpt.id)} className="text-port-error flex items-center gap-1 disabled:opacity-50 min-h-[44px] sm:min-h-0"><Trash2 size={12} /> Delete</button>}
+            : role === 'proof'
+              ? <span className="text-port-text-muted">Registered proof — revoke approval to delete</span>
+              : confirmingDelete
+                ? <span className="flex items-center gap-2">
+                    <button type="button" disabled={deleting} onClick={() => { setConfirmingDelete(false); onDelete(excerpt.id); }} className="text-port-error disabled:opacity-50 min-h-[44px] sm:min-h-0">Confirm delete</button>
+                    <button type="button" onClick={() => setConfirmingDelete(false)} className="text-port-text-muted min-h-[44px] sm:min-h-0">Keep</button>
+                  </span>
+                : <button type="button" disabled={deleting} onClick={() => setConfirmingDelete(true)} className="text-port-error flex items-center gap-1 disabled:opacity-50 min-h-[44px] sm:min-h-0"><Trash2 size={12} /> Delete</button>}
         </div>
       </div>
       <p className="text-xs text-port-text-muted">{excerpt.dependencyState?.status === 'stale' ? 'Earlier inputs — retained for reference' : excerpt.dependencyState?.status === 'current' ? 'Matches current inputs · production approval is separate' : 'Draft · approval is separate'}{excerpt.createdAt ? ` · ${new Date(excerpt.createdAt).toISOString().replace('T', ' ').slice(0, 19)} UTC` : ''}</p>
@@ -150,10 +177,18 @@ function ExcerptCard({ excerpt, activeRenderId, connected, deleting, noteBusy, o
 export default function ExcerptPanel({ project, rendering, occupied = rendering, progress, excerpts, activeRenderId = null, connected, revision = null, autoReview = null, ...actions }) {
   const newest = [...excerpts].reverse();
   const latestAttempt = newest[0];
-  const current = newest.find(e => e.status === 'complete' && e.filename && e.dependencyState?.status !== 'stale');
-  const visible = newest.filter(e => e.status === 'rendering' || e === current);
+  const roleOf = new Map(newest.map(e => [e.id, excerptRole(project, e)]));
+  // The latest usable excerpt PER ROLE stays visible, so a new social cut never buries the review draft.
+  const currentIds = new Set();
+  const seenRoles = new Set();
+  for (const e of newest) {
+    const role = roleOf.get(e.id);
+    if (e.status === 'complete' && e.filename && e.dependencyState?.status !== 'stale' && !seenRoles.has(role)) { seenRoles.add(role); currentIds.add(e.id); }
+  }
+  const visible = newest.filter(e => e.status === 'rendering' || currentIds.has(e.id));
   const history = newest.filter(e => !visible.includes(e));
-  const card = excerpt => <ExcerptCard key={excerpt.id} excerpt={excerpt} activeRenderId={activeRenderId} connected={connected}
+  const proofApproved = !!project?.productionReview?.approvals?.proof;
+  const card = excerpt => <ExcerptCard key={excerpt.id} excerpt={excerpt} role={roleOf.get(excerpt.id)} proofApproved={proofApproved} activeRenderId={activeRenderId} connected={connected}
     deleting={actions.deletingId === excerpt.id} noteBusy={actions.noteBusyId}
     onDelete={actions.deleteExcerpt} onCancel={actions.cancelExcerpt} onAddNote={actions.addNote}
     onEditNote={actions.editNote} onDeleteNote={actions.deleteNote} canRevise={canRevise} onRevise={revision?.revise} />;
@@ -167,6 +202,7 @@ export default function ExcerptPanel({ project, rendering, occupied = rendering,
   const [aspect, setAspect] = useState(projectAspect);
   const [fade, setFade] = useState(false);
   const [suggestions, setSuggestions] = useState(null);
+  const [suggestionError, setSuggestionError] = useState(null);
   const [suggesting, setSuggesting] = useState(false);
   const idFor = (s) => `mv-excerpt-${project?.id}-${s}`;
   const valid = Number.isFinite(startSec) && Number.isFinite(endSec) && endSec > startSec;
@@ -176,9 +212,10 @@ export default function ExcerptPanel({ project, rendering, occupied = rendering,
   const render = (s, e, opts) => actions.startExcerpt(s, e, opts);
   const suggestHooks = () => {
     setSuggesting(true);
+    setSuggestionError(null);
     getMusicVideoSocialCuts(project.id, { count: 3 }, { silent: true })
       .then((res) => setSuggestions(res?.suggestions || []))
-      .catch(() => setSuggestions([]))
+      .catch((err) => { setSuggestions(null); setSuggestionError(err?.message || 'Failed to find hooks'); })
       .finally(() => setSuggesting(false));
   };
 
@@ -228,7 +265,13 @@ export default function ExcerptPanel({ project, rendering, occupied = rendering,
               <Sparkles size={12} /> {suggesting ? 'Finding hooks…' : 'Suggest hooks'}
             </button>
           </div>
-          {suggestions && suggestions.length === 0 && <p className="text-xs text-port-text-muted">No hook windows found. Time the lyrics first.</p>}
+          {suggestionError && (
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <p role="alert" className="text-port-error">{suggestionError}</p>
+              <button type="button" onClick={suggestHooks} disabled={suggesting} className="text-port-accent disabled:opacity-50">Retry</button>
+            </div>
+          )}
+          {!suggestionError && suggestions && suggestions.length === 0 && <p className="text-xs text-port-text-muted">No hook windows found. Time the lyrics first.</p>}
           {suggestions && suggestions.length > 0 && (
             <ul className="space-y-1">
               {suggestions.map((s) => (
@@ -258,7 +301,7 @@ export default function ExcerptPanel({ project, rendering, occupied = rendering,
       {['error', 'canceled'].includes(latestAttempt?.status) && <p role="status" className="text-sm text-port-warning">
         {latestAttempt.status === 'error' ? `Latest draft attempt failed: ${latestAttempt.error || 'No error details recorded.'}` : 'Latest draft attempt was cancelled.'} Completed drafts are retained. Details are in Earlier and failed attempts.
       </p>}
-      <details><summary className="cursor-pointer min-h-[44px] py-2 text-sm">Revision and automatic review tools</summary>
+      <details open={autoReviewNeedsUser(project) || undefined}><summary className="cursor-pointer min-h-[44px] py-2 text-sm">Revision and automatic review tools</summary>
       {revision && (
         <RevisionPanel project={project} busy={revision.busy || occupied}
           genScenes={revision.genScenes} genVideoScenes={revision.genVideoScenes}

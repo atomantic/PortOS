@@ -1044,7 +1044,7 @@ export default function ChiefOfStaff() {
               : <Pause size={16} className="shrink-0" aria-hidden="true" />}
             <div className="flex-1 min-w-0 text-left">
               <div className="text-[10px] text-gray-600">Queue</div>
-              <div className="text-sm font-bold">{status.paused ? 'Resume' : 'Pause'}</div>
+              <div className={`${status.paused ? 'text-xs' : 'text-sm'} font-bold`}>{status.paused ? 'Resume' : 'Pause'}</div>
             </div>
           </button>
           <button

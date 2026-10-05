@@ -1,6 +1,7 @@
 /** Render-child spawning, supervision, retry, and terminal finalization. */
 
 import { spawn } from '../../lib/childProcess.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { watch as fsWatch } from 'fs';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
@@ -71,6 +72,11 @@ export async function spawnAndWatchVideo({
   steps: actualSteps,
   videoGenSettings,
 }) {
+  const retainOwnership = () => {
+    // Chained renders use child job IDs; their ambient owner is the outer job.
+    maintenance.markCurrentUnsettled();
+    maintenance.markResourceUnsettled('media', jobId);
+  };
   const heavyClaim = await claimHeavyLocalJob({ kind: 'local video generation', id: jobId });
   if (!heavyClaim.ok) {
     videoJobState.jobs.delete(jobId);
@@ -78,8 +84,10 @@ export async function spawnAndWatchVideo({
     await rmGuarded(stepwiseDir, { recursive: true, force: true });
     throw new ServerError(heavyClaim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: heavyClaim.holder } });
   }
-  const releaseHeavyClaim = () => heavyClaim.release()
-    .catch((err) => console.error(`❌ Video generation claim release [${jobId.slice(0, 8)}]: ${err.message}`));
+  const releaseHeavyClaim = () => heavyClaim.release().catch((err) => {
+    retainOwnership();
+    console.error(`❌ Video generation claim release [${jobId.slice(0, 8)}]: ${err.message}`);
+  });
   // The first render child. Named apart from the `proc` each wireRenderChild()
   // call binds, so a relaunch cannot be confused with the original.
   let firstProc;
@@ -101,14 +109,26 @@ export async function spawnAndWatchVideo({
   let previewReading = false;
   let previewPending = false;
   let previewClosed = false;
+  let previewCleanup;
   const cleanupStepwisePreview = () => {
-    if (previewClosed) return;
+    if (previewClosed) return previewCleanup;
     previewClosed = true;
     if (previewWatcher) {
       try { previewWatcher.close(); } catch { /* already closed */ }
       previewWatcher = null;
     }
-    void rmGuarded(stepwiseDir, { recursive: true, force: true });
+    previewCleanup = Promise.resolve().then(() => rmGuarded(stepwiseDir, { recursive: true, force: true })).catch(error => {
+      if (error.code !== 'ENOENT') retainOwnership();
+    });
+    return previewCleanup;
+  };
+  const cleanupFailedRender = async () => {
+    const results = await Promise.allSettled([
+      releaseHeavyClaim(),
+      cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true }),
+      cleanupStepwisePreview(),
+    ]);
+    if (results.some(result => result.status === 'rejected')) retainOwnership();
   };
   const processLatestPreview = async () => {
     if (previewClosed) return;
@@ -228,30 +248,39 @@ export async function spawnAndWatchVideo({
     // double-release the accelerator claim, double-clean the temp files, or emit
     // two terminal events if the real event lands as well.
     let closeHandled = false;
+    let childError;
     // Without an 'error' handler, a missing/non-executable pythonPath would
     // crash the server with an unhandled error event. Named (rather than an
     // inline arrow) so the caller can replay an 'error' this child emitted
     // before it was wired.
     const handleChildError = (err) => {
       if (closeHandled) return;
+      // A failed signal/transport operation can emit error for a live child.
+      // Keep ownership until close, rather than interpreting it as spawn failure.
+      if (proc.pid && proc.exitCode == null && proc.signalCode == null) {
+        childError = err;
+        return;
+      }
       closeHandled = true;
       clearCompletionWatchdog();
       job.status = 'error';
       const reason = `Failed to spawn ${bin}: ${err.message}`;
       console.error(`❌ Video generation spawn error [${jobId.slice(0, 8)}]: ${reason}`);
-      broadcastSse(job, { type: 'error', error: reason });
-      videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [meta?.prompt, meta?.negativePrompt] }) });
       videoJobState.activeProcess = null;
       if (displaySlept) wakeDisplayForVideo(videoGenSettings, 'Video generation');
-      void releaseHeavyClaim();
       // Spawn failed, so proc.on('close') will never fire — clean up every
       // temp file we own here, including the multipart upload, otherwise
       // ENOENT/permission errors leak files in os.tmpdir().
       // Defensive cleanup includes audio passed directly without the route's
       // uploadedTempPaths tracking. Duplicate unlinks remain harmless.
-      void cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true });
-      cleanupStepwisePreview();
-      closeJobAfterDelay(videoJobState.jobs, jobId);
+      return cleanupFailedRender().then(() => {
+        broadcastSse(job, { type: 'error', error: reason });
+        videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [meta?.prompt, meta?.negativePrompt] }) });
+        closeJobAfterDelay(videoJobState.jobs, jobId);
+      }).catch(error => {
+        retainOwnership();
+        console.error(`❌ Video spawn cleanup failed [${jobId.slice(0, 8)}]: ${error.message}`);
+      });
     };
 
     let missingPyModule = null;
@@ -389,7 +418,7 @@ export async function spawnAndWatchVideo({
       // before emitting the terminal completion event: an extend chain starts its
       // next child from that event and must be able to acquire the machine claim.
       await releaseHeavyClaim();
-      cleanupStepwisePreview();
+      await cleanupStepwisePreview();
       // Wrap the whole teardown so a throw from finalizeGeneratedVideo (history
       // save, thumbnail, file move) can't leak as an unhandled rejection — on
       // Node ≥15 that kills the process AND strands the media job `running` with
@@ -402,6 +431,7 @@ export async function spawnAndWatchVideo({
         // Cleanup internally generated resize/reference files, route-staged
         // uploads, and direct-call audio through the same ownership-aware helper.
         await cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true });
+        if (childError) throw childError;
 
         // A PortOS-fired completion-watchdog SIGKILL is a SUCCESS when the
         // output file is already on disk and non-empty: the render wrote its
@@ -494,6 +524,7 @@ export async function spawnAndWatchVideo({
           }
         }
       } catch (err) {
+        if (err !== childError) retainOwnership();
         // Finalize/teardown threw — fail the job loudly instead of crashing the
         // process. The job may already be partway through finalize, so force the
         // error state and emit the terminal event the client is waiting on.
@@ -542,7 +573,7 @@ export async function spawnAndWatchVideo({
       if (!earlyExit) return;
       for (const { stream, chunk } of earlyExit.output || []) proc[stream].emit('data', chunk);
       console.log(`⚠️ video render child exited before it was wired [${jobId.slice(0, 8)}]`);
-      if (earlyExit.type === 'error') handleChildError(earlyExit.error);
+      if (earlyExit.type === 'error') await handleChildError(earlyExit.error);
       else if (earlyExit.type === 'close') await handleChildClose(earlyExit.code, earlyExit.signal);
     };
     return replayEarlyExit;
@@ -570,6 +601,9 @@ export async function spawnAndWatchVideo({
   // path and must not replace the real error with its own.
   const stopAbandonedChild = (child) => {
     if (!child) return;
+    // This child has no completion listener. A kill request cannot certify
+    // its physical exit, so only explicit recovery can clear this ownership.
+    if (child.pid && child.exitCode == null && child.signalCode == null) retainOwnership();
     try {
       child.kill('SIGTERM');
     } catch (err) {
@@ -676,14 +710,12 @@ export async function spawnAndWatchVideo({
   const abandonBeforeWiring = async (err) => {
     stopAbandonedChild(firstProc);
     if (videoJobState.activeProcess === firstProc) videoJobState.activeProcess = null;
-    await releaseHeavyClaim();
+    await cleanupFailedRender();
     job.status = 'error';
     const reason = err.message || 'Video generation failed before the render child was wired';
     console.error(`❌ Video generation setup error [${jobId.slice(0, 8)}]: ${reason}`);
     broadcastSse(job, { type: 'error', error: reason });
     videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [meta?.prompt, meta?.negativePrompt] }) });
-    void cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true });
-    cleanupStepwisePreview();
     closeJobAfterDelay(videoJobState.jobs, jobId);
   };
 

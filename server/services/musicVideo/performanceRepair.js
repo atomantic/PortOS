@@ -6,6 +6,7 @@ import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { join } from 'path';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { findFfmpeg, probeVideoStreamInfo, runFfmpegProcess, safeUnder } from '../../lib/ffmpeg.js';
@@ -112,8 +113,10 @@ export async function startPerformanceRepair(projectId, sceneId, input) {
     await unlink(output).catch(() => {});
     throw refuse('Review needed: the accepted boundary frame could not be extracted');
   }
-  return mutateProjectRecord(projectId, (current) => {
+  // ffmpeg wrote the boundary frame in place; the row that first names it
+  // commits under a backup lease (#9982). A refused commit unlinks the frame.
+  return withBackupAssetPublication(() => mutateProjectRecord(projectId, (current) => {
     if (basis(current) !== basis(project)) throw refuse('The project changed during frame preparation — review it again', 'PERFORMANCE_REPAIR_STALE');
     return startPerformanceRepairOnProject(current, sceneId, input, filename, referenceFrameSec);
-  }).catch(async (error) => { await unlink(output).catch(() => {}); throw error; });
+  })).catch(async (error) => { await unlink(output).catch(() => {}); throw error; });
 }

@@ -132,7 +132,13 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
 
   // Generic runs accept arbitrary prompts/workspaces, including API-to-CLI fallback.
   'POST /api/runs',
+  'POST /api/system/maintenance',
+  'POST /api/system/maintenance/resume',
   'POST /api/voice/studio/setup',
+
+  // Instances: runs the Tailscale CLI and writes a TLS certificate and private
+  // key into the install's cert directory.
+  'POST /api/instances/provision-cert',
 
   // Apps: create/edit choose the repo path and the start/build commands; the
   // lifecycle and launch routes run them under PM2 or the native launcher.
@@ -170,6 +176,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // CoS: queue, release or steer an agent that runs shell commands in a
   // worktree, or a job that runs a shell command directly.
   'POST /api/cos/merge-admission',
+  'POST /api/cos/claim-ownership',
   'POST /api/cos/start',
   'POST /api/cos/resume',
   'POST /api/cos/evaluate',

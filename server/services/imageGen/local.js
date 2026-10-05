@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Image Gen — Local provider (mflux, diffusers, and platform-specific runners).
  *
@@ -697,8 +698,17 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     await rmGuarded(stepwiseDir, { recursive: true, force: true });
     throw new ServerError(heavyClaim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: heavyClaim.holder } });
   }
-  const releaseHeavyClaim = () => heavyClaim.release()
-    .catch((err) => console.error(`❌ Image generation claim release [${jobId.slice(0, 8)}]: ${err.message}`));
+  const releaseHeavyClaim = () => maintenance.continueSettlement(() => heavyClaim.release())
+    .catch((err) => {
+      maintenance.markCurrentUnsettled();
+      console.error(`❌ Image generation claim release [${jobId.slice(0, 8)}]: ${err.message}`);
+    });
+  const removeStepwise = () => maintenance.continueSettlement(
+    () => rmGuarded(stepwiseDir, { recursive: true, force: true }),
+  ).catch((err) => {
+    maintenance.markCurrentUnsettled();
+    console.error(`❌ Image generation scratch cleanup [${jobId.slice(0, 8)}]: ${err.message}`);
+  });
   let proc;
   let claimHandedOff = false;
   try {
@@ -725,9 +735,10 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     // event — unwind it exactly the way the busy branch above does, or a refusal
     // strands a `running` entry and its stepwise dir every time.
     if (!claimHandedOff) {
+      if (proc?.pid) maintenance.markCurrentUnsettled();
       await releaseHeavyClaim();
       jobs.delete(jobId);
-      await rmGuarded(stepwiseDir, { recursive: true, force: true }).catch(() => {});
+      await removeStepwise();
     }
     throw err;
   }
@@ -739,12 +750,16 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   // whether we've finalized so the close handler can detect "already
   // handled" and skip the second emit.
   let finalized = false;
+  let processError;
   proc.on('error', (err) => {
-    if (finalized) return;
+    processError = err;
+    if (finalized || proc.pid) return;
     finalized = true;
     job.status = 'error';
     const reason = `Failed to spawn ${bin}: ${err.message}`;
     console.error(`❌ Image generation spawn error [${jobId.slice(0, 8)}]: ${reason}`);
+    void releaseHeavyClaim();
+    void removeStepwise();
     dispatchTerminalEvent(
       jobId,
       () => broadcastSse(job, { type: 'error', error: reason }),
@@ -752,8 +767,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     );
     activeProcess = null;
     activeJob = null;
-    void releaseHeavyClaim();
-    rmGuarded(stepwiseDir, { recursive: true, force: true }).catch(() => {});
+
     closeJobAfterDelay(jobs, jobId);
   });
 
@@ -938,7 +952,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     activeJob = null;
     void releaseHeavyClaim();
     if (watcher) { try { watcher.close(); } catch { /* ignore */ } }
-    rmGuarded(stepwiseDir, { recursive: true, force: true }).catch(() => {});
+    void removeStepwise();
     // EventEmitter doesn't await async listeners — without this try/catch, a
     // throw from any of the post-exit work below (rejectDegenerateFrame,
     // sharp, atomicWrite, autoCleanGeneratedImage) would surface as an
@@ -975,9 +989,9 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
         );
         return;
       }
-      if (code !== 0) {
+      if (code !== 0 || processError) {
         job.status = 'error';
-        const reason = signal ? `Killed by signal ${signal}` : `Exit code ${code}`;
+        const reason = processError?.message || (signal ? `Killed by signal ${signal}` : `Exit code ${code}`);
         // Extract a structured user-error if the runner emitted one
         // (USER_ERROR:gated_repo:black-forest-labs/FLUX.2-klein-9B), and find
         // the matching `❌ …` prose line that follows it. Fall back to the last
@@ -1076,7 +1090,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
             .toBuffer()
             .catch((err) => { console.warn(`⚠️ Regen upscale failed for ${filename}: ${err?.message || err}`); return null; });
           if (resized) {
-            await atomicWrite(outputPath, resized).catch(() => {});
+            await atomicWrite(outputPath, resized).catch(() => maintenance.markCurrentUnsettled());
             meta.renderWidth = meta.width;
             meta.renderHeight = meta.height;
             meta.width = targetW;
@@ -1110,7 +1124,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
           // Render timing is stamped onto `meta` (not spread at the write) so the
           // sidecar and the `autoCleanGeneratedImage` rewrite below agree on it.
           Object.assign(meta, renderTimingFields(job.renderStartedAtMs));
-          await atomicWrite(sidecar, meta).catch(() => {});
+          await atomicWrite(sidecar, meta).catch(() => maintenance.markCurrentUnsettled());
           // Cleaners run BEFORE the SSE complete + completed events so subscribers
           // see the cleaned bytes. Local FLUX renders never carry C2PA chunks so
           // cleanC2PA is a no-op on local — denoise is the only mode that does
@@ -1342,12 +1356,14 @@ export async function deleteImage(filename) {
 // covers both sidecar spellings, and the index refresh stays inside the turn.
 const sidecarEditQueue = createKeyCachedQueue();
 
+// `mutate` edits the metadata in place; returning null leaves the file as it was.
 function editImageSidecar(filename, mutate) {
   // Admit before joining the queue so a cut drains every already-requested
   // edit, including one waiting for an earlier edit's index refresh.
   return withBackupAssetPublication(() => sidecarEditQueue(filename, async () => {
     const { path: sidecarPath, metadata } = await readImageSidecar(filename);
     const result = mutate(metadata);
+    if (result === null) return null;
     await atomicWrite(sidecarPath, metadata);
     await refreshImageIndex(filename);
     return result;
@@ -1369,6 +1385,20 @@ export async function updateImagePrompt(filename, prompt) {
     if (trimmedPrompt) metadata.prompt = trimmedPrompt;
     else delete metadata.prompt;
     return { filename, prompt: trimmedPrompt };
+  });
+}
+
+// Fill only keys the sidecar lacks, through the same edit queue as prompt and
+// visibility edits so neither write drops the other. An image without a sidecar
+// is left alone: a stub holding only these fields would carry no prompt, seed
+// or model. Resolves true when the sidecar changed, null otherwise.
+export function fillImageSidecarFields(filename, fields) {
+  return editImageSidecar(filename, (metadata) => {
+    if (!metadata || Object.keys(metadata).length === 0) return null;
+    const missing = Object.entries(fields).filter(([key, value]) => value != null && metadata[key] == null);
+    if (missing.length === 0) return null;
+    Object.assign(metadata, Object.fromEntries(missing));
+    return true;
   });
 }
 

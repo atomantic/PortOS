@@ -1,3 +1,4 @@
+import { maintenance } from './maintenanceAdmission.js';
 /**
  * Process-local admission for durable file-plus-row publications during backup.
  * Callers hold one mutation lease across BOTH stores, not around individual
@@ -31,6 +32,10 @@ function releasePublications() {
 
 /** Hold one admission across an entire file-plus-row workflow. Nested calls reuse it. */
 export async function withBackupAssetPublication(work) {
+  return maintenance.continueSettlement(() => withAdmittedBackupAssetPublication(work));
+}
+
+async function withAdmittedBackupAssetPublication(work) {
   const scope = publicationScope.getStore();
   if (scope?.active) return work();
   // Work spawned by a still-admitted lease joins it: the cut already waits for that lease.
@@ -51,6 +56,23 @@ export async function withBackupAssetPublication(work) {
       for (const resolve of waiters) resolve();
     }
   }
+}
+
+/**
+ * Whether the caller runs inside an active admission lease, so no cut can be
+ * active until its work settles. A listener scope created by
+ * runOutsideBackupAssetPublication is not a lease of its own.
+ */
+export function holdsBackupAssetPublication() {
+  return publicationScope.getStore()?.active === true;
+}
+
+/**
+ * Whether a backup cut is requested or active. Optional housekeeping that would
+ * otherwise wait out the whole snapshot can defer to its next pass instead.
+ */
+export function backupSnapshotCutPending() {
+  return cutRequested || cutActive;
 }
 
 /** Wait for already admitted workflows to settle, or reject when they do not. */

@@ -94,6 +94,19 @@ afterEach(async () => {
 });
 
 describe('grok provider — deriveAspectRatio', () => {
+  it('does not signal a live-child error as settled before physical close', async () => {
+    const failed = vi.fn();
+    imageGenEvents.on('failed', failed);
+    await grok.generateImage({ prompt: 'a fox' });
+    const child = spawnCalls[0].child;
+    child.pid = 9876;
+    child.emit('error', new Error('signal delivery failed'));
+    await flush();
+    expect(failed).not.toHaveBeenCalled();
+    await closeChild(0, 1);
+    expect(failed).toHaveBeenCalledTimes(1);
+  });
+
   it('maps common dimension pairs to the closest supported ratio', () => {
     expect(grok.deriveAspectRatio(1024, 1024)).toBe('1:1');
     expect(grok.deriveAspectRatio(1920, 1080)).toBe('16:9');

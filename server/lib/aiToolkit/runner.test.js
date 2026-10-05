@@ -39,6 +39,31 @@ describe('AI Toolkit runner service', () => {
     }
   });
 
+  it('reports settled only after API stream cleanup and asynchronous output hooks', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    await mkdir(join(dataDir, 'runs', 'settlement'), { recursive: true });
+    await writeFile(join(dataDir, 'runs', 'settlement', 'metadata.json'), '{}');
+    let releaseHook; let releaseReader;
+    const hook = new Promise(resolve => { releaseHook = resolve; });
+    const cleanup = new Promise(resolve => { releaseReader = resolve; });
+    const reader = { read: vi.fn(async () => ({ done: true })), cancel: vi.fn(() => cleanup), releaseLock: vi.fn() };
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, body: { getReader: () => reader } })));
+    const completed = vi.fn(); const settled = vi.fn(); const failed = vi.fn();
+    const runner = createRunnerService({ dataDir, hooks: { onRunCompleted: () => hook } });
+    await runner.executeApiRun({ runId: 'settlement', provider: { id: 'example', endpoint: 'https://api.example.com/v1' },
+      prompt: 'Example', onComplete: completed, onSettled: settled, onPersistenceFailure: failed });
+    await vi.waitFor(() => expect(completed).toHaveBeenCalledTimes(1));
+    expect(settled).not.toHaveBeenCalled();
+    releaseHook();
+    await vi.waitFor(() => expect(reader.cancel).toHaveBeenCalled());
+    expect(settled).not.toHaveBeenCalled();
+    releaseReader();
+    await vi.waitFor(() => expect(settled).toHaveBeenCalledTimes(1));
+    expect(reader.releaseLock).toHaveBeenCalledTimes(1);
+    expect(failed).not.toHaveBeenCalled();
+  });
+
   it('passes request capability requirements to proactive fallback selection', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);

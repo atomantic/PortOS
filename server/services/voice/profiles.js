@@ -10,6 +10,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { query } from '../../lib/db.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/paths.js';
@@ -391,10 +392,7 @@ export async function createClonedVoiceCandidate({
   const profileId = randomUUID();
   const profileDir = profileDirectory(profileId);
   const sourceDir = join(profileDir, 'source');
-  await mkdir(sourceDir, { recursive: true });
-
   const safePath = join(sourceDir, cleanFilename);
-  await writeFileGuarded(safePath, audioBuffer);
 
   const sha256 = createHash('sha256').update(audioBuffer).digest('hex');
   const now = timestamp();
@@ -437,7 +435,13 @@ export async function createClonedVoiceCandidate({
     updatedAt: now,
   });
 
-  return persist(next);
+  // The source recording and the row that names it publish under one lease, so
+  // a snapshot never carries a candidate whose consented recording it lacks (#9982).
+  return withBackupAssetPublication(async () => {
+    await mkdir(sourceDir, { recursive: true });
+    await writeFileGuarded(safePath, audioBuffer);
+    return persist(next);
+  });
 }
 
 /**

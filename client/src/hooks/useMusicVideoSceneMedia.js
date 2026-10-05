@@ -1,10 +1,13 @@
 import { shotActionContractProblem, shotActionPrompt } from '../../../server/lib/musicVideoActionContract.js';
 import { musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
 import { musicVideoCreativeContext } from '../../../server/lib/musicVideoCreativeContext.js';
+import { useEffect, useRef } from 'react';
+import socket from '../services/socket';
 import toast from '../components/ui/Toast';
-import { addMusicVideoSceneTake } from '../services/apiMusicVideo.js';
+import { addMusicVideoSceneTake, getMusicVideoSceneJobs } from '../services/apiMusicVideo.js';
 import { generateImage } from '../services/apiSystem.js';
 import { generateVideo } from '../services/apiImageVideo.js';
+import useSceneBatch from './useSceneBatch.js';
 import useSceneRenderLifecycle from './useSceneRenderLifecycle.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { isLayeredComposition, sceneVisualLayer } from '../lib/musicVideoLayers.js';
@@ -87,26 +90,74 @@ const sceneSpanSec = (scene) => (typeof scene.startSec === 'number' && typeof sc
  * the director chose.
  */
 export default function useMusicVideoSceneMedia({ project, videoSettings, applyScenePatch } = {}) {
+  const frameBatch = useSceneBatch();
+  const videoBatch = useSceneBatch();
+  // Latest scenes for the failure toasts' scene names, read lazily (a lane
+  // callback fires long after the render that created it).
+  const projectRef = useRef(project);
+  projectRef.current = project;
+  const sceneLabel = (sceneId) => {
+    const scene = projectRef.current?.scenes?.find((s) => s.sceneId === sceneId);
+    return scene ? (scene.sectionLabel || scene.label || `Scene ${(scene.order ?? 0) + 1}`) : '';
+  };
   const frameLane = useSceneRenderLifecycle({
     attachEvent: 'music-video:scene-image',
     completedEvent: 'image-gen:completed',
     failedEvent: 'image-gen:failed',
     canceledEvent: 'image-gen:canceled',
-    apply: ({ projectId, sceneId, referenceImageId, takes }) =>
-      applyScenePatch?.(projectId, sceneId, { referenceImageId, ...(Array.isArray(takes) ? { takes } : {}) }),
+    startedEvent: 'image-gen:started',
+    progressEvent: 'image-gen:progress',
+    onSettled: frameBatch.settled,
+    apply: ({ projectId, sceneId, referenceImageId, takes, lastFailure }) =>
+      applyScenePatch?.(projectId, sceneId, { referenceImageId, ...(Array.isArray(takes) ? { takes } : {}), ...(lastFailure !== undefined ? { lastFailure } : {}) }),
     failMessage: 'Frame render failed',
+    sceneLabel,
   });
   const videoLane = useSceneRenderLifecycle({
     attachEvent: 'music-video:scene-video',
     completedEvent: 'video-gen:completed',
     failedEvent: 'video-gen:failed',
     canceledEvent: 'video-gen:canceled',
-    apply: ({ projectId, sceneId, videoHistoryId, takes }) =>
-      applyScenePatch?.(projectId, sceneId, { videoHistoryId, ...(Array.isArray(takes) ? { takes } : {}) }),
+    startedEvent: 'video-gen:started',
+    progressEvent: 'video-gen:progress',
+    onSettled: videoBatch.settled,
+    apply: ({ projectId, sceneId, videoHistoryId, takes, lastFailure }) =>
+      applyScenePatch?.(projectId, sceneId, { videoHistoryId, ...(Array.isArray(takes) ? { takes } : {}), ...(lastFailure !== undefined ? { lastFailure } : {}) }),
     failMessage: 'Scene video render failed',
+    sceneLabel,
   });
+
+  // The server persists a failed scene render on the scene (#10154); fold it in
+  // live so the card's "failed · Retry" chip appears without a refetch.
+  const applyRef = useRef(applyScenePatch);
+  applyRef.current = applyScenePatch;
+  useEffect(() => {
+    const onFailure = ({ projectId, sceneId, lastFailure }) => applyRef.current?.(projectId, sceneId, { lastFailure: lastFailure ?? null });
+    socket.on('music-video:scene-failure', onFailure);
+    return () => socket.off('music-video:scene-failure', onFailure);
+  }, []);
+
+  // After a reload the lanes' spinners (React state) are gone while the queue
+  // keeps rendering — restore them from the server so the batch actions skip
+  // those scenes and no duplicate (possibly paid) render is submitted (#10154).
+  const projectId = project?.id;
+  const { restoreJobs: restoreFrameJobs } = frameLane;
+  const { restoreJobs: restoreVideoJobs } = videoLane;
+  useEffect(() => {
+    if (!projectId) return undefined;
+    let live = true;
+    getMusicVideoSceneJobs(projectId, { silent: true })
+      .then(({ jobs }) => {
+        if (!live || !Array.isArray(jobs)) return;
+        restoreFrameJobs(jobs.filter((j) => j.lane === 'image'));
+        restoreVideoJobs(jobs.filter((j) => j.lane === 'video'));
+      })
+      .catch(() => {}); // best-effort: a failed lookup just means no restored spinners
+    return () => { live = false; };
+  }, [projectId, restoreFrameJobs, restoreVideoJobs]);
   const genScenes = frameLane.genScenes;
   const genVideoScenes = videoLane.genScenes;
+  const failedScenes = { frame: frameLane.failedScenes, video: videoLane.failedScenes };
 
   const style = project?.concept?.style?.trim();
   const direction = [musicVideoCreativeContext(project?.concept), visualDirection(project?.visualSpec)].filter(Boolean).join('; ');
@@ -146,9 +197,12 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * true once it reaches the queue or finishes synchronously. The revision
    * hook (#9011) passes `revisionId` and awaits this to release a claimed
    * section whose kickoff never made it to the queue, and to count only
-   * confirmed submissions rather than every call it fired.
+   * confirmed submissions rather than every call it fired. A queued job also
+   * returns its `jobId`, and `onJob(jobId)` is told of it before the lane starts
+   * tracking it (a batch registers the job there, so a terminal event that raced
+   * ahead of the kickoff is still attributed to it).
    */
-  const generateFrame = (scene, { revisionId } = {}) => {
+  const generateFrame = (scene, { revisionId, onJob } = {}) => {
     const conditioning = conditioningReferences(project, scene);
     const problem = shotActionContractProblem(scene.direction?.actionContract, scene);
     if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
@@ -170,8 +224,9 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
           // reconciles a terminal event that raced ahead of this .then (fast fail).
           const jobId = res?.jobId || res?.generationId;
           if (!jobId) { frameLane.clearScene(scene.sceneId); return { ok: false }; } // no id to track → don't strand the button
+          onJob?.(jobId);
           frameLane.trackJob(jobId, scene.sceneId);
-          return { ok: true };
+          return { ok: true, jobId };
         }
         const filename = res?.filename;
         if (filename) {
@@ -199,11 +254,12 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   // the response carried no id to track. trackJob reconciles a terminal event
   // that raced ahead of this .then. Resolves `{ ok }` — see generateFrame's
   // doc comment for why the caller never sees a rejection.
-  const trackVideoJob = (res, sceneId) => {
+  const trackVideoJob = (res, sceneId, onJob) => {
     const jobId = res?.jobId || res?.generationId;
     if (!jobId) { videoLane.clearScene(sceneId); return { ok: false }; }
+    onJob?.(jobId);
     videoLane.trackJob(jobId, sceneId);
-    return { ok: true };
+    return { ok: true, jobId };
   };
 
   const handleVideoError = (err, sceneId, fallbackMessage) => {
@@ -223,7 +279,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * Returns a promise that always resolves to `{ ok }` — see generateFrame's
    * doc comment. `revisionId` (optional) is the revision hook's kickoff tag (#9011).
    */
-  const generateSceneVideo = (scene, { revisionId } = {}) => {
+  const generateSceneVideo = (scene, { revisionId, onJob } = {}) => {
     if (!scene.referenceImageId) { toast.error('Generate a reference frame first'); return Promise.resolve({ ok: false }); }
     const problem = shotActionContractProblem(scene.direction?.actionContract, scene);
     if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
@@ -269,7 +325,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
             // would force the resolver off a Grok install default. Keep the
             // shared pin saved, but omit it until this peer chooses Local.
             : { grokDuration: settings.grokDuration, disableAudio: true }),
-      mode: audioReactiveSelected ? 'a2v' : 'image',
+      mode: audioReactiveSelected || settings.generationMode === 'suppliedAudio' ? 'a2v' : 'image',
       sourceImageFile: scene.referenceImageId,
       ...(audioReactiveSelected ? {
         audioStartSec: scene.startSec || 0,
@@ -278,7 +334,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       } : {}),
       musicVideo: JSON.stringify({ projectId: project.id, sceneId: scene.sceneId, ...(revisionId ? { revisionId } : {}) }),
     })
-      .then((res) => trackVideoJob(res, scene.sceneId))
+      .then((res) => trackVideoJob(res, scene.sceneId, onJob))
       .catch((err) => handleVideoError(err, scene.sceneId, 'Scene video generation failed'));
   };
 
@@ -318,46 +374,70 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   const layered = isLayeredComposition(project);
   const frameScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) !== 'card');
   const footageScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) === 'footage');
+  const planMissingFrames = () => frameScenes.filter((scene) =>
+    !scene.referenceImageId && !genScenes[scene.sceneId] && buildFramePrompt(scene));
+
+  // The clips a Videos batch would submit: a footage scene with a frame, no clip
+  // and nothing in flight. A scene still waiting for its frame never blocks the
+  // others (#10153). Performance shots the current lane cannot lip-sync are
+  // dropped here and reported once (#8977).
+  const planMissingVideos = () => {
+    const candidates = footageScenes.filter((scene) =>
+      scene.referenceImageId && !scene.videoHistoryId && !genVideoScenes[scene.sceneId] && buildShotPrompt(scene));
+    const { settings, audioReactiveSelected } = videoSettings;
+    const lipSyncBlocked = performanceBlockedReason(audioReactiveSelected ? 'local' : settings.backend);
+    const pending = lipSyncBlocked ? candidates.filter((scene) => !isPerformanceScene(scene)) : candidates;
+    return { pending, skipped: candidates.length - pending.length, lipSyncBlocked };
+  };
+
+  // Fire every scene at once, counting the batch so the board can show
+  // "N of M done", and cancel what is left on request (useSceneBatch).
+  const runBatch = (batch, pending, generate) => {
+    batch.begin(pending.length);
+    pending.forEach((scene) => generate(scene, { onJob: batch.register }).then((res) => {
+      if (!res.ok) batch.kickoffFailed();
+      else if (!res.jobId) batch.completedWithoutJob();
+    }));
+  };
+
   const generateMissingFrames = () => {
-    const pending = frameScenes.filter((scene) =>
-      !scene.referenceImageId && !genScenes[scene.sceneId] && buildFramePrompt(scene));
+    const pending = planMissingFrames();
     if (pending.length === 0) {
       toast.info('Every scene already has a reference frame');
       return;
     }
-    pending.forEach((scene) => generateFrame(scene));
+    runBatch(frameBatch, pending, generateFrame);
   };
 
   const generateMissingVideos = () => {
-    const candidates = footageScenes.filter((scene) =>
-      scene.referenceImageId && !scene.videoHistoryId && !genVideoScenes[scene.sceneId] && buildShotPrompt(scene));
-    // Performance shots the current lane cannot lip-sync are skipped with one
-    // notice rather than a toast per scene (#8977).
-    const { settings, audioReactiveSelected } = videoSettings;
-    const lipSyncBlocked = performanceBlockedReason(audioReactiveSelected ? 'local' : settings.backend);
-    const pending = lipSyncBlocked ? candidates.filter((scene) => !isPerformanceScene(scene)) : candidates;
-    const skipped = candidates.length - pending.length;
+    const { pending, skipped, lipSyncBlocked } = planMissingVideos();
     if (skipped > 0) toast.info(`Skipped ${skipped} performance shot${skipped === 1 ? '' : 's'}: ${lipSyncBlocked}`);
-    if (pending.length === 0 && skipped > 0) return;
     if (pending.length === 0) {
-      const referenceFrameCount = footageScenes.filter((scene) => scene.referenceImageId).length;
-      toast.info(referenceFrameCount < footageScenes.length
-        ? 'Generate every reference frame before generating the remaining videos'
+      if (skipped > 0) return;
+      toast.info(footageScenes.some((scene) => !scene.referenceImageId && !scene.videoHistoryId)
+        ? 'Generate a reference frame first — no waiting scene has one yet'
         : 'Every scene already has a video');
       return;
     }
-    pending.forEach((scene) => generateSceneVideo(scene));
+    runBatch(videoBatch, pending, generateSceneVideo);
   };
 
   return {
     genScenes,
     genVideoScenes,
+    failedScenes,
+    sceneProgress: frameLane.sceneProgress,
+    videoSceneProgress: videoLane.sceneProgress,
+    frameBatch,
+    videoBatch,
     conditioning,
     buildFramePrompt,
     buildShotPrompt,
     generateFrame,
     generateSceneVideo,
     continueSceneVideo,
+    planMissingFrames,
+    planMissingVideos,
     generateMissingFrames,
     generateMissingVideos,
   };

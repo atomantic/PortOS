@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Media Job Queue — lane-aware FIFO for media generation jobs.
  *
@@ -33,7 +34,7 @@ import { unlink } from 'fs/promises';
 import { join, resolve as pathResolve, sep as PATH_SEP } from 'path';
 import { PATHS, readJSONFileStrict, atomicWrite, ensureDir, sleep } from '../../lib/fileUtils.js';
 import { SSE_HEADERS } from '../../lib/sseHeaders.js';
-import { runOutsideBackupAssetPublication, withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { holdsBackupAssetPublication, runOutsideBackupAssetPublication, withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { reapAndCleanDetachedDirs } from '../../lib/detachedSpawn.js';
 import {
@@ -472,6 +473,11 @@ let persistChain = Promise.resolve();
 // Terminal outcomes stay private until the snapshot containing them succeeds.
 // Recovery commits storage only; it never invokes a generator again.
 const pendingTransitions = new Map();
+// Only a completion publishes durable output. Its commit holds backup admission
+// from staging the terminal row through the hook fan-out, never while rendering
+// or waiting in the queue; failures and cancellations stay unadmitted so a
+// backup never delays them.
+const admitCompletion = (state, commit) => (state === 'completed' ? withBackupAssetPublication(commit) : commit());
 function stageTerminalTransition(job, apply, acknowledge) {
   job.terminating = true;
   const target = { ...job };
@@ -523,9 +529,10 @@ async function persistImpl() {
   const trimmedArchive = archive
     .filter((j) => {
       const ts = j.completedAt ? new Date(j.completedAt).getTime() : Date.now();
-      return !j.durabilityPending && ts > cutoff;
+      return !j.durabilityPending && (j.params?.remotePeerReservation === true || ts > cutoff);
     })
-    .slice(-MAX_PERSISTED_ARCHIVE).concat(pendingArchive);
+    .filter((job) => job.params?.remotePeerReservation !== true).slice(-MAX_PERSISTED_ARCHIVE)
+    .concat(archive.filter((job) => !job.durabilityPending && job.params?.remotePeerReservation === true), pendingArchive);
   // Mutate `archive` in place so subsequent reads see the trim too.
   archive.length = 0;
   archive.push(...trimmedArchive);
@@ -536,11 +543,19 @@ async function persistImpl() {
     ...queue,
     ...archive,
   ];
+  // A completion's terminal row and its `completed` fan-out publish together,
+  // so only a snapshot written inside a backup admission lease commits one. Any
+  // other write (progress, enqueue, the shutdown flush, or one landing after a
+  // completion's own retries gave up) keeps it `running` on disk and leaves it
+  // to an admitted recovery commit, never publishing it in the middle of a cut.
+  const admitted = holdsBackupAssetPublication();
+  const commits = (job) => admitted || job.durabilityPending?.status !== 'completed';
+  const deferredCompletion = [...pendingTransitions.keys()].some((job) => !commits(job));
   // Strip non-serializable bits.
-  const serializable = live.map((job) => ({ ...job, ...job.durabilityPending })).map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs }) =>
+  const serializable = live.map((job) => (commits(job) ? { ...job, ...job.durabilityPending } : job)).map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs }) =>
     ({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs }),
   );
-  const transitions = [...pendingTransitions];
+  const transitions = [...pendingTransitions].filter(([job]) => commits(job));
   await atomicWrite(JOBS_FILE, { jobs: serializable, videoHolds: videoHolds.snapshot() });
   for (const [job, acknowledge] of transitions) {
     if (pendingTransitions.get(job) !== acknowledge) continue;
@@ -550,6 +565,21 @@ async function persistImpl() {
     delete job.persistenceError;
     await acknowledge();
   }
+  if (deferredCompletion) recoverCompletionsUnderAdmission();
+}
+
+// Storage is writable again, but a completion is still staged. Commit it from
+// its own admission lease: it waits out an active backup cut, and its attach
+// hooks join the lease from the fan-out. Never awaited inside the persist
+// chain, so a cut draining an admitted write cannot deadlock on it.
+let completionRecovery = null;
+function recoverCompletionsUnderAdmission() {
+  if (completionRecovery) return;
+  // Tracked as a terminal operation so the shutdown flush drains it (and times
+  // out, reporting failure, if an open cut still holds the commit).
+  completionRecovery = trackTerminalOperation(withBackupAssetPublication(() => persist())
+    .catch((error) => console.error(`❌ media-job completion recovery commit failed: ${error.message}`))
+    .finally(() => { completionRecovery = null; }));
 }
 
 export async function initMediaJobQueue() {
@@ -598,9 +628,26 @@ export async function initMediaJobQueue() {
     // re-attached (#1332), and only a genuinely-dead one is reaped+failed in
     // initLoraTraining.) This runs before the worker starts, so every dir
     // present is an orphan from the prior process.
-    const videoReap = await reapAndCleanDetachedDirs(join(PATHS.videos, '.detached')).catch(() => ({ reaped: 0 }));
+    const videoReap = maintenance.held() ? { reaped: 0 }
+      : await reapAndCleanDetachedDirs(join(PATHS.videos, '.detached')).catch(() => ({ reaped: 0 }));
     if (videoReap.reaped) console.log(`🧹 reaped ${videoReap.reaped} surviving render(s) on boot`);
-    for (const j of persistedJobs) {
+    for (const persisted of persistedJobs) {
+      // An uncertain terminal observer result is not a terminal peer result.
+      // Reconcile the original idempotency key while preserving its peer slot.
+      const j = isRemoteMediaJob(persisted) && persisted.params?.remotePeerReservation === true
+        && ['failed', 'canceled'].includes(persisted.status) ? { ...persisted, status: 'running' } : persisted;
+      if (j.status === 'running' && maintenance.held()) {
+        maintenance.recoverOwned('media', j.id);
+        if (j.kind === 'training' && j.params?.runId && await jobHasSurvivingTrainer(j.params.runId)) {
+          recoveringJobs.add(j.id);
+          reattachJobs.push({ ...j, status: 'queued', params: { ...j.params, reattach: true } });
+        } else {
+          // Preserve uncertain work and staged inputs; no paid replay or orphan
+          // kill is safe merely because the observer process restarted.
+          archive.push({ ...j, params: restoredParams(j) });
+        }
+        continue;
+      }
       // Explicit Video Start grants one process lifetime. Restored jobs wait for
       // project reconciliation; replaying an unknown paid submit could charge twice.
       if (j.params?.videoProduction && ['queued', 'running'].includes(j.status)) {
@@ -615,6 +662,7 @@ export async function initMediaJobQueue() {
         // the remote adapter replay the submission, recover the provider job,
         // and continue polling (or deliver a persisted cancellation intent).
         if (isRemoteMediaJob(j)) {
+          maintenance.recoverOwned('media', j.id);
           const marker = j.params?.remoteMedia;
           queue.push({
             ...j,
@@ -750,8 +798,16 @@ function startLaneJob(job, { lane }) {
     console.log(`⚠️ media-job [${job.id.slice(0, 8)}] startLaneJob: already removed from queue, skipping`);
     return false;
   }
+  if (lane === 'remote' && remoteRunning.some((active) => active.params?.remoteMedia?.peerId === job.params?.remoteMedia?.peerId)) return false;
+  if (lane === 'remote' && archive.some((entry) => entry.id !== job.id && entry.params?.remotePeerReservation === true
+    && entry.params?.remoteMedia?.peerId === job.params?.remoteMedia?.peerId)) return false;
+  const permit = recoveringJobs.has(job.id)
+    ? maintenance.recoverOwned('media', job.id)
+    : maintenance.tryAdmit('media', job.id, { reconnect: isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true });
+  if (!permit) return false;
   queue.splice(idx, 1);
   job.status = 'running';
+  if (lane === 'remote') job.params = { ...job.params, remotePeerReservation: true };
   job.startedAt = new Date().toISOString();
   job.position = 1;
   job.progress = typeof job.progress === 'number' && Number.isFinite(job.progress) ? job.progress : 0;
@@ -768,8 +824,9 @@ function startLaneJob(job, { lane }) {
     ? (job.params?.mode || 'cloud')
     : lane === 'remote' ? `remote ${job.kind}` : job.kind;
   let finalized = false;
+  let archiveWrite;
   function finalizeLane() {
-    if (finalized) return;
+    if (finalized) return archiveWrite;
     finalized = true;
     // Count once, after every terminal path (including pre-dispatch throws),
     // and before releasing the lane. Boot reconciliation never comes here.
@@ -789,11 +846,14 @@ function startLaneJob(job, { lane }) {
     // the UI's recent-reel cap (recentLimit) handles in-memory display.
     archive.push(job);
     recomputeQueuePositions();
-    persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on ${label} done failed: ${e.message}`));
+    archiveWrite = persist();
+    archiveWrite.catch((e) => console.log(`⚠️ mediaJobQueue persist on ${label} done failed: ${e.message}`));
+    return archiveWrite;
   }
   let markRunning;
+  let recoverySettled = false;
   trackOperation(dispatchOperations, new Promise((resolve) => { markRunning = resolve; }));
-  (async () => {
+  permit.run(async () => {
     try {
       await persist();
       // Cancellation can win while the running snapshot is blocked.
@@ -801,9 +861,9 @@ function startLaneJob(job, { lane }) {
       broadcastSse(ensureSseEntry(job.id), { type: 'started', kind: job.kind });
       mediaJobEvents.emit('started', job);
       console.log(`▶️  media-job [${job.id.slice(0, 8)}] ${label} started`);
-      const lifecycle = runJob(job);
+      const lifecycle = runJob(job, permit);
       markRunning();
-      await lifecycle;
+      recoverySettled = await lifecycle;
     } catch (err) {
       markRunning();
       // runJob threw before its own terminal handlers ran (e.g. PYTHON
@@ -825,8 +885,13 @@ function startLaneJob(job, { lane }) {
         await trackTerminalOperation(persistTerminalTransition(job));
       }
     }
-    finalizeLane();
-  })().catch((error) => console.error(`❌ media-job [${job.id.slice(0, 8)}] storage settlement pending: ${error.message}`));
+    await finalizeLane();
+    const settled = await flushMediaJobQueue();
+    recoveringJobs.delete(job.id);
+    if (!settled.ok) permit.markUnsettled();
+    else if (recoverySettled && permit.completeRecovery) await permit.completeRecovery();
+    else await permit.finish();
+  }).catch((error) => console.error(`❌ media-job [${job.id.slice(0, 8)}] storage settlement pending: ${error.message}`));
   return true;
 }
 
@@ -871,9 +936,14 @@ async function prepareQueuedVideos(jobs = queue.filter((job) => !job.admitting))
   }
 }
 
+// IDs proven by the boot probe to have an existing trainer; request params cannot grant this.
+const recoveringJobs = new Set();
+
 async function drainLoop() {
   while (!dispatchQuiesced) {
-    const candidates = queue.filter((job) => !job.admitting);
+    const held = maintenance.held();
+    const candidates = queue.filter((job) => !job.admitting && (!held || recoveringJobs.has(job.id)));
+    if (held && !candidates.length) { await sleep(150); continue; }
     await prepareQueuedVideos(candidates);
     // Shutdown may have begun while cohorts resolved; exit without promoting.
     if (dispatchQuiesced) break;
@@ -889,6 +959,9 @@ async function drainLoop() {
       if (job.status !== 'queued' || job.hold || job.admitting) continue;
       const lane = jobLane(job);
       if (slots[lane] <= 0) continue;
+      // One GPU job per peer initially. Different peers and this Mac remain
+      // independent. Reconciliation occupies the same slot until settled.
+      if (lane === 'remote' && !job.params?.remoteMedia?.reconcile && candidates.some((pending) => pending.status === 'queued' && pending.params?.remoteMedia?.reconcile && pending.params.remoteMedia.peerId === job.params?.remoteMedia?.peerId)) continue;
       if (!startLaneJob(job, { lane })) continue;
       slots[lane] -= 1;
       if (Object.values(slots).every((remaining) => remaining <= 0)) break;
@@ -916,7 +989,7 @@ export function quiesceMediaJobQueue() {
 // should cancel them first.
 export function removeArchivedJob(jobId) {
   const idx = archive.findIndex((j) => j.id === jobId);
-  if (idx < 0 || archive[idx].durabilityPending) return false;
+  if (idx < 0 || archive[idx].durabilityPending || archive[idx].params?.remotePeerReservation === true) return false;
   archive.splice(idx, 1);
   // End any SSE clients still attached within the SSE_CLEANUP_DELAY_MS grace
   // window before dropping the entry — a bare `sseJobs.delete()` here would
@@ -943,7 +1016,9 @@ export function runJobNow(jobId) {
   if (dispatchQuiesced) {
     return { ok: false, code: MEDIA_QUEUE_SHUTTING_DOWN, error: 'The server is shutting down; the job stays queued and resumes after restart' };
   }
-  startLaneJob(job, { lane: 'cloud' });
+  if (!startLaneJob(job, { lane: 'cloud' })) {
+    return { ok: false, code: 'MAINTENANCE_HELD', error: 'Maintenance is holding new renders; this job stays queued' };
+  }
   return { ok: true, status: 'running' };
 }
 
@@ -1083,20 +1158,28 @@ function makeGenDispatcher(emitter, job, handlers) {
 // The dispatch window closes once the provider has been invoked (not settled —
 // a provider kickoff may legitimately stay pending) or the job failed before
 // reaching it. The finally covers a throw anywhere before that point.
-async function runJob(job) {
+async function runJob(job, permit) {
   let markDispatched;
   trackOperation(dispatchOperations, new Promise((resolve) => { markDispatched = resolve; }));
   try {
-    await runJobLifecycle(job, markDispatched);
+    return await runJobLifecycle(job, markDispatched, permit);
   } finally {
     markDispatched();
   }
 }
 
-async function runJobLifecycle(job, markDispatched) {
+async function runJobLifecycle(job, markDispatched, permit) {
   const sseEntry = ensureSseEntry(job.id);
   let resolveTerminalState;
   const terminalState = new Promise((resolve) => { resolveTerminalState = resolve; });
+  let resolveProviderSettlement;
+  const providerSettlement = new Promise(resolve => { resolveProviderSettlement = resolve; });
+  let watchdogNeedsProviderSettlement = false;
+  let providerInputsDisposable = false;
+  let providerRecoveryConfirmed = false;
+  let terminalPublished = false;
+  let inputCleanupAttempted = false;
+  let inputCleanupResult = { ok: false };
   let progressPersistDirty = false;
   let progressPersistTimer = null;
   let progressPersisting = null;
@@ -1141,7 +1224,46 @@ async function runJobLifecycle(job, markDispatched) {
   // fire a redundant provider cancel. It's a transient in-memory flag
   // (excluded from persistImpl's serialized field set).
   let watchdogTimer;
-  async function terminate(state, apply) {
+  async function releaseRemoteAudioInputs(disposable) {
+    if (!disposable || !isRemoteMediaJob(job)) return { ok: false };
+    if (disposable && isRemoteMediaJob(job) && job.params?.remotePeerReservation === true) {
+      job.params = { ...job.params, remotePeerReservation: false };
+      try { await persist(); }
+      catch (error) {
+        job.params = { ...job.params, remotePeerReservation: true };
+        maintenance.markResourceUnsettled('media', job.id);
+        return { ok: false };
+      }
+    }
+    if (inputCleanupAttempted) return inputCleanupResult;
+    inputCleanupAttempted = true;
+    try {
+      // withResource deliberately skips unsettled operations. Cleanup must
+      // execute under this exact captured permit so a new error stamps it.
+      await permit.run(async () => {
+        const { discardSourceAudioWindow } = await import('../federatedMedia/sourceAudio.js');
+        const owned = normalizeTempPaths(job.params?.uploadedTempPaths);
+        const cleaned = new Set();
+        for (const asset of job.params?.remoteMedia?.inputAssets || []) {
+          if (asset.role === 'sourceAudio') {
+            if (!owned.includes(asset.path) || !(await discardSourceAudioWindow(asset.path)).ok) {
+              throw new Error('Remote source audio has no verified owned cleanup binding');
+            }
+            cleaned.add(asset.path);
+          }
+        }
+        // This recovery certifies the feature's owned WAV windows. Other
+        // staged multipart inputs have no equivalent cleanup receipt here.
+        inputCleanupResult = { ok: [...owned, job.params?.uploadedTempPath, job.params?.audioFilePath]
+          .filter(Boolean).every(path => cleaned.has(path)) };
+      });
+    } catch (error) {
+      maintenance.markResourceUnsettled('media', job.id);
+      console.error(`❌ Remote video input cleanup needs recovery for ${job.id}: ${error.message}`);
+    }
+    return inputCleanupResult;
+  }
+  async function terminate(state, apply, remoteInputsDisposable = false) {
     if (!claimTerminalOutcome(job)) return;
     // setInterval now (was setTimeout) — using clearInterval to match the new
     // API. (Node accepts either clearTimeout or clearInterval on the same
@@ -1150,15 +1272,13 @@ async function runJobLifecycle(job, markDispatched) {
     emitter.off?.('activity', onActivity);
     emitter.off?.('progress', onActivity);
     await drainProgressPersist();
-    // Only a completion publishes durable output. It holds backup admission from
-    // staging the terminal row through the hook fan-out, never while rendering
-    // or waiting in the queue; failures and cancellations stay unadmitted so a
-    // backup never delays them.
-    const publish = () => publishTerminalTransition(state, apply);
-    await (state === 'completed' ? withBackupAssetPublication(publish) : publish());
+    await admitCompletion(state, () => publishTerminalTransition(state, apply, remoteInputsDisposable));
   }
 
-  async function publishTerminalTransition(state, apply) {
+  async function publishTerminalTransition(state, apply, remoteInputsDisposable) {
+    if (remoteInputsDisposable === true && isRemoteMediaJob(job)) {
+      job.params = { ...job.params, remotePeerReservation: false };
+    }
     stageTerminalTransition(job, (job) => {
       apply(job);
       job.status = state;
@@ -1171,6 +1291,12 @@ async function runJobLifecycle(job, markDispatched) {
       // so the residual values are not displayed for terminal jobs.
       job.completedAt = new Date().toISOString();
     }, async () => {
+      terminalPublished = true;
+      // The terminal snapshot is durable now; a restart no longer rebuilds
+      // this request. Absence of the executor verdict retains all inputs.
+      // A shared persist can acknowledge another job: restore THAT job's
+      // maintenance context, and never let cleanup failure lose this callback.
+      await releaseRemoteAudioInputs(remoteInputsDisposable);
       if (job.params?.videoProduction) {
         const tag = job.params.videoProduction;
         const { settleVideoAttempt } = await import('../creativeDirector/videoExecution.js');
@@ -1220,8 +1346,9 @@ async function runJobLifecycle(job, markDispatched) {
       broadcastSse(sseEntry, payload);
     },
     completed: (payload) => {
+      const { remoteInputsDisposable, remoteRecoverySettlement, ...result } = payload;
       trackTerminalOperation(
-        terminate('completed', (j) => { j.result = payload; })
+        terminate('completed', (j) => { j.result = result; }, remoteInputsDisposable === true)
           .catch((e) => console.log(`⚠️ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`)),
       );
     },
@@ -1236,7 +1363,7 @@ async function runJobLifecycle(job, markDispatched) {
             // is cleaned up still gets a meaningful terminal frame from the
             // archived state, rather than the generic "Canceled" fallback.
             j.error = 'Canceled while running';
-          }).catch((e) => console.log(`⚠️ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`)),
+          }, payload.remoteInputsDisposable === true).catch((e) => console.log(`⚠️ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`)),
         );
         return;
       }
@@ -1244,7 +1371,7 @@ async function runJobLifecycle(job, markDispatched) {
         terminate('failed', (j) => {
           j.error = payload.error || 'unknown error';
           videoHolds.captureFailure(j, j.error, payload);
-        })
+        }, payload.remoteInputsDisposable === true)
           .catch((e) => console.log(`⚠️ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`)),
       );
     },
@@ -1285,7 +1412,23 @@ async function runJobLifecycle(job, markDispatched) {
     : job.kind === 'training' ? trainingEvents
     : job.kind === 'audio' || job.kind === 'supercollider' ? audioGenEvents
     : imageGenEvents;
-  const dispatcher = makeGenDispatcher(emitter, job, handlers);
+  // A watchdog outcome records why the job failed; it does not prove that
+  // cancellation has reached physical exit and provider cleanup. Only a real
+  // provider terminal event can release that additional wait.
+  const observeProviderSettlement = payload => {
+    providerInputsDisposable = payload.remoteInputsDisposable === true;
+    const proof = payload.remoteRecoverySettlement;
+    providerRecoveryConfirmed = isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true
+      && proof?.jobId === job.id && proof?.peerId === job.params.remoteMedia.peerId
+      && typeof proof?.remoteJobId === 'string' && proof.remoteJobId.length > 0
+      && ['completed', 'failed', 'canceled'].includes(proof.status) && proof.executorSettled === true;
+    resolveProviderSettlement();
+  };
+  const dispatcher = makeGenDispatcher(emitter, job, {
+    ...handlers,
+    completed: payload => { observeProviderSettlement(payload); handlers.completed(payload); },
+    failed: payload => { observeProviderSettlement(payload); handlers.failed(payload); },
+  });
   dispatcher.attach();
 
   // Thread #2: per-job idle watchdog — fires when the gen has been silent
@@ -1348,7 +1491,8 @@ async function runJobLifecycle(job, markDispatched) {
       // draining to disk with job.status still 'running') during the import.
       if (!canRequestCancellation(job)) return;
       console.log(`⏱️ media-job [${job.id.slice(0, 8)}] watchdog fired after ${idleFor}ms idle (limit ${idleTimeoutMs}ms) — marking failed`);
-      if (mod?.cancel) mod.cancel(job.id);
+      watchdogNeedsProviderSettlement ||= job.providerInvoked === true;
+      if (mod?.cancel) await mod.cancel(job.id);
       handlers.failed({ error: `watchdog timeout: no runner output for ${Math.round(idleFor / 1000)}s (limit ${Math.round(idleTimeoutMs / 1000)}s)` });
     } catch (err) {
       // Don't take down the server over a watchdog tick that couldn't
@@ -1398,6 +1542,9 @@ async function runJobLifecycle(job, markDispatched) {
     if (job.cancelRequested && !isRemoteMediaJob(job)) {
       throw new Error('Canceled before provider dispatch');
     }
+    // A watchdog can win during the awaited policy/module preparation above.
+    // Its terminal outcome must prevent that delayed provider from starting.
+    if (!canRequestCancellation(job)) throw new Error('Provider dispatch stopped after the job reached a terminal outcome');
     // Transient, like terminating: no await between this flag and invocation.
     job.providerInvoked = true;
     const request = { ...safeParams, jobId: job.id };
@@ -1412,6 +1559,9 @@ async function runJobLifecycle(job, markDispatched) {
     markDispatched();
     await kickoff;
   } catch (err) {
+    // Policy/auth refusal still stands, but it cannot prove a previously
+    // admitted peer render finished before this recovery attempt.
+    if (isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true) maintenance.markCurrentUnsettled();
     // generateVideo / generateChainedVideo / generateImage threw before
     // reaching their proc.on cleanup hooks (e.g. PYTHON not configured,
     // validation fail). Clean up multipart upload temp files the route
@@ -1422,12 +1572,15 @@ async function runJobLifecycle(job, markDispatched) {
     // Tracked from the first microtask of the rejection, so a drain that saw
     // the dispatch window close cannot miss this failure (#9029).
     await trackTerminalOperation((async () => {
-      await safeUnlinkUpload(job.params?.uploadedTempPath);
-      await safeUnlinkUpload(job.params?.audioFilePath);
-      for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) {
-        await safeUnlinkUpload(p);
+      if (!(isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true)) {
+        await safeUnlinkUpload(job.params?.uploadedTempPath);
+        await safeUnlinkUpload(job.params?.audioFilePath);
+        for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) {
+          await safeUnlinkUpload(p);
+        }
       }
-      handlers.failed({ error: err.message, code: err.code });
+      handlers.failed({ error: err.message, code: err.code,
+        remoteInputsDisposable: isRemoteMediaJob(job) && job.providerInvoked !== true && job.params?.remoteMedia?.reconcile !== true });
     })());
   }
 
@@ -1435,7 +1588,13 @@ async function runJobLifecycle(job, markDispatched) {
   // the explicit terminal signal rather than polling every 100ms; this makes
   // lane release immediate and gives tests a deterministic lifecycle to drain.
   await terminalState;
+  if (watchdogNeedsProviderSettlement) await providerSettlement;
+  // A watchdog can win the terminal row before the real provider responds.
+  // Keep its later trusted verdict through physical settlement, then release
+  // inputs under the still-owned lane after that row is durable.
+  await releaseRemoteAudioInputs(providerInputsDisposable);
   dispatcher.detach();
+  return providerRecoveryConfirmed && providerInputsDisposable && terminalPublished && inputCleanupResult.ok;
 }
 
 /**
@@ -1591,7 +1750,7 @@ export async function cancelQueuedJobs({ kind } = {}) {
 export async function cancelJob(jobId) {
   const pending = findJob(jobId);
   if (pending?.durabilityPending) {
-    await persistTerminalTransition(pending);
+    await admitCompletion(pending.durabilityPending.status, () => persistTerminalTransition(pending));
     return pending.status === 'canceled' ? { ok: true, status: 'canceled' }
       : { ok: false, code: 'ALREADY_TERMINAL', status: pending.status, error: 'Job is already finishing' };
   }
@@ -1754,6 +1913,7 @@ export function __resetForTests() {
   // Un-latch the persistence block (#4115) — a test that booted on an unreadable
   // jobs file would otherwise leave every later test's queue unable to persist.
   persistBlocked = false;
+  completionRecovery = null;
 }
 
 // Test-only deterministic settle hook. EventEmitter terminal handlers and

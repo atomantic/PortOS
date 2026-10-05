@@ -317,6 +317,9 @@ vi.mock('../services/voice/tts.js', () => ({
   normalizeVoiceEngine: (engine) => engine === 'qwen3' ? 'qwen3-tts' : engine,
   VALID_ENGINES: new Set(['kokoro', 'piper', 'qwen3-tts']),
 }));
+import { compareSpeech } from '../lib/speechMatch.js';
+const transcribeMock = vi.fn();
+vi.mock('../services/voice/stt.js', () => ({ transcribe: (...a) => transcribeMock(...a) }));
 vi.mock('../services/voice/profiles.js', () => ({
   clearVoiceProfileRender: vi.fn(),
   recordVoiceProfileRender: vi.fn(),
@@ -2802,6 +2805,133 @@ describe('pipeline routes', () => {
       // Refetch the issue and confirm the audio filename landed.
       const issAfter = await request(app).get(`/api/pipeline/issues/${iss.id}`);
       expect(issAfter.body.stages.audio.lines[0].audioFilename).toMatch(/^vo-mock-/);
+    });
+
+
+    describe('spoken-text verification (#10250)', () => {
+      // The mocked synthesizeToFile mirrors the real verify step (stubbed transcribe
+      // + compareSpeech) so the route's expectedSpeech hand-off and verification
+      // persistence are exercised; the real service path is covered in audio.test.js.
+      const renderWithVerification = async (app, iss) => {
+        const audio = await import('../services/pipeline/audio.js');
+        audio.synthesizeToFile.mockImplementationOnce(async ({ text, expectedSpeech }) => {
+          const heard = await transcribeMock(Buffer.from('w'), { prompt: '' }).catch(() => null);
+          return {
+            filename: `vo-mock-${++uuidCounter}.wav`, latencyMs: 1, engine: 'kokoro',
+            verification: heard
+              ? { ...compareSpeech(expectedSpeech || text, heard.text), heard: heard.text }
+              : { status: 'unverified', similarity: null, heard: '' },
+          };
+        });
+        return request(app).post(`/api/pipeline/issues/${iss.id}/stages/audio/lines/0/render`).send({});
+      };
+      const seed = async (app) => {
+        const iss = await seedIssueWithStoryboards(app);
+        await request(app).post(`/api/pipeline/issues/${iss.id}/stages/audio/extract-lines`).send({});
+        return iss;
+      };
+
+      it('marks a read that matches the script as matched', async () => {
+        const app = makeApp();
+        const iss = await seed(app);
+        const script = (await request(app).get(`/api/pipeline/issues/${iss.id}`)).body.stages.audio.lines[0].text;
+        transcribeMock.mockResolvedValueOnce({ text: script });
+        const r = await renderWithVerification(app, iss);
+        expect(r.body.verification).toMatchObject({ status: 'matched', similarity: 1 });
+        expect(transcribeMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ prompt: '' }));
+      });
+
+      it('marks a different read as mismatch, keeps what was heard, and accepts it via expectedSpeech', async () => {
+        const app = makeApp();
+        const iss = await seed(app);
+        transcribeMock.mockResolvedValue({ text: 'completely different words about nothing at all' });
+        const r = await renderWithVerification(app, iss);
+        expect(r.status).toBe(200);
+        expect(r.body.verification).toMatchObject({ status: 'mismatch', heard: 'completely different words about nothing at all' });
+        const stored = (await request(app).get(`/api/pipeline/issues/${iss.id}`)).body.stages.audio.lines[0];
+        expect(stored.verification.status).toBe('mismatch');
+
+        // "Accept as spoken": the heard text becomes the expectation and the chip flips.
+        const accepted = await request(app)
+          .patch(`/api/pipeline/issues/${iss.id}/stages/audio/lines/0`)
+          .send({ expectedSpeech: 'completely different words about nothing at all' });
+        expect(accepted.status).toBe(200);
+        expect(accepted.body.stage.lines[0].verification.status).toBe('matched');
+
+        // The next render compares against expectedSpeech.
+        const again = await renderWithVerification(app, iss);
+        expect(again.body.verification.status).toBe('matched');
+        transcribeMock.mockReset();
+      });
+
+      it('is unverified, and the render still succeeds, when STT is down', async () => {
+        const app = makeApp();
+        const iss = await seed(app);
+        transcribeMock.mockRejectedValueOnce(new Error('connect ECONNREFUSED'));
+        const r = await renderWithVerification(app, iss);
+        expect(r.status).toBe(200);
+        expect(r.body.verification).toEqual({ status: 'unverified', similarity: null, heard: '' });
+        const stored = (await request(app).get(`/api/pipeline/issues/${iss.id}`)).body.stages.audio.lines[0];
+        expect(stored.audioFilename).toMatch(/^vo-mock-/);
+        expect(stored.verification.status).toBe('unverified');
+      });
+    });
+
+    describe('narration segment review (#10258)', () => {
+      // Same stub shape as renderWithVerification: transcribe + compareSpeech.
+      const stubVerifiedSynth = async () => {
+        const audio = await import('../services/pipeline/audio.js');
+        audio.synthesizeToFile.mockImplementationOnce(async ({ text, expectedSpeech }) => {
+          const heard = await transcribeMock(Buffer.from('w'), { prompt: '' }).catch(() => null);
+          return {
+            filename: `vo-mock-${++uuidCounter}.wav`, durationMs: 900, latencyMs: 1, engine: 'kokoro', voiceId: 'kokoro:af_heart',
+            verification: heard
+              ? { ...compareSpeech(expectedSpeech || text, heard.text), heard: heard.text }
+              : { status: 'unverified', similarity: null, heard: '' },
+          };
+        });
+      };
+
+      it('re-renders a mismatched segment, then accepts what was heard as spoken', async () => {
+        const app = makeApp();
+        const text = 'The AI woke at dawn.';
+        transcribeMock.mockResolvedValueOnce({ text: 'The ay eye woke at dawn' });
+        await stubVerifiedSynth();
+        const rerender = await request(app).post('/api/pipeline/tts/narrate/segment').send({ text, voiceId: 'kokoro:af_heart' });
+        expect(rerender.status).toBe(200);
+        expect(rerender.body).toMatchObject({ durationMs: 900, engine: 'kokoro', verification: { status: 'mismatch', heard: 'The ay eye woke at dawn' } });
+        expect(rerender.body.filename).toMatch(/^vo-mock-/);
+
+        const accepted = await request(app).patch('/api/pipeline/tts/narrate/segment')
+          .send({ text, heard: 'The ay eye woke at dawn', expectedSpeech: 'The ay eye woke at dawn' });
+        expect(accepted.status).toBe(200);
+        expect(accepted.body).toMatchObject({ expectedSpeech: 'The ay eye woke at dawn', verification: { status: 'matched', similarity: 1 } });
+
+        // The next re-render compares against the accepted spelling.
+        transcribeMock.mockResolvedValueOnce({ text: 'The ay eye woke at dawn' });
+        await stubVerifiedSynth();
+        const again = await request(app).post('/api/pipeline/tts/narrate/segment')
+          .send({ text, expectedSpeech: 'The ay eye woke at dawn' });
+        expect(again.body.verification.status).toBe('matched');
+      });
+
+      it('leaves the segment unverified, and the render succeeds, when STT is down', async () => {
+        const app = makeApp();
+        transcribeMock.mockRejectedValueOnce(new Error('connect ECONNREFUSED'));
+        await stubVerifiedSynth();
+        const r = await request(app).post('/api/pipeline/tts/narrate/segment').send({ text: 'Plain sentence.' });
+        expect(r.status).toBe(200);
+        expect(r.body.verification).toEqual({ status: 'unverified', similarity: null, heard: '' });
+
+        const rescored = await request(app).patch('/api/pipeline/tts/narrate/segment')
+          .send({ text: 'Plain sentence.', heard: '', expectedSpeech: 'Plain sentence' });
+        expect(rescored.body.verification.status).toBe('unverified');
+      });
+
+      it('rejects a segment re-render with no text', async () => {
+        const r = await request(makeApp()).post('/api/pipeline/tts/narrate/segment').send({ text: '  ' });
+        expect(r.status).toBe(400);
+      });
     });
 
     it('keeps local voice profile provenance out of the federated issue record', async () => {

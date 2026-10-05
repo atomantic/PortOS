@@ -1,3 +1,4 @@
+import { maintenance, isMaintenanceHold } from '../lib/maintenanceAdmission.js';
 /**
  * CoS Job Scheduler Module
  *
@@ -218,6 +219,10 @@ export function clearSpawningJob(jobId) {
  * Execute a scheduled autonomous job and re-register its timer.
  */
 export async function executeScheduledJob(jobId) {
+  if (maintenance.held()) {
+    scheduleEvent({ id: `job:${jobId}`, type: 'once', delayMs: 60000, handler: () => executeScheduledJob(jobId), metadata: { jobId, description: 'Maintenance hold' } });
+    return;
+  }
   if (!isDaemonRunning()) return;
 
   const paused = (await loadState()).paused || false;
@@ -330,9 +335,14 @@ export async function executeScheduledJob(jobId) {
     if (isScriptJob(job)) {
       const startedAt = Date.now();
       const scriptOk = await executeScriptJob(job).then(() => true, err => {
+        if (isMaintenanceHold(err)) return null;
         emitLog('error', `Script job failed: ${job.name} - ${err.message}`, { jobId: job.id });
         return false;
       });
+      if (scriptOk === null) {
+        scheduleEvent({ id: `job:${jobId}`, type: 'once', delayMs: 60000, handler: () => executeScheduledJob(jobId), metadata: { jobId } });
+        return;
+      }
       // Count the fired attempt against the budget whether it succeeded or failed —
       // a failing/looping scheduled job still consumes autonomous work + wall-clock,
       // and must not be able to bypass the daily cap.
@@ -343,9 +353,14 @@ export async function executeScheduledJob(jobId) {
     } else if (isShellJob(job)) {
       const startedAt = Date.now();
       const shellOk = await executeShellJob(job).then(() => true, err => {
+        if (isMaintenanceHold(err)) return null;
         emitLog('error', `Shell job failed: ${job.name} - ${err.message}`, { jobId: job.id });
         return false;
       });
+      if (shellOk === null) {
+        scheduleEvent({ id: `job:${jobId}`, type: 'once', delayMs: 60000, handler: () => executeScheduledJob(jobId), metadata: { jobId } });
+        return;
+      }
       await recordDomainUsage('cos', { actions: 1, ms: Date.now() - startedAt })
         .catch(err => console.error(`❌ Failed to record CoS budget usage for shell job ${job.id}: ${err.message}`));
       releaseReservation(); // recorded usage now owns the in-flight count for this action

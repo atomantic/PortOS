@@ -19,6 +19,7 @@ import { writersRoomWorksQuerySchema } from '../../lib/pipelineValidation.js';
 import { randomUUID, createHash } from 'crypto';
 import { readFile } from 'fs/promises';
 import { atomicWrite, ensureDir, rmGuarded } from '../../lib/fileUtils.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { countWords } from '../../lib/textUtils.js';
 import { WORK_KINDS, WORK_STATUSES } from '../../lib/writersRoomPresets.js';
 import { renderCharacterEvolutionListForPrompt } from '../../lib/characterEvolution.js';
@@ -383,8 +384,6 @@ export async function createWork({ folderId = null, title, kind = 'short-story' 
   const id = `wr-work-${randomUUID()}`;
   const draftId = `wr-draft-${randomUUID()}`;
   const now = nowIso();
-  await ensureDir(`${wrWorkDir(id)}/drafts`);
-  await atomicWrite(wrDraftPath(id, draftId), '');
   const manifest = {
     id,
     folderId,
@@ -407,7 +406,13 @@ export async function createWork({ folderId = null, title, kind = 'short-story' 
     createdAt: now,
     updatedAt: now,
   };
-  await saveManifest(id, manifest);
+  // The empty first draft body and the manifest naming it are one backup-admitted
+  // workflow (#9982): a snapshot never dumps a work whose draft file its copy missed.
+  await withBackupAssetPublication(async () => {
+    await ensureDir(`${wrWorkDir(id)}/drafts`);
+    await atomicWrite(wrDraftPath(id, draftId), '');
+    await saveManifest(id, manifest);
+  });
   // Auto-subscribe every writersRoomWorks-enabled peer so brand-new works (and
   // their later tombstones) propagate without waiting for a reconnect (#1565).
   autoSubscribeRecordToAllPeers(WRITERS_ROOM_WORK_KIND, id).catch(() => {});
@@ -627,7 +632,7 @@ export async function deleteWork(id) {
     // would drop it), so it was never syncable. Hard-remove the dir so the API's
     // "delete a broken work to recover" path still works (the soft-delete store
     // call would otherwise no-op on the unreadable manifest and strand it).
-    await rmGuarded(wrWorkDir(id), { recursive: true, force: true });
+    await withBackupAssetPublication(() => rmGuarded(wrWorkDir(id), { recursive: true, force: true }));
     return { ok: true };
   }
   // Soft-delete tombstone (#1565) so the deletion federates and an out-of-date
@@ -652,54 +657,63 @@ function buildDraftMeta(text, base = {}) {
   };
 }
 
-export async function saveDraftBody(workId, body, { referencedIngredientIds } = {}) {
-  const manifest = await getWork(workId);
-  const activeId = manifest.activeDraftVersionId;
-  if (!activeId) throw badRequest('Work has no active draft');
-  const text = String(body ?? '');
-  await atomicWrite(wrDraftPath(workId, activeId), text);
-  const draftIdx = manifest.drafts.findIndex((d) => d.id === activeId);
-  if (draftIdx < 0) throw notFound('Active draft');
-  const meta = buildDraftMeta(text, manifest.drafts[draftIdx]);
-  // Distinguish "caller omitted the field" (preserve the existing snapshot of
-  // referenced ids) from "caller passed an empty array" (the prose no longer
-  // mentions any linked ingredient — clear it). An absent field must NOT wipe
-  // a previously-computed reference list.
-  if (Array.isArray(referencedIngredientIds)) {
-    meta.referencedIngredientIds = referencedIngredientIds;
-  }
-  manifest.drafts[draftIdx] = meta;
-  manifest.updatedAt = nowIso();
-  await saveManifest(workId, manifest);
-  console.log(`📝 wr: saved draft ${activeId.slice(0, 14)}… (${manifest.drafts[draftIdx].wordCount} words)`);
-  return { manifest, body: text };
+// The draft body replaces its .md in place and the manifest row records its new
+// hash, word count and segment index, so the pair is one backup-admitted workflow
+// (#9982): a cut never copies the old prose beside a row that describes the new.
+export function saveDraftBody(workId, body, { referencedIngredientIds } = {}) {
+  return withBackupAssetPublication(async () => {
+    const manifest = await getWork(workId);
+    const activeId = manifest.activeDraftVersionId;
+    if (!activeId) throw badRequest('Work has no active draft');
+    const text = String(body ?? '');
+    await atomicWrite(wrDraftPath(workId, activeId), text);
+    const draftIdx = manifest.drafts.findIndex((d) => d.id === activeId);
+    if (draftIdx < 0) throw notFound('Active draft');
+    const meta = buildDraftMeta(text, manifest.drafts[draftIdx]);
+    // Distinguish "caller omitted the field" (preserve the existing snapshot of
+    // referenced ids) from "caller passed an empty array" (the prose no longer
+    // mentions any linked ingredient — clear it). An absent field must NOT wipe
+    // a previously-computed reference list.
+    if (Array.isArray(referencedIngredientIds)) {
+      meta.referencedIngredientIds = referencedIngredientIds;
+    }
+    manifest.drafts[draftIdx] = meta;
+    manifest.updatedAt = nowIso();
+    await saveManifest(workId, manifest);
+    console.log(`📝 wr: saved draft ${activeId.slice(0, 14)}… (${manifest.drafts[draftIdx].wordCount} words)`);
+    return { manifest, body: text };
+  });
 }
 
-export async function snapshotDraft(workId, { label } = {}) {
-  const { manifest, body } = await getWorkWithBody(workId);
-  const newDraftId = `wr-draft-${randomUUID()}`;
-  const fromId = manifest.activeDraftVersionId;
-  const fromDraft = manifest.drafts.find((d) => d.id === fromId);
-  const draftLabel = label || `Draft ${manifest.drafts.length + 1}`;
-  await atomicWrite(wrDraftPath(workId, newDraftId), body);
-  // The new draft copies the source's body verbatim, so carry its referenced
-  // ingredient ids forward — otherwise the freshly-snapshotted version would
-  // render no chips (despite identical prose) until the next save re-scans.
-  manifest.drafts.push(buildDraftMeta(body, {
-    id: newDraftId,
-    label: draftLabel,
-    contentFile: `drafts/${newDraftId}.md`,
-    createdAt: nowIso(),
-    createdFromVersionId: fromId,
-    ...(Array.isArray(fromDraft?.referencedIngredientIds)
-      ? { referencedIngredientIds: fromDraft.referencedIngredientIds }
-      : {}),
-  }));
-  manifest.activeDraftVersionId = newDraftId;
-  manifest.updatedAt = nowIso();
-  await saveManifest(workId, manifest);
-  console.log(`📚 wr: snapshot ${draftLabel} for ${manifest.title}`);
-  return manifest;
+// The new version's body file and the manifest row that adds it are one
+// backup-admitted workflow (#9982).
+export function snapshotDraft(workId, { label } = {}) {
+  return withBackupAssetPublication(async () => {
+    const { manifest, body } = await getWorkWithBody(workId);
+    const newDraftId = `wr-draft-${randomUUID()}`;
+    const fromId = manifest.activeDraftVersionId;
+    const fromDraft = manifest.drafts.find((d) => d.id === fromId);
+    const draftLabel = label || `Draft ${manifest.drafts.length + 1}`;
+    await atomicWrite(wrDraftPath(workId, newDraftId), body);
+    // The new draft copies the source's body verbatim, so carry its referenced
+    // ingredient ids forward — otherwise the freshly-snapshotted version would
+    // render no chips (despite identical prose) until the next save re-scans.
+    manifest.drafts.push(buildDraftMeta(body, {
+      id: newDraftId,
+      label: draftLabel,
+      contentFile: `drafts/${newDraftId}.md`,
+      createdAt: nowIso(),
+      createdFromVersionId: fromId,
+      ...(Array.isArray(fromDraft?.referencedIngredientIds)
+        ? { referencedIngredientIds: fromDraft.referencedIngredientIds }
+        : {}),
+    }));
+    manifest.activeDraftVersionId = newDraftId;
+    manifest.updatedAt = nowIso();
+    await saveManifest(workId, manifest);
+    console.log(`📚 wr: snapshot ${draftLabel} for ${manifest.title}`);
+    return manifest;
+  });
 }
 
 export async function setActiveDraft(workId, draftId) {

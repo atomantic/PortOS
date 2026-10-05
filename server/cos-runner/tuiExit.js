@@ -1,10 +1,24 @@
 /** Finish a runner TUI on observed process exit, even after force-kill reaping. */
+import { stripAnsi } from '../lib/ansiStrip.js';
+import { SENTINEL_COMPLETION_MARKER } from '../lib/agentOutputMarkers.js';
+
 // `tui:output` is live telemetry, so an immediate process exit can beat its
 // socket delivery. Keep a small terminal tail with the exit event: the PortOS
 // spawner owns failure analysis and can persist it when no ordinary TUI chunk
 // arrived. This is deliberately much smaller than the runner's 512 KiB live
 // buffer and is enough to carry a CLI's startup diagnostic.
 const TUI_EXIT_OUTPUT_TAIL_CHARS = 16 * 1024;
+
+// What `output.txt` (and so the completed card's transcript) receives. A
+// sentinel summary wins. A run that signaled done WITHOUT a summary (agy often
+// just `touch`es the file) must not fall back to the terminal buffer — that is
+// an escape-code repaint stream, not a transcript — so it gets a one-line
+// marker. Any other exit keeps the buffer for failure diagnosis, ANSI-stripped.
+function resolveCompletionOutput(agent) {
+  if (agent.completionOutput != null) return agent.completionOutput;
+  if (agent.completedBySentinel) return `${SENTINEL_COMPLETION_MARKER}\n(no summary was written to the completion file)\n`;
+  return stripAnsi(agent.outputBuffer);
+}
 
 export function createTuiExitHandler({ agentId, taskId, sessionId, agent, activeAgents, io, emitToServer, withState, persistCompletion, onError }) {
   return async ({ exitCode, signal }) => {
@@ -34,7 +48,7 @@ export function createTuiExitHandler({ agentId, taskId, sessionId, agent, active
       const outputTail = current.outputBuffer.slice(-TUI_EXIT_OUTPUT_TAIL_CHARS);
       // The terminal buffer contains TUI thinking/repaints. A validated
       // sentinel owns the durable user-facing output once it is available.
-      const completionOutput = current.completionOutput ?? current.outputBuffer;
+      const completionOutput = resolveCompletionOutput(current);
       await persistCompletion(agentId, completionOutput, current.paused ? null : {
         taskId, completedAt: new Date().toISOString(), exitCode: effectiveExitCode,
         signal: effectiveSignal, success: !!success, duration,
@@ -69,6 +83,7 @@ export function createTuiExitHandler({ agentId, taskId, sessionId, agent, active
       console.error(`❌ TUI agent ${agentId} exit handler error: ${err.message}`);
       activeAgents.delete(agentId);
       onError?.(err);
+      return false;
     }
   };
 }

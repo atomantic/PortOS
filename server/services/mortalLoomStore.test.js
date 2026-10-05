@@ -291,6 +291,15 @@ describe('updateStore', () => {
   });
   afterEach(() => restorePlatform());
 
+  it('serializes overlapping mutations so none is lost (#10097)', async () => {
+    let disk = JSON.stringify({ goals: [] });
+    // Yield between read and write so unserialized cycles would share a pre-image.
+    readFileMock.mockImplementation(async () => { const snap = disk; await new Promise((r) => setTimeout(r, 5)); return snap; });
+    writeFileMock.mockImplementation(async (_p, payload) => { disk = payload; });
+    await Promise.all(['a', 'b', 'c'].map((id) => store.updateStore((s) => { s.goals.push({ id }); })));
+    expect(JSON.parse(disk).goals.map((g) => g.id)).toEqual(['a', 'b', 'c']);
+  });
+
   it('seeds a fresh store when the file does not exist', async () => {
     existsResult = false;
     writeFileMock.mockResolvedValue(undefined);

@@ -1,19 +1,12 @@
 import { useRef, useState } from 'react';
 import { ListMusic, Plus, Trash2, Upload } from 'lucide-react';
+import { lyricSetupState } from '../../lib/musicVideoStages.js';
 
 // Client-minted ids keep a freshly added row addressable across saves without
 // waiting for the server (crypto.randomUUID is unavailable on the plain-HTTP
 // tailnet origin PortOS is usually opened from).
 const mintId = (prefix) => `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 const toSec = (value) => (value === '' ? null : Number(value));
-// Bounds mirror musicVideoPacingSchema so an out-of-range value is refused
-// by the input rather than applied locally and then rejected by the server.
-const PACING_FIELDS = [
-  ['minShotSec', 'Shortest shot (s)', 'Floor for a planned shot; a shorter section stays one shot.', 0.5, 60],
-  ['maxShotSec', 'Longest shot (s)', 'Ceiling for a planned shot, never longer than one generated clip (5s local, 6/10s Grok).', 1, 120],
-  ['hookSec', 'Opening hook (s)', 'Cap on the very first shot so the video opens on a cut.', 0.5, 60],
-];
-
 const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
 const round3 = (n) => Math.round(n * 1000) / 1000;
 const MIN_WORD_SEC = 0.02;
@@ -130,7 +123,7 @@ function WordTimingRow({ cue, lineNumber, disabled, onPreview, onCommit }) {
 }
 
 /**
- * Timed lyric cues, musical-phrase annotations and shot pacing for the AI
+ * Timed lyric cues and musical-phrase annotations for the AI
  * shot planner (#8964). Every list is editable in place: edits apply to the
  * board immediately (`onEditLocal`) and persist on blur (`onSave`, a project
  * PATCH that replaces the list whole). Import parses pasted LRC, SRT/WebVTT or
@@ -157,13 +150,15 @@ function MarkerChips({ markers }) {
   );
 }
 
-export default function LyricsPanel({ project, onEditLocal, onSave, onImport, importing, onImportTrack, onAlign, aligning = false }) {
+export default function LyricsPanel({ project, onEditLocal, onSave, onImport, importing, onImportTrack, onAlign, aligning = false, inline = false }) {
+  // `inline` drops the fold: Setup step 3 shows the editor open in place.
+  const Shell = inline ? 'div' : 'details';
+  const Heading = inline ? 'p' : 'summary';
   const cues = project.lyricCues || [];
   const markers = project.lyricMarkers || [];
   const markersAt = (line) => markers.filter((marker) => marker.line === line);
   const trailingMarkers = markers.filter((marker) => marker.line >= cues.length);
   const phrases = project.phrases || [];
-  const pacing = project.pacing || {};
   const [importText, setImportText] = useState('');
   const [importFormat, setImportFormat] = useState('auto');
   const [importMode, setImportMode] = useState('replace');
@@ -186,18 +181,6 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
   const replaceCues = (next) => { onEditLocal({ lyricCues: next }); saveCues(next); };
   const replacePhrases = (next) => { onEditLocal({ phrases: next }); savePhrases(next); };
 
-  const commitPacing = (key, raw, min, max) => {
-    const value = Number(raw);
-    if (raw !== '' && !(Number.isFinite(value) && value >= min && value <= max)) return false;
-    const next = { ...pacing };
-    if (raw === '') delete next[key];
-    else next[key] = value;
-    const nextPacing = Object.keys(next).length > 0 ? next : null;
-    onEditLocal({ pacing: nextPacing });
-    onSave({ pacing: nextPacing });
-    return true;
-  };
-
   const submitImport = () => {
     if (!importText.trim()) return;
     onImport({ text: importText, format: importFormat, mode: importMode }, () => setImportText(''));
@@ -217,12 +200,17 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
   };
 
   return (
-    <details className="mt-2 bg-port-bg border border-port-border rounded-lg p-2 text-xs">
-      <summary className="cursor-pointer select-none text-port-text-muted min-h-[44px] sm:min-h-0 flex flex-wrap items-center gap-x-1">
-        Lyrics, phrases &amp; pacing — {cues.length} line{cues.length === 1 ? '' : 's'} ({timedCount} timed)
+    <Shell className="mt-2 bg-port-bg border border-port-border rounded-lg p-2 text-xs">
+      <Heading className={`${inline ? '' : 'cursor-pointer select-none '}text-port-text-muted min-h-[44px] sm:min-h-0 flex flex-wrap items-center gap-x-1`}>
+        Lyrics &amp; phrases — {cues.length} line{cues.length === 1 ? '' : 's'} ({timedCount} timed)
         · {phrases.length} phrase{phrases.length === 1 ? '' : 's'}
         <span className="block sm:inline sm:ml-1">— AI Plan cuts on timed lines and phrase edges; no lyrics = an instrumental plan.</span>
-      </summary>
+      </Heading>
+      {project.productionReadiness?.storyboard?.approved && (
+        <p role="note" className="mt-2 rounded border border-port-warning/40 bg-port-warning/5 p-2 text-port-warning">
+          The storyboard is approved. Editing lyrics, markers or phrases will need re-approval of the storyboard.
+        </p>
+      )}
 
       <div className="mt-2 grid grid-cols-1 gap-3 lg:grid-cols-2">
         <section className="space-y-2 min-w-0">
@@ -262,29 +250,17 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
               <Upload size={13} /> {importing ? 'Importing…' : 'Import lyrics'}
             </button>
           </div>
-
-          <h4 className="font-medium text-port-text pt-1">Shot pacing</h4>
-          <div className="flex flex-wrap gap-2">
-            {PACING_FIELDS.map(([key, label, help, min, max]) => (
-              <div key={key}>
-                <label htmlFor={`mv-pacing-${key}`} className="block text-port-text-muted mb-0.5" title={help}>{label}</label>
-                <input id={`mv-pacing-${key}`} type="number" min={min} max={max} step={0.5}
-                  defaultValue={pacing[key] ?? ''} key={`${project.id}-${key}-${pacing[key] ?? ''}`}
-                  placeholder="default" title={help}
-                  onBlur={(e) => {
-                    if (e.target.value === String(pacing[key] ?? '')) return;
-                    // Out of range: restore the saved value instead of showing an unsaved one.
-                    if (!commitPacing(key, e.target.value, min, max)) e.target.value = pacing[key] ?? '';
-                  }}
-                  className={`${inputCls} w-24`} />
-              </div>
-            ))}
-          </div>
         </section>
 
         <section className="space-y-1 min-w-0">
           <div className="flex items-center justify-between">
             <h4 className="font-medium text-port-text">Lyric lines</h4>
+            {cues.length > 0 && !lyricSetupState(project).instrumental && (
+              <span className={`text-xs ${lyricSetupState(project).verified ? 'text-port-success' : 'text-port-warning'}`}
+                title="Verify the word timing in Production approvals once you have listened to it">
+                Lyric timing: {lyricSetupState(project).verified ? 'verified' : 'provisional'}
+              </span>
+            )}
             <span className="flex items-center gap-2">
               {onAlign && (
                 <button type="button" onClick={() => runAlign()} disabled={aligning || cues.length === 0 || !hasAudio}
@@ -319,7 +295,8 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
                     }}
                     onBlur={() => saveCues()} className={`${inputCls} min-w-0 flex-1 basis-40`} />
                   {onAlign && (
-                    <button type="button" onClick={() => runAlign(cue.id)} disabled={aligning}
+                    <button type="button" onClick={() => runAlign(cue.id)} disabled={aligning || !hasAudio}
+                      title={hasAudio ? undefined : 'Attach a song before aligning words'}
                       aria-label={`Re-align line ${i + 1}`}
                       className="min-h-[44px] sm:min-h-0 text-port-accent disabled:opacity-50">Re-align</button>
                   )}
@@ -366,6 +343,6 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
           </div>
         </section>
       </div>
-    </details>
+    </Shell>
   );
 }

@@ -7,10 +7,6 @@ vi.mock('../../services/apiUniverseBuilder.js', () => ({
   listUniverseNames: vi.fn(async () => [{ id: 'u1', name: 'Example universe' }, { id: 'u2', name: 'Other universe' }]),
   getUniverse: vi.fn(),
 }));
-vi.mock('../../services/apiMoodBoard.js', () => ({
-  listMoodBoards: vi.fn(async () => [{ id: 'b1', name: 'Painted style' }]),
-  getMoodBoard: vi.fn(async () => ({ name: 'Painted style', description: 'Watercolor', items: [{ type: 'text', text: 'Loose brush strokes' }] })),
-}));
 const project = { id: 'mv1', concept: {}, visualSpec: {} };
 const open = (onSave = vi.fn(async () => {})) => {
   render(<MemoryRouter><CreativeSetupPanel project={project} onSave={onSave} onPendingChange={vi.fn()} /></MemoryRouter>);
@@ -22,7 +18,7 @@ beforeEach(() => {
   getUniverse.mockResolvedValue({ id: 'u1', name: 'Example universe', styleNotes: 'Ink silhouettes', characters: [{ id: 'c1', name: 'Example singer', physicalDescription: 'Silver coat' }], places: [], objects: [] });
 });
 describe('creative setup', () => {
-  it('saves image-free canon, an authored prop and mood-board direction together', async () => {
+  it('saves image-free canon and an authored prop, leaving the mood board to Look references', async () => {
     const onSave = open();
     await screen.findByText('Example universe');
     fireEvent.change(screen.getByLabelText('Universe'), { target: { value: 'u1' } });
@@ -33,17 +29,15 @@ describe('creative setup', () => {
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Glass guitar' } });
     fireEvent.change(screen.getByLabelText('Appearance / description'), { target: { value: 'Transparent blue glass' } });
     fireEvent.click(screen.getByText('Add to production'));
-    fireEvent.click(screen.getByText('Mood board reference'));
-    await screen.findByText('Painted style');
-    fireEvent.change(screen.getByLabelText('Board'), { target: { value: 'b1' } });
     fireEvent.click(screen.getByText('Save creative setup'));
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     expect(onSave.mock.calls[0][0]).toMatchObject({
       concept: { universeId: 'u1', subjects: [
         { kind: 'character', name: 'Example singer', role: 'band', description: 'Silver coat', canonId: 'c1' },
         { kind: 'object', name: 'Glass guitar', description: 'Transparent blue glass' },
-      ] }, visualSpec: { moodBoardId: 'b1' },
+      ] },
     });
+    expect(onSave.mock.calls[0][0]).not.toHaveProperty('visualSpec');
   });
   it('discards an unsaved cast when the director cancels setup', async () => {
     const onSave = open();
@@ -87,20 +81,6 @@ describe('creative setup', () => {
     expect(screen.queryByText('Stale singer')).toBeNull();
     expect(screen.getByLabelText('Universe').value).toBe('u2');
   });
-});
-
-it('defaults code-first to zero, offers 20% selective footage, and saves the explicit allowance', async () => {
-  const onSave = open();
-  fireEvent.change(screen.getByLabelText('Production strategy'), { target: { value: 'code-first' } });
-  const allowance = screen.getByLabelText('Maximum generated video (% of final song time)');
-  expect(allowance.value).toBe('0');
-  fireEvent.click(screen.getByLabelText('Allow selective generated footage'));
-  expect(allowance.value).toBe('20');
-  fireEvent.change(allowance, { target: { value: '12.5' } });
-  fireEvent.click(screen.getByText('Save creative setup'));
-  await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
-    productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 12.5 },
-  })));
 });
 
 describe('tools / policy conflict', () => {

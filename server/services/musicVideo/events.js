@@ -16,6 +16,13 @@ import { EventEmitter } from 'events';
 // synchronous external-SD-API lane (which returns the image filename inline and
 // lets the client add it as a take through the takes route; video renders
 // always ride the queue, so the clip attach is hook-only).
+//   'scene-failure' → { projectId, sceneId, lastFailure: { lane, error, at } | null }
+//
+// `scene-image` / `scene-video` also carry the scene's `lastFailure` (null once a
+// take lands for that lane). 'scene-failure' is emitted by the same hooks when a
+// render FAILS (#10154) after the failure is persisted on the scene, bridged to
+// `music-video:scene-failure`, so the board's "Frame failed: <reason> · Retry"
+// chip appears without a refetch and survives a reload.
 //
 // #8988 adds two more:
 //   'excerpt-render' → { projectId, excerptId, status } — a draft excerpt
@@ -37,6 +44,12 @@ import { EventEmitter } from 'events';
 //     (a stage settled, a checkpoint is waiting, it needs the director, it
 //     finished); bridged to `music-video:autonomous`.
 //
+// A final render adds:
+//   'render' → { projectId, jobId, status: 'completed'|'failed'|'canceled', error }
+//     — a final music-video render job settled and its project write landed
+//     (server-only; an autonomous run waiting on its final render finishes or
+//     fails from it).
+//
 // The Cast & Sets check-in adds:
 //   'cast-and-sets' → { projectId, stage, project } — the check-in stage
 //     advanced (direction, an image landed, the sheet is ready, approved);
@@ -45,4 +58,7 @@ import { EventEmitter } from 'events';
 //   'dev-artifact'  → { projectId, artifactId, project } — a development
 //     artifact was added, versioned, noted, reviewed or deleted; bridged to
 //     `music-video:dev-artifact`.
+//   'publish-draft' → { projectId, draftId, target, state } — a publish draft's
+//     tab was filled ('open'), closed by hand ('closed') or discarded; bridged
+//     to `music-video:publish-draft`.
 export const musicVideoEvents = new EventEmitter();

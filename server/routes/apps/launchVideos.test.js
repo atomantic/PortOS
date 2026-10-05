@@ -41,6 +41,21 @@ beforeEach(() => {
 });
 
 describe('user-triggered launch videos', () => {
+  it('hands the agent only the motion, camera, sound and native-move grammar parts, and refuses an unknown grammar', async () => {
+    expect((await submit({ styleGrammarId: 'risograph-two-ink' })).status).toBe(202);
+    const [{ prompt }] = addTask.mock.calls[0];
+    expect(prompt).toContain('## Film style grammar: ');
+    for (const heading of ['Motion:', 'Camera vocabulary:', 'Sound:', 'Native moves:']) expect(prompt).toContain(heading);
+    // The app's own palette and fonts stay authoritative: no colour or type rules ride along.
+    for (const heading of ['\nColour:', '\nType:', '\nRendering:', '\nPitfalls:']) expect(prompt).not.toContain(heading);
+    expect(prompt).not.toContain('"styleGrammarId"');
+    expect((await submit({ styleGrammarId: 'no-such-grammar' })).status).toBe(400);
+    expect(addTask).toHaveBeenCalledTimes(1);
+    addTask.mockClear();
+    await submit({});
+    expect(addTask.mock.calls[0][0].prompt).not.toContain('Film style grammar');
+  });
+
   it('queues selected options with a stable app identity and a private, local output contract', async () => {
     const response = await submit({ tone: 'deadpan', direction: 'Emphasize the working flow', format: 'vertical', targetDurationSec: 18 });
     expect(response.status).toBe(202);

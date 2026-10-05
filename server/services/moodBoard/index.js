@@ -18,6 +18,7 @@
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import * as store from './db.js';
 import { localizeImageUrl } from './localize.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 
 // Read paths + federation entry points pass straight through to the store. The
 // asset-manifest filename resolver lives in logic.js (pure) and is re-exported
@@ -168,15 +169,21 @@ async function withLocalImage(input) {
   return input.imageUrl ? { ...input, imageUrl: await localizeImageUrl(input.imageUrl) } : input;
 }
 
+// A row that first names an image re-hosted just now commits under the backup
+// lease (#9982); every other item write stays outside it.
+const commitItem = (rehosted, commit) => (rehosted ? withBackupAssetPublication(commit) : commit());
+
 export async function addBoardItem(id, itemInput) {
   const resolved = await resolveGalleryItemCaption(itemInput);
-  const item = await store.addBoardItem(id, await withLocalImage(resolved));
+  const localized = await withLocalImage(resolved);
+  const item = await commitItem(localized?.imageUrl !== resolved?.imageUrl, () => store.addBoardItem(id, localized));
   emitRecordUpdated('moodBoard', id);
   return item;
 }
 
 export async function updateBoardItem(id, itemId, patch) {
-  const item = await store.updateBoardItem(id, itemId, patch?.imageUrl ? { ...patch, imageUrl: await localizeImageUrl(patch.imageUrl) } : patch);
+  const localized = patch?.imageUrl ? { ...patch, imageUrl: await localizeImageUrl(patch.imageUrl) } : patch;
+  const item = await commitItem(localized?.imageUrl !== patch?.imageUrl, () => store.updateBoardItem(id, itemId, localized));
   emitRecordUpdated('moodBoard', id);
   return item;
 }

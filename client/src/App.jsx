@@ -565,6 +565,8 @@ export default function App() {
           <Route path="music-video/:projectId" element={<MusicVideo />} />
           {/* Stage tab (setup | cast-sets | board | produce | compose | review); an unknown stage opens the project's default. */}
           <Route path="music-video/:projectId/:stage" element={<MusicVideo />} />
+          <Route path="music-video/:projectId/:stage/scene/:sceneId" element={<MusicVideo />} />
+          <Route path="music-video/:projectId/scene/:sceneId" element={<MusicVideo />} />
           <Route path="music-video/:projectId/dev/:artifactId" element={<MusicVideo />} />
           <Route path="music-video/:projectId/:stage/dev/:artifactId" element={<MusicVideo />} />
           {/* 3D — a top-level Create page (moved out of the Media Gen tabs). The

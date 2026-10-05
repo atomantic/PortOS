@@ -44,6 +44,7 @@ import { basename, join } from 'node:path';
 import { rm, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { ServerError } from '../../lib/errorHandler.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../../lib/fileUtils.js';
 import {
   publishRigArtifacts,
@@ -363,7 +364,10 @@ export async function retargetImageTo3dModel(modelId, options = {}, {
       mode,
       overrides: options,
     });
-    return await mutateModel(modelId, (current) => ({
+    // The verified pair already sits in its own `retarget/<retargetId>/` directory
+    // and is never replaced, so the row that first names it takes a backup lease
+    // (#9982), exactly like the rig row.
+    return await withBackupAssetPublication(() => mutateModel(modelId, (current) => ({
       ...current,
       retarget: {
         status: 'ready',
@@ -381,7 +385,7 @@ export async function retargetImageTo3dModel(modelId, options = {}, {
         startedAt,
         completedAt: now(),
       },
-    }));
+    })));
   } catch (error) {
     await mutateModel(modelId, (current) => ({
       ...current,

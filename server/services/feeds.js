@@ -26,6 +26,15 @@ const store = createCachedStore(FEEDS_FILE, DEFAULT_DATA, { context: 'feeds' });
 const itemSortKey = (item) => Date.parse(item.pubDate || item.fetchedAt) || 0;
 const compareItemsNewestFirst = (a, b) => itemSortKey(b) - itemSortKey(a);
 
+// Drop items with no link, a link already in `seen`, or a link repeated within
+// the batch. Mutates `seen` so duplicates inside one payload collapse too.
+const dedupeByLink = (items, seen = new Set()) =>
+  items.filter(item => {
+    if (!item.link || seen.has(item.link)) return false;
+    seen.add(item.link);
+    return true;
+  });
+
 // Sort runs on writes only; getItems trusts the invariant. Legacy unsorted
 // state on disk gets normalized once on first read (see ensureItemsSorted).
 // The invariant assumes this module owns all writes to feeds.json — out-of-band
@@ -172,7 +181,7 @@ export async function addFeed(url) {
   };
 
   // Add initial items
-  const newItems = parsed.items.slice(0, MAX_ITEMS_PER_FEED).map(item => ({
+  const newItems = dedupeByLink(parsed.items).slice(0, MAX_ITEMS_PER_FEED).map(item => ({
     id: randomUUID(),
     feedId: feed.id,
     title: item.title,
@@ -257,8 +266,7 @@ function applyParsedFeed(data, feed, parsed) {
   if (!feedRecord) return 0;
 
   const existingLinks = new Set(data.items.filter(i => i.feedId === feed.id).map(i => i.link));
-  const newItems = parsed.items
-    .filter(item => item.link && !existingLinks.has(item.link))
+  const newItems = dedupeByLink(parsed.items, existingLinks)
     .slice(0, MAX_ITEMS_PER_FEED)
     .map(item => ({
       id: randomUUID(),
@@ -277,7 +285,7 @@ function applyParsedFeed(data, feed, parsed) {
   // Trim to MAX_ITEMS_PER_FEED per feed (keep newest)
   const feedItems = data.items
     .filter(i => i.feedId === feed.id)
-    .sort((a, b) => new Date(b.fetchedAt) - new Date(a.fetchedAt));
+    .sort(compareItemsNewestFirst);
   if (feedItems.length > MAX_ITEMS_PER_FEED) {
     const keepIds = new Set(feedItems.slice(0, MAX_ITEMS_PER_FEED).map(i => i.id));
     data.items = data.items.filter(i => i.feedId !== feed.id || keepIds.has(i.id));

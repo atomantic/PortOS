@@ -1,3 +1,4 @@
+import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
  * Shared LLM runner wrapper.
  *
@@ -772,6 +773,10 @@ function createRecoveryInvestigationScope({ failed, failedModel, firstError }) {
  *   log/attribute the deterministic recovery path.
  */
 export async function runPromptThroughProvider(rawArgs) {
+  return maintenance.run('provider', rawArgs?.source ?? 'prompt', () => runPromptThroughProviderAdmitted(rawArgs), { continuation: true });
+}
+
+async function runPromptThroughProviderAdmitted(rawArgs) {
   // Validate inputs up front so an accidentally-null `provider` (or one
   // missing `id`/`type`) surfaces a clear error here instead of throwing
   // a downstream TypeError on `provider.id` inside createRun or on the

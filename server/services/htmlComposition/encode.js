@@ -4,7 +4,7 @@ import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import sharp from 'sharp';
 import { blurFrame } from './shutterBlur.js';
-import { findFfmpeg, runFfmpegProcess, probeVideoDuration, H264_ENCODE_ARGS, AAC_ENCODE_ARGS, BT709_CONTAINER_ARGS, bt709TagFilter } from '../../lib/ffmpeg.js';
+import { findFfmpeg, runFfmpegProcess, probeVideoDuration, H264_ENCODE_ARGS, AAC_ENCODE_ARGS, BT709_CONTAINER_ARGS, bt709TagFilter, planLoudnessMaster, reportMasteredLoudness } from '../../lib/ffmpeg.js';
 
 // Size the viewport for this format, then let the composition reframe itself
 // (#8960) before any seek captures it. A composition without a layout hook
@@ -37,7 +37,7 @@ const SCREENSHOT = Object.freeze({ format: 'png', optimizeForSpeed: true, fromSu
 // the terminal race releases a pending write on exit, disconnect or cancel.
 // `offsetSec` seeks a window of a longer timeline: frame n is drawn at
 // `offsetSec + n / fps` (a music-video excerpt stays on song time).
-export async function encodeComposition(page, contract, outputPath, { musicPath, audio, signal, onProgress, offsetSec = 0, videoFilter = null, spawnProcess = spawn, locateFfmpeg = findFfmpeg, tagFilter = bt709TagFilter } = {}) {
+export async function encodeComposition(page, contract, outputPath, { musicPath, audio, signal, onProgress, offsetSec = 0, videoFilter = null, master = false, runFfmpeg = runFfmpegProcess, spawnProcess = spawn, locateFfmpeg = findFfmpeg, tagFilter = bt709TagFilter } = {}) {
   const ffmpeg = await locateFfmpeg();
   if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
   const tag = await tagFilter();
@@ -48,6 +48,13 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   // beds keep the launch-video loop and half-second tail fade.
   const exactAudio = audio?.path ? audio : null;
   if (exactAudio && musicPath) throw new Error('Music-video audio replaces library music');
+  // Library and synthesized beds (never an exact music-video master) can be
+  // mastered to the loudness target (#10249): measure the trimmed bed first,
+  // then apply the linear gain inside the encode's own audio filter.
+  const bedTrim = `atrim=duration=${durationSec},asetpts=PTS-STARTPTS`;
+  const mastering = master && musicPath
+    ? await planLoudnessMaster({ bin: ffmpeg, inputArgs: ['-stream_loop', '-1', '-i', musicPath], prefilter: bedTrim, durationSec, signal, run: runFfmpeg })
+    : null;
   // Integer motionBlur (1-4) captures that many subframes per output frame and
   // lets ffmpeg's tmix filter blend them; 1 (default) captures/encodes exactly
   // as before, byte for byte. The object form (#9077) blends in Node instead
@@ -64,7 +71,7 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   else if (musicPath) args.push('-stream_loop', '-1', '-i', musicPath);
   args.push('-map', '0:v', '-vf', [motionBlurFilter, videoFilter, 'scale=in_range=pc:out_range=tv:out_color_matrix=bt709', tag].filter(Boolean).join(','), ...H264_ENCODE_ARGS, ...BT709_CONTAINER_ARGS);
   if (exactAudio) args.push('-map', '1:a', ...AAC_ENCODE_ARGS);
-  else if (musicPath) args.push('-map', '1:a', '-af', `atrim=duration=${durationSec},asetpts=PTS-STARTPTS,afade=t=out:st=${durationSec - 0.5}:d=0.5`, ...AAC_ENCODE_ARGS);
+  else if (musicPath) args.push('-map', '1:a', '-af', `${bedTrim}${mastering ? `,${mastering.filter}` : ''},afade=t=out:st=${durationSec - 0.5}:d=0.5`, ...AAC_ENCODE_ARGS);
   args.push('-frames:v', String(numFrames), '-t', String(durationSec), '-movflags', '+faststart', '-y', outputPath);
   const proc = spawnProcess(ffmpeg, args, safeChildProcessOptions({ stdio: ['pipe', 'ignore', 'pipe'] }));
   let stderr = '';
@@ -111,7 +118,10 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
     const at = offsetSec ? Math.round((offsetSec + t) * 1e6) / 1e6 : t;
     await seekComposition(page, at, Math.round(t * fps));
     page.check();
-    const { data } = await page.send('Page.captureScreenshot', SCREENSHOT);
+    const captureStarted = performance.now();
+    const { data } = await page.send('Page.captureScreenshot', SCREENSHOT).catch(error => {
+      throw new Error(`Composition capture failed at frame ${Math.round(t * fps)} (song ${at}s) after ${Math.round(performance.now() - captureStarted)}ms: ${error.message}`);
+    });
     page.check();
     return Buffer.from(data, 'base64');
   };
@@ -151,7 +161,8 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
     proc.stdin.end();
     await finished;
     page.check();
-    return shutter ? { sampleHistogram: histogram } : {};
+    const loudness = mastering ? await reportMasteredLoudness({ bin: ffmpeg, outputPath, before: mastering.before, signal, run: runFfmpeg }) : null;
+    return { ...(shutter ? { sampleHistogram: histogram } : {}), ...(loudness ? { loudness } : {}) };
   } catch (error) {
     if (error.code === 'EPIPE' || inputError?.code === 'EPIPE') {
       // A closed pipe often arrives before the process's close event. Preserve

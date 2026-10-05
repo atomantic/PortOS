@@ -54,6 +54,7 @@ export * from './creativeBriefLimits.js';
 export * as digitalTwinValidation from './digitalTwinValidation.js';
 export * as eidoverseValidation from './eidoverseValidation.js';
 export * as fableLoomValidation from './fableLoomValidation.js';
+export * as filmStyleGrammarValidation from './filmStyleGrammarValidation.js';
 export * as genomeValidation from './genomeValidation.js';
 export * as identityValidation from './identityValidation.js';
 export * as meatspaceValidation from './meatspaceValidation.js';
@@ -196,6 +197,7 @@ export * from './contextBudget.js';
 export * from './cursor.js';
 export * from './grok.js';
 export * from './falVideoModels.js';
+export * from './filmStyleGrammars.js';
 export * from './grokVideoClip.js';
 export * from './musicVideoShotTiming.js';
 export * from './reactorStartingFrame.js';
@@ -605,6 +607,7 @@ export * from './textUtils.js';
 export * from './vaultCrypto.js';
 
 // === Model & config ===
+export * from './backupAssetOwners.js';
 export * from './backupConfig.js';
 export * from './backupSnapshotBoundary.js';
 export * from './systemIdle.js';
@@ -825,6 +828,11 @@ export * from './scheduleExecutionFieldsValidation.js';
 export * from './codeAnimationSound.js';
 
 export * from './musicVideoMediaPolicy.js';
+export * from './musicVideoSummary.js';
 export * from './sandboxDelegation.js';
 
 export * from './forgeMaintenanceTasks.js';
+
+export * from './maintenanceAdmission.js';
+export * as peerAdminValidation from './peerAdminValidation.js';
+export * from './speechMatch.js';

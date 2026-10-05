@@ -1,3 +1,4 @@
+import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
  * CoS Runner Client
  *
@@ -214,7 +215,7 @@ const postSpawn = (path, body) =>
   fetchWithTimeout(`${COS_RUNNER_URL}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...body, maintenanceParentId: maintenance.currentId() }),
   }, 60000).then(
     response => ({ response }),
     err => ({ transportError: ambiguousSpawn(err) })

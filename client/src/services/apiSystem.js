@@ -615,3 +615,16 @@ export const runCosStorage = (input, options) => request('/data/cos/storage/run'
 export const cancelCosStorage = (options) => request('/data/cos/storage/cancel', { ...options, method: 'POST' });
 export const saveCosStoragePolicy = (policy, options) => request('/data/cos/storage/policy', { ...options, method: 'PUT', body: JSON.stringify(policy) });
 export const pinCosRecording = (input, options) => request('/data/cos/storage/pin', { ...options, method: 'PUT', body: JSON.stringify(input) });
+
+export const getMaintenanceStatus = (options) => request('/system/maintenance', options);
+export const beginMaintenance = (reason, options = {}) => request('/system/maintenance', {
+  method: 'POST', body: JSON.stringify({ reason }), ...options,
+});
+export const resumeMaintenance = (hold, options = {}) => request('/system/maintenance/resume', {
+  method: 'POST', body: JSON.stringify({ id: hold.id, revision: hold.revision }), ...options,
+});
+
+// Planning-only peer administration; never dispatches host operations.
+export const getPeerAdminSetup = (peerId, options) => request(`/peer-administration/peers/${encodeURIComponent(peerId)}`, options);
+export const savePeerAdminGrant = (data, options) => request('/peer-administration/grants', { ...options, method: 'POST', body: JSON.stringify(data) });
+export const previewPeerAdministration = (data, options) => request('/peer-administration/preview', { ...options, method: 'POST', body: JSON.stringify(data) });

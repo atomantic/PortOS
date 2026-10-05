@@ -6,7 +6,7 @@ import FilePickerButton from '../ui/FilePickerButton';
 import ReviewerPicker from './ReviewerPicker';
 import InstancePicker from './InstancePicker';
 import { ATTACHMENT_ACCEPT } from '../../utils/fileUpload';
-import { formatBytes } from '../../utils/formatters';
+import { formatBytes, shortClaudeModelName } from '../../utils/formatters';
 import {
   effortAwareModelOptions,
   generationControlsFor,
@@ -283,7 +283,7 @@ function TaskTypeFields({ form, compact, queueFirst }) {
                       className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs disabled:opacity-50"
                     >
                       {models.length !== 1 && <option value="">Default Model</option>}
-                      {models.map((model) => <option key={model} value={model}>{model.replace('claude-', '').replace(/-\d+$/, '')}</option>)}
+                      {models.map((model) => <option key={model} value={model}>{shortClaudeModelName(model)}</option>)}
                     </select>
                     <select
                       aria-label={`${label} effort`}

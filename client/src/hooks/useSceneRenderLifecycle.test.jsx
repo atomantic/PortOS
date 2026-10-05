@@ -19,6 +19,13 @@ vi.mock('../components/ui/Toast', () => ({ default: { error: (...a) => toastErro
 
 const useSceneRenderLifecycle = (await import('./useSceneRenderLifecycle.js')).default;
 
+// An owned failure re-polls the job (800ms timer + fetch) and THEN queues its
+// toast on the batch window, so drain timers, microtasks, then the window.
+const settleFailureToasts = async () => {
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+};
+
 const fire = (event, payload) => act(() => { handlers.get(event)?.(payload); });
 
 const IMAGE_CFG = {
@@ -85,13 +92,53 @@ describe('useSceneRenderLifecycle', () => {
     expect(toastError).not.toHaveBeenCalled();
   });
 
-  it('trackJob reconciles a FAILED orphan and toasts the failure', () => {
-    const { result } = renderLane();
+  it('trackJob reconciles a FAILED orphan and toasts the failure, naming the scene and the reason', () => {
+    vi.useFakeTimers();
+    const { result } = renderLane({ sceneLabel: (id) => ({ s1: 'Verse 1' })[id] });
     act(() => result.current.startScene('s1'));
-    fire('image-gen:failed', { generationId: 'job-1' });
+    fire('image-gen:failed', { generationId: 'job-1', error: 'CUDA out of memory' });
     act(() => result.current.trackJob('job-1', 's1'));
     expect(result.current.genScenes.s1).toBeUndefined();
-    expect(toastError).toHaveBeenCalledWith('Frame render failed');
+    act(() => { vi.runAllTimers(); });
+    expect(toastError).toHaveBeenCalledTimes(1);
+    expect(toastError).toHaveBeenCalledWith('Frame render failed: Verse 1 — CUDA out of memory');
+    vi.useRealTimers();
+  });
+
+  it('collapses a batch of failures into one summary toast instead of one identical toast per scene', async () => {
+    vi.useFakeTimers();
+    const labels = { s1: 'Intro', s2: 'Verse 1', s3: 'Chorus', s4: 'Bridge' };
+    const { result } = renderLane({ sceneLabel: (id) => labels[id] });
+    act(() => {
+      ['s1', 's2', 's3', 's4'].forEach((id, i) => { result.current.startScene(id); result.current.trackJob(`job-${i}`, id); });
+    });
+    // Owned failures re-poll the job before toasting (running-cancel disambiguation).
+    getMediaJob.mockResolvedValue({ status: 'failed' });
+    ['job-0', 'job-1', 'job-2', 'job-3'].forEach((id) => fire('image-gen:failed', { generationId: id, error: 'provider quota exceeded' }));
+    await settleFailureToasts();
+    expect(toastError).toHaveBeenCalledTimes(1);
+    expect(toastError).toHaveBeenCalledWith('Frame render failed for 4 scenes (Intro, Verse 1, Chorus, +1 more) — provider quota exceeded');
+    vi.useRealTimers();
+  });
+
+  it('does not pop a late failure toast after the board unmounts', () => {
+    vi.useFakeTimers();
+    const { result, unmount } = renderLane();
+    act(() => result.current.startScene('s1'));
+    fire('image-gen:failed', { generationId: 'job-1', error: 'boom' });
+    act(() => result.current.trackJob('job-1', 's1'));
+    unmount();
+    act(() => { vi.runAllTimers(); });
+    expect(toastError).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('restoreJobs re-lights spinners after a reload and the job terminal event clears the right scene', () => {
+    const { result } = renderLane();
+    act(() => result.current.restoreJobs([{ jobId: 'job-1', sceneId: 's1' }, { jobId: 'job-2', sceneId: 's2' }]));
+    expect(result.current.genScenes).toEqual({ s1: true, s2: true });
+    fire('image-gen:completed', { generationId: 'job-2' });
+    expect(result.current.genScenes).toEqual({ s1: true });
   });
 
   it('queued-cancel (canceled with no prior failed) clears the spinner silently', () => {
@@ -111,7 +158,7 @@ describe('useSceneRenderLifecycle', () => {
     // Spinner clears at once; toast is deferred pending the re-poll.
     expect(result.current.genScenes.s1).toBeUndefined();
     expect(toastError).not.toHaveBeenCalled();
-    await act(async () => { await vi.runAllTimersAsync(); });
+    await settleFailureToasts();
     expect(getMediaJob).toHaveBeenCalledWith('job-1');
     expect(toastError).toHaveBeenCalledWith('Frame render failed');
     vi.useRealTimers();
@@ -150,5 +197,40 @@ describe('useSceneRenderLifecycle', () => {
     // image spinner is untouched even on a same job-id collision.
     fire('video-gen:completed', { generationId: 'job-1' });
     expect(result.current.genScenes.s1).toBe(true);
+  });
+});
+
+describe('useSceneRenderLifecycle progress and settled outcomes (#10153)', () => {
+  beforeEach(() => { handlers.clear(); getMediaJob.mockReset(); toastError.mockReset(); });
+  afterEach(cleanup);
+
+  const PROGRESS_CFG = { startedEvent: 'image-gen:started', progressEvent: 'image-gen:progress' };
+
+  it('a scene is queued until the job reports running, then carries its progress fraction', () => {
+    const { result } = renderLane(PROGRESS_CFG);
+    act(() => { result.current.startScene('s1'); result.current.trackJob('job-1', 's1'); });
+    expect(result.current.sceneProgress.s1).toBeUndefined();
+    fire('image-gen:started', { generationId: 'job-1', totalSteps: 20 });
+    expect(result.current.sceneProgress.s1).toEqual({ progress: null });
+    fire('image-gen:progress', { generationId: 'job-1', progress: 0.4 });
+    expect(result.current.sceneProgress.s1).toEqual({ progress: 0.4 });
+    fire('image-gen:progress', { generationId: 'someone-elses', progress: 0.9 });
+    expect(result.current.sceneProgress).toEqual({ s1: { progress: 0.4 } });
+    fire('image-gen:completed', { generationId: 'job-1' });
+    expect(result.current.sceneProgress.s1).toBeUndefined();
+  });
+
+  it('reports each tracked job once with its terminal outcome, including an orphan that raced ahead', () => {
+    const onSettled = vi.fn();
+    const { result } = renderLane({ onSettled });
+    act(() => { result.current.startScene('s1'); result.current.startScene('s2'); result.current.startScene('s3'); });
+    act(() => { result.current.trackJob('a', 's1'); result.current.trackJob('b', 's2'); });
+    fire('image-gen:completed', { generationId: 'a' });
+    fire('image-gen:failed', { generationId: 'b' });
+    fire('image-gen:canceled', { generationId: 'c' }); // terminal beats trackJob
+    act(() => result.current.trackJob('c', 's3'));
+    expect(onSettled.mock.calls.map(([e]) => [e.jobId, e.sceneId, e.outcome])).toEqual([
+      ['a', 's1', 'completed'], ['b', 's2', 'failed'], ['c', 's3', 'canceled'],
+    ]);
   });
 });

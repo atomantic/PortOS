@@ -14,7 +14,7 @@ import { join } from 'path';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { PATHS, rmGuarded } from '../lib/fileUtils.js';
-import { getHfCacheRoot } from '../lib/hfCache.js';
+import { getHfCacheRoot, listLinkedSharedBlobs, releaseSharedBlobs } from '../lib/hfCache.js';
 import {
   getImageModels,
   setMediaModelEnabled,
@@ -28,6 +28,7 @@ import { emptyToUndefined, validateRequest } from '../lib/validation.js';
 import { ADDABLE_IMAGE_RUNNERS, ADDABLE_VIDEO_RUNTIMES, searchHuggingfaceModels } from '../lib/huggingfaceModel.js';
 import { addModelFromHuggingface } from '../services/mediaModelInstall.js';
 import { getMediaModelStorage } from '../services/mediaModelStorage.js';
+import { isModelStoreBackend, isSafeModelStoreKey, removeModelStoreItem } from '../services/modelStoreStorage.js';
 import { recordModelUninstall } from '../services/modelManifest.js';
 import { detectSystemCapabilities, withHardwareCompatibility } from '../lib/systemCapabilities.js';
 
@@ -205,9 +206,14 @@ router.delete('/hf/:dirName', asyncHandler(async (req, res) => {
   const fullPath = join(HF_HUB_DIR(), dirName);
   if (!existsSync(fullPath)) throw new ServerError('Model not found', { status: 404, code: 'NOT_FOUND' });
   console.log(`🗑️ Deleting HF model cache: ${dirName}`);
+  // The model dir may hold only links into the shared blob store, so note the
+  // blobs first and release the ones no other model uses once it is gone.
+  const sharedBlobs = await listLinkedSharedBlobs(HF_HUB_DIR(), dirName);
   await rmGuarded(fullPath, { recursive: true, force: true });
+  const { removed, freedBytes } = await releaseSharedBlobs(HF_HUB_DIR(), sharedBlobs);
+  if (removed) console.log(`🗑️ Released ${removed} shared HF blobs (${freedBytes} bytes) for ${dirName}`);
   await recordModelUninstall({ backend: 'huggingface', key: dirName });
-  res.json({ ok: true });
+  res.json({ ok: true, freedSharedBytes: freedBytes });
 }));
 
 router.delete('/lora/:filename', asyncHandler(async (req, res) => {
@@ -215,14 +221,23 @@ router.delete('/lora/:filename', asyncHandler(async (req, res) => {
   if (!filename.endsWith('.safetensors') || filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
     throw new ServerError('Invalid filename', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  const filePath = join(PATHS.loras, filename);
-  if (!existsSync(filePath)) throw new ServerError('LoRA not found', { status: 404, code: 'NOT_FOUND' });
-  console.log(`🗑️ Deleting LoRA: ${filename}`);
-  await rmGuarded(filePath, { force: true });
-  // This route removes the weight file directly rather than going through
-  // `loras.deleteLora`, so it clears the manifest entry itself.
-  await recordModelUninstall({ backend: 'lora', key: filename });
-  res.json({ ok: true });
+  // The LoRA manager's delete removes the sidecar with the weights, clears the
+  // manifest entry, and holds backup admission across the unlink (#9982).
+  // Imported on use so this route's graph doesn't carry the installers.
+  const { deleteLora } = await import('../services/loras.js');
+  res.json(await deleteLora(filename));
+}));
+
+// DELETE /store/:backend/:key — remove or clear one item of a file-system model
+// store (MTPLX, Hunyuan3D, HF xet cache, Pixie Forge LoRAs). The key must match
+// an item the server just scanned; the path removed comes from that scan, never
+// from the request.
+router.delete('/store/:backend/:key', asyncHandler(async (req, res) => {
+  const { backend, key } = req.params;
+  if (!isModelStoreBackend(backend) || !isSafeModelStoreKey(key)) {
+    throw new ServerError('Invalid model store item', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  res.json(await removeModelStoreItem(backend, key));
 }));
 
 export default router;

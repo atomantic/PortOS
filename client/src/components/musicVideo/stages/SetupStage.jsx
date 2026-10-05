@@ -1,26 +1,107 @@
+import { useState } from 'react';
 import AutonomousRunPanel from '../AutonomousRunPanel.jsx';
 import SongRevisionPanel from '../SongRevisionPanel.jsx';
-import StyleReferencesPanel from '../StyleReferencesPanel.jsx';
+import LookReferencesPanel from '../LookReferencesPanel.jsx';
 import AutoSizeTextarea from '../../ui/AutoSizeTextarea';
 import CreativeSetupPanel from '../CreativeSetupPanel.jsx';
-import TrackPanel from '../TrackPanel.jsx';
+import TrackPanel, { AdvancedTrackControls } from '../TrackPanel.jsx';
+import AudioTimingPanel from '../AudioTimingPanel.jsx';
 import AnalysisPanel from '../AnalysisPanel.jsx';
 import LyricsPanel from '../LyricsPanel.jsx';
 import VisualSpecPanel from '../VisualSpecPanel.jsx';
-import TreatmentPanel from '../TreatmentPanel.jsx';
-import { AudioActions } from '../ProjectActionGroups.jsx';
+import TreatmentPanel, { treatmentSummary } from '../TreatmentPanel.jsx';
+import { AnalyzeAction, MidiAction } from '../ProjectActionGroups.jsx';
+import StageSection from '../StageSection.jsx';
+import ProjectOptionsPanel, { projectOptionsSummary } from '../ProjectOptionsPanel.jsx';
+import { Check } from 'lucide-react';
+import { lyricSetupState, projectHasAudio } from '../../../lib/musicVideoStages.js';
+import { formatCount } from '../../../utils/formatters.js';
+
+const songSummary = (project, trackLabel) => {
+  const lines = (project.lyricCues || []).length;
+  const aligned = lines > 0 && project.lyricCues.every((cue) => cue.words?.length);
+  const lyrics = lyricSetupState(project);
+  const lyricText = lines
+    ? [`${formatCount(lines)} lyric ${lines === 1 ? 'line' : 'lines'}`, aligned ? 'aligned' : null, lyrics.verified ? 'verified' : null].filter(Boolean).join(' · ')
+    : lyrics.instrumental ? 'Instrumental' : 'No lyrics';
+  return [
+    projectHasAudio(project) ? trackLabel || 'Track attached' : 'No track yet',
+    project.audioAnalysis ? 'Analyzed' : 'Not analyzed',
+    lyricText,
+  ].join(' · ');
+};
+
+/** One numbered step of Song & lyrics, with a done state beside its title. */
+function SongStep({ number, title, done, children }) {
+  return (
+    <section aria-label={`Step ${number}: ${title}`} className="min-w-0 space-y-2 rounded-lg border border-port-border p-2">
+      <h3 className="flex items-center gap-2 text-sm font-medium">
+        <span aria-hidden="true" className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs ${done ? 'bg-port-success text-white' : 'bg-port-border text-port-text-muted'}`}>
+          {done ? <Check size={12} /> : number}
+        </span>
+        {number}. {title}
+        <span className={`text-xs font-normal ${done ? 'text-port-success' : 'text-port-text-muted'}`}>{done ? 'Done' : 'To do'}</span>
+      </h3>
+      {children}
+    </section>
+  );
+}
+
+/** Whole-song word alignment; the page's handler is silent, so errors surface here. */
+function AlignWords({ disabled, aligning, status, onAlign }) {
+  const [error, setError] = useState('');
+  const run = () => {
+    setError('');
+    Promise.resolve(onAlign()).catch((err) => setError(err?.message || 'Could not align the words to the vocal. Try again.'));
+  };
+  return (
+    <>
+      <p className="text-xs text-port-text-muted">
+        Align each word to the vocal, then listen back to confirm the timing. Word times can be fine-tuned per line in step 3.
+      </p>
+      <button type="button" onClick={run} disabled={aligning || disabled}
+        className="min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm text-port-accent disabled:opacity-50 sm:min-h-0">
+        {aligning ? 'Aligning…' : 'Align all words'}
+      </button>
+      {status && (
+        <div role="status" className="flex flex-wrap items-center gap-2 text-xs text-port-text-muted">
+          <span>{status.label}{status.percent > 0 ? ` ${status.percent}%` : ''}</span>
+          <button type="button" onClick={status.onCancel}
+            className="min-h-[44px] rounded border border-port-border px-2 text-port-error sm:min-h-0">Cancel</button>
+        </div>
+      )}
+      {error && <p role="alert" className="text-xs text-port-error">{error}</p>}
+    </>
+  );
+}
+
+const directionSummary = (project) => {
+  const refs = (project.visualSpec?.references || []).length + (project.styleReferences || []).length;
+  return [
+    project.concept?.prompt?.trim() ? 'Concept written' : 'No concept yet',
+    project.concept?.style?.trim() ? 'Style set' : 'No style yet',
+    refs ? `${formatCount(refs)} look ${refs === 1 ? 'reference' : 'references'}` : 'No look references',
+  ].join(' · ');
+};
 
 /**
- * Setup: where the song, its analysis and the creative direction come from —
- * creative setup (universe, cast, places), the track and its analysis/MIDI,
- * lyrics, concept & style, the visual spec and the treatment.
+ * Setup, in folded sections so each part reads at a glance: Project options
+ * (workflow, media, render style, image/video services, autopilot tools), Song
+ * & lyrics (the track, its analysis/MIDI and lyrics), Creative direction
+ * (universe, cast, places, mood board, concept & style, visual spec) and the
+ * Treatment brief. A section opens by default when it holds the next thing to do;
+ * an anchor inside a folded section unfolds it (see the page's hash effect).
  */
 export default function SetupStage({ board }) {
   const {
     project, tracks, trackName, audioFilename, locked, youtube, separation, midi, midiBound, renderBound, tempo, busy,
-    conceptDraft, styleDraft, importingLyrics, aligningLyrics, treatment,
+    conceptDraft, styleDraft, importingLyrics, aligningLyrics, alignStatus, treatment,
     autopilotRun, autonomous, runStage, onSelectStage,
   } = board;
+  const songOpen = !projectHasAudio(project) || !project.audioAnalysis || !lyricSetupState(project).ok;
+  const cues = project.lyricCues || [];
+  const aligned = cues.length > 0 && cues.every((cue) => cue.words?.length);
+  const trackLabel = project.trackId ? trackName(project.trackId) : audioFilename;
   return (
     <>
       {autopilotRun && (
@@ -34,50 +115,92 @@ export default function SetupStage({ board }) {
           framed
         />
       )}
-      <SongRevisionPanel key={`song-${project.id}`} project={project} tracks={tracks} onUpdated={board.replaceProject} onFork={board.onForkSong} disabled={locked || renderBound || midiBound} />
-      <CreativeSetupPanel
-        key={`creative-${project.id}`}
-        project={project}
-        onPendingChange={board.setCreativeSetupPending}
-        onSave={board.saveCreativeSetup}
-      />
-      <StyleReferencesPanel key={`moodboard-${project.id}`} project={project}
-        onSave={board.saveStyleReferences} onPendingChange={board.setStyleReferencesPending} />
-      <fieldset disabled={locked} className="min-w-0">
-        <div id="mv-track" className="space-y-2 rounded-lg border border-port-border bg-port-card p-3">
-          <TrackPanel
-            project={project}
-            tracks={tracks}
-            trackName={trackName}
-            audioFilename={audioFilename}
-            youtube={youtube}
-            renderBound={renderBound}
-            midiBound={midiBound}
-            onChangeTrack={board.onChangeTrack}
-            onProjectUpdated={board.replaceProject}
-            separation={separation}
-          />
-          <AudioActions project={project} midi={midi} midiBound={midiBound} busy={busy} onAnalyze={board.onAnalyze} />
-          <AnalysisPanel
-            audioAnalysis={project.audioAnalysis}
-            scenes={project.scenes || []}
-            tempo={tempo}
-            onReanalyze={board.onAnalyze}
-            analyzing={busy.analyzing}
-          />
-          <LyricsPanel
-            project={project}
-            onEditLocal={board.editProjectLocal}
-            onSave={board.saveProjectFields}
-            onImport={board.onImportLyrics}
-            onImportTrack={board.onImportTrackLyrics}
-            importing={importingLyrics}
-            onAlign={board.onAlignLyrics}
-            aligning={aligningLyrics}
-          />
-
+      <StageSection
+        id="mv-setup-options"
+        title="Project options"
+        summary={projectOptionsSummary(project)}
+        defaultOpen
+      >
+        <ProjectOptionsPanel
+          project={project}
+          videoSettings={board.videoSettings}
+          generatingVideos={Object.keys(board.sceneMedia?.genVideoScenes || {}).length > 0}
+          onMediaMode={board.saveMediaMode}
+          onRenderStyle={board.onRenderStyle}
+          onSaveAutomation={board.saveAutomation}
+          onSavePolicy={(productionPolicy) => board.saveCreativeSetup({ productionPolicy })}
+        />
+      </StageSection>
+      <StageSection id="mv-setup-song" title="Song & lyrics" summary={songSummary(project, trackLabel)} defaultOpen={songOpen}>
+        <fieldset disabled={locked} className="min-w-0">
+          <div id="mv-track" className="space-y-2">
+            <SongStep number={1} title="Track" done={projectHasAudio(project)}>
+              <TrackPanel
+                project={project}
+                tracks={tracks}
+                trackName={trackName}
+                audioFilename={audioFilename}
+                youtube={youtube}
+                renderBound={renderBound}
+                midiBound={midiBound}
+                onChangeTrack={board.onChangeTrack}
+              />
+            </SongStep>
+            <SongStep number={2} title="Analyze" done={Boolean(project.audioAnalysis)}>
+              <AnalyzeAction project={project} busy={busy} onAnalyze={board.onAnalyze} />
+              <AnalysisPanel
+                audioAnalysis={project.audioAnalysis}
+                scenes={project.scenes || []}
+                tempo={tempo}
+                onReanalyze={board.onAnalyze}
+                analyzing={busy.analyzing}
+              />
+            </SongStep>
+            <SongStep number={3} title="Lyrics" done={cues.length > 0}>
+              <LyricsPanel
+                inline
+                project={project}
+                onEditLocal={board.editProjectLocal}
+                onSave={board.saveProjectFields}
+                onImport={board.onImportLyrics}
+                onImportTrack={board.onImportTrackLyrics}
+                importing={importingLyrics}
+                onAlign={board.onAlignLyrics}
+                aligning={aligningLyrics}
+              />
+            </SongStep>
+            <SongStep number={4} title="Align & verify" done={aligned}>
+              <AlignWords
+                disabled={cues.length === 0 || !projectHasAudio(project)}
+                aligning={aligningLyrics}
+                status={alignStatus}
+                onAlign={board.onAlignLyrics}
+              />
+            </SongStep>
+          </div>
+        </fieldset>
+        <StageSection id="mv-setup-advanced-audio" title="Advanced audio" summary="Fork & revise song, vocal stem, sound bed, MIDI, timing revision">
+          <SongRevisionPanel key={`song-${project.id}`} project={project} tracks={tracks} onUpdated={board.replaceProject} onFork={board.onForkSong} disabled={locked || renderBound || midiBound} />
+          <fieldset disabled={locked} className="min-w-0 space-y-2">
+            <AdvancedTrackControls project={project} tracks={tracks} renderBound={renderBound} onProjectUpdated={board.replaceProject} separation={separation} />
+            <MidiAction project={project} midi={midi} midiBound={midiBound} />
+          </fieldset>
+          <AudioTimingPanel key={`timing-${project.id}`} project={project} tracks={tracks} onApplied={board.replaceProject} disabled={locked || renderBound} />
+        </StageSection>
+      </StageSection>
+      <StageSection id="mv-setup-direction" title="Creative direction" summary={directionSummary(project)}>
+        <CreativeSetupPanel
+          key={`creative-${project.id}`}
+          project={project}
+          onPendingChange={board.setCreativeSetupPending}
+          onSave={board.saveCreativeSetup}
+        />
+        <LookReferencesPanel key={`look-${project.id}`} project={project}
+          onSave={board.saveStyleReferences} onSaveSpec={board.saveVisualSpec} onAddReference={board.onAddReference}
+          onPendingChange={board.setStyleReferencesPending} />
+        <fieldset disabled={locked} className="min-w-0 space-y-2">
           {/* Concept & style — global direction for the video */}
-          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <div>
               <label htmlFor="mv-concept" className="mb-1 block text-xs text-port-text-muted">Concept</label>
               <AutoSizeTextarea
@@ -109,11 +232,15 @@ export default function SetupStage({ board }) {
             key={project.id}
             project={project}
             onSave={board.saveVisualSpec}
-            onAddReference={board.onAddReference}
           />
-          <TreatmentPanel key={`treatment-${project.id}`} project={project} treatment={treatment} />
-        </div>
-      </fieldset>
+        </fieldset>
+      </StageSection>
+      <StageSection id="mv-setup-treatment" title="Treatment brief" summary={`${treatmentSummary(project)} · feeds the shot planner`}>
+        <fieldset disabled={locked} className="min-w-0">
+          <TreatmentPanel key={`treatment-${project.id}`} project={project} treatment={treatment} part="brief"
+            storyboardApproved={!!board.productionReadiness?.storyboard?.approved} />
+        </fieldset>
+      </StageSection>
     </>
   );
 }

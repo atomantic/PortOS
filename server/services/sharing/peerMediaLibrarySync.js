@@ -13,6 +13,7 @@ import { join } from 'path';
 import { readdir, stat } from 'fs/promises';
 import { createHash } from 'crypto';
 import { PATHS } from '../../lib/fileUtils.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
@@ -226,7 +227,9 @@ function reconcileMediaLibraryIndex() {
     // from disk; audio/music aren't indexed (served from disk directly).
     const mod = await import('../mediaAssetIndex/index.js').catch(() => null);
     if (!mod?.reconcileMediaAssets) return;
-    await mod.reconcileMediaAssets().catch((err) => {
+    // The pull wrote bytes outside any lease; indexing them takes one, so a cut
+    // that copied the media directories first never dumps a row for a file it missed.
+    await withBackupAssetPublication(() => mod.reconcileMediaAssets()).catch((err) => {
       console.log(`⚠️ peerSync: media_assets reconcile after library sweep failed: ${err.message}`);
     });
   });

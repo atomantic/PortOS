@@ -93,10 +93,10 @@ export default function DevArtifactDrawer({
           <div className="flex flex-wrap gap-2">
             {isStageSheet ? (
               <>
-                <button type="button" disabled={busy || stageWorking || openNotes.length === 0} onClick={() => castAndSets.regenerate()}
-                  title={openNotes.length ? 'Re-render only what your open notes touch, as a new version' : 'Add a note first'}
+                <button type="button" disabled={busy || stageWorking} onClick={() => castAndSets.regenerate()}
+                  title={openNotes.length ? 'Re-render only what your open notes touch, as a new version' : 'Re-render every image as a new version — or add a note to change just one'}
                   className={`${buttonClass} border border-port-border`}>
-                  <RotateCcw size={14} aria-hidden="true" /> Regenerate with notes
+                  <RotateCcw size={14} aria-hidden="true" /> {openNotes.length ? 'Regenerate with notes' : 'Regenerate'}
                 </button>
                 {stage.status === 'review' && (
                   <button type="button" disabled={busy} onClick={() => castAndSets.approveAndContinue()} className={`${buttonClass} bg-port-accent text-white`}>

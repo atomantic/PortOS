@@ -1,3 +1,4 @@
+import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
  * One-shot TUI prompt runner.
  *
@@ -154,7 +155,16 @@ const PTY_ROWS = 50;
  *   it reports itself, not a provider incident for the autofixer to escalate.
  * @returns {Promise<void>}
  */
-export async function executeTuiRun({ runId, provider, prompt, screenshots = [], workspacePath, onData, onComplete, onReady, timeout, idleMs, label, guard = false, reportFailure = true, beforeExecute }) {
+export async function executeTuiRun(options) {
+  const permit = maintenance.admit('tui-run', options.runId, { continuation: true });
+  const lifecycle = { spawned: false, exited: false, cleaned: false,
+    settle() { if (this.cleaned && (!this.spawned || this.exited)) return permit.finish(); } };
+  try { return await permit.run(() => executeAdmittedTuiRun(options, lifecycle)); }
+  catch (err) { if (lifecycle.spawned) permit.markUnsettled(); throw err; }
+  finally { lifecycle.cleaned = true; await lifecycle.settle(); }
+}
+
+async function executeAdmittedTuiRun({ runId, provider, prompt, screenshots = [], workspacePath, onData, onComplete, onReady, timeout, idleMs, label, guard = false, reportFailure = true, beforeExecute }, maintenanceLifecycle) {
   if (!provider || typeof provider !== 'object') {
     throw new Error('executeTuiRun: provider is required');
   }
@@ -328,9 +338,12 @@ ${prompt}`;
   // one exit event until finish() and the timers below are ready, then replay it
   // through the ordinary exit path. This is a startup/lifecycle guard, not an
   // output-idle timeout: a live but quiet model remains untouched.
+  maintenanceLifecycle.spawned = true;
   let dispatchPtyExit = null;
   let pendingPtyExit = null;
   ptyProcess.onExit((event) => {
+    maintenanceLifecycle.exited = true;
+    maintenanceLifecycle.settle();
     if (dispatchPtyExit) {
       dispatchPtyExit(event);
       return;
@@ -544,6 +557,7 @@ ${prompt}`;
             ...(canceled ? { canceled: true } : {}),
           },
         }).catch((err) => {
+          maintenance.markCurrentUnsettled();
           console.error(`❌ TUI run ${runId} finalize failed: ${err.message}`);
           return {
             exitCode, success, error: error || err.message,
@@ -554,6 +568,7 @@ ${prompt}`;
         onCompleteInvoked = true;
         onComplete?.({ ...metadata, text: responseText, usedResponseFile, outputTruncated: outputBufferTruncated });
       } catch (err) {
+        maintenance.markCurrentUnsettled();
         console.error(`❌ TUI run ${runId} finish() failed: ${err?.message || err}`);
         // Ensure the original PTY is torn down even when a cleanup step BEFORE
         // the kill above threw (e.g. unregisterExternalSession). Otherwise the

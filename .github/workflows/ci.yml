@@ -798,6 +798,9 @@ jobs:
           CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
           PORTOS_TEST_QUIET: 1
           PGPASSWORD: portos
+          # Windows runners lose Vitest workers at startup with 0xC0000142
+          # (STATUS_DLL_INIT_FAILED) under per-file process churn (#10114).
+          PORTOS_CI_MAX_WORKERS: 2
         run: node scripts/run-ci-tests.js server
 
       - name: Report the failure, then cancel sibling CI jobs

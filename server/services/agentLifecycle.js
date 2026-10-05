@@ -1,3 +1,4 @@
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 /**
  * Agent Lifecycle
@@ -103,11 +104,19 @@ export async function spawnAgentForTask(task) {
  * early `return null` and any throw is covered by the wrapper's release.
  */
 async function runAgentSpawn(task) {
+  const permit = maintenance.admit('agent', task.id);
+  return permit.run(() => runAdmittedAgentSpawn(task, permit));
+}
+
+async function runAdmittedAgentSpawn(task, permit) {
   const context = createAgentSpawnContext(task);
   try {
     const prepared = await prepareAgentSpawn(task, context);
     if (!prepared) return null;
-    return await dispatchAgentRun(prepared, { spawnViaRunner });
+    permit.identify(context.agentId);
+    const result = await dispatchAgentRun(prepared, { spawnViaRunner });
+    if (!result) permit.finish();
+    return result;
   } catch (err) {
     if (!context.setupCatchArmed || context.handedOff) throw err;
     const privateSecurity = isPrivateSecurityTask(task);
@@ -124,6 +133,8 @@ async function runAgentSpawn(task) {
       cosEvents.emit('job:spawn-failed', { jobId: task.metadata.jobId });
     }
     return null;
+  } finally {
+    if (!context.handedOff) permit.finish();
   }
 }
 
@@ -477,6 +488,7 @@ async function completeUntrackedAgentFromCosState(agentId, exitCode, success, du
       await handleOrphanedTask(cosAgent.taskId, agentId, getTaskById, { agentMetadata: cosAgent.metadata, agentStartedAt: cosAgent.startedAt });
     }
   }
+  await maintenance.finishResource('agent', agentId);
 }
 
 /**
@@ -487,12 +499,20 @@ async function completeUntrackedAgentFromCosState(agentId, exitCode, success, du
  * finalization runs against a live agent.
  */
 export async function handleAgentCompletion(agentId, exitCode, success, duration) {
+  return maintenance.withResource('agent', agentId, async () => {
+    try { return await handleAdmittedAgentCompletion(agentId, exitCode, success, duration); }
+    catch (err) { maintenance.markResourceUnsettled('agent', agentId); throw err; }
+  });
+}
+
+async function handleAdmittedAgentCompletion(agentId, exitCode, success, duration) {
   // Paused agents are finalized by markAgentPaused, not here — skip so a stray
   // completion event can't clean the worktree / complete the task out from
   // under a later resume. Mirrors the CLI/TUI close-handler pause guards.
   if (pausedAgents.has(agentId)) {
     consumePausedAgentExit(agentId);
     runnerAgents.delete(agentId);
+    await maintenance.finishResource('agent', agentId);
     return;
   }
   const agent = runnerAgents.get(agentId);
@@ -681,5 +701,6 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     // cleanup completed — without this the runner harness would never see
     // the failure and couldn't requeue or alert.
     if (finalizeError) throw finalizeError;
+    maintenance.finishResource('agent', agentId);
   });
 }

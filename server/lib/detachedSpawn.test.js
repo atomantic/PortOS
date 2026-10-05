@@ -346,30 +346,164 @@ describe('spawnDetached', () => {
   // which denies a console host any console, so the job exited 0 in ~100ms
   // having produced no output and run no part of the script. Asserting real
   // streamed output plus the job's own exit code is what catches that.
+  const runWithLoaderInitRetry = async (runFn) => {
+    let result = await runFn();
+    if (__detachedSpawnTesting.isLoaderInitFailure({
+      code: result.code,
+      outBytes: result.outBytes,
+      errBytes: result.errBytes,
+      isWindows: !IS_POSIX,
+    })) {
+      process.stdout.write(`🪟 Windows detached job loader failure (${result.evidence}); retrying spawn once under runner load\n`);
+      result = await runFn();
+    }
+    return result;
+  };
+
+  // This shared quoted-argv/nonzero-exit contract runs locally on POSIX too;
+  // the actual PowerShell launcher still needs a real Windows CI host.
+  // Regression for #6169: the plain
+  // `spawn(..., { detached: true })` this replaced meant DETACHED_PROCESS,
+  // which denies a console host any console, so the job exited 0 in ~100ms
+  // having produced no output and run no part of the script. Asserting real
+  // streamed output plus the job's own exit code is what catches that.
   it('runs the job and streams its output through the control dir', async () => {
-    const controlDir = await tmpControlDir();
-    const handle = await spawnDetached(
-      process.execPath,
-      // The spaced/quoted argv entry pins the Windows command-line quoting the
-      // supervisor needs: .NET Framework's ProcessStartInfo takes one flat
-      // argument STRING, so a mis-quoted path would silently split.
-      ['-e', 'process.stdout.write(process.argv[1] + "\\n"); process.exit(3);', 'a b "c"'],
-      { controlDir }
-    );
-    const getOut = collect(handle.stdout);
-    const getErr = collect(handle.stderr);
-    expect(handle.pid).toBeGreaterThan(0);
-    const { code, signal } = await onClose(handle);
-    // A Windows loader failure can write a PID and exit sentinel without ever
-    // executing this fixture. Preserve the exact job-exit assertion, but include
-    // the bounded bootstrap timeline and stream lengths so CI distinguishes
-    // that failure from quoting/output regressions. Never print raw control files
-    // or stderr: either can contain private paths from the host runtime.
-    const bootstrap = IS_POSIX ? 'posix' : await __detachedSpawnTesting.readBootstrapDiagnostic(controlDir, 'supervisor-bootstrap.log');
-    const evidence = `detached job code=${code} signal=${signal}; stdout-bytes=${Buffer.byteLength(getOut())}; stderr-bytes=${Buffer.byteLength(getErr())}; supervisor=${bootstrap}`;
-    expect(code, evidence).toBe(3);
-    expect(signal).toBeNull();
-    expect(getOut()).toBe('a b "c"\n');
+    const result = await runWithLoaderInitRetry(async () => {
+      const controlDir = await tmpControlDir();
+      const handle = await spawnDetached(
+        process.execPath,
+        // The spaced/quoted argv entry pins the Windows command-line quoting the
+        // supervisor needs: .NET Framework's ProcessStartInfo takes one flat
+        // argument STRING, so a mis-quoted path would silently split.
+        ['-e', 'process.stdout.write(process.argv[1] + "\\n"); process.exit(3);', 'a b "c"'],
+        { controlDir, pollMs: 25, pidTimeoutMs: 30000 }
+      );
+      const getOut = collect(handle.stdout);
+      const getErr = collect(handle.stderr);
+      expect(handle.pid).toBeGreaterThan(0);
+      const { code, signal } = await onClose(handle);
+      // A Windows loader failure can write a PID and exit sentinel without ever
+      // executing this fixture. Preserve the exact job-exit assertion, but include
+      // the bounded bootstrap timeline and stream lengths so CI distinguishes
+      // that failure from quoting/output regressions. Never print raw control files
+      // or stderr: either can contain private paths from the host runtime.
+      const bootstrap = IS_POSIX ? 'posix' : await __detachedSpawnTesting.readBootstrapDiagnostic(controlDir, 'supervisor-bootstrap.log');
+      const out = getOut();
+      const err = getErr();
+      const outBytes = Buffer.byteLength(out);
+      const errBytes = Buffer.byteLength(err);
+      const evidence = `detached job code=${code} signal=${signal}; stdout-bytes=${outBytes}; stderr-bytes=${errBytes}; supervisor=${bootstrap}`;
+      return { code, signal, out, err, outBytes, errBytes, evidence };
+    });
+
+    expect(result.code, result.evidence).toBe(3);
+    expect(result.signal).toBeNull();
+    expect(result.out).toBe('a b "c"\n');
+  }, 45_000);
+
+  describe('isLoaderInitFailure and runner retry contract', () => {
+    it('identifies 0xC0000142 and 0xC0000005 as loader failures when no output was produced on Windows', () => {
+      expect(__detachedSpawnTesting.isLoaderInitFailure({
+        code: 3221225794,
+        outBytes: 0,
+        errBytes: 0,
+        isWindows: true,
+      })).toBe(true);
+      expect(__detachedSpawnTesting.isLoaderInitFailure({
+        code: 3221225477,
+        outBytes: 0,
+        errBytes: 0,
+        isWindows: true,
+      })).toBe(true);
+    });
+
+    it('refuses to treat a crash after stdout or stderr as a loader-init failure', () => {
+      expect(__detachedSpawnTesting.isLoaderInitFailure({
+        code: 3221225794,
+        outBytes: 10,
+        errBytes: 0,
+        isWindows: true,
+      })).toBe(false);
+      expect(__detachedSpawnTesting.isLoaderInitFailure({
+        code: 3221225477,
+        outBytes: 0,
+        errBytes: 5,
+        isWindows: true,
+      })).toBe(false);
+    });
+
+    it('refuses non-loader exit codes and POSIX runs', () => {
+      for (const code of [0, 1, 2, 3, 127]) {
+        expect(__detachedSpawnTesting.isLoaderInitFailure({
+          code,
+          outBytes: 0,
+          errBytes: 0,
+          isWindows: true,
+        })).toBe(false);
+      }
+      expect(__detachedSpawnTesting.isLoaderInitFailure({
+        code: 3221225794,
+        outBytes: 0,
+        errBytes: 0,
+        isWindows: false,
+      })).toBe(false);
+    });
+
+    it('retries once on pre-output loader failure and preserves exact failure when retry fails or wrong code occurs', async () => {
+      let callCount = 0;
+      const fakeRunJob = async (attempts) => {
+        const run = attempts[callCount++];
+        return run;
+      };
+
+      // Case 1: First attempt hits loader failure, second succeeds with 3 -> succeeds
+      callCount = 0;
+      const retrySucceeds = async () => {
+        const attempts = [
+          { code: 3221225794, outBytes: 0, errBytes: 0, signal: null, out: '', evidence: 'loader-fail-1' },
+          { code: 3, outBytes: 8, errBytes: 0, signal: null, out: 'a b "c"\n', evidence: 'ok' },
+        ];
+        let res = await fakeRunJob(attempts);
+        if (__detachedSpawnTesting.isLoaderInitFailure({ ...res, isWindows: true })) {
+          res = await fakeRunJob(attempts);
+        }
+        expect(res.code, res.evidence).toBe(3);
+        expect(res.out).toBe('a b "c"\n');
+      };
+      await retrySucceeds();
+      expect(callCount).toBe(2);
+
+      // Case 2: Wrong exit code (e.g. 4) -> does NOT retry, fails assertion
+      callCount = 0;
+      const wrongExit = async () => {
+        const attempts = [
+          { code: 4, outBytes: 8, errBytes: 0, signal: null, out: 'a b "c"\n', evidence: 'wrong-exit' },
+        ];
+        let res = await fakeRunJob(attempts);
+        if (__detachedSpawnTesting.isLoaderInitFailure({ ...res, isWindows: true })) {
+          res = await fakeRunJob(attempts);
+        }
+        expect(res.code, res.evidence).toBe(3);
+      };
+      await expect(wrongExit()).rejects.toThrow();
+      expect(callCount).toBe(1);
+
+      // Case 3: Loader failure on attempt 1, but attempt 2 also fails -> fails assertion with evidence
+      callCount = 0;
+      const retryFails = async () => {
+        const attempts = [
+          { code: 3221225794, outBytes: 0, errBytes: 0, signal: null, out: '', evidence: 'loader-fail-1' },
+          { code: 3221225794, outBytes: 0, errBytes: 0, signal: null, out: '', evidence: 'loader-fail-2' },
+        ];
+        let res = await fakeRunJob(attempts);
+        if (__detachedSpawnTesting.isLoaderInitFailure({ ...res, isWindows: true })) {
+          res = await fakeRunJob(attempts);
+        }
+        expect(res.code, res.evidence).toBe(3);
+      };
+      await expect(retryFails()).rejects.toThrow(/loader-fail-2/);
+      expect(callCount).toBe(2);
+    });
   });
 
   it.skipIf(IS_POSIX).each([1, 2, 3])('reports a real supervisor bootstrap failure without private paths (launch %i)', async (launch) => {

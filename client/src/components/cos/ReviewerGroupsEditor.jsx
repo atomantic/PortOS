@@ -160,12 +160,19 @@ export default function ReviewerGroupsEditor({ groups, onGroupsChange, reviewerH
             const name = tierName(index);
             const paused = group.reviewers.filter(token => Number(reviewerHealth[token]?.pausedUntil) > now);
             const active = index === activeIndex;
+            const tierFailures = group.reviewers.reduce((sum, token) => sum + (Number(reviewerHealth[token]?.failureCount) || 0), 0);
+            const failureSuffix = tierFailures > 0 ? ` (${tierFailures} failure${tierFailures === 1 ? '' : 's'})` : '';
+            const tierStatus = !group.reviewers.length
+              ? 'Empty draft'
+              : active
+                ? paused.length ? `Selected · paused members${failureSuffix}` : 'Active tier'
+                : paused.length ? `Paused members${failureSuffix}` : `Standby${failureSuffix}`;
             return <DraggableReviewItem key={group.id} id={group.id} data={{ kind: 'tier', groupId: group.id, label: name, empty: !group.reviewers.length }}
               disabled={disabled} handles={handles} className="rounded-lg border border-port-border p-3 bg-port-card">
               {handle => <section aria-label={name} className="min-w-0 space-y-2">
                 <div className="flex flex-wrap items-center gap-2">
                   {handle}<h3 className="font-semibold text-sm text-white">{name}</h3>
-                  <span className="text-xs text-gray-400">{!group.reviewers.length ? 'Empty draft' : active ? paused.length ? 'Selected · paused members' : 'Active tier' : paused.length ? 'Paused members' : 'Standby'}</span>
+                  <span className="text-xs text-gray-400">{tierStatus}</span>
                   <button type="button" disabled={disabled || index === 0} onClick={() => moveTier(index, index - 1)} aria-label={`Move ${name} earlier`} className="min-h-11 sm:min-h-8 px-2 text-xs text-port-accent disabled:opacity-40">Earlier</button>
                   <button type="button" disabled={disabled || index === groups.length - 1} onClick={() => moveTier(index, index + 1)} aria-label={`Move ${name} later`} className="min-h-11 sm:min-h-8 px-2 text-xs text-port-accent disabled:opacity-40">Later</button>
                   <button type="button" disabled={disabled} className="min-h-11 sm:min-h-8 px-2 text-xs text-port-error" aria-label={`Remove ${name}`}
@@ -178,18 +185,29 @@ export default function ReviewerGroupsEditor({ groups, onGroupsChange, reviewerH
                 <ReviewerPicker {...pickerProps} reviewers={group.reviewers} onChange={value => updateTier(group, value)} disabled={disabled} showUsernames={false} showRunFlags={false} showIntro={false}
                   renderReviewer={(token, row) => <DraggableReviewItem key={token} id={memberId(group.id, token)}
                     data={{ kind: 'member', groupId: group.id, token, label: `${token} in ${name}` }} disabled={disabled} handles={handles}>
-                    {memberHandle => <div className="min-w-0 border-t border-port-border/50 py-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        {memberHandle}
-                        <label htmlFor={`${id}-${group.id}-${token}-tier`} className="text-xs text-gray-500">Move to tier</label>
-                        <select id={`${id}-${group.id}-${token}-tier`} aria-label={`Tier for ${token} in ${name}`} value={group.id} disabled={disabled}
-                          onChange={event => moveMember(group.id, token, event.target.value)} className="min-w-0 max-w-full min-h-11 sm:min-h-8 bg-port-bg border border-port-border rounded text-xs text-gray-300">
-                          {groups.map((target, targetIndex) => <option key={target.id} value={target.id}>{tierName(targetIndex)}</option>)}
-                        </select>
-                        <span className="text-xs text-gray-500">{Number(reviewerHealth[token]?.pausedUntil) > now ? `Paused until ${formatDateTime(reviewerHealth[token].pausedUntil)}` : 'Unpaused'}</span>
-                      </div>
-                      {row}
-                    </div>}
+                    {memberHandle => {
+                      const memberHealth = reviewerHealth[token];
+                      const isPaused = Number(memberHealth?.pausedUntil) > now;
+                      const memberFailures = Number(memberHealth?.failureCount) || 0;
+                      const failureLabel = memberFailures > 0 ? ` · ${memberFailures} failure${memberFailures === 1 ? '' : 's'}` : '';
+                      const statusText = isPaused
+                        ? `Paused until ${formatDateTime(memberHealth.pausedUntil)}${failureLabel}`
+                        : `Unpaused${failureLabel}`;
+                      return (
+                        <div className="min-w-0 border-t border-port-border/50 py-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            {memberHandle}
+                            <label htmlFor={`${id}-${group.id}-${token}-tier`} className="text-xs text-gray-500">Move to tier</label>
+                            <select id={`${id}-${group.id}-${token}-tier`} aria-label={`Tier for ${token} in ${name}`} value={group.id} disabled={disabled}
+                              onChange={event => moveMember(group.id, token, event.target.value)} className="min-w-0 max-w-full min-h-11 sm:min-h-8 bg-port-bg border border-port-border rounded text-xs text-gray-300">
+                              {groups.map((target, targetIndex) => <option key={target.id} value={target.id}>{tierName(targetIndex)}</option>)}
+                            </select>
+                            <span className="text-xs text-gray-500">{statusText}</span>
+                          </div>
+                          {row}
+                        </div>
+                      );
+                    }}
                   </DraggableReviewItem>}
                 />
               </section>}

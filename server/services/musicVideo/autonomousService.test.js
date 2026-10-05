@@ -95,6 +95,9 @@ beforeEach(() => {
     generateDocument: stub('document', async () => ({ document: { directory: 'music-video/mv-auto/composition/example' } })),
     acceptDocument: stub('accept-document', async (id, directory) => { store.get(id).composition.document = { directory }; return {}; }),
     renderVideo: stub('render', async () => ({ jobId: 'render-1' })),
+    // The render job stays live until a test settles it with a `render` event.
+    activeRenderJobId: vi.fn(async () => 'render-1'),
+    cancelRender: vi.fn(async () => true),
   };
   service.__setAutonomousDepsForTests(doubles);
 });
@@ -121,6 +124,21 @@ describe('startAutonomousVideo', () => {
     // The song title renames the project; the track carries the prompt/lyrics Suno was given.
     expect(store.get('mv-auto').name).toBe('Neon Rain');
     expect(doubles.attachAudio).toHaveBeenCalledWith('track-1', 'music-song-a.mp3', expect.objectContaining({ source: 'suno', durationSec: 187 }));
+  });
+
+  it('names the imported Suno song on its track only after a backup cut is released (#9982)', async () => {
+    const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
+    const release = await acquireBackupSnapshotCut();
+    try {
+      await service.startAutonomousVideo({ prompt: 'a courier crosses a rainy city' });
+      await vi.waitFor(() => expect(calls).toContain('probe'));
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(doubles.attachAudio).not.toHaveBeenCalled();
+      release();
+      await vi.waitFor(() => expect(doubles.attachAudio).toHaveBeenCalledOnce());
+    } finally {
+      release();
+    }
   });
 
   it.each([
@@ -177,7 +195,74 @@ describe('startAutonomousVideo', () => {
     expect(runOf().status).toBe('running');
 
     await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'completed' } });
-    expect(runOf()).toMatchObject({ status: 'completed', output: expect.objectContaining({ renderJobId: 'render-1' }) });
+    // Production being done is not the run being done: it reads "Rendering final video" until the render settles.
+    expect(runOf()).toMatchObject({ status: 'running', stage: 'produce', stages: { produce: { status: 'running', step: 'rendering' } }, output: expect.objectContaining({ renderJobId: 'render-1' }) });
+    // A repeated completion event does not start a second render.
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'completed' } });
+    expect(doubles.renderVideo).toHaveBeenCalledOnce();
+    // Another job's settlement is not ours.
+    await service.__testing.onRenderEvent({ projectId: 'mv-auto', jobId: 'other', status: 'completed' });
+    expect(runOf().status).toBe('running');
+
+    await service.__testing.onRenderEvent({ projectId: 'mv-auto', jobId: 'render-1', status: 'completed' });
+    expect(runOf()).toMatchObject({ status: 'completed', stages: { produce: { status: 'done', step: null } } });
+  });
+
+  it('parks failed when the final render fails after production, and Retry re-renders without resuming production', async () => {
+    await service.startAutonomousVideo({ prompt: 'p' });
+    await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'completed' } });
+    await service.__testing.onRenderEvent({ projectId: 'mv-auto', jobId: 'render-1', status: 'failed', error: 'ffmpeg exit 1' });
+    expect(runOf()).toMatchObject({ status: 'failed', error: 'ffmpeg exit 1', errorCode: 'FINAL_RENDER_FAILED', stages: { produce: { status: 'failed' } } });
+
+    doubles.renderVideo.mockResolvedValueOnce({ jobId: 'render-2' });
+    doubles.activeRenderJobId.mockResolvedValue('render-2');
+    await service.resumeAutonomousVideo('mv-auto');
+    expect(doubles.renderVideo).toHaveBeenCalledTimes(2);
+    expect(runOf()).toMatchObject({ status: 'running', error: null, output: expect.objectContaining({ renderJobId: 'render-2' }), stages: { produce: { step: 'rendering' } } });
+    await service.__testing.onRenderEvent({ projectId: 'mv-auto', jobId: 'render-2', status: 'completed' });
+    expect(runOf().status).toBe('completed');
+  });
+
+  it('fails the run when the final render cannot start after production, and Retry tries again', async () => {
+    await service.startAutonomousVideo({ prompt: 'p' });
+    await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
+    doubles.renderVideo.mockRejectedValueOnce(Object.assign(new Error('no audio'), { code: 'NO_AUDIO' }));
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'completed' } });
+    expect(runOf()).toMatchObject({ status: 'failed', errorCode: 'NO_AUDIO', error: expect.stringContaining('did not start') });
+    await service.resumeAutonomousVideo('mv-auto');
+    expect(runOf()).toMatchObject({ status: 'running', output: expect.objectContaining({ renderJobId: 'render-1' }) });
+  });
+
+  it('settles from the project record when the render ended before its job id was stored', async () => {
+    doubles.activeRenderJobId.mockResolvedValue(null);
+    await service.startAutonomousVideo({ prompt: 'p' });
+    await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
+    store.get('mv-auto').renderHistoryId = 'render-1';
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'completed' } });
+    expect(runOf().status).toBe('completed');
+  });
+
+  it('after a restart during the final render: finishes if the MP4 landed, otherwise renders again', async () => {
+    await service.startAutonomousVideo({ prompt: 'p' });
+    await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'completed' } });
+    // The previous process died mid-render.
+    store.get('mv-auto').autonomousRun.processId = 'proc-previous';
+    doubles.activeRenderJobId.mockResolvedValue(null);
+    store.get('mv-auto').renderHistoryId = 'render-1';
+    await service.resumeAutonomousVideo('mv-auto');
+    expect(doubles.renderVideo).toHaveBeenCalledOnce();
+    expect(runOf().status).toBe('completed');
+
+    // Same interruption, but the render never produced a file.
+    store.get('mv-auto').autonomousRun = { ...runOf(), status: 'running', processId: 'proc-previous', stages: { ...runOf().stages, produce: { ...runOf().stages.produce, status: 'running' } } };
+    delete store.get('mv-auto').renderHistoryId;
+    doubles.renderVideo.mockResolvedValueOnce({ jobId: 'render-3' });
+    doubles.activeRenderJobId.mockResolvedValue('render-3');
+    await service.resumeAutonomousVideo('mv-auto');
+    expect(doubles.renderVideo).toHaveBeenCalledTimes(2);
+    expect(runOf().output.renderJobId).toBe('render-3');
   });
 
   it('parks needs-human when production parks, and failed when it fails', async () => {
@@ -196,7 +281,27 @@ describe('startAutonomousVideo', () => {
     expect(doubles.acceptDocument).toHaveBeenCalledWith('mv-auto', 'music-video/mv-auto/composition/example');
     expect(doubles.generateDocument).toHaveBeenCalledWith('mv-auto', { providerId: 'prov', model: 'm' });
     expect(store.get('mv-auto').composition).toMatchObject({ mode: 'document', authoringRenderer: 'three' });
-    await settled('completed');
+    // Queued is not finished: the run waits on the render job.
+    await vi.waitFor(() => expect(runOf()).toMatchObject({ status: 'running', stage: 'produce', output: { renderJobId: 'render-1' }, stages: { produce: { step: 'rendering' } } }));
+    await service.__testing.onRenderEvent({ projectId: 'mv-auto', jobId: 'render-1', status: 'completed' });
+    expect(runOf().status).toBe('completed');
+  });
+
+  it('code path: a failed final render parks the run failed, and a restart re-checks the render', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['code:render'], authoring: { providerId: 'prov', model: 'm' } });
+    await vi.waitFor(() => expect(runOf()?.output.renderJobId).toBe('render-1'));
+    await service.__testing.onRenderEvent({ projectId: 'mv-auto', jobId: 'render-1', status: 'failed', error: 'Render cancelled' });
+    expect(runOf()).toMatchObject({ status: 'failed', errorCode: 'FINAL_RENDER_FAILED', error: 'Render cancelled' });
+
+    doubles.renderVideo.mockResolvedValueOnce({ jobId: 'render-2' });
+    doubles.activeRenderJobId.mockResolvedValue('render-2');
+    await service.resumeAutonomousVideo('mv-auto');
+    expect(runOf()).toMatchObject({ status: 'running', output: { renderJobId: 'render-2' } });
+    // Interrupted while rendering: the render is still live in this process, so resume reattaches.
+    store.get('mv-auto').autonomousRun.processId = 'proc-previous';
+    await service.resumeAutonomousVideo('mv-auto');
+    expect(doubles.renderVideo).toHaveBeenCalledTimes(2);
+    expect(runOf()).toMatchObject({ status: 'running', output: { renderJobId: 'render-2' } });
   });
 
   it('resolves the direction LLM once per text stage: brief and lyrics run on the resolved TUI route, effort included, and the route is recorded (#9545)', async () => {
@@ -483,6 +588,7 @@ describe('failure and retry', () => {
     await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
     await expect(service.resumeAutonomousVideo('mv-auto')).rejects.toMatchObject({ code: 'ALREADY_RUNNING' });
     await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'completed' } });
+    await service.__testing.onRenderEvent({ projectId: 'mv-auto', jobId: 'render-1', status: 'completed' });
     await expect(service.resumeAutonomousVideo('mv-auto')).rejects.toMatchObject({ code: 'NOT_RESUMABLE' });
   });
 });
@@ -718,6 +824,8 @@ it('parks standalone code at real human gates and replaces a stale proof before 
   expect(doubles.renderVideo).not.toHaveBeenCalled();
   approve('proof');
   await service.resumeAutonomousVideo('mv-auto');
+  await vi.waitFor(() => expect(runOf()?.output.renderJobId).toBe('render-1'));
+  await service.__testing.onRenderEvent({ projectId: 'mv-auto', jobId: 'render-1', status: 'completed' });
   await settled('completed');
   expect(doubles.renderVideo).toHaveBeenCalledOnce();
   expect(doubles.generateDocument).toHaveBeenCalledOnce();

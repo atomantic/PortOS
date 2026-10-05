@@ -28,6 +28,7 @@ import { unlink } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { PATHS, shortId, importFileToDir } from '../lib/fileUtils.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
 import { MUSCRIPTOR_MODELS } from '../lib/muscriptorModels.js';
@@ -110,6 +111,15 @@ export function buildMuscriptorArgs({ pythonPath, scriptPath = MUSCRIPTOR_SCRIPT
 // jobId -> { clients, lastPayload, process }
 const transcriptionJobs = new Map();
 
+// ownerKey (e.g. a music-video project id) -> running jobId, so a reloaded page can reattach.
+const activeByOwner = new Map();
+
+/** The running transcription job id started for `ownerKey`, or null. */
+export function getActiveMidiTranscriptionJobId(ownerKey) {
+  const jobId = activeByOwner.get(ownerKey);
+  return jobId && transcriptionJobs.get(jobId) && !transcriptionJobs.get(jobId).settled ? jobId : null;
+}
+
 export const attachMidiTranscriptionSseClient = (jobId, res) => attachSse(transcriptionJobs, jobId, res);
 
 /**
@@ -146,7 +156,7 @@ export function cancelMidiTranscription(jobId) {
  * `PATHS.music` so the file federates to peers alongside the project's other
  * audio (the peer-sync asset manifest only ships known directories).
  */
-export async function startMidiTranscription({ audioPath, outputName = 'transcription', model, onComplete, destDir = PATHS.uploads }) {
+export async function startMidiTranscription({ audioPath, outputName = 'transcription', model, onComplete, destDir = PATHS.uploads, ownerKey = null }) {
   // Gate on the actual import, not just the binary — a partial venv (binary
   // present, `muscriptor` not importable) must still 503 so the in-app
   // installer re-opens to repair it instead of failing later in the sidecar.
@@ -162,6 +172,7 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
   const tempOut = join(tmpdir(), `portos-midi-${jobId}.mid`);
   const job = { id: jobId, status: 'running', clients: [], process: null, cancelRequested: false, settled: false };
   transcriptionJobs.set(jobId, job);
+  if (ownerKey) activeByOwner.set(ownerKey, jobId);
   console.log(`🎹 MIDI transcription ${shortId(jobId)} [${resolvedModel}] — ${audioPath}`);
 
   (async () => {
@@ -214,8 +225,15 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
       }
 
       broadcastSse(job, { type: 'progress', stage: 'importing' });
-      const { filename } = await importFileToDir(tempOut, `${outputName}.mid`, destDir);
-      const extra = (await onComplete?.({ filename, model: resolvedModel })) || {};
+      // The .mid copy, the row that names it and the discard unlink are one
+      // backup-admitted workflow (#9982): a snapshot never dumps a row for a
+      // file its copy missed, nor copies a file whose row was just declined.
+      const { filename, extra } = await withBackupAssetPublication(async () => {
+        const imported = await importFileToDir(tempOut, `${outputName}.mid`, destDir);
+        const result = (await onComplete?.({ filename: imported.filename, model: resolvedModel })) || {};
+        if (result.discarded) await unlink(join(destDir, imported.filename)).catch(() => {});
+        return { filename: imported.filename, extra: result };
+      });
 
       // `onComplete` may decline the result (`discarded: true` — e.g. the music
       // video's audio source changed mid-run, so this .mid is of the OLD
@@ -223,7 +241,6 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
       // orphaned file and tell the client it was discarded, not "ready".
       if (extra.discarded) {
         console.log(`🗑️ MIDI transcription ${shortId(jobId)} discarded — ${extra.reason || 'stale result'}`);
-        await unlink(join(destDir, filename)).catch(() => {});
         broadcastSse(job, { type: 'complete', discarded: true, model: resolvedModel });
         return;
       }
@@ -240,6 +257,7 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
       broadcastSse(job, frame);
     } finally {
       job.settled = true;
+      if (ownerKey && activeByOwner.get(ownerKey) === jobId) activeByOwner.delete(ownerKey);
       await unlink(tempOut).catch(() => {});
       closeJobAfterDelay(transcriptionJobs, jobId);
     }

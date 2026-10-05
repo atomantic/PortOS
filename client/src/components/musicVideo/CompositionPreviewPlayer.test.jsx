@@ -45,6 +45,18 @@ describe('CompositionPreviewPlayer', () => {
     expect(screen.queryByText(/Loading preview media/)).not.toBeInTheDocument();
   });
 
+  it('keeps the loaded preview through an unrelated project save and rebuilds when the document version changes', async () => {
+    const { rerender } = render(<CompositionPreviewPlayer project={project} audioUrl={null} />);
+    const frame = await screen.findByTitle('Composition document preview');
+    rerender(<CompositionPreviewPlayer project={{ ...project, updatedAt: '2026-02-02T00:00:00.000Z', name: 'Renamed' }} audioUrl={null} />);
+    await act(async () => {});
+    expect(api.getMusicVideoCompositionPreview).toHaveBeenCalledTimes(1);
+    expect(screen.getByTitle('Composition document preview')).toBe(frame);
+    const next = { ...project, composition: { mode: 'document', document: { ...DOCUMENT, directory: 'music-video/mv-1/composition/doc-b' } } };
+    rerender(<CompositionPreviewPlayer project={next} audioUrl={null} />);
+    await waitFor(() => expect(api.getMusicVideoCompositionPreview).toHaveBeenCalledTimes(2));
+  });
+
   it('does not build the preview behind a collapsed phone mini-player until it is expanded', async () => {
     const original = window.matchMedia;
     window.matchMedia = vi.fn(() => ({ matches: false }));

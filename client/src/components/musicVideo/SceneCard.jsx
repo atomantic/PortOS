@@ -1,7 +1,7 @@
 import PlateComparison from './PlateComparison.jsx';
 import ShotActionInspector from './ShotActionInspector.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, Scissors } from 'lucide-react';
 import { formatDurationSec, formatUsd } from '../../utils/formatters.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
@@ -16,7 +16,9 @@ const STILL_MOVE_LABELS = [['hold', 'Hold'], ['push', 'Push in'], ['pan', 'Pan']
 import {
   falSceneTake, grokCoverage, isPerformanceScene, performanceBlockedReason, performanceCapability, planPerformanceWindow, shotSplitLimit,
 } from '../../lib/musicVideoShotTiming.js';
+import SceneRenderProgress from './SceneRenderProgress.jsx';
 import { getFalVideoModel } from '../../lib/falVideoModels.js';
+import { COVERAGE_TOLERANCE_SEC, SCENE_ATTENTION_LABELS, sceneAttention } from '../../lib/musicVideoSceneAttention.js';
 
 // "est. $0.81 (5.05s at 1080P)" — or null when the take cannot be priced.
 const falEstimate = (take) => (take?.costUsd == null ? null
@@ -24,9 +26,6 @@ const falEstimate = (take) => (take?.costUsd == null ? null
 
 // The two timeline-bound scene fields rendered as identical number inputs.
 const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
-// Mirrors render.js COVERAGE_TOLERANCE_SEC: a non-looping shot may run this far
-// past its clip (the last frame holds); beyond it the render refuses (#8964).
-const COVERAGE_TOLERANCE_SEC = 0.25;
 
 /**
  * One scene on the board: ordering/delete, the shot + reference-frame prompts
@@ -66,13 +65,22 @@ const COVERAGE_TOLERANCE_SEC = 0.25;
  * jumps to the scene's start.
  */
 export default function SceneCard({
-  scene, index, isLast, generatingFrame, generatingVideo,
+  scene, index, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null,
   settingsSaving, videoBlockedReason, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
   onGenerateFrame, onGenerateVideo, onContinueVideo,
   onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false, layered = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
+  expanded, onToggleExpand, footageOptional = false, failedScenes = null,
 }) {
+  const detailsRef = useRef(null);
+
+  useEffect(() => {
+    if (expanded && detailsRef.current) {
+      detailsRef.current.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    }
+  }, [expanded]);
+
   // Pause the inline clip before opening the lightbox so the user can't hear
   // two desynced copies — MediaLightbox autoplays unmuted, and the thumb's
   // native controls let the user unmute it first (muted is only initial).
@@ -125,8 +133,24 @@ export default function SceneCard({
   const repairPlan = planPerformanceRepair({ scene, temporal: performanceReview?.shot,
     excerptStartSec: performanceReview?.excerptStartSec, backend: lipSyncBackend, videoSettings: falVideoSettings || {} });
   const shotModeId = `mv-shot-mode-${scene.sceneId}`;
+  // #10152: what needs the director's attention, visible without opening the card.
+  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec, failed: failedScenes || {} });
+  const generatingLane = generatingFrame && generatingVideo ? 'Frame + clip' : generatingFrame ? 'Frame' : generatingVideo ? 'Clip' : null;
+  // #10154: the server-persisted failure of the last render, shown until a
+  // retry is in flight (or lands a take, which clears it server-side).
+  const failure = scene.lastFailure && !(scene.lastFailure.lane === 'video' ? generatingVideo : generatingFrame)
+    ? scene.lastFailure : null;
   return (
-    <details className="group min-w-0 rounded-lg border border-port-border bg-port-card">
+    <div className="min-w-0">
+    <details
+      ref={detailsRef}
+      id={`scene-${scene.sceneId}`}
+      open={expanded != null ? expanded : undefined}
+      onToggle={(e) => {
+        onToggleExpand?.(scene.sceneId, e.currentTarget.open);
+      }}
+      className="group rounded-lg border border-port-border bg-port-card"
+    >
       <summary
         onClick={() => onSeek?.(scene)}
         className="flex min-h-[44px] cursor-pointer select-none items-center gap-3 p-2 marker:content-none [&::-webkit-details-marker]:hidden"
@@ -153,10 +177,24 @@ export default function SceneCard({
             {clipSec != null ? ` · clip ${clipSec.toFixed(1)}s` : ''}
           </div>
           {scene.lyricText && <div className="truncate text-[11px] italic text-port-text-muted">♪ {scene.lyricText}</div>}
+          {attention.length > 0 && (
+            <ul aria-label="Needs attention" className="mt-0.5 flex flex-wrap gap-1">
+              {attention.map((code) => (
+                <li key={code} data-attention={code} className="rounded border border-port-warning/40 bg-port-warning/10 px-1.5 text-[10px] text-port-warning">
+                  {SCENE_ATTENTION_LABELS[code]}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
-        {(generatingFrame || generatingVideo) && (
-          <Activity size={14} className="shrink-0 animate-spin text-port-accent" aria-label="Generating" />
+        {generatingLane && (
+          <span className="flex shrink-0 items-center gap-1 text-[11px] text-port-accent">
+            <Activity size={14} className="animate-spin" aria-label="Generating" />
+            {generatingLane}
+          </span>
         )}
+        <SceneRenderProgress kind="Frame" generating={generatingFrame} progress={frameProgress} />
+        <SceneRenderProgress kind="Video" generating={generatingVideo} progress={videoProgress} />
       </summary>
       <div className="space-y-2 p-3 pt-0">
         <div className="flex items-center justify-end gap-2">
@@ -186,7 +224,7 @@ export default function SceneCard({
           </div>
         )}
         <ShotActionInspector contract={scene.direction?.actionContract} scene={scene} />
-        <PlateComparison scene={scene} />
+        <PlateComparison scene={scene} frames={false} />
         <div className="flex flex-wrap gap-2 items-center text-xs">
           {SCENE_TIME_FIELDS.map(([labelText, key]) => {
             const toValue = (v) => (v === '' ? null : Number(v));
@@ -446,5 +484,19 @@ export default function SceneCard({
           onOpenPreview={onOpenPreview} />
       </div>
     </details>
+    {failure && (
+      <div className="mt-1 flex items-start gap-2 rounded border border-port-error/40 bg-port-error/10 px-2 py-1 text-xs text-port-error">
+        <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
+        <span className="min-w-0 flex-1 break-words">
+          {failure.lane === 'video' ? 'Video' : 'Frame'} failed: {failure.error}
+        </span>
+        <button type="button"
+          onClick={() => (failure.lane === 'video' ? onGenerateVideo?.(scene) : onGenerateFrame?.(scene))}
+          className="inline-flex min-h-[44px] shrink-0 items-center px-1 font-medium underline sm:min-h-0">
+          Retry
+        </button>
+      </div>
+    )}
+    </div>
   );
 }

@@ -16,12 +16,13 @@
  */
 
 import { createHash } from 'crypto';
-import { unlink } from 'fs/promises';
+import { access, unlink } from 'fs/promises';
 import { join, basename } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir, detectImageFormat, detectVideoFormat, writeFileGuarded } from '../../lib/fileUtils.js';
 import { parseXPostUrl, buildSyndicationUrl, extractXPostMedia } from '../../lib/xPostMedia.js';
 import { fetchPublicText, fetchPublicBinary } from '../../lib/safeUrlFetch.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import { MAX_ITEMS_PER_BOARD } from './logic.js';
 import * as store from './db.js';
@@ -41,15 +42,20 @@ function fingerprint(canonicalUrl, tag) {
 
 // Download an image (photo or video poster) into data/images/, sniffing the
 // format from bytes (never trusting Content-Type) — same posture as Pinterest's
-// downloadPinImage. Returns the served path, or null on any failure.
+// downloadPinImage. Returns { path, created } (created=false when the post-keyed
+// file already existed, so another board may name it), or null on any failure.
+// Both downloads are post-keyed, so a re-import rewrites bytes a board may
+// already name: each write holds the backup lease (#9982) so it never overlaps a snapshot.
 async function downloadImage(url, canonicalUrl, tag) {
   const res = await fetchPublicBinary(url, { timeoutMs: FETCH_TIMEOUT_MS, headers: MEDIA_HEADERS, maxBytes: MAX_IMAGE_BYTES });
   if (!res?.buffer?.length) return null;
   const fmt = detectImageFormat(res.buffer);
   if (!fmt) return null;
   const filename = `x-${fingerprint(canonicalUrl, tag)}${fmt.ext}`;
-  await writeFileGuarded(join(PATHS.images, filename), res.buffer);
-  return `/data/images/${filename}`;
+  const target = join(PATHS.images, filename);
+  const created = await access(target).then(() => false, () => true);
+  await withBackupAssetPublication(() => writeFileGuarded(target, res.buffer));
+  return { path: `/data/images/${filename}`, created };
 }
 
 // Download the post's video/GIF (X serves a looping GIF as an mp4) into
@@ -61,7 +67,7 @@ async function downloadVideo(url, canonicalUrl) {
   const res = await fetchPublicBinary(url, { timeoutMs: VIDEO_TIMEOUT_MS, headers: MEDIA_HEADERS, maxBytes: MAX_VIDEO_BYTES });
   if (!res?.buffer?.length || !detectVideoFormat(res.buffer)) return null;
   const filename = `x-${fingerprint(canonicalUrl, 'video')}.mp4`;
-  await writeFileGuarded(join(PATHS.videos, filename), res.buffer);
+  await withBackupAssetPublication(() => writeFileGuarded(join(PATHS.videos, filename), res.buffer));
   return filename;
 }
 
@@ -114,8 +120,8 @@ export async function importXPost(boardId, { url }) {
   for (let i = 0; i < images.length && imported.length < capacity; i++) {
     const source = `${canonicalUrl}#${i}`;
     if (seen.has(source)) continue;
-    const imageUrl = await downloadImage(images[i], canonicalUrl, String(i));
-    if (imageUrl) imported.push({ type: 'image', imageUrl, source, caption: null });
+    const image = await downloadImage(images[i], canonicalUrl, String(i));
+    if (image) imported.push({ type: 'image', imageUrl: image.path, source, caption: null });
   }
   if (video && imported.length < capacity) {
     const source = `${canonicalUrl}#video`;
@@ -128,12 +134,13 @@ export async function importXPost(boardId, { url }) {
         video.poster ? downloadImage(video.poster, canonicalUrl, 'poster') : Promise.resolve(null),
       ]);
       if (filename) {
-        imported.push({ type: 'video', mediaKey: `video:${filename}`, imageUrl: poster, source, caption: null });
-      } else if (poster) {
+        imported.push({ type: 'video', mediaKey: `video:${filename}`, imageUrl: poster.path, source, caption: null });
+      } else if (poster?.created) {
         // The video failed but its poster downloaded first (they ran in
-        // parallel) — nothing will ever reference it, so remove it rather
-        // than leaving an orphaned file in data/images.
-        await unlink(join(PATHS.images, basename(poster))).catch(() => {});
+        // parallel) — nothing will ever reference a poster THIS import created,
+        // so remove it rather than leaving an orphan. A poster that already
+        // existed may be named by another board's item: leave it alone.
+        await withBackupAssetPublication(() => unlink(join(PATHS.images, basename(poster.path)))).catch(() => {});
       }
     }
   }
@@ -144,7 +151,8 @@ export async function importXPost(boardId, { url }) {
     });
   }
 
-  const { board: nextBoard, added } = await store.appendImportedItems(boardId, imported);
+  // The append first names the downloaded media, so it commits under the lease.
+  const { board: nextBoard, added } = await withBackupAssetPublication(() => store.appendImportedItems(boardId, imported));
   emitRecordUpdated('moodBoard', boardId);
   console.log(`🐦 X post import: board ${boardId} +${added} item(s) from ${canonicalUrl}`);
   return { board: nextBoard, added };

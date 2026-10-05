@@ -1,3 +1,4 @@
+import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
  * Replace PortOS's estimated per-run token counts with the CLI's own measured
  * counts, read from the transcripts the coding CLIs already write to disk.
@@ -422,18 +423,37 @@ async function readGrokSessions({ home, workspacePath, from, to, fold, reserveFr
   }
 }
 
+/**
+ * Every conversation `agy` recorded. `history.jsonl` names only the ones with a
+ * logged workspace (a small minority — most conversations never get a line
+ * carrying a `conversationId`), so the brain directory is the authoritative
+ * list; a conversation absent from history has `workspace: null`.
+ */
+export async function listAgyConversations(root) {
+  const historyText = await tryReadFile(join(root, 'history.jsonl'));
+  const conversations = historyText ? parseAgyHistory(historyText) : [];
+  const known = new Set(conversations.map((c) => c.conversationId));
+  for (const conversationId of await listSubdirs(join(root, 'brain'))) {
+    if (!known.has(conversationId)) conversations.push({ conversationId, workspace: null, timestamp: null });
+  }
+  return conversations;
+}
+
 async function readAgySessions({ home, workspacePath, from, to, fold, reserveFrom, excludeFor }) {
   // Antigravity writes no token counts anywhere, so every row it produces is
   // an honest chars/4 estimate. `history.jsonl` is the only cwd-keyed index;
   // the brain transcript it points at carries the per-step timestamps that
   // place the work inside a run's window.
   const root = join(home, '.gemini', 'antigravity-cli');
-  const historyText = await tryReadFile(join(root, 'history.jsonl'));
-  for (const conversation of historyText ? parseAgyHistory(historyText) : []) {
-    if (!cwdMatches(conversation.workspace, workspacePath)) continue;
+  for (const conversation of await listAgyConversations(root)) {
+    // A conversation history never logged has no workspace; its transcript
+    // names the files it touched, so a worktree path appearing in it is the
+    // match (worktree paths are unique per run).
+    if (conversation.workspace && !cwdMatches(conversation.workspace, workspacePath)) continue;
     const transcriptPath = join(root, 'brain', conversation.conversationId, '.system_generated', 'logs', 'transcript.jsonl');
     const text = await tryReadFile(transcriptPath);
     if (!text) continue;
+    if (!conversation.workspace && !text.includes(workspacePath)) continue;
     const parsed = parseAgyTranscript(text, { from, to, exclude: excludeFor(transcriptPath) });
     const estimated = agyEstimatedBuckets(parsed);
     if (totalTranscriptTokens(estimated) === 0) continue;
@@ -893,6 +913,7 @@ export async function recordCompletedRunUsage(metadata, output, { home = homedir
       await atomicWrite(metadataPath, persisted);
     })
     .catch((err) => {
+      maintenance.markCurrentUnsettled();
       console.error(`❌ Failed to record usage: ${err.message}`);
     });
 }

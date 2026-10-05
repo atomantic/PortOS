@@ -19,6 +19,8 @@ import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { ensureDir, PATHS, rmGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { federatedSourceAudioSchema } from '../../lib/federatedMediaWire.js';
 import { wan22FrameCountError } from './wan22Controls.js';
 import {
   isDefaultI2vReferenceMode, normalizeI2vReferenceMode, resolveI2vReferenceStrength,
@@ -150,7 +152,8 @@ export const listVideoModels = () => getVideoModels().map(decorateVideoModel);
 
 export const defaultVideoModelId = (capabilities, preferredId) => getDefaultVideoModelId(capabilities, preferredId);
 
-export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, mode = null, imageStrength = null, i2vReferenceMode = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, displaySleep = null, jobId: providedJobId = null }) {
+export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, audioConditioning = null, mode = null, imageStrength = null, i2vReferenceMode = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, displaySleep = null, jobId: providedJobId = null }) {
+  const sourceAudioProvenance = audioConditioning == null ? null : federatedSourceAudioSchema.parse(audioConditioning);
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   // Single-flight is now enforced by the mediaJobQueue worker upstream — only
@@ -512,6 +515,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     guidanceScale: actualGuidance,
     tiling,
     disableAudio,
+    ...(sourceAudioProvenance ? { audioConditioning: sourceAudioProvenance } : {}),
     // Which prompt conditioner read this prompt. Only recorded when it wasn't
     // the stock one, so pre-feature history and every unswapped render stay
     // byte-identical — and so a Remix of a stock render can't resurrect an
@@ -689,10 +693,16 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     job.status = 'error';
     const reason = err.message || 'Failed to prepare video generation';
     console.error(`❌ Video generation preparation error [${jobId.slice(0, 8)}]: ${reason}`);
+    const cleanup = await Promise.allSettled([
+      cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true }),
+      rmGuarded(stepwiseDir, { recursive: true, force: true }),
+    ]);
+    if (cleanup.some(result => result.status === 'rejected')) {
+      maintenance.markCurrentUnsettled();
+      maintenance.markResourceUnsettled('media', jobId);
+    }
     broadcastSse(job, { type: 'error', error: reason });
     videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [prompt, negativePrompt] }) });
-    void cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true });
-    void rmGuarded(stepwiseDir, { recursive: true, force: true });
     closeJobAfterDelay(videoJobState.jobs, jobId);
     throw err;
   }

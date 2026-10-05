@@ -4,6 +4,7 @@ import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SSE_CLEANUP_DELAY_MS } from '../../lib/sseUtils.js';
+import { acquireBackupSnapshotCut } from '../../lib/backupSnapshotBoundary.js';
 
 let voiceProfilesRoot = '';
 const queryMock = vi.fn();
@@ -14,6 +15,13 @@ const queryMock = vi.fn();
 let spawnOverride = null;
 let runtimeOverride = null;
 
+// Every sidecar write is recorded when it is ATTEMPTED, so a test can tell a write
+// held behind backup admission from one that is merely still in flight.
+const sidecarWrites = [];
+vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, atomicWrite: (path, ...rest) => { sidecarWrites.push(path); return actual.atomicWrite(path, ...rest); } };
+});
 vi.mock('../../lib/db.js', () => ({ query: (...args) => queryMock(...args) }));
 vi.mock('../../lib/paths.js', async () => {
   const actual = await vi.importActual('../../lib/paths.js');
@@ -248,6 +256,30 @@ describe('fineTuning', () => {
       modelRevision: revisionFor(20),
       inference: { checkpointPath: join(jobDir(startRes.jobId), 'checkpoint-step-20') },
     });
+  });
+
+  it('lists a checkpoint in job.json only after an open backup cut releases (#9982)', async () => {
+    queryMock.mockResolvedValue({ rows: [{ data: PROFILE }] });
+    await seedSourceAudio();
+    const scripted = useScriptedRunner();
+    const { jobId } = await startFineTuningJob({ profileId: PROFILE.id, epochs: 2, checkpointInterval: 20 });
+    const readCheckpoints = async () => JSON.parse(await readFile(jobRecordPath(jobId), 'utf8')).checkpoints;
+    expect(await readCheckpoints()).toEqual([]);
+    const writesBefore = sidecarWrites.length;
+
+    // The runner sealed checkpoint 20 while a snapshot was copying this run's
+    // directory. The record naming it must wait, or the snapshot would list a
+    // checkpoint whose bytes it copied before they existed.
+    const release = await acquireBackupSnapshotCut();
+    scripted().emitFrames(checkpointFrame(jobId, 20));
+    for (let tick = 0; tick < 5; tick += 1) await new Promise((resolve) => setImmediate(resolve));
+    expect(sidecarWrites).toHaveLength(writesBefore);
+    expect(await readCheckpoints()).toEqual([]);
+
+    release();
+    await vi.waitFor(async () => expect((await readCheckpoints()).map((c) => c.step)).toEqual([20]));
+    scripted().exit(0);
+    await drainJobRecord(jobId);
   });
 
   it('settles a cancelled job as cancelled even though the abort also fires an error', async () => {

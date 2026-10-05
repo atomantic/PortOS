@@ -28,6 +28,17 @@ export const takeThumbUrl = (take) => (take.kind === 'image'
   ? `/data/images/${encodeURIComponent(take.assetId)}`
   : `/data/video-thumbnails/${encodeURIComponent(take.assetId)}.jpg`);
 
+/** Playable clip URL for a video take (hover/focus preview). */
+export const takeClipUrl = (take) => `/data/videos/${encodeURIComponent(take.assetId)}.mp4`;
+
+/** Scenes whose slot still has an undecided candidate (a candidate that is not the selection). */
+export function sceneHasPendingDecision(scene) {
+  return ['image', 'video'].some((kind) => {
+    const selected = scene?.[TAKE_SLOT[kind]] || null;
+    return sceneTakeList(scene, kind).some((t) => t.takeId && t.status === 'candidate' && t.assetId !== selected);
+  });
+}
+
 /** Short provenance label: the external provider for an import, else the source. */
 export function takeProvenance(take) {
   if (take.source === 'imported') return take.provider ? `imported · ${take.provider}` : 'imported';

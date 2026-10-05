@@ -122,6 +122,7 @@ export function buildProjectRecord(input, { id, now }) {
     visualSpec: input.visualSpec ? normalizeVisualSpec(input.visualSpec) : null,
     ...(input.styleReferences ? { styleReferences: input.styleReferences } : {}),
     videoSettings: {
+      ...(videoSettings.renderPool ? { renderPool: videoSettings.renderPool } : {}),
       backend: videoSettings.backend ?? 'local',
       modelId: videoSettings.modelId ?? null,
       grokDuration: videoSettings.grokDuration ?? 10,
@@ -522,6 +523,36 @@ export function addScenes(project, sceneInputs) {
 }
 
 /**
+ * Replace the whole board with freshly planned scenes (AI Plan "Replace").
+ * A new shot whose time span matches an old scene (within 10 ms) inherits that
+ * scene's id, direction, reference frame, selected clip and takes, so the
+ * generated work and treatment direction keyed to the id survive the re-plan.
+ * Returns `{ project, scenes, replaced }` (`replaced` = the old scene count).
+ */
+export function replaceScenes(project, sceneInputs) {
+  const list = Array.isArray(sceneInputs) ? sceneInputs : [];
+  const existing = project.scenes || [];
+  const claimed = new Set();
+  const sameSpan = (a, b) => typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < 0.01;
+  const scenes = list.map((input, order) => {
+    const fresh = buildScene(parseSceneOrThrow(musicVideoSceneCreateSchema, input), { order });
+    const prior = existing.find((old) => !claimed.has(old.sceneId)
+      && sameSpan(old.startSec, fresh.startSec) && sameSpan(old.endSec, fresh.endSec));
+    if (!prior) return fresh;
+    claimed.add(prior.sceneId);
+    return {
+      ...fresh,
+      sceneId: prior.sceneId,
+      referenceImageId: prior.referenceImageId ?? null,
+      videoHistoryId: prior.videoHistoryId ?? null,
+      takes: prior.takes || [],
+      ...(prior.direction ? { direction: prior.direction } : {}),
+    };
+  });
+  return { project: touch(project, { scenes }), scenes, replaced: existing.length };
+}
+
+/**
  * Apply a patch to a single scene. Returns `{ project, updated }`. Throws if the
  * scene id is unknown.
  */
@@ -742,10 +773,11 @@ export function mergeProjectRecord(local, remoteRaw) {
     };
   }
   if (local.videoSettings && typeof local.videoSettings === 'object'
-    && !Array.isArray(local.videoSettings) && Object.hasOwn(local.videoSettings, 'backend')) {
+    && !Array.isArray(local.videoSettings) && ['backend', 'renderPool'].some((key) => Object.hasOwn(local.videoSettings, key))) {
     const remoteVideoSettings = remote.videoSettings && typeof remote.videoSettings === 'object'
       && !Array.isArray(remote.videoSettings) ? remote.videoSettings : {};
-    remote.videoSettings = { ...remoteVideoSettings, backend: local.videoSettings.backend };
+    remote.videoSettings = { ...remoteVideoSettings,
+      ...Object.fromEntries(['backend', 'renderPool'].filter((key) => Object.hasOwn(local.videoSettings, key)).map((key) => [key, local.videoSettings[key]])) };
   }
   const remoteWins = compareNewerWins(remote.updatedAt, local.updatedAt);
   const next = remoteWins ? remote : local;

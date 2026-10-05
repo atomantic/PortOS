@@ -1,3 +1,4 @@
+import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
  * Runner agent recovery.
  *
@@ -70,6 +71,7 @@ export async function syncRunnerAgents() {
     // re-adopt — adopting it would put it in runnerAgents and the orphan
     // sweep would treat that local map as ownership. Live rows still sync.
     if (!(await runnerEntryShieldsRunningRecord(agent))) continue;
+    maintenance.recoverOwned('agent', agent.id);
     // Only sync if this process isn't already driving it
     if (!isAgentOwnedLocally(agent.id)) {
       const task = taskMap.get(agent.taskId);

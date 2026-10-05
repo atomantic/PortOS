@@ -77,6 +77,7 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
     providers, selectedProviderId, selectedModel, availableModels, setSelectedProviderId, setSelectedModel,
   } = useProviderModels({ allowDefault: true, silent: true });
   const canBuild = !!project?.renderHistoryId;
+  const kitStale = !!kit.builtAt && (kit.master?.renderHistoryId ?? null) !== (project?.renderHistoryId ?? null);
   const links = {
     ...(/^https?:\/\//.test(youtubeUrl.trim()) ? { youtube: youtubeUrl.trim() } : {}),
     ...(/^https?:\/\//.test(songUrl.trim()) ? { song: songUrl.trim() } : {}),
@@ -98,10 +99,16 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
           </button>
         </div>
         {!canBuild && <p className="text-xs text-port-text-muted">Render the final video first. The kit is made from it.</p>}
+        {kitStale && (
+          <p role="status" className="text-xs text-port-warning">Kit built from an earlier render. Fill draft is refused until you rebuild it. Use Rebuild kit.</p>
+        )}
         {publishKit.building && (
-          <div>
+          <div className="space-y-2">
             <div className="h-1.5 bg-port-bg rounded overflow-hidden"><div className="h-full bg-port-accent transition-all" style={{ width: `${publishKit.progress}%` }} /></div>
-            <p className="text-xs text-port-text-muted mt-1">Encoding — {Math.round(publishKit.progress)}%</p>
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-port-text-muted">Encoding — {Math.round(publishKit.progress)}%</p>
+              <button type="button" onClick={publishKit.cancelBuild} className="text-xs text-port-text-muted hover:text-port-text-base px-2 py-1">Cancel</button>
+            </div>
           </div>
         )}
         {kit.builtAt && (

@@ -17,6 +17,7 @@ import { basename, join, resolve, relative, isAbsolute } from 'path';
 import { PATHS, ensureDir, readJSONFile, readJSONFileStrict, atomicWrite, sha256File } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { acquireBackupSnapshotCut } from '../lib/backupSnapshotBoundary.js';
+import { backupAssetConsistency } from '../lib/backupAssetOwners.js';
 import { assertDatabaseAdmission } from '../lib/databaseMaintenanceJournal.js';
 import { createLineReader } from '../lib/streamLines.js';
 import { getEvent } from './eventScheduler.js';
@@ -635,6 +636,9 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     // that started first drains completely; new writers wait until the dump
     // and manifest are published. Rendering/provider work is outside admission.
     const releaseSnapshotCut = await acquireBackupSnapshotCut();
+    // The snapshot records how far that guarantee reaches: `global` only once
+    // no durable asset owner remains outside admission.
+    const assetConsistency = backupAssetConsistency();
     let pgResult;
     try {
       const excludeFlags = effectiveExcludes.flatMap(p => ['--exclude', p]);
@@ -645,7 +649,8 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
       const pgDumpPath = join(snapshotDir, 'portos-db.sql');
       pgResult = await dumpPostgres(pgDumpPath);
       manifest = await generateManifest(dataDestDir, join(snapshotDir, 'manifest.json'), pgDumpPath, {
-        allowMissingDump: pgResult.status === 'skipped' || pgResult.status === 'failed'
+        allowMissingDump: pgResult.status === 'skipped' || pgResult.status === 'failed',
+        assetConsistency,
       });
     } finally {
       releaseSnapshotCut();
@@ -659,6 +664,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
       status,
       filesChanged: changedFiles.length,
       pgBackup: pgResult,
+      assetConsistency,
       error: pgResult.status === 'failed' ? `DB dump ${pgResult.reason}` : null
     });
 
@@ -677,7 +683,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
       }
     }
 
-    const result = await complete({ snapshotId, filesChanged: changedFiles.length, status, lastRun, manifest, pgBackup: pgResult });
+    const result = await complete({ snapshotId, filesChanged: changedFiles.length, status, lastRun, manifest, pgBackup: pgResult, assetConsistency });
 
     // Prune only after `complete()` has cleared this snapshot's own
     // `.in-progress` marker and released `activeSnapshotId` — pruning any
@@ -859,8 +865,9 @@ function manifestReadFailure(operation, err) {
  * @param {string|null} [pgDumpPath=null] - Sibling SQL dump to also hash
  * @param {object} [options] - Dump inventory expectations
  * @param {boolean} [options.allowMissingDump=false] - Only for skipped/failed dumps
+ * @param {object} [options.assetConsistency] - The file-and-row consistency this snapshot claims
  */
-export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath = null, { allowMissingDump = false } = {}) {
+export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath = null, { allowMissingDump = false, assetConsistency } = {}) {
   const entries = await readdir(snapshotDataDir, { recursive: true })
     .catch(err => { throw manifestReadFailure('data readdir', err); });
   const files = {};
@@ -902,7 +909,8 @@ export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath
   const manifest = {
     generatedAt: new Date().toISOString(),
     fileCount: Object.keys(files).length,
-    files
+    files,
+    ...(assetConsistency ? { assetConsistency } : {}),
   };
 
   await atomicWrite(manifestPath, manifest);

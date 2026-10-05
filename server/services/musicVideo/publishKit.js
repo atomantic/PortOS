@@ -15,12 +15,14 @@ import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
 import { unlink, writeFile } from 'fs/promises';
 import { join } from 'path';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { safeUnder, edgeFadeFilter } from '../../lib/ffmpeg.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { getProject, listProjects, mutateProjectRecord } from './projects.js';
 import { suggestSocialCuts } from './socialCuts.js';
+import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 import { buildChapters, buildSrt, buildPublishCopyPrompt, parsePublishCopy, PUBLISH_PLATFORMS } from './publishKitText.js';
 
 const jobs = new Map();
@@ -133,6 +135,11 @@ async function beginPublishKitBuild(projectId, jobId) {
       ...(teaser ? [{ kind: 'teaser', label: `Teaser ${Math.round(teaser.endSec - teaser.startSec)}s`, filename: `${stem}-teaser.mp4`, window: teaser,
         args: ['-ss', String(teaser.startSec), '-t', String(teaser.endSec - teaser.startSec), '-i', masterPath, ...X_VIDEO_ARGS,
           '-af', `asetpts=PTS-STARTPTS${edgeFadeFilter(teaser.endSec - teaser.startSec)}`, ...AUDIO_ARGS] }] : []),
+      // #10150: Shorts/TikTok/Reels need 9:16; a 16:9 render gets a center-crop of the hook window (no generation).
+      ...(teaser && musicVideoAspect(project) === '16:9' ? [{ kind: 'vertical-9x16', label: `Vertical 9:16 ${Math.round(teaser.endSec - teaser.startSec)}s`, filename: `${stem}-vertical.mp4`, window: teaser,
+        args: ['-ss', String(teaser.startSec), '-t', String(teaser.endSec - teaser.startSec), '-i', masterPath,
+          '-vf', 'crop=trunc(ih*9/32)*2:ih,scale=1080:1920', ...X_VIDEO_ARGS,
+          '-af', `asetpts=PTS-STARTPTS${edgeFadeFilter(teaser.endSec - teaser.startSec)}`, ...AUDIO_ARGS] }] : []),
     ];
     const times = thumbnailTimes(project, durationSec);
     const total = encodes.length + times.length;
@@ -158,7 +165,9 @@ async function beginPublishKitBuild(projectId, jobId) {
     if (srt) { await writeFile(join(PATHS.videos, captionsFilename), srt); written.push(captionsFilename); }
     const previous = projectPublishKit(project);
     const staleFiles = [...(previous.exports || []).map((e) => e.filename), ...(previous.thumbnails || []), previous.captionsFilename].filter(Boolean);
-    await mutateProjectRecord(projectId, (current) => {
+    // ffmpeg wrote the kit's files in place; the row that first names them
+    // commits under a backup lease (#9982). Stale files go only after it.
+    await withBackupAssetPublication(() => mutateProjectRecord(projectId, (current) => {
       const kit = projectPublishKit(current);
       return { project: { ...current, publishKit: {
         ...kit,
@@ -170,7 +179,7 @@ async function beginPublishKitBuild(projectId, jobId) {
         captionsFilename,
         chapters: buildChapters(current),
       } } };
-    });
+    }));
     await releaseKitFiles(staleFiles, written);
     return written;
   };

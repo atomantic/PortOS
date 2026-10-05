@@ -114,7 +114,7 @@ describe('publishing kit build (#9281)', () => {
     await kit.startPublishKitBuild(id);
     await vi.waitFor(async () => expect((await projects.getProject(id)).publishKit?.builtAt).toBeTruthy(), { timeout: 90000, interval: 250 });
     const first = (await projects.getProject(id)).publishKit;
-    expect(first.exports.map((e) => e.kind)).toEqual(['x-1080p', 'preview-720p', 'teaser']);
+    expect(first.exports.map((e) => e.kind)).toEqual(['x-1080p', 'preview-720p', 'teaser', 'vertical-9x16']);
     for (const e of first.exports) expect(existsSync(join(PATHS.videos, e.filename))).toBe(true);
     expect(first.thumbnails).toHaveLength(2); // the two performance shots
     expect(first.thumbnail).toBe(first.thumbnails[0]);

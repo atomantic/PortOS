@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Autonomous Jobs — direct execution paths.
  *
@@ -33,7 +34,11 @@ function isScriptJob(job) {
  * @param {Object} job - The script job to execute
  * @returns {Promise<Object>} Result of the script execution
  */
-async function executeScriptJob(job, { manual = false } = {}) {
+async function executeScriptJob(job, options) {
+  return maintenance.run('script-job', job.id, () => executeScriptJobAdmitted(job, options));
+}
+
+async function executeScriptJobAdmitted(job, { manual = false } = {}) {
   if (!isScriptJob(job)) {
     throw new Error(`Job ${job.id} is not a script job`)
   }
@@ -49,7 +54,7 @@ async function executeScriptJob(job, { manual = false } = {}) {
   const result = await handler({ background: !manual })
 
   // Record the job execution
-  await recordJobExecution(job.id)
+  await recordJobExecution(job.id).catch(err => { maintenance.markCurrentUnsettled(); throw err })
 
   console.log(`✅ Script job completed: ${job.name}`)
   cosEvents.emit('jobs:script-executed', { id: job.id, result })
@@ -61,6 +66,10 @@ async function executeScriptJob(job, { manual = false } = {}) {
  * Execute a shell job directly (no AI agent needed)
  */
 async function executeShellJob(job) {
+  return maintenance.run('shell-job', job.id, () => executeShellJobAdmitted(job));
+}
+
+async function executeShellJobAdmitted(job) {
   const validation = validateCommand(job.command)
   if (!validation.valid) {
     throw new Error(`Invalid shell command: ${validation.error}`)
@@ -115,41 +124,19 @@ async function executeShellJob(job) {
       if (errBytes < MAX_OUTPUT_BYTES) { errChunks.push(data.toString()); errBytes += data.length }
     })
 
-    child.on('close', (rawCode, signal) => {
-      const code = rawCode ?? (signal ? 128 : 1)
+    let spawnError = null
+    child.on('error', err => {
+      spawnError = err
+      console.error(`❌ Shell job ${job.name} error: ${err.message}`)
+    })
+    child.once('close', (rawCode, signal) => {
       clearTimeout(timer)
-      if (killed) {
-        const persistTimeout = async () => {
-          await withLock(async () => {
-            const data = await loadJobs()
-            const j = data.jobs.find(x => x.id === job.id)
-            if (j) {
-              j.lastOutput = `Process killed after ${timeoutMs}ms timeout`
-              j.lastExitCode = -1
-              j.lastResult = 'timeout'
-              await saveJobs(data)
-            }
-          })
-          await recordJobExecution(job.id)
-        }
-        persistTimeout().then(() => {
-          const err = new Error(`Shell job "${job.name}" timed out after ${timeoutMs}ms`)
-          err.exitCode = -1
-          reject(err)
-        }).catch((persistErr) => {
-          console.error(`❌ Shell job ${job.name} failed to persist timeout state: ${persistErr.message}`)
-          const err = new Error(`Shell job "${job.name}" timed out after ${timeoutMs}ms`)
-          err.exitCode = -1
-          reject(err)
-        })
-        return
-      }
+      const code = killed || spawnError ? -1 : rawCode ?? (signal ? 128 : 1)
       const output = outChunks.join('')
-      const error = errChunks.join('')
-      const fullOutput = output + (error ? `\n[stderr]\n${error}` : '')
-      const redactedOutput = redactOutput(fullOutput)
-
-      // Persist output/exit code and record execution in a single lock cycle
+      const stderr = errChunks.join('')
+      const redactedOutput = redactOutput(killed
+        ? `Process killed after ${timeoutMs}ms timeout`
+        : spawnError?.message || output + (stderr ? `\n[stderr]\n${stderr}` : ''))
       const persist = async () => {
         await withLock(async () => {
           const data = await loadJobs()
@@ -158,57 +145,28 @@ async function executeShellJob(job) {
             j.lastOutput = redactedOutput.substring(0, 10000)
             j.lastExitCode = code
             j.lastRun = new Date().toISOString()
-            j.lastResult = code === 0 ? 'success' : 'failure'
+            j.lastResult = killed ? 'timeout' : spawnError ? 'error' : code === 0 ? 'success' : 'failure'
             j.runCount = (j.runCount || 0) + 1
             j.updatedAt = j.lastRun
             await saveJobs(data)
-            console.log(`🤖 Shell job executed: ${j.name} (run #${j.runCount})`)
             cosEvents.emit('jobs:executed', { id: job.id, runCount: j.runCount })
           }
         })
       }
-
       persist().then(() => {
+        cosEvents.emit('jobs:shell-executed', { id: job.id, exitCode: code })
         if (code !== 0) {
-          console.error(`❌ Shell job failed: ${job.name} (exit ${code})`)
-          cosEvents.emit('jobs:shell-executed', { id: job.id, exitCode: code })
-          const err = new Error(`Shell job "${job.name}" exited with code ${code}: ${redactedOutput.substring(0, 500)}`)
-          err.exitCode = code
-          reject(err)
+          const message = killed ? `timed out after ${timeoutMs}ms`
+            : spawnError ? `spawn error: ${spawnError.message}` : `exited with code ${code}: ${redactedOutput.substring(0, 500)}`
+          reject(Object.assign(new Error(`Shell job "${job.name}" ${message}`), { exitCode: code }))
           return
         }
-
         console.log(`✅ Shell job completed: ${job.name} (exit ${code})`)
-        cosEvents.emit('jobs:shell-executed', { id: job.id, exitCode: code })
         resolve({ success: true, exitCode: code, output: redactedOutput })
-      }).catch((persistErr) => {
+      }).catch(persistErr => {
+        maintenance.markCurrentUnsettled()
         console.error(`❌ Shell job ${job.name} failed to persist state: ${persistErr.message}`)
         reject(persistErr)
-      })
-    })
-
-    child.on('error', (err) => {
-      clearTimeout(timer)
-      console.error(`❌ Shell job ${job.name} error: ${err.message}`)
-      const persistError = async () => {
-        await withLock(async () => {
-          const data = await loadJobs()
-          const j = data.jobs.find(x => x.id === job.id)
-          if (j) {
-            j.lastOutput = err.message
-            j.lastExitCode = -1
-            j.lastRun = new Date().toISOString()
-            j.lastResult = 'error'
-            await saveJobs(data)
-          }
-        })
-        await recordJobExecution(job.id)
-      }
-      persistError().then(() => {
-        reject(new Error(`Shell job "${job.name}" spawn error: ${err.message}`))
-      }).catch((persistErr) => {
-        console.error(`❌ Shell job ${job.name} failed to persist error state: ${persistErr.message}`)
-        reject(new Error(`Shell job "${job.name}" spawn error: ${err.message}`))
       })
     })
   })

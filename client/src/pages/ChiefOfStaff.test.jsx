@@ -340,6 +340,21 @@ describe('ChiefOfStaff daemon pause controls', () => {
     await waitFor(() => expect(api.resumeCos).toHaveBeenCalledWith({ silent: true }));
     expect(toast.success).toHaveBeenCalledWith('Chief of Staff resumed');
   });
+
+  it('uses a smaller font for the resume button so it fits inside the compact card box', async () => {
+    api.getCosStatus.mockResolvedValue({
+      running: true,
+      paused: true,
+      pauseReason: 'Supervised maintenance',
+      config,
+      stats: {},
+    });
+    await renderSettledConfigTab();
+
+    const resumeButtons = await screen.findAllByRole('button', { name: /resume chief of staff scheduling/i });
+    expect(resumeButtons[0].querySelector('.text-xs')).toHaveTextContent('Resume');
+    expect(resumeButtons[0].querySelector('.text-sm')).toBeNull();
+  });
 });
 
 // The Learning stat card's skipped-count label used to sit in a `flex` row

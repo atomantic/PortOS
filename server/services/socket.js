@@ -311,6 +311,8 @@ const SIMPLE_BRIDGES = [
   // production run advancing (#9066) — all without a client refetch.
   { emitter: musicVideoEvents, event: 'scene-image', channel: 'music-video:scene-image' },
   { emitter: musicVideoEvents, event: 'scene-video', channel: 'music-video:scene-video' },
+  // A scene render failed (or its recorded failure cleared) — #10154.
+  { emitter: musicVideoEvents, event: 'scene-failure', channel: 'music-video:scene-failure' },
   { emitter: musicVideoEvents, event: 'auto-review', channel: 'music-video:auto-review' },
   { emitter: musicVideoEvents, event: 'production', channel: 'music-video:production' },
   // A fully-autonomous run (prompt → lyrics → Suno song → video) advancing.
@@ -319,6 +321,8 @@ const SIMPLE_BRIDGES = [
   // The Cast & Sets check-in advancing, and a development artifact changing.
   { emitter: musicVideoEvents, event: 'cast-and-sets', channel: 'music-video:cast-and-sets' },
   { emitter: musicVideoEvents, event: 'dev-artifact', channel: 'music-video:dev-artifact' },
+  // A publish draft's tab was filled, closed by hand, or discarded.
+  { emitter: musicVideoEvents, event: 'publish-draft', channel: 'music-video:publish-draft' },
 ];
 
 let forwardingRegistered = false;

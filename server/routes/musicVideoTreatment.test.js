@@ -111,7 +111,7 @@ describe('treatment compile', () => {
     const res = await compile(project.id, { baseRevision: 1, useAi: false });
     expect(res.status).toBe(200);
     expect(runPromptThroughProvider).not.toHaveBeenCalled();
-    expect(res.body).toMatchObject({ aiUsed: false, aiSkippedReason: 'not-requested' });
+    expect(res.body).toMatchObject({ aiUsed: false, aiSkippedReason: 'not-requested', llmRoute: null });
 
     const stored = (await reload(project.id)).treatment;
     expect(stored.revision).toBe(2);
@@ -174,7 +174,7 @@ describe('treatment compile', () => {
     });
     const res = await compile(project.id, { baseRevision: 1, providerId: 'test-llm', model: 'test-model' });
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ aiUsed: true, aiSkippedReason: null });
+    expect(res.body).toMatchObject({ aiUsed: true, aiSkippedReason: null, llmRoute: { providerId: 'test-llm', model: 'test-model', transport: 'api', source: 'pinned' } });
     const prompt = runPromptThroughProvider.mock.calls[0][0];
     expect(prompt.source).toBe('music-video-treatment');
     expect(prompt.prompt).toContain('<<<REFERENCE_NOTES');

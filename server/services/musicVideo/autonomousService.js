@@ -31,7 +31,11 @@ import { assertProductionApproval, productionReadiness, productionProofNeedsRend
  *
  * Production is delegated: `produce` starts the server-owned production run (or
  * the code render) and finishes when that reports back over the `production`
- * event. Only explicit start/resume requests begin work.
+ * event. Either way `produce` stays running ("Rendering final video") until the
+ * final render job settles over the `render` event: success completes the run,
+ * failure parks it `failed` and Retry re-renders only. A run interrupted while
+ * rendering re-checks `renderHistoryId` on resume (reattach, finish, or render
+ * again). Only explicit start/resume requests begin work.
  *
  * Production review (art → storyboard → proof) parks `produce` until approved.
  * An authenticated start/resume can grant `brief.autoApprove` for planning;
@@ -59,6 +63,7 @@ import {
   normalizeSunoOptions,
   sunoSongFields,
 } from '../../lib/musicVideoAutonomous.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
 
@@ -91,6 +96,8 @@ const defaults = {
   acceptDocument: async (...args) => (await import('./documentGeneration.js')).acceptMixedMediaDocument(...args),
   generateCode: async (...args) => (await import('./codeGeneration.js')).generateMusicVideoCode(...args),
   renderVideo: async (...args) => (await import('./render.js')).renderMusicVideo(...args),
+  activeRenderJobId: async (projectId) => (await import('./render.js')).getActiveRenderJobId(projectId),
+  cancelRender: async (jobId) => (await import('./render.js')).cancelRender(jobId),
   // The review persistence path; session authority was checked on start/resume.
   approveProductionReview: async (...args) => (await import('./productionReviewService.js')).approveProductionReview(...args),
   wait: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
@@ -152,6 +159,7 @@ const stagePatch = (run, stage, patch) => ({ stages: { [stage]: { ...run.stages[
 
 // ---- production review auto-approval (brief.autoApprove) --------------------------
 
+const RENDER_STEP = 'rendering';
 const PROOF_POLL_MS = 5_000;
 const PROOF_WAIT_MAX_MS = 90 * 60_000;
 const autoApproves = (run, stage) => normalizeAutoApprove(run.brief.autoApprove).includes(stage);
@@ -372,7 +380,9 @@ const STAGES = {
       title: fields.title, concept: run.brief.prompt, lyrics: fields.lyrics, prompt: fields.style,
     });
     const durationSec = await deps.probeDuration(song.filename);
-    await deps.attachAudio(track.id, song.filename, { source: 'suno', prompt: fields.style, lyrics: fields.lyrics, durationSec });
+    // The imported M4A is already durable; the track row that first names it
+    // commits under a backup lease (#9982).
+    await withBackupAssetPublication(() => deps.attachAudio(track.id, song.filename, { source: 'suno', prompt: fields.style, lyrics: fields.lyrics, durationSec }));
     // Linking the track seeds the project's timed lyric cues from the track lyrics.
     await deps.updateProject(project.id, { trackId: track.id });
     return { output: { trackId: track.id, sunoSongIds: song.songIds } };
@@ -421,7 +431,8 @@ const STAGES = {
       if (autoApproves(run, 'proof')) await awaitProofExcerpt(project.id, run);
       assertProductionApproval(await getProject(project.id));
       const render = await deps.renderVideo(project.id);
-      return { output: { renderJobId: render?.jobId || null } };
+      // The run is not finished until the MP4 exists: stay on produce and let the render's own event settle it.
+      return { output: { renderJobId: render?.jobId || null }, wait: true, step: RENDER_STEP };
     }
     const started = await deps.startProduction(project.id, {
       directive: trimTo([run.brief.prompt, run.brief.guidance].filter(Boolean).join('\n\n'), 4000),
@@ -474,8 +485,10 @@ async function advance(projectId) {
       }
       const finishedAt = new Date().toISOString();
       if (result.wait) {
-        await patchRun(projectId, (r) => ({ output: result.output, ...stagePatch(r, stage, { status: 'running' }) }));
-        console.log(`🎬 Autonomous music video ${short(run.id)} handed ${stage} to production`);
+        await patchRun(projectId, (r) => ({ output: result.output, ...stagePatch(r, stage, { status: 'running', step: result.step || null }) }));
+        console.log(`🎬 Autonomous music video ${short(run.id)} handed ${stage} to ${result.step === RENDER_STEP ? 'the final render' : 'production'}`);
+        // The render may have settled before its job id was stored on the run.
+        if (result.step === RENDER_STEP) await reconcileFinalRender(projectId);
         return;
       }
       const next = nextAutonomousStage(stage);
@@ -631,6 +644,12 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
       .catch((err) => console.warn(`⚠️ Autonomous music video ${short(out.run.id)} could not unlink the retaken track: ${err.message}`));
     console.log(`🎬 Autonomous music video ${short(out.run.id)} retaking its song`);
   }
+  if (out.run.stage === 'produce' && (out.run.output.renderJobId || out.run.output.productionDone)) {
+    // Production (or the code render) already finished; only the final render is left.
+    await reconcileFinalRender(projectId, { restart: true });
+    const latest = await getProject(projectId);
+    return { project: presentProjectAutonomousRun(latest), run: presentAutonomousRun(projectAutonomousRun(latest)) };
+  }
   if (out.run.stage === 'produce' && out.run.output.productionRunId) {
     const { resumeProduction } = await import('./productionService.js');
     const failure = await resumeProduction(projectId, out.run.output.productionRunId, { acceptBasis: true }).then(() => null, (err) => err);
@@ -667,6 +686,7 @@ export async function cancelAutonomousVideo(projectId) {
   const { run } = await requireRun(projectId);
   if (!(AUTONOMOUS_LIVE_STATUSES.includes(run.status) || run.status === 'failed')) throw runError(409, 'NOT_CANCELABLE', `A ${run.status} run cannot be canceled`);
   const out = await patchRun(projectId, () => ({ status: 'canceled', awaiting: null }));
+  if (run.output.renderJobId) await deps.cancelRender(run.output.renderJobId).catch(() => {});
   if (run.output.productionRunId) {
     const { cancelProduction } = await import('./productionService.js');
     await cancelProduction(projectId, run.output.productionRunId).catch(() => {});
@@ -695,13 +715,10 @@ async function onProductionEvent({ projectId, runId, run: production }) {
   if (!['running', 'needs-human'].includes(run.status)) return;
   const reason = trimTo(production.stopReason || production.error || '', 500);
   if (production.status === 'completed') {
-    const render = await deps.renderVideo(projectId).catch((err) => ({ error: err }));
-    await patchRun(projectId, (r) => ({
-      status: 'completed',
-      ...stagePatch(r, 'produce', { status: render.error ? 'failed' : 'done', finishedAt: new Date().toISOString(), error: render.error ? trimTo(render.error.message, 500) : null }),
-      ...(render.error ? { error: `The draft is ready, but the final render did not start: ${trimTo(render.error.message, 400)}` } : { output: { renderJobId: render.jobId || null } }),
-    }));
-    console.log(`✅ Autonomous music video ${short(run.id)} finished${render.error ? ' (final render did not start)' : ' — final render started'}`);
+    // A repeated completion event must not start a second render.
+    if (run.output.renderJobId) return;
+    await patchRun(projectId, () => ({ status: 'running', processId: PROCESS_ID, output: { productionDone: true } }));
+    await reconcileFinalRender(projectId, { restart: true });
   } else if (production.status === 'failed') {
     await park(projectId, 'failed', { error: reason || 'Production failed', errorCode: 'PRODUCTION_FAILED' });
   } else if (production.status === 'canceled') {
@@ -710,6 +727,69 @@ async function onProductionEvent({ projectId, runId, run: production }) {
     await park(projectId, 'needs-human', { error: reason || `Production is ${production.status}`, errorCode: 'PRODUCTION_PARKED' });
   }
 }
+
+// ---- final render completion -----------------------------------------------------
+
+/** Park the run as failed on its final render, with the stage marked failed so Retry re-renders only. */
+async function failFinalRender(projectId, message, errorCode = 'FINAL_RENDER_FAILED') {
+  const error = trimTo(message, 500);
+  await patchRun(projectId, (r) => stagePatch(r, 'produce', { status: 'failed', error, step: null }));
+  await park(projectId, 'failed', { error, errorCode });
+}
+
+async function completeFinalRender(projectId, run) {
+  await patchRun(projectId, (r) => ({
+    status: 'completed',
+    ...stagePatch(r, 'produce', { status: 'done', finishedAt: new Date().toISOString(), error: null, step: null }),
+    error: null, errorCode: null,
+  }));
+  console.log(`✅ Autonomous music video ${short(run.id)} finished — final video rendered`);
+}
+
+/** The run, when it is live on its produce stage waiting for the final render (job id or not yet started). */
+const runAwaitingRender = (project) => {
+  const run = projectAutonomousRun(project);
+  return run && run.stage === 'produce' && run.status === 'running' && (run.output.renderJobId || run.output.productionDone) ? run : null;
+};
+
+/**
+ * Settle a run waiting on its final render from the project's own record — the
+ * race where the render ended before its job id was stored, and a resume after
+ * a restart (the job died with the process). Still rendering → keep waiting;
+ * `renderHistoryId` equal to the job id → it finished; otherwise it failed, or
+ * with `restart` (an explicit resume, or production just completed) render again.
+ */
+async function reconcileFinalRender(projectId, { restart = false } = {}) {
+  const project = await getProject(projectId).catch(() => null);
+  const run = runAwaitingRender(project);
+  if (!run) return;
+  const jobId = run.output.renderJobId || null;
+  if (jobId && (project.status === 'rendering' || (await deps.activeRenderJobId(projectId)) === jobId)) {
+    await patchRun(projectId, (r) => stagePatch(r, 'produce', { status: 'running', step: RENDER_STEP }));
+    return;
+  }
+  if (jobId && project.renderHistoryId === jobId) return completeFinalRender(projectId, run);
+  if (!restart) return failFinalRender(projectId, project.renderError || 'The final render did not finish');
+  const render = await deps.renderVideo(projectId).catch((err) => ({ error: err }));
+  if (render.error) return failFinalRender(projectId, `The final render did not start: ${render.error.message}`, render.error.code || 'FINAL_RENDER_FAILED');
+  await patchRun(projectId, (r) => ({ output: { renderJobId: render.jobId || null }, ...stagePatch(r, 'produce', { status: 'running', error: null, step: RENDER_STEP }), error: null, errorCode: null }));
+  console.log(`🎬 Autonomous music video ${short(run.id)} is rendering the final video`);
+  // A render that settled before its id was stored.
+  await reconcileFinalRender(projectId);
+}
+
+async function onRenderEvent({ projectId, jobId, status, error }) {
+  if (!projectId || !jobId) return;
+  const project = await getProject(projectId).catch(() => null);
+  const run = runAwaitingRender(project);
+  if (!run || run.output.renderJobId !== jobId) return;
+  if (status === 'completed') return completeFinalRender(projectId, run);
+  return failFinalRender(projectId, error || (status === 'canceled' ? 'The final render was cancelled' : 'The final render failed'));
+}
+
+musicVideoEvents.on('render', (event) => {
+  onRenderEvent(event).catch((err) => console.error(`❌ Autonomous music video could not settle on its final render: ${err.message}`));
+});
 
 musicVideoEvents.on('production', (event) => {
   onProductionEvent(event).catch((err) => console.error(`❌ Autonomous music video could not settle on production: ${err.message}`));
@@ -730,4 +810,4 @@ async function settleBackground(timeoutMs = 10_000) {
   }
 }
 
-export const __testing = { onProductionEvent, advance, settleBackground };
+export const __testing = { onProductionEvent, onRenderEvent, advance, settleBackground };

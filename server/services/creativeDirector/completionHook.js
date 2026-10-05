@@ -34,6 +34,7 @@ import { runStitch } from './stitchRunner.js';
 import { sampleEvaluationFrames } from '../videoGen/local.js';
 import { listJobs, mediaJobEvents } from '../mediaJobQueue/index.js';
 import { PATHS, sleep } from '../../lib/fileUtils.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { PROJECT_TERMINAL_STATUSES, RUN_TERMINAL_STATUSES } from '../../lib/creativeDirectorPresets.js';
 import {
   DELIVERABLE_KINDS,
@@ -429,21 +430,27 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
       let frames = orphanedEvaluating.evaluationFrames || [];
       const allFramesExist = frames.length > 0 && frames.every((f) => existsSync(join(PATHS.videoThumbnails, f)));
       if (!allFramesExist) {
-        frames = await sampleEvaluationFrames(orphanedEvaluating.renderedJobId)
-          .catch((err) => {
-            console.error(`❌ CD resume sampleEvaluationFrames failed for ${orphanedEvaluating.renderedJobId.slice(0, 8)}: ${err.message}`);
-            return [];
-          });
-        // sampleEvaluationFrames can return [] for non-fatal reasons
-        // (ffmpeg missing on PATH, ffprobe miscount, transient I/O). The
-        // video file is still on disk (we checked above), so the
-        // evaluator template's single-thumbnail fallback path
-        // (`{{^multiFrame}}` in cd-evaluate.md) can still produce a
-        // verdict against `/data/video-thumbnails/{renderedJobId}.jpg`.
-        // Mirror the normal render-completion path (sceneRunner.js): hand
-        // off whatever frames we got, even an empty array, rather than
-        // bailing here and leaving the project wedged in `rendering`.
-        await updateScene(project.id, orphanedEvaluating.sceneId, { evaluationFrames: frames });
+        // Re-sampling overwrites `${jobId}-fN.jpg` in place, replacing bytes
+        // the persisted row may already name. Hold one backup admission from
+        // the first frame write through the row update (as sceneRunner does).
+        frames = await withBackupAssetPublication(async () => {
+          const sampled = await sampleEvaluationFrames(orphanedEvaluating.renderedJobId)
+            .catch((err) => {
+              console.error(`❌ CD resume sampleEvaluationFrames failed for ${orphanedEvaluating.renderedJobId.slice(0, 8)}: ${err.message}`);
+              return [];
+            });
+          // sampleEvaluationFrames can return [] for non-fatal reasons
+          // (ffmpeg missing on PATH, ffprobe miscount, transient I/O). The
+          // video file is still on disk (we checked above), so the
+          // evaluator template's single-thumbnail fallback path
+          // (`{{^multiFrame}}` in cd-evaluate.md) can still produce a
+          // verdict against `/data/video-thumbnails/{renderedJobId}.jpg`.
+          // Mirror the normal render-completion path (sceneRunner.js): hand
+          // off whatever frames we got, even an empty array, rather than
+          // bailing here and leaving the project wedged in `rendering`.
+          await updateScene(project.id, orphanedEvaluating.sceneId, { evaluationFrames: sampled });
+          return sampled;
+        });
       }
       // Pause race re-check after the expensive frame-sampling step. The
       // user could re-pause the project mid-resume; without this the

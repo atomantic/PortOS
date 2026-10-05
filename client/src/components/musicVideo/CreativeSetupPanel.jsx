@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
-import { musicVideoToolPolicyConflict, normalizeMusicVideoProductionPolicy } from '../../../../server/lib/musicVideoMediumPlan.js';
+import { musicVideoToolPolicyConflict } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { formatCount } from '../../utils/formatters.js';
 import { Link } from 'react-router';
 import { listUniverseNames, getUniverse } from '../../services/apiUniverseBuilder.js';
-import MoodBoardReferenceStrip from '../moodBoard/MoodBoardReferenceStrip.jsx';
 import { uuidv4 } from '../../lib/uuid.js';
 import { pullUniverseCanonReferences } from '../../lib/musicVideoUniverseRefs.js';
 
@@ -60,7 +59,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
   }, [editing, universeId]);
 
   const begin = () => {
-    setDraft({ universeId: project.concept?.universeId || '', subjects: project.concept?.subjects || [], moodBoardId: project.visualSpec?.moodBoardId || '', productionPolicy: normalizeMusicVideoProductionPolicy(project.productionPolicy) });
+    setDraft({ universeId: project.concept?.universeId || '', subjects: project.concept?.subjects || [] });
     setSelectedCanon([]);
     setNewName('');
     setNewDescription('');
@@ -82,22 +81,15 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
   };
   const save = async () => {
     if (!universeReady) { setError('Wait for the selected universe to load before saving.'); return; }
-    const percent = draft.productionPolicy.maxGeneratedVideoPercent;
-    if (percent === '' || !Number.isFinite(Number(percent)) || Number(percent) < 0 || Number(percent) > 100) {
-      setError('Choose a generated-video allowance from 0 to 100%.');
-      return;
-    }
     setSaving(true);
     setError('');
     const concept = { subjects: draft.subjects, universeId: draft.universeId || null };
-    const visualSpec = { moodBoardId: draft.moodBoardId || null };
     const canon = { characters: [], places: [], objects: [] };
     for (const item of selectedCanon) {
       if (draft.subjects.some((s) => s.id === item.subjectId)) canon[fields[item.kind]].push(item.entry);
     }
     const pulled = pullUniverseCanonReferences(canon, project.visualSpec?.references || []);
-    if (pulled.added) visualSpec.references = pulled.next;
-    return onSave({ concept, visualSpec, productionPolicy: { ...draft.productionPolicy, maxGeneratedVideoPercent: Number(percent) } }).then(() => setEditing(false)).catch((err) => setError(err.message || 'Could not save creative setup')).finally(() => setSaving(false));
+    return onSave({ concept, ...(pulled.added ? { visualSpec: { references: pulled.next } } : {}) }).then(() => setEditing(false)).catch((err) => setError(err.message || 'Could not save creative setup')).finally(() => setSaving(false));
   };
 
   return <section className="bg-port-card border border-port-border rounded-lg p-3 space-y-3 min-w-0 break-words" aria-label="Creative setup">
@@ -107,7 +99,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
     </div>
     {!editing ? <p className="text-xs text-port-text-muted">{subjects.length ? subjects.map((s) => `${s.name}${s.role === 'protagonist' ? ' (protagonist)' : s.role === 'band' ? ' (band)' : ''}`).join(' · ') : 'Create the band or protagonist, choose a universe, and select the places and objects that anchor the story.'}</p> : <fieldset disabled={saving} className="space-y-3 min-w-0">
       <p className="text-xs text-port-text-muted">Save this setup before planning or generating. Canon and style are copied into this project; source records stay independent.</p>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3">
         <div><label htmlFor={idFor('universe')} className="text-xs">Universe</label>
           <select id={idFor('universe')} className={inputClass} value={universeId} onChange={(e) => {
             const nextId = e.target.value;
@@ -123,26 +115,6 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
           </select>
           {universeId && <Link className="text-xs text-port-accent" target="_blank" to={`/universes/${encodeURIComponent(universeId)}`}>Edit universe canon</Link>}
         </div>
-        <div>
-          <MoodBoardReferenceStrip value={draft.moodBoardId} onChange={(id) => setDraft((d) => ({ ...d, moodBoardId: id || '' }))} newBoardName={project.name} />
-          <p className="text-xs text-port-text-muted">Copies captions, notes and analyzed styles. Add images in Visual spec to condition frames.</p>
-        </div>
-      </div>
-      <div className="space-y-2">
-        <label htmlFor={idFor('strategy')} className="block text-xs">Production strategy</label>
-        <select id={idFor('strategy')} className={inputClass} value={draft.productionPolicy.strategy} onChange={(e) => setDraft((d) => ({ ...d, productionPolicy: normalizeMusicVideoProductionPolicy({ strategy: e.target.value }, d.productionPolicy) }))}>
-          <option value="legacy">Legacy / manual workflow</option>
-          <option value="code-first">Code-first medium planning</option>
-        </select>
-        {draft.productionPolicy.strategy === 'code-first' && <>
-          <label htmlFor={idFor('selective-video')} className="flex items-center gap-2 text-xs min-h-[44px]">
-            <input id={idFor('selective-video')} type="checkbox" checked={Number(draft.productionPolicy.maxGeneratedVideoPercent) > 0} onChange={(e) => setDraft((d) => ({ ...d, productionPolicy: { ...d.productionPolicy, maxGeneratedVideoPercent: e.target.checked ? 20 : 0 } }))} />
-            Allow selective generated footage
-          </label>
-          <label htmlFor={idFor('video-allowance')} className="block text-xs">Maximum generated video (% of final song time)</label>
-          <input id={idFor('video-allowance')} type="number" min="0" max="100" step="any" className={inputClass} value={draft.productionPolicy.maxGeneratedVideoPercent} onChange={(e) => setDraft((d) => ({ ...d, productionPolicy: { ...d.productionPolicy, maxGeneratedVideoPercent: e.target.value } }))} />
-          <p className="text-xs text-port-text-muted">Start with code and images. This policy plans final-edit seconds; it does not change the renderer or enforce generation budgets in manual controls.</p>
-        </>}
       </div>
       {loading && <p className="text-xs">Loading canon…</p>}
       {universeReady && universe && <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">{kinds.map(([kind, label]) => <div key={kind}>
@@ -152,7 +124,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
           if (entry) add(kind, entry.name, entry.physicalDescription || entry.description, entry);
         }}><option value="">Add from universe…</option>{(universe[fields[kind]] || []).filter((entry) => !subjects.some((s) => s.canonId === entry.id && s.kind === kind)).map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select>
       </div>)}</div>}
-      <p className="text-xs text-port-text-muted">Up to 24 subjects. Selected canon images are added as look references when space is available; enable “Condition frames” in Visual spec to use their pixels.</p>
+      <p className="text-xs text-port-text-muted">Up to 24 subjects. Selected canon images are added as look references when space is available; enable “Condition frames” in Look references to use their pixels.</p>
       <ul className="space-y-2">{subjects.map((subject) => <li key={subject.id} className="border border-port-border rounded p-2 space-y-1">
         <div className="flex flex-wrap items-center gap-2"><span className="text-sm min-w-0 flex-1 break-words">{subject.name} · {subject.kind}</span>
           {subject.kind === 'character' && <><label htmlFor={idFor(subject.id)} className="sr-only">Role for {subject.name}</label><select id={idFor(subject.id)} className="bg-port-bg border border-port-border rounded text-xs" value={subject.role || 'supporting'} onChange={(e) => setDraft((d) => ({ ...d, subjects: d.subjects.map((s) => s.id === subject.id ? { ...s, role: e.target.value } : s) }))}><option value="protagonist">Protagonist</option><option value="band">Band</option><option value="supporting">Supporting</option></select></>}

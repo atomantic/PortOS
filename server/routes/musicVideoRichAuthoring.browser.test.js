@@ -23,7 +23,7 @@ vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: async () =
 vi.mock('../services/settings.js', () => ({ getSettings: async () => ({}) }));
 vi.mock('../services/auth.js', () => ({ isAuthEnabled: async () => true, verifyRequestSessionIdentity: async () => ({ kind: 'session', sessionId: 'synthetic-browser', label: null }) }));
 let endpoint;
-vi.mock('../services/browserService.js', () => ({ cdpRequest: path => fetch(`${endpoint}${path}`) }));
+vi.mock('../services/browserService.js', () => ({ loadConfig: async () => ({ chromePath: chrome }), cdpRequest: path => fetch(`${endpoint}${path}`) }));
 const { findFfmpeg } = await import('../lib/ffmpeg.js');
 const { _testChromeCaptureArgs, _waitForTestChrome, _cleanupTestBrowser } = await import('../services/htmlComposition/testBrowserCleanup.js');
 const chrome = [process.env.CHROME_PATH, chromium.executablePath(), '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome'].find(p => p && existsSync(p));
@@ -52,7 +52,7 @@ afterAll(async () => {
 });
 
 describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffmpeg and client dependencies required)', () => {
-  it('selects code-only, authors and accepts a Three.js world through the real UI and renders its reviewed proof', async () => {
+  it('authors and accepts a Three.js world through the real UI and renders its reviewed proof', async () => {
     // Skipped suites do not run cleanup hooks: load data-owning services only here.
     const { PATHS } = await import('../lib/paths.js');
     const { default: router } = await import('./musicVideo.js');
@@ -61,7 +61,7 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     await mkdir(PATHS.music, { recursive: true });
     await mkdir(PATHS.videos, { recursive: true });
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=10', join(PATHS.music, 'synthetic-master.wav')]);
-    const p = await store.createProject({ name: 'Example paper doorway', uploadedAudioFilename: 'synthetic-master.wav', mediaMode: 'code-images', composition: { mode: 'document' } });
+    const p = await store.createProject({ name: 'Example paper doorway', uploadedAudioFilename: 'synthetic-master.wav', mediaMode: 'code-only', composition: { mode: 'document' } });
     await store.setProjectAnalysis(p.id, { durationSec: 10, bpm: 120, beats: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], downbeats: [0, 4, 8], sections: [{ id: 'chorus', label: 'Chorus', startSec: 0, endSec: 10 }] });
     await store.updateProject(p.id, { lyricCues: [{ id: 'line', text: 'Open the doorway', startSec: 1, endSec: 7, words: [{ conf: 'matched', w: 'Open', startSec: 1, endSec: 3 }, { conf: 'matched', w: 'the', startSec: 3, endSec: 4 }, { conf: 'matched', w: 'doorway', startSec: 4, endSec: 7 }] }] });
     const scene = await store.addProjectScene(p.id, { label: 'Chorus', startSec: 0, endSec: 10, prompt: 'A paper doorway opens onto a copper sky.' });
@@ -122,7 +122,8 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
       }
     };
     await page.goto(`http://127.0.0.1:${server.address().port}`);
-    await page.getByLabel('Design and composition media').selectOption('code-only');
+    expect(await page.getByLabel('Design and composition media').count()).toBe(0); // media mode is chosen in Setup only
+    await page.getByText('Document source', { exact: true }).click();
     await page.getByLabel('Authoring renderer').selectOption('three');
     expect((await store.getProject(p.id)).mediaMode).toBe('code-only');
     const choreography = 'Energy target: driving chorus with an expansive exit.\n0:00–0:04 / opening downbeats: operator steps toward the door and raises the key; camera pushes in; title lands on the first vocal.\n0:04–0:10 / chorus accent: key turns, door swings outward, operator crosses the threshold; camera arcs around the prop; type clears before the exit.\nRepeat chorus: widen the doorway and increase the operator travel while retaining the copper motif.';
@@ -147,7 +148,7 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     await approve('Approve art direction', { exact: true });
     const [planned] = await Promise.all([
       page.waitForResponse(response => response.url().endsWith('/production-review/prepare') && response.request().method() === 'POST'),
-      page.getByRole('button', { name: 'Prepare planning draft with autopilot' }).click(),
+      page.getByRole('button', { name: 'Draft art direction and shots' }).click(),
     ]);
     expect(planned.status()).toBe(200);
     expect((await store.getProject(p.id)).treatment.shotDirections[0].medium).toBe('procedural');
@@ -194,11 +195,11 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     await page.locator('video').evaluate(async video => { await video.play(); await new Promise(r => setTimeout(r, 400)); video.pause(); });
     expect(await page.locator('video').evaluate(v => v.videoWidth)).toBeGreaterThan(0);
     expect(await page.getByRole('region', { name: 'Saved choreography for proof comparison' }).textContent()).toContain(choreography);
-    expect(await page.getByRole('button', { name: 'Approve animated proof' }).isDisabled()).toBe(true);
+    expect(await page.getByRole('button', { name: 'Approve — I reviewed this proof with audio' }).isDisabled()).toBe(true);
     await page.getByLabel('Playback energy compared with the saved plan').fill('The synthetic fixture demonstrates a driving chorus: the modeled subject changes pose and travels while the camera moves through the scene.');
     await page.getByLabel('Timecoded playback notes').fill('0:02 — subject enters the frame; 0:07 — pose and camera position differ and readable type remains clear. This is a synthetic workflow test, not artistic approval of a production video.');
-    await page.getByLabel('I watched this revision with audio at normal speed and compared its energy, timed choreography and lyric timing with the saved plan.').check();
-    await page.getByRole('button', { name: 'Approve animated proof' }).click();
+    expect(await page.getByRole('checkbox', { name: /I watched this revision/ }).count()).toBe(0);
+    await page.getByRole('button', { name: 'Approve — I reviewed this proof with audio' }).click();
     await page.waitForFunction(() => [...document.querySelectorAll('[role=status]')].filter(el => el.textContent === 'Approved for this revision').length === 3);
     const result = await store.getProject(p.id);
     expect(result.productionReview.feedback[0].resolvedAt).toBeTruthy();

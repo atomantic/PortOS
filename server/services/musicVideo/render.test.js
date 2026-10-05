@@ -138,7 +138,10 @@ describe('sound-design bed (#8988)', () => {
     expect(fc).toContain('[2:a]aresample=48000');
     expect(fc).toMatch(/\[4:a\][^;]*atrim=start=0:end=4,[^;]*volume=0\.3\[bed0\]/);
     // The song keeps its length and level: duration=first, normalize=0.
-    expect(fc).toContain('[master][bed0]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[mixa]');
+    expect(fc).toContain('[master][bed0]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[bedmix]');
+    // Only a true-peak guard follows the mix: no gain stage on the song.
+    expect(fc).toContain('[bedmix]alimiter=limit=0.8414:level=disabled,aresample=48000');
+    expect(fc).toContain('[mixa];');
     // A draft excerpt windows the MIXED audio, not the bare song.
     expect(fc).toContain('[mixa]atrim=start=1:end=3,asetpts=PTS-STARTPTS[outax]');
     expect(mapsOf(args)).toEqual(['[outvx]', '[outax]']);

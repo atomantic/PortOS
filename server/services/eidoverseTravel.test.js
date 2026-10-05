@@ -86,6 +86,19 @@ describe('registered-peer Eidoverse guest workflow over HTTP', () => {
     await expect(eidoverseVisitChat({ visitId: visit.visitId })).rejects.toMatchObject({ status: 404 });
   });
 
+  it('labels malformed peer names neutrally over GET destinations without touching peers or admission', async () => {
+    const names = ['null', 'undefined', '  null  ', '   ', null, undefined, 42, ' Null Island ', 'Undefined Gardens', 'NULL'];
+    const peers = names.map((name, i) => ({ id: `dest-${i}`, instanceId: `dest-instance-${i}`, address: '127.0.0.1', port: server.address().port, name, status: 'online', enabled: true }));
+    const before = JSON.stringify(peers);
+    const ineligible = [{ ...peers[0], id: 'off', instanceId: 'off-i', status: 'offline' }, { ...peers[0], id: 'dis', instanceId: 'dis-i', enabled: false }];
+    mocks.peers = [...peers, ...ineligible];
+    const body = await (await fetch(`${base}/destinations`)).json();
+    expect(body.destinations.map((d) => d.label)).toEqual([...Array(7).fill('Federated world'), 'Null Island', 'Undefined Gardens', 'NULL']);
+    expect(body.destinations.map((d) => d.peerId)).toEqual(peers.map(eidoversePeerId));
+    expect(JSON.stringify(peers)).toBe(before);
+    expect(mocks.admission).not.toHaveBeenCalled();
+  });
+
   it('limits browser tickets to visitor metadata and pins agent sessions to the originating peer', async () => {
     const { url } = await visitEidoversePeer({ peerId: eidoversePeerId(destination), agent: false });
     expect(mocks.admission).toHaveBeenLastCalledWith({ agent: false, name: 'Example Human' });

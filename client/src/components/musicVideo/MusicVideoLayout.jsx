@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
-  AlertTriangle, ArrowRight, CheckCircle2, CircleDot, Clapperboard, Film, Layers, LayoutGrid, Music, Play,
+  AlertTriangle, ArrowRight, CheckCircle2, CircleDot, Clapperboard, Film, History, Layers, LayoutGrid, Music, Play,
   Send, SlidersHorizontal, Users,
 } from 'lucide-react';
 import TabPills from '../ui/TabPills.jsx';
@@ -21,12 +21,53 @@ const STAGE_TRAILING = {
   active: <CircleDot size={12} className="shrink-0 text-port-accent max-lg:hidden" aria-label="in progress" />,
   blocked: <AlertTriangle size={12} className="shrink-0 text-port-warning" aria-label="needs you" />,
 };
+// Approved earlier, changed since (#10141): shown at every width, like "needs you",
+// because the stage's checklist names what to re-approve.
+const STALE_MARK = <History size={12} className="shrink-0 text-port-warning" aria-label="approved earlier, changed since" />;
 
 // The page's scroll body (the route is full-width, so the page owns its
 // scroll): a new tab scrolls it back to the top.
 export const MUSIC_VIDEO_SCROLL_ID = 'mv-scroll';
 
 const STATUS_TONES = { warn: 'text-port-warning', ok: 'text-port-success', muted: 'text-port-text-muted' };
+
+function StatusFacts({ status }) {
+  return status.facts.map((fact) => (
+    <span key={fact.id} className={`flex items-center gap-2 ${STATUS_TONES[fact.tone] || ''}`}>
+      <span aria-hidden="true" className="text-port-text-muted">·</span>{fact.label}
+    </span>
+  ));
+}
+
+/** Wide screens show the headline and every fact. A phone shows one tappable line. */
+function ProjectStatusLine({ status }) {
+  const [open, setOpen] = useState(false);
+  const facts = status.facts || [];
+  return (
+    <>
+      <p role="status" aria-label="Project status" className="hidden min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs sm:flex">
+        <span className={`font-medium ${STATUS_TONES[status.tone] || ''}`}>{status.headline}</span>
+        <StatusFacts status={status} />
+      </p>
+      <div>
+        <button
+          type="button"
+          className="flex min-h-8 w-full min-w-0 items-center gap-1 text-left text-xs sm:hidden"
+          aria-expanded={facts.length > 0 ? open : undefined}
+          onClick={() => { if (facts.length > 0) setOpen((value) => !value); }}
+        >
+          <span className={`min-w-0 truncate font-medium ${STATUS_TONES[status.tone] || ''}`}>{status.headline}</span>
+          {facts.length > 0 && <span className="shrink-0 text-port-text-muted">· {facts.length}</span>}
+        </button>
+        {open && facts.length > 0 && (
+          <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+            <StatusFacts status={status} />
+          </p>
+        )}
+      </div>
+    </>
+  );
+}
 
 // Below `lg` the preview is a mini-player pinned above the bottom tab bar (or
 // the viewport edge once the tab bar is in the header); from `lg` it is a
@@ -80,7 +121,7 @@ export default function MusicVideoLayout({
     id: entry.id,
     label: entry.label,
     icon: STAGE_ICONS[entry.id],
-    trailing: STAGE_TRAILING[entry.state] || null,
+    trailing: entry.state !== 'blocked' && entry.stale ? STALE_MARK : STAGE_TRAILING[entry.state] || null,
   }));
   const showSpend = spend.spentUsd > 0 || spend.capUsd != null;
   const stageEntry = progress.stages.find((entry) => entry.id === stage);
@@ -90,17 +131,17 @@ export default function MusicVideoLayout({
     <div ref={rootRef} className={`space-y-3 ${dockVisible ? 'max-lg:pb-40' : 'max-md:pb-20'}`}>
       <header
         ref={headerRef}
-        className="sticky top-[calc(env(safe-area-inset-top)-1rem)] z-30 -mx-4 space-y-2 border-b border-port-border bg-port-bg px-4 pt-2 md:top-[calc(env(safe-area-inset-top)-1.5rem)] md:-mx-6 md:px-6"
+        className="sticky top-[calc(env(safe-area-inset-top)-1rem)] z-30 -mx-4 -mt-4 space-y-2 border-b border-port-border bg-port-bg px-4 pt-2 md:top-[calc(env(safe-area-inset-top)-1.5rem)] md:-mx-6 md:-mt-6 md:px-6"
       >
         <div className="flex min-w-0 items-center gap-3">
-          <h2 className="min-w-0 flex-1 truncate text-lg font-semibold">{project.name}</h2>
+          <h2 className="min-w-0 flex-1 truncate text-lg font-semibold" title={project.name}>{project.name}</h2>
           <span className="flex min-w-0 items-center gap-1 text-xs text-port-text-muted max-sm:hidden">
             <Music size={12} className="shrink-0" aria-hidden="true" />
             <span className="truncate">{trackLabel}</span>
           </span>
           {showSpend && (
             <Pill size="xs" tone={spend.capUsd != null && spend.spentUsd >= spend.capUsd ? 'warning' : 'muted'}>
-              <span title="Paid generation used across this project's production runs, against the cap">
+              <span title={`Paid generation used, against the cap. Autopilot ${formatUsd(spend.autopilot ?? 0)} · manual takes ${formatUsd(spend.manual ?? 0)} · auto-review ${formatUsd(spend.autoReview ?? 0)} (estimates)`}>
                 {formatUsd(spend.spentUsd)}{spend.capUsd != null ? ` / ${formatUsd(spend.capUsd)}` : ' · no cap'}
               </span>
             </Pill>
@@ -111,22 +152,16 @@ export default function MusicVideoLayout({
               onClick={onNextAction}
               disabled={nextAction.disabled}
               title={nextAction.reason}
-              className="flex min-h-[44px] shrink-0 items-center gap-1 rounded bg-port-accent px-3 py-1.5 text-sm text-white disabled:opacity-50 sm:min-h-0"
+              aria-label={nextAction.label}
+              className="flex h-8 shrink-0 items-center gap-1 rounded bg-port-accent px-2 text-xs text-white disabled:opacity-50 sm:h-auto sm:min-h-0 sm:px-3 sm:py-1.5 sm:text-sm"
             >
-              <ActionIcon size={14} aria-hidden="true" /> {nextAction.label}
+              <ActionIcon size={14} aria-hidden="true" />
+              <span className="sm:hidden">{nextAction.shortLabel || nextAction.label}</span>
+              <span className="hidden sm:inline">{nextAction.label}</span>
             </button>
           )}
         </div>
-        {status && (
-          <p role="status" aria-label="Project status" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
-            <span className={`font-medium ${STATUS_TONES[status.tone] || ''}`}>{status.headline}</span>
-            {status.facts.map((fact) => (
-              <span key={fact.id} className={`flex items-center gap-2 ${STATUS_TONES[fact.tone] || ''}`}>
-                <span aria-hidden="true" className="text-port-text-muted">·</span>{fact.label}
-              </span>
-            ))}
-          </p>
-        )}
+        {status && <ProjectStatusLine status={status} />}
         {attention}
         <nav
           aria-label="Stages"

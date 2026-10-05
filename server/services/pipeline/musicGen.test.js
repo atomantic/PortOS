@@ -406,6 +406,9 @@ const h = vi.hoisted(() => ({
   mockExitCode: 0,
   mockStdout: '',
   mockWriteOutput: true,
+  deferClose: false,
+  child: null,
+  finishChild: null,
   musicgenPython: '/fake/venv-musicgen/bin/python3',
   audioldm2Python: '/fake/venv-audioldm2/bin/python3',
   minimaxMusic3Python: '/fake/venv-minimax-music3/bin/python3',
@@ -450,18 +453,26 @@ vi.mock('../../lib/childProcess.js', async () => {
       h.spawnCalls.push({ bin, args });
       const listeners = {};
       const proc = {
+        pid: 101, exitCode: null, signalCode: null,
         stdout: { on: (event, cb) => { if (event === 'data' && h.mockStdout) cb(Buffer.from(h.mockStdout)); } },
         stderr: { on: (event, cb) => { if (event === 'data') cb(Buffer.from('STAGE:generate\n')); } },
         on: (event, cb) => { listeners[event] = cb; },
+        emit: (event, ...args) => listeners[event]?.(...args),
         kill: () => {},
       };
-      Promise.resolve().then(() => {
+      let finished = false;
+      h.child = proc;
+      h.finishChild = () => {
+        if (finished) return;
+        finished = true;
         if (h.mockExitCode === 0 && h.mockWriteOutput) {
           const outPath = args[args.indexOf('--output') + 1];
           writeFileSync(outPath, Buffer.from('fake-wav-bytes'));
         }
+        proc.exitCode = h.mockExitCode;
         listeners.close?.(h.mockExitCode, null);
-      });
+      };
+      if (!h.deferClose) Promise.resolve().then(h.finishChild);
       return proc;
     },
   };
@@ -501,6 +512,9 @@ beforeEach(() => {
   h.spawnCalls.length = 0;
   h.mockExitCode = 0;
   h.mockWriteOutput = true;
+  h.deferClose = false;
+  h.child = null;
+  h.finishChild = null;
   h.mockStdout = 'STAGE:done\nRESULT:{"output":"x","durationSec":12.5,"sampleRate":32000}\n';
   h.musicgenPython = '/fake/venv-musicgen/bin/python3';
   h.audioldm2Python = '/fake/venv-audioldm2/bin/python3';
@@ -529,6 +543,45 @@ afterAll(async () => {
 });
 
 describe('generateMusic backend selection', () => {
+  it('keeps music ownership through a live sidecar error until close and partial-file cleanup', async () => {
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    h.deferClose = true;
+    const outcome = generateMusic({ prompt: 'in-flight audio' }).catch(error => error);
+    await vi.waitFor(() => expect(h.child).not.toBeNull());
+    const { hold } = maintenance.begin({ reason: 'Drain live audio', owner: 'Operator' });
+    try {
+      h.child.emit('error', new Error('signal transport failed'));
+      await Promise.resolve();
+      expect(maintenance.status().state).toBe('draining');
+      h.finishChild();
+      expect(await outcome).toMatchObject({ code: 'PIPELINE_MUSIC_GEN_FAILED' });
+      expect(await readdir(TEST_DIR)).toHaveLength(0);
+      expect(maintenance.status().state).toBe('ready');
+    } finally {
+      h.finishChild();
+      await outcome;
+      maintenance.resume({ id: hold.id, revision: hold.revision });
+    }
+  });
+
+  it('holds new music renders before probes or spawn while an admitted render can continue', async () => {
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const parent = maintenance.admit('media', 'admitted-audio');
+    const { hold } = maintenance.begin({ reason: 'Drain audio', owner: 'Operator' });
+    try {
+      await expect(generateMusic({ prompt: 'new render' })).rejects.toMatchObject({ code: 'MAINTENANCE_HELD' });
+      expect(h.probeCalls).toEqual([]);
+      expect(spawnCalls).toEqual([]);
+      await expect(parent.run(() => generateMusic({ prompt: 'already admitted' }))).resolves.toMatchObject({ engine: 'musicgen' });
+      expect(maintenance.status().state).toBe('draining');
+      await parent.finish();
+      expect(maintenance.status().state).toBe('ready');
+    } finally {
+      await parent.finish();
+      maintenance.resume({ id: hold.id, revision: hold.revision });
+    }
+  });
+
   it('defaults to the musicgen sidecar', async () => {
     const res = await generateMusic({ prompt: 'calm piano' });
     expect(spawnCalls).toHaveLength(1);

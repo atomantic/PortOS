@@ -11,8 +11,9 @@
 import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { Router } from 'express';
-import { musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema } from '../lib/musicVideoValidation.js';
-import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback } from '../services/musicVideo/productionReviewService.js';
+import { musicVideoProjectListQuerySchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
+import { productionReadiness } from '../services/musicVideo/productionReview.js';
+import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest,
@@ -107,10 +108,12 @@ import { getHistoryItem } from '../services/videoGen/history.js';
 import {
   startMidiTranscription,
   attachMidiTranscriptionSseClient,
+  getActiveMidiTranscriptionJobId,
   cancelMidiTranscription,
 } from '../services/audioMidiTranscription.js';
 import { analyzeAudioFileManual, buildManualAnalysisFromCached } from '../services/musicVideo/audioAnalysis.js';
 import { analyzeProjectSong, resolveProjectAudioPath } from '../services/musicVideo/projectAudio.js';
+import { listInFlightSceneJobs } from '../services/musicVideo/sceneJobs.js';
 import { renderMusicVideo, attachRenderSseClient, cancelRender, getActiveRenderJobId } from '../services/musicVideo/render.js';
 import { prepareCodeRender } from '../services/musicVideo/codeRender.js';
 import { generateMusicVideoCode, regenerateMusicVideoCodeSection } from '../services/musicVideo/codeGeneration.js';
@@ -118,7 +121,7 @@ import { startExcerptRender, attachExcerptRenderSseClient, cancelExcerptRender }
 import { deleteExcerpt, addReviewNote, editReviewNote, deleteReviewNote } from '../services/musicVideo/excerptService.js';
 import { suggestSocialCuts } from '../services/musicVideo/socialCuts.js';
 import { getActivePublishKitBuild, startPublishKitBuild, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, selectPublishKitThumbnail } from '../services/musicVideo/publishKit.js';
-import { preparePublishDraft, submitPublishDraft, discardPublishDraft, recordPublishPost } from '../services/musicVideo/publish/index.js';
+import { preparePublishDraft, discardPublishDraft, listPublishDrafts, recordPublishPost } from '../services/musicVideo/publish/index.js';
 import { getPublishPlatforms, updatePublishPlatforms, publishHistory } from '../services/musicVideo/publish/platforms.js';
 import {
   getDependencyImpact,
@@ -151,7 +154,12 @@ import { buildDocumentPreview } from '../services/musicVideo/documentPreview.js'
 import { acceptMixedMediaDocument, generateMixedMediaDocument, readMixedMediaCandidate, regenerateMixedMediaSection, reviseMixedMediaEvents } from '../services/musicVideo/documentGeneration.js';
 import { isZipUpload } from '../lib/zipStream.js';
 import { parseLyricCues } from '../services/musicVideo/timedText.js';
-import { alignProjectLyrics } from '../services/musicVideo/lyricAlign.js';
+import {
+  attachLyricAlignSseClient,
+  cancelLyricAlign,
+  getActiveLyricAlignJobId,
+  startLyricAlign,
+} from '../services/musicVideo/lyricAlignJob.js';
 import { importTrackLyrics, MAX_LYRIC_CUES } from '../services/musicVideo/trackLyrics.js';
 import { offsetLyricMarkers } from '../services/musicVideo/lyricMarkers.js';
 import {
@@ -178,10 +186,15 @@ import {
   regenerateCastAndSets,
   resumeCastAndSets,
   approveCastAndSets,
+  reconfirmCastAndSets,
   skipCastAndSets,
   getCastAndSets,
   presentProjectCastAndSets,
 } from '../services/musicVideo/castAndSetsService.js';
+import {
+  summarizeMusicVideoProject,
+  compareMusicVideoProjectsNewestFirst,
+} from '../lib/musicVideoSummary.js';
 
 const router = Router();
 
@@ -200,15 +213,55 @@ const projectUpdateSchema = musicVideoProjectUpdateSchema.extend(recordRenderPin
 // Backward-compatible by default: returns the full projects array. When a client
 // passes `limit`/`offset`, the response becomes the bounded
 // `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
+// `summary=1` (#10169) swaps each record for its bounded summary projection —
+// newest first, with a `nextCursor` — for the project index and header picker, so
+// they never load every project's scenes, runs and reviews.
 // Both pins are process-local, so only the server can say which stages a restart orphaned.
-const presentProjectForRead = (project) => presentProjectAutonomousRun(presentProjectCastAndSets(project));
+// Approvals decide stage completion and only the server computes them (#10136), so the read
+// response carries `productionReadiness` — stages derive from one record, never "not done" while a
+// second request is in flight. GET /:id/production-review still serves the full review payload.
+const presentProjectForRead = (project) => {
+  const presented = presentProjectAutonomousRun(presentProjectCastAndSets(project));
+  return { ...presented, productionReadiness: productionReadiness(presented) };
+};
 
 router.get('/', asyncHandler(async (req, res) => {
+  const query = validateRequest(musicVideoProjectListQuerySchema, req.query);
   const projects = (await listProjects()).map(presentProjectForRead);
-  if (!isPaginationRequested(req.query)) {
+  if (query.summary === '1' || query.summary === 'true') {
+    const summaries = projects.sort(compareMusicVideoProjectsNewestFirst)
+      .map((project) => summarizeMusicVideoProject(project, project.productionReadiness));
+    // The cursor is the next page's offset; `cursor` wins over `offset`.
+    const cursor = parseInt(query.cursor, 10);
+    const page = paginateArray(summaries, Number.isInteger(cursor) && cursor >= 0 ? { ...query, offset: String(cursor) } : query,
+      { defaultLimit: 50, maxLimit: 500 });
+    const next = page.offset + page.items.length;
+    return res.json({ ...page, nextCursor: next < page.total ? String(next) : null });
+  }
+  if (!isPaginationRequested(query)) {
     return res.json(projects);
   }
-  res.json(paginateArray(projects, req.query, { defaultLimit: 50, maxLimit: 500 }));
+  res.json(paginateArray(projects, query, { defaultLimit: 50, maxLimit: 500 }));
+}));
+
+// Bounded projection for the Tracks page MIDI read-through (#10203): the newest
+// MIDI transcription per linked track, without shipping every full project record.
+router.get('/midi-sources', asyncHandler(async (req, res) => {
+  const newest = new Map();
+  for (const p of await listProjects()) {
+    const midi = p.midiTranscription;
+    if (!p.trackId || !midi?.filename) continue;
+    const prev = newest.get(p.trackId);
+    if (!prev || (midi.createdAt || '') > (prev.midiTranscription.createdAt || '')) {
+      newest.set(p.trackId, {
+        trackId: p.trackId,
+        id: p.id,
+        name: p.name,
+        midiTranscription: { filename: midi.filename, model: midi.model, createdAt: midi.createdAt },
+      });
+    }
+  }
+  res.json([...newest.values()]);
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
@@ -360,8 +413,8 @@ router.post('/:id/analyze/manual', asyncHandler(async (req, res) => {
 // a missing provider or parse failure degrades to plain scenes rather than
 // failing the request (see `promptsSeeded`/`promptsSkippedReason` in the body).
 router.post('/:id/plan', asyncHandler(async (req, res) => {
-  const { seedPrompts, providerId, model, effort } = validateRequest(musicVideoPlanRequestSchema, req.body || {});
-  const result = await planProject(req.params.id, { seedPrompts, providerId, model, effort });
+  const { seedPrompts, providerId, model, effort, mode } = validateRequest(musicVideoPlanRequestSchema, req.body || {});
+  const result = await planProject(req.params.id, { seedPrompts, providerId, model, effort, mode: mode ?? 'require' });
   res.json(result);
 }));
 
@@ -432,13 +485,39 @@ router.post('/:id/lyrics/import-track', asyncHandler(async (req, res) => {
   res.json(await importTrackLyrics(req.params.id, { mode }));
 }));
 
-// Word-level alignment (#9074). Nothing here runs until the director clicks
-// Align words or a line's Re-align (or starts an autopilot run). The first
-// alignment downloads the music-grade whisper model; no whisper.cpp at all is
-// a 503 with install steps, not an empty timing list.
+// Word-level alignment (#9074) as a job (#10155). Nothing here runs until the
+// director clicks Align words or a line's Re-align (or starts an autopilot
+// run). Kickoff returns 202 + a jobId; stages (model download %, decoding,
+// transcribing window n/m) stream over SSE with cancel, and the terminal
+// `complete` frame carries the updated project. One job per project: a second
+// request returns the running job (`reused: true`). The first alignment
+// downloads the music-grade whisper model; no whisper.cpp at all is an error
+// frame with install steps, not an empty timing list.
 router.post('/:id/lyrics/align', asyncHandler(async (req, res) => {
   const { cueId } = validateRequest(musicVideoLyricsAlignSchema, req.body || {});
-  res.json(await alignProjectLyrics(req.params.id, { cueId }));
+  res.status(202).json(await startLyricAlign(req.params.id, { cueId }));
+}));
+
+router.get('/lyrics/align/:jobId/events', (req, res) => {
+  if (!attachLyricAlignSseClient(req.params.jobId, res)) {
+    throw new ServerError('Alignment job not found or expired', { status: 404, code: 'NOT_FOUND' });
+  }
+});
+
+router.post('/lyrics/align/:jobId/cancel', (req, res) => {
+  res.json({ ok: cancelLyricAlign(req.params.jobId) });
+});
+
+// Read-only: the project's live alignment, vocal-separation and MIDI jobs on
+// this instance (null when none), so a reloaded Setup reattaches to each
+// instead of POSTing a new run.
+router.get('/:id/active-jobs', asyncHandler(async (req, res) => {
+  const { getActiveVocalSeparationJobId } = await import('../services/musicVideo/vocalSeparation.js');
+  res.json({
+    alignment: getActiveLyricAlignJobId(req.params.id),
+    separation: getActiveVocalSeparationJobId(req.params.id),
+    midi: getActiveMidiTranscriptionJobId(req.params.id),
+  });
 }));
 
 // --- Audio → MIDI transcription (MuScriptor) ---
@@ -466,6 +545,7 @@ router.post('/:id/transcribe-midi', asyncHandler(async (req, res) => {
     audioPath,
     outputName: `${project.name || 'music-video'}-midi`,
     model,
+    ownerKey: projectId,
     // Land the .mid in the music dir (not uploads) so the peer-sync asset
     // manifest federates it with the project's other audio — the manifest
     // only ships known asset kinds/directories, and `music` is one.
@@ -510,6 +590,12 @@ router.get('/:id/render', (req, res) => {
   res.json({ jobId: getActiveRenderJobId(req.params.id) });
 });
 
+// Read-only: this project's in-flight scene frame/clip renders (#10154), so a
+// reloaded board restores its spinners instead of letting a duplicate be submitted.
+router.get('/:id/scene-jobs', (req, res) => {
+  res.json({ jobs: listInFlightSceneJobs(req.params.id) });
+});
+
 router.post('/:id/production-review/feedback', asyncHandler(async (req, res) => {
   res.json(await addProductionFeedback(req.params.id, validateRequest(musicVideoProductionFeedbackSchema, req.body)));
 }));
@@ -517,6 +603,13 @@ router.post('/:id/production-review/feedback/resolve', asyncHandler(async (req, 
   const input = validateRequest(musicVideoProductionFeedbackResolutionSchema, req.body);
   const reviewer = await requireProductionReviewer(req);
   res.json(await closeProductionFeedback(req.params.id, { feedbackId: input.feedbackId, resolution: input.resolution, reviewer }));
+}));
+// An explicit click: the only provider call is the stage's own revision.
+router.post('/:id/production-review/revise', asyncHandler(async (req, res) => {
+  res.json(await reviseProductionFromFeedback(req.params.id, validateRequest(musicVideoProductionReviseSchema, req.body ?? {})));
+}));
+router.post('/:id/production-review/revert', asyncHandler(async (req, res) => {
+  res.json(await revertProductionInput(req.params.id, validateRequest(musicVideoProductionRevertSchema, req.body)));
 }));
 router.get('/:id/production-review', asyncHandler(async (req, res) => {
   res.json(await getProductionReview(req.params.id));
@@ -662,6 +755,31 @@ router.delete('/:id/composition/document/candidate', asyncHandler(async (req, re
   res.json(await discardGeneratedDocument(req.params.id, directory));
 }));
 
+// Local making-of compilation. The preview digest binds download to the exact
+// reviewed metadata, content, rights declarations and explicit asset selection.
+router.get('/:id/making-of/catalog', asyncHandler(async (req, res) => {
+  const { getMakingOfCatalog } = await import('../services/musicVideo/makingOf.js');
+  res.json(await getMakingOfCatalog(req.params.id));
+}));
+
+router.post('/making-of/preview', asyncHandler(async (req, res) => {
+  const { musicVideoMakingOfSelectionSchema } = await import('../lib/musicVideoValidation.js');
+  const input = validateRequest(musicVideoMakingOfSelectionSchema, req.body ?? {});
+  const { compileMakingOf } = await import('../services/musicVideo/makingOf.js');
+  res.json(await compileMakingOf(input));
+}));
+
+router.post('/making-of/export', asyncHandler(async (req, res) => {
+  const { musicVideoMakingOfSelectionSchema } = await import('../lib/musicVideoValidation.js');
+  const input = validateRequest(musicVideoMakingOfSelectionSchema, req.body ?? {});
+  const { compileMakingOf } = await import('../services/musicVideo/makingOf.js');
+  const { zip } = await compileMakingOf(input, { download: true });
+  res.set('Content-Type', 'application/zip');
+  res.set('Content-Disposition', 'attachment; filename="music-video-making-of.zip"');
+  res.set('Cache-Control', 'no-store');
+  res.send(zip);
+}));
+
 router.get('/:id/composition/document/export', asyncHandler(async (req, res) => {
   const { zip, filename } = await exportDocumentZip(await requireProject(req.params.id));
   res.set('Content-Type', 'application/zip');
@@ -774,8 +892,8 @@ router.post('/:id/publish/:target/prepare', asyncHandler(async (req, res) => {
   res.json(await preparePublishDraft(req.params.id, target, options));
 }));
 
-router.post('/:id/publish/drafts/:draftId/submit', asyncHandler(async (req, res) => {
-  res.json(await submitPublishDraft(req.params.id, req.params.draftId));
+router.get('/:id/publish/drafts', asyncHandler(async (req, res) => {
+  res.json({ drafts: await listPublishDrafts(req.params.id) });
 }));
 
 router.delete('/:id/publish/drafts/:draftId', asyncHandler(async (req, res) => {
@@ -1056,6 +1174,12 @@ router.post('/:id/cast-and-sets/resume', asyncHandler(async (req, res) => {
 
 router.post('/:id/cast-and-sets/approve', asyncHandler(async (req, res) => {
   res.json(await approveCastAndSets(req.params.id));
+}));
+
+// "Keep approved": an approved check-in whose concept, style, subjects or song
+// changed since is re-stamped on the current inputs (#10141). No body.
+router.post('/:id/cast-and-sets/reconfirm', asyncHandler(async (req, res) => {
+  res.json(await reconfirmCastAndSets(req.params.id));
 }));
 
 router.post('/:id/cast-and-sets/skip', asyncHandler(async (req, res) => {

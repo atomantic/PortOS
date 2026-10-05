@@ -102,6 +102,16 @@ describe('draft excerpt deletion (#8986)', () => {
     expect(r.body.excerpts).toEqual([]);
   });
 
+  it('refuses to delete the excerpt registered as the production proof (#10148)', async () => {
+    const { project } = await projectWithExcerpt();
+    await projects.updateProject(project.id, { productionReview: { proof: { excerptId: 'mve-1', startSec: 10, endSec: 20, basis: 'b' } } });
+    const r = await request(app).delete(`${base(project.id)}/excerpt/mve-1`);
+    expect(r.status).toBe(409);
+    expect(r.body.code).toBe('EXCERPT_REGISTERED_PROOF');
+    expect(r.body.error || r.body.message).toMatch(/Revoke/);
+    expect((await projects.getProject(project.id)).excerpts).toHaveLength(1);
+  });
+
   it('refuses to delete an excerpt whose render is still in flight', async () => {
     const { project } = await projectWithExcerpt({ status: 'rendering', filename: null, contactSheetFilename: null });
     const r = await request(app).delete(`${base(project.id)}/excerpt/mve-1`);

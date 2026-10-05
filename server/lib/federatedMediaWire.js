@@ -157,6 +157,7 @@ export function normalizeRequestedMediaKinds(raw) {
 // staging name, and the provider's path resolver cannot drift on what an
 // acceptable conditioning image is.
 export const FEDERATED_MEDIA_ASSET_EXTENSION = Object.freeze({
+  'audio/wav': 'wav',
   'image/png': 'png',
   'image/jpeg': 'jpg',
   'image/webp': 'webp',
@@ -180,7 +181,7 @@ export const FEDERATED_MEDIA_ASSET_TTL_MS = 6 * 60 * 60 * 1000;
 // lands in so a capability's `roles` list reads as the set of fields a consumer
 // may send, with no second mapping to keep in sync.
 export const FEDERATED_MEDIA_INPUT_ROLES = Object.freeze([
-  'initImage', 'referenceImages', 'sourceImage', 'lastImage',
+  'initImage', 'referenceImages', 'sourceImage', 'lastImage', 'sourceAudio',
 ]);
 
 // Which of those roles hold a LIST rather than a single slot. One home, because
@@ -227,6 +228,18 @@ export const federatedMediaAssetId = (instanceId, sha256) =>
 // What a submission carries in place of the bytes. Deliberately just the id:
 // the id embeds the digest the provider verified at upload, so a second copy on
 // the wire would be a second source of truth for the same fact.
+export const federatedSourceAudioSchema = z.object({
+  sourceSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  clipSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  sampleRate: z.literal(48000),
+  channels: z.literal(2),
+  startSample: z.number().int().min(0).max(48000 * 36000),
+  endSample: z.number().int().positive().max(48000 * 36000),
+  sampleCount: z.number().int().positive().max(48000 * 60),
+}).strict().refine((v) => v.endSample - v.startSample === v.sampleCount, {
+  message: 'Audio window must match its exact sample count',
+});
+
 export const federatedMediaInputAssetRefSchema = z.object({
   assetId: federatedMediaAssetIdSchema,
 }).strict();
@@ -303,6 +316,15 @@ export const federatedMediaCapabilitySchema = z.object({
     label: z.string().trim().max(120).optional(),
   })).max(100).nullable().optional(),
   inputAssets: federatedMediaInputAssetsSchema,
+  supportedModes: z.array(z.enum(['text', 'image', 'fflf', 'a2v'])).max(4).optional(),
+  // Supplied audio drives motion; it does not establish verified lip-sync.
+  sourceAudio: z.object({ requiresImage: z.boolean() }).strict().optional(),
+  hardwareEligible: z.boolean().optional(),
+  memory: z.object({
+    requiredGb: z.number().nonnegative().nullable(),
+    totalGb: z.number().positive(),
+    freeGb: z.number().nonnegative(),
+  }).optional(),
 });
 
 // Per-kind occupancy of the provider's own generation lanes. Counts only —
@@ -320,6 +342,7 @@ const federatedMediaQueueStatusSchema = z.object({
   running: z.number().int().nonnegative(),
   maxQueuedJobs: z.number().int().positive(),
   accepting: z.boolean(),
+  maintenanceHeld: z.boolean().optional(),
   // Both added after wire v1 shipped, so both are optional: an older provider
   // omits them, and absent must read as UNKNOWN rather than zero. See "Drain
   // rate and per-kind occupancy" in docs/FEDERATED_MEDIA_PROVIDERS.md for what
@@ -348,7 +371,7 @@ const federatedMediaQueueStatusSchema = z.object({
 // Additive and optional in both directions, so no SCHEMA_VERSIONS bump: a
 // newer feature reaches an older consumer as an unmatched string, and an
 // absent list reads as the wire-v1 baseline (see federatedMediaSupports).
-export const FEDERATED_MEDIA_FEATURES = Object.freeze(['lyrics', 'inputAssets']);
+export const FEDERATED_MEDIA_FEATURES = Object.freeze(['lyrics', 'inputAssets', 'sourceAudio']);
 
 // A feature name is a short identifier token. Underscores and hyphens are in
 // the alphabet even though this build's own vocabulary is camelCase: the point

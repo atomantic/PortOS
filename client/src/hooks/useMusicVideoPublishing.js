@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import toast from '../components/ui/Toast';
+import socket from '../services/socket';
 import {
+  getMusicVideoPublishDrafts,
   prepareMusicVideoPublishDraft,
-  submitMusicVideoPublishDraft,
   discardMusicVideoPublishDraft,
   getMusicVideoPublishPlatforms,
   updateMusicVideoPublishPlatforms,
@@ -12,11 +12,10 @@ import {
 const EMPTY_POSTING = { drafts: {}, busy: {}, errors: {} };
 
 /**
- * Music Video posting (#9282). Each platform is two explicit steps: `prepare`
- * fills the post in the PortOS Browser and returns what it filled (a summary
- * and a screenshot) for the director to review; `submit` posts that same
- * draft. Nothing posts without the second press. Errors are kept per platform
- * so a sign-in prompt stays beside the platform that needs it.
+ * Music Video posting (#9282). `prepare` fills the post in the PortOS Browser
+ * and returns what it filled (a summary and a screenshot) for the director to
+ * review. Manual posting is handled outside this hook. Errors are kept per
+ * platform so a sign-in prompt stays beside the platform that needs it.
  *
  * Platforms are opt-in (#9287): `platforms` is the director's saved choice of
  * where they post (with an optional account each), `history` their posts and
@@ -52,34 +51,42 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
     setFor('errors', target, { message: err?.message || 'Failed', code: err?.code || null, url: err?.context?.url || null });
   };
 
+  // Rehydrate from the server after a reload, and follow its draft events
+  // (a tab filled elsewhere, closed by hand, or discarded).
+  useEffect(() => {
+    if (!projectId) return undefined;
+    let cancelled = false;
+    const apply = (list) => { if (cancelled) return; for (const d of list) if (d.state !== 'discarded') setFor('drafts', d.target, d); };
+    getMusicVideoPublishDrafts(projectId, { silent: true }).then((res) => apply(res?.drafts || [])).catch(() => {});
+    const onDraft = (e) => {
+      if (e?.projectId !== projectId) return;
+      if (e.state === 'discarded') {
+        setPosting((prev) => {
+          const current = prev.scope === scope ? prev.drafts[e.target] : null;
+          if (!current || current.draftId !== e.draftId) return prev;
+          const next = { ...prev.drafts };
+          delete next[e.target];
+          return { ...prev, drafts: next };
+        });
+      } else if (e.state === 'closed') {
+        setPosting((prev) => {
+          const current = prev.scope === scope ? prev.drafts[e.target] : null;
+          if (!current || current.draftId !== e.draftId) return prev;
+          return { ...prev, drafts: { ...prev.drafts, [e.target]: { ...current, state: 'closed' } } };
+        });
+      }
+    };
+    socket.on('music-video:publish-draft', onDraft);
+    return () => { cancelled = true; socket.off('music-video:publish-draft', onDraft); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, scope]);
+
   const prepare = (target, options = {}) => {
     setFor('busy', target, 'prepare');
     setFor('errors', target, null);
     return prepareMusicVideoPublishDraft(projectId, target, options, { silent: true })
       .then((draft) => { setFor('drafts', target, draft); return draft; })
       .catch((err) => { setFor('drafts', target, null); fail(target, err); return null; })
-      .finally(() => setFor('busy', target, null));
-  };
-
-  const submit = (target) => {
-    const draft = drafts[target];
-    if (!draft) return Promise.resolve(null);
-    setFor('busy', target, 'submit');
-    setFor('errors', target, null);
-    return submitMusicVideoPublishDraft(projectId, draft.draftId, { silent: true })
-      .then((res) => {
-        if (res?.project) replaceProject?.(res.project);
-        loadPlatforms();
-        setFor('drafts', target, null);
-        toast.success('Posted');
-        return res?.post || null;
-      })
-      .catch((err) => {
-        // A gone draft can't be posted again; the director fills it afresh.
-        if (err?.code === 'PUBLISH_DRAFT_MISSING') setFor('drafts', target, null);
-        fail(target, err);
-        return null;
-      })
       .finally(() => setFor('busy', target, null));
   };
 
@@ -103,5 +110,5 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
 
   const enabledTargets = Object.entries(platforms || {}).filter(([, p]) => p?.enabled).map(([t]) => t);
 
-  return { drafts, busy, errors, prepare, submit, discard, platforms, history, enabledTargets, setPlatform, recordPost };
+  return { drafts, busy, errors, prepare, discard, platforms, history, enabledTargets, setPlatform, recordPost };
 }

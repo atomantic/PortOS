@@ -29,3 +29,27 @@ describe('performance speaker save boundary', () => {
     await waitFor(() => expect(generate.disabled).toBe(false));
   });
 });
+
+describe('persisted render failure chip (#10154)', () => {
+  const failedScene = (lane) => ({ sceneId: 's1', startSec: 0, endSec: 5, referenceImageId: 'frame.png', takes: [],
+    lastFailure: { lane, error: 'CUDA out of memory', at: '2026-10-05T00:00:00.000Z' } });
+
+  it('shows "Frame failed: <reason>" with a Retry that re-runs the failed lane, and hides while retrying', () => {
+    const onGenerateFrame = vi.fn();
+    const onGenerateVideo = vi.fn();
+    const props = { index: 0, onEditLocal: vi.fn(), onSave: vi.fn(), onGenerateFrame, onGenerateVideo };
+    const { rerender } = render(<SceneCard scene={failedScene('image')} {...props} />);
+    expect(screen.getByText(/Frame failed: CUDA out of memory/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onGenerateFrame).toHaveBeenCalledWith(expect.objectContaining({ sceneId: 's1' }));
+    expect(onGenerateVideo).not.toHaveBeenCalled();
+
+    rerender(<SceneCard scene={failedScene('image')} generatingFrame {...props} />);
+    expect(screen.queryByText(/Frame failed/)).toBeNull();
+
+    rerender(<SceneCard scene={failedScene('video')} {...props} />);
+    expect(screen.getByText(/Video failed: CUDA out of memory/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onGenerateVideo).toHaveBeenCalledTimes(1);
+  });
+});

@@ -735,6 +735,8 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/insights` | Cross-domain insights |
 | `/api/instances`, `/api/sync`, `/api/peer-sync`, `/api/sharing` | Federation / peer sync (see [COMPANION_APP_API.md](./COMPANION_APP_API.md)) |
 | `/api/federation/media/v1` | Authenticated queued peer audio provider (see [FEDERATED_MEDIA_PROVIDERS.md](./FEDERATED_MEDIA_PROVIDERS.md)) |
+| `/api/federation/admin/v1` | Paired-peer administration preflights and temporary signed plans; execution remains unsupported (see [peer administration planning](./features/peer-administration.md)) |
+| `/api/peer-administration` | Operator-only per-peer/action planning grants and outbound previews (see [peer administration planning](./features/peer-administration.md)) |
 | `/api/mortalloom` | MortalLoom (iCloud-JSON sync precedent) |
 | `/api/review` | Review queue |
 | `/api/settings` | App settings |
@@ -771,6 +773,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/games` | Game projects |
 | `/api/sprites` | Sprite catalog / export |
 | `/api/threejs-models` | Procedural Three.js models |
+| `/api/film-styles` | Read-only film style grammar catalog: picker list (`GET /`), full grammar record (`GET /:id`) and rendered prompt-section preview (`GET /:id/prompt?parts=motion,camera`) |
 | `/api/code-animation` | Code Animation: LLM-written briefs, prompt building, persistent jobs gallery, generated HTML retrieval, frame-exact MP4 export (`POST /:id/export` → HTML-composition media job), portable source download (`GET /:id/package`), and data-only package validation (`POST /packages/validate`; [contract](CODE_ANIMATION_PACKAGES.md)) |
 | `/api/code-animation/execution` | Code Animation contained production execution: platform sandbox and lane readiness (`GET /`), operator-owned tool paths (`PUT /tools`, host control) and the on-demand adversarial containment check (`POST /probe`, host control) ([contract](CODE_ANIMATION_PACKAGES.md#contained-production-execution)) |
 | `/api/image-to-3d` | Image-to-3D conversion |

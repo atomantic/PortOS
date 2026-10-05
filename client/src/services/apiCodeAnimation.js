@@ -79,3 +79,8 @@ export const getCodeAnimationBlenderStarter = options => request('/code-animatio
 // evidence, and explicit promotion of one passing run.
 export const getCodeAnimationAcceptance = (id, options) => request(`/code-animation/projects/${encodeURIComponent(id)}/acceptance`, options);
 export const acceptCodeAnimationOutput = (id, runId, options) => request(`/code-animation/projects/${encodeURIComponent(id)}/accepted-output`, { method: 'POST', body: JSON.stringify({ runId }), ...options });
+
+// Film style grammar catalog (#10253). The list is the picker projection; the
+// full record carries each native move's "fits content like" examples.
+export const listFilmStyles = (options) => request('/film-styles', options);
+export const getFilmStyle = (id, options) => request(`/film-styles/${encodeURIComponent(id)}`, options);

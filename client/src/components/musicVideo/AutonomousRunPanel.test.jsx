@@ -75,8 +75,8 @@ function PanelWithUrl({ project, auto }) {
   );
 }
 
-function Harness({ initial, url = '/music-video/mv-1' }) {
-  const [project, setProject] = useState({ id: 'mv-1', autonomousRun: initial });
+function Harness({ initial, url = '/music-video/mv-1', extra = {} }) {
+  const [project, setProject] = useState({ id: 'mv-1', autonomousRun: initial, ...extra });
   const auto = useAutonomousMusicVideo({ project, replaceProject: setProject });
   return <MemoryRouter initialEntries={[url]}><PanelWithUrl project={project} auto={auto} /></MemoryRouter>;
 }
@@ -138,6 +138,22 @@ describe('AutonomousRunPanel', () => {
     expect(screen.getByRole('status').textContent).toContain('Sign in to Suno');
     fireEvent.click(screen.getByRole('button', { name: /resume/i }));
     await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', {}, { silent: true }));
+  });
+
+  it('reads "Rendering final video" while the render runs, links the final video once finished, and retries only the render when it failed', () => {
+    const produce = (step) => baseRun({ stage: 'produce', status: 'running', stages: stages({ style: { status: 'done' }, produce: { status: 'running', step } }), output: { renderJobId: 'job-1' } });
+    const { unmount } = render(<Harness initial={produce('rendering')} />);
+    expect(screen.getByRole('status').textContent).toContain('Rendering final video');
+    expect(screen.queryByRole('link', { name: /watch final video/i })).toBeNull();
+    unmount();
+
+    const failed = baseRun({ stage: 'produce', status: 'failed', error: 'ffmpeg exit 1', output: { renderJobId: 'job-1' } });
+    const { unmount: unmountFailed } = render(<Harness initial={failed} />);
+    expect(screen.getByRole('button', { name: /retry render/i })).toBeTruthy();
+    unmountFailed();
+
+    render(<Harness initial={baseRun({ stage: 'produce', status: 'completed' })} extra={{ renderHistoryId: 'job-1' }} />);
+    expect(screen.getByRole('link', { name: /watch final video/i }).getAttribute('href')).toBe('/music-video/mv-1/review');
   });
 
   it('flags a run left over from before a server restart and offers to resume it', () => {
@@ -250,7 +266,7 @@ describe('AutonomousStartDrawer', () => {
     fireEvent.click(screen.getByLabelText('Lyrics', { selector: '#mv-auto-checkpoint-lyrics' }));
     await waitFor(() => expect(screen.getByRole('option', { name: 'Example image' })).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/local image gen model/i), { target: { value: 'example-image' } });
-    fireEvent.change(screen.getByLabelText(/budget cap/i), { target: { value: '12' } });
+    fireEvent.change(screen.getByLabelText(/video generation budget/i), { target: { value: '12' } });
     await waitFor(() => expect(screen.getByRole('option', { name: 'Neon Rain' })).toBeTruthy());
     fireEvent.change(screen.getByLabelText('Mood board'), { target: { value: 'mb-1' } });
     fireEvent.change(screen.getByLabelText('Code authoring provider'), { target: { value: 'fixture-api' } });

@@ -24,6 +24,14 @@ Inheritance mirrors `withGatewayApiKey`: a gateway-backed wrapper with no policy
 
 **Provider-service extension point.** `createProviderService` / `createAIToolkit` accept `onProvidersSaved(data)`, invoked after every SUCCESSFUL `providers.json` write with the data that landed. PortOS injects it in `server/services/bootstrap.js` to keep its machine-local provider connection graph (`server/services/providerGraph.js`, #6367) reconciled with a file that a legacy `PATCH /api/providers/:id`, a model refresh, a migration or a downgraded release may also write. The hook is deliberately non-fatal: the write already landed and the cache already reflects it, and callers include boot warmups and schedulers with no `next(err)` to bubble to, so a throwing hook is logged and swallowed. Pair it with `applyProviderPatches(patches)`, which applies partial updates to SEVERAL named records in ONE write and — unlike `updateProvider` — performs no sibling fan-out, because a projection must touch exactly the routes it named and no conventional neighbour.
 
+**Host run admission.** `createAIToolkit` accepts `withRunAdmission(handler)` for the
+manual create-run route. The wrapper owns the complete async handler lifetime,
+including preparation after an HTTP disconnect; do not release it on response close.
+API execution also accepts `onPersistenceFailure` and `onSettled` callbacks. The latter
+fires after both stream cleanup and terminal persistence/hooks, independently of
+`onComplete` (which can precede transport settlement on timeout). These are host hooks,
+not toolkit imports of a host's workflow policy.
+
 **Runner extension points.** The runner exposes a small declared override surface (in `runner.js`) so the host (PortOS) supplies its own runners without reaching into private internals:
 
 - `setCliRunner(fn)` / `setTuiRunner(fn)` — register host CLI/TUI runners (pass `null` to revert). PortOS calls both in `server/index.js`: its CLI variant is stdin-based and knows the per-CLI argv conventions (Codex `exec -`, Antigravity `agy --print`, Claude Code `-p -`); the TUI runner has no toolkit built-in, and `setTuiRunner` attaches/detaches `executeTuiRun` so the runs router's `typeof runnerService.executeTuiRun === 'function'` gate stays honest.

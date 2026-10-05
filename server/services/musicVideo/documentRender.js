@@ -297,7 +297,7 @@ function documentMuxArgs(videoPath, audioPath, outputPath, { startSec, durationS
   }
   const bed = buildBed({
     beds: [{ assetPath: soundBed.path, offsetSec: 0, durationSec: songDurationSec, volume: soundBed.volume }],
-    firstInputIdx: 2, mainLabel: '[master]', outLabel: '[mixa]',
+    firstInputIdx: 2, mainLabel: '[master]', outLabel: '[mixa]', limitPeak: true,
   });
   const filters = [`[1:a]${audioNorm}[master]`, ...bed.filters,
     `[mixa]atrim=start=${startSec}:end=${startSec + durationSec},asetpts=PTS-STARTPTS,apad=whole_dur=${durationSec}${fade}[outa]`];
@@ -333,7 +333,7 @@ export async function encodeDocumentComposition({
       prepare: (dir) => stageDocumentData(dir, data, media),
     });
     signal?.throwIfAborted();
-    page = await openComposition(staged.directory, { signal, streamMedia: true, mediaMode: musicVideoMediaMode(project) });
+    page = await openComposition(staged.directory, { signal, streamMedia: true, mediaMode: musicVideoMediaMode(project), ownedBrowser: true });
     const metadata = await page.evaluate(`(() => {
       const c = globalThis.portosComposition;
       if (!c || typeof c.seek !== 'function') throw new Error('portosComposition.seek is required');

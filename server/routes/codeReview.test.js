@@ -311,3 +311,26 @@ describe('POST /api/code-review/local', () => {
     expect(res.body.findings).toContain('Blocking')
   })
 })
+
+describe('POST /api/code-review/report-failure', () => {
+  it('records an explicit failure with reason and returns 200', async () => {
+    codeReviewSvc.reportReviewerFailure.mockResolvedValue(true)
+    const res = await request(makeApp())
+      .post('/api/code-review/report-failure')
+      .send({ reviewer: 'ollama', reason: 'quota', error: '429 daily quota exhausted' })
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ recorded: true })
+    expect(codeReviewSvc.reportReviewerFailure).toHaveBeenCalledWith('ollama', {
+      reason: 'quota',
+      error: '429 daily quota exhausted',
+    })
+  })
+
+  it('rejects an invalid reviewer with 400', async () => {
+    const res = await request(makeApp())
+      .post('/api/code-review/report-failure')
+      .send({ reviewer: 'not-a-reviewer', reason: 'quota' })
+    expect(res.status).toBe(400)
+  })
+})
+

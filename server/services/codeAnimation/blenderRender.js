@@ -8,6 +8,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { findFfmpeg, runFfmpegProcess, H264_ENCODE_ARGS, BT709_CONTAINER_ARGS, bt709TagFilter,
   probeVideoGeometry, probeFrameCount, generateThumbnail } from '../../lib/ffmpeg.js';
 import { mutateVideoHistory } from '../videoGen/history.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { writeRunArtifact } from './projectFiles.js';
 import { resolveBlenderExecution } from './execution.js';
 import { BLENDER_DRIVER } from './blenderDriver.js';
@@ -132,12 +133,14 @@ export async function publishBlenderVideo(sequence, { revision, signal, reserve 
     thumbnail = await generateThumbnail(destination, id);
     if (!thumbnail) throw fail('Blender thumbnail generation failed');
     signal?.throwIfAborted();
-    const commit = () => mutateVideoHistory(history => {
+    // The history entry first names the copied MP4 and its poster, so it
+    // commits under the backup lease (#9982).
+    const commit = () => withBackupAssetPublication(() => mutateVideoHistory(history => {
       history.unshift({ id, filename, thumbnail, modelId: 'code-animation-blender', prompt: revision.manifest.title,
         ...sequence.sequence.geometry, seed: revision.manifest.seed ?? 0, createdAt: new Date().toISOString(),
         codeAnimation: { revisionId: revision.id, sourceHash: revision.sourceHash, renderer: sequence.renderer } });
       return history;
-    });
+    }));
     success = true;
     return { id, filename, thumbnail, path: `/data/videos/${filename}`, renderer: sequence.renderer, artifacts: sequence.artifacts,
       commit, cleanup: async () => { await rm(destination, { force: true }); await rm(join(PATHS.videoThumbnails, thumbnail), { force: true }); } };

@@ -6,6 +6,7 @@ import { musicVideoMediaMode } from '../../../server/lib/musicVideoMediaPolicy.j
 import { llmStagesDraftFrom, llmStagesFromDraft } from './musicVideoAutomation.js';
 
 import {
+  autonomousAttentionLink, describeAutonomousWait,
   AUTONOMOUS_DEFAULT_LIMITS, AUTONOMOUS_DEFAULT_TOOLS, AUTONOMOUS_LIVE_STATUSES, AUTONOMOUS_SONG_SOURCES, AUTONOMOUS_STAGES,
   SUNO_MODEL_PATTERN,
   normalizeLocalMusicOptions,
@@ -26,7 +27,9 @@ export {
   LOCAL_MUSIC_TYPE_LABELS,
   SUNO_LIMITS,
   SUNO_VOCAL_GENDERS,
+  autonomousAttentionLink,
   autonomousMedium,
+  describeAutonomousWait,
   normalizeLocalMusicOptions,
 } from '../../../server/lib/musicVideoAutonomous.js';
 
@@ -154,6 +157,11 @@ export const AUTONOMOUS_SONG_STEP_LABELS = Object.freeze({
   importing: 'Importing into the music library',
 });
 
+/** What the Produce stage is doing once production is done (the server's `stages.produce.step`). */
+export const AUTONOMOUS_PRODUCE_STEP_LABELS = Object.freeze({
+  rendering: 'Rendering final video',
+});
+
 /**
  * What a completed stage produced, read-only: `[{ key, label, text?, href? }]`
  * (empty when the stage stored nothing). A text field carries `multiline` when
@@ -187,6 +195,22 @@ export function autonomousStageOutput(run, stageId) {
 
 /** True while the run can still move (or be nudged): the project page keeps its panel prominent. */
 export const isAutonomousLive = (run) => !!run && AUTONOMOUS_LIVE_STATUSES.includes(run.status);
+
+// A scheduled run in one of these states holds the schedule: every later fire declines until it is cleared.
+const SCHEDULE_BLOCKING = new Set(['awaiting-approval', 'needs-human', 'stopped']);
+
+/**
+ * The project the Autonomous run schedule is parked on, as `{ projectId, name, status, link, summary }`,
+ * or null. Reads a full project (socket event) or a list summary (`runStatus` / `runOrigin`).
+ */
+export function scheduledRunBlocker(project) {
+  const run = project?.autonomousRun;
+  const status = run?.status ?? project?.runStatus;
+  const origin = run?.brief?.origin?.kind ?? project?.runOrigin;
+  if (!project?.id || origin !== 'schedule' || !SCHEDULE_BLOCKING.has(status)) return null;
+  const shown = run || { status };
+  return { projectId: project.id, name: project.name, status, link: autonomousAttentionLink(project.id, shown), summary: describeAutonomousWait(project.name, shown) };
+}
 
 /** The Schedule-card form's draft for a saved `taskMetadata.musicVideoAutopilot` (the prompt comes from a Brain idea, so there is none). */
 export function autopilotDraftFromParams(params) {

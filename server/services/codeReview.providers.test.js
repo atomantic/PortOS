@@ -15,7 +15,7 @@ vi.mock('./ollamaManager.js', () => ({ getBaseUrl: vi.fn(), getModelCapabilities
 const { getProviderById, listProviders } = await import('./providers.js');
 const { callProviderAISimple } = await import('./aiProvider.js');
 const { runCliProviderPrompt } = await import('../lib/cliProviderRun.js');
-const { pickCodeReviewDefaults, runLocalCodeReview, runLocalClaimCommentReview, getProviderReviewUnsupported, getReviewerConfigHealth, pickAvailableReviewerGroups, isReviewerQuotaFailure } = await import('./codeReview.js');
+const { REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS, REMOTE_CODE_REVIEW_TIMEOUT_CEILING_MS, getLocalCodeReviewTimeoutMs, pickCodeReviewDefaults, runLocalCodeReview, runLocalClaimCommentReview, getProviderReviewUnsupported, getReviewerConfigHealth, pickAvailableReviewerGroups } = await import('./codeReview.js');
 
 const backend = 'provider:example-gpu';
 const provider = { id: 'example-gpu', name: 'Example GPU', type: 'api', enabled: true,
@@ -45,12 +45,6 @@ describe('configured provider reviewers', () => {
     expect(pickCodeReviewDefaults({ codeReview: cleared })).toMatchObject({ reviewers: [], reviewerFallbackGroups: [], usernames: ['example-bot'] });
     expect(codeReviewSettingsSchema.safeParse({ reviewerFallbackGroups: [[]] }).success).toBe(false);
     expect(sanitizeTaskMetadata({ reviewerFallbackGroups: [[backend]], reviewers: ['codex'] })).not.toHaveProperty('reviewerFallbackGroups');
-  });
-
-  it('recognizes quota and usage allowance failures without classifying ordinary review failures', () => {
-    expect(isReviewerQuotaFailure('429 rate limit exceeded')).toBe(true);
-    expect(isReviewerQuotaFailure('monthly usage allowance exhausted')).toBe(true);
-    expect(isReviewerQuotaFailure('syntax findings returned')).toBe(false);
   });
 
   it('keeps a saved provider/model through settings, task metadata, prompt generation and execution', async () => {
@@ -241,6 +235,34 @@ describe('configured provider reviewers', () => {
     const ranAndFailed = await runLocalCodeReview({ backend, diff: 'example diff' });
     expect(ranAndFailed.ok).toBe(false);
     expect(isReviewerConfigFault(ranAndFailed.code)).toBe(false);
+  });
+
+  it('gives a remote API reviewer its own timeout budget instead of the local diff-size formula', async () => {
+    const diff = 'x'.repeat(42 * 1024);
+    const budgetOf = () => callProviderAISimple.mock.calls.at(-1)[0].timeout;
+
+    await runLocalCodeReview({ backend, diff });
+    expect(budgetOf()).toBe(REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS);
+    expect(budgetOf()).toBeGreaterThan(getLocalCodeReviewTimeoutMs(diff));
+
+    getProviderById.mockResolvedValue({ ...provider, timeout: 450_000 });
+    await runLocalCodeReview({ backend, diff });
+    expect(budgetOf()).toBe(450_000);
+
+    getProviderById.mockResolvedValue({ ...provider, timeout: 99_999_999 });
+    await runLocalCodeReview({ backend, diff });
+    expect(budgetOf()).toBe(REMOTE_CODE_REVIEW_TIMEOUT_CEILING_MS);
+
+    await runLocalCodeReview({ backend, diff, timeoutMs: 5_000 });
+    expect(budgetOf()).toBe(5_000);
+  });
+
+  it('names the effective remote budget and the diff size in a timeout failure', async () => {
+    getProviderById.mockResolvedValue({ ...provider, timeout: 450_000 });
+    callProviderAISimple.mockResolvedValue({ error: 'Provider request failed: This operation was aborted' });
+    const result = await runLocalCodeReview({ backend, diff: 'x'.repeat(42 * 1024) });
+    expect(result.error).toContain('timed out after 450000ms');
+    expect(result.error).toContain('42 KiB');
   });
 
   describe('getProviderReviewUnsupported', () => {

@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Provider-side staging for conditioning images an allowlisted peer uploads
  * ahead of a federated render (ADR
@@ -20,8 +21,10 @@
  * state (rule 4). Neither is conditioning, and neither has a field on the wire.
  */
 
-import { readdir, rm, stat, utimes } from 'node:fs/promises';
+import { pcmAudioInfo } from './sourceAudio.js';
+import { readdir, rm, stat, utimes, realpath, lstat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { isPathInsideDir } from '../../lib/pathSafety.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
   atomicWrite,
@@ -77,9 +80,13 @@ export async function findFederatedMediaAsset(callerId, assetId, { now = Date.no
     // Through the shared resolver, not join(): it basenames and re-anchors at
     // the inbox root, so this stays a single containment check shared with the
     // image runner's own re-validation of the same path.
-    const path = resolveFederatedMediaAsset(`${parsed.data}.${extension}`);
+    const path = extension === 'wav' ? join(PATHS.federatedMediaInbox, `${parsed.data}.wav`)
+      : resolveFederatedMediaAsset(`${parsed.data}.${extension}`);
     if (!path) return null;
-    const info = await stat(path).catch(() => null);
+    const info = await lstat(path).catch(() => null);
+    const actual = await realpath(path).catch(() => null);
+    const root = await realpath(PATHS.federatedMediaInbox).catch(() => null);
+    if (!root || !actual || !isPathInsideDir(root, actual) || info?.isSymbolicLink()) return null;
     if (!info?.isFile() || now - info.mtimeMs > FEDERATED_MEDIA_ASSET_TTL_MS) return null;
     return {
       path,
@@ -104,7 +111,9 @@ export async function findFederatedMediaAsset(callerId, assetId, { now = Date.no
  * @param {string} args.declaredSha256 - Caller's X-Content-SHA256 header.
  * @param {Buffer} args.body
  */
-export async function storeFederatedMediaAsset({ callerId, mimeType, declaredSha256, body }) {
+export const storeFederatedMediaAsset = (args) => maintenance.run('media-input', 'Federated input upload', () => storeAsset(args));
+
+async function storeAsset({ callerId, mimeType, declaredSha256, body }) {
   if (!FEDERATED_MEDIA_ASSET_MIME_TYPES.includes(mimeType)) {
     reject(
       `Unsupported conditioning image type: ${mimeType || 'none'}`,
@@ -123,7 +132,7 @@ export async function storeFederatedMediaAsset({ callerId, mimeType, declaredSha
   }
   // Magic bytes, not just the declared header. The header is the caller's word
   // for what this is; the bytes are what the generator will actually open.
-  const detected = detectImageFormat(body);
+  const detected = mimeType === 'audio/wav' && pcmAudioInfo(body) ? { mime: 'audio/wav' } : detectImageFormat(body);
   if (!detected || detected.mime !== mimeType) {
     reject(
       `Conditioning image bytes are not ${mimeType}`,
@@ -149,11 +158,17 @@ export async function storeFederatedMediaAsset({ callerId, mimeType, declaredSha
   // so a torn write would leave a file claiming a hash its bytes do not have —
   // and the runner would render from a truncated image. It ensures the directory
   // itself, so no separate ensureDir.
-  const existing = await stat(path).catch(() => null);
+  const existing = await lstat(path).catch(() => null);
   if (existing?.isFile() && existing.size === body.length) {
     await utimes(path, new Date(), new Date());
   } else {
-    await atomicWrite(path, body);
+    await atomicWrite(path, body).catch((error) => {
+      // The shared writer may have left an unknown temporary sibling, or
+      // suppressed a cleanup error. Keep this admission unsettled rather than
+      // claiming the input boundary is drained after an uncertain write.
+      maintenance.markCurrentUnsettled();
+      throw error;
+    });
   }
   return {
     wireVersion: FEDERATED_MEDIA_WIRE_VERSION,
@@ -190,7 +205,7 @@ export async function describeFederatedMediaAsset(callerId, assetId) {
 // The queue params a federated job reaches its conditioning through — the same
 // four the provider writes in `buildQueueParams`. Listed here because this is
 // where they have to be READ back to keep them alive.
-const CONDITIONING_PARAMS = ['initImagePath', 'referenceImagePaths', 'sourceImagePath', 'lastImagePath'];
+const CONDITIONING_PARAMS = ['initImagePath', 'referenceImagePaths', 'sourceImagePath', 'lastImagePath', 'audioFilePath'];
 
 /**
  * Basenames any queued or running job still depends on.

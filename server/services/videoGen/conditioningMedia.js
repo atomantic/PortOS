@@ -4,6 +4,7 @@ import { join, basename } from 'path';
 import { tmpdir } from 'os';
 import { unlinkGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { isIcLoraMode, icLoraSpecForMode } from '../../lib/icLoraWeights.js';
@@ -152,7 +153,12 @@ export async function prepareVideoConditioningMedia({
         ? [audioFilePath]
         : []),
     ];
-    return Promise.all(paths.filter(Boolean).map((path) => unlinkGuarded(path).catch(() => {})));
+    return Promise.all(paths.filter(Boolean).map((path) => unlinkGuarded(path).catch(error => {
+      if (error.code !== 'ENOENT') {
+        maintenance.markCurrentUnsettled();
+        maintenance.markResourceUnsettled('media', jobId);
+      }
+    })));
   };
   const resolvedIcReferencePaths = await materializeIngredientsReferences({
     mode, icReferencePaths, ffmpeg, w, h, parsedFps, jobId,

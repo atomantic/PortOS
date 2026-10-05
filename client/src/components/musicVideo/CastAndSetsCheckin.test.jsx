@@ -6,7 +6,7 @@ import useMusicVideoCastAndSets from '../../hooks/useMusicVideoCastAndSets';
 
 const { listeners, api, getMediaJob } = vi.hoisted(() => ({
   listeners: new Map(),
-  api: { getMusicVideoProject: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), skipMusicVideoCastAndSets: vi.fn() },
+  api: { getMusicVideoProject: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn() },
   getMediaJob: vi.fn(),
 }));
 vi.mock('../../services/socket', () => ({ default: {
@@ -183,5 +183,92 @@ describe('Cast & Sets direction editing', () => {
     fireEvent.change(screen.getByLabelText('Camera'), { target: { value: 'locked off' } });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Save direction/ })); });
     expect(screen.getByLabelText('Camera').value).toBe('locked off');
+  });
+});
+
+describe('Cast & Sets tab: undo, regenerate and guide import', () => {
+  const sheet = { id: 'sheet-1', title: 'Check-in sheet', kind: 'cast-sets', version: 1, status: 'approved', mimeType: 'text/html', updatedAt: '2026-01-01T00:00:00Z' };
+  const imported = { id: 'guide-1', title: 'My guide', kind: 'other', version: 1, status: 'pending', mimeType: 'image/png', updatedAt: '2026-01-02T00:00:00Z' };
+  const movie = { id: 'clip-1', title: 'A clip', kind: 'animatic', version: 1, status: 'pending', mimeType: 'video/mp4', updatedAt: '2026-01-03T00:00:00Z' };
+  const withStatus = (status, extra = {}) => ({ id: 'example-project', devArtifacts: [sheet, imported, movie], castAndSets: { revision: 1, status, plan: {}, images: {}, artifactId: 'sheet-1', ...extra } });
+  const open = (value, board = {}) => {
+    const Page = () => {
+      const [current, setCurrent] = useState(value);
+      const actions = useMusicVideoCastAndSets({ project: current, replaceProject: setCurrent });
+      return <CastSetsStage board={{ project: current, locked: false, castSets: actions, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(), approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...board }} />;
+    };
+    return render(<Page />);
+  };
+
+  it.each(['approved', 'skipped'])('restarts a %s check-in from the tab with Rebuild', async (status) => {
+    api.startMusicVideoCastAndSets.mockResolvedValue({ project: withStatus('directing', { revision: 2 }) });
+    open(withStatus(status));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Rebuild' })); });
+    expect(api.startMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', {}, { silent: true });
+    expect(screen.getByText('revision 2')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Rebuild' })).toBeNull();
+  });
+
+  it('offers Regenerate without a note and no Rebuild while the sheet awaits review', async () => {
+    api.regenerateMusicVideoCastAndSets.mockResolvedValue({ project: withStatus('imaging', { revision: 2 }) });
+    open(withStatus('review'));
+    expect(screen.queryByRole('button', { name: 'Rebuild' })).toBeNull();
+    const regenerate = screen.getByRole('button', { name: /Regenerate/ });
+    expect(regenerate).not.toBeDisabled();
+    await act(async () => { fireEvent.click(regenerate); });
+    expect(api.regenerateMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', {}, { silent: true });
+  });
+
+  it('imports a guide here and chooses it as the visual guide, only for usable files', () => {
+    const useAsGuide = vi.fn();
+    open(withStatus('approved'), { onUploadArtifact: vi.fn(), useAsGuide });
+    expect(screen.getByLabelText('Import development file')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Use My guide as visual guide' }));
+    expect(useAsGuide).toHaveBeenCalledWith('guide-1');
+    expect(screen.queryByRole('button', { name: 'Use A clip as visual guide' })).toBeNull();
+  });
+
+  it('names what changed since an approved sheet and keeps it approved on request (#10141)', async () => {
+    const stale = { approvedAt: '2026-01-01T00:00:00.000Z', changedFields: ['concept', 'style'] };
+    api.reconfirmMusicVideoCastAndSets.mockResolvedValue({ project: withStatus('approved') });
+    open(withStatus('approved'), { productionReadiness: { castAndSets: { approved: true, stale } } });
+    expect(screen.getByText('approved · stale')).toBeInTheDocument();
+    expect(screen.getByText(/^Approved earlier — changed since: concept, style\./)).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Keep approved' })); });
+    expect(api.reconfirmMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', { silent: true });
+  });
+
+  it('offers Revert only for changed inputs whose approved value was kept (#10241)', () => {
+    const onRevertApproval = vi.fn();
+    const stale = { approvedAt: '2026-01-01T00:00:00.000Z', changedFields: ['concept', 'song'], revertible: ['concept'] };
+    open(withStatus('approved'), { productionReadiness: { castAndSets: { approved: true, stale } }, onRevertApproval });
+    fireEvent.click(screen.getByRole('button', { name: 'Revert concept' }));
+    expect(onRevertApproval).toHaveBeenCalledWith('castAndSets', 'concept');
+    expect(screen.queryByRole('button', { name: 'Revert song' })).toBeNull();
+  });
+
+  it('shows no stale note or Keep approved for a current approval', () => {
+    open(withStatus('approved'), { productionReadiness: { castAndSets: { approved: true, stale: null } } });
+    expect(screen.queryByRole('button', { name: 'Keep approved' })).toBeNull();
+    expect(screen.queryByText(/changed since/)).toBeNull();
+  });
+
+  it('marks the chosen guide instead of offering it again', () => {
+    const value = { ...withStatus('approved'), productionReview: { draft: { guideArtifactId: 'sheet-1' } } };
+    open(value, { useAsGuide: vi.fn() });
+    expect(screen.getByText(/Visual guide$/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Use Check-in sheet as visual guide' })).toBeNull();
+  });
+});
+
+describe('Cast & Sets stage before any check-in exists', () => {
+  it('offers Build and Skip, wired to the start and skip actions', async () => {
+    const start = vi.fn();
+    const skip = vi.fn();
+    render(<CastSetsStage board={{ project: { id: 'example-project', audioAnalysis: { sections: [{}] } }, locked: false, castSets: { busy: false, start, skip }, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn() }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Build cast & sets' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(skip).toHaveBeenCalledTimes(1);
   });
 });

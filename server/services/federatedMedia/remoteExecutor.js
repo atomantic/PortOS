@@ -23,6 +23,7 @@
  * federatedMedia/inputAssets.js.
  */
 
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { createWriteStream } from 'node:fs';
 import { mkdir, rename, stat, unlink } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -305,9 +306,16 @@ export function createRemoteMediaExecutor({
 
   async function pollProviderJob(state, initial) {
     let current = initial;
+    const rememberTerminal = job => {
+      if (!['completed', 'failed', 'canceled'].includes(job.status)) return;
+      state.remoteTerminal = true;
+      state.remoteTerminalJob = { id: job.id, status: job.status };
+    };
     while (true) {
+      rememberTerminal(current);
       if (state.cancelRequested && !state.cancelSent) {
         current = await sendRemoteCancel(state, current.id);
+        rememberTerminal(current);
       }
       if (state.cancelRequested && ['completed', 'failed', 'canceled'].includes(current.status)) {
         throw canceledError();
@@ -367,7 +375,7 @@ export function createRemoteMediaExecutor({
     const partialPath = join(dir, `.${filename}.partial`);
     await mkdir(dir, { recursive: true });
     if (await existingResultMatches(finalPath, metadata)) return { filename, dir, path: finalPath };
-    await unlink(partialPath).catch(() => {});
+    await unlink(partialPath).catch((error) => { if (error.code !== 'ENOENT') maintenance.markCurrentUnsettled(); });
 
     const peer = await findPeer(state.peerId, { standingRoute: state.standingRoute });
     // Keep the controller live for the body stream so cancel()/the queue
@@ -430,7 +438,7 @@ export function createRemoteMediaExecutor({
         await rename(partialPath, finalPath);
         return { filename, dir, path: finalPath };
       } finally {
-        await unlink(partialPath).catch(() => {});
+        await unlink(partialPath).catch((error) => { if (error.code !== 'ENOENT') maintenance.markCurrentUnsettled(); });
       }
     }, { timeoutMs: null });
   }
@@ -469,6 +477,7 @@ export function createRemoteMediaExecutor({
     const submitted = await submitOrRecover(state, request);
     const completed = await pollProviderJob(state, submitted);
     const downloaded = await downloadResult(state, completed);
+    state.finalizing = true;
     const local = await finalize({
       jobId: state.jobId,
       peerId: state.peerId,
@@ -483,6 +492,7 @@ export function createRemoteMediaExecutor({
       renderStartedAtMs: state.renderStartedAtMs,
       ...downloaded,
     });
+    state.finalizing = false;
     return {
       ...local,
       federatedMedia: {
@@ -497,11 +507,17 @@ export function createRemoteMediaExecutor({
   async function run(params) {
     const marker = markerSchema.safeParse(params?.remoteMedia);
     if (!marker.success) {
+      if (params?.remoteMedia?.reconcile === true) maintenance.markCurrentUnsettled();
       events.emit('failed', {
         generationId: params?.jobId,
         error: `Remote ${label} job has invalid persisted routing metadata`,
       });
       return;
+    }
+    // The queue serializes peer work; also refuse overlapping attempts for
+    // the same idempotency key at the executor boundary.
+    if (activeJobs.has(params.jobId)) {
+      throw remoteMediaError('This remote job is already being observed', { code: 'MEDIA_PROVIDER_RECONCILIATION_ACTIVE' });
     }
 
     const state = {
@@ -528,19 +544,40 @@ export function createRemoteMediaExecutor({
       renderStartedAtMs: marker.data.reconcile === true ? null : Date.now(),
     };
     activeJobs.set(params.jobId, state);
+    let event;
+    let payload;
     try {
       const result = await runRemote(state, marker.data);
-      events.emit('completed', { generationId: params.jobId, ...result });
+      // This is a transient executor verdict, never a provider/caller field.
+      // The queue may release owned inputs only AFTER its terminal row is durable.
+      event = 'completed';
+      payload = { generationId: params.jobId, ...result,
+        remoteInputsDisposable: !state.finalizing && (state.remoteTerminal === true || !state.submissionMayExist) };
     } catch (error) {
-      events.emit('failed', {
+      // An unreachable/revoked peer is not proof that its admitted render
+      // stopped. Keep local ownership until completion can be reconciled.
+      if ((state.submissionMayExist && !state.remoteTerminal) || state.finalizing) maintenance.markCurrentUnsettled();
+      event = 'failed';
+      payload = {
         generationId: params.jobId,
+        remoteInputsDisposable: !state.finalizing && (state.remoteTerminal === true || !state.submissionMayExist),
         error: error?.canceled
           ? `Remote ${label} generation canceled`
           : (error?.message || `Remote ${label} generation failed`),
-      });
+      };
     } finally {
       activeJobs.delete(params.jobId);
     }
+    // Created locally only after executor teardown, never accepted from the
+    // provider response. Safe disposal can also mean "never submitted"; that
+    // does not certify termination of a previously admitted peer job.
+    if (marker.data.reconcile === true && state.remoteTerminalJob && !state.finalizing) {
+      payload.remoteRecoverySettlement = {
+        jobId: state.jobId, peerId: state.peerId, remoteJobId: state.remoteTerminalJob.id,
+        status: state.remoteTerminalJob.status, executorSettled: true,
+      };
+    }
+    events.emit(event, payload);
   }
 
   function cancel(jobId) {

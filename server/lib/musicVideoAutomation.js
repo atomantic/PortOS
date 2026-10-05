@@ -55,14 +55,16 @@ export const MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD = 100000;
 // The LLM text stages a director may route to their own provider/model/effort
 // (`automation.llmStages`). An unpinned stage uses the direction pin (`llm`).
 // `brief` / `lyrics` / `lyricsReview` run inside an autonomous run; `castAndSets`,
-// `plan` and `authoring` run for every automation-first project.
-export const MUSIC_VIDEO_LLM_STAGES = Object.freeze(['brief', 'lyrics', 'lyricsReview', 'castAndSets', 'plan', 'authoring']);
+// `plan` and `authoring` run for every automation-first project; `treatment` is the
+// director's Compile with AI on the Treatment brief (#10223).
+export const MUSIC_VIDEO_LLM_STAGES = Object.freeze(['brief', 'lyrics', 'lyricsReview', 'castAndSets', 'plan', 'treatment', 'authoring']);
 export const MUSIC_VIDEO_LLM_STAGE_LABELS = Object.freeze({
   brief: 'Creative brief',
   lyrics: 'Lyrics draft',
   lyricsReview: 'Lyrics review & revise',
   castAndSets: 'Cast & sets direction',
   plan: 'Shot plan',
+  treatment: 'Treatment compile',
   authoring: 'Code authoring',
 });
 // Stages that record the effective LLM route they last ran on (#9545): every LLM stage.

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { ExternalLink, X as XIcon, LogIn, Link as LinkIcon } from 'lucide-react';
 
 // Where the release goes, in posting order: the full video first so every
@@ -7,9 +8,9 @@ export const PUBLISH_TARGETS = [
   { target: 'youtube', label: 'YouTube', note: 'The final render, with chapters, thumbnail and captions' },
   { target: 'suno', label: 'Suno', note: 'Publishes the song with the cover and a link to the video' },
   { target: 'x', label: 'X thread', note: 'Hook with the 1080p video, then the story, prompt and links' },
-  { target: 'shorts', label: 'YouTube Shorts', note: 'The newest 9:16 social cut' },
-  { target: 'tiktok', label: 'TikTok', note: 'The newest 9:16 social cut, labelled AI-generated' },
-  { target: 'instagram', label: 'Instagram Reels', note: 'The newest 9:16 social cut, with the AI label' },
+  { target: 'shorts', label: 'YouTube Shorts', note: 'A 9:16 cut (the newest by default)' },
+  { target: 'tiktok', label: 'TikTok', note: 'A 9:16 cut (the newest by default), labelled AI-generated' },
+  { target: 'instagram', label: 'Instagram Reels', note: 'A 9:16 cut (the newest by default), with the AI label' },
   { target: 'reddit', label: 'Reddit', note: 'A native video post to r/aivideo (title and flair, no body)' },
   { target: 'stackerNews', label: 'Stacker News', note: 'A link post to the full video' },
 ];
@@ -20,7 +21,23 @@ const summaryRows = (summary) => Object.entries(summary || {})
   .filter(([, v]) => v != null && v !== '' && (typeof v !== 'object' || (Array.isArray(v) && v.every((x) => typeof x === 'string'))))
   .map(([k, v]) => [k, Array.isArray(v) ? v.join(' · ') : String(v)]);
 
-function TargetOptions({ target, kit, options, setOption, flairs, idFor }) {
+const VERTICAL_TARGETS = ['shorts', 'tiktok', 'instagram'];
+const fmtSec = (n) => `${Math.floor(n / 60)}:${String(Math.floor(n % 60)).padStart(2, '0')}`;
+
+/** Postable 9:16 cuts, oldest first (mirrors the server's pick; it still refuses a stale one). */
+function verticalCutChoices(project) {
+  const kit = project?.publishKit || {};
+  const cuts = (project?.excerpts || [])
+    .filter((e) => e?.status === 'complete' && e.aspect === '9:16' && e.filename)
+    .map((e) => ({ id: e.id, label: `Social cut ${fmtSec(e.startSec ?? 0)}-${fmtSec(e.endSec ?? 0)}` }));
+  const crop = (kit.exports || []).find((e) => e.kind === 'vertical-9x16' && e.filename);
+  if (crop && (kit.master?.renderHistoryId ?? null) === (project?.renderHistoryId ?? null)) {
+    cuts.unshift({ id: 'kit-vertical', label: `Kit center-crop ${fmtSec(crop.startSec ?? 0)}-${fmtSec(crop.endSec ?? 0)}` });
+  }
+  return cuts;
+}
+
+function TargetOptions({ target, kit, project, options, setOption, flairs, idFor }) {
   const field = (key, label, input) => (
     <div key={key} className="space-y-0.5 min-w-0">
       <label htmlFor={idFor(key)} className="block text-[11px] text-port-text-muted">{label}</label>
@@ -32,6 +49,15 @@ function TargetOptions({ target, kit, options, setOption, flairs, idFor }) {
   const area = (key, label) => field(key, label,
     <textarea id={idFor(key)} value={options[key] || ''} rows={3} onChange={(e) => setOption(key, e.target.value)} className={inputCls} />);
 
+  if (VERTICAL_TARGETS.includes(target)) {
+    const cuts = verticalCutChoices(project);
+    if (cuts.length < 2) return null;
+    return field('cutId', 'Vertical cut to post', (
+      <select id={idFor('cutId')} aria-label="Vertical cut to post" value={options.cutId || ''} onChange={(e) => setOption('cutId', e.target.value)} className={inputCls}>
+        <option value="">Newest fresh cut (default)</option>
+        {[...cuts].reverse().map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+      </select>));
+  }
   if (target === 'reddit') {
     return (
       <div className="grid sm:grid-cols-2 gap-2">
@@ -55,9 +81,11 @@ function TargetOptions({ target, kit, options, setOption, flairs, idFor }) {
     return <div className="grid sm:grid-cols-2 gap-2">{text('territory', 'Territory', 'art')}<div className="sm:col-span-2">{area('firstComment', 'First comment (optional)')}</div></div>;
   }
   if (target === 'suno') {
+    // Prefill from kit links or run output if available
+    const defaultSongUrl = kit.links?.song || (options.songUrl ? null : 'https://suno.com/song/…');
     return (
       <div className="grid sm:grid-cols-2 gap-2 items-end">
-        {text('songUrl', 'Song URL (the take to publish)', kit.links?.song || 'https://suno.com/song/…')}
+        {text('songUrl', 'Song URL (the take to publish)', defaultSongUrl)}
         <label className="flex items-center gap-1.5 text-xs min-h-[44px] sm:min-h-0">
           <input type="checkbox" checked={options.pin !== false} onChange={(e) => setOption('pin', e.target.checked)} /> Pin to profile
         </label>
@@ -124,8 +152,16 @@ function ManualLink({ idFor, label, onSave }) {
 function TargetRow({ project, kit, entry, publishing }) {
   const { target, label, note } = entry;
   const idFor = (key) => `mv-post-${project.id}-${target}-${key}`;
-  const [options, setOptions] = useState({});
+  const [options, setOptions] = useState(() => {
+    // Prefill Suno URL from autonomous run if available
+    if (target === 'suno' && project?.autonomousRun?.output?.sunoSongIds?.length > 0) {
+      const songId = project.autonomousRun.output.sunoSongIds[0];
+      return { songUrl: `https://suno.com/song/${encodeURIComponent(songId)}` };
+    }
+    return {};
+  });
   const setOption = (key, value) => setOptions((prev) => ({ ...prev, [key]: value }));
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const draft = publishing.drafts[target];
   const busy = publishing.busy[target];
   const error = publishing.errors[target];
@@ -136,7 +172,6 @@ function TargetRow({ project, kit, entry, publishing }) {
 
   return (
     <li className="rounded border border-port-border p-2 space-y-2">
-      <p className="text-xs text-port-text-muted">Preparing a draft may upload files and save platform metadata. This is separate from production and never publishes.</p>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="text-xs font-medium">{label}{account && <span className="font-normal text-port-text-muted"> as @{account}</span>}</div>
@@ -155,7 +190,7 @@ function TargetRow({ project, kit, entry, publishing }) {
       {posted
         ? <PostFeedback key={posted.url || 'post'} idFor={idFor} label={label} post={posted} onSave={(body) => publishing.recordPost(target, body)} />
         : <ManualLink idFor={idFor} label={label} onSave={(body) => publishing.recordPost(target, body)} />}
-      <TargetOptions target={target} kit={kit} options={options} setOption={setOption} flairs={flairs} idFor={idFor} />
+      <TargetOptions target={target} kit={kit} project={project} options={options} setOption={setOption} flairs={flairs} idFor={idFor} />
       {error && (
         <div role="alert" className="text-[11px] text-port-error space-y-0.5">
           <div className="flex items-center gap-1">{error.code === 'PUBLISH_LOGIN_REQUIRED' && <LogIn size={11} />}{error.message}</div>
@@ -164,19 +199,30 @@ function TargetRow({ project, kit, entry, publishing }) {
       )}
       {draft && (
         <div className="space-y-2">
-          {draft.screenshot && <img src={draft.screenshot} alt={`${label} draft as filled`} className="w-full rounded border border-port-border" />}
-          <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[11px]">
+          {draft.state === 'closed' && <p role="status" className="text-[11px] text-port-warning">Tab closed — Fill again</p>}
+          {draft.state !== 'closed' && draft.screenshot && <img src={draft.screenshot} alt={`${label} draft as filled`} className="w-full rounded border border-port-border" />}
+          {draft.state !== 'closed' && <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[11px]">
             {summaryRows(draft.summary).map(([k, v]) => (
               <div key={k} className="contents"><dt className="text-port-text-muted">{k}</dt><dd className="min-w-0 break-words whitespace-pre-wrap">{v}</dd></div>
             ))}
-          </dl>
-          <div className="flex flex-wrap gap-2">
-            <p className="text-sm">Review and publish yourself in the destination platform's open browser tab. PortOS cannot submit this draft. Record the resulting link below.</p>
-            <button type="button" onClick={() => publishing.discard(target)} disabled={!!busy}
+          </dl>}
+          {confirmDiscard ? (
+            <ConfirmButtonPair
+              prompt="Discard this draft?"
+              confirmText="Discard"
+              ariaLabel={`Confirm discard ${label} draft`}
+              confirmAriaLabel={`Confirm discard ${label} draft`}
+              largeTouchTargets
+              busy={!!busy}
+              onConfirm={() => { setConfirmDiscard(false); publishing.discard(target); }}
+              onCancel={() => setConfirmDiscard(false)}
+            />
+          ) : (
+            <button type="button" onClick={() => setConfirmDiscard(true)} disabled={!!busy}
               className="flex items-center gap-1 border border-port-border disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
               <XIcon size={13} /> Discard
             </button>
-          </div>
+          )}
         </div>
       )}
     </li>

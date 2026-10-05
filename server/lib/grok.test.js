@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync } from 'fs';
 import { pinPlatform } from './testHelper.js';
 
 import {
@@ -162,5 +162,20 @@ describe('grok — prepareGrokPromptFile', () => {
     const fileB = b.args[b.args.indexOf('--prompt-file') + 1];
     expect(fileA).not.toBe(fileB);
     a.cleanup(); b.cleanup();
+  });
+
+  it('can report an uncertain prompt-file cleanup without changing best-effort callers', () => {
+    pinPlatform('win32');
+    const result = prepareGrokPromptFile(['--prompt-file', '/dev/stdin'], 'synthetic prompt');
+    const file = result.args[result.args.indexOf('--prompt-file') + 1];
+    unlinkSync(file);
+    mkdirSync(file);
+    try {
+      expect(() => result.cleanup()).not.toThrow();
+      expect(() => result.cleanup({ throwOnError: true })).toThrow();
+    } finally {
+      rmSync(file, { recursive: true, force: true });
+    }
+    expect(() => result.cleanup({ throwOnError: true })).not.toThrow();
   });
 });

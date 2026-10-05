@@ -60,6 +60,8 @@ export const WHISPER_MISSING_MESSAGE = 'Aligning words needs whisper.cpp, and no
   + 'or run scripts/setup-voice.sh), then click Align words again.';
 
 let modelDownload = null;
+// Callers sharing the one in-flight download each watch its progress.
+const modelDownloadListeners = new Set();
 
 async function downloadAlignmentModel(target, { download = streamResumableDownload } = {}) {
   console.log(`⬇️ Downloading whisper alignment model ${ALIGN_MODEL_FILE} (about 1.6 GB, first alignment only)`);
@@ -69,6 +71,7 @@ async function downloadAlignmentModel(target, { download = streamResumableDownlo
     destPath: target,
     onBytes: (received, total) => {
       if (!(total > 0)) return;
+      for (const listener of modelDownloadListeners) listener({ received, total, percent: Math.round((received / total) * 100) });
       const decile = Math.floor((received / total) * 10);
       if (decile === lastDecile) return;
       lastDecile = decile;
@@ -83,7 +86,7 @@ async function downloadAlignmentModel(target, { download = streamResumableDownlo
  * use. A `large` model the voice settings already point at is used as is.
  * Concurrent callers share one download.
  */
-async function ensureAlignmentModel({ configuredModelPath = null, download } = {}) {
+async function ensureAlignmentModel({ configuredModelPath = null, download, onDownloadProgress = null } = {}) {
   const target = join(alignModelDir(), ALIGN_MODEL_FILE);
   if (existsSync(target)) return target;
   if (configuredModelPath && /large/i.test(basename(configuredModelPath)) && existsSync(configuredModelPath)) {
@@ -92,10 +95,15 @@ async function ensureAlignmentModel({ configuredModelPath = null, download } = {
   if (!modelDownload) {
     modelDownload = downloadAlignmentModel(target, { download }).finally(() => { modelDownload = null; });
   }
-  await modelDownload.catch((err) => {
+  if (onDownloadProgress) modelDownloadListeners.add(onDownloadProgress);
+  try {
+    await modelDownload;
+  } catch (err) {
     console.error(`❌ Whisper alignment model download failed: ${err.message}`);
     throw new ServerError(`Could not download the whisper alignment model: ${err.message}`, { status: 502, code: 'LYRIC_ALIGN_MODEL_DOWNLOAD_FAILED' });
-  });
+  } finally {
+    if (onDownloadProgress) modelDownloadListeners.delete(onDownloadProgress);
+  }
   return target;
 }
 
@@ -262,6 +270,7 @@ export async function resolveAlignmentTranscriber(deps = {}) {
     runCommand = runStreamingCommand,
     startServer = startTemporaryWhisperServer,
     transcribe = sttTranscribe,
+    onDownloadProgress = null,
   } = deps;
   const cfg = await voiceConfig().catch(() => null);
   const language = cfg?.stt?.language || 'en';
@@ -269,7 +278,7 @@ export async function resolveAlignmentTranscriber(deps = {}) {
 
   const cli = await firstOnPath(WHISPER_CLI_NAMES, which);
   if (cli) {
-    const modelPath = await ensureModel({ configuredModelPath });
+    const modelPath = await ensureModel({ configuredModelPath, onDownloadProgress });
     return createCliTranscriber({ bin: cli, modelPath, language, run: runCommand });
   }
   const endpoint = cfg?.stt?.endpoint || null;
@@ -278,7 +287,7 @@ export async function resolveAlignmentTranscriber(deps = {}) {
   }
   const serverBin = await which('whisper-server');
   if (serverBin) {
-    const modelPath = await ensureModel({ configuredModelPath });
+    const modelPath = await ensureModel({ configuredModelPath, onDownloadProgress });
     const server = await startServer({ bin: serverBin, modelPath });
     return createEndpointTranscriber({ endpoint: server.endpoint, kind: 'whisper-server', transcribe, release: server.stop });
   }

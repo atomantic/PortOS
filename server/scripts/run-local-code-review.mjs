@@ -4,7 +4,7 @@
  * Auth-independent local-review bridge for unattended claim agents.
  * Reads one JSON request from stdin and writes the service result to stdout.
  */
-import { getCodeReviewDefaults, reportReviewerFailure, reportReviewerSuccess, runLocalClaimCommentReview, runLocalCodeReview } from '../services/codeReview.js';
+import { getCodeReviewDefaults, pickAvailableReviewerGroups, reportReviewerFailure, reportReviewerSuccess, runLocalClaimCommentReview, runLocalCodeReview } from '../services/codeReview.js';
 
 import { Console } from 'node:console';
 import { isReviewerConfigFault, reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../lib/reviewerConfig.js';
@@ -14,11 +14,80 @@ import { stopCodexAppServer } from '../services/codexAppServer.js';
 // Provider/runtime diagnostics belong on stderr; stdout is exactly one JSON
 // response for the claim procedure's jq gate.
 globalThis.console = new Console({ stdout: process.stderr, stderr: process.stderr });
+
+// CLI flag dispatch for explicit agent reporting or active tier queries
+const args = process.argv.slice(2);
+const flag = args[0];
+
+if (flag === '--active-group' || flag === '--active-tier') {
+  try {
+    const defaults = await getCodeReviewDefaults().catch(() => null);
+    const activeGroup = pickAvailableReviewerGroups(defaults);
+    process.stdout.write(`${JSON.stringify({ ok: true, activeGroup })}\n`);
+    process.exit(0);
+  } catch (err) {
+    process.stdout.write(`${JSON.stringify({ ok: false, error: err.message })}\n`);
+    process.exit(1);
+  }
+}
+
+if (flag === '--report-failure') {
+  const backend = args[1];
+  const reasonIdx = args.indexOf('--reason');
+  const reason = reasonIdx >= 0 ? args[reasonIdx + 1] : undefined;
+  const errorIdx = args.indexOf('--error');
+  const error = errorIdx >= 0 ? args[errorIdx + 1] : undefined;
+  try {
+    const recorded = await reportReviewerFailure(backend, { reason, error });
+    process.stdout.write(`${JSON.stringify({ ok: true, recorded })}\n`);
+    process.exit(0);
+  } catch (err) {
+    process.stdout.write(`${JSON.stringify({ ok: false, error: err.message })}\n`);
+    process.exit(1);
+  }
+}
+
+if (flag === '--report-success') {
+  const backend = args[1];
+  try {
+    const recorded = await reportReviewerSuccess(backend);
+    process.stdout.write(`${JSON.stringify({ ok: true, recorded })}\n`);
+    process.exit(0);
+  } catch (err) {
+    process.stdout.write(`${JSON.stringify({ ok: false, error: err.message })}\n`);
+    process.exit(1);
+  }
+}
+
 const chunks = [];
 for await (const chunk of process.stdin) chunks.push(chunk);
 
 try {
   const request = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+
+  if (request.action === 'active-group' || request.action === 'active-tier') {
+    const defaults = await getCodeReviewDefaults().catch(() => null);
+    const activeGroup = pickAvailableReviewerGroups(defaults);
+    process.stdout.write(`${JSON.stringify({ ok: true, activeGroup })}\n`);
+    process.exit(0);
+  }
+
+  if (request.action === 'report-failure' || request.reportFailure) {
+    const backend = request.backend || request.reviewer;
+    const recorded = await reportReviewerFailure(backend, {
+      reason: request.reason,
+      error: request.error || request.message,
+    });
+    process.stdout.write(`${JSON.stringify({ ok: true, recorded })}\n`);
+    process.exit(0);
+  }
+
+  if (request.action === 'report-success' || request.reportSuccess) {
+    const backend = request.backend || request.reviewer;
+    const recorded = await reportReviewerSuccess(backend);
+    process.stdout.write(`${JSON.stringify({ ok: true, recorded })}\n`);
+    process.exit(0);
+  }
   // Resolved follow-up pins already include defaults. An explicit task clear
   // must not re-inherit the global pins when it reaches this bridge.
   const defaults = request.inheritDefaults === false ? null : await getCodeReviewDefaults().catch(() => null);

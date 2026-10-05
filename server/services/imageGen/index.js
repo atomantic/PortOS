@@ -1,3 +1,6 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { randomUUID } from 'node:crypto';
+import { imageGenEvents } from '../imageGenEvents.js';
 /**
  * Image Gen — Mode-aware dispatcher.
  *
@@ -124,6 +127,24 @@ export async function checkConnection({ mode: modeOverride, modelId: modelIdOver
 }
 
 export async function generateImage(params) {
+  const jobId = params?.jobId || randomUUID();
+  const permit = maintenance.admit('image', jobId);
+  const terminal = payload => {
+    if (payload?.generationId !== jobId) return;
+    detach();
+    queueMicrotask(() => permit.finish());
+  };
+  const detach = () => { for (const event of ['completed', 'failed', 'canceled']) imageGenEvents.off(event, terminal); };
+  for (const event of ['completed', 'failed', 'canceled']) imageGenEvents.on(event, terminal);
+  try {
+    const result = await permit.run(() => generateAdmittedImage({ ...params, jobId }));
+    // External SD-API is awaited; CLI/local providers return a live job id.
+    if (!result?.jobId) { detach(); permit.finish(); }
+    return result;
+  } catch (err) { detach(); permit.finish(); throw err; }
+}
+
+async function generateAdmittedImage(params) {
   const s = await getSettings();
   const requestedMode = params?.mode;
   const mode = requestedMode || cfg(s).mode || DEFAULT_MODE;

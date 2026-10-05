@@ -30,6 +30,11 @@ vi.mock('./cosState.js', () => ({
   isDaemonRunning: vi.fn(() => true),
 }));
 
+vi.mock('../lib/databaseMaintenanceJournal.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  assertDatabaseAdmission: () => {},
+}));
+
 vi.mock('./updateChecker.js', () => ({
   isUpdateInProgress: vi.fn(() => mocks.updateInProgress),
 }));
@@ -101,6 +106,7 @@ vi.mock('./persistentMindImageCapability.js', () => ({
 
 const supervisor = await import('./persistentMindSupervisor.js');
 const attachmentsService = await import('./persistentMindAttachments.js');
+const { acquireBackupSnapshotCut } = await import('../lib/backupSnapshotBoundary.js');
 
 const PNG = Buffer.from('example-png-bytes');
 const uploadRecord = (overrides = {}) => ({
@@ -367,6 +373,55 @@ describe('persistent mind image attachment lifecycle', () => {
     });
     expect(mocks.unlink).toHaveBeenCalledTimes(2);
     expect(mocks.root.persistentMind.pendingAttachments).toHaveLength(1);
+  });
+
+  // The CoS state file and the screenshots are copied at different moments of
+  // one backup rsync pass (#9982), so neither the upload record nor a deletion
+  // may change either store while a cut is held.
+  it('records an upload and removes a pending image only after a backup cut releases', async () => {
+    // State writes are not serialized by the mocked lock, so hold one mutation per cut.
+    const acrossCut = async (start, whileHeld) => {
+      const release = await acquireBackupSnapshotCut();
+      let pending;
+      try {
+        pending = start();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        whileHeld();
+      } finally {
+        release();
+      }
+      return pending;
+    };
+
+    const uploaded = await acrossCut(
+      () => supervisor.createPersistentMindAttachment({ filename: 'diagram.png', data: 'encoded-image' }),
+      () => expect(mocks.root.persistentMind.pendingAttachments).toEqual([]),
+    );
+    expect(uploaded).toMatchObject({ success: true });
+    const { attachmentId } = uploaded.attachment;
+    mocks.unlink.mockClear();
+
+    const deleted = await acrossCut(
+      () => supervisor.deletePersistentMindAttachment(attachmentId),
+      () => {
+        expect(mocks.unlink).not.toHaveBeenCalled();
+        expect(mocks.root.persistentMind.pendingAttachments.map((item) => item.attachmentId)).toEqual([attachmentId]);
+      },
+    );
+    expect(deleted).toEqual({ success: true, attachmentId });
+    expect(mocks.root.persistentMind.pendingAttachments).toEqual([]);
+  });
+
+  it('defers the cleanup pass, rather than waiting, while a backup cut is held', async () => {
+    mocks.root.persistentMind.pendingAttachments = [uploadRecord({ expiresAt: new Date(Date.now() - 1_000).toISOString() })];
+    const release = await acquireBackupSnapshotCut();
+    try {
+      await expect(supervisor.cleanupPersistentMindAttachments()).resolves.toMatchObject({ removed: 0, deferred: true });
+    } finally {
+      release();
+    }
+    expect(mocks.unlink).not.toHaveBeenCalled();
+    await expect(supervisor.cleanupPersistentMindAttachments()).resolves.toMatchObject({ removed: 1 });
   });
 
   it('reaps an expired unindexed upload marker and its image without scanning durable assets', async () => {

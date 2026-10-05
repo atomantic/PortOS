@@ -25,8 +25,8 @@ import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { addItem, ERR_DUPLICATE } from './mediaCollections.js';
 import { withReexportSuppressed, emitRecordUpdated } from './sharing/recordEvents.js';
 import { appendEntryImageRef, getUniverse, ENTRY_REF_KIND } from './universeBuilder.js';
-import { readImageSidecar } from './imageGen/local.js';
-import { atomicWrite } from '../lib/fileUtils.js';
+import { fillImageSidecarFields } from './imageGen/local.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 
 // runId → { universeId, pending, universePromise? }. Pure in-memory; lost on restart.
 // `universePromise` memoizes the universe doc for the lifetime of the batch so
@@ -110,35 +110,6 @@ function buildSidecarPatch({ tag, universe }) {
   return patch;
 }
 
-// Read-merge-write the image sidecar with universe context. Only fills keys
-// that are currently absent — re-renders of the same filename must not
-// silently overwrite an existing tag with a different universe's data.
-//
-// Skips writeback when the sidecar doesn't exist (empty metadata from
-// readImageSidecar's miss path). The PNG-generating code always writes a
-// sidecar before the `completed` event fires, so an empty result means the
-// PNG itself is missing too — creating a universe-only sidecar in that case
-// would leave a stub record with no prompt/seed/model on disk.
-async function enrichSidecar(filename, patch) {
-  const { path, metadata } = await readImageSidecar(filename);
-  if (!metadata || Object.keys(metadata).length === 0) return;
-  let changed = false;
-  const next = { ...metadata };
-  for (const [k, v] of Object.entries(patch)) {
-    if (v == null) continue;
-    if (next[k] === undefined || next[k] === null) {
-      next[k] = v;
-      changed = true;
-    }
-  }
-  if (!changed) return;
-  // Atomic (temp + rename) so concurrent readers — listGallery, the
-  // lightbox metadata fetch, or another batch entry — can't observe a
-  // mid-truncate empty file.
-  await atomicWrite(path, next);
-  await import('./mediaAssetIndex/index.js').then(m => m.indexImage({ filename })).catch(err => console.error(`❌ Media index universe metadata refresh: ${err.message}`));
-}
-
 let completedHandler = null;
 let terminalHandler = null;
 
@@ -150,10 +121,14 @@ export function initUniverseBuilderCollectionHook() {
   // EventEmitter does not await async listeners and does not catch their
   // rejections — any throw here would surface as an unhandled promise
   // rejection (process-killing on Node ≥15). Use a sync listener that
-  // launches an async IIFE with a top-level catch so this bookkeeping
+  // launches the async work with a top-level catch so this bookkeeping
   // miss can never crash the server or fail the user's render.
+  //
+  // The work is admitted synchronously, inside the queue's completion fan-out,
+  // so a backup cut that is already draining waits for the collection filing,
+  // entry-ref append and sidecar enrichment instead of capturing part of them.
   completedHandler = (job) => {
-    const handled = (async () => {
+    const handled = withBackupAssetPublication(async () => {
       if (!job || job.kind !== 'image') return;
       const tag = job.params?.universeRun;
       if (!tag) return;
@@ -215,7 +190,9 @@ export function initUniverseBuilderCollectionHook() {
         }
         const universePromise = entry?.universePromise || getUniverse(tag.universeId).catch(() => null);
         return universePromise
-          .then((universe) => enrichSidecar(filename, buildSidecarPatch({ tag, universe })))
+          // Fills only absent keys, so a re-render of the same filename never
+          // retags it with a different universe's data.
+          .then((universe) => fillImageSidecarFields(filename, buildSidecarPatch({ tag, universe })))
           .catch((err) => {
             console.log(`⚠️ universe-builder sidecar enrich failed for ${filename}: ${err?.message || String(err)}`);
             return null;
@@ -256,7 +233,7 @@ export function initUniverseBuilderCollectionHook() {
           if (completedUniverseId) emitRecordUpdated('universe', completedUniverseId);
         }
       }
-    })().catch((err) => {
+    }).catch((err) => {
       // Last-resort net for synchronous throws (unexpected job shape, etc).
       console.log(`⚠️ universe-builder collection hook crashed: ${err?.message || err}`);
     });

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -9,15 +9,34 @@ import { vitestCiPool } from './vitestCiPool.js';
 
 describe('vitestCiPool', () => {
   const original = process.env.CI;
+  const originalCi = process.env.PORTOS_CI_MAX_WORKERS;
   const originalPregate = process.env.PORTOS_PREGATE_MAX_WORKERS;
   const restore = (key, value) => {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   };
 
+  // The Windows CI job exports the override; tests must not inherit it.
+  beforeEach(() => {
+    delete process.env.PORTOS_CI_MAX_WORKERS;
+  });
+
   afterEach(() => {
     restore('CI', original);
     restore('PORTOS_PREGATE_MAX_WORKERS', originalPregate);
+    restore('PORTOS_CI_MAX_WORKERS', originalCi);
+  });
+
+  it('lets a CI job lower the cap but never raise it or use a malformed value', () => {
+    process.env.CI = 'true';
+    process.env.PORTOS_CI_MAX_WORKERS = '2';
+    expect(vitestCiPool()).toEqual({ maxWorkers: 2 });
+    process.env.PORTOS_CI_MAX_WORKERS = '16';
+    expect(vitestCiPool()).toEqual({ maxWorkers: 4 });
+    for (const bad of ['0', 'abc', '2.5', '']) {
+      process.env.PORTOS_CI_MAX_WORKERS = bad;
+      expect(vitestCiPool()).toEqual({ maxWorkers: 4 });
+    }
   });
 
   it('bounds local pregate workers, never above the workspace cap', () => {

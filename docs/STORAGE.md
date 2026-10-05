@@ -6,6 +6,34 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 
 > For the full domain-by-domain inventory (every current table and `data/` store, with Postgres-fit notes), see the plan doc: [`docs/plans/2026-06-06-create-postgres-storage-inventory.md`](./plans/2026-06-06-create-postgres-storage-inventory.md). This page covers the **contract and decision rules**, not the exhaustive list.
 
+Graceful maintenance uses `data/workflow-maintenance/state.json` as a **file-primary,
+machine-local runtime journal**. It must fence both the API and standalone CoS runner
+before either can use PostgreSQL or start work. Its bounded live-operation set and
+operator hold are not app records, never federate, and are included in the data backup.
+The schema is versioned; an absent file starts Normal, while corrupt/future state or
+an interrupted transaction fails closed. Replacement uses exclusive directory locking,
+file/directory fsync and atomic rename. No seed or DB migration is required.
+
+Ready means every admitted agent, persistent-mind turn, provider run, media render
+(including its browser/export preparation), and scheduled shell/script has released
+ownership after its final saving and cleanup. This includes federated jobs dispatched
+by this instance, through remote completion and verified local publication; a peer
+being unreachable is not completion. New peer dispatch stays held. A held restart
+retains unresolved remote ownership without replaying an unknown submission.
+Idle daemons, queued work, independently
+operated browser sessions and unrelated host apps do not count. Maintenance never
+cancels work, replays a paid submission, or enables a previously disabled policy.
+Resume removes the identified hold only; a stale request cannot remove a later hold.
+
+Operation age or a dead PID is not proof of saved output. On restart, the journal keeps
+unresolved ownership; runner survivors reconnect to their existing operation. A lost
+worker, failed save, or interrupted journal transaction needs recovery through its owning
+service and inspection of durable output before readiness can be certified. There is no
+force-Ready/expiry button. Resuming an unresolved hold permits new work but does not
+certify the old work finished. Do not delete this journal to claim readiness; preserve it
+with the related run/job records for recovery. A backup restored on another installation
+therefore starts conservatively if it contains a hold or outstanding operations.
+
 ## The Four Storage Classes
 
 | Class | Bytes live | Searchable metadata | Use when | PortOS examples |
@@ -724,3 +752,25 @@ originals and is distinct from space reclamation.
 ### Importer sessions
 
 `data/importer-sessions.json` is `file-primary`, machine-local operational state: for each manuscript imported into a series, how far `POST /api/importer/commit` got (`arc-persisted` after canon/arc/seasons landed, `committed` with the created issue ids). It exists so a reload between the commit and the next step cannot lose the client's own "already committed" markers and re-send the payload (#9943). It is keyed by a derived import id (`imp-` + hash of series id and the normalized manuscript), so a re-analyze of the same text reads the same session back. It is a bounded ledger of what THIS machine's commit did to THIS machine's records, with no foreign keys, cross-record queries, or search, so it stays out of PostgreSQL; each entry is only honored while the issues it recorded still exist. It is deliberately **never federated**: a peer's issues arrive through record sync, and replaying a commit there would describe records that machine did not create. Schema version 1, newest 500 sessions kept, rewritten whole behind a write queue (`services/importerSessions.js`); a payload declaring another version reads as empty rather than half-read, so no migration or `data.reference/` seed is needed. Rsync backups include it.
+
+## Peer administration planning policy
+
+`data/peer-admin-grants.json` is bounded, machine-local `file-primary` authority
+configuration, like the paired-credential registry. It contains schema-1 slots
+for exact peer/action identities (maximum 300), expiring planning-only grants,
+opaque grant IDs, server-derived authority type and a domain-separated pair
+binding digest, never raw credentials. It has no record relationships, search,
+sync cursors or federation export. Revocation replaces the slot with a new ID
+and `allowed: false`; stale writes compare the prior ID. All mutations share a
+file-wide queue and atomic writes. Missing means no grants; malformed or future
+schemas fail closed. This is a new standalone config document, so no existing
+on-disk format is migrated and no seed grants are shipped. Filesystem backups
+include it; a restored grant still needs matching host/peer/pair identities and
+an unexpired timestamp. `planning-v1` can never authorize a future executor.
+
+Preflights and plan receipts are bounded in-memory diagnostics, not durable
+operations: they expire within 60 seconds/five minutes and disappear at process
+restart. No operation can run or be recovered from them. The future execution
+ledger must be `db-primary`, receiver-local, retain replay/idempotency evidence,
+and be covered by PostgreSQL backup before any executor is connected. See
+[peer administration planning](features/peer-administration.md).

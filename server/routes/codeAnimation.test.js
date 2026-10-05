@@ -53,6 +53,7 @@ vi.mock('../services/promptRunner.js', () => ({
 }));
 vi.mock('../services/mediaJobQueue/index.js', () => ({
   enqueueJob: vi.fn(async () => ({ jobId: 'media-export', position: 1, status: 'queued' })),
+  listJobs: vi.fn(() => []),
 }));
 
 import { emitCodeAnimationChanged } from '../services/socket.js';
@@ -399,6 +400,14 @@ describe('POST /api/code-animation/brief', () => {
     expect(call.prompt).not.toContain('Reference images');
   });
 
+  it('gives the brief writer the chosen grammar\'s native moves', async () => {
+    runPromptThroughProvider.mockResolvedValue(briefResponse({ title: 't', concept: 'c', cast: '', onScreenText: '', styleNotes: '' }));
+    const res = await request(makeApp()).post('/api/code-animation/brief').send({ universeId: 'universe-1', styleGrammarId: 'blueprint-draft' });
+    expect(res.status).toBe(200);
+    expect(runPromptThroughProvider.mock.calls[0][0].prompt).toContain('Exploded assembly');
+    expect((await request(makeApp()).post('/api/code-animation/brief').send({ universeId: 'universe-1', styleGrammarId: 'no-such-style' })).status).toBe(400);
+  });
+
   it('502s a response that holds no brief', async () => {
     runPromptThroughProvider.mockResolvedValue({ text: 'I would rather not.' });
     const res = await request(makeApp()).post('/api/code-animation/brief').send({ universeId: 'universe-1' });
@@ -470,6 +479,28 @@ describe('POST /api/code-animation/prompt', () => {
     expect(getBoard).not.toHaveBeenCalled();
     expect(res.body.moodBoardId).toBeNull();
     expect(res.body.prompt).not.toContain('Mood board:');
+  });
+
+  it('renders a chosen film style grammar, persists it on the job input, and rejects an unknown id', async () => {
+    const app = makeApp();
+    const plain = await request(app).post('/api/code-animation/prompt').send(brief);
+    expect(plain.body.prompt).not.toContain('STYLE GRAMMAR');
+    const res = await request(app).post('/api/code-animation/prompt').send({ ...brief, styleGrammarId: 'blueprint-draft' });
+    expect(res.status).toBe(200);
+    expect(res.body.prompt.match(/STYLE GRAMMAR:/g)).toHaveLength(1);
+    // '' / null mean "None", identical to omitting it.
+    expect((await request(app).post('/api/code-animation/prompt').send({ ...brief, styleGrammarId: '' })).body.prompt).toBe(plain.body.prompt);
+    const unknown = await request(app).post('/api/code-animation/prompt').send({ ...brief, styleGrammarId: 'no-such-style' });
+    expect(unknown.status).toBe(400);
+    expect((await request(app).post('/api/code-animation/prompt').send({ ...brief, styleGrammarId: 'Not Kebab' })).status).toBe(400);
+
+    getProviderById.mockResolvedValue({ id: 'api-1', type: 'api', enabled: true });
+    runPromptThroughProvider.mockReturnValue(new Promise(() => {}));
+    const started = await request(app).post('/api/code-animation/generate').send({ ...brief, styleGrammarId: 'blueprint-draft', providerId: 'api-1' });
+    expect(started.status).toBe(202);
+    expect(started.body.input.styleGrammarId).toBe('blueprint-draft');
+    expect(codeAnimationRecords.get(started.body.id).input.styleGrammarId).toBe('blueprint-draft');
+    expect(runPromptThroughProvider.mock.calls[0][0].prompt).toContain('Film style grammar: Blueprint draft');
   });
 
   it('rejects a missing brief, a stray upload, and an unknown universe', async () => {

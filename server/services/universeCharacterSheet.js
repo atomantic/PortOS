@@ -16,6 +16,7 @@
 import { join, basename } from 'path';
 import { PATHS, ensureDir, shortId, assertSafeFilename, copyFileGuarded, unlinkGuarded } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { getSettings } from './settings.js';
 import { getUniverse, updateUniverse } from './universeBuilder.js';
 import { purgeReferenceSheetFromAllUniverses } from './universeCanon.js';
@@ -565,7 +566,15 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   };
 }
 
-export async function onSheetComplete({ universeId, entryId, jobId, sourceFilename, variant = LEGACY_SHEET_VARIANT_ID }) {
+// The completion listener calls this inside the media queue's `completed`
+// fan-out, and admission is taken before the first await, so a backup cut that
+// is already draining also waits for the sheet copy AND its character pointer:
+// a snapshot never captures the pointer without the bytes it names.
+export function onSheetComplete(completion) {
+  return withBackupAssetPublication(() => publishCompletedSheet(completion));
+}
+
+async function publishCompletedSheet({ universeId, entryId, jobId, sourceFilename, variant = LEGACY_SHEET_VARIANT_ID }) {
   if (!sourceFilename) return null;
   const variantConfig = getVariantConfig(variant);
   await ensureDir(PATHS.imageRefs);
@@ -652,8 +661,15 @@ export async function getCharacterReferenceSheet(universeId, entryId, { variant 
  *
  * `variant` defaults to 'standard' so the existing route + client callers
  * stay unchanged.
+ *
+ * Admitted before the pointer read and held through the purge, so a backup
+ * never captures the unlinked file alongside a pointer that still names it.
  */
-export async function deleteCharacterReferenceSheet(universeId, entryId, { variant = LEGACY_SHEET_VARIANT_ID } = {}) {
+export function deleteCharacterReferenceSheet(universeId, entryId, options) {
+  return withBackupAssetPublication(() => removeCharacterReferenceSheet(universeId, entryId, options));
+}
+
+async function removeCharacterReferenceSheet(universeId, entryId, { variant = LEGACY_SHEET_VARIANT_ID } = {}) {
   const variantConfig = getVariantConfig(variant);
   const universe = await getUniverse(universeId);
   const list = Array.isArray(universe.characters) ? universe.characters : [];

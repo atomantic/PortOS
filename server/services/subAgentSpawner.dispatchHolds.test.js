@@ -88,6 +88,7 @@ import { cosEvents, emitLog } from './cosEvents.js';
 import { isRunnerReachable } from './cosRunnerClient.js';
 import { spawnAgentForTask } from './agentOrchestrator.js';
 import { releaseAppReviewMarker } from './appActivity.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { isUpdateInProgress } from './updateChecker.js';
 import { setUseRunner } from './agentState.js';
 import { acquireLocalEndpointSpawnSlot } from './cosLocalEndpointSlots.js';
@@ -103,6 +104,22 @@ describe('subAgentSpawner — runner-down hold', () => {
     setUseRunner(true);
     isRunnerReachable.mockResolvedValue(true);
     isUpdateInProgress.mockReturnValue(false);
+  });
+
+  it('keeps task reservations recoverable when maintenance wins during spawn preparation', async () => {
+    spawnAgentForTask.mockRejectedValueOnce(Object.assign(new Error('Held'), { code: 'MAINTENANCE_HELD' }));
+    await dispatch({ id: 'held-task', metadata: { app: 'example-app', jobId: 'example-job' } });
+    expect(releaseAppReviewMarker).toHaveBeenCalledWith('example-app');
+    expect(cosEvents.emit).toHaveBeenCalledWith('job:spawn-failed', { jobId: 'example-job' });
+  });
+
+  it('holds a manual/automatic task-ready event before runner preparation', async () => {
+    const { hold } = maintenance.begin({ reason: 'Work', owner: 'Operator' });
+    try {
+      await dispatch({ id: 'held-task', metadata: {} });
+      expect(spawnAgentForTask).not.toHaveBeenCalled();
+      expect(isRunnerReachable).not.toHaveBeenCalled();
+    } finally { maintenance.resume({ id: hold.id, revision: hold.revision }); }
   });
 
   it('spawns normally while the runner is up', async () => {

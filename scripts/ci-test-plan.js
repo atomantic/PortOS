@@ -255,6 +255,9 @@ export const ALWAYS_RUN_TESTS = [
   // walkers (#8723): the offending file is never imported by the guard, so
   // impact selection only reaches them when the guard itself changes.
   'server/lib/apiRouteGraph.test.js',
+  // Whole-tree scanner (#9982): any server module can start taking backup
+  // admission with no import edge back to the owner inventory it must join.
+  'server/lib/backupAssetOwners.test.js',
   'server/lib/childProcess.guards.test.js',
   'server/lib/cliChildEnv.test.js',
   'server/lib/editorial/proseTics.test.js',

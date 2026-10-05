@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Sprite local-render completion hook (#4876).
  *
@@ -29,6 +30,7 @@
 
 import { join } from 'path';
 import { mediaJobEvents, listJobs } from '../mediaJobQueue/index.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { readJSONFile, atomicWrite } from '../../lib/fileUtils.js';
 import { spriteDir, runRelPath, SOURCE_CLIP_NAME, RUN_RECORD_NAME } from './paths.js';
 import { WALK_TRACK } from './animationTargets.js';
@@ -63,6 +65,18 @@ const decodeSpriteAnimationJob = (job) => {
  * Both the staging and the attach run INSIDE the per-record write tail: the
  * clip lands at the same path a user-triggered Reprocess reads, and a copy racing
  * that read would hand ffmpeg a truncated MP4 and error a previously-good run.
+ *
+ * The whole settle also holds backup admission (#9982): the staged clip, the
+ * decoded frames and manifest, and the run record that names them are one
+ * publication, and a snapshot copying the sprite directory halfway through would
+ * capture a run record whose frames it copied earlier. The lease is taken BEFORE
+ * the tail, and synchronously, because this runs as a completion listener: the
+ * queue's fan-out contract requires the lease to be held before the first await,
+ * so a cut already draining for the job's own completion also waits for this
+ * filing. No sprite workflow takes the lease while holding the tail, so the
+ * order cannot deadlock; one that does later must take the lease first too.
+ * A settle queued behind a long Reprocess holds its lease while it waits, which
+ * can stretch a cut's drain by that wait.
  */
 async function settleSpriteAnimationJob(job) {
   const decoded = decodeSpriteAnimationJob(job);
@@ -71,7 +85,7 @@ async function settleSpriteAnimationJob(job) {
   const label = `sprite ${track} ${recordId}/${direction || 'row-0'}`;
   const runRel = runRelPath(runId);
   const videoAbs = join(spriteDir(recordId), runRel, 'generated', SOURCE_CLIP_NAME);
-  return withAnimationWriteTail(recordId, async () => {
+  return withBackupAssetPublication(() => withAnimationWriteTail(recordId, async () => {
     // Settle a run ONCE. Neither attach looks at `run.status` — they guard only
     // frozen evidence (a finalized set, an approved run) — so re-entering here
     // for a run that is already `candidate` would re-stage the clip and re-run
@@ -113,7 +127,7 @@ async function settleSpriteAnimationJob(job) {
       ? attachTuiWalkResult(recordId, runId, videoAbs)
       : attachTrackTuiResult(track, recordId, runId, videoAbs));
     return true;
-  });
+  }));
 }
 
 let terminalHandler = null;
@@ -131,14 +145,18 @@ async function reconcileSettledSpriteJobs() {
     .filter((job) => ['completed', 'failed', 'canceled'].includes(job.status))
     .filter(decodeSpriteAnimationJob);
   if (!jobs.length) return 0;
+  // Register the whole recovery batch before yielding, so readiness cannot
+  // flicker between two archived jobs. Recovery starts no new provider work.
+  const pending = jobs.map(job => ({ job, permit: maintenance.recoverOwned('settlement', `sprite:${job.id}`) }));
   let settled = 0;
-  for (const job of jobs) {
+  for (const { job, permit } of pending) {
     // Serialized on purpose: these share the per-record write tail anyway, and a
     // boot sweep has no reason to contend with the requests now arriving.
     // eslint-disable-next-line no-await-in-loop
-    await settleSpriteAnimationJob(job).then(() => { settled += 1; }).catch((err) => (
-      console.error(`❌ sprite local render boot reconcile failed for job ${job.id.slice(0, 8)}: ${err?.message || err}`)
-    ));
+    await permit.run(() => settleSpriteAnimationJob(job)).then(() => { settled += 1; }).catch((err) => {
+      permit.markUnsettled();
+      console.error(`❌ sprite local render boot reconcile failed for job ${job.id.slice(0, 8)}: ${err?.message || err}`);
+    }).finally(() => permit.finish());
   }
   console.log(`🎞️ sprite local renders: reconciled ${settled} settled job(s) on boot`);
   return settled;
@@ -153,7 +171,7 @@ export function initSpriteLocalAnimationHook() {
   terminalHandler = (job) => {
     // Outside the request lifecycle, so a throw here would take the process
     // down rather than reaching error middleware (AGENTS.md boundary exception).
-    void settleSpriteAnimationJob(job).catch((err) => (
+    void maintenance.continueSettlement(() => settleSpriteAnimationJob(job)).catch((err) => (
       console.error(`❌ sprite local render hook failed for job ${job?.id?.slice(0, 8)}: ${err?.message || err}`)
     ));
   };

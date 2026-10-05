@@ -1,3 +1,4 @@
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -68,7 +69,7 @@ function runner(assertDatabaseAdmission = vi.fn()) {
     watch: vi.fn(() => () => {}),
   }));
   runInNewContext(source, {
-    assertDatabaseAdmission,
+    assertDatabaseAdmission, maintenance,
     express, http: { createServer: () => server }, SocketServer: function () { return io; },
     process, console, Buffer, Date, setTimeout, clearTimeout, join, basename,
     PATHS: { root: '/example', cosAgents: '/example/agents' }, PORTS: { COS: 0 },

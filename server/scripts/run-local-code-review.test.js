@@ -381,7 +381,7 @@ it('projects malformed diagnostics through the bridge and health store, clearing
       expect(result).not.toHaveProperty('findings');
       expect(result).not.toHaveProperty('verdict');
       const persisted = JSON.parse(await readFile(join(root, 'data/settings.json'), 'utf8'));
-      expect(persisted.codeReview.reviewerHealth[reviewer]).toEqual({ code: 'MALFORMED_REVIEW', reason: 'malformed', lastFailureAt: expect.any(Number), diagnostics });
+      expect(persisted.codeReview.reviewerHealth[reviewer]).toEqual({ code: 'MALFORMED_REVIEW', reason: 'malformed', failureCount: expect.any(Number), lastFailureAt: expect.any(Number), diagnostics });
       expect(malformed.stdout + malformed.stderr + JSON.stringify(persisted)).not.toContain(content);
       expect(malformed.stdout + malformed.stderr + JSON.stringify(persisted)).not.toContain('synthetic-private-metadata');
     }
@@ -395,3 +395,66 @@ it('projects malformed diagnostics through the bridge and health store, clearing
     await rm(root, { recursive: true, force: true });
   }
 }, 20000);
+
+it('supports --report-failure and --active-group directly via the standalone bridge', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'review-bridge-report-test-'));
+  try {
+    await symlink(fileURLToPath(new URL('../', import.meta.url)), join(root, 'server'), 'junction');
+    const data = join(root, 'data');
+    await mkdir(data);
+    await writeFile(join(data, 'settings.json'), JSON.stringify({
+      codeReview: {
+        reviewerFallbackGroups: [['ollama'], ['lmstudio']],
+        reviewerHealth: {},
+      },
+    }));
+
+    const testEnv = { ...process.env, NODE_ENV: 'test', MEMORY_BACKEND: 'file', PORTOS_DATA_ROOT: root };
+    delete testEnv.VITEST;
+
+    // 1. Query initial active group via CLI flag
+    const initialActive = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ['--preserve-symlinks', '--preserve-symlinks-main', join(root, 'server/scripts/run-local-code-review.mjs'), '--active-group'], {
+        cwd: root,
+        env: testEnv,
+      });
+      let stdout = '';
+      child.stdout.on('data', chunk => { stdout += chunk; });
+      child.on('close', code => resolve({ code, stdout }));
+      child.on('error', reject);
+    });
+    expect(initialActive.code).toBe(0);
+    expect(JSON.parse(initialActive.stdout)).toEqual({ ok: true, activeGroup: ['ollama'] });
+
+    // 2. Report quota failure directly via CLI flag
+    const reported = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ['--preserve-symlinks', '--preserve-symlinks-main', join(root, 'server/scripts/run-local-code-review.mjs'), '--report-failure', 'ollama', '--reason', 'quota'], {
+        cwd: root,
+        env: testEnv,
+      });
+      let stdout = '';
+      child.stdout.on('data', chunk => { stdout += chunk; });
+      child.on('close', code => resolve({ code, stdout }));
+      child.on('error', reject);
+    });
+    expect(reported.code).toBe(0);
+    expect(JSON.parse(reported.stdout)).toEqual({ ok: true, recorded: true });
+
+    // 3. Fallback tier is now active
+    const nextActive = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ['--preserve-symlinks', '--preserve-symlinks-main', join(root, 'server/scripts/run-local-code-review.mjs'), '--active-group'], {
+        cwd: root,
+        env: testEnv,
+      });
+      let stdout = '';
+      child.stdout.on('data', chunk => { stdout += chunk; });
+      child.on('close', code => resolve({ code, stdout }));
+      child.on('error', reject);
+    });
+    expect(nextActive.code).toBe(0);
+    expect(JSON.parse(nextActive.stdout)).toEqual({ ok: true, activeGroup: ['lmstudio'] });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}, 20000);
+

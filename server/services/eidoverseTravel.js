@@ -62,13 +62,21 @@ async function request(peer, path, body) {
   return response.json();
 }
 
+// A peer record can carry the literal strings "null"/"undefined" as its name;
+// show the neutral fallback rather than those sentinels. Display-only: the
+// stored peer is untouched and no address/ID-derived name is invented.
+function destinationLabel(name) {
+  const label = typeof name === 'string' ? name.trim() : '';
+  return label === '' || label === 'null' || label === 'undefined' ? 'Federated world' : label;
+}
+
 export async function listEidoverseDestinations() {
   await requireAvailable();
   const peers = (await getPeers()).filter((peer) => peer.enabled !== false && peer.status === 'online');
   const results = await Promise.all(peers.map(async (peer) => {
     const capabilities = await request(peer, '/capabilities').catch(() => null);
     if (capabilities?.version !== VERSION || capabilities.available !== true) return null;
-    return { peerId: peerKey(peer), label: peer.name || 'Federated world' };
+    return { peerId: peerKey(peer), label: destinationLabel(peer.name) };
   }));
   return { destinations: results.filter(Boolean) };
 }

@@ -1513,9 +1513,36 @@ describe('instances.js', () => {
 
       fetch.mockRejectedValue(new Error('Connection refused'));
 
-      const result = await queryPeer('peer-1', '/api/health');
+      const result = await queryPeer('peer-1', '/api/apps');
 
       expect(result).toEqual({ error: 'Failed to query peer: Connection refused' });
+    });
+  });
+
+  describe('queryPeer federation-surface allowlist', () => {
+    beforeEach(() => {
+      readJSONFile.mockResolvedValue({ self: null, peers: [{ id: 'peer-1', address: '10.0.0.1', port: 5555 }] });
+      fetch.mockResolvedValue({ json: () => Promise.resolve({}) });
+    });
+
+    it.each([
+      '/api/settings', '/api/commands/execute', '/api/peer-sync/push', '/api/apps/../settings',
+      'https://example.test/api/apps', '//example.test/api/apps', '/api/apps/%2e%2e/settings',
+      '/api/apps%2fx', 'api/apps', '/api/apps\\..\\settings', '/api/apps#x', '/api/apps\t/x',
+      'http://user:pw@example.test/api/apps', '/api/settings?next=/api/apps', '/api/brain/sync/../../settings',
+    ])('refuses %j before any network call', async (p) => {
+      const result = await queryPeer('peer-1', p);
+      expect(result).toMatchObject({ status: 400 });
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it('proxies allowlisted paths and forwards the query on the peer origin', async () => {
+      await queryPeer('peer-1', '/api/brain/reconcile/snapshot');
+      await queryPeer('peer-1', '/api/apps?x=1&y=/../z');
+      expect(fetch.mock.calls.map(c => c[0])).toEqual([
+        'http://10.0.0.1:5555/api/brain/reconcile/snapshot',
+        'http://10.0.0.1:5555/api/apps?x=1&y=/../z',
+      ]);
     });
   });
 

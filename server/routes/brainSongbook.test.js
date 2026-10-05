@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
-import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync, readFileSync } from 'fs';
+import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync, readFileSync, readdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createHash } from 'crypto';
@@ -36,9 +36,15 @@ vi.mock('../services/brainSongbookImport.js', () => ({
   importSongFromUrl: vi.fn(),
 }));
 
+vi.mock('../lib/databaseMaintenanceJournal.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  assertDatabaseAdmission: () => {},
+}));
+
 import * as brainStorage from '../services/brainStorage.js';
 import { importSongFromUrl } from '../services/brainSongbookImport.js';
 import songbookRoutes from './brainSongbook.js';
+import { acquireBackupSnapshotCut } from '../lib/backupSnapshotBoundary.js';
 
 afterAll(() => { if (tempRoot) rmSync(tempRoot, { recursive: true, force: true }); });
 
@@ -576,6 +582,56 @@ describe('Brain SongBook routes', () => {
       brainStorage.updateWith.mockResolvedValue(null);
       const res = await request(app).delete(`/api/brain/songbook/${SONG_ID}/attachments/ffffffff-gone.txt`);
       expect(res.status).toBe(404);
+    });
+  });
+
+  // Song records and attachment bytes are separate files under data/brain, so a
+  // backup rsync pass copies them at different moments (#9982). Each attachment
+  // mutation therefore waits out a held cut before touching either.
+  describe('attachment mutations and a backup cut', () => {
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+
+    it('writes neither the bytes nor the record of an upload until the cut releases', async () => {
+      brainStorage.getById.mockResolvedValue(baseSong());
+      mockUpdateWith(baseSong());
+      const uploaded = () => (existsSync(songbookDir()) ? readdirSync(songbookDir()) : [])
+        .filter((name) => name.endsWith('-cut-held.txt'));
+      const release = await acquireBackupSnapshotCut();
+      let pending;
+      try {
+        pending = request(app)
+          .post(`/api/brain/songbook/${SONG_ID}/attachments`)
+          .send({ filename: 'cut-held.txt', data: Buffer.from('example').toString('base64'), label: '' })
+          .then((res) => res);
+        await settle();
+        expect(uploaded()).toEqual([]);
+        expect(brainStorage.updateWith).not.toHaveBeenCalled();
+      } finally {
+        release();
+      }
+      expect((await pending).status).toBe(201);
+      expect(uploaded()).toHaveLength(1);
+    });
+
+    it('keeps both the record entry and the bytes of a deletion until the cut releases', async () => {
+      mkdirSync(songbookDir(), { recursive: true });
+      const filepath = join(songbookDir(), 'cccccccc-held.txt');
+      writeFileSync(filepath, 'keep me');
+      const meta = { filename: 'cccccccc-held.txt', label: '', mime: 'text/plain', size: 7, sha256: 'c'.repeat(64) };
+      brainStorage.getById.mockResolvedValue(baseSong({ attachments: [meta] }));
+      mockUpdateWith(baseSong({ attachments: [meta] }));
+      const release = await acquireBackupSnapshotCut();
+      let pending;
+      try {
+        pending = request(app).delete(`/api/brain/songbook/${SONG_ID}/attachments/cccccccc-held.txt`).then((res) => res);
+        await settle();
+        expect(brainStorage.updateWith).not.toHaveBeenCalled();
+        expect(existsSync(filepath)).toBe(true);
+      } finally {
+        release();
+      }
+      expect((await pending).status).toBe(200);
+      expect(existsSync(filepath)).toBe(false);
     });
   });
 });

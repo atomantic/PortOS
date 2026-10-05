@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { cp, lstat, mkdtemp, open, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -81,7 +82,10 @@ export async function stageMusicVideoComposition(sourceDirectory, jobId, song, {
     if (prepare) await prepare(compositionDir);
     return { directory: `${MUSIC_VIDEO_SCRATCH_DIR}/${jobId}/composition`, scratchRoot };
   } catch (error) {
-    await rm(scratchRoot, { recursive: true, force: true });
+    await rm(scratchRoot, { recursive: true, force: true }).catch(cleanupError => {
+      maintenance.markCurrentUnsettled();
+      throw cleanupError;
+    });
     throw error;
   }
 }
@@ -130,7 +134,11 @@ function deliveryNames(targets) {
   return names;
 }
 
-export async function renderComposition({ jobId, owner, audio, maxDurationSec, song, ...input }) {
+export async function renderComposition(options) {
+  return maintenance.run('composition', options.jobId, () => renderCompositionAdmitted(options), { continuation: true });
+}
+
+async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, song, ...input }) {
   const job = { controller: new AbortController(), committing: false };
   active.set(jobId, job);
   const { signal } = job.controller;
@@ -154,7 +162,7 @@ export async function renderComposition({ jobId, owner, audio, maxDurationSec, s
     const parsedInput = validateRequest(htmlCompositionRenderSchema, input);
     let { directory } = parsedInput;
     const sourceDirectory = directory;
-    const { musicTrack, launchVideo, synthesizeMusic, proof, formats, motionBlur: blurChoice } = parsedInput;
+    const { musicTrack, launchVideo, synthesizeMusic, proof, formats, motionBlur: blurChoice, masterLoudness } = parsedInput;
     // A music-video render may still ask for the extra frames its contract
     // declares in portosComposition.formats (renderTargets enforces that).
     if (musicVideo && (launchVideo || synthesizeMusic || musicTrack || proof)) {
@@ -257,8 +265,9 @@ export async function renderComposition({ jobId, owner, audio, maxDurationSec, s
         const outputPath = join(PATHS.videos, filename);
         const targetFrames = frameCount(target.contract);
         ownedPaths.push(outputPath, join(PATHS.videoThumbnails, `${target.id}.jpg`));
-        const { sampleHistogram } = await encodeComposition(page, target.contract, outputPath, {
+        const { sampleHistogram, loudness } = await encodeComposition(page, target.contract, outputPath, {
           musicPath: musicVideo ? null : musicPath,
+          master: masterLoudness !== false,
           audio: musicVideo?.audio,
           signal,
           onProgress: (fraction, detail) => {
@@ -279,7 +288,7 @@ export async function renderComposition({ jobId, owner, audio, maxDurationSec, s
         });
         framesDone += targetFrames;
         page.check();
-        rendered.push({ ...target, filename, outputPath, sampleHistogram });
+        rendered.push({ ...target, filename, outputPath, sampleHistogram, loudness });
       }
       // End script execution before post-processing and publishing the result.
       await page.close({ verify: true });
@@ -321,6 +330,7 @@ export async function renderComposition({ jobId, owner, audio, maxDurationSec, s
         ...frameOf(video.contract), numFrames: Math.round(contract.durationSec * contract.fps),
         ...(launchMetadata ? { launchVideo: launchMetadata, appId: launchMetadata.appId, posterSec: launchPlan.posterSec } : {}),
         ...(video.sampleHistogram ? { sampleHistogram: video.sampleHistogram } : {}),
+        ...(video.loudness ? { loudness: video.loudness } : {}),
         filename: video.filename, thumbnail: video.thumbnail, createdAt,
       }));
       await mutateVideoHistory(history => { history.unshift(...metas); return history; });
@@ -329,24 +339,30 @@ export async function renderComposition({ jobId, owner, audio, maxDurationSec, s
       // is the job. A single-format render keeps id === generationId as before.
       // A shutter-blur render reports how many output frames took each
       // sub-frame count, so the user can see where the render time went.
-      const summary = ({ id, filename, thumbnail, sampleHistogram }) => ({ id, filename, thumbnail, path: `/data/videos/${filename}`,
-        ...(sampleHistogram ? { sampleHistogram } : {}) });
+      const summary = ({ id, filename, thumbnail, sampleHistogram, loudness }) => ({ id, filename, thumbnail, path: `/data/videos/${filename}`,
+        ...(sampleHistogram ? { sampleHistogram } : {}), ...(loudness ? { loudness } : {}) });
       const [first] = rendered;
       result = { ...(launchMetadata ? { appId: launchMetadata.appId } : {}), generationId: jobId, ...summary(first),
         ...(formats ? { videos: rendered.map(video => ({ format: video.format, ...summary(video) })) } : {}) };
     }
   } catch (error) {
+    if (job.committing) maintenance.markCurrentUnsettled();
     failure = error;
   } finally {
-    await page?.close();
+    if (page) await page.close().catch(error => {
+      maintenance.markCurrentUnsettled();
+      failure ||= error;
+    });
     if (audioDirectory) await rm(audioDirectory, { recursive: true, force: true }).catch(() => {
+      maintenance.markCurrentUnsettled();
       console.warn('⚠️ Could not remove temporary composition audio');
     });
     if (scratchRoot) await rm(scratchRoot, { recursive: true, force: true }).catch(() => {
+      maintenance.markCurrentUnsettled();
       console.warn('⚠️ Could not remove temporary music-video composition');
     });
     if (!success) {
-      for (const path of ownedPaths) await unlinkGuarded(path).catch(() => {});
+      for (const path of ownedPaths) await unlinkGuarded(path).catch(error => { if (error.code !== 'ENOENT') maintenance.markCurrentUnsettled(); });
     }
     active.delete(jobId);
   }

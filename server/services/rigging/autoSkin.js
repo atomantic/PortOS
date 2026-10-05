@@ -39,6 +39,7 @@ import { basename, join } from 'node:path';
 import { rm, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { ServerError } from '../../lib/errorHandler.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFile, sha256File } from '../../lib/fileUtils.js';
 import { moveWithoutReplace } from '../../lib/noReplaceMove.js';
 import {
@@ -275,7 +276,11 @@ export async function rigImageTo3dModel(modelId, options = {}, { run = runAutoSk
       skeletonHint: options.skeletonHint,
       overrides: options,
     });
-    return await mutateModel(modelId, (current) => ({
+    // The verified pair already sits in its own `rig/<rigId>/` directory and is
+    // never replaced, so the row that first names it takes a backup lease (#9982):
+    // a cut either follows the commit, with the pair on disk to copy, or precedes
+    // it, and the dumped row still says `rigging`.
+    return await withBackupAssetPublication(() => mutateModel(modelId, (current) => ({
       ...current,
       rig: {
         status: 'ready',
@@ -290,7 +295,7 @@ export async function rigImageTo3dModel(modelId, options = {}, { run = runAutoSk
         startedAt,
         completedAt: now(),
       },
-    }));
+    })));
   } catch (error) {
     await mutateModel(modelId, (current) => ({
       ...current,

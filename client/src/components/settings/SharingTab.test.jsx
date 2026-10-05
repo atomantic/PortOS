@@ -254,6 +254,35 @@ describe('SharingTab — patches only the federation sub-keys it owns', () => {
   });
 });
 
+describe('SharingTab — bulk enable/disable and loading state', () => {
+  it('shows a loading state, not the failure message, while candidates load', async () => {
+    getMediaShareCandidates.mockReturnValue(new Promise(() => {}));
+    render(<SharingTab />);
+    expect(await screen.findByText(/Loading local image models/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Could not load the local image model list/i)).not.toBeInTheDocument();
+  });
+
+  it('Enable all checks every ready model; Disable all clears them', async () => {
+    getAuthStatus.mockResolvedValue({ enabled: true });
+    getMediaShareCandidates.mockResolvedValue({
+      image: [
+        { engine: 'local', modelId: 'img-a', modelName: 'img-a', ready: true },
+        { engine: 'local', modelId: 'img-b', modelName: 'img-b', ready: false },
+      ],
+      video: [{ engine: 'local', modelId: 'vid-a', modelName: 'vid-a', ready: true }],
+    });
+    render(<SharingTab />);
+    const imgA = await screen.findByLabelText(/img-a/);
+    fireEvent.click(screen.getByRole('button', { name: 'Enable all' }));
+    expect(imgA).toBeChecked();
+    expect(screen.getByLabelText(/vid-a/)).toBeChecked();
+    expect(screen.getByLabelText(/img-b/)).not.toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: 'Disable all' }));
+    expect(imgA).not.toBeChecked();
+    expect(screen.getByLabelText(/vid-a/)).not.toBeChecked();
+  });
+});
+
 describe('SharingTab — a failed candidate fetch is not an empty catalog', () => {
   it('says the list could not load rather than "no models installed"', async () => {
     getMediaShareCandidates.mockRejectedValue(new Error('offline'));

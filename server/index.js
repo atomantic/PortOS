@@ -1,3 +1,4 @@
+import maintenanceRoutes from './routes/maintenance.js';
 import './services/databaseBootFence.js';
 import express from 'express';
 import { Server } from 'socket.io';
@@ -132,6 +133,8 @@ import videoTimelineRoutes from './routes/videoTimeline.js';
 import htmlCompositionRoutes from './routes/htmlComposition.js';
 import mediaJobsRoutes from './routes/mediaJobs.js';
 import federatedMediaRoutes from './routes/federatedMedia.js';
+import peerAdministrationRoutes from './routes/peerAdministration.js';
+import peerAdminOperatorRoutes from './routes/peerAdminOperator.js';
 import creativeDirectorRoutes from './routes/creativeDirector.js';
 // Side-effect import (#5920): evaluating the completion hook is what registers the
 // Creative Director project starter on `creativeDirector/projectStartSink.js`, the
@@ -147,6 +150,7 @@ import spriteRoutes from './routes/sprites.js';
 import moodBoardRoutes from './routes/moodBoard.js';
 import deckRoutes from './routes/decks.js';
 import threejsModelsRoutes from './routes/threejsModels.js';
+import filmStylesRoutes from './routes/filmStyles.js';
 import codeAnimationRoutes from './routes/codeAnimation.js';
 import codeAnimationExecutionRoutes from './routes/codeAnimationExecution.js';
 import imageTo3dRoutes from './routes/imageTo3d.js';
@@ -302,6 +306,7 @@ app.use('/api/alerts', alertsRoutes);
 app.use('/api/avatar', avatarRoutes);
 app.use('/api/system', systemActivityRoutes);
 app.use('/api/system', systemHealthRoutes);
+app.use('/api/system', maintenanceRoutes);
 app.use('/api/system/capabilities', systemCapabilitiesRoutes);
 app.use('/api/system-resources', systemResourcesRoutes);
 app.use('/api/remote-desktop', remoteDesktopRoutes);
@@ -430,6 +435,8 @@ app.use('/api/video-timeline', videoTimelineRoutes);
 app.use('/api/html-composition', htmlCompositionRoutes);
 app.use('/api/media-jobs', mediaJobsRoutes);
 app.use('/api/federation/media/v1', federatedMediaRoutes);
+app.use('/api/federation/admin/v1', peerAdministrationRoutes);
+app.use('/api/peer-administration', peerAdminOperatorRoutes);
 app.use('/api/creative-director', creativeDirectorRoutes);
 app.use('/api/creative-commission', creativeCommissionRoutes);
 app.use('/api/games', gamesRoutes);
@@ -439,6 +446,7 @@ app.use('/api/sprites', spriteRoutes);
 app.use('/api/mood-boards', moodBoardRoutes);
 app.use('/api/decks', deckRoutes);
 app.use('/api/threejs-models', threejsModelsRoutes);
+app.use('/api/film-styles', filmStylesRoutes);
 app.use('/api/code-animation/execution', codeAnimationExecutionRoutes);
 app.use('/api/code-animation', codeAnimationRoutes);
 app.use('/api/image-to-3d', imageTo3dRoutes);
@@ -556,6 +564,9 @@ runBootSequence({ io, httpServer, localHttpServer, httpsEnabled, port: PORT, hos
 // Opt-in listener only: restores host configuration without generating tokens.
 // The boot smoke (#8343) opens no listener beyond the API server it probes.
 if (!isSmokeBoot()) {
+  // Event-driven notifications for parked Music Video runs (#10156); zero provider calls.
+  import('./services/musicVideo/attentionNotifier.js').then(({ initMusicVideoAttentionNotifier }) => initMusicVideoAttentionNotifier())
+    .catch((err) => console.error(`❌ Music video attention notifier could not start: ${err.message}`));
   import('./services/fleetLlmHost.js').then(({ startFleetLlmHost }) => startFleetLlmHost())
     .catch(() => console.error('❌ Dedicated model host listener could not start; open AI Providers → Model host setup.'));
   // Local file scan only (no provider calls); keeps the federated Claude Code

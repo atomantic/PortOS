@@ -886,9 +886,15 @@ export function createTuiSessionController({
       prClaimVerified,
       branchProvenEmpty,
       outputBuffer: getOutputBuffer(),
-    }).catch(err => emitLog('warn', `TUI completion cleanup failed for ${agentId}: ${err.message}`, { agentId }));
+    }).catch(err => {
+      persistence.markUnsettled?.();
+      emitLog('warn', `TUI completion cleanup failed for ${agentId}: ${err.message}`, { agentId });
+    });
     if (sentinel.cleanup) {
-      await sentinel.cleanup().catch(err => emitLog('warn', `TUI recovery sentinel cleanup failed for ${agentId}: ${err.message}`, { agentId }));
+      await sentinel.cleanup().catch(err => {
+        persistence.markUnsettled?.();
+        emitLog('warn', `TUI recovery sentinel cleanup failed for ${agentId}: ${err.message}`, { agentId });
+      });
     }
 
     persistence.releaseRunRecord(agentData?.pid ?? null);
@@ -1048,7 +1054,7 @@ export function createTuiSessionController({
       errorExecutionFallback: `TUI agent ended: ${reason}`,
     });
 
-    if (finalizeOutcome.outcome === 'paused') return;
+    if (finalizeOutcome.outcome === 'paused') { persistence.releaseRunRecord(agentData?.pid ?? null); return; }
 
     if (finalizeOutcome.outcome === 'abandoned') {
       await abandonForHostShutdown();
@@ -1151,6 +1157,9 @@ export function createTuiSessionController({
       if (finalizeVerdict && typeof finalizeVerdict.success === 'boolean') cleanupSuccess = finalizeVerdict.success;
       if (finalizeVerdict?.prClaimVerified === true) prClaimVerified = true;
       if (finalizeVerdict?.branchProvenEmpty === true) branchProvenEmpty = true;
+    } catch (err) {
+      persistence.markUnsettled?.();
+      throw err;
     } finally {
       await releaseRunResources({ agentData, cleanupSuccess, prClaimVerified, branchProvenEmpty });
     }

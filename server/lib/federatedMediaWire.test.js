@@ -136,6 +136,7 @@ describe('federated media status kind projection', () => {
       defaultDurationSec: null,
       lyrics: false,
       autoDuration: false,
+      supportedModes: ['text'],
       frameStride: 4,
       maxNumFrames: 1017,
       frameOptions: [25, 49, 73, 97, 121],
@@ -144,6 +145,8 @@ describe('federated media status kind projection', () => {
     };
 
     expect(federatedMediaCapabilitySchema.safeParse(capability).success).toBe(true);
+    expect(federatedMediaCapabilitySchema.parse(capability).supportedModes).toEqual(['text']);
+    expect(federatedMediaCapabilitySchema.safeParse({ ...capability, supportedModes: ['continue'] }).success).toBe(false);
     expect(federatedMediaProviderStatusSchema.safeParse(status({
       kinds: ['video'],
       capabilities: [capability],
@@ -420,7 +423,7 @@ describe('federatedMediaSupports', () => {
   });
 
   it('exposes every feature this build emits', () => {
-    expect([...FEDERATED_MEDIA_FEATURES]).toEqual(['lyrics', 'inputAssets']);
+    expect([...FEDERATED_MEDIA_FEATURES]).toEqual(['lyrics', 'inputAssets', 'sourceAudio']);
     for (const feature of FEDERATED_MEDIA_FEATURES) {
       expect(federatedMediaSupports({ features: [...FEDERATED_MEDIA_FEATURES] }, feature)).toBe(true);
     }

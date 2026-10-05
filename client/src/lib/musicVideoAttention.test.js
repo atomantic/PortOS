@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveAttentionItems, openRevisionOf } from './musicVideoAttention.js';
+import { autoReviewNeedsUser, deriveAttentionItems, openRevisionOf } from './musicVideoAttention.js';
 
 const scene = (sceneId, extra = {}) => ({ sceneId, ...extra });
 const revision = (extra = {}) => ({
@@ -86,9 +86,10 @@ describe('deriveAttentionItems (#9940)', () => {
       .toMatchObject([{ kind: 'revision' }]);
     // This board is already generating the hand-out.
     expect(deriveAttentionItems(project({ revisions: [revision()], autoReviews: [run()] }), { generatingSceneIds: new Set(['scene-a']) })).toEqual([]);
-    // A paused run is not "waiting": its open revision is an ordinary revision.
+    // A paused run is not "waiting" for hand-out: its open revision is an ordinary revision,
+    // and the stopped run is listed on its own row (#10156).
     expect(deriveAttentionItems(project({ revisions: [revision()], autoReviews: [run({ status: 'stopped' })] })))
-      .toMatchObject([{ kind: 'revision' }]);
+      .toMatchObject([{ kind: 'revision' }, { kind: 'auto-review-parked' }]);
   });
 
   it('flags a final render the server holds that this tab is not showing', () => {
@@ -113,5 +114,65 @@ describe('openRevisionOf', () => {
     expect(openRevisionOf(project({ revisions: [revision({ status: 'canceled' }), revision({ id: 'live', status: 'rendering' })] }))?.id).toBe('live');
     expect(openRevisionOf(project())).toBeNull();
     expect(openRevisionOf(null)).toBeNull();
+  });
+});
+
+describe('parked runs (#10156)', () => {
+  it('lists an autonomous run awaiting approval with an Open target and no Resume', () => {
+    const [item] = deriveAttentionItems(project({ name: 'Example', autonomousRun: { id: 'auto-1', status: 'awaiting-approval', awaiting: 'lyrics', stage: 'style' } }));
+    expect(item).toMatchObject({ kind: 'autonomous', canResume: false, openTo: 'setup#mv-auto-edit', projectId: 'mv-example' });
+    expect(item.detail).toContain('lyrics');
+  });
+
+  it('lists stopped and failed autonomous runs with a Resume or Retry', () => {
+    const stopped = deriveAttentionItems(project({ autonomousRun: { id: 'a', status: 'stopped', stage: 'song' } }));
+    const failed = deriveAttentionItems(project({ autonomousRun: { id: 'a', status: 'failed', stage: 'produce', error: 'boom' } }));
+    expect(stopped[0]).toMatchObject({ kind: 'autonomous', canResume: true, resumeLabel: 'Resume' });
+    expect(failed[0]).toMatchObject({ canResume: true, resumeLabel: 'Retry', openTo: 'produce' });
+  });
+
+  it('lists a stopped or limit-reached auto-review but not older superseded or healthy ones', () => {
+    const limit = deriveAttentionItems(project({ autoReviews: [run({ id: 'ar-1', status: 'limit-reached', stopReason: 'Reached the limit' })] }));
+    expect(limit).toEqual([expect.objectContaining({ kind: 'auto-review-parked', runId: 'ar-1', canResume: false, openTo: 'review', detail: 'Reached the limit' })]);
+    const stopped = deriveAttentionItems(project({ autoReviews: [run({ id: 'ar-2', status: 'stopped' })] }));
+    expect(stopped[0]).toMatchObject({ kind: 'auto-review-parked', canResume: true });
+    const superseded = deriveAttentionItems(project({ autoReviews: [run({ id: 'old', status: 'stopped' }), run({ id: 'new', status: 'passed' })] }));
+    expect(superseded).toEqual([]);
+  });
+
+  it('lists a production run at its limit, once, even when an autonomous run is parked on it', () => {
+    const production = { id: 'prod-1', status: 'limit-reached', stopReason: 'Spend limit' };
+    const alone = deriveAttentionItems(project({ productionRuns: [production] }));
+    expect(alone).toEqual([expect.objectContaining({ kind: 'production', runId: 'prod-1', openTo: 'produce', detail: 'Spend limit', canResume: true })]);
+    const owned = deriveAttentionItems(project({ productionRuns: [production], autonomousRun: { id: 'a', status: 'needs-human', stage: 'produce', output: { productionRunId: 'prod-1' } } }));
+    expect(owned.map((i) => i.kind)).toEqual(['autonomous']);
+  });
+
+  it('opens the auto-review tools only when a run is live or parked', () => {
+    expect(autoReviewNeedsUser(project())).toBe(false);
+    expect(autoReviewNeedsUser(project({ autoReviews: [run({ status: 'passed' })] }))).toBe(false);
+    expect(autoReviewNeedsUser(project({ autoReviews: [run({ status: 'running' })] }))).toBe(true);
+    expect(autoReviewNeedsUser(project({ autoReviews: [run({ status: 'needs-human' })] }))).toBe(true);
+  });
+});
+
+describe('stale approvals in Needs attention (#10141)', () => {
+  const readiness = {
+    castAndSets: { approved: true, stale: { changedFields: ['concept'] } },
+    art: { approved: false, stale: { changedFields: ['concept', 'cast', 'environments', 'visual language'] } },
+    storyboard: { approved: false, stale: null },
+    proof: { approved: false, stale: null },
+  };
+
+  it('names what changed per approval and opens the earliest one', () => {
+    const [item] = deriveAttentionItems(project(), { readiness });
+    expect(item).toMatchObject({ kind: 'stale-approvals', openTo: 'cast-sets', title: '2 approvals were given before later changes' });
+    expect(item.detail).toBe('Cast & Sets check-in — changed since: concept. Art direction — changed since: concept, cast, environments +1 more. Re-approve, or undo the change.');
+  });
+
+  it('stays quiet with no stale approval, and while a production run is replacing takes', () => {
+    expect(deriveAttentionItems(project(), { readiness: { art: { stale: null } } })).toEqual([]);
+    const producing = project({ productionRuns: [{ id: 'run-1', status: 'running' }], productionRunId: 'run-1' });
+    expect(deriveAttentionItems(producing, { readiness }).some((i) => i.kind === 'stale-approvals')).toBe(false);
   });
 });

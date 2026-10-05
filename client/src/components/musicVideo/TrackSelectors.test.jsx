@@ -70,12 +70,38 @@ describe('Music Video track choices', () => {
     expect(within(select).getByRole('option', { name: /\[b-123456\]$/ })).toHaveValue(tracks[1].id);
     expect(within(select).getByRole('option', { name: /No audio$/ })).toHaveValue('example-missing');
     fireEvent.change(select, { target: { value: tracks[1].id } });
-    expect(onChangeTrack).toHaveBeenCalledWith(tracks[1].id);
+    fireEvent.click(screen.getByRole('button', { name: 'Change track' }));
+    expect(onChangeTrack).toHaveBeenCalledWith(tracks[1].id, { cleared: ['beat/tempo analysis'] });
     expect(api.updateMusicVideoProject).not.toHaveBeenCalled();
     expect(youtube.startEdit).not.toHaveBeenCalled();
     rerender(<TrackPanel {...props} tracks={[...tracks].reverse()} renderBound />);
     expect(select).toBeDisabled();
     for (const [id, label] of labels) expect(Array.from(select.options).find((option) => option.value === id)?.textContent).toBe(label);
+  });
+
+  // Uniquely catches a track pick silently wiping analysis/alignment/MIDI/stem.
+  it('confirms before a track change that would clear timed data, and lets the user fork or cancel', () => {
+    const onChangeTrack = vi.fn();
+    const rich = { ...project, midiTranscription: { filename: 'x.mid' }, vocalStemFilename: 's.wav',
+      lyricCues: [{ text: 'a', startSec: 1, endSec: 2 }] };
+    const props = { project: rich, tracks, trackName, youtube, onChangeTrack, onProjectUpdated: vi.fn() };
+    const { rerender } = render(<TrackPanel {...props} />);
+    const select = screen.getByRole('combobox', { name: 'Change track' });
+    fireEvent.change(select, { target: { value: tracks[1].id } });
+    expect(onChangeTrack).not.toHaveBeenCalled();
+    const dialog = screen.getByRole('alertdialog');
+    for (const t of ['beat/tempo analysis', 'lyric and phrase timing', 'MIDI transcription', 'vocal stem']) {
+      expect(dialog.textContent).toContain(t);
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(onChangeTrack).not.toHaveBeenCalled();
+    fireEvent.change(select, { target: { value: tracks[1].id } });
+    fireEvent.click(screen.getByRole('button', { name: /Fork & change track/ }));
+    expect(onChangeTrack).toHaveBeenCalledWith(tracks[1].id, expect.objectContaining({ fork: true }));
+    rerender(<TrackPanel {...props} project={{ id: 'p', trackId: tracks[0].id }} />);
+    fireEvent.change(select, { target: { value: tracks[1].id } });
+    expect(onChangeTrack).toHaveBeenLastCalledWith(tracks[1].id, { cleared: [] });
   });
 
   it('keeps timing revisions audio-only, excludes the current track, and waits for explicit preview', () => {

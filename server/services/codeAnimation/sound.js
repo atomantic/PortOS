@@ -13,6 +13,7 @@ import { pcmToWavBuffer } from '../../lib/chiptuneRender.js';
 import { measureWavAudio } from '../../lib/wavAudioFile.js';
 import { CODE_ANIMATION_SAMPLE_RATE, measureSoundEvents, soundHash, soundTimeline, synthesizeSoundtrack } from '../../lib/codeAnimationSound.js';
 import { muxVoLines } from '../pipeline/audioMux.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { readRunArtifact, writeRunArtifact } from './projectFiles.js';
 
 const exec = promisify(execFile);
@@ -95,7 +96,10 @@ export async function muxSoundtrack({ projectId, revision, soundtrack, result, s
   signal.throwIfAborted();
   // Account for the newly rendered candidate and the second-pass mux scratch.
   if (reserve) await reserve((await stat(videoPath)).size * 2 + soundtrack.artifact.bytes);
-  const mux = await muxVoLines(videoPath, { voLines: [{ path: audioPath, offsetSec: 0 }], signal });
+  // A browser render's MP4 is already named by its history entry, so the
+  // in-place install of the muxed file takes the backup lease (#9982).
+  const mux = await muxVoLines(videoPath, { voLines: [{ path: audioPath, offsetSec: 0 }], signal,
+    withInstall: install => withBackupAssetPublication(install) });
   if (!mux.ok) throw fail(`Soundtrack mux failed: ${mux.reason}`);
   signal.throwIfAborted();
   const probe = await findFfprobe();

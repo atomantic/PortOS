@@ -448,6 +448,19 @@ export const sanitizeLineOffset = (raw) => {
   return Math.min(n, AUDIO_LINE_OFFSET_MAX_SEC);
 };
 
+const AUDIO_VERIFICATION_STATUSES = new Set(['matched', 'mismatch', 'unverified']);
+// Spoken-text check from the last render (#10250): what speech-to-text heard
+// versus the script. Advisory only — never gates the mux.
+const sanitizeAudioVerification = (raw) => {
+  if (!raw || typeof raw !== 'object' || !AUDIO_VERIFICATION_STATUSES.has(raw.status)) return null;
+  const similarity = Number(raw.similarity);
+  return {
+    status: raw.status,
+    similarity: raw.similarity != null && Number.isFinite(similarity) ? Math.min(Math.max(similarity, 0), 1) : null,
+    heard: trimTo(raw.heard, AUDIO_LINE_TEXT_MAX) || '',
+  };
+};
+
 const sanitizeAudioLine = (raw, i) => {
   if (!raw || typeof raw !== 'object') return null;
   const text = trimTo(raw.text, AUDIO_LINE_TEXT_MAX);
@@ -459,6 +472,8 @@ const sanitizeAudioLine = (raw, i) => {
     characterName: trimTo(raw.characterName, 120) || null,
     text,
     voiceIdOverride: trimTo(raw.voiceIdOverride, 200) || null,
+    expectedSpeech: trimTo(raw.expectedSpeech, AUDIO_LINE_TEXT_MAX) || null,
+    verification: sanitizeAudioVerification(raw.verification),
     audioJobId: isStr(raw.audioJobId) && raw.audioJobId ? raw.audioJobId : null,
     audioFilename: isStr(raw.audioFilename) && raw.audioFilename
       ? raw.audioFilename.slice(0, AUDIO_FILENAME_MAX)

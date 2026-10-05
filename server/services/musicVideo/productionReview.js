@@ -38,6 +38,28 @@ function hasProofEvidence(review) {
   return (review.method == null || review.method === 'playback') && review.watchedWithAudio === true;
 }
 
+const describeDirection = value => typeof value === 'string' ? value : JSON.stringify(value || {}, null, 2);
+
+/**
+ * Seed the empty art-direction draft fields (and the visual guide) from a
+ * Cast & Sets sheet. Text the director already typed — and a guide already
+ * chosen — is never overwritten, and a document-shot draft is left alone.
+ * Seeding supplies editable content only; it never records an approval.
+ */
+export function seedArtDraft(project, stage = project.castAndSets) {
+  const prior = project.productionReview?.draft || {};
+  if (prior.storyboardSource === 'document' || !stage?.direction) return project;
+  const d = stage.direction;
+  const keep = (key, fallback) => text(prior[key]) ? prior[key] : fallback;
+  const draft = { lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [], ...prior,
+    cast: keep('cast', describeDirection(d.protagonist)),
+    environments: keep('environments', describeDirection(d.sets)),
+    visualLanguage: keep('visualLanguage', describeDirection({ look: d.look, palette: d.protagonist?.palette, world: d.world })),
+    motionLanguage: keep('motionLanguage', describeDirection({ movement: d.protagonist?.movement, camera: d.world?.camera, transitions: d.world?.transitions })),
+    guideArtifactId: prior.guideArtifactId || (artifact(project, stage.artifactId) ? stage.artifactId : null) };
+  return { ...project, productionReview: { ...project.productionReview, draft } };
+}
+
 export function productionReviewBasis(project) {
   const draft = project.productionReview?.draft || {};
   const art = hash({ projectId: project.id, mediaMode: project.mediaMode, authoringRenderer: project.composition?.authoringRenderer, mode: project.composition?.mode, policy: project.productionPolicy,
@@ -61,11 +83,134 @@ export function productionReviewBasis(project) {
   return { art, storyboard, proof };
 }
 
+/** Labeled per-input hashes so a stale approval can name what changed since. */
+const h = v => hash(v ?? null);
+function productionApprovalInputs(project) {
+  const draft = project.productionReview?.draft || {};
+  const art = {
+    concept: h(project.concept), 'visual spec': h(project.visualSpec), 'style references': h(project.styleReferences),
+    'media mode': h([project.mediaMode, project.composition?.authoringRenderer, project.composition?.mode, project.productionPolicy]),
+    'art direction': h(project.castAndSets?.direction), cast: h(draft.cast), environments: h(draft.environments),
+    'visual language': h(draft.visualLanguage), 'motion language': h(draft.motionLanguage),
+    'implementation plan': h(draft.implementationPlan), 'visual guide': h(artifactBasis(artifact(project, draft.guideArtifactId))),
+  };
+  const scenes = {};
+  for (const [i, s] of (project.scenes || []).entries()) {
+    const n = i + 1;
+    scenes[`scene ${n} timing`] = h([s.startSec, s.endSec]);
+    scenes[`scene ${n} lyrics`] = h(s.lyricText);
+    scenes[`scene ${n} prompt`] = h([s.visualIntent, s.prompt, s.framePrompt]);
+  }
+  const storyboard = { ...art, song: h([source(project).trackId, source(project).uploadedAudioFilename, source(project).duration, source(project).beats, source(project).sections]),
+    lyrics: h([source(project).lyrics, source(project).markers, source(project).phrases]), 'lyric timing': h([draft.lyricsMode, draft.timingStatus, draft.timingNotes]),
+    'storyboard shots': h([draft.storyboard, draft.storyboardSource, project.productionReview?.documentStoryboard]), treatment: h(project.treatment), ...scenes };
+  const window = project.productionReview?.proof;
+  const proof = { ...storyboard, composition: h(project.composition), 'proof window': h(window && [window.startSec, window.endSec]),
+    takes: h((project.scenes || []).map(({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer }) =>
+      ({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer }))),
+    'sound bed': h(project.soundBed), 'video settings': h(project.videoSettings) };
+  return { art, storyboard, proof };
+}
+
+// The labels whose hash moved (or disappeared) between two input snapshots.
+const changedInputs = (before, now) => Object.keys(now).filter(k => before[k] !== now[k])
+  .concat(Object.keys(before).filter(k => !(k in now)));
+
+// Approved VALUES for the small text inputs a director edits by hand, stored
+// beside the hashes so a changed input can be reverted (#10241). Anything over
+// the cap, and anything that is not text (media, takes, the song), keeps only
+// its hash and so is never revertible. Absent from the record = not revertible.
+const MAX_SNAPSHOT_CHARS = 8 * 1024;
+const snapshotValue = v => {
+  const json = JSON.stringify(v);
+  return json !== undefined && json.length <= MAX_SNAPSHOT_CHARS ? JSON.parse(json) : undefined;
+};
+const snapshotAll = entries => Object.fromEntries(Object.entries(entries)
+  .map(([label, v]) => [label, snapshotValue(v)]).filter(([, v]) => v !== undefined));
+const DRAFT_FIELD_LABELS = { cast: 'cast', environments: 'environments', 'visual language': 'visualLanguage',
+  'motion language': 'motionLanguage', 'implementation plan': 'implementationPlan' };
+const SCENE_PROMPT_LABEL = /^scene \d+ prompt$/;
+const SCENE_PROMPT_KEYS = ['visualIntent', 'prompt', 'framePrompt'];
+
+/** The approved values of a production stage's revertible inputs, keyed by the same labels as its hashes. */
+function productionApprovalValues(project, stage) {
+  const draft = project.productionReview?.draft || {};
+  const entries = { concept: project.concept };
+  for (const [label, key] of Object.entries(DRAFT_FIELD_LABELS)) entries[label] = draft[key];
+  if (stage !== 'art') {
+    for (const [i, s] of (project.scenes || []).entries()) {
+      entries[`scene ${i + 1} prompt`] = { sceneId: s.sceneId, visualIntent: s.visualIntent, prompt: s.prompt, framePrompt: s.framePrompt };
+    }
+  }
+  return snapshotAll(entries);
+}
+
+const CAST_SETS_CONCEPT_STYLE_KEYS = ['style', 'universeStyle', 'moodBoardStyle'];
+const CAST_SETS_SPEC_STYLE_KEYS = ['palette', 'typography', 'cameraRules', 'moodBoardId'];
+const objectConcept = project => project.concept && typeof project.concept === 'object' ? project.concept : {};
+const pick = (obj, keys) => Object.fromEntries(keys.filter(k => obj?.[k] !== undefined).map(k => [k, obj[k]]));
+
+/** The approved values behind a Cast & Sets approval's `concept`, `style` and `subjects` hashes. */
+export function castAndSetsApprovalValues(project) {
+  const { subjects, style, universeStyle, moodBoardStyle, ...concept } = objectConcept(project);
+  return snapshotAll({ concept, subjects: subjects ?? [],
+    style: { ...pick(objectConcept(project), CAST_SETS_CONCEPT_STYLE_KEYS), ...pick(project.visualSpec, CAST_SETS_SPEC_STYLE_KEYS), styleReferences: project.styleReferences ?? null } });
+}
+
+const revertibleOf = (changedFields, values) => changedFields.filter(f => values && f in values);
+const withRevertible = (stale, values) => {
+  const revertible = revertibleOf(stale.changedFields, values);
+  return revertible.length ? { ...stale, revertible } : stale;
+};
+
+/** `{ approvedAt, changedFields, revertible? }` when a stage was approved on inputs that have since moved; null otherwise. */
+function staleApproval(project, stage, current, inputs) {
+  const approval = project.productionReview?.approvals?.[stage];
+  if (!approval || approval.basis === current) return null;
+  const before = approval.inputs;
+  const changedFields = before ? changedInputs(before, inputs[stage]) : [];
+  return withRevertible({ approvedAt: approval.approvedAt || null, changedFields: changedFields.length ? changedFields : (before ? ['proof render'] : []) }, approval.values);
+}
+
+/**
+ * The labeled inputs a Cast & Sets approval rests on — the concept, its style,
+ * the subjects (with the cast references the approval wrote) and the song —
+ * hashed per label. Stored on the stage at approval as `approvedInputs`.
+ * References hash by image only, so re-normalizing a reference's optional
+ * fields is not mistaken for a new subject.
+ */
+export function castAndSetsApprovalInputs(project) {
+  const { subjects, style, universeStyle, moodBoardStyle, ...concept } = project.concept || {};
+  const spec = project.visualSpec || {};
+  return {
+    concept: h(concept),
+    style: h([style || '', universeStyle || '', moodBoardStyle || '', spec.palette || [], spec.typography || '',
+      spec.cameraRules || '', spec.moodBoardId || null, project.styleReferences ?? null]),
+    subjects: h([subjects || [], (spec.references || []).map(r => r?.imageId || null)]),
+    song: h([project.trackId || null, project.uploadedAudioFilename || null]),
+  };
+}
+
+/**
+ * The Cast & Sets check-in as an approval: `{ approved, stale }`. An approved
+ * stage stays approved when its inputs move (its references still condition
+ * the frames) but reports what changed since. A stage approved before inputs
+ * were recorded has no basis to compare and reports no staleness.
+ */
+function castAndSetsApproval(project) {
+  const stage = project.castAndSets;
+  const approved = stage?.status === 'approved';
+  if (!approved || !stage.approvedInputs) return { approved, stale: null };
+  const changedFields = changedInputs(stage.approvedInputs, castAndSetsApprovalInputs(project));
+  return { approved, stale: changedFields.length ? withRevertible({ approvedAt: stage.approvedAt || null, changedFields }, stage.approvedValues) : null };
+}
+
 export function productionReadiness(project) {
   const review = project.productionReview || {};
   const draft = review.draft || {};
   const basis = productionReviewBasis(project);
   const alignmentBasis = productionAlignmentBasis(project);
+  const inputs = productionApprovalInputs(project);
   const unresolved = stage => (review.feedback || []).filter(f => f.stage === stage && f.decision === 'request-changes' && !f.resolvedAt);
   const artProblems = unresolved('art').map(f => `Resolve art feedback for ${f.target}: ${f.text}`);
   for (const [key, label] of [['cast', 'Cast guide'], ['environments', 'Environment guide'],
@@ -131,11 +276,62 @@ export function productionReadiness(project) {
     proofProblems.push('Render and watch a current animated chorus proof with the master song.');
   }
   const proofApproved = !proofProblems.length && hasProofEvidence(review.approvals?.proof?.proofReview) && review.approvals?.proof?.basis === hash({ basis: basis.proof, excerptId: excerpt.id, filename: excerpt.filename });
-  return { basis, alignment: { basis: alignmentBasis, status: draft.lyricsMode === 'instrumental' ? 'instrumental'
-    : draft.timingStatus !== 'verified' ? 'provisional' : review.alignmentBasis === alignmentBasis ? 'verified' : 'stale' }, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: alignmentBasis }, art: { approved: artApproved, problems: [...new Set(artProblems)] },
-    storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)] },
-    proof: { approved: proofApproved, problems: proofProblems, excerptId: excerpt?.id || null },
+  return { basis, inputs, alignment: { basis: alignmentBasis, status: draft.lyricsMode === 'instrumental' ? 'instrumental'
+    : draft.timingStatus !== 'verified' ? 'provisional' : review.alignmentBasis === alignmentBasis ? 'verified' : 'stale' }, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: alignmentBasis }, art: { approved: artApproved, problems: [...new Set(artProblems)], stale: artApproved ? null : staleApproval(project, 'art', basis.art, inputs) },
+    storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)], stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs) },
+    proof: { approved: proofApproved, problems: proofProblems, excerptId: excerpt?.id || null, stale: proofApproved ? null : staleApproval(project, 'proof', basis.proof, inputs) },
+    castAndSets: castAndSetsApproval(project),
     readyForProduction: proofApproved };
+}
+
+const refuseRevert = (message, code) => new ServerError(message, { status: 409, code });
+
+function restoreScenePrompt(project, value) {
+  if (!project.scenes?.some(s => s.sceneId === value.sceneId)) throw refuseRevert('That scene no longer exists, so its prompt cannot be restored.', 'MUSIC_VIDEO_REVERT_UNAVAILABLE');
+  return { ...project, scenes: project.scenes.map(s => s.sceneId === value.sceneId ? { ...s, ...Object.fromEntries(SCENE_PROMPT_KEYS.map(k => [k, value[k]])) } : s) };
+}
+
+function restoreCastAndSets(project, field, value) {
+  const concept = objectConcept(project);
+  if (field === 'concept') return { ...project, concept: { ...value, ...pick(concept, ['subjects', ...CAST_SETS_CONCEPT_STYLE_KEYS]) } };
+  if (field === 'subjects') return { ...project, concept: { ...concept, subjects: value } };
+  const { styleReferences, ...rest } = value;
+  const nextConcept = { ...concept };
+  for (const k of CAST_SETS_CONCEPT_STYLE_KEYS) delete nextConcept[k];
+  return { ...project, concept: { ...nextConcept, ...pick(rest, CAST_SETS_CONCEPT_STYLE_KEYS) },
+    visualSpec: { ...project.visualSpec, ...pick(rest, CAST_SETS_SPEC_STYLE_KEYS) }, styleReferences };
+}
+
+/**
+ * Write one changed input back to the value an approval was granted on (#10241).
+ * Refuses (409) unless the approval is stale, that input's hash moved, and a
+ * value was recorded for it; a legacy approval or an oversized/media input has none.
+ */
+export function revertApprovedInput(project, { stage, field }) {
+  const unavailable = reason => refuseRevert(reason, 'MUSIC_VIDEO_REVERT_UNAVAILABLE');
+  const cast = stage === 'castAndSets';
+  let record;
+  let now;
+  if (cast) {
+    const approval = project.castAndSets;
+    if (approval?.status !== 'approved') throw unavailable('The Cast & Sets check-in is not approved.');
+    record = { inputs: approval.approvedInputs, values: approval.approvedValues };
+    now = castAndSetsApprovalInputs(project);
+  } else {
+    const readiness = productionReadiness(project);
+    if (readiness[stage].approved) throw unavailable('This approval is current; there is nothing to revert.');
+    record = project.productionReview?.approvals?.[stage];
+    now = readiness.inputs[stage];
+  }
+  if (!record?.inputs || changedInputs(record.inputs, now).includes(field) === false) throw unavailable('That input has not changed since the approval.');
+  const value = record.values?.[field];
+  if (value === undefined) throw unavailable('The approved value of that input was not kept, so it cannot be restored.');
+  if (cast) return restoreCastAndSets(project, field, value);
+  if (field === 'concept') return { ...project, concept: value };
+  if (DRAFT_FIELD_LABELS[field]) return { ...project, productionReview: { ...project.productionReview,
+    draft: { ...project.productionReview?.draft, [DRAFT_FIELD_LABELS[field]]: value } } };
+  if (SCENE_PROMPT_LABEL.test(field)) return restoreScenePrompt(project, value);
+  throw unavailable('That input cannot be reverted.');
 }
 
 export function assertProductionApproval(project, stage = 'proof') {
@@ -164,7 +360,7 @@ export function approveProductionStage(project, { stage, basis, proofReview, app
       throw new ServerError('The rendered proof changed. Play and review the new excerpt before approving.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
     }
   }
-  const decision = { stage, basis: expected, approvedAt: new Date().toISOString(),
+  const decision = { stage, basis: expected, inputs: productionApprovalInputs(project)[stage], values: productionApprovalValues(project, stage), approvedAt: new Date().toISOString(),
     ...(approvedBy ? { approvedBy } : {}), ...(reviewer ? { reviewer: structuredClone(reviewer) } : {}),
     ...(stage === 'proof' ? { proofReview: structuredClone(proofReview) } : {}) };
   return { ...project, productionReview: { ...project.productionReview,

@@ -11,6 +11,27 @@ import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicV
  */
 
 import { z } from 'zod';
+import { knownFilmStyleIdSchema } from './filmStyleGrammars.js';
+
+const makingOfId = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
+export const musicVideoMakingOfSelectionSchema = z.object({
+  projects: z.array(z.object({
+    projectId: makingOfId,
+    snapshot: z.string().regex(/^[a-f0-9]{64}$/),
+    assets: z.array(z.object({
+      id: z.string().min(1).max(250),
+      rights: z.enum(['unknown', 'owned', 'licensed']).default('unknown'),
+      attribution: z.string().max(2000).default(''),
+      ownershipConfirmed: z.boolean().default(false),
+    }).strict()).max(300),
+  }).strict()).min(1).max(8),
+  previewDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+}).strict().superRefine((selection, ctx) => {
+  if (new Set(selection.projects.map(p => p.projectId)).size !== selection.projects.length
+    || selection.projects.some(p => new Set(p.assets.map(a => a.id)).size !== p.assets.length)) {
+    ctx.addIssue({ code: 'custom', message: 'Duplicate project or asset selection' });
+  }
+});
 
 export const musicVideoSongDraftSchema = z.object({
   title: z.string().trim().min(1).max(80), style: z.string().trim().min(1).max(1000),
@@ -80,6 +101,11 @@ export const musicVideoConceptSchema = z.object({
 // is optional because Grok does not consume it; the video-gen route performs
 // the authoritative installed-model validation when a local render starts.
 export const musicVideoVideoSettingsSchema = z.object({
+  renderPool: z.object({
+    mode: z.enum(['local', 'peers', 'both']),
+    peers: z.array(z.object({ peerId: z.string().uuid(), modelId: z.string().trim().min(1).max(256) }).strict()).max(12),
+  }).strict().refine((v) => v.mode === 'local' || v.peers.length > 0, { message: 'Select at least one peer model' })
+    .refine((v) => new Set(v.peers.map((p) => p.peerId)).size === v.peers.length, { message: 'Choose one model per peer' }).optional(),
   // null clears the per-project pin so this install's configured default wins.
   // 'fal' is the metered fal.ai queue REST backend (server/services/videoGen/fal.js,
   // #8968) — image-to-video only here; the audio-reactive lane stays local-only
@@ -106,7 +132,7 @@ export const musicVideoVideoSettingsSchema = z.object({
   // false = lip-sync to the audio alone, without the provider transcribing it
   // first (sung words it mishears turn into the wrong mouth shapes).
   falLipSyncTranscription: z.boolean().nullable().optional(),
-  generationMode: z.enum(['image', 'audioReactive']).optional(),
+  generationMode: z.enum(['image', 'audioReactive', 'suppliedAudio']).optional(),
   audioReactiveLora: z.string().max(255).regex(/^[^/\\]+\.safetensors$/i).nullable().optional(),
   audioReactiveScale: z.number().min(0).max(2).optional(),
 }).strict();
@@ -427,6 +453,8 @@ export const musicVideoCompositionSchema = z.object({
   version: z.literal(1).optional(),
   mode: z.enum(MUSIC_VIDEO_COMPOSITION_MODES).optional(),
   authoringRenderer: z.enum(['canvas', 'three']).optional(),
+  // Curated film style grammar the document authoring prompt follows (#10254).
+  styleGrammarId: knownFilmStyleIdSchema.optional(),
   cutting: z.enum(MUSIC_VIDEO_CUTTING_MODES).optional(),
   grade: z.object({
     preset: z.enum(MUSIC_VIDEO_GRADE_PRESETS).optional(),
@@ -682,6 +710,7 @@ export const musicVideoPublishPrepareSchema = z.object({
   pin: z.boolean(),
   prompt: kitText(25000),
   storyImage: z.string().min(1).max(300),
+  cutId: z.string().min(1).max(100),
 }).partial().strict();
 
 export const musicVideoExcerptNoteSchema = z.object({
@@ -1135,6 +1164,14 @@ export const musicVideoSceneCreateSchema = z.object({
   { message: 'endSec must be >= startSec', path: ['endSec'] },
 );
 
+// The last render failure persisted on a scene by the scene image/video hooks
+// (#10154): which lane failed, why (one bounded line), and when.
+export const musicVideoSceneLastFailureSchema = z.object({
+  lane: z.enum(['image', 'video']),
+  error: z.string().max(300),
+  at: z.string().max(64),
+}).strict();
+
 // Times are nullable here so clearing a Start/End input (the UI sends `null`)
 // is accepted. The endSec >= startSec invariant can't be checked on the partial
 // patch alone (the paired value may live on the existing record), so the merged
@@ -1162,6 +1199,10 @@ export const musicVideoSceneUpdateSchema = z.object({
   performanceSpeaker: z.string().trim().max(120).nullable().optional(),
   referenceImageId: z.string().max(256).nullable().optional(),
   videoHistoryId: z.string().max(64).nullable().optional(),
+  // #10154: the last generation failure the render hooks persisted. The board
+  // may send `null` to dismiss it; a full object is accepted so a client that
+  // round-trips the scene doesn't 400.
+  lastFailure: musicVideoSceneLastFailureSchema.nullable().optional(),
 }).strict();
 
 // Reorder the board: the full set of scene ids in their new order.
@@ -1186,6 +1227,8 @@ export const musicVideoPlanRequestSchema = z.object({
   providerId: z.string().max(64).optional(),
   model: z.string().max(200).optional(),
   effort: z.enum(EFFORT_LEVELS).optional(),
+  // Required once the board has scenes (409 PLAN_MODE_REQUIRED otherwise).
+  mode: z.enum(['replace', 'append']).optional(),
 }).strict();
 
 // Manual-tempo fallback (see services/musicVideo/audioAnalysis.js for why bpm
@@ -1300,6 +1343,23 @@ export const musicVideoProductionFeedbackSchema = z.object({
   target: z.string().trim().min(1).max(300), text: z.string().trim().min(1).max(8000),
   decision: z.enum(['comment', 'structure-accepted', 'request-changes']),
 }).strict();
+export const musicVideoProductionReviseSchema = musicVideoCastAndSetsStartSchema.extend({
+  stage: z.enum(['art', 'storyboard', 'proof']),
+}).strict();
+// The input label a stale approval names (`concept`, `scene 3 prompt`, …) — the server finds its stored value.
+export const musicVideoProductionRevertSchema = z.object({
+  stage: z.enum(['art', 'storyboard', 'proof', 'castAndSets']), field: z.string().trim().min(1).max(100),
+}).strict();
 export const musicVideoProductionFeedbackResolutionSchema = z.object({
   feedbackId: z.string().min(1).max(128), resolution: z.string().trim().min(1).max(8000), password: z.string().max(1024).optional(),
 }).strict();
+
+// GET /api/music-video query (#10169). Passthrough strings, like the other list
+// queries: `parsePagination` clamps `limit`/`offset`, and a malformed `cursor`
+// (an offset the summary page issued) falls back to the first page.
+export const musicVideoProjectListQuerySchema = z.object({
+  summary: z.enum(['1', 'true', '0', 'false']).optional(),
+  limit: z.string().optional(),
+  offset: z.string().optional(),
+  cursor: z.string().max(64).optional(),
+});

@@ -29,11 +29,11 @@ export function serializeBrowserOperation(fn) {
   return run;
 }
 
-/** Connect to the running PortOS Browser (launching it when it is stopped). */
-export async function connectPortosBrowser() {
+/** Connect to the running PortOS Browser (launching it when it is stopped, unless `launch: false`). */
+export async function connectPortosBrowser({ launch = true } = {}) {
   const { getHealthStatus, launchBrowser } = await import('../../browserService.js');
   let health = await getHealthStatus();
-  if (!health.connected) health = await launchBrowser();
+  if (!health.connected && launch) health = await launchBrowser();
   if (!health.connected) {
     throw new ServerError('PortOS Browser is unavailable. Start it in Settings › Browser, then retry.', { status: 503, code: 'PORTOS_BROWSER_UNAVAILABLE' });
   }

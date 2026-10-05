@@ -1,3 +1,4 @@
+import { federatedSourceAudioSchema } from './federatedMediaWire.js';
 import { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageLimits.js';
 export { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageLimits.js';
 import { CREDENTIALS } from './credentialRegistry.js';
@@ -22,6 +23,7 @@ import {
 } from './sharedSchemas.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import { EFFORT_LEVELS } from './providerModels.js';
+import { knownFilmStyleIdSchema } from './filmStyleGrammars.js';
 import { MODEL_ALIAS_LIMITS } from './providerModelAliases.js';
 import { PROVIDER_HARNESS_IDS, ROUTE_MODES } from './providerHarnesses.js';
 import { parseProviderRef } from './providerRef.js';
@@ -1394,9 +1396,20 @@ export const federatedMediaVideoJobSubmissionBaseSchema = federatedMediaJobRouti
   seed: z.number().int().min(0).optional(),
   sourceImage: federatedMediaInputAssetRefSchema.optional(),
   lastImage: federatedMediaInputAssetRefSchema.optional(),
+  sourceAudio: federatedMediaInputAssetRefSchema.optional(),
+  audioConditioning: federatedSourceAudioSchema.optional(),
 }).strict();
 
 export const federatedMediaVideoJobSubmissionSchema = federatedMediaVideoJobSubmissionBaseSchema
+  .refine((v) => Boolean(v.sourceAudio) === Boolean(v.audioConditioning), {
+    message: 'sourceAudio and audioConditioning must be supplied together',
+  })
+  .refine((v) => !v.audioConditioning || (v.fps !== undefined && v.numFrames !== undefined), {
+    message: 'Source audio requires explicit fps and numFrames for its exact window',
+  })
+  .refine((v) => !v.sourceAudio || (!v.lastImage && v.sourceAudio.assetId.endsWith(v.audioConditioning?.clipSha256 || '!')), {
+    message: 'Source audio must match its clip digest and cannot combine with an end frame',
+  })
   // First-last-frame needs both ends. A lone end frame would render a plain
   // text-to-video clip and quietly discard the frame the caller supplied.
   .refine((value) => value.lastImage === undefined || value.sourceImage !== undefined, {
@@ -2578,6 +2591,8 @@ export const appLaunchVideoRequestSchema = z.object({
   motionSkills: z.boolean().default(false),
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/).optional(),
   styleReference: launchVideoStyleReferenceSchema.optional(),
+  // Curated medium rulebook (#10254); only its motion/camera/sound/native-move parts reach the prompt.
+  styleGrammarId: knownFilmStyleIdSchema.optional(),
 }).strict();
 
 export const launchVideoOptionsSchema = z.object({
@@ -2603,6 +2618,8 @@ export const launchVideoStoryboardSchema = z.object({
 export const htmlCompositionRenderSchema = z.object({
   launchVideo: launchVideoOptionsSchema.optional(),
   synthesizeMusic: z.boolean().optional(),
+  // Master synthesized and library music to -14 LUFS / -1.5 dBTP (#10249); false keeps the bed as supplied.
+  masterLoudness: z.boolean().optional(),
   // Overrides the page's own portosComposition.motionBlur when present (#9080).
   motionBlur: htmlCompositionMotionBlurChoiceSchema.optional(),
   directory: z.string().min(1).max(1024).refine(value => !value.startsWith('/') && !value.includes('\\') && !value.includes(':') && !value.split('/').some(part => part === '..' || part === '.' || !part), 'directory must be a relative path inside data'),

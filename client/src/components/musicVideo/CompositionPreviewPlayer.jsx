@@ -54,7 +54,9 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const seekState = useRef({ inFlight: false, pending: null, ready: false });
   const appliedSeek = useRef(null);
 
-  const refresh = doc ? `${doc.directory}|${project.updatedAt}` : null;
+  // The document's own version (its folder + save time), not the project's
+  // `updatedAt`: an unrelated save must not reload a playing preview.
+  const refresh = doc ? `${doc.directory}|${doc.updatedAt || ''}` : null;
   useEffect(() => {
     let active = true;
     setPreview(null);

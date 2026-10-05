@@ -25,7 +25,7 @@ import { homedir } from 'node:os';
 import {
   join, dirname, resolve as resolvePath, relative, sep, posix, win32,
 } from 'node:path';
-import { sha256File } from './fileUtils.js';
+import { sha256File, rmGuarded } from './fileUtils.js';
 
 // HF cache root resolution mirrors huggingface_hub's own precedence:
 // HF_HUB_CACHE > HF_HOME/hub > $XDG_CACHE_HOME/huggingface/hub
@@ -532,4 +532,93 @@ export function aggregateVerifies(verifies) {
     checkedDeep: list.every((v) => v.checkedDeep),
     badFiles: list.flatMap((v) => v.files.filter((f) => !f.ok).map((f) => ({ repo: v.repoId, name: f.name, reason: f.reason }))),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Shared blob store
+//
+// Newer huggingface_hub releases keep weight bytes in `<hub>/blobs/<xx>/<hash>`
+// (marked by `.huggingface-shared-blobs`) and link each model's own
+// `blobs/<hash>` / `snapshots/` entries at them, with a `<hash>.refs` sidecar
+// naming the referrers. A model directory is therefore a handful of symlinks:
+// `du`/`dirSize` on it reports kilobytes, and `rm -rf models--X` frees nothing
+// because the bytes live outside it. These helpers make the store visible and
+// let a delete release the blobs nothing else references.
+// ---------------------------------------------------------------------------
+
+const SHARED_BLOBS_DIR = 'blobs';
+const REFS_SUFFIX = '.refs';
+
+async function walkSymlinks(dir, onLink) {
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    const path = join(dir, entry.name);
+    if (entry.isSymbolicLink()) await onLink(path);
+    else if (entry.isDirectory()) await walkSymlinks(path, onLink);
+  }
+}
+
+// Real paths (with sizes) of shared-store blobs one model directory links to.
+export async function listLinkedSharedBlobs(hubDir, dirName) {
+  const sharedRoot = join(await fs.realpath(hubDir).catch(() => hubDir), SHARED_BLOBS_DIR) + sep;
+  const found = new Map();
+  await walkSymlinks(join(hubDir, dirName), async (link) => {
+    const target = await fs.realpath(link).catch(() => null);
+    if (!target || !target.startsWith(sharedRoot) || found.has(target)) return;
+    const info = await fs.stat(target).catch(() => null);
+    if (info?.isFile()) found.set(target, info.size);
+  });
+  return found;
+}
+
+async function listModelDirNames(hubDir) {
+  const entries = await fs.readdir(hubDir, { withFileTypes: true }).catch(() => []);
+  return entries.filter((e) => e.isDirectory() && e.name.startsWith('models--')).map((e) => e.name);
+}
+
+async function referencedSharedBlobs(hubDir) {
+  const referenced = new Set();
+  for (const dirName of await listModelDirNames(hubDir)) {
+    for (const target of (await listLinkedSharedBlobs(hubDir, dirName)).keys()) referenced.add(target);
+  }
+  return referenced;
+}
+
+// Size of the shared store: `{ bytes, files: Map<realPath,size> }`. The `.refs`
+// sidecars and marker file are metadata, not weights.
+export async function scanSharedBlobStore(hubDir) {
+  const files = new Map();
+  const walk = async (dir) => {
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) await walk(path);
+      else if (entry.isFile() && !entry.name.endsWith(REFS_SUFFIX) && !entry.name.startsWith('.huggingface')) {
+        const info = await fs.stat(path).catch(() => null);
+        if (info) files.set(await fs.realpath(path).catch(() => path), info.size);
+      }
+    }
+  };
+  await walk(join(hubDir, SHARED_BLOBS_DIR));
+  let bytes = 0;
+  for (const size of files.values()) bytes += size;
+  return { bytes, files };
+}
+
+// After a model directory is removed, delete the given shared blobs that no
+// remaining model links to. Returns `{ removed, freedBytes }`. Blobs another
+// model still uses are left alone, so a delete never breaks a sibling.
+export async function releaseSharedBlobs(hubDir, candidates) {
+  if (!candidates?.size) return { removed: 0, freedBytes: 0 };
+  const referenced = await referencedSharedBlobs(hubDir);
+  let removed = 0;
+  let freedBytes = 0;
+  for (const [target, size] of candidates) {
+    if (referenced.has(target)) continue;
+    await rmGuarded(target, { force: true });
+    await rmGuarded(`${target}${REFS_SUFFIX}`, { force: true });
+    removed += 1;
+    freedBytes += size;
+  }
+  return { removed, freedBytes };
 }

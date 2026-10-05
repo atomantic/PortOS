@@ -70,6 +70,7 @@ vi.mock('../services/audioMidiTranscription.js', () => ({
   startMidiTranscription: vi.fn(async () => ({ jobId: 'midi-job-1', model: 'medium' })),
   attachMidiTranscriptionSseClient: vi.fn(() => true),
   cancelMidiTranscription: vi.fn(() => true),
+  getActiveMidiTranscriptionJobId: vi.fn(() => null),
 }));
 
 vi.mock('../services/musicVideo/lyricAlign.js', () => ({
@@ -108,7 +109,35 @@ describe('musicVideo routes', () => {
   it('GET / lists projects', async () => {
     const r = await request(app).get('/api/music-video');
     expect(r.status).toBe(200);
-    expect(r.body).toEqual([{ id: 'mv-1', name: 'A' }]);
+    expect(r.body).toHaveLength(1);
+    expect(r.body[0]).toMatchObject({ id: 'mv-1', name: 'A' });
+    expect(r.body[0].productionReadiness).toMatchObject({ readyForProduction: false, art: { approved: false } });
+  });
+
+  it('GET /:id carries server-computed productionReadiness so stages derive from one record (#10136)', async () => {
+    svc.getProject.mockResolvedValue({ id: 'mv-1', name: 'A' });
+    const r = await request(app).get('/api/music-video/mv-1');
+    expect(r.status).toBe(200);
+    expect(r.body.productionReadiness).toMatchObject({
+      art: { approved: false }, storyboard: { approved: false }, proof: { approved: false },
+    });
+  });
+
+  it('GET /midi-sources returns only the newest transcription per track, trimmed (#10203)', async () => {
+    const mk = (id, trackId, createdAt) => ({
+      id, name: id, trackId, scenes: [{ big: true }],
+      midiTranscription: createdAt ? { filename: `${id}.mid`, model: 'm', createdAt, notes: [1, 2] } : null,
+    });
+    svc.listProjects.mockResolvedValueOnce([
+      mk('mv-old', 't1', '2026-01-01'), mk('mv-new', 't1', '2026-02-01'),
+      mk('mv-none', 't1', null), mk('mv-other', 't2', '2026-01-05'), mk('mv-unlinked', null, '2026-03-01'),
+    ]);
+    const r = await request(app).get('/api/music-video/midi-sources');
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual([
+      { trackId: 't1', id: 'mv-new', name: 'mv-new', midiTranscription: { filename: 'mv-new.mid', model: 'm', createdAt: '2026-02-01' } },
+      { trackId: 't2', id: 'mv-other', name: 'mv-other', midiTranscription: { filename: 'mv-other.mid', model: 'm', createdAt: '2026-01-05' } },
+    ]);
   });
 
   it('GET / returns a bounded envelope when pagination is requested', async () => {
@@ -122,6 +151,60 @@ describe('musicVideo routes', () => {
     expect(r.body.total).toBe(5);
     expect(r.body.limit).toBe(2);
     expect(r.body.offset).toBe(1);
+  });
+
+  it('GET /?summary=1 returns bounded summary projections with cursor pagination (#10169)', async () => {
+    const p1 = {
+      id: 'mv-older',
+      name: 'Older Project',
+      version: 1,
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+      scenes: [{ sceneId: 's1' }],
+      productionRuns: [{ status: 'complete', usage: { spentUsd: 1.25 } }],
+    };
+    const p2 = {
+      id: 'mv-newer',
+      name: 'Newer Project',
+      version: 2,
+      rootProjectId: 'mv-root',
+      createdAt: '2026-02-01T00:00:00Z',
+      updatedAt: '2026-02-01T00:00:00Z',
+      scenes: [{ sceneId: 's1' }, { sceneId: 's2' }],
+      productionRuns: [{ status: 'running', limits: { spendCapUsd: 5.0 }, usage: { spentUsd: 0.5 } }],
+    };
+    svc.listProjects.mockResolvedValue([p1, p2]);
+
+    // Page 1: limit=1
+    const r1 = await request(app).get('/api/music-video?summary=1&limit=1');
+    expect(r1.status).toBe(200);
+    expect(r1.body.total).toBe(2);
+    expect(r1.body.limit).toBe(1);
+    expect(r1.body.offset).toBe(0);
+    expect(r1.body.nextCursor).toBe('1');
+    expect(r1.body.items).toHaveLength(1);
+
+    const first = r1.body.items[0];
+    expect(first.id).toBe('mv-newer');
+    expect(first.name).toBe('Newer Project');
+    expect(first.version).toBe(2);
+    expect(first.rootProjectId).toBe('mv-root');
+    expect(first.versionRoot).toBe('mv-root');
+    expect(first.stage).toBe('produce');
+    expect(first.status).toBe('draft');
+    expect(first.runStatus).toBe('running');
+    expect(first.spend).toMatchObject({ spentUsd: 0.5, capUsd: 5.0, autopilot: 0.5, manual: 0, autoReview: 0 });
+    expect(first.updatedAt).toBe('2026-02-01T00:00:00Z');
+    expect(first.scenes).toBeUndefined();
+
+    // Page 2: limit=1, cursor=1
+    const r2 = await request(app).get(`/api/music-video?summary=1&limit=1&cursor=${r1.body.nextCursor}`);
+    expect(r2.status).toBe(200);
+    expect(r2.body.total).toBe(2);
+    expect(r2.body.offset).toBe(1);
+    expect(r2.body.nextCursor).toBeNull();
+    expect(r2.body.items).toHaveLength(1);
+    expect(r2.body.items[0].id).toBe('mv-older');
   });
 
   it('GET /:id 404s when missing', async () => {
@@ -359,14 +442,64 @@ describe('musicVideo routes', () => {
   });
 
   describe('POST /:id/lyrics/align (#9074)', () => {
-    it('aligns only when the route is called, and accepts a single-line re-align', async () => {
+    const alignable = { id: 'mv-1', lyricCues: [{ id: 'lc-1', text: 'walking home' }] };
+
+    // Hold the mocked alignment open so the job stays "running" for the test.
+    const holdAlignment = () => {
+      let release;
+      alignProjectLyrics.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve({ id: 'mv-1', lyricCues: [] }); }));
+      return () => release();
+    };
+
+    it('starts a job only when the route is called, and a second click reuses it (#10155)', async () => {
+      svc.getProject.mockResolvedValue(alignable);
       expect(alignProjectLyrics).not.toHaveBeenCalled();
-      const all = await request(app).post('/api/music-video/mv-1/lyrics/align').send({});
-      expect(all.status).toBe(200);
-      expect(alignProjectLyrics).toHaveBeenCalledWith('mv-1', { cueId: undefined });
-      const one = await request(app).post('/api/music-video/mv-1/lyrics/align').send({ cueId: 'lc-1' });
-      expect(one.status).toBe(200);
-      expect(alignProjectLyrics).toHaveBeenLastCalledWith('mv-1', { cueId: 'lc-1' });
+      const release = holdAlignment();
+      const first = await request(app).post('/api/music-video/mv-1/lyrics/align').send({});
+      expect(first.status).toBe(202);
+      expect(first.body.jobId).toEqual(expect.any(String));
+      expect(first.body.reused).toBeUndefined();
+      const second = await request(app).post('/api/music-video/mv-1/lyrics/align').send({ cueId: 'lc-1' });
+      expect(second.status).toBe(202);
+      expect(second.body).toEqual({ jobId: first.body.jobId, reused: true });
+      expect(alignProjectLyrics).toHaveBeenCalledTimes(1);
+      expect(alignProjectLyrics).toHaveBeenCalledWith('mv-1', expect.objectContaining({ cueId: null }));
+      const active = await request(app).get('/api/music-video/mv-1/active-jobs');
+      expect(active.body).toEqual({ alignment: first.body.jobId, separation: null, midi: null });
+      release();
+      await vi.waitFor(async () => {
+        expect((await request(app).get('/api/music-video/mv-1/active-jobs')).body.alignment).toBeNull();
+      });
+    });
+
+    it('fails before a job exists when the project or its lyrics are missing', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', lyricCues: [] });
+      const none = await request(app).post('/api/music-video/mv-1/lyrics/align').send({});
+      expect(none.status).toBe(400);
+      expect(none.body.code).toBe('NO_LYRICS');
+      svc.getProject.mockResolvedValue(alignable);
+      const gone = await request(app).post('/api/music-video/mv-1/lyrics/align').send({ cueId: 'lc-gone' });
+      expect(gone.status).toBe(404);
+      expect(alignProjectLyrics).not.toHaveBeenCalled();
+    });
+
+    it('cancels a running job and 404s the stream of an unknown one', async () => {
+      svc.getProject.mockResolvedValue(alignable);
+      let isCancelled;
+      alignProjectLyrics.mockImplementationOnce((_id, opts) => new Promise((_resolve, reject) => {
+        isCancelled = opts.isCancelled;
+        const timer = setInterval(() => {
+          if (opts.isCancelled()) { clearInterval(timer); reject(Object.assign(new Error('cancelled'), { canceled: true })); }
+        }, 5);
+      }));
+      const { body: { jobId } } = await request(app).post('/api/music-video/mv-1/lyrics/align').send({});
+      expect(isCancelled()).toBe(false);
+      const cancel = await request(app).post(`/api/music-video/lyrics/align/${jobId}/cancel`);
+      expect(cancel.body).toEqual({ ok: true });
+      await vi.waitFor(async () => {
+        expect((await request(app).get('/api/music-video/mv-1/active-jobs')).body.alignment).toBeNull();
+      });
+      expect((await request(app).get('/api/music-video/lyrics/align/nope/events')).status).toBe(404);
     });
 
     it('rejects an unknown body and a cue id the schema cannot store', async () => {
@@ -583,7 +716,7 @@ describe('musicVideo routes', () => {
     it('plans with default options when no body is sent', async () => {
       const r = await request(app).post('/api/music-video/mv-1/plan');
       expect(r.status).toBe(200);
-      expect(planProject).toHaveBeenCalledWith('mv-1', { seedPrompts: undefined, providerId: undefined, model: undefined });
+      expect(planProject).toHaveBeenCalledWith('mv-1', { seedPrompts: undefined, providerId: undefined, model: undefined, mode: 'require' });
       expect(r.body.scenesAdded).toBe(1);
       expect(r.body.promptsSeeded).toBe(false);
     });
@@ -592,7 +725,26 @@ describe('musicVideo routes', () => {
       const r = await request(app).post('/api/music-video/mv-1/plan')
         .send({ seedPrompts: false, providerId: 'p1', model: 'gpt-x' });
       expect(r.status).toBe(200);
-      expect(planProject).toHaveBeenCalledWith('mv-1', { seedPrompts: false, providerId: 'p1', model: 'gpt-x' });
+      expect(planProject).toHaveBeenCalledWith('mv-1', { seedPrompts: false, providerId: 'p1', model: 'gpt-x', mode: 'require' });
+    });
+
+    it.each(['replace', 'append'])('forwards an explicit %s mode', async (mode) => {
+      const r = await request(app).post('/api/music-video/mv-1/plan').send({ mode });
+      expect(r.status).toBe(200);
+      expect(planProject).toHaveBeenCalledWith('mv-1', expect.objectContaining({ mode }));
+    });
+
+    it('surfaces the 409 PLAN_MODE_REQUIRED the planner raises for a non-empty board', async () => {
+      const { ServerError } = await import('../lib/errorHandler.js');
+      planProject.mockRejectedValueOnce(new ServerError('choose', { status: 409, code: 'PLAN_MODE_REQUIRED' }));
+      const r = await request(app).post('/api/music-video/mv-1/plan');
+      expect(r.status).toBe(409);
+      expect(r.body.code).toBe('PLAN_MODE_REQUIRED');
+    });
+
+    it('rejects an unknown mode', async () => {
+      const r = await request(app).post('/api/music-video/mv-1/plan').send({ mode: 'merge' });
+      expect(r.status).toBe(400);
     });
 
     it('rejects an unknown body field', async () => {

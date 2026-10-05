@@ -1,3 +1,4 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Creative Director — server-side scene render orchestrator.
  *
@@ -30,6 +31,7 @@
 
 import { join } from 'path';
 import { PATHS, resolveGalleryImage } from '../../lib/fileUtils.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { verifyVideoPlayable } from '../../lib/ffmpeg.js';
 import { presetToRenderParams } from '../../lib/creativeDirectorPresets.js';
 import { CD_MAX_SCENE_RETRIES } from '../creativeDirectorPrompts.js';
@@ -295,14 +297,14 @@ export async function runSceneRender(project, scene) {
     if (settled || job.id !== jobId) return;
     settled = true;
     cleanup();
-    settleReceipt('completed').then(() => handleRenderCompleted(project.id, scene.sceneId, jobId, { continuationFellBack, workRevision: project.workspace === 'video' ? scene.workRevision || 0 : undefined }))
+    maintenance.continueSettlement(() => settleReceipt('completed').then(() => handleRenderCompleted(project.id, scene.sceneId, jobId, { continuationFellBack, workRevision: project.workspace === 'video' ? scene.workRevision || 0 : undefined })))
       .catch(error => console.error(`❌ CD render completion failed: ${error.message}`));
   };
   const onFailed = (job) => {
     if (settled || job.id !== jobId) return;
     settled = true;
     cleanup();
-    settleReceipt(/timeout|timed out|interrupted/i.test(job.error || '') ? 'uncertain' : 'failed').then(() => handleRenderFailed(project.id, scene.sceneId, job.error || 'render failed', { workRevision: project.workspace === 'video' ? scene.workRevision || 0 : undefined }))
+    maintenance.continueSettlement(() => settleReceipt(/timeout|timed out|interrupted/i.test(job.error || '') ? 'uncertain' : 'failed').then(() => handleRenderFailed(project.id, scene.sceneId, job.error || 'render failed', { workRevision: project.workspace === 'video' ? scene.workRevision || 0 : undefined })))
       .catch(error => console.error(`❌ CD render failure handling failed: ${error.message}`));
   };
   const onCanceled = (job) => {
@@ -314,7 +316,7 @@ export async function runSceneRender(project, scene) {
     // CD_MAX_SCENE_RETRIES); the user explicitly stopped this. Mark the scene
     // failed and let the completionHook flag the project so the user can
     // resume from the UI.
-    settleReceipt(job.params?.videoProduction?.submissionUncertain ? 'uncertain' : 'canceled').then(() => handleRenderCanceled(project.id, scene.sceneId, project.workspace === 'video' ? scene.workRevision || 0 : undefined))
+    maintenance.continueSettlement(() => settleReceipt(job.params?.videoProduction?.submissionUncertain ? 'uncertain' : 'canceled').then(() => handleRenderCanceled(project.id, scene.sceneId, project.workspace === 'video' ? scene.workRevision || 0 : undefined)))
       .catch(error => console.error(`❌ CD render cancellation handling failed: ${error.message}`));
   };
   function cleanup() {
@@ -442,25 +444,34 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
     await skipEvaluatorForPause(preFrames.status, []);
     return;
   }
-  const evaluationFrames = await sampleEvaluationFrames(jobId).catch((err) => {
-    console.error(`❌ CD sampleEvaluationFrames failed for ${jobId.slice(0, 8)}: ${err.message}`);
-    return [];
+  // The sampled `${jobId}-fN.jpg` frames and the scene row that names them are
+  // one durable publication: hold backup admission from the first frame write
+  // through that row, so a snapshot never dumps a row naming frames its file
+  // copy missed. The evaluator dispatch below stays outside the lease. Resolves
+  // null when a pause landed during sampling (its frames are persisted then).
+  const evaluationFrames = await withBackupAssetPublication(async () => {
+    const frames = await sampleEvaluationFrames(jobId).catch((err) => {
+      console.error(`❌ CD sampleEvaluationFrames failed for ${jobId.slice(0, 8)}: ${err.message}`);
+      return [];
+    });
+    // Re-check immediately before the agent-task enqueue. Single-user
+    // single-instance app per AGENTS.md, but pause IS a real user action
+    // and the API roundtrip can land between this read and the enqueue
+    // below. The cost of one extra read is trivial vs. spending an agent
+    // run on work the user explicitly canceled.
+    const postFrames = await getProject(projectId);
+    if (postFrames?.status === 'paused' || postFrames?.status === 'failed') {
+      await skipEvaluatorForPause(postFrames.status, frames);
+      return null;
+    }
+    await updateScene(projectId, sceneId, { ...(opts.workRevision === undefined ? {} : { expectedWorkRevision: opts.workRevision }),
+      status: 'evaluating',
+      renderedJobId: jobId,
+      evaluationFrames: frames,
+    });
+    return frames;
   });
-  // Re-check immediately before the agent-task enqueue. Single-user
-  // single-instance app per AGENTS.md, but pause IS a real user action
-  // and the API roundtrip can land between this read and the enqueue
-  // below. The cost of one extra read is trivial vs. spending an agent
-  // run on work the user explicitly canceled.
-  const postFrames = await getProject(projectId);
-  if (postFrames?.status === 'paused' || postFrames?.status === 'failed') {
-    await skipEvaluatorForPause(postFrames.status, evaluationFrames);
-    return;
-  }
-  await updateScene(projectId, sceneId, { ...(opts.workRevision === undefined ? {} : { expectedWorkRevision: opts.workRevision }),
-    status: 'evaluating',
-    renderedJobId: jobId,
-    evaluationFrames,
-  });
+  if (!evaluationFrames) return;
   // Final pause guard: close the async gap between the postFrames check above
   // and the enqueue below. The scene is already persisted in 'evaluating' with
   // renderedJobId set, so advanceAfterSceneSettled's resume path will pick it

@@ -442,7 +442,7 @@ const TASK_INTERVAL_DEFAULTS = {
   // budget, checkpoints, idea tags); the shipped default is the free/local tool
   // set so nothing metered is spent until the operator opts in. It has no Quota
   // Burn form: image/video spend is bounded by its own budget and limits.
-  'music-video-autopilot': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { musicVideoAutopilot: normalizeAutopilotParams({}) } },
+  'music-video-autopilot': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, displayName: 'Autonomous run', providerId: null, model: null, prompt: null, taskMetadata: { musicVideoAutopilot: normalizeAutopilotParams({}) } },
   'universe-bible-describe': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { universeId: 'all', scope: 'all', depth: 'full', maxEntries: 10 } },
   'universe-bible-images':   { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { universeId: 'all', scope: 'all', maxEntries: 10, requireDescribed: false } }
 };

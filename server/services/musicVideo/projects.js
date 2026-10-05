@@ -22,6 +22,7 @@ import { assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy
  * sweep. The soft-delete fields were already on the record, so this was additive.
  */
 
+import { setSceneLastFailure } from './takes.js';
 import { presentMusicVideoDependencies, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
 import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
@@ -256,6 +257,15 @@ export async function appendSceneTakes(id, sceneId, inputs) {
   const result = await (await selectBackend()).appendSceneTakes(id, sceneId, inputs);
   emitRecordUpdated('musicVideoProject', id);
   return result;
+}
+
+/**
+ * Persist (or clear, with `failure` null) a scene's last generation failure —
+ * `{ lane: 'image'|'video', error, at }` (#10154). Returns the updated scene.
+ */
+export async function recordSceneFailure(id, sceneId, failure) {
+  const { scene } = await mutateProjectRecord(id, (current) => setSceneLastFailure(current, sceneId, failure));
+  return scene;
 }
 
 /** Append takes across scenes in one write (handoff import): `{ project, appended }`. */

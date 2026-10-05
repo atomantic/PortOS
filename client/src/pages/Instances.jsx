@@ -35,6 +35,7 @@ import PeerAgentsSection from '../components/instances/PeerAgentsSection';
 import { SchemaGapBadge } from '../components/instances/SchemaGapBadge';
 import { DEFAULT_PEER_PORT, DEFAULT_TAILCAT_LOCAL_PORT, DEFAULT_TAILCAT_REMOTE_PORT } from '../lib/ports.js';
 import PeerMediaProviderPanel from '../components/instances/PeerMediaProviderPanel';
+import PeerAdministrationPanel from '../components/instances/PeerAdministrationPanel';
 import UnattendedRenderRouting from '../components/instances/UnattendedRenderRouting';
 import BrainParityPanel from '../components/instances/BrainParityPanel';
 import BrainParitySchedule from '../components/instances/BrainParitySchedule';
@@ -1525,6 +1526,7 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
       <SchemaGapBadge peer={peer} peerSubs={peerSubs} />
 
       <PeerMediaProviderPanel peer={peer} onRefresh={onRefresh} />
+      <PeerAdministrationPanel peer={peer} />
 
       <SyncCategoriesPanel peer={peer} onRefresh={onRefresh} />
 

@@ -65,6 +65,7 @@ export function runSidecarProcess({ bin, args, env, signal, onStage, onProcess }
     onProcess?.(proc);
     let stdoutTail = '';
     let stderrTail = '';
+    let processError;
     let settled = false;
     const finish = (val) => {
       if (settled) return;
@@ -96,8 +97,18 @@ export function runSidecarProcess({ bin, args, env, signal, onStage, onProcess }
         }
       }
     });
-    proc.on('error', (err) => finish({ ok: false, reason: `spawn failed: ${err.message}`, stdout: stdoutTail }));
+    proc.on('error', (err) => {
+      if (proc.pid && proc.exitCode == null && proc.signalCode == null) {
+        processError = err;
+        return;
+      }
+      finish({ ok: false, reason: `spawn failed: ${err.message}`, stdout: stdoutTail });
+    });
     proc.on('close', (code, sig) => {
+      if (processError) {
+        finish({ ok: false, reason: `sidecar process failed: ${processError.message}`, stdout: stdoutTail });
+        return;
+      }
       if (sig === 'SIGTERM' || sig === 'SIGKILL') {
         finish({ ok: false, canceled: true, reason: `cancelled (${sig})`, stdout: stdoutTail });
         return;

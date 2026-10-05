@@ -2,14 +2,15 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import { AlertTriangle, CheckCircle2, Circle, CircleDot, ExternalLink, Loader2, Pause, Play, RotateCcw, Wand2, X, XCircle } from 'lucide-react';
 import {
-  AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LYRICS_STEP_LABELS, AUTONOMOUS_SONG_STEP_LABELS, AUTONOMOUS_STATUS_LABELS, AUTONOMOUS_VIEWABLE_STAGES,
+  AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LYRICS_STEP_LABELS, AUTONOMOUS_PRODUCE_STEP_LABELS, AUTONOMOUS_SONG_STEP_LABELS, AUTONOMOUS_STATUS_LABELS, AUTONOMOUS_VIEWABLE_STAGES,
   autonomousStageOutput, autonomousStageRows, isAutonomousLive,
 } from '../../lib/musicVideoAutonomous.js';
 import { productionReviewStopGuidance } from '../../lib/musicVideoStages.js';
+import { formatCount, formatUsd } from '../../utils/formatters.js';
 import AutoApproveFields from './AutoApproveFields.jsx';
 
 // The stages that report a sub-step while they run (the server's `stages[id].step`).
-const STEP_LABELS = { lyrics: AUTONOMOUS_LYRICS_STEP_LABELS, song: AUTONOMOUS_SONG_STEP_LABELS };
+const STEP_LABELS = { lyrics: AUTONOMOUS_LYRICS_STEP_LABELS, produce: AUTONOMOUS_PRODUCE_STEP_LABELS, song: AUTONOMOUS_SONG_STEP_LABELS };
 
 const STATUS_TONES = {
   running: 'text-port-accent', 'awaiting-approval': 'text-port-warning', 'needs-human': 'text-port-warning', stopped: 'text-port-warning',
@@ -78,6 +79,11 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
   const changed = editable && draft !== editable.value;
   const canRetry = ['needs-human', 'failed', 'stopped'].includes(run.status) || run.interrupted;
   const tone = STATUS_TONES[run.status] || '';
+  // #10157: what the production run has used against its limits (Suno is counted apart).
+  const spendRun = run.output?.productionRunId ? (project.productionRuns || []).find((r) => r.id === run.output.productionRunId) : null;
+  const sunoCount = Array.isArray(run.output?.sunoSongIds) ? run.output.sunoSongIds.length : 0;
+  // A failed run that only has the final render left retries just that.
+  const retryLabel = run.status === 'failed' && run.stage === 'produce' && (run.output?.renderJobId || run.output?.productionDone) ? 'Retry render' : run.status === 'failed' ? 'Retry' : 'Resume';
   // A stale or hand-edited `?run-stage=` that names no finished, viewable stage opens nothing.
   const selectedRow = rows.find((row) => row.id === selectedStage && row.status === 'done' && AUTONOMOUS_VIEWABLE_STAGES.includes(row.id)) || null;
   const selected = selectedRow?.id || null;
@@ -91,7 +97,7 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
   };
 
   return (
-    <section className={`${framed ? 'bg-port-card border border-port-border rounded-lg p-3 ' : ''}space-y-3 min-w-0`} aria-label="Autonomous run">
+    <section id="mv-autonomous-run" className={`${framed ? 'bg-port-card border border-port-border rounded-lg p-3 ' : ''}space-y-3 min-w-0`} aria-label="Autonomous run">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         {framed && <span className="flex items-center gap-1 text-sm font-medium"><Wand2 size={15} className="text-port-accent" aria-hidden="true" /> Autonomous run</span>}
         <span className={`text-sm ${tone}`}>{run.interrupted ? 'Interrupted — resume to continue' : AUTONOMOUS_STATUS_LABELS[run.status] || run.status}</span>
@@ -137,12 +143,27 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
         })}
       </ol>
 
+      {spendRun && (
+        <p aria-label="Run spend" className="text-xs text-port-text-muted break-words">
+          {formatCount(spendRun.usage?.generations ?? 0)}/{formatCount(spendRun.limits?.maxGenerations ?? 0)} generations
+          {' · '}{formatUsd(spendRun.usage?.spentUsd ?? 0)}{spendRun.limits?.spendCapUsd != null ? ` of ${formatUsd(spendRun.limits.spendCapUsd)} video budget` : ' video spend (no cap)'}
+          {sunoCount > 0 && ` · ${formatCount(sunoCount)} Suno generation${sunoCount === 1 ? '' : 's'} (separate)`}
+          {' · '}<Link to={`/music-video/${encodeURIComponent(project.id)}/produce`} className="text-port-accent hover:underline">View production run</Link>
+        </p>
+      )}
+
       {selectedRow && <StageOutput run={run} row={selectedRow} editableBelow={!!editable && awaiting === selectedRow.id} />}
 
       {run.error && (
         <p role="status" className="flex items-start gap-1 text-xs text-port-warning break-words min-w-0">
           <AlertTriangle size={13} className="mt-0.5 shrink-0" aria-hidden="true" /> <span className="min-w-0">{guidance?.current || run.error}</span>
         </p>
+      )}
+
+      {run.status === 'completed' && project.renderHistoryId && (
+        <Link to={`/music-video/${encodeURIComponent(project.id)}/review`} className="inline-flex items-center gap-1 text-sm text-port-accent hover:underline min-h-[44px] sm:min-h-0">
+          Watch final video <ExternalLink size={12} aria-hidden="true" />
+        </Link>
       )}
 
       {guidance?.historical && <p className="text-xs text-port-text-muted break-words">Historical stop reason: {guidance.historical}</p>}
@@ -192,7 +213,7 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
         <div className="flex flex-wrap gap-2">
           {canRetry && !awaiting && (
             <button type="button" disabled={auto.busy} onClick={() => resume()} className={buttonClass}>
-              <Play size={14} aria-hidden="true" /> {run.status === 'failed' ? 'Retry' : 'Resume'}
+              <Play size={14} aria-hidden="true" /> {retryLabel}
             </button>
           )}
           {run.status === 'running' && !run.interrupted && (

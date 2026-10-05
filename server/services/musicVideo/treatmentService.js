@@ -13,7 +13,8 @@
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
-import { resolveProviderAndModel, runPromptThroughProvider } from '../promptRunner.js';
+import { runPromptThroughProvider } from '../promptRunner.js';
+import { effortArg, recordLlmRoute, resolveMusicVideoLlm } from './llmRoute.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import {
   applyTreatmentPatch,
@@ -43,55 +44,64 @@ export async function updateTreatment(id, patch) {
   return { project, treatment: project.treatment };
 }
 
-async function refineWithAi(project, draft, { providerId, model }) {
-  if (draft.shotDirections.length > MAX_SHOTS_FOR_AI) return { draft, reason: 'too-many-shots', used: null };
-  const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model }).catch((err) => {
+async function refineWithAi(project, draft, { providerId, model, effort }) {
+  if (draft.shotDirections.length > MAX_SHOTS_FOR_AI) return { draft, reason: 'too-many-shots', used: null, route: null };
+  // Request pin > the brief's treatment pin > its direction LLM > an eligible TUI provider > the active one (llmRoute.js).
+  const { provider, selectedModel, route } = await resolveMusicVideoLlm({ providerId, model, effort, automation: project.automation, stage: 'treatment' }).catch((err) => {
     console.warn(`⚠️ Music Video treatment: provider resolution failed for ${project.id}: ${err.message}`);
-    return { provider: null, selectedModel: null };
+    return { provider: null, selectedModel: null, route: null };
   });
-  if (!provider) return { draft, reason: 'no-provider', used: null };
-  if (provider.enabled === false) return { draft, reason: 'provider-disabled', used: null };
+  if (!provider) return { draft, reason: 'no-provider', used: null, route: null };
+  if (provider.enabled === false) return { draft, reason: 'provider-disabled', used: null, route };
   const used = { providerId: provider.id, model: selectedModel || null };
   let text;
   try {
     ({ text } = await runPromptThroughProvider({
       provider,
       model: selectedModel,
+      ...effortArg(route),
       prompt: buildTreatmentPrompt(project, draft),
       source: 'music-video-treatment',
     }));
   } catch (err) {
     console.warn(`⚠️ Music Video treatment: LLM call failed for ${project.id}: ${err.message}`);
-    return { draft, reason: 'llm-failed', used: null };
+    return { draft, reason: 'llm-failed', used: null, route };
   }
   const parsed = parseTreatmentResponse(text);
   if (!parsed) {
     console.warn(`⚠️ Music Video treatment: unusable response for ${project.id}`);
-    return { draft, reason: 'unparsable-response', used: null };
+    return { draft, reason: 'unparsable-response', used: null, route };
   }
-  return { draft: mergeAiTreatment(project, draft, parsed), reason: null, used };
+  return { draft: mergeAiTreatment(project, draft, parsed), reason: null, used, route };
 }
 
 /**
  * Compile the treatment from the project's current inputs. Explicit user
- * action only. Returns `{ project, treatment, aiUsed, aiSkippedReason }`.
+ * action only. Returns `{ project, treatment, aiUsed, aiSkippedReason, llmRoute }`;
+ * `llmRoute` is the effective provider/model/effort the AI call ran on (null when
+ * AI was not requested or no provider resolved).
  */
-export async function compileTreatment(id, { baseRevision, useAi = true, providerId, model }) {
+export async function compileTreatment(id, { baseRevision, useAi = true, providerId, model, effort }) {
   const project = await requireProject(id);
   const basis = treatmentBasis(project);
   let draft = buildTreatmentDraft(project);
   let aiSkippedReason = useAi ? null : 'not-requested';
   let used = null;
+  let llmRoute = null;
   if (useAi) {
-    ({ draft, reason: aiSkippedReason, used } = await refineWithAi(project, draft, { providerId, model }));
+    let route;
+    ({ draft, reason: aiSkippedReason, used, route } = await refineWithAi(project, draft, { providerId, model, effort }));
+    llmRoute = route || null;
   }
   const compiledWith = used ? { source: 'ai', ...used } : { source: 'deterministic', providerId: null, model: null };
   const { project: updated } = await mutateProjectRecord(id, (current) => ({
     project: writeCompiledTreatment(current, { baseRevision, draft, basis, compiledWith }),
   }));
+  // The route is shown beside Compile; remember it only when the model actually answered.
+  const persisted = (used && await recordLlmRoute(id, 'treatment', llmRoute)) || updated;
   const log = aiSkippedReason && useAi ? console.warn : console.log;
   log(`🎬 Music Video treatment: compiled ${draft.shotDirections.length} shot direction${draft.shotDirections.length === 1 ? '' : 's'} for ${id} (${used ? 'ai' : `deterministic${aiSkippedReason ? `: ${aiSkippedReason}` : ''}`})`);
-  return { project: updated, treatment: updated.treatment, aiUsed: !!used, aiSkippedReason };
+  return { project: persisted, treatment: persisted.treatment, aiUsed: !!used, aiSkippedReason, llmRoute };
 }
 
 /** What Apply would change right now (read-only). */

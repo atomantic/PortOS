@@ -17,6 +17,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { spawn } from '../../lib/childProcess.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { atomicWrite, readJSONFileStrict } from '../../lib/fileUtils.js';
@@ -91,6 +92,12 @@ const serializableJob = ({
 /**
  * Write the job record to disk. Writes are chained per job because `close` and
  * `error` can both fire for one child and each rewrites the same file.
+ *
+ * The runner seals a checkpoint before reporting it, so this write is the moment
+ * a checkpoint becomes named. It takes backup admission: a snapshot that copied
+ * the run directory before a new checkpoint landed must not capture a record
+ * listing it afterwards. The runner's own writes are outside the process and
+ * cannot be admitted, but nothing names them until this write (#9982).
  */
 const persistJob = (jobState) => {
   // Capture the durable state when this write is queued. Otherwise a checkpoint
@@ -98,7 +105,7 @@ const persistJob = (jobState) => {
   // object and can race the terminal write out of order.
   const record = structuredClone(serializableJob(jobState));
   jobState.persistChain = (jobState.persistChain || Promise.resolve())
-    .then(() => atomicWrite(jobRecordPath(jobState.profileId, jobState.id), record))
+    .then(() => withBackupAssetPublication(() => atomicWrite(jobRecordPath(jobState.profileId, jobState.id), record)))
     .catch((err) => console.error(`❌ Failed to persist fine-tune job ${jobState.id}: ${err.message}`));
   return jobState.persistChain;
 };

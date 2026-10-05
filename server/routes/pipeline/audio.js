@@ -12,6 +12,7 @@ import * as seriesSvc from '../../services/pipeline/series.js';
 import * as issuesSvc from '../../services/pipeline/issues.js';
 import { getSeriesCanon } from '../../services/pipeline/seriesCanon.js';
 import { resolveSeriesLlmOverride } from '../../lib/seriesLlmOverride.js';
+import { compareSpeech } from '../../lib/speechMatch.js';
 import { listAllVoices, synthesizeToFile, parseVoiceId, extractDialogueLines, resolveVoiceForLine } from '../../services/pipeline/audio.js';
 import { narrateProse } from '../../services/pipeline/manuscriptNarration.js';
 import { synthesize as synthesizeVoice } from '../../services/voice/tts.js';
@@ -37,7 +38,9 @@ import {
 } from '../../services/pipeline/musicGen.js';
 import { deriveAudioCues, preserveRenderedCues } from '../../services/pipeline/audioCues.js';
 import { uploadSingle } from '../../lib/multipart.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { mapServiceError } from './shared.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 
 const router = Router();
 
@@ -114,6 +117,49 @@ router.post('/tts/narrate', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+// Re-render ONE narration segment (#10258). Narration segments are client-held
+// (the read-aloud modal never persists them), so this is stateless: the client
+// sends the segment text back and gets fresh audio + a fresh spoken-text check.
+// `expectedSpeech` is the user's accepted recognizer spelling for the segment.
+const ttsNarrateSegmentSchema = z.object({
+  text: z.string().trim().min(1).max(4000),
+  voiceId: z.string().trim().max(200).optional(),
+  expectedSpeech: z.string().trim().max(4000).nullable().optional(),
+});
+router.post('/tts/narrate/segment', asyncHandler(async (req, res) => {
+  const body = validateRequest(ttsNarrateSegmentSchema, req.body ?? {});
+  const result = await synthesizeToFile({
+    text: body.text,
+    voiceId: body.voiceId,
+    expectedSpeech: body.expectedSpeech || undefined,
+  }).catch((err) => { throw mapServiceError(err); });
+  res.json({
+    filename: result.filename,
+    durationMs: result.durationMs,
+    verification: result.verification,
+    engine: result.engine,
+    voiceId: result.voiceId || null,
+  });
+}));
+
+// "Accept as spoken" for a narration segment: re-score the segment's stored
+// `heard` text against a new `expectedSpeech` target. No STT call — mirrors the
+// audio-line PATCH. A segment with nothing heard stays `unverified`.
+const ttsNarrateSegmentRescoreSchema = z.object({
+  text: z.string().trim().min(1).max(4000),
+  heard: z.string().max(4000),
+  expectedSpeech: z.string().trim().max(4000).nullable().optional(),
+});
+router.patch('/tts/narrate/segment', asyncHandler(async (req, res) => {
+  const body = validateRequest(ttsNarrateSegmentRescoreSchema, req.body ?? {});
+  const expectedSpeech = body.expectedSpeech || null;
+  if (!body.heard.trim()) {
+    return res.json({ expectedSpeech, verification: { status: 'unverified', similarity: null, heard: '' } });
+  }
+  const { status, similarity } = compareSpeech(expectedSpeech || body.text, body.heard);
+  res.json({ expectedSpeech, verification: { status, similarity, heard: body.heard } });
+}));
+
 // Walk the issue's storyboards.scenes[].dialogue and populate
 // stages.audio.lines[]. `force: true` replaces existing lines wholesale;
 // the default refuses overwrite when lines[] is already populated so a
@@ -160,6 +206,8 @@ const lineEditSchema = z.object({
   // Per-line VO start offset (seconds into the stitched episode). null clears
   // the placement so the muxer skips the line. The sanitizer clamps the range.
   offsetSec: z.number().min(0).max(7200).nullable().optional(),
+  // Accepted recognizer spelling ("Ay-Ai" for "AI"); null clears it (#10250).
+  expectedSpeech: z.string().trim().max(4000).nullable().optional(),
 });
 router.patch('/issues/:id/stages/audio/lines/:lineIdx', asyncHandler(async (req, res) => {
   const lineIdx = Number(req.params.lineIdx);
@@ -185,6 +233,14 @@ router.patch('/issues/:id/stages/audio/lines/:lineIdx', asyncHandler(async (req,
       if ('text' in body) next.text = body.text;
       if ('voiceIdOverride' in body) next.voiceIdOverride = body.voiceIdOverride;
       if ('offsetSec' in body) next.offsetSec = body.offsetSec;
+      if ('expectedSpeech' in body) {
+        next.expectedSpeech = body.expectedSpeech || null;
+        // Re-score the last heard text against the new target; no STT call.
+        if (next.verification && next.verification.status !== 'unverified') {
+          const { status, similarity } = compareSpeech(next.expectedSpeech || next.text, next.verification.heard);
+          next.verification = { ...next.verification, status, similarity };
+        }
+      }
       const nextLines = [...lines];
       nextLines[lineIdx] = next;
       return { status: 'edited', lines: nextLines };
@@ -243,34 +299,42 @@ router.post('/issues/:id/stages/audio/lines/:lineIdx/render', asyncHandler(async
     voiceId,
     profileId: profileResolution?.profileId || undefined,
     route: 'studio',
+    expectedSpeech: line.expectedSpeech || undefined,
   })
     .catch((err) => { throw mapServiceError(err); });
-  if (synthResult.provenance) {
-    await recordVoiceProfileRender({
-      issueId: issue.id,
-      lineId: line.id,
+  // The WAV is already on disk. The render provenance row and the stage row
+  // that name it commit under one lease, so a backup cut can never dump a row
+  // naming audio its file copy had not reached (#9982).
+  const { issue: updatedIssue, stage } = await withBackupAssetPublication(async () => {
+    if (synthResult.provenance) {
+      await recordVoiceProfileRender({
+        issueId: issue.id,
+        lineId: line.id,
+        audioFilename: synthResult.filename,
+        latencyMs: synthResult.latencyMs,
+        durationMs: synthResult.durationMs,
+        provenance: synthResult.provenance,
+      });
+    } else {
+      await clearVoiceProfileRender({ issueId: issue.id, lineId: line.id });
+    }
+    const nextLines = [...lines];
+    nextLines[lineIdx] = {
+      ...line,
+      audioJobId: null,
       audioFilename: synthResult.filename,
-      latencyMs: synthResult.latencyMs,
-      durationMs: synthResult.durationMs,
-      provenance: synthResult.provenance,
+      verification: synthResult.verification,
+    };
+    return issuesSvc.updateStage(req.params.id, 'audio', {
+      status: 'edited',
+      lines: nextLines,
+      errorMessage: '',
     });
-  } else {
-    await clearVoiceProfileRender({ issueId: issue.id, lineId: line.id });
-  }
-  const nextLines = [...lines];
-  nextLines[lineIdx] = {
-    ...line,
-    audioJobId: null,
-    audioFilename: synthResult.filename,
-  };
-  const { issue: updatedIssue, stage } = await issuesSvc.updateStage(req.params.id, 'audio', {
-    status: 'edited',
-    lines: nextLines,
-    errorMessage: '',
   });
   res.json({
     issue: updatedIssue, stage, lineIdx,
     filename: synthResult.filename,
+    verification: synthResult.verification,
     engine: synthResult.engine,
     voiceId: synthResult.voiceId || voiceId,
     profileId: synthResult.profileId,
@@ -374,7 +438,7 @@ const musicGenerateSchema = z.object({
   durationSec: z.number().min(1).max(MAX_ENGINE_DURATION).optional(),
   modelId: z.enum(ALL_MODEL_IDS).optional(),
 });
-router.post('/issues/:id/stages/audio/music/generate', asyncHandler(async (req, res) => {
+router.post('/issues/:id/stages/audio/music/generate', asyncHandler((req, res) => maintenance.run('pipeline-audio', req.params.id, async () => {
   const body = validateRequest(musicGenerateSchema, req.body ?? {});
   // Guard the (expensive) generation behind a 404 check first — generating a
   // multi-second clip only to discover the issue is gone wastes GPU time and
@@ -387,7 +451,11 @@ router.post('/issues/:id/stages/audio/music/generate', asyncHandler(async (req, 
     durationSec: body.durationSec,
     modelId: body.modelId,
   }).catch((err) => { throw mapServiceError(err); });
-  const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
+  // The sidecar wrote the WAV in place and may still have been writing while a
+  // cut ran. The row that first names it waits for any open cut, so a dump can
+  // never name a track its file copy did not reach (#9982). The shared publication
+  // boundary retains maintenance settlement through that wait and the row save.
+  const { issue: updatedIssue, stage } = await withBackupAssetPublication(() => issuesSvc.updateStageWithLatest(
     req.params.id,
     'audio',
     (current) => ({
@@ -396,9 +464,9 @@ router.post('/issues/:id/stages/audio/music/generate', asyncHandler(async (req, 
       music: { source: MUSIC_SOURCE.GEN, trackFilename: gen.filename, label: gen.model },
       errorMessage: '',
     }),
-  ).catch((err) => { throw mapServiceError(err); });
+  )).catch((err) => { throw mapServiceError(err); });
   res.json({ issue: updatedIssue, stage, music: stage.music, durationSec: gen.durationSec, modelId: gen.modelId, engine: gen.engine });
-}));
+})));
 
 router.post('/issues/:id/stages/audio/music/upload', musicUpload, asyncHandler(async (req, res) => {
   if (!req.file) {
@@ -540,7 +608,7 @@ const cueRenderSchema = z.object({
   durationSec: z.number().min(1).max(MAX_ENGINE_DURATION).optional(),
   modelId: z.enum(ALL_MODEL_IDS).optional(),
 });
-router.post('/issues/:id/stages/audio/cues/:cueIdx/render', asyncHandler(async (req, res) => {
+router.post('/issues/:id/stages/audio/cues/:cueIdx/render', asyncHandler((req, res) => maintenance.run('pipeline-audio', req.params.id, async () => {
   const cueIdx = Number(req.params.cueIdx);
   if (!Number.isInteger(cueIdx) || cueIdx < 0) {
     throw new ServerError('cueIdx must be a non-negative integer', {
@@ -580,7 +648,9 @@ router.post('/issues/:id/stages/audio/cues/:cueIdx/render', asyncHandler(async (
   }).catch((err) => { throw mapServiceError(err); });
   // Merge against the freshest persisted cue inside the write queue so a
   // concurrent re-derive can't clobber the render (the cue list is re-read here).
-  const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
+  // The row that first names the WAV waits for any open backup cut (#9982).
+  // The shared publication boundary also owns its maintenance settlement.
+  const { issue: updatedIssue, stage } = await withBackupAssetPublication(() => issuesSvc.updateStageWithLatest(
     req.params.id,
     'audio',
     (current) => {
@@ -596,7 +666,7 @@ router.post('/issues/:id/stages/audio/cues/:cueIdx/render', asyncHandler(async (
       };
       return { cues: nextCues, errorMessage: '' };
     },
-  ).catch((err) => { throw mapServiceError(err); });
+  )).catch((err) => { throw mapServiceError(err); });
   res.json({
     issue: updatedIssue, stage, cueIdx,
     cue: stage.cues[cueIdx],
@@ -605,7 +675,7 @@ router.post('/issues/:id/stages/audio/cues/:cueIdx/render', asyncHandler(async (
     engine: gen.engine,
     modelId: gen.modelId,
   });
-}));
+})));
 
 // Deleting from the library leaves stale `music.trackFilename` pointers on
 // issues so the user sees the broken playback and re-picks. Auto-purging

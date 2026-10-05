@@ -22,6 +22,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir, detectImageFormat, writeFileGuarded } from '../../lib/fileUtils.js';
 import { normalizePinterestFeedUrl, parsePinterestRss } from '../../lib/pinterestFeed.js';
 import { fetchPublicText, fetchPublicBinary } from '../../lib/safeUrlFetch.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import { MAX_ITEMS_PER_BOARD } from './logic.js';
 import * as store from './db.js';
@@ -56,7 +57,9 @@ export async function downloadPinImage({ pinUrl, imageUrl, imageUrlOriginal }) {
   const fmt = detectImageFormat(res.buffer);
   if (!fmt) return null;
   const filename = `pinterest-${createHash('sha1').update(pinUrl).digest('hex').slice(0, 16)}${fmt.ext}`;
-  await writeFileGuarded(join(PATHS.images, filename), res.buffer);
+  // Pin-keyed, so a re-download rewrites bytes a board may already name: hold
+  // the backup lease (#9982) so the in-place write never overlaps a snapshot.
+  await withBackupAssetPublication(() => writeFileGuarded(join(PATHS.images, filename), res.buffer));
   return `/data/images/${filename}`;
 }
 
@@ -149,7 +152,10 @@ export async function syncPinterestBoard(boardId) {
   // Pass the feed we actually fetched so the locked append aborts if the user
   // unlinked / repointed the board while downloads ran (fetch is outside the lock).
   const syncedAt = new Date().toISOString();
-  const { board: nextBoard, added, aborted } = await store.appendPinterestItems(boardId, imported, { syncedAt, expectedFeedUrl: feedUrl });
+  // The append first names the downloaded pins, so it commits under the lease.
+  const { board: nextBoard, added, aborted } = await withBackupAssetPublication(
+    () => store.appendPinterestItems(boardId, imported, { syncedAt, expectedFeedUrl: feedUrl }),
+  );
   if (aborted) {
     console.log(`📌 Pinterest sync: board ${boardId} aborted — link changed mid-sync`);
     return { board: nextBoard, added: 0, feedCount: pins.length, aborted: true };

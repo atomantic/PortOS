@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
-import { productionReadiness, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, recordProductionFeedback, resolveProductionFeedback } from './productionReview.js';
+import { productionReadiness, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput } from './productionReview.js';
 
 const reviewProcessId = randomUUID();
 
@@ -134,6 +134,13 @@ export async function reverifyProductionAlignment(id, { basis, notes, reviewer }
   return changed(project);
 }
 
+/** Restore one changed input to the value its approval was granted on (#10241). */
+export async function revertProductionInput(id, input) {
+  await requireProject(id);
+  const { project } = await mutateProjectRecord(id, current => ({ project: revertApprovedInput(current, input) }));
+  return changed(project);
+}
+
 export async function approveProductionReview(id, input) {
   const guard = await validateGuideSelection(await requireProject(id), current => current.productionReview?.draft?.guideArtifactId);
   const { project } = await mutateProjectRecord(id, current => {
@@ -188,20 +195,9 @@ export async function prepareProductionReview(id, options = {}) {
     await approveCastAndSets(id);
     project = await requireProject(id);
   }
-  const d = stage?.direction || {};
-  const describe = value => typeof value === 'string' ? value : JSON.stringify(value || {}, null, 2);
   // Merge against the latest draft while holding the write lock: a guide job
   // may finish while the operator is editing its text.
-  await mutateProjectRecord(id, current => {
-    if (current.productionReview?.draft?.storyboardSource === 'document') return { project: current };
-    const prior = current.productionReview?.draft || {};
-    const draft = { lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [], ...prior,
-      cast: prior.cast || describe(d.protagonist), environments: prior.environments || describe(d.sets),
-      visualLanguage: prior.visualLanguage || describe({ look: d.look, palette: d.protagonist?.palette, world: d.world }),
-      motionLanguage: prior.motionLanguage || describe({ movement: d.protagonist?.movement, camera: d.world?.camera, transitions: d.world?.transitions }),
-      guideArtifactId: prior.guideArtifactId || stage?.artifactId };
-    return { project: { ...current, productionReview: { ...current.productionReview, draft } } };
-  });
+  await mutateProjectRecord(id, current => ({ project: seedArtDraft(current, stage) }));
   project = await requireProject(id);
   if (project.productionReview?.draft?.storyboardSource === 'document' || !productionReadiness(project).art.approved) return present(project);
   if (!project.scenes?.length) {
@@ -296,4 +292,58 @@ export async function addProductionFeedback(id, input) {
 export async function closeProductionFeedback(id, input) {
   const { project } = await mutateProjectRecord(id, current => ({ project: resolveProductionFeedback(current, input) }));
   return changed(project);
+}
+
+const openChangeRequests = (project, stage) => (project.productionReview?.feedback || [])
+  .filter(f => f.stage === stage && f.decision === 'request-changes' && !f.resolvedAt);
+
+/**
+ * One explicit click acts on a stage's open change requests: art regenerates
+ * the Cast & Sets direction, the storyboard re-plans the shots the notes name
+ * in place, and the proof re-authors its code or generated composition. The
+ * result lands on a new basis; the requests stay open until a reviewer
+ * resolves them, so approval remains blocked until then.
+ */
+export async function reviseProductionFromFeedback(id, { stage, ...route }) {
+  const project = await requireProject(id);
+  const requests = openChangeRequests(project, stage);
+  if (!requests.length) throw new ServerError('There are no open change requests for this stage.', { status: 409, code: 'MUSIC_VIDEO_NO_FEEDBACK' });
+  const refuse = message => new ServerError(message, { status: 409, code: 'MUSIC_VIDEO_REVISION_UNSUPPORTED' });
+  if (stage === 'art') {
+    if (!project.castAndSets?.direction) throw refuse('This art direction has no Cast & Sets direction to regenerate. Edit the guide, then resolve each request.');
+    const { regenerateCastAndSets } = await import('./castAndSetsService.js');
+    const { project: next } = await regenerateCastAndSets(id, { notes: [], ...route });
+    return { ...changed(next), revision: { stage } };
+  }
+  if (stage === 'storyboard') {
+    if (project.productionReview?.draft?.storyboardSource === 'document') throw refuse('Document shots come from the authored source. Revise it, reimport its shot manifest, then resolve each request.');
+    const { proposeShotRevisions } = await import('./planner.js');
+    const basis = productionReviewBasis(project).storyboard;
+    const updates = await proposeShotRevisions(project, requests, route);
+    const { project: next } = await mutateProjectRecord(id, current => {
+      if (productionReviewBasis(current).storyboard !== basis) throw new ServerError('The storyboard changed while it was being revised. Review it and try again.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
+      const scenes = current.scenes.map(scene => updates.has(scene.sceneId) ? { ...scene, ...updates.get(scene.sceneId) } : scene);
+      const draft = current.productionReview?.draft;
+      const storyboard = draft?.storyboard?.map(shot => {
+        const fields = updates.get(shot.sceneId);
+        return fields ? { ...shot, ...(fields.prompt ? { action: fields.prompt } : {}), ...(fields.framePrompt ? { staging: fields.framePrompt } : {}) } : shot;
+      });
+      return { project: { ...current, scenes, updatedAt: new Date().toISOString(),
+        ...(storyboard ? { productionReview: { ...current.productionReview, draft: { ...draft, storyboard } } } : {}) } };
+    });
+    return { ...changed(next), revision: { stage, sceneIds: [...updates.keys()] } };
+  }
+  const mode = project.composition?.mode;
+  if (mode === 'code') {
+    const { generateMusicVideoCode } = await import('./codeGeneration.js');
+    await generateMusicVideoCode(id, route);
+  } else if (mode === 'document') {
+    const kind = project.composition?.document?.source?.kind;
+    if (kind && !['generated', 'template'].includes(kind)) throw refuse('This composition was imported from its own source. Revise that source and reimport it, then resolve each request.');
+    const { generateMixedMediaDocument } = await import('./documentGeneration.js');
+    await generateMixedMediaDocument(id, route);
+  } else {
+    throw refuse('This proof is assembled from Board footage. Revise the affected storyboard shots or takes, then render a new proof.');
+  }
+  return { ...changed(await requireProject(id)), revision: { stage } };
 }
