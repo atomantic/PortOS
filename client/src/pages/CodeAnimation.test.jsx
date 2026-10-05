@@ -20,6 +20,8 @@ vi.mock('../services/api', () => ({
   generateCodeAnimationBrief: vi.fn(),
   getCodeAnimationJob: vi.fn(),
   getCodeAnimationOptions: vi.fn(),
+  getFilmStyle: vi.fn(),
+  listFilmStyles: vi.fn(),
   listCodeAnimationJobPage: vi.fn().mockResolvedValue({ items: [], total: 0, counts: { running: 0, completed: 0 }, nextCursor: null }),
   listMoodBoardNames: vi.fn(),
   listTracks: vi.fn().mockResolvedValue([]),
@@ -48,6 +50,8 @@ import {
   getCodeAnimationJob,
   listCodeAnimationJobPage,
   getCodeAnimationOptions,
+  getFilmStyle,
+  listFilmStyles,
   listMoodBoardNames,
   listTracks,
   listUniverseNames,
@@ -63,6 +67,14 @@ const OPTIONS = {
   messages: { ready: 'r', record: 'rec', recorded: 'done', progress: 'p', error: 'e' },
   audioGlobal: 'ANIMATION_AUDIO_URL',
   audioExtensions: ['mp3', 'wav'],
+};
+
+const FILM_STYLES = [
+  { id: 'blueprint-draft', label: 'Blueprint draft', category: 'drawing', summary: 'White lines on a deep blue sheet.', nativeMoves: [{ name: 'Exploded assembly' }] },
+];
+const BLUEPRINT = {
+  ...FILM_STYLES[0],
+  nativeMoves: [{ name: 'Exploded assembly', how: 'Pull apart.', fitsContentLike: ['product anatomy', 'teardowns'] }],
 };
 
 const renderPage = async (initialEntry = '/code-animation') => {
@@ -114,6 +126,8 @@ describe('Code Animation page', () => {
     listUniverseStyles.mockResolvedValue([{ id: 'u1', name: 'Example Universe', influences: { embrace: ['ink wash'], avoid: ['photorealism'] } }]);
     listMoodBoardNames.mockResolvedValue([{ id: 'b1', name: 'Dusk' }]);
     listTracks.mockResolvedValue([]);
+    listFilmStyles.mockResolvedValue(FILM_STYLES);
+    getFilmStyle.mockResolvedValue(BLUEPRINT);
     buildCodeAnimationPrompt.mockResolvedValue({
       prompt: 'You are an award-winning creative coder…',
       attachments: [{ label: 'Night markets', origin: 'universe', url: '/data/image-refs/style-ref.png' }],
@@ -362,6 +376,47 @@ describe('Code Animation page', () => {
     await emitSocket('code-animation:changed', { id: 'job-1' });
 
     expect(screen.getByLabelText(/^title/i)).toHaveValue('Edited after submit');
+  });
+
+  it('picks a film style, shows its moves, and sends the id with the brief and the prompt request', async () => {
+    const user = userEvent.setup();
+    await renderPage();
+    const select = screen.getByLabelText(/^film style/i);
+    expect(select).toHaveValue('');
+    expect(screen.getByRole('option', { name: /^None \(derive from universe/ })).toBeInTheDocument();
+    await user.selectOptions(select, 'blueprint-draft');
+    expect(screen.getByText('White lines on a deep blue sheet.')).toBeInTheDocument();
+    expect(await screen.findByText(/fits content like product anatomy, teardowns/)).toBeInTheDocument();
+    await user.type(screen.getByLabelText(/what happens/i), 'A lantern');
+    await user.click(screen.getByRole('button', { name: /build prompt/i }));
+    await waitFor(() => expect(buildCodeAnimationPrompt).toHaveBeenCalled());
+    expect(buildCodeAnimationPrompt.mock.calls[0][0].styleGrammarId).toBe('blueprint-draft');
+    expect(listFilmStyles).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores the film style from a saved job', async () => {
+    getCodeAnimationJob.mockResolvedValue({ ...runningJob, input: { ...runningJob.input, styleGrammarId: 'blueprint-draft' } });
+    await renderPage('/code-animation/job-1');
+    expect(screen.getByLabelText(/^film style/i)).toHaveValue('blueprint-draft');
+  });
+
+  it('drops a stored film style the catalog no longer has before it reaches the server', async () => {
+    localStorage.setItem('portos.codeAnimation.draft', JSON.stringify({ concept: 'x', styleGrammarId: 'retired-style' }));
+    const user = userEvent.setup();
+    await renderPage();
+    await user.click(screen.getByRole('button', { name: /build prompt/i }));
+    await waitFor(() => expect(buildCodeAnimationPrompt).toHaveBeenCalled());
+    expect(buildCodeAnimationPrompt.mock.calls[0][0].styleGrammarId).toBeNull();
+  });
+
+  it('shows an inline error and keeps the form usable when the catalog fails to load', async () => {
+    listFilmStyles.mockRejectedValue(new Error('offline'));
+    const user = userEvent.setup();
+    await renderPage();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/film styles unavailable: offline/i);
+    expect(screen.getByLabelText(/^film style/i)).toHaveValue('');
+    await user.type(screen.getByLabelText(/what happens/i), 'A lantern');
+    expect(screen.getByRole('button', { name: /build prompt/i })).toBeEnabled();
   });
 
   it('sends an explicit empty board when the user opts out of a mood board', async () => {

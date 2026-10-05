@@ -25,6 +25,7 @@
 
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
 import { moodBoardSection, universeStyleLines } from '../../lib/styleSourcePrompt.js';
+import { renderFilmStyleGrammarPrompt } from '../../lib/filmStyleGrammars.js';
 
 // The postMessage vocabulary between the preview host (parent) and the
 // generated page (sandboxed iframe). Served to the client through the options
@@ -94,11 +95,13 @@ export function resolveFrameSize(aspectRatio, resolution) {
   return { width: shortSide, height: even((shortSide * ratio.height) / ratio.width) };
 }
 
+const STYLE_GRAMMAR_PRECEDENCE = "Precedence: the universe style guide and mood board win on palette and subject content; the style grammar wins on rendering technique, motion stepping, camera moves and sound; the style refinements below refine both.";
+
 // The art direction. The universe's style guide IS the look — the same curated
 // tokens every other Create surface renders that world with — so the film
 // matches the universe's stills and videos; the per-animation notes only
 // refine it. The model's job is to translate that look into drawing code.
-function artDirectionSection({ universe, styleNotes, hasMoodBoard }) {
+function artDirectionSection({ universe, styleNotes, styleGrammarId, hasMoodBoard }) {
   const lines = [];
   if (universe) {
     lines.push(`The art style comes from the universe "${universe.name}". Match its established look exactly — this film must sit beside the universe's other artwork as the same world.`);
@@ -106,6 +109,11 @@ function artDirectionSection({ universe, styleNotes, hasMoodBoard }) {
     if (isNonBlankStr(universe.styleNotes)) {
       lines.push(`Tone and staging notes (context for mood — do not depict entities they name unless the brief asks): ${universe.styleNotes}`);
     }
+  }
+  const grammar = styleGrammarId ? renderFilmStyleGrammarPrompt(styleGrammarId) : '';
+  if (grammar) {
+    lines.push(`STYLE GRAMMAR:\n${grammar}`);
+    lines.push(STYLE_GRAMMAR_PRECEDENCE);
   }
   if (isNonBlankStr(styleNotes)) {
     lines.push(`${universe ? 'Refinements for this animation' : 'Style direction from the artist'}: ${trimTo(styleNotes, CODE_ANIMATION_LIMITS.styleNotesMax)}`);
@@ -232,6 +240,7 @@ ${interactive ? '10' : '9'}. Hold ${fps}fps: pre-render static layers and textur
  * @param {string} [input.cast] - the character design bible the rig is built from
  * @param {string} [input.onScreenText] - titles, captions, narration beats
  * @param {string} [input.styleNotes] - refinements on top of the universe style
+ * @param {string|null} [input.styleGrammarId] - film style grammar id (#10253); unknown ids throw a 400
  * @param {{ durationSeconds: number, aspectRatio: string, resolution: string, fps: number }} input.format
  * @param {'auto'|'canvas2d'|'webgl'|'svg'} [input.renderer]
  * @param {boolean} [input.interactive]
@@ -249,6 +258,7 @@ export function buildCodeAnimationPrompt({
   cast = '',
   onScreenText = '',
   styleNotes = '',
+  styleGrammarId = null,
   format,
   renderer = 'auto',
   interactive = false,
@@ -269,7 +279,7 @@ export function buildCodeAnimationPrompt({
   if (isNonBlankStr(onScreenText)) {
     sections.push(`ON-SCREEN TEXT / NARRATION BEATS (render typography procedurally, timed to the story; system fonts only):\n${trimTo(onScreenText, CODE_ANIMATION_LIMITS.textMax)}`);
   }
-  sections.push(`ART DIRECTION:\n${artDirectionSection({ universe, styleNotes, hasMoodBoard: !!moodBoard })}`);
+  sections.push(`ART DIRECTION:\n${artDirectionSection({ universe, styleNotes, styleGrammarId, hasMoodBoard: !!moodBoard })}`);
   const boardText = moodBoardSection(moodBoard);
   if (boardText) sections.push(boardText);
   const imagesText = referenceImagesSection(referenceImages, delivery);

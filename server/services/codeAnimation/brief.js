@@ -29,6 +29,7 @@ import { extractJson } from '../../lib/jsonExtract.js';
 import { renderCanonForPrompt } from '../../lib/universePromptRenderers.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { moodBoardSection, universeStyleLines } from '../../lib/styleSourcePrompt.js';
+import { getFilmStyleGrammar } from '../../lib/filmStyleGrammars.js';
 import { CODE_ANIMATION_LIMITS, PACING_RULE } from './prompt.js';
 
 // What separates a studio short from a moving screensaver, distilled from how
@@ -65,6 +66,16 @@ function castSection(universe) {
   return `CANON — cast the film from these and use their names:\n${canon}\n\nPrefer the canon above over inventing new entities. A character you use must behave, speak, and look as their entry describes.`;
 }
 
+// The film's medium (#10253). Only the native-move names reach the writer: the
+// beat sheet can spend one at the emotional peak; the full recipe is the coding
+// prompt's job.
+function styleGrammarSection(styleGrammarId) {
+  const grammar = styleGrammarId ? getFilmStyleGrammar(styleGrammarId) : null;
+  if (!grammar) return '';
+  const moves = grammar.nativeMoves.map(({ name }) => name).join('; ');
+  return `MEDIUM — the film will be rendered as: ${grammar.label} (${grammar.summary})\nMoves only this medium can make: ${moves}. Spend exactly one of them at the emotional peak of the beat sheet, and name it in that beat.`;
+}
+
 function currentSection(current) {
   const rows = [
     ['Title', current.title],
@@ -84,6 +95,7 @@ function currentSection(current) {
  * @param {object|null} [input.universe] - the resolved universe: style tokens plus `{ logline, premise, characters, places, objects }`
  * @param {object|null} [input.moodBoard] - `collectBoardStyleContext` output
  * @param {string} [input.seedIdea] - the artist's starting spark, if any
+ * @param {string|null} [input.styleGrammarId] - film style grammar id (#10253)
  * @param {{ durationSeconds: number, aspectRatio: string }} input.format
  * @param {{ title: string, concept: string, cast?: string, onScreenText: string, styleNotes: string }} [input.current]
  * @returns {string}
@@ -92,6 +104,7 @@ export function buildCodeAnimationBriefPrompt({
   universe = null,
   moodBoard = null,
   seedIdea = '',
+  styleGrammarId = null,
   format,
   current = {},
 }) {
@@ -109,6 +122,8 @@ export function buildCodeAnimationBriefPrompt({
   }
   const boardText = moodBoardSection(moodBoard);
   if (boardText) sections.push(boardText);
+  const grammarText = styleGrammarSection(styleGrammarId);
+  if (grammarText) sections.push(grammarText);
   const currentText = currentSection(current);
   if (currentText) sections.push(currentText);
   if (!universe && !isNonBlankStr(seedIdea) && !currentText) {

@@ -5,6 +5,7 @@ import PageHeader from '../components/PageHeader';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import AlbumTrackPicker from '../components/music/AlbumTrackPicker';
 import CodeAnimationPreview from '../components/codeAnimation/CodeAnimationPreview';
+import FilmStylePicker from '../components/codeAnimation/FilmStylePicker';
 import ProductionProjects from '../components/codeAnimation/ProductionProjects';
 import UniverseMoodBoardPicker, { BOARD_FOLLOW_UNIVERSE, BOARD_NONE, useStyleSourceLists } from '../components/media/UniverseMoodBoardPicker';
 import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
@@ -39,6 +40,7 @@ const DEFAULT_DRAFT = {
   cast: '',
   onScreenText: '',
   styleNotes: '',
+  styleGrammarId: '',
   universeId: '',
   moodBoardChoice: BOARD_FOLLOW_UNIVERSE,
   includeMoodBoardImages: true,
@@ -101,6 +103,7 @@ const loadDraft = () => {
     cast: stringField('cast'),
     onScreenText: stringField('onScreenText'),
     styleNotes: stringField('styleNotes'),
+    styleGrammarId: stringField('styleGrammarId'),
     universeId: stringField('universeId'),
     moodBoardChoice: stringField('moodBoardChoice'),
     includeMoodBoardImages: typeof stored.includeMoodBoardImages === 'boolean' ? stored.includeMoodBoardImages : DEFAULT_DRAFT.includeMoodBoardImages,
@@ -134,6 +137,7 @@ function toBrief(draft) {
     cast: draft.cast,
     onScreenText: draft.onScreenText,
     styleNotes: draft.styleNotes,
+    styleGrammarId: draft.styleGrammarId || null,
     format: draft.format,
     renderer: draft.renderer,
     interactive: draft.interactive,
@@ -166,6 +170,7 @@ function toBriefIdeaInput(draft) {
   return {
     universeId: draft.universeId || null,
     ...moodBoardSelection(draft),
+    styleGrammarId: draft.styleGrammarId || null,
     seedIdea: draft.seedIdea,
     current: {
       title: draft.title,
@@ -195,6 +200,7 @@ function draftFromJob(job) {
     cast: input.cast || '',
     onScreenText: input.onScreenText || '',
     styleNotes: input.styleNotes || '',
+    styleGrammarId: input.styleGrammarId || '',
     universeId: input.universeId || '',
     moodBoardChoice,
     includeMoodBoardImages: input.includeMoodBoardImages !== false,
@@ -308,6 +314,7 @@ function FastCodeAnimation() {
   } = useProviderModels({ filter: providerFilter, silent: true, withEffort: true });
 
   const update = (patch) => setDraft((prev) => ({ ...prev, ...patch }));
+  const onStyleGrammarChange = useCallback((styleGrammarId) => setDraft((prev) => ({ ...prev, styleGrammarId })), []);
   const updateFormat = (patch) => setDraft((prev) => ({ ...prev, format: { ...prev.format, ...patch } }));
 
   const fetchGalleryPage = useCallback(async ({ cursor, signal }) => {
@@ -601,6 +608,7 @@ function FastCodeAnimation() {
               onUniverseChange={(universeId) => update({ universeId })}
               onBoardChoiceChange={(moodBoardChoice) => update({ moodBoardChoice })}
             />
+            <FilmStylePicker id="ca-film-style" value={draft.styleGrammarId} onChange={onStyleGrammarChange} labelClass={labelClass} inputClass={inputClass} />
             <div>
               <label htmlFor="ca-style-notes" className={labelClass}>Style refinements <span className="text-gray-600">(optional, applied on top of the universe style)</span></label>
               <textarea id="ca-style-notes" rows={2} value={draft.styleNotes} maxLength={limits?.styleNotesMax} onChange={(event) => update({ styleNotes: event.target.value })} placeholder="Heavier film grain, slower camera, dusk palette" className={`${inputClass} resize-y`} />

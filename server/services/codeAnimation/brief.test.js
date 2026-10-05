@@ -89,6 +89,17 @@ describe('buildCodeAnimationBriefPrompt', () => {
   });
 });
 
+describe('brief writer film style grammar', () => {
+  it('hands the writer the native-move names only, and nothing without a grammar', () => {
+    const base = { universe: UNIVERSE, seedIdea: 'a chase', format: FORMAT, current: {} };
+    expect(buildCodeAnimationBriefPrompt(base)).not.toContain('MEDIUM');
+    const prompt = buildCodeAnimationBriefPrompt({ ...base, styleGrammarId: 'blueprint-draft' });
+    expect(prompt).toContain('MEDIUM');
+    expect(prompt).toContain('Exploded assembly; Dimension lock; Revision cloud');
+    expect(prompt).not.toContain('Pull an object apart along its axes');
+  });
+});
+
 describe('extractBriefIdea', () => {
   const response = (body) => `Here you go:\n\`\`\`json\n${JSON.stringify(body)}\n\`\`\``;
 

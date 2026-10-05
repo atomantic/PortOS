@@ -26,6 +26,8 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { emptyToNull } from '../lib/zodCompat.js';
+import { filmStyleIdSchema } from '../lib/filmStyleGrammarValidation.js';
+import { getFilmStyleGrammar } from '../lib/filmStyleGrammars.js';
 import {
   buildCodeAnimationRequest,
   generateCodeAnimationBrief,
@@ -62,6 +64,11 @@ const uploadFilenameSchema = z.string().trim().min(1).max(256)
   .regex(/^[^/\\]+$/, 'filename must be an upload basename');
 const optionalId = z.preprocess(emptyToNull, z.string().trim().min(1).max(128).nullable().optional());
 
+// Optional film style grammar (#10253): kebab-case id that must exist in the catalog.
+const styleGrammarIdSchema = z.preprocess(emptyToNull, filmStyleIdSchema
+  .refine((id) => !!getFilmStyleGrammar(id), 'Unknown film style grammar')
+  .nullable().optional());
+
 const formatSchema = z.object({
   durationSeconds: z.number().int().min(L.durationMin).max(L.durationMax).default(20),
   aspectRatio: z.enum(Object.keys(CODE_ANIMATION_ASPECT_RATIOS)).default('16:9'),
@@ -95,6 +102,7 @@ const briefSchema = z.object({
   onScreenText: z.string().trim().max(L.textMax).default(''),
   // Refinements on top of the universe style — the universe is the art direction.
   styleNotes: z.string().trim().max(L.styleNotesMax).default(''),
+  styleGrammarId: styleGrammarIdSchema,
   format: formatSchema.prefault({}),
   renderer: z.enum(CODE_ANIMATION_RENDERERS).default('auto'),
   interactive: z.boolean().default(false),
@@ -124,6 +132,7 @@ const generateSchema = briefSchema.extend({
 const briefIdeaSchema = z.object({
   universeId: optionalId,
   moodBoardId: optionalId,
+  styleGrammarId: styleGrammarIdSchema,
   seedIdea: z.string().trim().max(L.seedIdeaMax).default(''),
   // The same brief, partially filled — derived from briefSchema so the field
   // caps are stated once, with `concept` relaxed because there may be none yet.
