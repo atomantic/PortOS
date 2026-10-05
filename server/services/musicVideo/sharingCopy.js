@@ -35,18 +35,18 @@ async function ownedVideo(filename) {
   return actual;
 }
 
-async function fileHash(path) {
+async function fileHash(path, retainedFile = null) {
   // Do not follow a leaf symlink installed after the ownership lookup.
-  const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW || 0)).catch(missingFile);
+  const file = retainedFile || await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW || 0)).catch(missingFile);
   try {
     const before = await file.stat();
     if (!before.isFile()) throw fail('Unsafe video file');
     const hash = createHash('sha256');
-    for await (const chunk of file.createReadStream({ autoClose: false })) hash.update(chunk);
+    for await (const chunk of file.createReadStream({ autoClose: false, start: 0 })) hash.update(chunk);
     const after = await lstat(path).catch(missingFile);
     if (!after.isFile() || fileVersion(before) !== fileVersion(after)) throw fail('The video file changed during verification; prepare again');
     return { hash: hash.digest('hex'), version: fileVersion(after) };
-  } finally { await file.close(); }
+  } finally { if (!retainedFile) await file.close(); }
 }
 
 async function assertSourceSelected(source) {
@@ -122,11 +122,21 @@ export function prepareSharingCopy(projectId) {
 
 export async function sharingCopyDownload(projectId) {
   const source = await finalSource(projectId);
-  const copy = await cachedCopy(source);
-  if (!copy) throw fail('Prepare a sharing copy of the current final render first');
+  const copy = source.project.publishKit?.sharingCopy;
+  if (!copy || copy.version !== 1 || !sameSource(source, copy)) throw fail('Prepare a sharing copy of the current final render first');
   const path = await ownedVideo(copy.filename);
-  await assertSourceSelected(source);
-  return { copy, path };
+  const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW || 0)).catch(missingFile);
+  try {
+    const digest = await fileHash(path, file);
+    const info = await file.stat();
+    if (digest.version !== fileVersion(info) || info.size !== copy.bytes || !info.size || info.size >= SHARING_COPY_MAX_BYTES || digest.hash !== copy.hash) throw fail('Prepare a sharing copy of the current final render first');
+    await assertSourceSelected(source);
+    // The caller owns this exact verified descriptor; never reopen the pathname.
+    return { copy, file, modifiedAt: info.mtime };
+  } catch (error) {
+    await file.close();
+    throw error;
+  }
 }
 
 export function cancel(jobId) {

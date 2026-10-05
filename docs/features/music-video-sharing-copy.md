@@ -30,6 +30,12 @@ The copy's own hash and size are verified before reuse/download. Selecting a
 new final or changing the existing final's bytes invalidates it. No original
 file or history entry is overwritten. Publishing-kit metadata stores the result
 on the existing project record; missing files on another machine are cache misses.
+Downloads retain and stream the exact descriptor used to verify the copy rather
+than reopening its pathname. It closes after completion, refusal, disconnect or
+stream error. GET/HEAD, single byte ranges (including suffix ranges), If-Range,
+If-Match, If-Unmodified-Since and freshness conditions are supported; malformed
+or multipart ranges fall back to the full response. Unsatisfiable ranges return
+416, failed preconditions 412 and fresh conditional requests 304.
 
 API:
 

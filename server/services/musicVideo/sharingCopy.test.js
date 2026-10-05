@@ -1,13 +1,13 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'events';
-import { mkdir, readFile, readdir, symlink, truncate, unlink, writeFile } from 'fs/promises';
+import { mkdir, readFile, readdir, rename, symlink, truncate, unlink, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
-const state = vi.hoisted(() => ({ project: null, jobs: [], spawns: [], outputSizes: [], duringPass: null, failPass: null, realEncode: false, saveError: null, missingFfmpeg: false, cleanupError: false, observerError: null }));
+const state = vi.hoisted(() => ({ project: null, jobs: [], spawns: [], outputSizes: [], duringPass: null, failPass: null, realEncode: false, saveError: null, missingFfmpeg: false, cleanupError: false, observerError: null, openedFiles: [] }));
 vi.mock('fs/promises', async original => {
   const actual = await original();
-  return { ...actual, rm: async (path, options) => {
+  return { ...actual, open: async (...args) => { const file = await actual.open(...args); state.openedFiles.push(file); return file; }, rm: async (path, options) => {
     if (state.cleanupError && String(path).includes('sharing-work-')) throw new Error('Synthetic cleanup I/O error');
     return actual.rm(path, options);
   } };
@@ -71,7 +71,7 @@ const { enqueueJob } = await import('../mediaJobQueue/index.js');
 
 beforeEach(async () => {
   state.project = { id: 'mv-example', renderHistoryId: 'final-example' };
-  state.jobs = []; state.spawns = []; state.outputSizes = []; state.duringPass = null; state.failPass = null; state.realEncode = false; state.saveError = null; state.missingFfmpeg = false; state.cleanupError = false; state.observerError = null;
+  state.jobs = []; state.spawns = []; state.outputSizes = []; state.duringPass = null; state.failPass = null; state.realEncode = false; state.saveError = null; state.missingFfmpeg = false; state.cleanupError = false; state.observerError = null; state.openedFiles = [];
   vi.clearAllMocks();
   const { getProject } = await import('./projects.js');
   getProject.mockImplementation(async () => state.project);
@@ -136,7 +136,8 @@ describe('private sharing export workflow', () => {
     const cached = await sharing.prepareSharingCopy('mv-example');
     expect(cached.copy.filename).toBe('music-video-sharing-00000000-0000-4000-8000-000000000001.mp4');
     expect(enqueueJob).toHaveBeenCalledTimes(1);
-    expect((await sharing.sharingCopyDownload('mv-example')).copy).toEqual(cached.copy);
+    const download = await sharing.sharingCopyDownload('mv-example');
+    try { expect(download.copy).toEqual(cached.copy); } finally { await download.file.close(); }
     await writeFile(join(PATHS.videos, 'final-example.mp4'), 'changed final fixture');
     expect((await sharing.getSharingCopy('mv-example')).copy).toBeNull();
     await expect(sharing.sharingCopyDownload('mv-example')).rejects.toThrow('current final render');
@@ -235,6 +236,36 @@ describe('private sharing export workflow', () => {
     state.project.renderHistoryId = 'linked-example';
     await expect(sharing.prepareSharingCopy('mv-example')).rejects.toThrow('unsafe');
   });
+
+  it.each(['replacement', 'symlink'])('retains the certified inode across a %s swap during final validation', async swap => {
+    await runExport(swap === 'replacement' ? '00000000-0000-4000-8000-000000000071' : '00000000-0000-4000-8000-000000000072');
+    const copyPath = join(PATHS.videos, state.project.publishKit.sharingCopy.filename);
+    const { getProject } = await import('./projects.js');
+    let lookups = 0;
+    getProject.mockImplementation(async () => {
+      if (++lookups === 3) {
+        await rename(copyPath, `${copyPath}.old`);
+        if (swap === 'symlink') await symlink(join(PATHS.videos, 'final-example.mp4'), copyPath);
+        else await writeFile(copyPath, 'replacement bytes must not be delivered');
+      }
+      return state.project;
+    });
+    const { file } = await sharing.sharingCopyDownload('mv-example');
+    try {
+      const chunks = [];
+      for await (const chunk of file.createReadStream({ start: 0, autoClose: false })) chunks.push(chunk);
+      expect(Buffer.concat(chunks).toString()).toBe('sharing fixture');
+    } finally { await file.close(); }
+  });
+
+  it('closes the retained descriptor when source validation refuses delivery', async () => {
+    await runExport('00000000-0000-4000-8000-000000000073');
+    const { getProject } = await import('./projects.js');
+    let lookups = 0;
+    getProject.mockImplementation(async () => ++lookups === 3 ? { ...state.project, renderHistoryId: 'replacement-final' } : state.project);
+    await expect(sharing.sharingCopyDownload('mv-example')).rejects.toThrow('final render changed');
+    expect(state.openedFiles.every(file => file.fd === -1)).toBe(true);
+  });
 });
 
 // Two seconds only: catches ffmpeg argument/container/pass-log mistakes that stubs cannot.
@@ -251,7 +282,9 @@ it.skipIf(!realBinary)('exports a bounded real MP4 fixture through the supervise
   const { completed, failed } = await runExport('00000000-0000-4000-8000-000000000099');
   expect(failed).not.toHaveBeenCalled();
   expect(completed).toHaveBeenCalledWith(expect.objectContaining({ width: 1280, height: 720, fps: 60 }));
-  const { path, copy } = await sharing.sharingCopyDownload('mv-example');
+  const { file, copy } = await sharing.sharingCopyDownload('mv-example');
+  await file.close();
+  const path = join(PATHS.videos, copy.filename);
   expect(copy.bytes).toBeLessThan(sharing.SHARING_COPY_MAX_BYTES);
   expect(copy.durationSec).toBeCloseTo(2, 1);
   expect(await readFile(sourcePath)).toEqual(original);

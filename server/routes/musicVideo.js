@@ -10,6 +10,7 @@
 
 import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
+import { pipeline } from 'stream/promises';
 import { Router } from 'express';
 import { musicVideoProjectListQuerySchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
@@ -586,9 +587,44 @@ router.post('/:id/sharing-copy', asyncHandler(async (req, res) => {
   res.status(202).json(await prepareSharingCopy(req.params.id));
 }));
 router.get('/:id/sharing-copy/download', asyncHandler(async (req, res) => {
-  const { path, copy } = await sharingCopyDownload(req.params.id);
-  res.set('Cache-Control', 'private, no-store');
-  res.download(path, copy.filename);
+  const { file, copy, modifiedAt } = await sharingCopyDownload(req.params.id);
+  let stream;
+  const abort = () => { if (!res.writableFinished) stream?.destroy(); };
+  try {
+    if (req.aborted || res.destroyed) return;
+    const etag = `"${copy.hash}"`;
+    res.attachment(copy.filename).type('video/mp4');
+    res.set({ 'Cache-Control': 'private, no-store', 'Accept-Ranges': 'bytes', ETag: etag, 'Last-Modified': modifiedAt.toUTCString() });
+    const matches = value => value === '*' || value?.split(',').some(tag => tag.trim() === etag);
+    const unmodified = Date.parse(req.get('If-Unmodified-Since'));
+    if ((req.get('If-Match') && !matches(req.get('If-Match'))) || (!req.get('If-Match') && Number.isFinite(unmodified) && Math.floor(modifiedAt.getTime() / 1000) > Math.floor(unmodified / 1000))) {
+      res.status(412).end(); return;
+    }
+    if (req.fresh) { res.status(304).end(); return; }
+    let start = 0; let end = copy.bytes - 1;
+    const ifRange = req.get('If-Range');
+    const rangeCurrent = !ifRange || ifRange === etag || (!ifRange.includes('"') && Number.isFinite(Date.parse(ifRange)) && modifiedAt.getTime() <= Date.parse(ifRange) + 999);
+    if (req.get('Range') && rangeCurrent) {
+      const ranges = req.range(copy.bytes, { combine: true });
+      if (ranges === -1) { res.set('Content-Range', `bytes */${copy.bytes}`); res.status(416).end(); return; }
+      // Like res.download, malformed/non-byte/multipart ranges fall back to 200.
+      if (Array.isArray(ranges) && ranges.type === 'bytes' && ranges.length === 1) {
+        ({ start, end } = ranges[0]);
+        res.status(206).set('Content-Range', `bytes ${start}-${end}/${copy.bytes}`);
+      }
+    }
+    res.set('Content-Length', String(end - start + 1));
+    if (req.method === 'HEAD') { res.end(); return; }
+    stream = file.createReadStream({ start, end, autoClose: false });
+    res.once('close', abort);
+    req.once('aborted', abort);
+    await pipeline(stream, res);
+  } finally {
+    res.off('close', abort);
+    req.off('aborted', abort);
+    stream?.destroy();
+    await file.close();
+  }
 }));
 
 // Assemble the scenes' i2v clips into one MP4 over the track as the master audio
