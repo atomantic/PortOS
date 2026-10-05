@@ -2760,7 +2760,7 @@ describe('MusicVideo main page project cards', () => {
 
 describe('direct production review navigation', () => {
   it('focuses the exact step on repeated clicks and restores its deep link with Back/Forward without approval', async () => {
-    const project = { ...PROJECT_ANALYZED, scenes: [], composition: { mode: 'document' },
+    const project = { ...PROJECT_ANALYZED, scenes: [], castAndSets: { status: 'skipped' }, composition: { mode: 'document' },
       productionReview: { draft: { storyboardSource: 'document', storyboard: [{ id: 'shot-1' }, { id: 'shot-2' }] } },
       productionReadiness: { readyForProduction: false, basis: {}, art: { approved: false, problems: [] },
         storyboard: { approved: false, problems: ['Approve art first'] }, proof: { approved: false, problems: ['Approve storyboard first'] } } };

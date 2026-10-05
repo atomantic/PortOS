@@ -983,6 +983,7 @@ export default function MusicVideo() {
       case 'plan': handlePlan(); break;
       case 'approve-cast-sets': approveCastAndSets(); break;
       case 'resume-cast-sets': castSets.resume(); break;
+      case 'start-cast-sets': castSets.start(); break;
       case 'stop-production': production.stop(nextAction.runId); break;
       case 'resume-production': production.resume(nextAction.runId, nextAction.acceptBasis ? { acceptBasis: true } : {}); break;
       case 'resume-autonomous':
