@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import LlmRouteNote from './LlmRouteNote.jsx';
 import { Sparkles, Wand2, AlertTriangle, Plus, Trash2 } from 'lucide-react';
 import useFieldDraft from '../../hooks/useFieldDraft.js';
 import useProviderModels from '../../hooks/useProviderModels.js';
@@ -217,9 +218,9 @@ export default function TreatmentPanel({ project, treatment: api, part = 'all' }
           </button>
           {!analyzed && <span className="text-xs text-port-text-muted">Analyze the song first — the arc is built on its sections.</span>}
           {t?.compiledAt && (
-            <span className="text-[11px] text-port-text-muted">
-              Compiled {t.compiledWith?.source === 'ai' ? `with ${t.compiledWith.providerId}${t.compiledWith.model ? ` / ${t.compiledWith.model}` : ''}` : 'deterministically'}
-            </span>
+            t.compiledWith?.source === 'ai'
+              ? <LlmRouteNote route={project.automation?.routes?.treatment || t.compiledWith} prefix="Compiled with" />
+              : <span className="text-[11px] text-port-text-muted">Compiled deterministically</span>
           )}
         </div>
 

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import AutonomousRunPanel from '../AutonomousRunPanel.jsx';
 import SongRevisionPanel from '../SongRevisionPanel.jsx';
-import StyleReferencesPanel from '../StyleReferencesPanel.jsx';
+import LookReferencesPanel from '../LookReferencesPanel.jsx';
 import AutoSizeTextarea from '../../ui/AutoSizeTextarea';
 import CreativeSetupPanel from '../CreativeSetupPanel.jsx';
 import TrackPanel, { AdvancedTrackControls } from '../TrackPanel.jsx';
@@ -76,11 +76,11 @@ function AlignWords({ disabled, aligning, status, onAlign }) {
 }
 
 const directionSummary = (project) => {
-  const refs = (project.styleReferences || []).length;
+  const refs = (project.visualSpec?.references || []).length + (project.styleReferences || []).length;
   return [
     project.concept?.prompt?.trim() ? 'Concept written' : 'No concept yet',
     project.concept?.style?.trim() ? 'Style set' : 'No style yet',
-    refs ? `${formatCount(refs)} style ${refs === 1 ? 'reference' : 'references'}` : 'No style references',
+    refs ? `${formatCount(refs)} look ${refs === 1 ? 'reference' : 'references'}` : 'No look references',
   ].join(' · ');
 };
 
@@ -195,8 +195,9 @@ export default function SetupStage({ board }) {
           onPendingChange={board.setCreativeSetupPending}
           onSave={board.saveCreativeSetup}
         />
-        <StyleReferencesPanel key={`moodboard-${project.id}`} project={project}
-          onSave={board.saveStyleReferences} onPendingChange={board.setStyleReferencesPending} />
+        <LookReferencesPanel key={`look-${project.id}`} project={project}
+          onSave={board.saveStyleReferences} onSaveSpec={board.saveVisualSpec} onAddReference={board.onAddReference}
+          onPendingChange={board.setStyleReferencesPending} />
         <fieldset disabled={locked} className="min-w-0 space-y-2">
           {/* Concept & style — global direction for the video */}
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -231,7 +232,6 @@ export default function SetupStage({ board }) {
             key={project.id}
             project={project}
             onSave={board.saveVisualSpec}
-            onAddReference={board.onAddReference}
           />
         </fieldset>
       </StageSection>
