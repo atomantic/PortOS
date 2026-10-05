@@ -2369,7 +2369,8 @@ describe('MusicVideo per-scene clip import (#8978)', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /^Import clip take$/ }));
     const dialog = await screen.findByRole('dialog', { name: /Pick a video from your gallery/i });
-    fireEvent.click(within(dialog).getByText('(no prompt)').closest('.bg-port-card').querySelector('button'));
+    const galleryItem = await within(dialog).findByText('(no prompt)');
+    fireEvent.click(galleryItem.closest('.bg-port-card').querySelector('button'));
 
     await waitFor(() => expect(addMusicVideoSceneTake).toHaveBeenCalledWith(
       'mv-2', 's1', { kind: 'video', assetId: 'rh-9', source: 'imported' }, { silent: true },
