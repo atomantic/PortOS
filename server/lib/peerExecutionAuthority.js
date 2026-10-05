@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { assertNotRealDataWrite } from './testDataIsolation.js';
 
 const uuid = z.string().uuid();
+const adoptionIntentSchema = z.object({ version: z.literal(1), kind: z.literal('empty-adoption'), id: uuid }).strict();
 const recordSchema = z.object({
   version: z.literal(1), epoch: uuid, revision: z.number().int().positive().safe(),
   phase: z.enum(['ready', 'capturing', 'reconciling']),
@@ -44,11 +45,21 @@ export function createPeerExecutionAuthority(dataDir, { io = fs, assertWrite = a
     assertWrite(path, 'peer execution authority');
     if (damaged) throw executionAuthorityError('Execution authority publication was interrupted.');
     io.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-    // The first legacy adoption has no earlier record. An atomic intent link
+    // The first legacy adoption has no earlier record. An atomic intent record
     // makes even a crash before its first JSON publication recoverable by ID.
     try {
-      if (emptyAdoptionId) io.symlinkSync(`empty-adoption:${emptyAdoptionId}`, lock);
-      else io.mkdirSync(lock, { mode: 0o700 });
+      if (emptyAdoptionId) {
+        const intent = join(dataDir, `.peer-execution-adoption-${makeId()}.pending`);
+        const fd = io.openSync(intent, 'wx', 0o600);
+        try {
+          io.writeFileSync(fd, JSON.stringify({ version: 1, kind: 'empty-adoption', id: emptyAdoptionId }) + '\n');
+          io.fsyncSync(fd);
+        } finally { io.closeSync(fd); }
+        // Same no-replace hard-link primitive as databaseRestoreRecovery.begin;
+        // native Windows does not need symlink privilege for this regular file.
+        try { io.linkSync(intent, lock); } finally { io.unlinkSync(intent); }
+        syncDirectory();
+      } else io.mkdirSync(lock, { mode: 0o700 });
     }
     catch { throw executionAuthorityError('Execution authority is being changed or needs recovery.'); }
     let publishing = false;
@@ -101,17 +112,23 @@ export function createPeerExecutionAuthority(dataDir, { io = fs, assertWrite = a
     uuid.parse(id);
     const current = read({ inside: true, recovery: true });
     const locked = exists(lock);
-    const intent = locked && io.lstatSync(lock).isSymbolicLink() && io.readlinkSync(lock) === `empty-adoption:${id}`;
+    const lockStat = locked && io.lstatSync(lock);
+    let intent = false;
+    if (lockStat?.isFile() && lockStat.size <= 256) {
+      try { intent = adoptionIntentSchema.parse(JSON.parse(io.readFileSync(lock, 'utf8'))).id === id; }
+      catch { throw executionAuthorityError('The empty-adoption intent is unreadable.'); }
+    }
     if (current?.emptyAdoptionId !== id && !(intent && !current)) {
       if (locked || damaged) throw executionAuthorityError('Interrupted authority has no matching empty-adoption proof.');
       return current;
     }
     assertWrite(path, 'peer execution empty restore recovery');
     if (locked) {
-      if (io.lstatSync(lock).isSymbolicLink()) {
+      if (lockStat.isFile()) {
         if (!intent) throw executionAuthorityError('The empty-adoption owner changed.');
         io.unlinkSync(lock);
-      } else io.rmdirSync(lock); // Refuses unexpected contents.
+      } else if (lockStat.isDirectory()) io.rmdirSync(lock); // Refuses unexpected contents.
+      else throw executionAuthorityError('Unexpected empty-adoption lock type.');
       syncDirectory();
     }
     damaged = false;

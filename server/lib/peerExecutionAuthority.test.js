@@ -63,6 +63,20 @@ describe('non-rewound execution authority', () => {
     expect(() => authority.requireReady(original.epoch)).toThrow();
     expect(() => make().requireReady(original.epoch)).toThrow();
   });
+  it('publishes a regular exact-owner adoption intent without symbolic-link privileges', () => {
+    const id = randomUUID();
+    const io = { ...fs, symlinkSync: () => { throw new Error('fixture Windows symlink privilege unavailable'); },
+      renameSync: () => { throw new Error('fixture first publication interruption'); } };
+    expect(() => make({ io }).beginEmptyAdoption(id)).toThrow(/publication interruption/);
+    const lock = join(directory, '.peer-execution-authority-lock');
+    expect(fs.lstatSync(lock).isFile()).toBe(true);
+    expect(JSON.parse(fs.readFileSync(lock, 'utf8'))).toEqual({ version: 1, kind: 'empty-adoption', id });
+    expect(() => make().recoverEmptyAdoption(randomUUID())).toThrow(/matching/);
+    // This internal primitive is called only after a PG-locked empty-table proof.
+    expect(make().recoverEmptyAdoption(id)).toBeNull();
+    expect(make({ io: { ...fs, symlinkSync: io.symlinkSync } }).beginEmptyAdoption(id))
+      .toMatchObject({ phase: 'capturing', emptyAdoptionId: id });
+  });
   it('rejects planning scope, injected input, oversized values and equal identities before persistence', () => {
     const input = { hostInstanceId: randomUUID(), peerInstanceId: randomUUID(), requestId: randomUUID(),
       grantId: randomUUID(), grantGeneration: 1, scope: 'execution-v1', pairBinding: 'a'.repeat(64),
