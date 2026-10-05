@@ -38,6 +38,7 @@ import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { peerSyncEvents, findPeerById } from './peerSyncShared.js';
 import { isStr } from '../../lib/textUtils.js';
 import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 
 // Bound file hashing to avoid starving unrelated filesystem work when a
 // large record (especially a deck) advertises hundreds of images.
@@ -1032,14 +1033,21 @@ async function pullOneWorkBody(peer, base, entry) {
     // will re-push) — don't clobber it with the older peer bytes. A vanished
     // draft/work (deleted mid-pull) also skips. (sha256File of the .md equals
     // contentHash(text) since the body is the file verbatim.)
-    const current = await getWorkForSync(workId).catch(() => null);
-    const draft = Array.isArray(current?.drafts) ? current.drafts.find((d) => d?.id === draftId) : null;
-    if (!draft || draft.contentHash !== entry.sha256) {
+    // The download above stays outside the backup lease; the compare-and-swap
+    // and the write that replaces the draft file share it, so a cut never copies
+    // the file between the check and the write.
+    const written = await withBackupAssetPublication(async () => {
+      const current = await getWorkForSync(workId).catch(() => null);
+      const draft = Array.isArray(current?.drafts) ? current.drafts.find((d) => d?.id === draftId) : null;
+      if (!draft || draft.contentHash !== entry.sha256) return false;
+      await ensureDir(join(wrWorkDir(workId), 'drafts'));
+      await atomicWrite(wrDraftPath(workId, draftId), buffer);
+      return true;
+    });
+    if (!written) {
       console.log(`⚠️ peerSync: draft body ${safeLabel} target moved since diff — skipping write`);
       return;
     }
-    await ensureDir(join(wrWorkDir(workId), 'drafts'));
-    await atomicWrite(wrDraftPath(workId, draftId), buffer);
     peerSyncEvents.emit('asset-arrived', {
       filename: `${draftId}.md`,
       kind: WRITERS_ROOM_DRAFT_ASSET_KIND,
@@ -1106,10 +1114,12 @@ async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName, 
       if (localHash === entry.sha256) {
         // Bytes already up-to-date. Images still reconcile their sidecar, since
         // that may be the only reason this entry was flagged.
-        if (entry.kind === 'image') await pullSidecarForImage(peer, base, safeName).catch(() => {});
         // A video can have arrived before its video-history metadata. Recheck
         // the declared poster even though the mp4 itself does not need a pull.
-        if (entry.kind === 'video') await reconcileVideoThumbnail(safeName, localFullPath, peer.instanceId);
+        await withBackupAssetPublication(async () => {
+          if (entry.kind === 'image') await pullSidecarForImage(peer, base, safeName).catch(() => {});
+          if (entry.kind === 'video') await reconcileVideoThumbnail(safeName, localFullPath, peer.instanceId);
+        });
         return;
       }
     }
@@ -1122,6 +1132,13 @@ async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName, 
     console.warn('⚠️ peerSync: discarded asset with mismatched sha256');
     return;
   }
+  // The download stays outside the backup lease. Replacing the file, its sidecar
+  // and poster, and the media_assets row that indexes them hold it together, so
+  // a cut never captures a row for bytes it did not copy, or the reverse.
+  await withBackupAssetPublication(() => commitPulledAsset(peer, base, entry, localDir, fullPath, safeName, buffer, includeMismatched));
+}
+
+async function commitPulledAsset(peer, base, entry, localDir, fullPath, safeName, buffer, includeMismatched) {
   await ensureDir(localDir);
   if (!includeMismatched && existsSync(fullPath)) return;
   // atomicWrite (temp + rename) so a crash mid-write doesn't leave a
@@ -1166,7 +1183,7 @@ export async function pullMissingWorkBibles(senderInstanceId, entries) {
       if (!buffer) return;
       const current = await getWorkForSync(entry.workId);
       if (!current || current.deleted || current.ephemeral) return;
-      if (await applyWorkBibleBytes(entry, buffer, { via: 'peer-sync', peerId: senderInstanceId })) {
+      if (await withBackupAssetPublication(() => applyWorkBibleBytes(entry, buffer, { via: 'peer-sync', peerId: senderInstanceId }))) {
         peerSyncEvents.emit('asset-arrived', { filename, kind: 'writers-room-bible', workId: entry.workId, peerId: senderInstanceId });
       }
     }).catch((err) => console.error(`❌ peerSync: bible pull failed: ${err.message}`));

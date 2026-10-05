@@ -289,9 +289,12 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     ],
   },
   {
-    // Peer asset and draft-body pulls, share bucket import, and the peer library sweep.
+    // Downloads run outside admission. The write that lands a pulled asset (with
+    // its sidecar, poster and media_assets row), a draft body or a bible file, the
+    // share bucket's asset copy, and the library sweep's index rebuild each hold
+    // the lease.
     id: 'peer-and-share-imports',
-    status: 'outstanding',
+    status: 'admitted',
     modules: [
       'services/sharing/peerSyncAssets.js', 'services/sharing/importer.js', 'services/sharing/peerMediaLibrarySync.js',
     ],
