@@ -112,7 +112,7 @@ export default function PersistentMindTaskModelAllowlistControls({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 id={`${idPrefix}-heading`} className="text-sm font-semibold text-port-text">Task model allowlist</h3>
-          <p className="mt-1 text-xs leading-relaxed text-port-text-muted">Limit the models the mind may choose when it queues agent tasks. This does not change the model used by the mind itself.</p>
+          <p className="mt-1 text-xs leading-relaxed text-port-text-muted">Models the mind may queue tasks on. Empty means every enabled coding model. This does not change the mind's own model. Effort is chosen per task.</p>
         </div>
         <button
           type="button"
@@ -125,9 +125,7 @@ export default function PersistentMindTaskModelAllowlistControls({
       </div>
       {error && <p role="alert" className="mt-3 rounded border border-port-warning/30 bg-port-warning/10 px-3 py-2 text-xs text-port-warning">{error}</p>}
       {policyInvalid && <p className="mt-3 rounded border border-port-warning/30 bg-port-warning/10 px-3 py-2 text-xs text-port-warning">The saved policy is invalid, so task model selection is currently blocked. Add a valid model pair to repair it.</p>}
-      {!policyInvalid && entries.length === 0 ? (
-        <p className="mt-3 text-xs text-port-text-muted">No restriction configured — all enabled coding-provider models remain available.</p>
-      ) : !policyInvalid && (
+      {!policyInvalid && entries.length > 0 && (
         <div className="mt-3 space-y-2">
           {entries.map((entry, index) => {
             const provider = providerById.get(entry.providerId);
@@ -168,7 +166,7 @@ export default function PersistentMindTaskModelAllowlistControls({
           })}
         </div>
       )}
-      <p className="mt-3 text-[11px] leading-relaxed text-port-text-muted">Only exact provider/model pairs are accepted at queue time. A model removed from its provider is rejected until you remove it here.</p>
+      {entries.length > 0 && <p className="mt-3 text-[11px] leading-relaxed text-port-text-muted">Queueing accepts only these exact pairs. Remove a model here after it leaves its provider.</p>}
     </section>
   );
 }

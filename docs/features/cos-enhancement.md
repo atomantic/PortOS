@@ -119,12 +119,12 @@ non-empty list is applied to both the model choices sent to the mind and the
 server-side queue admission check, which supports subscription-specific or
 local-only task lanes. A removed or malformed allowlist fails closed.
 
-`GET /api/cos/mind/tools` returns the authority inventory and, when task access is
-granted, the same redacted task catalog used in the mind prompt. This keeps the
-Mind Tools UI and the model-facing contract discoverable without granting the
-mind arbitrary shell, filesystem, or general API access. Broader PortOS APIs
-remain governed by their own authenticated route contracts and are not silently
-made callable by enabling task filing.
+`GET /api/cos/mind/tools` returns the authority inventory and the managed-app
+roster. It does not list coding providers, models, or effort levels — the mind
+still receives that redacted catalog in its wake-time task prompt, and Mind
+Tools restricts models only through the task-model allowlist. Broader PortOS
+APIs remain governed by their own authenticated route contracts and are not
+silently made callable by enabling task filing.
 
 ## Persistent Mind phone calls
 

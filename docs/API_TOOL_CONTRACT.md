@@ -77,9 +77,10 @@ the same registry as the HTTP and Persistent Mind paths.
 ### Persistent Mind authority inventory
 
 `GET /api/cos/mind/tools` remains a separate authority view. It reports the
-Persistent Mind capability schema, boundaries, task catalog, grant state, and
-current saved recipe descriptors;
-it is not the generic semantic catalog. Persistent Mind execution uses the
+Persistent Mind capability schema, boundaries, grant state, managed-app roster,
+and current saved recipe descriptors. Coding-provider catalogs stay on the
+wake-time task prompt, not this settings view.
+It is not the generic semantic catalog. Persistent Mind execution uses the
 same registry internally and has a five-call semantic/tool budget plus a
 five-task-per-turn budget. No new authority is implied by the broader HTTP
 inventory.
