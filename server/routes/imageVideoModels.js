@@ -14,7 +14,7 @@ import { join } from 'path';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { PATHS, rmGuarded } from '../lib/fileUtils.js';
-import { getHfCacheRoot } from '../lib/hfCache.js';
+import { getHfCacheRoot, listLinkedSharedBlobs, releaseSharedBlobs } from '../lib/hfCache.js';
 import {
   getImageModels,
   setMediaModelEnabled,
@@ -206,9 +206,14 @@ router.delete('/hf/:dirName', asyncHandler(async (req, res) => {
   const fullPath = join(HF_HUB_DIR(), dirName);
   if (!existsSync(fullPath)) throw new ServerError('Model not found', { status: 404, code: 'NOT_FOUND' });
   console.log(`🗑️ Deleting HF model cache: ${dirName}`);
+  // The model dir may hold only links into the shared blob store, so note the
+  // blobs first and release the ones no other model uses once it is gone.
+  const sharedBlobs = await listLinkedSharedBlobs(HF_HUB_DIR(), dirName);
   await rmGuarded(fullPath, { recursive: true, force: true });
+  const { removed, freedBytes } = await releaseSharedBlobs(HF_HUB_DIR(), sharedBlobs);
+  if (removed) console.log(`🗑️ Released ${removed} shared HF blobs (${freedBytes} bytes) for ${dirName}`);
   await recordModelUninstall({ backend: 'huggingface', key: dirName });
-  res.json({ ok: true });
+  res.json({ ok: true, freedSharedBytes: freedBytes });
 }));
 
 router.delete('/lora/:filename', asyncHandler(async (req, res) => {
