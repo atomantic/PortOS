@@ -114,6 +114,7 @@ import {
 import { analyzeAudioFileManual, buildManualAnalysisFromCached } from '../services/musicVideo/audioAnalysis.js';
 import { analyzeProjectSong, resolveProjectAudioPath } from '../services/musicVideo/projectAudio.js';
 import { listInFlightSceneJobs } from '../services/musicVideo/sceneJobs.js';
+import { getSharingCopy, prepareSharingCopy, sharingCopyDownload } from '../services/musicVideo/sharingCopy.js';
 import { renderMusicVideo, attachRenderSseClient, cancelRender, getActiveRenderJobId } from '../services/musicVideo/render.js';
 import { prepareCodeRender } from '../services/musicVideo/codeRender.js';
 import { generateMusicVideoCode, regenerateMusicVideoCodeSection } from '../services/musicVideo/codeGeneration.js';
@@ -577,6 +578,19 @@ router.post('/transcribe-midi/:jobId/cancel', (req, res) => {
 });
 
 // --- Render (#1760, Phase 2) ---
+// Private local export; no publication or provider submission.
+router.get('/:id/sharing-copy', asyncHandler(async (req, res) => {
+  res.json(await getSharingCopy(req.params.id));
+}));
+router.post('/:id/sharing-copy', asyncHandler(async (req, res) => {
+  res.status(202).json(await prepareSharingCopy(req.params.id));
+}));
+router.get('/:id/sharing-copy/download', asyncHandler(async (req, res) => {
+  const { path, copy } = await sharingCopyDownload(req.params.id);
+  res.set('Cache-Control', 'private, no-store');
+  res.download(path, copy.filename);
+}));
+
 // Assemble the scenes' i2v clips into one MP4 over the track as the master audio
 // bed. Kickoff returns { jobId }; progress streams over SSE (mirrors
 // videoTimeline). Per-project mutex returns 409 with the live jobId for re-attach.

@@ -500,3 +500,8 @@ export const actOnMusicVideoSongRevision = (id, action, data, options = {}) => {
 };
 
 export const importMusicVideoDocumentShots = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/document-shots`, { method: 'POST', body: JSON.stringify(body), ...options });
+
+// Source-bound private sharing export; the server rejects stale download URLs.
+export const getMusicVideoSharingCopy = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/sharing-copy`, options);
+export const prepareMusicVideoSharingCopy = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/sharing-copy`, { method: 'POST', ...options });
+export const musicVideoSharingCopyDownloadUrl = (id) => `/api/music-video/${encodeURIComponent(id)}/sharing-copy/download`;
