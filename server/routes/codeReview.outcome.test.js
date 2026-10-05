@@ -42,7 +42,7 @@ describe('CLI reviewer outcome reporting', () => {
     expect(settings.current.codeReview).toEqual({
       ...configured,
       reviewerHealth: {
-        opencode: { code: 'REVIEWER_ACCESS_DENIED', reason: 'configuration', lastFailureAt: expect.any(Number) },
+        opencode: { code: 'REVIEWER_ACCESS_DENIED', reason: 'configuration', failureCount: 1, lastFailureAt: expect.any(Number) },
       },
     })
     expect(pickCodeReviewDefaults(settings.current).reviewerConfigFaults).toEqual({
