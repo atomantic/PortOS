@@ -3117,6 +3117,8 @@ describe('MusicVideo deep-linking and drawer URL routing (#10168)', () => {
     listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP, scenes: [first, { ...first, sceneId: 's2', order: 1 }] }]);
     render(<MemoryRouter initialEntries={[`/music-video/${PROJECT_WITH_CLIP.id}/board/scene/s1`]}><LocationProbe />{MV_ROUTES}</MemoryRouter>);
     await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
+    // The heading can land a commit before the inspector; wait for the scene the keys act on.
+    await waitFor(() => expect(document.querySelector('#scene-s1 summary')).not.toBeNull());
     document.querySelector('#scene-s1 summary').focus();
     await act(async () => fireEvent.keyDown(document.activeElement, { key: 'j' }));
     expect(screen.getByTestId('loc')).toHaveTextContent(`/music-video/${PROJECT_WITH_CLIP.id}/board/scene/s2`);
