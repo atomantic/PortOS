@@ -2,16 +2,19 @@ import { useState, useEffect, useCallback } from 'react';
 import { RefreshCw, Compass } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
+import LoadFailedState from '../../ui/LoadFailedState';
 import GsdProjectCard from './GsdProjectCard';
 
 export default function GsdTab() {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   const fetchData = useCallback(async () => {
-    const projectsData = await api.getGsdProjects().catch(() => ({ projects: [] }));
-    setProjects(projectsData.projects || projectsData || []);
+    const projectsData = await api.getGsdProjects().catch(() => null);
+    setFailed(projectsData === null);
+    if (projectsData) setProjects(projectsData.projects || projectsData || []);
     setLoading(false);
   }, []);
 
@@ -27,7 +30,7 @@ export default function GsdTab() {
   };
 
   if (loading) {
-    return <p className="text-sm text-gray-500">Loading GSD projects...</p>;
+    return <p className="text-sm text-gray-500">Loading Get Stuff Done projects...</p>;
   }
 
   return (
@@ -36,7 +39,7 @@ export default function GsdTab() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Compass size={18} className="text-port-accent" />
-          <h2 className="text-lg font-semibold text-white">GSD Projects</h2>
+          <h2 className="text-lg font-semibold text-white">Get Stuff Done projects</h2>
           <span className="text-xs text-gray-500">({projects.length})</span>
         </div>
         <button
@@ -55,10 +58,12 @@ export default function GsdTab() {
       </p>
 
       {/* Project Cards */}
-      {projects.length === 0 ? (
+      {failed && projects.length === 0 ? (
+        <LoadFailedState title="Could not load Get Stuff Done projects." hint="Retry." onRetry={fetchData} />
+      ) : projects.length === 0 ? (
         <div className="text-center py-12 text-gray-500">
           <Compass size={48} className="mx-auto mb-3 opacity-30" />
-          <p className="text-sm">No GSD-enabled projects found</p>
+          <p className="text-sm">No Get Stuff Done projects found</p>
           <p className="text-xs mt-1">Apps with a <code className="text-port-accent">.planning/</code> directory will appear here</p>
         </div>
       ) : (

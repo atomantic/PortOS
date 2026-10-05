@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
 import * as api from '../services/api';
 import { BookOpen, Search, Network, FileText, BarChart3, Activity } from 'lucide-react';
+import LoadFailedState from '../components/ui/LoadFailedState';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
@@ -38,14 +39,16 @@ export default function Wiki() {
   const vaultParam = searchParams.get('vault');
 
   const [vaults, setVaults] = useState([]);
+  const [vaultsFailed, setVaultsFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [noteSnapshot, setNoteSnapshot] = useState(null);
   const mountedRef = useMounted();
   const scanSequence = useRef(0);
 
   const loadVaults = useCallback(async () => {
-    const data = await api.getNotesVaults().catch(() => []);
-    setVaults(data);
+    const data = await api.getNotesVaults({ silent: true }).catch(() => null);
+    setVaultsFailed(data === null);
+    if (data) setVaults(data);
     setLoading(false);
   }, []);
 
@@ -138,6 +141,16 @@ export default function Wiki() {
         tabs={TABS.length}
         cards={3}
         sidebar={false}
+      />
+    );
+  }
+
+  if (vaultsFailed && vaults.length === 0) {
+    return (
+      <LoadFailedState
+        title="Could not load Obsidian vaults."
+        hint="Retry. This does not mean no vault is connected."
+        onRetry={loadVaults}
       />
     );
   }

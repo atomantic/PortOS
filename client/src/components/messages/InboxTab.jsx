@@ -9,6 +9,7 @@ import { timeAgo, formatDateNumeric } from '../../utils/formatters';
 import MessageDetail from './MessageDetail';
 import AddToThreadButton from '../threads/AddToThreadButton';
 import { messageReadState, partitionAccountsBySyncMode } from '../../lib/messageSyncModes';
+import LoadFailedState from '../ui/LoadFailedState';
 
 const ACTION_CONFIG = {
   reply:   { icon: Reply,   color: 'text-port-accent',  bg: 'bg-port-accent/10',  hoverBg: 'hover:bg-port-accent/20',  label: 'Reply' },
@@ -178,6 +179,7 @@ export default function InboxTab({ accounts }) {
   const accountList = useMemo(() => accounts || [], [accounts]);
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selectedAccount, setSelectedAccount] = useState('');
@@ -231,8 +233,9 @@ export default function InboxTab({ accounts }) {
     const params = { summary: true };
     if (selectedAccount) params.accountId = selectedAccount;
     if (debouncedSearch) params.search = debouncedSearch;
-    const result = await api.getMessageInbox(params, { silent: true }).catch(() => ({ messages: [], total: 0 }));
-    setMessages(result.messages || []);
+    const result = await api.getMessageInbox(params, { silent: true }).catch(() => null);
+    setLoadFailed(result === null);
+    if (result) setMessages(result.messages || []);
     setLoading(false);
   }, [selectedAccount, debouncedSearch]);
 
@@ -562,7 +565,15 @@ export default function InboxTab({ accounts }) {
         className="-mx-1 px-1"
       />
 
-      {visibleMessages.length === 0 && !loading && (
+      {loadFailed && !loading && (
+        <LoadFailedState
+          title="Could not load messages."
+          hint="Retry. An empty inbox is shown only after the list loads."
+          onRetry={fetchMessages}
+        />
+      )}
+
+      {visibleMessages.length === 0 && !loading && !loadFailed && (
         <InboxEmptyState
           accounts={accounts}
           lastSyncAt={lastSyncAt}
