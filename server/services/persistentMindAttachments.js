@@ -26,6 +26,7 @@ import {
   unlinkGuarded,
   writeFileGuarded,
 } from '../lib/fileUtils.js';
+import { backupSnapshotCutPending, withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { loadState, saveState, withStateLock } from './cosState.js';
 import { isUpdateInProgress } from './updateChecker.js';
 
@@ -210,8 +211,12 @@ export const resolveMessageAttachments = async (mind, attachmentIds, messageId) 
   return { attachments };
 };
 
+// Every caller either records an image written just before it or removes image
+// bytes before dropping the record that names them. The CoS state file and the
+// screenshots are copied at different moments of one backup rsync pass, so the
+// whole mutation holds the backup lease (#9982), taken before the state lock.
 async function mutateMindAttachments(mutator) {
-  return withStateLock(async () => {
+  return withBackupAssetPublication(() => withStateLock(async () => {
     const root = await loadState();
     const mind = normalizePersistentMindState(root.persistentMind);
     const result = await mutator(mind, root);
@@ -219,11 +224,14 @@ async function mutateMindAttachments(mutator) {
     root.persistentMind = normalizePersistentMindState(next);
     await saveState(root);
     return { state: root.persistentMind, value: result?.value };
-  });
+  }));
 }
 
 /** Remove expired or invalid unclaimed files in one bounded maintenance pass. */
 export async function cleanupPersistentMindAttachments({ now = Date.now() } = {}) {
+  // Housekeeping only (message sends and uploads run it first): defer the pass
+  // to the next call rather than make them wait out a backup cut.
+  if (backupSnapshotCutPending()) return { success: true, removed: 0, examined: 0, deferred: true };
   const result = await mutateMindAttachments(async (mind) => {
     let examined = 0;
     let removed = 0;

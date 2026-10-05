@@ -22,6 +22,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir, detectImageFormat, detectVideoFormat, writeFileGuarded } from '../../lib/fileUtils.js';
 import { parseXPostUrl, buildSyndicationUrl, extractXPostMedia } from '../../lib/xPostMedia.js';
 import { fetchPublicText, fetchPublicBinary } from '../../lib/safeUrlFetch.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import { MAX_ITEMS_PER_BOARD } from './logic.js';
 import * as store from './db.js';
@@ -41,14 +42,16 @@ function fingerprint(canonicalUrl, tag) {
 
 // Download an image (photo or video poster) into data/images/, sniffing the
 // format from bytes (never trusting Content-Type) — same posture as Pinterest's
-// downloadPinImage. Returns the served path, or null on any failure.
+// downloadPinImage. Returns the served path, or null on any failure. Both
+// downloads are post-keyed, so a re-import rewrites bytes a board may already
+// name: each write holds the backup lease (#9982) so it never overlaps a snapshot.
 async function downloadImage(url, canonicalUrl, tag) {
   const res = await fetchPublicBinary(url, { timeoutMs: FETCH_TIMEOUT_MS, headers: MEDIA_HEADERS, maxBytes: MAX_IMAGE_BYTES });
   if (!res?.buffer?.length) return null;
   const fmt = detectImageFormat(res.buffer);
   if (!fmt) return null;
   const filename = `x-${fingerprint(canonicalUrl, tag)}${fmt.ext}`;
-  await writeFileGuarded(join(PATHS.images, filename), res.buffer);
+  await withBackupAssetPublication(() => writeFileGuarded(join(PATHS.images, filename), res.buffer));
   return `/data/images/${filename}`;
 }
 
@@ -61,7 +64,7 @@ async function downloadVideo(url, canonicalUrl) {
   const res = await fetchPublicBinary(url, { timeoutMs: VIDEO_TIMEOUT_MS, headers: MEDIA_HEADERS, maxBytes: MAX_VIDEO_BYTES });
   if (!res?.buffer?.length || !detectVideoFormat(res.buffer)) return null;
   const filename = `x-${fingerprint(canonicalUrl, 'video')}.mp4`;
-  await writeFileGuarded(join(PATHS.videos, filename), res.buffer);
+  await withBackupAssetPublication(() => writeFileGuarded(join(PATHS.videos, filename), res.buffer));
   return filename;
 }
 
@@ -144,7 +147,8 @@ export async function importXPost(boardId, { url }) {
     });
   }
 
-  const { board: nextBoard, added } = await store.appendImportedItems(boardId, imported);
+  // The append first names the downloaded media, so it commits under the lease.
+  const { board: nextBoard, added } = await withBackupAssetPublication(() => store.appendImportedItems(boardId, imported));
   emitRecordUpdated('moodBoard', boardId);
   console.log(`🐦 X post import: board ${boardId} +${added} item(s) from ${canonicalUrl}`);
   return { board: nextBoard, added };

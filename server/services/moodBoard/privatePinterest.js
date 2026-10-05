@@ -9,6 +9,7 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir } from '../../lib/fileUtils.js';
 import { isBlockedIngestHost } from '../../lib/catalogValidation.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { normalizePinterestFeedUrl } from '../../lib/pinterestFeed.js';
 import { getHealthStatus, navigateToUrlPinned } from '../browserService.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
@@ -231,7 +232,8 @@ export async function importPrivatePinterestBoard(boardId, { url }) {
     });
   }
 
-  const { board: nextBoard, added } = await store.appendImportedItems(boardId, imported);
+  // The append first names the downloaded pins, so it commits under the backup lease (#9982).
+  const { board: nextBoard, added } = await withBackupAssetPublication(() => store.appendImportedItems(boardId, imported));
   if (added > 0) emitRecordUpdated('moodBoard', boardId);
   return { board: nextBoard, added, found, skipped: Math.max(0, found - added) };
 }

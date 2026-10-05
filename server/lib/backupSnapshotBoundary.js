@@ -67,6 +67,14 @@ export function holdsBackupAssetPublication() {
   return publicationScope.getStore()?.active === true;
 }
 
+/**
+ * Whether a backup cut is requested or active. Optional housekeeping that would
+ * otherwise wait out the whole snapshot can defer to its next pass instead.
+ */
+export function backupSnapshotCutPending() {
+  return cutRequested || cutActive;
+}
+
 /** Wait for already admitted workflows to settle, or reject when they do not. */
 async function awaitDrain(timeoutMs) {
   let timer;

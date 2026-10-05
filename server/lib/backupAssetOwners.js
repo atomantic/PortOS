@@ -195,6 +195,35 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     status: 'admitted',
     modules: ['services/rigging/autoSkin.js', 'services/rigging/retarget.js'],
   },
+  {
+    // Catalog ingredient media and voice-memo scraps, and an imported round
+    // reference audio: the file lands first and the row that first names it
+    // commits under the lease. Persistent Mind screenshots and songbook
+    // attachments keep their records in data/ files that one rsync pass copies
+    // apart from the bytes, so each holds the lease from its first byte change
+    // (or, for an upload, the record write) through the record. Committing a
+    // voice-memo scrap to an ingredient names bytes the admitted scrap already
+    // named, and detaching catalog media removes no bytes.
+    id: 'attachments-and-catalog-media',
+    status: 'admitted',
+    modules: [
+      'services/persistentMindAttachments.js', 'routes/brainSongbook.js', 'services/catalogMedia.js',
+      'services/catalogIngestSources.js', 'services/roundReferenceAudioImport.js',
+    ],
+  },
+  {
+    // Re-hosted images, Pinterest and X imports, extracted frames and collages:
+    // downloads and renders run outside admission, and the board row that first
+    // names them commits under the lease. URL- and pin-keyed downloads rewrite
+    // their file in place, so that write takes the lease too. Removing an item
+    // or a board removes no bytes.
+    id: 'mood-board-imports',
+    status: 'admitted',
+    modules: [
+      'services/moodBoard/collage.js', 'services/moodBoard/pinterest.js', 'services/moodBoard/privatePinterest.js',
+      'services/moodBoard/xPost.js', 'services/moodBoard/localize.js', 'services/moodBoard/index.js',
+    ],
+  },
   // Classified by a code sweep (#9982) but still outside admission. Each entry
   // names the modules whose file-plus-record workflows are not wrapped yet, so a
   // continuation can take one and move it up. Entries are per domain, not per
@@ -251,24 +280,6 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     status: 'outstanding',
     modules: [
       'services/sharing/peerSyncAssets.js', 'services/sharing/importer.js', 'services/sharing/peerMediaLibrarySync.js',
-    ],
-  },
-  {
-    // Persistent Mind screenshot attachments, songbook attachments, catalog
-    // ingredient media and voice memos, and round reference audio.
-    id: 'attachments-and-catalog-media',
-    status: 'outstanding',
-    modules: [
-      'services/persistentMindAttachments.js', 'routes/brainSongbook.js', 'services/catalogMedia.js',
-      'services/catalogIngestSources.js', 'services/roundReferenceAudioImport.js',
-    ],
-  },
-  {
-    id: 'mood-board-imports',
-    status: 'outstanding',
-    modules: [
-      'services/moodBoard/collage.js', 'services/moodBoard/pinterest.js', 'services/moodBoard/privatePinterest.js',
-      'services/moodBoard/xPost.js', 'services/moodBoard/localize.js',
     ],
   },
   {

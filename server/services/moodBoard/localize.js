@@ -17,6 +17,7 @@ import { join } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir, detectImageFormat, writeFileGuarded } from '../../lib/fileUtils.js';
 import { fetchPublicBinary } from '../../lib/safeUrlFetch.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import { externalImageItems, isExternalImageUrl } from './logic.js';
 import * as store from './db.js';
@@ -40,7 +41,9 @@ async function downloadExternalImage(url) {
   if (!fmt) return null;
   const filename = `board-${createHash('sha1').update(url.trim()).digest('hex').slice(0, 16)}${fmt.ext}`;
   await ensureDir(PATHS.images);
-  await writeFileGuarded(join(PATHS.images, filename), res.buffer);
+  // URL-keyed, so a repeat rewrites bytes a board may already name: hold the
+  // backup lease (#9982) so the in-place write never overlaps a snapshot.
+  await withBackupAssetPublication(() => writeFileGuarded(join(PATHS.images, filename), res.buffer));
   return `/data/images/${filename}`;
 }
 
@@ -71,7 +74,8 @@ export async function localizeBoardMedia(boardId) {
     }
   }
 
-  const { board: next, changed } = await store.applyLocalizedItemImages(boardId, replacements);
+  // The swap first names the downloaded files, so it commits under the lease.
+  const { board: next, changed } = await withBackupAssetPublication(() => store.applyLocalizedItemImages(boardId, replacements));
   if (changed) emitRecordUpdated('moodBoard', boardId);
   console.log(`🖼️ Mood board ${boardId}: re-hosted ${changed} external image(s)${failed ? `, ${failed} failed` : ''}`);
   return { board: next, localized: changed, failed };

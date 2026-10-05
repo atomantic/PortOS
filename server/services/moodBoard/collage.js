@@ -21,6 +21,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir, atomicWrite } from '../../lib/fileUtils.js';
 import { findFfmpeg, runFfmpegProcess, probeVideoDuration, safeUnder } from '../../lib/ffmpeg.js';
 import { assetBasename } from '../../lib/localImageFilename.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import { boardItemLocalImage, squareGridDims, frameSampleTimes } from './logic.js';
 import * as store from './db.js';
@@ -106,7 +107,8 @@ export async function extractItemFrames(boardId, itemId, { count }) {
       source: `frame:${file}#${i + 1}of${count}`,
       caption: item.caption ? `${item.caption} (frame ${i + 1}/${count})` : `Frame ${i + 1}/${count} of ${file}`,
     }));
-    const { board: next, added } = await store.appendImportedItems(boardId, imported);
+    // The append first names the frame files, so it commits under the backup lease (#9982).
+    const { board: next, added } = await withBackupAssetPublication(() => store.appendImportedItems(boardId, imported));
     if (added) emitRecordUpdated('moodBoard', boardId);
     console.log(`🎞️ Mood board ${boardId}: extracted ${names.length} frame(s) from ${file}, added ${added}`);
     return { board: next, added, frames: names };
@@ -195,13 +197,12 @@ export async function composeBoardCollage(boardId, { framesPerVideo, addFramesTo
     const filename = `board-collage-${boardId.replace(/[^A-Za-z0-9]/g, '').slice(0, 12)}-${Date.now()}.jpg`;
     await atomicWrite(join(PATHS.images, filename), jpeg);
 
-    let nextBoard = board;
-    if (imported.length) {
-      const res = await store.appendImportedItems(boardId, imported);
-      nextBoard = res.board;
-      if (res.added) emitRecordUpdated('moodBoard', boardId);
-    }
-    nextBoard = await store.updateBoard(boardId, { collageImageRef: filename });
+    // The frame items and the collage ref first name files written above, so
+    // both commit under one backup lease (#9982).
+    const nextBoard = await withBackupAssetPublication(async () => {
+      if (imported.length) await store.appendImportedItems(boardId, imported);
+      return store.updateBoard(boardId, { collageImageRef: filename });
+    });
     emitRecordUpdated('moodBoard', boardId);
     console.log(`🧩 Mood board ${boardId}: collage ${cols}x${rows} (${composites.length} cells, ${skipped} skipped) → ${filename}`);
     return { filename, url: `/data/images/${filename}`, width, height, cols, rows, cells: composites.length, skipped, board: nextBoard };
