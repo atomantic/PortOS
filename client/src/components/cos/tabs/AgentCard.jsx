@@ -34,7 +34,7 @@ import { estimateCosDuration } from '../../../lib/cosDurationEstimate';
 import { isAgentFeedbackUpdateTarget, isSystemAgent as isSystemAgentRecord } from '../../../lib/cosAgentFeedback';
 import AgentResultLine from '../AgentResultLine';
 import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
-import { formatBytes, formatCount, formatDurationMs, formatDateTime, formatTimeOfDay } from '../../../utils/formatters';
+import { formatBytes, formatCount, formatDurationMs, formatDateTime, formatTimeOfDay, shortClaudeModelName } from '../../../utils/formatters';
 import { useSocketResource } from '../../../hooks/useSocketResource';
 
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
@@ -786,7 +786,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                 agent.metadata.modelTier === 'light' ? 'bg-green-500/20 text-green-400' :
                 'bg-blue-500/20 text-blue-400'
               }`} title={agent.metadata.modelReason}>
-                {agent.metadata.model.replace('claude-', '').replace(/-\d+$/, '')}
+                {shortClaudeModelName(agent.metadata.model)}
               </span>
             )}
             {!inactive && (

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useReducer, useRef } from 'react';
+import { shortClaudeModelName } from '../utils/formatters';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import { processScreenshotUploads, processAttachmentUploads } from '../services/apiMedia';
@@ -434,7 +435,7 @@ export default function useTaskAddForm({
     id,
     name: unlistedSelection && id === state.newTask.model
       ? `${id} (${modelSource === MODEL_SOURCE.account ? 'not in account catalog' : 'no longer offered by this provider'})`
-      : id.replace('claude-', '').replace(/-\d+$/, ''),
+      : shortClaudeModelName(id),
   })), [availableModels, unlistedSelection, modelSource, state.newTask.model]);
 
   const modelSourceNote = (() => {

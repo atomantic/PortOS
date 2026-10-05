@@ -860,3 +860,12 @@ export function clamp(n, min, max) {
 export function capitalize(s) {
   return typeof s === 'string' && s.length ? s[0].toUpperCase() + s.slice(1) : s;
 }
+
+/**
+ * Short display name for a Claude model id: drops the `claude-` prefix and a
+ * trailing 8-digit date stamp only, so `claude-sonnet-5-5` stays "sonnet-5-5"
+ * (a bare `-\d+` strip would collapse it to "sonnet-5").
+ */
+export function shortClaudeModelName(model) {
+  return String(model ?? '').replace(/^claude-/, '').replace(/-\d{8}$/, '');
+}

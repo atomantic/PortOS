@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { shortClaudeModelName } from '../../utils/formatters';
 import { Plus, Edit2, Trash2, Cpu, Check, X, Shield, Sparkles } from 'lucide-react';
 import toast from '../ui/Toast';
 import FormField from '../ui/FormField';
@@ -290,7 +291,7 @@ export default function OrchestrationTab() {
                         >
                           <option value="">Default (Provider default)</option>
                           {models.map((m) => (
-                            <option key={m} value={m}>{m.replace('claude-', '').replace(/-\d+$/, '')}</option>
+                            <option key={m} value={m}>{shortClaudeModelName(m)}</option>
                           ))}
                         </select>
                       </div>

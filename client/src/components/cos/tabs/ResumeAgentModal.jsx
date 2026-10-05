@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react';
+import { shortClaudeModelName } from '../../../utils/formatters';
 import { X, RotateCcw, Image, Loader2 } from 'lucide-react';
 import { processScreenshotUploads } from '../../../services/apiMedia';
 import toast from '../../ui/Toast';
@@ -258,7 +259,7 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
               >
                 <option value="">{!providersLoaded ? 'Loading providers…' : formData.provider ? 'Select model...' : 'Select provider first'}</option>
                 {availableModels.map(m => (
-                  <option key={m} value={m}>{m.replace('claude-', '').replace(/-\d+$/, '')}</option>
+                  <option key={m} value={m}>{shortClaudeModelName(m)}</option>
                 ))}
               </select>
             </FormField>
