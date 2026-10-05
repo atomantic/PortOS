@@ -21,7 +21,9 @@ vi.mock('../sharing/recordEvents.js', () => ({ emitRecordUpdated: (...a) => emit
 
 const writeFile = vi.fn();
 const unlink = vi.fn(async () => {});
-vi.mock('fs/promises', () => ({ writeFile: (...a) => writeFile(...a), unlink: (...a) => unlink(...a) }));
+// access resolves = file exists; the default rejects = the target is absent.
+const access = vi.fn(async () => { throw new Error('ENOENT'); });
+vi.mock('fs/promises', () => ({ writeFile: (...a) => writeFile(...a), unlink: (...a) => unlink(...a), access: (...a) => access(...a) }));
 // Keep the real detectImageFormat (byte-sniffing) — only override PATHS/ensureDir.
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -39,6 +41,7 @@ const CANONICAL = 'https://x.com/i/status/42';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  access.mockImplementation(async () => { throw new Error('ENOENT'); });
   vi.spyOn(console, 'log').mockImplementation(() => {});
 });
 
@@ -160,5 +163,22 @@ describe('importXPost', () => {
     const deletedPosterPath = unlink.mock.calls[0][0].replaceAll('\\', '/');
     expect(deletedPosterPath).toMatch(/^\/tmp\/imgs\/x-[0-9a-f]{16}\.jpg$/);
     expect(store.appendImportedItems).not.toHaveBeenCalled();
+  });
+
+  it('keeps a poster that already existed (another board may name it) when the video body fails', async () => {
+    store.getBoard.mockResolvedValue({ id: 'mb-1', items: [] });
+    net.fetchPublicText.mockResolvedValue(JSON.stringify({
+      video: {
+        poster: 'https://pbs.twimg.com/poster.jpg',
+        variants: [{ type: 'video/mp4', src: 'https://video.twimg.com/v.mp4', bitrate: 1000 }],
+      },
+    }));
+    net.fetchPublicBinary.mockImplementation(async (url) => (
+      url === 'https://video.twimg.com/v.mp4' ? null : { buffer: JPEG_BYTES, contentType: 'image/jpeg' }
+    ));
+    access.mockResolvedValue(undefined); // poster file pre-exists
+
+    await expect(importXPost('mb-1', { url: POST_URL })).rejects.toMatchObject({ code: 'X_POST_DOWNLOAD_FAILED' });
+    expect(unlink).not.toHaveBeenCalled();
   });
 });
