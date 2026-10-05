@@ -751,6 +751,31 @@ router.delete('/:id/composition/document/candidate', asyncHandler(async (req, re
   res.json(await discardGeneratedDocument(req.params.id, directory));
 }));
 
+// Local making-of compilation. The preview digest binds download to the exact
+// reviewed metadata, content, rights declarations and explicit asset selection.
+router.get('/:id/making-of/catalog', asyncHandler(async (req, res) => {
+  const { getMakingOfCatalog } = await import('../services/musicVideo/makingOf.js');
+  res.json(await getMakingOfCatalog(req.params.id));
+}));
+
+router.post('/making-of/preview', asyncHandler(async (req, res) => {
+  const { musicVideoMakingOfSelectionSchema } = await import('../lib/musicVideoValidation.js');
+  const input = validateRequest(musicVideoMakingOfSelectionSchema, req.body ?? {});
+  const { compileMakingOf } = await import('../services/musicVideo/makingOf.js');
+  res.json(await compileMakingOf(input));
+}));
+
+router.post('/making-of/export', asyncHandler(async (req, res) => {
+  const { musicVideoMakingOfSelectionSchema } = await import('../lib/musicVideoValidation.js');
+  const input = validateRequest(musicVideoMakingOfSelectionSchema, req.body ?? {});
+  const { compileMakingOf } = await import('../services/musicVideo/makingOf.js');
+  const { zip } = await compileMakingOf(input, { download: true });
+  res.set('Content-Type', 'application/zip');
+  res.set('Content-Disposition', 'attachment; filename="music-video-making-of.zip"');
+  res.set('Cache-Control', 'no-store');
+  res.send(zip);
+}));
+
 router.get('/:id/composition/document/export', asyncHandler(async (req, res) => {
   const { zip, filename } = await exportDocumentZip(await requireProject(req.params.id));
   res.set('Content-Type', 'application/zip');

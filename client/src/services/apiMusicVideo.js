@@ -1,5 +1,13 @@
 import { request } from './apiCore.js';
 
+export const getMusicVideoMakingOfCatalog = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/making-of/catalog`, options);
+export const previewMusicVideoMakingOf = (selection, options = {}) => request('/music-video/making-of/preview', {
+  method: 'POST', body: JSON.stringify(selection), ...options,
+});
+export const exportMusicVideoMakingOf = (selection, options = {}) => request('/music-video/making-of/export', {
+  method: 'POST', body: JSON.stringify(selection), responseType: 'arraybuffer', ...options,
+});
+
 // Music Video production mode (#1760). Director scene-board project CRUD + the
 // offline beat/tempo/section analysis. `options` lets a caller suppress
 // request()'s auto-toast with `{ silent: true }` when it owns its own error UI.
