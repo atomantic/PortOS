@@ -8,9 +8,9 @@ export const PUBLISH_TARGETS = [
   { target: 'youtube', label: 'YouTube', note: 'The final render, with chapters, thumbnail and captions' },
   { target: 'suno', label: 'Suno', note: 'Publishes the song with the cover and a link to the video' },
   { target: 'x', label: 'X thread', note: 'Hook with the 1080p video, then the story, prompt and links' },
-  { target: 'shorts', label: 'YouTube Shorts', note: 'The newest 9:16 social cut' },
-  { target: 'tiktok', label: 'TikTok', note: 'The newest 9:16 social cut, labelled AI-generated' },
-  { target: 'instagram', label: 'Instagram Reels', note: 'The newest 9:16 social cut, with the AI label' },
+  { target: 'shorts', label: 'YouTube Shorts', note: 'A 9:16 cut (the newest by default)' },
+  { target: 'tiktok', label: 'TikTok', note: 'A 9:16 cut (the newest by default), labelled AI-generated' },
+  { target: 'instagram', label: 'Instagram Reels', note: 'A 9:16 cut (the newest by default), with the AI label' },
   { target: 'reddit', label: 'Reddit', note: 'A native video post to r/aivideo (title and flair, no body)' },
   { target: 'stackerNews', label: 'Stacker News', note: 'A link post to the full video' },
 ];
@@ -21,7 +21,23 @@ const summaryRows = (summary) => Object.entries(summary || {})
   .filter(([, v]) => v != null && v !== '' && (typeof v !== 'object' || (Array.isArray(v) && v.every((x) => typeof x === 'string'))))
   .map(([k, v]) => [k, Array.isArray(v) ? v.join(' · ') : String(v)]);
 
-function TargetOptions({ target, kit, options, setOption, flairs, idFor }) {
+const VERTICAL_TARGETS = ['shorts', 'tiktok', 'instagram'];
+const fmtSec = (n) => `${Math.floor(n / 60)}:${String(Math.floor(n % 60)).padStart(2, '0')}`;
+
+/** Postable 9:16 cuts, oldest first (mirrors the server's pick; it still refuses a stale one). */
+function verticalCutChoices(project) {
+  const kit = project?.publishKit || {};
+  const cuts = (project?.excerpts || [])
+    .filter((e) => e?.status === 'complete' && e.aspect === '9:16' && e.filename)
+    .map((e) => ({ id: e.id, label: `Social cut ${fmtSec(e.startSec ?? 0)}-${fmtSec(e.endSec ?? 0)}` }));
+  const crop = (kit.exports || []).find((e) => e.kind === 'vertical-9x16' && e.filename);
+  if (crop && (kit.master?.renderHistoryId ?? null) === (project?.renderHistoryId ?? null)) {
+    cuts.unshift({ id: 'kit-vertical', label: `Kit center-crop ${fmtSec(crop.startSec ?? 0)}-${fmtSec(crop.endSec ?? 0)}` });
+  }
+  return cuts;
+}
+
+function TargetOptions({ target, kit, project, options, setOption, flairs, idFor }) {
   const field = (key, label, input) => (
     <div key={key} className="space-y-0.5 min-w-0">
       <label htmlFor={idFor(key)} className="block text-[11px] text-port-text-muted">{label}</label>
@@ -33,6 +49,15 @@ function TargetOptions({ target, kit, options, setOption, flairs, idFor }) {
   const area = (key, label) => field(key, label,
     <textarea id={idFor(key)} value={options[key] || ''} rows={3} onChange={(e) => setOption(key, e.target.value)} className={inputCls} />);
 
+  if (VERTICAL_TARGETS.includes(target)) {
+    const cuts = verticalCutChoices(project);
+    if (cuts.length < 2) return null;
+    return field('cutId', 'Vertical cut to post', (
+      <select id={idFor('cutId')} aria-label="Vertical cut to post" value={options.cutId || ''} onChange={(e) => setOption('cutId', e.target.value)} className={inputCls}>
+        <option value="">Newest fresh cut (default)</option>
+        {[...cuts].reverse().map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+      </select>));
+  }
   if (target === 'reddit') {
     return (
       <div className="grid sm:grid-cols-2 gap-2">
@@ -165,7 +190,7 @@ function TargetRow({ project, kit, entry, publishing }) {
       {posted
         ? <PostFeedback key={posted.url || 'post'} idFor={idFor} label={label} post={posted} onSave={(body) => publishing.recordPost(target, body)} />
         : <ManualLink idFor={idFor} label={label} onSave={(body) => publishing.recordPost(target, body)} />}
-      <TargetOptions target={target} kit={kit} options={options} setOption={setOption} flairs={flairs} idFor={idFor} />
+      <TargetOptions target={target} kit={kit} project={project} options={options} setOption={setOption} flairs={flairs} idFor={idFor} />
       {error && (
         <div role="alert" className="text-[11px] text-port-error space-y-0.5">
           <div className="flex items-center gap-1">{error.code === 'PUBLISH_LOGIN_REQUIRED' && <LogIn size={11} />}{error.message}</div>
