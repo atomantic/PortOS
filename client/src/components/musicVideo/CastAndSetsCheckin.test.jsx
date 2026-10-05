@@ -235,3 +235,15 @@ describe('Cast & Sets tab: undo, regenerate and guide import', () => {
     expect(screen.queryByRole('button', { name: 'Use Check-in sheet as visual guide' })).toBeNull();
   });
 });
+
+describe('Cast & Sets stage before any check-in exists', () => {
+  it('offers Build and Skip, wired to the start and skip actions', async () => {
+    const start = vi.fn();
+    const skip = vi.fn();
+    render(<CastSetsStage board={{ project: { id: 'example-project', audioAnalysis: { sections: [{}] } }, locked: false, castSets: { busy: false, start, skip }, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn() }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Build cast & sets' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(skip).toHaveBeenCalledTimes(1);
+  });
+});

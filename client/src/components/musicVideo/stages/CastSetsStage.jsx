@@ -22,10 +22,23 @@ export default function CastSetsStage({ board }) {
           onSkip={board.skipCastAndSets}
         />
       ) : (
-        <p className="rounded-lg border border-port-border bg-port-card p-3 text-sm text-port-text-muted">
-          The autopilot builds the cast and sets — and stops for your check-in — before it plans the shots.
-          Run it from the header or the Produce tab; a hands-on project can skip this stage.
-        </p>
+        <div className="rounded-lg border border-port-border bg-port-card p-3 space-y-3">
+          <p className="text-sm text-port-text-muted">
+            The cast and sets are built — and stop for your check-in — before the shots are planned.
+            Build them now, or skip this stage and work from the sheets you add yourself.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => castSets.start()} disabled={locked || castSets.busy || kickoff.running || !project.audioAnalysis}
+              title={project.audioAnalysis ? undefined : 'Analyze the track first'}
+              className="min-h-10 rounded-lg bg-port-accent px-3 py-2 text-sm font-medium text-white disabled:opacity-50">
+              Build cast &amp; sets
+            </button>
+            <button type="button" onClick={() => castSets.skip()} disabled={locked || castSets.busy || kickoff.running}
+              className="min-h-10 rounded-lg border border-port-border px-3 py-2 text-sm text-port-text-muted hover:text-white disabled:opacity-50">
+              Skip
+            </button>
+          </div>
+        </div>
       )}
       <DevArtifactsPanel
         project={project}

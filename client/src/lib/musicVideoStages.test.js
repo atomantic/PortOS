@@ -39,11 +39,19 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveNextAction(autoFailed)).toMatchObject({ id: 'retry-autonomous', kind: 'run', label: 'Retry autonomous run' });
   });
 
-  it('a project waiting on Cast & Sets approval offers the approval, and a stopped check-in offers to resume', () => {
+  it('a project waiting on Cast & Sets approval offers the approval, a stopped check-in offers to resume, and no check-in offers to start', () => {
     const waiting = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, automation: {}, castAndSets: { status: 'review' }, scenes: [] };
     expect(deriveStages(waiting).current).toBe('cast-sets');
     expect(stateOf(waiting)).toMatchObject({ setup: 'done', 'cast-sets': 'active', board: 'todo' });
-    expect(deriveNextAction(waiting)).toMatchObject({ id: 'review-production', kind: 'goto', stage: 'cast-sets', shortLabel: 'Art' });
+    expect(deriveNextAction(waiting)).toMatchObject({ id: 'approve-cast-sets', kind: 'run' });
+
+    const notStarted = { ...waiting, castAndSets: null };
+    expect(deriveNextAction(notStarted)).toMatchObject({ id: 'kickoff' });
+    expect(deriveNextAction({ ...notStarted, automation: undefined })).toMatchObject({ id: 'start-cast-sets', kind: 'run', disabled: false });
+
+    const unplanned = { ...waiting, castAndSets: { status: 'approved' }, productionReadiness: { art: { approved: true }, storyboard: { approved: false }, proof: { approved: false }, readyForProduction: false } };
+    expect(deriveNextAction(unplanned)).toMatchObject({ id: 'plan' });
+    expect(deriveNextAction({ ...unplanned, scenes: [{ id: 's1' }] })).toMatchObject({ id: 'review-production', stage: 'board' });
 
     const interrupted = { ...waiting, castAndSets: { status: 'imaging', interrupted: true } };
     expect(stateOf(interrupted)['cast-sets']).toBe('blocked');

@@ -324,9 +324,15 @@ export function deriveNextAction(project, {
 
   if (proofActive) return { id: 'proof-progress', kind: 'goto', stage: 'review', anchor: 'mv-review-render', label: 'View review render', shortLabel: 'Review' };
   if (draftActive) return { id: 'draft-progress', kind: 'goto', stage: 'review', anchor: 'mv-draft-excerpts', label: 'View draft render', shortLabel: 'Draft' };
-  if (projectHasAudio(project) && project.audioAnalysis && !CAST_WORKING.has(cast?.status) && !readiness?.readyForProduction && run?.status !== 'running' && !renderActive && !kickoffRunning) {
-    const art = !readiness?.art.approved;
-    const board = !readiness?.storyboard.approved;
+  const art = !readiness?.art.approved;
+  const board = !readiness?.storyboard.approved;
+  // The approval panel only opens once the stage's own work exists: a stage with
+  // nothing built yet (no check-in, no shots) offers Start / Plan, and an open
+  // or interrupted check-in offers Approve / Resume — those come from the stage switch below.
+  const castNeedsOwnAction = art && ((!cast && scenes.length === 0) || (cast && (cast.status === 'review' || cast.interrupted || cast.status === 'failed')));
+  const boardNeedsOwnAction = !art && board && scenes.length === 0;
+  if (projectHasAudio(project) && project.audioAnalysis && !CAST_WORKING.has(cast?.status) && !readiness?.readyForProduction && run?.status !== 'running' && !renderActive && !kickoffRunning
+    && !castNeedsOwnAction && !boardNeedsOwnAction) {
     return { id: 'review-production', kind: 'goto', stage: art ? 'cast-sets' : board ? 'board' : 'review',
       anchor: art ? 'mv-review-art' : board ? 'mv-review-storyboard' : 'mv-review-proof',
       label: art ? 'Review art direction' : board ? 'Review timed storyboard' : 'Review animated proof',
@@ -382,6 +388,7 @@ export function deriveNextAction(project, {
       if (cast?.status === 'review') return { id: 'approve-cast-sets', kind: 'run', label: 'Approve cast & sets', shortLabel: 'Approve' };
       if (cast && (cast.interrupted || cast.status === 'failed')) return { id: 'resume-cast-sets', kind: 'run', label: 'Resume cast & sets', shortLabel: 'Resume' };
       if (cast && CAST_WORKING.has(cast.status)) return { id: 'busy', kind: 'run', label: 'Building cast & sets…', shortLabel: 'Building…', disabled: true };
+      if (!cast && !project.automation) return { id: 'start-cast-sets', kind: 'run', label: 'Build cast & sets', shortLabel: 'Build', disabled: !project.audioAnalysis, reason: project.audioAnalysis ? undefined : 'Analyze the track first' };
       return { id: 'kickoff', kind: 'run', label: 'Run autopilot', shortLabel: 'Autopilot', disabled: !!kickoffBlockedReason, reason: kickoffBlockedReason || undefined };
     case 'board':
       return { id: 'plan', kind: 'run', label: 'Plan the shots', shortLabel: 'Plan', disabled: !project.audioAnalysis, reason: project.audioAnalysis ? undefined : 'Analyze the track first' };
