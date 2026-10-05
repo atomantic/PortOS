@@ -1,5 +1,5 @@
 import { musicVideoAllowsMedia, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
-import { castAndSetsApprovalInputs, productionFeedbackContext, seedArtDraft } from './productionReview.js';
+import { castAndSetsApprovalInputs, castAndSetsApprovalValues, productionFeedbackContext, seedArtDraft } from './productionReview.js';
 import { withMusicVideoStyle } from './styleReferences.js';
 /**
  * Music Video — Cast & Sets check-in orchestrator.
@@ -549,7 +549,7 @@ function applyApproval(project, now) {
   }
   // Record what the approval rests on, so a later concept/style/subject/song
   // edit can be named as "changed since" (#10141).
-  return setCastAndSetsStatus(next, 'approved', { extra: { approvedInputs: castAndSetsApprovalInputs(next) } }, now);
+  return setCastAndSetsStatus(next, 'approved', { extra: { approvedInputs: castAndSetsApprovalInputs(next), approvedValues: castAndSetsApprovalValues(next) } }, now);
 }
 
 // Settle the stage and re-base a production run waiting on it, in ONE write,
@@ -579,7 +579,7 @@ export async function approveCastAndSets(projectId) {
 export async function reconfirmCastAndSets(projectId) {
   await requireProject(projectId);
   const now = new Date().toISOString();
-  const out = await mutateProjectRecord(projectId, (current) => reconfirmCastAndSetsOnProject(current, castAndSetsApprovalInputs(current), now));
+  const out = await mutateProjectRecord(projectId, (current) => reconfirmCastAndSetsOnProject(current, castAndSetsApprovalInputs(current), castAndSetsApprovalValues(current), now));
   console.log(`✅ Music Video Cast & Sets ${short(projectId)} kept approved on current inputs`);
   publish(projectId, out.project);
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };

@@ -513,6 +513,8 @@ export function stageChecklist(stageId, project, readiness = project?.production
       id: `approve-${key}`, label: `${label} approved`, done: approved, stale: !!stale,
       detail: approved || !readiness ? null : (stale ? `${stale} Re-approve in the editor below.` : readiness[key]?.problems?.[0] || waitingText),
       action: approved ? null : { label: `Review ${label.toLowerCase()}`, anchor: APPROVAL_ANCHORS[key], stage: APPROVAL_STAGES[key] },
+      // Inputs whose approved value the server kept: each gets a Revert button.
+      revert: !approved && stale && readiness[key].stale.revertible?.length ? { stage: key, fields: readiness[key].stale.revertible } : null,
     };
   };
   switch (stageId) {

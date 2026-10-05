@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { castAndSetsApprovalInputs, productionReadiness } from './productionReview.js';
+import { castAndSetsApprovalInputs, castAndSetsApprovalValues, productionReadiness, revertApprovedInput } from './productionReview.js';
 
 const castAndSetsApproval = (project) => productionReadiness(project).castAndSets;
 
@@ -46,5 +46,25 @@ describe('Cast & Sets approval basis', () => {
     expect(castAndSetsApproval(normalized).stale).toBeNull();
     const legacy = { ...project, concept: { prompt: 'Changed' }, castAndSets: { status: 'approved', approvedAt: '2026-01-01T00:00:00.000Z' } };
     expect(castAndSetsApproval(legacy)).toEqual({ approved: true, stale: null });
+  });
+});
+
+describe('reverting a Cast & Sets approval (#10241)', () => {
+  const project = { id: 'p1', concept: { prompt: 'Example concept', style: 'ink', subjects: [{ id: 's1' }] }, visualSpec: { palette: ['#000000'] } };
+  const approved = { ...project, castAndSets: { status: 'approved', approvedInputs: castAndSetsApprovalInputs(project), approvedValues: castAndSetsApprovalValues(project) } };
+
+  it('restores concept, style and subjects independently and clears the stale note', () => {
+    const edited = { ...approved, concept: { prompt: 'Other', style: 'oil', subjects: [] }, visualSpec: { palette: ['#ffffff'] } };
+    expect(productionReadiness(edited).castAndSets.stale.revertible).toEqual(['concept', 'style', 'subjects']);
+    let next = edited;
+    for (const field of ['concept', 'style', 'subjects']) next = revertApprovedInput(next, { stage: 'castAndSets', field });
+    expect(next.concept).toEqual(project.concept);
+    expect(next.visualSpec.palette).toEqual(['#000000']);
+    expect(productionReadiness(next).castAndSets.stale).toBeNull();
+  });
+
+  it('refuses a legacy approval that kept no values', () => {
+    const legacy = { ...approved, concept: { prompt: 'Other' }, castAndSets: { ...approved.castAndSets, approvedValues: undefined } };
+    expect(() => revertApprovedInput(legacy, { stage: 'castAndSets', field: 'concept' })).toThrow(/not kept/);
   });
 });

@@ -1343,6 +1343,10 @@ export const musicVideoProductionFeedbackSchema = z.object({
 export const musicVideoProductionReviseSchema = musicVideoCastAndSetsStartSchema.extend({
   stage: z.enum(['art', 'storyboard', 'proof']),
 }).strict();
+// The input label a stale approval names (`concept`, `scene 3 prompt`, …) — the server finds its stored value.
+export const musicVideoProductionRevertSchema = z.object({
+  stage: z.enum(['art', 'storyboard', 'proof', 'castAndSets']), field: z.string().trim().min(1).max(100),
+}).strict();
 export const musicVideoProductionFeedbackResolutionSchema = z.object({
   feedbackId: z.string().min(1).max(128), resolution: z.string().trim().min(1).max(8000), password: z.string().max(1024).optional(),
 }).strict();

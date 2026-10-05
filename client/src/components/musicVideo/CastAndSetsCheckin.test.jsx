@@ -6,7 +6,7 @@ import useMusicVideoCastAndSets from '../../hooks/useMusicVideoCastAndSets';
 
 const { listeners, api, getMediaJob } = vi.hoisted(() => ({
   listeners: new Map(),
-  api: { getMusicVideoProject: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), skipMusicVideoCastAndSets: vi.fn() },
+  api: { getMusicVideoProject: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn() },
   getMediaJob: vi.fn(),
 }));
 vi.mock('../../services/socket', () => ({ default: {
@@ -236,6 +236,15 @@ describe('Cast & Sets tab: undo, regenerate and guide import', () => {
     expect(screen.getByText(/^Approved earlier — changed since: concept, style\./)).toBeInTheDocument();
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Keep approved' })); });
     expect(api.reconfirmMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', { silent: true });
+  });
+
+  it('offers Revert only for changed inputs whose approved value was kept (#10241)', () => {
+    const onRevertApproval = vi.fn();
+    const stale = { approvedAt: '2026-01-01T00:00:00.000Z', changedFields: ['concept', 'song'], revertible: ['concept'] };
+    open(withStatus('approved'), { productionReadiness: { castAndSets: { approved: true, stale } }, onRevertApproval });
+    fireEvent.click(screen.getByRole('button', { name: 'Revert concept' }));
+    expect(onRevertApproval).toHaveBeenCalledWith('castAndSets', 'concept');
+    expect(screen.queryByRole('button', { name: 'Revert song' })).toBeNull();
   });
 
   it('shows no stale note or Keep approved for a current approval', () => {

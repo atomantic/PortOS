@@ -37,7 +37,7 @@ function statusLine(stage) {
  * concept, style, subjects or song changed since (`stale`, from the server's
  * readiness) says what changed and offers Keep approved beside Rebuild (#10141).
  */
-export default function CastAndSetsCheckin({ project, stale = null, busy, onOpenSheet, onApprove, onRegenerate, onEditDirection, onResume, onRebuild, onReconfirm, onSkip }) {
+export default function CastAndSetsCheckin({ project, stale = null, busy, onOpenSheet, onApprove, onRegenerate, onEditDirection, onResume, onRebuild, onReconfirm, onRevert, onSkip }) {
   const stage = project.castAndSets;
   if (!stage) return null;
   const working = WORKING.has(stage.status) && !stage.interrupted;
@@ -59,6 +59,16 @@ export default function CastAndSetsCheckin({ project, stale = null, busy, onOpen
         <p className="text-xs text-port-warning">
           {staleText} Keep the sheet approved as it is, or rebuild it from the current inputs.
         </p>
+      )}
+      {staleText && onRevert && stale?.revertible?.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {stale.revertible.map((field) => (
+            <button key={field} type="button" disabled={busy} onClick={() => onRevert(field)} title="Put this back to the value you approved"
+              className={`${buttonClass} border border-port-border`}>
+              <RotateCcw size={14} aria-hidden="true" /> Revert {field}
+            </button>
+          ))}
+        </div>
       )}
       <CastAndSetsReferenceProgress stage={stage} />
       <div className="flex flex-wrap gap-2">

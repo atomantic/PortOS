@@ -1027,6 +1027,7 @@ export default function MusicVideo() {
     runStage,
     onSelectStage: setRunStage,
     productionReadiness: productionReview.readiness,
+    onRevertApproval: productionReview.revert,
     locked: creativeSetupPending || styleReferencesPending || compositionSavePending > 0,
     busy: { analyzing, planning, arranging, cloning },
     tracks,
@@ -1461,6 +1462,7 @@ export default function MusicVideo() {
             <StageChecklist
               items={stageChecklist(activeStage, selected, productionReview.readiness, publish)}
               onAction={(action) => goToStage(action.stage || activeStage, action.anchor, action.params)}
+              onRevert={productionReview.revert}
               headerAnchor={nextAction?.kind === 'goto' ? nextAction.anchor : null}
             />
             {APPROVAL_STAGE_BY_TAB[activeStage] && (

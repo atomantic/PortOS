@@ -21,6 +21,7 @@
  *     artifactId, artifactVersion, notesApplied,
  *     createdAt, updatedAt, approvedAt,
  *     approvedInputs,       // labeled input hashes the approval rests on (productionReview.js); absent on legacy approvals
+ *     approvedValues,       // capped approved values of the revertible inputs, keyed like approvedInputs; absent = not revertible
  *   }
  *
  * Status: `directing` → `imaging` → `assembling` → `review` → `approved`, or
@@ -128,6 +129,7 @@ export function reviseCastAndSetsOnProject(project, { processId, notesApplied = 
     notesApplied: notesApplied.map((n) => ({ id: n.id || null, target: n.target || null, text: trimTo(n.text, 2000) })),
     approvedAt: null,
     approvedInputs: null,
+    approvedValues: null,
   }, now);
 }
 
@@ -257,10 +259,10 @@ export function setCastAndSetsStatus(project, status, { reason = null, error = n
  * re-stamps `approvedInputs` without re-applying the sheet, so the director's
  * later concept/style edits stand. Returns `{ project, stage }`.
  */
-export function reconfirmCastAndSetsOnProject(project, approvedInputs, now = new Date().toISOString()) {
+export function reconfirmCastAndSetsOnProject(project, approvedInputs, approvedValues = null, now = new Date().toISOString()) {
   const stage = requireStage(project);
   if (stage.status !== 'approved') throw stageError(409, 'CAST_SETS_NOT_APPROVED', `The Cast & Sets check-in is ${stage.status}, not approved`);
-  return write(project, { ...stage, approvedInputs, approvedAt: now }, now);
+  return write(project, { ...stage, approvedInputs, approvedValues, approvedAt: now }, now);
 }
 
 /** Refuse an approval that has nothing to approve. */
