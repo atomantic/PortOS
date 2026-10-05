@@ -2877,6 +2877,63 @@ describe('pipeline routes', () => {
       });
     });
 
+    describe('narration segment review (#10258)', () => {
+      // Same stub shape as renderWithVerification: transcribe + compareSpeech.
+      const stubVerifiedSynth = async () => {
+        const audio = await import('../services/pipeline/audio.js');
+        audio.synthesizeToFile.mockImplementationOnce(async ({ text, expectedSpeech }) => {
+          const heard = await transcribeMock(Buffer.from('w'), { prompt: '' }).catch(() => null);
+          return {
+            filename: `vo-mock-${++uuidCounter}.wav`, durationMs: 900, latencyMs: 1, engine: 'kokoro', voiceId: 'kokoro:af_heart',
+            verification: heard
+              ? { ...compareSpeech(expectedSpeech || text, heard.text), heard: heard.text }
+              : { status: 'unverified', similarity: null, heard: '' },
+          };
+        });
+      };
+
+      it('re-renders a mismatched segment, then accepts what was heard as spoken', async () => {
+        const app = makeApp();
+        const text = 'The AI woke at dawn.';
+        transcribeMock.mockResolvedValueOnce({ text: 'The ay eye woke at dawn' });
+        await stubVerifiedSynth();
+        const rerender = await request(app).post('/api/pipeline/tts/narrate/segment').send({ text, voiceId: 'kokoro:af_heart' });
+        expect(rerender.status).toBe(200);
+        expect(rerender.body).toMatchObject({ durationMs: 900, engine: 'kokoro', verification: { status: 'mismatch', heard: 'The ay eye woke at dawn' } });
+        expect(rerender.body.filename).toMatch(/^vo-mock-/);
+
+        const accepted = await request(app).patch('/api/pipeline/tts/narrate/segment')
+          .send({ text, heard: 'The ay eye woke at dawn', expectedSpeech: 'The ay eye woke at dawn' });
+        expect(accepted.status).toBe(200);
+        expect(accepted.body).toMatchObject({ expectedSpeech: 'The ay eye woke at dawn', verification: { status: 'matched', similarity: 1 } });
+
+        // The next re-render compares against the accepted spelling.
+        transcribeMock.mockResolvedValueOnce({ text: 'The ay eye woke at dawn' });
+        await stubVerifiedSynth();
+        const again = await request(app).post('/api/pipeline/tts/narrate/segment')
+          .send({ text, expectedSpeech: 'The ay eye woke at dawn' });
+        expect(again.body.verification.status).toBe('matched');
+      });
+
+      it('leaves the segment unverified, and the render succeeds, when STT is down', async () => {
+        const app = makeApp();
+        transcribeMock.mockRejectedValueOnce(new Error('connect ECONNREFUSED'));
+        await stubVerifiedSynth();
+        const r = await request(app).post('/api/pipeline/tts/narrate/segment').send({ text: 'Plain sentence.' });
+        expect(r.status).toBe(200);
+        expect(r.body.verification).toEqual({ status: 'unverified', similarity: null, heard: '' });
+
+        const rescored = await request(app).patch('/api/pipeline/tts/narrate/segment')
+          .send({ text: 'Plain sentence.', heard: '', expectedSpeech: 'Plain sentence' });
+        expect(rescored.body.verification.status).toBe('unverified');
+      });
+
+      it('rejects a segment re-render with no text', async () => {
+        const r = await request(makeApp()).post('/api/pipeline/tts/narrate/segment').send({ text: '  ' });
+        expect(r.status).toBe(400);
+      });
+    });
+
     it('keeps local voice profile provenance out of the federated issue record', async () => {
       const audio = await import('../services/pipeline/audio.js');
       const profiles = await import('../services/voice/profiles.js');

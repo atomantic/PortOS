@@ -1051,6 +1051,21 @@ export const narratePipelineProse = (text, voiceId, options = {}) =>
     ...options,
   });
 
+// Per-segment narration review (#10258). Re-render one sentence (fresh audio +
+// spoken-text check) and re-score its heard text against an accepted spelling.
+export const rerenderNarrationSegment = (text, voiceId, expectedSpeech, options = {}) =>
+  request('/pipeline/tts/narrate/segment', {
+    method: 'POST',
+    body: JSON.stringify({ text, ...(voiceId ? { voiceId } : {}), ...(expectedSpeech ? { expectedSpeech } : {}) }),
+    ...options,
+  });
+export const acceptNarrationSegmentSpeech = (text, heard, expectedSpeech, options = {}) =>
+  request('/pipeline/tts/narrate/segment', {
+    method: 'PATCH',
+    body: JSON.stringify({ text, heard, expectedSpeech }),
+    ...options,
+  });
+
 // Walks storyboards.scenes[].dialogue and populates stages.audio.lines[].
 // Pass { force: true } to replace existing lines wholesale (server defaults
 // to a 409 when lines[] is already populated so a stray click can't wipe
