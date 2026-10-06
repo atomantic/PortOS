@@ -45,6 +45,9 @@ import {
   musicVideoPublishCopyPatchSchema,
   musicVideoPublishCopyDraftSchema,
   musicVideoPublishThumbnailSchema,
+  musicVideoCoverArtComposeSchema,
+  musicVideoCoverArtGenerateSchema,
+  musicVideoCoverArtDesignSchema,
   musicVideoPublishTargetSchema,
   musicVideoPublishPrepareSchema,
   musicVideoPublishPlatformsPatchSchema,
@@ -909,6 +912,30 @@ router.patch('/:id/publish-kit/copy', asyncHandler(async (req, res) => {
 router.put('/:id/publish-kit/thumbnail', asyncHandler(async (req, res) => {
   const { filename } = validateRequest(musicVideoPublishThumbnailSchema, req.body || {});
   const { project } = await selectPublishKitThumbnail(req.params.id, filename);
+  res.json({ project });
+}));
+
+// Release cover art: the song's own design (drafted, or adjusted from the
+// director's direction), compose from a chosen image, or queue a fresh cover
+// photo whose completion hook composes the cover.
+router.post('/:id/publish-kit/cover-art', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCoverArtComposeSchema, req.body || {});
+  const { composeProjectCoverArt } = await import('../services/musicVideo/coverArt.js');
+  const { project } = await composeProjectCoverArt(req.params.id, input);
+  res.json({ project });
+}));
+
+router.post('/:id/publish-kit/cover-art/design', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCoverArtDesignSchema, req.body || {});
+  const { designCoverArt } = await import('../services/musicVideo/coverArt.js');
+  const { project } = await designCoverArt(req.params.id, input);
+  res.json({ project });
+}));
+
+router.post('/:id/publish-kit/cover-art/generate', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCoverArtGenerateSchema, req.body || {});
+  const { generateCoverArtSource } = await import('../services/musicVideo/coverArt.js');
+  const { project } = await generateCoverArtSource(req.params.id, input);
   res.json({ project });
 }));
 

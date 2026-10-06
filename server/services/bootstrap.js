@@ -152,6 +152,7 @@ import { initFableLoomSceneVideoHook } from './fableLoomSceneVideoHook.js';
 import { initMusicVideoSceneImageHook } from './musicVideoSceneImageHook.js';
 import { initMusicVideoSceneVideoHook } from './musicVideoSceneVideoHook.js';
 import { initMusicVideoCastSetsImageHook } from './musicVideoCastSetsImageHook.js';
+import { initMusicVideoCoverArtImageHook } from './musicVideoCoverArtImageHook.js';
 import { initCreativeDirectorMusicBedHook } from './creativeDirectorMusicBedHook.js';
 import { initMusicStudioHook } from './musicStudioHook.js';
 import { initImageGenQuotaHook } from './imageGenQuota.js';
@@ -690,6 +691,9 @@ const initMediaJobDependentHooks = () => {
   // (character sheet, looks, set plates, in-set tests) onto its stage key.
   // It only listens: nothing is generated at boot.
   initMusicVideoCastSetsImageHook();
+  // Music Video cover art hook — composes the release cover from a cover
+  // source image the director asked for. It only listens.
+  initMusicVideoCoverArtImageHook();
   // Creative Director music-bed hook — durably files a queued first-pass
   // audio render onto its project's `musicBed` field on completion, even if
   // the requesting client unmounted mid-render (#1928).

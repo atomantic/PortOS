@@ -75,13 +75,13 @@ function thumbnailTimes(project, durationSec, max = MAX_THUMBNAILS) {
 }
 
 /** A file an older build left behind, deleted only once no project's kit still names it (a clone shares the record). */
-async function releaseKitFiles(filenames, keep) {
+export async function releaseKitFiles(filenames, keep = []) {
   if (!filenames.length) return;
   const others = await listProjects().catch(() => []);
   const referenced = new Set(keep);
   for (const p of others) {
     const kit = projectPublishKit(p);
-    for (const f of [...(kit.exports || []).map((e) => e.filename), ...(kit.thumbnails || []), kit.captionsFilename]) if (f) referenced.add(f);
+    for (const f of [...(kit.exports || []).map((e) => e.filename), ...(kit.thumbnails || []), kit.captionsFilename, kit.coverArt?.filename]) if (f) referenced.add(f);
   }
   for (const name of filenames) {
     if (referenced.has(name)) continue;
