@@ -254,9 +254,8 @@ describe('getPendingAgentFeedbackCount', () => {
       neutral: 1,
       satisfactionRate: 33,
       byTaskType: {
-        'bug-fix': { positive: 0, negative: 1, neutral: 0, total: 1 },
-        testing: { positive: 1, negative: 0, neutral: 0, total: 1 },
-        documentation: { positive: 0, negative: 0, neutral: 1, total: 1 }
+        'auto-fix': { positive: 0, negative: 1, neutral: 0, total: 1 },
+        'external/untyped': { positive: 1, negative: 0, neutral: 1, total: 2 }
       },
       recentWithComments: [{
         agentId: 'agent-archived',
@@ -265,6 +264,70 @@ describe('getPendingAgentFeedbackCount', () => {
         comment: 'The regression remained.',
         submittedAt: '2026-08-01T11:00:00.000Z'
       }]
+    });
+  });
+
+  it('classifies claim-issue and self-improvement agents with parity between feedback and learning (#10403)', async () => {
+    // Issue: feedback stats used a divergent extractTaskType taxonomy. Verify
+    // that feedback classification now matches the canonical learning one by
+    // testing claim-issue (user task / issue description) and self-improvement
+    // agents get the same bucket in both paths.
+    const { extractTaskType: learningExtractTaskType } = await import('./taskLearning/store.js');
+
+    // Claim-issue agent: mimics a /do:next claim task with issue metadata
+    const claimAgent = {
+      id: 'agent-claim-issue',
+      taskId: 'github-issue-999',
+      status: 'completed',
+      completedAt: '2026-08-02T10:00:00.000Z',
+      metadata: {
+        taskType: 'user',
+        taskDescription: 'Investigate and fix parsing regression',
+      },
+      feedback: { rating: 'positive', submittedAt: '2026-08-02T11:00:00.000Z' }
+    };
+
+    // Self-improvement agent: metadata includes analysisType
+    const selfImprovementAgent = {
+      id: 'agent-self-improve',
+      status: 'completed',
+      completedAt: '2026-08-02T12:00:00.000Z',
+      metadata: {
+        taskType: 'internal',
+        analysisType: 'code-review',
+        taskDescription: 'Review recent PRs for quality',
+      },
+      feedback: { rating: 'positive', submittedAt: '2026-08-02T13:00:00.000Z' }
+    };
+
+    mockCosState.state.agents = {
+      [claimAgent.id]: claimAgent,
+      [selfImprovementAgent.id]: selfImprovementAgent,
+    };
+
+    // Get feedback classification
+    const feedbackStats = await getFeedbackStats();
+
+    // Get learning classification (what taskLearning/store.js would use)
+    const claimLearningType = learningExtractTaskType({
+      description: claimAgent.metadata.taskDescription,
+      metadata: claimAgent.metadata,
+      taskType: claimAgent.metadata.taskType,
+    });
+    const selfImproveLearningType = learningExtractTaskType({
+      description: selfImprovementAgent.metadata.taskDescription,
+      metadata: selfImprovementAgent.metadata,
+      taskType: selfImprovementAgent.metadata.taskType,
+    });
+
+    // Verify feedback and learning classifications match
+    expect(Object.keys(feedbackStats.byTaskType)).toContain(claimLearningType);
+    expect(Object.keys(feedbackStats.byTaskType)).toContain(selfImproveLearningType);
+    expect(feedbackStats.byTaskType[claimLearningType]).toEqual({
+      positive: 1, negative: 0, neutral: 0, total: 1
+    });
+    expect(feedbackStats.byTaskType[selfImproveLearningType]).toEqual({
+      positive: 1, negative: 0, neutral: 0, total: 1
     });
   });
 });
@@ -310,8 +373,9 @@ describe('submitAgentFeedback records the rating (#5594)', () => {
       taskId: 'task-42',
       rating: 'negative',
       comment: 'Missed the root cause',
-      // extractTaskType maps the description to a bucket the learning view uses.
-      taskType: 'bug-fix',
+      // extractTaskType uses the canonical classifier from taskLearning/store.js,
+      // which prioritizes taskType field and metadata patterns over description.
+      taskType: 'user-task',
     });
     expect(event.dedupeKey).toBe(`cos.agent.feedback:agent-1:${event.happenedAt}`);
   });
