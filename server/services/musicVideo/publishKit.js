@@ -8,8 +8,9 @@
  * field on the whole-record LWW body (same posture as `excerpts`), so an older
  * peer carries it through untouched.
  *
- * The build runs ffmpeg only; the copy is ONE user-triggered LLM call (AI
- * Provider Usage Policy) and every field stays editable afterwards.
+ * The build runs ffmpeg, plus one browser render of the 9:16 cut when the
+ * composition lays itself out at that frame; the copy is ONE user-triggered
+ * LLM call (AI Provider Usage Policy) and every field stays editable afterwards.
  */
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
@@ -137,9 +138,14 @@ async function beginPublishKitBuild(projectId, jobId) {
       ...(teaser ? [{ kind: 'teaser', label: `Teaser ${Math.round(teaser.endSec - teaser.startSec)}s`, filename: `${stem}-teaser.mp4`, window: teaser,
         args: ['-ss', String(teaser.startSec), '-t', String(teaser.endSec - teaser.startSec), '-i', masterPath, ...X_VIDEO_ARGS,
           '-af', `asetpts=PTS-STARTPTS${edgeFadeFilter(teaser.endSec - teaser.startSec)}`, ...AUDIO_ARGS] }] : []),
-      // #10150: Shorts/TikTok/Reels need 9:16; a 16:9 render gets the whole frame fitted over a blurred fill
-      // of itself (#10377) — a center-crop silently dropped off-center lyric/title text.
+      // #10150: Shorts/TikTok/Reels need 9:16. A composition that lays itself out at 9:16
+      // (portosComposition.formats) renders the window natively; otherwise the 16:9 master's whole
+      // frame is fitted over a blurred fill of itself (#10377) — a center-crop dropped off-center text.
       ...(teaser && musicVideoAspect(project) === '16:9' ? [{ kind: 'vertical-9x16', label: `Vertical 9:16 ${Math.round(teaser.endSec - teaser.startSec)}s`, filename: `${stem}-vertical.mp4`, window: teaser,
+        layout: 'fit',
+        native: async (outputPath) => (await import('./excerptRender.js')).renderSeekedWindow(project, {
+          startSec: teaser.startSec, endSec: teaser.endSec, aspect: '9:16', fade: true, outputPath, jobId: `${jobId}-vertical`, signal: job.abort.signal,
+        }),
         args: ['-ss', String(teaser.startSec), '-t', String(teaser.endSec - teaser.startSec), '-i', masterPath,
           '-vf', VERTICAL_FIT_FILTER, ...X_VIDEO_ARGS,
           '-af', `asetpts=PTS-STARTPTS${edgeFadeFilter(teaser.endSec - teaser.startSec)}`, ...AUDIO_ARGS] }] : []),
@@ -149,8 +155,25 @@ async function beginPublishKitBuild(projectId, jobId) {
     const written = [];
     let done = 0;
     const step = () => broadcastSse(job, { type: 'progress', progress: Math.min(0.99, ++done / total) });
+    // A native cut that isn't available (footage, a document without the 9:16 frame, a failed
+    // render) falls back to the fitted master; a cancel still cancels.
+    const renderNative = async (encode, out) => {
+      try {
+        if (await encode.native(out)) { encode.layout = 'native'; return true; }
+      } catch (error) {
+        if (job.abort.signal.aborted) throw error;
+        console.warn(`⚠️ Native ${encode.label} unavailable [${tag}], fitting the master instead: ${error.message}`);
+      }
+      await unlink(out).catch(() => {});
+      return false;
+    };
     for (const encode of encodes) {
       const out = join(PATHS.videos, encode.filename);
+      if (encode.native && await renderNative(encode, out)) {
+        written.push(encode.filename);
+        step();
+        continue;
+      }
       const result = await runFfmpegProcess({ bin: ffmpeg, signal: job.abort.signal, args: ['-hide_banner', '-loglevel', 'error', ...encode.args, '-y', out] });
       if (!result.ok) throw new Error(`${encode.label} encode failed: ${result.reason || 'ffmpeg error'}`);
       written.push(encode.filename);
@@ -176,7 +199,7 @@ async function beginPublishKitBuild(projectId, jobId) {
         ...kit,
         builtAt: new Date().toISOString(),
         master: { filename: entry.filename, renderHistoryId: project.renderHistoryId },
-        exports: encodes.map(({ kind, label, filename, window }) => ({ kind, label, filename, ...(window ? { startSec: window.startSec, endSec: window.endSec } : {}) })),
+        exports: encodes.map(({ kind, label, filename, window, layout }) => ({ kind, label, filename, ...(window ? { startSec: window.startSec, endSec: window.endSec } : {}), ...(layout ? { layout } : {}) })),
         thumbnails,
         thumbnail: thumbnails.includes(kit.thumbnail) ? kit.thumbnail : (thumbnails[0] || null),
         captionsFilename,

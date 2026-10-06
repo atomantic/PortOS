@@ -21,6 +21,7 @@ const { findFfmpeg, runFfmpegProcess } = ffmpegService;
 const projects = await import('./projects.js');
 const { saveHistory } = await import('../videoGen/history.js');
 const kit = await import('./publishKit.js');
+const excerptRender = await import('./excerptRender.js');
 const ffmpeg = await findFfmpeg();
 const watchedBuilds = new Set();
 const startPublishKitBuild = kit.startPublishKitBuild.bind(kit);
@@ -175,6 +176,52 @@ describe('publishing kit build (#9281)', () => {
     await expect(kit.startPublishKitBuild(id).then(() => kit.startPublishKitBuild(id))).rejects.toMatchObject({ code: 'PUBLISH_KIT_BUILD_IN_PROGRESS' });
     await vi.waitFor(async () => expect((await projects.getProject(id)).publishKit.builtAt).not.toBe(first.builtAt), { timeout: 90000, interval: 250 });
     await vi.waitFor(() => expect(existsSync(join(PATHS.videos, first.exports[0].filename))).toBe(false));
+  });
+
+  it.skipIf(!ffmpeg)('renders the 9:16 cut natively when the composition lays itself out at that frame', { timeout: 120000 }, async () => {
+    const id = await renderedProject();
+    await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, composition: { mode: 'document' } } }));
+    const native = vi.spyOn(excerptRender, 'renderSeekedWindow').mockImplementation(async (project, { outputPath, aspect, startSec, endSec, fade }) => {
+      expect({ id: project.id, aspect, fade }).toEqual({ id, aspect: '9:16', fade: true });
+      expect(endSec).toBeGreaterThan(startSec);
+      await writeFile(outputPath, 'native 9:16 render');
+      return { width: 1080, height: 1920 };
+    });
+    const encode = vi.spyOn(ffmpegService, 'runFfmpegProcess');
+    try {
+      await kit.startPublishKitBuild(id);
+      await vi.waitFor(async () => expect((await projects.getProject(id)).publishKit?.builtAt).toBeTruthy(), { timeout: 90000, interval: 250 });
+      const vertical = (await projects.getProject(id)).publishKit.exports.find((e) => e.kind === 'vertical-9x16');
+      expect(vertical.layout).toBe('native');
+      expect(await readFile(join(PATHS.videos, vertical.filename), 'utf8')).toBe('native 9:16 render');
+      // the master was never squeezed into 9:16 for it
+      expect(encode.mock.calls.some(([o]) => o.args.includes(kit.VERTICAL_FIT_FILTER))).toBe(false);
+    } finally {
+      native.mockRestore();
+      encode.mockRestore();
+    }
+  });
+
+  it.skipIf(!ffmpeg)('fits the master when the composition has no 9:16 layout', { timeout: 120000 }, async () => {
+    const id = await renderedProject();
+    await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, composition: { mode: 'document' } } }));
+    const native = vi.spyOn(excerptRender, 'renderSeekedWindow').mockImplementation(async (_project, { outputPath }) => {
+      await writeFile(outputPath, 'partial');
+      throw Object.assign(new Error('The composition document is 1920x1080 and does not declare 1080x1920'), { code: 'COMPOSITION_DOCUMENT_FORMAT' });
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await kit.startPublishKitBuild(id);
+      await vi.waitFor(async () => expect((await projects.getProject(id)).publishKit?.builtAt).toBeTruthy(), { timeout: 90000, interval: 250 });
+      const vertical = (await projects.getProject(id)).publishKit.exports.find((e) => e.kind === 'vertical-9x16');
+      expect(vertical.layout).toBe('fit');
+      const probed = await runFfmpegProcess({ bin: ffmpeg, args: ['-hide_banner', '-i', join(PATHS.videos, vertical.filename), '-f', 'null', '-'] });
+      expect(probed.ok).toBe(true);
+      expect(warn.mock.calls.some(([m]) => /fitting the master/.test(m))).toBe(true);
+    } finally {
+      native.mockRestore();
+      warn.mockRestore();
+    }
   });
 });
 
