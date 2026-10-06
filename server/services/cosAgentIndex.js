@@ -67,6 +67,30 @@ async function loadAgentIndexLeased() {
   return agentIndexPromise;
 }
 
+/**
+ * Refresh the primary lookup after a live file restore. The caller holds the
+ * snapshot cut, which has drained lazy migrations and archive publishers, and
+ * the CoS restore queues. Never call loadAgentIndex here: missing-index
+ * migration would wait for admission behind the cut this restore owns.
+ * Clear both singleton slots before reading so a failed reload cannot retain
+ * a mapping to files the transfer has already replaced.
+ */
+export async function reloadAgentIndexAfterRestore() {
+  agentIndex = null;
+  agentIndexPromise = null;
+  const content = await readFile(INDEX_FILE, 'utf8').catch(error => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  // Defer absent-index migration until the first reader after cut release.
+  if (content === null) return;
+  const parsed = JSON.parse(content);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Restored CoS agent index must be an object');
+  }
+  agentIndex = new Map(Object.entries(parsed));
+}
+
 // Persist agent index to disk via the shared atomicWrite helper (temp file + rename,
 // with Windows backup-swap fallback). Without atomic semantics a mid-write crash
 // truncates index.json and on next boot the date-bucket migration would silently

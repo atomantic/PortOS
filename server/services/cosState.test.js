@@ -334,6 +334,73 @@ describe('live CoS restore boundary', () => {
     expect(changed).toHaveBeenCalledWith(expect.objectContaining({ persistentMindPrompt: expect.objectContaining({ instructions: 'Restored instructions' }) }));
   });
 
+  it.each([false, true])('reloads a warm archive index after transfer (partial failure: %s)', async fails => {
+    writeState({ agents: {} });
+    const store = await freshModule();
+    const index = await import('./cosAgentIndex.js');
+    const { acquireBackupSnapshotCut } = await import('../lib/backupSnapshotBoundary.js');
+    const indexPath = join(COS_DIR, 'agents', 'index.json');
+    mkdirSync(join(COS_DIR, 'agents'), { recursive: true });
+    writeFileSync(indexPath, JSON.stringify({ 'agent-example': '2026-01-01' }));
+    await index.loadAgentIndex();
+    expect(index.getAgentDir('agent-example')).toBe(join(COS_DIR, 'agents', '2026-01-01', 'agent-example'));
+    const release = await acquireBackupSnapshotCut();
+    try {
+      const transfer = store.withLiveCosRestore(async () => {
+        writeFileSync(indexPath, JSON.stringify({ 'agent-example': '2026-02-02' }));
+        if (fails) throw new Error('partial transfer');
+      });
+      if (fails) await expect(transfer).rejects.toThrow('partial transfer');
+      else await transfer;
+      expect(index.getAgentDir('agent-example')).toBe(join(COS_DIR, 'agents', '2026-02-02', 'agent-example'));
+      expect((await index.loadAgentIndex()).get('agent-example')).toBe('2026-02-02');
+    } finally { release(); }
+  });
+
+  it('lets an archive publication queued behind restore use the restored index', async () => {
+    writeState({ agents: {} });
+    const store = await freshModule();
+    const index = await import('./cosAgentIndex.js');
+    const { acquireBackupSnapshotCut, withBackupAssetPublication } = await import('../lib/backupSnapshotBoundary.js');
+    const indexPath = join(COS_DIR, 'agents', 'index.json');
+    mkdirSync(join(COS_DIR, 'agents'), { recursive: true });
+    writeFileSync(indexPath, JSON.stringify({ 'agent-old': '2026-01-01' }));
+    await index.loadAgentIndex();
+    const release = await acquireBackupSnapshotCut();
+    let entered = false;
+    const writer = withBackupAssetPublication(async () => {
+      entered = true;
+      return index.addAgentArchivesToIndex([{ agentId: 'agent-new', date: '2026-03-03' }]);
+    });
+    try {
+      await store.withLiveCosRestore(async () => {
+        writeFileSync(indexPath, JSON.stringify({ 'agent-restored': '2026-02-02' }));
+      });
+      expect(entered).toBe(false);
+    } finally { release(); }
+    await writer;
+    expect(readJson(indexPath)).toEqual({ 'agent-restored': '2026-02-02', 'agent-new': '2026-03-03' });
+  });
+
+  it('clears a removed index without running migration behind the restore cut', async () => {
+    writeState({ agents: {} });
+    const store = await freshModule();
+    const index = await import('./cosAgentIndex.js');
+    const { acquireBackupSnapshotCut } = await import('../lib/backupSnapshotBoundary.js');
+    const indexPath = join(COS_DIR, 'agents', 'index.json');
+    mkdirSync(join(COS_DIR, 'agents'), { recursive: true });
+    writeFileSync(indexPath, JSON.stringify({ 'agent-example': '2026-01-01' }));
+    await index.loadAgentIndex();
+    const release = await acquireBackupSnapshotCut();
+    try {
+      await store.withLiveCosRestore(async () => { rmSync(indexPath); });
+      expect(existsSync(indexPath)).toBe(false);
+      expect(index.getAgentDir('agent-example')).toBe(join(COS_DIR, 'agents', 'agent-example'));
+    } finally { release(); }
+    expect((await index.loadAgentIndex()).size).toBe(0);
+    expect(existsSync(indexPath)).toBe(true);
+  });
+
   it('reloads partial transfer results while preserving the transfer failure', async () => {
     writeConfig({ persistentMindPrompt: { instructions: 'Old' } });
     writeState({ agents: {} });

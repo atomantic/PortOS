@@ -503,9 +503,12 @@ export function withLiveCosRestore(transfer) {
     restoreGeneration += 1;
     configCache = null;
     stateCache = null;
-    const [reload] = await Promise.allSettled([loadState().then(state => {
+    const [reload] = await Promise.allSettled([(async () => {
+      const { reloadAgentIndexAfterRestore } = await import('./cosAgentIndex.js');
+      await reloadAgentIndexAfterRestore();
+      const state = await loadState();
       cosEvents.emit('config:changed', state.config);
-    })]);
+    })()]);
     if (result.status === 'rejected') {
       if (reload.status === 'rejected') {
         const error = new Error(`${result.reason.message}. CoS cache reload failed: ${reload.reason.message}. Restart PortOS before using CoS.`, { cause: result.reason });
