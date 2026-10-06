@@ -28,6 +28,7 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { describe, expect, it } from 'vitest';
 import { buildApiRouteCatalog } from '../server/lib/apiRouteGraph.js';
+import { ERROR_CODES_BY_STATUS } from '../server/lib/errorHandler.js';
 
 const DOCS_DIR = dirname(fileURLToPath(import.meta.url));
 const DOC = readFileSync(join(DOCS_DIR, 'API.md'), 'utf8');
@@ -117,5 +118,18 @@ describe('docs/API.md matches the mounted route graph', () => {
         return !documentedPrefixes.some((prefix) => isUnder(prefix, wanted));
       });
     expect(uncovered, 'server/index.js mounts API prefixes docs/API.md never mentions — add a route-domain index row').toEqual([]);
+  });
+
+  it('documents the status-to-code vocabulary the error envelope actually emits', () => {
+    // The table is a published contract (`apiToolResource.js` advertises the same
+    // map). A code listed here that no route emits — `COMMAND_NOT_ALLOWED` was one;
+    // a disallowed command answers 403 `FORBIDDEN` — sends a client branching on
+    // a value it can never receive.
+    const documented = Object.fromEntries(
+      [...section('## Error Responses', '### Catalog scrap graph commits')
+        .matchAll(/^\|\s*(\d{3})\s*\|\s*`([A-Z_]+)`/gm)]
+        .map(([, status, code]) => [status, code]),
+    );
+    expect(documented).toEqual(ERROR_CODES_BY_STATUS);
   });
 });
