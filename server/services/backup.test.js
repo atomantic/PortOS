@@ -3120,7 +3120,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
   });
 
   describe('CoS restore ownership boundary', () => {
-    it.each([undefined, 'cos', 'cos/', 'cos/config.json', 'cos/state.json'])('holds the boundary for affected live scope %s', async subdirFilter => {
+    it.each([undefined, 'cos', 'cos/', 'cos/config.json', 'cos/state.json', 'cos/agents', 'cos/agents/', 'cos/agents/index.json'])('holds the boundary for affected live scope %s', async subdirFilter => {
       await runRestore('/dest', 'snap-1', { dryRun: false, subdirFilter });
       expect(withLiveCosRestore).toHaveBeenCalledTimes(1);
     });

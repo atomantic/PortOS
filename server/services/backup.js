@@ -1620,7 +1620,7 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
     return restoreFiles();
   };
   const restoreWithCosBoundary = async () => {
-    if (!dryRun && (!scope || ['cos', 'cos/config.json', 'cos/state.json'].includes(scope))) {
+    if (!dryRun && (!scope || ['cos', 'cos/config.json', 'cos/state.json', 'cos/agents'].includes(scope) || scope.startsWith('cos/agents/'))) {
       const { withLiveCosRestore } = await import('./cosState.js');
       return withLiveCosRestore(restoreWithMediaBoundary);
     }
