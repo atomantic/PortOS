@@ -53,7 +53,7 @@
 import { vi, afterAll } from 'vitest';
 import { rmSync } from 'fs';
 import { mockNoPeers } from './lib/mockPathsDataRoot.js';
-import './lib/admissionTestSetup.js';
+import './test/admissionSetup.js';
 
 // The server intentionally logs expected error paths, lifecycle transitions,
 // and fallback decisions. With console interception disabled (see the config),

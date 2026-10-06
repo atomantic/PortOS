@@ -14,7 +14,7 @@ afterAll(() => {
     entry.io.rmSync(entry.root, { recursive: true, force: true });
   }
 });
-vi.mock('./maintenanceAdmission.js', async (importOriginal) => {
+vi.mock('../lib/maintenanceAdmission.js', async (importOriginal) => {
   const actual = await importOriginal();
   const io = await vi.importActual('node:fs');
   const { randomUUID } = await vi.importActual('node:crypto');
@@ -29,7 +29,7 @@ vi.mock('./maintenanceAdmission.js', async (importOriginal) => {
 
 // Publication admission remains real, but never shares ownership with the install
 // or another test file. Use real fs/UUIDs even when domain suites mock them.
-vi.mock('./backupSharedAdmission.js', async (importOriginal) => {
+vi.mock('../lib/backupSharedAdmission.js', async (importOriginal) => {
   const actual = await importOriginal();
   const io = await vi.importActual('node:fs');
   const { randomUUID } = await vi.importActual('node:crypto');
