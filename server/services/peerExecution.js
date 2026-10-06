@@ -45,9 +45,11 @@ export function createPeerExecutionReceiver({ ledger, grants, coordinator, adapt
   const preflight = (req, input) => locked(async () => {
     for (const [key, value] of preflights) if (value.payload.expiresAt <= now()) preflights.delete(key);
     const pair = await caller(req);
+    // Default-deny is independent of database availability. Do not read the
+    // ledger or probe adapters until this exact pair has an execution grant.
+    const { grant } = await grants.current(pair.peer.id, input.intent.action);
     if (await findRequest(pair, input.requestId)) fail('PEER_EXECUTION_CONSUMED', 'Use status for an already-consumed request.');
     if (preflights.size >= 128) fail('PEER_EXECUTION_PREFLIGHT_LIMIT', 'Too many outstanding execution preflights.');
-    const { grant } = await grants.current(pair.peer.id, input.intent.action);
     const evidence = await adapters.prepare(input.intent);
     const binding = { hostInstanceId: pair.self.instanceId, peerInstanceId: pair.peer.instanceId,
       requestId: input.requestId, grantId: grant.id, grantGeneration: grant.generation, scope: 'execution-v1',

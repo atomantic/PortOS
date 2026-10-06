@@ -106,6 +106,7 @@ describe('receiver execution public workflow with fixture-only side effects', ()
     const retired = await restarted.status('paired', { requestId, preflight: envelope });
     expect(retired.payload).toMatchObject({ state: 'failed', code: 'PEER_EXECUTION_NOT_ACCEPTED' });
     expect((await receiver.dispatch('paired', dispatch)).payload).toEqual(retired.payload);
+    await grant();
     await expect(restarted.preflight('paired', { protocolVersion: 1, requestId, intent })).rejects.toMatchObject({ code: 'PEER_EXECUTION_CONSUMED' });
     await makeReceiver().recover();
     expect((await restarted.status('paired', { requestId })).payload).toEqual(retired.payload);
