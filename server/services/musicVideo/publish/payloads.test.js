@@ -102,6 +102,21 @@ describe('buildPublishPayload (#9282)', () => {
     expect(p).toMatchObject({ url: 'https://www.youtube.com/watch?v=posted', territory: 'art', title: 'Song' });
   });
 
+  it('reads the Substack publication from a name, a pasted URL or a custom domain', () => {
+    const copy = { substack: { title: 'Song', subtitle: '', body: 'Body' } };
+    const host = (publication) => buildPublishPayload('substack', project({ copy }), { publication }).publication;
+    expect(host('https://Example.substack.com/p/old-post')).toBe('example.substack.com');
+    expect(host('news.example.com')).toBe('news.example.com');
+    expect(() => host('not a host')).toThrow(/Substack publication/);
+    expect(host('https://open.substack.com/pub/example/p/old-post?r=abc')).toBe('example.substack.com');
+    expect(() => host('https://substack.com/@example')).toThrow(/Substack publication/);
+    expect(() => host('www.substack.com')).toThrow(/Substack publication/);
+    expect(buildPublishPayload('substack', project({ copy }), { publication: 'example' }))
+      .toEqual({ publication: 'example.substack.com', videoUrl: 'https://youtu.be/abc', title: 'Song', subtitle: '', body: 'Body' });
+    expect(() => buildPublishPayload('substack', project({ copy, links: {} }), { publication: 'example' })).toThrow(/publish to YouTube first/);
+    expect(() => buildPublishPayload('substack', project(), { publication: 'example' })).toThrow(/substack title/);
+  });
+
   it('posts a native video to r/aivideo by default, and validates other subreddits\' rules', () => {
     const named = (over = {}) => ({ ...project({ copy: { reddit: { title: 'Song Name — a music video', body: 'Body' } }, ...over }), name: 'Song Name' });
     expect(buildPublishPayload('reddit', named(), {})).toMatchObject({ subreddit: 'aivideo', kind: 'video', video: { dir: 'videos', name: 'master.mp4' }, body: '' });

@@ -65,6 +65,19 @@ async function readyProject() {
 }
 
 describe('publish drafts (#9282)', () => {
+  it('fills a Substack post on the publication named under Where you post', async () => {
+    const { id } = await projects.createProject({ name: 'Release' });
+    await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, publishKit: {
+      links: { youtube: 'https://youtu.be/abc' }, copy: { substack: { title: 'Song', subtitle: 'Sub', body: 'b' } },
+    } } }));
+    const { connect } = fakeBrowser();
+    const substack = adapter({ label: 'Substack' });
+    await preparePublishDraft(id, 'substack', {}, { connect, adapters: { substack }, platforms: { substack: { enabled: true, account: 'example' } } });
+    expect(substack.prepare).toHaveBeenCalledWith(expect.anything(), { publication: 'example.substack.com', videoUrl: 'https://youtu.be/abc', title: 'Song', subtitle: 'Sub', body: 'b' });
+    await expect(preparePublishDraft(id, 'substack', { again: true }, { connect, adapters: { substack }, platforms: { substack: { enabled: true, account: null } } }))
+      .rejects.toMatchObject({ status: 422, message: expect.stringMatching(/publication/) });
+  });
+
   it('fills a reviewable draft but never submits it; records a manually published link', async () => {
     const id = await readyProject();
     const { connect, pages } = fakeBrowser();

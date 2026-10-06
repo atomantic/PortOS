@@ -25,6 +25,7 @@ export const PUBLISH_FIELDS = [
   { platform: 'instagram', label: 'Instagram Reels', fields: [{ key: 'caption', label: 'Caption', max: 2200, multiline: true }] },
   { platform: 'reddit', label: 'Reddit', fields: [{ key: 'title', label: 'Title', max: 300 }, { key: 'body', label: 'Body (markdown)', multiline: true }] },
   { platform: 'stackerNews', label: 'Stacker News', fields: [{ key: 'title', label: 'Title', max: 80 }, { key: 'body', label: 'Body (markdown)', multiline: true }] },
+  { platform: 'substack', label: 'Substack', fields: [{ key: 'title', label: 'Title', max: 100 }, { key: 'subtitle', label: 'Subtitle', max: 250 }, { key: 'body', label: 'Body (under the video)', multiline: true }] },
 ];
 
 // What the writer may use beyond the notes and links; mirrors the server's

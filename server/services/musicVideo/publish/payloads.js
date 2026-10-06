@@ -10,7 +10,7 @@ import { musicVideoDependencyChanges } from '../../../lib/musicVideoDependencies
 import { suggestDistrokidGenres } from '../../../lib/distrokidGenres.js';
 import { suggestSocialCuts } from '../socialCuts.js';
 
-const TITLE_LIMITS = { youtube: 100, shorts: 100, reddit: 300, stackerNews: 80 };
+const TITLE_LIMITS = { youtube: 100, shorts: 100, reddit: 300, stackerNews: 80, substack: 100 };
 const DEFAULT_SUBREDDIT = 'aivideo';
 
 const missing = (message) => new ServerError(message, { status: 422, code: 'PUBLISH_ASSET_MISSING' });
@@ -80,6 +80,22 @@ function youtubeDescription(kit) {
 
 // A typed "@" on Instagram opens the mention picker, which swallows the next word.
 const instagramSafe = (caption) => caption.replace(/@(\w)/g, '$1');
+
+/**
+ * The publication's host from what the director typed: a bare name means
+ * name.substack.com; a custom domain or a pasted URL keeps only its host.
+ */
+function substackPublication(value) {
+  const address = text(value).toLowerCase().replace(/^https?:\/\//, '');
+  // A share link (open.substack.com/pub/name/p/…) names the publication in its path.
+  const shared = address.match(/^open\.substack\.com\/pub\/([a-z0-9-]{1,63})(?:[/?#]|$)/)?.[1];
+  if (shared) return `${shared}.substack.com`;
+  const host = address.split(/[/?#]/)[0];
+  if (/^[a-z0-9-]{1,63}$/.test(host)) return `${host}.substack.com`;
+  // substack.com itself (a profile link like substack.com/@name) is not a publication.
+  if (/^(?:(?:www|open)\.)?substack\.com$/.test(host)) return null;
+  return /^(?:[a-z0-9-]{1,63}\.)+[a-z]{2,}$/.test(host) ? host : null;
+}
 
 // The release cover: the composed cover art when there is one (already square,
 // with the title set), else the kit's thumbnail (cut square at post time).
@@ -166,6 +182,17 @@ const BUILDERS = {
     const territory = text(options.territory || 'art').replace(/^~/, '');
     if (!/^[A-Za-z0-9_]{1,32}$/.test(territory)) throw missing('Name the Stacker News territory');
     return { territory, title: requireTitle('stackerNews', text(kit.copy?.stackerNews?.title)), url, body: text(kit.copy?.stackerNews?.body), firstComment: text(options.firstComment) || null };
+  },
+  substack: (project, kit, options = {}) => {
+    const publication = substackPublication(options.publication);
+    if (!publication) throw missing('Name your Substack publication (name.substack.com) under Where you post');
+    const videoUrl = fullVideoUrl(kit);
+    if (!videoUrl) throw missing('Substack posts embed the full video: publish to YouTube first, or add its URL to the kit');
+    return {
+      publication, videoUrl,
+      title: requireTitle('substack', text(kit.copy?.substack?.title)),
+      subtitle: text(kit.copy?.substack?.subtitle), body: text(kit.copy?.substack?.body),
+    };
   },
   suno: (project, kit, options = {}) => {
     const song = songUrl(kit, options);

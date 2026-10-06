@@ -18,6 +18,10 @@ export const PUBLISH_TARGETS = [
   { target: 'reddit', label: 'Reddit', note: 'A native video post to r/aivideo (title and flair, no body)' },
   { target: 'stackerNews', label: 'Stacker News', note: 'A link post to the full video' },
   {
+    target: 'substack', label: 'Substack', accountPlaceholder: 'name.substack.com',
+    note: 'A post with the full video at the top, then your title, subtitle and body. Substack keeps it in Drafts; you choose who gets it and press Publish',
+  },
+  {
     // `accountPlaceholder` marks an account that is a name, not an @handle.
     target: 'distrokid', label: 'Spotify (via DistroKid)', accountPlaceholder: 'Artist name',
     note: 'The song as a single for Spotify and other stores, with a square cover and the AI disclosure. You tick the agreements and press Upload',
@@ -107,6 +111,9 @@ function TargetOptions({ target, kit, project, options, setOption, flairs, idFor
   }
   if (target === 'stackerNews') {
     return <div className="grid sm:grid-cols-2 gap-2">{text('territory', 'Territory', 'art')}<div className="sm:col-span-2">{area('firstComment', 'First comment (optional)')}</div></div>;
+  }
+  if (target === 'substack') {
+    return text('publication', 'Publication', account || 'name.substack.com');
   }
   if (target === 'suno') {
     // Prefill from kit links or run output if available

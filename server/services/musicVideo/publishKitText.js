@@ -111,9 +111,9 @@ export function buildSrt(project) {
 
 // ---- per-platform copy (one user-triggered LLM call) ----
 
-export const PUBLISH_PLATFORMS = Object.freeze(['youtube', 'shorts', 'x', 'tiktok', 'instagram', 'reddit', 'stackerNews']);
+export const PUBLISH_PLATFORMS = Object.freeze(['youtube', 'shorts', 'x', 'tiktok', 'instagram', 'reddit', 'stackerNews', 'substack']);
 // Each platform's own title ceiling; the parser clips rather than rejecting.
-const LIMITS = { youtubeTitle: 100, shortsTitle: 100, xHook: 280, redditTitle: 300, stackerNewsTitle: 80, caption: 2200 };
+const LIMITS = { youtubeTitle: 100, shortsTitle: 100, xHook: 280, redditTitle: 300, stackerNewsTitle: 80, substackTitle: 100, substackSubtitle: 250, caption: 2200 };
 
 const str = (v, max) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : '');
 
@@ -145,6 +145,7 @@ function copySpecs({ include, length }) {
     instagram: `"instagram":{"caption":"1-2 sentences${tags ? ' + 4-6 hashtags' : ''}"}`,
     reddit: `"reddit":{"title":"<=300 chars","body":"${body('markdown: what it is and how it was made')}"}`,
     stackerNews: `"stackerNews":{"title":"<=80 chars","body":"${body('markdown, personal tone')}"}`,
+    substack: `"substack":{"title":"<=100 chars","subtitle":"one line","body":"${body('3-5 short paragraphs of plain text, no markdown')}"}`,
   };
 }
 
@@ -246,6 +247,7 @@ export function parsePublishCopy(text, platforms = PUBLISH_PLATFORMS, { hashtags
     instagram: () => ({ caption: str(v('instagram').caption, LIMITS.caption) }),
     reddit: () => ({ title: str(v('reddit').title, LIMITS.redditTitle), body: str(v('reddit').body, 40000) }),
     stackerNews: () => ({ title: str(v('stackerNews').title, LIMITS.stackerNewsTitle), body: str(v('stackerNews').body, 40000) }),
+    substack: () => ({ title: str(v('substack').title, LIMITS.substackTitle), subtitle: str(v('substack').subtitle, LIMITS.substackSubtitle), body: str(v('substack').body, 40000) }),
   };
   const copy = Object.fromEntries(PUBLISH_PLATFORMS.filter((p) => platforms.includes(p)).map((p) => [p, all[p]()]));
   const filled = Object.values(copy).some((fields) => Object.values(fields).some((f) => (Array.isArray(f) ? f.length : f)));

@@ -677,6 +677,7 @@ export const musicVideoPublishCopyPatchSchema = z.object({
   instagram: z.object({ caption: kitText(2200) }).partial().strict().optional(),
   reddit: z.object({ title: kitText(300), body: kitText(40000) }).partial().strict().optional(),
   stackerNews: z.object({ title: kitText(80), body: kitText(40000) }).partial().strict().optional(),
+  substack: z.object({ title: kitText(100), subtitle: kitText(250), body: kitText(40000) }).partial().strict().optional(),
   notes: kitText(8000).optional(),
 }).strict();
 export const musicVideoPublishCopyDraftSchema = z.object({
@@ -744,7 +745,7 @@ export const musicVideoCoverArtGenerateSchema = z.object({
 
 // #9282: posting to a platform through the PortOS Browser. One strict options
 // object covers every target; each target's payload builder reads only its own.
-export const MUSIC_VIDEO_PUBLISH_TARGETS = Object.freeze(['youtube', 'shorts', 'tiktok', 'instagram', 'x', 'reddit', 'stackerNews', 'suno', 'sunoHook', 'distrokid']);
+export const MUSIC_VIDEO_PUBLISH_TARGETS = Object.freeze(['youtube', 'shorts', 'tiktok', 'instagram', 'x', 'reddit', 'stackerNews', 'substack', 'suno', 'sunoHook', 'distrokid']);
 export const musicVideoPublishTargetSchema = z.enum(MUSIC_VIDEO_PUBLISH_TARGETS);
 const publishUrl = z.string().url().max(500);
 // #9287: which platforms the director posts to (opt-in), the account for each,
@@ -764,6 +765,8 @@ export const musicVideoPublishPrepareSchema = z.object({
   flairText: z.string().max(64),
   firstComment: kitText(10000),
   territory: z.string().max(40),
+  // Substack: the publication (name.substack.com or a custom domain); defaults to the account under Where you post.
+  publication: z.string().trim().min(1).max(200),
   songUrl: publishUrl,
   pin: z.boolean(),
   // Suno Hook: keep the page's lyric overlay (default off: the cut carries its own).
