@@ -123,4 +123,18 @@ describe('buildPublishPayload (#9282)', () => {
   it('rejects an unknown target', () => {
     expect(() => buildPublishPayload('myspace', project())).toThrow(expect.objectContaining({ status: 400 }));
   });
+
+  it('names what DistroKid still needs, and defaults the store flags from the song', () => {
+    const song = (over = {}) => ({ ...project(), name: 'Song', lyricCues: [{ text: 'a line', startSec: 0, endSec: 1 }], ...over });
+    const who = { artistName: 'Example Artist', songwriterFirst: 'Alice', songwriterLast: 'Example' };
+    expect(() => buildPublishPayload('distrokid', song(), { ...who, artistName: '' })).toThrow(/artist name/);
+    expect(() => buildPublishPayload('distrokid', song(), { ...who, songwriterLast: '' })).toThrow(/songwriter/);
+    expect(() => buildPublishPayload('distrokid', { ...song(), publishKit: kit({ thumbnail: null }) }, who)).toThrow(/cover art/);
+    expect(buildPublishPayload('distrokid', song(), who)).toMatchObject({
+      title: 'Song', artist: 'Example Artist', explicit: false, instrumental: false, releaseDate: null,
+      ai: { lyrics: false, music: true, vocals: true }, cover: { name: 'thumb-1.jpg' },
+    });
+    expect(buildPublishPayload('distrokid', song({ lyricCues: [] }), { ...who, aiLyrics: true, releaseDate: '2026-11-06' }))
+      .toMatchObject({ instrumental: true, releaseDate: '2026-11-06', ai: { lyrics: true } });
+  });
 });

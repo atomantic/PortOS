@@ -8,10 +8,10 @@ function historyLine(h) {
   return `${h.posts} post${h.posts === 1 ? '' : 's'}${rated.length ? ` · ${rated.join(' · ')}` : ''}`;
 }
 
-function AccountInput({ id, label, initial, onSave, disabled }) {
+function AccountInput({ id, label, initial, placeholder, onSave, disabled }) {
   const [value, setValue] = useState(initial || '');
   return (
-    <input id={id} value={value} disabled={disabled} aria-label={`${label} account`} placeholder="@handle (optional)"
+    <input id={id} value={value} disabled={disabled} aria-label={`${label} account`} placeholder={placeholder || '@handle (optional)'}
       onChange={(e) => setValue(e.target.value)}
       onBlur={() => { if (value.trim() !== (initial || '')) onSave(value.trim() || null); }}
       className="w-full sm:w-40 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0 disabled:opacity-50" />
@@ -36,7 +36,7 @@ export default function PublishPlatformsPanel({ publishing }) {
         {enabledCount ? 'Copy is drafted and posts are offered only for the platforms turned on here.' : 'No platforms yet. Turn on the ones you use; copy and posting cover only those.'}
       </p>
       <ul className="divide-y divide-port-border">
-        {PUBLISH_TARGETS.map(({ target, label }) => {
+        {PUBLISH_TARGETS.map(({ target, label, accountPlaceholder }) => {
           const p = platforms[target] || {};
           const h = history?.[target];
           const latest = h?.notes?.[0];
@@ -46,7 +46,7 @@ export default function PublishPlatformsPanel({ publishing }) {
                 <input type="checkbox" checked={!!p.enabled} onChange={(e) => setPlatform(target, { enabled: e.target.checked })} />
                 <span className="font-medium">{label}</span>
               </label>
-              <AccountInput key={`${target}-${p.account || ''}`} id={`mv-platform-${target}-account`} label={label} initial={p.account}
+              <AccountInput key={`${target}-${p.account || ''}`} id={`mv-platform-${target}-account`} label={label} initial={p.account} placeholder={accountPlaceholder}
                 disabled={!p.enabled} onSave={(account) => setPlatform(target, { account })} />
               <div className="min-w-0 flex-1 text-[11px] text-port-text-muted">
                 <span>{historyLine(h)}</span>

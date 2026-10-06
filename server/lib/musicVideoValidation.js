@@ -688,7 +688,7 @@ export const musicVideoPublishThumbnailSchema = z.object({ filename: z.string().
 
 // #9282: posting to a platform through the PortOS Browser. One strict options
 // object covers every target; each target's payload builder reads only its own.
-export const MUSIC_VIDEO_PUBLISH_TARGETS = Object.freeze(['youtube', 'shorts', 'tiktok', 'instagram', 'x', 'reddit', 'stackerNews', 'suno']);
+export const MUSIC_VIDEO_PUBLISH_TARGETS = Object.freeze(['youtube', 'shorts', 'tiktok', 'instagram', 'x', 'reddit', 'stackerNews', 'suno', 'distrokid']);
 export const musicVideoPublishTargetSchema = z.enum(MUSIC_VIDEO_PUBLISH_TARGETS);
 const publishUrl = z.string().url().max(500);
 // #9287: which platforms the director posts to (opt-in), the account for each,
@@ -713,6 +713,16 @@ export const musicVideoPublishPrepareSchema = z.object({
   prompt: kitText(25000),
   storyImage: z.string().min(1).max(300),
   cutId: z.string().min(1).max(100),
+  // DistroKid (the song as a Spotify single): who it is by and the store flags.
+  artistName: z.string().trim().min(1).max(100),
+  songwriterFirst: z.string().trim().min(1).max(100),
+  songwriterLast: z.string().trim().min(1).max(100),
+  releaseDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  explicit: z.boolean(),
+  instrumental: z.boolean(),
+  aiLyrics: z.boolean(),
+  aiMusic: z.boolean(),
+  aiVocals: z.boolean(),
 }).partial().strict();
 
 export const musicVideoExcerptNoteSchema = z.object({

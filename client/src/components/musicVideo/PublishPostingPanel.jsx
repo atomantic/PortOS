@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
+import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage.js';
 import { ExternalLink, X as XIcon, LogIn, Link as LinkIcon } from 'lucide-react';
 
 // Where the release goes, in posting order: the full video first so every
@@ -13,7 +14,16 @@ export const PUBLISH_TARGETS = [
   { target: 'instagram', label: 'Instagram Reels', note: 'A 9:16 cut (the newest by default), with the AI label' },
   { target: 'reddit', label: 'Reddit', note: 'A native video post to r/aivideo (title and flair, no body)' },
   { target: 'stackerNews', label: 'Stacker News', note: 'A link post to the full video' },
+  {
+    // `accountPlaceholder` marks an account that is a name, not an @handle.
+    target: 'distrokid', label: 'Spotify (via DistroKid)', accountPlaceholder: 'Artist name',
+    note: 'The song as a single for Spotify and other stores, with a square cover and the AI disclosure. You tick the agreements and press Upload',
+    linkPlaceholder: 'Live on Spotify? Paste the Spotify link',
+  },
 ];
+
+// The songwriter's legal name DistroKid asks for, remembered on this device only.
+const SONGWRITER_KEY = 'portos.musicVideo.distrokidSongwriter';
 
 const inputCls = 'w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
 
@@ -37,7 +47,7 @@ function verticalCutChoices(project) {
   return cuts;
 }
 
-function TargetOptions({ target, kit, project, options, setOption, flairs, idFor }) {
+function TargetOptions({ target, kit, project, options, setOption, flairs, idFor, account }) {
   const field = (key, label, input) => (
     <div key={key} className="space-y-0.5 min-w-0">
       <label htmlFor={idFor(key)} className="block text-[11px] text-port-text-muted">{label}</label>
@@ -92,6 +102,35 @@ function TargetOptions({ target, kit, project, options, setOption, flairs, idFor
       </div>
     );
   }
+  if (target === 'distrokid') {
+    const check = (key, label, fallback) => (
+      <label key={key} className="flex items-center gap-1.5 text-xs min-h-[44px] sm:min-h-0">
+        <input type="checkbox" checked={options[key] ?? fallback} onChange={(e) => setOption(key, e.target.checked)} /> {label}
+      </label>
+    );
+    const hasLyrics = (project?.lyricCues || []).some((cue) => cue?.text?.trim());
+    return (
+      <div className="space-y-2">
+        <div className="grid sm:grid-cols-2 gap-2">
+          {text('artistName', 'Artist name', account || 'Your artist name')}
+          {field('releaseDate', 'Release date (blank = as soon as possible)',
+            <input id={idFor('releaseDate')} type="date" aria-label="Release date" value={options.releaseDate || ''} onChange={(e) => setOption('releaseDate', e.target.value)} className={inputCls} />)}
+          {text('songwriterFirst', 'Songwriter legal first name', 'First')}
+          {text('songwriterLast', 'Songwriter legal last name', 'Last')}
+        </div>
+        <div className="flex flex-wrap gap-x-4">
+          {check('explicit', 'Explicit lyrics', false)}
+          {check('instrumental', 'Instrumental', !hasLyrics)}
+        </div>
+        <div role="group" aria-label="Parts made with AI" className="flex flex-wrap gap-x-4">
+          <span className="text-[11px] text-port-text-muted self-center">Made with AI:</span>
+          {check('aiMusic', 'Music', true)}
+          {check('aiVocals', 'All of the audio', true)}
+          {check('aiLyrics', 'Lyrics', false)}
+        </div>
+      </div>
+    );
+  }
   if (target === 'x') {
     return (
       <div className="space-y-2">
@@ -134,12 +173,12 @@ function PostFeedback({ idFor, label, post, onSave }) {
 }
 
 /** Record a post made outside PortOS, so its reception can be tracked too. */
-function ManualLink({ idFor, label, onSave }) {
+function ManualLink({ idFor, label, placeholder, onSave }) {
   const [url, setUrl] = useState('');
   const valid = /^https?:\/\/\S+$/.test(url.trim());
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <input id={idFor('manual-url')} aria-label={`Link to a ${label} post made by hand`} value={url} placeholder="Posted by hand? Paste the link"
+      <input id={idFor('manual-url')} aria-label={`Link to a ${label} post made by hand`} value={url} placeholder={placeholder || 'Posted by hand? Paste the link'}
         onChange={(e) => setUrl(e.target.value)} className={`${inputCls} flex-1 min-w-0`} />
       <button type="button" disabled={!valid} onClick={() => onSave({ url: url.trim() }).then((post) => { if (post) setUrl(''); })}
         className="flex items-center gap-1 border border-port-border disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
@@ -150,13 +189,18 @@ function ManualLink({ idFor, label, onSave }) {
 }
 
 function TargetRow({ project, kit, entry, publishing }) {
-  const { target, label, note } = entry;
+  const { target, label, note, linkPlaceholder } = entry;
   const idFor = (key) => `mv-post-${project.id}-${target}-${key}`;
   const [options, setOptions] = useState(() => {
     // Prefill Suno URL from autonomous run if available
     if (target === 'suno' && project?.autonomousRun?.output?.sunoSongIds?.length > 0) {
       const songId = project.autonomousRun.output.sunoSongIds[0];
       return { songUrl: `https://suno.com/song/${encodeURIComponent(songId)}` };
+    }
+    if (target === 'distrokid') {
+      const saved = safeReadJsonStorage(SONGWRITER_KEY, {}) || {};
+      // A song whose lyrics an LLM wrote in the autonomous run discloses AI lyrics by default.
+      return { songwriterFirst: saved.first || '', songwriterLast: saved.last || '', aiLyrics: !!project?.autonomousRun?.output?.lyrics };
     }
     return {};
   });
@@ -174,7 +218,7 @@ function TargetRow({ project, kit, entry, publishing }) {
     <li className="rounded border border-port-border p-2 space-y-2">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="text-xs font-medium">{label}{account && <span className="font-normal text-port-text-muted"> as @{account}</span>}</div>
+          <div className="text-xs font-medium">{label}{account && <span className="font-normal text-port-text-muted"> as {entry.accountPlaceholder ? '' : '@'}{account}</span>}</div>
           <div className="text-[11px] text-port-text-muted">{note}</div>
           {posted?.url && (
             <a href={posted.url} target="_blank" rel="noreferrer" className="text-[11px] text-port-accent flex items-center gap-1 break-all">
@@ -182,15 +226,18 @@ function TargetRow({ project, kit, entry, publishing }) {
             </a>
           )}
         </div>
-        <button type="button" onClick={() => publishing.prepare(target, clean)} disabled={!!busy}
+        <button type="button" onClick={() => {
+          if (target === 'distrokid' && clean.songwriterFirst && clean.songwriterLast) safeWriteJsonStorage(SONGWRITER_KEY, { first: clean.songwriterFirst, last: clean.songwriterLast });
+          publishing.prepare(target, clean);
+        }} disabled={!!busy}
           className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
           {busy === 'prepare' ? 'Filling…' : (draft ? 'Fill again' : 'Fill draft')}
         </button>
       </div>
       {posted
         ? <PostFeedback key={posted.url || 'post'} idFor={idFor} label={label} post={posted} onSave={(body) => publishing.recordPost(target, body)} />
-        : <ManualLink idFor={idFor} label={label} onSave={(body) => publishing.recordPost(target, body)} />}
-      <TargetOptions target={target} kit={kit} project={project} options={options} setOption={setOption} flairs={flairs} idFor={idFor} />
+        : <ManualLink idFor={idFor} label={label} placeholder={linkPlaceholder} onSave={(body) => publishing.recordPost(target, body)} />}
+      <TargetOptions target={target} kit={kit} project={project} options={options} setOption={setOption} flairs={flairs} idFor={idFor} account={account} />
       {error && (
         <div role="alert" className="text-[11px] text-port-error space-y-0.5">
           <div className="flex items-center gap-1">{error.code === 'PUBLISH_LOGIN_REQUIRED' && <LogIn size={11} />}{error.message}</div>
