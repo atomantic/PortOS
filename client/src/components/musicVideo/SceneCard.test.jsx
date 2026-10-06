@@ -4,6 +4,24 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: () => ({}) }));
 import SceneCard from './SceneCard.jsx';
 
+describe('code shot (#10297)', () => {
+  it('offers no frame or clip generation for a code shot in a layered composition', () => {
+    const scene = { sceneId: 's1', visualLayer: 'code', startSec: 0, endSec: 5, takes: [] };
+    const { rerender } = render(<SceneCard scene={scene} index={0} layered onEditLocal={() => {}} onSave={() => {}} />);
+    expect(screen.getByTestId('code-shot-note').textContent).toMatch(/needs no frame or clip/);
+    // A composed render has no code to run, so it says the shot will be black there.
+    expect(screen.getByTestId('code-shot-note').textContent).toMatch(/composed render shows it as a black frame/);
+    expect(screen.queryByRole('button', { name: 'Generate frame' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Generate video' })).toBeNull();
+    rerender(<SceneCard scene={scene} index={0} layered documentComposition onEditLocal={() => {}} onSave={() => {}} />);
+    expect(screen.getByTestId('code-shot-note').textContent).not.toMatch(/black frame/);
+    // A plain render plays footage, so the generation controls come back.
+    rerender(<SceneCard scene={scene} index={0} layered={false} onEditLocal={() => {}} onSave={() => {}} />);
+    expect(screen.queryByTestId('code-shot-note')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Generate frame' })).toBeTruthy();
+  });
+});
+
 describe('performance speaker save boundary', () => {
   it('keeps paid generation disabled until the speaker edit is saved, including a failed save', async () => {
     let settle;

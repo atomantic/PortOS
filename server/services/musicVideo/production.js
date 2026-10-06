@@ -43,7 +43,7 @@ import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
-import { isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { codeFirstProductionAssets, normalizeMusicVideoProductionPolicy, summarizeMusicVideoMediumPlan } from '../../lib/musicVideoMediumPlan.js';
 import { projectAutoReviews } from './autoReview.js';
 import { projectRevisions } from './revision.js';
@@ -366,7 +366,7 @@ function productionTargets(project) {
   const layered = isLayeredComposition(project);
   const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
   return {
-    frame: scenes.filter((s) => sceneVisualLayer(s, { layered }) === 'still' || (!['card', 'code'].includes(sceneVisualLayer(s, { layered })) && !s.videoHistoryId)),
+    frame: scenes.filter((s) => sceneVisualLayer(s, { layered }) === 'still' || (!isSelfDrawnLayer(sceneVisualLayer(s, { layered })) && !s.videoHistoryId)),
     clip: scenes.filter((s) => sceneVisualLayer(s, { layered }) === 'footage'),
   };
 }

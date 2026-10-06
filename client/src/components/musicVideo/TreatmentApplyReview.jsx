@@ -16,6 +16,7 @@ function renderFieldLabel(fields) {
   if (!fields) return null;
   if (fields.shotMode === 'performance') return 'becomes a lip-synced performance shot';
   if (fields.visualLayer === 'card') return 'becomes a title card (composed render only)';
+  if (fields.visualLayer === 'code') return 'becomes a code shot the composition draws';
   if (fields.visualLayer === 'still') return 'becomes a moving still (composed render only)';
   return null;
 }

@@ -41,7 +41,7 @@ import { loadHistory, mutateVideoHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
 import { applyProjectPatch } from './projectsLogic.js';
-import { sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { isSelfDrawnLayer, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { renderableCues, sectionCardCues } from './composition.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
@@ -241,8 +241,14 @@ export async function resolveSceneClips(project, { layered = false } = {}) {
       const spanSec = authoredSpan(scene);
       if (spanSec == null) { untimed.push(scene.sceneId); continue; }
       const section = { sceneId: scene.sceneId, layer, inSec: 0, outSec: spanSec, duration: spanSec, sourceSec: spanSec };
-      if (layer === 'card' || layer === 'code') {
-        clips.push({ ...section, cardText: layer === 'card' && typeof scene.cardText === 'string' ? scene.cardText.trim() : '', cardColor: /^#[0-9a-f]{6}$/i.test(scene.cardColor || '') ? scene.cardColor : '#000000' });
+      // A composed render has no code to run: a code shot (#10297) is a black
+      // ground the typography layer draws over, cut exactly like a blank card.
+      if (layer === 'code') {
+        clips.push({ ...section, layer: 'card', cardText: '', cardColor: '#000000' });
+        continue;
+      }
+      if (layer === 'card') {
+        clips.push({ ...section, cardText: typeof scene.cardText === 'string' ? scene.cardText.trim() : '', cardColor: /^#[0-9a-f]{6}$/i.test(scene.cardColor || '') ? scene.cardColor : '#000000' });
         continue;
       }
       const imagePath = scene.referenceImageId ? safeUnder(PATHS.images, scene.referenceImageId) : null;
@@ -600,7 +606,7 @@ export function excerptBoundaryTimes(sections, cues, startSec, endSec, { fps = 2
 // authored span. Both callers build on the exact same resolved clip list, so
 // an excerpt frame matches what a full render would produce at that song time.
 export function assertCurrentClipDependencies(project) {
-  const stale = (project.scenes || []).filter((scene) => scene.videoHistoryId && !['still', 'card', 'code'].includes(scene.visualLayer))
+  const stale = (project.scenes || []).filter((scene) => scene.videoHistoryId && scene.visualLayer !== 'still' && !isSelfDrawnLayer(scene.visualLayer))
     .filter((scene) => musicVideoTakeChanges(project, scene, (scene.takes || []).find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId)).length);
   if (stale.length) throw new ServerError('Selected clips were derived from changed plates — preview and repair their dependencies before rendering',
     { status: 422, code: 'STALE_CLIP_DEPENDENCIES', context: { sceneIds: stale.map((scene) => scene.sceneId) } });

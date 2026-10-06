@@ -311,6 +311,12 @@ describe('resolveSceneClips', () => {
     expect(clips[0].duration).toBe(2); // 48/24
   });
 
+  it('cuts a code shot as a black ground in a composed render (#10297)', async () => {
+    loadHistory.mockResolvedValue([]);
+    const clips = await resolveSceneClips({ scenes: [{ sceneId: 's1', order: 0, visualLayer: 'code', startSec: 2, endSec: 5 }] }, { layered: true });
+    expect(clips).toEqual([expect.objectContaining({ sceneId: 's1', layer: 'card', cardText: '', cardColor: '#000000', duration: 3 })]);
+  });
+
   it('throws NO_SCENE_CLIPS when no scene has a clip', async () => {
     loadHistory.mockResolvedValue([]);
     await expect(resolveSceneClips({ scenes: [{ sceneId: 's1', order: 0, videoHistoryId: null }] }))
