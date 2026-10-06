@@ -45,7 +45,8 @@ describe('OrchestrationTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.getOrchestrationProfiles.mockResolvedValue(mockProfiles);
-    api.getProviders.mockResolvedValue(mockProviders);
+    // Real shape of getProviders(): { activeProvider, providers } — a bare array here hid a crash.
+    api.getProviders.mockResolvedValue({ activeProvider: 'anthropic', providers: mockProviders });
   });
 
   it('renders orchestration profiles list', async () => {
@@ -57,6 +58,14 @@ describe('OrchestrationTab', () => {
       expect(screen.getByText('Custom Team')).toBeTruthy();
       expect(screen.getByText('Built-in')).toBeTruthy();
     });
+  });
+
+  it('resolves provider display names from the { providers } response', async () => {
+    render(<OrchestrationTab />);
+    await waitFor(() => expect(screen.getByText('Custom Team')).toBeTruthy());
+    // Falls back to the raw id ("anthropic") when the providers list fails to load.
+    expect(screen.getAllByText('Anthropic').length).toBeGreaterThan(0);
+    expect(screen.queryByText('anthropic')).toBeNull();
   });
 
   it('opens create profile form and saves', async () => {
