@@ -27,14 +27,25 @@ vi.mock('node:fs', async importOriginal => {
 });
 vi.mock('../lib/fileUtils.js', async importOriginal => {
   const actual = await importOriginal();
-  return { ...actual, createWriteStreamGuarded: async (...args) => {
+  return { ...actual, atomicWrite: async (path, data) => {
+    await actual.atomicWrite(path, data);
+    if (path.endsWith('raw-storage.json')) await fixture.afterManifest?.();
+  }, createWriteStreamGuarded: async (...args) => {
     if (fixture.failWrite) throw new Error('disk full');
     await fixture.onWrite?.();
     return actual.createWriteStreamGuarded(...args);
   } };
 });
+vi.mock('../lib/backupSnapshotBoundary.js', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, withBackupAssetPublication: work => {
+    fixture.onAdmission?.();
+    return fixture.bypassAdmission ? work() : actual.withBackupAssetPublication(work);
+  } };
+});
 vi.mock('./codexSummaryRepair.js', () => ({ repairCodexTaskSummary: async () => null }));
 const storage = await import('./cosAgentStorage.js');
+const { acquireBackupSnapshotCut } = await import('../lib/backupSnapshotBoundary.js');
 const { pruneOldAgentArchives } = await import('./cosAgentIndex.js');
 const { default: routes } = await import('../routes/dataManager.js');
 const app = express();
@@ -62,6 +73,7 @@ beforeEach(async () => {
   await rm(fixture.root, { recursive: true, force: true }); await mkdir(fixture.root);
   fixture.state = {}; fixture.config = {}; fixture.trusted = true;
   fixture.failWrite = false; fixture.corruptVerification = false; fixture.onWrite = null;
+  fixture.afterManifest = null; fixture.onAdmission = null; fixture.bypassAdmission = false;
 });
 afterAll(() => rm(fixture.root, { recursive: true, force: true }));
 
@@ -154,4 +166,68 @@ it('rechecks opt-in policy before automatic publication and does no deletion by 
   expect((await settled()).skipped).toBe(1);
   expect(await readFile(join(dir, 'raw.txt'), 'utf8')).toBe(source);
   expect(await readFile(join(dir, 'metadata.json'), 'utf8')).toContain('example-model');
+});
+
+const deferred = () => {
+  let resolve;
+  const promise = new Promise(done => { resolve = done; });
+  return { promise, resolve };
+};
+const settleTurn = () => new Promise(resolve => setImmediate(resolve));
+const startStorageAction = async action => {
+  const preview = await storage.previewAgentStorage({ action });
+  await storage.startAgentStorage({ token: preview.token, ...(action === 'purge' ? { confirmation: 'PURGE RAW RECORDINGS' } : {}) });
+};
+const expectSettledRecording = async (dir, action) => {
+  const manifest = JSON.parse(await readFile(join(dir, 'raw-storage.json'), 'utf8'));
+  expect(manifest.disposition).toBe(action === 'compress' ? 'compressed' : 'purged');
+  const names = await readdir(dir);
+  expect(names).not.toContain('raw.txt');
+  if (action === 'compress') expect(gunzipSync(await readFile(join(dir, 'raw.txt.gz'))).toString()).toBe(source);
+  else expect(names).not.toContain('raw.txt.gz');
+  expect(names.some(name => name.endsWith('.tmp'))).toBe(false);
+};
+
+it.each(['compress', 'purge'])('%s waits out an open backup cut before changing bytes or manifest', async action => {
+  const dir = await seed();
+  const reached = deferred(); fixture.onAdmission = reached.resolve;
+  const release = await acquireBackupSnapshotCut();
+  try {
+    await startStorageAction(action);
+    await reached.promise;
+    await settleTurn();
+    expect(await readFile(join(dir, 'raw.txt'), 'utf8')).toBe(source);
+    expect(await readdir(dir)).not.toContain('raw-storage.json');
+    expect(await readdir(dir)).not.toContain('raw.txt.gz');
+  } finally { release(); }
+  expect((await settled()).state).toBe('completed');
+  await expectSettledRecording(dir, action);
+});
+
+it.each(['compress', 'purge'])('%s drains the file-primary manifest and byte deletion together', async action => {
+  const dir = await seed();
+  const reached = deferred(); const commit = deferred();
+  fixture.afterManifest = async () => { reached.resolve(); await commit.promise; };
+  await startStorageAction(action);
+  await reached.promise;
+  let cutReady = false;
+  const cut = acquireBackupSnapshotCut().then(release => { cutReady = true; return release; });
+  try { await settleTurn(); expect(cutReady).toBe(false); }
+  finally { commit.resolve(); }
+  const release = await cut;
+  try { await expectSettledRecording(dir, action); }
+  finally { release(); }
+  expect((await settled()).state).toBe('completed');
+});
+
+it('negative control publishes compressed bytes and manifest during an open cut', async () => {
+  const dir = await seed(); fixture.bypassAdmission = true;
+  const copiedNames = await readdir(dir);
+  const release = await acquireBackupSnapshotCut();
+  try {
+    await startStorageAction('compress');
+    await settled();
+    await expectSettledRecording(dir, 'compress');
+    expect(copiedNames).not.toContain('raw.txt.gz');
+  } finally { release(); }
 });
