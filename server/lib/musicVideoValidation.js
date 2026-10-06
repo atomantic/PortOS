@@ -687,6 +687,8 @@ export const musicVideoPublishCopyDraftSchema = z.object({
   // What the draft may use beyond the notes and links; omitted keys keep their defaults (title on, the rest off).
   include: z.object({ title: z.boolean(), lyrics: z.boolean(), spend: z.boolean(), chapters: z.boolean(), hashtags: z.boolean() }).partial().strict().optional(),
   length: z.enum(['short', 'full']).optional(),
+  // The director agreed to replace posts written or edited by hand since the last draft.
+  replaceEdited: z.boolean().optional(),
 }).strict();
 export const musicVideoPublishThumbnailSchema = z.object({ filename: z.string().min(1).max(300) }).strict();
 

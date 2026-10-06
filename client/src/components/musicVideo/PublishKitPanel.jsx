@@ -84,7 +84,14 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
   const [songUrl, setSongUrl] = useState(kit.links?.song || '');
   const [include, setInclude] = useState({ ...DEFAULT_INCLUDE, ...(kit.draftOptions?.include || {}) });
   const [length, setLength] = useState(kit.draftOptions?.length === 'full' ? 'full' : 'short');
-  const lyricLines = (project?.lyricCues || []).filter((c) => typeof c?.text === 'string' && c.text.trim()).length;
+  // Same filter as the server's timedLines: only cues with text and a start time reach the writer.
+  const lyricLines = (project?.lyricCues || [])
+    .filter((c) => typeof c?.text === 'string' && c.text.trim() && typeof c.startSec === 'number' && Number.isFinite(c.startSec)).length;
+  const [confirmReplace, setConfirmReplace] = useState(false);
+  // Mirrors the server's copyEditedSinceDraft: a draft would replace posts written or edited by hand.
+  const editedAt = Date.parse(kit.copyEditedAt || '');
+  const draftedAt = Date.parse(kit.copyDraftedAt || '');
+  const editedSinceDraft = Number.isFinite(editedAt) && (!Number.isFinite(draftedAt) || editedAt > draftedAt);
   const spend = projectSpend(project);
   const includeRows = [
     { key: 'title', label: 'Song title', detail: project?.name ? `"${project.name}"` : 'no title yet', available: !!project?.name },
@@ -102,13 +109,15 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
     ...(/^https?:\/\//.test(youtubeUrl.trim()) ? { youtube: youtubeUrl.trim() } : {}),
     ...(/^https?:\/\//.test(songUrl.trim()) ? { song: songUrl.trim() } : {}),
   };
-  const draft = () => publishKit.draftCopy({
+  const draft = (replaceEdited = false) => publishKit.draftCopy({
     ...(selectedProviderId ? { providerId: selectedProviderId } : {}),
     ...(selectedModel ? { model: selectedModel } : {}),
     notes, links,
     include: Object.fromEntries(includeRows.map(({ key, available }) => [key, available && include[key]])),
     length,
+    ...(replaceEdited ? { replaceEdited: true } : {}),
   });
+  const onDraft = () => (editedSinceDraft ? setConfirmReplace(true) : draft());
 
   return (
     <div className="space-y-3">
@@ -232,11 +241,20 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
               label="Writer" compact alwaysShowModel modelDisabled={availableModels.length === 0}
               emptyProviderOption="Active provider (default)" emptyModelOption="Default model" disabled={publishKit.drafting} />
           )}
-          <button type="button" onClick={draft} disabled={publishKit.drafting || noPlatforms}
+          <button type="button" onClick={onDraft} disabled={publishKit.drafting || publishKit.saving || noPlatforms || confirmReplace}
             className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
             <Sparkles size={13} /> {publishKit.drafting ? 'Drafting…' : (kit.copy ? 'Redraft copy' : 'Draft copy')}
           </button>
         </div>
+        {confirmReplace && (
+          <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-port-warning/50 bg-port-warning/10 p-2">
+            <span className="flex-1 min-w-[12rem]">Drafting replaces the posts you wrote or edited below.</span>
+            <button type="button" onClick={() => { setConfirmReplace(false); draft(true); }}
+              className="bg-port-warning/20 text-port-warning rounded px-2 py-1.5 min-h-[44px] sm:min-h-0">Replace them</button>
+            <button type="button" onClick={() => setConfirmReplace(false)}
+              className="text-port-text-muted px-2 py-1.5 min-h-[44px] sm:min-h-0">Keep mine</button>
+          </div>
+        )}
         {noPlatforms && <p className="text-port-text-muted">Turn on a platform under Where you post to draft its copy.</p>}
         {!noPlatforms && (
           <div className="space-y-3" key={kit.copyDraftedAt || 'copy'}>

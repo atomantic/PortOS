@@ -38,7 +38,7 @@ describe('PublishKitPanel (#9281)', () => {
 
   it('drafts copy from the notes, only well-formed links and only what is ticked', () => {
     const k = hook();
-    const project = { id: 'mv-1', name: 'Example Song', renderHistoryId: 'rh-1', lyricCues: [{ text: 'a line', startSec: 1 }], productionRuns: [{ usage: { spentUsd: 4.5 } }] };
+    const project = { id: 'mv-1', name: 'Example Song', renderHistoryId: 'rh-1', lyricCues: [{ text: 'a line', startSec: 1 }, { text: 'untimed' }], productionRuns: [{ usage: { spentUsd: 4.5 } }] };
     render(<PublishKitPanel project={project} publishKit={k} />);
     fireEvent.change(screen.getByLabelText(/Making-of notes/), { target: { value: 'hummed it in the car' } });
     fireEvent.change(screen.getByLabelText(/Full video URL/), { target: { value: 'https://example.com/v' } });
@@ -47,6 +47,7 @@ describe('PublishKitPanel (#9281)', () => {
     expect(screen.getByLabelText(/Song title/)).toBeChecked();
     expect(screen.getByLabelText(/Hashtags and YouTube tags/)).not.toBeChecked();
     expect(screen.getByLabelText('A sentence or two')).toBeChecked();
+    expect(screen.getByText(/1 timed line$/)).toBeTruthy(); // the untimed cue never reaches the writer
     fireEvent.click(screen.getByRole('button', { name: /Draft copy/ }));
     const none = { title: true, lyrics: false, chapters: false, spend: false, hashtags: false };
     expect(k.draftCopy).toHaveBeenLastCalledWith({ notes: 'hummed it in the car', links: { youtube: 'https://example.com/v' }, include: none, length: 'short' });
@@ -60,9 +61,22 @@ describe('PublishKitPanel (#9281)', () => {
     expect(k.draftCopy).toHaveBeenLastCalledWith(expect.objectContaining({ include: { ...none, title: false, lyrics: true, spend: true, hashtags: true }, length: 'full' }));
   });
 
+  it('asks before a draft replaces posts edited by hand', () => {
+    const k = hook();
+    const publishKit = { copy: { x: { hook: 'Mine.' } }, copyDraftedAt: '2026-01-01T00:00:00.000Z', copyEditedAt: '2026-01-02T00:00:00.000Z' };
+    render(<PublishKitPanel project={{ id: 'mv-1', name: 'Example Song', publishKit }} publishKit={k} enabledTargets={['x']} />);
+    fireEvent.click(screen.getByRole('button', { name: /Redraft copy/ }));
+    expect(k.draftCopy).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep mine' }));
+    expect(k.draftCopy).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /Redraft copy/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Replace them' }));
+    expect(k.draftCopy).toHaveBeenCalledWith(expect.objectContaining({ replaceEdited: true }));
+  });
+
   it('cannot tick lyrics or spend the project does not have, and lets you write a post without drafting', () => {
     const k = hook();
-    render(<PublishKitPanel project={{ id: 'mv-1', name: 'Example Song', renderHistoryId: 'rh-1' }} publishKit={k} enabledTargets={['x']} />);
+    render(<PublishKitPanel project={{ id: 'mv-1', name: 'Example Song', renderHistoryId: 'rh-1', lyricCues: [{ text: 'untimed' }] }} publishKit={k} enabledTargets={['x']} />);
     expect(screen.getByLabelText(/Lyrics/)).toBeDisabled();
     expect(screen.getByLabelText(/Generation spend/)).toBeDisabled();
     const hook_ = screen.getByLabelText('Hook post (no links)');

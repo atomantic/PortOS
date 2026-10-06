@@ -66,12 +66,15 @@ describe('publish copy prompt + parser (#9281)', () => {
     expect(all).toContain('the making-of as a long post');
   });
 
-  it('strips hashtags the model added unasked, keeping markdown headings', () => {
-    const reply = JSON.stringify({ tiktok: { caption: 'Made this one slowly. #music #aivideo' }, youtube: { title: 'T', description: '# Heading\nA line #tagged here', tags: ['music'] } });
+  it('strips hashtags the model added unasked and leaves everything else as written', () => {
+    const description = '# Heading\nA line #tagged here, my #1 take\n  - nested item  \nSee https://example.com/album/#listen';
+    const reply = JSON.stringify({ tiktok: { caption: 'Made this one slowly. #music #aivideo' }, youtube: { title: 'T', description, tags: ['music'] } });
     const copy = parsePublishCopy(reply, ['tiktok', 'youtube'], { hashtags: false });
     expect(copy.tiktok.caption).toBe('Made this one slowly.');
-    expect(copy.youtube.description).toBe('# Heading\nA line here');
-    expect(copy.youtube.tags).toEqual([]);
+    // Numbers, URL fragments, headings, indentation and markdown hard breaks survive.
+    expect(copy.youtube.description).toBe('# Heading\nA line here, my #1 take\n  - nested item  \nSee https://example.com/album/#listen');
+    // No tags come back, so a redraft keeps the ones the director typed.
+    expect(copy.youtube).not.toHaveProperty('tags');
     expect(parsePublishCopy(reply, ['tiktok']).tiktok.caption).toContain('#music');
   });
 

@@ -234,6 +234,14 @@ export async function updatePublishKitCopy(projectId, patch) {
   });
 }
 
+/** True when a post was written or edited by hand after the last draft (or with no draft yet). */
+export function copyEditedSinceDraft(kit) {
+  const edited = Date.parse(kit?.copyEditedAt || '');
+  if (!Number.isFinite(edited)) return false;
+  const drafted = Date.parse(kit?.copyDraftedAt || '');
+  return !Number.isFinite(drafted) || edited > drafted;
+}
+
 /** Generation spend across the project's production runs (what the copy may claim). */
 function spentUsd(project) {
   const total = (project.productionRuns || []).reduce((sum, run) => sum + (Number.isFinite(Number(run?.usage?.spentUsd)) ? Number(run.usage.spentUsd) : 0), 0);
@@ -243,10 +251,17 @@ function spentUsd(project) {
 /**
  * Draft the copy for every platform the director posts to, in ONE provider call they asked for.
  * `notes` (their making-of story) and what they chose to include (`include`,
- * `length`) are saved with the kit so a redraft reuses them.
+ * `length`) are saved with the kit so a redraft reuses them. A draft replaces
+ * the posts' text, so once a post was written or edited by hand since the last
+ * draft it is refused (409 PUBLISH_COPY_EDITED) unless `replaceEdited` says the
+ * director agreed to replace it. Fields the draft does not return (YouTube tags
+ * with hashtags off) keep what was there.
  */
-export async function draftPublishKitCopy(projectId, { providerId = null, model = null, notes = '', links = {}, include, length } = {}, deps = {}) {
+export async function draftPublishKitCopy(projectId, { providerId = null, model = null, notes = '', links = {}, include, length, replaceEdited = false } = {}, deps = {}) {
   const project = await requireProject(projectId);
+  if (!replaceEdited && copyEditedSinceDraft(projectPublishKit(project))) {
+    throw kitError(409, 'PUBLISH_COPY_EDITED', 'The posts were edited by hand since the last draft; confirm replacing them to draft again');
+  }
   const { getPublishPlatforms, publishHistory } = await import('./publish/platforms.js');
   const enabled = deps.platforms || await getPublishPlatforms();
   // Only where the director posts (#9287); Suno's caption reuses the YouTube description.
@@ -264,6 +279,8 @@ export async function draftPublishKitCopy(projectId, { providerId = null, model 
   if (!copy) throw kitError(502, 'PUBLISH_COPY_UNPARSEABLE', 'The copy draft came back without usable JSON — try again or another model');
   return mutateProjectRecord(projectId, (current) => {
     const kit = projectPublishKit(current);
-    return { project: { ...current, publishKit: { ...kit, copy: { ...(kit.copy || {}), ...copy }, notes, draftOptions: options, links: { ...(kit.links || {}), ...links }, copyDraftedAt: new Date().toISOString() } } };
+    const merged = { ...(kit.copy || {}) };
+    for (const [platform, fields] of Object.entries(copy)) merged[platform] = { ...(merged[platform] || {}), ...fields };
+    return { project: { ...current, publishKit: { ...kit, copy: merged, notes, draftOptions: options, links: { ...(kit.links || {}), ...links }, copyDraftedAt: new Date().toISOString() } } };
   });
 }

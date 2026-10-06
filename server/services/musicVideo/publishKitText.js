@@ -148,15 +148,24 @@ function copySpecs({ include, length }) {
   };
 }
 
-// A #word anywhere in the text; markdown headings ("# Heading") have a space and are left alone.
-const HASHTAG = /(^|[^\p{L}\p{N}_&])#[\p{L}\p{N}_]+/gu;
-/** The text with every hashtag removed and the spacing it leaves tidied. */
-export const stripHashtags = (text) => String(text || '')
-  .replace(HASHTAG, '$1')
-  .replace(/[ \t]+$/gm, '')
-  .replace(/[ \t]{2,}/g, ' ')
-  .replace(/\n{3,}/g, '\n\n')
-  .trim();
+// A run of hashtags: `#` plus a word with at least one letter (so `#1` and
+// `#2` stay), standing at a line start or after a space or opening bracket or
+// quote (so a URL fragment like `/album/#listen` and `&#39;` stay). Markdown
+// headings ("# Heading") have a space after the `#` and never match.
+const TAG = String.raw`#[\p{N}_]*\p{L}[\p{L}\p{N}_]*`;
+const HASHTAG_RUN = new RegExp(String.raw`([ \t]*)(?<=^|[\s(\[{"'“‘])${TAG}(?:[ \t]+${TAG})*([ \t]*)`, 'gmu');
+/**
+ * The text with every hashtag removed. Only the spacing around a removed tag
+ * changes: a run ending its line takes the spaces before it too, and one
+ * mid-line leaves a single space, so indentation and markdown line breaks
+ * elsewhere are untouched.
+ */
+export const stripHashtags = (text) => String(text || '').replace(HASHTAG_RUN, (match, lead, _trail, offset, whole) => {
+  const end = offset + match.length;
+  const lineStart = offset === 0 || whole[offset - 1] === '\n';
+  if (end >= whole.length || whole[end] === '\n' || whole[end] === '\r') return lineStart ? lead : '';
+  return lineStart ? lead : (lead ? ' ' : '');
+});
 
 /**
  * The copy prompt. `notes` is the director's own making-of story; the song
@@ -201,17 +210,21 @@ export function buildPublishCopyPrompt(project, { notes = '', spentUsd = null, l
 /**
  * The model's JSON reply as `{ platform: { field: text } }` for `platforms`,
  * clipped to each platform's limits; null when unusable. Without
- * `hashtags: true` every hashtag the model slipped in is removed and YouTube
- * tags stay empty, so none reaches a post unasked.
+ * `hashtags: true` every hashtag the model slipped in is removed and no
+ * YouTube tags are returned (the `tags` key is left out, so tags the director
+ * typed survive a redraft), so none reaches a post unasked.
  */
 export function parsePublishCopy(text, platforms = PUBLISH_PLATFORMS, { hashtags = true } = {}) {
   const { value } = extractJson(text, { blockType: 'object' });
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const clean = (fields) => (hashtags || !fields || typeof fields !== 'object' ? fields
-    : Object.fromEntries(Object.entries(fields).map(([k, f]) => [k, k === 'tags' ? [] : (typeof f === 'string' ? stripHashtags(f) : f)])));
+    : Object.fromEntries(Object.entries(fields).filter(([k]) => k !== 'tags').map(([k, f]) => [k, typeof f === 'string' ? stripHashtags(f) : f])));
   const v = (k) => (value[k] && typeof value[k] === 'object' ? clean(value[k]) : {});
   const all = {
-    youtube: () => ({ title: str(v('youtube').title, LIMITS.youtubeTitle), description: str(v('youtube').description, 5000), tags: (Array.isArray(v('youtube').tags) ? v('youtube').tags : []).map((t) => str(t, 60)).filter(Boolean).slice(0, 20) }),
+    youtube: () => ({
+      title: str(v('youtube').title, LIMITS.youtubeTitle), description: str(v('youtube').description, 5000),
+      ...(hashtags ? { tags: (Array.isArray(v('youtube').tags) ? v('youtube').tags : []).map((t) => str(t, 60)).filter(Boolean).slice(0, 20) } : {}),
+    }),
     shorts: () => ({ title: str(v('shorts').title, LIMITS.shortsTitle), description: str(v('shorts').description, 5000) }),
     x: () => ({ hook: str(v('x').hook, LIMITS.xHook), story: str(v('x').story, 25000) }),
     tiktok: () => ({ caption: str(v('tiktok').caption, LIMITS.caption) }),
