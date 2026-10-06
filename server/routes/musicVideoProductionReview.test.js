@@ -353,6 +353,10 @@ describe('human-reviewed Music Video workflow', () => {
     auth.authenticated = true;
     expect((await request(app).post(`${base}/publish/youtube/prepare`).set('authorization', 'Bearer synthetic-agent').send({})).status).toBe(200);
     expect(prepareExternalDraft).toHaveBeenCalledWith(project.id, 'youtube', expect.any(Object));
+    // The "post again" confirmation reaches the service; a non-boolean is refused.
+    expect((await request(app).post(`${base}/publish/youtube/prepare`).set('authorization', 'Bearer synthetic-agent').send({ again: true })).status).toBe(200);
+    expect(prepareExternalDraft).toHaveBeenLastCalledWith(project.id, 'youtube', { again: true });
+    expect((await request(app).post(`${base}/publish/youtube/prepare`).set('authorization', 'Bearer synthetic-agent').send({ again: 'yes' })).status).toBe(400);
   });
 });
 

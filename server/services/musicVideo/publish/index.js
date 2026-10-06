@@ -157,8 +157,10 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   // A platform already posted to gets a second draft only when the director says so:
   // otherwise one stray click is one duplicate post.
-  if (project.publishKit?.posts?.[target] && options.again !== true) {
-    throw new ServerError(`Already posted to ${adapter.label}. Confirm "Post again" to fill another draft`, { status: 409, code: 'PUBLISH_ALREADY_POSTED' });
+  const existing = project.publishKit?.posts?.[target];
+  if (existing && options.again !== true) {
+    const urls = existing.url ? [existing.url] : [];
+    throw new ServerError(`Already posted to ${adapter.label}. Confirm "Post again" to fill another draft`, { status: 409, code: 'PUBLISH_ALREADY_POSTED', context: { target, urls } });
   }
   let payload = resolveFiles(buildPublishPayload(target, project, withPlatformDefaults(target, options, platforms)));
   payload = await withAudio(target, payload, project, deps);

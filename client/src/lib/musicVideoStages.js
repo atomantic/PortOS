@@ -477,10 +477,11 @@ export function deriveNextAction(project, {
       if (!project.publishKit?.builtAt) return { id: 'goto-publish', kind: 'goto', stage: 'publish', label: 'Build the publishing kit', shortLabel: 'Kit' };
       // One platform at a time, never "publish everything": the next platform
       // not yet posted, so a click can't repeat a post that already went out.
-      const next = publishPlatformProgress(project, publish).rows.find((row) => row.state !== 'posted');
+      const { rows, total, posted } = publishPlatformProgress(project, publish);
+      const next = rows.find((row) => row.state !== 'posted');
       return next
-        ? { id: 'goto-publish', kind: 'goto', stage: 'publish', anchor: publishRowAnchor(next.target), label: `Next: post to ${next.label}`, shortLabel: next.label }
-        : { id: 'goto-publish', kind: 'goto', stage: 'publish', anchor: PUBLISH_ANCHOR, label: 'Open publishing', shortLabel: 'Publish' };
+        ? { id: 'goto-publish', kind: 'goto', stage: 'publish', anchor: publishRowAnchor(next.target), label: `Next: post to ${next.label} · ${total - posted} left`, shortLabel: next.label }
+        : { id: 'goto-publish', kind: 'goto', stage: 'publish', anchor: PUBLISH_ANCHOR, label: total ? 'All posted' : 'Open publishing', shortLabel: 'Publish' };
     }
     default:
       if (isFinalRenderStale(project)) {
