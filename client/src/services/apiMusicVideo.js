@@ -244,6 +244,10 @@ export const cancelMusicVideoPublishKit = (jobId, options = {}) =>
   request(`/music-video/publish-kit/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', ...options });
 export const draftMusicVideoPublishCopy = (id, body, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish-kit/copy`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
+export const getMusicVideoPromotionPlan = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish/promotion-plan`, options);
+export const planMusicVideoPromotion = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish/promotion-plan`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
 export const updateMusicVideoPublishCopy = (id, patch, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish-kit/copy`, { method: 'PATCH', body: JSON.stringify(patch || {}), ...options });
 export const selectMusicVideoPublishThumbnail = (id, filename, options = {}) =>

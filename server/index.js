@@ -146,6 +146,7 @@ import creativeCommissionRoutes from './routes/creativeCommissions.js';
 import gamesRoutes from './routes/games.js';
 import fableLoomRoutes from './routes/fableLoom.js';
 import musicVideoRoutes from './routes/musicVideo.js';
+import humanActionRoutes from './routes/humanActions.js';
 import spriteRoutes from './routes/sprites.js';
 import moodBoardRoutes from './routes/moodBoard.js';
 import deckRoutes from './routes/decks.js';
@@ -420,6 +421,7 @@ app.use('/api/sync', dataSyncRoutes);
 app.use('/api/meatspace', meatspaceRoutes);
 app.use('/api/mortalloom', mortallomRoutes);
 app.use('/api/review', reviewRoutes);
+app.use('/api/human-actions', humanActionRoutes);
 app.use('/api/github', githubRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/telegram', telegramRoutes);
@@ -567,6 +569,9 @@ if (!isSmokeBoot()) {
   // Event-driven notifications for parked Music Video runs (#10156); zero provider calls.
   import('./services/musicVideo/attentionNotifier.js').then(({ initMusicVideoAttentionNotifier }) => initMusicVideoAttentionNotifier())
     .catch((err) => console.error(`❌ Music video attention notifier could not start: ${err.message}`));
+  // Reminders for scheduled human action steps (Brain threads); zero provider calls.
+  import('./services/humanActionReminders.js').then(({ initHumanActionReminders }) => initHumanActionReminders())
+    .catch((err) => console.error(`❌ Human action reminders could not start: ${err.message}`));
   import('./services/fleetLlmHost.js').then(({ startFleetLlmHost }) => startFleetLlmHost())
     .catch(() => console.error('❌ Dedicated model host listener could not start; open AI Providers → Model host setup.'));
   // Local file scan only (no provider calls); keeps the federated Claude Code

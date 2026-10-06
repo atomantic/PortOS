@@ -561,6 +561,21 @@ settings controls and source-closed UI prompts are tracked separately in #7664.
 | GET | `/agents/activity/run-events/reconcile` | Where the ledger and the durable run records disagree (filters: `runId`, `limit`) — read-only |
 | POST | `/agents/activity/run-events/reconcile` | Close the run records the ledger proves are finished; reports what it closed |
 
+### Human Actions
+
+Steps only the person can take (press Post, answer replies, upload a file), scheduled for a time.
+Each step becomes a Brain thread tagged `human-action` and `plan:<planKey>`, so it appears in
+Review Hub › Actions on its day, and an `action_due` notification fires at its due time on the
+machine that created it. Planning the same `planKey` again archives that plan's open steps and
+leaves finished ones alone. Agents outside PortOS call these with `node scripts/portos-api.js`.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/human-actions` | List open steps, soonest first (`?planKey=`, `?includeDone=true`) |
+| POST | `/human-actions/plans` | Schedule `{ planKey, title, steps: [{ title, dueAt, instructions[], content[{label,text}], links[{label,url}], priority }] }` (`dueAt` needs a UTC offset) |
+| GET | `/music-video/:id/publish/promotion-plan` | A music video's open promotion steps |
+| POST | `/music-video/:id/publish/promotion-plan` | Plan its promotion with one provider call `{ goal?, audience?, days?, providerId?, model? }` and schedule the steps |
+
 ### Notifications
 
 | Method | Endpoint | Description |
@@ -732,6 +747,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/data` | Data manager/sync |
 | `/api/datadog`, `/api/jira`, `/api/github`, `/api/telegram` | External integrations |
 | `/api/health` | Apple Health metrics, ingest, and XML import |
+| `/api/human-actions` | Scheduled steps only the human can take, as Brain threads with reminders ([Human Actions](#human-actions)) |
 | `/api/insights` | Cross-domain insights |
 | `/api/instances`, `/api/sync`, `/api/peer-sync`, `/api/sharing` | Federation / peer sync (see [COMPANION_APP_API.md](./COMPANION_APP_API.md)) |
 | `/api/federation/media/v1` | Authenticated queued peer audio provider (see [FEDERATED_MEDIA_PROVIDERS.md](./FEDERATED_MEDIA_PROVIDERS.md)) |

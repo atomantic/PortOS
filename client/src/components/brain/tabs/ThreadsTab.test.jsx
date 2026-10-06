@@ -235,6 +235,26 @@ describe('ThreadsTab', () => {
     expect(api.getThread).toHaveBeenCalledTimes(1);
   });
 
+  it('shows a scheduled step with copyable text and keeps its due time when another field is saved', async () => {
+    const DUE = '2026-10-07T16:30:00.000Z';
+    const step = {
+      id: 'act', title: 'Post the clip', status: 'open', tags: ['human-action', 'plan:promo-example'], refs: [], dueAt: DUE,
+      notes: 'Part of **Promote "Example Song"**.\n\n1. Open X.\n2. Attach the clip.\n\n## Ready to paste\n\n**X post**\n````text\nNot a person. ```\n````',
+    };
+    api.getThread.mockResolvedValue({ ...step, resolvedRefs: [] });
+    api.updateThread.mockImplementation(async (id, patch) => ({ ...step, ...patch, resolvedRefs: [] }));
+    renderTab('/brain/threads?thread=act');
+    const card = await screen.findByRole('region', { name: 'Ready to paste' });
+    expect(within(card).getByText('Attach the clip.')).toBeTruthy();
+    expect(within(card).getByText('X post')).toBeTruthy();
+    expect(within(card).getByText('Not a person. ```')).toBeTruthy();
+    expect(within(card).getByRole('button', { name: /Copy/ })).toBeTruthy();
+
+    fireEvent.change(screen.getByDisplayValue('Post the clip'), { target: { value: 'Post the opening clip' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save' })); });
+    expect(api.updateThread).toHaveBeenCalledWith('act', expect.objectContaining({ title: 'Post the opening clip', dueAt: DUE }), { silent: true });
+  });
+
   it('is the component the Brain page renders for its threads tab', () => {
     const clientSrc = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
     const brainPage = readFileSync(join(clientSrc, 'pages', 'Brain.jsx'), 'utf8');

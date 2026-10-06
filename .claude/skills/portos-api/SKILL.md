@@ -13,8 +13,11 @@ node scripts/portos-api.js task "<what the agent should do>" --app <app-id> --pr
 node scripts/portos-api.js get /api/cos/tasks
 node scripts/portos-api.js post /api/image-gen/generate '{"prompt":"..."}'
 node scripts/portos-api.js post /api/music-video/autonomous @brief.json
+node scripts/portos-api.js post /api/human-actions/plans @plan.json   # schedule steps the user must take
 node scripts/portos-api.js get /api/api-docs/catalog.json   # discover endpoints
 ```
+
+- When the user has to do something by hand later (post, reply, upload, sign), schedule it with `POST /api/human-actions/plans` instead of only saying so in chat: each step gets a due time with a UTC offset, explicit `instructions`, and the exact text to paste in `content`. It lands in Review Hub › Actions and notifies them when due. Reuse the same `planKey` to replace a plan. Shape: [docs/API.md › Human Actions](../../../docs/API.md#human-actions).
 
 - Credential order: `PORTOS_API_TOKEN` (set inside PortOS-spawned agents), then `~/.portos/agent-key.json` (the agent API key).
 - `whoami` answering `"authenticated": false`, or a `401 AUTH_REQUIRED`, means no key is available: ask the user to turn on **Settings > Security > Agent API key**. Never ask for, store, or type the instance password.
