@@ -10,6 +10,7 @@ import { join } from 'path';
 import { createHash } from 'crypto';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFile, readJSONFileStrict, tryReadFile } from '../lib/fileUtils.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 
 const DIGITAL_TWIN_DIR = PATHS.digitalTwin;
@@ -159,7 +160,8 @@ export async function createSnapshot(label, description = '') {
     summary: buildSummary(data)
   };
 
-  return queueIndexWrite(async () => {
+  // Admit before the shared write tail: a cut drains the complete file/index pair.
+  return withBackupAssetPublication(() => queueIndexWrite(async () => {
     // Load (and maybe rebuild) the index BEFORE writing this snapshot file so
     // a recovery scan cannot pick up the file we are about to add, then
     // unshift a duplicate of it.
@@ -170,7 +172,7 @@ export async function createSnapshot(label, description = '') {
     await saveIndex(index);
     console.log(`📸 Time capsule created: "${label}" (${snapshot.id.slice(0, 8)})`);
     return snapshot;
-  });
+  }));
 }
 
 /**
@@ -194,7 +196,7 @@ export async function getSnapshot(id) {
  * Delete a snapshot
  */
 export async function deleteSnapshot(id) {
-  return queueIndexWrite(async () => {
+  return withBackupAssetPublication(() => queueIndexWrite(async () => {
     const index = await loadIndex();
     const exists = index.snapshots.find(s => s.id === id);
     if (!exists) return false;
@@ -209,7 +211,7 @@ export async function deleteSnapshot(id) {
 
     console.log(`🗑️ Time capsule deleted: "${exists.label}" (${id.slice(0, 8)})`);
     return true;
-  });
+  }));
 }
 
 /**

@@ -399,6 +399,13 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     id: 'operator-file-purge', status: 'admitted',
     modules: ['services/dataManager.js', 'routes/uploads.js', 'routes/attachments.js'],
   },
+  {
+    // Snapshot JSON and its index entry are one pair, including unlink-before-
+    // index deletion. Acquire before the index tail so queued writes drain.
+    id: 'time-capsule-snapshot-index',
+    status: 'admitted',
+    modules: ['services/timeCapsule.js'],
+  },
   // Anything the sweep did not reach. A new asset owner lands here until it is
   // classified; the claim cannot become `global` while this entry exists.
   { id: 'unclassified-durable-owners', status: 'outstanding', modules: [] },
