@@ -15,7 +15,7 @@ export function createVitestTempFixture(host, workspace, body) {
   // Generated workflow suites need the same private, real coordinators as the
   // ordinary server runner, even though their setup omits unrelated mocks.
   writeFileSync(join(root, 'vitest.setup.js'), workspace === 'server'
-    ? `import ${JSON.stringify(new URL('../../server/lib/admissionTestSetup.js', import.meta.url).href)};\n`
+    ? `import ${JSON.stringify(new URL('../../server/test/admissionSetup.js', import.meta.url).href)};\n`
     : '');
   const testFile = workspace === 'client' ? 'src/lifecycle.test.js' : 'lifecycle.test.js';
   writeFileSync(join(root, testFile), `
