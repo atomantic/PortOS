@@ -82,7 +82,8 @@ describe('agent API key', () => {
     await setAgentKeyEnabled(true);
     const key = await readKey();
     expect(key).toMatchObject({ url: 'http://127.0.0.1:5553', token: 'tok-1' });
-    expect((await stat(keyFile)).mode & 0o777).toBe(0o600);
+    // Windows has no POSIX mode bits; stat reports 0o666 whatever was asked.
+    if (process.platform !== 'win32') expect((await stat(keyFile)).mode & 0o777).toBe(0o600);
     expect(liveKeySessions()).toHaveLength(1);
 
     await __testing.reconcile();
