@@ -1,5 +1,9 @@
 /**
  * Inventory of durable asset owners for backup snapshot consistency (#9923).
+ * Scope: enumerated managed runtime writers using the shared install protocol.
+ * External tools and preexisting corruption are outside this concurrency claim.
+ * Startup migrations finish before backup routes/scheduling become available.
+ * New managed byte-plus-record workflows must enter this inventory.
  * An owner is one workflow that writes, replaces or deletes bytes under `data/`
  * together with a row (PostgreSQL or a `data/` record) that names them.
  *
@@ -445,26 +449,13 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     modules: ['lib/runtimeFilePublication.js', 'services/agentTuiSpawning/outputSpooler.js',
       'services/agentTuiSpawning/sessionController.js', 'cos-runner/index.js', 'cos-runner/tuiExit.js',
       'services/agentCliSpawning.js', 'services/agentSpawnDispatch.js',
-      'services/subAgentSpawner.js', 'services/featureAgents.js'],
+      'services/subAgentSpawner.js', 'services/featureAgents.js',
+      'services/runner.js', 'services/loops.js', 'cos-runner/completion.js'],
   },
   {
     id: 'agent-run-recording-publication',
     status: 'admitted',
     modules: ['services/agentRunTracking.js'],
-  },
-  {
-    // Active run transcripts and their file-primary completion metadata are
-    // mutated by server and separate CoS/TUI runner processes. Final output
-    // replacement precedes metadata; spool batches append output/state in
-    // parallel and raw truncation flags are separate writes. A server-local
-    // lease cannot drain the other process; requires a cross-process barrier.
-    id: 'runtime-recording-publication-across-processes',
-    status: 'outstanding',
-    modules: [
-      'services/runner.js', 'services/tuiPromptRunner.js', 'services/loops.js', 'cos-runner/index.js',
-      'services/agentTuiSpawning/outputSpooler.js',
-      'services/agentTuiSpawning/sessionController.js',
-    ],
   },
   {
     // Downloads remain staged outside admission. Hash-path installation/dedupe
@@ -473,9 +464,6 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     id: 'beeper-attachment-mirror', status: 'admitted',
     modules: ['services/beeperAttachments.js'],
   },
-  // Anything the sweep did not reach. A new asset owner lands here until it is
-  // classified; the claim cannot become `global` while this entry exists.
-  { id: 'unclassified-durable-owners', status: 'outstanding', modules: [] },
 ]);
 
 /**
