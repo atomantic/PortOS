@@ -17,10 +17,12 @@
  *   neither captured.
  * - `reference-only`: writes rows naming bytes that were already durable before
  *   its trigger was published, and writes no bytes itself, so there is no gap
- *   for a cut to land in. A deletion that commits the row that stops naming
- *   its bytes before it removes them belongs here too: the dump that follows a
+ *   for a cut to land in. A deletion that commits the PostgreSQL row that stops
+ *   naming its bytes before it removes them belongs here too: the dump that follows a
  *   cut's file copy either sees no row, or sees one whose bytes were removed
- *   only after the copy finished. So does a record whose bytes no row names:
+ *   only after the copy finished. File-primary indexes require admission because
+ *   their copy order relative to referenced bytes is not guaranteed. So does a
+ *   record whose bytes no row names:
  *   the copy takes it whole or not at all, and no dumped row can dangle.
  * - `outstanding`: still changes bytes and rows outside admission.
  *

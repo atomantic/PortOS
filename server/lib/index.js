@@ -844,3 +844,5 @@ export * as peerAdminValidation from './peerAdminValidation.js';
 export * from './speechMatch.js';
 
 export * from './musicVideoReviewDraft.js';
+export * from './backupSharedAdmission.js';
+export * from './runtimeFilePublication.js';
