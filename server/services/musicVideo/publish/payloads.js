@@ -16,6 +16,7 @@ const DEFAULT_SUBREDDIT = 'aivideo';
 const missing = (message) => new ServerError(message, { status: 422, code: 'PUBLISH_ASSET_MISSING' });
 const stale = () => new ServerError('The publishing kit was built from an earlier render — rebuild the kit before filling this draft', { status: 409, code: 'PUBLISH_KIT_STALE' });
 const text = (v) => (typeof v === 'string' ? v.trim() : '');
+const titleCase = (name) => name.replace(/\S+/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
 const kitOf = (project) => (project?.publishKit && typeof project.publishKit === 'object' ? project.publishKit : {});
 
 /** Refuse a kit whose master came from a different render than the project's current one. */
@@ -203,6 +204,8 @@ const BUILDERS = {
       genre: genre || null,
       secondaryGenre: secondary && secondary !== genre ? secondary : null,
       language: text(options.language) || 'English',
+      // DistroKid title-cases names unless told the capitalization is deliberate ("atomantic", "DJ Example").
+      preserveCaps: typeof options.preserveCaps === 'boolean' ? options.preserveCaps : artist !== titleCase(artist),
       // Store profiles: a first release asks for new ones; otherwise the director links the existing ones.
       newArtistProfile: options.newArtistProfile === true,
       // Apple Music requires a performer and a producer credit (real names).

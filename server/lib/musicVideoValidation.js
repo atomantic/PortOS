@@ -747,6 +747,7 @@ export const musicVideoPublishPrepareSchema = z.object({
   language: z.string().trim().min(1).max(60),
   songwriterRole: z.enum(['music', 'lyrics', 'both']),
   newArtistProfile: z.boolean(),
+  preserveCaps: z.boolean(),
   performerName: z.string().trim().min(1).max(100),
   performerRole: z.string().trim().min(1).max(60),
   producerName: z.string().trim().min(1).max(100),
