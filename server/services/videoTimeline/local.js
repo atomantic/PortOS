@@ -1,3 +1,5 @@
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { discardUnpublishedVideo } from '../videoGen/generateVideoHelpers.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Video Timeline — non-linear editor backend.
@@ -722,31 +724,39 @@ async function renderAdmittedProject(projectId, { posterSec } = {}, permit) {
           permit.finish();
           return;
         }
-        job.status = 'complete';
-        // The encode args already include -movflags +faststart, so no separate
-        // remux pass is needed here.
-        const thumb = await generateThumbnail(outputPath, jobId, { atSec: posterSec });
+        const thumb = await withBackupAssetPublication(async () => {
+          try {
+            // The encode args already include -movflags +faststart, so no separate
+            // remux pass is needed here.
+            const thumb = await generateThumbnail(outputPath, jobId, { atSec: posterSec });
 
-        // Push to existing video history with a timelineProjectId flag so the
-        // Media History page picks it up alongside generated clips.
-        const renderedNumFrames = Math.round(totalDuration * (fps || 24));
-        const meta = {
-          id: jobId,
-          prompt: `Timeline: ${project.name}`,
-          modelId: 'timeline',
-          seed: 0,
-          width: canonW,
-          height: canonH,
-          numFrames: renderedNumFrames,
-          fps: fps || 24,
-          filename,
-          thumbnail: thumb,
-          createdAt: new Date().toISOString(),
-          timelineProjectId: projectId,
-        };
-        // Serialized append through the single shared history tail so a concurrent
-        // download/render/timeline write can't clobber this entry.
-        await mutateVideoHistory((history) => { history.unshift(meta); return history; });
+            // Push to existing video history with a timelineProjectId flag so the
+            // Media History page picks it up alongside generated clips.
+            const renderedNumFrames = Math.round(totalDuration * (fps || 24));
+            const meta = {
+              id: jobId,
+              prompt: `Timeline: ${project.name}`,
+              modelId: 'timeline',
+              seed: 0,
+              width: canonW,
+              height: canonH,
+              numFrames: renderedNumFrames,
+              fps: fps || 24,
+              filename,
+              thumbnail: thumb,
+              createdAt: new Date().toISOString(),
+              timelineProjectId: projectId,
+            };
+            // Serialized append through the single shared history tail so a concurrent
+            // download/render/timeline write can't clobber this entry.
+            await mutateVideoHistory((history) => { history.unshift(meta); return history; });
+            return thumb;
+          } catch (error) {
+            await discardUnpublishedVideo({ jobId, outputPath });
+            throw error;
+          }
+        });
+        job.status = 'complete';
         console.log(`✅ Timeline rendered [${jobId.slice(0, 8)}]: ${filename}`);
         broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });
         projectRenders.delete(projectId);

@@ -100,7 +100,7 @@ Admission inventory (`withBackupAssetPublication`):
 | YouTube ingest (`youtubeIngest.js`) | Covered (#9982 partial): downloads run outside admission; the index record that first names a transcript or audio file takes the lease, and forgetting an ingest drops the record and unlinks its files under one lease |
 | Digital twin documents and genome upload/delete (`digital-twin-documents.js`, `genome.js`) | Covered (#9982 partial): each document file or raw genome file and the meta record naming it is one lease, including deletion |
 | Derived media index (`mediaAssetIndex/`) | Rebuilt: `media_assets` rows are excluded from snapshot dumps; database restore rebuilds atomically from disk before reopening admission, and relevant file restores refresh the mirror |
-| Remaining durable owners, classified by domain in `backupAssetOwners.js` | Outstanding (#9982): video generation and image generation tails |
+| Remaining durable owners, classified by domain in `backupAssetOwners.js` | Outstanding (#9982): image generation tails |
 | Explicit file purge (`dataManager.js`, `routes/uploads.js`, `routes/attachments.js`) | Covered: single and bulk deletions hold one lease. These operator-directed removals may intentionally leave external references; admission prevents a snapshot from interleaving with the removal, not from preserving that already-deleted state |
 | Durable replacement/deletion owners not yet classified | Outstanding (#9982) |
 | Snapshot consistency claim (`backupAssetOwners.js`, see below) | Covered (#9982 partial) |
@@ -246,8 +246,14 @@ faststart staging file before releasing the lease. A missing thumbnail retains
 the existing thumbnail-less behavior. Terminal status and notifications follow
 the durable commit. Caller publication latches keep committed outputs and earlier
 batch members out of later failure or cancellation cleanup. Federated video
-replacement/replay and derived stitch, upscale, timeline and HTML-composition
-lanes remain outstanding. The derived media index is excluded from snapshot dumps: its asynchronous refresh may lag authoritative files, so preserving its rows would preserve stale file references. Both legacy and new database restores rebuild it atomically from local sidecars and video history before reopening admission. Unreadable sources or SQL failure keep recovery fenced for a same-operation retry, without replaying the dump. Full and media-selective file restores rebuild it too; a failed rebuild is reported as a reconciliation failure. This does not make unadmitted authoritative media workflows consistent.
+transfers verify a staging file outside admission, then lease replacement,
+poster generation and history together. A failed replacement restores the prior
+clip and poster before releasing admission; replay replaces the existing row.
+Derived stitch, inline and queued upscale, timeline and HTML-composition renders
+produce fresh output outside admission, then lease poster and history publication
+through rollback. HTML compositions commit all formats together. 
+
+The derived media index is excluded from snapshot dumps: its asynchronous refresh may lag authoritative files, so preserving its rows would preserve stale file references. Both legacy and new database restores rebuild it atomically from local sidecars and video history before reopening admission. Unreadable sources or SQL failure keep recovery fenced for a same-operation retry, without replaying the dump. Full and media-selective file restores rebuild it too; a failed rebuild is reported as a reconciliation failure. This does not make unadmitted authoritative media workflows consistent.
 
 Code Animation writes its HTML, revision trees and run artifacts before the row
 that first names them. A generated animation's HTML and the job row marking it
@@ -259,7 +265,7 @@ Every production run-row write takes the lease, because the row is what first
 names the stage's frames, soundtrack WAV and Blender bake. A Blender film is
 copied under a fresh name and muxed before its history entry commits under the
 lease. A browser render's history entry is written by the HTML-composition job
-(still outstanding with video generation), so the soundtrack mux holds the lease
+under admission, so the soundtrack mux holds the lease
 across its in-place install over that file, but not across the encode.
 
 A sprite's row holds metadata and workflow state (status, the frozen chroma key,
