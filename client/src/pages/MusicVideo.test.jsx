@@ -2590,9 +2590,9 @@ describe('MusicVideo stage tabs (#9243)', () => {
     expect(await screen.findByLabelText(/Making-of notes/)).toHaveValue('Example second story');
     expect(screen.getByLabelText(/Full video URL/)).toHaveValue('https://example.com/second');
     fireEvent.click(screen.getByRole('button', { name: 'Draft copy' }));
-    await waitFor(() => expect(draftMusicVideoPublishCopy).toHaveBeenCalledWith(second.id, {
-      notes: 'Example second story', links: { youtube: 'https://example.com/second' },
-    }));
+    await waitFor(() => expect(draftMusicVideoPublishCopy).toHaveBeenCalledWith(second.id, expect.objectContaining({
+      notes: 'Example second story', links: { youtube: 'https://example.com/second' }, length: 'short',
+    })));
   });
 
   it('opens the stage named in the URL, falls back to the project\'s own stage for an unknown one, and the tabs navigate', async () => {
