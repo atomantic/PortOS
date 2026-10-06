@@ -9,22 +9,30 @@ import { PUBLISH_STEP_TIMEOUT_MS as T, clickVisibleText, loginRequired, replaceE
 const UPLOAD_URL = 'https://www.tiktok.com/tiktokstudio/upload';
 const label = 'TikTok';
 const TOUR = '.react-joyride__overlay';
+// Joyride renders each step's tooltip (stock or custom) inside its floater.
+const TOUR_BUTTONS = '.__floater button, .react-joyride__tooltip button';
 
 /**
  * Close TikTok Studio's onboarding tooltips ("Preview your video on your
  * phone"…). Their overlay covers the whole form, so every click times out
- * until it is gone. A tour can chain several steps, and once dismissed it does
- * not come back for the account.
+ * until it is gone. Joyride mounts a step a beat after the upload, so the
+ * first check waits `waitMs` for one to appear. A tour can chain several
+ * steps, and once dismissed it does not come back for the account. Only the
+ * tooltip's own buttons are pressed; Escape is the fallback.
  */
-async function dismissStudioTour(page, { attempts = 5 } = {}) {
+async function dismissStudioTour(page, { attempts = 5, waitMs = 3000 } = {}) {
+  if (waitMs) await page.locator(TOUR).first().waitFor({ state: 'attached', timeout: waitMs }).catch(() => {});
   for (let i = 0; i < attempts; i += 1) {
     if (!(await page.locator(TOUR).count())) return true;
-    const closed = await clickVisibleText(page, 'Got it').then(() => true, () => clickVisibleText(page, 'Skip').then(() => true, () => false));
-    if (!closed) await page.keyboard.press('Escape');
+    const press = (text) => clickVisibleText(page, text, { selector: TOUR_BUTTONS }).then(() => true, () => false);
+    if (!(await press('Got it')) && !(await press('Skip'))) await page.keyboard.press('Escape');
     await page.waitForTimeout(800);
   }
   return !(await page.locator(TOUR).count());
 }
+
+/** Close a tour step that mounted after the last check, before a click it would swallow. */
+const clearTour = (page) => dismissStudioTour(page, { waitMs: 0 });
 
 export const tiktokAdapter = {
   label,
@@ -44,6 +52,7 @@ export const tiktokAdapter = {
     let cover = false;
     if (payload.cover) {
       await step(label, 'set the cover frame', async () => {
+        await clearTour(page);
         await page.locator('text=Edit cover').first().click({ timeout: T });
         await page.locator('input[type=file][accept*=image]').first().setInputFiles(payload.cover.path, { timeout: T });
         await page.waitForTimeout(2500);
@@ -52,7 +61,10 @@ export const tiktokAdapter = {
       });
       cover = true;
     }
-    await step(label, 'open the post settings', () => page.locator('text=Show more').first().click({ timeout: T }));
+    await step(label, 'open the post settings', async () => {
+      await clearTour(page);
+      await page.locator('text=Show more').first().click({ timeout: T });
+    });
     const aiLabel = await step(label, 'turn on the AI-generated label', async () => {
       const was = await page.evaluate(() => {
         const text = [...document.querySelectorAll('*')].find((e) => e.children.length === 0 && e.textContent.trim() === 'AI-generated content');
