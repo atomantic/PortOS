@@ -90,6 +90,7 @@ beforeEach(() => {
     attachAudio: stub('attach', async () => ({})),
     probeDuration: stub('probe', async () => 187),
     analyzeSong: stub('analyze', async () => ({})),
+    designCoverArt: vi.fn(async () => ({})),
     startProduction: stub('production', async () => ({ run: { id: 'mvpr-1' } })),
     generateCode: stub('code', async () => ({})),
     generateDocument: stub('document', async () => ({ document: { directory: 'music-video/mv-auto/composition/example' } })),
@@ -117,6 +118,8 @@ describe('startAutonomousVideo', () => {
     expect(calls).toEqual(['createProject', 'brief', 'updateProject', 'lyrics', 'board', 'updateProject', 'suno', 'track', 'probe', 'attach', 'updateProject', 'analyze', 'production']);
     expect(runOf()).toMatchObject({ status: 'running', stage: 'produce' });
     expect(runOf().output).toMatchObject({ trackId: 'track-1', moodBoardId: 'board-1', productionRunId: 'mvpr-1', sunoSongIds: ['song-a', 'song-b'] });
+    // The made song gets its own single cover design, ready in the publishing kit.
+    expect(doubles.designCoverArt).toHaveBeenCalledWith('mv-auto', { providerId: null, model: null });
     expect(doubles.startProduction).toHaveBeenCalledWith('mv-auto', expect.objectContaining({
       pool: [{ kind: 'image', mode: 'local', model: 'flux2-dev' }, { kind: 'video', mode: 'local' }],
       limits: { maxGenerations: 40, maxReviewAttempts: 3 },

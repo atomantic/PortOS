@@ -26,13 +26,17 @@ afterAll(() => cleanupTempDataRoots());
 const compose = vi.fn(async ({ out }) => { await writeFile(out, 'jpeg'); return { width: 3000, height: 3000 }; });
 const enqueue = vi.fn(async () => ({ jobId: 'job-example' }));
 const jobStatus = vi.fn(async () => 'queued');
-const chooseRoute = vi.fn(async (_project, { preferred } = {}) => (preferred?.mode === 'codex' ? { mode: 'codex', model: null } : null));
+const DRAFT = { imagePrompt: 'Example image prompt: a grainy profile in blue light', rationale: 'Example reason.', design: { layout: 'top-center', typeface: 'serif', weight: 'light', letterCase: 'lower', titleColor: '#f0e6d2', accentColor: '#3366ff', backdrop: 'none', tagStyle: 'plain' } };
+const runPrompt = vi.fn(async () => ({ text: JSON.stringify(DRAFT) }));
+const defaultRoute = vi.fn(async () => ({ mode: 'grok', model: null }));
 
 beforeEach(() => {
-  compose.mockClear(); enqueue.mockReset(); enqueue.mockResolvedValue({ jobId: 'job-example' }); chooseRoute.mockClear();
+  compose.mockClear(); enqueue.mockReset(); enqueue.mockResolvedValue({ jobId: 'job-example' }); defaultRoute.mockClear();
   jobStatus.mockReset(); jobStatus.mockResolvedValue('queued');
+  runPrompt.mockReset(); runPrompt.mockResolvedValue({ text: JSON.stringify(DRAFT) });
   cover.__setCoverArtDepsForTests({
-    compose, enqueue, chooseRoute, jobStatus,
+    compose, enqueue, defaultRoute, jobStatus,
+    runner: async () => ({ resolveProviderAndModel: async () => ({ provider: { id: 'example-provider' }, selectedModel: null }), runPromptThroughProvider: runPrompt }),
     getSettings: async () => ({}),
     getPlatforms: async () => ({ distrokid: { enabled: true, account: 'Example Artist' } }),
     imageParams: async (_settings, route, common) => ({ ...common, provider: route.mode }),
@@ -82,14 +86,19 @@ describe('release cover art', () => {
     expect(compose).not.toHaveBeenCalled();
   });
 
-  it('queues one tagged cover image on Codex, then composes the cover from it when it lands', async () => {
+  it('queues one tagged cover image on the default image generator, then composes the cover from it when it lands', async () => {
     const { id } = await projectWithThumbnail();
     const { project } = await cover.generateCoverArtSource(id, { notes: 'Close-up profile of the singer' });
-    expect(project.publishKit.coverArt.pending).toMatchObject({ jobId: 'job-example', mode: 'codex' });
+    expect(project.publishKit.coverArt.pending).toMatchObject({ jobId: 'job-example', mode: 'grok' });
+    // No design yet: the song's own design is drafted first, steered by the notes.
+    expect(runPrompt.mock.calls[0][0]).toMatchObject({ source: 'music-video-cover-design' });
+    expect(runPrompt.mock.calls[0][0].prompt).toContain('Close-up profile of the singer');
+    expect(project.publishKit.coverArt.design).toMatchObject({ layout: 'top-center', typeface: 'serif' });
     const { requestId } = project.publishKit.coverArt.pending;
     const job = enqueue.mock.calls[0][0];
-    expect(job).toMatchObject({ kind: 'image', params: { width: 1024, height: 1024, provider: 'codex', musicVideo: { projectId: id, coverArt: { requestId } } } });
-    expect(job.params.prompt).toContain('Close-up profile of the singer');
+    expect(job).toMatchObject({ kind: 'image', params: { width: 1024, height: 1024, provider: 'grok', musicVideo: { projectId: id, coverArt: { requestId } } } });
+    expect(job.params.prompt).toContain('Example image prompt');
+    expect(job.params.prompt).toContain('Keep the top of the frame calm');
     expect(job.params.prompt).toContain('No text');
     await expect(cover.generateCoverArtSource(id)).rejects.toMatchObject({ status: 409, code: 'COVER_ART_IN_PROGRESS' });
 
@@ -145,9 +154,43 @@ describe('release cover art', () => {
     expect(enqueue).toHaveBeenCalledTimes(2);
   });
 
-  it('says so when no image backend is enabled', async () => {
+  it("drafts the song's own lettering, adjusts it from a direction, and re-sets an existing cover in it", async () => {
+    const { id, thumb } = await projectWithThumbnail();
+    await cover.composeProjectCoverArt(id, { source: { kind: 'thumbnail', filename: thumb } });
+    expect(compose.mock.calls[0][0].design).toBeNull();
+
+    const drafted = (await cover.designCoverArt(id, { direction: 'quiet and tiny type' })).project.publishKit.coverArt;
+    expect(drafted).toMatchObject({ design: { layout: 'top-center', weight: 'light' }, imagePrompt: DRAFT.imagePrompt, rationale: 'Example reason.', direction: 'quiet and tiny type' });
+    expect(compose.mock.calls.at(-1)[0].design).toMatchObject({ layout: 'top-center', typeface: 'serif' });
+
+    // An adjustment sends the current design along to be revised.
+    runPrompt.mockResolvedValueOnce({ text: JSON.stringify({ ...DRAFT, design: { ...DRAFT.design, scale: 'large', weight: 'banana' } }) });
+    const adjusted = (await cover.designCoverArt(id, { direction: 'make the title bigger' })).project.publishKit.coverArt;
+    expect(runPrompt.mock.calls.at(-1)[0].prompt).toContain('"layout":"top-center"');
+    // An option outside the vocabulary falls back rather than reaching the renderer.
+    expect(adjusted.design).toMatchObject({ scale: 'large', weight: 'bold' });
+
+    runPrompt.mockResolvedValueOnce({ text: 'no json here' });
+    await expect(cover.designCoverArt(id)).rejects.toMatchObject({ status: 502, code: 'COVER_DESIGN_UNPARSEABLE' });
+  });
+
+  it("queues on the install's own default image generator, never a fixed one", async () => {
     const { id } = await projectWithThumbnail();
-    chooseRoute.mockResolvedValue(null);
+    cover.__setCoverArtDepsForTests({
+      compose, enqueue, jobStatus,
+      runner: async () => ({ resolveProviderAndModel: async () => ({ provider: { id: 'example-provider' }, selectedModel: null }), runPromptThroughProvider: runPrompt }),
+      getSettings: async () => ({ imageGen: { mode: 'local' } }),
+      getPlatforms: async () => ({}),
+      imageParams: async (_settings, route, common) => ({ ...common, provider: route.mode }),
+      withStyle: async (_project, params) => params,
+    });
+    await cover.generateCoverArtSource(id);
+    expect(enqueue.mock.calls[0][0].params.provider).toBe('local');
+  });
+
+  it('says so when image generation is not set up', async () => {
+    const { id } = await projectWithThumbnail();
+    defaultRoute.mockResolvedValueOnce(null);
     await expect(cover.generateCoverArtSource(id)).rejects.toMatchObject({ status: 409, code: 'COVER_ART_ROUTE_UNAVAILABLE' });
     expect(enqueue).not.toHaveBeenCalled();
   });
@@ -164,6 +207,11 @@ describe('cover lettering', () => {
     await composeCoverArt({ source, out, title: 'Example Song', tag: 'Example Artist', size: 1000 });
     const meta = await sharp(out).metadata();
     expect(meta).toMatchObject({ format: 'jpeg', width: 1000, height: 1000 });
+    // Every layout renders (the vertical one rotates its line).
+    for (const layout of ['top-center', 'center', 'vertical-left']) {
+      await composeCoverArt({ source, out, title: 'A Much Longer Example Song Title Here', tag: 'Example Artist', design: { layout, backdrop: 'band', tagStyle: 'boxed', rule: true }, size: 600 });
+      expect(await sharp(out).metadata()).toMatchObject({ width: 600, height: 600 });
+    }
 
     // A portrait phone photo stored landscape with an EXIF rotation crops on the upright image.
     const rotated = join(dir, 'rotated.jpg');

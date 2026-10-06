@@ -695,6 +695,11 @@ export const musicVideoCoverArtComposeSchema = z.object({
   tag: z.string().max(24).optional(),
   focusX: z.number().min(0).max(1).optional(),
 }).strict();
+export const musicVideoCoverArtDesignSchema = z.object({
+  direction: z.string().max(1500).optional(),
+  providerId: z.string().min(1).max(200).optional(),
+  model: z.string().min(1).max(200).optional(),
+}).strict();
 export const musicVideoCoverArtGenerateSchema = z.object({
   notes: z.string().max(1500).optional(),
   reference: z.object({ kind: z.literal('image'), filename: z.string().min(1).max(300) }).strict().optional(),

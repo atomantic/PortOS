@@ -23,10 +23,12 @@ export function coverArtSources(project) {
 
 /**
  * Release cover art: the square image Spotify (via DistroKid) and Suno show.
- * Any image the project has can be the source; the title and artist tag are
- * set on it by code, so the lettering stays sharp. "Make with Codex" asks an
- * image backend for a fresh source, and the cover is composed from it when it
- * lands.
+ * Each song has its own design: the lettering and the photo, drafted from the
+ * song and steered by what the director types. "Restyle" redrafts the
+ * lettering from that direction (or adjusts it); "Make a new image" asks an
+ * image backend for a fresh photo (or an adjusted take on the current one).
+ * Any image the project has can be the photo; the title and artist are set
+ * on it by code, so the lettering stays sharp.
  */
 export default function CoverArtPanel({ project, publishKit }) {
   const art = project?.publishKit?.coverArt || {};
@@ -37,15 +39,16 @@ export default function CoverArtPanel({ project, publishKit }) {
   const [tag, setTag] = useState(null);
   const [focusX, setFocusX] = useState(Number.isFinite(art.focusX) ? art.focusX : 0.5);
   const [notes, setNotes] = useState('');
-  const [likeness, setLikeness] = useState(false);
-  const busy = publishKit.composing;
+  const [adjustImage, setAdjustImage] = useState(false);
+  const busy = publishKit.composing || publishKit.designing;
   const chosen = art.source ? `${art.source.kind}:${art.source.filename}` : null;
   const look = () => ({ title: title.trim(), ...(tag !== null ? { tag: tag.trim() } : {}), focusX });
   const compose = (source) => publishKit.composeCover({ ...(source ? { source: { kind: source.kind, filename: source.filename } } : {}), ...look() });
   const generate = () => publishKit.generateCover({
     ...(notes.trim() ? { notes: notes.trim() } : {}),
-    ...(likeness && art.source?.kind === 'image' ? { reference: { kind: 'image', filename: art.source.filename } } : {}),
+    ...(adjustImage && art.source?.kind === 'image' ? { reference: { kind: 'image', filename: art.source.filename } } : {}),
   });
+  const restyle = () => publishKit.designCover(notes.trim() ? { direction: notes.trim() } : {});
 
   return (
     <section aria-label="Cover art" className="rounded-lg border border-port-border bg-port-card p-3 space-y-2 text-xs">
@@ -108,22 +111,29 @@ export default function CoverArtPanel({ project, publishKit }) {
       </div>
 
       <div className="space-y-1 rounded border border-port-border p-2">
-        <label htmlFor={idFor('notes')} className="block text-[11px] text-port-text-muted">Make a new cover image (optional: what it should show)</label>
+        {art.rationale && <p className="text-port-text-muted">This song's look: {art.rationale}</p>}
+        <label htmlFor={idFor('notes')} className="block text-[11px] text-port-text-muted">
+          {art.design ? 'Adjust the style or the image (optional)' : 'Style direction for this song (optional)'}
+        </label>
         <textarea id={idFor('notes')} value={notes} maxLength={1500} rows={2} onChange={(e) => setNotes(e.target.value)}
-          placeholder="Close-up profile of the singer under flash"
+          placeholder={art.design ? 'Bigger title, warmer light, less contrast' : 'Grainy black and white, tiny lowercase type'}
           className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs" />
-        <div className="flex flex-wrap items-center gap-3">
-          {art.source?.kind === 'image' && (
-            <label htmlFor={idFor('likeness')} className="flex items-center gap-1.5 min-h-[44px] sm:min-h-0">
-              <input id={idFor('likeness')} type="checkbox" checked={likeness} onChange={(e) => setLikeness(e.target.checked)} />
-              Keep the likeness of the current cover image
-            </label>
-          )}
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" onClick={restyle} disabled={busy}
+            className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] sm:min-h-0">
+            <Sparkles size={13} /> {publishKit.designing ? 'Designing…' : (art.design ? 'Restyle the lettering' : 'Design the cover')}
+          </button>
           {/* Never disabled by `pending`: the server tells a live render from one a restart lost. */}
           <button type="button" onClick={generate}
             className="flex items-center gap-1 bg-port-accent/20 text-port-accent rounded px-2 py-1.5 min-h-[44px] sm:min-h-0">
-            <Sparkles size={13} /> Make with Codex
+            <ImageIcon size={13} /> Make a new image
           </button>
+          {art.source?.kind === 'image' && (
+            <label htmlFor={idFor('adjust-image')} className="flex items-center gap-1.5 min-h-[44px] sm:min-h-0">
+              <input id={idFor('adjust-image')} type="checkbox" checked={adjustImage} onChange={(e) => setAdjustImage(e.target.checked)} />
+              Start from the current image
+            </label>
+          )}
         </div>
       </div>
     </section>

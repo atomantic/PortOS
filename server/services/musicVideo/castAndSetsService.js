@@ -139,7 +139,7 @@ async function fail(projectId, reason, error = null) {
  * then the brief's other queueable image tools in catalog order, then the
  * install's Music Video render default. Returns `{ mode, model }` or null.
  */
-export async function chooseCastAndSetsRoute(project, { preferred = null, settings } = {}) {
+async function chooseCastAndSetsRoute(project, { preferred = null, settings } = {}) {
   if (deps.resolveRoute) return deps.resolveRoute(project, { preferred, settings });
   const { resolveRenderTargetConfig } = await import('../imageGen/cloudProviderConfig.js');
   // A mode is usable when it rides the queue and, for a cloud backend, its

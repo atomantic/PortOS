@@ -248,6 +248,8 @@ export const selectMusicVideoPublishThumbnail = (id, filename, options = {}) =>
 // (the result arrives over the `music-video:cover-art` socket event).
 export const composeMusicVideoCoverArt = (id, body, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish-kit/cover-art`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
+export const designMusicVideoCoverArt = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/cover-art/design`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
 export const generateMusicVideoCoverArt = (id, body, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish-kit/cover-art/generate`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
 // ---- Posting (#9282) ----

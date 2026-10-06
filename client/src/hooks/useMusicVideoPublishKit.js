@@ -11,6 +11,7 @@ import {
   selectMusicVideoPublishThumbnail,
   composeMusicVideoCoverArt,
   generateMusicVideoCoverArt,
+  designMusicVideoCoverArt,
 } from '../services/apiMusicVideo.js';
 import useSseJobSlot from './useSseJobSlot.js';
 
@@ -28,6 +29,7 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
   const [drafting, setDrafting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [composing, setComposing] = useState(false);
+  const [designing, setDesigning] = useState(false);
 
   const reload = (id) => {
     if (!id) return;
@@ -98,6 +100,13 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
       .catch(() => null)
       .finally(() => setComposing(false));
   };
+  const designCover = (body) => {
+    setDesigning(true);
+    return designMusicVideoCoverArt(projectId, body)
+      .then(apply)
+      .catch(() => null)
+      .finally(() => setDesigning(false));
+  };
   const generateCover = (body) => generateMusicVideoCoverArt(projectId, body).then(apply).catch(() => null);
 
   return {
@@ -112,6 +121,8 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
     selectThumbnail,
     composing,
     composeCover,
+    designing,
+    designCover,
     generateCover,
   };
 }

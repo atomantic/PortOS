@@ -91,6 +91,7 @@ const defaults = {
   attachAudio: async (trackId, filename, take) => (await import('../trackAudioAttach.js')).attachAudioAsRender(trackId, filename, take),
   probeDuration: (filename) => probeVideoDuration(join(PATHS.music, filename)).catch(() => null),
   analyzeSong: async (projectId) => (await import('./projectAudio.js')).analyzeProjectSong(projectId),
+  designCoverArt: async (projectId, input) => (await import('./coverArt.js')).designCoverArt(projectId, input),
   startProduction: async (...args) => (await import('./productionService.js')).startProduction(...args),
   generateDocument: async (...args) => (await import('./documentGeneration.js')).generateMixedMediaDocument(...args),
   acceptDocument: async (...args) => (await import('./documentGeneration.js')).acceptMixedMediaDocument(...args),
@@ -388,8 +389,15 @@ const STAGES = {
     return { output: { trackId: track.id, sunoSongIds: song.songIds } };
   },
 
-  async analyze({ project }) {
+  async analyze({ project, run }) {
     await deps.analyzeSong(project.id);
+    // The single's own cover design, drafted from the song just made, ready
+    // for the publishing kit. Best-effort: a failed draft never stops the video.
+    if (!project.publishKit?.coverArt?.design) {
+      const { providerId, model } = await llmOf(run, 'brief');
+      await deps.designCoverArt(project.id, { providerId: providerId || null, model: model || null })
+        .catch((err) => console.warn(`⚠️ Autonomous music video ${short(run.id)} cover design skipped: ${trimTo(err.message, 200)}`));
+    }
     return { output: {} };
   },
 

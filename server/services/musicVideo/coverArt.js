@@ -3,14 +3,17 @@
  *
  * `project.publishKit.coverArt` holds one composed square cover: a source
  * image (a kit thumbnail or any gallery image, Cast & Sets renders included)
- * cropped square with the title set on a split-flap row by code
- * (coverArtCompose.js). The director can also ask an image backend (Codex
- * first) for a fresh source; that job is tagged `musicVideo: { projectId,
- * coverArt: { requestId } }` and musicVideoCoverArtImageHook.js composes the
- * cover from it when it lands. Nothing here runs without a director action
- * (AI Provider Usage Policy).
+ * cropped square with the title and artist set over it by code, in the song's
+ * own design (coverArtCompose.js). The design is drafted per song by one
+ * provider call from the song and the director's direction, and redrafted
+ * from their adjustments (coverArtDesign.js). The install's default image generator
+ * makes the cover photo from the design's image prompt; that job is tagged
+ * `musicVideo: { projectId, coverArt: { requestId } }` and
+ * musicVideoCoverArtImageHook.js composes the cover from it when it lands.
+ * Nothing here runs without a director action (AI Provider Usage Policy).
  *
  *   coverArt: { filename, source: { kind, filename }, title, tag, focusX,
+ *               design, imagePrompt, rationale, direction, designedAt,
  *               composedAt, generated: [galleryFilename…],
  *               pending: { requestId, jobId, mode, requestedAt } | null,
  *               lastError: string | null }
@@ -23,7 +26,8 @@ import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { resolveGalleryImage } from '../../lib/pathSafety.js';
 import { trimTo } from '../../lib/textUtils.js';
-import { composeCoverArt } from './coverArtCompose.js';
+import { composeCoverArt, normalizeCoverDesign } from './coverArtCompose.js';
+import { buildCoverDesignPrompt, parseCoverDesign } from './coverArtDesign.js';
 import { musicVideoEvents } from './events.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { projectPublishKit, releaseKitFiles } from './publishKit.js';
@@ -32,7 +36,7 @@ const MAX_GENERATED = 12;
 const LIVE_JOB = new Set(['queued', 'running', 'canceling']);
 // A reservation that never got its job id (the process died mid-enqueue) stops blocking after this.
 const RESERVATION_TTL_MS = 2 * 60 * 1000;
-// Codex renders square at 1024; the compose scales it to the store size.
+// Cover photos render square at 1024; the compose scales them to the store size.
 const SOURCE_PX = 1024;
 
 const defaults = {
@@ -40,13 +44,28 @@ const defaults = {
   getSettings: async () => (await import('../settings.js')).getSettings(),
   getPlatforms: async () => (await import('./publish/platforms.js')).getPublishPlatforms(),
   enqueue: async (job) => (await import('../mediaJobQueue/index.js')).enqueueJob(job),
-  chooseRoute: async (project, opts) => (await import('./castAndSetsService.js')).chooseCastAndSetsRoute(project, opts),
+  defaultRoute: async (settings) => defaultImageRoute(settings),
   imageParams: async (settings, route, common) => (await import('./castAndSetsService.js')).imageJobParams(settings, route, common),
   withStyle: async (...args) => (await import('./styleReferences.js')).withMusicVideoStyle(...args),
   jobStatus: async (jobId) => (await import('../mediaJobQueue/index.js')).getJob(jobId)?.status || null,
+  runner: async () => import('../promptRunner.js'),
 };
 let deps = { ...defaults };
 export function __setCoverArtDepsForTests(overrides) { deps = { ...defaults, ...overrides }; }
+
+/**
+ * The install's own image generator for music videos: the Music Video render
+ * default, else the PortOS image default (local, Codex, Grok, …). Null when
+ * that backend cannot take a queued job or its cloud toggle is off.
+ */
+async function defaultImageRoute(settings) {
+  const [{ resolveRenderTargetConfig }, { QUEUEABLE_IMAGE_MODES }, { RENDER_TARGET }] = await Promise.all([
+    import('../imageGen/cloudProviderConfig.js'), import('../../lib/generationModes.js'), import('../../lib/renderTargets.js'),
+  ]);
+  const resolved = resolveRenderTargetConfig(settings, RENDER_TARGET.MUSIC_VIDEO, { usableInstallFallback: true });
+  if (!QUEUEABLE_IMAGE_MODES.includes(resolved.mode) || (resolved.cloud && !resolved.cloud.enabled)) return null;
+  return { mode: resolved.mode, model: null };
+}
 
 const coverError = (status, code, message) => new ServerError(message, { status, code });
 export const projectCoverArt = (project) => {
@@ -110,7 +129,7 @@ export async function composeProjectCoverArt(projectId, { source = null, title, 
   if (!next.title) throw coverError(422, 'VALIDATION_ERROR', 'Give the cover a title');
   await ensureDir(PATHS.videoThumbnails);
   const filename = `cover-${String(projectId).slice(3, 11)}-${randomUUID().slice(0, 8)}.jpg`;
-  await deps.compose({ ...next, source: path, out: safeUnder(PATHS.videoThumbnails, filename) });
+  await deps.compose({ ...next, design: art.design || null, source: path, out: safeUnder(PATHS.videoThumbnails, filename) });
   // The JPEG is written in place; the row that first names it commits under a backup lease (#9982).
   const out = await withBackupAssetPublication(() => writeCoverArt(projectId, () => ({
     ...next, filename, composedAt: new Date().toISOString(), lastError: null,
@@ -121,18 +140,55 @@ export async function composeProjectCoverArt(projectId, { source = null, title, 
   return { project: out.project };
 }
 
-/** The image prompt for a fresh cover source: the singer, the look, and room for the title. */
-function buildCoverArtPrompt(project, { notes = '' } = {}) {
+/**
+ * Draft this song's cover design (lettering and the photo to make) in one
+ * provider call. With a design already in place, `direction` adjusts it. An
+ * existing cover is recomposed in the new lettering at once; a new photo
+ * waits for "Make a cover image".
+ */
+export async function designCoverArt(projectId, { direction = '', providerId = null, model = null } = {}) {
+  const project = await requireProject(projectId);
+  const art = projectCoverArt(project);
+  const { resolveProviderAndModel, runPromptThroughProvider } = await deps.runner();
+  const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
+  if (!provider) throw coverError(503, 'NO_PROVIDER', 'No AI provider is available to design the cover');
+  const previous = art.design ? { design: art.design, imagePrompt: art.imagePrompt || '' } : null;
+  const prompt = buildCoverDesignPrompt(project, { direction: trimTo(direction, 1500), previous });
+  const { text } = await runPromptThroughProvider({ provider, model: selectedModel, prompt, source: 'music-video-cover-design' });
+  const drafted = parseCoverDesign(text);
+  if (!drafted) throw coverError(502, 'COVER_DESIGN_UNPARSEABLE', 'The cover design came back without a usable design. Try again or another model');
+  const out = await writeCoverArt(projectId, () => ({
+    design: drafted.design,
+    imagePrompt: drafted.imagePrompt || art.imagePrompt || '',
+    rationale: drafted.rationale,
+    direction: trimTo(direction, 1500),
+    designedAt: new Date().toISOString(),
+    lastError: null,
+  }));
+  console.log(`🖼️ Music Video cover art ${String(projectId).slice(3, 11)}: design ${previous ? 'adjusted' : 'drafted'} (${drafted.design.layout}, ${drafted.design.typeface})`);
+  if (art.source) return composeProjectCoverArt(projectId);
+  publish(projectId, out.project);
+  return { project: out.project };
+}
+
+// Where the photo should stay calm, so the title reads over it.
+const QUIET_AREA = {
+  'bottom-left': 'the lower left', 'bottom-center': 'the bottom', 'top-left': 'the upper left',
+  'top-center': 'the top', center: 'the middle', 'vertical-left': 'the left edge',
+};
+
+/** The image prompt for a cover photo: the design's own photo when drafted, adjusted by `notes`. */
+function buildCoverArtPrompt(project, art, { notes = '' } = {}) {
   const direction = project?.castAndSets?.direction || {};
   const p = direction.protagonist || {};
   const subject = trimTo([p.face, p.hair, p.signature].filter(Boolean).join('; '), 600);
   const look = trimTo(direction.look || project?.concept?.style, 600);
+  const layout = normalizeCoverDesign(art.design).layout;
   return [
     `Square single cover photograph for the song "${trimTo(project?.name || 'Untitled', 120)}".`,
-    trimTo(notes, 1500) || `A tight close-up portrait of the lead singer${subject ? `: ${subject}` : ''}.`,
-    look ? `Look: ${look}.` : '',
-    'Editorial flash photography: hard on-camera flash, deep shadows, rich color, sharp focus on the eyes.',
-    'Keep the bottom fifth of the frame simple and dark, since a title band is set over it later.',
+    art.imagePrompt || [`A close-up portrait of the lead singer${subject ? `: ${subject}` : ''}.`, look ? `Look: ${look}.` : ''].filter(Boolean).join(' '),
+    notes ? `Adjustment from the artist: ${trimTo(notes, 1500)}` : '',
+    `Keep ${QUIET_AREA[layout]} of the frame calm, since the title is set there later.`,
     'No text, letters, logos, or watermark anywhere in the image.',
   ].filter(Boolean).join(' ');
 }
@@ -149,19 +205,26 @@ async function pendingIsLive(pending) {
 }
 
 /**
- * Ask an image backend (Codex when enabled) for a new cover source. The
+ * Ask the install's default image generator for a new cover source. The
  * completion hook composes the cover from it with the current title and tag.
- * `reference` (a gallery image) keeps the singer's likeness; it defaults to
- * the Cast & Sets character sheet.
+ * `reference` (a gallery image) keeps the singer's likeness, or is the image
+ * `notes` adjusts; it defaults to the Cast & Sets character sheet. A song with
+ * no design yet gets one first, steered by `notes`.
  */
 export async function generateCoverArtSource(projectId, { notes = '', reference = null } = {}) {
-  const project = await requireProject(projectId);
+  let project = await requireProject(projectId);
   const previous = projectCoverArt(project).pending;
   if (await pendingIsLive(previous)) throw coverError(409, 'COVER_ART_IN_PROGRESS', 'A cover image is already being made');
+  if (!projectCoverArt(project).design) {
+    const designed = await designCoverArt(projectId, { direction: notes }).then(() => true).catch((err) => {
+      console.warn(`⚠️ Music Video cover art ${String(projectId).slice(3, 11)}: no design drafted (${err.message}); using the plain look`);
+      return false;
+    });
+    if (designed) { project = await requireProject(projectId); notes = ''; }
+  }
   const settings = await deps.getSettings();
-  const route = await deps.chooseRoute(project, { preferred: { mode: 'codex' }, settings })
-    || await deps.chooseRoute(project, { settings });
-  if (!route) throw coverError(409, 'COVER_ART_ROUTE_UNAVAILABLE', 'No image backend is enabled for music videos. Turn on Codex image generation and try again');
+  const route = await deps.defaultRoute(settings);
+  if (!route) throw coverError(409, 'COVER_ART_ROUTE_UNAVAILABLE', 'Image generation is not set up. Choose an image generator in Settings and try again');
   const refName = reference?.filename || project.castAndSets?.images?.character?.imageId || null;
   const refPath = refName ? resolveGalleryImage(refName) : null;
   if (reference?.filename && !refPath) throw coverError(422, 'PUBLISH_ASSET_MISSING', `The reference image is missing (${basename(reference.filename)})`);
@@ -174,7 +237,7 @@ export async function generateCoverArtSource(projectId, { notes = '', reference 
     return { pending: { requestId, jobId: null, mode: route.mode, requestedAt: new Date().toISOString() }, lastError: null };
   });
   const common = {
-    prompt: buildCoverArtPrompt(project, { notes }),
+    prompt: buildCoverArtPrompt(project, projectCoverArt(project), { notes }),
     width: SOURCE_PX,
     height: SOURCE_PX,
     ...(refPath ? { referenceImagePaths: [refPath], referenceImageStrengths: [1] } : {}),

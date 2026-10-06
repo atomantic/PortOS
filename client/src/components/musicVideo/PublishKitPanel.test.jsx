@@ -16,7 +16,7 @@ import PublishKitPanel from './PublishKitPanel.jsx';
 const hook = (over = {}) => ({
   building: false, progress: 0, build: vi.fn(), drafting: false, saving: false,
   draftCopy: vi.fn(async () => null), saveCopy: vi.fn(async () => null), selectThumbnail: vi.fn(async () => null),
-  composing: false, composeCover: vi.fn(async () => null), generateCover: vi.fn(async () => null), ...over,
+  composing: false, composeCover: vi.fn(async () => null), designing: false, designCover: vi.fn(async () => null), generateCover: vi.fn(async () => null), ...over,
 });
 const built = {
   builtAt: '2026-01-01T00:00:00.000Z', master: { filename: 'master.mp4' },
@@ -70,13 +70,21 @@ describe('PublishKitPanel (#9281)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Make the cover from Video frame 1' }));
     expect(k.composeCover).toHaveBeenLastCalledWith(expect.objectContaining({ source: { kind: 'thumbnail', filename: 't1.jpg' } }));
 
-    fireEvent.change(screen.getByLabelText(/Make a new cover image/), { target: { value: 'profile under flash' } });
-    fireEvent.click(screen.getByRole('button', { name: /Make with Codex/ }));
-    expect(k.generateCover).toHaveBeenCalledWith({ notes: 'profile under flash' });
+    fireEvent.change(screen.getByLabelText(/Style direction for this song/), { target: { value: 'grainy black and white' } });
+    fireEvent.click(screen.getByRole('button', { name: /Design the cover/ }));
+    expect(k.designCover).toHaveBeenCalledWith({ direction: 'grainy black and white' });
+    fireEvent.click(screen.getByRole('button', { name: /Make a new image/ }));
+    expect(k.generateCover).toHaveBeenCalledWith({ notes: 'grainy black and white' });
 
-    const art = { filename: 'cover-1.jpg', title: 'Example Song', tag: 'Example Artist', source: { kind: 'image', filename: 'sheet.png' }, pending: { mode: 'codex' } };
+    const art = { filename: 'cover-1.jpg', title: 'Example Song', tag: 'Example Artist', source: { kind: 'image', filename: 'sheet.png' }, pending: { mode: 'codex' }, design: { layout: 'top-center' }, rationale: 'Example reason.' };
     rerender(<PublishKitPanel project={{ ...project, publishKit: { ...built, coverArt: art } }} publishKit={k} />);
     expect(screen.getByAltText('Cover art for Example Song')).toBeTruthy();
     expect(screen.getByText(/Making a cover image on codex/)).toBeTruthy();
+    expect(screen.getByText(/This song's look: Example reason/)).toBeTruthy();
+    // With a design in place the same box adjusts it, and can start from the current image.
+    fireEvent.change(screen.getByLabelText(/Adjust the style or the image/), { target: { value: 'warmer light' } });
+    fireEvent.click(screen.getByLabelText('Start from the current image'));
+    fireEvent.click(screen.getByRole('button', { name: /Make a new image/ }));
+    expect(k.generateCover).toHaveBeenLastCalledWith({ notes: 'warmer light', reference: { kind: 'image', filename: 'sheet.png' } });
   });
 });
