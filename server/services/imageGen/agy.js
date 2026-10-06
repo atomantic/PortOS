@@ -480,6 +480,12 @@ async function runAgy(job, jobId, bin, args, {
         // createJobFailureFinalizer's doc comment in sseUtils.js.
         finalizeJobFailure(job, jobId, proc, `Agy post-exit handler failed: ${err?.message || err}`, { force: true });
       }
+    }).catch(err => {
+      // Admission can reject before the publication callback is entered.
+      // EventEmitter does not await this listener, so settle the job here too.
+      clearTimeout(timeoutTimer);
+      removeScratch();
+      finalizeJobFailure(job, jobId, proc, `Agy publication admission failed: ${err?.message || err}`);
     });
   });
 }

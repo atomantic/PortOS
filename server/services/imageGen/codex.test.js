@@ -5,6 +5,15 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { EventEmitter } from 'events';
 
+const admissionFault = vi.hoisted(() => ({ error: null }));
+vi.mock('../../lib/backupSnapshotBoundary.js', async original => {
+  const actual = await original();
+  return { ...actual, withBackupAssetPublication: (...args) => {
+    if (admissionFault.error) return Promise.reject(admissionFault.error);
+    return actual.withBackupAssetPublication(...args);
+  } };
+});
+
 // Each test runs against a synthetic ~/.codex layout so it never touches
 // the user's real generated_images dir. We mock os.homedir() directly —
 // node's homedir() uses getpwuid() on macOS and ignores $HOME, so just
@@ -737,4 +746,21 @@ describe('codex provider — noImageReason (no-image diagnostics)', () => {
     expect(msg).not.toContain(ESC);
     expect(msg).not.toMatch(/\[\d+m/);
   });
+});
+
+
+it('settles admission rejection from the actual close event and clears the active slot', async () => {
+  const job = await codex.generateImage({ prompt: 'admission failure' });
+  const child = spawnCalls[0].child;
+  const failed = new Promise(resolve => imageGenEvents.once('failed', resolve));
+  admissionFault.error = new Error('injected publication admission refusal');
+  try {
+    child.emit('close', 0, null);
+    expect((await failed).error).toContain('injected publication admission refusal');
+    expect(codex.getActiveJob()).toBeNull();
+    const response = { writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: new EventEmitter() };
+    expect(codex.attachSseClient(job.jobId, response)).toBe(true);
+    expect(response.write.mock.calls[0][0]).toContain('injected publication admission refusal');
+    response.req.emit('close');
+  } finally { admissionFault.error = null; }
 });

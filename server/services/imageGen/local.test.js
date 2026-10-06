@@ -4,12 +4,22 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { EventEmitter } from 'node:events';
 
+const admissionFault = vi.hoisted(() => ({ error: null }));
+vi.mock('../../lib/backupSnapshotBoundary.js', async original => {
+  const actual = await original();
+  return { ...actual, withBackupAssetPublication: (...args) => {
+    if (admissionFault.error) return Promise.reject(admissionFault.error);
+    return actual.withBackupAssetPublication(...args);
+  } };
+});
+
 // These lifecycle tests drive the child directly; preview watchers are unrelated.
 vi.mock('fs', async original => ({ ...await original(), watch: vi.fn(() => ({ close() {} })) }));
 
 const mockSpawn = vi.fn();
 vi.mock('../../lib/childProcess.js', async (original) => ({ ...await original(), spawn: (...args) => mockSpawn(...args) }));
-vi.mock('../../lib/heavyJobClaim.js', () => ({ claimHeavyLocalJob: async () => ({ ok: true, release: async () => {} }) }));
+const releaseClaim = vi.fn(async () => {});
+vi.mock('../../lib/heavyJobClaim.js', () => ({ claimHeavyLocalJob: async () => ({ ok: true, release: releaseClaim }) }));
 vi.mock('../localMemory.js', () => ({ gpuBlockersMessage: vi.fn(), prepareLocalMemory: async () => ({ blockers: [], unloaded: [] }) }));
 vi.mock('../hfToken.js', () => ({ hfChildEnv: async () => ({}) }));
 vi.mock('../../lib/fileUtils.js', async (original) => ({ ...await original(), ensureDir: vi.fn() }));
@@ -1239,4 +1249,33 @@ it('drains a snapshot through local upscale and the sidecar naming the delivered
     expect(JSON.parse(readFileSync(join(PATHS.images, `${job.jobId}.metadata.json`), 'utf8')))
       .toMatchObject({ width: 128, height: 128, renderWidth: 64, renderHeight: 64 });
   } finally { release(); }
+});
+
+
+it('settles a refused close-event publication and releases the process and heavy claim', async () => {
+  mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+  mockIsFlux2VenvHealthy.mockResolvedValue(true);
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+  mockSpawn.mockReturnValue(child);
+  const { imageGenEvents } = await import('../imageGenEvents.js');
+  const { attachSseClient, getActiveJob } = await import('./local.js');
+  const { SSE_CLEANUP_DELAY_MS } = await import('../../lib/sseUtils.js');
+  const { jobId } = await generateImage({ modelId: 'qwen-image-2.1', prompt: 'admission failure' });
+  const releasedBefore = releaseClaim.mock.calls.length;
+  const failed = new Promise(resolve => imageGenEvents.once('failed', resolve));
+  admissionFault.error = new Error('injected publication admission refusal');
+  vi.useFakeTimers();
+  try {
+    child.emit('close', 0);
+    expect((await failed).error).toContain('injected publication admission refusal');
+    expect(getActiveJob()).toBeNull();
+    expect(releaseClaim.mock.calls.length).toBe(releasedBefore + 1);
+    const response = { writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: new EventEmitter() };
+    expect(attachSseClient(jobId, response)).toBe(true);
+    expect(response.write.mock.calls[0][0]).toContain('injected publication admission refusal');
+    response.req.emit('close');
+    vi.advanceTimersByTime(SSE_CLEANUP_DELAY_MS);
+    expect(attachSseClient(jobId, response)).toBe(false);
+  } finally { admissionFault.error = null; vi.useRealTimers(); }
 });

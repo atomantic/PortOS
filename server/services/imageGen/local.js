@@ -1189,6 +1189,25 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       } finally {
         closeJobAfterDelay(jobs, jobId);
       }
+    }).catch(async err => {
+      // Admission failure happens before the inner finalizer can clear the
+      // process slot or release its heavy-job claim. Settle without publishing
+      // or deleting gallery bytes outside the refused boundary.
+      if (finalized) return;
+      finalized = true;
+      activeProcess = null;
+      activeJob = null;
+      if (watcher) { try { watcher.close(); } catch { /* ignore */ } }
+      await Promise.all([releaseHeavyClaim(), removeStepwise()]);
+      const reason = err?.message || String(err);
+      job.status = 'error';
+      job.error = reason;
+      dispatchTerminalEvent(
+        jobId,
+        () => broadcastSse(job, { type: 'error', error: reason }),
+        () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: reason }),
+      );
+      closeJobAfterDelay(jobs, jobId);
     });
   });
 
