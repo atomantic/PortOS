@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PREVIEW_DOCUMENT_BASE, inlineDocumentModule } from './documentModules.js';
+import { PREVIEW_DOCUMENT_BASE, inlineDocumentModule, previewDocumentPath } from './documentModules.js';
 
 const decode = (url) => Buffer.from(url.slice(url.indexOf(',') + 1), 'base64').toString('utf8');
 const graph = (entries) => new Map(Object.entries(entries).map(([k, v]) => [k, { data: Buffer.from(v) }]));
@@ -25,5 +25,31 @@ describe('inlineDocumentModule', () => {
     const lib = decode(main.match(/"data:text\/javascript;base64,([^"]+)"/)[0].slice(1, -1));
     expect(lib).toContain(JSON.stringify(`${PREVIEW_DOCUMENT_BASE}lib/u.js`));
     expect(lib).not.toContain('import.meta');
+  });
+});
+
+describe('previewDocumentPath', () => {
+  const base = PREVIEW_DOCUMENT_BASE;
+  it('maps stand-in-base URLs to document paths, from strings and URL objects alike', () => {
+    expect(previewDocumentPath(`${base}assets/photo-abc.jpg`, base)).toBe('assets/photo-abc.jpg');
+    expect(previewDocumentPath(new URL('photo-abc.jpg', `${base}assets/index.js`), base)).toBe('assets/photo-abc.jpg');
+  });
+
+  it('drops the query and hash, then decodes the path like the server keys its files', () => {
+    expect(previewDocumentPath(new URL('My Clip ü.jpg?v=2#t', `${base}media/x.js`).href, base)).toBe('media/My Clip ü.jpg');
+    expect(previewDocumentPath(`${base}media/a%3Fb.jpg`, base)).toBe('media/a?b.jpg');
+    expect(previewDocumentPath(`${base}media/bad%E0.jpg`, base)).toBe('media/bad%E0.jpg');
+  });
+
+  it('leaves everything else untouched', () => {
+    expect(previewDocumentPath('assets/photo.jpg', base)).toBe('assets/photo.jpg');
+    expect(previewDocumentPath('blob:null/1234', base)).toBe('blob:null/1234');
+    expect(previewDocumentPath('https://example.com/x.jpg', base)).toBe('https://example.com/x.jpg');
+    expect(previewDocumentPath(null, base)).toBe(null);
+  });
+
+  it('is self-contained, so the preview bootstrap can inline it', () => {
+    const inlined = new Function(`return (${previewDocumentPath.toString()})`)();
+    expect(inlined(`${base}assets/photo-abc.jpg`, base)).toBe('assets/photo-abc.jpg');
   });
 });

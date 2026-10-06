@@ -12,6 +12,19 @@ import { ServerError } from '../../lib/errorHandler.js';
  */
 export const PREVIEW_DOCUMENT_BASE = 'https://document.portos.invalid/';
 
+/**
+ * The document-relative path a preview media URL names, or the value unchanged when it is not one of
+ * ours. Runs inside the preview bootstrap (injected via toString, so it must stay self-contained):
+ * a stand-in-base URL — string or URL object — loses the reserved origin, its query and hash, and its
+ * percent-encoding, matching how the document's own files are keyed.
+ */
+export function previewDocumentPath(value, base) {
+  if (typeof URL !== 'undefined' && value instanceof URL) value = value.href;
+  if (typeof value !== 'string' || !value.startsWith(base)) return value;
+  const path = value.slice(base.length).split(/[?#]/)[0];
+  try { return decodeURIComponent(path); } catch { return path; }
+}
+
 // `import.meta.url` member expressions anywhere in the module (computed `import.meta['url']` included).
 function importMetaUrlRanges(node, out = []) {
   if (!node || typeof node !== 'object') return out;
