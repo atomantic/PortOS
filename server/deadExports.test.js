@@ -16,6 +16,7 @@ function excluded(file, name) {
   if (file.startsWith('server/integrations/')) return true; // Standalone integration API clients.
   if (file.startsWith('server/lib/aiToolkit/')) return true; // Vendored toolkit public barrel surface.
   if (file === 'server/lib/mockPathsDataRoot.js') return true; // Test-only helper module (#9032) — every export here is meant to be reached exclusively from *.test.js, which this scan intentionally excludes as a "mention".
+  if (file === 'server/lib/browserSuiteGate.js') return true; // Test-only `canRun` guard (#10312) — reached exclusively from *.browser.test.js.
   return false;
 }
 

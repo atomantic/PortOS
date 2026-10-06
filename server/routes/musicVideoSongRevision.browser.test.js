@@ -10,6 +10,7 @@ import { createRequire } from 'node:module';
 import { chromium } from 'playwright-core';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
+import { browserSuiteCanRun } from '../lib/browserSuiteGate.js';
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('mv-song-browser-') }));
 vi.mock('../services/settings.js', () => ({ getSettings: async () => ({}) }));
 const { _testChromeCaptureArgs, _waitForTestChrome, _cleanupTestBrowser } = await import('../services/htmlComposition/testBrowserCleanup.js');
@@ -19,9 +20,8 @@ const requireClient = createRequire(join(client, 'package.json'));
 let bundler;
 try { bundler = ['vite', '@vitejs/plugin-react', '@tailwindcss/postcss'].map(name => requireClient.resolve(name)); }
 catch (err) { if (err.code !== 'MODULE_NOT_FOUND') throw err; }
-const canRun = Boolean(chrome && bundler);
+const canRun = browserSuiteCanRun('song revision browser suite', { Chrome: chrome, 'client workspace dependencies': bundler }, { onUnavailable: cleanupTempDataRoots });
 // Prerequisite discovery may initialize mocked paths; skipped suites have no cleanup hooks.
-if (!canRun) cleanupTempDataRoots();
 let browser, proc, server, io, songs, musicVideoEvents;
 const broadcast = event => io.emit('music-video:song-revision', event);
 afterAll(async () => {

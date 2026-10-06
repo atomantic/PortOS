@@ -9,6 +9,7 @@ import { chromium } from 'playwright-core';
 import { createRequire } from 'node:module';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
+import { browserSuiteCanRun } from '../lib/browserSuiteGate.js';
 
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('mv-review-browser-') }));
 vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: async () => 'synthetic-instance' }));
@@ -33,8 +34,7 @@ try {
 
 // Dependency discovery can read the mocked PATHS through ffmpeg imports.
 // Vitest does not run afterAll when the whole suite is skipped.
-const canRun = Boolean(chrome && ffmpeg && clientBundler);
-if (!canRun) cleanupTempDataRoots();
+const canRun = browserSuiteCanRun('musicVideo browser suite', { Chrome: chrome, ffmpeg, 'client workspace dependencies': clientBundler }, { onUnavailable: cleanupTempDataRoots });
 
 let browser, proc, server;
 afterAll(async () => {

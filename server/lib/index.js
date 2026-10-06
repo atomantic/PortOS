@@ -715,6 +715,7 @@ export * from './gitTestRepo.js';
 export * from './mockPathsDataRoot.js';
 export * from './settingsTestUtil.js';
 export * from './dbTestGate.js';
+export * from './browserSuiteGate.js';
 export * from './runtimeEnv.js';
 export * from './testDataIsolation.js';
 export * from './testHelper.js';

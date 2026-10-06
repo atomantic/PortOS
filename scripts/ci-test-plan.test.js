@@ -1387,3 +1387,49 @@ describe('Windows escalation on a full plan (#7440)', () => {
     });
   });
 });
+
+describe('cross-workspace browser suites (#10312)', () => {
+  const BROWSER_SUITES = [
+    'server/routes/musicVideoProductionReview.browser.test.js',
+    'server/routes/musicVideoRichAuthoring.browser.test.js',
+    'server/routes/musicVideoSongRevision.browser.test.js',
+  ];
+
+  it('selects every music-video browser suite when a client component they mount changes', () => {
+    const cwd = fileURLToPath(new URL('../', import.meta.url));
+    const source = 'client/src/components/musicVideo/ProductionReviewPanel.jsx';
+    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd });
+    const plan = buildCiTestPlan(inputs.changedFiles, inputs);
+
+    expect(plan.full).toBe(false);
+    expect(plan.browserFiles).toEqual(expect.arrayContaining(BROWSER_SUITES));
+    expect(plan.suiteReasons.browser).toMatch(/browser suite/);
+  });
+
+  it('runs every tracked server browser suite on a full plan, and none from client or non-browser tests', () => {
+    const trackedFiles = [
+      ...BROWSER_SUITES,
+      'client/src/pages/Shell.browser.test.js',
+      'server/routes/browser.test.js',
+    ];
+    const plan = buildCiTestPlan(['package.json'], { trackedFiles });
+
+    expect(plan.full).toBe(true);
+    expect(plan.browserFiles).toEqual(BROWSER_SUITES);
+  });
+
+  it('selects nothing when the diff names no browser suite, and ignores a deleted suite', () => {
+    const trackedFiles = [...BROWSER_SUITES, 'server/services/auth.js', 'server/services/auth.test.js'];
+
+    expect(buildCiTestPlan(['server/services/auth.js'], { trackedFiles }).browserFiles).toEqual([]);
+    expect(buildCiTestPlan(['README.md'], { trackedFiles }).browserFiles).toEqual([]);
+    // A deleted path is not in trackedFiles, so it cannot become a vitest selector.
+    expect(buildCiTestPlan(['server/routes/gone.browser.test.js'], { trackedFiles }).browserFiles).toEqual([]);
+  });
+
+  it('selects a browser suite that is itself the changed file', () => {
+    const plan = buildCiTestPlan([BROWSER_SUITES[0]], { trackedFiles: BROWSER_SUITES });
+
+    expect(plan.browserFiles).toEqual([BROWSER_SUITES[0]]);
+  });
+});

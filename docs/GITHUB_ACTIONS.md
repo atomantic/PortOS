@@ -446,6 +446,23 @@ The selected work is split across parallel jobs:
   `Cache client node_modules` with the client job, so on a hit it pays no install.
 - **DB tests** — provisions only the isolated `portos_test` database and runs
   the serial DB suite when database-sensitive files changed.
+- **Cross-workspace browser suites** (same `database` job) — the
+  `server/**/*.browser.test.js` suites (`musicVideoProductionReview`,
+  `musicVideoRichAuthoring`, `musicVideoSongRevision`, …) bundle real client
+  components and drive them in Chrome. The `server` job installs no client
+  workspace, so they skip there and would otherwise skip in every CI job (#10312:
+  a `ProductionReviewPanel` prop change left all three harnesses blank behind a
+  green CI). The planner emits `browser_files`: every tracked server browser
+  suite on a full plan, otherwise the ones selected by a changed test or by the
+  basename lookup of a changed client source in a harness `entry` string. When it
+  is non-empty the `database` job also runs (even with `db` false), installs
+  the client workspace (sharing `Cache client node_modules`) and runs those files
+  with `PORTOS_REQUIRE_BROWSER_SUITES=1`, which makes
+  `server/lib/browserSuiteGate.js` throw instead of skip when Chrome, ffmpeg or
+  the client bundler is missing. Local runs without the prerequisites still skip.
+  Limit: selection follows the basename named in a harness entry, so a change to
+  a component the entry only imports transitively runs these suites on a full
+  plan or when a suite file itself changes, not on a scoped PR.
 - **Windows server tests** — the same server selection, but only on full CI
   (the `main` → `release` PR, nightly, release, workflow dispatch) or when a
   Windows-sensitive surface changed (`.ps1` / `.cmd` spawn, PowerShell BOM,
