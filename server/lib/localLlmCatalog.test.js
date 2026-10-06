@@ -210,6 +210,9 @@ describe('localLlmCatalog', () => {
       expect(ollama.find((m) => m.key === 'deepseek-r1-70b')?.id).toBe('deepseek-r1:70b');
       expect(ollama.find((m) => m.key === 'llama4-scout-17b')?.id).toBe('llama4:scout');
       expect(ollama.find((m) => m.key === 'phi-4-14b')?.id).toBe('phi4');
+      expect(ollama.find((m) => m.key === 'phi-4-reasoning-14b')?.id).toBe('phi4-reasoning:14b');
+      expect(ollama.find((m) => m.key === 'gemma4-e4b')?.id).toBe('gemma4:e4b');
+      expect(ollama.find((m) => m.key === 'translategemma-12b')?.id).toBe('translategemma:12b');
       expect(ollama.find((m) => m.key === 'aya-expanse-8b')?.id).toBe('aya-expanse:8b');
     });
   });
@@ -233,6 +236,10 @@ describe('localLlmCatalog', () => {
         .toEqual({ targetId: 'lmstudio-community/gemma-4-12B-it-GGUF', exact: true });
       expect(mapModelToBackend('lmstudio', 'lmstudio-community/gemma-4-12B-it-GGUF', 'ollama'))
         .toEqual({ targetId: 'gemma4:12b', exact: true });
+      expect(mapModelToBackend('ollama', 'gemma4:e4b', 'lmstudio'))
+        .toEqual({ targetId: 'lmstudio-community/gemma-4-E4B-it-GGUF', exact: true });
+      expect(mapModelToBackend('ollama', 'translategemma:12b', 'lmstudio'))
+        .toEqual({ targetId: 'lmstudio-community/TranslateGemma-12B-IT-GGUF', exact: true });
     });
 
     it('still maps models retired from the suggested-install catalog', () => {
