@@ -11,9 +11,10 @@ import { composeStyleNotes } from '../../../lib/styleGuide.js';
 import { extractCanonFromProse } from '../../universeCanon.js';
 import { resolveSeriesLlmOverride } from '../../../lib/seriesLlmOverride.js';
 import { getSeriesPlanningCanon } from '../seriesCanon.js';
-import { ARC_ROLES, ERR_VALIDATION, SEASON_LENGTH_PRESETS, SHAPE_GUIDANCE_NONE, appendCharacterFirstArcGuidance, appendTickingClock, lengthProfileForArcRole, makeErr, renderPriorSeason, resolveWorldContext } from './context.js';
+import { ARC_ROLES, ERR_VALIDATION, SEASON_LENGTH_PRESETS, SHAPE_GUIDANCE_NONE, appendCharacterFirstArcGuidance, appendTickingClock, lengthProfileForArcRole, renderPriorSeason, resolveWorldContext } from './context.js';
 import { ARC_LIMITS } from '../../../lib/storyArc.js';
 import { trimToClause } from '../../../lib/textUtils.js';
+import { codedError } from '../../../lib/codedError.js';
 
 /**
  * Build the context for one season's episode breakdown. `priorSeasonsContext`
@@ -125,14 +126,14 @@ export async function generateSeasonEpisodes(seriesId, seasonId, options = {}) {
   const seasons = series.seasons || [];
   const season = seasons.find((s) => s.id === seasonId);
   if (!season) {
-    throw makeErr(`Season not found on series: ${seasonId}`, ERR_VALIDATION);
+    throw codedError(`Season not found on series: ${seasonId}`, ERR_VALIDATION);
   }
   // Per-season lock — same semantics as the arc-level lock above, scoped to
   // this volume. Generating episodes seeds new issue records under the
   // season; a locked season's shape is frozen, so refuse before the LLM call.
   // Verify (read-only) stays available so the user can still inspect findings.
   if (season.locked === true) {
-    throw makeErr(
+    throw codedError(
       `Season "${season.title || season.number}" is locked — unlock it before generating episodes`,
       ERR_VALIDATION,
     );
@@ -141,7 +142,7 @@ export async function generateSeasonEpisodes(seriesId, seasonId, options = {}) {
   // against — fail loud so the user sees the misconfiguration instead of
   // getting back 8 episodes of "a thing happens then another thing".
   if (!season.synopsis?.trim() && !season.logline?.trim()) {
-    throw makeErr(
+    throw codedError(
       `Season "${season.title || season.number}" has no synopsis or logline — fill at least one before generating episodes`,
       ERR_VALIDATION,
     );
@@ -220,7 +221,7 @@ export async function commitEpisodesToIssues(seriesId, seasonId, episodes = [], 
     .sort((a, b) => (a.number || 0) - (b.number || 0));
   const canReuse = reusable.length === episodes.length && episodes.length > 0;
   if (reuseUngrouped && episodes.length > 0 && ungrouped.length > 0 && !canReuse) {
-    throw makeErr(
+    throw codedError(
       `Cannot safely seed ${episodes.length} generated episode(s): the series has ${ungrouped.length} ungrouped issue record(s), and ${reusable.length} are empty narrative placeholders. Reconcile that set before resuming so Autopilot does not duplicate or overwrite issue work.`,
       ERR_VALIDATION,
     );

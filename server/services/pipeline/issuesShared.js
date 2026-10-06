@@ -81,7 +81,6 @@ export const ERR_VALIDATION = 'PIPELINE_ISSUE_VALIDATION';
 export const ERR_DUPLICATE = 'PIPELINE_ISSUE_DUPLICATE';
 export const ERR_SEASON_LOCKED = 'PIPELINE_ISSUE_SEASON_LOCKED';
 export const ERR_STAGE_LOCKED = 'PIPELINE_STAGE_LOCKED';
-const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 const ISSUE_ID_RE = /^iss-[A-Za-z0-9-]+$/;
 
@@ -687,7 +686,6 @@ async function renumberInline(state, seriesId, fromSeasonId = null, preloadedSer
 export {
   store,
   queueSeriesIssuesWrite,
-  makeErr,
   ISSUE_ID_RE,
   readState,
   readStateForSeries,

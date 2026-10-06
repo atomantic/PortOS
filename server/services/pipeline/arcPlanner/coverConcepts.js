@@ -6,7 +6,8 @@
 import { runStagedLLM } from '../../stageRunner.js';
 import { getSeries, updateSeasonOnSeries } from '../series.js';
 import { assertStageUnlocked, getIssue, updateStageWithLatest } from '../issues.js';
-import { ERR_VALIDATION, makeErr } from './context.js';
+import { ERR_VALIDATION } from './context.js';
+import { codedError } from '../../../lib/codedError.js';
 
 /**
  * Generate FRONT + BACK cover-art concepts for one volume (season). Returns
@@ -24,7 +25,7 @@ export async function generateVolumeCoverConcepts(seriesId, seasonId, options = 
   const seasons = series.seasons || [];
   const season = seasons.find((s) => s.id === seasonId);
   if (!season) {
-    throw makeErr(`Season not found on series: ${seasonId}`, ERR_VALIDATION);
+    throw codedError(`Season not found on series: ${seasonId}`, ERR_VALIDATION);
   }
   const themesCsv = Array.isArray(season.themes) ? season.themes.join(', ') : '';
   const ctx = {
@@ -107,7 +108,7 @@ export async function generateComicCoverConcepts(issueId, options = {}) {
   // invalid-target guard below instead of silently defaulting to 'both'.
   const target = options.target ?? 'both';
   if (target !== 'cover' && target !== 'backCover' && target !== 'both') {
-    throw makeErr(`Invalid target: ${target}`, ERR_VALIDATION);
+    throw codedError(`Invalid target: ${target}`, ERR_VALIDATION);
   }
   const issue = await getIssue(issueId);
   // `commit: true` mutates `stages.comicPages.cover/backCover.script` —

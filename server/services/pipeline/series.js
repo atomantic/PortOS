@@ -38,6 +38,7 @@ import {
 } from '../sharing/recordEvents.js';
 import { renameCollectionForSeries, unlinkCollectionsForSeries } from '../mediaCollections.js';
 import { isStr, trimTo } from '../../lib/textUtils.js';
+import { codedError } from '../../lib/codedError.js';
 
 // Storage backend dispatcher (#1015). Series records moved from per-record
 // `data/pipeline-series/{id}/index.json` (collectionStore) to one-row-per-series
@@ -52,7 +53,6 @@ export const seriesStore = () => store();
 export const ERR_NOT_FOUND = 'PIPELINE_SERIES_NOT_FOUND';
 export const ERR_VALIDATION = 'PIPELINE_SERIES_VALIDATION';
 export const ERR_DUPLICATE = 'PIPELINE_SERIES_DUPLICATE';
-const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 export const SERIES_ID_RE = /^ser-[A-Za-z0-9-]+$/;
 
@@ -736,14 +736,14 @@ export async function listSeriesSummaries() {
 
 export async function getSeries(id, { includeDeleted = false } = {}) {
   const found = await store().loadOne(id);
-  if (!found) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
-  if (found.deleted && !includeDeleted) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
+  if (!found) throw codedError(`Series not found: ${id}`, ERR_NOT_FOUND);
+  if (found.deleted && !includeDeleted) throw codedError(`Series not found: ${id}`, ERR_NOT_FOUND);
   return found;
 }
 
 export async function createSeries(input = {}) {
   const name = trimTo(input.name, NAME_MAX);
-  if (!name) throw makeErr(`Series name is required (1..${NAME_MAX} chars)`, ERR_VALIDATION);
+  if (!name) throw codedError(`Series name is required (1..${NAME_MAX} chars)`, ERR_VALIDATION);
   const now = new Date().toISOString();
   const created = sanitizeSeries({
     id: `ser-${randomUUID()}`,
@@ -818,21 +818,21 @@ export async function createSeries(input = {}) {
  */
 export async function insertSeriesWithId(input = {}) {
   if (!isStr(input.id) || !SERIES_ID_RE.test(input.id)) {
-    throw makeErr(`insertSeriesWithId: invalid id "${input.id}" (expected ser-<uuid>)`, ERR_VALIDATION);
+    throw codedError(`insertSeriesWithId: invalid id "${input.id}" (expected ser-<uuid>)`, ERR_VALIDATION);
   }
   const name = trimTo(input.name, NAME_MAX);
-  if (!name) throw makeErr(`Series name is required (1..${NAME_MAX} chars)`, ERR_VALIDATION);
+  if (!name) throw codedError(`Series name is required (1..${NAME_MAX} chars)`, ERR_VALIDATION);
   const { next, wasResurrection } = await store().queueRecordWrite(input.id, async () => {
     // Tombstone-overwrite: same contract as universeBuilder.insertUniverseWithId —
     // re-import undeletes; peer-sync resurrection is prevented at the merge
     // path via LWW, not here.
     const existing = await store().loadOne(input.id);
     if (existing && !existing.deleted) {
-      throw makeErr(`Series id already exists: ${input.id}`, ERR_DUPLICATE);
+      throw codedError(`Series id already exists: ${input.id}`, ERR_DUPLICATE);
     }
     const wasResurrection = !!existing;
     const next = sanitizeSeries({ ...input, name });
-    if (!next) throw makeErr('Invalid series payload', ERR_VALIDATION);
+    if (!next) throw codedError('Invalid series payload', ERR_VALIDATION);
     if (wasResurrection) {
       console.warn(`♻️  insertSeriesWithId: overwriting tombstone for ${input.id}`);
     }
@@ -920,8 +920,8 @@ export async function updateSeries(id, patchOrMutator = {}) {
     merged, nameChanged, skipped, prevEphemeral, nextEphemeral, linkedUniverseId,
   } = await store().queueRecordWrite(id, async () => {
     const cur = await store().loadOne(id);
-    if (!cur) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
-    if (cur.deleted) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
+    if (!cur) throw codedError(`Series not found: ${id}`, ERR_NOT_FOUND);
+    if (cur.deleted) throw codedError(`Series not found: ${id}`, ERR_NOT_FOUND);
 
     let patch;
     if (isMutator) {
@@ -939,7 +939,7 @@ export async function updateSeries(id, patchOrMutator = {}) {
       // `typeof === 'object'` matches arrays and null — reject both so a
       // stray `return []` can't slip through unnoticed.
       if (Array.isArray(patch) || typeof patch !== 'object') {
-        throw makeErr('updateSeries mutator must return a plain object or null', ERR_VALIDATION);
+        throw codedError('updateSeries mutator must return a plain object or null', ERR_VALIDATION);
       }
     } else {
       patch = patchOrMutator;
@@ -948,7 +948,7 @@ export async function updateSeries(id, patchOrMutator = {}) {
     if (cur.locked?.arc === true && Object.hasOwn(patch, 'arc')
       && (patch.arc === null || Object.hasOwn(patch.arc || {}, 'seriesDesign'))
       && JSON.stringify(sanitizeSeriesDesign(patch.arc?.seriesDesign)) !== JSON.stringify(cur.arc?.seriesDesign ?? null)) {
-      throw makeErr('Arc is locked — unlock it before changing the series design', ERR_VALIDATION);
+      throw codedError('Arc is locked — unlock it before changing the series design', ERR_VALIDATION);
     }
     // Hierarchy invariant: a series lives in exactly one universe. Reject
     // clearing the link once it's set — moving to a *different* non-empty
@@ -957,7 +957,7 @@ export async function updateSeries(id, patchOrMutator = {}) {
     // land legacy orphans via the service directly (not this guard), so peer
     // fidelity is preserved.
     if ('universeId' in patch && cur.universeId && !trimTo(patch.universeId, UNIVERSE_ID_MAX)) {
-      throw makeErr('Cannot unlink a series from its universe — move it to another universe instead.', ERR_VALIDATION);
+      throw codedError('Cannot unlink a series from its universe — move it to another universe instead.', ERR_VALIDATION);
     }
     // Per-field merge so `{ provider: 'codex' }` doesn't clobber an existing `model`.
     const mergedLlm = 'llm' in patch
@@ -1035,7 +1035,7 @@ export async function updateSeries(id, patchOrMutator = {}) {
       llm: mergedLlm,
       updatedAt: new Date().toISOString(),
     });
-    if (!next) throw makeErr('Invalid series payload', ERR_VALIDATION);
+    if (!next) throw codedError('Invalid series payload', ERR_VALIDATION);
     await store().saveOneNow(next.id, next);
     // Surface the universe this series ends up linked to ONLY when (a) this
     // PATCH set/changed the link and (b) the series itself qualifies to promote
@@ -1101,12 +1101,12 @@ export async function updateSeries(id, patchOrMutator = {}) {
 
 export async function setArcFieldLock(id, field, locked) {
   if (!ARC_LOCKABLE_FIELDS.includes(field)) {
-    throw makeErr(`Unknown arc lock field: ${field}`, ERR_VALIDATION);
+    throw codedError(`Unknown arc lock field: ${field}`, ERR_VALIDATION);
   }
   return store().queueRecordWrite(id, async () => {
     const cur = await store().loadOne(id);
-    if (!cur) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
-    if (cur.deleted) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
+    if (!cur) throw codedError(`Series not found: ${id}`, ERR_NOT_FOUND);
+    if (cur.deleted) throw codedError(`Series not found: ${id}`, ERR_NOT_FOUND);
     const arcFields = { ...(cur.locked?.arcFields || {}) };
     if (locked === true) arcFields[field] = true;
     else delete arcFields[field];
@@ -1118,7 +1118,7 @@ export async function setArcFieldLock(id, field, locked) {
       locked: nextLocked,
       updatedAt: new Date().toISOString(),
     });
-    if (!next) throw makeErr('Invalid series payload', ERR_VALIDATION);
+    if (!next) throw codedError('Invalid series payload', ERR_VALIDATION);
     await store().saveOneNow(next.id, next);
     emitRecordUpdated('series', next.id);
     return next;
@@ -1140,11 +1140,11 @@ export async function setSeriesCoverImage(id, filename) {
   const next = isStr(filename) && filename ? filename.slice(0, COVER_IMAGE_MAX) : null;
   return store().queueRecordWrite(id, async () => {
     const cur = await store().loadOne(id);
-    if (!cur) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
-    if (cur.deleted) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
+    if (!cur) throw codedError(`Series not found: ${id}`, ERR_NOT_FOUND);
+    if (cur.deleted) throw codedError(`Series not found: ${id}`, ERR_NOT_FOUND);
     if ((cur.coverImage || null) === next) return cur; // no-op guard
     const merged = sanitizeSeries({ ...cur, coverImage: next, updatedAt: new Date().toISOString() });
-    if (!merged) throw makeErr('Invalid series payload', ERR_VALIDATION);
+    if (!merged) throw codedError('Invalid series payload', ERR_VALIDATION);
     await store().saveOneNow(merged.id, merged);
     emitRecordUpdated('series', merged.id);
     return merged;
@@ -1165,12 +1165,12 @@ export async function setSeriesCoverImage(id, filename) {
 export async function updateSeasonOnSeries(seriesId, seasonId, patchFn) {
   return store().queueRecordWrite(seriesId, async () => {
     const cur = await store().loadOne(seriesId);
-    if (!cur) throw makeErr(`Series not found: ${seriesId}`, ERR_NOT_FOUND);
-    if (cur.deleted) throw makeErr(`Series not found: ${seriesId}`, ERR_NOT_FOUND);
+    if (!cur) throw codedError(`Series not found: ${seriesId}`, ERR_NOT_FOUND);
+    if (cur.deleted) throw codedError(`Series not found: ${seriesId}`, ERR_NOT_FOUND);
     const seasons = Array.isArray(cur.seasons) ? cur.seasons : [];
     const seasonIdx = seasons.findIndex((s) => s.id === seasonId);
     if (seasonIdx < 0) {
-      throw makeErr(`Season not found: ${seasonId}`, 'PIPELINE_SEASON_NOT_FOUND');
+      throw codedError(`Season not found: ${seasonId}`, 'PIPELINE_SEASON_NOT_FOUND');
     }
     const existing = seasons[seasonIdx];
     const patched = patchFn(existing);
@@ -1192,7 +1192,7 @@ export async function updateSeasonOnSeries(seriesId, seasonId, patchFn) {
       seasons: nextSeasons,
       updatedAt: new Date().toISOString(),
     });
-    if (!merged) throw makeErr('Invalid series payload after season patch', ERR_VALIDATION);
+    if (!merged) throw codedError('Invalid series payload after season patch', ERR_VALIDATION);
     await store().saveOneNow(merged.id, merged);
     emitRecordUpdated('series', merged.id);
     return merged;
@@ -1206,8 +1206,8 @@ export async function deleteSeries(id) {
   // on the receiving peer via mergeSeriesFromSync's transition detection.
   const result = await store().queueRecordWrite(id, async () => {
     const cur = await store().loadOne(id);
-    if (!cur) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
-    if (cur.deleted) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
+    if (!cur) throw codedError(`Series not found: ${id}`, ERR_NOT_FOUND);
+    if (cur.deleted) throw codedError(`Series not found: ${id}`, ERR_NOT_FOUND);
     const now = new Date().toISOString();
     await store().saveOneNow(id, { ...cur, deleted: true, deletedAt: now, updatedAt: now });
     // Any live share-bucket subscription for this series tears itself down via

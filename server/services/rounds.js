@@ -23,6 +23,7 @@ import { PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { HARMONY_PARTS } from '../lib/songCraftRef.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { sanitizeRound as sanitizeRoundRecord } from '../lib/roundsValidation.js';
+import { codedError } from '../lib/codedError.js';
 
 // Shape bounds re-exported so routes/rounds.js and the seed migrations keep
 // their existing import surface (svc.TITLE_MAX_LENGTH, …).
@@ -43,7 +44,6 @@ export const ERR_NOT_FOUND = 'NOT_FOUND';
 // Raised when a refresh-from-template is requested for a song that isn't a
 // bundled built-in default (no shipped template to restore from).
 export const ERR_NOT_BUILTIN = 'NOT_BUILTIN';
-const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 // Project a stored or inbound record onto the canonical song shape, stamping
 // `builtIn` from the shipped-seed id set. Used on read (defends hand-edited
@@ -574,7 +574,7 @@ export async function updateRound(id, patch) {
   return enqueue(async () => {
     const songs = await readRounds();
     const idx = songs.findIndex((s) => s.id === id);
-    if (idx === -1) throw makeErr(`Song ${id} not found`, ERR_NOT_FOUND);
+    if (idx === -1) throw codedError(`Song ${id} not found`, ERR_NOT_FOUND);
     // Merge field-by-field so an absent key preserves the stored value while a
     // present key (including empty string / empty array) applies the change.
     const merged = { ...songs[idx] };
@@ -630,9 +630,9 @@ export async function refreshRoundFromTemplate(id) {
   return enqueue(async () => {
     const songs = await readRounds();
     const idx = songs.findIndex((s) => s.id === id);
-    if (idx === -1) throw makeErr(`Song ${id} not found`, ERR_NOT_FOUND);
+    if (idx === -1) throw codedError(`Song ${id} not found`, ERR_NOT_FOUND);
     const template = seedTemplate(id);
-    if (!template) throw makeErr(`Song ${id} is not a built-in default`, ERR_NOT_BUILTIN);
+    if (!template) throw codedError(`Song ${id} is not a built-in default`, ERR_NOT_BUILTIN);
     const existing = songs[idx];
     // Resetting layers to the template set can orphan a recording assigned to a
     // user-added layer the template doesn't define — unassign those so the
@@ -663,7 +663,7 @@ export async function deleteRound(id) {
   return enqueue(async () => {
     const songs = await readRounds();
     const idx = songs.findIndex((s) => s.id === id);
-    if (idx === -1) throw makeErr(`Song ${id} not found`, ERR_NOT_FOUND);
+    if (idx === -1) throw codedError(`Song ${id} not found`, ERR_NOT_FOUND);
     const [removed] = songs.splice(idx, 1);
     await atomicWrite(STATE_PATH, { rounds: songs });
     console.log(`🗑️ Deleted song "${removed.title}" (${id})`);

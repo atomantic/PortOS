@@ -23,10 +23,10 @@ import { getSeries } from './series.js';
 import { getSeason } from './seasons.js';
 import { listIssues } from './issues.js';
 import { PAGE_SIZES, DEFAULT_PAGE_SIZE } from './comicPdf.js';
+import { codedError } from '../../lib/codedError.js';
 
 export const ERR_NO_VOLUME_COVER = 'PIPELINE_VOLUME_PDF_NO_COVER';
 export const ERR_NO_RENDERED_ISSUES = 'PIPELINE_VOLUME_PDF_NO_RENDERED_ISSUES';
-const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 const READ_OPTS = { subject: 'volume page image' };
 const EMBED_OPTS = { unsupportedCode: 'PIPELINE_VOLUME_PDF_UNSUPPORTED_IMAGE' };
@@ -44,7 +44,7 @@ export async function buildVolumePdf(seriesId, seasonId, opts = {}) {
 
   const volCoverFilename = pickRenderedFilename(season.cover);
   if (!volCoverFilename) {
-    throw makeErr(
+    throw codedError(
       `Volume ${season.number || 1} has no rendered front cover yet — render it before compiling the volume PDF.`,
       ERR_NO_VOLUME_COVER,
     );
@@ -99,7 +99,7 @@ export async function buildVolumePdf(seriesId, seasonId, opts = {}) {
 
   if (targets.length === 1) {
     // Only the volume front cover and nothing else — not really a volume.
-    throw makeErr(
+    throw codedError(
       `Volume ${season.number || 1} has no rendered issue pages yet — render at least one issue's pages first.`,
       ERR_NO_RENDERED_ISSUES,
     );
@@ -137,7 +137,7 @@ export async function buildVolumePdf(seriesId, seasonId, opts = {}) {
   }
 
   if (pageCount === 0) {
-    throw makeErr('No usable pages — all embeds failed', ERR_NO_RENDERED_ISSUES);
+    throw codedError('No usable pages — all embeds failed', ERR_NO_RENDERED_ISSUES);
   }
 
   if (includeColophon) {
