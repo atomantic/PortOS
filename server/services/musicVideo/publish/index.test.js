@@ -185,4 +185,30 @@ describe('publish drafts (#9282)', () => {
     await preparePublishDraft(id, 'youtube', {}, { connect, adapters, platforms });
     expect(adapters.youtube.prepare.mock.calls[0][1].video.path).toBe(join(PATHS.videos, 'master.mp4'));
   });
+
+  it('sends the song to DistroKid with its audio, a square store cover, and the account as the artist', async () => {
+    const id = await readyProject();
+    await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, uploadedAudioFilename: 'song.wav', publishKit: { ...current.publishKit, thumbnail: 'thumb.jpg' } } }));
+    await mkdir(PATHS.videoThumbnails, { recursive: true });
+    await writeFile(join(PATHS.videoThumbnails, 'thumb.jpg'), 'x');
+    const audio = join(PATHS.videoThumbnails, 'thumb.jpg'); // any file on disk stands in for the song
+    const dk = { distrokid: { enabled: true, account: 'Example Artist' } };
+    const { connect } = fakeBrowser();
+    const adapters = { distrokid: adapter({ label: 'DistroKid' }) };
+    const options = { songwriterFirst: 'Alice', songwriterLast: 'Example' };
+    const resolveAudio = vi.fn(async () => audio);
+
+    // Without ffmpeg the 16:9 frame would be uploaded as the cover; the store rejects it, so no tab opens.
+    await expect(preparePublishDraft(id, 'distrokid', options, { connect, adapters, platforms: dk, resolveAudio, findFfmpeg: async () => null }))
+      .rejects.toMatchObject({ status: 422, code: 'PUBLISH_ASSET_MISSING' });
+    expect(connect).not.toHaveBeenCalled();
+
+    const runFfmpegProcess = vi.fn(async () => ({ ok: true }));
+    await preparePublishDraft(id, 'distrokid', options, { connect, adapters, platforms: dk, resolveAudio, findFfmpeg: async () => 'ffmpeg', runFfmpegProcess });
+    const payload = adapters.distrokid.prepare.mock.calls[0][1];
+    expect(payload).toMatchObject({ title: 'Release', artist: 'Example Artist', songwriter: { first: 'Alice', last: 'Example' }, audio: { path: audio }, instrumental: true });
+    expect(payload.cover.name).toMatch(/^publish-cover-distrokid-/);
+    expect(runFfmpegProcess.mock.calls[0][0].args.join(' ')).toContain('scale=3000:3000');
+    expect(resolveAudio.mock.calls[0][0]).toMatchObject({ id, uploadedAudioFilename: 'song.wav' });
+  });
 });

@@ -7,7 +7,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, within, act } from '@testing-library/react';
 import PublishPostingPanel, { PUBLISH_TARGETS } from './PublishPostingPanel.jsx';
 
-const ALL = ['youtube', 'suno', 'x', 'shorts', 'tiktok', 'instagram', 'reddit', 'stackerNews'];
+const ALL = ['youtube', 'suno', 'x', 'shorts', 'tiktok', 'instagram', 'reddit', 'stackerNews', 'distrokid'];
 const hook = (over = {}) => ({ drafts: {}, busy: {}, errors: {}, prepare: vi.fn(), submit: vi.fn(), discard: vi.fn(), enabledTargets: ALL, platforms: {}, recordPost: vi.fn(async () => null), ...over });
 const project = (kit = {}) => ({ id: 'mv-1', publishKit: { builtAt: '2026-01-01T00:00:00.000Z', thumbnails: ['t1.jpg'], ...kit } });
 const row = (label) => screen.getByText(label, { selector: 'div' }).closest('li');
@@ -46,6 +46,23 @@ describe('PublishPostingPanel (#9282)', () => {
     fireEvent.change(select, { target: { value: 'kit-vertical' } });
     fireEvent.click(within(shorts).getByRole('button', { name: 'Fill draft' }));
     expect(publishing.prepare).toHaveBeenCalledWith('shorts', { cutId: 'kit-vertical' });
+  });
+
+  it('fills a DistroKid release with the songwriter and AI parts, and remembers the songwriter on this device', () => {
+    const publishing = hook({ platforms: { distrokid: { enabled: true, account: 'Example Artist' } } });
+    const p = { ...project(), autonomousRun: { output: { lyrics: 'la la' } } };
+    const { unmount } = render(<PublishPostingPanel project={p} publishing={publishing} />);
+    const dk = row('Spotify (via DistroKid)');
+    expect(within(dk).getByLabelText('Artist name')).toHaveAttribute('placeholder', 'Example Artist');
+    expect(within(dk).getByLabelText('Instrumental')).toBeChecked(); // no lyric cues
+    fireEvent.change(within(dk).getByLabelText('Songwriter legal first name'), { target: { value: 'Alice' } });
+    fireEvent.change(within(dk).getByLabelText('Songwriter legal last name'), { target: { value: 'Example' } });
+    fireEvent.click(within(dk).getByLabelText('Explicit lyrics'));
+    fireEvent.click(within(dk).getByRole('button', { name: 'Fill draft' }));
+    expect(publishing.prepare).toHaveBeenCalledWith('distrokid', { songwriterFirst: 'Alice', songwriterLast: 'Example', aiLyrics: true, explicit: true });
+    unmount();
+    render(<PublishPostingPanel project={project()} publishing={hook()} />);
+    expect(within(row('Spotify (via DistroKid)')).getByLabelText('Songwriter legal first name')).toHaveValue('Alice');
   });
 
   it('shows no cut picker when there is only one 9:16 cut', () => {
