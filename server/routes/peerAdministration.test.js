@@ -92,6 +92,18 @@ beforeEach(() => {
 afterAll(cleanup);
 
 describe('bounded administration through the real authority boundary', () => {
+  it('keeps planning grants powerless on the independently authenticated execution surface', async () => {
+    await grant();
+    const input = { protocolVersion: 1, requestId: randomUUID(), intent };
+    const denied = await peerRequest('execution/preflight', input);
+    expect(denied.status).toBe(403);
+    expect(denied.body.code).toBe('PEER_EXECUTION_GRANT_REQUIRED');
+    expect((await request(app).post(`${ROOT}/execution/preflight`).send(input)).status).toBe(401);
+    expect((await peerRequest('execution/dispatch', { ...input, command: 'fixture-injection' })).status).toBe(400);
+    expect(execution.restart).not.toHaveBeenCalled();
+    expect(execution.update).not.toHaveBeenCalled();
+    expect(execution.install).not.toHaveBeenCalled();
+  });
   it('defaults to deny and never elevates a peer to existing host control', async () => {
     const body = { protocolVersion: 1, challenge: randomUUID(), intent };
     expect((await peerRequest('preflight', body)).body.code).toBe('PEER_ADMIN_GRANT_REQUIRED');

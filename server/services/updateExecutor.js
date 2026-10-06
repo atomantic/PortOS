@@ -1,4 +1,7 @@
 import { readFile, unlink } from 'fs/promises';
+import { createHash } from 'node:crypto';
+import { canonicalStringify } from '../lib/objects.js';
+import { assertPeerExecutionCapability } from '../lib/maintenanceExclusive.js';
 import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { spawnDetached, isDetachedRunning } from '../lib/detachedSpawn.js';
@@ -44,7 +47,7 @@ const CLEANABLE_WORKSPACES = new Set(['.', 'client', 'server', 'autofixer']);
  *   Refusal returns its recorded result; spawn failures reject. A successful
  *   launch returns separately from completion, which may outlive this server.
  */
-export async function launchUpdate(tag, emit, { forceCleanWorkspaces } = {}) {
+export async function launchUpdate(tag, emit, { forceCleanWorkspaces, peerExecution } = {}) {
   const targetVersion = tag.replace(/^v/, '');
   const isWindows = process.platform === 'win32';
   const cmd = isWindows ? 'powershell' : 'bash';
@@ -63,6 +66,18 @@ export async function launchUpdate(tag, emit, { forceCleanWorkspaces } = {}) {
     ? forceCleanWorkspaces.filter(w => CLEANABLE_WORKSPACES.has(w))
     : [];
   const childEnv = { ...process.env };
+  // Never inherit peer-only pinning from an operator's ambient environment.
+  delete childEnv.PORTOS_PEER_UPDATE_TARGET_SHA;
+  delete childEnv.PORTOS_PEER_UPDATE_EXPECTED_SHA;
+  if (peerExecution) {
+    const { capability, evidence } = peerExecution;
+    assertPeerExecutionCapability(capability, { action: 'portos.update' },
+      createHash('sha256').update(canonicalStringify(evidence)).digest('hex'));
+    if (!/^[a-f0-9]{40}$/.test(evidence.target.targetSha) || !/^[a-f0-9]{40}$/.test(evidence.target.headSha))
+      throw new Error('Invalid peer update revision.');
+    childEnv.PORTOS_PEER_UPDATE_TARGET_SHA = evidence.target.targetSha;
+    childEnv.PORTOS_PEER_UPDATE_EXPECTED_SHA = evidence.target.headSha;
+  }
   if (cleanList.length) {
     childEnv.PORTOS_FORCE_CLEAN_WORKSPACES = cleanList.join(',');
   } else {
@@ -77,7 +92,11 @@ export async function launchUpdate(tag, emit, { forceCleanWorkspaces } = {}) {
   // works unchanged. The control dir is reused across updates (spawnDetached
   // truncates stale files) and kept afterward as the post-mortem record of the
   // launch.
-  const controlDir = join(PATHS.data, 'update-detached');
+  const peerOperation = peerExecution && assertPeerExecutionCapability(peerExecution.capability, { action: 'portos.update' },
+    createHash('sha256').update(canonicalStringify(peerExecution.evidence)).digest('hex'));
+  const controlDir = peerOperation
+    ? join(PATHS.data, 'peer-execution', peerOperation.operationId)
+    : join(PATHS.data, 'update-detached');
 
   // Refuse to reuse the control dir while a prior update script is still
   // running (survival path: the old script outlives the server restart it
@@ -96,6 +115,8 @@ export async function launchUpdate(tag, emit, { forceCleanWorkspaces } = {}) {
     return { started: false, result: { success: false, failedStep: 'starting', errorMessage } };
   }
 
+  if (peerExecution) assertPeerExecutionCapability(peerExecution.capability, { action: 'portos.update' },
+    createHash('sha256').update(canonicalStringify(peerExecution.evidence)).digest('hex'));
   const child = await spawnDetached(cmd, args, {
     cwd: PATHS.root,
     env: childEnv,

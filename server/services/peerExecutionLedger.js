@@ -1,6 +1,6 @@
 /**
- * Receiver-local persistence primitives only. A record is neither a grant nor a
- * launch authorization. No peer route or fixed adapter imports this module yet.
+ * Receiver-local durable consumption. A record is neither a grant nor launch
+ * authorization; the receiver verifies authority, ownership and adapter evidence.
  */
 import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
@@ -99,6 +99,16 @@ export function createPeerExecutionLedger({ db, dataDir, authority = createPeerE
       return { operation: fromRow(row), isNew: true };
     });
   };
+  const readRequest = async ({ hostInstanceId, peerInstanceId, requestId }) => {
+    uuid.parse(hostInstanceId); uuid.parse(peerInstanceId); uuid.parse(requestId);
+    return find(db, { hostInstanceId, peerInstanceId, requestId });
+  };
+  const generationFloor = async ({ hostInstanceId, peerInstanceId, action }) => {
+    floorSchema.omit({ generation: true }).parse({ hostInstanceId, peerInstanceId, action });
+    const { rows: [row] } = await db.query(`SELECT generation FROM peer_execution_generation_floors
+      WHERE host_instance_id = $1 AND peer_instance_id = $2 AND action = $3`, [hostInstanceId, peerInstanceId, action]);
+    return row ? Number(row.generation) : 0;
+  };
   const read = async id => {
     uuid.parse(id);
     const { rows: [row] } = await db.query('SELECT * FROM peer_execution_operations WHERE operation_id = $1', [id]);
@@ -118,7 +128,7 @@ export function createPeerExecutionLedger({ db, dataDir, authority = createPeerE
       return Number(row.generation);
     });
   };
-  // Persistence CAS, not a dispatcher. The future receiver must own and verify
+  // Persistence CAS, not a dispatcher. The receiver must own and verify
   // the coordinator claim/adapter evidence before calling this internal method.
   const transition = (id, revision, state, { claim = null, receipt = null, authorityEpoch = null } = {}) => {
     uuid.parse(id); positive.parse(revision); z.enum(states).parse(state);
@@ -137,7 +147,7 @@ export function createPeerExecutionLedger({ db, dataDir, authority = createPeerE
         'awaiting-reconnect': ['succeeded', 'failed', 'uncertain'], uncertain: ['succeeded', 'failed'], succeeded: [], failed: [] };
       if (!allowed[current.state].includes(state)) fail('PEER_EXECUTION_TRANSITION_REFUSED', 'An operation cannot move backwards or launch again.');
       if (state === 'in-flight' && !claim) fail('PEER_EXECUTION_CLAIM_REQUIRED', 'Persist the exact coordinator ownership before recording a start.');
-      if (current.claim && claim && JSON.stringify(current.claim) !== JSON.stringify(claim))
+      if (current.claim && claim && (current.claim.id !== claim.id || current.claim.fingerprint !== claim.fingerprint || claim.revision < current.claim.revision))
         fail('PEER_EXECUTION_CLAIM_CHANGED', 'A different coordinator owner cannot replace the recorded start.');
       if (terminal(state) && receipt?.executionEpoch !== epoch)
         fail('PEER_EXECUTION_RECEIPT_STALE', 'Terminal evidence must bind the current non-rewound authority epoch.');
@@ -153,6 +163,11 @@ export function createPeerExecutionLedger({ db, dataDir, authority = createPeerE
     uuid.nullable().parse(after); z.number().int().min(1).max(PAGE_SIZE).parse(limit);
     const { rows } = await db.query(`SELECT * FROM peer_execution_operations
       WHERE ($1::uuid IS NULL OR operation_id > $1) ORDER BY operation_id LIMIT $2`, [after, limit]);
+    return rows.map(fromRow);
+  };
+  const listActive = async () => {
+    const { rows } = await db.query(`SELECT * FROM peer_execution_operations
+      WHERE state IN ('queued', 'draining', 'in-flight', 'awaiting-reconnect', 'uncertain') ORDER BY created_at LIMIT 32`);
     return rows.map(fromRow);
   };
   const captureRestore = async (client, id, started) => {
@@ -312,5 +327,5 @@ export function createPeerExecutionLedger({ db, dataDir, authority = createPeerE
     if (current?.phase === 'ready' && current.settledRecoveryId === id) return current;
     return authority.completeRestore(id);
   };
-  return { initialize, consume, read, list, transition, advanceGenerationFloor, prepareRestore, adoptEmptyRestore, reconcileRestore, authority };
+  return { initialize, consume, read, readRequest, generationFloor, list, listActive, transition, advanceGenerationFloor, prepareRestore, adoptEmptyRestore, reconcileRestore, authority };
 }

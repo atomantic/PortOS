@@ -167,6 +167,12 @@ if has_local_changes; then
   step "git-pull" "failed" "Checkout is dirty; no stash was created"
   exit 1
 fi
+if [ -n "${PORTOS_PEER_UPDATE_TARGET_SHA:-}" ]; then
+  if [[ ! "$PORTOS_PEER_UPDATE_TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || [[ ! "${PORTOS_PEER_UPDATE_EXPECTED_SHA:-}" =~ ^[a-f0-9]{40}$ ]] || [ "$current_branch" != "main" ] || [ "$(git rev-parse HEAD)" != "$PORTOS_PEER_UPDATE_EXPECTED_SHA" ]; then
+    step "git-pull" "failed" "Peer update evidence changed"
+    exit 1
+  fi
+fi
 if [ "$current_branch" != "main" ]; then
   log "⚠️  On branch '${current_branch:-detached HEAD}' — switching to main for update"
   run git checkout main
@@ -182,7 +188,11 @@ fi
 # post-pull HEAD yields exactly the pull's delta on main, so a manifest change
 # the update brings is detected even when launched from another branch.
 pre_pull_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
-run git pull --rebase
+if [ -n "${PORTOS_PEER_UPDATE_TARGET_SHA:-}" ]; then
+  run git merge --ff-only "$PORTOS_PEER_UPDATE_TARGET_SHA"
+else
+  run git pull --rebase
+fi
 step "git-pull" "done" "Latest changes pulled"
 
 # Determine which workspaces' package.json this update touched, so safe_install

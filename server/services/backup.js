@@ -1329,7 +1329,7 @@ const OS_METADATA_RSYNC_EXCLUDES = [...OS_METADATA_FILES, '._*'].map(name => `--
  * verification and execution cannot disagree.
  */
 const RESTORE_PRESERVED_FILES = Object.freeze([
-  'database-authority.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance',
+  'database-authority.json', 'peer-execution', 'peer-execution-catalog.json', 'peer-execution-grants.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance',
 ]);
 // Matched case-insensitively (rsync has no such flag, so each letter becomes a
 // `[xX]` class): on a case-insensitive volume a `Database-Authority.json` entry
@@ -1567,7 +1567,15 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   // until it finishes (#7302), so this restore's idle floor scales to it.
   const idleTimeoutMs = restoreIdleTimeoutMs(verification.largestFileBytes);
   const restoreFiles = async () => {
-    const [transfer] = await Promise.allSettled([runRsync(srcDir, PATHS.data, flags, { idleTimeoutMs })]);
+    const transferFiles = () => runRsync(srcDir, PATHS.data, flags, { idleTimeoutMs });
+    const transferWithIdentityFence = async () => {
+      if (!dryRun && (!scope || scope === 'instances.json') && await stat(join(srcDir, 'instances.json')).then(info => info.isFile(), error => { if (error.code === 'ENOENT') return false; throw error; })) {
+        const { withPeerExecutionIdentityRestore } = await import('./peerExecutionRuntime.js');
+        return withPeerExecutionIdentityRestore(transferFiles);
+      }
+      return transferFiles();
+    };
+    const [transfer] = await Promise.allSettled([transferWithIdentityFence()]);
     const reconciliationError = !dryRun
       ? await reconcileLiveFileRestore(subdirFilter).then(
         () => null,
