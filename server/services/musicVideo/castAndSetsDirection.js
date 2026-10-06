@@ -283,29 +283,36 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
 const isPlaceholder = (s) => typeof s === 'string' && /^\s*<.+>\s*$/.test(s);
 const text = (max) => z.string().transform((s) => (isPlaceholder(s) ? '' : s.trim().slice(0, max)));
 const slug = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+// Prose fields a model sometimes answers in structure (a palette as {"primary":"#fff"} or a
+// list of hexes). Flatten those to text rather than letting one sub-field reject the whole
+// protagonist or world, which reads as "missing" and fails the stage.
+const flatten = (v) => (Array.isArray(v) ? v.map(flatten).filter(Boolean).join(', ')
+  : v && typeof v === 'object' ? Object.entries(v).map(([k, x]) => `${k}: ${flatten(x)}`).join(', ')
+  : typeof v === 'number' ? String(v) : v);
+const prose = (max) => z.preprocess(flatten, text(max));
 
 const protagonistSchema = z.object({
-  name: text(SHORT).optional(),
-  description: text(TEXT).optional(),
-  face: text(TEXT).optional(),
-  hair: text(TEXT).optional(),
-  signature: text(TEXT).optional(),
-  gesture: text(TEXT).optional(),
+  name: prose(SHORT).optional(),
+  description: prose(TEXT).optional(),
+  face: prose(TEXT).optional(),
+  hair: prose(TEXT).optional(),
+  signature: prose(TEXT).optional(),
+  gesture: prose(TEXT).optional(),
   rules: z.array(text(300)).optional(),
   // Procedural medium: how the character is built and moves in code.
-  construction: text(TEXT).optional(),
-  shapeLanguage: text(500).optional(),
-  materials: text(500).optional(),
-  palette: text(300).optional(),
-  movement: text(TEXT).optional(),
+  construction: prose(TEXT).optional(),
+  shapeLanguage: prose(500).optional(),
+  materials: prose(500).optional(),
+  palette: prose(300).optional(),
+  movement: prose(TEXT).optional(),
   expressions: z.array(text(300)).optional(),
 }).passthrough();
 const worldSchema = z.object({
-  layout: text(TEXT).optional(),
-  depth: text(500).optional(),
-  lighting: text(500).optional(),
-  camera: text(500).optional(),
-  transitions: text(500).optional(),
+  layout: prose(TEXT).optional(),
+  depth: prose(500).optional(),
+  lighting: prose(500).optional(),
+  camera: prose(500).optional(),
+  transitions: prose(500).optional(),
 }).passthrough();
 // Unusable definitions (not an object, or no character survives validation) count as
 // absent so the merge keeps the current ones; `{ characters: [] }` is a deliberate clear.
