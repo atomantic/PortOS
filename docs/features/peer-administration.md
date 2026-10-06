@@ -39,11 +39,13 @@ catalog execution grant. Installation verifies the streamed byte count and hash
 before publication and never replaces an existing destination file.
 
 On the sending host, prepare the desired action, inspect its exact signed
-preflight, then request execution. The sender stores the request identity before
+preflight, then request execution. The sender stores the request identity and signed preview before
 sending and refuses dispatch if that recovery record cannot be read back.
 An uncertain response retains the request and offers **Check status**; it never
 starts another attempt automatically. The receiving host owns the durable ledger;
-browser storage is a convenience for finding its receipt.
+browser storage retains the evidence needed to recover its receipt. A proven local
+pre-send rejection permits a fresh preview. A timeout or unsigned remote refusal
+never does.
 
 ## Authority and drain
 
@@ -99,6 +101,16 @@ completion. Unknown side effects retain exclusive ownership. Boot never replays 
 launch; explicit status reads can reconcile exact completion evidence arriving
 after boot. Terminal database persistence, journal settlement and hold release
 are independently recoverable, including crashes between those boundaries.
+
+Status requests can include the original signed preview. When the receiver has
+never consumed that request, it verifies the signature and both instance identities,
+then atomically records a permanent failed receipt under the same database lock
+as dispatch. That receipt proves no launch occurred and prevents any delayed
+dispatch or reused preflight from starting it later. Already accepted requests
+retain their original state. This recovery works after receiver restart, grant
+revocation and epoch rotation while the original pair credential remains valid;
+it never restores authority from the preview. A request without verifiable
+original evidence remains unresolved instead of treating a bare 404 as proof.
 
 Updates and restarts write per-operation launch evidence before starting their
 detached adapter. Reconciliation requires its exact successful exit receipt and

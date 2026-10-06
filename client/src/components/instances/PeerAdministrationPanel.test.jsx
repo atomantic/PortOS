@@ -123,6 +123,7 @@ describe('separate peer execution controls', () => {
     expect(dispatchPeerExecution).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Submit execution' }));
     await screen.findByText('Execution status: draining');
+    expect(storage.safeReadJsonStorage(`peer-execution:${setup.hostInstanceId}:${peer.id}:${setup.peerInstanceId}`).preflight).toEqual(preview);
     expect(dispatchPeerExecution).toHaveBeenCalledWith({ peerId: peer.id, preflight: preview }, { silent: true });
   });
 
@@ -138,6 +139,23 @@ describe('separate peer execution controls', () => {
     await screen.findByText(/Execution was not submitted because this browser could not save its recovery record/);
     expect(dispatchPeerExecution).not.toHaveBeenCalled();
     expect(screen.queryByText('Execution status: uncertain')).toBeNull();
+  });
+
+  it.each([
+    ['PEER_EXECUTION_NOT_SENT', envelope.payload.requestId, 'failed'],
+    ['PEER_EXECUTION_NOT_SENT', 'unrelated-request', 'uncertain'],
+    ['PEER_ADMIN_REMOTE_REFUSED', envelope.payload.requestId, 'uncertain'],
+  ])('recovers only correlated local non-dispatch proof: %s / %s', async (code, requestId, state) => {
+    previewPeerExecution.mockResolvedValue(envelope);
+    dispatchPeerExecution.mockRejectedValue(Object.assign(new Error('Dispatch did not complete'), { code, context: { requestId } }));
+    await open();
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare PortOS restart execution' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Submit execution' }));
+    await screen.findByText('Dispatch did not complete');
+    expect(screen.getByText(`Execution status: ${state}`)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Prepare PortOS restart execution' }).disabled).toBe(state === 'uncertain');
+    expect(dispatchPeerExecution).toHaveBeenCalledTimes(1);
+    expect(storage.safeReadJsonStorage(`peer-execution:${setup.hostInstanceId}:${peer.id}:${setup.peerInstanceId}`).preflight).toEqual(envelope);
   });
 
   it('retains an uncertain launch across tab closure and recovers with status without a second dispatch', async () => {
@@ -161,7 +179,8 @@ describe('separate peer execution controls', () => {
     await screen.findByText('Execution status: succeeded');
     expect(dispatchPeerExecution).toHaveBeenCalledTimes(1);
     expect(dispatchPeerExecution).toHaveBeenCalledWith({ peerId: peer.id, preflight: envelope }, { silent: true });
-    expect(getPeerExecutionStatus).toHaveBeenCalledWith({ peerId: peer.id, requestId: envelope.payload.requestId }, { silent: true });
+    expect(getPeerExecutionStatus).toHaveBeenCalledWith({ peerId: peer.id, requestId: envelope.payload.requestId, preflight: envelope }, { silent: true });
+    expect(storage.safeReadJsonStorage(`peer-execution:${setup.hostInstanceId}:${peer.id}:${setup.peerInstanceId}`).preflight).toEqual(envelope);
   });
 });
 

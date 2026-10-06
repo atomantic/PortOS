@@ -131,8 +131,15 @@ function verifiedExecutionReceipt(peer, self, envelope, requestId) {
 
 /** Exactly one dispatch attempt; a lost response is recovered through status. */
 export async function dispatchPeerExecution({ peerId, preflight }) {
-  const { peer, self } = await peerAdminIdentity(peerId);
-  const payload = verifiedExecutionPreflight(peer, self, preflight, preflight?.payload?.requestId);
+  // Only this local block can assert that dispatch was never attempted.
+  const { peer, self, payload } = await (async () => {
+    const { peer, self } = await peerAdminIdentity(peerId);
+    return { peer, self, payload: verifiedExecutionPreflight(peer, self, preflight, preflight?.payload?.requestId) };
+  })().catch(() => {
+    throw new ServerError('Execution was not sent because its preview or paired identity is no longer valid. Prepare a fresh preview.', {
+      status: 409, code: 'PEER_EXECUTION_NOT_SENT', context: { requestId: preflight?.payload?.requestId },
+    });
+  });
   const { requestId, grantId, grantGeneration, intent, evidenceDigest, executionEpoch, version } = payload;
   const envelope = await exchange(peer, 'executionDispatch', {
     protocolVersion: 1, requestId, grantId, grantGeneration, intent, evidenceDigest, executionEpoch, version,
@@ -141,9 +148,9 @@ export async function dispatchPeerExecution({ peerId, preflight }) {
   return verifiedExecutionReceipt(peer, self, envelope, requestId);
 }
 
-export async function getPeerExecutionStatus({ peerId, requestId }) {
+export async function getPeerExecutionStatus({ peerId, requestId, preflight }) {
   const { peer, self } = await peerAdminIdentity(peerId);
-  const envelope = await exchange(peer, 'executionStatus', { requestId }, AbortSignal.timeout(10_000)).catch(executionUnavailable);
+  const envelope = await exchange(peer, 'executionStatus', { requestId, ...(preflight && { preflight }) }, AbortSignal.timeout(10_000)).catch(executionUnavailable);
   await unchangedPair(peerId, peer, self);
   return verifiedExecutionReceipt(peer, self, envelope, requestId);
 }
