@@ -10,6 +10,7 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { resolveGalleryImage } from '../lib/fileUtils.js';
+import { logFailureWithStack } from '../lib/failureLogging.js';
 import {
   validateRequest,
   creativeDirectorProjectCreateSchema,
@@ -240,7 +241,7 @@ router.post('/:id/auto-cast', asyncHandler(async (req, res) => {
   const composable = project && project.status !== 'paused' && project.status !== 'failed';
   const composing = Boolean(compose) && composable && Array.isArray(cast) && cast.length > 0 && !project.treatment;
   if (composing) {
-    startCreativeDirectorProject(req.params.id).catch((e) => console.log(`⚠️ CD auto-compose failed: ${e.message}`));
+    startCreativeDirectorProject(req.params.id).catch((e) => logFailureWithStack(`❌ CD auto-compose failed for ${req.params.id}`, e));
   }
   // First-pass gen (#1818): when opted in, kick off a catalog portrait render
   // for each member auto-cast just added that has no portrait yet. The renders
@@ -252,7 +253,7 @@ router.post('/:id/auto-cast', asyncHandler(async (req, res) => {
   if (generateFirstPass && Array.isArray(result.added) && result.added.length > 0) {
     firstPass = await enqueueFirstPassPortraits(result.added, project)
       .catch((e) => {
-        console.log(`⚠️ CD first-pass portraits failed: ${e.message}`);
+        console.warn(`⚠️ CD first-pass portraits failed for ${req.params.id}: ${e.message}`);
         return null;
       });
   }
@@ -266,7 +267,7 @@ router.post('/:id/auto-cast', asyncHandler(async (req, res) => {
   if (generateFirstPassMusicBed && project) {
     firstPassMusicBed = await enqueueFirstPassMusicBed(project)
       .catch((e) => {
-        console.log(`⚠️ CD first-pass music bed failed: ${e.message}`);
+        console.warn(`⚠️ CD first-pass music bed failed for ${req.params.id}: ${e.message}`);
         return null;
       });
   }
@@ -306,7 +307,7 @@ router.patch('/:id/plan', asyncHandler(async (req, res) => {
   const updated = await setPlan(req.params.id, plan);
   const { advanceAfterPlanStepSettled } = await import('../services/creativeDirector/planAdvance.js');
   advanceAfterPlanStepSettled(req.params.id)
-    .catch((e) => console.log(`⚠️ CD plan advance failed: ${e.message}`));
+    .catch((e) => logFailureWithStack(`❌ CD plan advance failed for ${req.params.id}`, e));
   res.json(updated);
 }));
 
@@ -331,7 +332,7 @@ router.post('/:id/directive', asyncHandler(async (req, res) => {
   if (!parked) {
     const { advanceAfterPlanStepSettled } = await import('../services/creativeDirector/planAdvance.js');
     advanceAfterPlanStepSettled(req.params.id)
-      .catch((e) => console.log(`⚠️ CD directive advance failed: ${e.message}`));
+      .catch((e) => logFailureWithStack(`❌ CD directive advance failed for ${req.params.id}`, e));
   }
   res.json(updated);
 }));
@@ -347,7 +348,7 @@ router.post('/:id/replan', asyncHandler(async (req, res) => {
   const updated = await updateProject(req.params.id, { plan: null, status: 'planning', failureReason: null });
   const { advanceAfterPlanStepSettled } = await import('../services/creativeDirector/planAdvance.js');
   advanceAfterPlanStepSettled(req.params.id)
-    .catch((e) => console.log(`⚠️ CD replan advance failed: ${e.message}`));
+    .catch((e) => logFailureWithStack(`❌ CD replan advance failed for ${req.params.id}`, e));
   res.json(updated);
 }));
 
@@ -376,7 +377,7 @@ router.post('/:id/plan/step/:stepId', asyncHandler(async (req, res) => {
   }
   const { advanceAfterPlanStepSettled } = await import('../services/creativeDirector/planAdvance.js');
   advanceAfterPlanStepSettled(req.params.id)
-    .catch((e) => console.log(`⚠️ CD plan step ${action} advance failed: ${e.message}`));
+    .catch((e) => logFailureWithStack(`❌ CD plan step ${action} advance failed for ${req.params.id}`, e));
   res.json(await getProject(req.params.id));
 }));
 
@@ -395,7 +396,7 @@ router.patch('/:id/scene/:sceneId', asyncHandler(async (req, res) => {
     // Fire-and-forget — agent or user just settled a scene; nudge the
     // orchestrator so the next scene (or stitch) starts.
     const { advanceAfterSceneSettled } = await import('../services/creativeDirector/completionHook.js');
-    advanceAfterSceneSettled(req.params.id).catch((e) => console.log(`⚠️ CD scene advance failed: ${e.message}`));
+    advanceAfterSceneSettled(req.params.id).catch((e) => logFailureWithStack(`❌ CD scene advance failed for ${req.params.id}`, e));
   }
   res.json(updated);
 }));
@@ -442,7 +443,7 @@ router.post('/:id/start', asyncHandler(async (req, res) => {
   // Fire-and-forget — the orchestrator runs server-side and may spawn an
   // agent (treatment / evaluate) or kick off a render directly. The route
   // returns immediately; the UI's polling reflects state changes.
-  startCreativeDirectorProject(project.id).catch((e) => console.log(`⚠️ CD start failed: ${e.message}`));
+  startCreativeDirectorProject(project.id).catch((e) => logFailureWithStack(`❌ CD start failed for ${project.id}`, e));
   res.json({ ok: true, project: await getProject(project.id) });
 }));
 
@@ -466,7 +467,7 @@ router.post('/:id/pause', asyncHandler(async (req, res) => {
 // time only, no Claude in the loop.
 router.post('/smoke-test', asyncHandler(async (_req, res) => {
   const project = await createSmokeTestProject();
-  startCreativeDirectorProject(project.id).catch((e) => console.log(`⚠️ CD smoke start failed: ${e.message}`));
+  startCreativeDirectorProject(project.id).catch((e) => logFailureWithStack(`❌ CD smoke start failed for ${project.id}`, e));
   res.status(201).json(project);
 }));
 
@@ -488,7 +489,7 @@ router.post('/:id/resume', asyncHandler(async (req, res) => {
   // without this the resumed project runs its whole next pass under a banner
   // reporting the stop the user just undid.
   await updateProject(project.id, { status: restored, failureReason: null });
-  startCreativeDirectorProject(project.id).catch((e) => console.log(`⚠️ CD resume failed: ${e.message}`));
+  startCreativeDirectorProject(project.id).catch((e) => logFailureWithStack(`❌ CD resume failed for ${project.id}`, e));
   res.json({ ok: true, project: await getProject(project.id) });
 }));
 

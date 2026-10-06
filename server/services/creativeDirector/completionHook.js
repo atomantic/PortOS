@@ -44,6 +44,7 @@ import {
   exhaustedDeliverableStreak,
   missedDeliverableReason,
 } from './deliverableGate.js';
+import { logFailureWithStack } from '../../lib/failureLogging.js';
 
 export async function handleCreativeDirectorCompletion(task, agentId, success) {
   const videoAttempt = task?.metadata?.videoProduction;
@@ -146,7 +147,7 @@ export async function handleCreativeDirectorCompletion(task, agentId, success) {
     // the user has no idea what happened.
     const reason = `${meta.kind} agent task failed (taskId=${task.id || '?'}, agent=${agentId || '?'})`;
     await updateProject(project.id, { status: 'failed', failureReason: reason })
-      .catch((e) => console.log(`⚠️ CD updateProject(failed) for ${project.id} failed: ${e.message}`));
+      .catch((e) => logFailureWithStack(`❌ CD updateProject(failed) for ${project.id} failed`, e));
     console.error(`❌ CD project ${project.id} marked failed (task ${meta.kind} failed)`);
     return;
   }
@@ -304,7 +305,7 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
     if (emptyStreak) {
       await closeDeliverableStreak(project.id, project.runs, 'treatment');
       await updateProject(project.id, { status: 'paused', failureReason: blockedStageReason('treatment', emptyStreak) })
-        .catch((e) => console.log(`⚠️ CD updateProject(paused) for ${project.id} failed: ${e.message}`));
+        .catch((e) => logFailureWithStack(`❌ CD updateProject(paused) for ${project.id} failed`, e));
       console.log(`⏸️  CD project ${project.id}: treatment agent came back empty ${emptyStreak}× — paused for a model change`);
       return;
     }
@@ -530,7 +531,7 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
           // text-to-video, exactly as the fire-and-forget contract allowed.
           // Runs outside the request lifecycle — never throw.
           waitForSeedFrameThenAdvance(project.id, sceneId)
-            .catch((e) => console.log(`⚠️ CD deferred advance for ${project.id}/${sceneId} failed: ${e.message}`));
+            .catch((e) => logFailureWithStack(`❌ CD deferred advance for ${project.id}/${sceneId} failed`, e));
         };
         // Match by scene TAG, not the single job id we happened to sample: if
         // a duplicate/re-queued seed job for the same scene completes first and
@@ -605,7 +606,7 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
   const accepted = scenes.filter((s) => s.status === 'accepted');
   if (!accepted.length) {
     await updateProject(project.id, { status: 'failed' })
-      .catch((e) => console.log(`⚠️ CD updateProject(failed) for ${projectId} failed: ${e.message}`));
+      .catch((e) => logFailureWithStack(`❌ CD updateProject(failed) for ${projectId} failed`, e));
     console.error(`❌ CD project ${projectId}: every scene failed — marking project failed`);
     return;
   }
