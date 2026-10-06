@@ -11,25 +11,45 @@ const menu = (tag) => `<button aria-label="More options" data-tag="${tag}"></but
 const card = (id, tag) => `<div><div><a href="/song/${id}">Song</a></div><div>${menu(tag)}</div></div>`;
 const marked = () => document.querySelector('[data-portos-song-menu]')?.dataset.tag;
 
+const title = '<h1>Page song</h1>';
+const link = (id) => `<a href="/song/${id}">Song</a>`;
+
 describe('markSunoSongMenu', () => {
   it("picks the cover's own menu, not the 'Cover of' card above it", () => {
     // Shaped like a live cover page: the parent's card and its menu come first,
-    // inside the header that holds the page song's menu.
+    // inside the header that holds the page song's title and menu.
     document.body.innerHTML = `
-      <main><section><div>${card(PARENT, 'parent')}<div><span>styles</span>${menu('header')}</div></div></section>
+      <main><section><div>${card(PARENT, 'parent')}<div>${title}<span>styles</span>${menu('header')}</div></div></section>
         <aside>${card(OTHER, 'similar')}</aside></main>
       <footer>${card(OWN, 'playbar')}</footer>`;
     expect(markSunoSongMenu(OWN)).toBe(true);
     expect(marked()).toBe('header');
   });
 
-  it("picks the song's menu on a page with no other song above it", () => {
-    document.body.innerHTML = `<main><section>${menu('header')}</section><aside>${card(OTHER, 'similar')}</aside></main>`;
+  it("picks the page song's menu when the 'Cover of' link and its menu are separate siblings in the header", () => {
+    // The shape a Suno redesign could produce: no card wraps the link and its
+    // menu, so the header holds both menus. The parent's menu still follows the
+    // parent's link; only the title's menu follows the title.
+    document.body.innerHTML = `
+      <header><div>${link(PARENT)}${menu('parent')}</div>${title}<div><button>Edit</button>${menu('header')}</div></header>
+      <aside>${card(OTHER, 'similar')}</aside>`;
     expect(markSunoSongMenu(OWN)).toBe(true);
     expect(marked()).toBe('header');
   });
 
-  it("accepts a single-menu card that links to the page's own song, ignoring case", () => {
+  it("fails rather than guess when two menus both follow the title", () => {
+    document.body.innerHTML = `<header>${title}${menu('a')}${menu('b')}</header>`;
+    expect(markSunoSongMenu(OWN)).toBe(false);
+    expect(marked()).toBeUndefined();
+  });
+
+  it("fails when the parent's menu is the only menu after the title", () => {
+    document.body.innerHTML = `<header>${title}${link(PARENT)}${menu('parent')}</header><aside>${card(OTHER, 'similar')}</aside>`;
+    expect(markSunoSongMenu(OWN)).toBe(false);
+    expect(marked()).toBeUndefined();
+  });
+
+  it("accepts a menu that follows a link to the page's own song, ignoring case", () => {
     document.body.innerHTML = `<aside>${card(OTHER, 'similar')}</aside>${card(OWN, 'own')}`;
     expect(markSunoSongMenu(OWN.toUpperCase())).toBe(true);
     expect(marked()).toBe('own');
@@ -41,10 +61,15 @@ describe('markSunoSongMenu', () => {
     expect(marked()).toBeUndefined();
   });
 
+  it('fails on a page with a menu but no title or own-song link to tie it to', () => {
+    document.body.innerHTML = `<main><section>${menu('header')}</section></main>`;
+    expect(markSunoSongMenu(OWN)).toBe(false);
+  });
+
   it('moves the mark when run again', () => {
     document.body.innerHTML = `${card(OWN, 'a')}`;
     markSunoSongMenu(OWN);
-    document.body.insertAdjacentHTML('afterbegin', `<section>${menu('b')}</section>`);
+    document.body.innerHTML = `${title}${menu('b')}`;
     markSunoSongMenu(OWN);
     expect(document.querySelectorAll('[data-portos-song-menu]')).toHaveLength(1);
     expect(marked()).toBe('b');
