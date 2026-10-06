@@ -74,6 +74,21 @@ describe('releaseIdleSiblingNextHolder', () => {
     expect(await holderBranch()).toBe(BRANCH);
   });
 
+  it('lets a coordinator release a tree whose only dirt is untracked files, leaving them in place', async () => {
+    await writeFile(join(holder, 'notes 2.txt'), 'draft');
+    const released = await releaseIdleSiblingNextHolder(repo, BRANCH, { agents: [], nowMs: LATER(), allowUntracked: true });
+    expect(resolve(released.path)).toBe(resolve(holder));
+    expect(existsSync(join(holder, 'notes 2.txt'))).toBe(true);
+    expect(await holderBranch()).toBe('');
+  });
+
+  it('still refuses an untracked-tolerant release when a tracked file changed', async () => {
+    await writeFile(join(holder, 'tracked.txt'), 'v1');
+    await git(['add', 'tracked.txt'], holder);
+    await expect(releaseIdleSiblingNextHolder(repo, BRANCH, { agents: [], nowMs: LATER(), allowUntracked: true })).resolves.toBeNull();
+    expect(await holderBranch()).toBe(BRANCH);
+  });
+
   it('refuses a tree touched within the idle window', async () => {
     await expect(releaseIdleSiblingNextHolder(repo, BRANCH, { agents: [] })).resolves.toBeNull();
     expect(await holderBranch()).toBe(BRANCH);
