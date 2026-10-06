@@ -44,13 +44,21 @@ async function fireHumanActionReminder(threadId, deps = {}) {
   const now = deps.now ? deps.now() : Date.now();
   armed.delete(threadId);
   let reminded = null;
+  let notYet = false;
   // Stamp first, under the record's write queue, so two fires (a timer and a
   // boot catch-up) can't both notify.
   await storage.updateWith('threads', threadId, (fresh) => {
-    if (humanActionReminderDecision(fresh, now)?.fire !== true) return null;
+    const decision = humanActionReminderDecision(fresh, now);
+    if (decision?.fire !== true) {
+      notYet = Boolean(decision?.delayMs);
+      return null;
+    }
     reminded = fresh;
     return { remindedFor: fresh.dueAt };
   });
+  // Woke before its time (a moved due date, a clock adjustment): arm it again
+  // rather than dropping the reminder until the next unrelated write.
+  if (notYet) (deps.requeue || queueReconcile)();
   if (!reminded) return false;
   await notify({
     type: NOTIFICATION_TYPES.ACTION_DUE,

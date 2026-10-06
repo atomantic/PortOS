@@ -20,11 +20,25 @@ import {
 } from '../lib/humanActions.js';
 import { isTerminalThreadStatus } from '../lib/brainThreads.js';
 
+// One write at a time per plan: two overlapping requests for the same plan (an
+// agent retry) would otherwise both archive the same open steps and both
+// create a full set, doubling every step and reminder.
+const planTails = new Map();
+
 /**
  * Write a validated plan (see `humanActionPlanSchema`) as Brain threads.
  * Returns `{ planKey, created: [thread], replaced: number }`.
  */
-export async function scheduleHumanActionPlan(plan) {
+export function scheduleHumanActionPlan(plan) {
+  const previous = planTails.get(plan.planKey) || Promise.resolve();
+  const run = previous.catch(() => {}).then(() => writePlan(plan));
+  const tail = run.catch(() => {});
+  planTails.set(plan.planKey, tail);
+  tail.then(() => { if (planTails.get(plan.planKey) === tail) planTails.delete(plan.planKey); });
+  return run;
+}
+
+async function writePlan(plan) {
   const tag = humanActionPlanTag(plan.planKey);
   const existing = (await brainStorage.getThreads()) || [];
   const stale = existing.filter((thread) => isHumanActionThread(thread)

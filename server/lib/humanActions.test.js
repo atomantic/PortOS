@@ -58,6 +58,10 @@ describe('humanActionReminderDecision', () => {
     expect(humanActionReminderDecision(thread({ dueAt: '2026-10-06T17:59:00.000Z' }), NOW)).toEqual({ fire: true });
   });
 
+  it('counts a timer that fires a hair before the due time as due', () => {
+    expect(humanActionReminderDecision(thread({ dueAt: new Date(NOW + 1).toISOString() }), NOW)).toEqual({ fire: true });
+  });
+
   it('never repeats a reminder for the same due time, but re-arms a moved one', () => {
     expect(humanActionReminderDecision(thread({ remindedFor: '2026-10-06T19:00:00.000Z' }), NOW)).toBeNull();
     expect(humanActionReminderDecision(thread({ remindedFor: '2026-10-06T12:00:00.000Z' }), NOW)).toEqual({ delayMs: 60 * 60 * 1000 });

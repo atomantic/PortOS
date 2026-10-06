@@ -49,6 +49,7 @@ const depsFor = (storage) => ({
   addNotification: vi.fn(async () => ({})),
   now: () => NOW,
   instanceId: ME,
+  requeue: vi.fn(),
 });
 
 describe('human action reminders', () => {
@@ -97,5 +98,13 @@ describe('human action reminders', () => {
     const fired = await Promise.all([fireHumanActionReminder('step-1', deps), fireHumanActionReminder('step-1', deps)]);
     expect(fired.filter(Boolean)).toHaveLength(1);
     expect(deps.addNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-arms a step whose timer woke before it was due instead of dropping it', async () => {
+    const storage = fakeStore([step({ dueAt: '2026-10-06T19:00:00.000Z' })]);
+    const deps = depsFor(storage);
+    expect(await fireHumanActionReminder('step-1', deps)).toBe(false);
+    expect(deps.addNotification).not.toHaveBeenCalled();
+    expect(deps.requeue).toHaveBeenCalledTimes(1);
   });
 });

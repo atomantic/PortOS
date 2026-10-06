@@ -4,10 +4,13 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
 // An in-memory thread store behind the brainStorage calls the service makes.
+// Each call yields a turn like real disk I/O, so overlapping requests interleave.
 const store = new Map();
+const tick = () => new Promise((resolve) => setImmediate(resolve));
 vi.mock('../services/brainStorage.js', () => ({
-  getThreads: vi.fn(async () => [...store.values()]),
+  getThreads: vi.fn(async () => { await tick(); return [...store.values()]; }),
   createThread: vi.fn(async (data) => {
+    await tick();
     const record = { id: `t${store.size + 1}`, ...data };
     store.set(record.id, record);
     return record;
@@ -58,6 +61,16 @@ describe('/api/human-actions', () => {
     expect(store.get('t2').status).toBe('done');
     const list = await request(app).get('/api/human-actions?planKey=promo-example&includeDone=true');
     expect(list.body.actions.map((t) => t.title)).toEqual(['Old', 'Done', 'New']);
+  });
+
+  it('runs overlapping requests for the same plan one after the other, so a retry never doubles the steps', async () => {
+    const body = planBody([step('Only', '2026-10-07T18:00:00Z')]);
+    await Promise.all([
+      request(app).post('/api/human-actions/plans').send(body),
+      request(app).post('/api/human-actions/plans').send(body),
+    ]);
+    const list = await request(app).get('/api/human-actions?planKey=promo-example');
+    expect(list.body.actions.map((t) => t.title)).toEqual(['Only']);
   });
 
   it('refuses a step with no instructions or a due time without an offset', async () => {

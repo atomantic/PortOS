@@ -22,6 +22,10 @@ export const HUMAN_ACTION_PLAN_TAG_PREFIX = 'plan:';
 // reminder.
 export const HUMAN_ACTION_CATCH_UP_MS = 24 * 60 * 60 * 1000;
 
+// Node timers run off libuv's cached clock and can fire a millisecond or so
+// before `Date.now()` reaches the due time; a step this close counts as due.
+export const HUMAN_ACTION_EARLY_FIRE_MS = 1000;
+
 const planKey = z.string().trim().min(1).max(40)
   .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'planKey must be a lowercase dash slug');
 
@@ -116,6 +120,6 @@ export function humanActionReminderDecision(thread, now = Date.now()) {
   const due = Date.parse(thread.dueAt);
   if (!Number.isFinite(due)) return null;
   if (thread.remindedFor === thread.dueAt) return null;
-  if (due > now) return { delayMs: due - now };
+  if (due - now > HUMAN_ACTION_EARLY_FIRE_MS) return { delayMs: due - now };
   return now - due <= HUMAN_ACTION_CATCH_UP_MS ? { fire: true } : null;
 }
