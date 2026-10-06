@@ -145,10 +145,12 @@ export default function ToolsTab({ agentId, agent }) {
     if (!agentId || !selectedAccountId) return;
     setGenerating(true);
     const contentConfig = agent?.aiConfig?.content || agent?.aiConfig;
-    const generated = await api.generateAgentPost({ agentId, accountId: selectedAccountId, submolt: selectedSubmolt, providerId: contentConfig?.providerId, model: contentConfig?.model });
+    // request() toasts a failure; release Generate rather than leave it spinning.
+    const generated = await api.generateAgentPost({ agentId, accountId: selectedAccountId, submolt: selectedSubmolt, providerId: contentConfig?.providerId, model: contentConfig?.model }).catch(() => null);
+    setGenerating(false);
+    if (!generated) return;
     setPostTitle(generated.title);
     setPostContent(generated.content);
-    setGenerating(false);
 
     const draft = await api.createAgentDraft({
       agentId,
@@ -207,9 +209,10 @@ export default function ToolsTab({ agentId, agent }) {
     const generated = await api.generateAgentComment({
       agentId, accountId: selectedAccountId, postId: selectedPost.id, parentId: replyToId || undefined,
       providerId: contentConfig?.providerId, model: contentConfig?.model
-    });
-    setCommentContent(generated.content);
+    }).catch(() => null);
     setGeneratingComment(false);
+    if (!generated) return;
+    setCommentContent(generated.content);
 
     const draft = await api.createAgentDraft({
       agentId,
