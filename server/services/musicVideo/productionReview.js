@@ -27,9 +27,9 @@ export const documentStoryboardBasis = project => hash({
 
 // Share the evidence contract between new decisions and persisted approvals:
 // a legacy automatic waiver must not become production-ready after an upgrade.
+// Playback notes are optional: approving is the director's call, not a form to fill in.
 function hasProofEvidence(review) {
-  if (!review || review.autoApproved || !text(review.energyComparison) || !text(review.timecodedNotes)
-    || !/(?:\b\d{1,2}:\d{2}(?:\.\d+)?\b|\b\d+(?:\.\d+)?s\b)/.test(review.timecodedNotes)) return false;
+  if (!review || review.autoApproved) return false;
   if (review.method === 'machine') {
     const evidence = review.machineEvidence;
     return review.watchedWithAudio === false && text(evidence?.visualReview) && evidence.visualReview.trim().length >= 40
@@ -227,11 +227,9 @@ export function productionReadiness(project) {
   const cues = (project.lyricCues || []).filter(c => text(c.text));
   if (draft.lyricsMode === 'instrumental') {
     if (cues.length) boardProblems.push('This song has lyrics. Remove the instrumental exception or correct the song data.');
-    if (!text(draft.timingNotes)) boardProblems.push('Explain and confirm the instrumental exception.');
   } else {
     if (!cues.length) boardProblems.push('Import lyrics and align them to the current vocal; missing lyrics are not an instrumental.');
     if (draft.timingStatus !== 'verified' || review.alignmentBasis !== alignmentBasis) boardProblems.push('Lyric alignment is provisional or changed. Listen and verify the current word timings.');
-    if (!text(draft.timingNotes)) boardProblems.push('Record how the vocal timings were checked.');
     if (cues.some(c => !(Number.isFinite(c.startSec) && c.endSec > c.startSec && c.endSec <= duration)
       || !c.words?.length || c.words.some(w => !(Number.isFinite(w.startSec) && w.endSec > w.startSec)
         || w.startSec < c.startSec || w.endSec > c.endSec))) {
@@ -281,7 +279,8 @@ export function productionReadiness(project) {
     storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)], stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs) },
     proof: { approved: proofApproved, problems: proofProblems, excerptId: excerpt?.id || null, stale: proofApproved ? null : staleApproval(project, 'proof', basis.proof, inputs) },
     castAndSets: castAndSetsApproval(project),
-    readyForProduction: proofApproved };
+    // The animated proof is optional review evidence: the approved storyboard is what the final render needs.
+    readyForProduction: storyboardApproved };
 }
 
 const refuseRevert = (message, code) => new ServerError(message, { status: 409, code });

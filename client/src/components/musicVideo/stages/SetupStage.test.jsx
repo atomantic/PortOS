@@ -43,19 +43,19 @@ describe('Song step', () => {
     const project = { id: 'p', trackId: 't', audioAnalysis: {}, lyricCues: [{ id: 'c', text: 'hi', words: [{ w: 'hi' }] }],
       productionReview: { draft: { cast: 'kept', lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '' } } };
     render(<SetupStage board={board(project, { productionReview: review({ save }), planningDraft: [{ cast: 'edited', lyricsMode: 'vocal' }, setPlanning] })} />);
-    fireEvent.change(screen.getByLabelText(/What you checked/), { target: { value: 'Listened through twice' } });
+    fireEvent.change(screen.getByLabelText('Notes (optional)'), { target: { value: 'Listened through twice' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Mark timing verified' }));
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ cast: 'kept', lyricsMode: 'vocal', timingStatus: 'verified', timingNotes: 'Listened through twice' }));
     await vi.waitFor(() => expect(setPlanning).toHaveBeenCalledWith({ cast: 'edited', lyricsMode: 'vocal', timingStatus: 'verified', timingNotes: 'Listened through twice' }));
   });
 
-  it('re-verifies a stale timing through the alignment route and needs a note to do it', () => {
+  it('re-verifies a stale timing through the alignment route without requiring a note', () => {
     const reverifyAlignment = vi.fn(async () => ({}));
     const project = { id: 'p', trackId: 't', audioAnalysis: {}, lyricCues: [{ id: 'c', text: 'hi' }], productionReview: { draft: { lyricsMode: 'vocal', timingStatus: 'verified' } } };
     render(<SetupStage board={board(project, { productionReview: review({ reverifyAlignment, readiness: { alignment: { status: 'stale' } } }) })} />);
     const button = screen.getByRole('button', { name: 'Re-verify timing' });
-    expect(button).toBeDisabled();
-    fireEvent.change(screen.getByLabelText(/What you checked/), { target: { value: 'New master checked' } });
+    expect(button).toBeEnabled();
+    fireEvent.change(screen.getByLabelText('Notes (optional)'), { target: { value: 'New master checked' } });
     fireEvent.click(button);
     expect(reverifyAlignment).toHaveBeenCalledWith('New master checked');
   });
@@ -67,20 +67,17 @@ describe('Song step', () => {
       productionReview: review({ readiness: { alignment: { status: 'stale' } } }),
       planningDraft: [{ cast: 'edited', timingStatus: 'verified', timingNotes: 'old' }, setPlanning],
     })} />);
-    fireEvent.change(screen.getByLabelText(/What you checked/), { target: { value: 'New master checked' } });
+    fireEvent.change(screen.getByLabelText('Notes (optional)'), { target: { value: 'New master checked' } });
     fireEvent.click(screen.getByRole('button', { name: 'Re-verify timing' }));
     await vi.waitFor(() => expect(setPlanning).toHaveBeenCalledWith({ cast: 'edited', timingStatus: 'verified', timingNotes: 'New master checked' }));
   });
 
-  it('confirms an instrumental with a reason', () => {
+  it('confirms an instrumental straight away; a note is optional', () => {
     const save = vi.fn(async () => ({}));
     const project = { id: 'p', trackId: 't', audioAnalysis: {}, productionReview: { draft: {} } };
     render(<SetupStage board={board(project, { productionReview: review({ save }) })} />);
     fireEvent.click(screen.getByRole('radio', { name: 'Instrumental' }));
-    const confirm = screen.getByRole('button', { name: 'Confirm instrumental' });
-    expect(confirm).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Why this song has no lyrics'), { target: { value: 'No vocals at all' } });
-    fireEvent.click(confirm);
-    expect(save).toHaveBeenCalledWith(expect.objectContaining({ lyricsMode: 'instrumental', timingNotes: 'No vocals at all' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm instrumental' }));
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ lyricsMode: 'instrumental', timingNotes: '' }));
   });
 });

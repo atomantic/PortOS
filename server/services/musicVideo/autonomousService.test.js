@@ -761,11 +761,10 @@ describe('events and process pinning', () => {
   });
 });
 
-it('parks standalone code at real human gates and replaces a stale proof before final rendering', async () => {
+it('parks standalone code at the art and storyboard gates, then renders the final without an animated proof', async () => {
   creativeReview.real = true;
   const { approveProductionStage, productionReviewBasis } = await vi.importActual('./productionReview.js');
   const { renderProductionProof } = await import('./productionReviewService.js');
-  let proofNumber = 0;
   doubles.analyzeSong.mockImplementation(async () => {
     Object.assign(store.get('mv-auto'), {
       audioAnalysis: { durationSec: 20, sections: [{ id: 'chorus', label: 'Chorus', startSec: 18, endSec: 20 }] },
@@ -773,63 +772,32 @@ it('parks standalone code at real human gates and replaces a stale proof before 
       devArtifacts: [{ id: 'guide', version: 1, file: 'guide.html', mimeType: 'text/html' }],
       productionReview: { draft: {
         cast: 'Paper dancer', environments: 'Theatre', visualLanguage: 'Ink silhouettes', motionLanguage: 'Slow orbit',
-        guideArtifactId: 'guide', lyricsMode: 'instrumental', timingNotes: 'Synthetic instrumental master checked.',
+        guideArtifactId: 'guide', lyricsMode: 'instrumental', timingNotes: '',
         storyboard: [{ sceneId: 'shot', lyricCueIds: [], action: 'Dancer unfolds', staging: 'Wide theatre', camera: 'Orbit', transition: 'Fade' }],
       } },
     });
   });
   doubles.generateDocument.mockResolvedValue({ document: { directory: 'music-video/mv-auto/composition/example' } });
-  renderProductionProof.mockImplementation(async (_id, window) => {
-    const project = store.get('mv-auto');
-    const id = `proof-${++proofNumber}`;
-    project.excerpts = [{ id, status: 'complete', filename: `${id}.mp4` }];
-    project.productionReview.proof = { ...window, excerptId: id };
-    project.productionReview.proof.basis = productionReviewBasis(project).proof;
-    return { jobId: id };
-  });
   const approve = stage => {
     const project = store.get('mv-auto');
-    const excerpt = project.excerpts?.find(e => e.id === project.productionReview?.proof?.excerptId);
-    store.set(project.id, approveProductionStage(project, { stage, basis: productionReviewBasis(project)[stage],
-      proofReview: stage === 'proof' ? { watchedWithAudio: true, excerptId: excerpt.id, filename: excerpt.filename,
-        energyComparison: 'Human fixture reviewed the intended energy.', timecodedNotes: '0:04 the chorus action lands.' } : undefined }));
+    store.set(project.id, approveProductionStage(project, { stage, basis: productionReviewBasis(project)[stage] }));
   };
   await service.startAutonomousVideo({ prompt: 'Synthetic animation', tools: ['code:render'], authoring: { providerId: 'example', model: 'example-code' } });
   await settled('needs-human');
   expect(doubles.generateDocument).not.toHaveBeenCalled();
   expect(doubles.renderVideo).not.toHaveBeenCalled();
   approve('art');
+  await service.resumeAutonomousVideo('mv-auto');
+  await settled('needs-human');
+  expect(doubles.renderVideo).not.toHaveBeenCalled();
+  // An instrumental needs no typed reason; approving the storyboard is enough.
   approve('storyboard');
-  await service.resumeAutonomousVideo('mv-auto');
-  await settled('needs-human');
-  expect(doubles.generateDocument).toHaveBeenCalledOnce();
-  expect(renderProductionProof).toHaveBeenCalledOnce();
-  expect(renderProductionProof).toHaveBeenLastCalledWith('mv-auto', { startSec: 0, endSec: 20 });
-  expect(doubles.renderVideo).not.toHaveBeenCalled();
-  store.get('mv-auto').excerpts[0].status = 'rendering';
-  await service.resumeAutonomousVideo('mv-auto');
-  await settled('needs-human');
-  expect(renderProductionProof).toHaveBeenCalledOnce();
-  for (const status of ['error', 'canceled']) {
-    store.get('mv-auto').excerpts[0].status = status;
-    store.get('mv-auto').excerpts[0].filename = null;
-    const callsBefore = renderProductionProof.mock.calls.length;
-    await service.resumeAutonomousVideo('mv-auto');
-    await settled('needs-human');
-    expect(renderProductionProof).toHaveBeenCalledTimes(callsBefore + 1);
-    expect(doubles.renderVideo).not.toHaveBeenCalled();
-  }
-  approve('proof');
-  store.get('mv-auto').composition.document.directory = 'music-video/mv-auto/composition/revised';
-  await service.resumeAutonomousVideo('mv-auto');
-  await settled('needs-human');
-  expect(renderProductionProof).toHaveBeenCalledTimes(4);
-  expect(doubles.renderVideo).not.toHaveBeenCalled();
-  approve('proof');
   await service.resumeAutonomousVideo('mv-auto');
   await vi.waitFor(() => expect(runOf()?.output.renderJobId).toBe('render-1'));
   await service.__testing.onRenderEvent({ projectId: 'mv-auto', jobId: 'render-1', status: 'completed' });
   await settled('completed');
+  expect(renderProductionProof).not.toHaveBeenCalled();
+  expect(store.get('mv-auto').productionReview.approvals.proof).toBeUndefined();
   expect(doubles.renderVideo).toHaveBeenCalledOnce();
   expect(doubles.generateDocument).toHaveBeenCalledOnce();
   expect(doubles.startProduction).not.toHaveBeenCalled();
@@ -886,49 +854,24 @@ describe('auto-approve the rest (brief.autoApprove)', () => {
   });
 
   it('never approves past a readiness problem: the run parks for a human at that stage', async () => {
-    reviewFixture({ timingNotes: '' });
+    // A vocal song with no lyrics imported is a real readiness problem.
+    reviewFixture({ lyricsMode: 'vocal' });
     await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], autoApprove: ['art', 'storyboard'] }, { autoApproveAuthorized: true });
     await settled('needs-human');
-    expect(runOf()).toMatchObject({ errorCode: 'MUSIC_VIDEO_APPROVAL_REQUIRED', error: 'Explain and confirm the instrumental exception.' });
+    expect(runOf()).toMatchObject({ errorCode: 'MUSIC_VIDEO_APPROVAL_REQUIRED', error: expect.stringContaining('Import lyrics') });
     expect(approvals().art).toMatchObject({ approvedBy: 'autopilot' });
     expect(approvals().storyboard).toBeUndefined();
     expect(doubles.startProduction).not.toHaveBeenCalled();
   });
 
-  const proofRenders = async (outcome) => {
+  it('ignores a legacy proof grant: code renders the final without rendering or approving a proof', async () => {
+    reviewFixture();
     const { renderProductionProof } = await import('./productionReviewService.js');
-    renderProductionProof.mockImplementation(async (_id, window) => {
-      const project = store.get('mv-auto');
-      project.excerpts = [{ id: 'proof-1', status: 'rendering', filename: null }];
-      project.productionReview.proof = { ...window, excerptId: 'proof-1' };
-      project.productionReview.proof.basis = actual.productionReviewBasis(project).proof;
-      return { jobId: 'proof-1' };
-    });
-    // The excerpt job settles while the run waits between polls.
-    doubles.wait.mockImplementation(async () => { Object.assign(store.get('mv-auto').excerpts[0], outcome); });
-    return renderProductionProof;
-  };
-
-  it('waits for the proof render then parks for substantive review even with a legacy proof grant', async () => {
-    reviewFixture();
-    await proofRenders({ status: 'complete', filename: 'proof-1.mp4' });
     await service.startAutonomousVideo({ prompt: 'p', tools: ['code:render'], authoring: { providerId: 'example', model: 'example-code' },
       autoApprove: ['art', 'storyboard', 'proof'] }, { autoApproveAuthorized: true });
-    await settled('needs-human');
-    expect(doubles.wait).toHaveBeenCalledWith(5000);
+    await vi.waitFor(() => expect(doubles.renderVideo).toHaveBeenCalledOnce());
+    expect(renderProductionProof).not.toHaveBeenCalled();
     expect(approvals().proof).toBeUndefined();
-    expect(actual.productionReadiness(store.get('mv-auto')).readyForProduction).toBe(false);
-    expect(doubles.renderVideo).not.toHaveBeenCalled();
-  });
-
-  it('fails the run with the excerpt error when the proof render fails', async () => {
-    reviewFixture();
-    await proofRenders({ status: 'error', error: 'Synthetic encoder failure' });
-    await service.startAutonomousVideo({ prompt: 'p', tools: ['code:render'], authoring: { providerId: 'example', model: 'example-code' },
-      autoApprove: ['art', 'storyboard', 'proof'] }, { autoApproveAuthorized: true });
-    await settled('failed');
-    expect(runOf()).toMatchObject({ errorCode: 'PROOF_RENDER_FAILED', error: 'The proof render failed: Synthetic encoder failure' });
-    expect(approvals().proof).toBeUndefined();
-    expect(doubles.renderVideo).not.toHaveBeenCalled();
+    expect(actual.productionReadiness(store.get('mv-auto')).readyForProduction).toBe(true);
   });
 });

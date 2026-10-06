@@ -9,19 +9,22 @@ const buttonClass = 'min-h-[44px] rounded border border-port-border px-3 py-2 te
 const timeFieldClass = 'mt-1 block w-24 rounded border border-port-border bg-port-bg p-2 text-sm';
 const approveClass = 'min-h-[44px] rounded bg-port-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50';
 const labels = { art: 'Art direction', storyboard: 'Lyric-timed storyboard', proof: 'Animated proof' };
+// The proof is an optional check (the final render doesn't wait on it), so its heading says so.
+const OPTIONAL = { proof: true };
 // Each approval closes the step that owns its work (#10151); the page passes that step's `stage`.
 const STAGE_TABS = { art: 'cast-sets', storyboard: 'board', proof: 'produce' };
-const EMPTY_PLAYBACK = { method: 'playback', energyComparison: '', timecodedNotes: '', visualReview: '', audioReview: '', limitations: '' };
+const EMPTY_PLAYBACK = { method: 'playback', timecodedNotes: '', visualReview: '', audioReview: '', limitations: '' };
 
 const FOLD_STYLE = { scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' };
 /**
  * The open box that closes a step: heading, then the approval's content and
  * Approve / Request changes, highlighted until approved.
  */
-function ApprovalBox({ id, label, approved, children }) {
+function ApprovalBox({ id, label, approved, optional = false, children }) {
   return <section id={id} tabIndex={-1} aria-label={`Approve: ${label}`} style={FOLD_STYLE}
-    className={`rounded-lg border p-3 focus:outline focus:outline-2 focus:outline-port-accent ${approved ? 'border-port-border' : 'border-port-accent bg-port-accent/5'}`}>
-    <h4 className="text-sm font-semibold">{approved ? `${label} approved` : `Approve the ${label.toLowerCase()}`}</h4>
+    className={`rounded-lg border p-3 focus:outline focus:outline-2 focus:outline-port-accent ${approved || optional ? 'border-port-border' : 'border-port-accent bg-port-accent/5'}`}>
+    {/* An optional check isn't highlighted: it never competes with the step's real next action. */}
+    <h4 className="text-sm font-semibold">{approved ? `${label} approved` : optional ? label : `Approve the ${label.toLowerCase()}`}{optional && !approved && <span className="ml-2 font-normal text-port-text-muted">Optional</span>}</h4>
     {children}
   </section>;
 }
@@ -63,7 +66,6 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   const shotKey = shot => shot.id || shot.sceneId;
   const setShot = (shot, key, value) => set('storyboard', shots.map(s => shotKey(s) === shotKey(shot) ? { ...s, [key]: value } : s));
   const blocked = dirty || review.busy || !ready;
-  const prototype = project.excerpts?.find(e => e.id === project.productionReview?.prototype?.excerptId);
   const excerpt = project.excerpts?.find(e => e.id === project.productionReview?.proof?.excerptId);
   const proofIdentity = JSON.stringify([project.id, ready?.basis.proof ?? project.productionReview?.proof?.basis ?? null, excerpt?.id, excerpt?.filename]);
   const recordedProofReview = project.productionReview?.approvals?.proof?.proofReview;
@@ -78,14 +80,12 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   const evidenceComplete = machineReview
     ? playback.visualReview.trim().length >= 40 && playback.audioReview.trim().length >= 40 && !!playback.limitations.trim()
     : true;
-  const hasTimecodedNotes = /(?:\b\d{1,2}:\d{2}(?:\.\d+)?\b|\b\d+(?:\.\d+)?s\b)/.test(playback.timecodedNotes);
-  const playbackComplete = evidenceComplete && !!playback.energyComparison.trim() && hasTimecodedNotes;
   const approve = stage => {
     return review.approve(stage, stage === 'proof' ? { watchedWithAudio: !machineReview,
       ...(machineReview ? { method: 'machine', machineEvidence: {
         visualReview: playback.visualReview.trim(), audioReview: playback.audioReview.trim(), limitations: playback.limitations.trim(),
       } } : {}),
-      energyComparison: playback.energyComparison.trim(), timecodedNotes: playback.timecodedNotes.trim(),
+      ...(playback.timecodedNotes.trim() ? { timecodedNotes: playback.timecodedNotes.trim() } : {}),
       excerptId: excerpt.id, filename: excerpt.filename } : undefined);
   };
 
@@ -96,13 +96,13 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
     if (dirty) return 'Save your planning edits first.';
     if (review.busy) return 'Working…';
     const problems = ready[stage].problems;
+    // With no current proof, the Render button already says what to do; repeating it as a warning reads as required.
+    if (stage === 'proof' && proofNeedsRender) return null;
     if (problems.length) return problems.length > 1 ? `${problems[0]} (+${problems.length - 1} more below)` : problems[0];
     if (stage === 'art' && visibleArt !== artIdentity) return 'Open the visual guide below first.';
     if (stage !== 'proof') return null;
     if (review.proof.active) return 'Wait for the proof to finish rendering.';
     if (playbackBlocked) return proofNeedsRender ? 'Render a 10–45 second chorus proof, then watch it with sound.' : 'Play the proof below with sound first.';
-    if (!playback.energyComparison.trim()) return 'Add how the energy compares with the plan.';
-    if (!hasTimecodedNotes) return 'Add a note with a time, like 0:04.';
     if (!evidenceComplete) return 'Complete the machine review notes (40+ characters each, plus limitations).';
     return null;
   };
@@ -148,14 +148,12 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   const renderControls = <div id="mv-review-render" tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className="flex flex-wrap items-end gap-2">
     <label htmlFor={fieldId('proof-start')} className="text-sm">Chorus start (s)<input id={fieldId('proof-start')} type="number" min="0" step="0.01" value={startSec} onChange={e => setStartSec(Number(e.target.value))} className={timeFieldClass} /></label>
     <label htmlFor={fieldId('proof-end')} className="text-sm">End (s)<input id={fieldId('proof-end')} type="number" min="0" step="0.01" value={endSec} onChange={e => setEndSec(Number(e.target.value))} className={timeFieldClass} /></label>
-    <button type="button" className={proofNeedsRender ? approveClass : buttonClass} disabled={blocked || !ready?.storyboard.approved || review.proof.occupied || review.proof.active} onClick={() => review.renderProof({ startSec, endSec })}>{proofNeedsRender ? 'Render animated proof' : 'Render a new proof'}</button>
-    <button type="button" className={buttonClass} disabled={blocked || review.proof.occupied || review.proof.active} onClick={() => review.renderProof({ startSec, endSec, kind: 'prototype' })}>Render preview only</button>
+    <button type="button" className={buttonClass} disabled={blocked || !ready?.storyboard.approved || review.proof.occupied || review.proof.active} onClick={() => review.renderProof({ startSec, endSec })}>{proofNeedsRender ? 'Render animated proof' : 'Render a new proof'}</button>
   </div>;
   const proofContent = <>
     {!excerpt && <div className="space-y-1 text-sm" aria-label="Proof approval prerequisites">
       {!ready?.art.approved && <p><a href="#mv-review-art" onClick={jump('cast-sets', 'mv-review-art')} className="text-port-accent underline">Approve the art direction</a> first.</p>}
       {ready?.art.approved && !ready?.storyboard.approved && <p><a href="#mv-review-storyboard" onClick={jump('board', 'mv-review-storyboard')} className="text-port-accent underline">Approve the storyboard</a> first.</p>}
-      {prototype && <p className="text-xs text-port-text-muted">The prototype below is a preview only; it can't be approved.</p>}
     </div>}
     {excerpt && <p className="text-xs text-port-text-muted break-words">{excerpt.filename || excerpt.status} · {project.productionReview?.proof?.basis === ready?.basis.proof ? 'Current source revision' : 'Source changed — render a new proof'}</p>}
     {excerpt?.status === 'error' && excerpt.error && <p role="alert" className="text-sm text-port-error break-words">{excerpt.error}</p>}
@@ -168,7 +166,6 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
       {!proofNeedsRender && renderControls}
       {review.proof.occupied && !review.proof.active && <p role="status">Review evidence is rendering in another project. Wait for it to finish before starting another.</p>}
       {review.proof.active && <p role="status">{review.proof.connected === false ? 'Connecting to review render…' : `Rendering review evidence — ${review.proof.percent ?? 0}%.`} Production approvals are separate.</p>}
-      {prototype?.status === 'complete' && prototype.filename && <figure><video controls className="mt-2 w-full rounded" aria-label="Unapproved feasibility prototype" src={`/data/videos/${encodeURIComponent(prototype.filename)}`} /><figcaption className="text-sm">Unapproved feasibility prototype — separate from production proof</figcaption></figure>}
       {excerpt?.status === 'complete'  && excerpt.filename && <video key={proofIdentity} controls className="mt-2 w-full rounded" aria-label="Animated proof with master audio" src={`/data/videos/${encodeURIComponent(excerpt.filename)}`}
         onLoadedData={() => setProofMedia({ identity: proofIdentity, ready: true })}
         onError={() => setProofMedia({ identity: proofIdentity, ready: false, error: true })} />}
@@ -183,8 +180,8 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
           <dt>Audio review</dt><dd>{matchingRecordedReview.machineEvidence.audioReview}</dd>
           <dt>Review limitations</dt><dd>{matchingRecordedReview.machineEvidence.limitations}</dd>
         </dl>}
-        <p className="mt-1 whitespace-pre-wrap text-sm">{matchingRecordedReview.energyComparison}</p>
-        <p className="mt-2 whitespace-pre-wrap text-sm">{matchingRecordedReview.timecodedNotes}</p>
+        {matchingRecordedReview.energyComparison && <p className="mt-1 whitespace-pre-wrap text-sm">{matchingRecordedReview.energyComparison}</p>}
+        {matchingRecordedReview.timecodedNotes && <p className="mt-2 whitespace-pre-wrap text-sm">{matchingRecordedReview.timecodedNotes}</p>}
       </section>}
       {/* The review notes belong to a proof; with none to watch they would only be disabled clutter. */}
       {!proofNeedsRender && <>
@@ -206,13 +203,9 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
             onChange={e => setPlayback({ [key]: e.target.value })} className={fieldClass} />
         </label>)}
       </fieldset>}
-      <label htmlFor={fieldId('energy-comparison')} className="block text-sm">Playback energy compared with the saved plan
-        <textarea id={fieldId('energy-comparison')} rows={3} maxLength={4000} disabled={playbackBlocked} value={playback.energyComparison} onChange={e => setPlayback({ energyComparison: e.target.value })} className={fieldClass}
-          placeholder="Chosen energy target; observed subject, prop and camera activity; where playback matches or misses the intended arc." />
-      </label>
-      <label htmlFor={fieldId('playback-notes')} className="block text-sm">Timecoded playback notes
-        <textarea id={fieldId('playback-notes')} rows={3} maxLength={4000} disabled={playbackBlocked} value={playback.timecodedNotes} onChange={e => setPlayback({ timecodedNotes: e.target.value })} className={fieldClass}
-          placeholder="0:04 — subject turns on the downbeat; prop opens through 0:06; camera and type clear the lyric. Name any mismatch to revise." />
+      <label htmlFor={fieldId('playback-notes')} className="block text-sm">Notes (optional)
+        <textarea id={fieldId('playback-notes')} rows={2} maxLength={4000} disabled={playbackBlocked} value={playback.timecodedNotes} onChange={e => setPlayback({ timecodedNotes: e.target.value })} className={fieldClass}
+          placeholder="0:04 — turn lands on the downbeat" />
       </label>
       </>}
   </>;
@@ -220,14 +213,14 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   const label = labels[stage];
   return <section id="mv-production-review" aria-label="Production review" className="space-y-3">
     {review.error && <p role="alert" className="text-port-error">{review.error}</p>}
-    <ApprovalBox id={`mv-review-${key}`} label={label} approved={!!ready?.[key].approved}>
+    <ApprovalBox id={`mv-review-${key}`} label={label} optional={!!OPTIONAL[key]} approved={!!ready?.[key].approved}>
         {/* The decision comes first, at the top of the box, with one line on what it still needs. */}
         {key === 'proof' && proofNeedsRender && !ready?.[key].approved && <div className="mt-2">{renderControls}</div>}
         <div className="mt-2 flex flex-wrap items-center gap-2">
         {!ready?.[key].approved && !(key === 'proof' && proofNeedsRender) && <button type="button" className={approveClass} onClick={() => approve(key)}
           aria-describedby={approvalHelp(key) ? fieldId(`${key}-approval-help`) : undefined}
           disabled={blocked || (key === 'art' && visibleArt !== artIdentity) || ready?.[key].approved || !!ready?.[key].problems.length
-            || (key === 'proof' && (playbackBlocked || !playbackComplete))}>
+            || (key === 'proof' && (playbackBlocked || !evidenceComplete))}>
           {key === 'proof' ? machineReview ? 'Approve proof with machine evidence' : 'Approve proof — watched with sound' : `Approve ${label.toLowerCase()}`}
         </button>}
         <button type="button" className={buttonClass} onClick={() => {
@@ -238,7 +231,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         }}>Request changes</button>
         </div>
         {approvalHelp(key) && <p id={fieldId(`${key}-approval-help`)} role="status" className="mt-1 text-sm text-port-warning">{approvalHelp(key)}</p>}
-        {(ready?.[key].problems || []).length > 1 && <ul className="mt-1 list-disc pl-5 text-xs text-port-text-muted">{ready[key].problems.slice(1).map(problem => <li key={problem}>{problem}</li>)}</ul>}
+        {approvalHelp(key) && (ready?.[key].problems || []).length > 1 && <ul className="mt-1 list-disc pl-5 text-xs text-port-text-muted">{ready[key].problems.slice(1).map(problem => <li key={problem}>{problem}</li>)}</ul>}
         {key === 'proof' ? proofContent : <ProductionReviewContext stage={key} project={project} onOpenArtifact={onOpenArtifact} onArtReady={available => setVisibleArt(available ? artIdentity : null)} onSeek={onSeek} />}
         {openRequests(key).length > 0 && <div role="group" aria-label={`${label} change requests`} className="mt-2 space-y-2 rounded border border-port-warning p-2">
           <p className="text-sm">Resolve these change requests to approve.</p>
@@ -272,11 +265,11 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         <p className="text-sm whitespace-pre-wrap">{item.text}</p>
         <p className="text-xs text-port-text-muted">Reviewed revision {item.basis.slice(0, 12)}{ready?.basis[item.stage] !== item.basis ? ' · content has changed since review' : ' · current revision'}</p>
         <details><summary className="cursor-pointer py-2 text-sm">Original reviewed content</summary><pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(project.productionReview.reviewedRevisions?.[item.basis]?.draft, null, 2)}</pre></details>
-        {item.resolvedAt ? <p className="text-sm">Resolution: {item.resolution}</p> : <>
-          <label htmlFor={fieldId(`resolution-${item.id}`)} className="block text-sm">Resolution for {item.target}<textarea id={fieldId(`resolution-${item.id}`)} className={fieldClass} value={resolutions[item.id] || ''} onChange={e => setResolutions({ ...resolutions, [item.id]: e.target.value })} /></label>
-          <button type="button" className={buttonClass} disabled={blocked || !resolutions[item.id]?.trim()} onClick={async () => {
-            await review.resolveFeedback(item.id, resolutions[item.id]);
-          }}>Resolve feedback after review</button>
+        {item.resolvedAt ? (item.resolution ? <p className="text-sm">Resolution: {item.resolution}</p> : null) : <>
+          <label htmlFor={fieldId(`resolution-${item.id}`)} className="block text-sm">How it was resolved (optional)<textarea id={fieldId(`resolution-${item.id}`)} className={fieldClass} value={resolutions[item.id] || ''} onChange={e => setResolutions({ ...resolutions, [item.id]: e.target.value })} /></label>
+          <button type="button" className={buttonClass} disabled={blocked} onClick={async () => {
+            await review.resolveFeedback(item.id, resolutions[item.id]?.trim() || '');
+          }}>Mark resolved</button>
         </>}
       </li>)}</ul>
     </details>

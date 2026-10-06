@@ -131,11 +131,11 @@ export function deriveAttentionItems(project, { generatingSceneIds = null, draft
 }
 
 // Approvals in the order they are given, with the tab (and editor) each is re-given on.
+// The animated proof is optional, so a proof approved on older inputs needs no attention.
 const STALE_APPROVALS = [
   ['castAndSets', 'Cast & Sets check-in', 'cast-sets'],
   ['art', 'Art direction', 'cast-sets#mv-review-art'],
   ['storyboard', 'Timed storyboard', 'board#mv-review-storyboard'],
-  ['proof', 'Animated proof', 'produce#mv-review-proof'],
 ];
 
 // One row for every approval given on inputs that have changed since (#10141),

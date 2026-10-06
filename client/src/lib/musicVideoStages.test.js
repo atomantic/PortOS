@@ -191,22 +191,23 @@ it('never promotes placeholder scenes or imported schematic documents to final p
   const project = { id: 'example', trackId: 'song', audioAnalysis: ANALYSIS, ...LYRICS, scenes: [scene()], composition: { mode: 'document', document: { directory: 'draft' } } };
   expect(stateOf(project)).toMatchObject({ 'cast-sets': 'active', board: 'todo', produce: 'todo' });
   expect(deriveNextAction(project)).toMatchObject({ id: 'review-production', stage: 'cast-sets' });
-  const planned = { ...project, productionReadiness: { ...APPROVED, proof: { approved: false }, readyForProduction: false } };
-  expect(deriveNextAction(planned)).toMatchObject({ id: 'review-production', stage: 'produce' });
+  // The proof is optional: with art and storyboard approved the header moves on to rendering.
+  const planned = { ...project, productionReadiness: { ...APPROVED, proof: { approved: false }, readyForProduction: true } };
+  expect(deriveNextAction(planned)).toMatchObject({ id: 'render-final' });
 });
 
-// #10140: the proof is the last part of Make. Following the steps in order
-// must never send an earlier step back to not done.
+// Following the steps in order must never send an earlier step back to not
+// done. The animated proof is optional: it never holds Make or the render.
 describe('following the tab order', () => {
   // The server's proof basis covers the whole composition (productionReview.js),
   // so an approval holds only while the composition it was given over is unchanged.
   const readinessFor = (project, { art = false, storyboard = false, approvedComposition = null } = {}) => {
     const proof = approvedComposition !== null && approvedComposition === JSON.stringify(project.composition || null);
-    return { art: { approved: art, problems: [] }, storyboard: { approved: storyboard, problems: [] }, proof: { approved: proof, problems: [] }, readyForProduction: proof };
+    return { art: { approved: art, problems: [] }, storyboard: { approved: storyboard, problems: [] }, proof: { approved: proof, problems: [] }, readyForProduction: storyboard };
   };
   const doneSet = (project, readiness) => new Set(deriveStages(project, readiness).stages.filter((s) => s.state === 'done').map((s) => s.id));
 
-  it('walks song → look → storyboard → footage → composition → proof → render without a step going backwards', () => {
+  it('walks song → look → storyboard → footage → composition → render without a step going backwards', () => {
     let project = { id: 'p', scenes: [], composition: { mode: 'composed', textCues: [] } };
     let approvals = {};
     const steps = [
@@ -215,7 +216,6 @@ describe('following the tab order', () => {
       ['board', () => { project = { ...project, scenes: [scene({ referenceImageId: null, videoHistoryId: null })] }; approvals = { ...approvals, storyboard: true }; }],
       ['produce', () => { project = { ...project, scenes: [scene()] }; }],
       ['compose', () => { project = { ...project, composition: { ...project.composition, textCues: [{ id: 'c1', text: 'Hello', startSec: 0, endSec: 2 }], grade: { contrast: 1.1 } } }; }],
-      ['proof', () => { approvals = { ...approvals, approvedComposition: JSON.stringify(project.composition) }; }],
       ['review', () => { project = { ...project, renderHistoryId: 'rh-1' }; }],
     ];
     let before = doneSet(project, readinessFor(project, approvals));
@@ -224,16 +224,15 @@ describe('following the tab order', () => {
       const readiness = readinessFor(project, approvals);
       const after = doneSet(project, readiness);
       for (const id of before) expect(after.has(id), `${id} regressed after ${step}`).toBe(true);
-      // Each action finishes its own step, except that footage and typography
-      // leave Make open: the proof over the composition closes it.
-      if (step === 'produce' || step === 'compose') expect(after.has('produce'), `Make done after ${step}, before its proof`).toBe(false);
-      else expect(after.has(step === 'proof' ? 'produce' : step), `${step} not done`).toBe(true);
+      // Each action finishes its own step; footage alone leaves Make open until the typography is added.
+      if (step === 'produce') expect(after.has('produce'), 'Make done before its composition').toBe(false);
+      else expect(after.has(step === 'compose' ? 'produce' : step), `${step} not done`).toBe(true);
       before = after;
     }
     expect(deriveStages(project, readinessFor(project, approvals)).current).toBe('publish');
   });
 
-  it('a typography edit after proof approval reopens Make only and sends the header to its proof', () => {
+  it('a typography edit after proof approval keeps Make done and lists the proof as optional', () => {
     const composition = { mode: 'composed', textCues: [{ id: 'c1', text: 'Hello', startSec: 0, endSec: 2 }] };
     const project = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [scene()], composition };
     const approvals = { art: true, storyboard: true, approvedComposition: JSON.stringify(composition) };
@@ -242,17 +241,21 @@ describe('following the tab order', () => {
     const edited = { ...project, composition: { ...composition, textCues: [...composition.textCues, { id: 'c2', text: 'World', startSec: 2, endSec: 4 }] } };
     const readiness = readinessFor(edited, approvals);
     expect(Object.fromEntries(deriveStages(edited, readiness).stages.map((s) => [s.id, s.state])))
-      .toMatchObject({ board: 'done', produce: 'active', review: 'todo' });
-    expect(deriveNextAction(edited, { readiness })).toMatchObject({ id: 'review-production', stage: 'produce', anchor: 'mv-review-proof' });
-    expect(stageChecklist('produce', edited, readiness).map((i) => [i.id, i.done])).toEqual([['footage', true], ['composition', true], ['approve-proof', false]]);
+      .toMatchObject({ board: 'done', produce: 'done', review: 'active' });
+    expect(deriveNextAction(edited, { readiness })).toMatchObject({ id: 'render-final' });
+    expect(stageChecklist('produce', edited, readiness).map((i) => [i.id, i.done, !!i.optional, i.label]))
+      .toEqual([['footage', true, false, 'Footage for every shot (1 of 1)'], ['composition', true, false, 'Timed typography added'], ['approve-proof', false, true, 'Animated proof (optional)']]);
   });
 
   it('keeps the header on the footage until it is in, unless a run is parked on its pilot proof', () => {
     const project = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [scene({ videoHistoryId: null })] };
     const readiness = readinessFor(project, { art: true, storyboard: true });
     expect(deriveNextAction(project, { readiness })).toMatchObject({ id: 'goto-produce', stage: 'produce' });
-    const parked = { ...project, productionRuns: [run({ status: 'blocked' })] };
-    expect(deriveNextAction(parked, { readiness })).toMatchObject({ id: 'review-production', stage: 'produce' });
+    // A run parked on its pilot proof before paid bulk generation still sends the director to that proof.
+    const parked = { ...project, productionRuns: [run({ status: 'blocked', pilot: { scenes: [{ sceneId: 's1' }] } })] };
+    expect(deriveNextAction(parked, { readiness })).toMatchObject({ id: 'review-production', stage: 'produce', anchor: 'mv-review-proof' });
+    const parkedNoPilot = { ...project, productionRuns: [run({ status: 'blocked' })] };
+    expect(deriveNextAction(parkedNoPilot, { readiness })).toMatchObject({ id: 'resume-production' });
   });
 });
 

@@ -69,14 +69,13 @@ function currentStage(project, readiness, run) {
   const mode = project.composition?.mode || 'concat';
   const layered = isLayeredComposition(project);
   const planned = Boolean(readiness?.storyboard?.approved);
-  const proofApproved = Boolean(readiness?.proof?.approved);
   const footageReady = FOOTAGE_OPTIONAL_MODES.has(mode) || scenes.every((scene) => sceneRenderReady(scene, { layered }));
   const done = {
     setup: Boolean(project.trackId || project.uploadedAudioFilename) && Boolean(project.audioAnalysis) && lyricsReady(project, readiness),
     'cast-sets': Boolean(readiness?.art?.approved),
     board: planned,
-    // Make needs footage, the composition over it and the proof that closes both (#10140) — mirrors the client's deriveStages.
-    produce: planned && footageReady && composeDone(project, mode) && proofApproved,
+    // Make needs footage and the composition over it; the animated proof is optional (mirrors the client's deriveStages).
+    produce: planned && footageReady && composeDone(project, mode),
     // A render made before later scene edits no longer counts as the final video — mirrors the client's isFinalRenderStale.
     review: Boolean(project.renderHistoryId) && project.renderDependencyState?.status !== 'stale',
     publish: Object.keys(project.publishKit?.posts || {}).length > 0,

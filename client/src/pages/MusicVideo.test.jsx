@@ -3046,8 +3046,8 @@ describe('Autopilot collapsed review summary', () => {
     const error = 'Review and approve the current art direction first.';
     const project = { ...PROJECT_ANALYZED, autonomousRun: { id: 'history-run', status: 'needs-human', stage: 'produce',
       error, errorCode: 'MUSIC_VIDEO_APPROVAL_REQUIRED', brief: { autoApprove: [] }, stages: {}, output: {} },
-      productionReadiness: { basis: {}, art: { approved: true, problems: [] }, storyboard: { approved: true, problems: [] },
-        proof: { approved: false, problems: ['Render and watch a current animated chorus proof with the master song.'] } } };
+      productionReadiness: { basis: {}, art: { approved: true, problems: [] }, storyboard: { approved: false, problems: ['Approve the current lyric-timed storyboard.'] },
+        proof: { approved: false, problems: [] } } };
     listMusicVideoProjects.mockResolvedValue([project]);
     render(<MemoryRouter initialEntries={['/music-video/mv-3/review']}>{MV_ROUTES}</MemoryRouter>);
     // Collapsed, the run is the header's Autopilot button: it never repeats the stale error.
@@ -3057,7 +3057,7 @@ describe('Autopilot collapsed review summary', () => {
     const drawer = await screen.findByRole('dialog', { name: 'Project settings' });
     const run = within(drawer).getByRole('region', { name: 'Autonomous run' });
     expect(within(run).getByText(`Historical stop reason: ${error}`)).toBeInTheDocument();
-    const current = within(run).getByText(/Render and watch a current animated chorus proof/);
+    const current = within(run).getByText(/Approve the current lyric-timed storyboard/);
     expect(current.textContent).not.toContain(error);
   });
 });

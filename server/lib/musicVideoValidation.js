@@ -1170,7 +1170,7 @@ export const musicVideoProductionDraftSchema = z.object({
   }).strict()).max(2000),
 }).strict();
 export const musicVideoAlignmentReviewSchema = z.object({
-  basis: z.string().min(1).max(128), notes: z.string().trim().min(1).max(4000),
+  basis: z.string().min(1).max(128), notes: z.string().trim().max(4000).default(''),
 }).strict();
 export const musicVideoDocumentShotsSchema = z.object({
   documentDirectory: z.string().min(1).max(500), audioBasis: z.string().min(1).max(128),
@@ -1199,9 +1199,8 @@ export const musicVideoProductionApprovalSchema = z.object({
       limitations: z.string().trim().min(1).max(4000),
     }).strict().optional(),
     excerptId: z.string().min(1).max(200), filename: z.string().min(1).max(200),
-    energyComparison: z.string().trim().min(1).max(4000),
-    timecodedNotes: z.string().trim().min(1).max(4000)
-      .regex(/(?:\b\d{1,2}:\d{2}(?:\.\d+)?\b|\b\d+(?:\.\d+)?s\b)/, 'Include a playback time such as 0:04 or 4.5s.'),
+    energyComparison: z.string().trim().max(4000).optional(),
+    timecodedNotes: z.string().trim().max(4000).optional(),
   }).strict().optional(),
 }).strict();
 export const musicVideoProductionProofSchema = z.object({
@@ -1425,7 +1424,7 @@ export const musicVideoProductionRevertSchema = z.object({
   stage: z.enum(['art', 'storyboard', 'proof', 'castAndSets']), field: z.string().trim().min(1).max(100),
 }).strict();
 export const musicVideoProductionFeedbackResolutionSchema = z.object({
-  feedbackId: z.string().min(1).max(128), resolution: z.string().trim().min(1).max(8000), password: z.string().max(1024).optional(),
+  feedbackId: z.string().min(1).max(128), resolution: z.string().trim().max(8000).default(''), password: z.string().max(1024).optional(),
 }).strict();
 
 // GET /api/music-video query (#10169). Passthrough strings, like the other list

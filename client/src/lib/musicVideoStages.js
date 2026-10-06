@@ -19,15 +19,15 @@ import { FINISHED_OUTSIDE_RERENDER_NOTE, finishedOutside, finishedOutsideCovers 
  * The six steps of a music video, in the order the director decides them. The
  * ids are the route's `:stage` values and stay stable across the relabel
  * (#10297 follow-up): Song is `setup`, Look is `cast-sets`, Storyboard is
- * `board`, Make is `produce` (footage, composition and the proof that closes
- * them) and Final render is `review`. `doneWhen` is the one line a step
+ * `board`, Make is `produce` (footage and the composition over it; an
+ * animated proof is an optional check) and Final render is `review`. `doneWhen` is the one line a step
  * shows under its title.
  */
 export const MUSIC_VIDEO_STAGES = [
   { id: 'setup', label: 'Song', title: 'Song', doneWhen: 'Done when the track is analyzed and every lyric word is timed to the vocal.' },
   { id: 'cast-sets', label: 'Look', title: 'Look', doneWhen: 'Done when the art direction is written, a visual guide is chosen, and you approve it.' },
   { id: 'board', label: 'Storyboard', title: 'Storyboard', doneWhen: 'Done when shots cover the whole song and you approve the timed storyboard.' },
-  { id: 'produce', label: 'Make', title: 'Make', doneWhen: 'Done when every shot has its picture and you approve a proof watched with sound.' },
+  { id: 'produce', label: 'Make', title: 'Make', doneWhen: 'Done when every shot has its picture and the composition is ready.' },
   { id: 'review', label: 'Final render', title: 'Final render', doneWhen: 'Done when the full video is rendered from the approved plan and is up to date.' },
   { id: 'publish', label: 'Publish', title: 'Publish', doneWhen: 'Done when every platform you turned on has a post.' },
 ];
@@ -50,8 +50,11 @@ export const currentProductionRun = (project) => {
   return runs.find((r) => RESUMABLE_RUN_STATUSES.has(r.status)) || runs[runs.length - 1] || null;
 };
 
-/** Current review guidance for a stopped approval-gated run; retain other failures. */
-export function productionReviewStopGuidance(run, readiness, through = 'proof') {
+/**
+ * Current review guidance for a stopped approval-gated run; retain other failures.
+ * Runs wait on art and storyboard only: the animated proof is optional.
+ */
+export function productionReviewStopGuidance(run, readiness, through = 'storyboard') {
   const reason = run?.stopReason || run?.error;
   if (!readiness || !reason || !['blocked', 'needs-human', 'stopped', 'failed'].includes(run.status)) return null;
   const approvalStop = run.errorCode === 'MUSIC_VIDEO_APPROVAL_REQUIRED'
@@ -306,10 +309,9 @@ export function lyricSetupState(project, readiness = project?.productionReadines
  * changed since — plus `current`, the first stage that is not done. A live production
  * run owns the project, so it pins `current` to Produce.
  *
- * Make (`produce`) holds the footage, the composition over it and the animated
- * proof that closes both (#10140): the proof's basis covers the whole
- * composition (typography, grade), so it is judged last. A later typography or
- * grade edit marks Make stale until the proof is approved again.
+ * Make (`produce`) holds the footage and the composition over it. Its animated
+ * proof is an optional check: the composition preview already shows the
+ * picture, so neither Make nor the final render waits on a proof approval.
  */
 export function deriveStages(project, readiness = project?.productionReadiness, publish = {}) {
   const scenes = project?.scenes || [];
@@ -329,7 +331,7 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
     setup: projectHasAudio(project) && !!project?.audioAnalysis && lyricSetupState(project, readiness).ok,
     'cast-sets': castDone,
     board: planned,
-    produce: produceDone && composeDone(project || {}, mode) && !!readiness?.proof.approved,
+    produce: produceDone && composeDone(project || {}, mode),
     // A render made before later scene edits no longer counts as the final video.
     review: !!project?.renderHistoryId && !isFinalRenderStale(project),
     // #9281/#9282: published once every enabled platform has a recorded post.
@@ -347,7 +349,6 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
   const stale = external ? {} : {
     'cast-sets': !!readiness?.art?.stale || !!readiness?.castAndSets?.stale,
     board: !!readiness?.storyboard?.stale,
-    produce: !!readiness?.proof?.stale,
   };
   const current = liveRun
     ? 'produce'
@@ -393,18 +394,15 @@ export function deriveNextAction(project, {
   const draftReview = project.productionReview?.draft || {};
   const documentShots = draftReview.storyboardSource === 'document' && (draftReview.storyboard || []).length > 0;
   const boardNeedsOwnAction = !art && board && scenes.length === 0 && !documentShots;
-  // The proof closes Make, so it waits for Make's footage — unless a production
-  // run is parked on its pilot proof, which only the approval frees.
-  const footageOptional = FOOTAGE_OPTIONAL_MODES.has(project.composition?.mode || 'concat');
-  const layered = isLayeredComposition(project);
-  const footageDone = footageOptional || scenes.every((scene) => sceneRenderReady(scene, { layered }));
-  const proofDue = current !== 'produce' || footageDone || (!!run && RESUMABLE_RUN_STATUSES.has(run.status));
-  if (!finishedOutside(project) && projectHasAudio(project) && project.audioAnalysis && !CAST_WORKING.has(cast?.status) && !readiness?.readyForProduction && (art || board || proofDue)
+  // The animated proof is optional, so the header sends the director to it only
+  // when a production run is parked on its pilot proof before paid bulk generation.
+  const pilotParked = !!run && RESUMABLE_RUN_STATUSES.has(run.status) && !!run.pilot?.scenes?.length && !readiness?.proof?.approved;
+  if (!finishedOutside(project) && projectHasAudio(project) && project.audioAnalysis && !CAST_WORKING.has(cast?.status) && (art || board || pilotParked)
     && run?.status !== 'running' && !renderActive && !kickoffRunning
     && !castNeedsOwnAction && !boardNeedsOwnAction) {
     return { id: 'review-production', kind: 'goto', stage: art ? 'cast-sets' : board ? 'board' : 'produce',
       anchor: art ? 'mv-review-art' : board ? 'mv-review-storyboard' : 'mv-review-proof',
-      label: art ? 'Review art direction' : board ? 'Review timed storyboard' : 'Review animated proof',
+      label: art ? 'Review art direction' : board ? 'Review timed storyboard' : 'Review pilot proof',
       shortLabel: art ? 'Review art' : board ? 'Review storyboard' : 'Review proof' };
   }
   if (run && RESUMABLE_RUN_STATUSES.has(run.status)) {
@@ -467,6 +465,8 @@ export function deriveNextAction(project, {
     case 'board':
       return { id: 'plan', kind: 'run', label: 'Plan the shots', shortLabel: 'Plan', disabled: !project.audioAnalysis, reason: project.audioAnalysis ? undefined : 'Analyze the track first' };
     case 'produce': {
+      const footageDone = FOOTAGE_OPTIONAL_MODES.has(project.composition?.mode || 'concat')
+        || scenes.every((scene) => sceneRenderReady(scene, { layered: isLayeredComposition(project) }));
       if (run?.status === 'needs-human') return { id: 'goto-review', kind: 'goto', stage: 'review', label: 'Review the draft', shortLabel: 'Review' };
       if (!footageDone) return { id: 'goto-produce', kind: 'goto', stage: 'produce', anchor: 'mv-generation', label: 'Make the footage', shortLabel: 'Make' };
       const label = { document: 'Attach a composition', eidoverse: 'Save the Eidoverse scene', code: 'Generate the code video' }[project.composition?.mode] || 'Add typography';
@@ -587,7 +587,7 @@ export function stageChecklist(stageId, project, readiness = project?.production
           action: autoSong ? null : { label: 'Import lyrics', anchor: 'mv-lyrics-import' } },
         { id: 'timing', label: lyrics.instrumental ? 'Instrumental confirmed' : 'Lyric timing verified', done: lyrics.verified || lyrics.ok,
           detail: lyrics.alignment === 'stale' ? 'Word timings or the master changed since you verified them; verify again.'
-            : lyrics.instrumental ? 'Say why the song has no lyrics under Time and verify.'
+            : lyrics.instrumental ? 'Confirm the song is instrumental under Time and verify.'
               : 'Align the words, listen back, then mark the timing verified under Time and verify.',
           action: autoSong ? null : { label: 'Verify timing', anchor: 'mv-lyric-timing' } },
       ];
@@ -619,7 +619,7 @@ export function stageChecklist(stageId, project, readiness = project?.production
     }
     case 'produce': {
       // Make: footage (unless the render style draws its own picture), the
-      // composition over it, then the proof that closes both (see deriveStages).
+      // composition over it, then the optional proof (see deriveStages).
       const items = [];
       if (!FOOTAGE_OPTIONAL_MODES.has(mode)) {
         const layered = isLayeredComposition(project);
@@ -628,7 +628,9 @@ export function stageChecklist(stageId, project, readiness = project?.production
         items.push({ id: 'footage', label: `Footage for every shot (${formatCount(ready)} of ${formatCount(scenes.length)})`, done: footageDone,
           action: footageDone ? null : { label: 'Make the footage', anchor: 'mv-generation' } });
       }
-      const proof = approval('proof', 'Animated proof', 'Render the proof over this composition, watch it with sound, then approve it below.');
+      const proofApproval = approval('proof', 'Animated proof', null);
+      // Optional: shown so it can be found, never counted toward the step being done.
+      const proof = { ...proofApproval, label: proofApproval.done ? proofApproval.label : 'Animated proof (optional)', optional: true, detail: null };
       const composition = project.composition || {};
       let work = null;
       if (mode === 'composed') work = { id: 'composition', label: 'Timed typography added', done: (composition.textCues || []).length > 0, action: { label: 'Add typography', anchor: 'mv-typo-font' } };

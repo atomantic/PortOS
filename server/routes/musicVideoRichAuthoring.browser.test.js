@@ -161,8 +161,8 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     await page.getByRole('button', { name: 'Save revision feedback' }).click();
     await page.getByText('Move the operator behind the threshold at the exit.', { exact: true }).waitFor();
     expect(await page.getByRole('button', { name: 'Approve lyric-timed storyboard' }).isDisabled()).toBe(true);
-    await page.getByLabel('Resolution for shot: chorus / operator').fill('Reviewed the updated staging in the storyboard.');
-    await page.getByRole('button', { name: 'Resolve feedback after review' }).click();
+    await page.getByLabel('How it was resolved (optional)').fill('Reviewed the updated staging in the storyboard.');
+    await page.getByRole('button', { name: 'Mark resolved' }).click();
     await page.getByText('Resolution: Reviewed the updated staging in the storyboard.', { exact: true }).waitFor();
     const beforeBoard = await page.evaluate(async id => (await fetch('/api/music-video/' + id + '/production-review')).json(), p.id);
     expect(beforeBoard.readiness.storyboard.problems).toEqual([]);
@@ -205,9 +205,9 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     await page.locator('video').evaluate(async video => { await video.play(); await new Promise(r => setTimeout(r, 400)); video.pause(); });
     expect(await page.locator('video').evaluate(v => v.videoWidth)).toBeGreaterThan(0);
     expect(await page.locator('[aria-label="Saved choreography for proof comparison"]').textContent()).toContain(choreography);
-    expect(await page.getByRole('button', { name: 'Approve proof — watched with sound' }).isDisabled()).toBe(true);
-    await page.getByLabel('Playback energy compared with the saved plan').fill('The synthetic fixture demonstrates a driving chorus: the modeled subject changes pose and travels while the camera moves through the scene.');
-    await page.getByLabel('Timecoded playback notes').fill('0:02 — subject enters the frame; 0:07 — pose and camera position differ and readable type remains clear. This is a synthetic workflow test, not artistic approval of a production video.');
+    // Played with sound, the proof can be approved at once; the note below is optional.
+    expect(await page.getByRole('button', { name: 'Approve proof — watched with sound' }).isDisabled()).toBe(false);
+    await page.getByLabel('Notes (optional)').fill('0:02 — subject enters the frame; 0:07 — pose and camera position differ and readable type remains clear. This is a synthetic workflow test, not artistic approval of a production video.');
     expect(await page.getByRole('checkbox', { name: /I watched this revision/ }).count()).toBe(0);
     await page.getByRole('button', { name: 'Approve proof — watched with sound' }).click();
     await page.getByRole('heading', { name: 'Animated proof approved', exact: true }).waitFor();
