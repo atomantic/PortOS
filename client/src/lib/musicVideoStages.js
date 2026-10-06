@@ -380,7 +380,10 @@ export function deriveNextAction(project, {
   // nothing built yet (no check-in, no shots) offers Start / Plan, and an open
   // or interrupted check-in offers Approve / Resume — those come from the stage switch below.
   const castNeedsOwnAction = art && ((!cast && scenes.length === 0) || (cast && (cast.status === 'review' || cast.interrupted || cast.status === 'failed')));
-  const boardNeedsOwnAction = !art && board && scenes.length === 0;
+  // A document storyboard brings its shots from the authored source, so it has nothing to plan on the board.
+  const draftReview = project.productionReview?.draft || {};
+  const documentShots = draftReview.storyboardSource === 'document' && (draftReview.storyboard || []).length > 0;
+  const boardNeedsOwnAction = !art && board && scenes.length === 0 && !documentShots;
   // The proof closes Make, so it waits for Make's footage — unless a production
   // run is parked on its pilot proof, which only the approval frees.
   const footageOptional = FOOTAGE_OPTIONAL_MODES.has(project.composition?.mode || 'concat');
@@ -500,6 +503,8 @@ const PUBLISH_ANCHOR = 'mv-publish-kit';
 // server returns plain sentences; the first matching rule picks the group.
 const STORYBOARD_PROBLEM_GROUPS = [
   { id: 'art', label: 'Art direction', test: /art direction|art feedback/i, action: { label: 'Review art direction', anchor: APPROVAL_ANCHORS.art } },
+  // A document storyboard needs a manifest from its current build; its message mentions timing, so it is matched first.
+  { id: 'manifest', label: 'Document shot manifest', test: /shot manifest/i, action: { label: 'Import the shot manifest', anchor: 'mv-review-planning' } },
   { id: 'lyrics', label: 'Lyrics', test: /lyrics|instrumental/i, action: { label: 'Import lyrics', stage: 'setup', anchor: 'mv-lyrics-import' } },
   { id: 'timing', label: 'Lyric timing', test: /alignment|timing|vocal|master song/i, action: { label: 'Verify timing', stage: 'setup', anchor: 'mv-lyric-timing' } },
   { id: 'coverage', label: 'Shot coverage', test: /cover the master|gaps or overlaps|create a timed/i, action: { label: 'Open the treatment', anchor: 'mv-board-treatment' } },
@@ -668,7 +673,10 @@ export function stepNotes(project, readiness = project?.productionReadiness, pub
     const ready = scenes.filter((scene) => sceneRenderReady(scene, { layered })).length;
     make = `${formatCount(ready)} of ${formatCount(scenes.length)} shots have their picture`;
   } else if (scenes.length) make = 'Picture drawn by the composition';
-  const review = isFinalRenderStale(project) ? 'Out of date' : project.renderHistoryId ? 'Rendered' : '';
+  // Before a final render, the drafts and proofs to watch are what Final render holds.
+  const drafts = (project.excerpts || []).filter((e) => e.status === 'complete' && e.filename).length;
+  const review = isFinalRenderStale(project) ? 'Out of date' : project.renderHistoryId ? 'Rendered'
+    : drafts ? `${formatCount(drafts)} ${drafts === 1 ? 'draft' : 'drafts'} to watch` : '';
   const posts = publishPlatformProgress(project, publish);
   const publishNote = posts.total ? `${formatCount(posts.posted)} of ${formatCount(posts.total)} posted` : posts.posted ? 'Posted' : '';
   return { setup: song, 'cast-sets': look, board, produce: make, review, publish: publishNote };

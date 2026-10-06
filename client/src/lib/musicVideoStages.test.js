@@ -438,6 +438,20 @@ describe('stageChecklist', () => {
     expect(stageChecklist('produce', castProject({ scenes: [scene()], composition: { mode: 'composed', textCues: [] } }), APPROVED).map((i) => [i.id, i.done]))
       .toEqual([['footage', true], ['composition', false], ['approve-proof', true]]);
   });
+  it('asks for the storyboard review, not a board plan, when a document storyboard brings its own shots', () => {
+    const project = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, ...LYRICS, scenes: [], composition: { mode: 'document', document: { directory: 'd' } },
+      productionReview: { draft: { ...LYRICS.productionReview.draft, storyboardSource: 'document', storyboard: [{ id: 'shot-1' }] } } };
+    const readiness = { ...APPROVED, storyboard: { approved: false, problems: ['Import a shot manifest from the current authored document and master audio.'] }, proof: { approved: false, problems: [] }, readyForProduction: false };
+    expect(deriveNextAction(project, { readiness })).toMatchObject({ id: 'review-production', stage: 'board', anchor: 'mv-review-storyboard' });
+    expect(deriveNextAction({ ...project, productionReview: { draft: LYRICS.productionReview.draft } }, { readiness })).toMatchObject({ id: 'plan' });
+  });
+
+  it('sends a missing document shot manifest to the manifest import, not to lyric timing', () => {
+    const readiness = { ...NOT_APPROVED, storyboard: { approved: false, problems: ['Import a shot manifest from the current authored document and master audio. Reauthor or reimport after source, timing or shot changes.'] } };
+    const items = stageChecklist('board', castProject({ scenes: [scene()] }), readiness);
+    expect(items.find((i) => i.id === 'board-manifest')).toMatchObject({ label: 'Document shot manifest', action: { label: 'Import the shot manifest', anchor: 'mv-review-planning' } });
+    expect(items.some((i) => i.id === 'board-timing')).toBe(false);
+  });
   it('keeps Setup open until lyrics are imported and their timing verified, unless the song is instrumental', () => {
     const base = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS };
     const setup = (project, readiness) => deriveStages(project, readiness).stages.find((st) => st.id === 'setup').state;
@@ -533,6 +547,8 @@ describe('stepNotes', () => {
     expect(stepNotes({ ...project, composition: { mode: 'document' } }).produce).toBe('Picture drawn by the composition');
     expect(stepNotes({ id: 'p' })).toMatchObject({ setup: 'No track yet', board: '', produce: '' });
     expect(stepNotes({ ...project, renderHistoryId: 'r', renderDependencyState: { status: 'stale' } }).review).toBe('Out of date');
+    // Before the final render, Final render says how many drafts and proofs there are to watch.
+    expect(stepNotes({ ...project, excerpts: [{ id: 'a', status: 'complete', filename: 'a.mp4' }, { id: 'b', status: 'complete', filename: 'b.mp4' }, { id: 'c', status: 'error' }] }).review).toBe('2 drafts to watch');
   });
 });
 

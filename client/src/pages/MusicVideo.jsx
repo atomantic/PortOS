@@ -62,7 +62,7 @@ import CreateProjectDrawer from '../components/musicVideo/CreateProjectDrawer.js
 import AutonomousStartDrawer from '../components/musicVideo/AutonomousStartDrawer.jsx';
 import { automationDraftFrom, automationFromDraft } from '../lib/musicVideoAutomation.js';
 import { listUniverseNames } from '../services/apiUniverseBuilder.js';
-import MusicVideoLayout, { MUSIC_VIDEO_SCROLL_ID } from '../components/musicVideo/MusicVideoLayout.jsx';
+import MusicVideoLayout, { MUSIC_VIDEO_PAGE_ID, MUSIC_VIDEO_SCROLL_ID } from '../components/musicVideo/MusicVideoLayout.jsx';
 import ProjectSettingsDrawer, { SETTINGS_TAB_IDS } from '../components/musicVideo/ProjectSettingsDrawer.jsx';
 import MusicVideoProjectCard from '../components/musicVideo/MusicVideoProjectCard.jsx';
 import PreviewDock from '../components/musicVideo/PreviewDock.jsx';
@@ -1156,7 +1156,8 @@ export default function MusicVideo() {
   const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, liveFirst: activeStage === 'produce' }) : [];
 
   return (
-    <div className="flex h-full flex-col">
+    // Below md the whole page scrolls (title bar and project header with it), so the step gets the screen.
+    <div id={MUSIC_VIDEO_PAGE_ID} className="flex h-full flex-col max-md:overflow-auto">
       <MidiInstallModal {...midi.installGate} />
       <MidiGatedModal {...midi.gatedGate} />
       <MediaPreview preview={preview} setPreview={setPreview} items={previewItems} />
@@ -1343,7 +1344,7 @@ export default function MusicVideo() {
         }}
       />
 
-      <div id={MUSIC_VIDEO_SCROLL_ID} className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
+      <div id={MUSIC_VIDEO_SCROLL_ID} className="min-h-0 flex-1 p-4 max-md:flex-none md:overflow-auto md:p-6">
         {projectsError && !selected && (
           <Banner tone="error" size="md" title="Music video projects unavailable" className="mb-4" actions={(
             <button

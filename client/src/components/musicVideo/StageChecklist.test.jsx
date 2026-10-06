@@ -21,3 +21,18 @@ describe('StageChecklist Revert buttons (#10241)', () => {
     expect(screen.queryByRole('button', { name: /^Revert/ })).toBeNull();
   });
 });
+
+describe('StageChecklist on a finished step', () => {
+  it('folds the done rows into one line so the step content comes up sooner', () => {
+    render(<StageChecklist items={[{ id: 'a', label: 'Track attached', done: true }, { id: 'b', label: 'Lyric timing verified', done: true }]} />);
+    expect(screen.getByText('All done')).toBeTruthy();
+    expect(screen.getByText('Track attached · Lyric timing verified')).toBeTruthy();
+    expect(screen.queryByRole('list')).toBeNull();
+  });
+
+  it('keeps one row per item while anything is left', () => {
+    render(<StageChecklist items={[{ id: 'a', label: 'Track attached', done: true }, { id: 'b', label: 'Lyric timing verified', done: false, action: { label: 'Verify timing', anchor: 'x' } }]} onAction={vi.fn()} />);
+    expect(screen.getAllByRole('listitem')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: /Verify timing/ })).toBeTruthy();
+  });
+});

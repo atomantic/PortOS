@@ -5,7 +5,7 @@
  * range-only control (it has no frame of its own to re-lay-out).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
 vi.mock('../../services/apiMusicVideo.js', () => ({ getMusicVideoSocialCuts: vi.fn() }));
 
@@ -62,7 +62,7 @@ it('keeps the current draft visible while retaining stale and failed attempts be
   expect(screen.getByRole('status')).toHaveTextContent('Latest draft attempt failed: Render interrupted');
   fireEvent.click(screen.getByText('Earlier and failed attempts (2)'));
   expect(history.open).toBe(true);
-  expect(screen.getByText('Earlier inputs — retained for reference')).toBeVisible();
+  expect(screen.getByText('Made before later changes · re-render this range to see them')).toBeVisible();
   expect(screen.getByRole('alert')).toHaveTextContent('Render interrupted');
 });
 
@@ -87,6 +87,28 @@ it('does not mislabel current footage after it has been approved as production p
 
 describe('ExcerptPanel roles and deletion (#10148)', () => {
   const done = (id, extra = {}) => ({ id, status: 'complete', filename: `${id}.mp4`, startSec: 0, endSec: 12, dependencyState: { status: 'current' }, ...extra });
+
+  it('keeps a range\'s newest render visible even when later changes made it out of date', () => {
+    render(<ExcerptPanel project={documentProject} rendering={false} progress={0} excerpts={[
+      done('opening', { startSec: 0, endSec: 72, dependencyState: { status: 'stale' } }),
+      { id: 'failed', status: 'error', error: 'boom', startSec: 0, endSec: 72 },
+    ]} startExcerpt={vi.fn()} />);
+    const list = screen.getByRole('list', { name: 'Current draft and active renders' });
+    expect(list).toHaveTextContent('Made before later changes · re-render this range to see them');
+    expect(screen.getByText('Earlier and failed attempts (1)')).toBeTruthy();
+  });
+
+  it('keeps the newest draft of every range visible, first and above the render form', () => {
+    render(<ExcerptPanel project={documentProject} rendering={false} progress={0} excerpts={[
+      done('opening-old', { startSec: 0, endSec: 72 }), done('opening', { startSec: 0, endSec: 72 }), done('chorus', { startSec: 135, endSec: 196 }),
+    ]} startExcerpt={vi.fn()} />);
+    const list = screen.getByRole('list', { name: 'Current draft and active renders' });
+    // Both ranges stay in view; only the older render of the opening goes to history.
+    expect(within(list).getAllByRole('listitem').map((item) => item.textContent.slice(0, 13))).toEqual(['2:15.0 – 3:16', '0:00.0 – 1:12']);
+    expect(screen.getByText('Earlier and failed attempts (1)')).toBeTruthy();
+    // The renders come before the controls that make a new one.
+    expect(list.compareDocumentPosition(screen.getByRole('button', { name: /Render excerpt/ })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 
   it('keeps the review draft visible when a newer social cut renders, and badges both', () => {
     render(<ExcerptPanel project={documentProject} rendering={false} progress={0}
