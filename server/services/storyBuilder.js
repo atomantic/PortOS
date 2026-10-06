@@ -62,6 +62,7 @@ import {
   ERR_VALIDATION as ARC_ERR_VALIDATION,
 } from './pipeline/arcPlanner.js';
 import { isStr, trimTo } from '../lib/textUtils.js';
+import { codedError } from '../lib/codedError.js';
 
 // Storage backend dispatcher (#1016): the facade is a drop-in for the
 // collectionStore surface this service used to call directly, so every method
@@ -72,7 +73,6 @@ export const storyBuilderStore = () => store();
 
 export const ERR_NOT_FOUND = 'STORY_BUILDER_NOT_FOUND';
 export const ERR_VALIDATION = 'STORY_BUILDER_VALIDATION';
-const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 const SESSION_ID_RE = /^stb-[A-Za-z0-9-]+$/;
 export const TITLE_MAX = 200;
@@ -239,8 +239,8 @@ export async function listStorySessions({ includeDeleted = false } = {}) {
 
 export async function getStorySession(id, { includeDeleted = false } = {}) {
   const found = await store().loadOne(id);
-  if (!found) throw makeErr(`Story Builder session not found: ${id}`, ERR_NOT_FOUND);
-  if (found.deleted && !includeDeleted) throw makeErr(`Story Builder session not found: ${id}`, ERR_NOT_FOUND);
+  if (!found) throw codedError(`Story Builder session not found: ${id}`, ERR_NOT_FOUND);
+  if (found.deleted && !includeDeleted) throw codedError(`Story Builder session not found: ${id}`, ERR_NOT_FOUND);
   return found;
 }
 
@@ -252,7 +252,7 @@ export async function getStorySession(id, { includeDeleted = false } = {}) {
  */
 export async function createStorySession(input = {}) {
   const title = trimTo(input.title, TITLE_MAX);
-  if (!title) throw makeErr(`Title is required (1..${TITLE_MAX} chars)`, ERR_VALIDATION);
+  if (!title) throw codedError(`Title is required (1..${TITLE_MAX} chars)`, ERR_VALIDATION);
   const intakeMode = INTAKE_MODES.includes(input.intakeMode) ? input.intakeMode : 'seed';
   const seedIdea = trimTo(input.seedIdea, SEED_MAX);
 
@@ -352,7 +352,7 @@ export async function createStorySession(input = {}) {
 export async function updateStorySession(id, patch = {}) {
   return store().queueRecordWrite(id, async () => {
     const cur = await store().loadOne(id);
-    if (!cur || cur.deleted) throw makeErr(`Story Builder session not found: ${id}`, ERR_NOT_FOUND);
+    if (!cur || cur.deleted) throw codedError(`Story Builder session not found: ${id}`, ERR_NOT_FOUND);
     const next = sanitizeSession({
       ...cur,
       ...('title' in patch ? { title: patch.title } : {}),
@@ -361,7 +361,7 @@ export async function updateStorySession(id, patch = {}) {
       ...('llm' in patch ? { llm: { ...(cur.llm || {}), ...(patch.llm || {}) } } : {}),
       updatedAt: nowIso(),
     });
-    if (!next) throw makeErr('Invalid session payload', ERR_VALIDATION);
+    if (!next) throw codedError('Invalid session payload', ERR_VALIDATION);
     await store().saveOneNow(next.id, next);
     return next;
   });
@@ -370,7 +370,7 @@ export async function updateStorySession(id, patch = {}) {
 export async function deleteStorySession(id) {
   return store().queueRecordWrite(id, async () => {
     const cur = await store().loadOne(id);
-    if (!cur || cur.deleted) throw makeErr(`Story Builder session not found: ${id}`, ERR_NOT_FOUND);
+    if (!cur || cur.deleted) throw codedError(`Story Builder session not found: ${id}`, ERR_NOT_FOUND);
     const now = nowIso();
     await store().saveOneNow(id, { ...cur, deleted: true, deletedAt: now, updatedAt: now });
     return { id };
@@ -630,7 +630,7 @@ export async function getStorySessionView(id) {
 async function writeSyncState(id, enabled, hashes) {
   return store().queueRecordWrite(id, async () => {
     const cur = await store().loadOne(id);
-    if (!cur || cur.deleted) throw makeErr(`Story Builder session not found: ${id}`, ERR_NOT_FOUND);
+    if (!cur || cur.deleted) throw codedError(`Story Builder session not found: ${id}`, ERR_NOT_FOUND);
     const next = sanitizeSession({
       ...cur,
       sync: enabled === true,
@@ -654,7 +654,7 @@ async function writeSyncState(id, enabled, hashes) {
 export async function reconcileStorySession(id) {
   const session = await getStorySession(id);
   if (session.sync !== true) {
-    throw makeErr('Cross-machine resume is off for this session — enable it before reconciling', ERR_VALIDATION);
+    throw codedError('Cross-machine resume is off for this session — enable it before reconciling', ERR_VALIDATION);
   }
   const { hashes } = await computeCurrentHashes(session);
   return writeSyncState(id, true, hashes);
@@ -709,13 +709,13 @@ async function applyUnderlyingLock(session, stepId, locked) {
 }
 
 export async function lockStep(id, stepId) {
-  if (!isValidStepId(stepId)) throw makeErr(`Unknown step: ${stepId}`, ERR_VALIDATION);
+  if (!isValidStepId(stepId)) throw codedError(`Unknown step: ${stepId}`, ERR_VALIDATION);
   const session = await getStorySession(id);
   const { hashes } = await computeCurrentHashes(session);
   await applyUnderlyingLock(session, stepId, true);
   return store().queueRecordWrite(id, async () => {
     const cur = await store().loadOne(id);
-    if (!cur || cur.deleted) throw makeErr(`Story Builder session not found: ${id}`, ERR_NOT_FOUND);
+    if (!cur || cur.deleted) throw codedError(`Story Builder session not found: ${id}`, ERR_NOT_FOUND);
     const steps = { ...cur.steps };
     steps[stepId] = {
       ...steps[stepId],
@@ -746,12 +746,12 @@ export async function lockStep(id, stepId) {
 }
 
 export async function unlockStep(id, stepId) {
-  if (!isValidStepId(stepId)) throw makeErr(`Unknown step: ${stepId}`, ERR_VALIDATION);
+  if (!isValidStepId(stepId)) throw codedError(`Unknown step: ${stepId}`, ERR_VALIDATION);
   const session = await getStorySession(id);
   await applyUnderlyingLock(session, stepId, false);
   return store().queueRecordWrite(id, async () => {
     const cur = await store().loadOne(id);
-    if (!cur || cur.deleted) throw makeErr(`Story Builder session not found: ${id}`, ERR_NOT_FOUND);
+    if (!cur || cur.deleted) throw codedError(`Story Builder session not found: ${id}`, ERR_NOT_FOUND);
     const steps = { ...cur.steps };
     steps[stepId] = { status: 'ready', locked: false, lockedAt: null, upstreamHash: null };
     const next = sanitizeSession({ ...cur, steps, updatedAt: nowIso() });
@@ -771,17 +771,17 @@ export async function unlockStep(id, stepId) {
  * underlying record (arc, readerMap, …) still refuses regeneration.
  */
 export async function setCurrentStep(id, stepId) {
-  if (!isValidStepId(stepId)) throw makeErr(`Unknown step: ${stepId}`, ERR_VALIDATION);
+  if (!isValidStepId(stepId)) throw codedError(`Unknown step: ${stepId}`, ERR_VALIDATION);
   return updateStorySession(id, { currentStep: stepId });
 }
 
 // ── Per-issue locks (issues step loop) ────────────────────────────────────
 
 export async function setIssueLock(id, issueId, locked) {
-  if (!isStr(issueId) || !issueId) throw makeErr('issueId is required', ERR_VALIDATION);
+  if (!isStr(issueId) || !issueId) throw codedError('issueId is required', ERR_VALIDATION);
   return store().queueRecordWrite(id, async () => {
     const cur = await store().loadOne(id);
-    if (!cur || cur.deleted) throw makeErr(`Story Builder session not found: ${id}`, ERR_NOT_FOUND);
+    if (!cur || cur.deleted) throw codedError(`Story Builder session not found: ${id}`, ERR_NOT_FOUND);
     const steps = { ...cur.steps };
     const issueLocks = { ...(steps.issues?.issueLocks || {}) };
     if (locked) issueLocks[issueId] = { locked: true, lockedAt: nowIso(), upstreamHash: null };
@@ -827,18 +827,18 @@ export async function setIssueLock(id, issueId, locked) {
  */
 export async function generateIssuesFromArc(id, options = {}) {
   const session = await getStorySession(id);
-  if (!session.seriesId) throw makeErr('No series linked', ERR_VALIDATION);
+  if (!session.seriesId) throw codedError('No series linked', ERR_VALIDATION);
   const series = await getSeries(session.seriesId);
   const seasons = Array.isArray(series?.seasons) ? series.seasons : [];
   if (seasons.length === 0) {
-    throw makeErr('No seasons on the arc yet — generate the plot arc first', ERR_VALIDATION);
+    throw codedError('No seasons on the arc yet — generate the plot arc first', ERR_VALIDATION);
   }
 
   const targetSeasons = options.seasonId
     ? seasons.filter((s) => s.id === options.seasonId)
     : seasons;
   if (options.seasonId && targetSeasons.length === 0) {
-    throw makeErr(`Season not found on series: ${options.seasonId}`, ERR_VALIDATION);
+    throw codedError(`Season not found on series: ${options.seasonId}`, ERR_VALIDATION);
   }
 
   const reqProviderId = options.providerId || session.llm?.provider || undefined;
@@ -904,7 +904,7 @@ export async function generateStep(id, stepId, options = {}) {
     if (options.fromDownstream) emit('Reading existing issues…', 'collect');
     const sourceMaterial = options.fromDownstream ? await collectIssueSourceText(session.seriesId) : '';
     if (options.fromDownstream && !sourceMaterial) {
-      throw makeErr(
+      throw codedError(
         'No issue content to backfill the idea from — write a comic script, teleplay, or prose on at least one issue first',
         ERR_VALIDATION,
       );
@@ -936,7 +936,7 @@ export async function generateStep(id, stepId, options = {}) {
     return { result: content, runId, providerId, model };
   }
   if (stepId === 'universeAesthetic') {
-    if (!session.universeId) throw makeErr('No universe linked', ERR_VALIDATION);
+    if (!session.universeId) throw codedError('No universe linked', ERR_VALIDATION);
     const universe = await getUniverse(session.universeId);
     emit('Expanding the aesthetic…', 'generate');
     const { preservedVariations, preservedCompositeSheets } = extractPreservedFromDraft(universe);
@@ -976,7 +976,7 @@ export async function generateStep(id, stepId, options = {}) {
     return { result: updated, providerId: expanded.providerId, model: expanded.model };
   }
   if (stepId === 'plotArc') {
-    if (!session.seriesId) throw makeErr('No series linked', ERR_VALIDATION);
+    if (!session.seriesId) throw codedError('No series linked', ERR_VALIDATION);
     let arcGenResult;
     if (options.fromDownstream) {
       // Backfill: extract the arc + seasons from the issues that already exist
@@ -985,7 +985,7 @@ export async function generateStep(id, stepId, options = {}) {
       emit('Reading existing issues…', 'collect');
       const sourceText = await collectIssueSourceText(session.seriesId);
       if (!sourceText) {
-        throw makeErr(
+        throw codedError(
           'No issue content to backfill the arc from — write a comic script, teleplay, or prose on at least one issue first',
           ERR_VALIDATION,
         );
@@ -1003,7 +1003,7 @@ export async function generateStep(id, stepId, options = {}) {
     const { arc, seasons, runId, providerId, model } = arcGenResult;
     // A null arc means the LLM returned nothing identifying — refuse rather
     // than wiping a previously-generated arc with `updateSeries({ arc: null })`.
-    if (!arc) throw makeErr('LLM returned an empty arc — try regenerating', ERR_VALIDATION);
+    if (!arc) throw codedError('LLM returned an empty arc — try regenerating', ERR_VALIDATION);
     // Route through commitSeasonsWithRemap so per-field arc locks, per-season
     // locks, and orphaned child issues are all honored — same path the Arc
     // Canvas's regenerate uses. A plain updateSeries({ arc, seasons }) would
@@ -1015,7 +1015,7 @@ export async function generateStep(id, stepId, options = {}) {
     return { result: updated, runId, providerId, model };
   }
   if (stepId === 'readerMap') {
-    if (!session.seriesId) throw makeErr('No series linked', ERR_VALIDATION);
+    if (!session.seriesId) throw codedError('No series linked', ERR_VALIDATION);
     emit('Mapping reader emotion…', 'generate');
     const { readerMap, runId, providerId, model } = await generateReaderMap(session.seriesId, {
       providerOverride: reqProviderId, modelOverride: reqModel,
@@ -1025,7 +1025,7 @@ export async function generateStep(id, stepId, options = {}) {
     const updated = await updateSeries(session.seriesId, { arc: { ...(series.arc || {}), readerMap } });
     return { result: updated, runId, providerId, model };
   }
-  throw makeErr(`Generate is not supported for step "${stepId}"`, ERR_VALIDATION);
+  throw codedError(`Generate is not supported for step "${stepId}"`, ERR_VALIDATION);
 }
 
 export async function refineStep(id, stepId, { feedback, entryId, providerId, model, onProgress } = {}) {
@@ -1035,7 +1035,7 @@ export async function refineStep(id, stepId, { feedback, entryId, providerId, mo
   const reqModel = model || session.llm?.model || undefined;
   const emit = (label, phase) => onProgress?.({ label, phase });
   if (stepId === 'universeAesthetic') {
-    if (!session.universeId) throw makeErr('No universe linked', ERR_VALIDATION);
+    if (!session.universeId) throw codedError('No universe linked', ERR_VALIDATION);
     const universe = await getUniverse(session.universeId);
     emit('Refining the aesthetic…', 'generate');
     const refined = await refineWorldPrompts({
@@ -1059,7 +1059,7 @@ export async function refineStep(id, stepId, { feedback, entryId, providerId, mo
     return { result: updated, changes: refined.changes || [], rationale: refined.rationale || '' };
   }
   if (stepId === 'plotArc') {
-    if (!session.seriesId) throw makeErr('No series linked', ERR_VALIDATION);
+    if (!session.seriesId) throw codedError('No series linked', ERR_VALIDATION);
     emit('Refining the plot arc…', 'generate');
     const { arc, changes, rationale, runId, providerId: usedProviderId, model: usedModel } = await refineArc(session.seriesId, feedback, { providerId: reqProviderId, model: reqModel });
     emit('Saving…', 'persist');
@@ -1075,14 +1075,14 @@ export async function refineStep(id, stepId, { feedback, entryId, providerId, mo
     // dropping that re-check (this path bypasses it) would let a refine land if
     // the arc was locked while the LLM call was in flight.
     if (latest.locked?.arc === true) {
-      throw makeErr('Arc is locked — unlock it on the Arc Canvas before refining', ARC_ERR_VALIDATION);
+      throw codedError('Arc is locked — unlock it on the Arc Canvas before refining', ARC_ERR_VALIDATION);
     }
     const mergedArc = mergeArcWithLocks(latest.arc, { ...arc, seriesDesign: latest.arc?.seriesDesign }, latest.locked?.arcFields);
     const updated = await updateSeries(session.seriesId, { arc: mergedArc });
     return { result: updated, changes, rationale, runId, providerId: usedProviderId, model: usedModel };
   }
   if (stepId === 'readerMap') {
-    if (!session.seriesId) throw makeErr('No series linked', ERR_VALIDATION);
+    if (!session.seriesId) throw codedError('No series linked', ERR_VALIDATION);
     emit('Refining the reader map…', 'generate');
     const { readerMap, changes, rationale, runId, providerId: usedProviderId, model: usedModel } = await refineReaderMap(session.seriesId, feedback, { providerId: reqProviderId, model: reqModel });
     emit('Saving…', 'persist');
@@ -1091,11 +1091,11 @@ export async function refineStep(id, stepId, { feedback, entryId, providerId, mo
     return { result: updated, changes, rationale, runId, providerId: usedProviderId, model: usedModel };
   }
   if (stepId === 'characters') {
-    if (!session.universeId) throw makeErr('No universe linked', ERR_VALIDATION);
-    if (!isStr(entryId)) throw makeErr('entryId is required to refine a character', ERR_VALIDATION);
+    if (!session.universeId) throw codedError('No universe linked', ERR_VALIDATION);
+    if (!isStr(entryId)) throw codedError('entryId is required to refine a character', ERR_VALIDATION);
     emit('Refining the character…', 'generate');
     const out = await refineUniverseCharacter(session.universeId, entryId, { providerId: reqProviderId, model: reqModel });
     return { result: out.universe, changes: out.changes || [], rationale: out.rationale || '' };
   }
-  throw makeErr(`Refine is not supported for step "${stepId}"`, ERR_VALIDATION);
+  throw codedError(`Refine is not supported for step "${stepId}"`, ERR_VALIDATION);
 }

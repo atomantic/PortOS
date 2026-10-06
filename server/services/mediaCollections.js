@@ -35,11 +35,11 @@ import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
   withBaseHashFlushBatch,
 } from '../lib/conflictJournal.js';
+import { codedError } from '../lib/codedError.js';
 
 export const ERR_NOT_FOUND = 'NOT_FOUND';
 export const ERR_DUPLICATE = 'DUPLICATE';
 export const ERR_VALIDATION = 'VALIDATION_ERROR';
-const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 export const NAME_MAX_LENGTH = 80;
 export const DESCRIPTION_MAX_LENGTH = 500;
@@ -68,7 +68,7 @@ const COLLECTION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 // id, so they don't need this; the write paths throw before `loadOne` runs.
 const assertCollectionId = (id) => {
   if (typeof id !== 'string' || !COLLECTION_ID_PATTERN.test(id)) {
-    throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
+    throw codedError(`Collection not found: ${id}`, ERR_NOT_FOUND);
   }
 };
 
@@ -252,8 +252,8 @@ export async function listCollectionIds() {
 
 export async function getCollection(id, { includeDeleted = false } = {}) {
   const c = await store().loadOne(id);
-  if (!c) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
-  if (c.deleted === true && !includeDeleted) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
+  if (!c) throw codedError(`Collection not found: ${id}`, ERR_NOT_FOUND);
+  if (c.deleted === true && !includeDeleted) throw codedError(`Collection not found: ${id}`, ERR_NOT_FOUND);
   return c;
 }
 
@@ -281,10 +281,10 @@ export async function createCollection({ name, description = '', source = 'user'
   // listCollections() read would silently drop.
   const trimmedName = typeof name === 'string' ? name.trim() : '';
   if (!trimmedName || trimmedName.length > NAME_MAX_LENGTH) {
-    throw makeErr('Collection name is required (1..' + NAME_MAX_LENGTH + ' chars)', ERR_VALIDATION);
+    throw codedError('Collection name is required (1..' + NAME_MAX_LENGTH + ' chars)', ERR_VALIDATION);
   }
   if (!COLLECTION_SOURCES.includes(source)) {
-    throw makeErr(`source must be one of ${COLLECTION_SOURCES.join('|')}`, ERR_VALIDATION);
+    throw codedError(`source must be one of ${COLLECTION_SOURCES.join('|')}`, ERR_VALIDATION);
   }
   const trimmedDescription = typeof description === 'string'
     ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
@@ -329,7 +329,7 @@ export async function createCollection({ name, description = '', source = 'user'
 export async function findOrCreateCollectionByName({ name, description = '', universeId = null }) {
   const trimmed = typeof name === 'string' ? name.trim() : '';
   if (!trimmed || trimmed.length > NAME_MAX_LENGTH) {
-    throw makeErr('Collection name is required (1..' + NAME_MAX_LENGTH + ' chars)', ERR_VALIDATION);
+    throw codedError('Collection name is required (1..' + NAME_MAX_LENGTH + ' chars)', ERR_VALIDATION);
   }
   const trimmedDescription = typeof description === 'string'
     ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
@@ -493,10 +493,10 @@ export async function findCollectionByUniverseId(universeId) {
  */
 export async function findOrCreateUniverseCollection({ universeId, universeName, description = '' }) {
   if (!universeId || typeof universeId !== 'string') {
-    throw makeErr('universeId is required', ERR_VALIDATION);
+    throw codedError('universeId is required', ERR_VALIDATION);
   }
   if (typeof universeName !== 'string' || !universeName.trim()) {
-    throw makeErr('universeName is required', ERR_VALIDATION);
+    throw codedError('universeName is required', ERR_VALIDATION);
   }
   // Normalize the universeId once so lookup and storage both key on the
   // same string. Without this, an overlong id (e.g. from a malformed
@@ -571,10 +571,10 @@ export async function findCollectionBySeriesId(seriesId) {
 
 export async function findOrCreateSeriesCollection({ seriesId, seriesName, description = '' }) {
   if (!seriesId || typeof seriesId !== 'string') {
-    throw makeErr('seriesId is required', ERR_VALIDATION);
+    throw codedError('seriesId is required', ERR_VALIDATION);
   }
   if (typeof seriesName !== 'string' || !seriesName.trim()) {
-    throw makeErr('seriesName is required', ERR_VALIDATION);
+    throw codedError('seriesName is required', ERR_VALIDATION);
   }
   const normalizedSeriesId = seriesId.slice(0, SERIES_ID_MAX);
   const desiredName = seriesCollectionNameFor(seriesName);
@@ -709,8 +709,8 @@ export async function updateCollection(id, patch) {
   assertCollectionId(id);
   const merged = await store().queueRecordWrite(id, async () => {
     const cur = await store().loadOne(id);
-    if (!cur) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
-    if (cur.deleted === true) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
+    if (!cur) throw codedError(`Collection not found: ${id}`, ERR_NOT_FOUND);
+    if (cur.deleted === true) throw codedError(`Collection not found: ${id}`, ERR_NOT_FOUND);
     // Product/UI constraint: universe-linked collections own their visible
     // name. The name is the user-facing identity of a universe's bucket, so
     // renaming it independent of the universe is confusing — the supported
@@ -719,13 +719,13 @@ export async function updateCollection(id, patch) {
     // this lock exists to keep what the user sees consistent with the
     // universe's name, not to prevent routing forks.
     if ('name' in patch && cur.universeId && patch.name !== cur.name) {
-      throw makeErr(
+      throw codedError(
         'This collection is linked to a Universe — rename the universe to rename it.',
         ERR_VALIDATION,
       );
     }
     if ('name' in patch && cur.seriesId && patch.name !== cur.name) {
-      throw makeErr(
+      throw codedError(
         'This collection is linked to a Series — rename the series to rename it.',
         ERR_VALIDATION,
       );
@@ -734,7 +734,7 @@ export async function updateCollection(id, patch) {
     // also reject up-front so the API gives a clear error rather than silently
     // dropping the cover.
     if (patch.coverKey != null && !cur.items.find((it) => itemKey(it) === patch.coverKey)) {
-      throw makeErr('coverKey must reference an item in this collection', ERR_VALIDATION);
+      throw codedError('coverKey must reference an item in this collection', ERR_VALIDATION);
     }
     const merged = {
       ...cur,
@@ -773,7 +773,7 @@ export async function deleteCollection(id) {
   assertCollectionId(id);
   const { universeId: deletedUniverseId, seriesId: deletedSeriesId, alreadyDeleted } = await store().queueRecordWrite(id, async () => {
     const target = await store().loadOne(id);
-    if (!target) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
+    if (!target) throw codedError(`Collection not found: ${id}`, ERR_NOT_FOUND);
     // Idempotent on an already-tombstoned record: re-stamping deletedAt/
     // updatedAt would make an old tombstone look "newer" to a peer's LWW (and
     // re-emitting churns the sync pipeline). Return without rewriting or
@@ -804,11 +804,11 @@ export async function deleteCollection(id) {
 // Returns a normalized `{ kind, ref }` so callers don't re-trim.
 const validateItemInput = (item) => {
   if (!item || !ITEM_KIND.has(item.kind)) {
-    throw makeErr('item.kind must be "image" or "video"', ERR_VALIDATION);
+    throw codedError('item.kind must be "image" or "video"', ERR_VALIDATION);
   }
   const ref = typeof item.ref === 'string' ? item.ref.trim() : '';
   if (!ref || ref.length > REF_MAX_LENGTH || ref.includes(':')) {
-    throw makeErr('item.ref invalid (empty, too long, or contains ":")', ERR_VALIDATION);
+    throw codedError('item.ref invalid (empty, too long, or contains ":")', ERR_VALIDATION);
   }
   // Mirror sanitizeItem's path-traversal rejection so the write path can't
   // persist a ref that the next listCollections() read would silently drop
@@ -818,10 +818,10 @@ const validateItemInput = (item) => {
   // mirror sanitizeItem exactly or local addItem rejects refs that peer
   // sync would accept (and vice versa).
   if (ref.includes('/') || ref.includes('\\')) {
-    throw makeErr('item.ref invalid (contains path separators)', ERR_VALIDATION);
+    throw codedError('item.ref invalid (contains path separators)', ERR_VALIDATION);
   }
   if (ref === '.' || ref === '..') {
-    throw makeErr('item.ref invalid (parent-directory segment)', ERR_VALIDATION);
+    throw codedError('item.ref invalid (parent-directory segment)', ERR_VALIDATION);
   }
   return { kind: item.kind, ref };
 };
@@ -831,16 +831,16 @@ export async function addItem(id, item) {
   assertCollectionId(id);
   const merged = await store().queueRecordWrite(id, async () => {
     const cur = await store().loadOne(id);
-    if (!cur) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
+    if (!cur) throw codedError(`Collection not found: ${id}`, ERR_NOT_FOUND);
     // A soft-deleted collection behaves as not-found for mutations (matches
     // updateCollection) — never resurrect a tombstone or churn its timestamps.
-    if (cur.deleted === true) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
+    if (cur.deleted === true) throw codedError(`Collection not found: ${id}`, ERR_NOT_FOUND);
     const key = `${kind}:${ref}`;
     if (cur.items.find((it) => itemKey(it) === key)) {
-      throw makeErr(`Item already in collection: ${key}`, ERR_DUPLICATE);
+      throw codedError(`Item already in collection: ${key}`, ERR_DUPLICATE);
     }
     if (cur.items.length >= ITEMS_MAX) {
-      throw makeErr(`Collection full (limit ${ITEMS_MAX})`, ERR_VALIDATION);
+      throw codedError(`Collection full (limit ${ITEMS_MAX})`, ERR_VALIDATION);
     }
     const updated = {
       ...cur,
@@ -879,25 +879,25 @@ export async function addItem(id, item) {
  * Returns the post-write collection plus counts: `{ collection, added, removed }`.
  */
 export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = {}) {
-  if (!Array.isArray(add)) throw makeErr('add must be an array', ERR_VALIDATION);
-  if (!Array.isArray(remove)) throw makeErr('remove must be an array', ERR_VALIDATION);
+  if (!Array.isArray(add)) throw codedError('add must be an array', ERR_VALIDATION);
+  if (!Array.isArray(remove)) throw codedError('remove must be an array', ERR_VALIDATION);
 
   // Validate every `add` entry up front so a single bad item doesn't leave
   // a partially-applied batch behind.
   const cleanAdd = add.map(validateItemInput);
   for (const key of remove) {
     if (typeof key !== 'string' || !key) {
-      throw makeErr('remove keys must be non-empty strings of the form "<kind>:<ref>"', ERR_VALIDATION);
+      throw codedError('remove keys must be non-empty strings of the form "<kind>:<ref>"', ERR_VALIDATION);
     }
   }
 
   assertCollectionId(id);
   const result = await store().queueRecordWrite(id, async () => {
     const cur = await store().loadOne(id);
-    if (!cur) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
+    if (!cur) throw codedError(`Collection not found: ${id}`, ERR_NOT_FOUND);
     // A soft-deleted collection behaves as not-found for mutations (matches
     // updateCollection) — never resurrect a tombstone or churn its timestamps.
-    if (cur.deleted === true) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
+    if (cur.deleted === true) throw codedError(`Collection not found: ${id}`, ERR_NOT_FOUND);
 
     const removeSet = new Set(remove);
     const remainingItems = cur.items.filter((it) => !removeSet.has(itemKey(it)));
@@ -919,7 +919,7 @@ export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = 
 
     const nextItems = [...remainingItems, ...additions];
     if (nextItems.length > ITEMS_MAX) {
-      throw makeErr(`Collection full (limit ${ITEMS_MAX})`, ERR_VALIDATION);
+      throw codedError(`Collection full (limit ${ITEMS_MAX})`, ERR_VALIDATION);
     }
 
     // Drop a cover that pointed at a now-removed item — matches the
@@ -947,13 +947,13 @@ export async function removeItem(id, key) {
   assertCollectionId(id);
   const merged = await store().queueRecordWrite(id, async () => {
     const cur = await store().loadOne(id);
-    if (!cur) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
+    if (!cur) throw codedError(`Collection not found: ${id}`, ERR_NOT_FOUND);
     // A soft-deleted collection behaves as not-found for mutations (matches
     // updateCollection) — never resurrect a tombstone or churn its timestamps.
-    if (cur.deleted === true) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
+    if (cur.deleted === true) throw codedError(`Collection not found: ${id}`, ERR_NOT_FOUND);
     const before = cur.items.length;
     const items = cur.items.filter((it) => itemKey(it) !== key);
-    if (items.length === before) throw makeErr(`Item not in collection: ${key}`, ERR_NOT_FOUND);
+    if (items.length === before) throw codedError(`Item not in collection: ${key}`, ERR_NOT_FOUND);
     const updated = {
       ...cur,
       items,

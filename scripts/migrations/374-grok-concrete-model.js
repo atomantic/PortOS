@@ -1,8 +1,7 @@
 /** Replace Grok Build's shipped placeholder with its verified grok-4.6 model.
  * Preserve custom models and argv; old sentinel handling remains supported.
  */
-import { writeFile } from 'fs/promises';
-import { readProvidersDoc } from './_lib.js';
+import { readProvidersDoc, writeJsonAtomic } from './_lib.js';
 
 const LEGACY = new Set(['grok-configured-default', 'grok-build']);
 const MODEL = 'grok-4.6';
@@ -26,6 +25,6 @@ export default {
         changed = true;
       }
     }
-    if (changed) await writeFile(doc.path, `${JSON.stringify(doc.config, null, 2)}\n`);
+    if (changed) await writeJsonAtomic(doc.path, doc.config);
   }
 };

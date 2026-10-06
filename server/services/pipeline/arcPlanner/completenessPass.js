@@ -13,7 +13,8 @@ import { getSeries } from '../series.js';
 import { STAGE_OUTPUT_MAX } from '../issues.js';
 import { getSeriesCanon } from '../seriesCanon.js';
 import { canonicalStringify } from '../../../lib/objects.js';
-import { ERR_VALIDATION, MANUSCRIPT_STAGES, VERIFY_SEVERITIES, buildArcBaseContext, collectManuscriptSections, makeErr, manuscriptSectionHeader, sectionsCorpus } from './context.js';
+import { ERR_VALIDATION, MANUSCRIPT_STAGES, VERIFY_SEVERITIES, buildArcBaseContext, collectManuscriptSections, manuscriptSectionHeader, sectionsCorpus } from './context.js';
+import { codedError } from '../../../lib/codedError.js';
 
 // ── Manuscript completeness ("finish the draft") ──────────────────────────
 // Unlike verifyArc/verifyVolume (which read synopsis/beats from idea.input /
@@ -215,7 +216,7 @@ export async function analyzeManuscriptCompleteness(seriesId, options = {}) {
   // guard below and get graded as if it were a drafted manuscript.
   const sections = await collectManuscriptSections(seriesId, { stageOrder: MANUSCRIPT_STAGES });
   if (!sections.length) {
-    throw makeErr(
+    throw codedError(
       'No manuscript to analyze — write a comic script, prose, or teleplay on at least one issue first',
       ERR_VALIDATION,
     );

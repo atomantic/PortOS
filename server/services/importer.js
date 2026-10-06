@@ -43,6 +43,7 @@ import { isStr } from '../lib/textUtils.js';
 import {
   deriveImportId, getImportSession, recordImportProgress, withImportLock, SESSION_STATUS,
 } from './importerSessions.js';
+import { codedError } from '../lib/codedError.js';
 
 // Surfaced to the route layer so the importer's policy errors become 400s
 // with stable codes.
@@ -53,7 +54,6 @@ export const ERR_LOCKED = 'IMPORTER_LOCKED';
 // rolled back. Retrying commit is safe (merges are idempotent).
 export const ERR_PARTIAL_COMMIT_ISSUES = 'IMPORTER_PARTIAL_COMMIT_ISSUES';
 
-const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 // Ordered stages surfaced to the client's live progress checklist during the
 // analyze phase. Emitted in the `start` frame so the client renders the list
@@ -192,10 +192,10 @@ const normName = (s) => String(s || '').trim().toLowerCase();
 // message live in one place.
 function assertSourceWithinLimit(source) {
   if (!isStr(source) || !source.trim()) {
-    throw makeErr('source is required', ERR_VALIDATION);
+    throw codedError('source is required', ERR_VALIDATION);
   }
   if (source.length > IMPORTER_SOURCE_CHAR_LIMIT) {
-    throw makeErr(
+    throw codedError(
       `Source is ${source.length.toLocaleString()} chars — exceeds the ${IMPORTER_SOURCE_CHAR_LIMIT.toLocaleString()}-char ceiling. Trim the source or wait for chunked-extraction support.`,
       ERR_VALIDATION,
     );
@@ -270,13 +270,13 @@ export function mergeSeasons(existingSeasons, incomingSeasons, buildSeasonImpl =
   for (const s of incomingSeasons) {
     if (Number.isInteger(s?.number) && s.number >= 1) {
       if (s.number > SEASON_NUMBER_MAX) {
-        throw makeErr(
+        throw codedError(
           `mergeSeasons: explicit season number ${s.number} exceeds the max of ${SEASON_NUMBER_MAX}.`,
           ERR_VALIDATION,
         );
       }
       if (seenIncomingNumbers.has(s.number)) {
-        throw makeErr(
+        throw codedError(
           `mergeSeasons: duplicate explicit season number ${s.number} in incoming list — caller must pre-dedupe.`,
           ERR_VALIDATION,
         );
@@ -304,7 +304,7 @@ export function mergeSeasons(existingSeasons, incomingSeasons, buildSeasonImpl =
       num = s.number;
     } else {
       if (nextFreeNumber > SEASON_NUMBER_MAX) {
-        throw makeErr(
+        throw codedError(
           `Cannot auto-assign season number — next free slot (${nextFreeNumber}) exceeds the max of ${SEASON_NUMBER_MAX}. Free up a season slot or set season.number explicitly.`,
           ERR_VALIDATION,
         );
@@ -629,7 +629,7 @@ async function proposeIssues({ seriesName, contentType, source, typeFlags, arcSu
       // letting it sail through to a confusing commit-time 400.
       const oversized = mechanical.findIndex((iss) => iss.proseExcerpt.length > IMPORTER_PROSE_EXCERPT_MAX);
       if (oversized !== -1) {
-        throw makeErr(
+        throw codedError(
           `Issue ${oversized + 1} of the comic split is ${mechanical[oversized].proseExcerpt.length.toLocaleString()} chars — over the ${IMPORTER_PROSE_EXCERPT_MAX.toLocaleString()}-char per-issue limit. Add ISSUE/PAGE headers so it splits into smaller issues, or split the source.`,
           ERR_VALIDATION,
         );
@@ -749,10 +749,10 @@ export async function analyzeImport({
   targetIssueCount,
 } = {}) {
   if (!isStr(universeName) || !universeName.trim()) {
-    throw makeErr('universeName is required', ERR_VALIDATION);
+    throw codedError('universeName is required', ERR_VALIDATION);
   }
   if (!isStr(seriesName) || !seriesName.trim()) {
-    throw makeErr('seriesName is required', ERR_VALIDATION);
+    throw codedError('seriesName is required', ERR_VALIDATION);
   }
   assertSourceWithinLimit(source);
 
@@ -774,7 +774,7 @@ export async function analyzeImport({
   // FAST — no point spending heavy-tier tokens to extract an arc the commit
   // phase will refuse to apply.
   if (existingSeries?.locked?.arc === true) {
-    throw makeErr(
+    throw codedError(
       `Series "${existingSeries.name}" has a locked arc. Unlock it on the Arc Canvas before importing — or rename the import's series so a fresh series is created.`,
       ERR_LOCKED,
     );
@@ -1012,7 +1012,7 @@ export async function retryIssueSplit({
 } = {}) {
   assertSourceWithinLimit(source);
   if (!IMPORTER_CONTENT_TYPES.includes(contentType)) {
-    throw makeErr(`Unknown contentType "${contentType}"`, ERR_VALIDATION);
+    throw codedError(`Unknown contentType "${contentType}"`, ERR_VALIDATION);
   }
   const userRequestedCount = Number.isFinite(targetIssueCount) && targetIssueCount > 0;
   const promptSeriesName = isStr(seriesName) && seriesName.trim() ? seriesName.trim() : 'the series';
@@ -1068,10 +1068,10 @@ async function commitImportOnce({
   // a per-series destructive replace would be too coarse). Default false.
   replaceMode = false,
 } = {}) {
-  if (!isStr(universeId)) throw makeErr('universeId is required', ERR_VALIDATION);
-  if (!isStr(seriesId)) throw makeErr('seriesId is required', ERR_VALIDATION);
+  if (!isStr(universeId)) throw codedError('universeId is required', ERR_VALIDATION);
+  if (!isStr(seriesId)) throw codedError('seriesId is required', ERR_VALIDATION);
   if (!Array.isArray(issues) || issues.length === 0) {
-    throw makeErr('At least one issue is required', ERR_VALIDATION);
+    throw codedError('At least one issue is required', ERR_VALIDATION);
   }
 
   // Read for validation (universeId/seriesId linkage, lock checks, the
@@ -1095,12 +1095,12 @@ async function commitImportOnce({
   // legacy data — flag it so the caller decides rather than silently linking.
   if (series.universeId !== universe.id) {
     if (series.universeId) {
-      throw makeErr(
+      throw codedError(
         `Series "${series.name}" is linked to a different universe — commit refused to avoid cross-linking.`,
         ERR_VALIDATION,
       );
     }
-    throw makeErr(
+    throw codedError(
       `Series "${series.name}" has no universeId — commit refused. Link the series to a universe explicitly before importing.`,
       ERR_VALIDATION,
     );
@@ -1131,7 +1131,7 @@ async function commitImportOnce({
   }
 
   if (series.locked?.arc === true) {
-    throw makeErr(
+    throw codedError(
       `Series "${series.name}" has a locked arc — commit refused. Unlock the arc to import.`,
       ERR_LOCKED,
     );
@@ -1145,7 +1145,7 @@ async function commitImportOnce({
   for (let i = 0; i < issues.length; i++) {
     const proposal = issues[i];
     if (!isStr(proposal?.title) || !proposal.title.trim()) {
-      throw makeErr(
+      throw codedError(
         `Issue at position ${i + 1} is missing a title — commit refused before any state changed.`,
         ERR_VALIDATION,
       );
@@ -1161,7 +1161,7 @@ async function commitImportOnce({
         && (!Number.isInteger(proposal.arcPosition)
             || proposal.arcPosition < 1
             || proposal.arcPosition > ARC_POSITION_MAX)) {
-      throw makeErr(
+      throw codedError(
         `Issue at position ${i + 1} has invalid arcPosition (must be integer 1..${ARC_POSITION_MAX}) — commit refused before any state changed.`,
         ERR_VALIDATION,
       );
@@ -1171,7 +1171,7 @@ async function commitImportOnce({
     // a direct caller doesn't seed `stages.prose` with garbage.
     if (proposal.proseExcerpt !== undefined && proposal.proseExcerpt !== null) {
       if (!isStr(proposal.proseExcerpt) || !proposal.proseExcerpt.trim()) {
-        throw makeErr(
+        throw codedError(
           `Issue at position ${i + 1} has invalid proseExcerpt (must be non-empty when present) — commit refused before any state changed.`,
           ERR_VALIDATION,
         );
@@ -1188,7 +1188,7 @@ async function commitImportOnce({
     const pos = issues[i]?.arcPosition;
     if (Number.isInteger(pos) && pos >= 1) {
       if (seenArcPositions.has(pos)) {
-        throw makeErr(
+        throw codedError(
           `Duplicate arcPosition ${pos} at issue position ${i + 1} — commit refused before any state changed.`,
           ERR_VALIDATION,
         );
@@ -1230,7 +1230,7 @@ async function commitImportOnce({
     for (let i = 0; i < issues.length; i++) {
       const pos = issues[i]?.arcPosition;
       if (Number.isInteger(pos) && pos >= 1 && existingArcPositions.has(pos)) {
-        throw makeErr(
+        throw codedError(
           `Issue at position ${i + 1} explicit arcPosition ${pos} collides with an existing issue on the series — commit refused before any state changed. Either renumber the incoming issue or omit arcPosition to auto-assign.`,
           ERR_VALIDATION,
         );
@@ -1244,7 +1244,7 @@ async function commitImportOnce({
       return proposal;
     }
     if (nextFreeArcPos > ARC_POSITION_MAX) {
-      throw makeErr(
+      throw codedError(
         `Cannot auto-assign arcPosition — next free slot (${nextFreeArcPos}) exceeds the max of ${ARC_POSITION_MAX}. Free up a position or set issue.arcPosition explicitly.`,
         ERR_VALIDATION,
       );
@@ -1263,13 +1263,13 @@ async function commitImportOnce({
     const s = seasons[i];
     if (s?.number !== undefined && s?.number !== null) {
       if (!Number.isInteger(s.number) || s.number < 1 || s.number > SEASON_NUMBER_MAX) {
-        throw makeErr(
+        throw codedError(
           `Season at position ${i + 1} has invalid number (must be integer 1..${SEASON_NUMBER_MAX}) — commit refused before any state changed.`,
           ERR_VALIDATION,
         );
       }
       if (seenSeasonNumbers.has(s.number)) {
-        throw makeErr(
+        throw codedError(
           `Duplicate season number ${s.number} at position ${i + 1} — commit refused before any state changed.`,
           ERR_VALIDATION,
         );
@@ -1328,7 +1328,7 @@ async function commitImportOnce({
           ? ` ${deletedIds.length} issue${deletedIds.length === 1 ? '' : 's'} were already deleted before the failure (${deletedIds.join(', ')}) and cannot be recovered.`
           : '';
         const remainingMsg = ` ${remainingIds.length} issue${remainingIds.length === 1 ? '' : 's'} remain on disk (${remainingIds.join(', ')}, including the failed one); retry will wipe them.`;
-        throw makeErr(
+        throw codedError(
           `Replace mode aborted on first delete failure — issue ${ex.id} could not be deleted (${failed.message}). No universe, series, or new-issue writes were performed.${deletedMsg}${remainingMsg} Resolve the underlying error and retry.`,
           ERR_VALIDATION,
         );

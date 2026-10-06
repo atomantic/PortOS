@@ -16,8 +16,7 @@ import { BIBLE_KEYS, pruneStaleReferenceSheets, mergePreservedSheetPointers } fr
 import { store } from './storeFacade.js';
 import {
   sanitizeTemplate, sanitizeRun, sanitizeImageRefFilename, resolveInfluences,
-  sanitizeStyleReference, sanitizeInfluences, sanitizeLocked, mergeInfluencesWithLocks,
-  makeErr, UNIVERSE_ID_RE,
+  sanitizeStyleReference, sanitizeInfluences, sanitizeLocked, mergeInfluencesWithLocks, UNIVERSE_ID_RE,
   ERR_NOT_FOUND, ERR_VALIDATION, ERR_DUPLICATE, ERR_HAS_LIVE_SERIES,
   NAME_MAX_LENGTH, LOGLINE_MAX, CURRENT_SCHEMA_VERSION, ENTRY_REF_KIND, IMAGE_REFS_PER_ENTRY_MAX,
   STYLE_REFERENCES_MAX, STYLE_NOTES_MAX,
@@ -35,6 +34,7 @@ import {
 // import is cycle-safe — unlike canonUsage.js, which back-imports this module.
 import { listSeries } from '../pipeline/series.js';
 import { isStr, trimTo } from '../../lib/textUtils.js';
+import { codedError } from '../../lib/codedError.js';
 
 // Once-per-process flag for the canon-backfill log — readState() runs in both
 // the queue and from un-queued readers, and the in-memory migration is cheap
@@ -181,8 +181,8 @@ export async function getUniverse(id, { includeDeleted = false } = {}) {
   // The store's sanitizer (sanitizeTemplate) runs on the loaded record, so the
   // returned object is shape-equivalent to what listUniverses would surface.
   const w = await store().loadOne(id);
-  if (!w) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
-  if (w.deleted && !includeDeleted) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
+  if (!w) throw codedError(`Universe not found: ${id}`, ERR_NOT_FOUND);
+  if (w.deleted && !includeDeleted) throw codedError(`Universe not found: ${id}`, ERR_NOT_FOUND);
   return w;
 }
 
@@ -245,7 +245,7 @@ export async function needsEntryIdPersist(id) {
 
 export async function createUniverse(input = {}) {
   const name = trimTo(input.name, NAME_MAX_LENGTH);
-  if (!name) throw makeErr(`Universe name is required (1..${NAME_MAX_LENGTH} chars)`, ERR_VALIDATION);
+  if (!name) throw codedError(`Universe name is required (1..${NAME_MAX_LENGTH} chars)`, ERR_VALIDATION);
   const id = randomUUID();
   const created = await store().queueRecordWrite(id, async () => {
     const now = new Date().toISOString();
@@ -323,10 +323,10 @@ export async function createUniverse(input = {}) {
  */
 export async function insertUniverseWithId(input = {}) {
   if (!isStr(input.id) || !UNIVERSE_ID_RE.test(input.id)) {
-    throw makeErr(`insertUniverseWithId: invalid id "${input.id}"`, ERR_VALIDATION);
+    throw codedError(`insertUniverseWithId: invalid id "${input.id}"`, ERR_VALIDATION);
   }
   const name = trimTo(input.name, NAME_MAX_LENGTH);
-  if (!name) throw makeErr(`Universe name is required (1..${NAME_MAX_LENGTH} chars)`, ERR_VALIDATION);
+  if (!name) throw codedError(`Universe name is required (1..${NAME_MAX_LENGTH} chars)`, ERR_VALIDATION);
   const s = store();
   const { next, wasResurrection } = await s.queueRecordWrite(input.id, async () => {
     // Tombstone-overwrite: a previously-deleted record with the same id is
@@ -337,11 +337,11 @@ export async function insertUniverseWithId(input = {}) {
     // which is the transport the federation uses.
     const existing = await s.loadOne(input.id);
     if (existing && !existing.deleted) {
-      throw makeErr(`Universe id already exists: ${input.id}`, ERR_DUPLICATE);
+      throw codedError(`Universe id already exists: ${input.id}`, ERR_DUPLICATE);
     }
     const wasResurrection = !!existing;
     const next = sanitizeTemplate({ ...input, name });
-    if (!next) throw makeErr('Invalid universe payload', ERR_VALIDATION);
+    if (!next) throw codedError('Invalid universe payload', ERR_VALIDATION);
     if (wasResurrection) {
       console.warn(`♻️  insertUniverseWithId: overwriting tombstone for ${input.id}`);
     }
@@ -445,8 +445,8 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
   const s = store();
   const { merged, nameChanged, skipped, removedCharacterIds, prevEphemeral, nextEphemeral } = await s.queueRecordWrite(id, async () => {
     const cur = await s.loadOne(id);
-    if (!cur) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
-    if (cur.deleted) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
+    if (!cur) throw codedError(`Universe not found: ${id}`, ERR_NOT_FOUND);
+    if (cur.deleted) throw codedError(`Universe not found: ${id}`, ERR_NOT_FOUND);
 
     let patch;
     if (isMutator) {
@@ -457,7 +457,7 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
       // `typeof === 'object'` matches arrays and null — reject both so a stray
       // `return []` can't slip through and silently no-op the categories merge.
       if (Array.isArray(patch) || typeof patch !== 'object') {
-        throw makeErr('updateUniverse mutator must return a plain object or null', ERR_VALIDATION);
+        throw codedError('updateUniverse mutator must return a plain object or null', ERR_VALIDATION);
       }
     } else {
       patch = patchOrMutator;
@@ -629,7 +629,7 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
       llm: mergedLlm,
       updatedAt: new Date().toISOString(),
     });
-    if (!mergedRecord) throw makeErr('Invalid universe payload', ERR_VALIDATION);
+    if (!mergedRecord) throw codedError('Invalid universe payload', ERR_VALIDATION);
     // Stamp `updatedAt = now` on every canon entry whose CONTENT changed vs the
     // pre-write record. The bible sanitizer preserves a present `updatedAt`, so
     // an inline edit / AI rewrite that does `{ ...e, ...patch }` keeps the OLD
@@ -760,14 +760,14 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
  */
 export async function addStyleReference(id, reference, { adopt = null } = {}) {
   const sanitized = sanitizeStyleReference(reference);
-  if (!sanitized) throw makeErr('Invalid style reference payload', ERR_VALIDATION);
+  if (!sanitized) throw codedError('Invalid style reference payload', ERR_VALIDATION);
   return updateUniverse(id, (cur) => {
     const current = Array.isArray(cur.styleReferences) ? cur.styleReferences : [];
     // Idempotent on re-send (a retried request, a double-click): an id already
     // present is a no-op rather than a duplicate or a cap-exceeded error.
     if (current.some((ref) => ref?.id === sanitized.id)) return null;
     if (current.length >= STYLE_REFERENCES_MAX) {
-      throw makeErr(`A universe can hold up to ${STYLE_REFERENCES_MAX} art references`, ERR_VALIDATION);
+      throw codedError(`A universe can hold up to ${STYLE_REFERENCES_MAX} art references`, ERR_VALIDATION);
     }
     return {
       styleReferences: [...current, sanitized],
@@ -813,7 +813,7 @@ export async function adoptStyleGuide(id, { styleNotes, influences } = {}) {
  * removal that raced the image-delete purge is a no-op rather than an error.
  */
 export async function removeStyleReference(id, referenceId) {
-  if (!isStr(referenceId)) throw makeErr('referenceId is required', ERR_VALIDATION);
+  if (!isStr(referenceId)) throw codedError('referenceId is required', ERR_VALIDATION);
   return updateUniverse(id, (cur) => {
     const current = Array.isArray(cur.styleReferences) ? cur.styleReferences : [];
     const next = current.filter((ref) => ref?.id !== referenceId);
@@ -844,14 +844,14 @@ export async function deleteUniverse(id) {
     .map((ser) => ({ id: ser.id, name: ser.name }));
   if (blockingSeries.length > 0) {
     throw Object.assign(
-      makeErr(`Universe has ${blockingSeries.length} live series — move or delete them first`, ERR_HAS_LIVE_SERIES),
+      codedError(`Universe has ${blockingSeries.length} live series — move or delete them first`, ERR_HAS_LIVE_SERIES),
       { blockingSeries },
     );
   }
   await s.queueRecordWrite(id, async () => {
     const cur = await s.loadOne(id);
-    if (!cur) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
-    if (cur.deleted) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
+    if (!cur) throw codedError(`Universe not found: ${id}`, ERR_NOT_FOUND);
+    if (cur.deleted) throw codedError(`Universe not found: ${id}`, ERR_NOT_FOUND);
     const now = new Date().toISOString();
     const tombstone = { ...cur, deleted: true, deletedAt: now, updatedAt: now };
     await s.writeRecord(id, tombstone);
@@ -877,7 +877,7 @@ export async function deleteUniverse(id) {
 
 export async function recordRun(run) {
   const sanitized = sanitizeRun(run);
-  if (!sanitized) throw makeErr('Invalid run payload', ERR_VALIDATION);
+  if (!sanitized) throw codedError('Invalid run payload', ERR_VALIDATION);
   // The facade serializes the runs append→cap on its own run-tail (and caps at
   // 200), so concurrent recordRun + delete-cascade can't clobber each other.
   await store().appendRun(sanitized);

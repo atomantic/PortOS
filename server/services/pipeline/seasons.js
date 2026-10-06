@@ -16,12 +16,12 @@ import * as seriesSvc from './series.js';
 import * as issuesSvc from './issues.js';
 import { emitRecordUpdated, withReexportSuppressed } from '../sharing/recordEvents.js';
 import { isStr } from '../../lib/textUtils.js';
+import { codedError } from '../../lib/codedError.js';
 
 export const ERR_NOT_FOUND = 'PIPELINE_SEASON_NOT_FOUND';
 export const ERR_VALIDATION = 'PIPELINE_SEASON_VALIDATION';
 export const ERR_REASSIGN_TARGET = 'PIPELINE_SEASON_REASSIGN_TARGET_INVALID';
 export const ERR_LOCKED = 'PIPELINE_SEASON_LOCKED';
-const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 // Fields a locked-season patch MUST NOT touch. `locked` itself is allowed
 // (the user has to be able to unlock); `status` is allowed because it tracks
@@ -37,19 +37,19 @@ export async function listSeasons(seriesId) {
 export async function getSeason(seriesId, seasonId) {
   const seasons = await listSeasons(seriesId);
   const found = seasons.find((s) => s.id === seasonId);
-  if (!found) throw makeErr(`Season not found: ${seasonId}`, ERR_NOT_FOUND);
+  if (!found) throw codedError(`Season not found: ${seasonId}`, ERR_NOT_FOUND);
   return found;
 }
 
 export async function createSeason(seriesId, input = {}) {
   const next = buildSeason(input);
   if (!next) {
-    throw makeErr('Season requires a title or a number > 0', ERR_VALIDATION);
+    throw codedError('Season requires a title or a number > 0', ERR_VALIDATION);
   }
   const series = await seriesSvc.getSeries(seriesId);
   const existing = series.seasons || [];
   if (existing.length >= ARC_LIMITS.SEASONS_PER_SERIES_MAX) {
-    throw makeErr(`Series already has ${ARC_LIMITS.SEASONS_PER_SERIES_MAX} seasons (max)`, ERR_VALIDATION);
+    throw codedError(`Series already has ${ARC_LIMITS.SEASONS_PER_SERIES_MAX} seasons (max)`, ERR_VALIDATION);
   }
   // If the user didn't pick a number, default to last + 1 so the canonical
   // ordering reads naturally. Falls back to 1 for the first season.
@@ -78,7 +78,7 @@ export async function updateSeason(seriesId, seasonId, patch = {}) {
     if (cur.locked === true && patch.locked !== false) {
       const forbidden = Object.keys(patch).filter((k) => !LOCKED_SEASON_ALLOWED_KEYS.has(k));
       if (forbidden.length > 0) {
-        throw makeErr(
+        throw codedError(
           `Season "${cur.title || cur.number}" is locked — unlock it before editing (${forbidden.join(', ')})`,
           ERR_LOCKED,
         );
@@ -92,7 +92,7 @@ export async function updateSeason(seriesId, seasonId, patch = {}) {
       createdAt: cur.createdAt,
       updatedAt: new Date().toISOString(),
     });
-    if (!next) throw makeErr('Season requires a title or a number > 0', ERR_VALIDATION);
+    if (!next) throw codedError('Season requires a title or a number > 0', ERR_VALIDATION);
     nextNumber = next.number;
     return next;
   });
@@ -115,12 +115,12 @@ export async function deleteSeason(seriesId, seasonId, { reassignTo = null } = {
   const series = await seriesSvc.getSeries(seriesId);
   const seasons = series.seasons || [];
   const cur = seasons.find((s) => s.id === seasonId);
-  if (!cur) throw makeErr(`Season not found: ${seasonId}`, ERR_NOT_FOUND);
+  if (!cur) throw codedError(`Season not found: ${seasonId}`, ERR_NOT_FOUND);
   // Refuse to delete a locked season — destructive ops on locked records
   // must require an explicit unlock first. Matches the editorial-freeze
   // semantics that block `updateSeason` content patches above.
   if (cur.locked === true) {
-    throw makeErr(
+    throw codedError(
       `Season "${cur.title || cur.number}" is locked — unlock it before deleting`,
       ERR_LOCKED,
     );
@@ -130,14 +130,14 @@ export async function deleteSeason(seriesId, seasonId, { reassignTo = null } = {
   // before any disk writes means the caller can retry cleanly.
   if (reassignTo != null) {
     if (!isStr(reassignTo)) {
-      throw makeErr('reassignTo must be a season id or null', ERR_REASSIGN_TARGET);
+      throw codedError('reassignTo must be a season id or null', ERR_REASSIGN_TARGET);
     }
     if (reassignTo === seasonId) {
-      throw makeErr('reassignTo cannot be the season being deleted', ERR_REASSIGN_TARGET);
+      throw codedError('reassignTo cannot be the season being deleted', ERR_REASSIGN_TARGET);
     }
     const target = seasons.find((s) => s.id === reassignTo);
     if (!target) {
-      throw makeErr(`reassignTo season not found: ${reassignTo}`, ERR_REASSIGN_TARGET);
+      throw codedError(`reassignTo season not found: ${reassignTo}`, ERR_REASSIGN_TARGET);
     }
   }
   // Re-point child issues first so a mid-write crash doesn't leave them

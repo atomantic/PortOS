@@ -13,7 +13,8 @@
  * server/lib/aiToolkit/defaults/providers.sample.json.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { writeJsonAtomic } from './_lib.js';
 import { join } from 'path';
 
 const PROVIDERS_REL_PATH = 'data/providers.json';
@@ -89,7 +90,7 @@ export default {
     }
 
     if (changed) {
-      await writeFile(providersPath, `${JSON.stringify(config, null, 2)}\n`);
+      await writeJsonAtomic(providersPath, config);
     } else {
       console.log(`✅ ${PROVIDERS_REL_PATH}: Grok Build CLI/TUI already on configured-default sentinel — no change`);
     }

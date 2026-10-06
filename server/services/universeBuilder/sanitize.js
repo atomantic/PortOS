@@ -43,7 +43,6 @@ export const ERR_DUPLICATE = 'DUPLICATE';
 // thrown error carries `blockingSeries: [{id,name}]` so the route can tell the
 // user which series to move or delete first. Maps to HTTP 409.
 export const ERR_HAS_LIVE_SERIES = 'UNIVERSE_HAS_LIVE_SERIES';
-export const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 // Universe ids are bare UUIDs (no prefix). Accept any reasonable alphanumeric
 // id 8–80 chars so future id-scheme changes upstream still round-trip; the

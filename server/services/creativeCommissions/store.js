@@ -81,6 +81,7 @@ import {
   tombstoneFeedbackForCommission,
 } from './feedbackStore.js';
 import { isStr } from '../../lib/textUtils.js';
+import { codedError } from '../../lib/codedError.js';
 
 // Emits `commission:changed` on any create/update/delete (not on run-record
 // appends, which don't affect scheduling). The scheduler subscribes to re-sync.
@@ -133,7 +134,6 @@ export const MAX_PERSISTED_FEEDBACK = 100;
 // createServiceErrorMapper), mirroring the universeBuilder convention.
 export const ERR_NOT_FOUND = 'NOT_FOUND';
 export const ERR_VALIDATION = 'VALIDATION_ERROR';
-export const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 /**
  * Normalize a single feedback reaction (#2657, Phase 2). A reaction MUST carry a
@@ -563,13 +563,13 @@ export function assertValidSchedule(schedule) {
   const recurrence = schedule?.kind === 'RECURRENCE' ? schedule.recurrence : null;
   if (recurrence) {
     if (!isValidRecurrence(recurrence)) {
-      throw makeErr('Invalid schedule: could not derive a valid recurrence', ERR_VALIDATION);
+      throw codedError('Invalid schedule: could not derive a valid recurrence', ERR_VALIDATION);
     }
     return recurrence;
   }
   const cron = commissionToCron(schedule);
   if (!cron || !isValidCron(cron)) {
-    throw makeErr('Invalid schedule: could not derive a valid cron expression', ERR_VALIDATION);
+    throw codedError('Invalid schedule: could not derive a valid cron expression', ERR_VALIDATION);
   }
   return cron;
 }
@@ -641,7 +641,7 @@ export async function listCommissions({ strict = false } = {}) {
 export async function getCommission(id) {
   const raw = await commissionStore().readRaw(id);
   const rec = raw ? sanitizeCommission(raw) : null;
-  if (!rec) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
+  if (!rec) throw codedError(`Commission not found: ${id}`, ERR_NOT_FOUND);
   // Lazily migrate any legacy inline feedback (Phase 2 storage) into the
   // federated store, then clear it — so the scheduler's pre-fire read and the
   // route GET always see the federated feedback even before the boot backfill
@@ -753,7 +753,7 @@ export async function updateCommission(id, patch) {
     );
     return { next, changedFields };
   });
-  if (!merged) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
+  if (!merged) throw codedError(`Commission not found: ${id}`, ERR_NOT_FOUND);
   const { next: mergedRecord, changedFields } = merged;
   // Carry the CHANGED key set: the project reconciler only cares about `enabled`
   // and `assignment`, so an edit that touched neither skips its project lookup —
@@ -787,7 +787,7 @@ export async function deleteCommission(id) {
     await store.writeRaw(id, { ...current, deleted: true, deletedAt: now, updatedAt: now, briefUpdatedAt: now });
     return true;
   });
-  if (!existed) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
+  if (!existed) throw codedError(`Commission not found: ${id}`, ERR_NOT_FOUND);
   // Re-sync schedules (the scheduler cancels the now-tombstoned commission's cron)
   // and push the tombstone to peers.
   commissionEvents.emit('commission:changed', { id, action: 'delete' });
@@ -901,7 +901,7 @@ export async function submitCommissionFeedback(id, input) {
   // The UI always rates a specific run; reject a runId that isn't on the record
   // so feedback can't dangle against a non-existent run.
   if (input?.runId && !commission.runs.some((r) => r.id === input.runId)) {
-    throw makeErr(`Run not found on commission: ${input.runId}`, ERR_VALIDATION);
+    throw codedError(`Run not found on commission: ${input.runId}`, ERR_VALIDATION);
   }
   // Write to the FEDERATED feedback store (#2686): one record per reaction,
   // deterministic id per run so a re-rating LWW-updates in place (one reaction
@@ -914,7 +914,7 @@ export async function submitCommissionFeedback(id, input) {
     note: input?.note,
     tags: input?.tags,
   });
-  if (!rec) throw makeErr('Invalid feedback: a non-zero rating (up/down) is required', ERR_VALIDATION);
+  if (!rec) throw codedError('Invalid feedback: a non-zero rating (up/down) is required', ERR_VALIDATION);
   emitRecordInvalidated(CREATIVE_COMMISSION_KIND, id);
   commission.feedback = await listFeedbackForCommission(id).catch(() => []);
   return commission;

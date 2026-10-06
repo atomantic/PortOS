@@ -15,11 +15,12 @@ import { getIssue } from './issueCrud.js';
 import {
   store, queueSeriesIssuesWrite, readState, saveIssueNow, saveIssuesNow,
   sanitizeIssue, sanitizeTextStage, sanitizeVisualStage, sanitizeAudioStage,
-  snapshotRunHistory, makeErr,
+  snapshotRunHistory,
   ERR_NOT_FOUND, ERR_VALIDATION,
   STAGE_IDS, TEXT_STAGE_IDS, VISUAL_STAGE_IDS, AUDIO_STAGE_IDS,
 } from './issuesShared.js';
 import { isStr } from '../../lib/textUtils.js';
+import { codedError } from '../../lib/codedError.js';
 
 /**
  * Partial update to a single stage on an issue. Use this from generators so
@@ -52,14 +53,14 @@ function mergeStagePatch(currentStage, stageId, patch, { snapshotPrior = false }
 
 export function updateStagesWithLatest(seriesId, updates = [], { snapshotPrior = false } = {}) {
   if (!isStr(seriesId) || !seriesId) {
-    return Promise.reject(makeErr('seriesId is required', ERR_VALIDATION));
+    return Promise.reject(codedError('seriesId is required', ERR_VALIDATION));
   }
   if (!Array.isArray(updates) || updates.length === 0) {
     return Promise.resolve([]);
   }
   for (const { stageId } of updates) {
     if (!STAGE_IDS.includes(stageId)) {
-      return Promise.reject(makeErr(`Unknown stage: ${stageId}`, ERR_VALIDATION));
+      return Promise.reject(codedError(`Unknown stage: ${stageId}`, ERR_VALIDATION));
     }
   }
 
@@ -75,9 +76,9 @@ export function updateStagesWithLatest(seriesId, updates = [], { snapshotPrior =
     const indexById = new Map(state.issues.map((i, idx) => [i.id, idx]));
     for (const update of updates) {
       const idx = indexById.get(update.issueId) ?? -1;
-      if (idx < 0) throw makeErr(`Issue not found: ${update.issueId}`, ERR_NOT_FOUND);
+      if (idx < 0) throw codedError(`Issue not found: ${update.issueId}`, ERR_NOT_FOUND);
       const cur = state.issues[idx];
-      if (cur.deleted || cur.seriesId !== seriesId) throw makeErr(`Issue not found: ${update.issueId}`, ERR_NOT_FOUND);
+      if (cur.deleted || cur.seriesId !== seriesId) throw codedError(`Issue not found: ${update.issueId}`, ERR_NOT_FOUND);
       const currentStage = cur.stages[update.stageId];
       const patch = update.computeFn(currentStage);
       if (isPlainObject(patch) && Object.keys(patch).length === 0) {
@@ -94,7 +95,7 @@ export function updateStagesWithLatest(seriesId, updates = [], { snapshotPrior =
         stages: { ...cur.stages, [update.stageId]: nextStage },
         updatedAt: new Date().toISOString(),
       });
-      if (!mergedIssue) throw makeErr('Invalid issue payload', ERR_VALIDATION);
+      if (!mergedIssue) throw codedError('Invalid issue payload', ERR_VALIDATION);
       state.issues[idx] = mergedIssue;
       results.push({ issue: mergedIssue, stage: mergedIssue.stages[update.stageId] });
       changed = true;
@@ -129,14 +130,14 @@ export function updateStagesWithLatest(seriesId, updates = [], { snapshotPrior =
  */
 export function restoreStageFromHistory(issueId, stageId, runId) {
   if (!TEXT_STAGE_IDS.includes(stageId)) {
-    return Promise.reject(makeErr(`Stage "${stageId}" does not support history restore`, ERR_VALIDATION));
+    return Promise.reject(codedError(`Stage "${stageId}" does not support history restore`, ERR_VALIDATION));
   }
   if (!isStr(runId) || !runId) {
-    return Promise.reject(makeErr('runId is required', ERR_VALIDATION));
+    return Promise.reject(codedError('runId is required', ERR_VALIDATION));
   }
   return updateStageWithLatest(issueId, stageId, (cur) => {
     const snapshot = (cur?.runHistory || []).find((entry) => entry.runId === runId);
-    if (!snapshot) throw makeErr(`Snapshot not found in stage history: ${runId}`, ERR_VALIDATION);
+    if (!snapshot) throw codedError(`Snapshot not found in stage history: ${runId}`, ERR_VALIDATION);
     return {
       status: 'edited',
       input: snapshot.input || '',
@@ -162,7 +163,7 @@ export function updateStageWithLatest(issueId, stageId, computeFn, { snapshotPri
   if (!STAGE_IDS.includes(stageId)) {
     // Validate before queueing so the caller gets an immediate rejection
     // rather than waiting in line for an error it already knows about.
-    return Promise.reject(makeErr(`Unknown stage: ${stageId}`, ERR_VALIDATION));
+    return Promise.reject(codedError(`Unknown stage: ${stageId}`, ERR_VALIDATION));
   }
   // Serialize on the SERIES tail (not the per-id queue) so a stage save can't
   // interleave with a series-wide renumber/bulk write that rewrites this same
@@ -174,8 +175,8 @@ export function updateStageWithLatest(issueId, stageId, computeFn, { snapshotPri
   // lock for the freshest stage.
   const work = async () => {
     const cur = await store().loadOne(issueId);
-    if (!cur) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
-    if (cur.deleted) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
+    if (!cur) throw codedError(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
+    if (cur.deleted) throw codedError(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
     const currentStage = cur.stages[stageId];
     const patch = computeFn(currentStage);
     // Empty-patch fast path: a computeFn that returns `{}` is a "decided not

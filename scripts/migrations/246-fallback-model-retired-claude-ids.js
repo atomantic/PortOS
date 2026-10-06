@@ -34,7 +34,8 @@
  * against.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { writeJsonAtomic } from './_lib.js';
 import { join } from 'path';
 
 const PROVIDERS_REL_PATH = 'data/providers.json';
@@ -128,7 +129,7 @@ export default {
       return;
     }
 
-    await writeFile(providersPath, `${JSON.stringify(config, null, 2)}\n`);
+    await writeJsonAtomic(providersPath, config);
     const summary = touched.map((t) => `${t.id} → ${t.target}: ${t.from} → ${t.to}`).join(', ');
     console.log(`📝 ${PROVIDERS_REL_PATH}: repaired ${touched.length} stale fallbackModel pin(s) — ${summary}`);
   },

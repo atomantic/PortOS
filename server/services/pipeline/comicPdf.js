@@ -13,6 +13,7 @@ import { getIssue } from './issues.js';
 import { getSeries } from './series.js';
 import { pickRenderedFilename } from '../../lib/renderSlot.js';
 import { readImageFromMedia, embedImageBytes, fitImage } from '../../lib/pdfImageEmbed.js';
+import { codedError } from '../../lib/codedError.js';
 
 export const PAGE_SIZES = Object.freeze({
   'us-letter': { width: 612, height: 792 },
@@ -22,7 +23,6 @@ export const PAGE_SIZES = Object.freeze({
 export const DEFAULT_PAGE_SIZE = 'us-letter';
 
 export const ERR_NO_RENDERED_PAGES = 'PIPELINE_COMIC_PDF_NO_PAGES';
-const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 const READ_OPTS = { subject: 'comic page image' };
 const EMBED_OPTS = { unsupportedCode: 'PIPELINE_COMIC_PDF_UNSUPPORTED_IMAGE' };
@@ -59,7 +59,7 @@ export async function buildComicPdf(issueId, opts = {}) {
   const backCoverFilename = pickRenderedFilename(backCover);
   if (backCoverFilename) targets.push(backCoverFilename);
   if (targets.length === 0) {
-    throw makeErr('Issue has no rendered pages or cover yet', ERR_NO_RENDERED_PAGES);
+    throw codedError('Issue has no rendered pages or cover yet', ERR_NO_RENDERED_PAGES);
   }
 
   // Read all files concurrently — disk I/O parallelizes cleanly; @cantoo/pdf-lib's
@@ -97,7 +97,7 @@ export async function buildComicPdf(issueId, opts = {}) {
   }
 
   if (pageCount === 0) {
-    throw makeErr('No usable pages — all embeds failed', ERR_NO_RENDERED_PAGES);
+    throw codedError('No usable pages — all embeds failed', ERR_NO_RENDERED_PAGES);
   }
 
   if (includeColophon) {
