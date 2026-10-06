@@ -8,7 +8,7 @@ import { llmStagesDraftFrom, llmStagesFromDraft } from './musicVideoAutomation.j
 import {
   autonomousAttentionLink, describeAutonomousWait,
   AUTONOMOUS_DEFAULT_LIMITS, AUTONOMOUS_DEFAULT_TOOLS, AUTONOMOUS_LIVE_STATUSES, AUTONOMOUS_SONG_SOURCES, AUTONOMOUS_STAGES,
-  SUNO_MODEL_PATTERN,
+  ORCHESTRATOR_CHECKPOINTS, SUNO_MODEL_PATTERN,
   normalizeLocalMusicOptions,
 } from '../../../server/lib/musicVideoAutonomous.js';
 
@@ -19,6 +19,9 @@ export const AUTONOMOUS_SONG_SOURCE_LABELS = Object.freeze({
 
 export {
   AUTONOMOUS_AUTO_APPROVE_STAGES,
+  AUTONOMOUS_LIMIT_BOUNDS,
+  ORCHESTRATOR_CHECKPOINTS,
+  isOrchestratedRun,
   AUTONOMOUS_CHECKPOINT_IDS,
   AUTONOMOUS_SONG_SOURCES,
   LOCAL_MUSIC_CODE_LANGUAGES,
@@ -40,6 +43,12 @@ export const AUTONOMOUS_CHECKPOINT_LABELS = Object.freeze({
 
 // Production review stages the run may approve itself (`brief.autoApprove`).
 export const AUTONOMOUS_AUTO_APPROVE_LABELS = Object.freeze({ art: 'Art', storyboard: 'Storyboard', proof: 'Proof' });
+
+// Who clears the review points: the director (optional checkpoints) or the orchestrator model.
+export const AUTONOMOUS_RUN_MODES = Object.freeze(['checkpoints', 'orchestrated']);
+
+// How the orchestrator's decisions read on the run panel.
+export const ORCHESTRATOR_VERDICT_LABELS = Object.freeze({ approve: 'Approved', revise: 'Sent back', retake: 'Retake', noted: 'Notes' });
 
 export const AUTONOMOUS_STATUS_LABELS = Object.freeze({
   running: 'Running', 'awaiting-approval': 'Awaiting review', 'needs-human': 'Needs attention', stopped: 'Paused',
@@ -71,6 +80,9 @@ export const emptyAutonomousDraft = () => ({
   llmStages: {},
   // Review & revise the lyric draft with a second pass.
   lyricsReview: false,
+  runMode: 'checkpoints',
+  orchestrator: { providerId: '', model: '', effort: '' },
+  maxReviewAttempts: String(AUTONOMOUS_DEFAULT_LIMITS.maxReviewAttempts),
 });
 
 /** A blank model is fine (Suno's current one); anything else must name a version such as v6. */
@@ -101,6 +113,9 @@ export function autonomousRequestFromDraft(draft, { providerId, model, effort } 
   const suno = draft.songSource === 'suno' ? sunoRequestFromDraft(draft.suno) : null;
   const localMusic = (draft.songSource === 'local' || draft.localFallback) ? normalizeLocalMusicOptions(draft.localMusic) : null;
   const llmStages = llmStagesFromDraft(draft.llmStages);
+  const orchestrated = draft.runMode === 'orchestrated' && !!draft.orchestrator?.providerId;
+  const maxReviewAttempts = orchestrated ? optionalInt(draft.maxReviewAttempts) : undefined;
+  const limits = { ...(maxGenerations ? { maxGenerations } : {}), ...(maxReviewAttempts ? { maxReviewAttempts } : {}) };
   const models = Object.fromEntries(Object.entries(draft.models || {})
     .filter(([id, value]) => draft.tools.includes(id) && typeof value === 'string' && value.trim())
     .map(([id, value]) => [id, value.trim()]));
@@ -120,8 +135,14 @@ export function autonomousRequestFromDraft(draft, { providerId, model, effort } 
     ...(Object.keys(models).length ? { models } : {}),
     ...(draft.guidance.trim() ? { guidance: draft.guidance.trim() } : {}),
     budgetUsd: Number.isFinite(budget) && budget >= 0 ? budget : null,
-    ...(maxGenerations ? { limits: { maxGenerations } } : {}),
-    checkpoints: draft.checkpoints,
+    ...(Object.keys(limits).length ? { limits } : {}),
+    // The orchestrator clears every review point itself, so it pauses at none.
+    checkpoints: orchestrated ? [] : draft.checkpoints,
+    ...(orchestrated ? { orchestrator: {
+      providerId: draft.orchestrator.providerId,
+      ...(draft.orchestrator.model ? { model: draft.orchestrator.model } : {}),
+      ...(draft.orchestrator.effort ? { effort: draft.orchestrator.effort } : {}),
+    } } : {}),
     ...(draft.moodBoardId ? { moodBoardId: draft.moodBoardId } : {}),
     ...(llmStages ? { llmStages } : {}),
     ...(draft.lyricsReview === true ? { lyricsReview: true } : {}),
@@ -137,6 +158,24 @@ export function autonomousStageRows(run) {
     const current = run.stage === stage.id;
     return { id: stage.id, label: stage.label, status: state.status || 'pending', current, error: state.error || null, step: state.step || null };
   });
+}
+
+const ORCHESTRATOR_CHECKPOINT_LABELS = Object.fromEntries(ORCHESTRATOR_CHECKPOINTS.map((c) => [c.id, c.label]));
+
+/** The orchestrator's decisions, newest first, as display rows. */
+export function orchestratorReviewRows(run) {
+  return (run?.orchestration?.reviews || []).slice().reverse().map((review) => ({
+    id: review.id,
+    checkpoint: ORCHESTRATOR_CHECKPOINT_LABELS[review.checkpoint] || review.checkpoint,
+    verdict: review.verdict,
+    verdictLabel: ORCHESTRATOR_VERDICT_LABELS[review.verdict] || review.verdict,
+    score: Number.isFinite(review.score) ? review.score : null,
+    notes: review.notes || '',
+    changes: review.changes || [],
+    issues: review.issues || [],
+    measured: !review.route,
+    at: review.at || null,
+  }));
 }
 
 /** The stages whose output stays viewable on the run panel, in pipeline order. */
@@ -160,6 +199,7 @@ export const AUTONOMOUS_SONG_STEP_LABELS = Object.freeze({
 /** What the Produce stage is doing once production is done (the server's `stages.produce.step`). */
 export const AUTONOMOUS_PRODUCE_STEP_LABELS = Object.freeze({
   rendering: 'Rendering final video',
+  'final-review': 'The orchestrator is watching the final video',
 });
 
 /**
@@ -246,7 +286,8 @@ export function autopilotDraftFromParams(params) {
  * so fields the form does not edit (such as review attempts) survive a save; the server re-normalizes it all on write.
  */
 export function autopilotParamsFromDraft(draft, saved, { providerId, model, effort } = {}) {
-  const { prompt: _prompt, ...request } = autonomousRequestFromDraft({ ...draft, prompt: '' }, {});
+  // The orchestrator is a start-time grant bound to a signed-in session; a schedule never carries one.
+  const { prompt: _prompt, orchestrator: _orchestrator, ...request } = autonomousRequestFromDraft({ ...draft, prompt: '', runMode: 'checkpoints' }, {});
   const { llm: _llm, ...kept } = saved && typeof saved === 'object' ? saved : {};
   return {
     ...kept,

@@ -1,6 +1,6 @@
 import { musicVideoMediaMode, musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 import { prepareProductionReview } from './productionReviewService.js';
-import { assertProductionApproval, productionReadiness } from './productionReview.js';
+import { assertProductionApproval, productionAlignmentBasis, productionReadiness, productionReviewBasis } from './productionReview.js';
 
 /**
  * Fully-autonomous Music Video — the run orchestrator.
@@ -42,6 +42,14 @@ import { assertProductionApproval, productionReadiness } from './productionRevie
  * the route binds the grant to a session and each automatic decision to this run.
  * Proof always requires recorded playback or machine review evidence. Older
  * briefs granting proof auto-approval still wait for rendering, then park for review.
+ *
+ * An ORCHESTRATED run (`brief.orchestrator`) replaces the director at every
+ * review point instead: the orchestrator model judges the lyrics, the sound and
+ * look, the song, the art direction, the lyric timing, the storyboard and the
+ * final video, and either approves each or revises it and judges again
+ * (bounded by `limits.maxReviewAttempts`, then the last version is accepted).
+ * Every decision lands in `run.orchestration.reviews`. It is approval
+ * authority, so like `autoApprove` it is granted only to a signed-in session.
  */
 
 import { randomUUID } from 'crypto';
@@ -51,12 +59,15 @@ import { probeVideoDuration } from '../../lib/ffmpeg.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { trimTo } from '../../lib/textUtils.js';
 import {
+  AUTONOMOUS_DEFAULT_LIMITS,
   AUTONOMOUS_LIVE_STATUSES,
   AUTONOMOUS_STAGE_IDS,
   autonomousLyricsReviewEnabled,
   autonomousMedium,
   autonomousPool,
+  isOrchestratedRun,
   nextAutonomousStage,
+  ORCHESTRATOR_REVIEW_LOG_MAX,
   normalizeAutoApprove,
   normalizeAutonomousBrief,
   normalizeLocalMusicOptions,
@@ -101,6 +112,15 @@ const defaults = {
   cancelRender: async (jobId) => (await import('./render.js')).cancelRender(jobId),
   // The review persistence path; session authority was checked on start/resume.
   approveProductionReview: async (...args) => (await import('./productionReviewService.js')).approveProductionReview(...args),
+  // Orchestrated mode: the reviewer call, and the edits a reviewer makes by hand.
+  orchestrate: async (args) => (await import('./orchestratorReview.js')).askOrchestrator(args),
+  alignLyrics: async (projectId) => (await import('./lyricAlign.js')).alignProjectLyrics(projectId),
+  verifyAlignment: async (...args) => (await import('./productionReviewService.js')).reverifyProductionAlignment(...args),
+  addFeedback: async (...args) => (await import('./productionReviewService.js')).addProductionFeedback(...args),
+  closeFeedback: async (...args) => (await import('./productionReviewService.js')).closeProductionFeedback(...args),
+  reviseFromFeedback: async (...args) => (await import('./productionReviewService.js')).reviseProductionFromFeedback(...args),
+  guideImagePath: async (artifact) => (await import('./devArtifactStore.js')).resolveDevArtifactFile(artifact.file),
+  finalReviewFrames: async (jobId) => (await import('./orchestratorReview.js')).captureFinalReviewFrames(jobId),
   wait: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
 };
 let deps = { ...defaults };
@@ -176,6 +196,17 @@ function autoApproveGrant(list, authorized) {
     ...(typeof authorized === 'object' ? { autoApproveAuthorizedBy: structuredClone(authorized) } : {}) };
 }
 
+/**
+ * The orchestrator approves Production review stages and verifies lyric timing
+ * on the operator's behalf, so — like an auto-approve grant — only an
+ * authenticated session may start an orchestrated run, and the grant records who.
+ */
+function orchestratorGrant(authorized) {
+  if (!authorized) throw runError(403, 'AUTH_REQUIRED', 'Sign in to start an orchestrated run: the orchestrator approves stages for you.');
+  return { orchestratorAuthorizedAt: new Date().toISOString(),
+    orchestratorAuthorizedBy: typeof authorized === 'object' ? structuredClone(authorized) : null };
+}
+
 /** Approve `stage` for the run when the brief allows it and its readiness is clean; returns the fresh project. */
 async function autoApproveStage(project, run, stage) {
   if (!autoApproves(run, stage)) return project;
@@ -185,6 +216,356 @@ async function autoApproveStage(project, run, stage) {
     reviewer: { kind: 'autopilot', runId: run.id, authorizedBy: run.brief.autoApproveAuthorizedBy || null } });
   console.log(`🤖 Autonomous music video ${short(run.id)} auto-approved ${stage} (brief.autoApprove)`);
   return getProject(project.id);
+}
+
+// ---- orchestrated mode (brief.orchestrator) --------------------------------------
+// The orchestrator stands in for the director at each review point. A review is
+// one provider call; a revision is applied and judged again until it approves or
+// `limits.maxReviewAttempts` revisions of that checkpoint are spent — then the
+// last version is accepted and the log says so. Revisions are counted from the
+// persisted log, so a retried stage cannot buy itself a fresh allowance.
+
+const reviewLimit = (run) => run.brief.limits?.maxReviewAttempts || AUTONOMOUS_DEFAULT_LIMITS.maxReviewAttempts;
+const latestRun = async (projectId) => projectAutonomousRun(await getProject(projectId));
+const revisionsSpent = (run, checkpoint) => (run?.orchestration?.reviews || [])
+  .filter((r) => r.checkpoint === checkpoint && (r.verdict === 'revise' || r.verdict === 'retake')).length;
+const reviewModule = () => import('./orchestratorReview.js');
+const ideaOf = (run) => ({ prompt: run.brief.prompt, guidance: run.brief.guidance || '' });
+const orchestratorIdentity = (run, route) => ({ kind: 'orchestrator', runId: run.id,
+  providerId: route?.providerId || run.brief.orchestrator.providerId, model: route?.model || run.brief.orchestrator.model || null,
+  authorizedBy: run.brief.orchestratorAuthorizedBy || null });
+
+/** Append one decision to the run's review log (oldest dropped past the cap). */
+async function recordReview(projectId, entry) {
+  const at = new Date().toISOString();
+  const { run } = await patchRun(projectId, (r) => ({ orchestration: { ...r.orchestration,
+    reviews: [...(r.orchestration?.reviews || []), { id: randomUUID(), at, ...entry }].slice(-ORCHESTRATOR_REVIEW_LOG_MAX) } }));
+  console.log(`🎬 Autonomous music video ${short(run.id)} orchestrator ${entry.verdict} ${entry.checkpoint}${entry.score ? ` (${entry.score}/10)` : ''}`);
+  return run;
+}
+
+/** One review call, parsed. `images` ride along when the orchestrator can see them. */
+async function askReview(run, checkpoint, prompt, images = []) {
+  const { parseOrchestratorVerdict } = await reviewModule();
+  const reply = await deps.orchestrate({ orchestrator: run.brief.orchestrator, prompt, images, source: 'music-video-orchestrator-review' });
+  return { ...parseOrchestratorVerdict(reply.text, checkpoint), route: reply.route || null, visual: reply.visual === true };
+}
+
+const reviewEntry = (checkpoint, review, overrides = {}) => ({
+  checkpoint, verdict: review.verdict, score: review.score ?? null, notes: review.notes || '',
+  route: review.route || null, visual: review.visual === true, ...overrides,
+});
+
+/**
+ * Review a text checkpoint until it is approved: `apply(review)` returns the
+ * revised value, or null when the review carried nothing to apply. Returns the
+ * accepted value.
+ */
+async function reviewUntilApproved(projectId, run, checkpoint, { value, prompt, apply }) {
+  let current = value;
+  for (;;) {
+    const review = await askReview(run, checkpoint, prompt(current));
+    const revised = review.verdict === 'revise' ? apply(review, current) : null;
+    if (revised !== null && revisionsSpent(await latestRun(projectId), checkpoint) < reviewLimit(run)) {
+      await recordReview(projectId, reviewEntry(checkpoint, review, { verdict: 'revise' }));
+      current = revised;
+      continue;
+    }
+    const why = review.verdict !== 'revise' ? '' : revised === null ? 'No revision was supplied; accepted as is. ' : 'Revision limit reached; accepted the latest version. ';
+    await recordReview(projectId, reviewEntry(checkpoint, review, { verdict: 'approve', notes: `${why}${review.notes || ''}`.trim() }));
+    return current;
+  }
+}
+
+async function orchestrateLyrics(projectId, run, lyrics) {
+  const { buildLyricsReviewPrompt } = await reviewModule();
+  return reviewUntilApproved(projectId, run, 'lyrics', {
+    value: lyrics,
+    prompt: (current) => buildLyricsReviewPrompt({ ...ideaOf(run), title: run.output.title, description: run.output.musicalDescription, lyrics: current }),
+    apply: (review) => review.lyrics || null,
+  });
+}
+
+/** The sound & look, judged before the song is made and the mood board created from it. */
+async function orchestrateStyle(projectId, run) {
+  const { buildStyleReviewPrompt } = await reviewModule();
+  const value = { sunoStyle: run.output.sunoStyle, concept: run.output.concept || {}, moodBoard: run.output.moodBoard || {} };
+  return reviewUntilApproved(projectId, run, 'style', {
+    value,
+    prompt: (current) => buildStyleReviewPrompt({ ...ideaOf(run), title: run.output.title, description: run.output.musicalDescription, ...current }),
+    apply: (review, current) => (review.sunoStyle || review.conceptStyle || review.lookPrompt ? {
+      sunoStyle: review.sunoStyle || current.sunoStyle,
+      concept: { ...current.concept, ...(review.conceptStyle ? { style: review.conceptStyle } : {}) },
+      moodBoard: { ...current.moodBoard, ...(review.lookPrompt ? { stylePrompt: review.lookPrompt } : {}) },
+    } : null),
+  });
+}
+
+const cueText = (cue) => (typeof cue?.text === 'string' ? cue.text.trim() : '');
+const validSpan = (start, end) => Number.isFinite(start) && Number.isFinite(end) && end > start;
+const MIN_WORD_SEC = 0.05;
+
+/**
+ * Give a lyric line with no usable word timings evenly spaced words inside its
+ * own span, else the gap its neighbours leave — what a director does by hand
+ * after alignment skips a line. Returns the repaired cues and the line count.
+ */
+export function repairLyricWordTimings(cues, durationSec) {
+  let repaired = 0;
+  const out = cues.map((cue, i) => {
+    const words = cueText(cue).split(/\s+/).filter(Boolean);
+    if (!words.length) return cue;
+    const usable = Array.isArray(cue.words) && cue.words.length > 0 && cue.words.every((w) => validSpan(w.startSec, w.endSec))
+      && validSpan(cue.startSec, cue.endSec) && cue.words.every((w) => w.startSec >= cue.startSec && w.endSec <= cue.endSec);
+    if (usable) return cue;
+    const prevEnd = i > 0 && Number.isFinite(cues[i - 1].endSec) ? cues[i - 1].endSec : 0;
+    const nextStart = i < cues.length - 1 && Number.isFinite(cues[i + 1].startSec) ? cues[i + 1].startSec : durationSec;
+    const [start, end] = validSpan(cue.startSec, cue.endSec) && cue.endSec <= durationSec ? [cue.startSec, cue.endSec] : [prevEnd, nextStart];
+    if (!validSpan(start, end) || (end - start) / words.length < MIN_WORD_SEC) return cue;
+    const step = (end - start) / words.length;
+    const round = (n) => Math.round(n * 1000) / 1000;
+    repaired += 1;
+    return { ...cue, startSec: round(start), endSec: round(end),
+      words: words.map((w, k) => ({ w, startSec: round(start + k * step), endSec: round(k === words.length - 1 ? end : start + (k + 1) * step), conf: 'interpolated' })) };
+  });
+  return { cues: out, repaired };
+}
+
+/** The song as measurements: analysis plus how much of the written lyric the recognizer heard. */
+function songFacts(project, run, alignError) {
+  const analysis = project.audioAnalysis || {};
+  const cues = (project.lyricCues || []).filter((c) => cueText(c));
+  const words = cues.flatMap((c) => c.words || []);
+  return {
+    instrumental: run.brief.instrumental === true,
+    songSource: run.output.songSource || run.brief.songSource,
+    durationSec: Number.isFinite(analysis.durationSec) ? Math.round(analysis.durationSec * 10) / 10 : null,
+    tempoBpm: Number.isFinite(analysis.bpm) ? Math.round(analysis.bpm) : Number.isFinite(analysis.tempo) ? Math.round(analysis.tempo) : null,
+    sections: (analysis.sections || []).slice(0, 24).map((s) => s.label || s.type || 'section'),
+    ...(run.brief.instrumental ? {} : {
+      lyricLines: cues.length,
+      linesWithWordTimings: cues.filter((c) => c.words?.length).length,
+      lyricWords: words.length,
+      recognizedWordShare: words.length ? Math.round((words.filter((w) => w.conf === 'matched').length / words.length) * 100) / 100 : null,
+      ...(alignError ? { alignmentError: trimTo(alignError, 300) } : {}),
+    }),
+  };
+}
+
+/**
+ * The song checkpoint, at the end of analysis: align the vocal to the lyric
+ * sheet (the timings the storyboard needs anyway), fill lines alignment
+ * skipped, then judge the song from those measurements. A retake is taken only
+ * for a local song (free) with revisions left; a Suno retake would spend
+ * credits the operator did not approve, so that song is kept and the reason logged.
+ */
+async function orchestrateSong(projectId, run) {
+  let alignError = null;
+  if (!run.brief.instrumental && (await getProject(projectId))?.lyricCues?.some((c) => cueText(c))) {
+    await deps.alignLyrics(projectId).catch((err) => { alignError = err.message; });
+    await mutateProjectRecord(projectId, (current) => {
+      const { cues, repaired } = repairLyricWordTimings(current.lyricCues || [], current.audioAnalysis?.durationSec);
+      return { project: repaired ? { ...current, lyricCues: cues } : current };
+    });
+  }
+  const { buildSongReviewPrompt } = await reviewModule();
+  const project = await getProject(projectId);
+  const facts = songFacts(project, run, alignError);
+  const review = await askReview(run, 'song', buildSongReviewPrompt({ ...ideaOf(run), title: run.output.title, facts }));
+  if (review.verdict === 'retake') {
+    const local = facts.songSource === 'local';
+    const left = revisionsSpent(await latestRun(projectId), 'song') < reviewLimit(run);
+    if (local && left) {
+      await recordReview(projectId, reviewEntry('song', review, { facts }));
+      return { retake: true };
+    }
+    const why = local ? 'Retake limit reached; kept this song.' : 'Kept: retaking a Suno song spends credits.';
+    await recordReview(projectId, reviewEntry('song', review, { verdict: 'approve', facts, notes: `${why} ${review.notes || ''}`.trim() }));
+    return { retake: false };
+  }
+  await recordReview(projectId, reviewEntry('song', review, { facts }));
+  return { retake: false };
+}
+
+/**
+ * Verify the lyric timing for the storyboard gate. Alignment already ran at the
+ * song checkpoint; this records the orchestrator's check of it (every line has
+ * bounded word timings) as the verification a director gives by listening.
+ * An instrumental is marked as one. Problems it cannot fix stay for readiness to name.
+ */
+async function orchestrateAlignment(projectId, run) {
+  const project = await getProject(projectId);
+  const draft = project.productionReview?.draft;
+  if (!draft || draft.storyboardSource === 'document') return;
+  const status = productionReadiness(project).alignment.status;
+  if (status === 'verified' || status === 'instrumental') return;
+  const cues = (project.lyricCues || []).filter((c) => cueText(c));
+  if (!cues.length) {
+    if (!run.brief.instrumental) return;
+    await mutateProjectRecord(projectId, (current) => ({ project: { ...current, productionReview: { ...current.productionReview,
+      draft: { ...current.productionReview.draft, lyricsMode: 'instrumental', timingNotes: 'Instrumental song: no lyric timing to verify.' } } } }));
+    await recordReview(projectId, { checkpoint: 'alignment', verdict: 'approve', score: null, notes: 'Instrumental song: no lyric timing to verify.', route: null, visual: false });
+    return;
+  }
+  const words = cues.flatMap((c) => c.words || []);
+  const timed = cues.filter((c) => c.words?.length && validSpan(c.startSec, c.endSec)).length;
+  const matched = words.filter((w) => w.conf === 'matched').length;
+  const notes = `Checked by the orchestrator: ${timed} of ${cues.length} lines carry word timings; ${matched} of ${words.length} words were heard by the recognizer, the rest interpolated.`;
+  if (timed < cues.length) {
+    await recordReview(projectId, { checkpoint: 'alignment', verdict: 'revise', score: null, notes: `${notes} Lines without timings need a director.`, route: null, visual: false });
+    return;
+  }
+  await deps.verifyAlignment(projectId, { basis: productionAlignmentBasis(project), notes, reviewer: orchestratorIdentity(run) });
+  await recordReview(projectId, { checkpoint: 'alignment', verdict: 'approve', score: null, notes, route: null, visual: false });
+}
+
+/** Anchor every storyboard shot to the lyric lines it overlaps (the "Review lyric anchors" chore). */
+async function anchorStoryboardLyrics(projectId) {
+  await mutateProjectRecord(projectId, (current) => {
+    const draft = current.productionReview?.draft;
+    if (!draft?.storyboard?.length || draft.storyboardSource === 'document') return { project: current };
+    const cues = (current.lyricCues || []).filter((c) => cueText(c));
+    let changed = false;
+    const storyboard = draft.storyboard.map((shot) => {
+      const scene = current.scenes?.find((s) => s.sceneId === shot.sceneId);
+      if (!scene) return shot;
+      const ids = cues.filter((c) => c.startSec < scene.endSec && c.endSec > scene.startSec).map((c) => c.id);
+      if (ids.length === (shot.lyricCueIds || []).length && ids.every((id) => shot.lyricCueIds.includes(id))) return shot;
+      changed = true;
+      return { ...shot, lyricCueIds: ids };
+    });
+    return { project: changed ? { ...current, productionReview: { ...current.productionReview, draft: { ...draft, storyboard } } } : current };
+  });
+}
+
+const STORYBOARD_FIELDS = ['action', 'staging', 'camera', 'transition'];
+const blankShotFields = (shot) => STORYBOARD_FIELDS.filter((key) => !(typeof shot?.[key] === 'string' && shot[key].trim()));
+// What a director types into a blank storyboard field when the orchestrator left it empty.
+const STORYBOARD_FIELD_DEFAULT = Object.freeze({ staging: 'Medium shot', camera: 'Locked-off camera', transition: 'Cut' });
+
+/** Fill blank storyboard fields from the review's `fill`, then plain defaults. */
+async function fillStoryboard(projectId, fill = []) {
+  await mutateProjectRecord(projectId, (current) => {
+    const draft = current.productionReview?.draft;
+    if (!draft?.storyboard?.length || draft.storyboardSource === 'document') return { project: current };
+    let changed = false;
+    const storyboard = draft.storyboard.map((shot) => {
+      const blank = blankShotFields(shot);
+      if (!blank.length) return shot;
+      const scene = current.scenes?.find((s) => s.sceneId === shot.sceneId);
+      const given = fill.find((f) => f.sceneId === shot.sceneId) || {};
+      changed = true;
+      return { ...shot, ...Object.fromEntries(blank.map((key) => [key,
+        given[key] || (key === 'action' ? scene?.visualIntent || scene?.prompt || scene?.label || 'Hold on the subject' : STORYBOARD_FIELD_DEFAULT[key])])) };
+    });
+    return { project: changed ? { ...current, productionReview: { ...current.productionReview, draft: { ...draft, storyboard } } } : current };
+  });
+}
+
+async function reviewArt(run, project) {
+  const { buildArtReviewPrompt } = await reviewModule();
+  const draft = project.productionReview?.draft || {};
+  const guide = project.devArtifacts?.find((a) => a.id === draft.guideArtifactId && !a.deleted);
+  const image = guide?.mimeType?.startsWith('image/') ? await deps.guideImagePath(guide).catch(() => null) : null;
+  return askReview(run, 'art', buildArtReviewPrompt({ ...ideaOf(run), concept: project.concept, draft, hasImage: !!image }), image ? [image] : []);
+}
+
+async function reviewStoryboard(run, project) {
+  const { buildStoryboardReviewPrompt } = await reviewModule();
+  const draft = project.productionReview?.draft || {};
+  const cues = project.lyricCues || [];
+  const shots = (draft.storyboard || []).slice(0, 120).map((shot) => {
+    const scene = project.scenes?.find((s) => s.sceneId === shot.sceneId) || {};
+    return { sceneId: shot.sceneId, startSec: scene.startSec ?? null, endSec: scene.endSec ?? null,
+      lyrics: (shot.lyricCueIds || []).map((id) => cueText(cues.find((c) => c.id === id))).filter(Boolean).join(' / '),
+      ...Object.fromEntries(STORYBOARD_FIELDS.map((key) => [key, trimTo(shot[key], 400)])) };
+  });
+  const incomplete = (draft.storyboard || []).filter((shot) => blankShotFields(shot).length).map((shot) => shot.sceneId);
+  return askReview(run, 'storyboard', buildStoryboardReviewPrompt({ ...ideaOf(run), concept: project.concept, shots, incomplete }));
+}
+
+/** Apply a revise verdict to a production stage; returns false when nothing could be applied. */
+async function applyProductionRevision(projectId, run, stage, review) {
+  if (stage === 'art') {
+    if (!review.changes.length) return false;
+    await mutateProjectRecord(projectId, (current) => ({ project: { ...current, productionReview: { ...current.productionReview,
+      draft: { ...current.productionReview?.draft, ...Object.fromEntries(review.changes.map((c) => [c.field, c.text])) } } } }));
+    return true;
+  }
+  const project = await getProject(projectId);
+  const known = new Set((project.productionReview?.draft?.storyboard || []).map((shot) => shot.sceneId));
+  const changes = review.changes.filter((c) => known.has(c.sceneId));
+  if (!changes.length || project.productionReview?.draft?.storyboardSource === 'document') return false;
+  const before = new Set((project.productionReview?.feedback || []).map((f) => f.id));
+  const basis = productionReviewBasis(project).storyboard;
+  for (const change of changes) {
+    await deps.addFeedback(projectId, { stage, basis, target: change.sceneId, text: change.text, decision: 'request-changes' });
+  }
+  const { route, ...plan } = await llmOf(run, 'plan');
+  const failure = await deps.reviseFromFeedback(projectId, { stage, ...plan }).then(() => null, (err) => err);
+  const created = ((await getProject(projectId)).productionReview?.feedback || []).filter((f) => !before.has(f.id) && !f.resolvedAt);
+  const resolution = failure ? `The re-plan failed (${trimTo(failure.message, 200)}); kept the shot.` : 'Revised by the orchestrator.';
+  for (const entry of created) {
+    await deps.closeFeedback(projectId, { feedbackId: entry.id, resolution, reviewer: orchestratorIdentity(run, review.route) });
+  }
+  return !failure;
+}
+
+/**
+ * Clear one Production review gate (art or storyboard) as the director would:
+ * review, revise and review again, then approve the current revision. A
+ * readiness problem the orchestrator cannot fix leaves the gate closed, and
+ * the run parks for a human with that problem named.
+ */
+async function orchestrateProductionStage(project, run, stage) {
+  for (;;) {
+    const ready = productionReadiness(project);
+    if (ready[stage].approved || (stage === 'storyboard' && !ready.art.approved)) return project;
+    if (stage === 'storyboard') await anchorStoryboardLyrics(project.id);
+    const review = stage === 'art' ? await reviewArt(run, await getProject(project.id)) : await reviewStoryboard(run, await getProject(project.id));
+    if (stage === 'storyboard') await fillStoryboard(project.id, review.fill);
+    const spent = revisionsSpent(await latestRun(project.id), stage);
+    if (review.verdict === 'revise' && spent < reviewLimit(run) && await applyProductionRevision(project.id, run, stage, review)) {
+      await recordReview(project.id, reviewEntry(stage, review, { changes: review.changes.map((c) => trimTo(`${c.field || c.sceneId}: ${c.text}`, 300)) }));
+      project = await getProject(project.id);
+      continue;
+    }
+    project = await getProject(project.id);
+    const readiness = productionReadiness(project);
+    const why = review.verdict !== 'revise' ? '' : spent >= reviewLimit(run) ? 'Revision limit reached; accepted the latest version. ' : 'Nothing to revise was supplied; accepted as is. ';
+    if (readiness[stage].problems.length) {
+      await recordReview(project.id, reviewEntry(stage, review, { verdict: 'revise', notes: `Could not approve: ${trimTo(readiness[stage].problems[0], 300)} ${review.notes || ''}`.trim() }));
+      return project;
+    }
+    await deps.approveProductionReview(project.id, { stage, basis: readiness.basis[stage], approvedBy: 'orchestrator', reviewer: orchestratorIdentity(run, review.route) });
+    await recordReview(project.id, reviewEntry(stage, review, { verdict: 'approve', notes: `${why}${review.notes || ''}`.trim() }));
+    return getProject(project.id);
+  }
+}
+
+/** Art and storyboard: the orchestrator when the run has one, else the operator's auto-approve grant. */
+const settleProductionStage = (project, run, stage) => (isOrchestratedRun(run)
+  ? orchestrateProductionStage(project, run, stage)
+  : autoApproveStage(project, run, stage));
+
+/**
+ * The orchestrator's look at the finished film. Nothing is left to change at
+ * this point, so a critical verdict is logged as notes (`noted`) beside the
+ * render rather than holding the run. A failed look is logged, never fatal.
+ */
+async function orchestrateFinal(projectId, run) {
+  const project = await getProject(projectId);
+  const frames = await deps.finalReviewFrames(run.output.renderJobId).catch((err) => ({ images: [], frameTimes: [], facts: { error: err.message }, cleanup: async () => {} }));
+  try {
+    const { buildFinalReviewPrompt } = await reviewModule();
+    const review = await askReview(run, 'final', buildFinalReviewPrompt({ ...ideaOf(run), concept: project?.concept, facts: frames.facts, frameTimes: frames.frameTimes }), frames.images);
+    await recordReview(projectId, reviewEntry('final', review, { verdict: review.verdict === 'approve' ? 'approve' : 'noted',
+      issues: review.issues || [], ...(frames.images.length ? {} : { notes: `Judged without frames (${frames.facts?.error || 'none could be captured'}). ${review.notes || ''}`.trim() }) }));
+  } catch (err) {
+    await recordReview(projectId, { checkpoint: 'final', verdict: 'noted', score: null, notes: `The final review could not run: ${trimTo(err.message, 300)}`, route: null, visual: false });
+  } finally {
+    await frames.cleanup?.().catch(() => {});
+  }
 }
 
 // ---- stage executors -------------------------------------------------------------
@@ -253,6 +634,56 @@ async function localSong({ project, run, save }) {
   return { output: { trackId, songSource: 'local' } };
 }
 
+// Draft, then — when the brief asks for it — review & revise on the
+// `lyricsReview` stage's LLM. The review is a step inside the lyrics stage (the
+// stage list is wire/UI contract), reported through `stages.lyrics.step`. The
+// draft is stored before the review runs, so a failed review retries only the review.
+async function writeRunLyrics({ project, run, save }) {
+  if (run.brief.instrumental) return { output: { lyrics: '' } };
+  const review = autonomousLyricsReviewEnabled(run.brief);
+  const description = run.output.musicalDescription;
+  const guidance = run.brief.guidance || undefined;
+  const step = (name) => patchRun(project.id, (r) => stagePatch(r, 'lyrics', { step: name }));
+  let draft = review ? run.output.lyricsDraft : null;
+  let draftRoute = review ? run.output.lyricsRoute : null;
+  if (!draft) {
+    if (review) await step('draft');
+    const { route, ...llm } = await llmOf(run, 'lyrics');
+    ({ lyrics: draft } = await deps.writeLyrics({ description, guidance, ...llm }));
+    draftRoute = route;
+    await recordRoute(project, 'lyrics', route);
+    if (!review) return { output: { lyrics: draft, ...(route ? { lyricsRoute: route } : {}) } };
+    await save({ output: { lyricsDraft: draft, ...(route ? { lyricsRoute: route } : {}) } });
+  }
+  await step('review');
+  const { route, ...llm } = await llmOf(run, 'lyricsReview');
+  const revised = await deps.reviewLyrics({ lyrics: draft, description, guidance, ...llm });
+  await recordRoute(project, 'lyricsReview', route);
+  return { output: {
+    lyricsDraft: draft,
+    lyrics: revised.lyrics,
+    lyricsReviewNotes: revised.notes || '',
+    ...(draftRoute ? { lyricsRoute: draftRoute } : {}),
+    ...(route ? { lyricsReviewRoute: route } : {}),
+  } };
+}
+
+async function createRunStyle({ project, run }) {
+  if (musicVideoMediaMode(project) === 'code-only') {
+    await deps.updateProject(project.id, { concept: { prompt: run.output.concept.prompt, style: run.output.concept.style || run.output.moodBoard?.stylePrompt || '' } });
+    return { output: { moodBoardId: null } };
+  }
+  const board = run.output.moodBoard;
+  const moodBoardId = run.brief.moodBoardId || run.output.moodBoardId || (await deps.createMoodBoard(board)).id;
+  // The board is also the project's linked mood board; the server derives the
+  // authored style snapshot from it (styleSnapshots.js).
+  await deps.updateProject(project.id, {
+    concept: { prompt: run.output.concept.prompt, ...(run.output.concept.style ? { style: run.output.concept.style } : {}) },
+    visualSpec: { moodBoardId },
+  });
+  return { output: { moodBoardId } };
+}
+
 const STAGES = {
   async brief({ project, run }) {
     const { route, ...llm } = await llmOf(run, 'brief');
@@ -265,55 +696,28 @@ const STAGES = {
     return { output: { ...brief, ...(route ? { briefRoute: route } : {}) } };
   },
 
-  // Draft, then — when the brief asks for it — review & revise on the
-  // `lyricsReview` stage's LLM. The review is a step inside this stage (the
-  // stage list is wire/UI contract), reported through `stages.lyrics.step`.
-  // The draft is stored before the review runs, so a failed review retries
-  // only the review.
-  async lyrics({ project, run, save }) {
-    if (run.brief.instrumental) return { output: { lyrics: '' } };
-    const review = autonomousLyricsReviewEnabled(run.brief);
-    const description = run.output.musicalDescription;
-    const guidance = run.brief.guidance || undefined;
-    const step = (name) => patchRun(project.id, (r) => stagePatch(r, 'lyrics', { step: name }));
-    let draft = review ? run.output.lyricsDraft : null;
-    let draftRoute = review ? run.output.lyricsRoute : null;
-    if (!draft) {
-      if (review) await step('draft');
-      const { route, ...llm } = await llmOf(run, 'lyrics');
-      ({ lyrics: draft } = await deps.writeLyrics({ description, guidance, ...llm }));
-      draftRoute = route;
-      await recordRoute(project, 'lyrics', route);
-      if (!review) return { output: { lyrics: draft, ...(route ? { lyricsRoute: route } : {}) } };
-      await save({ output: { lyricsDraft: draft, ...(route ? { lyricsRoute: route } : {}) } });
+  // The orchestrator judges the written lyrics and may rewrite them (orchestrateLyrics).
+  async lyrics(ctx) {
+    const { project, run, save } = ctx;
+    if (run.brief.instrumental || !isOrchestratedRun(run)) return writeRunLyrics(ctx);
+    // The draft (or reviewed draft) is stored before the orchestrator judges it,
+    // so a failed review retries only the review.
+    let written = run.output.lyricsForReview ? { output: { lyrics: run.output.lyricsForReview } } : null;
+    if (!written) {
+      written = await writeRunLyrics(ctx);
+      await save({ output: { ...written.output, lyricsForReview: written.output.lyrics } });
     }
-    await step('review');
-    const { route, ...llm } = await llmOf(run, 'lyricsReview');
-    const revised = await deps.reviewLyrics({ lyrics: draft, description, guidance, ...llm });
-    await recordRoute(project, 'lyricsReview', route);
-    return { output: {
-      lyricsDraft: draft,
-      lyrics: revised.lyrics,
-      lyricsReviewNotes: revised.notes || '',
-      ...(draftRoute ? { lyricsRoute: draftRoute } : {}),
-      ...(route ? { lyricsReviewRoute: route } : {}),
-    } };
+    const lyrics = await orchestrateLyrics(project.id, run, written.output.lyrics);
+    return { output: { ...written.output, lyrics, lyricsForReview: null } };
   },
 
-  async style({ project, run }) {
-    if (musicVideoMediaMode(project) === 'code-only') {
-      await deps.updateProject(project.id, { concept: { prompt: run.output.concept.prompt, style: run.output.concept.style || run.output.moodBoard?.stylePrompt || '' } });
-      return { output: { moodBoardId: null } };
+  async style({ project, run, save }) {
+    // The orchestrator judges the sound & look before the mood board is made from it.
+    if (isOrchestratedRun(run) && !run.output.styleReviewed) {
+      const reviewed = await orchestrateStyle(project.id, run);
+      ({ run } = await save({ output: { ...reviewed, styleReviewed: true } }));
     }
-    const board = run.output.moodBoard;
-    const moodBoardId = run.brief.moodBoardId || run.output.moodBoardId || (await deps.createMoodBoard(board)).id;
-    // The board is also the project's linked mood board; the server derives the
-    // authored style snapshot from it (styleSnapshots.js).
-    await deps.updateProject(project.id, {
-      concept: { prompt: run.output.concept.prompt, ...(run.output.concept.style ? { style: run.output.concept.style } : {}) },
-      visualSpec: { moodBoardId },
-    });
-    return { output: { moodBoardId } };
+    return createRunStyle({ project, run });
   },
 
   async song({ project, run, save }) {
@@ -365,6 +769,11 @@ const STAGES = {
 
   async analyze({ project, run }) {
     await deps.analyzeSong(project.id);
+    if (isOrchestratedRun(run) && (await orchestrateSong(project.id, run)).retake) {
+      // A local fallback stays local: the retake must not send the run back to Suno.
+      const reset = Object.fromEntries(SONG_OUTPUT_KEYS.filter((key) => key !== 'songSource' && key !== 'songFallbackReason').map((key) => [key, null]));
+      return { output: reset, goto: 'song', unlinkTrack: run.output.trackId || null };
+    }
     // The single's own cover design, drafted from the song just made, ready
     // for the publishing kit. Best-effort: a failed draft never stops the video.
     if (!project.publishKit?.coverArt?.design) {
@@ -383,13 +792,17 @@ const STAGES = {
     await prepareProductionReview(project.id);
     project = await getProject(project.id);
     const artWasApproved = productionReadiness(project).art.approved;
-    project = await autoApproveStage(project, run, 'art');
+    project = await settleProductionStage(project, run, 'art');
     if (!artWasApproved && productionReadiness(project).art.approved) {
       // Preparing stops at the art gate; with art approved it drafts the storyboard.
       await prepareProductionReview(project.id);
       project = await getProject(project.id);
     }
-    project = await autoApproveStage(project, run, 'storyboard');
+    if (isOrchestratedRun(run)) {
+      await orchestrateAlignment(project.id, run);
+      project = await getProject(project.id);
+    }
+    project = await settleProductionStage(project, run, 'storyboard');
     assertProductionApproval(project, 'storyboard');
     // The authoring stage's pin, else the run's code-authoring pin taken as
     // given (production checks it exactly), else the direction LLM.
@@ -413,7 +826,10 @@ const STAGES = {
       directive: trimTo([run.brief.prompt, run.brief.guidance].filter(Boolean).join('\n\n'), 4000),
       pool: autonomousPool(run.brief.tools, run.brief.models).filter((route) => musicVideoAllowsMedia(project, route.kind)),
       limits: { ...run.brief.limits, ...(run.brief.budgetUsd != null ? { spendCapUsd: run.brief.budgetUsd } : {}) },
-      reviewer: { providerId: run.brief.llm?.providerId || null, model: run.brief.llm?.model || null },
+      // The orchestrator also judges production's plates and drafts when the run has one.
+      reviewer: isOrchestratedRun(run)
+        ? { providerId: run.brief.orchestrator.providerId, model: run.brief.orchestrator.model || null }
+        : { providerId: run.brief.llm?.providerId || null, model: run.brief.llm?.model || null },
       authoring: input,
     });
     return { output: { productionRunId: started.run.id }, wait: true };
@@ -459,6 +875,15 @@ async function advance(projectId) {
         return;
       }
       const finishedAt = new Date().toISOString();
+      if (result.goto) {
+        // The orchestrator sent the run back (a song retake): both stages run again.
+        const pending = { status: 'pending', startedAt: null, finishedAt: null, error: null, step: null };
+        await patchRun(projectId, (r) => ({ output: result.output, stage: result.goto,
+          stages: { [stage]: { ...r.stages[stage], ...pending }, [result.goto]: { ...r.stages[result.goto], ...pending } } }));
+        if (result.unlinkTrack) await unlinkRunTrack(projectId, run.id, result.unlinkTrack);
+        console.log(`🎬 Autonomous music video ${short(run.id)} going back to ${result.goto}`);
+        continue;
+      }
       if (result.wait) {
         await patchRun(projectId, (r) => ({ output: result.output, ...stagePatch(r, stage, { status: 'running', step: result.step || null }) }));
         console.log(`🎬 Autonomous music video ${short(run.id)} handed ${stage} to ${result.step === RENDER_STEP ? 'the final render' : 'production'}`);
@@ -488,6 +913,23 @@ function advanceInBackground(projectId) {
   advance(projectId).catch((err) => console.error(`❌ Autonomous music video advance failed for ${short(projectId)}: ${err.message}`));
 }
 
+/**
+ * Drop the project's link to a retaken song. The rejected track stays in the
+ * music library (the director may still want it); only the link goes, and
+ * only while it still names that track (never one the director picked since).
+ * Unlinking keeps the lyric cues' text and clears their timings (applyProjectPatch
+ * → invalidateTimedText), and the new song's link re-seeds them from its own
+ * lyrics. A failed unlink is not fatal: that same link replaces the old one.
+ */
+async function unlinkRunTrack(projectId, runId, trackId) {
+  const project = await getProject(projectId);
+  if (project?.trackId === trackId) {
+    await deps.updateProject(projectId, { trackId: null })
+      .catch((err) => console.warn(`⚠️ Autonomous music video ${short(runId)} could not unlink the retaken track: ${err.message}`));
+  }
+  console.log(`🎬 Autonomous music video ${short(runId)} retaking its song`);
+}
+
 // ---- director actions ------------------------------------------------------------
 
 const emptyStages = () => Object.fromEntries(AUTONOMOUS_STAGE_IDS.map((id) => [id, { status: 'pending', startedAt: null, finishedAt: null, error: null }]));
@@ -499,6 +941,7 @@ const emptyStages = () => Object.fromEntries(AUTONOMOUS_STAGE_IDS.map((id) => [i
 export async function startAutonomousVideo(input, { autoApproveAuthorized = false } = {}) {
   const brief = { ...normalizeAutonomousBrief(input), ...autoApproveGrant(input?.autoApprove, autoApproveAuthorized) };
   if (!brief.prompt) throw runError(400, 'VALIDATION_ERROR', 'A prompt is required');
+  if (brief.orchestrator) Object.assign(brief, orchestratorGrant(autoApproveAuthorized));
   const now = new Date().toISOString();
   const created = await deps.createProject({
     name: brief.name || trimTo(brief.prompt.replace(/\s+/g, ' '), 60) || 'Autonomous music video',
@@ -531,7 +974,7 @@ export async function startAutonomousVideo(input, { autoApproveAuthorized = fals
     updatedAt: now,
   };
   const out = await mutateProjectRecord(created.id, (current) => ({ project: { ...current, autonomousRun: run }, run }));
-  console.log(`🎬 Autonomous music video ${short(run.id)} started (${brief.tools.length} tool(s), ${brief.checkpoints.length} checkpoint(s)${brief.autoApprove.length ? `, auto-approve ${brief.autoApprove.join('/')}` : ''}${brief.origin.kind === 'schedule' ? ', scheduled' : ''})`);
+  console.log(`🎬 Autonomous music video ${short(run.id)} started (${brief.tools.length} tool(s), ${brief.orchestrator ? `orchestrated by ${brief.orchestrator.providerId}` : `${brief.checkpoints.length} checkpoint(s)`}${brief.autoApprove.length ? `, auto-approve ${brief.autoApprove.join('/')}` : ''}${brief.origin.kind === 'schedule' ? ', scheduled' : ''})`);
   publish(out.project, out.run);
   advanceInBackground(created.id);
   return { project: out.project, run: presentAutonomousRun(out.run) };
@@ -609,16 +1052,7 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
         : stagePatch(r, stage, { error: null })),
     };
   });
-  if (retakenTrackId) {
-    // The rejected track stays in the music library (the director may still
-    // want it); only the project's link to it goes. Unlinking keeps the lyric
-    // cues' text and clears their timings (applyProjectPatch → invalidateTimedText),
-    // and the new song's link re-seeds them from its own lyrics. A failed unlink
-    // is not fatal: that same link replaces the old one.
-    await deps.updateProject(projectId, { trackId: null })
-      .catch((err) => console.warn(`⚠️ Autonomous music video ${short(out.run.id)} could not unlink the retaken track: ${err.message}`));
-    console.log(`🎬 Autonomous music video ${short(out.run.id)} retaking its song`);
-  }
+  if (retakenTrackId) await unlinkRunTrack(projectId, out.run.id, retakenTrackId);
   if (out.run.stage === 'produce' && (out.run.output.renderJobId || out.run.output.productionDone)) {
     // Production (or the code render) already finished; only the final render is left.
     await reconcileFinalRender(projectId, { restart: true });
@@ -712,7 +1146,23 @@ async function failFinalRender(projectId, message, errorCode = 'FINAL_RENDER_FAI
   await park(projectId, 'failed', { error, errorCode });
 }
 
+// projectId -> the final review in flight, so a render event and a reconcile
+// that both see the finished render share one look instead of reviewing twice.
+const finalReviews = new Map();
+
 async function completeFinalRender(projectId, run) {
+  if (isOrchestratedRun(run) && run.output.finalReviewedJobId !== run.output.renderJobId) {
+    if (finalReviews.has(projectId)) return finalReviews.get(projectId);
+    const review = (async () => {
+      await patchRun(projectId, (r) => stagePatch(r, 'produce', { status: 'running', step: 'final-review' }));
+      await orchestrateFinal(projectId, run);
+      await patchRun(projectId, () => ({ output: { finalReviewedJobId: run.output.renderJobId || null } }));
+    })();
+    finalReviews.set(projectId, review);
+    try { await review; } finally { finalReviews.delete(projectId); }
+    // Stopped or canceled while the orchestrator watched: leave that state alone.
+    if ((await latestRun(projectId))?.status !== 'running') return;
+  }
   await patchRun(projectId, (r) => ({
     status: 'completed',
     ...stagePatch(r, 'produce', { status: 'done', finishedAt: new Date().toISOString(), error: null, step: null }),

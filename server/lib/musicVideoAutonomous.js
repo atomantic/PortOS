@@ -98,6 +98,35 @@ export const AUTONOMOUS_AUTO_APPROVE_STAGES = Object.freeze(['art', 'storyboard'
 export const normalizeAutoApprove = (list) => AUTONOMOUS_AUTO_APPROVE_STAGES
   .filter((stage) => Array.isArray(list) && list.includes(stage));
 
+// ---- orchestrated mode --------------------------------------------------------
+// An orchestrated run names an ORCHESTRATOR — a provider/model/effort that
+// stands in for the director at every review point a human would otherwise
+// clear: it judges each output, approves it, or sends it back for revision
+// (bounded by `limits.maxReviewAttempts`). It replaces the human checkpoints,
+// so an orchestrated brief carries none, and it is approval authority, so the
+// route grants it only to an authenticated session (like `autoApprove`).
+export const ORCHESTRATOR_CHECKPOINTS = Object.freeze([
+  Object.freeze({ id: 'lyrics', label: 'Lyrics' }),
+  Object.freeze({ id: 'style', label: 'Sound & look' }),
+  Object.freeze({ id: 'song', label: 'Song' }),
+  Object.freeze({ id: 'art', label: 'Art direction' }),
+  Object.freeze({ id: 'alignment', label: 'Lyric timing' }),
+  Object.freeze({ id: 'storyboard', label: 'Storyboard' }),
+  Object.freeze({ id: 'final', label: 'Final video' }),
+]);
+export const ORCHESTRATOR_CHECKPOINT_IDS = Object.freeze(ORCHESTRATOR_CHECKPOINTS.map((c) => c.id));
+// approve = accepted as is; revise = the orchestrator changed or sent it back;
+// retake = a new song; noted = recorded only (nothing left to change, e.g. the final video).
+export const ORCHESTRATOR_VERDICTS = Object.freeze(['approve', 'revise', 'retake', 'noted']);
+// How many review entries a run keeps (oldest dropped first).
+export const ORCHESTRATOR_REVIEW_LOG_MAX = 60;
+
+/** The orchestrator pin `{ providerId, model, effort }`, or null when no provider is named. */
+export const normalizeOrchestrator = (raw) => normalizeMusicVideoLlm(raw);
+
+/** True when a run (or its brief) is orchestrated. */
+export const isOrchestratedRun = (runOrBrief) => !!(runOrBrief?.brief || runOrBrief)?.orchestrator?.providerId;
+
 export const AUTONOMOUS_DEFAULT_LIMITS = Object.freeze({ maxGenerations: 40, maxReviewAttempts: 3 });
 export const AUTONOMOUS_LIMIT_BOUNDS = Object.freeze({
   maxGenerations: Object.freeze({ min: 1, max: 500 }),
@@ -209,13 +238,23 @@ function normalizeAutonomousSettings(raw = {}) {
 /** True when a run brief asks for the lyric review & revise pass. */
 export const autonomousLyricsReviewEnabled = (brief) => brief?.lyricsReview === true || !!brief?.llmStages?.lyricsReview;
 
-/** Normalize a start request into the brief a run stores: the settings plus prompt, name and origin. */
+/**
+ * Normalize a start request into the brief a run stores: the settings plus
+ * prompt, name, origin and the orchestrator pin. The orchestrator is a start
+ * option only (it is approval authority bound to a signed-in session), so the
+ * scheduled task's params never carry one.
+ */
 export function normalizeAutonomousBrief(raw = {}) {
   const origin = raw.origin && typeof raw.origin === 'object' ? raw.origin : {};
+  const settings = normalizeAutonomousSettings(raw);
+  const orchestrator = normalizeOrchestrator(raw.orchestrator);
   return {
     prompt: clean(raw.prompt, AUTONOMOUS_PROMPT_MAX),
     name: clean(raw.name, AUTONOMOUS_NAME_MAX) || null,
-    ...normalizeAutonomousSettings(raw),
+    ...settings,
+    // The orchestrator clears every review point itself, so it parks at none.
+    ...(orchestrator ? { checkpoints: [] } : {}),
+    orchestrator,
     origin: {
       kind: AUTONOMOUS_ORIGINS.includes(origin.kind) ? origin.kind : 'manual',
       ideaId: clean(origin.ideaId, 80) || null,

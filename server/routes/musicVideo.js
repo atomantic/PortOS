@@ -1193,14 +1193,15 @@ router.post('/:id/production-runs/:runId/cancel', asyncHandler(async (req, res) 
 // `music-video:autonomous`. Optional checkpoints park it for approval. Only these
 // explicit requests (or the scheduled task) begin work — nothing at boot does.
 // A non-empty `autoApprove` lets the run approve those Production review stages
-// itself. Bind the grant to the authenticated session; proof still needs review evidence.
-const authorizeAutoApprove = async (req, autoApprove) => {
-  if (autoApprove === undefined) return false;
+// itself, and an `orchestrator` reviews and approves every stage for the operator.
+// Bind either grant to the authenticated session; proof still needs review evidence.
+const authorizeAutoApprove = async (req, autoApprove, orchestrator) => {
+  if (autoApprove === undefined && !orchestrator) return false;
   return requireProductionReviewer(req);
 };
 router.post('/autonomous', asyncHandler(async (req, res) => {
   const { password: _password, ...input } = validateRequest(musicVideoAutonomousStartSchema, req.body || {});
-  const autoApproveAuthorized = await authorizeAutoApprove(req, input.autoApprove);
+  const autoApproveAuthorized = await authorizeAutoApprove(req, input.autoApprove, input.orchestrator);
   res.status(202).json(await startAutonomousVideo(input, { autoApproveAuthorized }));
 }));
 
