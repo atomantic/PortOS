@@ -5,6 +5,7 @@ import { useLocalStoragePersisted } from './useLocalStorageBool';
 import { useRenderJobQueue } from './useRenderJobQueue';
 import { renderPromptCount, scopedPromptCount } from '../lib/universeBuilderCounts';
 import { DEFAULT_RENDER_OPTS, TRUNK_TABS } from '../lib/universeBuilderShared';
+import { pluralize } from '../lib/textUtils';
 
 /**
  * Owns Universe Builder batch-render configuration and queue orchestration.
@@ -113,7 +114,7 @@ export default function useUniverseRender({
     // so every row can match its own job the moment the spinner would start.
     await syncEntryIdsFromServer?.();
     enqueueEntryJobs(result.entryJobs);
-    toast.success(`Queued ${result.promptCount} renders → "${result.collectionName}"`);
+    toast.success(`Queued ${pluralize(result.promptCount, 'render')} → "${result.collectionName}"`);
     const updatedRuns = await listWorldRuns(selectedId).catch(() => runs);
     setRuns(updatedRuns);
   };

@@ -108,7 +108,7 @@ export default function Calendar() {
           <span className="text-sm text-gray-500">
             {accounts === null
               ? (loading ? 'Loading accounts…' : 'Accounts unavailable')
-              : `${formatCount(accounts.length)} accounts${accountsReady ? '' : ' (last loaded)'}`}
+              : `${formatCount(accounts.length)} ${accounts.length === 1 ? 'account' : 'accounts'}${accountsReady ? '' : ' (last loaded)'}`}
           </span>
         }
       />

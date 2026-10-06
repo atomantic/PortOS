@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import socket from '../services/socket';
 import { getMediaJob } from '../services/apiMediaJobs';
 import { evictOldest, ORPHAN_BUFFER_MAX } from '../lib/boundedMap';
+import { pluralize } from '../lib/textUtils';
 import toast from '../components/ui/Toast';
 
 // Failures landing within this window of each other are one batch.
@@ -18,7 +19,7 @@ function failureToastMessage(failMessage, failures) {
   }
   const named = labels.slice(0, MAX_NAMED_SCENES).join(', ');
   const more = labels.length > MAX_NAMED_SCENES ? `, +${labels.length - MAX_NAMED_SCENES} more` : '';
-  return `${failMessage} for ${failures.length} scenes${named ? ` (${named}${more})` : ''}${reason ? ` — ${reason}` : ''}`;
+  return `${failMessage} for ${pluralize(failures.length, 'scene')}${named ? ` (${named}${more})` : ''}${reason ? ` — ${reason}` : ''}`;
 }
 
 /**

@@ -84,7 +84,7 @@ describe('Calendar account availability', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
     expect(await screen.findByText(account.name)).toBeVisible();
-    expect(screen.getByText('1 accounts')).toBeVisible();
+    expect(screen.getByText('1 account')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Add Account' })).toBeEnabled();
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByLabelText('Current location')).toHaveTextContent('/calendar/config?from=2026-10-01');
@@ -118,7 +118,7 @@ describe('Calendar account availability', () => {
     expect(screen.getByRole('button', { name: 'Sync' })).toBeEnabled();
     await act(async () => rejectRefresh(new Error('Refresh unavailable')));
     expect(await screen.findByRole('alert')).toHaveTextContent('snapshot is stale');
-    expect(screen.getByText('1 accounts (last loaded)')).toBeVisible();
+    expect(screen.getByText('1 account (last loaded)')).toBeVisible();
     expect(within(screen.getByRole('region', { name: 'Last loaded calendar accounts' })).getByText(account.name)).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Sync' })).toBeNull();
     selectTab('Config');
@@ -171,6 +171,6 @@ describe('Calendar account availability', () => {
     expect(await screen.findByText(account.name)).toBeVisible();
     await act(async () => rejectFirst(new Error('Superseded read')));
     expect(screen.queryByRole('alert')).toBeNull();
-    expect(screen.getByText('1 accounts')).toBeVisible();
+    expect(screen.getByText('1 account')).toBeVisible();
   });
 });

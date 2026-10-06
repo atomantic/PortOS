@@ -19,6 +19,7 @@ import BeeperTab from '../components/messages/BeeperTab';
 import ContactsTab from '../components/messages/ContactsTab';
 import { getPageNavTabs } from '../../../server/lib/navManifest.js';
 import { buildPageNavTabs } from '../lib/pageNavTabs.js';
+import { pluralize } from '../lib/textUtils.js';
 
 // Presentation per tab id. The manifest (`tabGroup: 'messages'`) owns
 // id/label/order — this page owns how each tab looks and behaves.
@@ -161,7 +162,7 @@ export default function Messages() {
         // keys off, rather than teaching it a second "accounts" meaning.
         actions={loading || !ACCOUNT_TAB_IDS.has(activeTab) ? null : (
           <span className="text-sm text-gray-500">
-            {accounts === null ? 'Accounts unavailable' : `${accounts.length} accounts`}
+            {accounts === null ? 'Accounts unavailable' : pluralize(accounts.length, 'account')}
           </span>
         )}
       />

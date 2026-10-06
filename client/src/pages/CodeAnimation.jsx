@@ -26,6 +26,7 @@ import {
   uploadFile,
 } from '../services/api';
 import { copyToClipboard } from '../lib/clipboard';
+import { pluralize } from '../lib/textUtils';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../lib/safeStorage';
 import { UPLOAD_IMAGE_ACCEPT, validateImageFile } from '../utils/fileUpload';
 import { formatCount, timeAgo } from '../utils/formatters';
@@ -414,7 +415,7 @@ function FastCodeAnimation() {
     event.target.value = '';
     if (!files.length) return;
     const room = Math.max(0, maxRefs - draft.referenceImages.length);
-    if (files.length > room) toast.error(`Only ${room} more reference image(s) fit`);
+    if (files.length > room) toast.error(`Only ${pluralize(room, 'more reference image')} fit`);
     const valid = files.slice(0, room).filter((file) => {
       const invalid = validateImageFile(file, Infinity);
       if (invalid) toast.error(invalid);
