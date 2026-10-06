@@ -438,7 +438,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     id: 'runtime-recording-publication-across-processes',
     status: 'outstanding',
     modules: [
-      'services/runner.js', 'lib/tuiPromptRunner.js',
+      'services/runner.js', 'services/tuiPromptRunner.js', 'services/loops.js', 'cos-runner/index.js',
       'services/agentTuiSpawning/outputSpooler.js',
       'services/agentTuiSpawning/sessionController.js',
     ],
