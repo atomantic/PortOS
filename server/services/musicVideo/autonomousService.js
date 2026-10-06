@@ -660,13 +660,15 @@ async function writeRunLyrics({ project, run, save }) {
   const review = autonomousLyricsReviewEnabled(run.brief);
   const description = run.output.musicalDescription;
   const guidance = run.brief.guidance || undefined;
+  // The prompt carries the lyrical intent (hook, subject, imagery); the musical description only the sound.
+  const request = run.brief.prompt || undefined;
   const step = (name) => patchRun(project.id, (r) => stagePatch(r, 'lyrics', { step: name }));
   let draft = review ? run.output.lyricsDraft : null;
   let draftRoute = review ? run.output.lyricsRoute : null;
   if (!draft) {
     if (review) await step('draft');
     const { route, ...llm } = await llmOf(run, 'lyrics');
-    ({ lyrics: draft } = await deps.writeLyrics({ description, guidance, ...llm }));
+    ({ lyrics: draft } = await deps.writeLyrics({ description, guidance, request, ...llm }));
     draftRoute = route;
     await recordRoute(project, 'lyrics', route);
     if (!review) return { output: { lyrics: draft, ...(route ? { lyricsRoute: route } : {}) } };
@@ -674,7 +676,7 @@ async function writeRunLyrics({ project, run, save }) {
   }
   await step('review');
   const { route, ...llm } = await llmOf(run, 'lyricsReview');
-  const revised = await deps.reviewLyrics({ lyrics: draft, description, guidance, ...llm });
+  const revised = await deps.reviewLyrics({ lyrics: draft, description, guidance, request, ...llm });
   await recordRoute(project, 'lyricsReview', route);
   return { output: {
     lyricsDraft: draft,

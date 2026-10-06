@@ -346,9 +346,9 @@ describe('startAutonomousVideo', () => {
       musicVideoEvents.off('autonomous', onEvent);
     }
     expect(calls).toEqual(['createProject', 'brief', 'updateProject', 'lyrics', 'review']);
-    expect(doubles.writeLyrics).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'local-llm', model: 'small' }));
+    expect(doubles.writeLyrics).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'local-llm', model: 'small', request: 'p' }));
     expect(doubles.reviewLyrics).toHaveBeenCalledWith(expect.objectContaining({
-      lyrics: '[verse]\nrain on glass', description: BRIEF.musicalDescription, providerId: 'cloud', model: 'big', effort: 'high',
+      lyrics: '[verse]\nrain on glass', description: BRIEF.musicalDescription, request: 'p', providerId: 'cloud', model: 'big', effort: 'high',
     }));
     expect(steps).toEqual(expect.arrayContaining(['draft', 'review']));
     // The checkpoint parks on the revision, keeping the draft and the critique beside it.
