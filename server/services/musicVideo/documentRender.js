@@ -317,7 +317,7 @@ export async function encodeDocumentComposition({
   const { findFfmpeg, runFfmpegProcess, probeVideoGeometry, edgeFadeFilter } = await import('../../lib/ffmpeg.js');
   const { stageMusicVideoComposition } = await import('../htmlComposition/index.js');
   const { openComposition } = await import('../htmlComposition/browser.js');
-  const { encodeComposition } = await import('../htmlComposition/encode.js');
+  const { encodeComposition, encodeCompositionSegments } = await import('../htmlComposition/encode.js');
   const { loadHistory } = await import('../videoGen/history.js');
   const { AUDIO_NORM, buildAudioBedMix } = await import('../videoTimeline/audioBedMix.js');
   const ffmpeg = await findFfmpeg();
@@ -334,7 +334,8 @@ export async function encodeDocumentComposition({
       prepare: (dir) => stageDocumentData(dir, data, media),
     });
     signal?.throwIfAborted();
-    page = await openComposition(staged.directory, { signal, streamMedia: true, mediaMode: musicVideoMediaMode(project), ownedBrowser: true });
+    const openPage = (pageSignal) => openComposition(staged.directory, { signal: pageSignal, streamMedia: true, mediaMode: musicVideoMediaMode(project), ownedBrowser: true });
+    page = await openPage(signal);
     const metadata = await page.evaluate(`(() => {
       const c = globalThis.portosComposition;
       if (!c || typeof c.seek !== 'function') throw new Error('portosComposition.seek is required');
@@ -367,8 +368,10 @@ export async function encodeDocumentComposition({
     }
     const target = documentTargetFrame(parsed.data, project);
     const window = documentRenderWindow(target, { windowStart, windowEnd });
-    await encodeComposition(page, { ...target, durationSec: window.durationSec }, silent, {
-      videoFilter: musicVideoGradeFilter(project.composition?.grade, data.scenes, { fps: target.fps, offsetSec: window.startSec }),
+    // Long windows split across several browsers (encodeCompositionSegments).
+    await encodeCompositionSegments(page, { ...target, durationSec: window.durationSec }, silent, {
+      openPage, encode: encodeComposition,
+      videoFilterAt: (offsetSec) => musicVideoGradeFilter(project.composition?.grade, data.scenes, { fps: target.fps, offsetSec }),
       signal, offsetSec: window.startSec, onProgress: (fraction) => onProgress?.(fraction * 0.95),
     });
     page.check();

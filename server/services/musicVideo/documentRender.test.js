@@ -12,7 +12,7 @@ import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
-vi.mock('../htmlComposition/encode.js', () => ({ encodeComposition: vi.fn(async () => { throw new Error('stop at encoder'); }) }));
+vi.mock('../htmlComposition/encode.js', async (importOriginal) => ({ ...(await importOriginal()), encodeComposition: vi.fn(async () => { throw new Error('stop at encoder'); }) }));
 const { encodeComposition } = await import('../htmlComposition/encode.js');
 
 const { browser } = vi.hoisted(() => ({ browser: { seen: null, contract: null } }));
