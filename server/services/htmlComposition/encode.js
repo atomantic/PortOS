@@ -2,6 +2,8 @@ import { pcmToWavBuffer } from '../../lib/chiptuneRender.js';
 import { spawn } from '../../lib/childProcess.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { availableParallelism, totalmem } from 'node:os';
+import { rm, writeFile } from 'node:fs/promises';
 import sharp from 'sharp';
 import { blurFrame } from './shutterBlur.js';
 import { findFfmpeg, runFfmpegProcess, probeVideoDuration, H264_ENCODE_ARGS, AAC_ENCODE_ARGS, BT709_CONTAINER_ARGS, bt709TagFilter, planLoudnessMaster, reportMasteredLoudness } from '../../lib/ffmpeg.js';
@@ -37,7 +39,10 @@ const SCREENSHOT = Object.freeze({ format: 'png', optimizeForSpeed: true, fromSu
 // the terminal race releases a pending write on exit, disconnect or cancel.
 // `offsetSec` seeks a window of a longer timeline: frame n is drawn at
 // `offsetSec + n / fps` (a music-video excerpt stays on song time).
-export async function encodeComposition(page, contract, outputPath, { musicPath, audio, signal, onProgress, offsetSec = 0, videoFilter = null, master = false, runFfmpeg = runFfmpegProcess, spawnProcess = spawn, locateFfmpeg = findFfmpeg, tagFilter = bt709TagFilter } = {}) {
+// `continuous` marks a window that continues an earlier one (a parallel
+// segment): its first frame's auto-shutter comparison sees the real previous
+// frame instead of treating the window start as the start of the song.
+export async function encodeComposition(page, contract, outputPath, { musicPath, audio, signal, onProgress, offsetSec = 0, continuous = false, videoFilter = null, master = false, runFfmpeg = runFfmpegProcess, spawnProcess = spawn, locateFfmpeg = findFfmpeg, tagFilter = bt709TagFilter } = {}) {
   const ffmpeg = await locateFfmpeg();
   if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
   const tag = await tagFilter();
@@ -133,7 +138,7 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   // Output frames per sub-frame count: where a shutter render spent its time.
   const histogram = {};
   try {
-    let previous = null;
+    let previous = shutter?.samples === 'auto' && continuous && offsetSec > 0 && numFrames > 0 ? await capture(-1 / fps) : null;
     let centre = shutter?.samples === 'auto' && numFrames > 0 ? await capture(0) : null;
     for (let n = 0; n < numFrames; n++) {
       if (shutter) {
@@ -145,11 +150,11 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
           const next = n + 1 < numFrames ? await capture((n + 1) / fps) : null;
           const still = (previous || next) && (!previous || previous.equals(centre)) && (!next || next.equals(centre));
           frame = still ? { rgb: await toRgb(centre), count: 1 }
-            : await blurFrame(shutter, width, height, async offset => toRgb(await capture(Math.max(0, (n + offset * shutter.shutter) / fps))), await toRgb(centre));
+            : await blurFrame(shutter, width, height, async offset => toRgb(await capture(Math.max(-offsetSec, (n + offset * shutter.shutter) / fps))), await toRgb(centre));
           previous = centre;
           centre = next;
         } else {
-          frame = await blurFrame(shutter, width, height, async offset => toRgb(await capture(Math.max(0, (n + offset * shutter.shutter) / fps))));
+          frame = await blurFrame(shutter, width, height, async offset => toRgb(await capture(Math.max(-offsetSec, (n + offset * shutter.shutter) / fps))));
         }
         histogram[frame.count] = (histogram[frame.count] ?? 0) + 1;
         await write(frame.rgb);
@@ -177,6 +182,94 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
     stop('cleanup requested');
     // Wait for close, not just the first error, before deleting partial output.
     if (!exited) await new Promise(resolve => proc.once('close', resolve));
+  }
+}
+
+// Capture is serial per page: seek, screenshot, pipe, one frame at a time, so a
+// song-length render leaves most cores idle. A long render splits into frame
+// ranges, each captured by its own browser into its own segment, then the
+// segments join losslessly (stream copy). Seeks are deterministic by contract,
+// so each frame is the same whichever browser draws it. Each browser holds a
+// full-size page and its own encoder, so the count is capped by cores and RAM.
+const SEGMENT_MIN_FRAMES = 240;
+const SEGMENT_MAX_WORKERS = 4;
+const SEGMENT_BYTES_PER_WORKER = 3 * 1024 ** 3;
+
+export function compositionRenderWorkers({ cores = availableParallelism(), memoryBytes = totalmem() } = {}) {
+  return Math.max(1, Math.min(SEGMENT_MAX_WORKERS, Math.floor(cores / 2), Math.floor(memoryBytes / SEGMENT_BYTES_PER_WORKER)));
+}
+
+/** Contiguous frame ranges `[{ start, frames }]`, each at least SEGMENT_MIN_FRAMES long. */
+export function planSegments(numFrames, workers) {
+  const count = Math.max(1, Math.min(workers, Math.floor(numFrames / SEGMENT_MIN_FRAMES)));
+  const base = Math.floor(numFrames / count);
+  const extra = numFrames % count;
+  const segments = [];
+  for (let i = 0, start = 0; i < count; i++) {
+    const frames = base + (i < extra ? 1 : 0);
+    segments.push({ start, frames });
+    start += frames;
+  }
+  return segments;
+}
+
+// A video-only (silent) capture of `contract`, split across `workers` pages.
+// `page` draws the first segment; `openPage(signal)` opens each further one
+// and the segment closes it. `videoFilterAt(offsetSec)` builds a segment's
+// filter on song time. One segment is exactly `encodeComposition`.
+export async function encodeCompositionSegments(page, contract, outputPath, { openPage, workers = compositionRenderWorkers(), offsetSec = 0, videoFilterAt = () => null, signal, onProgress, encode = encodeComposition, runFfmpeg = runFfmpegProcess, locateFfmpeg = findFfmpeg } = {}) {
+  const { fps, durationSec } = contract;
+  const numFrames = Math.round(durationSec * fps);
+  const segments = planSegments(numFrames, workers);
+  if (segments.length === 1) {
+    return encode(page, contract, outputPath, { signal, onProgress, offsetSec, videoFilter: videoFilterAt(offsetSec) });
+  }
+  const ffmpeg = await locateFfmpeg();
+  if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
+  // One failed segment stops the rest instead of letting them run to the end.
+  const controller = new AbortController();
+  const relay = () => controller.abort(signal.reason);
+  signal?.addEventListener('abort', relay, { once: true });
+  const parts = segments.map((_, i) => `${outputPath}.part${i}.mp4`);
+  const listPath = `${outputPath}.parts.txt`;
+  const done = segments.map(() => 0);
+  const histogram = {};
+  try {
+    signal?.throwIfAborted();
+    const results = await Promise.allSettled(segments.map(async ({ start, frames }, i) => {
+      let segmentPage = i === 0 ? page : null;
+      try {
+        segmentPage ??= await openPage(controller.signal);
+        const at = Math.round((offsetSec + start / fps) * 1e6) / 1e6;
+        const result = await encode(segmentPage, { ...contract, durationSec: frames / fps }, parts[i], {
+          signal: controller.signal, offsetSec: at, continuous: start > 0, videoFilter: videoFilterAt(at),
+          onProgress: (_fraction, detail) => {
+            done[i] = detail?.frame ?? 0;
+            const frame = done.reduce((sum, value) => sum + value, 0);
+            onProgress?.(frame / numFrames, { frame, frames: numFrames });
+          },
+        });
+        for (const [count, total] of Object.entries(result?.sampleHistogram ?? {})) histogram[count] = (histogram[count] ?? 0) + total;
+      } catch (error) {
+        controller.abort(error);
+        throw error;
+      } finally {
+        if (i > 0 && segmentPage) await segmentPage.close().catch(() => {});
+      }
+    }));
+    signal?.throwIfAborted();
+    // Report the segment that failed first, not the ones it stopped.
+    const failed = results.find(result => result.status === 'rejected' && result.reason === controller.signal.reason)
+      ?? results.find(result => result.status === 'rejected');
+    if (failed) throw failed.reason;
+    await writeFile(listPath, parts.map(part => `file '${part.replaceAll("'", "'\\''")}'`).join('\n'));
+    const joined = await runFfmpeg({ bin: ffmpeg, signal, args: ['-hide_banner', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', listPath,
+      '-c', 'copy', '-movflags', '+faststart', '-y', outputPath] });
+    if (!joined.ok) throw new Error(`Joining render segments failed: ${joined.reason}`);
+    return Object.keys(histogram).length ? { sampleHistogram: histogram } : {};
+  } finally {
+    signal?.removeEventListener('abort', relay);
+    for (const path of [...parts, listPath]) await rm(path, { force: true }).catch(() => {});
   }
 }
 
