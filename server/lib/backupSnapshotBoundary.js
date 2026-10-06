@@ -1,6 +1,7 @@
 import { maintenance } from './maintenanceAdmission.js';
+import { backupSharedAdmission } from './backupSharedAdmission.js';
 /**
- * Process-local admission for durable file-plus-row publications during backup.
+ * Cross-process admission for durable file-plus-row publications during backup.
  * Callers hold one mutation lease across BOTH stores, not around individual
  * filesystem or SQL operations. The backup closes admission before rsync and
  * keeps it closed through the database dump and manifest write.
@@ -8,7 +9,8 @@ import { maintenance } from './maintenanceAdmission.js';
  * Database maintenance shares the boundary. A cut is refused while a maintenance
  * fence is up, and maintenance that must not observe or replace a half-published
  * pair takes the same cut around its own destructive step. Publication itself is
- * never refused here: under a fence the database already rejects the row write.
+ * waits for a snapshot; unreadable ownership fails closed. Under a database
+ * fence the database already rejects the row write.
  * Every retryable refusal carries BACKUP_SNAPSHOT_BUSY.
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -43,12 +45,17 @@ async function withAdmittedBackupAssetPublication(work) {
   while (!joinsAdmitted && (cutRequested || cutActive)) {
     await new Promise(resolve => publicationWaiters.push(resolve));
   }
+  let sharedLease;
+  while (!(sharedLease = backupSharedAdmission.tryPublication({ parent: joinsAdmitted ? scope.spawnedBy.sharedLease : null }))) {
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
   admitted += 1;
-  const lease = { active: true };
+  const lease = { active: true, sharedLease };
   try {
     return await publicationScope.run(lease, work);
   } finally {
     lease.active = false;
+    sharedLease.release();
     admitted -= 1;
     if (admitted === 0) {
       const waiters = drainWaiters;
@@ -67,12 +74,17 @@ export function holdsBackupAssetPublication() {
   return publicationScope.getStore()?.active === true;
 }
 
+/** Read-only ownership evidence for interrupted-publication recovery. */
+export function backupPublicationAdmissionStatus() {
+  return backupSharedAdmission.status();
+}
+
 /**
  * Whether a backup cut is requested or active. Optional housekeeping that would
  * otherwise wait out the whole snapshot can defer to its next pass instead.
  */
 export function backupSnapshotCutPending() {
-  return cutRequested || cutActive;
+  return cutRequested || cutActive || backupSharedAdmission.cutPending();
 }
 
 /** Wait for already admitted workflows to settle, or reject when they do not. */
@@ -121,11 +133,19 @@ export async function acquireBackupSnapshotCut({ timeoutMs = DEFAULT_DRAIN_TIMEO
   if (publicationScope.getStore()?.active) throw new Error('Backup snapshot cut cannot be acquired inside an asset publication');
   if (cutRequested || cutActive) throw busyError('Backup snapshot cut already owned');
   assertDatabaseAdmission();
+  const sharedCut = backupSharedAdmission.reserveCut();
   cutRequested = true;
+  const deadline = Date.now() + timeoutMs;
   try {
     if (admitted > 0) await awaitDrain(timeoutMs);
+    let blockers;
+    while ((blockers = backupSharedAdmission.publications()).length > 0) {
+      if (Date.now() >= deadline) throw Object.assign(busyError('Timed out draining asset publications for backup. Reconcile interrupted publications before retrying; ownership records must not be removed by age or PID.'), { blockers });
+      await new Promise(resolve => setTimeout(resolve, Math.min(25, Math.max(1, deadline - Date.now()))));
+    }
     assertDatabaseAdmission();
   } catch (error) {
+    sharedCut.release();
     cutRequested = false;
     releasePublications();
     throw error;
@@ -135,6 +155,7 @@ export async function acquireBackupSnapshotCut({ timeoutMs = DEFAULT_DRAIN_TIMEO
   let released = false;
   return () => {
     if (released) return;
+    sharedCut.release();
     released = true;
     cutActive = false;
     releasePublications();

@@ -113,3 +113,17 @@ vi.mock('./lib/maintenanceAdmission.js', async (importOriginal) => {
     if (entry.closed || path !== join(root, 'workflow-maintenance')) throw new Error('Unexpected maintenance test path');
   } }) };
 });
+
+// Publication admission remains real, but never shares ownership with the install
+// or another test file. Use real fs/UUIDs even when domain suites mock them.
+vi.mock('./lib/backupSharedAdmission.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  const io = await vi.importActual('node:fs');
+  const { randomUUID } = await vi.importActual('node:crypto');
+  const root = io.mkdtempSync(join(tmpdir(), 'backup-admission-workflow-'));
+  const entry = { io, root, closed: false };
+  maintenanceTestRoots.push(entry);
+  return { ...actual, backupSharedAdmission: actual.createBackupSharedAdmission(root, { io, makeId: randomUUID, assertWrite: path => {
+    if (entry.closed || path !== root) throw new Error('Unexpected backup admission test path');
+  } }) };
+});
