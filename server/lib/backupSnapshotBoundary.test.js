@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { acquireBackupSnapshotCut, runOutsideBackupAssetPublication, withBackupAssetPublication } from './backupSnapshotBoundary.js';
+import { rmSync } from 'node:fs';
+import { backupPublicationAdmissionStatus, acquireBackupSnapshotCut, runOutsideBackupAssetPublication, withBackupAssetPublication } from './backupSnapshotBoundary.js';
 
 const deferred = () => {
   let resolve;
@@ -71,6 +72,32 @@ describe('backup snapshot publication admission', () => {
     expect(next).toHaveBeenCalledOnce();
     rowWrite.resolve();
     await first;
+  });
+
+  it.each([false, true])('retains explicit rollback uncertainty after local callbacks settle (caught nested=%s)', async nested => {
+    const error = Object.assign(new Error('rollback incomplete'), { backupPublicationUncertain: true });
+    try {
+      if (nested) {
+        await withBackupAssetPublication(async () => {
+          await withBackupAssetPublication(async () => { throw error; }).catch(() => {});
+        });
+      } else {
+        await expect(withBackupAssetPublication(async () => { throw error; })).rejects.toBe(error);
+      }
+      const owners = backupPublicationAdmissionStatus().publications;
+      expect(owners).toEqual([expect.objectContaining({ kind: 'publication', uncertain: true })]);
+      await expect(acquireBackupSnapshotCut({ timeoutMs: 10 })).rejects.toMatchObject({
+        code: 'BACKUP_SNAPSHOT_BUSY', blockers: [expect.objectContaining({ id: owners[0].id, uncertain: true })],
+      });
+      // Successful rollback failures do not leave another recovery owner.
+      await expect(withBackupAssetPublication(async () => { throw new Error('rolled back'); })).rejects.toThrow('rolled back');
+      expect(backupPublicationAdmissionStatus().publications).toHaveLength(1);
+    } finally {
+      // Explicit fixture teardown, never a production stale-owner recovery.
+      for (const owner of backupPublicationAdmissionStatus().publications) rmSync(owner.path, { recursive: true });
+    }
+    const release = await acquireBackupSnapshotCut();
+    release();
   });
 
   it('bounds a local publication wait without releasing the cut or leaving a queued callback', async () => {

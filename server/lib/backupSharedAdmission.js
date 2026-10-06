@@ -46,7 +46,7 @@ export function createBackupSharedAdmission(directory, { io = fs, makeId = rando
       const owner = JSON.parse(io.readFileSync(join(path, 'owner.json'), 'utf8'));
       if (owner.version !== 1 || typeof owner.id !== 'string' || typeof owner.generation !== 'string'
         || !Number.isInteger(owner.pid) || !['publication', 'snapshot'].includes(owner.kind)) throw new Error('Invalid ownership record');
-      return { ...owner, path };
+      return { ...owner, path, ...(exists(join(path, 'uncertain')) ? { uncertain: true } : {}) };
     } catch { return { path, unreadable: true }; }
   };
   const writeOwner = (path, kind) => {
@@ -60,6 +60,13 @@ export function createBackupSharedAdmission(directory, { io = fs, makeId = rando
     return {
       owner, path,
       get active() { return active; },
+      markUncertain() {
+        const marker = join(path, 'uncertain');
+        const fd = io.openSync(marker, 'wx', 0o600);
+        try { io.writeFileSync(fd, 'Publication rollback failed; reconcile both stores before retiring this owner.\n'); io.fsyncSync(fd); }
+        finally { io.closeSync(fd); }
+        syncDir(path);
+      },
       release() {
         if (!active) return;
         if (describe(path).id !== owner.id) throw busy(`Backup admission ownership changed at ${path}; reconcile the recorded owner before retrying.`, { recoveryPath: path });
