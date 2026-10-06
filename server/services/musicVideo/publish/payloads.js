@@ -86,8 +86,14 @@ const instagramSafe = (caption) => caption.replace(/@(\w)/g, '$1');
  * name.substack.com; a custom domain or a pasted URL keeps only its host.
  */
 function substackPublication(value) {
-  const host = text(value).toLowerCase().replace(/^https?:\/\//, '').replace(/^@/, '').split(/[/?#]/)[0];
+  const address = text(value).toLowerCase().replace(/^https?:\/\//, '');
+  // A share link (open.substack.com/pub/name/p/…) names the publication in its path.
+  const shared = address.match(/^open\.substack\.com\/pub\/([a-z0-9-]{1,63})(?:[/?#]|$)/)?.[1];
+  if (shared) return `${shared}.substack.com`;
+  const host = address.split(/[/?#]/)[0];
   if (/^[a-z0-9-]{1,63}$/.test(host)) return `${host}.substack.com`;
+  // substack.com itself (a profile link like substack.com/@name) is not a publication.
+  if (/^(?:(?:www|open)\.)?substack\.com$/.test(host)) return null;
   return /^(?:[a-z0-9-]{1,63}\.)+[a-z]{2,}$/.test(host) ? host : null;
 }
 

@@ -108,6 +108,9 @@ describe('buildPublishPayload (#9282)', () => {
     expect(host('https://Example.substack.com/p/old-post')).toBe('example.substack.com');
     expect(host('news.example.com')).toBe('news.example.com');
     expect(() => host('not a host')).toThrow(/Substack publication/);
+    expect(host('https://open.substack.com/pub/example/p/old-post?r=abc')).toBe('example.substack.com');
+    expect(() => host('https://substack.com/@example')).toThrow(/Substack publication/);
+    expect(() => host('www.substack.com')).toThrow(/Substack publication/);
     expect(buildPublishPayload('substack', project({ copy }), { publication: 'example' }))
       .toEqual({ publication: 'example.substack.com', videoUrl: 'https://youtu.be/abc', title: 'Song', subtitle: '', body: 'Body' });
     expect(() => buildPublishPayload('substack', project({ copy, links: {} }), { publication: 'example' })).toThrow(/publish to YouTube first/);

@@ -36,7 +36,10 @@ export const substackAdapter = {
     });
     if (payload.body) {
       await step(label, 'write the body', async () => {
-        await page.locator(BODY).first().click();
+        // No click: once the URL became an embed, the editor's middle is the
+        // embed, and a click there would send keys to the player or select the
+        // embed for the paste to replace. Refocus the editor and go to its end.
+        await page.evaluate((sel) => document.querySelector(sel)?.focus(), BODY);
         await page.keyboard.press('ControlOrMeta+End');
         await page.keyboard.press('Enter');
         await pasteText(page, BODY, payload.body);
@@ -46,6 +49,7 @@ export const substackAdapter = {
     return {
       publication: payload.publication, title: payload.title, subtitle: payload.subtitle || null,
       video: embedded ? `Embedded: ${payload.videoUrl}` : `Link (not embedded): ${payload.videoUrl}`,
+      saved: 'Substack keeps this under Drafts; each Fill again saves another draft there',
     };
   },
 };
