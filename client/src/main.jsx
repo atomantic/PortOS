@@ -10,12 +10,14 @@ import { ThemeProvider } from './components/ThemeContext';
 import { isStaleChunkError, reloadOnceForStaleChunk } from './utils/staleChunkReload';
 import { reportClientError } from './lib/clientErrorReporter';
 import { registerServiceWorker } from './lib/registerServiceWorker';
+import { installStandaloneDownloadHandler } from './lib/standaloneDownload';
 import App from './App';
 import './index.css';
 
 // Offline app-shell + low-bandwidth asset caching (production, secure-context
 // only — no-op in dev and over plain-HTTP Tailnet). See lib/registerServiceWorker.
 registerServiceWorker();
+installStandaloneDownloadHandler();
 
 // Start checking for a newer build as soon as a chunk preload fails. Vite also
 // emits this for module evaluation errors, so the recovery helper reloads only
