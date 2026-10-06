@@ -647,6 +647,7 @@ export * from './concurrencyGate.js';
 export * from './dispatchLabels.js';
 export * from './distrokidForm.js';
 export * from './distrokidGenres.js';
+export * from './sunoPage.js';
 export * from './domainAutonomy.js';
 export * from './domainBudgets.js';
 export * from './eidoverseCreativeToolkit.js';
