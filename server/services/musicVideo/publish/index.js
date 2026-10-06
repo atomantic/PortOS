@@ -132,8 +132,13 @@ function withPlatformDefaults(target, options, platforms) {
 async function withAudio(target, payload, project, deps) {
   if (target !== 'distrokid') return payload;
   const resolveAudio = deps.resolveAudio || (await import('../projectAudio.js')).resolveProjectAudioPath;
-  const path = await resolveAudio(project);
-  if (!existsSync(path)) throw new ServerError('The song file is missing on disk: set the project audio again', { status: 422, code: 'PUBLISH_ASSET_MISSING' });
+  const noSong = (message) => new ServerError(message, { status: 422, code: 'PUBLISH_ASSET_MISSING' });
+  // The resolver speaks in analysis terms (NO_AUDIO, a stale track link); say what publishing needs instead.
+  const path = await resolveAudio(project).catch((err) => {
+    throw err?.code === 'NO_AUDIO' ? noSong('Set the project\'s song (a track or an uploaded file) before sending it to DistroKid')
+      : noSong(`The project's song can't be found (${err?.message || 'unknown error'}): set the project audio again`);
+  });
+  if (!path || !existsSync(path)) throw noSong('The song file is missing on disk: set the project audio again');
   return { ...payload, audio: { path } };
 }
 

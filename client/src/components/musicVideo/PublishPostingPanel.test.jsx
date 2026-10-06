@@ -54,6 +54,8 @@ describe('PublishPostingPanel (#9282)', () => {
     const { unmount } = render(<PublishPostingPanel project={p} publishing={publishing} />);
     const dk = row('Spotify (via DistroKid)');
     expect(within(dk).getByLabelText('Artist name')).toHaveAttribute('placeholder', 'Example Artist');
+    expect(dk).toHaveTextContent('as Example Artist');
+    expect(dk).not.toHaveTextContent('@Example Artist');
     expect(within(dk).getByLabelText('Instrumental')).toBeChecked(); // no lyric cues
     fireEvent.change(within(dk).getByLabelText('Songwriter legal first name'), { target: { value: 'Alice' } });
     fireEvent.change(within(dk).getByLabelText('Songwriter legal last name'), { target: { value: 'Example' } });

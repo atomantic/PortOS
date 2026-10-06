@@ -15,6 +15,7 @@ export const PUBLISH_TARGETS = [
   { target: 'reddit', label: 'Reddit', note: 'A native video post to r/aivideo (title and flair, no body)' },
   { target: 'stackerNews', label: 'Stacker News', note: 'A link post to the full video' },
   {
+    // `accountPlaceholder` marks an account that is a name, not an @handle.
     target: 'distrokid', label: 'Spotify (via DistroKid)', accountPlaceholder: 'Artist name',
     note: 'The song as a single for Spotify and other stores, with a square cover and the AI disclosure. You tick the agreements and press Upload',
     linkPlaceholder: 'Live on Spotify? Paste the Spotify link',
@@ -217,7 +218,7 @@ function TargetRow({ project, kit, entry, publishing }) {
     <li className="rounded border border-port-border p-2 space-y-2">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="text-xs font-medium">{label}{account && <span className="font-normal text-port-text-muted"> as @{account}</span>}</div>
+          <div className="text-xs font-medium">{label}{account && <span className="font-normal text-port-text-muted"> as {entry.accountPlaceholder ? '' : '@'}{account}</span>}</div>
           <div className="text-[11px] text-port-text-muted">{note}</div>
           {posted?.url && (
             <a href={posted.url} target="_blank" rel="noreferrer" className="text-[11px] text-port-accent flex items-center gap-1 break-all">

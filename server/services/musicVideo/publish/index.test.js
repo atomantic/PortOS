@@ -211,4 +211,18 @@ describe('publish drafts (#9282)', () => {
     expect(runFfmpegProcess.mock.calls[0][0].args.join(' ')).toContain('scale=3000:3000');
     expect(resolveAudio.mock.calls[0][0]).toMatchObject({ id, uploadedAudioFilename: 'song.wav' });
   });
+
+  it('refuses a DistroKid draft whose song is unset or gone, in publishing terms, before opening a tab', async () => {
+    const id = await readyProject();
+    await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, publishKit: { ...current.publishKit, thumbnail: 'thumb.jpg' } } }));
+    await mkdir(PATHS.videoThumbnails, { recursive: true });
+    await writeFile(join(PATHS.videoThumbnails, 'thumb.jpg'), 'x');
+    const { connect } = fakeBrowser();
+    const deps = { connect, adapters: { distrokid: adapter({ label: 'DistroKid' }) }, platforms: { distrokid: { enabled: true, account: 'Example Artist' } } };
+    const options = { songwriterFirst: 'Alice', songwriterLast: 'Example' };
+    await expect(preparePublishDraft(id, 'distrokid', options, deps)).rejects.toMatchObject({ status: 422, code: 'PUBLISH_ASSET_MISSING', message: expect.stringMatching(/Set the project's song/) });
+    await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, uploadedAudioFilename: 'gone.wav' } }));
+    await expect(preparePublishDraft(id, 'distrokid', options, deps)).rejects.toMatchObject({ status: 422, code: 'PUBLISH_ASSET_MISSING', message: expect.stringMatching(/missing on disk/) });
+    expect(connect).not.toHaveBeenCalled();
+  });
 });
