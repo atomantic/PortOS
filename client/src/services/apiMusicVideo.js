@@ -256,6 +256,24 @@ export const designMusicVideoCoverArt = (id, body, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish-kit/cover-art/design`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
 export const generateMusicVideoCoverArt = (id, body, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish-kit/cover-art/generate`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
+// Lettering controls (#10345): `design` is any subset of the cover design, merged over the song's; recomposes at once.
+export const saveMusicVideoCoverDesign = (id, design, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/cover-art/design`, { method: 'PUT', body: JSON.stringify({ design }), ...options });
+// One saved cover design per artist, and the typefaces the director uploaded (#10345).
+export const getMusicVideoArtistStyles = (options = {}) => request('/music-video/publish/artist-styles', options);
+export const saveMusicVideoArtistStyle = (body, options = {}) =>
+  request('/music-video/publish/artist-styles', { method: 'PUT', body: JSON.stringify(body), ...options });
+export const deleteMusicVideoArtistStyle = (name, options = {}) =>
+  request(`/music-video/publish/artist-styles?name=${encodeURIComponent(name)}`, { method: 'DELETE', ...options });
+export const getMusicVideoCoverFonts = (options = {}) => request('/music-video/publish/cover-fonts', options);
+export const uploadMusicVideoCoverFont = (file, options = {}) => {
+  const body = new FormData();
+  body.append('font', file, file.name || 'font');
+  return request('/music-video/publish/cover-fonts', { method: 'POST', body, ...options });
+};
+export const deleteMusicVideoCoverFont = (id, options = {}) =>
+  request(`/music-video/publish/cover-fonts/${encodeURIComponent(id)}`, { method: 'DELETE', ...options });
+export const musicVideoCoverFontUrl = (id) => `/api/music-video/publish/cover-fonts/${encodeURIComponent(id)}/file`;
 // ---- Posting (#9282) ----
 // Prepare fills the platform's post in the PortOS Browser → { draftId, target,
 // summary, screenshot }. Manual posting is handled outside this wrapper.

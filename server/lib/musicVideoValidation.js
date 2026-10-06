@@ -1,5 +1,6 @@
 import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
+import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
 /**
  * Music Video production mode — Zod schemas + shared enums (issue #1760, Phase 1).
  *
@@ -702,6 +703,27 @@ export const musicVideoCoverArtDesignSchema = z.object({
   providerId: z.string().min(1).max(200).optional(),
   model: z.string().min(1).max(200).optional(),
 }).strict();
+// #10345: the Lettering controls. A design is every COVER_DESIGN_OPTIONS field
+// plus tracking, colors and the rule; any subset is a patch over the song's
+// current design. `typeface` is a free string here (a built-in name or a
+// `font:<id>` for an uploaded font) and is resolved against the uploaded fonts
+// when the design is normalized.
+const coverHex = z.string().regex(/^#[0-9a-f]{6}$/i);
+const coverDesignFields = Object.fromEntries(Object.entries(COVER_DESIGN_OPTIONS)
+  .map(([key, list]) => [key, key === 'typeface' ? z.string().min(1).max(60) : z.enum(list)]));
+export const musicVideoCoverDesignSchema = z.object({
+  ...coverDesignFields,
+  tracking: z.number().min(-0.05).max(0.3),
+  titleColor: coverHex,
+  accentColor: coverHex,
+  rule: z.boolean(),
+}).partial().strict();
+export const musicVideoCoverDesignSaveSchema = z.object({ design: musicVideoCoverDesignSchema }).strict();
+export const musicVideoArtistStyleSaveSchema = z.object({
+  name: z.string().trim().min(1).max(60),
+  design: musicVideoCoverDesignSchema,
+}).strict();
+export const musicVideoArtistStyleDeleteSchema = z.object({ name: z.string().trim().min(1).max(60) }).strict();
 export const musicVideoCoverArtGenerateSchema = z.object({
   notes: z.string().max(1500).optional(),
   reference: z.object({ kind: z.literal('image'), filename: z.string().min(1).max(300) }).strict().optional(),

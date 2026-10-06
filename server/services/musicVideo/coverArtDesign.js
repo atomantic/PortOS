@@ -10,16 +10,18 @@
 import { extractJson } from '../../lib/jsonExtract.js';
 import { fenceBlock } from '../../lib/promptFencing.js';
 import { trimTo } from '../../lib/textUtils.js';
-import { COVER_DESIGN_OPTIONS, normalizeCoverDesign } from './coverArtCompose.js';
+import { COVER_DESIGN_OPTIONS, coverTypefaceChoices, customTypeface, normalizeCoverDesign } from '../../lib/musicVideoCoverOverlay.js';
 
 const lyricsText = (project) => (project?.lyricCues || []).map((c) => (typeof c?.text === 'string' ? c.text.trim() : '')).filter(Boolean).join('\n');
 
 /**
  * The drafting prompt. With a `previous` design the direction is an
  * adjustment to it; without one it is a fresh design (the direction, when
- * given, steering it).
+ * given, steering it). `artistStyle` (the artist's saved design) is where a
+ * fresh design starts, so a run of singles reads as a set; `fonts` are the
+ * typefaces the director uploaded, which the design may use.
  */
-export function buildCoverDesignPrompt(project, { direction = '', previous = null } = {}) {
+export function buildCoverDesignPrompt(project, { direction = '', previous = null, artistStyle = null, fonts = [] } = {}) {
   const castDirection = project?.castAndSets?.direction || {};
   const p = castDirection.protagonist || {};
   const facts = [
@@ -28,14 +30,19 @@ export function buildCoverDesignPrompt(project, { direction = '', previous = nul
     castDirection.look ? `The video's photographic look: ${trimTo(castDirection.look, 600)}` : null,
     [p.face, p.hair, p.signature].some(Boolean) ? `The singer: ${trimTo([p.face, p.hair, p.signature].filter(Boolean).join('; '), 600)}` : null,
   ].filter(Boolean).join('\n');
-  const options = Object.entries(COVER_DESIGN_OPTIONS).map(([k, list]) => `  "${k}": one of ${list.map((v) => `"${v}"`).join(', ')}`).join(',\n');
+  const options = Object.entries({ ...COVER_DESIGN_OPTIONS, typeface: coverTypefaceChoices(fonts) })
+    .map(([k, list]) => `  "${k}": one of ${list.map((v) => `"${v}"`).join(', ')}`).join(',\n');
+  const uploaded = fonts.map((f) => `"${customTypeface(f.id)}" is the artist's own typeface ${f.family}`);
   return [
     'You are the art director for a single\'s cover artwork (the square image Spotify shows). Design a look that is this song\'s own: grow it from the song\'s words and its video\'s world, not from a genre template or another artist\'s cover.',
     'The cover is one photograph with the song title and artist name set over it in type. You choose the photo and the type treatment.',
     facts,
     fenceBlock('Lyrics', lyricsText(project) || '(no lyrics)', 3000),
     previous ? fenceBlock('The current design (adjust it; keep what the direction does not change)', JSON.stringify(previous), 3000) : '',
+    !previous && artistStyle ? fenceBlock("The artist's saved style (start from it so their singles read as a set; change only what this song calls for)", JSON.stringify(artistStyle), 3000) : '',
     direction ? fenceBlock(previous ? "The artist's adjustment" : "The artist's direction", direction, 1500) : '',
+    'Title treatments: "outline" sets hollow letters, "stencil" cuts each line with a thin gap. Artist name: "with-title" sets it right under the title, "opposite-corner" puts it at the far edge.',
+    uploaded.length ? `Typefaces: ${uploaded.join('; ')}. Prefer one when it suits the song.` : '',
     'Return ONLY a JSON object:',
     `{
   "imagePrompt": "the cover photograph to generate, in one paragraph: subject, framing, light, palette, texture. Square. No text or lettering in the image. Leave calm space where the title goes.",
@@ -52,11 +59,11 @@ ${options},
 }
 
 /** The model's answer as `{ design, imagePrompt, rationale }`, or null when it has no usable design. */
-export function parseCoverDesign(text) {
+export function parseCoverDesign(text, { fonts = [] } = {}) {
   const { value } = extractJson(text, { blockType: 'object' });
   if (!value || typeof value !== 'object' || !value.design || typeof value.design !== 'object') return null;
   return {
-    design: normalizeCoverDesign(value.design),
+    design: normalizeCoverDesign(value.design, { fonts }),
     imagePrompt: trimTo(typeof value.imagePrompt === 'string' ? value.imagePrompt : '', 1500),
     rationale: trimTo(typeof value.rationale === 'string' ? value.rationale : '', 300),
   };

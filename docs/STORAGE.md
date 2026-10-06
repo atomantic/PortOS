@@ -464,6 +464,10 @@ Apply this checklist to **every new feature that persists data**, and require it
 
 Optional SDK environments under `data/venvs/` are machine-local, regenerable runtime files, not application records. Reactor provisions its pinned SDK, private Python and checksum-verified uv manager on the first authorized render (or optionally through `npm run setup:reactor`); no seed, migration, database table, or peer synchronization is needed. Data Manager identifies these environments but does not purge them while render processes may use them.
 
+### Music Video cover lettering
+
+`data/cover-fonts/` is `file-primary`: the typefaces a director uploads for cover lettering (`<id>.ttf|otf|woff2`) plus a small `fonts.json` index (`{ id, family, ext, width, addedAt }`, width measured at upload). Machine-local and never federated: a font is a licensed binary the director chose for this install, and whether it renders depends on this machine's font system. It is included in normal data backups (no new exclude); it relates to no other record and needs no search, so it stays out of the DB. On macOS each font is also mirrored into `~/Library/Fonts/PortOS/`, because CoreText reads only Fonts folders; other platforms register the file with fontconfig through libvips. An upload is refused unless the renderer proves it can set text in it. The per-artist saved cover design is `settings.musicVideoPublishing.artistStyles` in the file-primary `data/settings.json` (keyed by lowercased artist name), beside the machine-local `platforms` choice; settings are not synced between machines. Neither needs a migration: a cover design stored before `titleStyle`/`tagLayout` existed normalizes to the previous look unchanged. Code: `server/services/musicVideo/coverFonts.js`, `publish/artistStyles.js`; layout: `server/lib/musicVideoCoverOverlay.js`.
+
 ### Private integration API keys
 
 `data/private/api-keys.json` is machine-local `file-primary` configuration,
