@@ -15,7 +15,8 @@ const ensureSchema = vi.fn(async () => {});
 const readImageSidecar = vi.fn(async () => ({ metadata: { prompt: 'p', createdAt: '2026-01-01T00:00:00.000Z' } }));
 const loadHistory = vi.fn(async () => ([{ id: 'job-1', filename: 'job-1.mp4', createdAt: '2026-01-02T00:00:00.000Z' }]));
 
-vi.mock('./db.js', () => ({ upsertAsset, reconcileMediaAssets, removeAsset }));
+vi.mock('./db.js', async () => ({ upsertAsset, reconcileMediaAssets, removeAsset,
+  queueMediaIndexRefresh: (await import('../../lib/fileWriteQueue.js')).createFileWriteQueue() }));
 vi.mock('../../lib/db.js', () => ({ checkHealth, ensureSchema }));
 vi.mock('../imageGen/local.js', () => ({ readImageSidecar, listGallery: vi.fn(async () => []) }));
 vi.mock('../videoGen/local.js', () => ({ loadHistory }));
@@ -86,6 +87,64 @@ describe('initMediaAssetIndex', () => {
     videoGenEvents.emit('completed', { generationId: 'job-2', videos: [{ id: 'job-2-landscape' }, { id: 'job-2-vertical' }] });
     await flush();
     expect(upsertAsset.mock.calls.map(([row]) => row.mediaKey)).toEqual(['video:job-2-landscape', 'video:job-2-vertical']);
+  });
+});
+
+describe('completed hooks across a queued restore refresh', () => {
+  it.each(['image', 'video'])('reads %s metadata only when its queued publication starts', async kind => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const { initMediaAssetIndex } = await import('./index.js');
+    const { queueMediaIndexRefresh } = await import('./db.js');
+    await initMediaAssetIndex();
+    const entered = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    const reader = kind === 'image' ? readImageSidecar : loadHistory;
+    const originalReader = reader.getMockImplementation();
+    const originalUpsert = upsertAsset.getMockImplementation();
+    let sourcePrompt = 'before restore';
+    let mirroredPrompt;
+    const written = [];
+    reader.mockImplementation(async () => {
+      const metadata = { prompt: sourcePrompt, createdAt: '2026-01-01T00:00:00.000Z' };
+      return kind === 'image' ? { metadata } : [{ id: 'job-1', filename: 'job-1.mp4', ...metadata }];
+    });
+    upsertAsset.mockImplementation(async row => {
+      if (!written.length) {
+        entered.resolve();
+        await release.promise;
+      }
+      written.push(row.data.prompt);
+      mirroredPrompt = row.data.prompt;
+    });
+    const emit = () => kind === 'image'
+      ? imageGenEvents.emit('completed', { filename: 'img-1.png' })
+      : videoGenEvents.emit('completed', { generationId: 'job-1' });
+    let rebuild;
+    try {
+      emit();
+      await entered.promise;
+      // This occupies the same queue as the real transactional rebuild (whose
+      // persistence is covered by db.test). A later completion must not read
+      // its source until that replacement has finished.
+      rebuild = queueMediaIndexRefresh(() => {
+        sourcePrompt = 'restored metadata';
+        mirroredPrompt = sourcePrompt;
+      });
+      emit();
+      await flush();
+      expect(reader).toHaveBeenCalledTimes(1);
+      expect(mirroredPrompt).toBeUndefined();
+      release.resolve();
+      await queueMediaIndexRefresh(() => {});
+      expect(written).toEqual(['before restore', 'restored metadata']);
+      expect(mirroredPrompt).toBe('restored metadata');
+    } finally {
+      release.resolve();
+      await rebuild;
+      await queueMediaIndexRefresh(() => {});
+      reader.mockImplementation(originalReader);
+      upsertAsset.mockImplementation(originalUpsert);
+    }
   });
 });
 

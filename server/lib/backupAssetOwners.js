@@ -316,13 +316,12 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     ],
   },
   {
-    // Async completion hooks and full reconciliation read file-backed media
-    // metadata before their derived Postgres writes, outside workflow admission.
-    // Poster edits also leave old thumbnail metadata in this derived mirror.
-    // Classify and verify the mirror's restore semantics in the final sweep;
-    // admitting authoritative history alone does not settle these DB pointers.
+    // Derived rows are excluded from snapshot dumps. Restore reconstructs
+    // them from authoritative sidecars/history before releasing the DB fence;
+    // failed reads or SQL retain the fence and cannot report success. File
+    // restores refresh the same mirror. No asset bytes are owned here.
     id: 'media-asset-index-refresh',
-    status: 'outstanding',
+    status: 'reference-only',
     modules: ['services/mediaAssetIndex/index.js', 'services/mediaAssetIndex/db.js'],
   },
   {
@@ -372,6 +371,12 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     id: 'digital-twin-documents-and-genome',
     status: 'admitted',
     modules: ['services/digital-twin-documents.js', 'services/genome.js'],
+  },
+  {
+    // Explicit file cleanup can leave external references by design, but one
+    // lease keeps its single/bulk deletion out of a copy-then-dump snapshot.
+    id: 'operator-file-purge', status: 'admitted',
+    modules: ['services/dataManager.js', 'routes/uploads.js', 'routes/attachments.js'],
   },
   // Anything the sweep did not reach. A new asset owner lands here until it is
   // classified; the claim cannot become `global` while this entry exists.

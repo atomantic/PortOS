@@ -16,6 +16,8 @@ import { syncFeedTables, syncFeedSequenceName } from '../lib/db/schema/syncFeed.
 // The real rewind rewrites this install's data/instances_sync_cursors.json.
 const rewindPostgresSyncCursors = vi.hoisted(() => vi.fn(async () => 0));
 vi.mock('./syncOrchestrator.js', () => ({ rewindPostgresSyncCursors }));
+// Restore schema fixtures own no gallery files; never scan the live install.
+vi.mock('./imageGen/local.js', () => ({ listGallery: async () => [] }));
 // The restore recovery journal (#9725) lives in data/ and fences the pool; keep
 // it in a disposable data root, never the install's live tree.
 const dataRoot = vi.hoisted(() => ({ path: null }));

@@ -24,7 +24,7 @@ import { isTestRunner } from '../../lib/runtimeEnv.js';
 import { checkHealth, ensureSchema } from '../../lib/db.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { videoGenEvents } from '../videoGen/events.js';
-import { upsertAsset, removeAsset, reconcileMediaAssets } from './db.js';
+import { upsertAsset, removeAsset, reconcileMediaAssets, queueMediaIndexRefresh } from './db.js';
 import { imageMediaKey, imageToRow, videoMediaKey, videoToRow } from './logic.js';
 
 export { reconcileMediaAssets } from './db.js';
@@ -44,18 +44,20 @@ export async function indexImage({ filename, temp } = {}) {
   // gallery file or sidecar — skip indexing it. It lives in imageCleanTmp and
   // is consumed by an explicit result-fetch, never listed in the gallery.
   if (temp) return;
-  const { readImageSidecar } = await import('../imageGen/local.js');
-  const { metadata } = await readImageSidecar(filename);
-  // Match disk gallery's timestamp fallback for uploads without a sidecar.
-  let createdAt = metadata.createdAt;
-  if (!createdAt) {
-    const [{ stat }, { join }, { PATHS }] = await Promise.all([
-      import('node:fs/promises'), import('node:path'), import('../../lib/fileUtils.js'),
-    ]);
-    createdAt = (await stat(join(PATHS.images, filename))).birthtime.toISOString();
-  }
-  const row = imageToRow({ filename, path: `/data/images/${filename}`, createdAt, ...metadata });
-  await upsertAsset(row).catch((err) => console.error(`❌ Media index image upsert failed: ${err.message}`));
+  return queueMediaIndexRefresh(async () => {
+    const { readImageSidecar } = await import('../imageGen/local.js');
+    const { metadata } = await readImageSidecar(filename);
+    // Match disk gallery's timestamp fallback for uploads without a sidecar.
+    let createdAt = metadata.createdAt;
+    if (!createdAt) {
+      const [{ stat }, { join }, { PATHS }] = await Promise.all([
+        import('node:fs/promises'), import('node:path'), import('../../lib/fileUtils.js'),
+      ]);
+      createdAt = (await stat(join(PATHS.images, filename))).birthtime.toISOString();
+    }
+    const row = imageToRow({ filename, path: `/data/images/${filename}`, createdAt, ...metadata });
+    await upsertAsset(row).catch((err) => console.error(`❌ Media index image upsert failed: ${err.message}`));
+  });
 }
 
 // Index the just-generated video(s). The 'completed' event carries the job id
@@ -66,12 +68,14 @@ async function onVideoCompleted({ generationId, videos } = {}) {
   const ids = Array.isArray(videos) ? videos.map((video) => video?.id) : [generationId];
   const wanted = new Set(ids.filter((id) => typeof id === 'string' && id));
   if (!wanted.size) return;
-  const { loadHistory } = await import('../videoGen/local.js');
-  const history = await loadHistory().catch(() => []);
-  const entries = Array.isArray(history) ? history.filter((h) => wanted.has(h.id)) : [];
-  for (const entry of entries) {
-    await upsertAsset(videoToRow(entry)).catch((err) => console.error(`❌ Media index video upsert failed: ${err.message}`));
-  }
+  return queueMediaIndexRefresh(async () => {
+    const { loadHistory } = await import('../videoGen/local.js');
+    const history = await loadHistory().catch(() => []);
+    const entries = Array.isArray(history) ? history.filter((h) => wanted.has(h.id)) : [];
+    for (const entry of entries) {
+      await upsertAsset(videoToRow(entry)).catch((err) => console.error(`❌ Media index video upsert failed: ${err.message}`));
+    }
+  });
 }
 
 // Drop one row, non-fatally. The delete paths call this AFTER the file is
@@ -80,7 +84,7 @@ async function onVideoCompleted({ generationId, videos } = {}) {
 // behavior. Skipped under the escape hatch, where there's no index to maintain.
 async function unindexKey(mediaKey, kind) {
   if (!mediaKey || isEscapeHatch()) return;
-  await removeAsset(mediaKey).catch((err) => console.error(`❌ Media index ${kind} remove failed: ${err.message}`));
+  await queueMediaIndexRefresh(() => removeAsset(mediaKey)).catch((err) => console.error(`❌ Media index ${kind} remove failed: ${err.message}`));
 }
 
 /**

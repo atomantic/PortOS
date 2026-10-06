@@ -4,6 +4,7 @@
  */
 
 import { Router } from 'express';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { readdir, stat } from 'fs/promises';
 import { join, resolve } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -133,7 +134,7 @@ router.get('/:filename', asyncHandler(async (req, res) => {
 }));
 
 // DELETE /api/uploads/:filename - Delete a file
-router.delete('/:filename', asyncHandler(async (req, res) => {
+router.delete('/:filename', asyncHandler(async (req, res) => withBackupAssetPublication(async () => {
   const { filename } = req.params;
   const safeFilename = sanitizeFilename(filename);
   const filepath = resolve(UPLOADS_DIR, safeFilename);
@@ -152,10 +153,10 @@ router.delete('/:filename', asyncHandler(async (req, res) => {
   console.log(`🗑️ File deleted: ${safeFilename} (${formatSize(stats.size)})`);
 
   res.json({ success: true, filename: safeFilename, size: stats.size });
-}));
+})));
 
 // DELETE /api/uploads - Delete all files
-router.delete('/', asyncHandler(async (req, res) => {
+router.delete('/', asyncHandler(async (req, res) => withBackupAssetPublication(async () => {
   const { confirm } = req.query;
 
   if (confirm !== 'true') {
@@ -184,6 +185,6 @@ router.delete('/', asyncHandler(async (req, res) => {
     freedSpace,
     freedSpaceFormatted: formatSize(freedSpace)
   });
-}));
+})));
 
 export default router;

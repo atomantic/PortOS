@@ -22,10 +22,15 @@
  * without it.
  */
 
-import { readFile } from 'fs/promises';
+import { readFile, readdir, stat } from 'fs/promises';
 import { join } from 'path';
-import { query } from '../../lib/db.js';
+import { query, withTransaction } from '../../lib/db.js';
 import { dedupeByKey } from '../../lib/arrayUtils.js';
+import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
+
+// Queue the complete source-read → mirror-write flow, not merely SQL, so an
+// old completion hook cannot overwrite a restore's newer reconstruction.
+export const queueMediaIndexRefresh = createFileWriteQueue();
 import {
   imageToRow, videoToRow, compactGalleryRecord, compactSource, compactSourceToRow,
   COMPACT_SOURCE_FIELDS, COMPACT_PREVIEW_KEY, COMPACT_PROMPT_CHARS,
@@ -59,7 +64,7 @@ export async function upsertAsset(row) {
 // Upsert many rows in chunked multi-row INSERTs so reconcile (which runs every
 // boot over the whole gallery) is a handful of round-trips, not one-per-asset.
 const UPSERT_CHUNK = 500;
-async function upsertAssets(rows) {
+async function upsertAssets(rows, runQuery = query) {
   // Collapse duplicate media_keys BEFORE chunking (see `dedupeByKey` for why a
   // multi-row upsert cannot carry a repeated conflict key). Untreated, one throw
   // aborted the WHOLE reconcile — a single duplicated gallery filename or
@@ -78,7 +83,7 @@ async function upsertAssets(rows) {
       values.push(`($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}::jsonb, $${b + 5}, NOW())`);
       params.push(row.mediaKey, row.kind, row.ref, JSON.stringify(row.data), row.createdAt);
     });
-    await query(
+    await runQuery(
       `INSERT INTO media_assets (media_key, kind, ref, data, created_at, indexed_at)
        VALUES ${values.join(', ')}
        ${UPSERT_CONFLICT}`,
@@ -357,6 +362,34 @@ export async function readVideoHistoryStrict(historyPath) {
   return { ok: true, list: parsed };
 }
 
+// Restore must distinguish an absent gallery/sidecar from an unreadable or
+// corrupt one. The interactive gallery intentionally tolerates both, which
+// is inappropriate when replacing every restored cache row.
+async function readGalleryForRestore() {
+  const { PATHS } = await import('../../lib/fileUtils.js');
+  let files;
+  try { files = await readdir(PATHS.images); }
+  catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  const images = [];
+  for (const filename of files.filter(name => /\.png$/i.test(name))) {
+    const info = await stat(join(PATHS.images, filename));
+    if (!info.isFile()) throw new Error('Media gallery contains a non-file image');
+    let metadata = {};
+    for (const sidecar of [filename.replace(/\.png$/i, '.metadata.json'), `${filename}.metadata.json`]) {
+      let raw;
+      try { raw = await readFile(join(PATHS.images, sidecar), 'utf8'); }
+      catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+      metadata = JSON.parse(raw);
+      if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+        throw new Error('Media gallery sidecar must contain an object');
+      }
+      break;
+    }
+    images.push({ filename, path: `/data/images/${filename}`, createdAt: info.birthtime.toISOString(), ...metadata });
+  }
+  return images;
+}
+
 // Wrap a reader so a thrown error becomes { ok:false } rather than a trusted
 // empty list (the listGallery path throws on real I/O errors like EACCES/EIO).
 async function readListStrict(fn) {
@@ -386,14 +419,19 @@ async function readListStrict(fn) {
  * readers go through the same strict failure-vs-empty wrapper, so a throwing
  * reader uniformly skips that kind's prune rather than wiping it.
  */
-export async function reconcileMediaAssets(deps = {}) {
+export function reconcileMediaAssets(deps = {}) {
+  return queueMediaIndexRefresh(() => reconcileNow(deps));
+}
+
+async function reconcileNow(deps) {
   const now = new Date().toISOString();
   // Rows indexed after this instant (a generation/upload/peer sync landing
   // mid-reconcile) are absent from the disk snapshot but must not be pruned.
   const startedAt = now;
 
   const imageRead = await readListStrict(
-    deps.listGallery || (await import('../imageGen/local.js')).listGallery,
+    deps.listGallery || (deps.rebuild || deps.requireComplete
+      ? readGalleryForRestore : (await import('../imageGen/local.js')).listGallery),
   );
   // The video default path needs the file-level missing-vs-corrupt distinction
   // (loadHistory collapses both to []); an injected reader returns an array, so
@@ -406,6 +444,21 @@ export async function reconcileMediaAssets(deps = {}) {
     .map((it) => imageToRow(it, { now })).filter(Boolean);
   const videoRows = (Array.isArray(videoRead.list) ? videoRead.list : [])
     .map((v) => videoToRow(v, { now })).filter(Boolean);
+
+  // Restore cannot retain old or partially reconstructed cache rows. Read both
+  // authorities first, then replace the mirror atomically; a failed read is
+  // never a trusted empty gallery. This also removes future-dated legacy rows
+  // that the ordinary concurrent-generation prune deliberately preserves.
+  if ((deps.rebuild || deps.requireComplete) && (!imageRead.ok || !videoRead.ok)) {
+    throw new Error('Media index rebuild could not read authoritative files');
+  }
+  if (deps.rebuild) {
+    return withTransaction(async (client) => {
+      const removed = await client.query('DELETE FROM media_assets');
+      const indexed = await upsertAssets([...imageRows, ...videoRows], client.query.bind(client));
+      return { ok: true, indexed, pruned: removed.rowCount || 0, skippedPrune: [] };
+    });
+  }
 
   // Rows WRITTEN, which is below the rows read when disk repeated a ref.
   const indexed = await upsertAssets([...imageRows, ...videoRows]);

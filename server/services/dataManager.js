@@ -6,6 +6,7 @@ import { promisify } from 'util';
 import { parseFilesystemStats } from '../lib/fileCore.js';
 import { PATHS, ensureDir, isTopLevelEntryName, rmGuarded, writeFileGuarded } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import {
   federatedMediaInboxBusy, imageCleanTmpBusy, trainingRunsBusy, updateDetachedBusy,
 } from './dataManagerBusy.js';
@@ -444,80 +445,84 @@ export async function archiveCategory(categoryKey, options = {}) {
 }
 
 export async function purgeCategory(categoryKey, options = {}) {
-  if (!SAFE_NAME.test(categoryKey)) throw new ServerError('Invalid category name', { status: 400, code: 'VALIDATION_ERROR' });
-  const meta = CATEGORIES[categoryKey];
-  if (!meta?.deletable) {
-    throw new ServerError(`Category "${categoryKey}" is not purgeable`, { status: 403, code: 'CATEGORY_NOT_PURGEABLE' });
-  }
-  // "Caller asked for one entry" is keyed on the option being PRESENT, not on
-  // it being truthy: `{ subPath: '' }` is a caller that meant to name something
-  // and produced nothing, and must 400 — not fall through to the branch that
-  // empties the whole directory (#3327).
-  const wantsItem = options.subPath !== undefined && options.subPath !== null;
-  if (wantsItem && !isTopLevelEntryName(options.subPath)) {
-    // Refusing separators outright means no traversal segment can form and, more
-    // importantly, no *intermediate* component can be a symlink for `rm` to
-    // follow out of the category — the lexical containment check below never
-    // touches the filesystem, so it cannot see that.
-    throw new ServerError('subPath must name a single entry in the category', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  // Item-scoped categories only ever lose one entry at a time. Written as
-  // "must be exactly 'category'" so an absent or misspelled scope refuses the
-  // wipe instead of inheriting the old all-or-nothing behavior (#3327).
-  if (!wantsItem && meta.purgeScope !== 'category') {
-    throw new ServerError(
-      `Category "${categoryKey}" only supports per-item purge — pass a subPath`,
-      { status: 400, code: 'CATEGORY_ITEM_PURGE_ONLY' }
-    );
-  }
-
-  const dirPath = join(DATA_DIR, categoryKey);
-  if (!existsSync(dirPath)) {
-    throw new ServerError(`Category directory not found: ${categoryKey}`, { status: 404, code: 'NOT_FOUND' });
-  }
-
-  // A named directory can still contain a live job's working state. Apply
-  // the same fail-closed busy probe to both deletion scopes.
-  const { busy, busyReason } = await resolveCategoryBusy(categoryKey);
-  if (busy) throw new ServerError(busyReason, { status: 409, code: 'CATEGORY_BUSY' });
-
-  if (wantsItem) {
-    const resolvedRoot = resolve(dirPath);
-    const resolvedTarget = resolve(join(dirPath, options.subPath));
-    // Boundary-aware containment check: use path.relative so a prefix like
-    // `/data/cat` cannot satisfy containment for `/data/cat2`.
-    const rel = relative(resolvedRoot, resolvedTarget);
-    if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
-      throw new ServerError('Invalid subPath', { status: 400, code: 'VALIDATION_ERROR' });
+  // A purge may retain external record references by explicit operator choice,
+  // but its deletions must never interleave with a snapshot's copy and dump.
+  return withBackupAssetPublication(async () => {
+    if (!SAFE_NAME.test(categoryKey)) throw new ServerError('Invalid category name', { status: 400, code: 'VALIDATION_ERROR' });
+    const meta = CATEGORIES[categoryKey];
+    if (!meta?.deletable) {
+      throw new ServerError(`Category "${categoryKey}" is not purgeable`, { status: 403, code: 'CATEGORY_NOT_PURGEABLE' });
     }
-    // Item-scoped categories are flat directories of assets; their only
-    // subdirectories are working state for other features (`data/videos/.detached`
-    // holds the control files of in-flight renders). A one-click recursive
-    // delete next to those on a cleanup page is a foot-gun, so an item purge
-    // removes a single file and never recurses. `lstat`, not `stat`, so a
-    // symlinked entry is judged as the link it is and simply unlinked.
-    const itemScoped = meta.purgeScope === 'items';
-    if (itemScoped) {
-      const entryStat = await lstat(resolvedTarget).catch(() => null);
-      if (!entryStat) {
-        throw new ServerError(`Item not found in "${categoryKey}"`, { status: 404, code: 'NOT_FOUND' });
-      }
-      if (entryStat.isDirectory()) {
-        throw new ServerError(
-          `"${options.subPath}" is a directory — per-item purge in "${categoryKey}" only removes files`,
-          { status: 400, code: 'ITEM_PURGE_FILE_ONLY' }
-        );
-      }
+    // "Caller asked for one entry" is keyed on the option being PRESENT, not on
+    // it being truthy: `{ subPath: '' }` is a caller that meant to name something
+    // and produced nothing, and must 400 — not fall through to the branch that
+    // empties the whole directory (#3327).
+    const wantsItem = options.subPath !== undefined && options.subPath !== null;
+    if (wantsItem && !isTopLevelEntryName(options.subPath)) {
+      // Refusing separators outright means no traversal segment can form and, more
+      // importantly, no *intermediate* component can be a symlink for `rm` to
+      // follow out of the category — the lexical containment check below never
+      // touches the filesystem, so it cannot see that.
+      throw new ServerError('subPath must name a single entry in the category', { status: 400, code: 'VALIDATION_ERROR' });
     }
-    await rmGuarded(resolvedTarget, { recursive: !itemScoped, force: true });
-    console.log(`🗑️ Purged item from data/${categoryKey}`);
-  } else {
-    const entries = await readdir(dirPath).catch(() => []);
-    await Promise.all(entries.map(entry => rmGuarded(join(dirPath, entry), { recursive: true, force: true })));
-    console.log(`🗑️ Purged all ${entries.length} entries from data/${categoryKey}`);
-  }
+    // Item-scoped categories only ever lose one entry at a time. Written as
+    // "must be exactly 'category'" so an absent or misspelled scope refuses the
+    // wipe instead of inheriting the old all-or-nothing behavior (#3327).
+    if (!wantsItem && meta.purgeScope !== 'category') {
+      throw new ServerError(
+        `Category "${categoryKey}" only supports per-item purge — pass a subPath`,
+        { status: 400, code: 'CATEGORY_ITEM_PURGE_ONLY' }
+      );
+    }
 
-  return { category: categoryKey, subPath: wantsItem ? options.subPath : null };
+    const dirPath = join(DATA_DIR, categoryKey);
+    if (!existsSync(dirPath)) {
+      throw new ServerError(`Category directory not found: ${categoryKey}`, { status: 404, code: 'NOT_FOUND' });
+    }
+
+    // A named directory can still contain a live job's working state. Apply
+    // the same fail-closed busy probe to both deletion scopes.
+    const { busy, busyReason } = await resolveCategoryBusy(categoryKey);
+    if (busy) throw new ServerError(busyReason, { status: 409, code: 'CATEGORY_BUSY' });
+
+    if (wantsItem) {
+      const resolvedRoot = resolve(dirPath);
+      const resolvedTarget = resolve(join(dirPath, options.subPath));
+      // Boundary-aware containment check: use path.relative so a prefix like
+      // `/data/cat` cannot satisfy containment for `/data/cat2`.
+      const rel = relative(resolvedRoot, resolvedTarget);
+      if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
+        throw new ServerError('Invalid subPath', { status: 400, code: 'VALIDATION_ERROR' });
+      }
+      // Item-scoped categories are flat directories of assets; their only
+      // subdirectories are working state for other features (`data/videos/.detached`
+      // holds the control files of in-flight renders). A one-click recursive
+      // delete next to those on a cleanup page is a foot-gun, so an item purge
+      // removes a single file and never recurses. `lstat`, not `stat`, so a
+      // symlinked entry is judged as the link it is and simply unlinked.
+      const itemScoped = meta.purgeScope === 'items';
+      if (itemScoped) {
+        const entryStat = await lstat(resolvedTarget).catch(() => null);
+        if (!entryStat) {
+          throw new ServerError(`Item not found in "${categoryKey}"`, { status: 404, code: 'NOT_FOUND' });
+        }
+        if (entryStat.isDirectory()) {
+          throw new ServerError(
+            `"${options.subPath}" is a directory — per-item purge in "${categoryKey}" only removes files`,
+            { status: 400, code: 'ITEM_PURGE_FILE_ONLY' }
+          );
+        }
+      }
+      await rmGuarded(resolvedTarget, { recursive: !itemScoped, force: true });
+      console.log(`🗑️ Purged item from data/${categoryKey}`);
+    } else {
+      const entries = await readdir(dirPath).catch(() => []);
+      await Promise.all(entries.map(entry => rmGuarded(join(dirPath, entry), { recursive: true, force: true })));
+      console.log(`🗑️ Purged all ${entries.length} entries from data/${categoryKey}`);
+    }
+
+    return { category: categoryKey, subPath: wantsItem ? options.subPath : null };
+  });
 }
 
 export async function getBackups() {
