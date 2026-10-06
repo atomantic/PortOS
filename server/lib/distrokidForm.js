@@ -179,3 +179,32 @@ export function untickDistrokidExtras() {
     stillTicked: ticked.filter((b) => b.checked).map(labelOf),
   };
 }
+
+/**
+ * Set the release's artist. A plan with several artists shows a field (or a
+ * picker); an account with one artist renders it as a hidden input that
+ * already holds that artist, so there it is only checked. Resolves
+ * `{ ok, fixed }`: `fixed` is the account's own artist when the form does not
+ * let it change, so a mismatch can name both.
+ */
+export function setDistrokidArtist(artist) {
+  const fields = [...document.querySelectorAll('#artistName, [name=bandname]')];
+  const field = fields.find((e) => e.type !== 'hidden');
+  if (field) {
+    if (field.tagName === 'SELECT') {
+      const want = artist.toLowerCase();
+      const opt = [...field.options].find((o) => o.value === artist || o.textContent.trim().toLowerCase() === want);
+      if (!opt) return { ok: false, fixed: null };
+      field.value = opt.value;
+    } else {
+      field.focus();
+      field.value = artist;
+    }
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    field.dispatchEvent(new Event('change', { bubbles: true }));
+    field.blur?.();
+    return { ok: true, fixed: null };
+  }
+  const fixed = fields.find((e) => e.value)?.value || null;
+  return { ok: !!fixed && fixed.toLowerCase() === artist.toLowerCase(), fixed };
+}
