@@ -14,7 +14,8 @@ vi.mock('../lib/fileUtils.js', async () => {
 });
 
 // Avoid digitalTwinEvents side effects during answer submit
-vi.mock('./digital-twin-meta.js', () => ({
+vi.mock('./digital-twin-meta.js', async importOriginal => ({
+  ...await importOriginal(),
   digitalTwinEvents: { emit: vi.fn() },
 }));
 
