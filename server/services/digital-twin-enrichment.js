@@ -1,4 +1,6 @@
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { atomicWrite } from '../lib/fileUtils.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { getActiveProvider, getProviderById } from './providers.js';
@@ -140,7 +142,9 @@ export async function generateEnrichmentQuestion(category, providerOverride, mod
   };
 }
 
-async function processScaleAnswer(data) {
+const processScaleAnswer = data => withBackupAssetPublication(() => processScaleAnswerLeased(data));
+
+async function processScaleAnswerLeased(data) {
   const { category, question, scaleValue, scaleQuestionId } = data;
   const config = ENRICHMENT_CATEGORIES[category];
   if (!config) throw new Error(`Unknown enrichment category: ${category}`);
@@ -207,7 +211,7 @@ async function processScaleAnswer(data) {
   } else {
     existingContent = `# ${config.label}\n\n`;
   }
-  await writeFile(targetPath, existingContent + '\n' + formattedContent);
+  await atomicWrite(targetPath, existingContent + '\n' + formattedContent);
 
   // Record scale answer
   if (!meta.enrichment.scaleQuestionsAnswered) meta.enrichment.scaleQuestionsAnswered = {};
@@ -276,6 +280,12 @@ export async function processEnrichmentAnswer(data) {
     }
   }
 
+  // Provider work finishes before admission; only the durable publication drains.
+  return withBackupAssetPublication(() => persistEnrichmentAnswer(category, config, formattedContent));
+}
+
+async function persistEnrichmentAnswer(category, config, formattedContent) {
+  await ensureSoulDir();
   // Append to target document
   const targetPath = join(DIGITAL_TWIN_DIR, config.targetDoc);
   let existingContent = '';
@@ -286,7 +296,7 @@ export async function processEnrichmentAnswer(data) {
     existingContent = `# ${config.label}\n\n`;
   }
 
-  await writeFile(targetPath, existingContent + '\n' + formattedContent);
+  await atomicWrite(targetPath, existingContent + '\n' + formattedContent);
 
   // Update meta
   const meta = await loadMeta();
@@ -496,7 +506,10 @@ Respond in JSON format:
 /**
  * Save analyzed list content to document
  */
-export async function saveEnrichmentListDocument(category, content, items) {
+export const saveEnrichmentListDocument = (category, content, items) =>
+  withBackupAssetPublication(() => saveEnrichmentListDocumentLeased(category, content, items));
+
+async function saveEnrichmentListDocumentLeased(category, content, items) {
   const config = ENRICHMENT_CATEGORIES[category];
   if (!config) {
     throw new Error(`Unknown enrichment category: ${category}`);
@@ -505,7 +518,7 @@ export async function saveEnrichmentListDocument(category, content, items) {
   await ensureSoulDir();
 
   const targetPath = join(DIGITAL_TWIN_DIR, config.targetDoc);
-  await writeFile(targetPath, content);
+  await atomicWrite(targetPath, content);
 
   // Update meta
   const meta = await loadMeta();
