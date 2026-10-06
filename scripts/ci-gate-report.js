@@ -181,8 +181,15 @@ export function summarizeGateResults(
             + ' `🛑 Requested cancellation` (written only when a job really'
             + ' failed), `FAIL `, or `AssertionError`; the culprit is usually the'
             + ' job that completed EARLIEST.']),
-        'Otherwise: a job that hits the 6-hour limit is'
-          + ' recorded as `cancelled` rather than `timed_out` (check for a hang),'
+        // Every ci.yml job sets its own `timeout-minutes`, so the limit that
+        // usually bites is the job's (20 minutes for DB tests), not GitHub's
+        // 6-hour default. GitHub records either as `cancelled`, so a slow apt
+        // mirror or a hung test reads like a superseded push (#10369).
+        'Otherwise: a job that ran past its `timeout-minutes` (or the 6-hour'
+          + ' default) is recorded as `cancelled` rather than `timed_out` — open'
+          + ' the cancelled job and look for an annotation reading "exceeded the'
+          + ' maximum execution time"; the step that was running when it hit the'
+          + ' limit is the slow one (a stalled package download, a hang),'
           + ' a newer push superseded this run (cancel-in-progress leaves a NEWER'
           + ' run for the branch), or GitHub cancelled it externally — the Actions'
           + ' spending limit, which is the LAST hypothesis, not the first.',
