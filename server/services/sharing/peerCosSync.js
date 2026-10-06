@@ -11,9 +11,11 @@
 import { isMachineLocalCosTask } from '../../lib/cosFederationPolicy.js';
 import { join } from 'path';
 import { existsSync } from 'fs';
-import { readdir } from 'fs/promises';
+import { mkdtemp, readFile, readdir } from 'fs/promises';
+import { tmpdir } from 'os';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { createHash } from 'crypto';
-import { PATHS, atomicWrite, ensureDir, sha256File, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
+import { PATHS, atomicWrite, ensureDir, rmGuarded, sha256File, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { logFailureWithStack } from '../../lib/failureLogging.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
@@ -155,7 +157,7 @@ const lastCosHistoryManifestHash = new Map(); // peerInstanceId → manifestHash
 const cosHistoryUnchangedSkips = new Map(); // peerInstanceId → count
 const cosHistorySweepInFlight = new Set(); // peerInstanceId
 
-async function pullMissingCosArchives(senderInstanceId, missing) {
+async function pullMissingCosArchives(senderInstanceId, missing, stagingRoot) {
   if (!isStr(senderInstanceId) || !Array.isArray(missing) || missing.length === 0) return [];
   const peer = await findPeerById(senderInstanceId);
   if (!peer) {
@@ -165,7 +167,7 @@ async function pullMissingCosArchives(senderInstanceId, missing) {
   const base = peerBaseUrl(peer);
   const landed = [];
   for (const entry of missing) {
-    const pair = await pullOneCosArchiveFile(peer, base, entry).catch((err) => {
+    const pair = await pullOneCosArchiveFile(peer, base, entry, stagingRoot).catch((err) => {
       logFailureWithStack(`⚠️ peerSync: cos-archive pull ${entry?.agentId}/${entry?.file} from ${peer.name || senderInstanceId} failed`, err);
       return null;
     });
@@ -174,7 +176,7 @@ async function pullMissingCosArchives(senderInstanceId, missing) {
   return landed;
 }
 
-async function pullOneCosArchiveFile(peer, base, entry) {
+async function pullOneCosArchiveFile(peer, base, entry, stagingRoot) {
   const { date, agentId, file, sha256 } = entry || {};
   // Re-validate segments here even though the diff already did.
   if (!COS_ARCHIVE_DATE_RE.test(date || '') || !COS_AGENT_ID_RE.test(agentId || '') || !COS_ARCHIVE_FILES.includes(file)) return null;
@@ -193,12 +195,13 @@ async function pullOneCosArchiveFile(peer, base, entry) {
       console.error(`⚠️ peerSync: cos archive ${safeLabel} hash mismatch — discarding (got ${bufHash.slice(0, 8)}, want ${String(sha256).slice(0, 8)})`);
       return null;
     }
-    const destDir = join(cosAgentsDir(), date, agentId);
+    // Network and integrity checks run outside admission. Keep verified bytes
+    // in scratch until the whole sweep can publish files and its index together.
+    const destDir = join(stagingRoot, date, agentId);
     await ensureDir(destDir);
-    await atomicWrite(join(destDir, file), buffer);
-    peerSyncEvents.emit('asset-arrived', { filename: safeLabel, kind: 'cos-archive', peerId: peer.instanceId });
-    console.log(`📥 peerSync: pulled cos archive ${safeLabel} from ${peer.name || peer.instanceId} (${buffer.length} bytes)`);
-    return { date, agentId };
+    const stagedPath = join(destDir, file);
+    await atomicWrite(stagedPath, buffer);
+    return { date, agentId, file, stagedPath };
   } finally {
     inflightPulls.delete(key);
   }
@@ -214,7 +217,7 @@ async function pullOneCosArchiveFile(peer, base, entry) {
  * overwrites a locally-owned id.
  */
 async function reconcileCosHistoryIndex(entries) {
-  if (!Array.isArray(entries) || entries.length === 0) return;
+  if (!Array.isArray(entries) || entries.length === 0) return true;
   // One {date, agentId} pair per agent (entries carry up to 3 files per agent).
   const seen = new Set();
   const pairs = [];
@@ -225,9 +228,10 @@ async function reconcileCosHistoryIndex(entries) {
     pairs.push({ date: e.date, agentId: e.agentId });
   }
   const mod = await import('../cosAgentIndex.js').catch(() => null);
-  if (!mod?.addAgentArchivesToIndex) return;
-  await mod.addAgentArchivesToIndex(pairs).catch((err) => {
+  if (!mod?.addAgentArchivesToIndex) return false;
+  return mod.addAgentArchivesToIndex(pairs).then(() => true, err => {
     logFailureWithStack('⚠️ peerSync: cos-history index merge failed', err);
+    return false;
   });
 }
 
@@ -286,35 +290,50 @@ export async function syncCosHistoryFromPeer(peer) {
     }
     const missing = await diffCosHistoryManifestAgainstLocal(manifest.entries);
     if (missing.length === 0) {
-      // Everything the manifest references is already on disk — reconcile the
-      // index BEFORE caching the hash so a present-but-unindexed archive (e.g. a
-      // prior sweep landed the bytes but crashed before the index persisted)
-      // becomes visible, instead of being skipped forever by the unchanged
-      // short-circuit above.
-      await reconcileCosHistoryIndex(manifest.entries);
-      lastCosHistoryManifestHash.set(peer.instanceId, manifest.manifestHash);
-      return { pulled: 0 };
+      // Repair present-but-unindexed archives under admission as well.
+      return await withBackupAssetPublication(async () => {
+        if (await reconcileCosHistoryIndex(manifest.entries)) {
+          lastCosHistoryManifestHash.set(peer.instanceId, manifest.manifestHash);
+        }
+        return { pulled: 0 };
+      });
     }
-    const requested = missing.length;
-    await pullMissingCosArchives(peer.instanceId, missing);
-    // Re-diff: a resolved pull does NOT mean every byte landed (peer dropped,
-    // 404, size-cap reject) — this is the authoritative signal.
-    const stillMissing = await diffCosHistoryManifestAgainstLocal(manifest.entries);
-    const pulled = requested - stillMissing.length;
-    if (stillMissing.length === 0) {
-      // Full manifest now present — reconcile the index from the manifest (every
-      // referenced agent, incl. its metadata.json, is confirmed on disk) before
-      // caching the hash so the arrivals show in the history UI.
-      await reconcileCosHistoryIndex(manifest.entries);
-      lastCosHistoryManifestHash.set(peer.instanceId, manifest.manifestHash);
-      console.log(`📥 peerSync: cos-history sweep from ${peer.name || peer.instanceId} — pulled ${pulled} archive file(s)`);
-    } else {
-      // Partial pull — do NOT record the hash, so the next tick re-diffs and
-      // retries the still-missing files; the index is reconciled once the
-      // manifest is fully present (above), never from a half-pulled agent.
-      console.error(`⚠️ peerSync: cos-history sweep from ${peer.name || peer.instanceId} — pulled ${pulled}/${requested}, ${stillMissing.length} still missing; retrying next tick`);
+    const stagingRoot = await mkdtemp(join(tmpdir(), 'portos-cos-archive-sync-'));
+    try {
+      const staged = await pullMissingCosArchives(peer.instanceId, missing, stagingRoot);
+      return await withBackupAssetPublication(async () => {
+        for (const entry of staged) {
+          const { date, agentId, file, stagedPath } = entry;
+          const safeLabel = `${date}/${agentId}/${file}`;
+          const destDir = join(cosAgentsDir(), date, agentId);
+          try {
+            const buffer = await readFile(stagedPath);
+            await ensureDir(destDir);
+            await atomicWrite(join(destDir, file), buffer);
+            peerSyncEvents.emit('asset-arrived', { filename: safeLabel, kind: 'cos-archive', peerId: peer.instanceId });
+            console.log(`📥 peerSync: pulled cos archive ${safeLabel} from ${peer.name || peer.instanceId} (${buffer.length} bytes)`);
+          } catch (err) {
+            logFailureWithStack(`⚠️ peerSync: cos-archive publication ${safeLabel} failed`, err);
+          }
+        }
+        // A resolved download does not prove publication. Re-diff before the
+        // index commit, while the same lease still protects landed bytes.
+        const stillMissing = await diffCosHistoryManifestAgainstLocal(manifest.entries);
+        const pulled = missing.length - stillMissing.length;
+        if (stillMissing.length === 0) {
+          if (await reconcileCosHistoryIndex(manifest.entries)) {
+            lastCosHistoryManifestHash.set(peer.instanceId, manifest.manifestHash);
+          }
+          console.log(`📥 peerSync: cos-history sweep from ${peer.name || peer.instanceId} — pulled ${pulled} archive file(s)`);
+        } else {
+          // Partial bytes remain unindexed and retryable on the next sweep.
+          console.error(`⚠️ peerSync: cos-history sweep from ${peer.name || peer.instanceId} — pulled ${pulled}/${missing.length}, ${stillMissing.length} still missing; retrying next tick`);
+        }
+        return { pulled, missing: stillMissing.length };
+      });
+    } finally {
+      await rmGuarded(stagingRoot, { recursive: true, force: true });
     }
-    return { pulled, missing: stillMissing.length };
   } finally {
     cosHistorySweepInFlight.delete(peer.instanceId);
   }

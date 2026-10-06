@@ -369,6 +369,13 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     ],
   },
   {
+    // Verified peer archive bytes stay in scratch until files and the primary
+    // agentId-to-date index can publish under the same lease.
+    id: 'peer-cos-archive-import',
+    status: 'admitted',
+    modules: ['services/sharing/peerCosSync.js'],
+  },
+  {
     // The ChatGPT zip import extracts assets before any row names them; each
     // conversation's archived transcript and the memory row that names it (and
     // its assets) commit under one lease. Deleting an import memory drops the
