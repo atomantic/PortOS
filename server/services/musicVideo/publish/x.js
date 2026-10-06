@@ -10,6 +10,7 @@ import { PUBLISH_STEP_TIMEOUT_MS as T, loginRequired, pasteText, step } from './
 
 const COMPOSE_URL = 'https://x.com/compose/post';
 const label = 'X';
+const DIALOG_WAIT_MS = 8000;
 
 /**
  * The CSS prefix that scopes selectors to the composer we opened. /compose/post opens as a modal over the
@@ -17,8 +18,12 @@ const label = 'X';
  * fileInput), so an unscoped selector matches both. Without a modal (a full-page composer) it is empty.
  */
 async function composerScope(page) {
-  const inDialog = await page.locator('[role=dialog] [data-testid=tweetTextarea_0]').count().catch(() => 0);
-  return inDialog > 0 ? '[role=dialog] ' : '';
+  // Wait for a composer to exist at all, then give the modal's editor a moment to hydrate before deciding:
+  // a snapshot taken too early would fall back to unscoped selectors and hit the inline composer.
+  await page.locator('[data-testid=tweetTextarea_0]').first().waitFor({ timeout: T }).catch(() => {});
+  const inDialog = await page.locator('[role=dialog] [data-testid=tweetTextarea_0]').first()
+    .waitFor({ timeout: DIALOG_WAIT_MS }).then(() => true, () => false);
+  return inDialog ? '[role=dialog] ' : '';
 }
 
 export const xAdapter = {
