@@ -198,6 +198,9 @@ describe('reviewLyrics', () => {
     const { prompt } = lastRunArgs();
     expect(prompt).toContain('chorus must say "airplane mode"');
     expect(prompt).toMatch(/hook phrase, title phrase or required image it names that the draft lacks must appear/);
+    expect(prompt).toMatch(/ignore its purely musical or production details/);
+    await reviewLyrics({ lyrics: DRAFT, description: 'synthwave' });
+    expect(lastRunArgs().prompt).not.toContain('SONG REQUEST');
   });
 
   it('treats an answer with no separator as all lyrics (empty notes), unwrapping a fence', async () => {

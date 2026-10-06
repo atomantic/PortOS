@@ -102,7 +102,7 @@ const lengthContract = (targetSeconds) => {
 // The listener-facing request a song was commissioned from (an autonomous run's
 // prompt). The musical description covers only sound, so without this the hook
 // phrase, subject and imagery the user asked for never reach the lyricist.
-const SONG_REQUEST_LABEL = 'SONG REQUEST (what the lyrics must deliver: honour every hook phrase, subject and image it names)';
+const SONG_REQUEST_LABEL = 'SONG REQUEST (what the lyrics must deliver: honour every hook phrase, subject and image it names; ignore its purely musical or production details such as genre, tempo, instruments or artist names, which the musical description owns and which never belong in a lyric line)';
 
 export function buildLyricsPrompt({ description, guidance, request, template, targetSeconds } = {}) {
   return [
@@ -124,8 +124,9 @@ const LYRICS_REVIEW_INSTRUCTIONS = [
   'Keep the length roughly equal to the draft: about the same number of sung lines per section.',
   'Improve scansion and singability, sharpen weak or generic lines, give the chorus more punch, and make the argument of the song land more clearly.',
   'Never add new topics, characters or story beats the draft does not already contain. Keep the lyrics original.',
-  'Exception: when a SONG REQUEST is given, check the draft against it first. Any hook phrase, title phrase or required image it names that the draft lacks must appear in the revision (a named hook belongs in the chorus), and your notes must say what was missing.',
 ].join(' ');
+// Only with a request, so a review without one (Music Studio) keeps its original prompt.
+const LYRICS_REVIEW_REQUEST_CHECK = ' Exception: check the draft against the SONG REQUEST first. Any hook phrase, title phrase or required image it names that the draft lacks must appear in the revision (a named hook belongs in the chorus), and your notes must say what was missing.';
 const LYRICS_REVIEW_OUTPUT_CONTRACT = [
   'Return the complete revised lyric sheet first, with its section tags.',
   `Then a line containing only ${LYRICS_REVIEW_SEPARATOR}`,
@@ -136,6 +137,7 @@ const LYRICS_REVIEW_OUTPUT_CONTRACT = [
 function buildLyricsReviewPrompt({ lyrics, description, guidance, request } = {}) {
   return [
     LYRICS_REVIEW_INSTRUCTIONS,
+    trimTo(request, MAX_GUIDANCE) ? LYRICS_REVIEW_REQUEST_CHECK : '',
     section(SONG_REQUEST_LABEL, trimTo(request, MAX_GUIDANCE)),
     section('MUSICAL DESCRIPTION', trimTo(description, MAX_DESCRIPTION) || '(none given)'),
     section('ADDITIONAL GUIDANCE FROM THE USER', trimTo(guidance, MAX_GUIDANCE)),
