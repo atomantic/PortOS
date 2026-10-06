@@ -26,7 +26,6 @@ import { trimToClause } from '../../../lib/textUtils.js';
 
 export const ERR_VALIDATION = 'PIPELINE_ARC_VALIDATION';
 
-export const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 export const VERIFY_SEVERITIES = new Set(['high', 'medium', 'low']);
 

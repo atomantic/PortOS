@@ -27,9 +27,9 @@ import { requestCreativeDirectorProjectStart } from '../creativeDirector/project
 import { getDefaultVideoModelId, getVideoModels } from '../../lib/mediaModels.js';
 import { buildPlaceByKey } from '../../lib/scenePrompt.js';
 import { getSettings } from '../settings.js';
+import { codedError } from '../../lib/codedError.js';
 
 export const ERR_NO_STORYBOARDS = 'PIPELINE_EPISODE_NO_STORYBOARDS';
-const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 const DEFAULT_SCENE_DURATION = 3;
 const MAX_SCENES = 30;
@@ -89,7 +89,7 @@ export function buildTreatmentFromStoryboards({ issue, series, canon = null }) {
   const rawScenes = Array.isArray(storyboards?.scenes) ? storyboards.scenes : [];
   const usable = rawScenes.filter((s) => (s?.description || '').trim().length > 0);
   if (!usable.length) {
-    throw makeErr(
+    throw codedError(
       'Storyboards stage has no scenes with descriptions. Add scenes on the Storyboards stage first.',
       ERR_NO_STORYBOARDS,
     );

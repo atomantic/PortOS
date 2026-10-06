@@ -39,6 +39,7 @@ export { withReexportSuppressed };
 import { subscriptionFilename, legacySubscriptionFilename } from './manifest.js';
 import { getInstanceId } from '../instanceIdentity.js';
 import { isStr } from '../../lib/textUtils.js';
+import { codedError } from '../../lib/codedError.js';
 
 // Re-export from the canonical source so other modules can import the
 // filename helper from either side without forcing a manifest.js import.
@@ -49,7 +50,6 @@ export const SUBSCRIBABLE_KINDS = Object.freeze(['series', 'universe']);
 export const ERR_NOT_FOUND = 'SHARING_SUBSCRIPTION_NOT_FOUND';
 export const ERR_VALIDATION = 'SHARING_SUBSCRIPTION_VALIDATION';
 export const ERR_DUPLICATE = 'SHARING_SUBSCRIPTION_DUPLICATE';
-const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 const queueStateWrite = createFileWriteQueue();
 
@@ -135,10 +135,10 @@ export async function adoptImportedSubscription({ bucketId, recordKind, recordId
  */
 export async function subscribe({ bucketId, recordKind, recordId }) {
   if (!SUBSCRIBABLE_KINDS.includes(recordKind)) {
-    throw makeErr(`subscribable kinds are ${SUBSCRIBABLE_KINDS.join(', ')} (got "${recordKind}")`, ERR_VALIDATION);
+    throw codedError(`subscribable kinds are ${SUBSCRIBABLE_KINDS.join(', ')} (got "${recordKind}")`, ERR_VALIDATION);
   }
   if (!isStr(bucketId) || !isStr(recordId)) {
-    throw makeErr('bucketId and recordId are required', ERR_VALIDATION);
+    throw codedError('bucketId and recordId are required', ERR_VALIDATION);
   }
   // Validate the bucket exists (throws ERR_NOT_FOUND otherwise).
   await getBucket(bucketId);
@@ -171,11 +171,11 @@ async function runExport({ bucketId, recordKind, recordId }) {
 }
 
 export async function unsubscribe(id) {
-  if (!isStr(id)) throw makeErr('subscription id required', ERR_VALIDATION);
+  if (!isStr(id)) throw codedError('subscription id required', ERR_VALIDATION);
   const sub = await queueStateWrite(async () => {
     const state = await readState();
     const idx = state.subscriptions.findIndex((s) => s.id === id);
-    if (idx < 0) throw makeErr(`Subscription not found: ${id}`, ERR_NOT_FOUND);
+    if (idx < 0) throw codedError(`Subscription not found: ${id}`, ERR_NOT_FOUND);
     const [removed] = state.subscriptions.splice(idx, 1);
     await writeState(state);
     return removed;

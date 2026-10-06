@@ -17,11 +17,12 @@ import * as seriesSvc from './series.js';
 import {
   store, queueSeriesIssuesWrite, readState, readStateForSeries,
   saveIssueNow, saveIssuesNow, renumberInline, sanitizeIssue,
-  snapshotRunHistory, makeErr, ISSUE_ID_RE,
+  snapshotRunHistory, ISSUE_ID_RE,
   ERR_NOT_FOUND, ERR_VALIDATION, ERR_DUPLICATE, ERR_SEASON_LOCKED,
   TITLE_MAX, SERIES_ID_MAX, ISSUES_PER_RESPONSE_MAX,
 } from './issuesShared.js';
 import { isStr, trimTo } from '../../lib/textUtils.js';
+import { codedError } from '../../lib/codedError.js';
 
 export async function listIssues({
   seriesId = null,
@@ -141,16 +142,16 @@ export async function listRecentIssues({ limit = 10, withHistory = true, include
 
 export async function getIssue(id, { includeDeleted = false } = {}) {
   const found = await store().loadOne(id);
-  if (!found) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
-  if (found.deleted && !includeDeleted) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
+  if (!found) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
+  if (found.deleted && !includeDeleted) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
   return found;
 }
 
 export function createIssue(input = {}, { preloadedSeries = null } = {}) {
   const seriesId = trimTo(input.seriesId, SERIES_ID_MAX);
-  if (!seriesId) return Promise.reject(makeErr('seriesId is required', ERR_VALIDATION));
+  if (!seriesId) return Promise.reject(codedError('seriesId is required', ERR_VALIDATION));
   const title = trimTo(input.title, TITLE_MAX);
-  if (!title) return Promise.reject(makeErr(`title is required (1..${TITLE_MAX} chars)`, ERR_VALIDATION));
+  if (!title) return Promise.reject(codedError(`title is required (1..${TITLE_MAX} chars)`, ERR_VALIDATION));
   return queueSeriesIssuesWrite(seriesId, async () => {
     const state = await readState();
     const next = sanitizeIssue({
@@ -173,7 +174,7 @@ export function createIssue(input = {}, { preloadedSeries = null } = {}) {
       updatedAt: new Date().toISOString(),
       ephemeral: input.ephemeral === true,
     });
-    if (!next) throw makeErr('Invalid issue payload', ERR_VALIDATION);
+    if (!next) throw codedError('Invalid issue payload', ERR_VALIDATION);
     state.issues.push(next);
     await renumberInline(state, seriesId, next.seasonId || UNSCOPED_ANCHOR, preloadedSeries);
     await saveIssuesNow(state.issues.filter((i) => i.seriesId === seriesId));
@@ -222,7 +223,7 @@ export function bulkReassignSeason(seriesId, fromSeasonId, toSeasonId = null, { 
       const findLocked = (id) => (id ? seasons.find((s) => s.id === id && s.locked === true) : null);
       const blocker = findLocked(fromSeasonId) || findLocked(toSeasonId);
       if (blocker) {
-        throw makeErr(
+        throw codedError(
           `Season "${blocker.title || blocker.number}" is locked — unlock it before reassigning issues`,
           ERR_SEASON_LOCKED,
         );
@@ -280,7 +281,7 @@ export function bulkReassignSeason(seriesId, fromSeasonId, toSeasonId = null, { 
  */
 export function reassignIssuesToSeries(fromSeriesId, toSeriesId, { seasonIdMap = {} } = {}) {
   if (!isStr(fromSeriesId) || !isStr(toSeriesId) || fromSeriesId === toSeriesId) {
-    return Promise.reject(makeErr('reassignIssuesToSeries: fromSeriesId and toSeriesId must differ', ERR_VALIDATION));
+    return Promise.reject(codedError('reassignIssuesToSeries: fromSeriesId and toSeriesId must differ', ERR_VALIDATION));
   }
   // This reads/mutates issues belonging to BOTH series (it moves source issues
   // and renumbers the destination), so serialize on both per-series queues, not
@@ -322,22 +323,22 @@ export function reassignIssuesToSeries(fromSeriesId, toSeriesId, { seasonIdMap =
  */
 export function insertIssueWithId(input = {}) {
   if (!isStr(input.id) || !ISSUE_ID_RE.test(input.id)) {
-    return Promise.reject(makeErr(`insertIssueWithId: invalid id "${input.id}" (expected iss-<uuid>)`, ERR_VALIDATION));
+    return Promise.reject(codedError(`insertIssueWithId: invalid id "${input.id}" (expected iss-<uuid>)`, ERR_VALIDATION));
   }
   const seriesId = trimTo(input.seriesId, SERIES_ID_MAX);
-  if (!seriesId) return Promise.reject(makeErr('seriesId is required', ERR_VALIDATION));
+  if (!seriesId) return Promise.reject(codedError('seriesId is required', ERR_VALIDATION));
   const title = trimTo(input.title, TITLE_MAX);
-  if (!title) return Promise.reject(makeErr(`title is required (1..${TITLE_MAX} chars)`, ERR_VALIDATION));
+  if (!title) return Promise.reject(codedError(`title is required (1..${TITLE_MAX} chars)`, ERR_VALIDATION));
   return queueSeriesIssuesWrite(seriesId, async () => {
     const state = await readState();
     // Tombstone-overwrite: same contract as universeBuilder.insertUniverseWithId.
     const existingIdx = state.issues.findIndex((i) => i.id === input.id);
     if (existingIdx >= 0 && !state.issues[existingIdx].deleted) {
-      throw makeErr(`Issue id already exists: ${input.id}`, ERR_DUPLICATE);
+      throw codedError(`Issue id already exists: ${input.id}`, ERR_DUPLICATE);
     }
     const wasResurrection = existingIdx >= 0;
     const next = sanitizeIssue({ ...input, seriesId, title });
-    if (!next) throw makeErr('Invalid issue payload', ERR_VALIDATION);
+    if (!next) throw codedError('Invalid issue payload', ERR_VALIDATION);
     if (wasResurrection) {
       console.warn(`♻️  insertIssueWithId: overwriting tombstone for ${input.id}`);
       state.issues[existingIdx] = next;
@@ -416,7 +417,7 @@ function mergeIssuePatch(cur, patch = {}) {
     stages: mergedStages,
     updatedAt: new Date().toISOString(),
   });
-  if (!merged) throw makeErr('Invalid issue payload', ERR_VALIDATION);
+  if (!merged) throw codedError('Invalid issue payload', ERR_VALIDATION);
   return merged;
 }
 
@@ -443,8 +444,8 @@ export function updateIssue(id, patch = {}, { skipRenumber = false } = {}) {
     return getIssue(id, { includeDeleted: true }).then((existing) =>
       queueSeriesIssuesWrite(existing.seriesId, async () => {
         const cur = await store().loadOne(id);
-        if (!cur) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
-        if (cur.deleted) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
+        if (!cur) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
+        if (cur.deleted) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
         const merged = mergeIssuePatch(cur, patch);
         await saveIssueNow(merged);
         emitRecordUpdated('series', merged.seriesId);
@@ -460,9 +461,9 @@ export function updateIssue(id, patch = {}, { skipRenumber = false } = {}) {
     queueSeriesIssuesWrite(existing.seriesId, async () => {
       const state = await readState();
       const idx = state.issues.findIndex((i) => i.id === id);
-      if (idx < 0) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
+      if (idx < 0) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
       const cur = state.issues[idx];
-      if (cur.deleted) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
+      if (cur.deleted) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
       const merged = mergeIssuePatch(cur, patch);
       state.issues[idx] = merged;
       // A seasonId move affects both source and destination volumes, so full
@@ -493,9 +494,9 @@ export function deleteIssue(id) {
     queueSeriesIssuesWrite(existing.seriesId, async () => {
       const state = await readState();
       const idx = state.issues.findIndex((i) => i.id === id);
-      if (idx < 0) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
+      if (idx < 0) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
       const cur = state.issues[idx];
-      if (cur.deleted) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
+      if (cur.deleted) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
       const seriesId = cur.seriesId;
       const now = new Date().toISOString();
       state.issues[idx] = { ...cur, deleted: true, deletedAt: now, updatedAt: now };

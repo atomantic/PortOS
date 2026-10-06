@@ -32,11 +32,11 @@ import { randomUUID } from 'crypto';
 import { access } from 'fs/promises';
 import { PATHS, atomicWrite, readJSONFile, ensureDir, tryReadFile, unlinkGuarded } from '../lib/fileUtils.js';
 import { isValidKey as isValidMediaKey, parseKey } from '../lib/mediaItemKey.js';
+import { codedError } from '../lib/codedError.js';
 
 const SKETCH_DIR = join(PATHS.data, 'media-sketches');
 
 export const ERR_VALIDATION = 'VALIDATION_ERROR';
-const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 // Guardrails so a hand-rolled or malicious payload can't balloon a sidecar.
 export const MAX_STROKES = 5000;
@@ -90,10 +90,10 @@ function sanitizeStroke(raw) {
 }
 
 export function sanitizeSketchInput(input) {
-  if (!input || typeof input !== 'object') throw makeErr('sketch payload required', ERR_VALIDATION);
-  if (!Array.isArray(input.strokes)) throw makeErr('strokes must be an array', ERR_VALIDATION);
+  if (!input || typeof input !== 'object') throw codedError('sketch payload required', ERR_VALIDATION);
+  if (!Array.isArray(input.strokes)) throw codedError('strokes must be an array', ERR_VALIDATION);
   if (!isFinitePositive(input.width) || !isFinitePositive(input.height)) {
-    throw makeErr('width and height must be positive numbers', ERR_VALIDATION);
+    throw codedError('width and height must be positive numbers', ERR_VALIDATION);
   }
   const strokes = [];
   for (const raw of input.strokes) {
@@ -104,7 +104,7 @@ export function sanitizeSketchInput(input) {
   let png = null;
   if (typeof input.png === 'string' && input.png) {
     const m = DATA_URL_PNG.exec(input.png);
-    if (!m) throw makeErr('png must be a data:image/png;base64 URL', ERR_VALIDATION);
+    if (!m) throw codedError('png must be a data:image/png;base64 URL', ERR_VALIDATION);
     png = Buffer.from(m[1], 'base64');
   }
   return {
@@ -117,7 +117,7 @@ export function sanitizeSketchInput(input) {
 
 /** Read the persisted sketch for a key, or null when none exists. */
 export async function getSketch(key) {
-  if (!isValidKey(key)) throw makeErr(`Invalid key: ${key}`, ERR_VALIDATION);
+  if (!isValidKey(key)) throw codedError(`Invalid key: ${key}`, ERR_VALIDATION);
   // Read-only projection: saveSketch replaces the full canvas from explicit input, never this fallback.
   const data = await readJSONFile(jsonPathFor(key), null, { logError: false });
   if (!data || typeof data !== 'object' || !Array.isArray(data.strokes)) return null;
@@ -133,7 +133,7 @@ export async function getSketch(key) {
 
 /** Raw flattened PNG bytes for a key, or null. */
 export async function getSketchPng(key) {
-  if (!isValidKey(key)) throw makeErr(`Invalid key: ${key}`, ERR_VALIDATION);
+  if (!isValidKey(key)) throw codedError(`Invalid key: ${key}`, ERR_VALIDATION);
   return tryReadFile(pngPathFor(key), null); // Buffer | null
 }
 
@@ -143,7 +143,7 @@ export async function getSketchPng(key) {
  * the init image, so it needs the path (not the bytes) to hand off to the runner.
  */
 export async function getSketchPngPath(key) {
-  if (!isValidKey(key)) throw makeErr(`Invalid key: ${key}`, ERR_VALIDATION);
+  if (!isValidKey(key)) throw codedError(`Invalid key: ${key}`, ERR_VALIDATION);
   const path = pngPathFor(key);
   return access(path).then(() => path).catch(() => null);
 }
@@ -154,12 +154,12 @@ export async function getSketchPngPath(key) {
  * Returns the stored projection `{ key, width, height, strokes, updatedAt, hasPng }`.
  */
 export async function saveSketch(key, input) {
-  if (!isValidKey(key)) throw makeErr(`Invalid key: ${key}`, ERR_VALIDATION);
+  if (!isValidKey(key)) throw codedError(`Invalid key: ${key}`, ERR_VALIDATION);
   // A blank-canvas sketch (`sketch:<uuid>`) has no backing media; any other key
   // must be an `image:<ref>` — video and the rest of the shared vocabulary stay
   // unsupported (a video can't carry a stroke overlay in this UI).
   if (!isBlankSketchKey(key) && parseKey(key)?.kind !== 'image') {
-    throw makeErr('Only image media or blank-canvas sketches can be annotated', ERR_VALIDATION);
+    throw codedError('Only image media or blank-canvas sketches can be annotated', ERR_VALIDATION);
   }
   const clean = sanitizeSketchInput(input);
   return withBackupAssetPublication(() => publishImageFiles([pngPathFor(key), jsonPathFor(key)], async () => {
@@ -192,7 +192,7 @@ export async function saveSketch(key, input) {
 
 /** Remove a key's sidecar (json + png). Idempotent. */
 export async function removeSketch(key) {
-  if (!isValidKey(key)) throw makeErr(`Invalid key: ${key}`, ERR_VALIDATION);
+  if (!isValidKey(key)) throw codedError(`Invalid key: ${key}`, ERR_VALIDATION);
   return withBackupAssetPublication(() => publishImageFiles([pngPathFor(key), jsonPathFor(key)], async () => {
     await unlinkGuarded(jsonPathFor(key)).catch(error => { if (error.code !== 'ENOENT') throw error; });
     await unlinkGuarded(pngPathFor(key)).catch(error => { if (error.code !== 'ENOENT') throw error; });

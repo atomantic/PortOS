@@ -43,13 +43,13 @@ import { restoreCommissionFeedback } from './creativeCommissions/feedbackStore.j
 import { restoreCommission } from './creativeCommissions/store.js';
 import { restoreDeck } from './decks.js';
 import { restoreLoom } from './fableLoom/index.js';
+import { codedError } from '../lib/codedError.js';
 
 export const ERR_NOT_FOUND = 'CONFLICT_JOURNAL_NOT_FOUND';
 export const ERR_VALIDATION = 'CONFLICT_JOURNAL_VALIDATION';
 // The conflict entry exists but the record it targets was tombstoned between
 // archive time and resolution — distinct from ERR_NOT_FOUND (the entry itself).
 export const ERR_TARGET_GONE = 'CONFLICT_TARGET_GONE';
-const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 // RESTORABLE_FIELDS (the user-authored content fields a restore/merge may write
 // per kind; id/createdAt/server-owned fields are never overlaid) is owned by
@@ -80,7 +80,7 @@ export async function listConflicts({ status = null } = {}) {
 
 export async function getConflict(id) {
   const entry = await store().loadOne(id);
-  if (!entry) throw makeErr(`Conflict entry not found: ${id}`, ERR_NOT_FOUND);
+  if (!entry) throw codedError(`Conflict entry not found: ${id}`, ERR_NOT_FOUND);
   return entry;
 }
 
@@ -99,7 +99,7 @@ async function applyToRecord(kind, recordId, patch, { replace = false } = {}) {
         // 'NOT_FOUND' (no module-specific export) when the row is missing OR
         // tombstoned — both mean the conflict target is gone.
         || err?.code === 'NOT_FOUND') {
-      throw makeErr(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
+      throw codedError(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
     }
     throw err;
   };
@@ -185,25 +185,25 @@ async function applyToRecord(kind, recordId, patch, { replace = false } = {}) {
     // null (not throw) for a missing record — translate that to ERR_TARGET_GONE so
     // the route serves a clean 409 (#2686).
     const restored = await restoreCommissionFeedback(recordId, patch).catch(translateGone);
-    if (!restored) throw makeErr(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
+    if (!restored) throw codedError(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
   } else if (kind === 'creativeCommission') {
     // restoreCommission merges the snapshot's brief fields, un-tombstones, and
     // bumps updatedAt so the restore wins the next LWW. Machine-local schedule/
     // runs/assignment are kept as-is. Returns null for a missing record (#2686).
     const restored = await restoreCommission(recordId, patch).catch(translateGone);
-    if (!restored) throw makeErr(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
+    if (!restored) throw codedError(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
   } else if (kind === 'deck') {
     // restoreDeck merges the snapshot's style-guide/identity fields, un-tombstones,
     // and bumps updatedAt so the restore wins the next LWW and re-pushes. Returns
     // null for a deck already hard-pruned by the tombstone sweep (→ ERR_TARGET_GONE).
     const restored = await restoreDeck(recordId, patch).catch(translateGone);
-    if (!restored) throw makeErr(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
+    if (!restored) throw codedError(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
   } else if (kind === 'fableLoom') {
     // Restore the authored story graph and playback settings through the normal
     // loom mutation path so the edit is sanitized, timestamped, and re-pushed.
     await restoreLoom(recordId, patch).catch(translateGone);
   } else {
-    throw makeErr(`Unsupported conflict kind: ${kind}`, ERR_VALIDATION);
+    throw codedError(`Unsupported conflict kind: ${kind}`, ERR_VALIDATION);
   }
 }
 
@@ -213,9 +213,9 @@ async function applyToRecord(kind, recordId, patch, { replace = false } = {}) {
  */
 export async function resolveConflict(id, { action, fields = [] } = {}) {
   const entry = await getConflict(id);
-  if (entry.status !== 'pending') throw makeErr(`Conflict already ${entry.status}`, ERR_VALIDATION);
+  if (entry.status !== 'pending') throw codedError(`Conflict already ${entry.status}`, ERR_VALIDATION);
   const allowed = RESTORABLE_FIELDS[entry.recordKind];
-  if (!allowed) throw makeErr(`Unsupported conflict kind: ${entry.recordKind}`, ERR_VALIDATION);
+  if (!allowed) throw codedError(`Unsupported conflict kind: ${entry.recordKind}`, ERR_VALIDATION);
   const snapshot = entry.localSnapshot || {};
 
   if (action === 'restore-all') {
@@ -223,13 +223,13 @@ export async function resolveConflict(id, { action, fields = [] } = {}) {
     await applyToRecord(entry.recordKind, entry.recordId, pick(snapshot, allowed, entry.recordKind), { replace: true });
   } else if (action === 'merge-fields') {
     if (!Array.isArray(fields) || fields.length === 0) {
-      throw makeErr('merge-fields requires a non-empty `fields` array', ERR_VALIDATION);
+      throw codedError('merge-fields requires a non-empty `fields` array', ERR_VALIDATION);
     }
     const invalid = fields.filter((f) => !allowed.includes(f));
-    if (invalid.length) throw makeErr(`Not restorable: ${invalid.join(', ')}`, ERR_VALIDATION);
+    if (invalid.length) throw codedError(`Not restorable: ${invalid.join(', ')}`, ERR_VALIDATION);
     await applyToRecord(entry.recordKind, entry.recordId, pick(snapshot, fields, entry.recordKind));
   } else if (action !== 'discard') {
-    throw makeErr(`Unknown resolution action: ${action}`, ERR_VALIDATION);
+    throw codedError(`Unknown resolution action: ${action}`, ERR_VALIDATION);
   }
 
   const resolved = { ...entry, status: 'resolved', resolution: action, resolvedAt: new Date().toISOString() };
@@ -243,11 +243,11 @@ export async function deleteConflict(id) {
   // Validate the id BEFORE interpolating it into recordDir(id) — getConflict()
   // (which we no longer call) used to enforce this via the store's isValidId;
   // an unguarded id would make recordDir a path-traversal existence oracle.
-  if (!isSafeRecordId(id)) throw makeErr(`Conflict entry not found: ${id}`, ERR_NOT_FOUND);
+  if (!isSafeRecordId(id)) throw codedError(`Conflict entry not found: ${id}`, ERR_NOT_FOUND);
   // Don't gate on getConflict() — it requires a successful parse, so a corrupt
   // journal entry would 404 here and become permanently undeletable. Check raw
   // directory existence instead, then hard-delete (deleteOne is idempotent).
-  if (!existsSync(store().recordDir(id))) throw makeErr(`Conflict entry not found: ${id}`, ERR_NOT_FOUND);
+  if (!existsSync(store().recordDir(id))) throw codedError(`Conflict entry not found: ${id}`, ERR_NOT_FOUND);
   await store().deleteOne(id);
   return { id, deleted: true };
 }
