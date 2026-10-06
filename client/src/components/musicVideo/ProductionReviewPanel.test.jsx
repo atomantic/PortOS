@@ -5,7 +5,7 @@ import ProductionReviewPanel from './ProductionReviewPanel.jsx';
 
 afterEach(() => { vi.unstubAllGlobals(); window.location.hash = ''; });
 
-const approvalAction = 'Approve — I reviewed this proof with audio';
+const approvalAction = 'Approve proof — watched with sound';
 const proofAction = /Approve.*proof/;
 const project = {
   id: 'example-project', scenes: [], lyricCues: [], composition: { mode: 'document' },
@@ -20,38 +20,39 @@ const reviewFixture = () => ({ readiness: {
   basis: { art: 'art', storyboard: 'board', proof: 'same-creative-basis' },
   art: { approved: true, problems: [] }, storyboard: { approved: true, problems: [] }, proof: { approved: false, problems: [] },
 }, busy: false, proof: { active: false }, approve: vi.fn(), save: vi.fn(async () => null) });
+const NOTE = '0:04 — figure turns on the downbeat; prop follows at 4.5s.';
 function recordPlayback() {
   fireEvent.loadedData(screen.getByLabelText('Animated proof with master audio'));
-  fireEvent.change(screen.getByLabelText('Playback energy compared with the saved plan'), { target: { value: 'The driving turn matches the chosen energy.' } });
-  fireEvent.change(screen.getByLabelText('Timecoded playback notes'), { target: { value: '0:04 — figure turns on the downbeat; prop follows at 4.5s.' } });
+  fireEvent.change(screen.getByLabelText('Notes (optional)'), { target: { value: NOTE } });
 }
 
 describe('Production proof playback evidence', () => {
-  it('records playback attestation only when the reviewer explicitly approves, without a separate checkbox', () => {
+  it('approves a played proof straight away; notes are optional and no checkbox attests', () => {
     const review = reviewFixture();
     render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
     const approve = screen.getByRole('button', { name: approvalAction });
     expect(approve.disabled).toBe(true);
     fireEvent.loadedData(screen.getByLabelText('Animated proof with master audio'));
-    expect(screen.getByText('Describe how the playback energy compares with the saved plan.')).toBeTruthy();
-    fireEvent.change(screen.getByLabelText('Playback energy compared with the saved plan'), { target: { value: 'Driving movement matches the plan.' } });
-    expect(approve.disabled).toBe(true);
-    expect(screen.getByText('Add playback notes with a timestamp such as 0:04 or 4.5s.')).toBeTruthy();
-    recordPlayback();
     expect(screen.queryByRole('checkbox')).toBeNull();
     expect(approve.disabled).toBe(false);
+    // Optional: labelled so, and not highlighted like a required approval.
+    expect(screen.getByRole('heading', { name: /^Animated proof\s*Optional$/ })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Approve: Animated proof' }).className).not.toContain('border-port-accent');
     expect(review.approve).not.toHaveBeenCalled();
-    expect(document.getElementById(approve.getAttribute('aria-describedby').split(' ').at(-1)).textContent).toContain('watched this exact proof with audio at normal speed');
+    // The button itself says what approving attests; no attestation paragraph, and no line once nothing is missing.
+    expect(approve.textContent).toBe('Approve proof — watched with sound');
+    expect(screen.queryByText(/By approving, I confirm/)).toBeNull();
+    expect(approve.getAttribute('aria-describedby')).toBeNull();
     fireEvent.click(approve);
-    expect(review.approve).toHaveBeenCalledWith('proof', {
-      watchedWithAudio: true, excerptId: 'proof-a', filename: 'proof-a.mp4',
-      energyComparison: 'The driving turn matches the chosen energy.',
-      timecodedNotes: '0:04 — figure turns on the downbeat; prop follows at 4.5s.',
-    });
+    expect(review.approve).toHaveBeenCalledWith('proof', { watchedWithAudio: true, excerptId: 'proof-a', filename: 'proof-a.mp4' });
+    // A note, when given, goes with the approval.
+    fireEvent.change(screen.getByLabelText('Notes (optional)'), { target: { value: NOTE } });
+    fireEvent.click(approve);
+    expect(review.approve).toHaveBeenLastCalledWith('proof', { watchedWithAudio: true, excerptId: 'proof-a', filename: 'proof-a.mp4', timecodedNotes: NOTE });
   });
 
 
-  it('explains why a completed prototype cannot be approved and opens the missing prerequisites', () => {
+  it('opens the missing prerequisites and offers no prototype render', () => {
     const review = reviewFixture();
     review.readiness.art.approved = false;
     review.readiness.storyboard = { approved: false, problems: ['Verify alignment against the current master.', 'Import a matching document shot manifest.'] };
@@ -61,20 +62,17 @@ describe('Production proof playback evidence', () => {
     render(<ProductionReviewPanel project={prototype} review={review} onOpenArtifact={vi.fn()} stage="proof" onNavigate={onNavigate} />);
     expect(screen.getByRole('region', { name: 'Approve: Animated proof' })).toBeTruthy();
     const prerequisites = screen.getByLabelText('Proof approval prerequisites');
-    expect(prerequisites.textContent).toContain('feasibility prototype, not a registered production proof');
-    expect(prerequisites.textContent).toContain('Verify alignment against the current master.');
-    expect(prerequisites.textContent).toContain('Import a matching document shot manifest.');
-    expect(screen.getByRole('button', { name: approvalAction }).disabled).toBe(true);
+    // The proof step names the one earlier approval to give, not that step's problems.
+    expect(prerequisites.textContent).toContain('Approve the art direction first.');
+    expect(prerequisites.textContent).not.toContain('Verify alignment against the current master.');
+    // With no proof yet, the box leads with rendering one; there is nothing to approve.
+    expect(screen.queryByRole('button', { name: approvalAction })).toBeNull();
     expect(screen.getByRole('button', { name: 'Render animated proof' }).disabled).toBe(true);
-    fireEvent.loadedData(screen.getByLabelText('Unapproved feasibility prototype'));
-    expect(screen.getByRole('button', { name: approvalAction }).disabled).toBe(true);
-    fireEvent.click(within(prerequisites).getByRole('link', { name: 'Resolve storyboard prerequisites and approve it' }));
-    // The storyboard approval and its planning edits live on the Board step, so the links cross steps.
-    expect(onNavigate).toHaveBeenLastCalledWith('board', 'mv-review-storyboard');
-    fireEvent.click(within(prerequisites).getByRole('link', { name: 'Open planning edits for document shot manifests' }));
-    expect(onNavigate).toHaveBeenLastCalledWith('board', 'mv-review-planning');
-    fireEvent.click(within(prerequisites).getByRole('link', { name: 'Song step' }));
-    expect(onNavigate).toHaveBeenLastCalledWith('setup', 'mv-lyric-timing');
+    expect(screen.queryByRole('button', { name: 'Render preview only' })).toBeNull();
+    expect(screen.queryByLabelText('Unapproved feasibility prototype')).toBeNull();
+    // The link crosses to the step that owns that approval.
+    fireEvent.click(within(prerequisites).getByRole('link', { name: 'Approve the art direction' }));
+    expect(onNavigate).toHaveBeenLastCalledWith('cast-sets', 'mv-review-art');
     expect(review.approve).not.toHaveBeenCalled();
   });
 
@@ -87,8 +85,14 @@ describe('Production proof playback evidence', () => {
       proof: { approved: false, problems: ['Render and watch a current animated chorus proof with the master song.'] },
     } };
     view.rerender(<ProductionReviewPanel project={project} review={changedReview} onOpenArtifact={vi.fn()} stage="proof" />);
-    expect(screen.getByLabelText('Timecoded playback notes').value).toBe('');
-    expect(screen.getByRole('button', { name: approvalAction }).disabled).toBe(true);
+    // The notes belonged to the old proof: they go, with the fields, until a new proof is rendered.
+    expect(screen.queryByLabelText('Notes (optional)')).toBeNull();
+    view.rerender(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
+    expect(screen.getByLabelText('Notes (optional)').value).toBe('');
+    view.rerender(<ProductionReviewPanel project={project} review={changedReview} onOpenArtifact={vi.fn()} stage="proof" />);
+    // A proof of an older revision can't be approved; rendering a new one leads instead.
+    expect(screen.queryByRole('button', { name: approvalAction })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Render animated proof' })).toBeTruthy();
     expect(screen.getByText(/Source changed — render a new proof/)).toBeTruthy();
     expect(review.approve).not.toHaveBeenCalled();
   });
@@ -98,7 +102,8 @@ describe('Production proof playback evidence', () => {
       error: 'Composition capture failed at frame 0 (song 12s): Browser command timed out: Page.captureScreenshot' }] }}
       review={reviewFixture()} onOpenArtifact={vi.fn()} stage="proof" />);
     expect(screen.getByRole('alert').textContent).toContain('capture failed at frame 0');
-    expect(screen.getByRole('button', { name: proofAction }).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: proofAction })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Render animated proof' })).toBeTruthy();
     expect(screen.queryByLabelText('Animated proof with master audio')).toBeNull();
   });
 
@@ -123,9 +128,7 @@ describe('Production proof playback evidence', () => {
     fireEvent.click(approve);
     expect(review.approve).toHaveBeenCalledWith('proof', {
       method: 'machine', watchedWithAudio: false, machineEvidence: evidence,
-      excerptId: 'proof-a', filename: 'proof-a.mp4',
-      energyComparison: 'The driving turn matches the chosen energy.',
-      timecodedNotes: '0:04 — figure turns on the downbeat; prop follows at 4.5s.',
+      excerptId: 'proof-a', filename: 'proof-a.mp4', timecodedNotes: NOTE,
     });
     fireEvent.change(screen.getByLabelText('Review method'), { target: { value: 'playback' } });
     expect(screen.getByRole('button', { name: approvalAction }).disabled).toBe(false);
@@ -140,7 +143,7 @@ describe('Production proof playback evidence', () => {
     expect(approve.disabled).toBe(true);
   });
 
-  it('reports server errors and blocks machine approval for missing media or timestamps', () => {
+  it('reports server errors and blocks machine approval for missing media', () => {
     const review = reviewFixture();
     render(<ProductionReviewPanel project={project} review={{ ...review, error: 'The proof revision changed; review the current proof.' }} onOpenArtifact={vi.fn()} stage="proof" />);
     expect(screen.getByRole('alert').textContent).toContain('proof revision changed');
@@ -150,11 +153,8 @@ describe('Production proof playback evidence', () => {
     for (const label of ['Visual and motion observations', 'Audio and alignment observations', 'Review limitations']) {
       fireEvent.change(screen.getByLabelText(label), { target: { value: 'Specific evidence from the exact proof and the current master audio.' } });
     }
-    fireEvent.change(screen.getByLabelText('Playback energy compared with the saved plan'), { target: { value: 'Driving movement matches the saved plan.' } });
-    fireEvent.change(screen.getByLabelText('Timecoded playback notes'), { target: { value: 'Missing timestamp' } });
     const approve = screen.getByRole('button', { name: proofAction });
-    expect(approve.disabled).toBe(true);
-    fireEvent.change(screen.getByLabelText('Timecoded playback notes'), { target: { value: '0:04 — turn matches the downbeat.' } });
+    expect(approve.disabled).toBe(false);
     fireEvent.error(screen.getByLabelText('Animated proof with master audio'));
     expect(approve.disabled).toBe(true);
     expect(screen.getByLabelText('Visual and motion observations').disabled).toBe(true);
@@ -215,7 +215,7 @@ describe('Production proof playback evidence', () => {
     const board = render(<ProductionReviewPanel project={withRequests} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
     expect(screen.queryByRole('group', { name: 'Animated proof change requests' })).toBeNull();
     const requests = screen.getByRole('group', { name: 'Lyric-timed storyboard change requests' });
-    expect(requests.textContent).toContain('Approval stays blocked until these are resolved. Revise from feedback, or edit and resolve manually.');
+    expect(requests.textContent).toContain('Resolve these change requests to approve.');
     expect(requests.textContent).toContain('Land the leap on the downbeat');
     expect(requests.textContent).not.toContain('Already handled');
     fireEvent.click(within(requests).getByRole('button', { name: 'Revise from feedback' }));
@@ -255,7 +255,7 @@ describe('Production proof playback evidence', () => {
     const view = render(<ProductionReviewPanel project={approved} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
     expect(screen.getByLabelText('Recorded proof review').textContent).toContain('0:04 — the figure turns on the downbeat.');
     expect(screen.queryByRole('checkbox')).toBeNull();
-    expect(screen.getByLabelText('Timecoded playback notes').value).toBe('');
+    expect(screen.getByLabelText('Notes (optional)').value).toBe('');
     view.rerender(<ProductionReviewPanel project={{ ...approved, excerpts: [{ id: 'proof-a', filename: 'replacement.mp4', status: 'complete' }] }} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
     expect(screen.queryByLabelText('Recorded proof review')).toBeNull();
   });
@@ -263,7 +263,7 @@ describe('Production proof playback evidence', () => {
   it.each([
     { id: 'proof-b', filename: 'proof-b.mp4' },
     { id: 'proof-a', filename: 'replacement.mp4' },
-  ])('requires new playback notes when the proof artifact changes to $filename without a creative-basis change', ({ id, filename }) => {
+  ])('requires playing the new proof again when it changes to $filename without a creative-basis change', ({ id, filename }) => {
     const review = reviewFixture();
     const view = render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
     recordPlayback();
@@ -272,14 +272,12 @@ describe('Production proof playback evidence', () => {
       excerpts: [{ id, filename, status: 'complete' }] };
     view.rerender(<ProductionReviewPanel project={replacement} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
     expect(screen.queryByRole('checkbox')).toBeNull();
-    expect(screen.getByLabelText('Playback energy compared with the saved plan').value).toBe('');
-    expect(screen.getByLabelText('Timecoded playback notes').value).toBe('');
+    expect(screen.getByLabelText('Notes (optional)').value).toBe('');
     expect(screen.getByRole('button', { name: proofAction }).disabled).toBe(true);
     recordPlayback();
     fireEvent.click(screen.getByRole('button', { name: proofAction }));
     expect(review.approve).toHaveBeenCalledWith('proof', expect.objectContaining({
-      excerptId: id, filename, watchedWithAudio: true, energyComparison: 'The driving turn matches the chosen energy.',
-      timecodedNotes: '0:04 — figure turns on the downbeat; prop follows at 4.5s.',
+      excerptId: id, filename, watchedWithAudio: true, timecodedNotes: NOTE,
     }));
   });
 
@@ -304,13 +302,40 @@ describe('Production proof playback evidence', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save planning edits', hidden: true }));
     await waitFor(() => expect(review.save).toHaveBeenCalled());
     expect(screen.getByText('Save edits before preparing, approving or rendering.')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Approve art direction' }).disabled).toBe(true);
+    // Art is already approved in this fixture, so it offers no Approve button, only Request changes.
+    expect(screen.queryByRole('button', { name: 'Approve art direction' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Request changes' })).toBeTruthy();
     view.rerender(<Steps stage="proof" />);
     fireEvent.loadedData(screen.getByLabelText('Animated proof with master audio'));
-    expect(screen.getByText('Save your planning edits before approving this revision.', { selector: '#mv-review-example-project-proof-proof-approval-help' })).toBeTruthy();
-    expect(screen.getByLabelText('Timecoded playback notes').disabled).toBe(true);
+    expect(screen.getByText('Save your planning edits first.', { selector: '#mv-review-example-project-proof-proof-approval-help' })).toBeTruthy();
+    expect(screen.getByLabelText('Notes (optional)').disabled).toBe(true);
     expect(screen.getByRole('button', { name: proofAction }).disabled).toBe(true);
     expect(review.approve).not.toHaveBeenCalled();
+  });
+});
+
+describe('Approval problems with unsaved edits', () => {
+  it.each([
+    [['Cover the master with timed shots.']],
+    [['Cover the master with timed shots.', 'Resolve storyboard feedback for shot: chorus: hold longer']],
+  ])('lists every storyboard problem while planning edits are unsaved (%j)', (problems) => {
+    const review = reviewFixture();
+    review.readiness.storyboard = { approved: false, problems };
+    function Board() {
+      const planning = useState({ ...project.productionReview.draft, cast: 'Edited cast' });
+      return <ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="storyboard" planning={planning} />;
+    }
+    render(<Board />);
+    expect(screen.getByText('Save your planning edits first.')).toBeTruthy();
+    for (const problem of problems) expect(screen.getByText(problem)).toBeTruthy();
+  });
+
+  it('shows the first problem once, on the help line, when nothing is unsaved', () => {
+    const review = reviewFixture();
+    review.readiness.storyboard = { approved: false, problems: ['Cover the master with timed shots.', 'Second problem.'] };
+    render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
+    expect(screen.getAllByText(/Cover the master with timed shots\./)).toHaveLength(1);
+    expect(screen.getByText('Second problem.')).toBeTruthy();
   });
 });
 
@@ -337,7 +362,7 @@ describe('Per-stage approval sections (#10151)', () => {
     render(<ProductionReviewPanel project={prototype} review={review} onOpenArtifact={vi.fn()} stage="proof" onNavigate={onNavigate} />);
     expect(screen.queryByText('Art direction', { selector: 'summary' })).toBeNull();
     expect(screen.queryByText('Edit art direction and visual guide')).toBeNull();
-    fireEvent.click(screen.getByText('Review and approve art direction'));
+    fireEvent.click(screen.getByText('Approve the art direction'));
     expect(onNavigate).toHaveBeenCalledWith('cast-sets', 'mv-review-art');
   });
 
@@ -362,6 +387,9 @@ describe('Per-stage approval sections (#10151)', () => {
     expect(within(box).getByRole('button', { name: 'Approve lyric-timed storyboard' })).toBeTruthy();
     expect(within(box).getByRole('button', { name: 'Request changes' })).toBeTruthy();
     expect(container.querySelector('details#mv-review-storyboard')).toBeNull();
+    // The decision sits at the top of the box, before the shots it is about.
+    const approveButton = within(box).getByRole('button', { name: 'Approve lyric-timed storyboard' });
+    expect(approveButton.compareDocumentPosition(within(box).getByRole('region', { name: 'Storyboard review content' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByText('About production approvals')).toBeNull();
   });
 });

@@ -1,5 +1,5 @@
-import { prepareProductionReview, renderProductionProof, attachProductionPilotProof } from './productionReviewService.js';
-import { productionReadiness, productionProofNeedsRender, productionProofWindow } from './productionReview.js';
+import { prepareProductionReview, attachProductionPilotProof } from './productionReviewService.js';
+import { productionReadiness, productionProofNeedsRender } from './productionReview.js';
 import { currentPlateEvidence, plateRequirementBasis, selectedPlatePasses } from '../../lib/musicVideoPlateEvidence.js';
 import { ensureSceneTakes, selectSceneTake } from './takes.js';
 /**
@@ -431,13 +431,6 @@ async function takeSteps(projectId, runId) {
       }
       return halt(projectId, runId, { status: 'blocked', reason: 'Watch and approve the rendered pilot in Production review before bulk generation.' });
     }
-    if (step.type === 'review' && !readiness.proof.approved) {
-      if (productionProofNeedsRender(project, readiness.basis.proof)) {
-        await renderProductionProof(projectId, productionProofWindow(project));
-      }
-      return halt(projectId, runId, { status: 'blocked', reason: 'Watch and approve the animated proof in Production review before the full film.' });
-    }
-
 
     if (step.type === 'idle' || step.type === 'wait') return { project, run, action: step };
     if (step.type === 'plan-pilots') {

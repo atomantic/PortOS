@@ -1,6 +1,6 @@
 import { musicVideoMediaMode, musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
-import { prepareProductionReview, renderProductionProof } from './productionReviewService.js';
-import { assertProductionApproval, productionReadiness, productionProofNeedsRender, productionProofWindow } from './productionReview.js';
+import { prepareProductionReview } from './productionReviewService.js';
+import { assertProductionApproval, productionReadiness } from './productionReview.js';
 
 /**
  * Fully-autonomous Music Video — the run orchestrator.
@@ -161,8 +161,6 @@ const stagePatch = (run, stage, patch) => ({ stages: { [stage]: { ...run.stages[
 // ---- production review auto-approval (brief.autoApprove) --------------------------
 
 const RENDER_STEP = 'rendering';
-const PROOF_POLL_MS = 5_000;
-const PROOF_WAIT_MAX_MS = 90 * 60_000;
 const autoApproves = (run, stage) => normalizeAutoApprove(run.brief.autoApprove).includes(stage);
 
 /**
@@ -187,30 +185,6 @@ async function autoApproveStage(project, run, stage) {
     reviewer: { kind: 'autopilot', runId: run.id, authorizedBy: run.brief.autoApproveAuthorizedBy || null } });
   console.log(`🤖 Autonomous music video ${short(run.id)} auto-approved ${stage} (brief.autoApprove)`);
   return getProject(project.id);
-}
-
-/**
- * Wait for the current proof excerpt to finish rendering (polls the record; the
- * excerpt job runs on its own). Stops when the run is stopped or canceled; a
- * failed render or a render past the cap fails the stage.
- */
-async function awaitProofExcerpt(projectId, run) {
-  const polls = Math.ceil(PROOF_WAIT_MAX_MS / PROOF_POLL_MS);
-  for (let i = 0; ; i++) {
-    const project = await getProject(projectId);
-    const latest = projectAutonomousRun(project);
-    if (latest?.id !== run.id || latest.status !== 'running' || latest.processId !== PROCESS_ID) {
-      throw runError(409, 'NOT_RUNNING', 'The run was stopped while its proof rendered');
-    }
-    const excerptId = project.productionReview?.proof?.excerptId;
-    const excerpt = excerptId ? (project.excerpts || []).find((e) => e.id === excerptId) : null;
-    if (excerpt?.status === 'complete') return project;
-    if (excerpt && excerpt.status !== 'rendering') {
-      throw runError(500, 'PROOF_RENDER_FAILED', `The proof render failed: ${trimTo(excerpt.error || excerpt.status, 400)}`);
-    }
-    if (i >= polls) throw runError(504, 'PROOF_RENDER_TIMEOUT', 'The proof render did not finish within 90 minutes');
-    await deps.wait(PROOF_POLL_MS);
-  }
 }
 
 // ---- stage executors -------------------------------------------------------------
@@ -429,15 +403,8 @@ const STAGES = {
           : await deps.generateDocument(project.id, input);
         await deps.acceptDocument(project.id, candidate.document.directory);
       }
-      project = await getProject(project.id);
-      const readiness = productionReadiness(project);
-      if (productionProofNeedsRender(project, readiness.basis.proof)) {
-        await renderProductionProof(project.id, productionProofWindow(project));
-      }
-      // Older briefs may grant proof approval. Honor the render wait, but never
-      // manufacture review evidence: a reviewer must approve the finished excerpt.
-      if (autoApproves(run, 'proof')) await awaitProofExcerpt(project.id, run);
-      assertProductionApproval(await getProject(project.id));
+      // The animated proof is optional review evidence, so the run renders the film once the
+      // storyboard is approved; the director can still render and approve a proof by hand.
       const render = await deps.renderVideo(project.id);
       // The run is not finished until the MP4 exists: stay on produce and let the render's own event settle it.
       return { output: { renderJobId: render?.jobId || null }, wait: true, step: RENDER_STEP };

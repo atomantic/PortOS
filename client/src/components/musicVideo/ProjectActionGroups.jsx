@@ -273,7 +273,7 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
   // Determine the blocker reason for display
   let blockerReason = '';
   if (!readiness?.readyForProduction) {
-    blockerReason = 'Approve the current visual guide, timed storyboard and animated proof first';
+    blockerReason = 'Approve the current visual guide and timed storyboard first';
   } else if (eidoverseMode && eidoverseBlocked) {
     blockerReason = eidoverseBlocked;
   } else if (documentMode && documentBlocked) {

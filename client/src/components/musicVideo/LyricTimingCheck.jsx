@@ -11,8 +11,8 @@ const buttonClass = 'min-h-[44px] rounded border border-port-border bg-port-bg p
  * draft fields the storyboard approval reads (`lyricsMode`, `timingStatus`,
  * `timingNotes`), so the Song step is finished here rather than in a review
  * panel on another step. A stale verification (the master or the word times
- * changed) is re-verified through the server's alignment route, which needs a
- * note. `planning` is the page's unsaved planning draft pair; its copy of these
+ * changed) is re-verified through the server's alignment route. Notes are
+ * optional. `planning` is the page's unsaved planning draft pair; its copy of these
  * fields is kept in step so a later planning save cannot undo this one.
  */
 export default function LyricTimingCheck({ project, review, planning = null, disabled = false }) {
@@ -56,7 +56,7 @@ export default function LyricTimingCheck({ project, review, planning = null, dis
       ) : (
         <>
           <label htmlFor={notesId} className="block text-xs text-port-text-muted">
-            {mode === 'vocal' ? 'What you checked (needed to re-verify after a change)' : 'Why this song has no lyrics'}
+            Notes (optional)
           </label>
           <textarea id={notesId} rows={2} maxLength={4000} value={notes} onChange={(e) => setNotes(e.target.value)}
             className="w-full rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm" />
@@ -65,12 +65,12 @@ export default function LyricTimingCheck({ project, review, planning = null, dis
           )}
           {mode === 'vocal' ? (
             <button type="button" className={buttonClass}
-              disabled={busy || lyrics.lines === 0 || (stale && !notes.trim())}
+              disabled={busy || lyrics.lines === 0}
               onClick={() => (stale ? reverify() : write({ lyricsMode: 'vocal', timingStatus: 'verified', timingNotes: notes.trim() }))}>
               {stale ? 'Re-verify timing' : 'Mark timing verified'}
             </button>
           ) : (
-            <button type="button" className={buttonClass} disabled={busy || !notes.trim()}
+            <button type="button" className={buttonClass} disabled={busy}
               onClick={() => write({ lyricsMode: 'instrumental', timingNotes: notes.trim() })}>
               Confirm instrumental
             </button>

@@ -801,7 +801,8 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
 
 async function assertCurrentRenderApproval(projectId, preparedProject, options) {
   const current = await getProject(projectId);
-  assertProductionApproval(current);
+  // The final render needs the approved storyboard; the animated proof is optional.
+  assertProductionApproval(current, 'storyboard');
   if (productionReviewBasis(current).proof !== productionReviewBasis(preparedProject).proof) {
     throw new ServerError('The reviewed film changed during render preparation.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
   }
@@ -817,9 +818,9 @@ export async function renderMusicVideo(projectId, options = {}) {
 async function renderAdmittedMusicVideo(projectId, options, permit) {
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  assertProductionApproval(project);
+  assertProductionApproval(project, 'storyboard');
   if (typeof options?.codeDirectory === 'string' && options.codeDirectory) {
-    throw new ServerError('Import and select the composition document, then approve its animated proof before rendering.', { status: 409, code: 'MUSIC_VIDEO_UNREVIEWED_DIRECTORY' });
+    throw new ServerError('Import and select the composition document before rendering.', { status: 409, code: 'MUSIC_VIDEO_UNREVIEWED_DIRECTORY' });
   }
   const existingJob = projectRenders.get(projectId);
   if (existingJob && (existingJob === PENDING || jobs.has(existingJob))) {
