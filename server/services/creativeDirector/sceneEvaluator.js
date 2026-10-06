@@ -38,6 +38,7 @@ import { addItem } from '../mediaCollections.js';
 import { updateScene, recordRun, updateRun } from './local.js';
 import { resolveStagePin } from './projectsLogic.js';
 import { enqueueEvaluateTask } from './agentBridge.js';
+import { logFailureWithStack } from '../../lib/failureLogging.js';
 
 // Cap frames per call — the runner base64-inlines every frame into one request
 // body, so a large batch balloons the prompt and a local VLM's context window.
@@ -299,7 +300,7 @@ export async function applySceneVerdict(project, scene, verdict, llm = null, run
   const advance = async () => {
     const advanceAfterSceneSettled = await loadAdvance();
     return advanceAfterSceneSettled(project.id).catch((err) =>
-      console.log(`⚠️ CD advance after scene ${scene.sceneId} settled failed: ${err.message}`));
+      logFailureWithStack(`❌ CD advance after scene ${scene.sceneId} of ${project.id} settled failed`, err));
   };
 
   if (verdict.accepted) {

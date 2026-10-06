@@ -450,6 +450,24 @@ describe('creativeDirector routes', () => {
       expect(hook.startCreativeDirectorProject).toHaveBeenCalledWith('cd-1');
     });
 
+    it('logs a rejected background kick to stderr with the project id and stack, and still answers 200', async () => {
+      cdService.getProject.mockResolvedValue({ id: 'cd-1', name: 'A', status: 'draft' });
+      cdService.updateProject.mockResolvedValue({});
+      hook.startCreativeDirectorProject.mockRejectedValueOnce(new Error('enqueue exploded'));
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        const r = await request(app).post('/api/creative-director/cd-1/start');
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(r.status).toBe(200);
+        expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('❌ CD start failed for cd-1: enqueue exploded'), expect.stringContaining('enqueue exploded'));
+        expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining('CD start failed'));
+      } finally {
+        errSpy.mockRestore();
+        logSpy.mockRestore();
+      }
+    });
+
     it('resets failed scenes back to pending and re-fires orchestrator', async () => {
       cdService.getProject.mockResolvedValueOnce({
         id: 'cd-1',

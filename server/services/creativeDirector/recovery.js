@@ -28,6 +28,7 @@
 import { listProjects, updateScene, updatePlanStep, updateProject } from './local.js';
 import { listJobs, cancelJob } from '../mediaJobQueue/index.js';
 import { inflightRuns, ownedLiveJobs, retireRuns } from './stopProject.js';
+import { logFailureWithStack } from '../../lib/failureLogging.js';
 
 // Boot-time coordination: cos.start() (entered from cos.init() when
 // alwaysOn/autoStart is configured) calls resetOrphanedTasks(), which
@@ -186,7 +187,7 @@ export async function recoverInFlightProjects() {
       // step from the reset plan). Legacy video projects stay on the scene loop.
       if (project.directive) {
         advanceAfterPlanStepSettled(project.id)
-          .catch((e) => console.log(`⚠️ CD recovery: plan advance for ${project.id} failed: ${e.message}`));
+          .catch((e) => logFailureWithStack(`❌ CD recovery: plan advance for ${project.id} failed`, e));
         resumed += 1;
         continue;
       }
@@ -202,7 +203,7 @@ export async function recoverInFlightProjects() {
           .catch((e) => console.log(`⚠️ CD recovery: reset stitching→rendering for ${project.id} failed: ${e.message}`));
       }
       advanceAfterSceneSettled(project.id)
-        .catch((e) => console.log(`⚠️ CD recovery: advance for ${project.id} failed: ${e.message}`));
+        .catch((e) => logFailureWithStack(`❌ CD recovery: advance for ${project.id} failed`, e));
       resumed += 1;
     }
   }
