@@ -99,9 +99,15 @@ const lengthContract = (targetSeconds) => {
   return `\n\nTARGET LENGTH: the finished song should run about ${minutes} minute${minutes === '1' ? '' : 's'} (${sec} seconds). Write roughly ${lines} sung lyric lines in total (section tags excluded) and never more than ${Math.round(lines * 1.2)}; keep sections concise rather than adding verses. This overrides any instruction above to add more sections.`;
 };
 
-export function buildLyricsPrompt({ description, guidance, template, targetSeconds } = {}) {
+// The listener-facing request a song was commissioned from (an autonomous run's
+// prompt). The musical description covers only sound, so without this the hook
+// phrase, subject and imagery the user asked for never reach the lyricist.
+const SONG_REQUEST_LABEL = 'SONG REQUEST (what the lyrics must deliver: honour every hook phrase, subject and image it names; ignore its purely musical or production details such as genre, tempo, instruments or artist names, which the musical description owns and which never belong in a lyric line)';
+
+export function buildLyricsPrompt({ description, guidance, request, template, targetSeconds } = {}) {
   return [
     pickTemplate(template, DEFAULT_LYRICS_TEMPLATE),
+    section(SONG_REQUEST_LABEL, trimTo(request, MAX_GUIDANCE)),
     section('MUSICAL DESCRIPTION', trimTo(description, MAX_DESCRIPTION) || '(none given)'),
     section('ADDITIONAL GUIDANCE FROM THE USER', trimTo(guidance, MAX_GUIDANCE)),
     lengthContract(targetSeconds),
@@ -119,6 +125,8 @@ const LYRICS_REVIEW_INSTRUCTIONS = [
   'Improve scansion and singability, sharpen weak or generic lines, give the chorus more punch, and make the argument of the song land more clearly.',
   'Never add new topics, characters or story beats the draft does not already contain. Keep the lyrics original.',
 ].join(' ');
+// Only with a request, so a review without one (Music Studio) keeps its original prompt.
+const LYRICS_REVIEW_REQUEST_CHECK = ' Exception: check the draft against the SONG REQUEST first. Any hook phrase, title phrase or required image it names that the draft lacks must appear in the revision (a named hook belongs in the chorus), and your notes must say what was missing.';
 const LYRICS_REVIEW_OUTPUT_CONTRACT = [
   'Return the complete revised lyric sheet first, with its section tags.',
   `Then a line containing only ${LYRICS_REVIEW_SEPARATOR}`,
@@ -126,9 +134,11 @@ const LYRICS_REVIEW_OUTPUT_CONTRACT = [
   'No preamble, no other commentary, no markdown fence.',
 ].join('\n');
 
-function buildLyricsReviewPrompt({ lyrics, description, guidance } = {}) {
+function buildLyricsReviewPrompt({ lyrics, description, guidance, request } = {}) {
   return [
     LYRICS_REVIEW_INSTRUCTIONS,
+    trimTo(request, MAX_GUIDANCE) ? LYRICS_REVIEW_REQUEST_CHECK : '',
+    section(SONG_REQUEST_LABEL, trimTo(request, MAX_GUIDANCE)),
     section('MUSICAL DESCRIPTION', trimTo(description, MAX_DESCRIPTION) || '(none given)'),
     section('ADDITIONAL GUIDANCE FROM THE USER', trimTo(guidance, MAX_GUIDANCE)),
     section('DRAFT LYRICS', trimTo(lyrics, MAX_LYRICS)),
@@ -193,6 +203,7 @@ export async function describeMusic({ concept, guidance, template, providerId, m
  * @param {object} args
  * @param {string} args.description — the enriched musical description
  * @param {string} [args.guidance] — "make the chorus about X", etc.
+ * @param {string} [args.request] — the song request it is commissioned from (hook, subject, imagery)
  * @param {string} [args.template] — meta-prompt override; blank → the default
  * @param {number} [args.targetSeconds] — intended song length; default 180 (~3 min)
  * @param {string} [args.providerId]
@@ -200,11 +211,11 @@ export async function describeMusic({ concept, guidance, template, providerId, m
  * @param {string} [args.effort]
  * @returns {Promise<{ lyrics: string, llm: { provider: string, model: string|null } }>}
  */
-export async function writeLyrics({ description, guidance, template, targetSeconds, providerId, model, effort } = {}) {
+export async function writeLyrics({ description, guidance, request, template, targetSeconds, providerId, model, effort } = {}) {
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   assertProvider(provider, { message: 'No AI provider available to write lyrics', code: 'NO_PROVIDER' });
 
-  const prompt = buildLyricsPrompt({ description, guidance, template, targetSeconds });
+  const prompt = buildLyricsPrompt({ description, guidance, request, template, targetSeconds });
   const { text, model: ranModel } = await runPromptThroughProvider({
     provider, model: selectedModel, effort, prompt, source: 'music-lyrics',
   });
@@ -224,19 +235,20 @@ export async function writeLyrics({ description, guidance, template, targetSecon
  * @param {string} args.lyrics — the draft to revise
  * @param {string} [args.description] — the musical description it was written against
  * @param {string} [args.guidance]
+ * @param {string} [args.request] — the song request the draft must honour
  * @param {string} [args.providerId]
  * @param {string} [args.model]
  * @param {string} [args.effort]
  * @returns {Promise<{ lyrics: string, notes: string, llm: { provider: string, model: string|null } }>}
  */
-export async function reviewLyrics({ lyrics, description, guidance, providerId, model, effort } = {}) {
+export async function reviewLyrics({ lyrics, description, guidance, request, providerId, model, effort } = {}) {
   if (!trimTo(lyrics, MAX_LYRICS)) {
     throw new ServerError('There are no lyrics to review.', { status: 400, code: 'VALIDATION_ERROR' });
   }
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   assertProvider(provider, { message: 'No AI provider available to review lyrics', code: 'NO_PROVIDER' });
 
-  const prompt = buildLyricsReviewPrompt({ lyrics, description, guidance });
+  const prompt = buildLyricsReviewPrompt({ lyrics, description, guidance, request });
   const { text, model: ranModel } = await runPromptThroughProvider({
     provider, model: selectedModel, effort, prompt, source: 'music-lyrics-review',
   });

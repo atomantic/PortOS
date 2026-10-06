@@ -146,6 +146,15 @@ describe('writeLyrics', () => {
     expect(lastRunArgs().prompt).toContain('about leaving at dawn');
   });
 
+  it('puts the song request ahead of the musical description so its hook reaches the lyricist', async () => {
+    await writeLyrics({ description: 'synth-pop', request: 'a chorus built around the phrase "airplane mode"' });
+    const { prompt } = lastRunArgs();
+    expect(prompt).toMatch(/SONG REQUEST[^\n]*hook phrase[^\n]*:\na chorus built around the phrase "airplane mode"/);
+    expect(prompt.indexOf('SONG REQUEST')).toBeLessThan(prompt.indexOf('MUSICAL DESCRIPTION'));
+    await writeLyrics({ description: 'synth-pop' });
+    expect(lastRunArgs().prompt).not.toContain('SONG REQUEST');
+  });
+
   it('passes effort through to the runner', async () => {
     await writeLyrics({ description: 'x', effort: 'low' });
     expect(lastRunArgs().effort).toBe('low');
@@ -181,6 +190,17 @@ describe('reviewLyrics', () => {
     expect(prompt).toMatch(/Keep the title/);
     expect(prompt).toMatch(/section tag/);
     expect(prompt).toMatch(/Never add new topics/);
+  });
+
+  it('checks the draft against the song request and keeps a named hook', async () => {
+    ai.runPromptThroughProvider.mockResolvedValue({ text: '[verse]\nrain\n---\nAdded the missing hook.', model: 'ran-model' });
+    await reviewLyrics({ lyrics: DRAFT, description: 'synthwave', request: 'chorus must say "airplane mode"' });
+    const { prompt } = lastRunArgs();
+    expect(prompt).toContain('chorus must say "airplane mode"');
+    expect(prompt).toMatch(/hook phrase, title phrase or required image it names that the draft lacks must appear/);
+    expect(prompt).toMatch(/ignore its purely musical or production details/);
+    await reviewLyrics({ lyrics: DRAFT, description: 'synthwave' });
+    expect(lastRunArgs().prompt).not.toContain('SONG REQUEST');
   });
 
   it('treats an answer with no separator as all lyrics (empty notes), unwrapping a fence', async () => {
