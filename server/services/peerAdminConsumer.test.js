@@ -49,13 +49,18 @@ describe('peer execution sender boundary', () => {
     expect(credential.peerAuthAccepted).toBe(true);
   });
 
-  it('rejects a forged or expired preview before making a dispatch request', async () => {
+  it('proves only local preview rejection was never sent, binding the result to its request', async () => {
     const preflight = signed(snapshot(randomUUID()));
     preflight.payload.intent = { action: 'portos.update' };
-    await expect(dispatchPeerExecution({ peerId: peer.id, preflight })).rejects.toMatchObject({ code: 'PEER_EXECUTION_UNVERIFIED_RESPONSE' });
-    await expect(dispatchPeerExecution({ peerId: peer.id, preflight: signed({ ...snapshot(randomUUID()), expiresAt: Date.now() - 1 }) }))
-      .rejects.toMatchObject({ code: 'PEER_EXECUTION_UNVERIFIED_RESPONSE' });
+    await expect(dispatchPeerExecution({ peerId: peer.id, preflight })).rejects.toMatchObject({ code: 'PEER_EXECUTION_NOT_SENT', context: { requestId: preflight.payload.requestId } });
+    const expired = signed({ ...snapshot(randomUUID()), expiresAt: Date.now() - 1 });
+    await expect(dispatchPeerExecution({ peerId: peer.id, preflight: expired }))
+      .rejects.toMatchObject({ code: 'PEER_EXECUTION_NOT_SENT', context: { requestId: expired.payload.requestId } });
     expect(peerFetch).not.toHaveBeenCalled();
+    peerFetch.mockResolvedValueOnce({ ok: false });
+    await expect(dispatchPeerExecution({ peerId: peer.id, preflight: signed(snapshot(randomUUID())) }))
+      .rejects.toMatchObject({ code: 'PEER_ADMIN_REMOTE_REFUSED' });
+    expect(peerFetch).toHaveBeenCalledOnce();
   });
 
   it('rejects signed responses with another intent or a pair changed while preparing', async () => {
@@ -74,8 +79,9 @@ describe('peer execution sender boundary', () => {
     expect(peerFetch).toHaveBeenCalledTimes(1);
     const completed = { ...receipt(preflight.payload.requestId), state: 'succeeded', revision: 4 };
     readPeerBody.mockResolvedValueOnce(signed(completed, 'execution-receipt'));
-    await expect(getPeerExecutionStatus({ peerId: peer.id, requestId: preflight.payload.requestId })).resolves.toEqual(completed);
+    await expect(getPeerExecutionStatus({ peerId: peer.id, requestId: preflight.payload.requestId, preflight })).resolves.toEqual(completed);
     expect(peerFetch.mock.calls[1][0]).toMatch(/execution\/status$/);
+    expect(JSON.parse(peerFetch.mock.calls[1][1].body)).toEqual({ requestId: preflight.payload.requestId, preflight });
   });
 
   it('rejects a valid signature for an unrelated receipt or incorrect signature purpose', async () => {

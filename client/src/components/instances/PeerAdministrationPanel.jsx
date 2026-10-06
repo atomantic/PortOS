@@ -136,17 +136,21 @@ function ExecutionControls({ peer, setup, onSetup }) {
     const saved = safeReadJsonStorage(storageKey);
     return typeof saved?.requestId === 'string' ? saved : null;
   });
+  const requestRef = useRef(request);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error, setError] = useState('');
   const mounted = useMounted();
   const unresolved = request && !['succeeded', 'failed'].includes(request.state);
   const remember = (value, requireDurable = false) => {
-    safeWriteJsonStorage(storageKey, value);
-    if (requireDurable && safeReadStorage(storageKey) !== JSON.stringify(value)) {
+    const original = value.preflight ?? (requestRef.current?.requestId === value.requestId ? requestRef.current.preflight : null);
+    const next = original ? { ...value, preflight: original } : value;
+    safeWriteJsonStorage(storageKey, next);
+    if (requireDurable && safeReadStorage(storageKey) !== JSON.stringify(next)) {
       throw new Error('Execution was not submitted because this browser could not save its recovery record. Enable persistent browser storage and prepare the action again.');
     }
-    if (mounted.current) setRequest(value);
+    requestRef.current = next;
+    if (mounted.current) setRequest(next);
   };
   const run = async work => {
     if (busyRef.current) return;
@@ -174,15 +178,24 @@ function ExecutionControls({ peer, setup, onSetup }) {
   });
   const dispatch = () => run(async () => {
     // Verify persistent storage BEFORE launch so recovery survives reloads and tab closure.
-    const pending = { requestId: preflight.payload.requestId, state: 'uncertain' };
+    const pending = { requestId: preflight.payload.requestId, state: 'uncertain', preflight };
     remember(pending, true);
     const envelope = preflight;
     setPreflight(null);
-    const value = await dispatchPeerExecution({ peerId: peer.id, preflight: envelope }, { silent: true });
+    const value = await dispatchPeerExecution({ peerId: peer.id, preflight: envelope }, { silent: true }).catch(err => {
+      // Only our sender can prove that no dispatch was attempted. Remote
+      // refusals, unrelated errors and lost responses remain uncertain.
+      if (err.code === 'PEER_EXECUTION_NOT_SENT' && err.context?.requestId === pending.requestId) {
+        remember({ requestId: pending.requestId, state: 'failed', code: err.code });
+      }
+      throw err;
+    });
     remember(value);
   });
   const checkStatus = () => run(async () => {
-    const value = await getPeerExecutionStatus({ peerId: peer.id, requestId: request.requestId }, { silent: true });
+    const value = await getPeerExecutionStatus({ peerId: peer.id, requestId: request.requestId,
+      ...(request.preflight ? { preflight: request.preflight } : {}),
+    }, { silent: true });
     if (!Number.isSafeInteger(request.revision) || value.revision >= request.revision) remember(value);
   });
 

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import {
-  peerAdminPreflightSchema, peerAdminPlanSchema, peerAdminReceiptSchema, peerExecutionPreflightSchema, peerExecutionDispatchSchema,
+  peerAdminPreflightSchema, peerAdminPlanSchema, peerAdminReceiptSchema, peerExecutionPreflightSchema, peerExecutionDispatchSchema, peerExecutionStatusSchema,
 } from '../lib/peerAdminValidation.js';
 import {
   createPeerAdminPreflight,
@@ -39,7 +39,7 @@ router.post('/execution/dispatch', asyncHandler(async (req, res) => {
   res.status(202).json(await (await peerExecutionRuntime()).dispatch(req, input));
 }));
 router.post('/execution/status', asyncHandler(async (req, res) => {
-  const input = validateRequest(peerAdminReceiptSchema, req.body);
+  const input = validateRequest(peerExecutionStatusSchema, req.body);
   const { peerExecutionRuntime } = await import('../services/peerExecutionRuntime.js');
   res.json(await (await peerExecutionRuntime()).status(req, input));
 }));

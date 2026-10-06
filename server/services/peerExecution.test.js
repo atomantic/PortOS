@@ -29,6 +29,12 @@ beforeEach(async () => {
       const operation = { operationId: randomUUID(), binding, fingerprint: hash(binding), revision: 1, state: 'queued', claim: null, receipt: null };
       operations.set(operation.operationId, operation); return { operation, isNew: true };
     },
+    retireUnconsumed: async binding => {
+      const { operation, isNew } = await ledger.consume(binding);
+      if (!isNew) return operation;
+      const retired = { ...operation, state: 'failed', receipt: { outcome: 'failed', code: 'PEER_EXECUTION_NOT_ACCEPTED', evidenceDigest: null, executionEpoch: epoch } };
+      operations.set(retired.operationId, retired); return retired;
+    },
     read: async id => operations.get(id),
     readRequest: async ({ hostInstanceId, peerInstanceId, requestId }) => [...operations.values()].find(row => row.binding.requestId === requestId
       && row.binding.hostInstanceId === hostInstanceId && row.binding.peerInstanceId === peerInstanceId) ?? null,
@@ -86,6 +92,37 @@ describe('receiver execution public workflow with fixture-only side effects', ()
     const restarted = makeReceiver(); await restarted.recover();
     expect((await restarted.status('paired', input)).payload.state).toBe('succeeded');
     expect(adapters.run).toHaveBeenCalledTimes(1);
+  });
+  it('retires an unconsumed signed request after restart and revocation, preventing every delayed dispatch', async () => {
+    await grant();
+    const requestId = randomUUID();
+    const envelope = await receiver.preflight('paired', { protocolVersion: 1, requestId, intent });
+    const { scope: _scope, senderInstanceId: _sender, targetInstanceId: _target, expiresAt: _expiry, ...dispatch } = envelope.payload;
+    await grant({ allowExecution: false });
+    const restarted = makeReceiver();
+    await expect(restarted.status('paired', { requestId })).rejects.toMatchObject({ code: 'PEER_EXECUTION_NOT_FOUND' });
+    await expect(restarted.status('paired', { requestId, preflight: { ...envelope, signature: 'a'.repeat(64) } })).rejects.toMatchObject({ code: 'PEER_EXECUTION_RECOVERY_UNVERIFIED' });
+    expect(operations.size).toBe(0);
+    const retired = await restarted.status('paired', { requestId, preflight: envelope });
+    expect(retired.payload).toMatchObject({ state: 'failed', code: 'PEER_EXECUTION_NOT_ACCEPTED' });
+    expect((await receiver.dispatch('paired', dispatch)).payload).toEqual(retired.payload);
+    await expect(restarted.preflight('paired', { protocolVersion: 1, requestId, intent })).rejects.toMatchObject({ code: 'PEER_EXECUTION_CONSUMED' });
+    await makeReceiver().recover();
+    expect((await restarted.status('paired', { requestId })).payload).toEqual(retired.payload);
+    expect(adapters.run).not.toHaveBeenCalled();
+    expect(coordinator.status().state).toBe('normal');
+  });
+  it('returns the existing accepted operation when recovery races an admitted dispatch', async () => {
+    const active = coordinator.admit('render', 'Fixture render');
+    await grant();
+    const requestId = randomUUID();
+    const preflight = await receiver.preflight('paired', { protocolVersion: 1, requestId, intent });
+    const { scope: _scope, senderInstanceId: _sender, targetInstanceId: _target, expiresAt: _expiry, ...input } = preflight.payload;
+    await receiver.dispatch('paired', input);
+    const response = await receiver.status('paired', { requestId, preflight });
+    expect(['queued', 'draining']).toContain(response.payload.state);
+    await active.finish(); await receiver.drain(); await idle();
+    expect(adapters.run).toHaveBeenCalledOnce();
   });
   it('lets admitted work settle naturally and rechecks revocation before dispatch', async () => {
     const active = coordinator.admit('provider', 'Fixture provider');

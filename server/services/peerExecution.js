@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto';
 import { canonicalStringify } from '../lib/objects.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { peerExecutionError } from './peerExecutionGrants.js';
-import { peerAdminPairBinding, signPeerAdmin } from './peerAdministration.js';
+import { peerExecutionPreflightPayloadSchema } from '../lib/peerAdminValidation.js';
+import { peerAdminPairBinding, signPeerAdmin, verifyPeerAdminSignature } from './peerAdministration.js';
 
 const hash = value => createHash('sha256').update(canonicalStringify(value)).digest('hex');
 const claimRef = claim => ({ id: claim.id, revision: claim.revision, fingerprint: claim.fingerprint });
@@ -208,9 +209,22 @@ export function createPeerExecutionReceiver({ ledger, grants, coordinator, adapt
       await finish(operation, { state: 'failed', code: 'PEER_EXECUTION_INTERRUPTED_BEFORE_LAUNCH' }, null);
     }
   };
-  const status = (req, { requestId }) => locked(async () => {
+  const status = (req, { requestId, preflight: envelope }) => locked(async () => {
     const pair = await caller(req);
     let operation = await findRequest(pair, requestId);
+    if (!operation && envelope) {
+      const payload = envelope.payload;
+      if (!peerExecutionPreflightPayloadSchema.safeParse(payload).success
+        || !verifyPeerAdminSignature(pair.peer, 'execution-preflight', payload, envelope.signature)
+        || payload.requestId !== requestId || payload.senderInstanceId !== pair.peer.instanceId
+        || payload.targetInstanceId !== pair.self.instanceId)
+        fail('PEER_EXECUTION_RECOVERY_UNVERIFIED', 'The original request preview could not be verified.');
+      operation = await ledger.retireUnconsumed({ hostInstanceId: pair.self.instanceId, peerInstanceId: pair.peer.instanceId,
+        requestId, grantId: payload.grantId, grantGeneration: payload.grantGeneration, scope: 'execution-v1',
+        pairBinding: peerAdminPairBinding(pair.peer, pair.self), intent: payload.intent, receiverVersion: payload.version,
+        evidenceDigest: payload.evidenceDigest, executionEpoch: payload.executionEpoch });
+      preflights.delete(`${pair.peer.instanceId}:${requestId}`);
+    }
     if (!operation) throw peerExecutionError('PEER_EXECUTION_NOT_FOUND', 'Execution request not found.', 404);
     // A deliberate receipt read may observe completion written after server boot.
     // It never dispatches work, retries a launch, or cancels live local work.

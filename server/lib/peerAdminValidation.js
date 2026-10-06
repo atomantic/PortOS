@@ -56,10 +56,10 @@ export const peerExecutionPreflightPayloadSchema = peerExecutionDispatchSchema.e
   scope: z.literal(PEER_EXECUTION_SCOPE), senderInstanceId: uuid, targetInstanceId: uuid,
   expiresAt: z.number().int().positive().safe(),
 }).strict();
-export const peerExecutionRemoteDispatchSchema = peerAdminPeerSchema.extend({
-  preflight: z.object({ payload: peerExecutionPreflightPayloadSchema, signature: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
-}).strict();
-export const peerExecutionRemoteStatusSchema = peerAdminPeerSchema.extend({ requestId: uuid }).strict();
+const executionPreflightEnvelope = z.object({ payload: peerExecutionPreflightPayloadSchema, signature: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+export const peerExecutionRemoteDispatchSchema = peerAdminPeerSchema.extend({ preflight: executionPreflightEnvelope }).strict();
+export const peerExecutionStatusSchema = z.object({ requestId: uuid, preflight: executionPreflightEnvelope.optional() }).strict();
+export const peerExecutionRemoteStatusSchema = peerExecutionStatusSchema.extend({ peerId }).strict();
 
 export const peerExecutionReceiptPayloadSchema = z.object({
   protocolVersion: z.literal(1), scope: z.literal(PEER_EXECUTION_SCOPE), requestId: uuid,

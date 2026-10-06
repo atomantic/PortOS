@@ -65,6 +65,31 @@ describe.skipIf(!runDb)('receiver-local permanent execution consumption', () => 
     expect(coordinator.status().state).toBe('normal');
     expect(await ledger.generationFloor({ hostInstanceId: input.hostInstanceId, peerInstanceId: input.peerInstanceId, action: input.intent.action })).toBe(1);
   });
+  it('permanently retires unconsumed requests without authorizing work and serializes against delayed consume', async () => {
+    const retired = await ledger.retireUnconsumed(input);
+    expect(retired).toMatchObject({ state: 'failed', revision: 1, claim: null, receipt: { code: 'PEER_EXECUTION_NOT_ACCEPTED' } });
+    expect((await ledger.consume(input)).operation).toEqual(retired);
+    expect((await ledger.consume(input)).isNew).toBe(false);
+    const restarted = createPeerExecutionLedger({ db, dataDir: directory });
+    expect(await restarted.readRequest(input)).toEqual(retired);
+    const other = { ...input, requestId: randomUUID() };
+    const [accepted, observed] = await Promise.all([ledger.consume(other), restarted.retireUnconsumed(other)]);
+    expect(observed.operationId).toBe(accepted.operation.operationId);
+    expect(observed.state).toBe(accepted.operation.state);
+    expect((await ledger.list()).length).toBe(2);
+    const stale = { ...input, requestId: randomUUID() };
+    ledger.authority.invalidate();
+    const denied = await restarted.retireUnconsumed(stale);
+    expect(denied.receipt.executionEpoch).toBe(ledger.authority.read().epoch);
+    expect(denied.binding.executionEpoch).toBe(stale.executionEpoch);
+    const recoveryId = randomUUID();
+    await ledger.prepareRestore(recoveryId);
+    await query('DELETE FROM peer_execution_operations');
+    await query('DELETE FROM peer_execution_generation_floors');
+    await ledger.reconcileRestore(recoveryId);
+    expect((await restarted.readRequest(input)).state).toBe('failed');
+    expect((await restarted.readRequest(stale)).receipt.code).toBe('PEER_EXECUTION_NOT_ACCEPTED');
+  });
   it.each(['acquisition', 'capture-query', 'begin-publication', 'snapshot-publication', 'completion-publication', 'directory-sync'])
     ('resumes only the same legacy empty-adoption owner after %s failure and process reconstruction', async boundary => {
       const { _createPeerExecutionRestore } = await import('./peerExecutionRestore.js');

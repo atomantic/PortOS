@@ -99,6 +99,25 @@ export function createPeerExecutionLedger({ db, dataDir, authority = createPeerE
       return { operation: fromRow(row), isNew: true };
     });
   };
+  // A status recovery may retire a signed request that never reached consume.
+  // Use the same DB lock as consume: either the launch owns the row already,
+  // or this permanent terminal tombstone wins and every delayed launch loses.
+  const retireUnconsumed = async raw => {
+    const binding = peerExecutionBindingSchema.parse(raw);
+    return locked(async client => {
+      const epoch = authority.read()?.epoch;
+      authority.requireReady(epoch);
+      const previous = await find(client, binding);
+      if (previous) return previous;
+      const receipt = { outcome: 'failed', code: 'PEER_EXECUTION_NOT_ACCEPTED', evidenceDigest: null, executionEpoch: epoch };
+      const { rows: [row] } = await client.query(`INSERT INTO peer_execution_operations
+        (operation_id, host_instance_id, peer_instance_id, request_id, fingerprint, binding, execution_epoch, state, receipt)
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, 'failed', $8::jsonb) RETURNING *`,
+      [makeId(), binding.hostInstanceId, binding.peerInstanceId, binding.requestId, fingerprint(binding), JSON.stringify(binding), binding.executionEpoch, JSON.stringify(receipt)]);
+      authority.requireReady(epoch);
+      return fromRow(row);
+    });
+  };
   const readRequest = async ({ hostInstanceId, peerInstanceId, requestId }) => {
     uuid.parse(hostInstanceId); uuid.parse(peerInstanceId); uuid.parse(requestId);
     return find(db, { hostInstanceId, peerInstanceId, requestId });
@@ -327,5 +346,5 @@ export function createPeerExecutionLedger({ db, dataDir, authority = createPeerE
     if (current?.phase === 'ready' && current.settledRecoveryId === id) return current;
     return authority.completeRestore(id);
   };
-  return { initialize, consume, read, readRequest, generationFloor, list, listActive, transition, advanceGenerationFloor, prepareRestore, adoptEmptyRestore, reconcileRestore, authority };
+  return { initialize, consume, retireUnconsumed, read, readRequest, generationFloor, list, listActive, transition, advanceGenerationFloor, prepareRestore, adoptEmptyRestore, reconcileRestore, authority };
 }
