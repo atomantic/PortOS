@@ -164,14 +164,23 @@ const CLOSING = /^[,.;:!?)\]}]/;
  * mid-line leaves a single space, so indentation and markdown line breaks
  * elsewhere are untouched.
  */
-export const stripHashtags = (text) => String(text || '').replace(HASHTAG_RUN, (match, lead, trail, offset, whole) => {
-  const end = offset + match.length;
-  const lineStart = offset === 0 || whole[offset - 1] === '\n';
-  const newline = trail.match(/\r?\n$/)?.[0] || '';
-  if (newline || end >= whole.length) return lineStart ? '' : newline;
-  if (lineStart) return lead;
-  return lead && !CLOSING.test(whole.slice(end)) ? ' ' : '';
-});
+export function stripHashtags(text) {
+  let droppedLine = false;
+  const out = String(text || '').replace(HASHTAG_RUN, (match, lead, trail, offset, whole) => {
+    const end = offset + match.length;
+    const lineStart = offset === 0 || whole[offset - 1] === '\n';
+    const newline = trail.match(/\r?\n$/)?.[0] || '';
+    if (newline || end >= whole.length) {
+      if (!lineStart) return newline;
+      droppedLine = true;
+      return '';
+    }
+    if (lineStart) return lead;
+    return lead && !CLOSING.test(whole.slice(end)) ? ' ' : '';
+  });
+  // A tags-only line between two paragraphs would leave a double gap; close it.
+  return droppedLine ? out.replace(/\r?\n(?:[ \t]*\r?\n){2,}/g, (gap) => (gap.startsWith('\r') ? '\r\n\r\n' : '\n\n')) : out;
+}
 
 /**
  * The copy prompt. `notes` is the director's own making-of story; the song

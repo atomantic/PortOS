@@ -289,7 +289,8 @@ export async function draftPublishKitCopy(projectId, { providerId = null, model 
     if (copy.youtube && !('tags' in copy.youtube) && Array.isArray(youtube?.tags) && sameTags(youtube.tags, kit.draftedTags)) {
       merged.youtube = { ...youtube, tags: [] };
     }
-    const draftedTags = Array.isArray(copy.youtube?.tags) ? copy.youtube.tags : [];
+    // A draft without YouTube keeps the record of what the last YouTube draft wrote.
+    const draftedTags = copy.youtube ? (Array.isArray(copy.youtube.tags) ? copy.youtube.tags : []) : (kit.draftedTags || []);
     return { project: { ...current, publishKit: { ...kit, copy: merged, draftedTags, notes, draftOptions: options, links: { ...(kit.links || {}), ...links }, copyDraftedAt: new Date().toISOString() } } };
   });
 }

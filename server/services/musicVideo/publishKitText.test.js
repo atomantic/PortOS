@@ -77,6 +77,9 @@ describe('publish copy prompt + parser (#9281)', () => {
     // No tags come back, so a redraft keeps the ones the director typed.
     expect(copy.youtube).not.toHaveProperty('tags');
     expect(parsePublishCopy(reply, ['tiktok']).tiktok.caption).toContain('#music');
+    // A tags-only line between paragraphs leaves one paragraph break, not two.
+    const between = JSON.stringify({ tiktok: { caption: 'Para one\n\n#a #b\n\nPara two' } });
+    expect(parsePublishCopy(between, ['tiktok'], { hashtags: false }).tiktok.caption).toBe('Para one\n\nPara two');
   });
 
   it('clips each field to its platform limit and rejects an empty or non-JSON reply', () => {

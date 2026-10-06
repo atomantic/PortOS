@@ -168,6 +168,8 @@ describe('publishing kit copy (#9281)', () => {
     const deps = { platforms: { youtube: { enabled: true } }, history: {}, runner: runner(reply) };
     const first = await kit.draftPublishKitCopy(id, { include: { hashtags: true } }, deps);
     expect(first.project.publishKit.copy.youtube.tags).toEqual(['model tag']);
+    // A draft with YouTube off in between still remembers which tags the model wrote.
+    await kit.draftPublishKitCopy(id, {}, { ...deps, platforms: { x: { enabled: true } }, runner: runner(JSON.stringify({ x: { hook: 'h' } })) });
     const second = await kit.draftPublishKitCopy(id, {}, deps);
     expect(second.project.publishKit.copy.youtube.tags).toEqual([]);
   });
