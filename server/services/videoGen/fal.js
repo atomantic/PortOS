@@ -263,7 +263,7 @@ const isStagedUpload = (path) => {
 };
 
 // The staged voice clip keeps its upload's extension (a performance slice is always WAV).
-export function audioMimeType(path) {
+function audioMimeType(path) {
   const ext = String(path).toLowerCase().split('.').pop();
   return {
     mp3: 'audio/mpeg', m4a: 'audio/mp4', mp4: 'audio/mp4', aac: 'audio/aac', ogg: 'audio/ogg', opus: 'audio/ogg',

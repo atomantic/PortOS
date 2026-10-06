@@ -678,32 +678,20 @@ describe('videoGen/fal — recover completed renders (#8564)', () => {
   });
 });
 
-describe('audioMimeType', () => {
-  it('labels the staged voice clip by its extension, WAV by default', async () => {
-    const { audioMimeType } = await import('./fal.js');
-    expect(audioMimeType('/u/video-audio-1.mp3')).toBe('audio/mpeg');
-    expect(audioMimeType('/u/video-audio-1.M4A')).toBe('audio/mp4');
-    expect(audioMimeType('/u/slice.wav')).toBe('audio/wav');
-    expect(audioMimeType('/u/clip')).toBe('audio/wav');
-    expect(audioMimeType('/u/rec.webm')).toBe('audio/webm');
-    expect(audioMimeType('/u/rec.opus')).toBe('audio/ogg');
-    expect(audioMimeType('/u/take.aiff')).toBe('audio/aiff');
-  });
-});
-
 describe('standalone lip-sync take', () => {
   it('drops the staged voice clip once the take is published, but never a file outside data/uploads', async () => {
     const { PATHS } = await import('../../lib/fileUtils.js');
     await mkdir(PATHS.uploads, { recursive: true });
-    const staged = join(PATHS.uploads, 'video-audio-test.wav');
-    const outside = join(TEST_ROOT, 'keep-me.wav');
+    const posted = [];
+    const staged = join(PATHS.uploads, 'video-audio-test.mp3');
+    const outside = join(TEST_ROOT, 'keep-me.webm');
     const frame = join(TEST_ROOT, 'face.png');
     await writeFile(staged, 'voice'); await writeFile(outside, 'voice'); await writeFile(frame, 'png');
     const run = async (audioFilePath, requestId) => {
       const statusUrl = `https://queue.fal.run/fal-ai/y/requests/${requestId}/status`;
       const responseUrl = `https://queue.fal.run/fal-ai/y/requests/${requestId}`;
-      vi.stubGlobal('fetch', vi.fn(async (url) => {
-        if (url === 'https://queue.fal.run/fal-ai/y') return jsonResponse({ request_id: requestId, status_url: statusUrl, response_url: responseUrl });
+      vi.stubGlobal('fetch', vi.fn(async (url, opts) => {
+        if (url === 'https://queue.fal.run/fal-ai/y') { posted.push(JSON.parse(opts.body)); return jsonResponse({ request_id: requestId, status_url: statusUrl, response_url: responseUrl }); }
         if (url === statusUrl) return jsonResponse({ status: 'COMPLETED' });
         if (url === responseUrl) return jsonResponse({ video: { url: `https://cdn.fal.ai/${requestId}.mp4` } });
         if (url === `https://cdn.fal.ai/${requestId}.mp4`) return { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(Buffer.from('mp4')).buffer };
@@ -716,5 +704,8 @@ describe('standalone lip-sync take', () => {
     await expect(readFile(staged)).rejects.toMatchObject({ code: 'ENOENT' });
     await run(outside, 'req-outside');
     expect((await readFile(outside)).toString()).toBe('voice');
+    // the clip's data URI is labelled by its extension, not always WAV
+    expect(JSON.stringify(posted[0])).toContain('data:audio/mpeg;base64,');
+    expect(JSON.stringify(posted[1])).toContain('data:audio/webm;base64,');
   });
 });
