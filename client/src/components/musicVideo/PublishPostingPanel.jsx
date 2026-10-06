@@ -2,6 +2,7 @@ import { useState } from 'react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage.js';
 import { ExternalLink, X as XIcon, LogIn, Link as LinkIcon } from 'lucide-react';
+import { DISTROKID_GENRES, suggestDistrokidGenres } from '../../../../server/lib/distrokidGenres.js';
 
 // Where the release goes, in posting order: the full video first so every
 // other post can link to it.
@@ -22,8 +23,10 @@ export const PUBLISH_TARGETS = [
   },
 ];
 
-// The songwriter's legal name DistroKid asks for, remembered on this device only.
+// The DistroKid answers the director gives once (songwriter legal name and
+// role, language, store profiles, Apple performer role), remembered on this device only.
 const SONGWRITER_KEY = 'portos.musicVideo.distrokidSongwriter';
+const DISTROKID_REMEMBERED = { songwriterFirst: 'first', songwriterLast: 'last', songwriterRole: 'role', language: 'language', newArtistProfile: 'newArtistProfile', performerRole: 'performerRole' };
 
 const inputCls = 'w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
 
@@ -109,6 +112,14 @@ function TargetOptions({ target, kit, project, options, setOption, flairs, idFor
       </label>
     );
     const hasLyrics = (project?.lyricCues || []).some((cue) => cue?.text?.trim());
+    const instrumental = options.instrumental ?? !hasLyrics;
+    const suggested = suggestDistrokidGenres(project);
+    const fullName = [options.songwriterFirst, options.songwriterLast].map((v) => v?.trim()).filter(Boolean).join(' ') || 'Songwriter legal name';
+    const genreSelect = (key, label, suggestion, noneLabel) => field(key, label,
+      <select id={idFor(key)} value={options[key] || ''} onChange={(e) => setOption(key, e.target.value)} className={inputCls}>
+        <option value="">{suggestion ? `${suggestion} (from the song's style)` : noneLabel}</option>
+        {DISTROKID_GENRES.map((g) => <option key={g} value={g}>{g}</option>)}
+      </select>);
     return (
       <div className="space-y-2">
         <div className="grid sm:grid-cols-2 gap-2">
@@ -117,10 +128,25 @@ function TargetOptions({ target, kit, project, options, setOption, flairs, idFor
             <input id={idFor('releaseDate')} type="date" aria-label="Release date" value={options.releaseDate || ''} onChange={(e) => setOption('releaseDate', e.target.value)} className={inputCls} />)}
           {text('songwriterFirst', 'Songwriter legal first name', 'First')}
           {text('songwriterLast', 'Songwriter legal last name', 'Last')}
+          {field('songwriterRole', 'Songwriter wrote',
+            <select id={idFor('songwriterRole')} value={options.songwriterRole || (instrumental ? 'music' : 'both')} onChange={(e) => setOption('songwriterRole', e.target.value)} className={inputCls}>
+              <option value="both">Music and lyrics</option>
+              <option value="music">Music</option>
+              <option value="lyrics">Lyrics</option>
+            </select>)}
+          {text('language', 'Language', 'English')}
+          {genreSelect('genre', 'Genre', suggested.primary, 'Pick a genre')}
+          {genreSelect('secondaryGenre', 'Secondary genre (optional)', suggested.secondary, 'None')}
         </div>
         <div className="flex flex-wrap gap-x-4">
           {check('explicit', 'Explicit lyrics', false)}
           {check('instrumental', 'Instrumental', !hasLyrics)}
+          {check('newArtistProfile', 'First release as this artist (new store profiles)', true)}
+        </div>
+        <div role="group" aria-label="Apple Music credits" className="grid sm:grid-cols-3 gap-2">
+          {text('performerName', 'Apple performer (real name)', fullName)}
+          {text('performerRole', 'Performer role (optional)', 'e.g. Vocals')}
+          {text('producerName', 'Apple producer (real name)', fullName)}
         </div>
         <div role="group" aria-label="Parts made with AI" className="flex flex-wrap gap-x-4">
           <span className="text-[11px] text-port-text-muted self-center">Made with AI:</span>
@@ -199,8 +225,9 @@ function TargetRow({ project, kit, entry, publishing }) {
     }
     if (target === 'distrokid') {
       const saved = safeReadJsonStorage(SONGWRITER_KEY, {}) || {};
+      const remembered = Object.fromEntries(Object.entries(DISTROKID_REMEMBERED).filter(([, k]) => saved[k] != null && saved[k] !== '').map(([opt, k]) => [opt, saved[k]]));
       // A song whose lyrics an LLM wrote in the autonomous run discloses AI lyrics by default.
-      return { songwriterFirst: saved.first || '', songwriterLast: saved.last || '', aiLyrics: !!project?.autonomousRun?.output?.lyrics };
+      return { songwriterFirst: '', songwriterLast: '', ...remembered, aiLyrics: !!project?.autonomousRun?.output?.lyrics };
     }
     return {};
   });
@@ -227,8 +254,10 @@ function TargetRow({ project, kit, entry, publishing }) {
           )}
         </div>
         <button type="button" onClick={() => {
-          if (target === 'distrokid' && clean.songwriterFirst && clean.songwriterLast) safeWriteJsonStorage(SONGWRITER_KEY, { first: clean.songwriterFirst, last: clean.songwriterLast });
-          publishing.prepare(target, clean);
+          if (target === 'distrokid' && clean.songwriterFirst && clean.songwriterLast) {
+            safeWriteJsonStorage(SONGWRITER_KEY, Object.fromEntries(Object.entries(DISTROKID_REMEMBERED).filter(([opt]) => clean[opt] != null).map(([opt, k]) => [k, clean[opt]])));
+          }
+          publishing.prepare(target, target === 'distrokid' ? { newArtistProfile: true, ...clean } : clean);
         }} disabled={!!busy}
           className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
           {busy === 'prepare' ? 'Filling…' : (draft ? 'Fill again' : 'Fill draft')}

@@ -643,6 +643,7 @@ export * from './assetRoutePrefixes.js';
 export * from './asyncMutex.js';
 export * from './concurrencyGate.js';
 export * from './dispatchLabels.js';
+export * from './distrokidGenres.js';
 export * from './domainAutonomy.js';
 export * from './domainBudgets.js';
 export * from './eidoverseCreativeToolkit.js';

@@ -7,6 +7,8 @@
 import { ServerError } from '../../../lib/errorHandler.js';
 import { chaptersText } from '../publishKitText.js';
 import { musicVideoDependencyChanges } from '../../../lib/musicVideoDependencies.js';
+import { suggestDistrokidGenres } from '../../../lib/distrokidGenres.js';
+import { suggestSocialCuts } from '../socialCuts.js';
 
 const TITLE_LIMITS = { youtube: 100, shorts: 100, reddit: 300, stackerNews: 80 };
 const DEFAULT_SUBREDDIT = 'aivideo';
@@ -185,11 +187,31 @@ const BUILDERS = {
     const releaseDate = text(options.releaseDate);
     if (releaseDate && !/^\d{4}-\d{2}-\d{2}$/.test(releaseDate)) throw missing('Give the release date as YYYY-MM-DD');
     const hasLyrics = (project?.lyricCues || []).some((cue) => text(cue?.text));
+    const instrumental = typeof options.instrumental === 'boolean' ? options.instrumental : !hasLyrics;
+    const suggested = suggestDistrokidGenres(project);
+    const genre = text(options.genre) || suggested.primary;
+    const secondary = text(options.secondaryGenre) || suggested.secondary;
+    const fullName = `${songwriter.first} ${songwriter.last}`;
+    // The store preview (and TikTok clip) opens on the song's strongest hook.
+    const previewStartSec = Number.isFinite(options.previewStartSec) ? options.previewStartSec : (suggestSocialCuts(project, { count: 1 })[0]?.startSec ?? null);
     return {
       title, artist, songwriter, releaseDate: releaseDate || null,
+      songwriterRole: options.songwriterRole || (instrumental ? 'music' : 'both'),
       explicit: options.explicit === true,
-      instrumental: typeof options.instrumental === 'boolean' ? options.instrumental : !hasLyrics,
+      instrumental,
       ai: { lyrics: options.aiLyrics === true, music: options.aiMusic !== false, vocals: options.aiVocals !== false },
+      genre: genre || null,
+      secondaryGenre: secondary && secondary !== genre ? secondary : null,
+      language: text(options.language) || 'English',
+      // Store profiles: a first release asks for new ones; otherwise the director links the existing ones.
+      newArtistProfile: options.newArtistProfile === true,
+      // Apple Music requires a performer and a producer credit (real names).
+      credits: {
+        performer: text(options.performerName) || fullName,
+        performerRole: text(options.performerRole) || null,
+        producer: text(options.producerName) || fullName,
+      },
+      previewStartSec: previewStartSec != null ? Math.max(0, Math.floor(previewStartSec)) : null,
       cover,
     };
   },
