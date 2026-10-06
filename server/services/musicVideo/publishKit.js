@@ -24,6 +24,7 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '
 import { getProject, listProjects, mutateProjectRecord } from './projects.js';
 import { suggestSocialCuts } from './socialCuts.js';
 import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
+import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 import { buildChapters, buildSrt, buildPublishCopyPrompt, parsePublishCopy, normalizeCopyOptions, PUBLISH_PLATFORMS } from './publishKitText.js';
 
 const jobs = new Map();
@@ -143,8 +144,8 @@ async function beginPublishKitBuild(projectId, jobId) {
       // frame is fitted over a blurred fill of itself (#10377) — a center-crop dropped off-center text.
       ...(teaser && musicVideoAspect(project) === '16:9' ? [{ kind: 'vertical-9x16', label: `Vertical 9:16 ${Math.round(teaser.endSec - teaser.startSec)}s`, filename: `${stem}-vertical.mp4`, window: teaser,
         layout: 'fit',
-        native: async (outputPath) => (await import('./excerptRender.js')).renderSeekedWindow(project, {
-          startSec: teaser.startSec, endSec: teaser.endSec, aspect: '9:16', fade: true, outputPath, jobId: `${jobId}-vertical`, signal: job.abort.signal,
+        native: async (outputPath, onProgress) => (await import('./excerptRender.js')).renderSeekedWindow(project, {
+          startSec: teaser.startSec, endSec: teaser.endSec, aspect: '9:16', fade: true, outputPath, jobId: `${jobId}-vertical`, signal: job.abort.signal, onProgress,
         }),
         args: ['-ss', String(teaser.startSec), '-t', String(teaser.endSec - teaser.startSec), '-i', masterPath,
           '-vf', VERTICAL_FIT_FILTER, ...X_VIDEO_ARGS,
@@ -155,13 +156,26 @@ async function beginPublishKitBuild(projectId, jobId) {
     const written = [];
     let done = 0;
     const step = () => broadcastSse(job, { type: 'progress', progress: Math.min(0.99, ++done / total) });
-    // A native cut that isn't available (footage, a document without the 9:16 frame, a failed
-    // render) falls back to the fitted master; a cancel still cancels.
+    // The native cut renders the composition as it is now; the rest of the kit is the master.
+    // Only when the master was rendered from exactly this composition do they match.
+    const matchesMaster = Boolean(project.renderDependencies) && !musicVideoDependencyChanges(project, project.renderDependencies).length;
+    // A native cut that isn't available (footage, a document without the 9:16 frame, a composition
+    // changed since the master, a failed render) falls back to the fitted master; a cancel still
+    // cancels and leaves no partial file behind.
     const renderNative = async (encode, out) => {
+      if (!matchesMaster) {
+        console.log(`📐 ${encode.label} [${tag}]: the composition changed since the final render (or was never recorded), fitting the master`);
+        return false;
+      }
       try {
-        if (await encode.native(out)) { encode.layout = 'native'; return true; }
+        const slot = done;
+        const progress = (fraction) => broadcastSse(job, { type: 'progress', progress: Math.min(0.99, (slot + Math.max(0, Math.min(1, fraction))) / total) });
+        if (await encode.native(out, progress)) { encode.layout = 'native'; return true; }
       } catch (error) {
-        if (job.abort.signal.aborted) throw error;
+        if (job.abort.signal.aborted) {
+          await unlink(out).catch(() => {});
+          throw error;
+        }
         console.warn(`⚠️ Native ${encode.label} unavailable [${tag}], fitting the master instead: ${error.message}`);
       }
       await unlink(out).catch(() => {});

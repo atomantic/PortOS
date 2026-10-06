@@ -235,13 +235,14 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
  * Resolves the encode's frame (`{ width, height, … }`), or null when the project has no
  * seekable composition. A document that does not lay itself out at that frame throws
  * COMPOSITION_DOCUMENT_FORMAT, which the caller takes as "not available".
+ * `deps` (tests): `renderers` stands in for the seeked renderers, `resolveAudio` for the master lookup.
  */
-export async function renderSeekedWindow(stored, { startSec, endSec, aspect, fade = false, outputPath, jobId, signal, onProgress }) {
-  const renderer = SEEKED_EXCERPTS[stored?.composition?.mode];
+export async function renderSeekedWindow(stored, { startSec, endSec, aspect, fade = false, outputPath, jobId, signal, onProgress }, { renderers = SEEKED_EXCERPTS, resolveAudio = resolveMasterAudioPath } = {}) {
+  const renderer = renderers[stored?.composition?.mode];
   if (!renderer) return null;
   const project = musicVideoAtAspect(stored, aspect);
   const prepared = await renderer.prepare(project);
-  const audioPath = await resolveMasterAudioPath(project);
+  const audioPath = await resolveAudio(project);
   if (renderer.performanceTakes) {
     assertCurrentClipDependencies(project);
     await assertCurrentPerformanceTakes(project, audioPath);

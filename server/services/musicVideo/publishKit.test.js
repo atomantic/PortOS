@@ -22,6 +22,7 @@ const projects = await import('./projects.js');
 const { saveHistory } = await import('../videoGen/history.js');
 const kit = await import('./publishKit.js');
 const excerptRender = await import('./excerptRender.js');
+const { captureMusicVideoEvidence } = await import('../../lib/musicVideoDependencies.js');
 const ffmpeg = await findFfmpeg();
 const watchedBuilds = new Set();
 const startPublishKitBuild = kit.startPublishKitBuild.bind(kit);
@@ -178,10 +179,22 @@ describe('publishing kit build (#9281)', () => {
     await vi.waitFor(() => expect(existsSync(join(PATHS.videos, first.exports[0].filename))).toBe(false));
   });
 
-  it.skipIf(!ffmpeg)('renders the 9:16 cut natively when the composition lays itself out at that frame', { timeout: 120000 }, async () => {
+  // A document project whose final render was made from its current composition.
+  const documentRendered = async () => {
     const id = await renderedProject();
-    await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, composition: { mode: 'document' } } }));
-    const native = vi.spyOn(excerptRender, 'renderSeekedWindow').mockImplementation(async (project, { outputPath, aspect, startSec, endSec, fade }) => {
+    await projects.mutateProjectRecord(id, (current) => {
+      const next = { ...current, composition: { mode: 'document', version: 'v1' } };
+      return { project: { ...next, renderDependencies: captureMusicVideoEvidence(next) } };
+    });
+    return id;
+  };
+
+  it.skipIf(!ffmpeg)('renders the 9:16 cut natively when the composition lays itself out at that frame', { timeout: 120000 }, async () => {
+    const id = await documentRendered();
+    const progress = [];
+    const native = vi.spyOn(excerptRender, 'renderSeekedWindow').mockImplementation(async (project, { outputPath, aspect, startSec, endSec, fade, onProgress }) => {
+      onProgress(0.5);
+      progress.push(0.5);
       expect({ id: project.id, aspect, fade }).toEqual({ id, aspect: '9:16', fade: true });
       expect(endSec).toBeGreaterThan(startSec);
       await writeFile(outputPath, 'native 9:16 render');
@@ -203,8 +216,7 @@ describe('publishing kit build (#9281)', () => {
   });
 
   it.skipIf(!ffmpeg)('fits the master when the composition has no 9:16 layout', { timeout: 120000 }, async () => {
-    const id = await renderedProject();
-    await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, composition: { mode: 'document' } } }));
+    const id = await documentRendered();
     const native = vi.spyOn(excerptRender, 'renderSeekedWindow').mockImplementation(async (_project, { outputPath }) => {
       await writeFile(outputPath, 'partial');
       throw Object.assign(new Error('The composition document is 1920x1080 and does not declare 1080x1920'), { code: 'COMPOSITION_DOCUMENT_FORMAT' });
@@ -222,6 +234,61 @@ describe('publishing kit build (#9281)', () => {
       native.mockRestore();
       warn.mockRestore();
     }
+  });
+
+  it.skipIf(!ffmpeg)('fits the master when the composition changed since the final render', { timeout: 120000 }, async () => {
+    const id = await documentRendered();
+    await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, composition: { ...current.composition, version: 'v2' } } }));
+    const native = vi.spyOn(excerptRender, 'renderSeekedWindow');
+    try {
+      await kit.startPublishKitBuild(id);
+      await vi.waitFor(async () => expect((await projects.getProject(id)).publishKit?.builtAt).toBeTruthy(), { timeout: 90000, interval: 250 });
+      expect((await projects.getProject(id)).publishKit.exports.find((e) => e.kind === 'vertical-9x16').layout).toBe('fit');
+      expect(native).not.toHaveBeenCalled();
+    } finally {
+      native.mockRestore();
+    }
+  });
+
+  it.skipIf(!ffmpeg)('cancelling during the native cut cancels the build and leaves no partial file', { timeout: 120000 }, async () => {
+    const id = await documentRendered();
+    let partial = null;
+    const native = vi.spyOn(excerptRender, 'renderSeekedWindow').mockImplementation(async (_project, { outputPath, signal }) => {
+      partial = outputPath;
+      await writeFile(outputPath, 'partial');
+      await new Promise((_, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error('Render cancelled'), { code: 'CANCELED' })), { once: true }));
+    });
+    const encode = vi.spyOn(ffmpegService, 'runFfmpegProcess');
+    try {
+      await kit.startPublishKitBuild(id);
+      await vi.waitFor(() => expect(partial).toBeTruthy(), { timeout: 90000, interval: 50 });
+      const fitsBefore = encode.mock.calls.length;
+      kit.cancelPublishKitBuild(kit.getActivePublishKitBuild(id).jobId);
+      await vi.waitFor(() => expect(kit.getActivePublishKitBuild(id)).toBeNull(), { timeout: 15000, interval: 20 });
+      expect(existsSync(partial)).toBe(false);
+      expect(encode.mock.calls.slice(fitsBefore).some(([o]) => o.args.includes(kit.VERTICAL_FIT_FILTER))).toBe(false);
+      expect((await projects.getProject(id)).publishKit?.builtAt).toBeFalsy();
+    } finally {
+      native.mockRestore();
+      encode.mockRestore();
+    }
+  });
+});
+
+describe('renderSeekedWindow (the kit\'s native 9:16 cut)', () => {
+  it('has nothing to render for a footage project', async () => {
+    expect(await excerptRender.renderSeekedWindow({ id: 'mv-x', composition: { mode: 'footage' } }, { startSec: 0, endSec: 10, aspect: '9:16' }, { renderers: {} })).toBeNull();
+  });
+
+  it('renders the window at the asked aspect, clamped to the song', async () => {
+    const encode = vi.fn(async (input) => ({ width: 1080, height: 1920, input }));
+    const renderers = { document: { prepare: vi.fn(async (project) => ({ totalSec: 30, project })), encode } };
+    const stored = { id: 'mv-x', aspect: '16:9', composition: { mode: 'document' } };
+    const out = await excerptRender.renderSeekedWindow(stored, { startSec: 20, endSec: 45, aspect: '9:16', fade: true, outputPath: '/tmp/v.mp4', jobId: 'job' }, { renderers, resolveAudio: async () => '/tmp/song.wav' });
+    expect(out).toMatchObject({ width: 1080, height: 1920 });
+    const input = encode.mock.calls[0][0];
+    expect(input).toMatchObject({ startSec: 20, endSec: 30, fade: true, outputPath: '/tmp/v.mp4', audioPath: '/tmp/song.wav', soundBed: null });
+    expect(renderers.document.prepare.mock.calls[0][0]).not.toBe(stored); // re-framed view, the record untouched
   });
 });
 
