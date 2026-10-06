@@ -85,6 +85,18 @@ describe('Cast & Sets direction', () => {
     expect(mergeCastAndSetsDirection(null, parsed, { sections, medium: 'procedural' }).missing).not.toContain('protagonist');
   });
 
+  it('keeps a protagonist with null, boolean or single-string answers in its fields', () => {
+    const parsed = parseCastAndSetsResponse(JSON.stringify({
+      logline: 'x',
+      protagonist: { name: 'A', description: 'b', gesture: null, signature: true, palette: { primary: '#fff', accent: null },
+        rules: 'Never lands', expressions: null },
+      world: { camera: null },
+    }));
+    expect(parsed.protagonist).toMatchObject({ name: 'A', gesture: '', signature: 'true', palette: 'primary: #fff', rules: ['Never lands'], expressions: [] });
+    expect(parsed.world.camera).toBe('');
+    expect(mergeCastAndSetsDirection(null, parsed, { sections, medium: 'procedural' }).missing).not.toContain('protagonist');
+  });
+
   it('on a revision keeps absent keys, applies present ones, and treats an empty value as a clear', () => {
     const { direction: previous } = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...ANSWER, questions: ['Is she right?'], interpretation: 'agents' })), { sections, moodImageCount: 4 });
     const revision = parseCastAndSetsResponse(JSON.stringify({
