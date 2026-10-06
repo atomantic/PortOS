@@ -46,7 +46,7 @@ async function watchContainer(plan, abort, state) {
         state.failureReached ||= await exists(join(state.container.root, 'output', 'intentional-failure.txt'));
       }
       if (state.mode === 'cancel' && !state.abortedOwned) {
-        assert.equal(c.State.Running, true);
+        assert.equal(c.State.Running, true, 'owned container is running');
         state.abortedOwned = true;
         abort.abort(new Error('synthetic owned-container cancellation'));
       }
@@ -78,7 +78,7 @@ async function renderCase({ project, plan, audioPath, outputPath, mode = 'geomet
     assert.equal(await exists(outputPath), false, 'cancel never files a film');
   } else if (mode === 'failure') {
     assert.equal(state.failureReached, true, 'scene actually reached the deliberate failing setup');
-    assert.equal(renderError?.code, 'EIDOVERSE_RENDER_FAILED');
+    assert.equal(renderError?.code, 'EIDOVERSE_RENDER_FAILED', 'deliberate scene failure surfaces as EIDOVERSE_RENDER_FAILED');
     assert.equal(await exists(outputPath), false, 'failing scene never files a film');
   } else if (renderError) throw renderError;
   return { observedOwnedContainer: true, containerRemoved: true, scratchRemoved: true, noFilm: mode !== 'geometry' };
@@ -106,16 +106,16 @@ async function live(report, reportPath, upstream) {
   let active = 'source';
   let root;
   try {
-    assert.equal((await run('git', ['-C', upstream, 'rev-parse', 'HEAD'])).trim(), UPSTREAM_SHA);
+    assert.equal((await run('git', ['-C', upstream, 'rev-parse', 'HEAD'])).trim(), UPSTREAM_SHA, 'upstream checkout is at the pinned SHA');
     assert.equal((await run('git', ['-C', upstream, 'status', '--porcelain'])).trim(), '', 'independent upstream source must be clean');
     report.criteria.source = { status: 'pass', revision: UPSTREAM_SHA };
     active = 'build';
     report.portosSha = (await run('git', ['-C', REPO, 'rev-parse', 'HEAD'])).trim();
     for (const tag of ['eidoverse:render', 'portos-eidoverse-video:1']) {
       const [image] = JSON.parse(await run('docker', ['image', 'inspect', tag]));
-      assert.equal(image.Os, 'linux'); assert.equal(image.Architecture, 'amd64');
+      assert.equal(image.Os, 'linux', 'image OS is linux'); assert.equal(image.Architecture, 'amd64', 'image architecture is amd64');
       assert.equal(image.Config.Labels?.['org.portos.eidoverse.upstream'], UPSTREAM_SHA, 'build provenance label required');
-      if (tag === 'portos-eidoverse-video:1') assert.equal(image.Config.Labels?.['org.portos.eidoverse.portos'], report.portosSha);
+      if (tag === 'portos-eidoverse-video:1') assert.equal(image.Config.Labels?.['org.portos.eidoverse.portos'], report.portosSha, 'portos provenance label matches this checkout');
       report.criteria.build[tag] = image.Id;
     }
     report.criteria.build.status = 'pass';
@@ -184,8 +184,12 @@ async function live(report, reportPath, upstream) {
     // Do not publish arbitrary child-process logs, absolute paths or host environment.
     report.reason = `Real acceptance failed at ${active}; inspect the private execution log before retrying.`;
     report.criteria[active].status = 'fail';
+    // Harness-authored assert messages are constant strings, so they name the failing check without leaking
+    // anything; every other error (execFile embeds cmd/stderr) is reduced to its code/name.
+    const harnessCheck = error instanceof assert.AssertionError && !error.generatedMessage ? error.message : null;
+    if (harnessCheck) report.criteria[active].check = harnessCheck;
     console.error(`❌ ${report.reason}`);
-    console.error(error.code || error.name);
+    console.error(harnessCheck ? `${error.code}: ${harnessCheck}` : (error.code || error.name));
   } finally {
     if (root) await rm(root, { recursive: true, force: true });
     await save(report, reportPath);
