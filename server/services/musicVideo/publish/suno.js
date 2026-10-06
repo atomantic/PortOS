@@ -23,7 +23,7 @@ export const sunoAdapter = {
       // A share link or redirect can land on the song under another URL; the page's own wins.
       const songId = songIdOf(page.url()) || songIdOf(payload.songUrl);
       if (!songId) throw new Error(`no song id in ${payload.songUrl}`);
-      if (!(await page.evaluate(markSunoSongMenu, songId))) throw new Error("no menu for this page's own song (only other songs' menus were found)");
+      if (!(await page.evaluate(markSunoSongMenu, songId))) throw new Error("no menu could be tied to this page's own song (its title or own-song link)");
       await page.locator('[data-portos-song-menu]').click({ timeout: T });
       await page.locator('[role=menuitem]').filter({ hasText: /^Publish$/ }).first().click({ timeout: T });
       await page.locator('[role=dialog]').first().waitFor({ timeout: T });
