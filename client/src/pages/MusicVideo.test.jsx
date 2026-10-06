@@ -2515,6 +2515,18 @@ describe('MusicVideo stage tabs (#9243)', () => {
   );
   const selectedTab = () => screen.getByRole('tab', { selected: true });
 
+  it('opens Project settings › Autopilot at the checkpoint editor from an attention deep link', async () => {
+    listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP,
+      autonomousRun: { id: 'auto-1', status: 'awaiting-approval', awaiting: 'lyrics', stage: 'lyrics', output: { lyrics: 'Example lyric line' }, brief: {} },
+    }]);
+    renderAt('/music-video/mv-1/setup?mvPanel=autopilot#mv-auto-edit');
+    await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('tab', { name: /^Autopilot/ })).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(document.getElementById('mv-auto-edit')).toHaveFocus());
+    expect(dialog.contains(document.getElementById('mv-auto-edit'))).toBe(true);
+  });
+
   it('puts the selected step before its own approval, keeps the run in Project settings, and keeps unsaved planning edits across steps', async () => {
     listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP,
       autonomousRun: { status: 'needs-human', stage: 'video', output: {}, brief: {} },
@@ -2532,7 +2544,10 @@ describe('MusicVideo stage tabs (#9243)', () => {
     for (const stage of ['board', 'produce', 'cast-sets']) {
       await openStage(stage);
       const panel = screen.getByRole('tabpanel');
-      expect(within(panel).getByRole('heading', { level: 3, name: selectedTab().textContent })).toBeInTheDocument();
+      // The selected tab also reads its state (", Done") to screen readers; the panel is labelled by the step's heading.
+      const title = selectedTab().textContent.split(',')[0];
+      expect(within(panel).getByRole('heading', { level: 3, name: title })).toBeInTheDocument();
+      expect(panel).toHaveAccessibleName(title);
       // The step's own work comes first; the one approval that closes it sits at the bottom.
       const stageReview = within(panel).getByRole('region', { name: 'Production review' });
       expect(panel.lastElementChild).toBe(stageReview);

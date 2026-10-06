@@ -25,12 +25,12 @@ const TONE_CLASSES = {
 /**
  * One state word per step, shared by the step list and the phone's bottom bar:
  * Done, Changed since approval (an approval whose inputs moved, #10141), Needs
- * you (stopped, or the current step waiting on the director), In progress,
- * Not started.
+ * you (stopped, or the step `describeProjectStatus` names as waiting on the
+ * director), In progress, Not started.
  */
-export function stepState(entry, { current, needsYou }) {
-  if (entry.state === 'done') return entry.stale ? { word: 'Changed since approval', tone: 'warn' } : { word: 'Done', tone: 'ok' };
-  if (entry.state === 'blocked' || (entry.id === current && needsYou)) return { word: 'Needs you', tone: 'warn' };
+export function stepState(entry, { needsYouStage = null } = {}) {
+  if (entry.state === 'done' && entry.id !== needsYouStage) return entry.stale ? { word: 'Changed since approval', tone: 'warn' } : { word: 'Done', tone: 'ok' };
+  if (entry.state === 'blocked' || entry.id === needsYouStage) return { word: 'Needs you', tone: 'warn' };
   if (entry.stale) return { word: 'Changed since approval', tone: 'warn' };
   if (entry.state === 'active') return { word: 'In progress', tone: 'accent' };
   return { word: 'Not started', tone: 'muted' };
@@ -45,12 +45,12 @@ const MARK_CLASSES = {
 };
 
 /** The six steps as a vertical list (md and up): number or check, name, state word and one fact. */
-function StepRail({ stages, stage, onStageChange, current, needsYou, notes }) {
+function StepRail({ stages, stage, onStageChange, needsYouStage, notes }) {
   return (
     <nav aria-label="Steps" className="hidden md:block">
       <ol className="space-y-1">
         {stages.map((entry, index) => {
-          const state = stepState(entry, { current, needsYou });
+          const state = stepState(entry, { needsYouStage });
           const selected = entry.id === stage;
           return (
             <li key={entry.id}>
@@ -93,7 +93,8 @@ const DOCK_CLASSES = 'max-xl:fixed max-xl:inset-x-0 max-xl:bottom-0 max-xl:z-30 
  * `status` is `describeProjectStatus(…)`; `notes` is `stepNotes(…)`.
  * `attention` is the `NeedsAttentionBanner` element (or null): work the server
  * holds that needs a Resume or Cancel, visible on every step. `autopilot` is
- * `{ label, tone }` for the header's Autopilot button (or null to hide it);
+ * `autopilotStatus(…)` (`{ label, short, tone }`) for the header's Autopilot
+ * button (or null to hide it);
  * `onOpenSettings(tab)` opens Project settings. `dock` is the `PreviewDock`.
  */
 export default function MusicVideoLayout({
@@ -124,19 +125,26 @@ export default function MusicVideoLayout({
     document.getElementById(MUSIC_VIDEO_SCROLL_ID)?.scrollTo?.({ top: 0 });
   }, [stage]);
 
-  const needsYou = status?.tone === 'warn';
+  const needsYouStage = status?.needsYouStage || null;
   const tabs = progress.stages.map((entry) => {
-    const state = stepState(entry, { current: progress.current, needsYou });
+    const state = stepState(entry, { needsYouStage });
     return {
       id: entry.id,
       label: entry.label,
       icon: STAGE_ICONS[entry.id],
-      trailing: state.tone === 'warn' ? <span aria-label={state.word.toLowerCase()} className="h-1.5 w-1.5 shrink-0 rounded-full bg-port-warning" /> : null,
+      // The phone bar is icons only: the state word rides along for screen readers, a dot marks "needs you".
+      trailing: (
+        <>
+          <span className="sr-only">, {state.word}</span>
+          {state.tone === 'warn' && <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-port-warning" />}
+        </>
+      ),
     };
   });
   const showSpend = spend.spentUsd > 0 || spend.capUsd > 0;
   const stageEntry = progress.stages.find((entry) => entry.id === stage);
-  const ActionIcon = nextAction?.kind === 'goto' ? ArrowRight : Play;
+  // Play runs something; an arrow goes somewhere (a step, or a Project settings tab).
+  const ActionIcon = nextAction?.kind === 'run' ? Play : ArrowRight;
 
   return (
     <div ref={rootRef} className={`space-y-3 ${dockVisible ? 'max-xl:pb-[calc(10rem+env(safe-area-inset-bottom))]' : 'max-md:pb-[calc(5rem+env(safe-area-inset-bottom))]'}`}>
@@ -181,10 +189,12 @@ export default function MusicVideoLayout({
             <button
               type="button"
               onClick={() => onOpenSettings('autopilot')}
+              aria-label={autopilot.label}
               className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded-lg border px-2.5 text-sm ${autopilot.tone === 'warn' ? 'border-port-warning/50 text-port-warning' : 'border-port-border text-port-text'}`}
             >
               <Bot size={15} aria-hidden="true" />
-              {autopilot.label}
+              <span className="sm:hidden">{autopilot.short || autopilot.label}</span>
+              <span className="hidden sm:inline">{autopilot.label}</span>
             </button>
           )}
           {showSpend && (
@@ -209,7 +219,7 @@ export default function MusicVideoLayout({
         {nextAction?.disabled && nextAction.reason && <p role="status" className="text-xs text-port-text-muted">{nextAction.reason}</p>}
         {attention}
         <nav
-          aria-label="Stages"
+          aria-label="Steps"
           className="md:hidden max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-40 max-md:border-t max-md:border-port-border max-md:bg-port-bg max-md:pb-[env(safe-area-inset-bottom)]"
         >
           <TabPills
@@ -228,16 +238,17 @@ export default function MusicVideoLayout({
 
       <div className={`grid items-start gap-4 md:grid-cols-[13rem_minmax(0,1fr)] ${dockVisible ? 'xl:grid-cols-[13rem_minmax(0,1fr)_minmax(20rem,24rem)]' : ''}`}>
         <div className="md:sticky md:top-[calc(var(--mv-header-h,9rem)-0.75rem)]">
-          <StepRail stages={progress.stages} stage={stage} onStageChange={onStageChange} current={progress.current} needsYou={needsYou} notes={notes} />
+          <StepRail stages={progress.stages} stage={stage} onStageChange={onStageChange} needsYouStage={needsYouStage} notes={notes} />
         </div>
+        {/* Labelled by its own heading: from md the phone tab bar is hidden and the step list drives it. */}
         <div
           role="tabpanel"
           id={`mv-stage-${stage}`}
-          aria-labelledby={`tab-${stage}`}
+          aria-labelledby={`mv-step-title-${stage}`}
           className="min-w-0 space-y-3"
         >
           <div className="space-y-0.5">
-            <h3 className="text-xl font-semibold">{stageEntry?.title || stageEntry?.label}</h3>
+            <h3 id={`mv-step-title-${stage}`} className="text-xl font-semibold">{stageEntry?.title || stageEntry?.label}</h3>
             {stageEntry?.doneWhen && <p className="text-sm text-port-text-muted">{stageEntry.doneWhen}</p>}
           </div>
           {children}

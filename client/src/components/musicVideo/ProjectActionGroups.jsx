@@ -8,10 +8,11 @@ import { projectServicesSummary } from '../../lib/musicVideoStages.js';
 import { batchActive, batchSummary, scenesWaitingForFrame, videoBatchPreview, videosButtonLabel } from '../../lib/musicVideoBatchPlan.js';
 
 /**
- * The board-level actions the old single toolbar carried, split by the stage
- * that owns them: analyze + MIDI (Setup), AI plan + auto-arrange (Board), the
- * frame/clip generators (Produce) and the final render (Review). The render
- * style select and the render pins are project options, edited in Project settings. Each
+ * The board-level actions the old single toolbar carried, split by the step
+ * that owns them: analyze (Song; MIDI in Project settings › Audio), AI plan +
+ * auto-arrange (Storyboard), the frame/clip generators (Make) and the final
+ * render (Final render). The render style select and the render pins are
+ * project options, edited in Project settings. Each
  * group takes the page's hook slots (`midi`, `videoSettings`, `sceneMedia`,
  * `renderJob`) and the page-owned in-flight flags in `busy`.
  */

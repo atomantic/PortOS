@@ -5,11 +5,10 @@ import RecordRenderPinRow from '../imageGen/RecordRenderPinRow.jsx';
 import ToggleChip from '../ui/ToggleChip.jsx';
 import Pill from '../ui/Pill.jsx';
 import { RenderStyleSelect } from './ProjectActionGroups.jsx';
-import { renderStyleLabel, compositionDraft, RENDER_STYLE_HELP } from './compositionDraft.js';
+import { compositionDraft, RENDER_STYLE_HELP } from './compositionDraft.js';
 import { normalizeMusicVideoProductionPolicy } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { MUSIC_VIDEO_AUTOMATION_TOOLS, automationDraftFrom, automationFromDraft } from '../../lib/musicVideoAutomation.js';
-import { MUSIC_VIDEO_MEDIA_MODE_LABELS, musicVideoMediaMode } from '../../../../server/lib/musicVideoMediaPolicy.js';
-import { projectServicesSummary } from '../../lib/musicVideoStages.js';
+import { musicVideoMediaMode } from '../../../../server/lib/musicVideoMediaPolicy.js';
 import { formatUsd } from '../../utils/formatters.js';
 
 const TOOL_GROUPS = [['image', 'Image'], ['video', 'Video'], ['code', 'Code']];
@@ -17,22 +16,13 @@ const rowCls = 'grid min-w-0 grid-cols-1 gap-1 sm:grid-cols-[9rem_minmax(0,1fr)]
 const headCls = 'pt-1.5 text-xs font-medium text-port-text-muted';
 
 /** One line naming the project's options, for the folded Setup section's summary. */
-export function projectOptionsSummary(project) {
-  return [
-    project?.automation ? 'Autopilot' : 'Director',
-    MUSIC_VIDEO_MEDIA_MODE_LABELS[musicVideoMediaMode(project)],
-    renderStyleLabel(project?.composition?.mode),
-    projectServicesSummary(project),
-  ].join(' · ');
-}
-
 /**
- * Setup's "Project options": what kind of project this is and which services it
+ * Project settings › Project: what kind of project this is and which services it
  * renders with, each editable in place — the workflow (autopilot or hands-on),
  * the media the design may use (code / images / video), the render style, the
  * image and video services, and, for an autopilot project, the tools the
  * autopilot may spend on and its Cast & Sets check-in. Every change saves to the
- * project through the same paths the Produce and Compose controls use.
+ * project through the same paths the Make step's controls use.
  */
 export default function ProjectOptionsPanel({
   project, videoSettings, generatingVideos = false, onMediaMode, onRenderStyle, onSaveAutomation, onSavePolicy,

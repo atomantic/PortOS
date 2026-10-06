@@ -241,30 +241,26 @@ it('shows union totals and explicit exceptions before Apply, and pins a director
   expect(screen.getByText(/generated video 10 \/ 20 seconds/)).toBeTruthy();
 });
 
-describe('TreatmentPanel split by dependency', () => {
+describe('TreatmentPanel brief and direction', () => {
   const noop = { save: vi.fn(), compile: vi.fn(), compiling: false };
-  it('the brief shows without a fold or compile controls, and says the planner reads it', () => {
-    const { container } = render(<TreatmentPanel project={PROJECT} treatment={noop} part="brief" />);
+  it('shows the brief without a fold before any shots, and explains what direction needs instead of compiling 0 shots', () => {
+    const { container } = render(<TreatmentPanel project={{ ...PROJECT, scenes: [] }} treatment={noop} />);
     expect(container.querySelector('details')).toBeNull();
     expect(screen.getByLabelText('Audience')).toBeTruthy();
-    expect(screen.queryByText('Draft without AI')).toBeNull();
     expect(screen.getByText('The planner reads this brief when it plans shots.')).toBeTruthy();
-  });
-  it('the direction half explains what is needed instead of compiling 0 shots', () => {
-    render(<TreatmentPanel project={{ ...PROJECT, scenes: [] }} treatment={noop} part="direction" />);
     expect(screen.getByText('Plan the shots to direct them one by one.')).toBeTruthy();
     expect(screen.queryByText('Draft without AI')).toBeNull();
-    expect(screen.queryByLabelText('Audience')).toBeNull();
   });
-  it('the Board half offers compile once scenes exist', () => {
-    render(<TreatmentPanel project={PROJECT} treatment={noop} part="direction" />);
+  it('offers compile beside the brief once scenes exist', () => {
+    render(<TreatmentPanel project={PROJECT} treatment={noop} />);
     expect(screen.getByText('Draft without AI')).toBeTruthy();
-    expect(screen.queryByLabelText('Audience')).toBeNull();
+    expect(screen.getByLabelText('Audience')).toBeTruthy();
+    expect(screen.queryByText('Plan the shots to direct them one by one.')).toBeNull();
   });
   it('warns before a treatment edit that an approved storyboard will need re-approval (#10141)', () => {
-    const { rerender } = render(<TreatmentPanel project={PROJECT} treatment={noop} part="brief" storyboardApproved />);
+    const { rerender } = render(<TreatmentPanel project={PROJECT} treatment={noop} storyboardApproved />);
     expect(screen.getByRole('note')).toHaveTextContent('Editing the treatment will need re-approval of the storyboard');
-    rerender(<TreatmentPanel project={PROJECT} treatment={noop} part="brief" />);
+    rerender(<TreatmentPanel project={PROJECT} treatment={noop} />);
     expect(screen.queryByRole('note')).toBeNull();
   });
   it('summarizes revision, applied state and gaps for the section header', () => {

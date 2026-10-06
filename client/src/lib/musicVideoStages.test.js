@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { summarizeMusicVideoProject } from '../../../server/lib/musicVideoSummary.js';
 import {
-  MUSIC_VIDEO_STAGES, currentProductionRun, deriveNextAction, deriveStages, projectSpend, boardJobEstimate, listPreviewSources, describeProjectStatus, resolveStageParam, stageChecklist, stepNotes, compareMusicVideoProjectsNewestFirst,
+  MUSIC_VIDEO_STAGES, currentProductionRun, deriveNextAction, deriveStages, projectSpend, boardJobEstimate, listPreviewSources, describeProjectStatus, resolveStageParam, stageChecklist, stepNotes, autopilotStatus, compareMusicVideoProjectsNewestFirst,
 } from './musicVideoStages.js';
 
 const APPROVED = { art: { approved: true }, storyboard: { approved: true }, proof: { approved: true }, readyForProduction: true };
@@ -28,12 +28,21 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveNextAction({ id: 'p', trackId: 't1', scenes: [] })).toMatchObject({ id: 'analyze' });
   });
 
+  it('sends an analyzed song to its lyrics, then to verifying their timing, instead of re-analyzing (#10305 review)', () => {
+    const analyzed = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [] };
+    expect(deriveStages(analyzed).current).toBe('setup');
+    expect(deriveNextAction(analyzed)).toMatchObject({ id: 'import-lyrics', kind: 'goto', stage: 'setup', anchor: 'mv-lyrics-import' });
+    const unverified = { ...analyzed, lyricCues: [{ id: 'l1', text: 'la la' }] };
+    expect(deriveNextAction(unverified)).toMatchObject({ id: 'verify-timing', kind: 'goto', stage: 'setup', anchor: 'mv-lyric-timing', label: 'Verify lyric timing' });
+    expect(deriveNextAction({ ...analyzed, audioAnalysis: null })).toMatchObject({ id: 'analyze' });
+  });
+
   it('reflects an autonomous run in the header next action instead of asking to attach a track', () => {
     const autoRunning = { id: 'p', autonomousRun: { status: 'running', stage: 'lyrics', stages: { lyrics: { step: 'draft' } } } };
     expect(deriveNextAction(autoRunning)).toMatchObject({ id: 'busy', label: 'Writing the lyric draft…', disabled: true });
 
     const autoAwaiting = { id: 'p', autonomousRun: { status: 'awaiting-approval', awaiting: 'lyrics' } };
-    expect(deriveNextAction(autoAwaiting)).toMatchObject({ id: 'review-autonomous', kind: 'run', label: 'Review Lyrics' });
+    expect(deriveNextAction(autoAwaiting)).toMatchObject({ id: 'review-autonomous', kind: 'open', label: 'Review Lyrics' });
 
     const autoStopped = { id: 'p', autonomousRun: { status: 'stopped' } };
     expect(deriveNextAction(autoStopped)).toMatchObject({ id: 'resume-autonomous', kind: 'run', label: 'Resume autonomous run' });
@@ -111,8 +120,9 @@ describe('deriveStages / deriveNextAction', () => {
     expect(stateOf(stale).review).toBe('active');
     expect(deriveNextAction(stale)).toMatchObject({ id: 'render-final', label: 'Re-render final video' });
     expect(stageChecklist('review', stale)[0]).toMatchObject({ done: false, detail: 'Final render is out of date — re-render.' });
-    expect(describeProjectStatus(stale, { progress: deriveStages(stale) }).facts.find((f) => f.id === 'render'))
-      .toMatchObject({ label: 'Final render is out of date — re-render', tone: 'warn' });
+    expect(stepNotes(stale).review).toBe('Out of date');
+    // The project index agrees: a stale render does not finish Final render.
+    expect(summarizeMusicVideoProject(stale, APPROVED).stage).toBe('review');
   });
 
   it('counts Publish per enabled platform, done only when each has a post (#10143)', () => {
@@ -326,52 +336,44 @@ describe('describeProjectStatus', () => {
     current,
     stages: MUSIC_VIDEO_STAGES.map((stage) => ({ ...stage, state: overrides[stage.id] || (stage.id === current ? 'active' : 'todo') })),
   });
-  const readiness = (art, storyboard, proof) => ({
-    art: { approved: art }, storyboard: { approved: storyboard }, proof: { approved: proof }, readyForProduction: proof,
+
+  it('names the step and flags the one waiting on the director', () => {
+    const status = describeProjectStatus({ excerpts: [] },
+      { progress: stages('cast-sets', { setup: 'done' }), nextAction: { id: 'review-production', stage: 'cast-sets' } });
+    expect(status).toEqual({ headline: 'Step 2 of 6: Look needs you', tone: 'warn', needsYouStage: 'cast-sets' });
+    // A blocked step needs the director even with no approval to give.
+    expect(describeProjectStatus({}, { progress: stages('produce', { produce: 'blocked' }) }))
+      .toMatchObject({ headline: 'Step 4 of 6: Make needs you', needsYouStage: 'produce' });
   });
 
-  it('names the stage, flags a pending approval and says nothing has been rendered', () => {
-    const status = describeProjectStatus(
-      { autonomousRun: { status: 'stopped' }, excerpts: [] },
-      { progress: stages('cast-sets', { setup: 'done' }), nextAction: { id: 'review-production' }, readiness: readiness(false, false, false) },
-    );
-    expect(status.headline).toBe('Step 2 of 6: Look needs you');
-    expect(status.tone).toBe('warn');
-    expect(status.facts.map((fact) => fact.label)).toEqual([
-      'Approvals: 0 of 3 approved · needs art, storyboard, proof', 'Nothing rendered yet',
-    ]);
+  it('names the step an approval sits on, even when an earlier step is still open', () => {
+    // Song is not done yet, but the header asks for the art approval on Look.
+    const status = describeProjectStatus({}, { progress: stages('setup'), nextAction: { id: 'review-production', stage: 'cast-sets' } });
+    expect(status).toMatchObject({ headline: 'Step 2 of 6: Look needs you', needsYouStage: 'cast-sets' });
+    expect(describeProjectStatus({}, { progress: stages('setup'), nextAction: { id: 'approve-cast-sets', kind: 'run' } }).needsYouStage).toBe('cast-sets');
   });
 
-  it('says why a stopped production run is waiting rather than calling every stop a pause', () => {
-    const fact = (status) => describeProjectStatus({ productionRuns: [{ id: 'r1', status }] }, { progress: stages('produce') })
-      .facts.find((entry) => entry.id === 'production').label;
-    expect(fact('stopped')).toBe('Production paused');
-    expect(fact('blocked')).toBe('Production blocked');
-    expect(fact('limit-reached')).toBe('Production at its limit');
-    expect(fact('needs-replan')).toBe('Production needs a replan');
+  it('reads plainly when nothing waits on the director', () => {
+    expect(describeProjectStatus({}, { progress: stages('review') })).toEqual({ headline: 'Step 5 of 6: Final render', tone: 'muted', needsYouStage: null });
+    const done = describeProjectStatus({ renderHistoryId: 'r1' }, { progress: { current: 'publish', stages: MUSIC_VIDEO_STAGES.map((stage) => ({ ...stage, state: 'done' })) } });
+    expect(done).toEqual({ headline: 'Published', tone: 'ok', needsYouStage: null });
   });
+});
 
-  it('reports drafts and the final render', () => {
-    const drafts = describeProjectStatus({ excerpts: [{ id: 'a', status: 'complete', filename: 'a.mp4' }] }, { progress: stages('review') });
-    expect(drafts.headline).toBe('Step 5 of 6: Final render');
-    expect(drafts.facts.at(-1).label).toBe('1 draft excerpt, no final render');
-    const done = describeProjectStatus({ renderHistoryId: 'r1' }, {
-      progress: { current: 'publish', stages: MUSIC_VIDEO_STAGES.map((stage) => ({ ...stage, state: 'done' })) },
-      readiness: readiness(true, true, true),
-    });
-    expect(done.headline).toBe('Published');
-    expect(done.facts.map((fact) => fact.label)).toEqual(['Approvals: All 3 approved', 'Final render ready']);
-  });
-
-  it('shows detailed autopilot progress and omits approvals during setup without scenes', () => {
-    const status = describeProjectStatus(
-      { autonomousRun: { status: 'running', stage: 'lyrics', stages: { lyrics: { step: 'draft' } } }, excerpts: [] },
-      { progress: stages('setup'), readiness: readiness(false, false, false) },
-    );
-    expect(status.headline).toBe('Step 1 of 6: Song');
-    expect(status.facts.map((fact) => fact.label)).toEqual([
-      'Autonomous run: writing the lyric draft', 'Nothing rendered yet',
-    ]);
+describe('autopilotStatus', () => {
+  it('says what the autonomous run is doing, then a parked production run, else just Autopilot', () => {
+    expect(autopilotStatus({ autonomousRun: { status: 'running', stage: 'lyrics', stages: { lyrics: { step: 'draft' } } } }))
+      .toEqual({ label: 'Autonomous run: writing the lyric draft', short: 'Autopilot running', tone: 'muted' });
+    expect(autopilotStatus({ autonomousRun: { status: 'awaiting-approval', awaiting: 'lyrics' } })).toMatchObject({ short: 'Autopilot needs you', tone: 'warn' });
+    // The button keeps the run's state while the header asks for an approval (no suppression).
+    const blocked = (status) => autopilotStatus({ productionRuns: [{ id: 'r1', status }] });
+    expect(blocked('stopped').label).toBe('Production paused');
+    expect(blocked('blocked').label).toBe('Production blocked');
+    expect(blocked('limit-reached').label).toBe('Production at its limit');
+    expect(blocked('needs-replan').label).toBe('Production needs a replan');
+    expect(blocked('running')).toMatchObject({ short: 'Autopilot running', tone: 'muted' });
+    expect(autopilotStatus({ autonomousRun: { status: 'completed' } })).toEqual({ label: 'Autopilot', short: 'Autopilot', tone: 'muted' });
+    expect(autopilotStatus({})).toEqual({ label: 'Autopilot', short: 'Autopilot', tone: 'muted' });
   });
 });
 

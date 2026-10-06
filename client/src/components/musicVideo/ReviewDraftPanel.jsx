@@ -6,7 +6,7 @@ export default function ReviewDraftPanel({ project, onOpen, draftState }) {
   const localState = useMusicVideoReviewDraft(project, { enabled: !draftState });
   const { draft, checking, unavailableCount } = draftState || localState;
   if (checking) return <p role="status">Finding an available review draft…</p>;
-  if (!draft) return unavailableCount ? <p role="alert">Imported drafts are unavailable. Choose an available development file below.</p> : null;
+  if (!draft) return unavailableCount ? <p role="alert">Imported drafts are unavailable. Choose an available development file in Project settings › Files.</p> : null;
   const artifact = project.devArtifacts.find(item => item.id === draft.artifactId);
   return <section aria-label="Imported review draft" className="min-w-0 space-y-2 rounded-lg border border-port-border bg-port-card p-3">
     <div className="flex flex-wrap items-center justify-between gap-2">

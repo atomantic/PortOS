@@ -60,6 +60,18 @@ describe('Song step', () => {
     expect(reverifyAlignment).toHaveBeenCalledWith('New master checked');
   });
 
+  it('keeps an unsaved planning draft in step after a re-verify', async () => {
+    const setPlanning = vi.fn();
+    const project = { id: 'p', trackId: 't', audioAnalysis: {}, lyricCues: [{ id: 'c', text: 'hi' }], productionReview: { draft: { lyricsMode: 'vocal', timingStatus: 'verified', timingNotes: 'old' } } };
+    render(<SetupStage board={board(project, {
+      productionReview: review({ readiness: { alignment: { status: 'stale' } } }),
+      planningDraft: [{ cast: 'edited', timingStatus: 'verified', timingNotes: 'old' }, setPlanning],
+    })} />);
+    fireEvent.change(screen.getByLabelText(/What you checked/), { target: { value: 'New master checked' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Re-verify timing' }));
+    await vi.waitFor(() => expect(setPlanning).toHaveBeenCalledWith({ cast: 'edited', timingStatus: 'verified', timingNotes: 'New master checked' }));
+  });
+
   it('confirms an instrumental with a reason', () => {
     const save = vi.fn(async () => ({}));
     const project = { id: 'p', trackId: 't', audioAnalysis: {}, productionReview: { draft: {} } };

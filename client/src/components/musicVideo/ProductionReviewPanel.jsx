@@ -7,35 +7,33 @@ const EMPTY = { cast: '', environments: '', visualLanguage: '', motionLanguage: 
 const fieldClass = 'mt-1 w-full rounded border border-port-border bg-port-bg p-2 text-sm';
 const buttonClass = 'min-h-[44px] rounded border border-port-border px-3 py-2 text-sm disabled:opacity-50';
 const labels = { art: 'Art direction', storyboard: 'Lyric-timed storyboard', proof: 'Animated proof' };
-// Each approval lives on the tab that owns its work (#10151); the page passes `stage` to render only that one.
+// Each approval closes the step that owns its work (#10151); the page passes that step's `stage`.
 const STAGE_TABS = { art: 'cast-sets', storyboard: 'board', proof: 'produce' };
 const EMPTY_PLAYBACK = { method: 'playback', energyComparison: '', timecodedNotes: '', visualReview: '', audioReview: '', limitations: '' };
 
 const FOLD_STYLE = { scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' };
 /**
- * One approval. On a step (`single`) it is the open box that closes the step —
- * heading, then its content and Approve / Request changes — highlighted until
- * approved; with every approval listed it folds like before.
+ * The open box that closes a step: heading, then the approval's content and
+ * Approve / Request changes, highlighted until approved.
  */
-function ApprovalFold({ single, open, id, label, approved, children }) {
-  if (single) return <section id={id} tabIndex={-1} aria-label={`Approve: ${label}`} style={FOLD_STYLE}
+function ApprovalBox({ id, label, approved, children }) {
+  return <section id={id} tabIndex={-1} aria-label={`Approve: ${label}`} style={FOLD_STYLE}
     className={`rounded-lg border p-3 focus:outline focus:outline-2 focus:outline-port-accent ${approved ? 'border-port-border' : 'border-port-accent bg-port-accent/5'}`}>
     <h4 className="text-sm font-semibold">{approved ? `${label} approved` : `Approve the ${label.toLowerCase()}`}</h4>
     {children}
   </section>;
-  return <details open={open} id={id} tabIndex={-1} style={FOLD_STYLE} className="rounded border border-port-border p-2 focus:outline focus:outline-2 focus:outline-port-accent">
-    <summary className="cursor-pointer min-h-[44px] py-2 text-sm font-medium">{label}</summary>
-    {children}
-  </details>;
 }
 
-/** Editable planning content and explicit operator decisions for every render mode. */
-// `framed={false}` drops the card chrome and heading for a host that supplies them.
-// `stage` ('art' | 'storyboard' | 'proof') renders just that stage's approval, feedback and planning fields; omitted, all three render.
-// `planning` is an optional `[draft, setDraft]` pair owned by the page so unsaved edits survive a tab switch; `onNavigate(tab, anchor)` jumps tabs.
-export default function ProductionReviewPanel({ project, review, onOpenArtifact, framed = true, stage = null, planning = null, onNavigate = null }) {
-  const showArt = !stage || stage === 'art';
-  const showBoard = !stage || stage === 'storyboard';
+/**
+ * One step's production approval, with its feedback and planning fields, for
+ * every render mode. `stage` ('art' | 'storyboard' | 'proof') is the approval
+ * the step closes. `planning` is an optional `[draft, setDraft]` pair owned by
+ * the page so unsaved edits survive a step switch; `onNavigate(step, anchor)`
+ * jumps steps.
+ */
+export default function ProductionReviewPanel({ project, review, onOpenArtifact, stage, planning = null, onNavigate = null }) {
+  const showArt = stage === 'art';
+  const showBoard = stage === 'storyboard';
   const fieldId = key => `mv-review-${project.id}-${key}`;
   const saved = project.productionReview?.draft || EMPTY;
   const [visibleArt, setVisibleArt] = useState(null);
@@ -45,7 +43,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   const [local, setLocal] = planning || [ownLocal, setOwnLocal];
   const draft = local || saved;
   const dirty = !!local && JSON.stringify(local) !== JSON.stringify(saved);
-  const [feedback, setFeedback] = useState({ stage: stage || 'art', target: '', text: '', decision: 'request-changes' });
+  const [feedback, setFeedback] = useState({ stage, target: '', text: '', decision: 'request-changes' });
   const [resolutions, setResolutions] = useState({});
   const [importError, setImportError] = useState(null);
   const [revisionNotice, setRevisionNotice] = useState(null);
@@ -103,16 +101,15 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
     if (!evidenceComplete) return 'Complete the visual and audio observations (at least 40 characters each) and state the review limitations.';
     return null;
   };
-  // A link to another stage's section crosses tabs through the page; within a tab it just unfolds the target.
+  // A link to another step's section crosses steps through the page; within this step it just unfolds the target.
   const jump = (tab, anchor) => event => {
-    if (onNavigate && stage && tab !== STAGE_TABS[stage]) { event.preventDefault(); onNavigate(tab, anchor); return; }
+    if (onNavigate && tab !== STAGE_TABS[stage]) { event.preventDefault(); onNavigate(tab, anchor); return; }
     openReviewSection(event);
   };
   const openReviewSection = event => {
     const target = document.getElementById(event.currentTarget.hash.slice(1));
     if (target) { target.open = true; target.focus({ preventScroll: true }); }
   };
-  const nextStage = ['art', 'storyboard', 'proof'].find(stage => !ready?.[stage].approved) || 'proof';
   const openRequests = stage => (project.productionReview?.feedback || []).filter(f => f.stage === stage && f.decision === 'request-changes' && !f.resolvedAt);
   // Mirrors the server's revise routing so an unsupported stage explains itself instead of failing on click.
   const revisionScope = stage => {
@@ -148,7 +145,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         {!ready?.art.approved && <li><a href="#mv-review-art" onClick={jump('cast-sets', 'mv-review-art')} className="text-port-accent underline">Review and approve art direction</a> for the current revision.</li>}
         {!ready?.storyboard.approved && <li><a href="#mv-review-storyboard" onClick={jump('board', 'mv-review-storyboard')} className="text-port-accent underline">Resolve storyboard prerequisites and approve it</a>.
           <ul className="list-disc pl-5">{(ready?.storyboard.problems || []).map(problem => <li key={problem}>{problem}</li>)}</ul>
-          <a href="#mv-review-planning" onClick={jump('board', 'mv-review-planning')} className="text-port-accent underline">Open planning edits for alignment and document shot manifests</a>.
+          <a href="#mv-review-planning" onClick={jump('board', 'mv-review-planning')} className="text-port-accent underline">Open planning edits for document shot manifests</a>; lyric timing is verified on the <a href="#mv-lyric-timing" onClick={jump('setup', 'mv-lyric-timing')} className="text-port-accent underline">Song step</a>.
         </li>}
         <li>Choose a 10–45 second chorus window and use “Render animated proof” below. The feasibility prototype button creates a separate, unapproved preview.</li>
         <li>Review the proof with audio, add an energy comparison and timecoded notes, then approve using the playback attestation.</li>
@@ -221,12 +218,11 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
       <p className="text-xs text-port-text-muted">Include at least one playback timestamp such as 0:04 or 4.5s. These notes are saved with this exact proof. A replacement proof requires a new comparison and acknowledgement.</p>
       {!machineReview && <p id={fieldId('playback-attestation')} className="text-sm">By approving, I confirm that I watched this exact proof with audio at normal speed and compared its energy, timed choreography and lyric timing with the saved plan.</p>}
   </>;
-  return <section id="mv-production-review" aria-label="Production review" className={framed ? 'rounded-lg border border-port-border bg-port-card p-3 space-y-3' : 'space-y-3'}>
-    {framed && <h3 className="font-medium">Production review</h3>}
+  const key = stage;
+  const label = labels[stage];
+  return <section id="mv-production-review" aria-label="Production review" className="space-y-3">
     {review.error && <p role="alert" className="text-port-error">{review.error}</p>}
-    <ol className="space-y-3">
-      {Object.entries(labels).filter(([key]) => !stage || key === stage).map(([key, label]) => <li key={key}><ApprovalFold single={!!stage} open={window.location.hash === `#mv-review-${key}` || (!stage && key === nextStage)} id={`mv-review-${key}`} label={label} approved={!!ready?.[key].approved}>
-        {!stage && <p role="status" className="text-xs">{ready?.[key].approved ? 'Approved for this revision' : 'Review required'}</p>}
+    <ApprovalBox id={`mv-review-${key}`} label={label} approved={!!ready?.[key].approved}>
         <div id={fieldId(`${key}-prerequisites`)}>{(ready?.[key].problems || []).map(problem => <p key={problem} className="mt-1 text-xs text-port-text-muted">{problem}</p>)}</div>
         {key === 'proof' ? proofContent : <ProductionReviewContext stage={key} project={project} basis={ready?.basis[key]} approved={ready?.[key].approved} onOpenArtifact={onOpenArtifact} onArtReady={available => setVisibleArt(available ? artIdentity : null)} />}
         <p id={fieldId(`${key}-approval-help`)} role="status" className="mt-2 text-sm text-port-text-muted">{approvalHelp(key)}</p>
@@ -252,15 +248,11 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
           </>}
           {revisionNotice?.stage === key && <p role="status" className="text-sm">{revisionNotice.text}</p>}
         </div>}
-      </ApprovalFold></li>)}
-    </ol>
+    </ApprovalBox>
     {dirty && <p role="status" className="text-sm">Save your planning edits before approving this revision.</p>}
     <details>
       <summary className="cursor-pointer min-h-[44px] py-2 text-sm">Review feedback and revision history</summary>
       <p className="text-sm">Name a cast member, environment, shot, artifact or frame time. Structure acceptance records agreement on organization only; it never approves the art or authorizes production.</p>
-      {!stage && <label htmlFor={fieldId('feedback-stage')} className="block text-sm">Feedback stage<select id={fieldId('feedback-stage')} className={fieldClass} value={feedback.stage} onChange={e => setFeedback({ ...feedback, stage: e.target.value })}>
-        {Object.entries(labels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-      </select></label>}
       <label htmlFor={fieldId('feedback-target')} className="block text-sm">Feedback target<input id={fieldId('feedback-target')} className={fieldClass} value={feedback.target} placeholder="Cast: operator; shot: chorus; frame: 12.5s" onChange={e => setFeedback({ ...feedback, target: e.target.value })} /></label>
       <label htmlFor={fieldId('feedback-text')} className="block text-sm">Requested change<textarea id={fieldId('feedback-text')} className={fieldClass} rows={3} value={feedback.text} onChange={e => setFeedback({ ...feedback, text: e.target.value })} /></label>
       <label htmlFor={fieldId('feedback-decision')} className="block text-sm">Review decision<select id={fieldId('feedback-decision')} className={fieldClass} value={feedback.decision} onChange={e => setFeedback({ ...feedback, decision: e.target.value })}>
@@ -275,7 +267,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
       {savedRequestStage && openRequests(savedRequestStage).length > 0 && <p role="status" className="text-sm">
         Approval stays blocked until these are resolved. <a href={`#mv-review-${savedRequestStage}`} onClick={openReviewSection} className="text-port-accent underline">Revise from feedback</a>, or edit and resolve manually.
       </p>}
-      <ul className="mt-3 space-y-3">{(project.productionReview?.feedback || []).filter(item => !stage || item.stage === stage).map(item => <li key={item.id} className="rounded border border-port-border p-2">
+      <ul className="mt-3 space-y-3">{(project.productionReview?.feedback || []).filter(item => item.stage === stage).map(item => <li key={item.id} className="rounded border border-port-border p-2">
         <p className="text-sm"><strong>{item.target}</strong> · {item.decision} · {item.resolvedAt ? 'Resolved' : 'Open'}</p>
         <p className="text-sm whitespace-pre-wrap">{item.text}</p>
         <p className="text-xs text-port-text-muted">Reviewed revision {item.basis.slice(0, 12)}{ready?.basis[item.stage] !== item.basis ? ' · content has changed since review' : ' · current revision'}</p>
@@ -289,7 +281,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
       </li>)}</ul>
     </details>
     {stage !== 'proof' && <details id="mv-review-planning" tabIndex={-1} open={window.location.hash === '#mv-review-planning'} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }}>
-      <summary className="cursor-pointer min-h-[44px] py-2 text-sm">{!stage ? 'Edit visual guide and storyboard' : showArt ? 'Edit art direction and visual guide' : 'Edit alignment and storyboard shots'}</summary>
+      <summary className="cursor-pointer min-h-[44px] py-2 text-sm">{showArt ? 'Edit art direction and visual guide' : 'Edit storyboard shots'}</summary>
       <div className="space-y-3">
         {importError && <p role="alert">{importError}</p>}
         {showArt && <label htmlFor={fieldId('import')} className="block text-sm">Import planning JSON as an unapproved draft

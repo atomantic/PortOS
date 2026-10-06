@@ -65,16 +65,14 @@ export function treatmentSummary(project) {
  * "Draft without AI" makes no provider call at all. Keyed by project id at the
  * call site so a field draft never carries across projects.
  *
- * `part` splits it by what each piece depends on: the brief (what the planner
- * reads) needs no scenes, while compile / arc / shot direction / Apply need
- * them. The Storyboard step renders both. Omit it to render both. The caller supplies
- * the collapsible section, so there is no fold of its own here.
+ * The brief (what the planner reads) needs no scenes, so it is always shown;
+ * compile / arc / shot direction / Apply need them and wait until shots are
+ * planned. The Storyboard step supplies the collapsible section, so there is
+ * no fold of its own here.
  * `storyboardApproved` (from the server's readiness) warns that any treatment
  * edit will need the storyboard re-approved (#10141).
  */
-export default function TreatmentPanel({ project, treatment: api, part = 'all', storyboardApproved = false }) {
-  const showBrief = part !== 'direction';
-  const showDirection = part !== 'brief';
+export default function TreatmentPanel({ project, treatment: api, storyboardApproved = false }) {
   const hasScenes = (project.scenes || []).length > 0;
   const t = project.treatment || null;
   const brief = t?.brief || {};
@@ -116,8 +114,7 @@ export default function TreatmentPanel({ project, treatment: api, part = 'all', 
           The storyboard is approved. Editing the treatment will need re-approval of the storyboard.
         </p>
       )}
-      {showBrief && (
-        <>
+      <>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
           <BriefField id={idFor('audience')} label="Audience" value={brief.audience} maxLength={500}
             placeholder="Who this is for — e.g. late-night city pop fans" onCommit={(v) => saveBrief({ audience: v })} />
@@ -182,19 +179,16 @@ export default function TreatmentPanel({ project, treatment: api, part = 'all', 
             </button>
           </div>
         </div>
-        {part === 'brief' && (
-          <p className="text-xs text-port-text-muted">
-            The planner reads this brief when it plans shots.
-          </p>
-        )}
-        </>
-      )}
+        <p className="text-xs text-port-text-muted">
+          The planner reads this brief when it plans shots.
+        </p>
+      </>
 
-      {showDirection && !hasScenes && (
+      {!hasScenes && (
         <p className="text-sm text-port-text-muted">Plan the shots to direct them one by one.</p>
       )}
 
-      {showDirection && hasScenes && (
+      {hasScenes && (
         <>
         <div className="flex flex-wrap items-center gap-2">
           {providers.length > 0 && (

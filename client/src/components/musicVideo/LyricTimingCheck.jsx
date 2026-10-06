@@ -24,9 +24,15 @@ export default function LyricTimingCheck({ project, review, planning = null, dis
   const busy = disabled || review.busy || !review.current;
   const notesId = `mv-timing-notes-${project.id}`;
 
+  // Keep the page's unsaved planning draft in step with what the server now holds.
+  const syncPlanning = (fields) => { if (planning?.[0]) planning[1]({ ...planning[0], ...fields }); };
   const write = async (fields) => {
-    const result = await review.save({ ...saved, ...fields });
-    if (result && planning?.[0]) planning[1]({ ...planning[0], ...fields });
+    if (await review.save({ ...saved, ...fields })) syncPlanning(fields);
+  };
+  const reverify = async () => {
+    const timingNotes = notes.trim();
+    // The alignment route records the verification on the draft server-side.
+    if (await review.reverifyAlignment(timingNotes)) syncPlanning({ timingStatus: 'verified', timingNotes });
   };
 
   const verified = mode === 'vocal' ? lyrics.verified && !lyrics.instrumental : lyrics.instrumental && lyrics.verified;
@@ -60,7 +66,7 @@ export default function LyricTimingCheck({ project, review, planning = null, dis
           {mode === 'vocal' ? (
             <button type="button" className={buttonClass}
               disabled={busy || lyrics.lines === 0 || (stale && !notes.trim())}
-              onClick={() => (stale ? review.reverifyAlignment(notes.trim()) : write({ lyricsMode: 'vocal', timingStatus: 'verified', timingNotes: notes.trim() }))}>
+              onClick={() => (stale ? reverify() : write({ lyricsMode: 'vocal', timingStatus: 'verified', timingNotes: notes.trim() }))}>
               {stale ? 'Re-verify timing' : 'Mark timing verified'}
             </button>
           ) : (

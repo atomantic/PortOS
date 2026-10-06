@@ -172,39 +172,14 @@ const PRODUCTION_RUN_LABELS = {
   'limit-reached': 'Production at its limit', 'needs-replan': 'Production needs a replan',
 };
 
-const APPROVAL_LABELS = { art: 'art', storyboard: 'storyboard', proof: 'proof' };
-
-/** One line for the production-approval gate: which of the three approvals the current revision holds. */
-export function approvalSummary(readiness) {
-  if (!readiness) return null;
-  const keys = Object.keys(APPROVAL_LABELS);
-  const approved = keys.filter((key) => readiness[key]?.approved).length;
-  const missing = keys.filter((key) => !readiness[key]?.approved).map((key) => APPROVAL_LABELS[key]);
-  return approved === keys.length ? 'All 3 approved' : `${approved} of 3 approved · needs ${missing.join(', ')}`;
-}
-
 /**
- * The project's "where does it stand" line for the sticky header: the stage it
- * is in (and whether that stage is waiting on the director), plus short facts
- * for the autopilot run, the production run, the approvals and what there is to
- * watch. `progress` is `deriveStages(…)`; `nextAction` is `deriveNextAction(…)`.
- * Fact tones are `ok`, `warn` or `muted`.
+ * What the header's Autopilot button says: the autonomous run's current step or
+ * state, else a live or parked production run, else just "Autopilot". Tones are
+ * `ok`, `warn` or `muted`; `short` is the phone label.
  */
-export function describeProjectStatus(project, { progress, nextAction = null, readiness = project?.productionReadiness, reviewingDraft = false, reviewDraftState } = {}) {
-  if (!project || !progress) return null;
-  const index = MUSIC_VIDEO_STAGES.findIndex((stage) => stage.id === progress.current);
-  const entry = progress.stages.find((stage) => stage.id === progress.current);
-  const allDone = progress.stages.every((stage) => stage.state === 'done');
-  // A goto into Production review is a human approval, not something the app does by itself.
-  const needsYou = entry?.state === 'blocked' || ['review-production', 'approve-cast-sets', 'review-autonomous'].includes(nextAction?.id);
-  const activeEvidence = ['draft-progress', 'proof-progress'].includes(nextAction?.id);
-  const reviewDraft = reviewingDraft && reviewDraftState ? reviewDraftState.draft : latestMusicVideoReviewDraft(project);
-  const headline = reviewingDraft ? reviewDraftState?.checking ? 'Checking review draft' : reviewDraft ? 'Imported draft for review' : 'Choose an available review file' : activeEvidence ? 'Review render in progress' : allDone
-    ? 'Published'
-    : `Step ${index + 1} of ${MUSIC_VIDEO_STAGES.length}: ${entry?.label || ''}${needsYou ? ' needs you' : ''}`;
-  const facts = [];
-  const auto = project.autonomousRun;
-  if (auto && nextAction?.id !== 'review-production' && !activeEvidence) {
+export function autopilotStatus(project) {
+  const auto = project?.autonomousRun;
+  if (auto && auto.status !== 'canceled') {
     let label;
     if (auto.status === 'running' && !auto.interrupted) {
       const step = auto.stages?.[auto.stage]?.step;
@@ -217,24 +192,47 @@ export function describeProjectStatus(project, { progress, nextAction = null, re
       label = `Autonomous run ${statusLabel}`;
     }
     const tone = auto.status === 'completed' ? 'ok' : auto.status === 'running' && !auto.interrupted ? 'muted' : 'warn';
-    facts.push({ id: 'autopilot', label, tone });
+    if (auto.status !== 'completed') return { label, short: tone === 'warn' ? 'Autopilot needs you' : 'Autopilot running', tone };
   }
   const run = currentProductionRun(project);
   if (run && RESUMABLE_RUN_STATUSES.has(run.status)) {
-    facts.push({ id: 'production', label: PRODUCTION_RUN_LABELS[run.status] || 'Production paused', tone: run.status === 'running' ? 'muted' : 'warn' });
+    const running = run.status === 'running';
+    return { label: PRODUCTION_RUN_LABELS[run.status] || 'Production paused', short: running ? 'Autopilot running' : 'Autopilot needs you', tone: running ? 'muted' : 'warn' };
   }
-  const approvals = approvalSummary(readiness);
-  const showApprovals = progress.current !== 'setup' || (project.scenes || []).length > 0;
-  if (approvals && showApprovals) facts.push({ id: 'approvals', label: `Approvals: ${approvals}`, tone: readiness.readyForProduction ? 'ok' : 'warn' });
-  const drafts = (project.excerpts || []).filter((e) => e.status === 'complete' && e.filename).length;
-  if (isFinalRenderStale(project)) facts.push({ id: 'render', label: STALE_RENDER_MESSAGE, tone: 'warn' });
-  else if (project.renderHistoryId) facts.push({ id: 'render', label: 'Final render ready', tone: 'ok' });
-  else if (reviewingDraft && reviewDraftState?.checking) facts.push({ id: 'render', label: 'Checking imported media availability', tone: 'muted' });
-  else if (reviewingDraft && reviewDraftState?.unavailableCount && !reviewDraft) facts.push({ id: 'render', label: 'Imported drafts unavailable', tone: 'warn' });
-  else if (reviewDraft) facts.push({ id: 'render', label: `Imported animatic v${reviewDraft.version} · ${reviewDraft.reviewStatus === 'pending' ? 'pending review' : reviewDraft.reviewStatus === 'approved' ? 'draft reviewed' : 'changes requested'}`, tone: 'muted' });
-  else if (drafts) facts.push({ id: 'render', label: `${drafts} draft ${drafts === 1 ? 'excerpt' : 'excerpts'}, no final render`, tone: 'muted' });
-  else facts.push({ id: 'render', label: 'Nothing rendered yet', tone: 'muted' });
-  return { headline, tone: reviewingDraft ? 'muted' : activeEvidence ? 'muted' : allDone ? 'ok' : needsYou ? 'warn' : 'muted', facts };
+  return { label: 'Autopilot', short: 'Autopilot', tone: 'muted' };
+}
+
+/**
+ * The project's "where does it stand" line for the sticky header: the step it
+ * is in, or the step waiting on the director (`needsYouStage`, also marked in
+ * the step list). A stopped step, an approval to give (`review-production`,
+ * which may sit on a later step than the first unfinished one), a Cast & Sets
+ * check-in or an autonomous checkpoint all need the director. `progress` is
+ * `deriveStages(…)`; `nextAction` is `deriveNextAction(…)`.
+ */
+export function describeProjectStatus(project, { progress, nextAction = null, reviewingDraft = false, reviewDraftState } = {}) {
+  if (!project || !progress) return null;
+  const entry = progress.stages.find((stage) => stage.id === progress.current);
+  const allDone = progress.stages.every((stage) => stage.state === 'done');
+  const blocked = entry?.state === 'blocked';
+  const asksForYou = ['review-production', 'approve-cast-sets', 'review-autonomous'].includes(nextAction?.id);
+  const needsYou = blocked || asksForYou;
+  const needsYouStage = !needsYou ? null : blocked ? progress.current
+    : nextAction.id === 'approve-cast-sets' ? 'cast-sets' : nextAction.stage || progress.current;
+  const shownId = needsYouStage || progress.current;
+  const index = MUSIC_VIDEO_STAGES.findIndex((stage) => stage.id === shownId);
+  const shown = progress.stages.find((stage) => stage.id === shownId);
+  const activeEvidence = ['draft-progress', 'proof-progress'].includes(nextAction?.id);
+  const reviewDraft = reviewingDraft && reviewDraftState ? reviewDraftState.draft : latestMusicVideoReviewDraft(project);
+  const headline = reviewingDraft ? reviewDraftState?.checking ? 'Checking review draft' : reviewDraft ? 'Imported draft for review' : 'Choose an available review file' : activeEvidence ? 'Review render in progress' : allDone
+    ? 'Published'
+    : `Step ${index + 1} of ${MUSIC_VIDEO_STAGES.length}: ${shown?.label || ''}${needsYou ? ' needs you' : ''}`;
+  const quiet = reviewingDraft || activeEvidence || allDone;
+  return {
+    headline,
+    tone: reviewingDraft || activeEvidence ? 'muted' : allDone ? 'ok' : needsYou ? 'warn' : 'muted',
+    needsYouStage: quiet ? null : needsYouStage,
+  };
 }
 
 export const STALE_RENDER_MESSAGE = 'Final render is out of date — re-render';
@@ -356,8 +354,8 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
 
 /**
  * The single primary action the sticky header offers. `kind: 'run'` calls a
- * handler the page owns (keyed by `id`; `review-autonomous` opens Project
- * settings › Autopilot); `kind: 'goto'` opens a stage (and
+ * handler the page owns (keyed by `id`); `kind: 'open'` opens a Project
+ * settings tab (`review-autonomous` → Autopilot); `kind: 'goto'` opens a stage (and
  * optionally scrolls to `anchor`). `label` is the full control name; `shortLabel`
  * is what a phone shows so the project name keeps room. `disabled` carries the
  * reason it can't run yet. A live production run, a render in flight and a
@@ -427,7 +425,7 @@ export function deriveNextAction(project, {
     if (auto.status === 'awaiting-approval') {
       const target = AUTONOMOUS_CHECKPOINT_LABELS[auto.awaiting] || auto.awaiting || 'checkpoint';
       // The checkpoint editor is in Project settings › Autopilot; the page opens it.
-      return { id: 'review-autonomous', kind: 'run', label: `Review ${target}`, shortLabel: 'Review' };
+      return { id: 'review-autonomous', kind: 'open', label: `Review ${target}`, shortLabel: 'Review' };
     }
     if (auto.interrupted || auto.status === 'stopped' || auto.status === 'needs-human') {
       return { id: 'resume-autonomous', kind: 'run', label: 'Resume autonomous run', shortLabel: 'Resume' };
@@ -443,7 +441,11 @@ export function deriveNextAction(project, {
       if (project.automation && scenes.length === 0) {
         return { id: 'kickoff', kind: 'run', label: 'Run autopilot', shortLabel: 'Autopilot', disabled: !!kickoffBlockedReason, reason: kickoffBlockedReason || undefined };
       }
-      return { id: 'analyze', kind: 'run', label: 'Analyze song', shortLabel: 'Analyze' };
+      if (!project.audioAnalysis) return { id: 'analyze', kind: 'run', label: 'Analyze song', shortLabel: 'Analyze' };
+      // Analyzed: what keeps Song open is the lyrics or their timing, finished on the step itself.
+      return lyricSetupState(project, readiness).imported
+        ? { id: 'verify-timing', kind: 'goto', stage: 'setup', anchor: 'mv-lyric-timing', label: 'Verify lyric timing', shortLabel: 'Timing' }
+        : { id: 'import-lyrics', kind: 'goto', stage: 'setup', anchor: 'mv-lyrics-import', label: 'Add the lyrics', shortLabel: 'Lyrics' };
     case 'cast-sets':
       if (cast?.status === 'review') return { id: 'approve-cast-sets', kind: 'run', label: 'Approve cast & sets', shortLabel: 'Approve' };
       if (cast && (cast.interrupted || cast.status === 'failed')) return { id: 'resume-cast-sets', kind: 'run', label: 'Resume cast & sets', shortLabel: 'Resume' };
@@ -552,14 +554,14 @@ export function stageChecklist(stageId, project, readiness = project?.production
         { id: 'track', label: 'Track attached', done: hasAudio, detail: !hasAudio && autoSong ? 'The autonomous run is making the song.' : null,
           action: hasAudio || autoSong ? null : { label: 'Attach a track', anchor: 'mv-track' } },
         { id: 'analysis', label: 'Song analyzed', done: !!project.audioAnalysis,
-          action: project.audioAnalysis ? null : { label: 'Analyze', anchor: 'mv-track' } },
+          action: project.audioAnalysis ? null : { label: 'Analyze', anchor: 'mv-analyze' } },
         { id: 'lyrics', label: lyrics.instrumental ? 'Instrumental, no lyrics needed' : 'Lyrics imported', done: lyrics.imported || lyrics.ok,
-          detail: 'Import the lyrics, or mark the song instrumental in step 4.',
+          detail: 'Import the lyrics, or mark the song instrumental under Time and verify.',
           action: autoSong ? null : { label: 'Import lyrics', anchor: 'mv-lyrics-import' } },
         { id: 'timing', label: lyrics.instrumental ? 'Instrumental confirmed' : 'Lyric timing verified', done: lyrics.verified || lyrics.ok,
           detail: lyrics.alignment === 'stale' ? 'Word timings or the master changed since you verified them; verify again.'
-            : lyrics.instrumental ? 'Say why the song has no lyrics in step 4.'
-              : 'Align the words, listen back, then mark the timing verified in step 4.',
+            : lyrics.instrumental ? 'Say why the song has no lyrics under Time and verify.'
+              : 'Align the words, listen back, then mark the timing verified under Time and verify.',
           action: autoSong ? null : { label: 'Verify timing', anchor: 'mv-lyric-timing' } },
       ];
     }

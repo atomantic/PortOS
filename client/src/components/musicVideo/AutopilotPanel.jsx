@@ -1,3 +1,4 @@
+import { Link } from 'react-router';
 import { useState } from 'react';
 import { Bot, Clapperboard, Pause, Play, X } from 'lucide-react';
 import AutomationBriefFields from './AutomationBriefFields.jsx';
@@ -421,7 +422,7 @@ function ProductionSection({ project, production, readiness }) {
         <span className="flex items-center gap-1"><Clapperboard size={12} /> Production run{isStartedByAutonomous ? '' : ' (opt-in)'}</span>
         {isStartedByAutonomous && (
           <span className="text-xs text-port-text-muted font-normal">
-            · <a href={project?.id ? `/music-video/${project.id}/setup#mv-autonomous-run` : '#mv-autonomous-run'} className="text-port-accent hover:underline">Started by the autonomous run</a>
+            · <Link to={{ search: '?mvPanel=autopilot', hash: '#mv-autonomous-run' }} className="text-port-accent hover:underline">Started by the autonomous run</Link>
           </span>
         )}
       </span>

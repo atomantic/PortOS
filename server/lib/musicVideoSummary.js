@@ -76,7 +76,8 @@ function currentStage(project, readiness, run) {
     board: planned,
     // Make needs footage, the composition over it and the proof that closes both (#10140) — mirrors the client's deriveStages.
     produce: planned && footageReady && composeDone(project, mode) && proofApproved,
-    review: Boolean(project.renderHistoryId),
+    // A render made before later scene edits no longer counts as the final video — mirrors the client's isFinalRenderStale.
+    review: Boolean(project.renderHistoryId) && project.renderDependencyState?.status !== 'stale',
     publish: Object.keys(project.publishKit?.posts || {}).length > 0,
   };
   return STAGE_IDS.find((id) => !done[id]) || 'publish';

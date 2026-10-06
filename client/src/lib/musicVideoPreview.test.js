@@ -16,8 +16,8 @@ it('surfaces a pinned imported animatic in both full and summary cards without c
   const progress = deriveStages(project, null);
   expect(progress.stages.find(stage => stage.id === 'review').state).not.toBe('done');
   const status = describeProjectStatus(project, { progress, reviewingDraft: true });
-  expect(status.headline).toBe('Imported draft for review');
-  expect(status.facts.find(fact => fact.id === 'render').label).toContain('pending review');
+  // The draft's own review state is shown by ReviewDraftPanel on Final render; the header names the task.
+  expect(status).toMatchObject({ headline: 'Imported draft for review', tone: 'muted', needsYouStage: null });
   expect(project.renderHistoryId).toBeUndefined();
 });
 
@@ -38,15 +38,15 @@ it('uses version creation time rather than later notes to choose the latest impo
   expect(selectMusicVideoPreview({ id: 'review-project', devArtifacts: [newer, old] })).toMatchObject({ artifactId: 'new-film', reviewStatus: 'changes-requested' });
 });
 
-it('describes the resolved review snapshot, including missing newer drafts and all-unavailable media', () => {
+it('names the review-draft task in the header while checking, resolved or with every draft unavailable', () => {
   const project = { id: 'example', devArtifacts: [animatic('new-film', 3)], scenes: [] };
   const progress = deriveStages(project, null);
   const resolved = { draft: { version: 2, reviewStatus: 'approved' }, unavailableCount: 1, checking: false };
   const status = describeProjectStatus(project, { progress, reviewingDraft: true, reviewDraftState: resolved });
-  expect(status.facts.find(fact => fact.id === 'render').label).toBe('Imported animatic v2 · draft reviewed');
+  expect(status.headline).toBe('Imported draft for review');
+  expect(describeProjectStatus(project, { progress, reviewingDraft: true, reviewDraftState: { ...resolved, checking: true } }).headline).toBe('Checking review draft');
   const missing = describeProjectStatus(project, { progress, reviewingDraft: true, reviewDraftState: { ...resolved, draft: null } });
   expect(missing.headline).toBe('Choose an available review file');
-  expect(missing.facts.find(fact => fact.id === 'render').label).toBe('Imported drafts unavailable');
 });
 
 describe('selectMusicVideoPreview', () => {

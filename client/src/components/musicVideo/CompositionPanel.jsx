@@ -1,11 +1,11 @@
-import { RenderFailure } from '../RenderStatusPanel.jsx';
-import GradePanel from '../GradePanel.jsx';
-import TypographyPanel from '../TypographyPanel.jsx';
-import EidoverseVideoPanel from '../EidoverseVideoPanel.jsx';
-import CodeVideoPanel from '../CodeVideoPanel.jsx';
-import DocumentCompositionPanel from '../DocumentCompositionPanel.jsx';
-import { renderStyleLabel } from '../compositionDraft.js';
-import { MUSIC_VIDEO_MEDIA_MODE_LABELS, musicVideoMediaMode } from '../../../../../server/lib/musicVideoMediaPolicy.js';
+import { RenderFailure } from './RenderStatusPanel.jsx';
+import GradePanel from './GradePanel.jsx';
+import TypographyPanel from './TypographyPanel.jsx';
+import EidoverseVideoPanel from './EidoverseVideoPanel.jsx';
+import CodeVideoPanel from './CodeVideoPanel.jsx';
+import DocumentCompositionPanel from './DocumentCompositionPanel.jsx';
+import { renderStyleLabel } from './compositionDraft.js';
+import { MUSIC_VIDEO_MEDIA_MODE_LABELS, musicVideoMediaMode } from '../../../../server/lib/musicVideoMediaPolicy.js';
 
 /**
  * The composition half of Make: how the final render is put together — grade,
@@ -13,7 +13,7 @@ import { MUSIC_VIDEO_MEDIA_MODE_LABELS, musicVideoMediaMode } from '../../../../
  * code-rendered or composition-document panel. The preview of what this
  * produces is docked beside the step.
  */
-export default function ComposeStage({ board }) {
+export default function CompositionPanel({ board }) {
   const { project, locked, audioUrl } = board;
   const mode = project.composition?.mode;
   return (
@@ -23,7 +23,7 @@ export default function ComposeStage({ board }) {
         <div className="flex flex-wrap items-center gap-2 text-xs text-port-text-muted">
           <span>Render style: <span className="text-port-text">{renderStyleLabel(mode)}</span></span>
           <span>Media: <span className="text-port-text">{MUSIC_VIDEO_MEDIA_MODE_LABELS[musicVideoMediaMode(project)]}</span></span>
-          <button type="button" onClick={() => board.openSettings('project')} className="min-h-[44px] px-1 text-port-accent sm:min-h-0">
+          <button type="button" onClick={() => board.openSettings('project')} aria-label="Change render style and media in Project settings" className="min-h-[44px] px-1 text-port-accent sm:min-h-0">
             Change
           </button>
         </div>

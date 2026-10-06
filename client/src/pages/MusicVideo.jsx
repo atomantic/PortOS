@@ -88,7 +88,7 @@ import { deriveAttentionItems } from '../lib/musicVideoAttention.js';
 import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
 import { useMusicVideoReviewDraft } from '../hooks/useMusicVideoReviewDraft.js';
 import {
-  deriveNextAction, deriveStages, projectShotSummary, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, stepNotes, compareMusicVideoProjectsNewestFirst,
+  deriveNextAction, deriveStages, projectShotSummary, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, stepNotes, autopilotStatus, compareMusicVideoProjectsNewestFirst,
 } from '../lib/musicVideoStages.js';
 import { groupMusicVideoProjects } from '../lib/musicVideoProjectList.js';
 import { AUTONOMOUS_VIEWABLE_STAGES } from '../lib/musicVideoAutonomous.js';
@@ -116,11 +116,7 @@ const STAGE_VIEWS = {
   setup: SetupStage, 'cast-sets': CastSetsStage, board: BoardStage, produce: ProduceStage, review: ReviewStage, publish: PublishStage,
 };
 
-// The header's Autopilot button: what a live or parked run is doing, else just the name.
-const autopilotButton = (status) => {
-  const fact = status?.facts?.find((entry) => entry.id === 'autopilot' || entry.id === 'production');
-  return fact ? { label: fact.label, tone: fact.tone } : { label: 'Autopilot', tone: 'muted' };
-};
+
 
 export default function MusicVideo() {
   // Deep-linkable project selection: the selected project lives in the URL
@@ -1009,7 +1005,7 @@ export default function MusicVideo() {
     ? { id: 'review-imported', kind: 'goto', stage: 'review', label: 'Checking review draft', disabled: true, reason: 'Checking exact-version media availability' }
     : reviewDraft
       ? { id: 'review-imported', kind: 'goto', stage: 'review', label: 'Review imported draft', shortLabel: 'Review draft' }
-      : { id: 'review-files', kind: 'run', label: 'Choose review file', shortLabel: 'Choose file' }
+      : { id: 'review-files', kind: 'open', label: 'Choose review file', shortLabel: 'Choose file' }
     : productionNextAction;
   // What the server holds that this tab might not be showing (#9940): derived
   // from the saved record, so it survives a reload. Work this tab can see
@@ -1152,10 +1148,10 @@ export default function MusicVideo() {
   } : null;
   const StageView = STAGE_VIEWS[activeStage];
   const projectStatus = !selected ? null : statusKnown && productionReview.readiness
-    ? describeProjectStatus(selected, { progress, nextAction: productionNextAction, readiness: productionReview.readiness, reviewingDraft, reviewDraftState })
+    ? describeProjectStatus(selected, { progress, nextAction: productionNextAction, reviewingDraft, reviewDraftState })
     : statusKnown
-      ? { headline: `Status unavailable: ${productionReview.readinessError}`, tone: 'warn', facts: [] }
-      : { headline: 'Loading status…', tone: 'muted', facts: [] };
+      ? { headline: `Status unavailable: ${productionReview.readinessError}`, tone: 'warn', needsYouStage: null }
+      : { headline: 'Loading status…', tone: 'muted', needsYouStage: null };
 
   const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, liveFirst: activeStage === 'produce' }) : [];
 
@@ -1457,7 +1453,7 @@ export default function MusicVideo() {
             spend={projectSpend(selected)}
             status={projectStatus}
             notes={stepNotes(selected, productionReview.readiness, publish)}
-            autopilot={autopilotButton(projectStatus)}
+            autopilot={autopilotStatus(selected)}
             onOpenSettings={setSettingsTab}
             attention={(
               <NeedsAttentionBanner
@@ -1499,7 +1495,6 @@ export default function MusicVideo() {
                 project={selected}
                 review={productionReview}
                 onOpenArtifact={openArtifact}
-                framed={false}
                 stage={APPROVAL_STAGE_BY_TAB[activeStage]}
                 planning={planningDraft}
                 onNavigate={goToStage}

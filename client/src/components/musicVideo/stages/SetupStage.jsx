@@ -8,9 +8,9 @@ import { Check } from 'lucide-react';
 import { lyricSetupState, projectHasAudio } from '../../../lib/musicVideoStages.js';
 
 /** One numbered step of Song & lyrics, with a done state beside its title. */
-function SongStep({ number, title, done, children }) {
+function SongStep({ id, number, title, done, children }) {
   return (
-    <section aria-label={`Step ${number}: ${title}`} className="min-w-0 space-y-2 rounded-lg border border-port-border p-2">
+    <section id={id} aria-label={`Step ${number}: ${title}`} className="min-w-0 space-y-2 rounded-lg border border-port-border p-2">
       <h3 className="flex items-center gap-2 text-sm font-medium">
         <span aria-hidden="true" className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs ${done ? 'bg-port-success text-white' : 'bg-port-border text-port-text-muted'}`}>
           {done ? <Check size={12} /> : number}
@@ -80,7 +80,7 @@ export default function SetupStage({ board }) {
             onChangeTrack={board.onChangeTrack}
           />
         </SongStep>
-        <SongStep number={2} title="Analyze" done={Boolean(project.audioAnalysis)}>
+        <SongStep id="mv-analyze" number={2} title="Analyze" done={Boolean(project.audioAnalysis)}>
           <AnalyzeAction project={project} busy={busy} onAnalyze={board.onAnalyze} />
           <AnalysisPanel
             audioAnalysis={project.audioAnalysis}

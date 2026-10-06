@@ -11,7 +11,7 @@ import DevArtifactsPanel from './DevArtifactsPanel.jsx';
 import HandoffControls from './HandoffControls.jsx';
 import MakingOfExportPanel from './MakingOfExportPanel.jsx';
 
-export const SETTINGS_TABS = [
+const SETTINGS_TABS = [
   { id: 'project', label: 'Project', icon: SlidersHorizontal },
   { id: 'audio', label: 'Audio', icon: Music },
   { id: 'autopilot', label: 'Autopilot', icon: Bot },
