@@ -106,6 +106,13 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
     if (!evidenceComplete) return 'Complete the machine review notes (40+ characters each, plus limitations).';
     return null;
   };
+  // The problems listed under the help line: all of them, less the first when the help line is showing it
+  // (it isn't while edits are unsaved or an action is running). A proof with nothing rendered lists none.
+  const listedProblems = stage => {
+    if (!ready || ready[stage].approved || (stage === 'proof' && proofNeedsRender)) return [];
+    const problems = ready[stage].problems || [];
+    return dirty || review.busy ? problems : problems.slice(1);
+  };
   // A link to another step's section crosses steps through the page; within this step it just unfolds the target.
   const jump = (tab, anchor) => event => {
     if (onNavigate && tab !== STAGE_TABS[stage]) { event.preventDefault(); onNavigate(tab, anchor); return; }
@@ -231,7 +238,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         }}>Request changes</button>
         </div>
         {approvalHelp(key) && <p id={fieldId(`${key}-approval-help`)} role="status" className="mt-1 text-sm text-port-warning">{approvalHelp(key)}</p>}
-        {approvalHelp(key) && (ready?.[key].problems || []).length > 1 && <ul className="mt-1 list-disc pl-5 text-xs text-port-text-muted">{ready[key].problems.slice(1).map(problem => <li key={problem}>{problem}</li>)}</ul>}
+        {listedProblems(key).length > 0 && <ul className="mt-1 list-disc pl-5 text-xs text-port-text-muted">{listedProblems(key).map(problem => <li key={problem}>{problem}</li>)}</ul>}
         {key === 'proof' ? proofContent : <ProductionReviewContext stage={key} project={project} onOpenArtifact={onOpenArtifact} onArtReady={available => setVisibleArt(available ? artIdentity : null)} onSeek={onSeek} />}
         {openRequests(key).length > 0 && <div role="group" aria-label={`${label} change requests`} className="mt-2 space-y-2 rounded border border-port-warning p-2">
           <p className="text-sm">Resolve these change requests to approve.</p>

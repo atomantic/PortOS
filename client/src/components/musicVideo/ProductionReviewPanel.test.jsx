@@ -314,6 +314,31 @@ describe('Production proof playback evidence', () => {
   });
 });
 
+describe('Approval problems with unsaved edits', () => {
+  it.each([
+    [['Cover the master with timed shots.']],
+    [['Cover the master with timed shots.', 'Resolve storyboard feedback for shot: chorus: hold longer']],
+  ])('lists every storyboard problem while planning edits are unsaved (%j)', (problems) => {
+    const review = reviewFixture();
+    review.readiness.storyboard = { approved: false, problems };
+    function Board() {
+      const planning = useState({ ...project.productionReview.draft, cast: 'Edited cast' });
+      return <ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="storyboard" planning={planning} />;
+    }
+    render(<Board />);
+    expect(screen.getByText('Save your planning edits first.')).toBeTruthy();
+    for (const problem of problems) expect(screen.getByText(problem)).toBeTruthy();
+  });
+
+  it('shows the first problem once, on the help line, when nothing is unsaved', () => {
+    const review = reviewFixture();
+    review.readiness.storyboard = { approved: false, problems: ['Cover the master with timed shots.', 'Second problem.'] };
+    render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
+    expect(screen.getAllByText(/Cover the master with timed shots\./)).toHaveLength(1);
+    expect(screen.getByText('Second problem.')).toBeTruthy();
+  });
+});
+
 describe('Lyric timing lives on the Song step', () => {
   it('leaves song content and timing verification out of the storyboard planning editor', () => {
     const review = reviewFixture();
