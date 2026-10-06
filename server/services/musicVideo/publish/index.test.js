@@ -210,6 +210,14 @@ describe('publish drafts (#9282)', () => {
     expect(payload.cover.name).toMatch(/^publish-cover-distrokid-/);
     expect(runFfmpegProcess.mock.calls[0][0].args.join(' ')).toContain('scale=3000:3000');
     expect(resolveAudio.mock.calls[0][0]).toMatchObject({ id, uploadedAudioFilename: 'song.wav' });
+
+    // Composed cover art is already store size: it goes up as is, with no ffmpeg cut.
+    await writeFile(join(PATHS.videoThumbnails, 'cover-example.jpg'), 'x');
+    await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, publishKit: { ...current.publishKit, coverArt: { filename: 'cover-example.jpg' } } } }));
+    runFfmpegProcess.mockClear();
+    await preparePublishDraft(id, 'distrokid', options, { connect, adapters, platforms: dk, resolveAudio, findFfmpeg: async () => null, runFfmpegProcess });
+    expect(adapters.distrokid.prepare.mock.calls.at(-1)[1].cover).toMatchObject({ name: 'cover-example.jpg', path: join(PATHS.videoThumbnails, 'cover-example.jpg') });
+    expect(runFfmpegProcess).not.toHaveBeenCalled();
   });
 
   it('refuses a DistroKid draft whose song is unset or gone, in publishing terms, before opening a tab', async () => {

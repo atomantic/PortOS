@@ -139,7 +139,7 @@ async function fail(projectId, reason, error = null) {
  * then the brief's other queueable image tools in catalog order, then the
  * install's Music Video render default. Returns `{ mode, model }` or null.
  */
-async function chooseCastAndSetsRoute(project, { preferred = null, settings } = {}) {
+export async function chooseCastAndSetsRoute(project, { preferred = null, settings } = {}) {
   if (deps.resolveRoute) return deps.resolveRoute(project, { preferred, settings });
   const { resolveRenderTargetConfig } = await import('../imageGen/cloudProviderConfig.js');
   // A mode is usable when it rides the queue and, for a cloud backend, its
@@ -259,7 +259,7 @@ function referencePaths(stage, item) {
 }
 
 /** Job params for one image on the stage's route (cloud provider bag or the local model). */
-async function imageJobParams(settings, route, common) {
+export async function imageJobParams(settings, route, common) {
   const [{ resolveRenderTargetConfig }, { resolveImageCleaners }, { resolveLocalImageModel }] = await Promise.all([
     import('../imageGen/cloudProviderConfig.js'),
     import('../imageGen/index.js'),

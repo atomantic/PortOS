@@ -3,6 +3,7 @@ import { Package, Download, Copy, Sparkles, Image as ImageIcon, Captions, ListOr
 import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import { copyToClipboard } from '../../lib/clipboard.js';
+import CoverArtPanel from './CoverArtPanel.jsx';
 
 const fmtTime = (sec) => {
   const s = Math.max(0, Math.floor(sec));
@@ -160,6 +161,8 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
           </div>
         )}
       </section>
+
+      <CoverArtPanel key={project?.id} project={project} publishKit={publishKit} />
 
       <section aria-label="Release copy" className="rounded-lg border border-port-border bg-port-card p-3 space-y-2 text-xs">
         <h3 className="text-sm font-medium flex items-center gap-1.5"><Sparkles size={14} /> Release copy</h3>

@@ -61,4 +61,7 @@ import { EventEmitter } from 'events';
 //   'publish-draft' → { projectId, draftId, target, state } — a publish draft's
 //     tab was filled ('open'), closed by hand ('closed') or discarded; bridged
 //     to `music-video:publish-draft`.
+//   'cover-art'     → { projectId, project } — the release cover art was
+//     composed, or a cover source image was queued, landed or failed; bridged
+//     to `music-video:cover-art`.
 export const musicVideoEvents = new EventEmitter();

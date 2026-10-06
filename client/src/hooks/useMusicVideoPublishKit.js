@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
+import socket from '../services/socket';
 import {
   getMusicVideoProject,
   buildMusicVideoPublishKit,
@@ -8,6 +9,8 @@ import {
   draftMusicVideoPublishCopy,
   updateMusicVideoPublishCopy,
   selectMusicVideoPublishThumbnail,
+  composeMusicVideoCoverArt,
+  generateMusicVideoCoverArt,
 } from '../services/apiMusicVideo.js';
 import useSseJobSlot from './useSseJobSlot.js';
 
@@ -16,13 +19,15 @@ const readPercent = (frame) => (Number.isFinite(frame.progress) ? frame.progress
 /**
  * Music Video publishing kit (#9281): the build is a `useSseJobSlot` job whose
  * terminal frame reloads the project it was started for (the kit lives on the
- * server record); the copy draft, copy edits and thumbnail choice each return
- * the whole project and apply it with `replaceProject`.
+ * server record); the copy draft, copy edits, thumbnail choice and cover art
+ * each return the whole project and apply it with `replaceProject`. A cover
+ * image made by a backend lands later, over `music-video:cover-art`.
  */
 export default function useMusicVideoPublishKit({ project, replaceProject } = {}) {
   const projectId = project?.id || null;
   const [drafting, setDrafting] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [composing, setComposing] = useState(false);
 
   const reload = (id) => {
     if (!id) return;
@@ -61,6 +66,14 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
     if (job.attach(runningJobId, projectId)) attachedJobs.current.add(runningJobId);
   }, [runningJobId, projectId]);
 
+  useEffect(() => {
+    if (!projectId) return undefined;
+    const onCover = (e) => { if (e?.projectId === projectId && e.project) replaceProject(e.project); };
+    socket.on('music-video:cover-art', onCover);
+    return () => { socket.off('music-video:cover-art', onCover); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
   const apply = (res) => { if (res?.project) replaceProject(res.project); return res?.project || null; };
 
   const draftCopy = (body) => {
@@ -78,6 +91,14 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
       .finally(() => setSaving(false));
   };
   const selectThumbnail = (filename) => selectMusicVideoPublishThumbnail(projectId, filename).then(apply).catch(() => null);
+  const composeCover = (body) => {
+    setComposing(true);
+    return composeMusicVideoCoverArt(projectId, body)
+      .then(apply)
+      .catch(() => null)
+      .finally(() => setComposing(false));
+  };
+  const generateCover = (body) => generateMusicVideoCoverArt(projectId, body).then(apply).catch(() => null);
 
   return {
     building: job.active,
@@ -89,5 +110,8 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
     draftCopy,
     saveCopy,
     selectThumbnail,
+    composing,
+    composeCover,
+    generateCover,
   };
 }

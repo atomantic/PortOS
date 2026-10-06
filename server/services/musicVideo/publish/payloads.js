@@ -77,6 +77,13 @@ function youtubeDescription(kit) {
 // A typed "@" on Instagram opens the mention picker, which swallows the next word.
 const instagramSafe = (caption) => caption.replace(/@(\w)/g, '$1');
 
+// The release cover: the composed cover art when there is one (already square,
+// with the title set), else the kit's thumbnail (cut square at post time).
+const releaseCover = (kit) => {
+  if (kit.coverArt?.filename) return { dir: 'videoThumbnails', name: kit.coverArt.filename, square: true };
+  return kit.thumbnail ? { dir: 'videoThumbnails', name: kit.thumbnail } : null;
+};
+
 const BUILDERS = {
   youtube: (project, kit) => {
     if (!kit.master?.filename) throw missing('Build the publishing kit first — it names the final render to upload');
@@ -162,10 +169,10 @@ const BUILDERS = {
     const video = fullVideoUrl(kit);
     const lead = text(kit.copy?.youtube?.description).split(/\n\s*\n/)[0] || '';
     const caption = [lead, video ? `Music video: ${video}` : ''].filter(Boolean).join(' ').slice(0, 500);
-    return { songUrl: song, caption, cover: kit.thumbnail ? { dir: 'videoThumbnails', name: kit.thumbnail } : null, pin: options.pin !== false };
+    return { songUrl: song, caption, cover: releaseCover(kit), pin: options.pin !== false };
   },
   // The song as a single for Spotify and the other stores. The service adds the
-  // project's source audio; the cover is cut square from the kit's thumbnail.
+  // project's source audio; the cover is the kit's cover art, else its thumbnail cut square.
   distrokid: (project, kit, options = {}) => {
     const title = text(project?.name);
     if (!title) throw missing('Name the project first: it is the song title on Spotify');
@@ -173,7 +180,8 @@ const BUILDERS = {
     if (!artist) throw missing('Give the artist name the song is released under (or set it as the DistroKid account under Where you post)');
     const songwriter = { first: text(options.songwriterFirst), last: text(options.songwriterLast) };
     if (!songwriter.first || !songwriter.last) throw missing("DistroKid needs the songwriter's real first and last name");
-    if (!kit.thumbnail) throw missing('Pick a thumbnail in the publishing kit first: it becomes the cover art');
+    const cover = releaseCover(kit);
+    if (!cover) throw missing('Make the cover art in the publishing kit first (or pick a thumbnail)');
     const releaseDate = text(options.releaseDate);
     if (releaseDate && !/^\d{4}-\d{2}-\d{2}$/.test(releaseDate)) throw missing('Give the release date as YYYY-MM-DD');
     const hasLyrics = (project?.lyricCues || []).some((cue) => text(cue?.text));
@@ -182,7 +190,7 @@ const BUILDERS = {
       explicit: options.explicit === true,
       instrumental: typeof options.instrumental === 'boolean' ? options.instrumental : !hasLyrics,
       ai: { lyrics: options.aiLyrics === true, music: options.aiMusic !== false, vocals: options.aiVocals !== false },
-      cover: { dir: 'videoThumbnails', name: kit.thumbnail },
+      cover,
     };
   },
 };

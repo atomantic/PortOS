@@ -105,6 +105,8 @@ async function withCovers(target, payload, deps) {
   if (target !== 'tiktok' && !SQUARE_COVER_PX[target]) return payload;
   const source = target === 'tiktok' ? payload.video?.path : payload.cover?.path;
   if (!source) return payload;
+  // Composed cover art is already a store-size square.
+  if (target === 'distrokid' && payload.cover?.square) return payload;
   const { findFfmpeg, runFfmpegProcess } = await import('../../../lib/ffmpeg.js');
   // A store rejects a non-square cover, so DistroKid gets no draft rather than the 16:9 frame.
   const uncut = () => {

@@ -136,5 +136,10 @@ describe('buildPublishPayload (#9282)', () => {
     });
     expect(buildPublishPayload('distrokid', song({ lyricCues: [] }), { ...who, aiLyrics: true, releaseDate: '2026-11-06' }))
       .toMatchObject({ instrumental: true, releaseDate: '2026-11-06', ai: { lyrics: true } });
+    // The composed cover art wins over the thumbnail, for DistroKid and Suno alike.
+    const withCover = song({ publishKit: kit({ coverArt: { filename: 'cover-1.jpg' } }) });
+    expect(buildPublishPayload('distrokid', withCover, who).cover).toEqual({ dir: 'videoThumbnails', name: 'cover-1.jpg', square: true });
+    expect(buildPublishPayload('distrokid', { ...withCover, publishKit: kit({ thumbnail: null, coverArt: { filename: 'cover-1.jpg' } }) }, who).cover.name).toBe('cover-1.jpg');
+    expect(buildPublishPayload('suno', withCover, { songUrl: 'https://suno.com/song/example' }).cover.name).toBe('cover-1.jpg');
   });
 });

@@ -15,7 +15,8 @@ import PublishKitPanel from './PublishKitPanel.jsx';
 
 const hook = (over = {}) => ({
   building: false, progress: 0, build: vi.fn(), drafting: false, saving: false,
-  draftCopy: vi.fn(async () => null), saveCopy: vi.fn(async () => null), selectThumbnail: vi.fn(async () => null), ...over,
+  draftCopy: vi.fn(async () => null), saveCopy: vi.fn(async () => null), selectThumbnail: vi.fn(async () => null),
+  composing: false, composeCover: vi.fn(async () => null), generateCover: vi.fn(async () => null), ...over,
 });
 const built = {
   builtAt: '2026-01-01T00:00:00.000Z', master: { filename: 'master.mp4' },
@@ -56,5 +57,27 @@ describe('PublishKitPanel (#9281)', () => {
     expect(k.saveCopy).toHaveBeenCalledWith({ youtube: { tags: ['music', 'ai video', 'claude'] } });
     fireEvent.click(screen.getByRole('button', { name: 'Use thumbnail t2.jpg' }));
     expect(k.selectThumbnail).toHaveBeenCalledWith('t2.jpg');
+  });
+
+  it('makes the cover art from a project image with the title, and asks Codex for a new one', () => {
+    const k = hook();
+    const project = { id: 'mv-1', name: 'Example Song', publishKit: built, castAndSets: { images: { character: { imageId: 'sheet.png' } } } };
+    const { rerender } = render(<PublishKitPanel project={project} publishKit={k} />);
+    expect(screen.getByText('No cover yet')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Title on the cover'), { target: { value: 'Example Retitle' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Make the cover from Cast & Sets: character' }));
+    expect(k.composeCover).toHaveBeenCalledWith({ source: { kind: 'image', filename: 'sheet.png' }, title: 'Example Retitle', focusX: 0.5 });
+    fireEvent.click(screen.getByRole('button', { name: 'Make the cover from Video frame 1' }));
+    expect(k.composeCover).toHaveBeenLastCalledWith(expect.objectContaining({ source: { kind: 'thumbnail', filename: 't1.jpg' } }));
+
+    fireEvent.change(screen.getByLabelText(/Make a new cover image/), { target: { value: 'profile under flash' } });
+    fireEvent.click(screen.getByRole('button', { name: /Make with Codex/ }));
+    expect(k.generateCover).toHaveBeenCalledWith({ notes: 'profile under flash' });
+
+    const art = { filename: 'cover-1.jpg', title: 'Example Song', tag: 'Example Artist', source: { kind: 'image', filename: 'sheet.png' }, pending: { mode: 'codex' } };
+    rerender(<PublishKitPanel project={{ ...project, publishKit: { ...built, coverArt: art } }} publishKit={k} />);
+    expect(screen.getByAltText('Cover art for Example Song')).toBeTruthy();
+    expect(screen.getByText(/Making a cover image on codex/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Making/ })).toBeDisabled();
   });
 });

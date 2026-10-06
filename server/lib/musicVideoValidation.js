@@ -686,6 +686,20 @@ export const musicVideoPublishCopyDraftSchema = z.object({
 }).strict();
 export const musicVideoPublishThumbnailSchema = z.object({ filename: z.string().min(1).max(300) }).strict();
 
+// Release cover art: a source (a kit thumbnail or a gallery image) composed
+// with the title and artist tag, or a fresh source image from a backend.
+const coverArtSourceSchema = z.object({ kind: z.enum(['thumbnail', 'image']), filename: z.string().min(1).max(300) }).strict();
+export const musicVideoCoverArtComposeSchema = z.object({
+  source: coverArtSourceSchema.optional(),
+  title: z.string().max(60).optional(),
+  tag: z.string().max(24).optional(),
+  focusX: z.number().min(0).max(1).optional(),
+}).strict();
+export const musicVideoCoverArtGenerateSchema = z.object({
+  notes: z.string().max(1500).optional(),
+  reference: z.object({ kind: z.literal('image'), filename: z.string().min(1).max(300) }).strict().optional(),
+}).strict();
+
 // #9282: posting to a platform through the PortOS Browser. One strict options
 // object covers every target; each target's payload builder reads only its own.
 export const MUSIC_VIDEO_PUBLISH_TARGETS = Object.freeze(['youtube', 'shorts', 'tiktok', 'instagram', 'x', 'reddit', 'stackerNews', 'suno', 'distrokid']);
