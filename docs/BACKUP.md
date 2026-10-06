@@ -7,7 +7,7 @@ PortOS backs up two things together, into a single timestamped snapshot:
 
 ### Consistency while assets are changing
 
-The backup service closes a process-local publication boundary before copying
+The backup service closes a shared cross-process publication boundary before copying
 `data/`, drains music-track take publications already in progress, and keeps
 new take publications waiting through the SQL dump and manifest write. Browser
 code takes, SuperCollider takes, chiptune renders, and painted-waveform renders
@@ -15,7 +15,9 @@ stage encoding outside that boundary, then publish their final audio bytes and
 track row together inside it. Manual and scheduled backups use the same cut.
 If an admitted take does not drain within two minutes, or the cut cannot be
 released, the snapshot is marked failed (never published or used for retention
-pruning) and take publication reopens.
+pruning). A normal drain timeout releases its own cut; an unreadable or interrupted
+owner remains blocked until its data is reconciled. The protocol and deliberate
+recovery procedure are documented in [Shared publication admission](./BACKUP_PUBLICATION_ADMISSION.md).
 
 **Media-job completion (#9981).** A render's completion holds the same admission
 from staging its terminal queue row (`media-jobs.json`) through the `completed`
@@ -53,8 +55,9 @@ stops PM2 to obtain it:
   operation reopens everything; nothing stays held.
 - Every release is owner-scoped: a failed or cancelled operation releases only the
   cut it acquired and leaves the maintenance journal and restore-recovery
-  incomplete guards exactly as they were. The boundary is process-local; the
-  detached cutover worker runs only after the server stops.
+  incomplete guards exactly as they were. Durable ownership coordinates the
+  server and CoS runner sharing this install. Both processes must run the updated
+  protocol; the detached cutover worker still runs only after the server stops.
 
 Admission inventory (`withBackupAssetPublication`):
 
