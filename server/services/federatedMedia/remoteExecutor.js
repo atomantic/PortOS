@@ -437,9 +437,8 @@ export function createRemoteMediaExecutor({
             code: 'MEDIA_PROVIDER_RESULT_INTEGRITY_FAILED',
           });
         }
-        // POSIX rename replaces an existing file atomically. Do not unlink the
-        // destination first: consumers should never observe a missing final path
-        // between integrity verification and promotion.
+        // Promotion waits for the adapter's publication boundary. The verified
+        // staging file is never named by a history record.
         verified = true;
         return { filename, dir, path: finalPath, stagedPath: partialPath };
       } finally {
@@ -486,20 +485,21 @@ export function createRemoteMediaExecutor({
     let local;
     try {
       local = await publishResult(async () => {
+        // Atomic installation preserves an existing path until its replacement lands.
         if (downloaded.stagedPath) await rename(downloaded.stagedPath, downloaded.path);
         return finalize({
-      jobId: state.jobId,
-      peerId: state.peerId,
-      request,
-      remoteJob: completed,
-      // Wall-clock render timing (#5878). Measured from THIS install's
-      // ingestion of the job — submission, the peer's own queue wait and
-      // render, download, verification — because that whole span is what the
-      // user waited through here. The peer's internal render time is not on
-      // the wire, and asking for it would be a status payload crossing the
-      // federation boundary.
-      renderStartedAtMs: state.renderStartedAtMs,
-      ...downloaded,
+          jobId: state.jobId,
+          peerId: state.peerId,
+          request,
+          remoteJob: completed,
+          // Wall-clock render timing (#5878). Measured from THIS install's
+          // ingestion of the job — submission, the peer's own queue wait and
+          // render, download, verification — because that whole span is what the
+          // user waited through here. The peer's internal render time is not on
+          // the wire, and asking for it would be a status payload crossing the
+          // federation boundary.
+          renderStartedAtMs: state.renderStartedAtMs,
+          ...downloaded,
         });
       }, { ...downloaded, jobId: state.jobId });
     } finally {
