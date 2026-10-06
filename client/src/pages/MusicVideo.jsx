@@ -98,6 +98,13 @@ const emptyCreateForm = () => ({
   name: '', mode: 'autonomous', trackId: '', universeId: '', moodBoardId: '', automation: automationDraftFrom(null),
 });
 
+// Format project label for the header dropdown: omit trailing media type parentheticals
+// like "(experimental, images)" or "(revision)" so the title remains clean.
+function formatProjectPickerLabel(name) {
+  if (typeof name !== 'string') return '';
+  return name.replace(/\s*\([^)]*\)$/, '').trim();
+}
+
 // Why the autopilot kickoff can't run yet, or null when it can.
 function autopilotBlocker(project) {
   if (!project) return null;
@@ -1227,13 +1234,13 @@ export default function MusicVideo() {
             >
               <option value="">{loading ? 'Loading projects…' : 'Select a project…'}</option>
               {sortedProjects.map((project) => (
-                <option key={project.id} value={project.id}>{project.name}</option>
+                <option key={project.id} value={project.id}>{formatProjectPickerLabel(project.name)}</option>
               ))}
             </select>
             {selected && (
               <details className="min-w-0">
                 <summary className="min-h-[44px] cursor-pointer rounded border border-port-border px-2 py-1.5 text-sm">Project actions · v{selected.version || 1}</summary>
-                <div className="flex flex-wrap items-center gap-1 py-2">
+                <div className="flex flex-wrap items-center gap-1 pt-1.5 pb-0">
                 <button
                   type="button"
                   onClick={handleRename}

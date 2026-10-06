@@ -1362,6 +1362,25 @@ describe('MusicVideo project versions', () => {
     await screen.findByRole('heading', { level: 2, name: 'Neon Run v2' });
     expect(screen.getByText('Project actions · v2')).toBeTruthy();
   });
+
+  it('omits media type parenthetical in the project picker options and compacts actions padding', async () => {
+    const parentheticalProject = {
+      ...PROJECT_WITH_CLIP,
+      id: 'mv-exp',
+      name: 'You Are the Room - Blueprint v7 (experimental, images)',
+    };
+    await openProject(parentheticalProject);
+
+    const picker = await screen.findByLabelText('Project');
+    const option = Array.from(picker.options).find((opt) => opt.value === 'mv-exp');
+    expect(option).toBeDefined();
+    expect(option?.textContent).toBe('You Are the Room - Blueprint v7');
+
+    const actionsSummary = screen.getByText(/^Project actions ·/);
+    const actionsContent = actionsSummary.parentElement?.querySelector('div');
+    expect(actionsContent).toHaveClass('pt-1.5');
+    expect(actionsContent).toHaveClass('pb-0');
+  });
 });
 
 describe('MusicVideo audio preview + download', () => {
