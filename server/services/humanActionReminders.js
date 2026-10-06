@@ -60,14 +60,24 @@ async function fireHumanActionReminder(threadId, deps = {}) {
   // rather than dropping the reminder until the next unrelated write.
   if (notYet) (deps.requeue || queueReconcile)();
   if (!reminded) return false;
-  await notify({
+  const sent = await notify({
     type: NOTIFICATION_TYPES.ACTION_DUE,
     title: `Time to: ${reminded.title}`,
     description: reminded.nextAction || 'Open the step for its instructions.',
     priority: ['high', 'urgent'].includes(reminded.priority) ? 'high' : 'medium',
     link: threadLink(threadId),
     metadata: { threadId, dueAt: reminded.dueAt },
+  }).then(() => true, (err) => {
+    console.error(`❌ Human action notification failed for ${threadId}: ${err.message}`);
+    return false;
   });
+  if (!sent) {
+    // Un-stamp so the retry (and the next boot) can deliver it.
+    await storage.updateWith('threads', threadId, (fresh) => (
+      fresh.remindedFor === reminded.dueAt ? { remindedFor: null } : null
+    ));
+    return false;
+  }
   console.log(`⏰ Human action due: ${reminded.title}`);
   return true;
 }

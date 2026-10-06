@@ -21,6 +21,13 @@ const plan = humanActionPlanSchema.parse({
 });
 
 describe('humanActionPlanSchema', () => {
+  it('rejects a step whose rendered notes exceed the thread notes cap instead of truncating', () => {
+    const big = { ...plan, steps: [{ ...plan.steps[0], content: Array.from({ length: 5 }, (_, i) => ({ label: `L${i}`, text: 'x'.repeat(5000) })) }] };
+    const result = humanActionPlanSchema.safeParse(big);
+    expect(result.success).toBe(false);
+    expect(result.error.issues[0].path).toEqual(['steps', 0]);
+  });
+
   it('refuses a due time without an offset, so a local time is never read as UTC', () => {
     const bad = { ...plan, steps: [{ ...plan.steps[0], dueAt: '2026-10-07T10:00:00' }] };
     expect(humanActionPlanSchema.safeParse(bad).success).toBe(false);

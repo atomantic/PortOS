@@ -55,6 +55,16 @@ const depsFor = (storage) => ({
 describe('human action reminders', () => {
   beforeEach(() => stopHumanActionReminders());
 
+  it('un-stamps a step whose notification failed so a retry can deliver it', async () => {
+    const storage = fakeStore([step({ dueAt: '2026-10-06T17:59:00.000Z' })]);
+    const deps = depsFor(storage);
+    deps.addNotification.mockRejectedValueOnce(new Error('disk full'));
+    expect(await fireHumanActionReminder('step-1', deps)).toBe(false);
+    expect(storage.byId.get('step-1').remindedFor).toBeNull();
+    expect(await fireHumanActionReminder('step-1', deps)).toBe(true);
+    expect(deps.addNotification).toHaveBeenCalledTimes(2);
+  });
+
   it('arms future steps, catches up a due one once, and skips steps another machine created', async () => {
     const storage = fakeStore([
       step(),
