@@ -1121,7 +1121,7 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     expect(reviews()).toEqual(['lyrics:revise', 'lyrics:approve', 'style:revise', 'style:approve', 'song:approve']);
   });
 
-  it('clears art, lyric timing and storyboard like a director, then logs its look at the final video', async () => {
+  it('clears art, lyric timing and storyboard like a director, then re-authors the sections it flags in the final video', async () => {
     creativeReview.real = true;
     const actual = await vi.importActual('./productionReview.js');
     doubles.approveProductionReview = stub('approve', async (id, input) => {
@@ -1186,10 +1186,50 @@ describe('orchestrated mode (brief.orchestrator)', () => {
       storyboard: { approvedBy: 'orchestrator' } });
     expect(project.productionReview.alignmentReview.reviewer).toMatchObject({ kind: 'orchestrator', runId: runOf().id });
 
+    // The flagged second goes back as a change request on the film, the document is
+    // re-authored with it open, and the film is rendered and watched again.
+    doubles.renderVideo.mockResolvedValueOnce({ jobId: 'render-2' });
+    doubles.activeRenderJobId.mockResolvedValue('render-2');
     await service.__testing.onRenderEvent({ projectId: 'mv-auto', jobId: 'render-1', status: 'completed' });
+    await vi.waitFor(() => expect(runOf().output.renderJobId).toBe('render-2'));
+    expect(doubles.generateDocument).toHaveBeenCalledTimes(2);
+    expect(store.get('mv-auto').productionReview.feedback.at(-1)).toMatchObject({ stage: 'proof', target: 'final@0:18', text: 'Static hold',
+      resolution: 'Re-authored by the orchestrator.', resolvedAt: expect.any(String) });
+    await service.__testing.onRenderEvent({ projectId: 'mv-auto', jobId: 'render-2', status: 'completed' });
     await settled('completed');
-    expect(reviews()).toEqual(['lyrics:approve', 'style:approve', 'song:approve', 'art:revise', 'art:approve', 'alignment:approve', 'storyboard:revise', 'storyboard:approve', 'final:noted']);
-    expect(runOf().orchestration.reviews.at(-1)).toMatchObject({ issues: [{ atSec: 18, text: 'Static hold' }], notes: expect.stringContaining('Judged without frames') });
-    expect(doubles.finalReviewFrames).toHaveBeenCalledWith('render-1');
+    expect(reviews()).toEqual(['lyrics:approve', 'style:approve', 'song:approve', 'art:revise', 'art:approve', 'alignment:approve', 'storyboard:revise', 'storyboard:approve', 'final:revise', 'final:approve']);
+    expect(runOf().orchestration.reviews.at(-2)).toMatchObject({ issues: [{ atSec: 18, text: 'Static hold' }], notes: expect.stringContaining('Judged without frames') });
+    expect(doubles.finalReviewFrames.mock.calls.map(([jobId]) => jobId)).toEqual(['render-1', 'render-2']);
+  });
+
+  it('sends flagged footage back through an auto-review it judges, within the generations production left, then stops at the limit', async () => {
+    doubles.startAutoReview = stub('auto-review', async () => ({ run: { id: 'mvar-fix' } }));
+    service.__setAutonomousDepsForTests(doubles);
+    doubles.analyzeSong.mockImplementation(async () => {
+      Object.assign(store.get('mv-auto'), { scenes: [{ sceneId: 'a', startSec: 0, endSec: 10 }, { sceneId: 'b', startSec: 10, endSec: 20 }] });
+    });
+    answers.final = [
+      { verdict: 'revise', notes: 'The opening stutters.', issues: [{ atSec: 4, text: 'Frozen frame' }] },
+      { verdict: 'revise', notes: 'Still soft.', issues: [{ atSec: 12, text: 'Blurry' }] },
+    ];
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], limits: { maxReviewAttempts: 1 }, orchestrator: ORCHESTRATOR }, { autoApproveAuthorized: true });
+    await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
+    store.get('mv-auto').productionRuns = [{ id: 'mvpr-1', limits: { maxGenerations: 40, spendCapUsd: null }, usage: { generations: 10 } }];
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'completed' } });
+    await service.__testing.onRenderEvent({ projectId: 'mv-auto', jobId: 'render-1', status: 'completed' });
+    await vi.waitFor(() => expect(runOf().output.finalAutoReviewId).toBe('mvar-fix'));
+    expect(doubles.startAutoReview).toHaveBeenCalledWith('mv-auto', { startSec: 0, endSec: 10, limits: { maxAttempts: 2, maxGenerations: 30 },
+      reviewer: { providerId: 'orch', model: 'judge' } });
+    expect(runOf()).toMatchObject({ status: 'running', stages: { produce: { step: 'final-revision' } } });
+
+    doubles.renderVideo.mockResolvedValueOnce({ jobId: 'render-2' });
+    doubles.activeRenderJobId.mockResolvedValue('render-2');
+    musicVideoEvents.emit('auto-review', { projectId: 'mv-auto', runId: 'mvar-fix', run: { id: 'mvar-fix', status: 'passed' } });
+    await vi.waitFor(() => expect(runOf().output.renderJobId).toBe('render-2'));
+    await service.__testing.onRenderEvent({ projectId: 'mv-auto', jobId: 'render-2', status: 'completed' });
+    await settled('completed');
+    expect(doubles.startAutoReview).toHaveBeenCalledOnce();
+    expect(reviews().slice(-2)).toEqual(['final:revise', 'final:noted']);
+    expect(runOf().orchestration.reviews.at(-1).notes).toMatch(/Revision limit reached/);
   });
 });
