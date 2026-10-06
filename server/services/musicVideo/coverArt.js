@@ -13,6 +13,7 @@
  * Nothing here runs without a director action (AI Provider Usage Policy).
  *
  *   coverArt: { filename, source: { kind, filename }, title, tag, focusX,
+ *               lettering (false = a finished cover, used bare),
  *               design, imagePrompt, rationale, direction, designedAt,
  *               composedAt, generated: [galleryFilename…],
  *               pending: { requestId, jobId, mode, requestedAt } | null,
@@ -112,9 +113,10 @@ async function defaultTag() {
 /**
  * Compose the cover from `source` with the title and tag, and make it the
  * release's cover. Unset fields keep the last cover's (title defaults to the
- * project name, tag to the DistroKid artist).
+ * project name, tag to the DistroKid artist). `lettering: false` uses the
+ * image as a finished cover: squared and sized, with nothing set on it.
  */
-export async function composeProjectCoverArt(projectId, { source = null, title, tag, focusX } = {}) {
+export async function composeProjectCoverArt(projectId, { source = null, title, tag, focusX, lettering } = {}) {
   const project = await requireProject(projectId);
   const art = projectCoverArt(project);
   const from = source || art.source;
@@ -122,11 +124,12 @@ export async function composeProjectCoverArt(projectId, { source = null, title, 
   const path = sourcePath(project, from);
   const next = {
     source: { kind: from.kind, filename: basename(from.filename) },
-    title: typeof title === 'string' ? title.trim() : (art.title ?? project.name ?? ''),
+    title: typeof title === 'string' ? title.trim() : (art.title || project.name || ''),
     tag: typeof tag === 'string' ? tag.trim() : (art.tag ?? await defaultTag()),
     focusX: Number.isFinite(focusX) ? focusX : (Number.isFinite(art.focusX) ? art.focusX : 0.5),
+    lettering: typeof lettering === 'boolean' ? lettering : art.lettering !== false,
   };
-  if (!next.title) throw coverError(422, 'VALIDATION_ERROR', 'Give the cover a title');
+  if (next.lettering && !next.title) throw coverError(422, 'VALIDATION_ERROR', 'Give the cover a title');
   await ensureDir(PATHS.videoThumbnails);
   const filename = `cover-${String(projectId).slice(3, 11)}-${randomUUID().slice(0, 8)}.jpg`;
   await deps.compose({ ...next, design: art.design || null, source: path, out: safeUnder(PATHS.videoThumbnails, filename) });
@@ -166,7 +169,8 @@ export async function designCoverArt(projectId, { direction = '', providerId = n
     lastError: null,
   }));
   console.log(`🖼️ Music Video cover art ${String(projectId).slice(3, 11)}: design ${previous ? 'adjusted' : 'drafted'} (${drafted.design.layout}, ${drafted.design.typeface})`);
-  if (art.source) return composeProjectCoverArt(projectId);
+  // Restyling the lettering puts it back on a cover that was used bare.
+  if (art.source) return composeProjectCoverArt(projectId, { lettering: true });
   publish(projectId, out.project);
   return { project: out.project };
 }
@@ -284,7 +288,7 @@ export async function onCoverArtImageSettled({ projectId, requestId, filename = 
     ...(current ? { pending: null } : {}),
   }));
   if (!current) { publish(projectId, out.project); return true; }
-  await composeProjectCoverArt(projectId, { source: { kind: 'image', filename } }).catch(async (err) => {
+  await composeProjectCoverArt(projectId, { source: { kind: 'image', filename }, lettering: true }).catch(async (err) => {
     console.error(`❌ Music Video cover art ${String(projectId).slice(3, 11)} compose failed: ${err.message}`);
     const failed = await writeCoverArt(projectId, () => ({ lastError: trimTo(`The cover could not be composed: ${err.message}`, 300) }));
     publish(projectId, failed.project);

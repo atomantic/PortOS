@@ -66,7 +66,7 @@ describe('PublishKitPanel (#9281)', () => {
     expect(screen.getByText('No cover yet')).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Title on the cover'), { target: { value: 'Example Retitle' } });
     fireEvent.click(screen.getByRole('button', { name: 'Make the cover from Cast & Sets: character' }));
-    expect(k.composeCover).toHaveBeenCalledWith({ source: { kind: 'image', filename: 'sheet.png' }, title: 'Example Retitle', focusX: 0.5 });
+    expect(k.composeCover).toHaveBeenCalledWith({ source: { kind: 'image', filename: 'sheet.png' }, title: 'Example Retitle', focusX: 0.5, lettering: true });
     fireEvent.click(screen.getByRole('button', { name: 'Make the cover from Video frame 1' }));
     expect(k.composeCover).toHaveBeenLastCalledWith(expect.objectContaining({ source: { kind: 'thumbnail', filename: 't1.jpg' } }));
 
