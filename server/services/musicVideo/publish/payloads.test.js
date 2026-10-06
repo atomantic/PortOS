@@ -133,7 +133,16 @@ describe('buildPublishPayload (#9282)', () => {
     expect(buildPublishPayload('distrokid', song(), who)).toMatchObject({
       title: 'Song', artist: 'Example Artist', explicit: false, instrumental: false, releaseDate: null,
       ai: { lyrics: false, music: true, vocals: true }, cover: { name: 'thumb-1.jpg' },
+      songwriterRole: 'both', language: 'English', genre: null, secondaryGenre: null, newArtistProfile: false, preserveCaps: false,
+      credits: { performer: 'Alice Example', producer: 'Alice Example', performerRole: null }, previewStartSec: null,
     });
+    // Genre comes from the song's own style words; the director's picks win, and the preview opens on the hook.
+    const styled = song({ autonomousRun: { output: { sunoStyle: 'dark synthwave, pop hooks, female vocal' } } });
+    expect(buildPublishPayload('distrokid', styled, who)).toMatchObject({ genre: 'Electronic', secondaryGenre: 'Pop' });
+    expect(buildPublishPayload('distrokid', styled, { ...who, genre: 'Pop', secondaryGenre: 'Pop', newArtistProfile: true, performerName: 'Bob Example', performerRole: 'Vocals', previewStartSec: 42.7 }))
+      .toMatchObject({ genre: 'Pop', secondaryGenre: null, newArtistProfile: true, credits: { performer: 'Bob Example', performerRole: 'Vocals', producer: 'Alice Example' }, previewStartSec: 42 });
+    // An all-lowercase artist name keeps its capitalization on the stores.
+    expect(buildPublishPayload('distrokid', song(), { ...who, artistName: 'example' }).preserveCaps).toBe(true);
     expect(buildPublishPayload('distrokid', song({ lyricCues: [] }), { ...who, aiLyrics: true, releaseDate: '2026-11-06' }))
       .toMatchObject({ instrumental: true, releaseDate: '2026-11-06', ai: { lyrics: true } });
     // The composed cover art wins over the thumbnail, for DistroKid and Suno alike.

@@ -2,16 +2,21 @@
  * DistroKid adapter: the song goes to Spotify (and the other stores DistroKid
  * delivers to) as a single. Spotify has no upload for independent artists, so
  * a distributor is the only route. prepare() fills DistroKid's upload form
- * with the song's audio, a square cover, title, artist, songwriter, explicit
- * and instrumental flags, the AI disclosure, and the release date. It never
- * ticks the agreement boxes or presses Upload: those attest the director owns
- * the rights, so they stay with the director.
+ * with the song's audio, a square cover, title, artist, songwriter and role,
+ * explicit and instrumental flags, the AI disclosure, genre, language, store
+ * profiles, Apple Music credits, the preview start and the release date, and
+ * unticks every paid extra. It never ticks the agreement boxes or presses
+ * Upload: those attest the director owns the rights, so they stay with the
+ * director. Per-track fields carry a random suffix per page load, so they are
+ * matched by name prefix.
  *
- * DistroKid restyles this form often, so every field is found by its name or
- * its label text, and a field that is no longer there is reported in the
- * summary as left for the director rather than failing the whole draft.
+ * DistroKid restyles this form often, so every field is found by its id or
+ * name (the in-page steps live in lib/distrokidForm.js), and a field that is
+ * no longer there is reported in the summary as left for the director rather
+ * than failing the whole draft.
  */
 import { PUBLISH_STEP_TIMEOUT_MS as T, loginRequired, step } from './browser.js';
+import { discloseDistrokidAi, fillDistrokidFields, untickDistrokidExtras } from '../../../lib/distrokidForm.js';
 
 const label = 'DistroKid';
 const UPLOAD_URL = 'https://distrokid.com/new/';
@@ -37,47 +42,8 @@ async function setValue(page, selector, value) {
   }, [selector, value]);
 }
 
-/** Check the first radio/checkbox whose label text matches `pattern` (a RegExp source). */
-async function checkByLabel(page, selector, pattern) {
-  return page.evaluate(([sel, src]) => {
-    const re = new RegExp(src, 'i');
-    const box = [...document.querySelectorAll(sel)].find((b) => re.test((b.closest('label')?.innerText || b.parentElement?.innerText || '').replace(/\s+/g, ' ')));
-    if (!box) return false;
-    if (!box.checked) box.click();
-    return true;
-  }, [selector, pattern]);
-}
-
-/** Answer DistroKid's AI question and tick the parts the director says AI made. */
-async function discloseAi(page, ai) {
-  const any = ai.lyrics || ai.music || ai.vocals;
-  const answered = await page.evaluate((yes) => {
-    const radio = document.querySelector(`input[type=radio][name^="ai_gate_"][value="${yes ? 1 : 0}"]`);
-    if (!radio) return false;
-    radio.scrollIntoView({ block: 'center' });
-    if (!radio.checked) radio.click();
-    return true;
-  }, any);
-  if (!answered || !any) return answered;
-  await page.waitForTimeout(1000);
-  return page.evaluate((want) => {
-    const popup = [...document.querySelectorAll('.swal2-popup')].find((p) => /which parts|ai-generated/i.test(p.innerText || ''));
-    if (!popup) return false;
-    const tick = (re, on) => {
-      const box = [...popup.querySelectorAll('input[type=checkbox]')].find((b) => re.test(b.closest('label')?.innerText || b.parentElement?.innerText || ''));
-      if (box && box.checked !== on) box.click();
-      return !!box;
-    };
-    const found = [
-      tick(/lyrics/i, want.lyrics),
-      tick(/music\s*\(composed/i, want.music),
-      tick(/all of the audio/i, want.vocals),
-    ];
-    const save = [...popup.querySelectorAll('button')].find((b) => /^save$/i.test((b.innerText || '').trim()));
-    save?.click();
-    return found.every(Boolean) && !!save;
-  }, ai);
-}
+const ROLE_TEXT = { music: 'Music', lyrics: 'Lyrics', both: 'Music and lyrics' };
+const clock = (sec) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 
 export const distrokidAdapter = {
   label,
@@ -106,20 +72,48 @@ export const distrokidAdapter = {
       await page.locator(payload.explicit ? '#js-explicit-radio-button-1' : '#js-not-explicit-radio-button-1').first().check({ timeout: 5000 });
       return true;
     });
-    await soft(payload.instrumental ? 'instrumental' : 'contains lyrics', () => checkByLabel(page, 'input[type=radio]', payload.instrumental ? 'instrumental|no lyrics' : 'contains lyrics'));
     if (payload.releaseDate) await soft(`release date ${payload.releaseDate}`, () => setValue(page, '#release-date-dp, input[name=releaseDate]', payload.releaseDate));
-    await soft('AI disclosure', () => discloseAi(page, payload.ai));
+    const fields = await page.evaluate(fillDistrokidFields, {
+      albumTitle: payload.title,
+      language: payload.language,
+      genre: payload.genre,
+      secondaryGenre: payload.secondaryGenre,
+      preserveCaps: payload.preserveCaps,
+      newArtistProfile: payload.newArtistProfile,
+      instrumental: payload.instrumental,
+      songwriterRole: ROLE_TEXT[payload.songwriterRole] || ROLE_TEXT.both,
+      previewStart: payload.previewStartSec != null ? { min: Math.floor(payload.previewStartSec / 60), sec: payload.previewStartSec % 60 } : null,
+      credits: payload.credits,
+    }).catch(() => ({ done: [], missed: ['genre, language, credits and the other release answers'] }));
+    leftForYou.push(...fields.missed);
+    if (!payload.genre) leftForYou.push('genre');
+    if (!payload.newArtistProfile) leftForYou.push('your existing store profiles (Spotify, Apple, YouTube Music, Instagram, Facebook)');
+    await soft('AI disclosure', async () => {
+      if (!(await page.evaluate(discloseDistrokidAi, { step: 'gate', ai: payload.ai }))) return false;
+      if (!(payload.ai.lyrics || payload.ai.music || payload.ai.vocals)) return true;
+      await page.waitForTimeout(1000);
+      return page.evaluate(discloseDistrokidAi, { step: 'parts', ai: payload.ai });
+    });
+    // Paid extras are the director's call, every time: none stays ticked.
+    const extras = await page.evaluate(untickDistrokidExtras).catch(() => null);
+    if (extras === null) leftForYou.push('check that no paid extras are ticked');
+    else if (extras.stillTicked.length) leftForYou.push(`untick the paid extras: ${extras.stillTicked.join(', ')}`);
     await page.evaluate(() => document.querySelector('#js-track-upload-1')?.scrollIntoView({ block: 'center' })).catch(() => {});
 
     const aiParts = [payload.ai.lyrics && 'lyrics', payload.ai.music && 'music', payload.ai.vocals && 'all of the audio'].filter(Boolean);
     return {
       artist: payload.artist,
       title: payload.title,
-      songwriter: `${payload.songwriter.first} ${payload.songwriter.last}`,
+      songwriter: `${payload.songwriter.first} ${payload.songwriter.last} (${payload.songwriterRole === 'both' ? 'music and lyrics' : payload.songwriterRole})`,
       releaseDate: payload.releaseDate || 'As soon as possible',
+      genre: [payload.genre, payload.secondaryGenre].filter(Boolean).join(' / ') || null,
+      language: payload.language,
       explicit: payload.explicit ? 'Yes' : 'No',
       ai: aiParts.length ? aiParts.join(', ') : 'None',
-      leftForYou: [...leftForYou, 'the agreement checkboxes', 'Upload'],
+      appleCredits: `${payload.credits.performer} (performer), ${payload.credits.producer} (producer)`,
+      preview: payload.previewStartSec != null ? `from ${clock(payload.previewStartSec)}` : null,
+      paidExtras: extras === null || extras.stillTicked.length ? null : (extras.unticked.length ? `unticked: ${extras.unticked.join(', ')}` : 'none ticked'),
+      leftForYou: [...leftForYou, 'which stores (DistroKid picks all by default)', 'the agreement checkboxes', 'Upload'],
     };
   },
 };

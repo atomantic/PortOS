@@ -67,6 +67,32 @@ describe('PublishPostingPanel (#9282)', () => {
     expect(within(row('Spotify (via DistroKid)')).getByLabelText('Songwriter legal first name')).toHaveValue('Alice');
   });
 
+  it('suggests a genre from the song and remembers the once-only DistroKid answers', () => {
+    const publishing = hook({ platforms: { distrokid: { enabled: true, account: 'Example Artist' } } });
+    const p = { ...project(), autonomousRun: { output: { sunoStyle: 'dark synthwave, pop hooks' } } };
+    const { unmount } = render(<PublishPostingPanel project={p} publishing={publishing} />);
+    const dk = row('Spotify (via DistroKid)');
+    expect(within(dk).getByLabelText('Genre')).toHaveDisplayValue('Electronic (from the song\'s style)');
+    expect(within(dk).getByLabelText('Secondary genre (optional)')).toHaveDisplayValue('Pop (from the song\'s style)');
+    fireEvent.change(within(dk).getByLabelText('Songwriter legal first name'), { target: { value: 'Alice' } });
+    fireEvent.change(within(dk).getByLabelText('Songwriter legal last name'), { target: { value: 'Example' } });
+    fireEvent.change(within(dk).getByLabelText('Genre'), { target: { value: 'Rock' } });
+    fireEvent.change(within(dk).getByLabelText('Language'), { target: { value: 'Spanish' } });
+    fireEvent.click(within(dk).getByLabelText('First release as this artist (new store profiles)'));
+    fireEvent.click(within(dk).getByRole('button', { name: 'Fill draft' }));
+    expect(publishing.prepare).toHaveBeenCalledWith('distrokid', expect.objectContaining({ genre: 'Rock', language: 'Spanish', newArtistProfile: true }));
+    unmount();
+    const later = hook({ platforms: { distrokid: { enabled: true, account: 'Example Artist' } } });
+    render(<PublishPostingPanel project={project()} publishing={later} />);
+    const again = row('Spotify (via DistroKid)');
+    expect(within(again).getByLabelText('Language')).toHaveValue('Spanish');
+    // New store profiles are asked per release, never carried to the next one.
+    expect(within(again).getByLabelText('First release as this artist (new store profiles)')).not.toBeChecked();
+    fireEvent.click(within(again).getByRole('button', { name: 'Fill draft' }));
+    expect(later.prepare.mock.calls[0][1]).not.toHaveProperty('newArtistProfile');
+    expect(within(again).getByLabelText('Genre')).toHaveValue('');
+  });
+
   it('shows no cut picker when there is only one 9:16 cut', () => {
     render(<PublishPostingPanel project={project()} publishing={hook()} />);
     expect(within(row('TikTok')).queryByLabelText('Vertical cut to post')).toBeNull();

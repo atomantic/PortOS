@@ -742,6 +742,16 @@ export const musicVideoPublishPrepareSchema = z.object({
   aiLyrics: z.boolean(),
   aiMusic: z.boolean(),
   aiVocals: z.boolean(),
+  genre: z.string().trim().min(1).max(60),
+  secondaryGenre: z.string().trim().min(1).max(60),
+  language: z.string().trim().min(1).max(60),
+  songwriterRole: z.enum(['music', 'lyrics', 'both']),
+  newArtistProfile: z.boolean(),
+  preserveCaps: z.boolean(),
+  performerName: z.string().trim().min(1).max(100),
+  performerRole: z.string().trim().min(1).max(60),
+  producerName: z.string().trim().min(1).max(100),
+  previewStartSec: z.number().min(0).max(3600),
 }).partial().strict();
 
 export const musicVideoExcerptNoteSchema = z.object({
