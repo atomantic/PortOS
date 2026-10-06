@@ -13,13 +13,22 @@
  * instance, and nothing here sends anything through a messaging API.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, readdirSync, rmSync, utimesSync, writeFileSync, existsSync } from 'fs';
+import { mkdirSync, readdirSync, rmSync, utimesSync, writeFileSync, readFileSync, existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 const tempRoot = createTempDataRoot('portos-beeper-attachments-');
 
 vi.mock('../lib/db.js', () => ({ query: vi.fn() }));
+const publicationSeam = vi.hoisted(() => ({ bypass: false, reached: null }));
+vi.mock('../lib/backupSnapshotBoundary.js', async original => {
+  const actual = await original();
+  return { ...actual, withBackupAssetPublication: work => {
+    publicationSeam.reached?.();
+    return publicationSeam.bypass ? work() : actual.withBackupAssetPublication(work);
+  } };
+});
+
 vi.mock('./settings.js', () => ({ getSettings: vi.fn() }));
 // The client is mocked WHOLE rather than partially: importing the real module
 // pulls in the vault-backed credential store, which reads `PATHS` at import
@@ -120,6 +129,7 @@ const storedFiles = () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  publicationSeam.bypass = false; publicationSeam.reached = null;
   vi.mocked(getSettings).mockResolvedValue({ beeper: { attachmentBudgetGb: 5 } });
   rmSync(tempRoot, { recursive: true, force: true });
   mkdirSync(tempRoot, { recursive: true });
@@ -748,5 +758,92 @@ describe('shapeAttachment', () => {
       byte_length: 40 * 1024 * 1024,
     }));
     expect(shaped).toMatchObject({ stored: true, unavailable: true, overCap: true });
+  });
+});
+
+
+describe('attachment snapshot publication', () => {
+  const deferred = () => Promise.withResolvers();
+  function mirror(beforeCommit = async () => {}) {
+    let row = attachmentRow();
+    vi.mocked(query).mockImplementation(async (sql, params) => {
+      const flat = String(sql).replace(/\s+/g, ' ');
+      if (flat.includes('FROM beeper_attachments WHERE message_id')) return { rows: [row] };
+      if (flat.includes('SET local_path = $3')) {
+        await beforeCommit(params[2]);
+        row = { ...row, local_path: params[2], byte_length: params[3] };
+      }
+      if (flat.includes('SELECT DISTINCT local_path')) return { rows: row.local_path ? [{ local_path: row.local_path }] : [] };
+      if (flat.includes('SELECT 1 FROM beeper_attachments')) return { rows: row.local_path ? [{}] : [] };
+      return { rows: [] };
+    });
+    vi.mocked(headAsset).mockResolvedValue({ bytes: 4 });
+    vi.mocked(fetchAssetStream).mockImplementation(async () => streamResponse([new Uint8Array([1, 2, 3, 4])]));
+    return { row: () => row, forget: () => { row = { ...row, local_path: null }; } };
+  }
+
+  it.each([false, true])('keeps a new path outside an active file-copy cut (bypass=%s)', async bypass => {
+    const { acquireBackupSnapshotCut } = await import('../lib/backupSnapshotBoundary.js');
+    const table = mirror();
+    const arrived = deferred();
+    publicationSeam.reached = arrived.resolve;
+    publicationSeam.bypass = bypass;
+    const release = await acquireBackupSnapshotCut();
+    const copiedFiles = storedFiles();
+    const work = ensureAttachmentBytes('msg-example-1', 0);
+    try {
+      await arrived.promise;
+      if (bypass) await work;
+      expect(table.row().local_path != null).toBe(bypass);
+      // Negative control: a post-copy database dump names bytes not copied.
+      expect(table.row().local_path != null && !copiedFiles.includes(table.row().local_path)).toBe(bypass);
+    } finally { release(); await work; }
+    expect(readFileSync(join(attachmentsRoot(), table.row().local_path))).toEqual(Buffer.from([1, 2, 3, 4]));
+  });
+
+  it('drains an installed file through its row commit, including row-write failure', async () => {
+    const { acquireBackupSnapshotCut } = await import('../lib/backupSnapshotBoundary.js');
+    const reached = deferred(); const finish = deferred();
+    const table = mirror(async () => { reached.resolve(); await finish.promise; throw new Error('row unavailable'); });
+    const work = ensureAttachmentBytes('msg-example-1', 0);
+    const rejected = expect(work).rejects.toThrow('row unavailable');
+    await reached.promise;
+    expect(storedFiles()).toHaveLength(1);
+    let cutReady = false;
+    const cut = acquireBackupSnapshotCut().then(release => { cutReady = true; return release; });
+    try {
+      await new Promise(resolve => setImmediate(resolve));
+      expect(cutReady).toBe(false);
+    } finally { finish.resolve(); }
+    await rejected;
+    const release = await cut;
+    try {
+      expect(table.row().local_path).toBeNull();
+      // Unclaimed immutable bytes are safe; cleanup must not remove deduped data.
+      expect(storedFiles()).toHaveLength(1);
+    } finally { release(); }
+  });
+
+  it('serializes orphan deletion behind a deduplicated file claim', async () => {
+    let block = false;
+    const reached = deferred(); const finish = deferred();
+    const table = mirror(async () => { if (block) { reached.resolve(); await finish.promise; } });
+    const first = await ensureAttachmentBytes('msg-example-1', 0);
+    table.forget(); block = true;
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    utimesSync(first.filePath, old, old);
+    const claim = ensureAttachmentBytes('msg-example-1', 0);
+    await reached.promise;
+    const deleting = deferred();
+    publicationSeam.reached = deleting.resolve;
+    const sweep = sweepAttachmentOrphans();
+    try {
+      await deleting.promise;
+      expect(existsSync(first.filePath)).toBe(true);
+    } finally { finish.resolve(); }
+    await claim;
+    expect(await sweep).toMatchObject({ orphansRemoved: 0 });
+    expect(table.row().local_path).not.toBeNull();
+    expect(existsSync(first.filePath)).toBe(true);
   });
 });
