@@ -2,6 +2,7 @@
 import * as fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
+import { type as hostOsType } from 'node:os';
 import { PATHS } from './paths.js';
 import { assertNotRealDataWrite } from './testDataIsolation.js';
 
@@ -16,7 +17,7 @@ const busy = (message, details = {}) => Object.assign(new Error(message), {
  * or observes the gate and never starts its mutation. No PID/age reclamation:
  * a crashed writer may have left half a publication behind.
  */
-export function createBackupSharedAdmission(directory, { io = fs, makeId = randomUUID, assertWrite = assertNotRealDataWrite } = {}) {
+export function createBackupSharedAdmission(directory, { io = fs, makeId = randomUUID, assertWrite = assertNotRealDataWrite, syncDirectories = hostOsType() !== 'Windows_NT' } = {}) {
   const readers = join(directory, 'publications');
   const cutPath = join(directory, 'cut');
   const generation = makeId();
@@ -25,7 +26,9 @@ export function createBackupSharedAdmission(directory, { io = fs, makeId = rando
     catch (error) { if (error.code === 'ENOENT') return false; throw error; }
   };
   const syncDir = path => {
-    if (process.platform === 'win32') return;
+    // This capability belongs to the backing filesystem, not a caller's
+    // emulated process.platform (e.g. a macOS render fixture on Windows).
+    if (!syncDirectories) return;
     const fd = io.openSync(path, 'r');
     try { io.fsyncSync(fd); } finally { io.closeSync(fd); }
   };

@@ -18,7 +18,9 @@ checking the cut; the cut registers before checking readers. This ordering close
 the cross-process admission race. A preliminary gate check avoids registering
 and deleting leases repeatedly during a long snapshot. Directory creation and
 removal work on Windows and POSIX; ownership files are fsynced, with directory
-fsync on POSIX (Windows does not support opening a directory that way).
+fsync on POSIX (Windows does not support opening a directory that way). The
+directory-sync capability follows the native host OS associated with the filesystem;
+a simulated product platform must not change durability behavior.
 
 If a publication cannot restore its previous pair, throw an error with
 `backupPublicationUncertain: true`. The boundary settles its local callback count
