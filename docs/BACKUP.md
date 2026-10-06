@@ -104,6 +104,7 @@ Admission inventory (`withBackupAssetPublication`):
 | Image generation completion, upscale/clean tails, variants and sketch pairs (`imageGen/*.js`, `mediaSketches.js`) | Covered (#9982 partial): provider output publication through sidecar and cleanup takes one lease; remote replacement and variant/sketch rewrites restore previous files on failure |
 | Pipeline audio mux (music, voice, generated cues, silent strip), including Creative Director stitch/final assembly | Covered (#9982 partial): encoding runs outside admission; replacement of the already-recorded video and rollback hold the lease. CD final/rough-cut rows only reference the existing history entry |
 | Music Video Making-of export (`makingOf.js`, `makingOfVisuals.js`) | Reference-only: reads existing assets and transforms buffers for the ZIP response; no durable file or row writes |
+| Time Capsule snapshots (`timeCapsule.js`) | Covered (#9982 partial): snapshot creation and deletion lease the file and index entry together, acquiring before the shared index write tail |
 | Durable replacement/deletion owners not yet classified | Outstanding (#9982) |
 | Snapshot consistency claim (`backupAssetOwners.js`, see below) | Covered (#9982 partial) |
 | Database restore execution and backend-cutover acceptance (`backup.js`, `databasePreflight.js`) | Covered (#9983) |
