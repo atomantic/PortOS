@@ -108,6 +108,7 @@ Admission inventory (`withBackupAssetPublication`):
 | Time Capsule snapshots (`timeCapsule.js`) | Covered (#9982 partial): snapshot creation and deletion lease the file and index entry together, acquiring before the shared index write tail |
 | CoS raw recording compression and purge (`cosAgentStorage.js`) | Covered (#9982 partial): verified gzip publication, storage manifest and plain-file removal share a lease; purge intent and unlinks also share a lease because the manifest is file-primary |
 | CoS agent archive/index publication (`cosAgentLifecycle.js`, `cosAgentArchive.js`, `cosAgentIndex.js`) | Covered (#9982 partial): completion, zombie/stale archival, deletion and legacy layout migration lease directory changes through state and index publication; state-locked workflows acquire admission first |
+| Game compiled manifests (`games/compile.js`) | Covered (#9982 partial): versioned manifest and game compiled/history pointers hold one lease before the per-game queue |
 | Durable replacement/deletion owners not yet classified | Outstanding (#9982) |
 | Snapshot consistency claim (`backupAssetOwners.js`, see below) | Covered (#9982 partial) |
 | Database restore execution and backend-cutover acceptance (`backup.js`, `databasePreflight.js`) | Covered (#9983) |
