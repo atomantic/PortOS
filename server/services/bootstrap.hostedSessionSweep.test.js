@@ -37,7 +37,8 @@ describe('hosted-session sweeper boot wiring (#5660)', () => {
 
   it('passes io down from runBootSequence, which is where the Socket.IO server lives', () => {
     const bootBody = stripCommentsAndNormalize(extractDeclaration(SRC, 'runBootSequence') || '');
-    expect(bootBody).toContain('startBackgroundServices({ spawnerReady, io })');
+    // Other boot facts may ride along in the same object; `io` must be one.
+    expect(bootBody).toMatch(/startBackgroundServices\(\{ spawnerReady, io[,\s}]/);
   });
 
   it('disarms the sweeper during graceful shutdown', () => {

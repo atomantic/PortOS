@@ -49,7 +49,7 @@ let apiUrl = null;
 let timer = null;
 let listening = false;
 
-const defaultApiUrl = () => `http://127.0.0.1:${Number(process.env.PORT) || PORTS.API}`;
+const defaultApiUrl = () => localApiUrlFor();
 
 const isKeyEnabled = async () => (await getSettings())?.secrets?.agentKey?.enabled === true;
 
@@ -150,11 +150,16 @@ const reconcileInBackground = (reason) => {
 };
 
 /**
- * Boot hook. `localApiUrl` is the loopback origin this process serves the API
- * on (the HTTP mirror when HTTPS is on), written into the file for the CLI.
+ * The loopback origin a local CLI reaches this API on: the HTTP mirror when
+ * :5555 speaks TLS (see announceListening in bootstrap.js), else :5555 itself.
  */
-export const initAgentKey = ({ localApiUrl } = {}) => {
-  apiUrl = localApiUrl || defaultApiUrl();
+export const localApiUrlFor = ({ httpsEnabled = false, port = null } = {}) => (httpsEnabled
+  ? `http://127.0.0.1:${Number(process.env.PORTOS_HTTP_PORT) || PORTS.API_LOCAL}`
+  : `http://127.0.0.1:${port || Number(process.env.PORT) || PORTS.API}`);
+
+/** Boot hook; `httpsEnabled` and `port` pick the URL written into the file. */
+export const initAgentKey = ({ httpsEnabled = false, port = null } = {}) => {
+  apiUrl = localApiUrlFor({ httpsEnabled, port });
   if (!listening) {
     listening = true;
     // Covers the flag itself, and a password being set or cleared.

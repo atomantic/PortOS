@@ -60,7 +60,7 @@ describe('agent API key', () => {
     authEnabled = true;
     settings = {};
     __testing.reset();
-    initAgentKey({ localApiUrl: 'http://127.0.0.1:5553' });
+    initAgentKey({ httpsEnabled: true, port: 5555 });
     await __testing.reconcile();
   });
 

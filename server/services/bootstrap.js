@@ -401,12 +401,12 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
  * Fire-and-forget service inits + scheduler arming. None of these block the
  * server from listening; each logs its own failure and the boot continues.
  */
-const startBackgroundServices = ({ spawnerReady, io, localApiUrl }) => {
+const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   // Keep the opt-in agent API key file current (Settings > Security). A no-op
   // beyond one settings read while the key is off. Disabled under smoke boot
   // with the rest of this function, so a smoke run never writes to $HOME.
   import('./agentKey.js')
-    .then(({ initAgentKey }) => initAgentKey({ localApiUrl }))
+    .then(({ initAgentKey }) => initAgentKey({ httpsEnabled, port }))
     .catch((err) => logBootstrapFailure('❌ Agent API key init failed', err));
 
   // Put npm's global bin directory on PATH before anything spawns a provider
@@ -919,13 +919,7 @@ const announceListening = ({ io, httpServer, localHttpServer, httpsEnabled, port
  */
 export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled, port, host, spawnerReady }) =>
   runPostRouteSequence(gateStepsForSmokeBoot({
-    startBackgroundServices: () => startBackgroundServices({
-      spawnerReady,
-      io,
-      // Where a local CLI reaches this API: the loopback HTTP mirror when
-      // :5555 speaks TLS (see announceListening), else :5555 itself.
-      localApiUrl: `http://127.0.0.1:${httpsEnabled ? (Number(process.env.PORTOS_HTTP_PORT) || PORTS.API_LOCAL) : port}`,
-    }),
+    startBackgroundServices: () => startBackgroundServices({ spawnerReady, io, httpsEnabled, port }),
 
     // Instance identity + sync log come up before requests are accepted, so a
     // brain mutation can't arrive before the sync log is ready.
