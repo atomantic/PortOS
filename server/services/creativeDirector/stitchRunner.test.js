@@ -95,6 +95,7 @@ vi.mock('../../lib/childProcess.js', async () => {
 });
 
 const { runStitch } = await import('./stitchRunner.js');
+const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
 
 beforeEach(async () => {
   updateProjectCalls.length = 0;
@@ -145,4 +146,20 @@ describe('runStitch — audio mux is best-effort', () => {
     expect(await readFile(join(VIDEOS_DIR, FINAL_ENTRY.filename), 'utf8')).toBe(MUXED_BYTES);
     expect(await readdir(VIDEOS_DIR)).toEqual([FINAL_ENTRY.filename]);
   });
+});
+
+it('keeps the recorded video and final-cut settlement behind an active backup cut', async () => {
+  ffmpegWritesOutput = true;
+  const release = await acquireBackupSnapshotCut();
+  const work = runStitch('cd-1');
+  try {
+    await vi.waitFor(async () => expect((await readdir(VIDEOS_DIR)).some(name => name.includes('.silent.'))).toBe(true));
+    expect(await readFile(join(VIDEOS_DIR, FINAL_ENTRY.filename), 'utf8')).toBe(EPISODE_BYTES);
+    expect(cdProject.status).toBe('stitching');
+    expect(cdProject.finalVideoId).toBeUndefined();
+  } finally { release(); }
+  await work;
+  expect(cdProject).toMatchObject({ finalVideoId: FINAL_ENTRY.id, status: 'complete' });
+  expect(await readFile(join(VIDEOS_DIR, FINAL_ENTRY.filename), 'utf8')).toBe(MUXED_BYTES);
+  expect(await readdir(VIDEOS_DIR)).toEqual([FINAL_ENTRY.filename]);
 });
