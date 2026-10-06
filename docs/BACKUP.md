@@ -99,7 +99,9 @@ Admission inventory (`withBackupAssetPublication`):
 | ChatGPT archive import and import-memory deletion (`chatgptImport.js`, `brain.js`; the ZIP's asset extraction in `chatgptZipImport.js`) | Covered (#9982 partial): assets are extracted outside admission and named only by the memory row; each conversation's archived transcript and that row commit under one lease, and deleting an import memory drops the record and unlinks its transcript and unreferenced assets under one lease |
 | YouTube ingest (`youtubeIngest.js`) | Covered (#9982 partial): downloads run outside admission; the index record that first names a transcript or audio file takes the lease, and forgetting an ingest drops the record and unlinks its files under one lease |
 | Digital twin documents and genome upload/delete (`digital-twin-documents.js`, `genome.js`) | Covered (#9982 partial): each document file or raw genome file and the meta record naming it is one lease, including deletion |
-| Remaining durable owners, classified by domain in `backupAssetOwners.js` | Outstanding (#9982): video generation, image generation tails, derived media-index refresh |
+| Derived media index (`mediaAssetIndex/`) | Rebuilt: `media_assets` rows are excluded from snapshot dumps; database restore rebuilds atomically from disk before reopening admission, and relevant file restores refresh the mirror |
+| Remaining durable owners, classified by domain in `backupAssetOwners.js` | Outstanding (#9982): video generation and image generation tails |
+| Explicit file purge (`dataManager.js`, `routes/uploads.js`, `routes/attachments.js`) | Covered: single and bulk deletions hold one lease. These operator-directed removals may intentionally leave external references; admission prevents a snapshot from interleaving with the removal, not from preserving that already-deleted state |
 | Durable replacement/deletion owners not yet classified | Outstanding (#9982) |
 | Snapshot consistency claim (`backupAssetOwners.js`, see below) | Covered (#9982 partial) |
 | Database restore execution and backend-cutover acceptance (`backup.js`, `databasePreflight.js`) | Covered (#9983) |
@@ -245,7 +247,7 @@ the existing thumbnail-less behavior. Terminal status and notifications follow
 the durable commit. Caller publication latches keep committed outputs and earlier
 batch members out of later failure or cancellation cleanup. Federated video
 replacement/replay and derived stitch, upscale, timeline and HTML-composition
-lanes remain outstanding; this does not settle the derived media index.
+lanes remain outstanding. The derived media index is excluded from snapshot dumps: its asynchronous refresh may lag authoritative files, so preserving its rows would preserve stale file references. Both legacy and new database restores rebuild it atomically from local sidecars and video history before reopening admission. Unreadable sources or SQL failure keep recovery fenced for a same-operation retry, without replaying the dump. Full and media-selective file restores rebuild it too; a failed rebuild is reported as a reconciliation failure. This does not make unadmitted authoritative media workflows consistent.
 
 Code Animation writes its HTML, revision trees and run artifacts before the row
 that first names them. A generated animation's HTML and the job row marking it
@@ -297,8 +299,9 @@ grouped by domain with the modules whose file-plus-record workflows still run
 outside admission, plus an `unclassified-durable-owners` entry for anything a
 code sweep did not reach. Their persistence adapters and direct filesystem calls
 still need workflow-level classification; independently locking `fileCore` or
-SQL primitives would not cover the gap between writes. No domain is excluded
-from the snapshot to satisfy the claim.
+SQL primitives would not cover the gap between writes. No authoritative asset domain is excluded
+from the snapshot to satisfy the claim; the derived media index is reconstructed
+from the authoritative files instead of preserving cache rows.
 
 When wrapping one of them, remember the order a cut works in: it copies files,
 then dumps rows. A row that names new bytes therefore has to commit under the

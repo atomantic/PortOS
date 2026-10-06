@@ -73,6 +73,8 @@ vi.mock('../lib/databaseMaintenanceJournal.js', () => ({
 vi.mock('../scripts/run-db-migrations.js', () => ({
   runDbMigrations: vi.fn().mockResolvedValue(0),
 }));
+const reconcileMediaAssets = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
+vi.mock('./mediaAssetIndex/db.js', () => ({ reconcileMediaAssets }));
 const executionRestore = vi.hoisted(() => ({ prepare: vi.fn(), finish: vi.fn() }));
 vi.mock('./peerExecutionRestore.js', () => ({
   preparePeerExecutionRestore: executionRestore.prepare,
@@ -979,6 +981,7 @@ describe('dumpPostgres status classification', () => {
     const result = dumpPostgres('/tmp/example.sql');
     await flush();
     assertPoolToolSpawn(spawn.mock.calls[0]);
+    expect(spawn.mock.calls[0][1]).toContain('--exclude-table-data=media_assets');
     proc.emit('close', 0);
     expect(await result).toMatchObject({ status: 'ok' });
     vi.unstubAllEnvs();
@@ -1553,6 +1556,7 @@ describe('restorePostgres', () => {
     it.each([
       ['schema upgrade', () => ensureSchema.mockRejectedValueOnce(new Error('ddl failed')), 'restore_schema_reconciliation'],
       ['ordered migration', () => runDbMigrations.mockRejectedValueOnce(new Error('migration failed')), 'restore_schema_reconciliation'],
+      ['media rebuild', () => reconcileMediaAssets.mockRejectedValueOnce(new Error('media read failed')), 'restore_media_reconciliation'],
       ['cursor write', () => rewindPostgresSyncCursors.mockRejectedValueOnce(new Error('disk full')), 'restore_sync_resync'],
     ])('a %s fault after commit stays fenced, then recovery repairs from the original floors without replaying', async (_case, inject, reason) => {
       inject();
@@ -3255,6 +3259,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
 
       expect(reloadSettings).toHaveBeenCalledTimes(1);
       expect(invalidateBrainCaches).toHaveBeenCalledTimes(1);
+      expect(reconcileMediaAssets).toHaveBeenCalledWith({ rebuild: true });
       // A live restore must not pass --dry-run to rsync.
       expect(spawn.mock.calls[0][1]).not.toContain('--dry-run');
     });
@@ -3269,6 +3274,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       await runRestore('/dest', 'snap-1', { dryRun: false, subdirFilter: 'images' });
 
       expect(invalidateBrainCaches).not.toHaveBeenCalled();
+      expect(reconcileMediaAssets).toHaveBeenCalledWith({ rebuild: true });
     });
 
     it('does not reload settings for a dry run', async () => {
@@ -3277,6 +3283,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       expect(reloadSettings).not.toHaveBeenCalled();
       expect(invalidateBrainCaches).not.toHaveBeenCalled();
       expect(spawn.mock.calls[0][1]).toContain('--dry-run');
+      expect(reconcileMediaAssets).not.toHaveBeenCalled();
     });
 
     it('defaults to a dry run (no settings reload) when no options are given', async () => {

@@ -778,6 +778,9 @@ export async function dumpPostgres(outputPath) {
       // Machine-local replay receipts (#9725) describe this install's past
       // restores, not application data; the table definition is still dumped.
       '--exclude-table-data=restore_receipts',
+      // The asynchronous media mirror can lag its authoritative files. Rebuild
+      // it after restore rather than snapshotting stale file references.
+      '--exclude-table-data=media_assets',
       '-f', outputPath
     ], {
       shell: false,
@@ -1238,6 +1241,13 @@ async function reconcileLiveFileRestore(subdirFilter) {
       ? [{ label: 'Brain cache invalidation', run: invalidateBrainCaches }]
       : []),
     { label: 'settings reload', run: reloadSettings },
+    ...((!subdirFilter || ['images', 'videos', 'video-thumbnails', 'video-history.json']
+      .some(path => subdirFilter === path || subdirFilter.startsWith(`${path}/`)))
+      && getBackendName() !== 'file'
+      ? [{ label: 'media index rebuild', run: async () => {
+        const { reconcileMediaAssets } = await import('./mediaAssetIndex/db.js');
+        await reconcileMediaAssets({ rebuild: true });
+      } }] : []),
   ];
   const results = await Promise.allSettled(
     refreshes.map(({ run }) => Promise.resolve().then(run)),
@@ -1248,7 +1258,7 @@ async function reconcileLiveFileRestore(subdirFilter) {
 
   if (failures.length > 0) {
     throw new Error(
-      `Live restore cache reconciliation failed (${failures.join('; ')}). Restart PortOS before relying on restored settings or Brain data.`,
+      `Live restore cache reconciliation failed (${failures.join('; ')}). Restart PortOS before relying on restored settings, Brain data or media.`,
       { cause: results.find(result => result.status === 'rejected').reason },
     );
   }
