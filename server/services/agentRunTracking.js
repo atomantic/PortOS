@@ -5,6 +5,7 @@
  */
 
 import { join } from 'path';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { mkdir } from 'fs/promises';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { recordSession } from './usage.js';
@@ -58,9 +59,11 @@ export async function createAgentRun({ agentId, task, model, provider, workspace
     outputSize: 0
   };
 
-  await atomicWrite(join(runDir, 'metadata.json'), metadata);
-  await atomicWrite(join(runDir, 'prompt.txt'), task.description || '');
-  await atomicWrite(join(runDir, 'output.txt'), '');
+  await withBackupAssetPublication(async () => {
+    await atomicWrite(join(runDir, 'prompt.txt'), task.description || '');
+    await atomicWrite(join(runDir, 'output.txt'), '');
+    await atomicWrite(join(runDir, 'metadata.json'), metadata);
+  });
 
   // Record usage session for CoS agent
   recordSession(provider.id, provider.name, model || provider.defaultModel).catch(err => {
@@ -151,8 +154,10 @@ export async function completeAgentRun(runId, output, exitCode, duration, errorA
   // Persist output first so endTime remains the durable completion marker. If
   // this write fails, the still-open metadata lets recovery retry the whole
   // operation; once metadata lands, every run artifact is already complete.
-  await atomicWrite(join(runDir, 'output.txt'), output || '');
-  await atomicWrite(metaPath, metadata);
+  await withBackupAssetPublication(async () => {
+    await atomicWrite(join(runDir, 'output.txt'), output || '');
+    await atomicWrite(metaPath, metadata);
+  });
 
   // Record usage for every completed CoS agent run: failed and interrupted
   // providers still consumed tokens. Prefers the provider CLI's own

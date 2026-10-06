@@ -446,6 +446,11 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
       'services/agentTuiSpawning/sessionController.js', 'cos-runner/index.js', 'cos-runner/tuiExit.js'],
   },
   {
+    id: 'agent-run-recording-publication',
+    status: 'admitted',
+    modules: ['services/agentRunTracking.js'],
+  },
+  {
     // Active run transcripts and their file-primary completion metadata are
     // mutated by server and separate CoS/TUI runner processes. Final output
     // replacement precedes metadata; spool batches append output/state in
