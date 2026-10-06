@@ -52,6 +52,8 @@ export const CATEGORIES = {
   'audio': { label: 'Audio', description: 'Rendered voice-over lines referenced by pipeline issues', archivable: true, deletable: false },
   'autofixer': { label: 'Autofixer', description: 'Autofixer run data', archivable: true, deletable: true, purgeScope: 'category' },
   'avatar': { label: 'Avatar', description: 'Uploaded avatar images', archivable: true, deletable: false },
+  // Machine-local ownership authority must survive every generic cleanup action.
+  'backup-admission': { label: 'Backup Admission', description: 'Active publication and snapshot ownership — reconcile through backup recovery', archivable: false, deletable: false },
   'backup': { label: 'Backups', description: 'Data backup archives', archivable: false, deletable: true, purgeScope: 'category' },
   'brain': { label: 'Brain', description: 'Brain items and sync log', archivable: true, deletable: false },
   // The Beeper attachment byte mirror (#37) — the only thing the Beeper feature
