@@ -1,3 +1,4 @@
+import { publishRuntimeFiles } from '../lib/runtimeFilePublication.js';
 /**
  * Loops Service
  *
@@ -141,15 +142,13 @@ async function executeIteration(loopId) {
       active.runId = null;
 
       const outputPath = join(LOOPS_OUTPUT_DIR, `${id}-${iterationNum}.txt`);
-      // atomicWrite (not a bare writeFile, which is no longer imported) — a bare
-      // writeFile here throws ReferenceError synchronously, before .catch() can
-      // attach, skipping updatePersistedLoop so lastRun/iterationCount never persist.
-      await atomicWrite(outputPath, result).catch(() => {});
-
-      await updatePersistedLoop(id, {
-        lastRun: Date.now(),
-        iterationCount: active.iterationCount,
-        lastExitCode: metadata.exitCode
+      await publishRuntimeFiles([outputPath], async () => {
+        await atomicWrite(outputPath, result);
+        await updatePersistedLoop(id, {
+          lastRun: Date.now(),
+          iterationCount: active.iterationCount,
+          lastExitCode: metadata.exitCode
+        });
       }).finally(() => {
         // Notify after persistence settles, including failures: live execution
         // has ended either way, and consumers must leave the running state.

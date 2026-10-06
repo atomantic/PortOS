@@ -1,3 +1,4 @@
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 /** Finish a runner TUI on observed process exit, even after force-kill reaping. */
 import { stripAnsi } from '../lib/ansiStrip.js';
 import { SENTINEL_COMPLETION_MARKER } from '../lib/agentOutputMarkers.js';
@@ -49,35 +50,37 @@ export function createTuiExitHandler({ agentId, taskId, sessionId, agent, active
       // The terminal buffer contains TUI thinking/repaints. A validated
       // sentinel owns the durable user-facing output once it is available.
       const completionOutput = resolveCompletionOutput(current);
-      await persistCompletion(agentId, completionOutput, current.paused ? null : {
-        taskId, completedAt: new Date().toISOString(), exitCode: effectiveExitCode,
-        signal: effectiveSignal, success: !!success, duration,
-        completionReason: success ? 'agent-signaled-done' : 'tui-exit',
-      });
-      io.emit('tui:exit', {
-        sessionId,
-        agentId,
-        exitCode: effectiveExitCode,
-        signal: effectiveSignal,
-        ...(outputTail ? { outputTail } : {}),
-      });
-      // A pause still needs the transport exit: the server consumes it to
-      // release its process map and unblock worktree adoption. Preserve the
-      // durable paused record and omit the task-completion verdict.
-      if (current.paused === true) return;
-      emitToServer('agent:completed', {
-        agentId,
-        taskId,
-        exitCode: effectiveExitCode,
-        success,
-        duration,
-        outputLength: completionOutput.length,
-        completionReason: current.completedBySentinel ? 'agent-signaled-done' : 'tui-exit',
-      });
-      await withState((state) => {
-        state.stats.completed++;
-        if (!success) state.stats.failed++;
-        delete state.agents[agentId];
+      await withBackupAssetPublication(async () => {
+        await persistCompletion(agentId, completionOutput, current.paused ? null : {
+          taskId, completedAt: new Date().toISOString(), exitCode: effectiveExitCode,
+          signal: effectiveSignal, success: !!success, duration,
+          completionReason: success ? 'agent-signaled-done' : 'tui-exit',
+        });
+        io.emit('tui:exit', {
+          sessionId,
+          agentId,
+          exitCode: effectiveExitCode,
+          signal: effectiveSignal,
+          ...(outputTail ? { outputTail } : {}),
+        });
+        // A pause still needs the transport exit: the server consumes it to
+        // release its process map and unblock worktree adoption. Preserve the
+        // durable paused record and omit the task-completion verdict.
+        if (current.paused === true) return;
+        emitToServer('agent:completed', {
+          agentId,
+          taskId,
+          exitCode: effectiveExitCode,
+          success,
+          duration,
+          outputLength: completionOutput.length,
+          completionReason: current.completedBySentinel ? 'agent-signaled-done' : 'tui-exit',
+        });
+        await withState((state) => {
+          state.stats.completed++;
+          if (!success) state.stats.failed++;
+          delete state.agents[agentId];
+        });
       });
     } catch (err) {
       console.error(`❌ TUI agent ${agentId} exit handler error: ${err.message}`);
