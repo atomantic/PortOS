@@ -43,10 +43,11 @@ export default function OrchestrationTab() {
     try {
       const [profList, provList] = await Promise.all([
         api.getOrchestrationProfiles({ silent: true }).catch(() => []),
-        api.getProviders({ silent: true }).catch(() => []),
+        api.getProviders({ silent: true }).catch(() => ({ providers: [] })),
       ]);
       setProfiles(profList || []);
-      setProviders((provList || []).filter((p) => p.enabled));
+      // getProviders() resolves { activeProvider, providers }, not a bare array.
+      setProviders((provList?.providers || []).filter((p) => p.enabled));
     } catch (err) {
       toast.error(`Failed to load orchestration data: ${err.message}`);
     } finally {
