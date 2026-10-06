@@ -69,6 +69,27 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
       'services/creativeDirector/completionHook.js',
     ],
   },
+  {
+    // Creative Director audio passes replace a video already named by history.
+    // Each mux encodes outside admission and leases only installation/rollback.
+    id: 'pipeline-audio-mux-installation',
+    status: 'admitted',
+    modules: ['services/pipeline/audioMux.js'],
+  },
+  {
+    // Final/rough-cut rows name the existing timeline history entry; these
+    // callers' audio replacements are admitted by the shared mux helpers.
+    id: 'creative-director-cut-settlement',
+    status: 'reference-only',
+    modules: ['services/creativeDirector/stitchRunner.js', 'services/creativeDirector/videoAssembly.js'],
+  },
+  {
+    // Reads existing assets, transforms in buffers, returns a ZIP response.
+    // No durable file or row is written by either making-of module.
+    id: 'music-video-making-of-export',
+    status: 'reference-only',
+    modules: ['services/musicVideo/makingOf.js', 'services/musicVideo/makingOfVisuals.js'],
+  },
   { id: 'music-video-production-settlement', status: 'reference-only', modules: ['services/musicVideo/productionService.js'] },
   { id: 'sprite-animation-completion', status: 'admitted', modules: ['services/sprites/localAnimationJobHook.js'] },
   { id: 'music-library-import-and-deletion', status: 'admitted', modules: ['services/pipeline/musicLibrary.js'] },

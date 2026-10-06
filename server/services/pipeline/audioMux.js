@@ -40,7 +40,12 @@ import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { PATHS } from '../../lib/fileUtils.js';
 import { findFfmpeg, runFfmpegProcess, hasAudioStream, safeUnder, installEncodedVideo } from '../../lib/ffmpeg.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { statMusicTrack } from './musicLibrary.js';
+
+// Mux callers can name an already-published history entry. Encoding stays outside
+// backup admission; each in-place installation (including rollback) takes the
+// lease so a file copy cannot race the replacement of those named bytes.
 
 // 0.5 ≈ -6 dB — quiet enough to sit under dialogue once VO mixing lands
 // (4d.2), but not so quiet the user wonders if it's there.
@@ -151,7 +156,7 @@ export async function muxMusicBed(inputVideoPath, { musicPath, musicGain = DEFAU
   // silent original intact rather than a half-written video. A failed install
   // rolls back and degrades to "bed skipped" rather than throwing out of the
   // caller's stitch (#7237); see the failure-handling note at the top.
-  const installed = await installEncodedVideo(tmpOut, inputVideoPath, 'music bed');
+  const installed = await withBackupAssetPublication(() => installEncodedVideo(tmpOut, inputVideoPath, 'music bed'));
   if (!installed.ok) return installed;
   return { ok: true };
 }
@@ -306,7 +311,7 @@ export async function muxVoLines(inputVideoPath, { voLines = [], musicPath = nul
     await unlink(tmpOut).catch(() => {});
     return result;
   }
-  const installed = await withInstall(() => installEncodedVideo(tmpOut, inputVideoPath, 'VO mux'));
+  const installed = await withBackupAssetPublication(() => withInstall(() => installEncodedVideo(tmpOut, inputVideoPath, 'VO mux')));
   if (!installed.ok) return installed;
   return { ok: true, lineCount: placed.length, ducked: !!usableMusic, clipAudio };
 }
@@ -503,7 +508,7 @@ export async function muxCueBed(inputVideoPath, { cues = [], voLines = [], music
     await unlink(tmpOut).catch(() => {});
     return result;
   }
-  const installed = await installEncodedVideo(tmpOut, inputVideoPath, 'cue bed');
+  const installed = await withBackupAssetPublication(() => installEncodedVideo(tmpOut, inputVideoPath, 'cue bed'));
   if (!installed.ok) return installed;
   return { ok: true, cueCount: placedCues.length, ducked: placedVo.length > 0, clipAudio };
 }
@@ -537,7 +542,7 @@ export async function muxStripAudio(inputVideoPath, { signal } = {}) {
     await unlink(tmpOut).catch(() => {});
     return result;
   }
-  const installed = await installEncodedVideo(tmpOut, inputVideoPath, 'silent strip');
+  const installed = await withBackupAssetPublication(() => installEncodedVideo(tmpOut, inputVideoPath, 'silent strip'));
   if (!installed.ok) return installed;
   return { ok: true };
 }

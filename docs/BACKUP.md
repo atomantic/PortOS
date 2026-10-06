@@ -102,6 +102,8 @@ Admission inventory (`withBackupAssetPublication`):
 | Derived media index (`mediaAssetIndex/`) | Rebuilt: `media_assets` rows are excluded from snapshot dumps; database restore rebuilds atomically from disk before reopening admission, and relevant file restores refresh the mirror |
 | Explicit file purge (`dataManager.js`, `routes/uploads.js`, `routes/attachments.js`) | Covered: single and bulk deletions hold one lease. These operator-directed removals may intentionally leave external references; admission prevents a snapshot from interleaving with the removal, not from preserving that already-deleted state |
 | Image generation completion, upscale/clean tails, variants and sketch pairs (`imageGen/*.js`, `mediaSketches.js`) | Covered (#9982 partial): provider output publication through sidecar and cleanup takes one lease; remote replacement and variant/sketch rewrites restore previous files on failure |
+| Pipeline audio mux (music, voice, generated cues, silent strip), including Creative Director stitch/final assembly | Covered (#9982 partial): encoding runs outside admission; replacement of the already-recorded video and rollback hold the lease. CD final/rough-cut rows only reference the existing history entry |
+| Music Video Making-of export (`makingOf.js`, `makingOfVisuals.js`) | Reference-only: reads existing assets and transforms buffers for the ZIP response; no durable file or row writes |
 | Durable replacement/deletion owners not yet classified | Outstanding (#9982) |
 | Snapshot consistency claim (`backupAssetOwners.js`, see below) | Covered (#9982 partial) |
 | Database restore execution and backend-cutover acceptance (`backup.js`, `databasePreflight.js`) | Covered (#9983) |
