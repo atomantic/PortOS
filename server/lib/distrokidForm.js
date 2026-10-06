@@ -127,7 +127,8 @@ export function fillDistrokidFields(plan) {
  * The AI disclosure, in two steps because the parts appear once the gate says
  * yes. `{ step: 'gate', ai }` answers the gate; `{ step: 'parts', ai }` ticks
  * lyrics, music, and all of the audio (AI vocals) or part of it (AI
- * instruments under a human voice). `ai`: { lyrics, music, vocals }.
+ * instruments under a human voice), then presses the parts modal's Save when
+ * DistroKid shows them in one. `ai`: { lyrics, music, vocals }.
  * Resolves true when every field it needed was there.
  */
 export function discloseDistrokidAi({ step, ai }) {
@@ -143,8 +144,10 @@ export function discloseDistrokidAi({ step, ai }) {
     gate.scrollIntoView?.({ block: 'center' });
     return set(gate, true);
   }
-  const full = document.querySelector('input[name^="ai_"][value="full"]');
-  const partial = document.querySelector('input[name^="ai_"][value="partial"]');
+  // The parts now open in a SweetAlert modal whose audio-scope boxes carry no name.
+  const scope = (value) => document.querySelector(`input[name^="ai_"][value="${value}"], input.distroAiRecordingScope[value="${value}"]`);
+  const full = scope('full');
+  const partial = scope('partial');
   const partialAudio = !ai.vocals && ai.music;
   let audio = set(full, !!ai.vocals) && set(partial, partialAudio);
   if (audio && partialAudio) {
@@ -160,9 +163,13 @@ export function discloseDistrokidAi({ step, ai }) {
       audio = set(kinds.find((k) => k.value === 'instruments'), true);
     }
   }
-  return set(document.querySelector('input[name^="ai_lyrics_"]'), !!ai.lyrics)
+  const parts = set(document.querySelector('input[name^="ai_lyrics_"]'), !!ai.lyrics)
     && set(document.querySelector('input[name^="ai_music_"]'), !!ai.music)
     && audio;
+  // The modal keeps nothing until Save, and closing it any other way resets the gate to No.
+  const save = document.querySelector('.ai-credits-swal-modal .swal2-confirm');
+  if (parts && save) save.click();
+  return parts;
 }
 
 /**

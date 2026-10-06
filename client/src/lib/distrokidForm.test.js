@@ -92,6 +92,34 @@ describe('DistroKid form recipe', () => {
     expect(checked('ai_gate_')).toBe('0');
   });
 
+  it("ticks the parts in DistroKid's modal, whose audio boxes have no name, and saves it", () => {
+    // The live shape since October 2026: a SweetAlert modal; closing it without Save resets the gate.
+    document.body.innerHTML = `
+      ${radios('ai_gate_ef56', ['0', '1'])}
+      <div class="swal2-popup ai-credits-swal-modal">
+        <label><input type="checkbox" class="distroAiLyrics" name="ai_lyrics_ef56" value="1">Lyrics (written by AI)</label>
+        <label><input type="checkbox" class="distroAiMusic" name="ai_music_ef56" value="1">Music (composed by AI)</label>
+        <label><input type="checkbox" class="distroAiRecordingScope" value="full">All of the audio</label>
+        <label><input type="checkbox" class="distroAiRecordingScope" value="partial">Part of the audio</label>
+        ${radios('ai_partial_audio_type_ef56', ['vocals', 'instruments'])}
+        <button class="swal2-cancel">Cancel</button><button class="swal2-confirm">Save</button>
+      </div>`;
+    let saved = 0;
+    document.querySelector('.swal2-confirm').addEventListener('click', () => { saved += 1; });
+    expect(discloseDistrokidAi({ step: 'parts', ai: { lyrics: false, music: true, vocals: true } })).toBe(true);
+    const box = (sel) => document.querySelector(sel).checked;
+    expect([box('.distroAiLyrics'), box('.distroAiMusic'), box('[value=full]'), box('[value=partial]')]).toEqual([false, true, true, false]);
+    expect(saved).toBe(1);
+  });
+
+  it('does not save the modal when a part it needed is missing', () => {
+    document.body.innerHTML = `<div class="ai-credits-swal-modal"><input type="checkbox" name="ai_music_ef56"><button class="swal2-confirm">Save</button></div>`;
+    let saved = 0;
+    document.querySelector('.swal2-confirm').addEventListener('click', () => { saved += 1; });
+    expect(discloseDistrokidAi({ step: 'parts', ai: { lyrics: false, music: true, vocals: true } })).toBe(false);
+    expect(saved).toBe(0);
+  });
+
   it('leaves no paid extra ticked, and names the ones it unticked', () => {
     expect(untickDistrokidExtras()).toEqual({ unticked: ['Social Media Pack', 'Leave a Legacy'], stillTicked: [] });
     expect(document.querySelectorAll('input[name=extras]:checked')).toHaveLength(0);
