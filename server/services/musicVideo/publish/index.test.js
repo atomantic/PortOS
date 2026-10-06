@@ -188,7 +188,7 @@ describe('publish drafts (#9282)', () => {
     // Once posted, a second draft (a duplicate post) needs the director's explicit "again".
     await recordPublishPost(id, 'youtube', { url: 'https://www.youtube.com/watch?v=example' });
     connect.mockClear();
-    await expect(preparePublishDraft(id, 'youtube', {}, { connect, adapters, platforms })).rejects.toMatchObject({ status: 409, code: 'PUBLISH_ALREADY_POSTED' });
+    await expect(preparePublishDraft(id, 'youtube', {}, { connect, adapters, platforms })).rejects.toMatchObject({ status: 409, code: 'PUBLISH_ALREADY_POSTED', context: { target: 'youtube', urls: ['https://www.youtube.com/watch?v=example'] } });
     expect(connect).not.toHaveBeenCalled();
     await preparePublishDraft(id, 'youtube', { again: true }, { connect, adapters, platforms });
     expect(adapters.youtube.prepare).toHaveBeenCalledTimes(2);

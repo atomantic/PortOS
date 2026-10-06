@@ -112,7 +112,10 @@ describe('deriveStages / deriveNextAction', () => {
     const kitBuilt = { ...finished, publishKit: { builtAt: '2026-01-01T00:00:00.000Z', posts: { youtube: { url: 'https://example.com/v' } } } };
     const publish = { targets: [{ target: 'youtube', label: 'YouTube' }, { target: 'distrokid', label: 'Spotify (via DistroKid)' }] };
     expect(deriveNextAction({ ...finished, publishKit: { builtAt: '2026-01-01T00:00:00.000Z' } })).toMatchObject({ label: 'Open publishing', anchor: 'mv-publish-kit' });
-    expect(deriveNextAction(kitBuilt, { publish })).toMatchObject({ label: 'Next: post to Spotify (via DistroKid)', anchor: 'mv-post-distrokid' });
+    expect(deriveNextAction(kitBuilt, { publish })).toMatchObject({ label: 'Next: post to Spotify (via DistroKid) · 1 left', anchor: 'mv-post-distrokid' });
+    // Every enabled platform posted: nothing left to do here, and no bulk-post wording.
+    const allPosted = { ...kitBuilt, publishKit: { ...kitBuilt.publishKit, posts: { youtube: { url: 'https://example.com/v' }, distrokid: { url: 'https://example.com/s' } } } };
+    expect(deriveNextAction(allPosted, { publish })).toMatchObject({ label: 'All posted', anchor: 'mv-publish-kit' });
     expect(stageChecklist('publish', kitBuilt, undefined, publish).find((i) => i.id === 'post-distrokid').action).toEqual({ label: 'Post here', anchor: 'mv-post-distrokid' });
     expect(stateOf({ ...finished, publishKit: { posts: { youtube: { url: 'https://example.com/v' } } } }).publish).toBe('done');
   });
