@@ -1,8 +1,11 @@
 /** Real mux installation against synthetic files and the real snapshot cut. */
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it as vitestIt, vi } from 'vitest';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { cleanupTempDataRoots, lazyTempDataRoot } from '../../lib/mockPathsDataRoot.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, ownTestBodies } from '../../lib/mockPathsDataRoot.js';
+
+const owned = ownTestBodies(vitestIt);
+const it = owned.it;
 
 const deferred = () => {
   let resolve;
@@ -57,6 +60,7 @@ const writers = [
   { name: 'silent strip', run: () => muxStripAudio(video()) },
 ];
 beforeEach(async () => {
+  await owned.drain();
   encoded = deferred(); installed = deferred(); releaseInstall = deferred();
   missingOutput = false; bypassAdmission = false; encodedInsideLease = null;
   await rm(root(), { recursive: true, force: true });
@@ -64,7 +68,11 @@ beforeEach(async () => {
   await writeFile(video(), 'original');
   await writeFile(audio(), 'synthetic audio');
 });
-afterAll(cleanupTempDataRoots);
+// Fail-fast cancellation leaves the async mux body running after Vitest's
+// wrapper settles. Keep its original, temporary output and backup until it exits.
+afterAll(async () => {
+  try { await owned.drain(); } finally { cleanupTempDataRoots(); }
+});
 
 describe.each(writers)('$name backup publication', ({ run }) => {
   it('encodes outside admission but preserves the named video throughout an open cut', async () => {
