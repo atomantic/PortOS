@@ -811,7 +811,9 @@ export const songAttachmentUploadSchema = z.object({
 // in the write schemas below, so Zod's unknown-key stripping drops a
 // client-supplied value. `source` records where an auto-discovered thread came
 // from, `externalState` what the tracker last said, and `closedAt` is stamped by
-// the route when the status enters a terminal state.
+// the route when the status enters a terminal state. `remindedFor` is the
+// `dueAt` a scheduled human action's reminder was sent for
+// (services/humanActionReminders.js), so a restart never repeats it.
 
 // Vocabularies live in the pure leaf (`lib/brainThreads.js`) so the client
 // renders its pickers from the same arrays these enums validate against.

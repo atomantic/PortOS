@@ -690,6 +690,14 @@ export const musicVideoPublishCopyDraftSchema = z.object({
   // The director agreed to replace posts written or edited by hand since the last draft.
   replaceEdited: z.boolean().optional(),
 }).strict();
+// Plan the promotion as scheduled steps for the artist (Review Hub › Actions).
+export const musicVideoPromotionPlanSchema = z.object({
+  providerId: z.string().max(200).nullable().optional(),
+  model: z.string().max(200).nullable().optional(),
+  goal: z.string().trim().max(1500).optional(),
+  audience: z.string().trim().max(1000).optional(),
+  days: z.number().int().min(1).max(30).optional(),
+}).strict();
 export const musicVideoPublishThumbnailSchema = z.object({ filename: z.string().min(1).max(300) }).strict();
 
 // Release cover art: a source (a kit thumbnail or a gallery image) composed

@@ -45,6 +45,7 @@ import {
   musicVideoSocialCutsQuerySchema,
   musicVideoPublishCopyPatchSchema,
   musicVideoPublishCopyDraftSchema,
+  musicVideoPromotionPlanSchema,
   musicVideoPublishThumbnailSchema,
   musicVideoCoverArtComposeSchema,
   musicVideoCoverArtGenerateSchema,
@@ -919,6 +920,19 @@ router.post('/:id/publish-kit/copy', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoPublishCopyDraftSchema, req.body || {});
   const { project } = await draftPublishKitCopy(req.params.id, input);
   res.json({ project });
+}));
+
+// The release's scheduled promotion steps (open ones), soonest first.
+router.get('/:id/publish/promotion-plan', asyncHandler(async (req, res) => {
+  const { promotionPlanSteps } = await import('../services/musicVideo/promotionPlan.js');
+  res.json(await promotionPlanSteps(req.params.id));
+}));
+
+// Turn the release into dated steps only the artist can take, with reminders.
+router.post('/:id/publish/promotion-plan', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoPromotionPlanSchema, req.body || {});
+  const { planMusicVideoPromotion } = await import('../services/musicVideo/promotionPlan.js');
+  res.status(201).json(await planMusicVideoPromotion(req.params.id, input));
 }));
 
 router.patch('/:id/publish-kit/copy', asyncHandler(async (req, res) => {
