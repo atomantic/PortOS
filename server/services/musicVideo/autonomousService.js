@@ -310,7 +310,7 @@ const MIN_WORD_SEC = 0.05;
  * own span, else the gap its neighbours leave — what a director does by hand
  * after alignment skips a line. Returns the repaired cues and the line count.
  */
-export function repairLyricWordTimings(cues, durationSec) {
+function repairLyricWordTimings(cues, durationSec) {
   let repaired = 0;
   const out = cues.map((cue, i) => {
     const words = cueText(cue).split(/\s+/).filter(Boolean);
