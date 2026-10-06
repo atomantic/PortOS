@@ -237,7 +237,7 @@ export async function updatePublishKitCopy(projectId, patch) {
 const sameTags = (a, b) => Array.isArray(b) && b.length > 0 && a.length === b.length && a.every((t, i) => t === b[i]);
 
 /** True when a post was written or edited by hand after the last draft (or with no draft yet). */
-export function copyEditedSinceDraft(kit) {
+function copyEditedSinceDraft(kit) {
   const edited = Date.parse(kit?.copyEditedAt || '');
   if (!Number.isFinite(edited)) return false;
   const drafted = Date.parse(kit?.copyDraftedAt || '');

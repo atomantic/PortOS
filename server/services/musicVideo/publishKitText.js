@@ -123,8 +123,8 @@ const str = (v, max) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, m
  * appears unless they asked for them. `length: 'short'` keeps every post to a
  * sentence or two.
  */
-export const DEFAULT_COPY_INCLUDE = Object.freeze({ title: true, lyrics: false, spend: false, chapters: false, hashtags: false });
-export const COPY_LENGTHS = Object.freeze(['short', 'full']);
+const DEFAULT_COPY_INCLUDE = Object.freeze({ title: true, lyrics: false, spend: false, chapters: false, hashtags: false });
+const COPY_LENGTHS = Object.freeze(['short', 'full']);
 
 export function normalizeCopyOptions({ include, length } = {}) {
   const src = include && typeof include === 'object' ? include : {};
@@ -164,7 +164,7 @@ const CLOSING = /^[,.;:!?)\]}]/;
  * mid-line leaves a single space, so indentation and markdown line breaks
  * elsewhere are untouched.
  */
-export function stripHashtags(text) {
+function stripHashtags(text) {
   let droppedLine = false;
   const out = String(text || '').replace(HASHTAG_RUN, (match, lead, trail, offset, whole) => {
     const end = offset + match.length;
