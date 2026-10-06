@@ -5,8 +5,11 @@
  * Lyrics and styles are left exactly as the director made them.
  */
 import { PUBLISH_STEP_TIMEOUT_MS as T, clickVisibleText, ensureToggleBeside, loginRequired, step } from './browser.js';
+import { markSunoSongMenu } from '../../../lib/sunoPage.js';
 
 const label = 'Suno';
+
+const songIdOf = (url) => String(url).match(/\/song\/([0-9a-f-]{36})/i)?.[1] || null;
 
 export const sunoAdapter = {
   label,
@@ -15,7 +18,11 @@ export const sunoAdapter = {
     await page.waitForTimeout(5000);
     if (!(await page.locator("button[aria-label='More options']").count())) throw loginRequired(label, payload.songUrl);
     await step(label, 'open the Publish dialog', async () => {
-      await page.locator("button[aria-label='More options']").first().click({ timeout: T });
+      // A cover's page lists the song it covers first, with its own menu, so the
+      // page song's menu is picked by which song card it sits in.
+      const songId = songIdOf(payload.songUrl);
+      if (!songId || !(await page.evaluate(markSunoSongMenu, songId))) throw new Error("no menu for this page's own song");
+      await page.locator('[data-portos-song-menu]').click({ timeout: T });
       await page.locator('[role=menuitem]').filter({ hasText: /^Publish$/ }).first().click({ timeout: T });
       await page.locator('[role=dialog]').first().waitFor({ timeout: T });
     });
