@@ -144,6 +144,7 @@ export const CATEGORIES = {
   'model-tests': { label: 'Model Capability Tests', description: 'Throwaway agent sandboxes from the capability test suite — recreated per run, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
   'music': { label: 'Music', description: 'Uploaded and generated background tracks', archivable: true, deletable: false },
   'openclaw': { label: 'OpenClaw', description: 'OpenClaw integration config', archivable: true, deletable: false },
+  'peer-execution': { label: 'Peer Execution Recovery', description: 'Machine-local launch evidence and completion receipts required to reconcile authorized peer maintenance — preserve unresolved operations', archivable: false, deletable: false },
   'pipeline-comparative-rank': { label: 'Comparative Rank', description: 'Cached comparative issue rankings — re-running them costs LLM calls', archivable: true, deletable: false },
   'pipeline-editorial': { label: 'Editorial Analysis', description: 'Cached editorial analyses — re-running them costs LLM calls', archivable: true, deletable: false },
   'pipeline-editorial-health': { label: 'Editorial Health', description: 'Cached editorial health scores — re-running them costs LLM calls', archivable: true, deletable: false },
