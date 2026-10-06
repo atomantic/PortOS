@@ -108,7 +108,12 @@ describe('deriveStages / deriveNextAction', () => {
     expect(stateOf(finished)).toEqual({ setup: 'done', 'cast-sets': 'done', board: 'done', produce: 'done', review: 'done', publish: 'active' });
     // #9281: a rendered project moves on to the release.
     expect(deriveNextAction(finished)).toMatchObject({ id: 'goto-publish', kind: 'goto', stage: 'publish', label: 'Build the publishing kit' });
-    expect(deriveNextAction({ ...finished, publishKit: { builtAt: '2026-01-01T00:00:00.000Z' } })).toMatchObject({ label: 'Publish the release' });
+    // With the kit built, the header names one platform at a time: the next one not yet posted.
+    const kitBuilt = { ...finished, publishKit: { builtAt: '2026-01-01T00:00:00.000Z', posts: { youtube: { url: 'https://example.com/v' } } } };
+    const publish = { targets: [{ target: 'youtube', label: 'YouTube' }, { target: 'distrokid', label: 'Spotify (via DistroKid)' }] };
+    expect(deriveNextAction({ ...finished, publishKit: { builtAt: '2026-01-01T00:00:00.000Z' } })).toMatchObject({ label: 'Open publishing', anchor: 'mv-publish-kit' });
+    expect(deriveNextAction(kitBuilt, { publish })).toMatchObject({ label: 'Next: post to Spotify (via DistroKid)', anchor: 'mv-post-distrokid' });
+    expect(stageChecklist('publish', kitBuilt, undefined, publish).find((i) => i.id === 'post-distrokid').action).toEqual({ label: 'Post here', anchor: 'mv-post-distrokid' });
     expect(stateOf({ ...finished, publishKit: { posts: { youtube: { url: 'https://example.com/v' } } } }).publish).toBe('done');
   });
 

@@ -473,10 +473,15 @@ export function deriveNextAction(project, {
       const shortLabel = { document: 'Attach', eidoverse: 'Save', code: 'Generate' }[project.composition?.mode] || 'Type';
       return { id: 'goto-compose', kind: 'goto', stage: 'produce', anchor: 'mv-composition', label, shortLabel };
     }
-    case 'publish':
-      return project.publishKit?.builtAt
-        ? { id: 'goto-publish', kind: 'goto', stage: 'publish', label: 'Publish the release', shortLabel: 'Publish' }
-        : { id: 'goto-publish', kind: 'goto', stage: 'publish', label: 'Build the publishing kit', shortLabel: 'Kit' };
+    case 'publish': {
+      if (!project.publishKit?.builtAt) return { id: 'goto-publish', kind: 'goto', stage: 'publish', label: 'Build the publishing kit', shortLabel: 'Kit' };
+      // One platform at a time, never "publish everything": the next platform
+      // not yet posted, so a click can't repeat a post that already went out.
+      const next = publishPlatformProgress(project, publish).rows.find((row) => row.state !== 'posted');
+      return next
+        ? { id: 'goto-publish', kind: 'goto', stage: 'publish', anchor: publishRowAnchor(next.target), label: `Next: post to ${next.label}`, shortLabel: next.label }
+        : { id: 'goto-publish', kind: 'goto', stage: 'publish', anchor: PUBLISH_ANCHOR, label: 'Open publishing', shortLabel: 'Publish' };
+    }
     default:
       if (isFinalRenderStale(project)) {
         return {
@@ -507,6 +512,8 @@ export function changedFieldsText(changedFields, limit = 4) {
 const APPROVAL_ANCHORS = { art: 'mv-review-art', storyboard: 'mv-review-storyboard', proof: 'mv-review-proof' };
 const APPROVAL_STAGES = { art: 'cast-sets', storyboard: 'board', proof: 'produce' };
 const PUBLISH_ANCHOR = 'mv-publish-kit';
+/** The anchor of one platform's row in the posting panel. */
+export const publishRowAnchor = (target) => `mv-post-${target}`;
 
 // Storyboard readiness problems, grouped by what the user has to go fix. The
 // server returns plain sentences; the first matching rule picks the group.
@@ -655,7 +662,12 @@ export function stageChecklist(stageId, project, readiness = project?.production
       if (!progress.rows.length) return [...items, { id: 'posted', label: 'Posted to a platform', done: progress.done, action: progress.done ? null : { label: 'Open publishing', anchor: PUBLISH_ANCHOR } }];
       items.push({ id: 'posted', label: `Posted to every enabled platform (${formatCount(progress.posted)} of ${formatCount(progress.total)})`, done: progress.done, action: progress.done ? null : { label: 'Open publishing', anchor: PUBLISH_ANCHOR } });
       const STATE_LABELS = { posted: 'posted', draft: 'draft filled', none: 'not started' };
-      for (const row of progress.rows) items.push({ id: `post-${row.target}`, label: `${row.label}: ${STATE_LABELS[row.state]}`, done: row.state === 'posted', action: row.state === 'posted' ? null : { label: 'Open publishing', anchor: PUBLISH_ANCHOR } });
+      for (const row of progress.rows) {
+        items.push({
+          id: `post-${row.target}`, label: `${row.label}: ${STATE_LABELS[row.state]}`, done: row.state === 'posted',
+          action: row.state === 'posted' ? null : { label: row.state === 'draft' ? 'Finish this post' : 'Post here', anchor: publishRowAnchor(row.target) },
+        });
+      }
       return items;
     }
     default:

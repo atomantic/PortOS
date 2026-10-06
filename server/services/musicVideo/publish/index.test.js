@@ -184,6 +184,14 @@ describe('publish drafts (#9282)', () => {
     await writeFile(join(PATHS.videos, 'master.mp4'), 'x');
     await preparePublishDraft(id, 'youtube', {}, { connect, adapters, platforms });
     expect(adapters.youtube.prepare.mock.calls[0][1].video.path).toBe(join(PATHS.videos, 'master.mp4'));
+
+    // Once posted, a second draft (a duplicate post) needs the director's explicit "again".
+    await recordPublishPost(id, 'youtube', { url: 'https://www.youtube.com/watch?v=example' });
+    connect.mockClear();
+    await expect(preparePublishDraft(id, 'youtube', {}, { connect, adapters, platforms })).rejects.toMatchObject({ status: 409, code: 'PUBLISH_ALREADY_POSTED' });
+    expect(connect).not.toHaveBeenCalled();
+    await preparePublishDraft(id, 'youtube', { again: true }, { connect, adapters, platforms });
+    expect(adapters.youtube.prepare).toHaveBeenCalledTimes(2);
   });
 
   it('sends the song to DistroKid with its audio, a square store cover, and the account as the artist', async () => {

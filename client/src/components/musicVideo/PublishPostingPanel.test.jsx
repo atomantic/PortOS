@@ -93,6 +93,20 @@ describe('PublishPostingPanel (#9282)', () => {
     expect(within(again).getByLabelText('Genre')).toHaveValue('');
   });
 
+  it('asks before filling a second draft for a platform already posted to', () => {
+    const publishing = hook();
+    render(<PublishPostingPanel project={project({ posts: { youtube: { url: 'https://www.youtube.com/watch?v=example' } } })} publishing={publishing} />);
+    const yt = row('YouTube');
+    expect(within(yt).queryByRole('button', { name: 'Fill draft' })).toBeNull();
+    fireEvent.click(within(yt).getByRole('button', { name: 'Post again…' }));
+    expect(publishing.prepare).not.toHaveBeenCalled();
+    fireEvent.click(within(yt).getByRole('button', { name: 'Confirm posting to YouTube again' }));
+    expect(publishing.prepare).toHaveBeenCalledWith('youtube', { again: true });
+    // A platform not yet posted fills straight away, on its own.
+    fireEvent.click(within(row('TikTok')).getByRole('button', { name: 'Fill draft' }));
+    expect(publishing.prepare).toHaveBeenLastCalledWith('tiktok', {});
+  });
+
   it('shows no cut picker when there is only one 9:16 cut', () => {
     render(<PublishPostingPanel project={project()} publishing={hook()} />);
     expect(within(row('TikTok')).queryByLabelText('Vertical cut to post')).toBeNull();
