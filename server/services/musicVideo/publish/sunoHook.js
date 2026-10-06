@@ -14,7 +14,7 @@ import { PUBLISH_STEP_TIMEOUT_MS as T, clickVisibleText, loginRequired, step } f
 const CREATE_URL = 'https://suno.com/hooks/create';
 const label = 'Suno Hook';
 // Measured on the 2026-10 picker: one waveform second is about this many CSS px; dragging right moves the window earlier.
-export const WAVEFORM_PX_PER_SEC = 23.6;
+const WAVEFORM_PX_PER_SEC = 23.6;
 // The page's readout is a rounded m:ss, so a one-second miss is the finest check it can support.
 const READBACK_TOLERANCE_SEC = 1;
 
