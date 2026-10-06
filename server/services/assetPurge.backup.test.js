@@ -14,8 +14,8 @@ vi.mock('../lib/fileUtils.js', async importOriginal => {
   return { ...actual, PATHS: { ...actual.PATHS, data: fixture.root,
     images: join(fixture.root, 'images'), uploads: join(fixture.root, 'uploads'),
     cosAttachments: join(fixture.root, 'attachments') },
-  rmGuarded: async (...args) => { await fixture.beforeDelete?.(); return actual.rmGuarded(...args); },
-  unlinkGuarded: async (...args) => { await fixture.beforeDelete?.(); return actual.unlinkGuarded(...args); } };
+  rmGuarded: async (...args) => { await fixture.beforeDelete?.(...args); return actual.rmGuarded(...args); },
+  unlinkGuarded: async (...args) => { await fixture.beforeDelete?.(...args); return actual.unlinkGuarded(...args); } };
 });
 const { purgeCategory } = await import('./dataManager.js');
 const { default: uploads } = await import('../routes/uploads.js');
@@ -37,6 +37,31 @@ beforeEach(async () => {
 afterAll(() => rm(fixture.root, { recursive: true, force: true }));
 
 describe('operator file purges drain before a backup copies files', () => {
+  it('drains sibling removals before releasing a failed bulk purge', async () => {
+    const entered = deferred();
+    const proceed = deferred();
+    fixture.beforeDelete = async path => {
+      if (path.endsWith('one.txt')) throw new Error('synthetic deletion failure');
+      entered.resolve(); await proceed.promise;
+    };
+    const operation = purgeCategory('messages');
+    const failed = expect(operation).rejects.toThrow('synthetic deletion failure');
+    await entered.promise;
+    let acquired = false;
+    const cut = acquireBackupSnapshotCut().then(release => { acquired = true; return release; });
+    try {
+      await new Promise(resolve => setImmediate(resolve));
+      expect(acquired, 'failure must not release admission while another removal runs').toBe(false);
+    } finally {
+      proceed.resolve();
+      await failed;
+      const release = await cut;
+      release();
+    }
+    expect(await readFile(join(fixture.root, 'messages', 'one.txt'), 'utf8')).toBe('first');
+    await expect(readFile(join(fixture.root, 'messages', 'two.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it.each([
     ['category item', 'images', false, () => purgeCategory('images', { subPath: 'one.txt' })],
     ['category bulk', 'messages', true, () => purgeCategory('messages')],

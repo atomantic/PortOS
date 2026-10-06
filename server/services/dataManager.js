@@ -517,7 +517,9 @@ export async function purgeCategory(categoryKey, options = {}) {
       console.log(`🗑️ Purged item from data/${categoryKey}`);
     } else {
       const entries = await readdir(dirPath).catch(() => []);
-      await Promise.all(entries.map(entry => rmGuarded(join(dirPath, entry), { recursive: true, force: true })));
+      const removals = await Promise.allSettled(entries.map(entry => rmGuarded(join(dirPath, entry), { recursive: true, force: true })));
+      const failed = removals.find(result => result.status === 'rejected');
+      if (failed) throw failed.reason;
       console.log(`🗑️ Purged all ${entries.length} entries from data/${categoryKey}`);
     }
 
