@@ -127,7 +127,9 @@ export function fillDistrokidFields(plan) {
  * The AI disclosure, in two steps because the parts appear once the gate says
  * yes. `{ step: 'gate', ai }` answers the gate; `{ step: 'parts', ai }` ticks
  * lyrics, music, and all of the audio (AI vocals) or part of it (AI
- * instruments under a human voice). `ai`: { lyrics, music, vocals }.
+ * instruments under a human voice), then presses the parts modal's Save when
+ * DistroKid shows them in one; `{ step: 'check', ai }` confirms afterwards that
+ * the gate still holds the answer and the modal closed. `ai`: { lyrics, music, vocals }.
  * Resolves true when every field it needed was there.
  */
 export function discloseDistrokidAi({ step, ai }) {
@@ -137,14 +139,22 @@ export function discloseDistrokidAi({ step, ai }) {
     if (el.checked !== on) el.click();
     return true;
   };
+  if (step === 'check') {
+    // After Save: the gate still holds the answer and no AI modal is left open.
+    const gate = document.querySelector('input[type=radio][name^="ai_gate_"]:checked');
+    const open = [...document.querySelectorAll('.ai-credits-swal-modal')].some((m) => m.isConnected && !m.closest('[hidden]') && m.style.display !== 'none');
+    return gate?.value === (any ? '1' : '0') && !open;
+  }
   if (step === 'gate') {
     const gate = document.querySelector(`input[type=radio][name^="ai_gate_"][value="${any ? 1 : 0}"]`);
     if (!gate) return false;
     gate.scrollIntoView?.({ block: 'center' });
     return set(gate, true);
   }
-  const full = document.querySelector('input[name^="ai_"][value="full"]');
-  const partial = document.querySelector('input[name^="ai_"][value="partial"]');
+  // The parts now open in a SweetAlert modal whose audio-scope boxes carry no name.
+  const scope = (value) => document.querySelector(`input[name^="ai_"][value="${value}"], input.distroAiRecordingScope[value="${value}"]`);
+  const full = scope('full');
+  const partial = scope('partial');
   const partialAudio = !ai.vocals && ai.music;
   let audio = set(full, !!ai.vocals) && set(partial, partialAudio);
   if (audio && partialAudio) {
@@ -160,9 +170,16 @@ export function discloseDistrokidAi({ step, ai }) {
       audio = set(kinds.find((k) => k.value === 'instruments'), true);
     }
   }
-  return set(document.querySelector('input[name^="ai_lyrics_"]'), !!ai.lyrics)
+  const parts = set(document.querySelector('input[name^="ai_lyrics_"]'), !!ai.lyrics)
     && set(document.querySelector('input[name^="ai_music_"]'), !!ai.music)
     && audio;
+  // The modal keeps nothing until Save, and closing it any other way resets the gate to No,
+  // so a modal with no Save to press is a failure, not a pass.
+  const popup = document.querySelector('.ai-credits-swal-modal') || document.querySelector('.swal2-popup');
+  const save = popup?.querySelector('.swal2-confirm');
+  if (popup && !save) return false;
+  if (parts && save) save.click();
+  return parts;
 }
 
 /**

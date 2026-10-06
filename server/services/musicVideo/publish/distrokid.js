@@ -98,7 +98,10 @@ export const distrokidAdapter = {
       if (!(await page.evaluate(discloseDistrokidAi, { step: 'gate', ai: payload.ai }))) return false;
       if (!(payload.ai.lyrics || payload.ai.music || payload.ai.vocals)) return true;
       await page.waitForTimeout(1000);
-      return page.evaluate(discloseDistrokidAi, { step: 'parts', ai: payload.ai });
+      if (!(await page.evaluate(discloseDistrokidAi, { step: 'parts', ai: payload.ai }))) return false;
+      // A Save that didn't take resets the gate to No once the modal goes, so the answer is re-read.
+      await page.waitForTimeout(800);
+      return page.evaluate(discloseDistrokidAi, { step: 'check', ai: payload.ai });
     });
     // Paid extras are the director's call, every time: none stays ticked.
     const extras = await page.evaluate(untickDistrokidExtras).catch(() => null);
