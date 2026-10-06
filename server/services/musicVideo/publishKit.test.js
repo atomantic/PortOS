@@ -141,10 +141,37 @@ describe('publishing kit copy (#9281)', () => {
     const { project } = await kit.draftPublishKitCopy(id, { notes: 'made it on a Sunday', links: { youtube: 'https://example.com/v' } }, deps);
     expect(deps.runner.runPromptThroughProvider).toHaveBeenCalledTimes(1);
     expect(deps.runner.runPromptThroughProvider.mock.calls[0][0]).toMatchObject({ source: 'music-video-publish-copy' });
+    // Nothing beyond the title is ticked by default, so the model's tags are dropped and the choice is kept for a redraft.
     expect(project.publishKit).toMatchObject({ notes: 'made it on a Sunday', links: { youtube: 'https://example.com/v' }, copy: { youtube: { title: 'A title' }, x: { hook: 'a hook' } } });
+    expect(project.publishKit.copy.youtube).not.toHaveProperty('tags');
+    expect(project.publishKit.draftOptions).toEqual({ include: { title: true, lyrics: false, spend: false, chapters: false, hashtags: false }, length: 'short' });
     const edited = await kit.updatePublishKitCopy(id, { x: { hook: 'my own hook' } });
     expect(edited.project.publishKit.copy.x).toEqual({ hook: 'my own hook', story: 'story' });
     expect(edited.project.publishKit.copy.youtube.title).toBe('A title');
+  });
+
+  it('will not replace posts edited by hand unless the director confirms, and keeps fields the draft leaves out', async () => {
+    const { id } = await projects.createProject({ name: 'Example Song' });
+    await kit.updatePublishKitCopy(id, { youtube: { title: 'My title', tags: ['my tag'] } });
+    const deps = { platforms: ALL_ON, history: {}, runner: runner(JSON.stringify({ youtube: { title: 'Drafted', description: 'd', tags: ['model tag'] } })) };
+    await expect(kit.draftPublishKitCopy(id, {}, deps)).rejects.toMatchObject({ status: 409, code: 'PUBLISH_COPY_EDITED' });
+    expect(deps.runner.runPromptThroughProvider).not.toHaveBeenCalled();
+    const { project } = await kit.draftPublishKitCopy(id, { replaceEdited: true }, deps);
+    expect(project.publishKit.copy.youtube).toEqual({ title: 'Drafted', description: 'd', tags: ['my tag'] });
+    // Right after a draft nothing was edited, so redrafting needs no confirmation.
+    await expect(kit.draftPublishKitCopy(id, {}, deps)).resolves.toBeTruthy();
+  });
+
+  it('clears tags an earlier draft wrote once hashtags are unticked', async () => {
+    const { id } = await projects.createProject({ name: 'Example Song' });
+    const reply = JSON.stringify({ youtube: { title: 'Drafted', description: 'd', tags: ['model tag'] } });
+    const deps = { platforms: { youtube: { enabled: true } }, history: {}, runner: runner(reply) };
+    const first = await kit.draftPublishKitCopy(id, { include: { hashtags: true } }, deps);
+    expect(first.project.publishKit.copy.youtube.tags).toEqual(['model tag']);
+    // A draft with YouTube off in between still remembers which tags the model wrote.
+    await kit.draftPublishKitCopy(id, {}, { ...deps, platforms: { x: { enabled: true } }, runner: runner(JSON.stringify({ x: { hook: 'h' } })) });
+    const second = await kit.draftPublishKitCopy(id, {}, deps);
+    expect(second.project.publishKit.copy.youtube.tags).toEqual([]);
   });
 
   it('reports an unusable draft instead of saving it', async () => {
