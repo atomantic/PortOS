@@ -16,7 +16,7 @@ import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import sharp from 'sharp';
-import { mkdir, writeFile, readFile, rm } from 'fs/promises';
+import { mkdir, writeFile, readFile, readdir, rm } from 'fs/promises';
 import { createHash } from 'crypto';
 import {
   capSharpThreads,
@@ -32,6 +32,12 @@ const restoreSharpThreads = capSharpThreads();
 afterAll(restoreSharpThreads);
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-atlas-test-'));
 
+let beforeAssetWrite = async () => {};
+let bypassAdmission = false;
+vi.mock('../../lib/backupSnapshotBoundary.js', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, withBackupAssetPublication: work => bypassAdmission ? work() : actual.withBackupAssetPublication(work) };
+});
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
   Object.assign(actual.PATHS, {
@@ -39,7 +45,10 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
     sprites: join(TEST_ROOT, 'sprites'),
     images: join(TEST_ROOT, 'images'),
   });
-  return actual;
+  return { ...actual, atomicWrite: async (path, ...args) => {
+    await beforeAssetWrite(path);
+    return actual.atomicWrite(path, ...args);
+  } };
 });
 
 vi.mock('../imageGen/index.js', () => ({
@@ -365,6 +374,7 @@ describe('lockAllAnchors fixture materialization (#6180)', () => {
 });
 
 beforeEach(() => {
+  beforeAssetWrite = async () => {}; bypassAdmission = false;
   rmSync(join(TEST_ROOT, 'sprite-records.json'), { force: true });
 });
 afterAll(() => rmSync(TEST_ROOT, {
@@ -964,4 +974,47 @@ it('preserves an unreadable atlas pointer until it is repaired', async () => {
   expect(await readFile(path, 'utf8')).toBe('{');
   await writeFile(path, good);
   await expect(compileAtlas(id)).resolves.toMatchObject({ created: false });
+});
+
+const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
+const backupDeferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
+const backupSettle = () => new Promise(resolve => setImmediate(resolve));
+
+describe('atlas backup publication', () => {
+  it('keeps the runtime pointer and version bytes behind an open cut', async () => {
+    const id = await finalizedAmbientPlace();
+    const release = await acquireBackupSnapshotCut();
+    const writes = []; beforeAssetWrite = async path => { writes.push(path); };
+    const work = compileAtlas(id);
+    try { await backupSettle(); await backupSettle(); expect(writes).toEqual([]); }
+    finally { release(); }
+    const result = await work;
+    expect(await readFile(join(TEST_ROOT, 'sprites', id, result.atlasPath))).toBeTruthy();
+  });
+  it('drains atlas bytes through the real current-pointer write', async () => {
+    const id = await finalizedAmbientPlace();
+    const reached = backupDeferred(); const commit = backupDeferred();
+    beforeAssetWrite = async path => { if (path.endsWith('runtime/current.json')) { reached.resolve(); await commit.promise; } };
+    const work = compileAtlas(id);
+    await Promise.race([reached.promise, work.then(() => { throw new Error('missed pointer seam'); })]);
+    let ready = false; const cut = acquireBackupSnapshotCut().then(release => { ready = true; return release; });
+    try { await backupSettle(); expect(ready).toBe(false); } finally { commit.resolve(); }
+    const result = await work; const release = await cut;
+    try {
+      const pointer = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, 'runtime/current.json'), 'utf8'));
+      expect(pointer.atlasPath).toBe(result.atlasPath);
+      expect(await readFile(join(TEST_ROOT, 'sprites', id, pointer.atlasPath))).toBeTruthy();
+    } finally { release(); }
+  });
+  it('negative control exposes a new pointer absent from an earlier copied runtime tree', async () => {
+    const id = await finalizedAmbientPlace(); bypassAdmission = true;
+    const copiedAtlasPaths = await readdir(join(TEST_ROOT, 'sprites', id, 'runtime'), { recursive: true }).catch(err => { if (err.code === 'ENOENT') return []; throw err; });
+    const release = await acquireBackupSnapshotCut();
+    try {
+      const result = await compileAtlas(id);
+      const pointer = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, 'runtime/current.json'), 'utf8'));
+      expect(pointer.atlasPath).toBe(result.atlasPath);
+      expect(copiedAtlasPaths).not.toContain(pointer.atlasPath.replace(/^runtime\//, ''));
+    } finally { release(); }
+  });
 });

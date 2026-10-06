@@ -92,7 +92,8 @@ const manifestRelPath = (id) => `reference/${id}-reference-set-v1.json`;
 // manifest and the second save would erase the first's locked state —
 // breaking the immutability contract. Same convention as the completion
 // hook's per-record queue.
-const manifestWriteTail = createKeyCachedQueue();
+const manifestWriteQueue = createKeyCachedQueue();
+const manifestWriteTail = (recordId, fn) => withBackupAssetPublication(() => manifestWriteQueue(recordId, fn));
 
 // Phase-1 imported manifests are copied verbatim from the source pipeline
 // and carry repo-root paths (`art-source/sprites/<id>/reference/...`), while
@@ -851,7 +852,11 @@ export async function forkSprite(sourceId, body) {
  * gallery into the record's reference/candidates/ with a generation sidecar.
  * Returns the candidate rel path (falsy result = hook logs a skip).
  */
-export async function attachReferenceCandidate(ctx) {
+export function attachReferenceCandidate(ctx) {
+  return withBackupAssetPublication(() => attachReferenceCandidateLeased(ctx));
+}
+
+async function attachReferenceCandidateLeased(ctx) {
   const { recordId, anchorId, filename } = ctx;
   const src = join(PATHS.images, filename);
   if (!await pathExists(src)) return null;
