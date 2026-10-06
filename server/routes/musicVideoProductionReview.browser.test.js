@@ -133,7 +133,7 @@ describe.skipIf(!canRun)('production review in a real browser (Chrome, ffmpeg an
     await page.getByLabel('Playback energy compared with the saved plan').fill('The synthetic fixture demonstrates a driving chorus: the modeled subject changes pose and travels while the camera moves through the scene.');
     await page.getByLabel('Timecoded playback notes').fill('0:02 — subject enters the frame; 0:07 — pose and camera position differ and readable type remains clear. This is a synthetic workflow test, not artistic approval of a production video.');
     expect(await page.getByRole('checkbox', { name: /I watched this revision/ }).count()).toBe(0);
-    await page.getByRole('button', { name: 'Approve — I reviewed this proof with audio' }).click();
+    await page.getByRole('button', { name: 'Approve proof — watched with sound' }).click();
     await page.getByRole('heading', { name: 'Animated proof approved', exact: true }).waitFor();
     const result = await store.getProject(p.id);
     expect(Object.keys(result.productionReview.approvals).sort()).toEqual(['art', 'proof', 'storyboard']);

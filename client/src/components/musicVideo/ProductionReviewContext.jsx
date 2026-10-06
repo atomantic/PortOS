@@ -12,14 +12,13 @@ const FOLD = 'min-h-[44px] cursor-pointer py-2 text-sm';
  * at a time, never a wall of text above the Approve button. `onSeek(startSec)`
  * plays the docked preview from a shot.
  */
-export default function ProductionReviewContext({ stage, project, basis, approved, onOpenArtifact, onArtReady, onSeek = null }) {
+export default function ProductionReviewContext({ stage, project, onOpenArtifact, onArtReady, onSeek = null }) {
   const draft = project.productionReview?.draft || {};
   const guide = project.devArtifacts?.find(a => a.id === draft.guideArtifactId && !a.deleted);
   const document = draft.storyboardSource === 'document';
   const shots = draft.storyboard || [];
   const sheets = (project.devArtifacts || []).filter(a => !a.deleted && a.kind === 'storyboard');
   return <section aria-label={`${stage === 'art' ? 'Art direction' : 'Storyboard'} review content`} className="min-w-0 space-y-3 py-3">
-    <p className="text-xs text-port-text-muted break-words">Project v{project.version || 1} · {approved ? 'Approved saved revision' : 'Current saved revision'} · {basis?.slice(0, 12) || 'Loading revision…'}</p>
     {stage === 'art' ? <>
       {guide ? <figure className="min-w-0 space-y-2">
         <figcaption className="text-sm font-medium">Selected visual guide: {guide.title} · v{guide.version || 1}</figcaption>

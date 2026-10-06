@@ -6,6 +6,8 @@ const EMPTY = { cast: '', environments: '', visualLanguage: '', motionLanguage: 
   lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [] };
 const fieldClass = 'mt-1 w-full rounded border border-port-border bg-port-bg p-2 text-sm';
 const buttonClass = 'min-h-[44px] rounded border border-port-border px-3 py-2 text-sm disabled:opacity-50';
+const timeFieldClass = 'mt-1 block w-24 rounded border border-port-border bg-port-bg p-2 text-sm';
+const approveClass = 'min-h-[44px] rounded bg-port-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50';
 const labels = { art: 'Art direction', storyboard: 'Lyric-timed storyboard', proof: 'Animated proof' };
 // Each approval closes the step that owns its work (#10151); the page passes that step's `stage`.
 const STAGE_TABS = { art: 'cast-sets', storyboard: 'board', proof: 'produce' };
@@ -87,19 +89,21 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
       excerptId: excerpt.id, filename: excerpt.filename } : undefined);
   };
 
+  // One line under the action buttons saying what approval still needs, or nothing when it can be given.
   const approvalHelp = stage => {
-    if (!ready) return 'Loading review prerequisites…';
-    if (dirty) return 'Save your planning edits before approving this revision.';
-    if (review.busy) return 'Wait for the current review action to finish.';
-    if (ready[stage].approved) return 'Already approved for this revision.';
-    if (ready[stage].problems.length) return 'Complete the prerequisites listed above before approving.';
-    if (stage === 'art' && visibleArt !== artIdentity) return 'Load and inspect the selected visual guide before approving art direction.';
+    if (!ready) return 'Loading…';
+    if (ready[stage].approved) return null;
+    if (dirty) return 'Save your planning edits first.';
+    if (review.busy) return 'Working…';
+    const problems = ready[stage].problems;
+    if (problems.length) return problems.length > 1 ? `${problems[0]} (+${problems.length - 1} more below)` : problems[0];
+    if (stage === 'art' && visibleArt !== artIdentity) return 'Open the visual guide below first.';
     if (stage !== 'proof') return null;
-    if (review.proof.active) return 'Wait for the evidence render to finish, then review the completed proof.';
-    if (playbackBlocked) return 'Load the completed animated proof before recording your review. If playback fails, restore its exact file or render a new proof.';
-    if (!playback.energyComparison.trim()) return 'Describe how the playback energy compares with the saved plan.';
-    if (!hasTimecodedNotes) return 'Add playback notes with a timestamp such as 0:04 or 4.5s.';
-    if (!evidenceComplete) return 'Complete the visual and audio observations (at least 40 characters each) and state the review limitations.';
+    if (review.proof.active) return 'Wait for the proof to finish rendering.';
+    if (playbackBlocked) return proofNeedsRender ? 'Render a 10–45 second chorus proof, then watch it with sound.' : 'Play the proof below with sound first.';
+    if (!playback.energyComparison.trim()) return 'Add how the energy compares with the plan.';
+    if (!hasTimecodedNotes) return 'Add a note with a time, like 0:04.';
+    if (!evidenceComplete) return 'Complete the machine review notes (40+ characters each, plus limitations).';
     return null;
   };
   // A link to another step's section crosses steps through the page; within this step it just unfolds the target.
@@ -138,38 +142,32 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
       : stage === 'storyboard' ? `Revised ${count} shot${count === 1 ? '' : 's'}. Review them, then resolve each request.`
         : 'A revised composition is ready. Render and review a new proof, then resolve each request.' });
   };
+  // Without a current proof the next thing to do is render one, so its controls lead the box.
+  const proofNeedsRender = !excerpt || ['error', 'canceled'].includes(excerpt.status)
+    || (project.productionReview?.proof?.basis && ready?.basis.proof && project.productionReview.proof.basis !== ready.basis.proof);
+  const renderControls = <div id="mv-review-render" tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className="flex flex-wrap items-end gap-2">
+    <label htmlFor={fieldId('proof-start')} className="text-sm">Chorus start (s)<input id={fieldId('proof-start')} type="number" min="0" step="0.01" value={startSec} onChange={e => setStartSec(Number(e.target.value))} className={timeFieldClass} /></label>
+    <label htmlFor={fieldId('proof-end')} className="text-sm">End (s)<input id={fieldId('proof-end')} type="number" min="0" step="0.01" value={endSec} onChange={e => setEndSec(Number(e.target.value))} className={timeFieldClass} /></label>
+    <button type="button" className={proofNeedsRender ? approveClass : buttonClass} disabled={blocked || !ready?.storyboard.approved || review.proof.occupied || review.proof.active} onClick={() => review.renderProof({ startSec, endSec })}>{proofNeedsRender ? 'Render animated proof' : 'Render a new proof'}</button>
+    <button type="button" className={buttonClass} disabled={blocked || review.proof.occupied || review.proof.active} onClick={() => review.renderProof({ startSec, endSec, kind: 'prototype' })}>Render preview only</button>
+  </div>;
   const proofContent = <>
-    <p className="text-xs text-port-text-muted break-words">Project v{project.version || 1} · proof revision {ready?.basis.proof?.slice(0, 12) || 'Loading…'} · {excerpt ? `Excerpt ${excerpt.id}` : 'No registered proof'}</p>
-    {!excerpt && <div className="rounded border border-port-border p-3 space-y-2" aria-label="Proof approval prerequisites">
-      <p className="text-sm">{prototype ? 'The video below is a feasibility prototype, not a registered production proof. Watching it does not enable proof approval.' : 'No production proof is registered for this project.'}</p>
-      <ol className="list-decimal pl-5 text-sm space-y-2">
-        {!ready?.art.approved && <li><a href="#mv-review-art" onClick={jump('cast-sets', 'mv-review-art')} className="text-port-accent underline">Review and approve art direction</a> for the current revision.</li>}
-        {!ready?.storyboard.approved && <li><a href="#mv-review-storyboard" onClick={jump('board', 'mv-review-storyboard')} className="text-port-accent underline">Resolve storyboard prerequisites and approve it</a>.
-          <ul className="list-disc pl-5">{(ready?.storyboard.problems || []).map(problem => <li key={problem}>{problem}</li>)}</ul>
-          <a href="#mv-review-planning" onClick={jump('board', 'mv-review-planning')} className="text-port-accent underline">Open planning edits for document shot manifests</a>; lyric timing is verified on the <a href="#mv-lyric-timing" onClick={jump('setup', 'mv-lyric-timing')} className="text-port-accent underline">Song step</a>.
-        </li>}
-        <li>Choose a 10–45 second chorus window and use “Render animated proof” below. The feasibility prototype button creates a separate, unapproved preview.</li>
-        <li>Review the proof with audio, add an energy comparison and timecoded notes, then approve using the playback attestation.</li>
-      </ol>
+    {!excerpt && <div className="space-y-1 text-sm" aria-label="Proof approval prerequisites">
+      {!ready?.art.approved && <p><a href="#mv-review-art" onClick={jump('cast-sets', 'mv-review-art')} className="text-port-accent underline">Approve the art direction</a> first.</p>}
+      {ready?.art.approved && !ready?.storyboard.approved && <p><a href="#mv-review-storyboard" onClick={jump('board', 'mv-review-storyboard')} className="text-port-accent underline">Approve the storyboard</a> first.</p>}
+      {prototype && <p className="text-xs text-port-text-muted">The prototype below is a preview only; it can't be approved.</p>}
     </div>}
     {excerpt && <p className="text-xs text-port-text-muted break-words">{excerpt.filename || excerpt.status} · {project.productionReview?.proof?.basis === ready?.basis.proof ? 'Current source revision' : 'Source changed — render a new proof'}</p>}
     {excerpt?.status === 'error' && excerpt.error && <p role="alert" className="text-sm text-port-error break-words">{excerpt.error}</p>}
 
-      <p className="text-sm">Render a 10–45 second chorus over the finished composition and watch it with sound at normal speed.</p>
       <details aria-label="Saved choreography for proof comparison" className="rounded border border-port-border bg-port-bg p-3">
         <summary className="min-h-[44px] cursor-pointer text-sm font-medium">Saved energy target and timed choreography</summary>
         <p className="mt-1 whitespace-pre-wrap text-sm">{saved.motionLanguage || 'Save an energy target and timed choreography in the planning editor before judging the proof.'}</p>
         <p className="mt-2 text-xs text-port-text-muted">Compare playback with this saved plan. If the chosen energy or actions are missing, record revision feedback with a time range before approving.</p>
       </details>
-      <div id="mv-review-render" tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className="flex flex-wrap items-end gap-2">
-        <label htmlFor={fieldId('proof-start')} className="text-sm">Proof start (seconds)<input id={fieldId('proof-start')} type="number" min="0" step="0.01" value={startSec} onChange={e => setStartSec(Number(e.target.value))} className={fieldClass} /></label>
-        <label htmlFor={fieldId('proof-end')} className="text-sm">Proof end (seconds)<input id={fieldId('proof-end')} type="number" min="0" step="0.01" value={endSec} onChange={e => setEndSec(Number(e.target.value))} className={fieldClass} /></label>
-        <button type="button" className={buttonClass} disabled={blocked || review.proof.occupied || review.proof.active} onClick={() => review.renderProof({ startSec, endSec, kind: 'prototype' })}>Render feasibility prototype — unapproved</button>
-        <button type="button" className={buttonClass} disabled={blocked || !ready?.storyboard.approved || review.proof.occupied || review.proof.active} onClick={() => review.renderProof({ startSec, endSec })}>Render animated proof</button>
-      </div>
+      {!proofNeedsRender && renderControls}
       {review.proof.occupied && !review.proof.active && <p role="status">Review evidence is rendering in another project. Wait for it to finish before starting another.</p>}
       {review.proof.active && <p role="status">{review.proof.connected === false ? 'Connecting to review render…' : `Rendering review evidence — ${review.proof.percent ?? 0}%.`} Production approvals are separate.</p>}
-      <p className="text-xs text-port-text-muted">A feasibility prototype uses the current authored composition and master audio without approving the look or authorizing production. It can be made before art approval; it never becomes approved proof automatically.</p>
       {prototype?.status === 'complete' && prototype.filename && <figure><video controls className="mt-2 w-full rounded" aria-label="Unapproved feasibility prototype" src={`/data/videos/${encodeURIComponent(prototype.filename)}`} /><figcaption className="text-sm">Unapproved feasibility prototype — separate from production proof</figcaption></figure>}
       {excerpt?.status === 'complete'  && excerpt.filename && <video key={proofIdentity} controls className="mt-2 w-full rounded" aria-label="Animated proof with master audio" src={`/data/videos/${encodeURIComponent(excerpt.filename)}`}
         onLoadedData={() => setProofMedia({ identity: proofIdentity, ready: true })}
@@ -188,6 +186,8 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         <p className="mt-1 whitespace-pre-wrap text-sm">{matchingRecordedReview.energyComparison}</p>
         <p className="mt-2 whitespace-pre-wrap text-sm">{matchingRecordedReview.timecodedNotes}</p>
       </section>}
+      {/* The review notes belong to a proof; with none to watch they would only be disabled clutter. */}
+      {!proofNeedsRender && <>
       <label htmlFor={fieldId('review-method')} className="block text-sm">Review method
         <select id={fieldId('review-method')} disabled={playbackBlocked} value={playback.method}
           onChange={e => setPlayback({ method: e.target.value })} className={fieldClass}>
@@ -197,7 +197,6 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
       </label>
       {machineReview && <fieldset className="space-y-3">
         <legend className="text-sm font-medium">Machine review evidence</legend>
-        <p className="text-xs text-port-text-muted">Record the actual inspection method and observations for this exact proof. Frame checks alone cannot establish motion or audio alignment. No human playback is claimed.</p>
         {[
           ['visualReview', 'Visual and motion observations', 8000],
           ['audioReview', 'Audio and alignment observations', 8000],
@@ -206,7 +205,6 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
           <textarea id={fieldId(key)} rows={3} maxLength={maxLength} disabled={playbackBlocked} value={playback[key]}
             onChange={e => setPlayback({ [key]: e.target.value })} className={fieldClass} />
         </label>)}
-        <p className="text-xs text-port-text-muted">Visual and audio observations each need at least 40 characters; describe limitations explicitly.</p>
       </fieldset>}
       <label htmlFor={fieldId('energy-comparison')} className="block text-sm">Playback energy compared with the saved plan
         <textarea id={fieldId('energy-comparison')} rows={3} maxLength={4000} disabled={playbackBlocked} value={playback.energyComparison} onChange={e => setPlayback({ energyComparison: e.target.value })} className={fieldClass}
@@ -216,32 +214,34 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         <textarea id={fieldId('playback-notes')} rows={3} maxLength={4000} disabled={playbackBlocked} value={playback.timecodedNotes} onChange={e => setPlayback({ timecodedNotes: e.target.value })} className={fieldClass}
           placeholder="0:04 — subject turns on the downbeat; prop opens through 0:06; camera and type clear the lyric. Name any mismatch to revise." />
       </label>
-      <p className="text-xs text-port-text-muted">Include at least one playback timestamp such as 0:04 or 4.5s. These notes are saved with this exact proof. A replacement proof requires a new comparison and acknowledgement.</p>
-      {!machineReview && <p id={fieldId('playback-attestation')} className="text-sm">By approving, I confirm that I watched this exact proof with audio at normal speed and compared its energy, timed choreography and lyric timing with the saved plan.</p>}
+      </>}
   </>;
   const key = stage;
   const label = labels[stage];
   return <section id="mv-production-review" aria-label="Production review" className="space-y-3">
     {review.error && <p role="alert" className="text-port-error">{review.error}</p>}
     <ApprovalBox id={`mv-review-${key}`} label={label} approved={!!ready?.[key].approved}>
-        <div id={fieldId(`${key}-prerequisites`)}>{(ready?.[key].problems || []).map(problem => <p key={problem} className="mt-1 text-xs text-port-text-muted">{problem}</p>)}</div>
-        {key === 'proof' ? proofContent : <ProductionReviewContext stage={key} project={project} basis={ready?.basis[key]} approved={ready?.[key].approved} onOpenArtifact={onOpenArtifact} onArtReady={available => setVisibleArt(available ? artIdentity : null)} onSeek={onSeek} />}
-        <p id={fieldId(`${key}-approval-help`)} role="status" className="mt-2 text-sm text-port-text-muted">{approvalHelp(key)}</p>
-        <button type="button" className={`${buttonClass} mt-2`} onClick={() => approve(key)}
-          aria-describedby={`${fieldId(`${key}-prerequisites`)} ${fieldId(`${key}-approval-help`)}${key === 'proof' && !machineReview ? ` ${fieldId('playback-attestation')}` : ''}`}
+        {/* The decision comes first, at the top of the box, with one line on what it still needs. */}
+        {key === 'proof' && proofNeedsRender && !ready?.[key].approved && <div className="mt-2">{renderControls}</div>}
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+        {!ready?.[key].approved && !(key === 'proof' && proofNeedsRender) && <button type="button" className={approveClass} onClick={() => approve(key)}
+          aria-describedby={approvalHelp(key) ? fieldId(`${key}-approval-help`) : undefined}
           disabled={blocked || (key === 'art' && visibleArt !== artIdentity) || ready?.[key].approved || !!ready?.[key].problems.length
             || (key === 'proof' && (playbackBlocked || !playbackComplete))}>
-          {key === 'proof' ? machineReview ? 'Approve animated proof with machine evidence' : 'Approve — I reviewed this proof with audio' : `Approve ${label.toLowerCase()}`}
-        </button>
-
-        <button type="button" className={`${buttonClass} mt-2 ml-2`} onClick={() => {
+          {key === 'proof' ? machineReview ? 'Approve proof with machine evidence' : 'Approve proof — watched with sound' : `Approve ${label.toLowerCase()}`}
+        </button>}
+        <button type="button" className={buttonClass} onClick={() => {
           setFeedback({ ...feedback, stage: key, decision: 'request-changes' });
           const input = document.getElementById(fieldId('feedback-text'));
           const fold = input?.closest('details'); if (fold) fold.open = true;
           input?.scrollIntoView({ block: 'center' }); input?.focus({ preventScroll: true });
         }}>Request changes</button>
+        </div>
+        {approvalHelp(key) && <p id={fieldId(`${key}-approval-help`)} role="status" className="mt-1 text-sm text-port-warning">{approvalHelp(key)}</p>}
+        {(ready?.[key].problems || []).length > 1 && <ul className="mt-1 list-disc pl-5 text-xs text-port-text-muted">{ready[key].problems.slice(1).map(problem => <li key={problem}>{problem}</li>)}</ul>}
+        {key === 'proof' ? proofContent : <ProductionReviewContext stage={key} project={project} onOpenArtifact={onOpenArtifact} onArtReady={available => setVisibleArt(available ? artIdentity : null)} onSeek={onSeek} />}
         {openRequests(key).length > 0 && <div role="group" aria-label={`${label} change requests`} className="mt-2 space-y-2 rounded border border-port-warning p-2">
-          <p className="text-sm">Approval stays blocked until these are resolved. Revise from feedback, or edit and resolve manually.</p>
+          <p className="text-sm">Resolve these change requests to approve.</p>
           <ul className="list-disc pl-5 text-sm">{openRequests(key).map(item => <li key={item.id} className="break-words"><strong>{item.target}</strong>: {item.text}</li>)}</ul>
           {revisionScope(key).unavailable ? <p className="text-xs text-port-text-muted">{revisionScope(key).unavailable}</p> : <>
             <button type="button" className={buttonClass} disabled={blocked} aria-describedby={fieldId(`${key}-revision-help`)} onClick={() => revise(key)}>Revise from feedback</button>
@@ -253,7 +253,6 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
     {dirty && <p role="status" className="text-sm">Save your planning edits before approving this revision.</p>}
     <details>
       <summary className="cursor-pointer min-h-[44px] py-2 text-sm">Review feedback and revision history</summary>
-      <p className="text-sm">Name a cast member, environment, shot, artifact or frame time. Structure acceptance records agreement on organization only; it never approves the art or authorizes production.</p>
       <label htmlFor={fieldId('feedback-target')} className="block text-sm">Feedback target<input id={fieldId('feedback-target')} className={fieldClass} value={feedback.target} placeholder="Cast: operator; shot: chorus; frame: 12.5s" onChange={e => setFeedback({ ...feedback, target: e.target.value })} /></label>
       <label htmlFor={fieldId('feedback-text')} className="block text-sm">Requested change<textarea id={fieldId('feedback-text')} className={fieldClass} rows={3} value={feedback.text} onChange={e => setFeedback({ ...feedback, text: e.target.value })} /></label>
       <label htmlFor={fieldId('feedback-decision')} className="block text-sm">Review decision<select id={fieldId('feedback-decision')} className={fieldClass} value={feedback.decision} onChange={e => setFeedback({ ...feedback, decision: e.target.value })}>
