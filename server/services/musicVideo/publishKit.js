@@ -234,6 +234,8 @@ export async function updatePublishKitCopy(projectId, patch) {
   });
 }
 
+const sameTags = (a, b) => Array.isArray(b) && b.length > 0 && a.length === b.length && a.every((t, i) => t === b[i]);
+
 /** True when a post was written or edited by hand after the last draft (or with no draft yet). */
 export function copyEditedSinceDraft(kit) {
   const edited = Date.parse(kit?.copyEditedAt || '');
@@ -281,6 +283,13 @@ export async function draftPublishKitCopy(projectId, { providerId = null, model 
     const kit = projectPublishKit(current);
     const merged = { ...(kit.copy || {}) };
     for (const [platform, fields] of Object.entries(copy)) merged[platform] = { ...(merged[platform] || {}), ...fields };
-    return { project: { ...current, publishKit: { ...kit, copy: merged, notes, draftOptions: options, links: { ...(kit.links || {}), ...links }, copyDraftedAt: new Date().toISOString() } } };
+    // With hashtags off the draft returns no tags: typed tags stay, but tags an
+    // earlier draft wrote (still unedited) go, so none remain unasked.
+    const youtube = merged.youtube;
+    if (copy.youtube && !('tags' in copy.youtube) && Array.isArray(youtube?.tags) && sameTags(youtube.tags, kit.draftedTags)) {
+      merged.youtube = { ...youtube, tags: [] };
+    }
+    const draftedTags = Array.isArray(copy.youtube?.tags) ? copy.youtube.tags : [];
+    return { project: { ...current, publishKit: { ...kit, copy: merged, draftedTags, notes, draftOptions: options, links: { ...(kit.links || {}), ...links }, copyDraftedAt: new Date().toISOString() } } };
   });
 }

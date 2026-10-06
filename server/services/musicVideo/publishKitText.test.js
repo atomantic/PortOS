@@ -68,9 +68,10 @@ describe('publish copy prompt + parser (#9281)', () => {
 
   it('strips hashtags the model added unasked and leaves everything else as written', () => {
     const description = '# Heading\nA line #tagged here, my #1 take\n  - nested item  \nSee https://example.com/album/#listen';
-    const reply = JSON.stringify({ tiktok: { caption: 'Made this one slowly. #music #aivideo' }, youtube: { title: 'T', description, tags: ['music'] } });
+    const reply = JSON.stringify({ tiktok: { caption: 'Out now #newmusic, link below (#music)\n#a #b\nMade this one slowly. #music #aivideo' }, youtube: { title: 'T', description, tags: ['music'] } });
     const copy = parsePublishCopy(reply, ['tiktok', 'youtube'], { hashtags: false });
-    expect(copy.tiktok.caption).toBe('Made this one slowly.');
+    // No stray space before punctuation, no empty brackets, no line left holding only tags.
+    expect(copy.tiktok.caption).toBe('Out now, link below\nMade this one slowly.');
     // Numbers, URL fragments, headings, indentation and markdown hard breaks survive.
     expect(copy.youtube.description).toBe('# Heading\nA line here, my #1 take\n  - nested item  \nSee https://example.com/album/#listen');
     // No tags come back, so a redraft keeps the ones the director typed.

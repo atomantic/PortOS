@@ -150,21 +150,27 @@ function copySpecs({ include, length }) {
 
 // A run of hashtags: `#` plus a word with at least one letter (so `#1` and
 // `#2` stay), standing at a line start or after a space or opening bracket or
-// quote (so a URL fragment like `/album/#listen` and `&#39;` stay). Markdown
-// headings ("# Heading") have a space after the `#` and never match.
+// quote (so a URL fragment like `/album/#listen` and `&#39;` stay), optionally
+// wrapped whole in parentheses. Markdown headings ("# Heading") have a space
+// after the `#` and never match.
 const TAG = String.raw`#[\p{N}_]*\p{L}[\p{L}\p{N}_]*`;
-const HASHTAG_RUN = new RegExp(String.raw`([ \t]*)(?<=^|[\s(\[{"'“‘])${TAG}(?:[ \t]+${TAG})*([ \t]*)`, 'gmu');
+const RUN = String.raw`${TAG}(?:[ \t]+${TAG})*`;
+const HASHTAG_RUN = new RegExp(String.raw`([ \t]*)(?:(?<=^|[\s"'“‘])\(${RUN}\)|(?<=^|[\s(\[{"'“‘])${RUN})([ \t]*(?:\r?\n)?)`, 'gmu');
+const CLOSING = /^[,.;:!?)\]}]/;
 /**
- * The text with every hashtag removed. Only the spacing around a removed tag
- * changes: a run ending its line takes the spaces before it too, and one
+ * The text with every hashtag removed. Only the spacing around a removed run
+ * changes: a line that held only tags goes away, a run ending its line takes
+ * the spaces before it, one before punctuation takes its space, and one
  * mid-line leaves a single space, so indentation and markdown line breaks
  * elsewhere are untouched.
  */
-export const stripHashtags = (text) => String(text || '').replace(HASHTAG_RUN, (match, lead, _trail, offset, whole) => {
+export const stripHashtags = (text) => String(text || '').replace(HASHTAG_RUN, (match, lead, trail, offset, whole) => {
   const end = offset + match.length;
   const lineStart = offset === 0 || whole[offset - 1] === '\n';
-  if (end >= whole.length || whole[end] === '\n' || whole[end] === '\r') return lineStart ? lead : '';
-  return lineStart ? lead : (lead ? ' ' : '');
+  const newline = trail.match(/\r?\n$/)?.[0] || '';
+  if (newline || end >= whole.length) return lineStart ? '' : newline;
+  if (lineStart) return lead;
+  return lead && !CLOSING.test(whole.slice(end)) ? ' ' : '';
 });
 
 /**

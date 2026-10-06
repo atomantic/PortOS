@@ -162,6 +162,16 @@ describe('publishing kit copy (#9281)', () => {
     await expect(kit.draftPublishKitCopy(id, {}, deps)).resolves.toBeTruthy();
   });
 
+  it('clears tags an earlier draft wrote once hashtags are unticked', async () => {
+    const { id } = await projects.createProject({ name: 'Example Song' });
+    const reply = JSON.stringify({ youtube: { title: 'Drafted', description: 'd', tags: ['model tag'] } });
+    const deps = { platforms: { youtube: { enabled: true } }, history: {}, runner: runner(reply) };
+    const first = await kit.draftPublishKitCopy(id, { include: { hashtags: true } }, deps);
+    expect(first.project.publishKit.copy.youtube.tags).toEqual(['model tag']);
+    const second = await kit.draftPublishKitCopy(id, {}, deps);
+    expect(second.project.publishKit.copy.youtube.tags).toEqual([]);
+  });
+
   it('reports an unusable draft instead of saving it', async () => {
     const { id } = await projects.createProject({ name: 'Example Song' });
     await expect(kit.draftPublishKitCopy(id, {}, { platforms: ALL_ON, history: {}, runner: runner('sorry, no JSON') })).rejects.toMatchObject({ status: 502, code: 'PUBLISH_COPY_UNPARSEABLE' });
