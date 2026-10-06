@@ -74,6 +74,11 @@ describe('DistroKid form recipe', () => {
     expect(missed).toEqual(['genre (Electronic)', 'Apple Music credits (or untick Apple Music and iTunes)']);
   });
 
+  it('leaves the Apple credits for the director when no performer role was given and none is selected', () => {
+    const { missed } = fillDistrokidFields({ ...PLAN, credits: { ...PLAN.credits, performerRole: null } });
+    expect(missed).toEqual(['Apple Music credits (or untick Apple Music and iTunes)']);
+  });
+
   it('discloses AI vocals as all of the audio, and AI music under a human voice as part of it', () => {
     expect(discloseDistrokidAi({ step: 'gate', ai: { lyrics: false, music: true, vocals: true } })).toBe(true);
     expect(checked('ai_gate_')).toBe('1');

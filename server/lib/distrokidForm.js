@@ -109,7 +109,9 @@ export function fillDistrokidFields(plan) {
 
   const c = plan.credits || {};
   const performer = type(document.querySelector('#track-1-performer-1-name'), c.performer)
-    && (!c.performerRole || choose(document.querySelector('#track-1-performer-1-role'), c.performerRole));
+    && (c.performerRole
+      ? choose(document.querySelector('#track-1-performer-1-role'), c.performerRole)
+      : !!document.querySelector('#track-1-performer-1-role')?.value);
   const producer = type(document.querySelector('#track-1-producer-1-name'), c.producer)
     && choose(document.querySelector('#track-1-producer-1-role'), 'Producer');
   note('Apple Music credits (or untick Apple Music and iTunes)', performer && producer);
