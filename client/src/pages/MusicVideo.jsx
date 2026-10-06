@@ -60,11 +60,10 @@ import MidiGatedModal from '../components/install/MidiGatedModal.jsx';
 import { listTracks, trackAudioUrl } from '../services/apiTracks.js';
 import CreateProjectDrawer from '../components/musicVideo/CreateProjectDrawer.jsx';
 import AutonomousStartDrawer from '../components/musicVideo/AutonomousStartDrawer.jsx';
-import AutonomousRunPanel from '../components/musicVideo/AutonomousRunPanel.jsx';
 import { automationDraftFrom, automationFromDraft } from '../lib/musicVideoAutomation.js';
 import { listUniverseNames } from '../services/apiUniverseBuilder.js';
 import MusicVideoLayout, { MUSIC_VIDEO_SCROLL_ID } from '../components/musicVideo/MusicVideoLayout.jsx';
-import StageSection from '../components/musicVideo/StageSection.jsx';
+import ProjectSettingsDrawer, { SETTINGS_TAB_IDS } from '../components/musicVideo/ProjectSettingsDrawer.jsx';
 import MusicVideoProjectCard from '../components/musicVideo/MusicVideoProjectCard.jsx';
 import PreviewDock from '../components/musicVideo/PreviewDock.jsx';
 import NeedsAttentionBanner from '../components/musicVideo/NeedsAttentionBanner.jsx';
@@ -73,7 +72,6 @@ import StageChecklist from '../components/musicVideo/StageChecklist.jsx';
 import CastSetsStage from '../components/musicVideo/stages/CastSetsStage.jsx';
 import BoardStage from '../components/musicVideo/stages/BoardStage.jsx';
 import ProduceStage from '../components/musicVideo/stages/ProduceStage.jsx';
-import ComposeStage from '../components/musicVideo/stages/ComposeStage.jsx';
 import ReviewStage from '../components/musicVideo/stages/ReviewStage.jsx';
 import { PUBLISH_TARGETS } from '../components/musicVideo/PublishPostingPanel.jsx';
 import PublishStage from '../components/musicVideo/stages/PublishStage.jsx';
@@ -90,10 +88,10 @@ import { deriveAttentionItems } from '../lib/musicVideoAttention.js';
 import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
 import { useMusicVideoReviewDraft } from '../hooks/useMusicVideoReviewDraft.js';
 import {
-  productionReviewStopGuidance, deriveNextAction, deriveStages, projectShotSummary, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, compareMusicVideoProjectsNewestFirst,
+  deriveNextAction, deriveStages, projectShotSummary, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, stepNotes, autopilotStatus, compareMusicVideoProjectsNewestFirst,
 } from '../lib/musicVideoStages.js';
 import { groupMusicVideoProjects } from '../lib/musicVideoProjectList.js';
-import { AUTONOMOUS_STATUS_LABELS, AUTONOMOUS_VIEWABLE_STAGES } from '../lib/musicVideoAutonomous.js';
+import { AUTONOMOUS_VIEWABLE_STAGES } from '../lib/musicVideoAutonomous.js';
 
 // Automation first: a new project defaults to autopilot with the free tools.
 const emptyCreateForm = () => ({
@@ -112,18 +110,13 @@ function autopilotBlocker(project) {
 // A saved art draft needs every field the server schema requires.
 const EMPTY_PRODUCTION_DRAFT = { cast: '', environments: '', visualLanguage: '', motionLanguage: '', guideArtifactId: null,
   lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [] };
-// The tab that owns each production approval (#10151).
-const APPROVAL_STAGE_BY_TAB = { 'cast-sets': 'art', board: 'storyboard', compose: 'proof' };
+// The step each production approval closes (#10151); it sits at the bottom of that step.
+const APPROVAL_STAGE_BY_TAB = { 'cast-sets': 'art', board: 'storyboard', produce: 'proof' };
 const STAGE_VIEWS = {
-  setup: SetupStage, 'cast-sets': CastSetsStage, board: BoardStage, produce: ProduceStage, compose: ComposeStage, review: ReviewStage, publish: PublishStage,
+  setup: SetupStage, 'cast-sets': CastSetsStage, board: BoardStage, produce: ProduceStage, review: ReviewStage, publish: PublishStage,
 };
 
-// Keep active work open; historical runs remain available behind their summary.
-const autopilotSummary = (run, readiness) => {
-  const label = run.interrupted ? 'Interrupted — resume to continue' : AUTONOMOUS_STATUS_LABELS[run.status] || run.status;
-  const guidance = productionReviewStopGuidance(run, readiness);
-  return run.error ? `${label} — ${guidance?.current || run.error}` : label;
-};
+
 
 export default function MusicVideo() {
   // Deep-linkable project selection: the selected project lives in the URL
@@ -931,7 +924,7 @@ export default function MusicVideo() {
         items.push(videoItem(take.assetId, `${take.assetId}.mp4`, take.prompt || scene.prompt || ''));
       }
     }
-    // Scenes can reuse the same frame/clip (the Produce tab's generation controls surface a
+    // Scenes can reuse the same frame/clip (Make's generation controls surface a
     // "Repetition: N unique frames" badge). Dedupe by key so prev/next and
     // openPreview's .find() land on a single item rather than the first of
     // several identical keys with different prompts.
@@ -966,6 +959,16 @@ export default function MusicVideo() {
     const search = next.toString();
     navigate(`/music-video/${encodeURIComponent(selected.id)}/${stage}${search ? `?${search}` : ''}${anchor ? `#${anchor}` : ''}`, { replace: activeStage === stage });
   };
+  // Project settings (render style, audio tools, autopilot, files) is a drawer
+  // over the open step; `?mvPanel=<tab>` says it is open and on which tab.
+  const settingsParam = searchParams.get('mvPanel');
+  const settingsTab = SETTINGS_TAB_IDS.includes(settingsParam) ? settingsParam : null;
+  const setSettingsTab = (tab) => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (tab) next.set('mvPanel', tab);
+    else next.delete('mvPanel');
+    return next;
+  }, { replace: !!tab && !!settingsTab });
 
   // The docked preview: scene cards seek it; on a phone it is a mini-player
   // that starts collapsed. Both reset with the project.
@@ -1002,7 +1005,7 @@ export default function MusicVideo() {
     ? { id: 'review-imported', kind: 'goto', stage: 'review', label: 'Checking review draft', disabled: true, reason: 'Checking exact-version media availability' }
     : reviewDraft
       ? { id: 'review-imported', kind: 'goto', stage: 'review', label: 'Review imported draft', shortLabel: 'Review draft' }
-      : { id: 'review-files', kind: 'goto', stage: 'review', anchor: 'mv-review-development', label: 'Choose review file', shortLabel: 'Choose file' }
+      : { id: 'review-files', kind: 'open', label: 'Choose review file', shortLabel: 'Choose file' }
     : productionNextAction;
   // What the server holds that this tab might not be showing (#9940): derived
   // from the saved record, so it survives a reload. Work this tab can see
@@ -1017,6 +1020,8 @@ export default function MusicVideo() {
   const runNextAction = () => {
     if (!selected || !nextAction || nextAction.disabled || compositionSavePending > 0) return;
     if (nextAction.id === 'review-imported') { openArtifact(reviewDraft.artifactId); return; }
+    if (nextAction.id === 'review-files') { setSettingsTab('files'); return; }
+    if (nextAction.id === 'review-autonomous') { setSettingsTab('autopilot'); return; }
     if (nextAction.kind === 'goto') { goToStage(nextAction.stage, nextAction.anchor); return; }
     switch (nextAction.id) {
       case 'kickoff': handleKickoff(); break;
@@ -1133,14 +1138,22 @@ export default function MusicVideo() {
     // Choose a Development file as the art-direction visual guide (saved with the rest of the draft).
     useAsGuide: (artifactId) => productionReview.save({ ...EMPTY_PRODUCTION_DRAFT, ...(selected.productionReview?.draft || {}), guideArtifactId: artifactId }),
     goToStage,
+    openSettings: setSettingsTab,
+    productionReview,
+    planningDraft,
     openArtifact,
     openPreview,
     openContactSheet: () => setContactSheetOpen(true),
     seekToScene,
   } : null;
   const StageView = STAGE_VIEWS[activeStage];
+  const projectStatus = !selected ? null : statusKnown && productionReview.readiness
+    ? describeProjectStatus(selected, { progress, nextAction: productionNextAction, reviewingDraft, reviewDraftState })
+    : statusKnown
+      ? { headline: `Status unavailable: ${productionReview.readinessError}`, tone: 'warn', needsYouStage: null }
+      : { headline: 'Loading status…', tone: 'muted', needsYouStage: null };
 
-  const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, liveFirst: activeStage === 'compose' }) : [];
+  const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, liveFirst: activeStage === 'produce' }) : [];
 
   return (
     <div className="flex h-full flex-col">
@@ -1426,6 +1439,9 @@ export default function MusicVideo() {
           </div>
         )}
         {selected && (
+          <ProjectSettingsDrawer open={!!settingsTab} tab={settingsTab || 'project'} onTabChange={setSettingsTab} onClose={() => setSettingsTab(null)} board={board} />
+        )}
+        {selected && (
           <MusicVideoLayout
             project={selected}
             trackLabel={trackName(selected.trackId)}
@@ -1435,11 +1451,10 @@ export default function MusicVideo() {
             nextAction={compositionSavePending > 0 && nextAction ? { ...nextAction, disabled: true, reason: 'Saving composition…' } : nextAction}
             onNextAction={runNextAction}
             spend={projectSpend(selected)}
-            status={statusKnown && productionReview.readiness
-              ? describeProjectStatus(selected, { progress, nextAction: productionNextAction, readiness: productionReview.readiness, reviewingDraft, reviewDraftState })
-              : statusKnown
-                ? { headline: `Status unavailable: ${productionReview.readinessError}`, tone: 'warn', facts: [] }
-                : { headline: 'Loading status…', tone: 'muted', facts: [] }}
+            status={projectStatus}
+            notes={stepNotes(selected, productionReview.readiness, publish)}
+            autopilot={autopilotStatus(selected)}
+            onOpenSettings={setSettingsTab}
             attention={(
               <NeedsAttentionBanner
                 items={attentionItems}
@@ -1456,7 +1471,7 @@ export default function MusicVideo() {
                 }}
               />
             )}
-            dock={previewSources.length ? (
+            dock={(
               <PreviewDock
                 project={selected}
                 sources={previewSources}
@@ -1465,42 +1480,26 @@ export default function MusicVideo() {
                 collapsed={dockCollapsed}
                 onToggleCollapsed={() => setDockCollapsed((c) => !c)}
               />
-            ) : null}
-            projectPanels={<div className="space-y-3 min-w-0">
-              {autopilotRun && activeStage !== 'setup' && (
-                <StageSection
-                  id="mv-autonomous-run"
-                  key={`autonomous-${selected.id}`}
-                  title="Autonomous run"
-                  summary={autopilotSummary(autopilotRun, productionReview.readiness)}
-                  defaultOpen={!!runStage || autopilotRun.interrupted || ['running', 'awaiting-approval', 'needs-human', 'failed'].includes(autopilotRun.status)}
-                >
-                  <AutonomousRunPanel project={selected} auto={autonomous} readiness={productionReview.readiness} selectedStage={runStage} onSelectStage={setRunStage} framed={false} />
-                </StageSection>
-              )}
-            </div>}
+            )}
           >
-            <StageSection title="Native production prerequisites">
             <StageChecklist
               items={stageChecklist(activeStage, selected, productionReview.readiness, publish)}
               onAction={(action) => goToStage(action.stage || activeStage, action.anchor, action.params)}
               onRevert={productionReview.revert}
               headerAnchor={nextAction?.kind === 'goto' ? nextAction.anchor : null}
             />
-            </StageSection>
+            <StageView key={selected.id} board={board} />
             {APPROVAL_STAGE_BY_TAB[activeStage] && (
               <ProductionReviewPanel
                 key={`${selected.id}-${activeStage}`}
                 project={selected}
                 review={productionReview}
                 onOpenArtifact={openArtifact}
-                framed={false}
                 stage={APPROVAL_STAGE_BY_TAB[activeStage]}
                 planning={planningDraft}
                 onNavigate={goToStage}
               />
             )}
-            <StageView key={selected.id} board={board} />
           </MusicVideoLayout>
         )}
       </div>

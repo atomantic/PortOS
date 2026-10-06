@@ -84,7 +84,7 @@ describe('MusicVideoProjectCard', () => {
       preview: { kind: 'none', label: 'No render yet' },
     };
     render(<MusicVideoProjectCard project={summary} onSelect={vi.fn()} />);
-    expect(screen.getByText('Board')).toBeInTheDocument();
+    expect(screen.getByText('Storyboard')).toBeInTheDocument();
     expect(screen.getByText('128 BPM')).toBeInTheDocument();
     expect(screen.getByText(/2 scenes · 1 clip/)).toBeInTheDocument();
     expect(screen.getByTitle('50% clips rendered')).toBeInTheDocument();

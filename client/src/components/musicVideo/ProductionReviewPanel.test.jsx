@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { useState } from 'react';
 import ProductionReviewPanel from './ProductionReviewPanel.jsx';
 
 afterEach(() => { vi.unstubAllGlobals(); window.location.hash = ''; });
@@ -28,7 +29,7 @@ function recordPlayback() {
 describe('Production proof playback evidence', () => {
   it('records playback attestation only when the reviewer explicitly approves, without a separate checkbox', () => {
     const review = reviewFixture();
-    render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} />);
+    render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
     const approve = screen.getByRole('button', { name: approvalAction });
     expect(approve.disabled).toBe(true);
     fireEvent.loadedData(screen.getByLabelText('Animated proof with master audio'));
@@ -56,8 +57,9 @@ describe('Production proof playback evidence', () => {
     review.readiness.storyboard = { approved: false, problems: ['Verify alignment against the current master.', 'Import a matching document shot manifest.'] };
     review.readiness.proof.problems = ['Approve the current lyric-timed storyboard before the animated proof.'];
     const prototype = { ...project, productionReview: { ...project.productionReview, proof: null, prototype: { excerptId: 'proof-a' } } };
-    render(<ProductionReviewPanel project={prototype} review={review} onOpenArtifact={vi.fn()} />);
-    fireEvent.click(screen.getByText('Animated proof', { selector: 'summary' }));
+    const onNavigate = vi.fn();
+    render(<ProductionReviewPanel project={prototype} review={review} onOpenArtifact={vi.fn()} stage="proof" onNavigate={onNavigate} />);
+    expect(screen.getByRole('region', { name: 'Approve: Animated proof' })).toBeTruthy();
     const prerequisites = screen.getByLabelText('Proof approval prerequisites');
     expect(prerequisites.textContent).toContain('feasibility prototype, not a registered production proof');
     expect(prerequisites.textContent).toContain('Verify alignment against the current master.');
@@ -67,22 +69,24 @@ describe('Production proof playback evidence', () => {
     fireEvent.loadedData(screen.getByLabelText('Unapproved feasibility prototype'));
     expect(screen.getByRole('button', { name: approvalAction }).disabled).toBe(true);
     fireEvent.click(within(prerequisites).getByRole('link', { name: 'Resolve storyboard prerequisites and approve it' }));
-    expect(document.getElementById('mv-review-storyboard').open).toBe(true);
-    fireEvent.click(within(prerequisites).getByRole('link', { name: 'Open planning edits for alignment and document shot manifests' }));
-    expect(document.getElementById('mv-review-planning').open).toBe(true);
-    expect(document.activeElement.id).toBe('mv-review-planning');
+    // The storyboard approval and its planning edits live on the Board step, so the links cross steps.
+    expect(onNavigate).toHaveBeenLastCalledWith('board', 'mv-review-storyboard');
+    fireEvent.click(within(prerequisites).getByRole('link', { name: 'Open planning edits for document shot manifests' }));
+    expect(onNavigate).toHaveBeenLastCalledWith('board', 'mv-review-planning');
+    fireEvent.click(within(prerequisites).getByRole('link', { name: 'Song step' }));
+    expect(onNavigate).toHaveBeenLastCalledWith('setup', 'mv-lyric-timing');
     expect(review.approve).not.toHaveBeenCalled();
   });
 
   it('clears evidence when the creative revision changes even if the excerpt and filename are unchanged', () => {
     const review = reviewFixture();
-    const view = render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} />);
+    const view = render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
     recordPlayback();
     const changedReview = { ...review, readiness: { ...review.readiness,
       basis: { ...review.readiness.basis, proof: 'new-creative-basis' },
       proof: { approved: false, problems: ['Render and watch a current animated chorus proof with the master song.'] },
     } };
-    view.rerender(<ProductionReviewPanel project={project} review={changedReview} onOpenArtifact={vi.fn()} />);
+    view.rerender(<ProductionReviewPanel project={project} review={changedReview} onOpenArtifact={vi.fn()} stage="proof" />);
     expect(screen.getByLabelText('Timecoded playback notes').value).toBe('');
     expect(screen.getByRole('button', { name: approvalAction }).disabled).toBe(true);
     expect(screen.getByText(/Source changed — render a new proof/)).toBeTruthy();
@@ -92,7 +96,7 @@ describe('Production proof playback evidence', () => {
   it('shows a persisted capture failure after reconnect and keeps proof approval blocked', () => {
     render(<ProductionReviewPanel project={{ ...project, excerpts: [{ id: 'proof-a', status: 'error',
       error: 'Composition capture failed at frame 0 (song 12s): Browser command timed out: Page.captureScreenshot' }] }}
-      review={reviewFixture()} onOpenArtifact={vi.fn()} />);
+      review={reviewFixture()} onOpenArtifact={vi.fn()} stage="proof" />);
     expect(screen.getByRole('alert').textContent).toContain('capture failed at frame 0');
     expect(screen.getByRole('button', { name: proofAction }).disabled).toBe(true);
     expect(screen.queryByLabelText('Animated proof with master audio')).toBeNull();
@@ -100,7 +104,7 @@ describe('Production proof playback evidence', () => {
 
   it('submits substantive machine evidence for the exact proof without claiming playback', () => {
     const review = reviewFixture();
-    const view = render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} />);
+    const view = render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
     recordPlayback();
     fireEvent.change(screen.getByLabelText('Review method'), { target: { value: 'machine' } });
     expect(screen.queryByRole('checkbox')).toBeNull();
@@ -126,7 +130,7 @@ describe('Production proof playback evidence', () => {
     fireEvent.change(screen.getByLabelText('Review method'), { target: { value: 'playback' } });
     expect(screen.getByRole('button', { name: approvalAction }).disabled).toBe(false);
     fireEvent.change(screen.getByLabelText('Review method'), { target: { value: 'machine' } });
-    view.rerender(<ProductionReviewPanel project={{ ...project, excerpts: [{ ...project.excerpts[0], filename: 'replacement.mp4' }] }} review={review} onOpenArtifact={vi.fn()} />);
+    view.rerender(<ProductionReviewPanel project={{ ...project, excerpts: [{ ...project.excerpts[0], filename: 'replacement.mp4' }] }} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
     expect(screen.getByLabelText('Review method').value).toBe('playback');
     fireEvent.loadedData(screen.getByLabelText('Animated proof with master audio'));
     fireEvent.change(screen.getByLabelText('Review method'), { target: { value: 'machine' } });
@@ -138,7 +142,7 @@ describe('Production proof playback evidence', () => {
 
   it('reports server errors and blocks machine approval for missing media or timestamps', () => {
     const review = reviewFixture();
-    render(<ProductionReviewPanel project={project} review={{ ...review, error: 'The proof revision changed; review the current proof.' }} onOpenArtifact={vi.fn()} />);
+    render(<ProductionReviewPanel project={project} review={{ ...review, error: 'The proof revision changed; review the current proof.' }} onOpenArtifact={vi.fn()} stage="proof" />);
     expect(screen.getByRole('alert').textContent).toContain('proof revision changed');
     expect(screen.getByLabelText('Review method').disabled).toBe(true);
     fireEvent.loadedData(screen.getByLabelText('Animated proof with master audio'));
@@ -162,7 +166,7 @@ describe('Production proof playback evidence', () => {
     const review = reviewFixture(); review.readiness.art.approved = false;
     const art = { ...project, devArtifacts: [{ id: 'guide', title: 'Synthetic visual guide', version: 2, mimeType: 'image/png' }],
       productionReview: { ...project.productionReview, draft: { ...project.productionReview.draft, guideArtifactId: 'guide' } } };
-    render(<ProductionReviewPanel project={art} review={review} onOpenArtifact={vi.fn()} />);
+    render(<ProductionReviewPanel project={art} review={review} onOpenArtifact={vi.fn()} stage="art" />);
     const approve = screen.getByRole('button', { name: 'Approve art direction' });
     expect(approve.disabled).toBe(true);
     const image = await screen.findByAltText('Synthetic visual guide v2');
@@ -176,20 +180,27 @@ describe('Production proof playback evidence', () => {
     expect(screen.getByRole('alert').textContent).toContain('could not be loaded');
   });
 
-  it('shows the document shots beside storyboard approval and targets change requests to that stage', () => {
-    const review = reviewFixture(); review.readiness.storyboard.approved = false;
+  it('shows the document shots beside storyboard approval and targets change requests to that stage', async () => {
+    const review = { ...reviewFixture(), feedback: vi.fn(async () => true) }; review.readiness.storyboard.approved = false;
     const doc = { ...project, composition: { mode: 'document', document: { directory: 'synthetic/doc-2' } },
       productionReview: { ...project.productionReview, draft: { ...project.productionReview.draft, storyboardSource: 'document',
         storyboard: [{ id: 'shot-a', label: 'Doorway', startSec: 0, endSec: 10, action: 'Open the doorway on the downbeat', camera: 'Push in', staging: 'Figure left', transition: 'Match cut', lyricCueIds: [] }] } } };
-    render(<ProductionReviewPanel project={doc} review={review} onOpenArtifact={vi.fn()} />);
+    render(<ProductionReviewPanel project={doc} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
     const content = screen.getByLabelText('Storyboard review content');
     expect(content.textContent).toContain('1 document shots');
     expect(content.textContent).toContain('doc-2');
     expect(content.textContent).toContain('Open the doorway on the downbeat');
-    fireEvent.click(within(content.closest('details')).getByRole('button', { name: 'Request changes' }));
-    expect(screen.getByLabelText('Feedback stage').value).toBe('storyboard');
+    const box = screen.getByRole('region', { name: 'Approve: Lyric-timed storyboard' });
+    expect(box.contains(content)).toBe(true);
+    fireEvent.click(within(box).getByRole('button', { name: 'Request changes' }));
+    expect(screen.queryByLabelText('Feedback stage')).toBeNull();
     expect(document.activeElement).toBe(screen.getByLabelText('Requested change'));
     expect(screen.getByLabelText('Requested change').closest('details').open).toBe(true);
+    fireEvent.change(screen.getByLabelText('Feedback target'), { target: { value: 'shot: Doorway' } });
+    fireEvent.change(screen.getByLabelText('Requested change'), { target: { value: 'Hold the doorway one beat longer.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save revision feedback' }));
+    expect(review.feedback).toHaveBeenCalledWith({ stage: 'storyboard', target: 'shot: Doorway', text: 'Hold the doorway one beat longer.', decision: 'request-changes' });
+    await waitFor(() => expect(screen.getByLabelText('Requested change').value).toBe(''));
   });
 
   it('offers a stage revision for open change requests and explains the blocked approval', async () => {
@@ -201,7 +212,8 @@ describe('Production proof playback evidence', () => {
         { id: 'fb-done', stage: 'storyboard', target: 'shot: Intro', text: 'Already handled', decision: 'request-changes', basis: 'board', resolvedAt: '2026-01-01T00:00:00.000Z' },
         { id: 'fb-proof', stage: 'proof', target: 'frame: 0:04', text: 'Prop lands late', decision: 'request-changes', basis: 'same-creative-basis' },
       ] } };
-    render(<ProductionReviewPanel project={withRequests} review={review} onOpenArtifact={vi.fn()} />);
+    const board = render(<ProductionReviewPanel project={withRequests} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
+    expect(screen.queryByRole('group', { name: 'Animated proof change requests' })).toBeNull();
     const requests = screen.getByRole('group', { name: 'Lyric-timed storyboard change requests' });
     expect(requests.textContent).toContain('Approval stays blocked until these are resolved. Revise from feedback, or edit and resolve manually.');
     expect(requests.textContent).toContain('Land the leap on the downbeat');
@@ -210,16 +222,27 @@ describe('Production proof playback evidence', () => {
     expect(review.revise).toHaveBeenCalledWith('storyboard');
     await waitFor(() => expect(requests.textContent).toContain('Revised 2 shots. Review them, then resolve each request.'));
     // A document-mode proof with no imported source can be re-authored as a generated candidate.
+    board.unmount();
+    render(<ProductionReviewPanel project={withRequests} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
+    expect(screen.queryByRole('group', { name: 'Lyric-timed storyboard change requests' })).toBeNull();
     const proofRequests = screen.getByRole('group', { name: 'Animated proof change requests' });
     expect(within(proofRequests).getByRole('button', { name: 'Revise from feedback' })).toBeTruthy();
   });
 
-  it('keeps the hash-selected art context open when readiness arrives', () => {
+  it('keeps the hash-selected art approval open and highlighted when readiness arrives, until approved', () => {
     window.location.hash = '#mv-review-art';
-    const review = reviewFixture();
-    const view = render(<ProductionReviewPanel project={project} review={{ ...review, readiness: null }} onOpenArtifact={vi.fn()} />);
-    view.rerender(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} />);
-    expect(document.getElementById('mv-review-art').open).toBe(true);
+    const review = reviewFixture(); review.readiness.art.approved = false;
+    const view = render(<ProductionReviewPanel project={project} review={{ ...review, readiness: null }} onOpenArtifact={vi.fn()} stage="art" />);
+    view.rerender(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="art" />);
+    const box = document.getElementById('mv-review-art');
+    expect(box).toBe(screen.getByRole('region', { name: 'Approve: Art direction' }));
+    expect(box.tagName).toBe('SECTION');
+    expect(within(box).getByRole('heading', { name: 'Approve the art direction' })).toBeTruthy();
+    expect(box.className).toContain('border-port-accent');
+    const approved = reviewFixture();
+    view.rerender(<ProductionReviewPanel project={project} review={approved} onOpenArtifact={vi.fn()} stage="art" />);
+    expect(within(box).getByRole('heading', { name: 'Art direction approved' })).toBeTruthy();
+    expect(box.className).not.toContain('border-port-accent');
   });
 
   it('shows the recorded review for an approved artifact without treating it as fresh playback evidence', () => {
@@ -229,11 +252,11 @@ describe('Production proof playback evidence', () => {
       excerptId: 'proof-a', filename: 'proof-a.mp4', watchedWithAudio: true,
       energyComparison: 'The driving turn matches the saved energy target.', timecodedNotes: '0:04 — the figure turns on the downbeat.',
     } } } } };
-    const view = render(<ProductionReviewPanel project={approved} review={review} onOpenArtifact={vi.fn()} />);
+    const view = render(<ProductionReviewPanel project={approved} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
     expect(screen.getByLabelText('Recorded proof review').textContent).toContain('0:04 — the figure turns on the downbeat.');
     expect(screen.queryByRole('checkbox')).toBeNull();
     expect(screen.getByLabelText('Timecoded playback notes').value).toBe('');
-    view.rerender(<ProductionReviewPanel project={{ ...approved, excerpts: [{ id: 'proof-a', filename: 'replacement.mp4', status: 'complete' }] }} review={review} onOpenArtifact={vi.fn()} />);
+    view.rerender(<ProductionReviewPanel project={{ ...approved, excerpts: [{ id: 'proof-a', filename: 'replacement.mp4', status: 'complete' }] }} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
     expect(screen.queryByLabelText('Recorded proof review')).toBeNull();
   });
 
@@ -242,12 +265,12 @@ describe('Production proof playback evidence', () => {
     { id: 'proof-a', filename: 'replacement.mp4' },
   ])('requires new playback notes when the proof artifact changes to $filename without a creative-basis change', ({ id, filename }) => {
     const review = reviewFixture();
-    const view = render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} />);
+    const view = render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
     recordPlayback();
     expect(screen.getByRole('button', { name: proofAction }).disabled).toBe(false);
     const replacement = { ...project, productionReview: { ...project.productionReview, proof: { ...project.productionReview.proof, excerptId: id } },
       excerpts: [{ id, filename, status: 'complete' }] };
-    view.rerender(<ProductionReviewPanel project={replacement} review={review} onOpenArtifact={vi.fn()} />);
+    view.rerender(<ProductionReviewPanel project={replacement} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
     expect(screen.queryByRole('checkbox')).toBeNull();
     expect(screen.getByLabelText('Playback energy compared with the saved plan').value).toBe('');
     expect(screen.getByLabelText('Timecoded playback notes').value).toBe('');
@@ -262,7 +285,7 @@ describe('Production proof playback evidence', () => {
 
   it('blocks approval and explains a failed proof player', () => {
     const review = reviewFixture();
-    render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} />);
+    render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
     recordPlayback();
     fireEvent.error(screen.getByLabelText('Animated proof with master audio'));
     expect(screen.getByRole('alert').textContent).toContain('could not be played');
@@ -271,38 +294,37 @@ describe('Production proof playback evidence', () => {
 
   it('keeps failed choreography saves dirty and blocks approval', async () => {
     const review = reviewFixture();
-    render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} />);
-    recordPlayback();
+    // The page owns the planning draft so unsaved edits on the art step still block the proof step.
+    function Steps({ stage }) {
+      const planning = useState(null);
+      return <ProductionReviewPanel key={stage} project={project} review={review} onOpenArtifact={vi.fn()} stage={stage} planning={planning} />;
+    }
+    const view = render(<Steps stage="art" />);
     fireEvent.change(screen.getByLabelText('Timed choreography and energy plan'), { target: { value: 'Energy target: explosive. 0:04 — replace the turn with a leap.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save planning edits', hidden: true }));
     await waitFor(() => expect(review.save).toHaveBeenCalled());
     expect(screen.getByText('Save edits before preparing, approving or rendering.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Approve art direction' }).disabled).toBe(true);
+    view.rerender(<Steps stage="proof" />);
+    fireEvent.loadedData(screen.getByLabelText('Animated proof with master audio'));
+    expect(screen.getByText('Save your planning edits before approving this revision.', { selector: '#mv-review-example-project-proof-approval-help' })).toBeTruthy();
     expect(screen.getByLabelText('Timecoded playback notes').disabled).toBe(true);
     expect(screen.getByRole('button', { name: proofAction }).disabled).toBe(true);
     expect(review.approve).not.toHaveBeenCalled();
   });
 });
 
-describe('Stale alignment review', () => {
-  it('labels historical verification and offers an explicit native button with the saved notes', () => {
-    const vocal = { ...project, productionReview: { ...project.productionReview, draft: { ...project.productionReview.draft, lyricsMode: 'vocal' } } };
+describe('Lyric timing lives on the Song step', () => {
+  it('leaves song content and timing verification out of the storyboard planning editor', () => {
     const review = reviewFixture();
     review.readiness.alignment = { status: 'stale', basis: 'current-word-times' };
-    review.reverifyAlignment = vi.fn();
-    const view = render(<ProductionReviewPanel project={vocal} review={review} onOpenArtifact={vi.fn()} />);
-    fireEvent.click(screen.getByText('Edit visual guide and storyboard'));
-    expect(screen.getByRole('option', { name: 'Previously verified — needs re-review' }).selected).toBe(true);
-    const button = screen.getByRole('button', { name: 'Reverify current timings' });
-    expect(button.tagName).toBe('BUTTON');
-    expect(button.disabled).toBe(false);
-    expect(screen.getByText(/Listen to the current master and inspect its word timings/)).toBeTruthy();
-    expect(review.reverifyAlignment).not.toHaveBeenCalled();
-    fireEvent.click(button);
-    expect(review.reverifyAlignment).toHaveBeenCalledWith('Synthetic master');
-    fireEvent.change(screen.getByLabelText('Alignment notes / instrumental rationale'), { target: { value: 'New unsaved notes' } });
-    expect(button.disabled).toBe(true);
-    view.rerender(<ProductionReviewPanel project={vocal} review={{ ...review, busy: true }} onOpenArtifact={vi.fn()} />);
-    expect(button.disabled).toBe(true);
+    render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
+    fireEvent.click(screen.getByText('Edit storyboard shots'));
+    expect(screen.queryByLabelText('Song content')).toBeNull();
+    expect(screen.queryByLabelText('Alignment status')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reverify current timings' })).toBeNull();
+    // The storyboard source stays here: it is the storyboard's own input.
+    expect(screen.getByLabelText('Storyboard source')).toBeTruthy();
   });
 });
 
@@ -327,5 +349,19 @@ describe('Per-stage approval sections (#10151)', () => {
     render(<ProductionReviewPanel project={project} review={reviewFixture()} onOpenArtifact={vi.fn()} stage="storyboard" />);
     expect(screen.getByLabelText('Storyboard source')).toBeTruthy();
     expect(screen.queryByLabelText('Cast guide')).toBeNull();
+  });
+
+  it('shows the approval on its step as an open box that closes the step, not a fold', () => {
+    const review = reviewFixture();
+    review.readiness.storyboard.approved = false;
+    const { container } = render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
+    const box = screen.getByRole('region', { name: 'Approve: Lyric-timed storyboard' });
+    expect(box.id).toBe('mv-review-storyboard');
+    expect(box.tagName).toBe('SECTION');
+    expect(within(box).getByRole('heading', { name: 'Approve the lyric-timed storyboard' })).toBeTruthy();
+    expect(within(box).getByRole('button', { name: 'Approve lyric-timed storyboard' })).toBeTruthy();
+    expect(within(box).getByRole('button', { name: 'Request changes' })).toBeTruthy();
+    expect(container.querySelector('details#mv-review-storyboard')).toBeNull();
+    expect(screen.queryByText('About production approvals')).toBeNull();
   });
 });

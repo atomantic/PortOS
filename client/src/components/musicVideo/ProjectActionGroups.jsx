@@ -8,10 +8,11 @@ import { projectServicesSummary } from '../../lib/musicVideoStages.js';
 import { batchActive, batchSummary, scenesWaitingForFrame, videoBatchPreview, videosButtonLabel } from '../../lib/musicVideoBatchPlan.js';
 
 /**
- * The board-level actions the old single toolbar carried, split by the stage
- * that owns them: analyze + MIDI (Setup), AI plan + auto-arrange (Board), the
- * frame/clip generators (Produce) and the final render (Review). The render
- * style select and the render pins are project options, edited in Setup. Each
+ * The board-level actions the old single toolbar carried, split by the step
+ * that owns them: analyze (Song; MIDI in Project settings › Audio), AI plan +
+ * auto-arrange (Storyboard), the frame/clip generators (Make) and the final
+ * render (Final render). The render style select and the render pins are
+ * project options, edited in Project settings. Each
  * group takes the page's hook slots (`midi`, `videoSettings`, `sceneMedia`,
  * `renderJob`) and the page-owned in-flight flags in `busy`.
  */
@@ -133,7 +134,7 @@ function BatchStatus({ noun, batch }) {
 
 /**
  * The batch generators, with the image and video services they render on (a
- * project option, edited in Setup › Project options; `onEditServices` goes there).
+ * project option, edited in Project settings › Project; `onEditServices` goes there).
  */
 export function GenerationActions({ project, videoSettings, sceneMedia, onEditServices }) {
   // The first click only opens the confirm line (count + estimate); nothing is
@@ -175,7 +176,7 @@ export function GenerationActions({ project, videoSettings, sceneMedia, onEditSe
       <span className="flex min-w-0 flex-wrap items-center gap-1 text-xs text-port-text-muted">
         {projectServicesSummary(project)}
         {onEditServices && (
-          <button type="button" onClick={onEditServices} className="min-h-[44px] px-1 text-port-accent sm:min-h-0">Change in Setup</button>
+          <button type="button" onClick={onEditServices} className="min-h-[44px] px-1 text-port-accent sm:min-h-0">Change in Project settings</button>
         )}
       </span>
       <button
@@ -254,7 +255,7 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
   const eidoverseMode = mode === 'eidoverse';
   const eidoverseBlocked = !eidoverseMode ? '' : noAudioOf(project) ? 'Link a track first'
     : !(project.audioAnalysis?.durationSec > 0) ? 'Analyze the master song first'
-      : !project.composition?.eidoverseScene?.inlineScript ? 'Save an Eidoverse scene in Compose first' : '';
+      : !project.composition?.eidoverseScene?.inlineScript ? 'Save an Eidoverse scene in Make first' : '';
   const readySceneCount = scenes.filter((scene) => sceneRenderReady(scene, { layered })).length;
   const noAudio = noAudioOf(project);
   const codeDuration = Math.max(

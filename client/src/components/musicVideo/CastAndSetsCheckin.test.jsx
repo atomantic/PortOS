@@ -19,6 +19,11 @@ vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => ({
 }));
 vi.mock('../../services/apiMediaJobs', () => ({ getMediaJob }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+// The Look step also holds the creative direction; it is covered by its own panels' tests.
+vi.mock('./CreativeSetupPanel.jsx', () => ({ default: () => null }));
+vi.mock('./LookReferencesPanel.jsx', () => ({ default: () => null }));
+vi.mock('./VisualSpecPanel.jsx', () => ({ default: () => null }));
+const DRAFTS = { conceptDraft: { value: '', onChange: () => {}, onBlur: () => {} }, styleDraft: { value: '', onChange: () => {}, onBlur: () => {} } };
 
 const emit = async (event, data) => act(async () => { for (const fn of listeners.get(event) || []) fn(data); });
 const plan = {
@@ -33,7 +38,7 @@ function Harness({ initial, locked = true }) {
   const [value, setValue] = useState(initial);
   selectProject = setValue;
   const actions = useMusicVideoCastAndSets({ project: value, replaceProject: setValue });
-  return <CastSetsStage board={{ project: value, locked, castSets: actions, kickoff: { running: locked }, devArtifacts: { busy: false }, openArtifact: vi.fn(), approveCastAndSets: actions.approve, skipCastAndSets: actions.skip }} />;
+  return <CastSetsStage board={{ project: value, locked, castSets: actions, kickoff: { running: locked }, devArtifacts: { busy: false }, openArtifact: vi.fn(), approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS }} />;
 }
 const stage = (next) => emit('music-video:cast-and-sets', { projectId: next.id, project: next });
 const card = (name) => within(screen.getByRole('article', { name }));
@@ -198,7 +203,7 @@ describe('Cast & Sets tab: undo, regenerate and guide import', () => {
     const Page = () => {
       const [current, setCurrent] = useState(value);
       const actions = useMusicVideoCastAndSets({ project: current, replaceProject: setCurrent });
-      return <CastSetsStage board={{ project: current, locked: false, castSets: actions, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(), approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...board }} />;
+      return <CastSetsStage board={{ project: current, locked: false, castSets: actions, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(), approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS, ...board }} />;
     };
     return render(<Page />);
   };
@@ -268,7 +273,7 @@ describe('Cast & Sets stage before any check-in exists', () => {
   it('offers Build and Skip, wired to the start and skip actions', async () => {
     const start = vi.fn();
     const skip = vi.fn();
-    render(<CastSetsStage board={{ project: { id: 'example-project', audioAnalysis: { sections: [{}] } }, locked: false, castSets: { busy: false, start, skip }, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn() }} />);
+    render(<CastSetsStage board={{ project: { id: 'example-project', audioAnalysis: { sections: [{}] } }, locked: false, castSets: { busy: false, start, skip }, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(), ...DRAFTS }} />);
     fireEvent.click(screen.getByRole('button', { name: 'Build cast & sets' }));
     fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
     expect(start).toHaveBeenCalledTimes(1);

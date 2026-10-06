@@ -19,7 +19,7 @@ export const RENDER_STYLE_HELP = {
   concat: 'Cuts the generated footage as is: needs footage generation, no live preview, output follows the clips. Typography cues do not render.',
   composed: 'Lays timed text over the generated footage: needs footage generation, no live preview, output follows the clips.',
   code: 'Draws the song in code with no footage: no generation needed, no live preview, limited 720p Canvas output.',
-  document: 'Renders your composition document (Three.js or Canvas): no footage required, live preview in Compose, 1080p at 24 fps by default.',
+  document: 'Renders your composition document (Three.js or Canvas): no footage required, live preview in Make, 1080p at 24 fps by default.',
   eidoverse: 'Renders an Eidoverse scene from a saved script: no footage required, no live preview, needs a track analyzed first.',
 };
 

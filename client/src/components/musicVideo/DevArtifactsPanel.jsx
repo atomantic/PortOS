@@ -29,7 +29,7 @@ const GUIDE_MIME_TYPES = ['text/html', 'image/png', 'image/jpeg'];
  * navigates to its deep link (`/music-video/:projectId/:stage/dev/:artifactId`),
  * which shows it in the viewer drawer.
  *
- * `kinds` narrows the list to those artifact kinds (the Cast & Sets tab shows
+ * `kinds` narrows the list to those artifact kinds (the Look step shows
  * only its own sheets); without `onUpload` the import control is left out.
  * With `onUseAsGuide(artifactId)` each usable sheet or image gets a
  * "Use as visual guide" action; `guideId` marks the one already chosen.

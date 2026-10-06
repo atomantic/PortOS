@@ -164,7 +164,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     <div className="space-y-2" aria-label="Composition preview">
       {previewError && <p className="text-xs text-port-error" role="alert">{previewError}</p>}
       {status && <p className="text-xs text-port-text-muted">{status}</p>}
-      <div className={`overflow-hidden rounded border border-port-border bg-black mx-auto ${collapsed ? 'max-lg:hidden' : ''}`}
+      <div className={`overflow-hidden rounded border border-port-border bg-black mx-auto ${collapsed ? 'max-xl:hidden' : ''}`}
         style={{ aspectRatio: aspect, maxHeight: '70vh', maxWidth: '100%' }}>
         {preview?.html ? (
           <iframe ref={iframeRef} title={draft ? 'Composition candidate preview' : 'Composition document preview'} sandbox="allow-scripts" srcDoc={preview.html} className="h-full w-full" />

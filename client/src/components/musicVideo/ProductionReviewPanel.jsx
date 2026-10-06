@@ -7,17 +7,33 @@ const EMPTY = { cast: '', environments: '', visualLanguage: '', motionLanguage: 
 const fieldClass = 'mt-1 w-full rounded border border-port-border bg-port-bg p-2 text-sm';
 const buttonClass = 'min-h-[44px] rounded border border-port-border px-3 py-2 text-sm disabled:opacity-50';
 const labels = { art: 'Art direction', storyboard: 'Lyric-timed storyboard', proof: 'Animated proof' };
-// Each approval lives on the tab that owns its work (#10151); the page passes `stage` to render only that one.
-const STAGE_TABS = { art: 'cast-sets', storyboard: 'board', proof: 'compose' };
+// Each approval closes the step that owns its work (#10151); the page passes that step's `stage`.
+const STAGE_TABS = { art: 'cast-sets', storyboard: 'board', proof: 'produce' };
 const EMPTY_PLAYBACK = { method: 'playback', energyComparison: '', timecodedNotes: '', visualReview: '', audioReview: '', limitations: '' };
 
-/** Editable planning content and explicit operator decisions for every render mode. */
-// `framed={false}` drops the card chrome and heading for a host that supplies them.
-// `stage` ('art' | 'storyboard' | 'proof') renders just that stage's approval, feedback and planning fields; omitted, all three render.
-// `planning` is an optional `[draft, setDraft]` pair owned by the page so unsaved edits survive a tab switch; `onNavigate(tab, anchor)` jumps tabs.
-export default function ProductionReviewPanel({ project, review, onOpenArtifact, framed = true, stage = null, planning = null, onNavigate = null }) {
-  const showArt = !stage || stage === 'art';
-  const showBoard = !stage || stage === 'storyboard';
+const FOLD_STYLE = { scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' };
+/**
+ * The open box that closes a step: heading, then the approval's content and
+ * Approve / Request changes, highlighted until approved.
+ */
+function ApprovalBox({ id, label, approved, children }) {
+  return <section id={id} tabIndex={-1} aria-label={`Approve: ${label}`} style={FOLD_STYLE}
+    className={`rounded-lg border p-3 focus:outline focus:outline-2 focus:outline-port-accent ${approved ? 'border-port-border' : 'border-port-accent bg-port-accent/5'}`}>
+    <h4 className="text-sm font-semibold">{approved ? `${label} approved` : `Approve the ${label.toLowerCase()}`}</h4>
+    {children}
+  </section>;
+}
+
+/**
+ * One step's production approval, with its feedback and planning fields, for
+ * every render mode. `stage` ('art' | 'storyboard' | 'proof') is the approval
+ * the step closes. `planning` is an optional `[draft, setDraft]` pair owned by
+ * the page so unsaved edits survive a step switch; `onNavigate(step, anchor)`
+ * jumps steps.
+ */
+export default function ProductionReviewPanel({ project, review, onOpenArtifact, stage, planning = null, onNavigate = null }) {
+  const showArt = stage === 'art';
+  const showBoard = stage === 'storyboard';
   const fieldId = key => `mv-review-${project.id}-${key}`;
   const saved = project.productionReview?.draft || EMPTY;
   const [visibleArt, setVisibleArt] = useState(null);
@@ -27,7 +43,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   const [local, setLocal] = planning || [ownLocal, setOwnLocal];
   const draft = local || saved;
   const dirty = !!local && JSON.stringify(local) !== JSON.stringify(saved);
-  const [feedback, setFeedback] = useState({ stage: stage || 'art', target: '', text: '', decision: 'request-changes' });
+  const [feedback, setFeedback] = useState({ stage, target: '', text: '', decision: 'request-changes' });
   const [resolutions, setResolutions] = useState({});
   const [importError, setImportError] = useState(null);
   const [revisionNotice, setRevisionNotice] = useState(null);
@@ -85,16 +101,15 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
     if (!evidenceComplete) return 'Complete the visual and audio observations (at least 40 characters each) and state the review limitations.';
     return null;
   };
-  // A link to another stage's section crosses tabs through the page; within a tab it just unfolds the target.
+  // A link to another step's section crosses steps through the page; within this step it just unfolds the target.
   const jump = (tab, anchor) => event => {
-    if (onNavigate && stage && tab !== STAGE_TABS[stage]) { event.preventDefault(); onNavigate(tab, anchor); return; }
+    if (onNavigate && tab !== STAGE_TABS[stage]) { event.preventDefault(); onNavigate(tab, anchor); return; }
     openReviewSection(event);
   };
   const openReviewSection = event => {
     const target = document.getElementById(event.currentTarget.hash.slice(1));
     if (target) { target.open = true; target.focus({ preventScroll: true }); }
   };
-  const nextStage = ['art', 'storyboard', 'proof'].find(stage => !ready?.[stage].approved) || 'proof';
   const openRequests = stage => (project.productionReview?.feedback || []).filter(f => f.stage === stage && f.decision === 'request-changes' && !f.resolvedAt);
   // Mirrors the server's revise routing so an unsupported stage explains itself instead of failing on click.
   const revisionScope = stage => {
@@ -110,7 +125,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
     const mode = project.composition?.mode;
     if (mode === 'code') return { action: 'Regenerates the code composition with these requests. Render a new proof afterwards.' };
     if (mode === 'document') return ['generated', 'template', undefined].includes(project.composition?.document?.source?.kind)
-      ? { action: 'Authors a revised composition candidate with these requests. Accept it in Compose, then render a new proof.' }
+      ? { action: 'Authors a revised composition candidate with these requests. Accept it in Make, then render a new proof.' }
       : { unavailable: 'This composition was imported from its own source. Revise that source and reimport it, then resolve each request.' };
     return { unavailable: 'This proof is assembled from Board footage. Revise the affected storyboard shots or takes, then render a new proof.' };
   };
@@ -130,7 +145,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         {!ready?.art.approved && <li><a href="#mv-review-art" onClick={jump('cast-sets', 'mv-review-art')} className="text-port-accent underline">Review and approve art direction</a> for the current revision.</li>}
         {!ready?.storyboard.approved && <li><a href="#mv-review-storyboard" onClick={jump('board', 'mv-review-storyboard')} className="text-port-accent underline">Resolve storyboard prerequisites and approve it</a>.
           <ul className="list-disc pl-5">{(ready?.storyboard.problems || []).map(problem => <li key={problem}>{problem}</li>)}</ul>
-          <a href="#mv-review-planning" onClick={jump('board', 'mv-review-planning')} className="text-port-accent underline">Open planning edits for alignment and document shot manifests</a>.
+          <a href="#mv-review-planning" onClick={jump('board', 'mv-review-planning')} className="text-port-accent underline">Open planning edits for document shot manifests</a>; lyric timing is verified on the <a href="#mv-lyric-timing" onClick={jump('setup', 'mv-lyric-timing')} className="text-port-accent underline">Song step</a>.
         </li>}
         <li>Choose a 10–45 second chorus window and use “Render animated proof” below. The feasibility prototype button creates a separate, unapproved preview.</li>
         <li>Review the proof with audio, add an energy comparison and timecoded notes, then approve using the playback attestation.</li>
@@ -203,17 +218,11 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
       <p className="text-xs text-port-text-muted">Include at least one playback timestamp such as 0:04 or 4.5s. These notes are saved with this exact proof. A replacement proof requires a new comparison and acknowledgement.</p>
       {!machineReview && <p id={fieldId('playback-attestation')} className="text-sm">By approving, I confirm that I watched this exact proof with audio at normal speed and compared its energy, timed choreography and lyric timing with the saved plan.</p>}
   </>;
-  return <section id="mv-production-review" aria-label="Production review" className={framed ? 'rounded-lg border border-port-border bg-port-card p-3 space-y-3' : 'space-y-3'}>
-    {framed && <h3 className="font-medium">Production review</h3>}
-    <details><summary className="min-h-[44px] cursor-pointer text-xs text-port-text-muted">About production approvals</summary>
-      <p className="text-sm text-port-text-muted">{stage ? 'Approving a development file or rendering a draft does not approve production.'
-        : 'Approve the visual direction, then the timed storyboard, then the reviewed animated proof. Approving a development file or rendering a draft does not approve production.'}</p>
-    </details>
+  const key = stage;
+  const label = labels[stage];
+  return <section id="mv-production-review" aria-label="Production review" className="space-y-3">
     {review.error && <p role="alert" className="text-port-error">{review.error}</p>}
-    <ol className="space-y-3">
-      {Object.entries(labels).filter(([key]) => !stage || key === stage).map(([key, label]) => <li key={key}><details open={window.location.hash === `#mv-review-${key}` || (!stage && key === nextStage)} id={`mv-review-${key}`} tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className="rounded border border-port-border p-2 focus:outline focus:outline-2 focus:outline-port-accent">
-        <summary className="cursor-pointer min-h-[44px] py-2 text-sm font-medium">{label}</summary>
-        <p role="status" className="text-xs">{ready?.[key].approved ? 'Approved for this revision' : 'Review required'}</p>
+    <ApprovalBox id={`mv-review-${key}`} label={label} approved={!!ready?.[key].approved}>
         <div id={fieldId(`${key}-prerequisites`)}>{(ready?.[key].problems || []).map(problem => <p key={problem} className="mt-1 text-xs text-port-text-muted">{problem}</p>)}</div>
         {key === 'proof' ? proofContent : <ProductionReviewContext stage={key} project={project} basis={ready?.basis[key]} approved={ready?.[key].approved} onOpenArtifact={onOpenArtifact} onArtReady={available => setVisibleArt(available ? artIdentity : null)} />}
         <p id={fieldId(`${key}-approval-help`)} role="status" className="mt-2 text-sm text-port-text-muted">{approvalHelp(key)}</p>
@@ -239,16 +248,11 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
           </>}
           {revisionNotice?.stage === key && <p role="status" className="text-sm">{revisionNotice.text}</p>}
         </div>}
-      </details></li>)}
-    </ol>
-    <p className="text-xs text-port-text-muted">Your signed-in session can approve each reviewed stage. Authenticated agents can also review and approve. Proof approval requires recorded visual and audio evidence; publishing remains manual.</p>
+    </ApprovalBox>
     {dirty && <p role="status" className="text-sm">Save your planning edits before approving this revision.</p>}
     <details>
       <summary className="cursor-pointer min-h-[44px] py-2 text-sm">Review feedback and revision history</summary>
       <p className="text-sm">Name a cast member, environment, shot, artifact or frame time. Structure acceptance records agreement on organization only; it never approves the art or authorizes production.</p>
-      {!stage && <label htmlFor={fieldId('feedback-stage')} className="block text-sm">Feedback stage<select id={fieldId('feedback-stage')} className={fieldClass} value={feedback.stage} onChange={e => setFeedback({ ...feedback, stage: e.target.value })}>
-        {Object.entries(labels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-      </select></label>}
       <label htmlFor={fieldId('feedback-target')} className="block text-sm">Feedback target<input id={fieldId('feedback-target')} className={fieldClass} value={feedback.target} placeholder="Cast: operator; shot: chorus; frame: 12.5s" onChange={e => setFeedback({ ...feedback, target: e.target.value })} /></label>
       <label htmlFor={fieldId('feedback-text')} className="block text-sm">Requested change<textarea id={fieldId('feedback-text')} className={fieldClass} rows={3} value={feedback.text} onChange={e => setFeedback({ ...feedback, text: e.target.value })} /></label>
       <label htmlFor={fieldId('feedback-decision')} className="block text-sm">Review decision<select id={fieldId('feedback-decision')} className={fieldClass} value={feedback.decision} onChange={e => setFeedback({ ...feedback, decision: e.target.value })}>
@@ -263,7 +267,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
       {savedRequestStage && openRequests(savedRequestStage).length > 0 && <p role="status" className="text-sm">
         Approval stays blocked until these are resolved. <a href={`#mv-review-${savedRequestStage}`} onClick={openReviewSection} className="text-port-accent underline">Revise from feedback</a>, or edit and resolve manually.
       </p>}
-      <ul className="mt-3 space-y-3">{(project.productionReview?.feedback || []).filter(item => !stage || item.stage === stage).map(item => <li key={item.id} className="rounded border border-port-border p-2">
+      <ul className="mt-3 space-y-3">{(project.productionReview?.feedback || []).filter(item => item.stage === stage).map(item => <li key={item.id} className="rounded border border-port-border p-2">
         <p className="text-sm"><strong>{item.target}</strong> · {item.decision} · {item.resolvedAt ? 'Resolved' : 'Open'}</p>
         <p className="text-sm whitespace-pre-wrap">{item.text}</p>
         <p className="text-xs text-port-text-muted">Reviewed revision {item.basis.slice(0, 12)}{ready?.basis[item.stage] !== item.basis ? ' · content has changed since review' : ' · current revision'}</p>
@@ -277,7 +281,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
       </li>)}</ul>
     </details>
     {stage !== 'proof' && <details id="mv-review-planning" tabIndex={-1} open={window.location.hash === '#mv-review-planning'} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }}>
-      <summary className="cursor-pointer min-h-[44px] py-2 text-sm">{!stage ? 'Edit visual guide and storyboard' : showArt ? 'Edit art direction and visual guide' : 'Edit alignment and storyboard shots'}</summary>
+      <summary className="cursor-pointer min-h-[44px] py-2 text-sm">{showArt ? 'Edit art direction and visual guide' : 'Edit storyboard shots'}</summary>
       <div className="space-y-3">
         {importError && <p role="alert">{importError}</p>}
         {showArt && <label htmlFor={fieldId('import')} className="block text-sm">Import planning JSON as an unapproved draft
@@ -291,7 +295,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         </label>}
         {showBoard && project.composition?.mode === 'document' && <div className="space-y-2 rounded border border-port-border p-2">
           <p className="text-sm">Document shot manifest</p>
-          <p className="text-xs text-port-text-muted">Export the composition in Compose. Have its author extract the actual shot IDs, timings and choreography from the source (for example timeline.js) into the JSON format below, keeping its documentDirectory and audioBasis from when that source was authored. A generic document section or Board row is not a shot list. Reauthor and reimport the composition after changing lyrics or timing, then import its matching manifest here.</p>
+          <p className="text-xs text-port-text-muted">Export the composition in Make. Have its author extract the actual shot IDs, timings and choreography from the source (for example timeline.js) into the JSON format below, keeping its documentDirectory and audioBasis from when that source was authored. A generic document section or Board row is not a shot list. Reauthor and reimport the composition after changing lyrics or timing, then import its matching manifest here.</p>
           <label htmlFor={fieldId('document-shots')} className="block text-sm">Import document shot manifest
             <input id={fieldId('document-shots')} type="file" accept=".json,application/json" disabled={dirty || review.busy || !project.productionReview?.draft || !project.composition.document} className={fieldClass}
               onChange={async e => {
@@ -334,23 +338,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         {draft.guideArtifactId && <button type="button" className={buttonClass} onClick={() => onOpenArtifact(draft.guideArtifactId)}>Review visual sheet</button>}
         </>}
         {showBoard && <>
-        <label htmlFor={fieldId('song-content')} className="block text-sm">Song content
-          <select id={fieldId('song-content')} value={draft.lyricsMode} onChange={e => set('lyricsMode', e.target.value)} className={fieldClass}>
-            <option value="vocal">Vocal song — aligned lyrics required</option><option value="instrumental">Instrumental — explicit exception</option>
-          </select>
-        </label>
-        <label htmlFor={fieldId('alignment-status')} className="block text-sm">Alignment status
-          <select id={fieldId('alignment-status')} value={draft.timingStatus} onChange={e => set('timingStatus', e.target.value)} className={fieldClass}>
-            <option value="provisional">Provisional — needs listening and correction</option><option value="verified">{ready?.alignment?.status === 'stale' ? 'Previously verified — needs re-review' : 'Verified against the current master vocal'}</option>
-          </select>
-        </label>
-        {draft.lyricsMode === 'vocal' && ready?.alignment?.status === 'stale' && <div className="space-y-2">
-          <p role="status" className="text-sm text-port-warning">Word timings or master audio changed. The previous verification is historical; current alignment needs re-review.</p>
-          <p className="text-xs text-port-text-muted">Listen to the current master and inspect its word timings before reverifying. Save any edited notes first. This records your authenticated review; it does not approve the storyboard or fix timing errors.</p>
-          <button type="button" className={buttonClass} disabled={blocked || !draft.timingNotes.trim()}
-            onClick={() => review.reverifyAlignment(draft.timingNotes)}>Reverify current timings</button>
-        </div>}
-        <label htmlFor={fieldId('alignment-notes')} className="block text-sm">Alignment notes / instrumental rationale<textarea id={fieldId('alignment-notes')} rows={2} value={draft.timingNotes} onChange={e => set('timingNotes', e.target.value)} className={fieldClass} /></label>
+        {/* Song content and lyric-timing verification live on the Song step (LyricTimingCheck). */}
         <label htmlFor={fieldId('storyboard-source')} className="block text-sm">Storyboard source
           <select id={fieldId('storyboard-source')} value={draft.storyboardSource || 'board'} onChange={e => set('storyboardSource', e.target.value)} className={fieldClass}>
             <option value="board">Board scenes</option><option value="document">Authored document shot manifest</option>
@@ -369,7 +357,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
             {!documentShots && !scene && <button type="button" className={buttonClass} disabled={dirty || review.busy || !shot.id} onClick={() => review.bindShot(shot.id)}>Create Board scene from this draft shot</button>}
             {documentShots ? <div className="flex flex-wrap gap-2">
               {['startSec', 'endSec'].map(key => <label key={key} htmlFor={fieldId(`${shotKey(shot)}-${key}`)} className="text-sm">{key === 'startSec' ? 'Shot start (seconds)' : 'Shot end (seconds)'}<input id={fieldId(`${shotKey(shot)}-${key}`)} type="number" min="0" step="0.01" value={shot[key] ?? ''} onChange={e => setShot(shot, key, e.target.value === '' ? null : Number(e.target.value))} className={fieldClass} /></label>)}
-              <p className="text-xs text-port-text-muted">Planning edits do not rewrite source code. Reauthor or reimport in Compose, then import its matching shot manifest before approval.</p>
+              <p className="text-xs text-port-text-muted">Planning edits do not rewrite source code. Reauthor or reimport in Make, then import its matching shot manifest before approval.</p>
             </div> : <p className="text-xs text-port-text-muted">{scene && Number.isFinite(scene.startSec) && Number.isFinite(scene.endSec) ? `Shot window ${formatTimecode(scene.startSec)}–${formatTimecode(scene.endSec)}. ` : ''}Review exact start/end in Board. Imported timings remain provisional.</p>}
             {['action', 'staging', 'camera', 'transition'].map(key => <label key={key} htmlFor={fieldId(`${shotKey(shot)}-${key}`)} className="block text-sm capitalize">{key}
               <textarea id={fieldId(`${shotKey(shot)}-${key}`)} rows={2} value={shot[key]} placeholder={({ action: 'At a beat or word: subject and prop action; pose, travel and energy change.', staging: 'Depth, blocking, prop trajectory and typography placement through the shot.', camera: 'Timed camera path, framing changes and motivated holds.', transition: 'Exact entry/exit anchor, visual handoff and escalation into the next section.' })[key]} onChange={e => setShot(shot, key, e.target.value)} className={fieldClass} />

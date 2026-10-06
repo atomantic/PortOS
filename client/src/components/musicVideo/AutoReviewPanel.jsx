@@ -1,3 +1,4 @@
+import { Link } from 'react-router';
 import { useState } from 'react';
 import { Bot, Play, Pause, X } from 'lucide-react';
 import useProviderModels from '../../hooks/useProviderModels.js';
@@ -140,7 +141,7 @@ export default function AutoReviewPanel({ project, startSec, endSec, rangeValid,
         <span className="flex items-center gap-1"><Bot size={12} /> Auto-review{isStartedByAutonomous ? '' : ' (opt-in)'}</span>
         {isStartedByAutonomous && (
           <span className="text-xs text-port-text-muted font-normal">
-            · <a href={project?.id ? `/music-video/${project.id}/setup#mv-autonomous-run` : '#mv-autonomous-run'} className="text-port-accent hover:underline">Started by the autonomous run</a>
+            · <Link to={{ search: '?mvPanel=autopilot', hash: '#mv-autonomous-run' }} className="text-port-accent hover:underline">Started by the autonomous run</Link>
           </span>
         )}
       </span>
