@@ -178,6 +178,8 @@ describe('dataManager purge scope (#3327)', () => {
     await expect(purgeCategory('loras', { subPath: 'anything' })).rejects.toThrow(/is not purgeable/);
     await expect(purgeCategory('beeper')).rejects.toThrow(/is not purgeable/);
     await expect(purgeCategory('beeper', { subPath: 'attachments' })).rejects.toThrow(/is not purgeable/);
+    await expect(purgeCategory('peer-execution')).rejects.toThrow(/is not purgeable/);
+    await expect(purgeCategory('peer-execution', { subPath: 'fixture-operation/evidence.json' })).rejects.toThrow(/is not purgeable/);
   });
 
   it('fails closed when a deletable category has no recognized purgeScope', async () => {
