@@ -6,6 +6,7 @@ import TabPills from '../ui/TabPills';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
 import { timeAgo, formatDateNumeric } from '../../utils/formatters';
+import { pluralize } from '../../lib/textUtils';
 import MessageDetail from './MessageDetail';
 import AddToThreadButton from '../threads/AddToThreadButton';
 import { messageReadState, partitionAccountsBySyncMode } from '../../lib/messageSyncModes';
@@ -342,7 +343,7 @@ export default function InboxTab({ accounts }) {
     setEvaluating(false);
     if (!result) return;
     const count = Object.keys(result.evaluations || {}).length;
-    toast.success(`Evaluated ${count} messages`);
+    toast.success(`Evaluated ${pluralize(count, 'message')}`);
     // Merge evaluations into local state
     setMessages(prev => prev.map(m => {
       const ev = result.evaluations?.[m.id];
@@ -521,7 +522,7 @@ export default function InboxTab({ accounts }) {
               const result = await api.fetchFullContent(selectedAccount).catch(() => null);
               setFetchingFull(false);
               if (!result) return;
-              toast.success(`Fetched full content for ${result.count || 0} messages`);
+              toast.success(`Fetched full content for ${pluralize(result.count || 0, 'message')}`);
               fetchMessages();
             }}
             disabled={fetchingFull}
@@ -539,7 +540,7 @@ export default function InboxTab({ accounts }) {
               const result = await api.fetchFullContent(selectedAccount, { force: true }).catch(() => null);
               setFetchingFull(false);
               if (!result) return;
-              toast.success(`Re-fetched content for ${result.updated || 0}/${result.total || 0} messages`);
+              toast.success(`Re-fetched content for ${result.updated || 0} of ${pluralize(result.total || 0, 'message')}`);
               fetchMessages();
             }}
             disabled={fetchingFull}
