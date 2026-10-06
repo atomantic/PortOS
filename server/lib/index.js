@@ -649,6 +649,7 @@ export * from './dispatchLabels.js';
 export * from './distrokidForm.js';
 export * from './distrokidGenres.js';
 export * from './sunoPage.js';
+export * from './sunoSongPicker.js';
 export * from './domainAutonomy.js';
 export * from './domainBudgets.js';
 export * from './eidoverseCreativeToolkit.js';

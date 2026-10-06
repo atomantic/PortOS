@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pickSongRow } from './sunoHook.js';
+import { pickSongRow } from '../../../lib/sunoSongPicker.js';
 import { buildPublishPayload } from './payloads.js';
 import { captureMusicVideoEvidence } from '../../../lib/musicVideoDependencies.js';
 

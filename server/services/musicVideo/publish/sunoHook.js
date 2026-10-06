@@ -9,6 +9,7 @@
  * else a drag calibrated at WAVEFORM_PX_PER_SEC. Either way the page's own m:ss
  * label is read back and the fill fails rather than post the wrong stretch.
  */
+import { pickSongRow } from '../../../lib/sunoSongPicker.js';
 import { PUBLISH_STEP_TIMEOUT_MS as T, clickVisibleText, loginRequired, step } from './browser.js';
 
 const CREATE_URL = 'https://suno.com/hooks/create';
@@ -23,22 +24,6 @@ const parseClock = (text) => {
   const m = String(text).match(/(\d+):(\d{2})/);
   return m ? Number(m[1]) * 60 + Number(m[2]) : null;
 };
-
-/**
- * Which picker row is the song: by id when a row carries it, else by the one
- * row with the song's length, else the only row. Pure; rows are `{ text, html }`.
- */
-export function pickSongRow(rows, { songId, durationSec, title }) {
-  const byId = rows.findIndex((r) => songId && r.html.toLowerCase().includes(songId.toLowerCase()));
-  if (byId >= 0) return byId;
-  const named = rows.map((r, i) => [r, i]).filter(([r]) => !title || r.text.toLowerCase().includes(title.toLowerCase()));
-  const pool = named.length ? named : rows.map((r, i) => [r, i]);
-  if (pool.length === 1) return pool[0][1];
-  const clock = Number.isFinite(durationSec) ? fmtClock(Math.round(durationSec)) : null;
-  const sameLength = clock ? pool.filter(([r]) => r.text.includes(clock)) : [];
-  if (sameLength.length === 1) return sameLength[0][1];
-  return -1;
-}
 
 async function selectSong(page, payload) {
   await page.locator('text=Select Song').first().click({ timeout: T });
