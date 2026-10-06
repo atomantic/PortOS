@@ -117,31 +117,88 @@ const LIMITS = { youtubeTitle: 100, shortsTitle: 100, xHook: 280, redditTitle: 3
 
 const str = (v, max) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : '');
 
+/**
+ * What the director chose to put in the draft. Nothing beyond the notes and
+ * links they typed is included unless they ticked it, and no hashtag or tag
+ * appears unless they asked for them. `length: 'short'` keeps every post to a
+ * sentence or two.
+ */
+const DEFAULT_COPY_INCLUDE = Object.freeze({ title: true, lyrics: false, spend: false, chapters: false, hashtags: false });
+const COPY_LENGTHS = Object.freeze(['short', 'full']);
+
+export function normalizeCopyOptions({ include, length } = {}) {
+  const src = include && typeof include === 'object' ? include : {};
+  const merged = Object.fromEntries(Object.entries(DEFAULT_COPY_INCLUDE).map(([k, d]) => [k, typeof src[k] === 'boolean' ? src[k] : d]));
+  return { include: merged, length: COPY_LENGTHS.includes(length) ? length : 'short' };
+}
+
 // The JSON shape each platform's copy takes in the prompt.
-const COPY_SPECS = {
-  youtube: '"youtube":{"title":"<=100 chars","description":"2 short paragraphs + the links given","tags":["8-15 lowercase tags"]}',
-  shorts: '"shorts":{"title":"<=100 chars, ends with #shorts","description":"1-2 sentences + the full video URL if given"}',
-  x: '"x":{"hook":"<=280 chars, one surprising claim, no links","story":"the making-of as a long post"}',
-  tiktok: '"tiktok":{"caption":"1-2 sentences + 4-6 hashtags"}',
-  instagram: '"instagram":{"caption":"1-2 sentences + 4-6 hashtags"}',
-  reddit: '"reddit":{"title":"<=300 chars","body":"markdown: what it is, what it cost, how it was made"}',
-  stackerNews: '"stackerNews":{"title":"<=80 chars","body":"markdown, personal tone"}',
-};
+function copySpecs({ include, length }) {
+  const short = length === 'short';
+  const tags = include.hashtags;
+  const body = (full) => (short ? '1-2 sentences' : full);
+  return {
+    youtube: `"youtube":{"title":"<=100 chars","description":"${body('2 short paragraphs')} + the links given"${tags ? ',"tags":["8-15 lowercase tags"]' : ''}}`,
+    shorts: `"shorts":{"title":"<=100 chars${tags ? ', ends with #shorts' : ''}","description":"1-2 sentences + the full video URL if given"}`,
+    x: `"x":{"hook":"<=280 chars, ${short ? 'one or two sentences' : 'one surprising claim'}, no links","story":"${short ? 'empty string' : 'the making-of as a long post'}"}`,
+    tiktok: `"tiktok":{"caption":"1-2 sentences${tags ? ' + 4-6 hashtags' : ''}"}`,
+    instagram: `"instagram":{"caption":"1-2 sentences${tags ? ' + 4-6 hashtags' : ''}"}`,
+    reddit: `"reddit":{"title":"<=300 chars","body":"${body('markdown: what it is and how it was made')}"}`,
+    stackerNews: `"stackerNews":{"title":"<=80 chars","body":"${body('markdown, personal tone')}"}`,
+  };
+}
+
+// A run of hashtags: `#` plus a word with at least one letter (so `#1` and
+// `#2` stay), standing at a line start or after a space or opening bracket or
+// quote (so a URL fragment like `/album/#listen` and `&#39;` stay), optionally
+// wrapped whole in parentheses. Markdown headings ("# Heading") have a space
+// after the `#` and never match.
+const TAG = String.raw`#[\p{N}_]*\p{L}[\p{L}\p{N}_]*`;
+const RUN = String.raw`${TAG}(?:[ \t]+${TAG})*`;
+const HASHTAG_RUN = new RegExp(String.raw`([ \t]*)(?:(?<=^|[\s"'“‘])\(${RUN}\)|(?<=^|[\s(\[{"'“‘])${RUN})([ \t]*(?:\r?\n)?)`, 'gmu');
+const CLOSING = /^[,.;:!?)\]}]/;
+/**
+ * The text with every hashtag removed. Only the spacing around a removed run
+ * changes: a line that held only tags goes away, a run ending its line takes
+ * the spaces before it, one before punctuation takes its space, and one
+ * mid-line leaves a single space, so indentation and markdown line breaks
+ * elsewhere are untouched.
+ */
+function stripHashtags(text) {
+  let droppedLine = false;
+  const out = String(text || '').replace(HASHTAG_RUN, (match, lead, trail, offset, whole) => {
+    const end = offset + match.length;
+    const lineStart = offset === 0 || whole[offset - 1] === '\n';
+    const newline = trail.match(/\r?\n$/)?.[0] || '';
+    if (newline || end >= whole.length) {
+      if (!lineStart) return newline;
+      droppedLine = true;
+      return '';
+    }
+    if (lineStart) return lead;
+    return lead && !CLOSING.test(whole.slice(end)) ? ' ' : '';
+  });
+  // A tags-only line between two paragraphs would leave a double gap; close it.
+  return droppedLine ? out.replace(/\r?\n(?:[ \t]*\r?\n){2,}/g, (gap) => (gap.startsWith('\r') ? '\r\n\r\n' : '\n\n')) : out;
+}
 
 /**
- * The copy prompt. `notes` is the director's own making-of story and
- * `spentUsd` the generation spend; both are the facts the copy may claim —
- * nothing else about cost or process is invented. `platforms` limits the
+ * The copy prompt. `notes` is the director's own making-of story; the song
+ * title, lyrics, chapters and `spentUsd` (generation spend) reach the writer
+ * only when `include` ticks them, and hashtags/tags only when it ticks
+ * `hashtags`. Those are the only facts the copy may claim. `platforms` limits the
  * draft to where the director posts (#9287); `lessons` are their own ratings
  * of earlier posts (`{ platform, reception, notes }`), so the copy leans
  * toward what landed and away from what didn't.
  */
-export function buildPublishCopyPrompt(project, { notes = '', spentUsd = null, links = {}, platforms = PUBLISH_PLATFORMS, lessons = [] } = {}) {
-  const lyrics = timedLines(project).map((l) => l.text).join('\n');
-  const chapters = chaptersText(buildChapters(project));
+export function buildPublishCopyPrompt(project, { notes = '', spentUsd = null, links = {}, platforms = PUBLISH_PLATFORMS, lessons = [], include, length } = {}) {
+  const options = normalizeCopyOptions({ include, length });
+  const { include: inc } = options;
+  const lyrics = inc.lyrics ? timedLines(project).map((l) => l.text).join('\n') : '';
+  const chapters = inc.chapters ? chaptersText(buildChapters(project)) : '';
   const facts = [
-    `Song title: ${project?.name || 'Untitled'}`,
-    spentUsd != null ? `Video generation spend: $${Number(spentUsd).toFixed(2)}` : null,
+    inc.title && project?.name ? `Song title: ${project.name}` : null,
+    inc.spend && spentUsd != null ? `Video generation spend: $${Number(spentUsd).toFixed(2)}` : null,
     links.youtube ? `Full video URL: ${links.youtube}` : null,
     links.song ? `Song URL: ${links.song}` : null,
   ].filter(Boolean).join('\n');
@@ -150,26 +207,39 @@ export function buildPublishCopyPrompt(project, { notes = '', spentUsd = null, l
     .filter((l) => wanted.includes(l.platform) && (l.reception || l.notes))
     .map((l) => `- ${l.platform}${l.reception ? ` (${l.reception})` : ''}: ${l.notes || 'no notes'}`)
     .join('\n');
+  const specs = copySpecs(options);
   return [
-    'You write release copy for a music video the user made. Write in the first person as the artist: plain, specific, no hype words, no emoji, no hashtags except where a field asks for them.',
-    'Use ONLY facts given below. Never invent costs, tools, durations or events.',
+    `You write release copy for a music video the user made. Write in the first person as the artist: plain, specific, no hype words, no emoji, ${inc.hashtags ? 'no hashtags except where a field asks for them' : 'no hashtags anywhere'}.`,
+    options.length === 'short' ? 'Keep every post to a sentence or two. Leave out anything not needed.' : '',
+    'Use ONLY facts given below. Never invent costs, tools, durations, lyrics, song titles or events, and do not mention anything the artist did not give you.',
     facts,
     fenceBlock('Making-of notes from the artist', notes || '(none)', 6000),
-    fenceBlock('Lyrics', lyrics || '(no timed lyrics)', 4000),
+    lyrics ? fenceBlock('Lyrics', lyrics, 4000) : '',
     chapters ? fenceBlock('Chapters', chapters, 1200) : '',
     lessonText ? fenceBlock('How the artist rated earlier posts (lean toward what landed, avoid what did not)', lessonText, 3000) : '',
     'Return ONLY a JSON object with exactly these keys:',
-    `{${wanted.map((p) => COPY_SPECS[p]).join(',\n ')}}`,
+    `{${wanted.map((p) => specs[p]).join(',\n ')}}`,
   ].filter(Boolean).join('\n\n');
 }
 
-/** The model's JSON reply as `{ platform: { field: text } }` for `platforms`, clipped to each platform's limits; null when unusable. */
-export function parsePublishCopy(text, platforms = PUBLISH_PLATFORMS) {
+/**
+ * The model's JSON reply as `{ platform: { field: text } }` for `platforms`,
+ * clipped to each platform's limits; null when unusable. Without
+ * `hashtags: true` every hashtag the model slipped in is removed and no
+ * YouTube tags are returned (the `tags` key is left out, so tags the director
+ * typed survive a redraft), so none reaches a post unasked.
+ */
+export function parsePublishCopy(text, platforms = PUBLISH_PLATFORMS, { hashtags = true } = {}) {
   const { value } = extractJson(text, { blockType: 'object' });
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const v = (k) => (value[k] && typeof value[k] === 'object' ? value[k] : {});
+  const clean = (fields) => (hashtags || !fields || typeof fields !== 'object' ? fields
+    : Object.fromEntries(Object.entries(fields).filter(([k]) => k !== 'tags').map(([k, f]) => [k, typeof f === 'string' ? stripHashtags(f) : f])));
+  const v = (k) => (value[k] && typeof value[k] === 'object' ? clean(value[k]) : {});
   const all = {
-    youtube: () => ({ title: str(v('youtube').title, LIMITS.youtubeTitle), description: str(v('youtube').description, 5000), tags: (Array.isArray(v('youtube').tags) ? v('youtube').tags : []).map((t) => str(t, 60)).filter(Boolean).slice(0, 20) }),
+    youtube: () => ({
+      title: str(v('youtube').title, LIMITS.youtubeTitle), description: str(v('youtube').description, 5000),
+      ...(hashtags ? { tags: (Array.isArray(v('youtube').tags) ? v('youtube').tags : []).map((t) => str(t, 60)).filter(Boolean).slice(0, 20) } : {}),
+    }),
     shorts: () => ({ title: str(v('shorts').title, LIMITS.shortsTitle), description: str(v('shorts').description, 5000) }),
     x: () => ({ hook: str(v('x').hook, LIMITS.xHook), story: str(v('x').story, 25000) }),
     tiktok: () => ({ caption: str(v('tiktok').caption, LIMITS.caption) }),

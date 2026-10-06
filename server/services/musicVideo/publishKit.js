@@ -23,7 +23,7 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '
 import { getProject, listProjects, mutateProjectRecord } from './projects.js';
 import { suggestSocialCuts } from './socialCuts.js';
 import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
-import { buildChapters, buildSrt, buildPublishCopyPrompt, parsePublishCopy, PUBLISH_PLATFORMS } from './publishKitText.js';
+import { buildChapters, buildSrt, buildPublishCopyPrompt, parsePublishCopy, normalizeCopyOptions, PUBLISH_PLATFORMS } from './publishKitText.js';
 
 const jobs = new Map();
 const projectBuilds = new Map();
@@ -234,6 +234,16 @@ export async function updatePublishKitCopy(projectId, patch) {
   });
 }
 
+const sameTags = (a, b) => Array.isArray(b) && b.length > 0 && a.length === b.length && a.every((t, i) => t === b[i]);
+
+/** True when a post was written or edited by hand after the last draft (or with no draft yet). */
+function copyEditedSinceDraft(kit) {
+  const edited = Date.parse(kit?.copyEditedAt || '');
+  if (!Number.isFinite(edited)) return false;
+  const drafted = Date.parse(kit?.copyDraftedAt || '');
+  return !Number.isFinite(drafted) || edited > drafted;
+}
+
 /** Generation spend across the project's production runs (what the copy may claim). */
 function spentUsd(project) {
   const total = (project.productionRuns || []).reduce((sum, run) => sum + (Number.isFinite(Number(run?.usage?.spentUsd)) ? Number(run.usage.spentUsd) : 0), 0);
@@ -242,10 +252,18 @@ function spentUsd(project) {
 
 /**
  * Draft the copy for every platform the director posts to, in ONE provider call they asked for.
- * `notes` (their making-of story) is saved with the kit so a redraft reuses it.
+ * `notes` (their making-of story) and what they chose to include (`include`,
+ * `length`) are saved with the kit so a redraft reuses them. A draft replaces
+ * the posts' text, so once a post was written or edited by hand since the last
+ * draft it is refused (409 PUBLISH_COPY_EDITED) unless `replaceEdited` says the
+ * director agreed to replace it. Fields the draft does not return (YouTube tags
+ * with hashtags off) keep what was there.
  */
-export async function draftPublishKitCopy(projectId, { providerId = null, model = null, notes = '', links = {} } = {}, deps = {}) {
+export async function draftPublishKitCopy(projectId, { providerId = null, model = null, notes = '', links = {}, include, length, replaceEdited = false } = {}, deps = {}) {
   const project = await requireProject(projectId);
+  if (!replaceEdited && copyEditedSinceDraft(projectPublishKit(project))) {
+    throw kitError(409, 'PUBLISH_COPY_EDITED', 'The posts were edited by hand since the last draft; confirm replacing them to draft again');
+  }
   const { getPublishPlatforms, publishHistory } = await import('./publish/platforms.js');
   const enabled = deps.platforms || await getPublishPlatforms();
   // Only where the director posts (#9287); Suno's caption reuses the YouTube description.
@@ -256,12 +274,23 @@ export async function draftPublishKitCopy(projectId, { providerId = null, model 
   const { resolveProviderAndModel, runPromptThroughProvider } = deps.runner || await import('../promptRunner.js');
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   if (!provider) throw kitError(503, 'NO_PROVIDER', 'No AI provider is available to draft the copy');
-  const prompt = buildPublishCopyPrompt(project, { notes, spentUsd: spentUsd(project), links, platforms, lessons });
+  const options = normalizeCopyOptions({ include, length });
+  const prompt = buildPublishCopyPrompt(project, { notes, spentUsd: spentUsd(project), links, platforms, lessons, ...options });
   const { text } = await runPromptThroughProvider({ provider, model: selectedModel, prompt, source: 'music-video-publish-copy' });
-  const copy = parsePublishCopy(text, platforms);
+  const copy = parsePublishCopy(text, platforms, { hashtags: options.include.hashtags });
   if (!copy) throw kitError(502, 'PUBLISH_COPY_UNPARSEABLE', 'The copy draft came back without usable JSON — try again or another model');
   return mutateProjectRecord(projectId, (current) => {
     const kit = projectPublishKit(current);
-    return { project: { ...current, publishKit: { ...kit, copy: { ...(kit.copy || {}), ...copy }, notes, links: { ...(kit.links || {}), ...links }, copyDraftedAt: new Date().toISOString() } } };
+    const merged = { ...(kit.copy || {}) };
+    for (const [platform, fields] of Object.entries(copy)) merged[platform] = { ...(merged[platform] || {}), ...fields };
+    // With hashtags off the draft returns no tags: typed tags stay, but tags an
+    // earlier draft wrote (still unedited) go, so none remain unasked.
+    const youtube = merged.youtube;
+    if (copy.youtube && !('tags' in copy.youtube) && Array.isArray(youtube?.tags) && sameTags(youtube.tags, kit.draftedTags)) {
+      merged.youtube = { ...youtube, tags: [] };
+    }
+    // A draft without YouTube keeps the record of what the last YouTube draft wrote.
+    const draftedTags = copy.youtube ? (Array.isArray(copy.youtube.tags) ? copy.youtube.tags : []) : (kit.draftedTags || []);
+    return { project: { ...current, publishKit: { ...kit, copy: merged, draftedTags, notes, draftOptions: options, links: { ...(kit.links || {}), ...links }, copyDraftedAt: new Date().toISOString() } } };
   });
 }
