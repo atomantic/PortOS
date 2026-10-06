@@ -217,8 +217,10 @@ export function createRunFinalizer({
   const finalizeOnce = async (cause) => {
     if (!lifecycle.markSettled()) return false;
     activeRuns.delete(runId);
+    let admitted = false;
     try {
       await withAssetPublication(async () => {
+        admitted = true;
         try {
           if (cause.type === 'success') await finalizeSuccess(cause);
           else if (cause.type === 'timeout') await finalizeTimeout(cause.bound);
@@ -235,6 +237,22 @@ export function createRunFinalizer({
           await finalizeHandlerError(handlerErr);
         }
       });
+      return true;
+    } catch (admissionErr) {
+      // Admission refused (busy/timeout): nothing may be written through the
+      // refused boundary, but callers still need exactly one terminal callback.
+      if (admitted) throw admissionErr;
+      failed();
+      console.error(`❌ Run ${runId} finalization admission refused: ${admissionErr.message}`);
+      const failMetadata = {
+        runId,
+        endTime: new Date().toISOString(),
+        duration: Date.now() - startTime,
+        success: false,
+        error: `Run finalization deferred: ${admissionErr.message}`,
+      };
+      settleTerminal(() => hooks.onRunFailed?.(failMetadata, failMetadata.error, getOutput()), `Run ${runId} onRunFailed hook`);
+      settleTerminal(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
       return true;
     } finally {
       for (const { fn, label } of terminalCallbacks) runTerminal(fn, label);
