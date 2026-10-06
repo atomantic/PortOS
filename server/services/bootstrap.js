@@ -1,3 +1,4 @@
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { bindMaintenanceIo } from './maintenanceControl.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { noteReadinessChanged } from './readinessNotify.js';
@@ -294,6 +295,7 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       sampleProvidersFile: join(dataReferenceDir, 'providers.json'),
       io,
       asyncHandler,
+      withAssetPublication: withBackupAssetPublication,
       withRunAdmission: handler => (req, res) => maintenance.run('manual-run', 'Runs', () => handler(req, res)),
       // Inject PortOS's ServerError so toolkit route errors normalize into the
       // canonical `{ error, code, timestamp, context? }` envelope (issue #1084).
