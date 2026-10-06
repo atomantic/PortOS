@@ -2335,6 +2335,15 @@ describe('restoreSnapshot manifest verification', () => {
         subdirFilter: 'brain',
       });
       expect(equalPreview.changedFiles.filter(line => line.includes(relativePath))).toEqual([]);
+
+      // A selected file needs an exact include rule on rsync 3.x; the
+      // directory-only /file/*** pattern silently skips it there.
+      await realFs.writeFile(livePath, liveContent);
+      const filePreview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true, subdirFilter: relativePath });
+      expect(filePreview.changedFiles.some(line => line.includes(relativePath))).toBe(true);
+      expect(await realFs.readFile(livePath, 'utf8')).toBe(liveContent);
+      await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, subdirFilter: relativePath });
+      expect(await realFs.readFile(livePath, 'utf8')).toBe(snapshotContent);
     } finally {
       if (previousRsync === undefined) delete process.env.PORTOS_RSYNC;
       else process.env.PORTOS_RSYNC = previousRsync;
@@ -3068,6 +3077,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         // Leading `/` is load-bearing: rsync matches an unanchored pattern
         // against the end of every path, so `brain/***` would also restore
         // `data/<anything>/brain/**` — outside the scope the preflight verified.
+        '--include=/brain',
         '--include=/brain/***',
         '--include=*/',
         '--exclude=*',
