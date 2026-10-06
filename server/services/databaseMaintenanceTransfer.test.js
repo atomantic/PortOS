@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { STUB_DUMP_COMPLETE, installDatabaseStubs } from '../test/fixtures/databaseTransferStubs.js';
 
-const context = vi.hoisted(() => ({ root: undefined, list: null, stop: null }));
+const context = vi.hoisted(() => ({ root: undefined, list: null, stop: null, timed: null }));
 vi.mock('../lib/paths.js', async original => {
   const actual = await original();
   return { ...actual, PATHS: new Proxy(actual.PATHS, {
@@ -20,6 +20,13 @@ vi.mock('../lib/paths.js', async original => {
       return target[key];
     },
   }) };
+});
+// Only the process-table snapshot is wrapped (timed per call); every behavior
+// is the real one. It is the harness's one real `ps -A` and the first suspect
+// when a case is slow under load.
+vi.mock('../lib/detachedSpawn.js', async original => {
+  const actual = await original();
+  return { ...actual, snapshotProcesses: (...args) => context.timed('snapshotProcesses', () => actual.snapshotProcesses(...args)) };
 });
 vi.mock('./pm2.js', () => ({
   listMaintenanceProcesses: (...args) => context.list(...args),
@@ -44,28 +51,32 @@ let rows;
 let operation;
 let token;
 let strays;
+let ordinary;
 
-beforeEach(() => {
+beforeEach(({ onTestFailed }) => {
   root = mkdtempSync(join(tmpdir(), 'database-transfer-'));
   writeFileSync(join(root, '.portos-disposable-root'), '');
   mkdirSync(join(root, 'server', 'cos-runner'), { recursive: true });
   writeFileSync(join(root, 'server', 'start.js'), '');
   writeFileSync(join(root, 'server', 'cos-runner', 'index.js'), '');
   context.root = root;
+  onTestFailed(() => console.error(`❌ database transfer fixture failed: ${diagnostics()}`));
   journal = createDatabaseMaintenanceJournal(join(root, 'data'));
   stubs = installDatabaseStubs(root);
   strays = [];
+  ordinary = [];
+  context.timed = (name, run) => stubs.timed(name, run);
   rows = [
     { name: 'portos-cos', pmId: 12, pid: 1012, status: 'online', cwd: root, script: 'server/cos-runner/index.js' },
     { name: 'portos-server', pmId: 13, pid: 1013, status: 'online', cwd: root, script: 'server/start.js' },
   ];
-  context.list = vi.fn(async () => rows.map(row => ({ ...row })));
-  context.stop = vi.fn(async id => {
+  context.list = vi.fn(() => stubs.timed('listMaintenanceProcesses', async () => rows.map(row => ({ ...row }))));
+  context.stop = vi.fn(id => stubs.timed('stopApp', async () => {
     const row = rows.find(value => value.pmId === id);
     stubs.event('stop ' + row.name);
     row.status = 'stopped'; row.pid = 0;
     return { success: true };
-  });
+  }));
   // Inherited libpq settings that must never redirect the transfer.
   Object.assign(process.env, {
     PATH: `${stubs.bin}:${savedEnv.PATH}`, PGPASSWORD: 'example-password',
@@ -74,12 +85,20 @@ beforeEach(() => {
     PGOPTIONS: '-c search_path=inherited',
   });
 });
-afterEach(() => {
+afterEach(async () => {
   for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
   Object.assign(process.env, savedEnv);
   for (const group of strays) { try { process.kill(-group, 'SIGKILL'); } catch { /* already gone */ } }
+  for (const child of ordinary) child.kill('SIGKILL');
+  // A timed-out case's transfer is still running: end the stubs it waits on and
+  // let it settle BEFORE its root goes, so it neither overlaps the next case
+  // nor writes into a removed root. Never infer completion from the timeout:
+  // while anything is in flight, keep the root and say so.
+  const contained = await stubs.contain();
+  if (process.env.DB_TRANSFER_DIAG) console.log(`⏱️ database transfer fixture: ${stubs.report()}`);
   context.root = undefined;
-  rmSync(root, { recursive: true, force: true });
+  if (contained) rmSync(root, { recursive: true, force: true });
+  else console.error(`❌ database transfer fixture still in flight at teardown; keeping its disposable root: ${stubs.report()}`);
 });
 
 function begin(source = native, target = docker) {
@@ -97,7 +116,14 @@ function successor() {
   return previous;
 }
 
-const transfer = () => runDatabaseTransfer(operation.id, token, fast);
+// Last harness phase plus owned-child state, for a failure or timeout. Bounded
+// and redacted: mark names, child kinds and durations only.
+const diagnostics = () => {
+  let stage = 'unknown';
+  try { stage = journal.read()?.stage ?? 'none'; } catch { /* journal not readable */ }
+  return stubs.report(`stage=${stage}`);
+};
+const transfer = () => stubs.track(stubs.timed('runDatabaseTransfer', () => runDatabaseTransfer(operation.id, token, fast)));
 const dumpPath = () => join(root, 'data', 'db-dumps', `portos-maintenance-${operation.id}.sql`);
 
 // An ordinary process of this install: a pooled write and a detached spawn.
@@ -118,6 +144,7 @@ function ordinaryWriter() {
   delete env.VITEST;
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['--input-type=module', '-e', code], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    ordinary.push(child);
     let stdout = '';
     child.stdout.on('data', chunk => { stdout += chunk; });
     child.once('error', reject);
@@ -197,6 +224,30 @@ describe.skipIf(process.platform === 'win32')('offline database transfer', () =>
     expect(await pending).toMatchObject({ importCommitted: true });
   }, 30_000);
 
+  // Regression caught: a case that times out while a stub is blocked leaves its
+  // transfer and child running into the next case, or writing into a removed root.
+  it('reports a blocked case\'s last phase and owned child state, then settles it before its root goes', async () => {
+    begin();
+    stubs.setMode('dump', 'pause');
+    const pending = transfer();
+    const outcome = pending.then(() => 'resolved', error => error.message);
+    await vi.waitFor(() => expect(stubs.started('dump')).toBe(true), { timeout: 10_000, interval: 20 });
+
+    const blocked = diagnostics();
+    expect(blocked).toMatch(/^last=\S+\(\d+ms ago\) slowest=.+ children=dump:running pending=1 stage=exporting$/);
+    expect(blocked).toMatch(/snapshotProcesses=\d+x\/\d+ms/);
+    // No argv, endpoint, credential or path reaches the report (the only "/" is a count/duration separator).
+    expect(blocked).not.toMatch(/invalid|example|portos|bash|db\.sh|pg_dump|psql|PG[A-Z]|\/(?!\d)/);
+
+    expect(await stubs.contain()).toBe(true);
+    expect(await outcome).toMatch(/source export failed/);
+    // SIGKILL skips the stub's own exit line, so a contained child reads gone, not exited.
+    expect(diagnostics()).toMatch(/children=dump:gone pending=0 stage=exporting$/);
+    // Nothing continued past the settled case: no import began, no dump recorded.
+    expect(stubs.invocations('psql')).toEqual([]);
+    expect(journal.transferStatus(operation.id)).toEqual({ dump: 'absent', import: 'pending' });
+  }, 30_000);
+
   it.each(['fail', 'incomplete'])('never records a %s export; a recovered owner re-quiesces and exports again', async mode => {
     begin();
     stubs.setMode('dump', mode);
@@ -206,7 +257,7 @@ describe.skipIf(process.platform === 'win32')('offline database transfer', () =>
     expect(stubs.invocations('psql')).toEqual([]);
 
     const retired = successor();
-    await expect(runDatabaseTransfer(operation.id, retired, fast)).rejects.toThrow();
+    await expect(stubs.track(runDatabaseTransfer(operation.id, retired, fast))).rejects.toThrow();
     stubs.setMode('dump', 'ok');
     const listed = context.list.mock.calls.length;
     expect(await transfer()).toMatchObject({ stage: 'importing', imported: true });
