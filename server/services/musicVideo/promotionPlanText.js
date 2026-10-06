@@ -83,7 +83,7 @@ export function buildPromotionPlanPrompt(project, { goal = '', audience = '', da
 }
 
 /** Local `day` (0 = today) at `time` HH:MM in `timezone`, as an ISO instant; never in the past. */
-export function promotionStepDueAt(day, time, timezone, now = Date.now()) {
+function promotionStepDueAt(day, time, timezone, now = Date.now()) {
   const today = todayInTimezone(timezone, new Date(now));
   const [y, m, d] = today.split('-').map(Number);
   const target = new Date(Date.UTC(y, m - 1, d + day)).toISOString().slice(0, 10);

@@ -4,7 +4,11 @@ vi.mock('./brainStorage.js', () => ({ brainEvents: { on: vi.fn(), off: vi.fn() }
 vi.mock('./eventScheduler.js', () => ({ schedule: vi.fn(), cancel: vi.fn() }));
 vi.mock('./notifications.js', () => ({ addNotification: vi.fn(), NOTIFICATION_TYPES: { ACTION_DUE: 'action_due' } }));
 
-import { fireHumanActionReminder, reconcileHumanActionReminders, stopHumanActionReminders } from './humanActionReminders.js';
+import {
+  _fireHumanActionReminder as fireHumanActionReminder,
+  _reconcileHumanActionReminders as reconcileHumanActionReminders,
+  _stopHumanActionReminders as stopHumanActionReminders,
+} from './humanActionReminders.js';
 
 const NOW = Date.parse('2026-10-06T18:00:00.000Z');
 const ME = 'instance-a';

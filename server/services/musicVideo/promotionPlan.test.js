@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { planMusicVideoPromotion } from './promotionPlan.js';
-import { buildPromotionPlanPrompt, promotionPlanKey, promotionStepDueAt } from './promotionPlanText.js';
+import { buildPromotionPlanPrompt, parsePromotionPlan, promotionPlanKey } from './promotionPlanText.js';
 
 // 2026-10-06 11:00 in Los Angeles.
 const NOW = Date.parse('2026-10-06T18:00:00.000Z');
@@ -78,7 +78,9 @@ describe('promotion plan text', () => {
 
   it('places a step across a DST change at its local time', () => {
     // 2026-11-01 is the US fall-back day; 18:00 local is 02:00Z the next day (PST, UTC-8).
-    expect(promotionStepDueAt(0, '18:00', TZ, Date.parse('2026-11-01T17:00:00.000Z'))).toBe('2026-11-02T02:00:00.000Z');
+    const reply = JSON.stringify({ steps: [{ title: 'Post', day: 0, time: '18:00', instructions: ['Post it.'] }] });
+    const [step] = parsePromotionPlan(reply, { timezone: TZ, now: Date.parse('2026-11-01T17:00:00.000Z') });
+    expect(step.dueAt).toBe('2026-11-02T02:00:00.000Z');
   });
 
   it('says nothing has been posted when nothing has', () => {

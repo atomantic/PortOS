@@ -38,7 +38,7 @@ function disarm(id) {
 }
 
 /** Send the reminder for one thread if it is still due and not yet reminded. */
-export async function fireHumanActionReminder(threadId, deps = {}) {
+async function fireHumanActionReminder(threadId, deps = {}) {
   const storage = deps.storage || brainStorage;
   const notify = deps.addNotification || addNotification;
   const now = deps.now ? deps.now() : Date.now();
@@ -65,7 +65,7 @@ export async function fireHumanActionReminder(threadId, deps = {}) {
 }
 
 /** Arm, re-arm, disarm or fire for every human action thread this machine created. */
-export async function reconcileHumanActionReminders(deps = {}) {
+async function reconcileHumanActionReminders(deps = {}) {
   const storage = deps.storage || brainStorage;
   const scheduler = deps.scheduler || eventScheduler;
   const now = deps.now ? deps.now() : Date.now();
@@ -125,10 +125,17 @@ export async function initHumanActionReminders() {
   console.log(`⏰ Human action reminders ready${count ? ` (${count} armed)` : ''}${fired ? `, ${fired} caught up` : ''}`);
 }
 
-export function stopHumanActionReminders() {
+function stopHumanActionReminders() {
   brainEvents.off('threads:upserted', onThreadEvent);
   brainEvents.off('threads:deleted', onThreadEvent);
   brainEvents.off('record:changed', onRecordChanged);
   for (const id of [...armed.keys()]) disarm(id);
   started = false;
 }
+
+// Test hooks: the clock with injected storage, scheduler and time.
+export {
+  fireHumanActionReminder as _fireHumanActionReminder,
+  reconcileHumanActionReminders as _reconcileHumanActionReminders,
+  stopHumanActionReminders as _stopHumanActionReminders,
+};
