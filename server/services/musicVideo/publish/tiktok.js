@@ -8,6 +8,23 @@ import { PUBLISH_STEP_TIMEOUT_MS as T, clickVisibleText, loginRequired, replaceE
 
 const UPLOAD_URL = 'https://www.tiktok.com/tiktokstudio/upload';
 const label = 'TikTok';
+const TOUR = '.react-joyride__overlay';
+
+/**
+ * Close TikTok Studio's onboarding tooltips ("Preview your video on your
+ * phone"…). Their overlay covers the whole form, so every click times out
+ * until it is gone. A tour can chain several steps, and once dismissed it does
+ * not come back for the account.
+ */
+async function dismissStudioTour(page, { attempts = 5 } = {}) {
+  for (let i = 0; i < attempts; i += 1) {
+    if (!(await page.locator(TOUR).count())) return true;
+    const closed = await clickVisibleText(page, 'Got it').then(() => true, () => clickVisibleText(page, 'Skip').then(() => true, () => false));
+    if (!closed) await page.keyboard.press('Escape');
+    await page.waitForTimeout(800);
+  }
+  return !(await page.locator(TOUR).count());
+}
 
 export const tiktokAdapter = {
   label,
@@ -17,6 +34,9 @@ export const tiktokAdapter = {
     if (/\/login/.test(page.url())) throw loginRequired(label, UPLOAD_URL);
     await step(label, 'upload the video', () => page.locator('input[type=file][accept*=video]').first().setInputFiles(payload.video.path, { timeout: T }));
     await step(label, 'wait for the caption editor', () => page.locator('[contenteditable=true]').first().waitFor({ timeout: T }));
+    await step(label, 'close the Studio tour', async () => {
+      if (!(await dismissStudioTour(page))) throw new Error('an onboarding tooltip still covers the form');
+    });
     if (payload.caption) {
       await step(label, 'write the caption', () => replaceEditorText(page, '[contenteditable=true]', payload.caption));
       await page.keyboard.press('Escape'); // closes the hashtag suggestion popup, nothing else
