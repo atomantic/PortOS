@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
 import { createRequire } from 'node:module';
-import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
+import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots, sweepStrayTempRoots } from '../lib/mockPathsDataRoot.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { browserSuiteCanRun } from '../lib/browserSuiteGate.js';
 
@@ -41,6 +41,8 @@ afterAll(async () => {
   await _cleanupTestBrowser({ browser, proc, cleanup: () => {} });
   if (server) await new Promise(resolve => server.close(resolve));
   cleanupTempDataRoots();
+  // A just-killed Chrome helper can recreate the data root after removal; CI's Linux run left one (#10312).
+  await sweepStrayTempRoots('mv-review-browser-');
 });
 
 describe.skipIf(!canRun)('production review in a real browser (Chrome, ffmpeg and client dependencies required)', () => {

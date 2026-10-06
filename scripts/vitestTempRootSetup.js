@@ -17,7 +17,18 @@ const VITEST_INTERNAL_SCRATCH_DIR = /^[A-Za-z0-9_-]{21}$/;
 // its lookup cache to $TMPDIR, which is our owned root. It is toolchain-owned
 // output, not fixture data: match the exact cache name only, so a real leaked
 // fixture is still reported.
-const TOOLCHAIN_CACHE_PREFIXES = new Set(['xcrun_db']);
+const TOOLCHAIN_CACHE_PREFIXES = new Set([
+  'xcrun_db',
+  // Linux Chrome/Chromium create `[.]com.google.Chrome.<random>` (or
+  // `org.chromium.Chromium.`) scratch directories in $TMPDIR and remove them only
+  // on a clean exit; the owned test browsers are terminated, so they linger. They
+  // are browser-owned, not fixture data, and surface once a real-Chrome suite runs
+  // under this guard on Linux (#10312). Exact browser prefixes only.
+  'com.google.Chrome.',
+  '.com.google.Chrome.',
+  'org.chromium.Chromium.',
+  '.org.chromium.Chromium.',
+]);
 
 export function groupLeakPrefix(name) {
   return name.replace(/[0-9a-zA-Z]{6,}$/, '') || name;
