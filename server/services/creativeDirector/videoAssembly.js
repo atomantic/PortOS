@@ -58,6 +58,18 @@ async function prepareClips(project, history) {
   return segments;
 }
 
+async function stopRender(timeline, jobId) {
+  if (!jobId) return;
+  // cancelRender is a no-op until the child handle exists. Retry only until
+  // that first successful signal, then wait for the job to leave the active
+  // set so a caller can reuse the project without overlapping ffmpeg.
+  let signalled = false;
+  while (['running', 'pending'].includes(timeline.getRenderJobStatus(jobId)?.status)) {
+    if (!signalled) signalled = timeline.cancelRender(jobId) === true;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+}
+
 export async function runVideoAssembly(projectId) {
   if (inFlight.has(projectId)) return;
   inFlight.add(projectId);
@@ -134,13 +146,13 @@ export async function runVideoAssembly(projectId) {
       }
       const deadline = Date.now() + 30 * 60 * 1000;
       while (!entry && Date.now() < deadline) {
-        if (!await isCurrent()) { timeline.cancelRender(jobId); return; }
+        if (!await isCurrent()) { await stopRender(timeline, jobId); return; }
         const status = timeline.getRenderJobStatus(jobId);
         if (['error', 'canceled'].includes(status?.status)) throw fail(`Timeline assembly ${status.status}: ${status.error || 'Open Timeline to inspect the cut.'}`);
         entry = (await loadHistory()).find(row => row.id === jobId);
         if (!entry) await sleep(1000);
       }
-      if (!entry) { timeline.cancelRender(jobId); throw fail('Timeline assembly timed out. Partial clips remain available; inspect Timeline and Resume.'); }
+      if (!entry) { await stopRender(timeline, jobId); throw fail('Timeline assembly timed out. Partial clips remain available; inspect Timeline and Resume.'); }
       if (!await isCurrent()) return;
       const path = safeUnder(PATHS.videos, entry.filename) ? join(PATHS.videos, entry.filename) : null;
       if (!path) throw fail('Timeline returned an invalid output path.');

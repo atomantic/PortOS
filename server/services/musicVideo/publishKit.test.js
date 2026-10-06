@@ -5,7 +5,7 @@
  * record, and a rebuild frees the files the previous kit made. The copy is
  * one provider call (injected here) whose JSON lands editable on the kit.
  */
-import { describe, expect, it, vi, afterAll } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -22,7 +22,28 @@ const projects = await import('./projects.js');
 const { saveHistory } = await import('../videoGen/history.js');
 const kit = await import('./publishKit.js');
 const ffmpeg = await findFfmpeg();
+const watchedBuilds = new Set();
+const startPublishKitBuild = kit.startPublishKitBuild.bind(kit);
+vi.spyOn(kit, 'startPublishKitBuild').mockImplementation(async (id, ...rest) => {
+  watchedBuilds.add(id);
+  return startPublishKitBuild(id, ...rest);
+});
 
+// A timed-out encode keeps writing this file's shared video directory. Cancel
+// the job and wait until it has left the active set before the next case runs.
+async function drainPublishKitBuilds() {
+  for (const id of watchedBuilds) {
+    const active = kit.getActivePublishKitBuild(id);
+    if (active) kit.cancelPublishKitBuild(active.jobId);
+  }
+  const pending = [...watchedBuilds].some(id => kit.getActivePublishKitBuild(id));
+  if (!pending) return;
+  await vi.waitFor(() => {
+    expect([...watchedBuilds].every(id => kit.getActivePublishKitBuild(id) === null)).toBe(true);
+  }, { timeout: 15000, interval: 20 });
+}
+
+afterEach(drainPublishKitBuilds);
 afterAll(() => cleanupTempDataRoots());
 
 const cue = (text, startSec, endSec) => ({ id: `lc-${startSec}`, text, startSec, endSec });
@@ -104,6 +125,32 @@ describe('publishing kit build (#9281)', () => {
       expect(project.publishKit.master).toEqual({ filename: 'original-master.mp4', renderHistoryId: 'original-render' });
     } finally {
       releaseEncode({ ok: true });
+      probe.mockRestore();
+      encode.mockRestore();
+    }
+  });
+
+  it('stops a superseded kit build before the next case reuses the project', async () => {
+    const { id } = await projects.createProject({ name: 'Example Held Build' });
+    await mkdir(PATHS.videos, { recursive: true });
+    await writeFile(join(PATHS.videos, 'held-master.mp4'), 'placeholder; encoding is held');
+    await saveHistory([{ id: 'held-render', filename: 'held-master.mp4', durationSec: 36 }]);
+    await projects.mutateProjectRecord(id, current => ({ project: { ...current, renderHistoryId: 'held-render' } }));
+    const probe = vi.spyOn(ffmpegService, 'findFfmpeg').mockResolvedValue('example-ffmpeg');
+    const encode = vi.spyOn(ffmpegService, 'runFfmpegProcess').mockImplementation(({ signal }) => new Promise(resolve => {
+      if (signal?.aborted) resolve({ ok: false, reason: 'cancelled' });
+      else signal?.addEventListener('abort', () => resolve({ ok: false, reason: 'cancelled' }), { once: true });
+    }));
+    try {
+      await kit.startPublishKitBuild(id);
+      await vi.waitFor(() => expect(kit.getActivePublishKitBuild(id)?.jobId).toBeTruthy());
+      await drainPublishKitBuilds();
+      await projects.mutateProjectRecord(id, current => ({ project: { ...current, marker: 'next-case' } }));
+      await new Promise(resolve => setTimeout(resolve, 30));
+      const project = await projects.getProject(id);
+      expect(project.marker).toBe('next-case');
+      expect(project.publishKit?.builtAt).toBeFalsy();
+    } finally {
       probe.mockRestore();
       encode.mockRestore();
     }

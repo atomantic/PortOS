@@ -70,6 +70,7 @@ const { videoGenEvents } = await import('../videoGen/events.js');
 const { enqueueJob } = await import('../mediaJobQueue/index.js');
 
 beforeEach(async () => {
+  await drainOwnedExport();
   state.project = { id: 'mv-example', renderHistoryId: 'final-example' };
   state.jobs = []; state.spawns = []; state.outputSizes = []; state.duringPass = null; state.failPass = null; state.realEncode = false; state.saveError = null; state.missingFfmpeg = false; state.cleanupError = false; state.observerError = null; state.openedFiles = [];
   vi.clearAllMocks();
@@ -80,12 +81,31 @@ beforeEach(async () => {
 });
 afterAll(cleanupTempDataRoots);
 
+let ownedRun = null;
+let ownedJobId = null;
+
+async function drainOwnedExport() {
+  if (ownedJobId) sharing.cancel(ownedJobId);
+  const owned = ownedRun;
+  ownedRun = null;
+  ownedJobId = null;
+  if (owned) await owned.catch(() => {});
+}
+
 async function runExport(jobId = '00000000-0000-4000-8000-000000000001') {
+  await drainOwnedExport();
+  ownedJobId = jobId;
   const queued = await sharing.prepareSharingCopy('mv-example');
   const params = state.jobs.find(j => j.id === queued.jobId).params;
   const completed = vi.fn(); const failed = vi.fn();
   videoGenEvents.once('completed', completed); videoGenEvents.once('failed', failed);
-  await sharing.runSharingCopy({ ...params, jobId });
+  const run = sharing.runSharingCopy({ ...params, jobId });
+  ownedRun = run;
+  try {
+    await run;
+  } finally {
+    if (ownedRun === run) ownedRun = null;
+  }
   videoGenEvents.removeListener('completed', completed); videoGenEvents.removeListener('failed', failed);
   return { completed, failed };
 }
@@ -256,6 +276,22 @@ describe('private sharing export workflow', () => {
       for await (const chunk of file.createReadStream({ start: 0, autoClose: false })) chunks.push(chunk);
       expect(Buffer.concat(chunks).toString()).toBe('sharing fixture');
     } finally { await file.close(); }
+  });
+
+  it('a cancelled export cannot write the next case project', async () => {
+    let releasePass;
+    state.duringPass = () => new Promise(resolve => { releasePass = resolve; });
+    const pending = runExport('00000000-0000-4000-8000-000000000098');
+    await vi.waitFor(() => expect(state.spawns.length).toBeGreaterThan(0));
+    await new Promise(resolve => setImmediate(resolve));
+    await drainOwnedExport();
+    const sentinel = { id: 'mv-example', renderHistoryId: 'final-example', marker: 'next-case' };
+    state.project = sentinel;
+    releasePass();
+    await pending;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(state.project).toBe(sentinel);
+    expect(state.project.publishKit?.sharingCopy).toBeUndefined();
   });
 
   it('closes the retained descriptor when source validation refuses delivery', async () => {

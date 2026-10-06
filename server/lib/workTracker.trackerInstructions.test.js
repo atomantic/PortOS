@@ -18,8 +18,14 @@ import {
   REPO_STUDY_LABEL_CONTRACT,
   formatOptionalIssueLabelFlags,
 } from './dispatchLabels.js';
-import { formatTrackerInstructions, TRACKER_FILING_PRESETS, formatForgeCategoryLabelFlags } from './workTracker.js';
+import { formatTrackerInstructions, TRACKER_FILING_PRESETS, formatForgeCategoryLabelFlags, resolveTrackerFilingBlock } from './workTracker.js';
 import { getAuditFilingPreset } from './auditCatalog.js';
+
+// The shipped prompt catalog's cold transform exceeds the expansion test's
+// budget when a full run is contending for CPU. File scope is unbudgeted
+// (#7951, #10356).
+const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
+const { AUDIT_TASK_TYPES, modeContractFor } = await import('./auditCatalog.js');
 
 const REF_WATCH = { slugPrefix: 'ref-watch-', label: 'reference-watch', issueLabel: 'reference-watch' };
 
@@ -248,10 +254,6 @@ describe('formatTrackerInstructions — ux preset (#3273)', () => {
   // If an audit prompt later adopts a placeholder the generator substitutes but
   // this chain does not, this test fails and names the token — add it here.
   it('leaves no unexpanded {token} in ANY shipped audit prompt, in either mode', async () => {
-    const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
-    const { AUDIT_TASK_TYPES, modeContractFor } = await import('./auditCatalog.js');
-    const { resolveTrackerFilingBlock } = await import('./workTracker.js');
-
     expect(AUDIT_TASK_TYPES.size).toBeGreaterThan(1);
     for (const taskType of AUDIT_TASK_TYPES) {
       const template = DEFAULT_TASK_PROMPTS[taskType];
@@ -292,7 +294,6 @@ describe('formatTrackerInstructions — ux preset (#3273)', () => {
   // ux keeps one assertion of its own: it is the audit whose body most recently
   // hardcoded its posture instead of deferring to the injected banner.
   it('keeps the ux prompt on the injected tracker and mode seams', async () => {
-    const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
     const template = DEFAULT_TASK_PROMPTS['ux'];
     expect(template).toContain('{trackerInstructions}');
     expect(template).toContain('{modeInstructions}');
@@ -301,7 +302,6 @@ describe('formatTrackerInstructions — ux preset (#3273)', () => {
 
 describe('resolveTrackerFilingBlock — fileIssues audit types', () => {
   it('files for an audit type only when fileIssues is on', async () => {
-    const { resolveTrackerFilingBlock } = await import('./workTracker.js');
     const app = { repoPath: '/tmp/example-repo', workTracker: 'plan' };
     const off = await resolveTrackerFilingBlock(app, 'security', { fileIssues: false });
     expect(off.trackerInstructions).toBe('');
@@ -314,7 +314,6 @@ describe('resolveTrackerFilingBlock — fileIssues audit types', () => {
   });
 
   it('still files always-filing types (reference-watch) without fileIssues', async () => {
-    const { resolveTrackerFilingBlock } = await import('./workTracker.js');
     const app = { repoPath: '/tmp/example-repo', workTracker: 'plan' };
     const block = await resolveTrackerFilingBlock(app, 'reference-watch');
     expect(block.workTracker).toBe('plan');
@@ -361,7 +360,6 @@ describe('formatTrackerInstructions — plan-feature preset', () => {
   });
 
   it('is an always-filing type: files without a fileIssues flag (unlike audit types)', async () => {
-    const { resolveTrackerFilingBlock } = await import('./workTracker.js');
     const app = { repoPath: '/tmp/example-repo', workTracker: 'plan' };
     const block = await resolveTrackerFilingBlock(app, 'plan-feature', { fileIssues: false });
     expect(block.workTracker).toBe('plan');
@@ -401,7 +399,6 @@ describe('formatTrackerInstructions — repo-study complete labels', () => {
 // provenance requirements (there is no source repository or license to inspect).
 describe('YouTube analysis tracker dispatch', () => {
   it('keeps external filing and local PLAN work aligned with completion metadata', async () => {
-    const { resolveTrackerFilingBlock } = await import('./workTracker.js');
     for (const tracker of ['github', 'gitlab', 'jira', 'plan']) {
       const block = await resolveTrackerFilingBlock({ repoPath: '/example', workTracker: tracker }, 'youtube-analysis');
       expect(block.workTracker).toBe(tracker);

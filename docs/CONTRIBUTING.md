@@ -149,6 +149,19 @@ npm run setup:db:test
 npm run test:db
 ```
 
+Supported full local validation uses the CI worker budget. An unbounded
+`npm test` can oversubscribe a loaded machine: real media, prompt-catalog,
+and nested-worker cases then hit their existing budgets. A green focused
+file run is evidence for that file only, not a full-suite result.
+
+```bash
+# Server, then client. The value only lowers each workspace cap (client stays at 2).
+PORTOS_PREGATE_MAX_WORKERS=4 npm test
+
+# Focused evidence for one file:
+npm test --prefix server -- services/creativeDirector/videoAssembly.test.js
+```
+
 For release validation, run `npm run test:db` after the server and client
 suites finish rather than alongside them. A concurrent run is supported —
 the database restore suite drains a timed-out case before the next one touches
