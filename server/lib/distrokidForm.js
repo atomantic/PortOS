@@ -128,7 +128,8 @@ export function fillDistrokidFields(plan) {
  * yes. `{ step: 'gate', ai }` answers the gate; `{ step: 'parts', ai }` ticks
  * lyrics, music, and all of the audio (AI vocals) or part of it (AI
  * instruments under a human voice), then presses the parts modal's Save when
- * DistroKid shows them in one. `ai`: { lyrics, music, vocals }.
+ * DistroKid shows them in one; `{ step: 'check', ai }` confirms afterwards that
+ * the gate still holds the answer and the modal closed. `ai`: { lyrics, music, vocals }.
  * Resolves true when every field it needed was there.
  */
 export function discloseDistrokidAi({ step, ai }) {
@@ -138,6 +139,12 @@ export function discloseDistrokidAi({ step, ai }) {
     if (el.checked !== on) el.click();
     return true;
   };
+  if (step === 'check') {
+    // After Save: the gate still holds the answer and no AI modal is left open.
+    const gate = document.querySelector('input[type=radio][name^="ai_gate_"]:checked');
+    const open = [...document.querySelectorAll('.ai-credits-swal-modal')].some((m) => m.isConnected && !m.closest('[hidden]') && m.style.display !== 'none');
+    return gate?.value === (any ? '1' : '0') && !open;
+  }
   if (step === 'gate') {
     const gate = document.querySelector(`input[type=radio][name^="ai_gate_"][value="${any ? 1 : 0}"]`);
     if (!gate) return false;
@@ -166,8 +173,11 @@ export function discloseDistrokidAi({ step, ai }) {
   const parts = set(document.querySelector('input[name^="ai_lyrics_"]'), !!ai.lyrics)
     && set(document.querySelector('input[name^="ai_music_"]'), !!ai.music)
     && audio;
-  // The modal keeps nothing until Save, and closing it any other way resets the gate to No.
-  const save = document.querySelector('.ai-credits-swal-modal .swal2-confirm');
+  // The modal keeps nothing until Save, and closing it any other way resets the gate to No,
+  // so a modal with no Save to press is a failure, not a pass.
+  const popup = document.querySelector('.ai-credits-swal-modal') || document.querySelector('.swal2-popup');
+  const save = popup?.querySelector('.swal2-confirm');
+  if (popup && !save) return false;
   if (parts && save) save.click();
   return parts;
 }

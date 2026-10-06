@@ -112,6 +112,48 @@ describe('DistroKid form recipe', () => {
     expect(saved).toBe(1);
   });
 
+  it('discloses AI music under a human voice in the modal as part of the audio, with instruments', () => {
+    document.body.innerHTML = `
+      <div class="swal2-popup ai-credits-swal-modal">
+        <input type="checkbox" class="distroAiLyrics" name="ai_lyrics_ef56" value="1">
+        <input type="checkbox" class="distroAiMusic" name="ai_music_ef56" value="1">
+        <input type="checkbox" class="distroAiRecordingScope" value="full">
+        <input type="checkbox" class="distroAiRecordingScope" value="partial">
+        ${radios('ai_partial_audio_type_ef56', ['vocals', 'instruments'])}
+        <button class="swal2-confirm">Save</button>
+      </div>`;
+    let saved = 0;
+    document.querySelector('.swal2-confirm').addEventListener('click', () => { saved += 1; });
+    expect(discloseDistrokidAi({ step: 'parts', ai: { lyrics: false, music: true, vocals: false } })).toBe(true);
+    const box = (sel) => document.querySelector(sel).checked;
+    expect([box('[value=full]'), box('[value=partial]'), box('.distroAiMusic')]).toEqual([false, true, true]);
+    expect(checked('ai_partial_audio_type_')).toBe('instruments');
+    expect(saved).toBe(1);
+  });
+
+  it('fails when a modal is showing but has no Save to press', () => {
+    document.body.innerHTML = `
+      <div class="swal2-popup">
+        <input type="checkbox" name="ai_lyrics_ef56"><input type="checkbox" name="ai_music_ef56">
+        <input type="checkbox" class="distroAiRecordingScope" value="full"><input type="checkbox" class="distroAiRecordingScope" value="partial">
+      </div>`;
+    expect(discloseDistrokidAi({ step: 'parts', ai: { lyrics: false, music: true, vocals: true } })).toBe(false);
+  });
+
+  it('confirms the answer stuck: the gate still says yes and the modal closed', () => {
+    const ai = { lyrics: false, music: true, vocals: true };
+    document.body.innerHTML = `${radios('ai_gate_ef56', ['0', '1'])}`;
+    document.querySelector('[value="1"]').checked = true;
+    expect(discloseDistrokidAi({ step: 'check', ai })).toBe(true);
+    // A Save that didn't take: the gate fell back to No.
+    document.querySelector('[value="0"]').checked = true;
+    expect(discloseDistrokidAi({ step: 'check', ai })).toBe(false);
+    // Or the modal is still open.
+    document.querySelector('[value="1"]').checked = true;
+    document.body.insertAdjacentHTML('beforeend', '<div class="ai-credits-swal-modal"></div>');
+    expect(discloseDistrokidAi({ step: 'check', ai })).toBe(false);
+  });
+
   it('does not save the modal when a part it needed is missing', () => {
     document.body.innerHTML = `<div class="ai-credits-swal-modal"><input type="checkbox" name="ai_music_ef56"><button class="swal2-confirm">Save</button></div>`;
     let saved = 0;
