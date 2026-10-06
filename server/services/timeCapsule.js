@@ -203,11 +203,15 @@ export async function deleteSnapshot(id) {
 
     const snapshotFile = join(SNAPSHOTS_DIR, `${id}.json`);
     // Commit reference removal first: a failed index write must retain the
-    // snapshot bytes. A later unlink failure leaves only an unreferenced file.
+    // snapshot bytes. Restore the listing on unlink failure so deletion stays retryable.
+    const previousSnapshots = index.snapshots;
     index.snapshots = index.snapshots.filter(s => s.id !== id);
     await saveIndex(index);
-    await unlink(snapshotFile).catch((err) => {
-      if (err.code !== 'ENOENT') throw err;
+    await unlink(snapshotFile).catch(async err => {
+      if (err.code === 'ENOENT') return;
+      index.snapshots = previousSnapshots;
+      await saveIndex(index);
+      throw err;
     });
 
     console.log(`🗑️ Time capsule deleted: "${exists.label}" (${id.slice(0, 8)})`);
