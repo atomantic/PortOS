@@ -748,8 +748,9 @@ async function resolvePreparedParams({
       await cleanupStaged();
       throw new ServerError(hosted.errorMessage, { status: 400, code: hosted.errorCode });
     }
-    // A standalone fal lip-sync take: stage the voice clip durably like the frame. The queue owns
-    // and removes it with the job (uploadedTempPaths), as it does for the local a2v lane.
+    // A standalone fal lip-sync take: stage the voice clip durably like the frame. The queue removes
+    // it if the job fails, is cancelled or is lost to a restart (uploadedTempPaths); the fal worker
+    // removes it once the take is published.
     let hostedAudioPath = null;
     if (falLipSync && uploads.audioFile) {
       if (!sourceImagePath) {
@@ -757,6 +758,20 @@ async function resolvePreparedParams({
         throw new ServerError('A fal.ai lip-sync render needs a reference frame (sourceImage or sourceImageFile).', { status: 400, code: 'VALIDATION_ERROR' });
       }
       hostedAudioPath = await stageUploadDurable(uploads.audioFile, 'audio');
+      // A paid route: refuse a clip fal would reject (unreadable, or outside the model's window)
+      // before anything is submitted.
+      const window = getFalVideoModel(body.falModelId)?.audioInput || {};
+      const clipSec = await probeVideoDuration(hostedAudioPath).catch(() => null);
+      if (clipSec == null) {
+        await cleanupStaged();
+        throw new ServerError('Could not read the voice clip\'s duration. Upload a valid WAV, MP3, M4A, AAC, FLAC, OGG or WebM file.',
+          { status: 400, code: 'VIDEO_GEN_AUDIO_DURATION_UNREADABLE' });
+      }
+      if ((window.minSec != null && clipSec < window.minSec) || (window.maxSec != null && clipSec > window.maxSec)) {
+        await cleanupStaged();
+        throw new ServerError(`The voice clip is ${clipSec.toFixed(2)} s; this lip-sync model takes ${window.minSec}–${window.maxSec} s (pad a short line with silence).`,
+          { status: 400, code: 'VIDEO_GEN_AUDIO_LENGTH' });
+      }
     }
     return {
       backend,

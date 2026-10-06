@@ -25,7 +25,7 @@
 
 import { randomUUID } from 'crypto';
 import { readFile, writeFile, unlink } from 'fs/promises';
-import { join } from 'path';
+import { join, relative, resolve, isAbsolute } from 'path';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
@@ -257,10 +257,18 @@ export async function generateVideo({
   };
 }
 
+const isStagedUpload = (path) => {
+  const rel = relative(PATHS.uploads, resolve(path));
+  return !!rel && !rel.startsWith('..') && !isAbsolute(rel);
+};
+
 // The staged voice clip keeps its upload's extension (a performance slice is always WAV).
 export function audioMimeType(path) {
   const ext = String(path).toLowerCase().split('.').pop();
-  return { mp3: 'audio/mpeg', m4a: 'audio/mp4', mp4: 'audio/mp4', aac: 'audio/aac', ogg: 'audio/ogg', flac: 'audio/flac' }[ext] || 'audio/wav';
+  return {
+    mp3: 'audio/mpeg', m4a: 'audio/mp4', mp4: 'audio/mp4', aac: 'audio/aac', ogg: 'audio/ogg', opus: 'audio/ogg',
+    flac: 'audio/flac', webm: 'audio/webm', aif: 'audio/aiff', aiff: 'audio/aiff',
+  }[ext] || 'audio/wav';
 }
 
 async function runFalVideo(job, jobId, {
@@ -332,6 +340,9 @@ async function runFalVideo(job, jobId, {
     activeRequests.delete(jobId);
     activeJobs.delete(jobId);
     await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta: { ...meta, ...measured }, actualSeed: null, mutateHistory: mutateVideoHistory, publication });
+    // The staged voice clip is spent once the take is published. The queue removes it on failure,
+    // cancel and restart; on success it is ours to drop (only a clip staged under data/uploads).
+    if (audioFilePath && isStagedUpload(audioFilePath)) await unlink(audioFilePath).catch(() => {});
     closeJobAfterDelay(jobs, jobId);
   } catch (err) {
     // Best-effort: an unanticipated throw (e.g. from fetchFalResult or the

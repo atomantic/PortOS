@@ -737,6 +737,22 @@ describe('prepareVideoGenParams — standalone fal lip sync', () => {
     )).rejects.toMatchObject({ status: 400, code: 'VIDEO_GEN_AUDIO_MODE_MISMATCH' });
   });
 
+  it('refuses a voice clip fal would reject before anything is submitted', async () => {
+    getSettings.mockResolvedValueOnce(falSettings());
+    probeVideoDuration.mockResolvedValueOnce(3.2);
+    await expect(prepare(
+      { backend: 'fal', falModelId: LIPSYNC, mode: 'image', sourceImageFile: 'face.png' },
+      { audioFile: upload('audioFile', 'line.wav') },
+    )).rejects.toMatchObject({ status: 400, code: 'VIDEO_GEN_AUDIO_LENGTH' });
+    getSettings.mockResolvedValueOnce(falSettings());
+    probeVideoDuration.mockResolvedValueOnce(null);
+    await expect(prepare(
+      { backend: 'fal', falModelId: LIPSYNC, mode: 'image', sourceImageFile: 'face.png' },
+      { audioFile: upload('audioFile', 'line.wav') },
+    )).rejects.toMatchObject({ status: 400, code: 'VIDEO_GEN_AUDIO_DURATION_UNREADABLE' });
+    expect(unlinkMock).toHaveBeenCalled(); // the staged clip is rolled back
+  });
+
   it('needs a reference frame for the lip sync', async () => {
     getSettings.mockResolvedValueOnce(falSettings());
     await expect(prepare({ backend: 'fal', falModelId: LIPSYNC, mode: 'text' }, { audioFile: upload('audioFile', 'line.wav') }))

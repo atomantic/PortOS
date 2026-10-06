@@ -12,6 +12,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
   actual.PATHS.videos = FAKE_VIDEOS_DIR;
   actual.PATHS.data = FAKE_DATA_DIR;
   actual.PATHS.videoThumbnails = join(TEST_ROOT, 'thumbnails');
+  actual.PATHS.uploads = join(TEST_ROOT, 'uploads');
   return {
     ...actual,
     ensureDir: vi.fn(async (dir) => mkdir(dir, { recursive: true })),
@@ -684,5 +685,36 @@ describe('audioMimeType', () => {
     expect(audioMimeType('/u/video-audio-1.M4A')).toBe('audio/mp4');
     expect(audioMimeType('/u/slice.wav')).toBe('audio/wav');
     expect(audioMimeType('/u/clip')).toBe('audio/wav');
+    expect(audioMimeType('/u/rec.webm')).toBe('audio/webm');
+    expect(audioMimeType('/u/rec.opus')).toBe('audio/ogg');
+    expect(audioMimeType('/u/take.aiff')).toBe('audio/aiff');
+  });
+});
+
+describe('standalone lip-sync take', () => {
+  it('drops the staged voice clip once the take is published, but never a file outside data/uploads', async () => {
+    const { PATHS } = await import('../../lib/fileUtils.js');
+    await mkdir(PATHS.uploads, { recursive: true });
+    const staged = join(PATHS.uploads, 'video-audio-test.wav');
+    const outside = join(TEST_ROOT, 'keep-me.wav');
+    const frame = join(TEST_ROOT, 'face.png');
+    await writeFile(staged, 'voice'); await writeFile(outside, 'voice'); await writeFile(frame, 'png');
+    const run = async (audioFilePath, requestId) => {
+      const statusUrl = `https://queue.fal.run/fal-ai/y/requests/${requestId}/status`;
+      const responseUrl = `https://queue.fal.run/fal-ai/y/requests/${requestId}`;
+      vi.stubGlobal('fetch', vi.fn(async (url) => {
+        if (url === 'https://queue.fal.run/fal-ai/y') return jsonResponse({ request_id: requestId, status_url: statusUrl, response_url: responseUrl });
+        if (url === statusUrl) return jsonResponse({ status: 'COMPLETED' });
+        if (url === responseUrl) return jsonResponse({ video: { url: `https://cdn.fal.ai/${requestId}.mp4` } });
+        if (url === `https://cdn.fal.ai/${requestId}.mp4`) return { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(Buffer.from('mp4')).buffer };
+        throw new Error(`unexpected fetch: ${url}`);
+      }));
+      const job = await fal.generateVideo({ apiKey: 'test-key', modelId: 'fal-ai/y', sourceImagePath: frame, audioFilePath });
+      expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'completed' });
+    };
+    await run(staged, 'req-staged');
+    await expect(readFile(staged)).rejects.toMatchObject({ code: 'ENOENT' });
+    await run(outside, 'req-outside');
+    expect((await readFile(outside)).toString()).toBe('voice');
   });
 });
