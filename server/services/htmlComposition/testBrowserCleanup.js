@@ -1,5 +1,6 @@
 import { execFileSync } from '../../lib/childProcess.js';
-import { closeSync, existsSync, openSync, opendirSync, readSync } from 'node:fs';
+import { closeSync, existsSync, openSync, opendirSync, readSync, statfsSync } from 'node:fs';
+import { availableParallelism, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 
@@ -25,7 +26,9 @@ export function _selectTestChrome(candidates) {
 
 // Failure-only Linux observations of this owned child and its current worker.
 // Never read cmdline, environ, links, stacks, or arbitrary process output. A
-// fixed prefix per file and at most 16 threads bound both capture and output.
+// At most 23 prefixes of 4096 bytes (92 KiB), 17 directory entries and one
+// statfs call. These count/byte caps do not guarantee elapsed time. Samples
+// are non-atomic: wait categories and resource pressure do not prove a cause.
 function readProcPrefix(path) {
   const fd = openSync(path, 'r');
   try {
@@ -39,7 +42,7 @@ function readThreadIds(path) {
   const ids = [];
   try {
     let entry;
-    while (ids.length < 17 && (entry = dir.readSync())) {
+    for (let entries = 0; entries < 17 && (entry = dir.readSync()); entries++) {
       if (/^[1-9]\d*$/.test(entry.name)) ids.push(entry.name);
     }
   } finally { dir.closeSync(); }
@@ -47,9 +50,42 @@ function readThreadIds(path) {
 }
 
 const PROCESS_STATES = { R: 'runnable', S: 'sleeping', D: 'uninterruptible', Z: 'zombie', T: 'stopped', t: 'traced', X: 'dead', I: 'idle' };
+const WAIT_CATEGORIES = new Map([
+  ['none', ['0']],
+  ['futex', ['futex_wait_queue', 'futex_wait_queue_me', 'futex_wait']],
+  ['poll', ['ep_poll', 'do_epoll_wait', 'do_poll', 'poll_schedule_timeout', 'poll_schedule_timeout.constprop.0']],
+  ['pipe', ['pipe_read']],
+  ['child', ['do_wait', 'kernel_wait4']],
+  ['io', ['io_schedule', 'io_schedule_timeout', 'wait_on_page_bit_common']],
+  ['page', ['folio_wait_bit_common']],
+  ['completion', ['wait_for_common', 'do_wait_for_common', 'wait_for_completion']],
+  ['lock', ['rwsem_down_read_slowpath', 'rwsem_down_write_slowpath', '__mutex_lock', '__mutex_lock_slowpath']],
+].flatMap(([category, names]) => names.map(name => [name, category])));
+const safeInteger = value => Number.isSafeInteger(value) && value >= 0 ? value : 'unavailable';
+const attemptObservation = fn => { try { return fn(); } catch { return 'unavailable'; } };
+
+function resourceFacts(child, { read, cpus, usage, disk }) {
+  const worker = attemptObservation(usage);
+  const fs = attemptObservation(disk);
+  const pressure = kind => attemptObservation(() => {
+    const text = read(`/proc/pressure/${kind}`).slice(0, 4096);
+    const value = Number(text.match(/(?:^|\n)some avg10=(\d+(?:\.\d+)?)(?: |$)/)?.[1]);
+    return Number.isFinite(value) && value >= 0 && value <= 100 ? value : 'unavailable';
+  });
+  const memory = attemptObservation(() => safeInteger(Number(
+    read('/proc/meminfo').slice(0, 4096).match(/(?:^|\n)MemAvailable:\s+(\d+) kB(?:\n|$)/)?.[1],
+  )));
+  const freeBytes = Number.isSafeInteger(fs?.bavail) && fs.bavail >= 0 && Number.isSafeInteger(fs?.bsize) && fs.bsize > 0
+    ? safeInteger(fs.bavail * fs.bsize) : 'unavailable';
+  return `cpus=${attemptObservation(() => safeInteger(cpus()))} workerUserMicros=${safeInteger(worker?.userCPUTime)}`
+    + ` workerSystemMicros=${safeInteger(worker?.systemCPUTime)} workerMaxRssKiB=${safeInteger(worker?.maxRSS)} childCpuTicks=${child?.cpuTicks ?? 'unavailable'}`
+    + ` cpuAvg10=${pressure('cpu')} memoryAvg10=${pressure('memory')} ioAvg10=${pressure('io')}`
+    + ` memAvailableKiB=${memory} tmpFreeBytes=${freeBytes} tmpFreeInodes=${safeInteger(fs?.ffree)}`;
+}
 
 export function _testChromeProcessFacts(proc, {
   platform = process.platform, workerPid = process.pid, read = readProcPrefix, threads = readThreadIds,
+  cpus = availableParallelism, usage = () => process.resourceUsage(), disk = () => statfsSync(tmpdir()),
 } = {}) {
   if (platform !== 'linux') return 'os=unsupported';
   if (!Number.isSafeInteger(proc?.pid) || proc.pid <= 0) return 'os=linux child=unavailable';
@@ -63,35 +99,32 @@ export function _testChromeProcessFacts(proc, {
       if (end < 0) return null;
       const fields = text.slice(end + 2).trim().split(/\s+/);
       if (fields.length < 4 || !Object.hasOwn(PROCESS_STATES, fields[0]) || !fields.slice(1, 4).every(x => /^\d+$/.test(x))) return null;
-      return { state: PROCESS_STATES[fields[0]], parent: fields[1], group: fields[2], session: fields[3] };
+      const cpuTicks = fields.slice(11, 13).length === 2 && fields.slice(11, 13).every(x => /^\d+$/.test(x))
+        ? safeInteger(Number(fields[11]) + Number(fields[12])) : 'unavailable';
+      return { state: PROCESS_STATES[fields[0]], parent: fields[1], group: fields[2], session: fields[3], cpuTicks };
     } catch { return null; }
   };
   const child = stat(proc.pid);
   const worker = stat(workerPid);
   const same = (a, b) => a && b ? (a === b ? 'worker' : 'other') : 'unavailable';
-  const waits = { none: 0, futex: 0, poll: 0, pipe: 0, child: 0, io: 0, other: 0, unavailable: 0 };
+  const waitCategory = path => attemptObservation(() => {
+    // Exact kernel names only; unfamiliar text never becomes log content.
+    // Zero also occurs when the kernel hides a wait; it doesn't prove runnable.
+    return WAIT_CATEGORIES.get(read(path).slice(0, 4096).trim()) ?? 'other';
+  });
+  const leadWait = waitCategory(`/proc/${proc.pid}/wchan`);
+  const waits = { none: 0, futex: 0, poll: 0, pipe: 0, child: 0, io: 0, page: 0, completion: 0, lock: 0, other: 0, unavailable: 0 };
   let ids;
-  try { ids = threads(`/proc/${proc.pid}/task`).filter(x => /^[1-9]\d*$/.test(x)).slice(0, 17); }
+  try { ids = threads(`/proc/${proc.pid}/task`).slice(0, 17).filter(x => /^[1-9]\d*$/.test(x)); }
   catch { ids = null; }
   for (const id of ids?.slice(0, 16) ?? []) {
-    let category = 'unavailable';
-    try {
-      const wait = read(`/proc/${proc.pid}/task/${id}/wchan`).slice(0, 4096).trim();
-      // Exact kernel names only: unfamiliar text never becomes log content.
-      // Zero also occurs when the kernel hides a wait; it doesn't prove runnable.
-      category = wait === '0' ? 'none'
-        : ['futex_wait_queue', 'futex_wait_queue_me', 'futex_wait'].includes(wait) ? 'futex'
-          : ['ep_poll', 'do_epoll_wait', 'do_poll', 'poll_schedule_timeout', 'poll_schedule_timeout.constprop.0'].includes(wait) ? 'poll'
-            : wait === 'pipe_read' ? 'pipe'
-              : ['do_wait', 'kernel_wait4'].includes(wait) ? 'child'
-                : ['io_schedule', 'io_schedule_timeout', 'wait_on_page_bit_common'].includes(wait) ? 'io' : 'other';
-    } catch { /* exited, permissions, or unavailable procfs */ }
-    waits[category]++;
+    waits[waitCategory(`/proc/${proc.pid}/task/${id}/wchan`)]++;
   }
   return `os=linux child=${child?.state ?? 'unavailable'} worker=${worker?.state ?? 'unavailable'}`
     + ` parent=${same(child?.parent, String(workerPid))} group=${same(child?.group, worker?.group)} session=${same(child?.session, worker?.session)}`
-    + ` threads=${ids ? Math.min(ids.length, 16) : 'unavailable'} threadLimit=${ids ? ids.length > 16 : 'unavailable'}`
-    + ` waits=${Object.entries(waits).map(([name, count]) => `${name}:${count}`).join(',')}`;
+    + ` leadWait=${leadWait} threads=${ids ? Math.min(ids.length, 16) : 'unavailable'} threadLimit=${ids ? ids.length > 16 : 'unavailable'}`
+    + ` waits=${Object.entries(waits).map(([name, count]) => `${name}:${count}`).join(',')}`
+    + `; resources: ${resourceFacts(child, { read, cpus, usage, disk })}`;
 }
 
 function describeProcess(proc, observeProcess) {
