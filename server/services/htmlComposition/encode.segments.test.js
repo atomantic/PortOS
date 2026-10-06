@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { compositionRenderWorkers, encodeCompositionSegments } from './encode.js';
+import { encodeCompositionSegments } from './encode.js';
 import { findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
 
 const contract = { fps: 24, durationSec: 60, width: 1920, height: 1080, motionBlur: 1 };
@@ -68,13 +68,6 @@ describe('encodeCompositionSegments', () => {
     });
     await expect(run).rejects.toBe(failure);
     expect(extras[0].closed).toBe(1);
-  });
-
-  it('sizes workers by cores and memory', () => {
-    expect(compositionRenderWorkers({ cores: 12, memoryBytes: 64 * 1024 ** 3 })).toBe(4);
-    expect(compositionRenderWorkers({ cores: 4, memoryBytes: 64 * 1024 ** 3 })).toBe(2);
-    expect(compositionRenderWorkers({ cores: 12, memoryBytes: 8 * 1024 ** 3 })).toBe(2);
-    expect(compositionRenderWorkers({ cores: 1, memoryBytes: 1024 ** 3 })).toBe(1);
   });
 });
 

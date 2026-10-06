@@ -195,12 +195,12 @@ const SEGMENT_MIN_FRAMES = 240;
 const SEGMENT_MAX_WORKERS = 4;
 const SEGMENT_BYTES_PER_WORKER = 3 * 1024 ** 3;
 
-export function compositionRenderWorkers({ cores = availableParallelism(), memoryBytes = totalmem() } = {}) {
+function compositionRenderWorkers({ cores = availableParallelism(), memoryBytes = totalmem() } = {}) {
   return Math.max(1, Math.min(SEGMENT_MAX_WORKERS, Math.floor(cores / 2), Math.floor(memoryBytes / SEGMENT_BYTES_PER_WORKER)));
 }
 
 /** Contiguous frame ranges `[{ start, frames }]`, each at least SEGMENT_MIN_FRAMES long. */
-export function planSegments(numFrames, workers) {
+function planSegments(numFrames, workers) {
   const count = Math.max(1, Math.min(workers, Math.floor(numFrames / SEGMENT_MIN_FRAMES)));
   const base = Math.floor(numFrames / count);
   const extra = numFrames % count;
