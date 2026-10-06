@@ -26,7 +26,6 @@ export default function Dashboard() {
   const [apps, setApps] = useState(null);
   const [appsReadSettled, setAppsReadSettled] = useState(false);
   const [health, setHealth] = useState(null);
-  const [usage, setUsage] = useState(null);
   const [tribeCare, setTribeCare] = useState(null);
   const [feeds, setFeeds] = useState(null);
   const [meatspaceLogging, setMeatspaceLogging] = useState(null);
@@ -112,7 +111,6 @@ export default function Dashboard() {
       .finally(() => setAppsReadSettled(true));
     const secondaryRead = Promise.all([
       refreshHealth(),
-      api.getHourlyUsage({ silent: true }).catch(() => null).then(setUsage),
       api.getTribeCareSummary({ silent: true }).catch(() => null).then(setTribeCare),
       api.getFeedStats({ silent: true }).catch(() => null).then(setFeeds),
       api.getMeatspaceLoggingStats({ silent: true }).catch(() => null).then(setMeatspaceLogging),
@@ -243,8 +241,8 @@ export default function Dashboard() {
   }), [activeApps]);
 
   const dashboardState = useMemo(
-    () => ({ apps: appList, appsLoading, sortedApps, activeApps, appStats, health, usage, tribeCare, feeds, meatspaceLogging, calendarAgenda, brainOnThisDay, dailyDriver, dailyActions, instanceFeatures, refetch: fetchData, refetchHealth: refreshHealth }),
-    [appList, appsLoading, sortedApps, activeApps, appStats, health, usage, tribeCare, feeds, meatspaceLogging, calendarAgenda, brainOnThisDay, dailyDriver, dailyActions, instanceFeatures, fetchData, refreshHealth]
+    () => ({ apps: appList, appsLoading, sortedApps, activeApps, appStats, health, tribeCare, feeds, meatspaceLogging, calendarAgenda, brainOnThisDay, dailyDriver, dailyActions, instanceFeatures, refetch: fetchData, refetchHealth: refreshHealth }),
+    [appList, appsLoading, sortedApps, activeApps, appStats, health, tribeCare, feeds, meatspaceLogging, calendarAgenda, brainOnThisDay, dailyDriver, dailyActions, instanceFeatures, fetchData, refreshHealth]
   );
 
   // Falls back to a local minimal layout only AFTER the initial fetch has
