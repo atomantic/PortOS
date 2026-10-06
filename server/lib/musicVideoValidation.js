@@ -732,6 +732,8 @@ export const musicVideoPublishPrepareSchema = z.object({
   prompt: kitText(25000),
   storyImage: z.string().min(1).max(300),
   cutId: z.string().min(1).max(100),
+  // Fill a draft for a platform the release was already posted to.
+  again: z.boolean(),
   // DistroKid (the song as a Spotify single): who it is by and the store flags.
   artistName: z.string().trim().min(1).max(100),
   songwriterFirst: z.string().trim().min(1).max(100),

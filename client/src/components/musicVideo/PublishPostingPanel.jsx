@@ -3,6 +3,7 @@ import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage.js';
 import { ExternalLink, X as XIcon, LogIn, Link as LinkIcon } from 'lucide-react';
 import { DISTROKID_GENRES, suggestDistrokidGenres } from '../../../../server/lib/distrokidGenres.js';
+import { publishRowAnchor } from '../../lib/musicVideoStages.js';
 
 // Where the release goes, in posting order: the full video first so every
 // other post can link to it.
@@ -234,6 +235,7 @@ function TargetRow({ project, kit, entry, publishing }) {
   });
   const setOption = (key, value) => setOptions((prev) => ({ ...prev, [key]: value }));
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [confirmAgain, setConfirmAgain] = useState(false);
   const draft = publishing.drafts[target];
   const busy = publishing.busy[target];
   const error = publishing.errors[target];
@@ -241,9 +243,15 @@ function TargetRow({ project, kit, entry, publishing }) {
   const flairs = draft?.summary?.flairs;
   const account = publishing.platforms?.[target]?.account;
   const clean = Object.fromEntries(Object.entries(options).filter(([, v]) => v !== '' && v != null));
+  const fill = (extra) => {
+    if (target === 'distrokid' && clean.songwriterFirst && clean.songwriterLast) {
+      safeWriteJsonStorage(SONGWRITER_KEY, Object.fromEntries(Object.entries(DISTROKID_REMEMBERED).filter(([opt]) => clean[opt] != null).map(([opt, k]) => [k, clean[opt]])));
+    }
+    publishing.prepare(target, { ...clean, ...extra });
+  };
 
   return (
-    <li className="rounded border border-port-border p-2 space-y-2">
+    <li id={publishRowAnchor(target)} className="rounded border border-port-border p-2 space-y-2 scroll-mt-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="text-xs font-medium">{label}{account && <span className="font-normal text-port-text-muted"> as {entry.accountPlaceholder ? '' : '@'}{account}</span>}</div>
@@ -254,15 +262,31 @@ function TargetRow({ project, kit, entry, publishing }) {
             </a>
           )}
         </div>
-        <button type="button" onClick={() => {
-          if (target === 'distrokid' && clean.songwriterFirst && clean.songwriterLast) {
-            safeWriteJsonStorage(SONGWRITER_KEY, Object.fromEntries(Object.entries(DISTROKID_REMEMBERED).filter(([opt]) => clean[opt] != null).map(([opt, k]) => [k, clean[opt]])));
-          }
-          publishing.prepare(target, clean);
-        }} disabled={!!busy}
-          className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
-          {busy === 'prepare' ? 'Filling…' : (draft ? 'Fill again' : 'Fill draft')}
-        </button>
+        {/* Already posted: a second draft would repeat the post, so it takes a confirm (and the server refuses without `again`). */}
+        {posted && !draft ? (
+          confirmAgain ? (
+            <ConfirmButtonPair
+              prompt={`Already posted to ${label}. Fill another draft?`}
+              confirmText="Post again"
+              ariaLabel={`Confirm posting to ${label} again`}
+              confirmAriaLabel={`Confirm posting to ${label} again`}
+              largeTouchTargets
+              busy={!!busy}
+              onConfirm={() => { setConfirmAgain(false); fill({ again: true }); }}
+              onCancel={() => setConfirmAgain(false)}
+            />
+          ) : (
+            <button type="button" onClick={() => setConfirmAgain(true)} disabled={!!busy}
+              className="flex items-center gap-1 border border-port-border disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
+              {busy === 'prepare' ? 'Filling…' : 'Post again…'}
+            </button>
+          )
+        ) : (
+          <button type="button" onClick={() => fill(posted ? { again: true } : {})} disabled={!!busy}
+            className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
+            {busy === 'prepare' ? 'Filling…' : (draft ? 'Fill again' : 'Fill draft')}
+          </button>
+        )}
       </div>
       {posted
         ? <PostFeedback key={posted.url || 'post'} idFor={idFor} label={label} post={posted} onSave={(body) => publishing.recordPost(target, body)} />
