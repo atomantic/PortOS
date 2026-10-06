@@ -10,6 +10,7 @@ vi.mock('../../hooks/useProviderModels.js', () => ({
   default: () => ({ providers: [], selectedProviderId: '', selectedModel: '', availableModels: [], setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn() }),
 }));
 vi.mock('../../lib/clipboard.js', () => ({ copyToClipboard: vi.fn() }));
+vi.mock('./SingleArtworkPanel.jsx', () => ({ default: () => null })); // covered by SingleArtworkPanel.test.jsx
 
 import PublishKitPanel from './PublishKitPanel.jsx';
 

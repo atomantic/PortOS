@@ -8,6 +8,12 @@ import {
   draftMusicVideoPublishCopy,
   updateMusicVideoPublishCopy,
   selectMusicVideoPublishThumbnail,
+  updateMusicVideoSingleArtwork,
+  generateMusicVideoSingleArtwork,
+  adjustMusicVideoSingleArtwork,
+  composeMusicVideoSingleArtwork,
+  approveMusicVideoSingleArtwork,
+  unapproveMusicVideoSingleArtwork,
 } from '../services/apiMusicVideo.js';
 import useSseJobSlot from './useSseJobSlot.js';
 
@@ -23,6 +29,7 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
   const projectId = project?.id || null;
   const [drafting, setDrafting] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [artworkBusy, setArtworkBusy] = useState(null);
 
   const reload = (id) => {
     if (!id) return;
@@ -79,7 +86,23 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
   };
   const selectThumbnail = (filename) => selectMusicVideoPublishThumbnail(projectId, filename).then(apply).catch(() => null);
 
+  // Single artwork (#10331): one action at a time, each returning the whole project.
+  const artworkAction = (label, run) => {
+    setArtworkBusy(label);
+    return run().then(apply).catch(() => null).finally(() => setArtworkBusy(null));
+  };
+  const singleArtwork = {
+    busy: artworkBusy,
+    save: (patch) => artworkAction('save', () => updateMusicVideoSingleArtwork(projectId, patch)),
+    generate: (body) => artworkAction('generate', () => generateMusicVideoSingleArtwork(projectId, body)),
+    adjust: (optionId, note) => artworkAction('adjust', () => adjustMusicVideoSingleArtwork(projectId, optionId, note)),
+    compose: (body) => artworkAction('compose', () => composeMusicVideoSingleArtwork(projectId, body)),
+    approve: (optionId) => artworkAction('approve', () => approveMusicVideoSingleArtwork(projectId, optionId)),
+    unapprove: () => artworkAction('approve', () => unapproveMusicVideoSingleArtwork(projectId)),
+  };
+
   return {
+    singleArtwork,
     building: job.active,
     progress: job.active ? job.percent : 0,
     build: () => job.start({}, projectId),

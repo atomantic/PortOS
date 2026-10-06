@@ -35,7 +35,7 @@ const DRAFT_DETACH_MS = 30 * 60 * 1000;
 const drafts = new Map();
 
 const draftPresentation = (draft) => ({
-  draftId: draft.id, projectId: draft.projectId, target: draft.target, summary: draft.summary,
+  draftId: draft.id, projectId: draft.projectId, target: draft.target, summary: draft.summary, warnings: draft.warnings || [],
   screenshot: draft.screenshot, state: draft.state, createdAt: draft.createdAt, manualPublication: true,
 });
 const emitDraft = (draft, state = draft.state) => musicVideoEvents.emit('publish-draft', {
@@ -103,6 +103,7 @@ const SQUARE_COVER_PX = { suno: 1500, distrokid: 3000 };
 /** Cut the frame a platform shows before play: TikTok's cover (9:16 frame), Suno's and DistroKid's (square). */
 async function withCovers(target, payload, deps) {
   if (target !== 'tiktok' && !SQUARE_COVER_PX[target]) return payload;
+  if (payload.cover?.approved) return payload; // the approved single artwork is already 3000×3000
   const source = target === 'tiktok' ? payload.video?.path : payload.cover?.path;
   if (!source) return payload;
   const { findFfmpeg, runFfmpegProcess } = await import('../../../lib/ffmpeg.js');
@@ -168,7 +169,7 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
       const shot = await page.screenshot({ type: 'jpeg', quality: 70 }).catch(() => null);
       const id = `mvpub-${randomUUID()}`;
       const screenshot = shot ? `data:image/jpeg;base64,${shot.toString('base64')}` : null;
-      const draft = { id, projectId, target, payload, page, browser, summary, screenshot, url: page.url(), state: 'open', createdAt: Date.now() };
+      const draft = { id, projectId, target, payload, warnings: payload.warnings || [], page, browser, summary, screenshot, url: page.url(), state: 'open', createdAt: Date.now() };
       draft.timer = setTimeout(() => { detachDraft(draft).catch(() => {}); }, DRAFT_DETACH_MS);
       draft.timer.unref?.();
       page.once?.('close', () => { if (draft.page === page && draft.state === 'open' && drafts.has(id)) { draft.state = 'closed'; emitDraft(draft); } });

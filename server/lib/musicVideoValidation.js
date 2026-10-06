@@ -686,6 +686,28 @@ export const musicVideoPublishCopyDraftSchema = z.object({
 }).strict();
 export const musicVideoPublishThumbnailSchema = z.object({ filename: z.string().min(1).max(300) }).strict();
 
+// #10331: the song's own single artwork.
+const singleArtworkTypeSchema = z.object({
+  position: z.enum(['top', 'center', 'bottom']),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  fontFamily: z.string().max(100),
+  titleScale: z.number().min(0.4).max(2),
+  showArtist: z.boolean(),
+}).partial().strict();
+export const musicVideoSingleArtworkPatchSchema = z.object({
+  stylePrompt: z.string().max(4000).optional(),
+  referenceImages: z.array(z.string().min(1).max(300)).max(4).optional(),
+  type: singleArtworkTypeSchema.optional(),
+}).strict();
+export const musicVideoSingleArtworkGenerateSchema = z.object({
+  stylePrompt: z.string().max(4000).optional(),
+  referenceImages: z.array(z.string().min(1).max(300)).max(4).optional(),
+  count: z.number().int().min(1).max(4).optional(),
+}).strict();
+export const musicVideoSingleArtworkAdjustSchema = z.object({ optionId: z.string().min(1).max(64), adjustPrompt: z.string().min(1).max(2000) }).strict();
+export const musicVideoSingleArtworkComposeSchema = z.object({ optionId: z.string().min(1).max(64), artist: z.string().max(200).optional(), type: singleArtworkTypeSchema.optional() }).strict();
+export const musicVideoSingleArtworkApproveSchema = z.object({ optionId: z.string().min(1).max(64) }).strict();
+
 // #9282: posting to a platform through the PortOS Browser. One strict options
 // object covers every target; each target's payload builder reads only its own.
 export const MUSIC_VIDEO_PUBLISH_TARGETS = Object.freeze(['youtube', 'shorts', 'tiktok', 'instagram', 'x', 'reddit', 'stackerNews', 'suno', 'distrokid']);

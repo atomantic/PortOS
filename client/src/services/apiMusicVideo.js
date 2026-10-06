@@ -244,6 +244,17 @@ export const updateMusicVideoPublishCopy = (id, patch, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish-kit/copy`, { method: 'PATCH', body: JSON.stringify(patch || {}), ...options });
 export const selectMusicVideoPublishThumbnail = (id, filename, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish-kit/thumbnail`, { method: 'PUT', body: JSON.stringify({ filename }), ...options });
+
+// ---- Single artwork (#10331) ----
+const artworkUrl = (id, tail = '') => `/music-video/${encodeURIComponent(id)}/publish-kit/single-artwork${tail}`;
+const artworkPost = (id, tail, body, options) => request(artworkUrl(id, tail), { method: 'POST', body: JSON.stringify(body || {}), ...options });
+export const getMusicVideoSingleArtwork = (id, options = {}) => request(artworkUrl(id), options);
+export const updateMusicVideoSingleArtwork = (id, patch, options = {}) => request(artworkUrl(id), { method: 'PATCH', body: JSON.stringify(patch || {}), ...options });
+export const generateMusicVideoSingleArtwork = (id, body, options = {}) => artworkPost(id, '/generate', body, options);
+export const adjustMusicVideoSingleArtwork = (id, optionId, adjustPrompt, options = {}) => artworkPost(id, '/adjust', { optionId, adjustPrompt }, options);
+export const composeMusicVideoSingleArtwork = (id, body, options = {}) => artworkPost(id, '/compose', body, options);
+export const approveMusicVideoSingleArtwork = (id, optionId, options = {}) => artworkPost(id, '/approve', { optionId }, options);
+export const unapproveMusicVideoSingleArtwork = (id, options = {}) => request(artworkUrl(id, '/approve'), { method: 'DELETE', ...options });
 // ---- Posting (#9282) ----
 // Prepare fills the platform's post in the PortOS Browser → { draftId, target,
 // summary, screenshot }. Manual posting is handled outside this wrapper.

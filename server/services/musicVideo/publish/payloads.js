@@ -165,7 +165,7 @@ const BUILDERS = {
     return { songUrl: song, caption, cover: kit.thumbnail ? { dir: 'videoThumbnails', name: kit.thumbnail } : null, pin: options.pin !== false };
   },
   // The song as a single for Spotify and the other stores. The service adds the
-  // project's source audio; the cover is cut square from the kit's thumbnail.
+  // project's source audio; the cover is the approved single artwork (#10331), else cut square from the kit's thumbnail.
   distrokid: (project, kit, options = {}) => {
     const title = text(project?.name);
     if (!title) throw missing('Name the project first: it is the song title on Spotify');
@@ -173,7 +173,10 @@ const BUILDERS = {
     if (!artist) throw missing('Give the artist name the song is released under (or set it as the DistroKid account under Where you post)');
     const songwriter = { first: text(options.songwriterFirst), last: text(options.songwriterLast) };
     if (!songwriter.first || !songwriter.last) throw missing("DistroKid needs the songwriter's real first and last name");
-    if (!kit.thumbnail) throw missing('Pick a thumbnail in the publishing kit first: it becomes the cover art');
+    // #10331: the approved single artwork is the cover; the video thumbnail is only a warned fallback.
+    const art = kit.singleArtwork;
+    const approved = !!(art?.approvedImageId && art.composedPath && art.composedOptionId === art.approvedImageId);
+    if (!approved && !kit.thumbnail) throw missing('Approve the single artwork (or pick a thumbnail) in the publishing kit first: it becomes the cover art');
     const releaseDate = text(options.releaseDate);
     if (releaseDate && !/^\d{4}-\d{2}-\d{2}$/.test(releaseDate)) throw missing('Give the release date as YYYY-MM-DD');
     const hasLyrics = (project?.lyricCues || []).some((cue) => text(cue?.text));
@@ -182,7 +185,8 @@ const BUILDERS = {
       explicit: options.explicit === true,
       instrumental: typeof options.instrumental === 'boolean' ? options.instrumental : !hasLyrics,
       ai: { lyrics: options.aiLyrics === true, music: options.aiMusic !== false, vocals: options.aiVocals !== false },
-      cover: { dir: 'videoThumbnails', name: kit.thumbnail },
+      cover: approved ? { dir: 'videoThumbnails', name: art.composedPath, approved: true } : { dir: 'videoThumbnails', name: kit.thumbnail },
+      warnings: approved ? [] : ['No single artwork is approved: the cover is cut from the video thumbnail. Approve a single artwork in the publishing kit for proper cover art.'],
     };
   },
 };

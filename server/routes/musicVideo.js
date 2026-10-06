@@ -45,6 +45,11 @@ import {
   musicVideoPublishCopyPatchSchema,
   musicVideoPublishCopyDraftSchema,
   musicVideoPublishThumbnailSchema,
+  musicVideoSingleArtworkAdjustSchema,
+  musicVideoSingleArtworkApproveSchema,
+  musicVideoSingleArtworkComposeSchema,
+  musicVideoSingleArtworkGenerateSchema,
+  musicVideoSingleArtworkPatchSchema,
   musicVideoPublishTargetSchema,
   musicVideoPublishPrepareSchema,
   musicVideoPublishPlatformsPatchSchema,
@@ -122,6 +127,7 @@ import { generateMusicVideoCode, regenerateMusicVideoCodeSection } from '../serv
 import { startExcerptRender, attachExcerptRenderSseClient, cancelExcerptRender } from '../services/musicVideo/excerptRender.js';
 import { deleteExcerpt, addReviewNote, editReviewNote, deleteReviewNote } from '../services/musicVideo/excerptService.js';
 import { suggestSocialCuts } from '../services/musicVideo/socialCuts.js';
+import { adjustSingleArtwork, approveSingleArtwork, clearSingleArtworkApproval, composeSingleArtwork, generateSingleArtwork, presentSingleArtwork, updateSingleArtwork } from '../services/musicVideo/singleArtwork.js';
 import { getActivePublishKitBuild, startPublishKitBuild, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, selectPublishKitThumbnail } from '../services/musicVideo/publishKit.js';
 import { preparePublishDraft, discardPublishDraft, listPublishDrafts, recordPublishPost } from '../services/musicVideo/publish/index.js';
 import { getPublishPlatforms, updatePublishPlatforms, publishHistory } from '../services/musicVideo/publish/platforms.js';
@@ -909,6 +915,38 @@ router.patch('/:id/publish-kit/copy', asyncHandler(async (req, res) => {
 router.put('/:id/publish-kit/thumbnail', asyncHandler(async (req, res) => {
   const { filename } = validateRequest(musicVideoPublishThumbnailSchema, req.body || {});
   const { project } = await selectPublishKitThumbnail(req.params.id, filename);
+  res.json({ project });
+}));
+
+// --- Single artwork (#10331) ---
+router.get('/:id/publish-kit/single-artwork', asyncHandler(async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  res.json({ singleArtwork: presentSingleArtwork(project) });
+}));
+router.patch('/:id/publish-kit/single-artwork', asyncHandler(async (req, res) => {
+  const { project } = await updateSingleArtwork(req.params.id, validateRequest(musicVideoSingleArtworkPatchSchema, req.body || {}));
+  res.json({ project });
+}));
+router.post('/:id/publish-kit/single-artwork/generate', asyncHandler(async (req, res) => {
+  const { project } = await generateSingleArtwork(req.params.id, validateRequest(musicVideoSingleArtworkGenerateSchema, req.body || {}));
+  res.json({ project });
+}));
+router.post('/:id/publish-kit/single-artwork/adjust', asyncHandler(async (req, res) => {
+  const { optionId, adjustPrompt } = validateRequest(musicVideoSingleArtworkAdjustSchema, req.body || {});
+  const { project } = await adjustSingleArtwork(req.params.id, optionId, adjustPrompt);
+  res.json({ project });
+}));
+router.post('/:id/publish-kit/single-artwork/compose', asyncHandler(async (req, res) => {
+  res.json(await composeSingleArtwork(req.params.id, validateRequest(musicVideoSingleArtworkComposeSchema, req.body || {})));
+}));
+router.post('/:id/publish-kit/single-artwork/approve', asyncHandler(async (req, res) => {
+  const { optionId } = validateRequest(musicVideoSingleArtworkApproveSchema, req.body || {});
+  const { project } = await approveSingleArtwork(req.params.id, optionId);
+  res.json({ project });
+}));
+router.delete('/:id/publish-kit/single-artwork/approve', asyncHandler(async (req, res) => {
+  const { project } = await clearSingleArtworkApproval(req.params.id);
   res.json({ project });
 }));
 
