@@ -85,7 +85,7 @@ const instagramSafe = (caption) => caption.replace(/@(\w)/g, '$1');
  * The publication's host from what the director typed: a bare name means
  * name.substack.com; a custom domain or a pasted URL keeps only its host.
  */
-export function substackPublication(value) {
+function substackPublication(value) {
   const host = text(value).toLowerCase().replace(/^https?:\/\//, '').replace(/^@/, '').split(/[/?#]/)[0];
   if (/^[a-z0-9-]{1,63}$/.test(host)) return `${host}.substack.com`;
   return /^(?:[a-z0-9-]{1,63}\.)+[a-z]{2,}$/.test(host) ? host : null;
