@@ -1626,13 +1626,20 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
     }
     return restoreWithMediaBoundary();
   };
-  // Fixed acquisition order: settings -> CoS config -> CoS runtime -> media registry. Settings
-  // writers drain before any CoS queue is held, and remain fenced until both
-  // the transfer and all cache reconciliation (including CoS) have settled.
-  if (!dryRun && (!scope || scope === 'settings.json')) {
-    return withLiveSettingsRestore(restoreWithCosBoundary);
+  // Fixed acquisition order: snapshot cut -> settings -> CoS config -> CoS
+  // runtime -> media registry. Drain publications BEFORE holding any domain
+  // queue they may need to finish, and keep admission closed through transfer
+  // and all cache reconciliation, including a partially failed transfer.
+  const restoreWithSettingsBoundary = () => !dryRun && (!scope || scope === 'settings.json')
+    ? withLiveSettingsRestore(restoreWithCosBoundary)
+    : restoreWithCosBoundary();
+  if (dryRun) return restoreWithSettingsBoundary();
+  const releaseSnapshotCut = await acquireBackupSnapshotCut();
+  try {
+    return await restoreWithSettingsBoundary();
+  } finally {
+    releaseSnapshotCut();
   }
-  return restoreWithCosBoundary();
 }
 
 const DUMP_UNREADABLE = Object.freeze({ status: 'failed', reason: 'dump_unreadable', error: 'The snapshot database dump could not be read or staged for restore. Restore was refused without changing data.' });

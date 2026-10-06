@@ -3135,6 +3135,108 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
     });
   });
 
+  describe('live file restore publication boundary', () => {
+    afterEach(() => { snapshotCutSeam.wrap = null; });
+
+    it.each([false, true])('drains file publications before domain queues and holds reconciliation (bypass=%s)', async bypass => {
+      const { withBackupAssetPublication } = await import('../lib/backupSnapshotBoundary.js');
+      const marker = join(testDataRoot(), 'restore-publication.txt');
+      const admitted = Promise.withResolvers();
+      const finishPublication = Promise.withResolvers();
+      const requested = Promise.withResolvers();
+      const transferring = Promise.withResolvers();
+      const reconciling = Promise.withResolvers();
+      const finishReconciliation = Promise.withResolvers();
+      snapshotCutSeam.wrap = acquire => {
+        requested.resolve();
+        return bypass ? () => {} : acquire();
+      };
+      const publication = withBackupAssetPublication(async () => {
+        await fs.writeFile(marker, 'old publication started');
+        admitted.resolve();
+        await finishPublication.promise;
+        await fs.writeFile(marker, 'old publication committed');
+      });
+      await admitted.promise;
+      const proc = fakeProc();
+      spawn.mockImplementationOnce(() => {
+        // Real destination bytes at the rsync process boundary, no live data.
+        writeFileSync(marker, 'restored snapshot');
+        transferring.resolve();
+        setImmediate(() => proc.emit('close', 0));
+        return proc;
+      });
+      reloadSettings.mockImplementationOnce(async () => {
+        reconciling.resolve();
+        await finishReconciliation.promise;
+      });
+      const restore = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
+      let later;
+      try {
+        await requested.promise;
+        if (bypass) {
+          await transferring.promise;
+          expect(withLiveSettingsRestore).toHaveBeenCalledTimes(1);
+        } else {
+          await new Promise(resolve => setImmediate(resolve));
+          expect(withLiveSettingsRestore).not.toHaveBeenCalled();
+          expect(withLiveCosRestore).not.toHaveBeenCalled();
+          expect(spawn).not.toHaveBeenCalled();
+        }
+        finishPublication.resolve();
+        await publication;
+        await reconciling.promise;
+        // Without the outer cut, the older in-flight write overwrites restored
+        // bytes. With it, rsync starts only after that publication is durable.
+        expect(await fs.readFile(marker, 'utf8')).toBe(bypass ? 'old publication committed' : 'restored snapshot');
+        let laterRan = false;
+        later = withBackupAssetPublication(async () => {
+          laterRan = true;
+          await fs.writeFile(marker, 'later publication');
+        });
+        await new Promise(resolve => setImmediate(resolve));
+        expect(laterRan).toBe(bypass);
+      } finally {
+        finishPublication.resolve();
+        finishReconciliation.resolve();
+        await Promise.all([publication, restore, later]);
+      }
+      expect(await fs.readFile(marker, 'utf8')).toBe('later publication');
+    });
+
+    it('refuses an owned cut before domain queues or transfer, while preview remains available', async () => {
+      const { acquireBackupSnapshotCut } = await import('../lib/backupSnapshotBoundary.js');
+      const release = await acquireBackupSnapshotCut();
+      try {
+        await expect(restoreSnapshot('/dest', 'snap-1', { dryRun: false }))
+          .rejects.toMatchObject({ code: 'BACKUP_SNAPSHOT_BUSY' });
+        expect(withLiveSettingsRestore).not.toHaveBeenCalled();
+        expect(withLiveCosRestore).not.toHaveBeenCalled();
+        expect(spawn).not.toHaveBeenCalled();
+        await expect(runRestore('/dest', 'snap-1', { dryRun: true })).resolves.toMatchObject({ dryRun: true });
+        // A refused restore must not release the other owner's cut.
+        await expect(acquireBackupSnapshotCut()).rejects.toMatchObject({ code: 'BACKUP_SNAPSHOT_BUSY' });
+      } finally { release(); }
+    });
+
+    it.each(['domain refusal', 'transfer failure', 'reconciliation failure'])('releases its cut after %s', async failure => {
+      const { acquireBackupSnapshotCut } = await import('../lib/backupSnapshotBoundary.js');
+      if (failure === 'domain refusal') {
+        withLiveCosRestore.mockRejectedValueOnce(new Error('restore refused'));
+      } else {
+        const proc = fakeProc();
+        spawn.mockImplementationOnce(() => {
+          setImmediate(() => proc.emit('close', failure === 'transfer failure' ? 1 : 0));
+          return proc;
+        });
+        if (failure === 'reconciliation failure') reloadSettings.mockRejectedValueOnce(new Error('reload failed'));
+      }
+      await expect(restoreSnapshot('/dest', 'snap-1', { dryRun: false })).rejects.toThrow();
+      const release = await acquireBackupSnapshotCut();
+      release();
+    });
+  });
+
   describe('media registry restore ownership boundary', () => {
     it.each([undefined, 'media-models.json'])('holds the boundary for affected live scope %s', async subdirFilter => {
       await runRestore('/dest', 'snap-1', { dryRun: false, subdirFilter });
