@@ -179,8 +179,8 @@ export async function dispatchAgentRun(context, { spawnViaRunner } = {}) {
     sourceWorkspace ? capturePrimaryCheckoutState(sourceWorkspace) : null,
   ]);
   let systemPromptFile = null;
+  const agentDir = join(AGENTS_DIR, agentId);
   const { runId } = await withBackupAssetPublication(async () => {
-    const agentDir = join(AGENTS_DIR, agentId);
     if (!existsSync(agentDir)) {
       await ensureDir(agentDir);
     }
