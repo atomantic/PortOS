@@ -627,3 +627,11 @@ export const resumeMaintenance = (hold, options = {}) => request('/system/mainte
 export const getPeerAdminSetup = (peerId, options) => request(`/peer-administration/peers/${encodeURIComponent(peerId)}`, options);
 export const savePeerAdminGrant = (data, options) => request('/peer-administration/grants', { ...options, method: 'POST', body: JSON.stringify(data) });
 export const previewPeerAdministration = (data, options) => request('/peer-administration/preview', { ...options, method: 'POST', body: JSON.stringify(data) });
+
+export const savePeerExecutionGrant = (data, options) => request('/peer-administration/execution-grants', { ...options, method: 'POST', body: JSON.stringify(data) });
+export const previewPeerExecution = (data, options) => request('/peer-administration/execution-preview', { ...options, method: 'POST', body: JSON.stringify(data) });
+export const dispatchPeerExecution = (data, options) => request('/peer-administration/execution-dispatch', { ...options, method: 'POST', body: JSON.stringify(data) });
+export const getPeerExecutionStatus = (data, options) => request('/peer-administration/execution-status', { ...options, method: 'POST', body: JSON.stringify(data) });
+export const getPeerCatalogReviews = (options) => request('/peer-administration/catalog-reviews', options);
+export const getPeerCatalogReview = (backend, catalogKey, options) => request(`/peer-administration/catalog-review?backend=${encodeURIComponent(backend)}&catalogKey=${encodeURIComponent(catalogKey)}`, options);
+export const savePeerCatalogReview = (data, options) => request('/peer-administration/catalog-review', { ...options, method: 'PUT', body: JSON.stringify(data) });

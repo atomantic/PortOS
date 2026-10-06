@@ -309,6 +309,12 @@ if ($hasChanges) {
     Step "git-pull" "failed" "Checkout is dirty; no stash was created"
     Stop-UpdateScript 1
 }
+if ($env:PORTOS_PEER_UPDATE_TARGET_SHA) {
+    if ($env:PORTOS_PEER_UPDATE_TARGET_SHA -cnotmatch '^[a-f0-9]{40}$' -or $env:PORTOS_PEER_UPDATE_EXPECTED_SHA -cnotmatch '^[a-f0-9]{40}$' -or $currentBranch -ne 'main' -or (git rev-parse HEAD) -ne $env:PORTOS_PEER_UPDATE_EXPECTED_SHA) {
+        Step "git-pull" "failed" "Peer update evidence changed"
+        Stop-UpdateScript 1
+    }
+}
 if ($currentBranch -ne "main") {
     if (-not $currentBranch) {
         $detachedCommit = git rev-parse --short HEAD
@@ -330,7 +336,11 @@ if (-not (Repair-StaleSubmodules)) {
 # post-pull HEAD yields exactly the pull's delta on main, so a manifest change
 # the update brings is detected even when launched from another branch.
 $prePullSha = git rev-parse HEAD 2>$null
-Invoke-Logged git pull --rebase
+if ($env:PORTOS_PEER_UPDATE_TARGET_SHA) {
+    Invoke-Logged git merge --ff-only $env:PORTOS_PEER_UPDATE_TARGET_SHA
+} else {
+    Invoke-Logged git pull --rebase
+}
 if ($LASTEXITCODE -ne 0) { Stop-UpdateScript $LASTEXITCODE }
 Step "git-pull" "done" "Latest changes pulled"
 

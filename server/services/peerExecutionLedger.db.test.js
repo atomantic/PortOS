@@ -1,5 +1,5 @@
-/** Real transaction/restore fixtures only; no grants, peers, adapters or providers. */
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+/** Disposable transaction/restore and receiver workflow fixtures; no live peer or provider actions. */
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -38,6 +38,33 @@ afterEach(async () => {
 afterAll(async () => { if (health.connected) await close(); });
 
 describe.skipIf(!runDb)('receiver-local permanent execution consumption', () => {
+  it('executes one fixture adapter through real grant floors, consumption and terminal recovery', async () => {
+    const [{ createPeerExecutionReceiver }, { createPeerExecutionGrants }, { createMaintenanceAdmission }] = await Promise.all([
+      import('./peerExecution.js'), import('./peerExecutionGrants.js'), import('../lib/maintenanceAdmission.js'),
+    ]);
+    const pair = { self: { instanceId: input.hostInstanceId }, peer: { id: 'fixture-pair', instanceId: input.peerInstanceId, syncSecret: 'fixture-secret'.repeat(4) } };
+    let store = { version: 1, grants: [] };
+    const proofs = new Map();
+    const coordinator = createMaintenanceAdmission(directory, { verifyExclusiveReceipt: (claim, receipt) => {
+      const proof = proofs.get(claim.operation.operationId);
+      return proof?.fingerprint === claim.fingerprint && proof.receiptDigest === receipt.receiptDigest;
+    } });
+    const grants = createPeerExecutionGrants({ ledger, identity: async () => pair, readStore: async () => store, writeStore: async value => { store = value; } });
+    const run = vi.fn(async () => ({ state: 'succeeded', code: 'FIXTURE_COMPLETED' }));
+    const receiver = createPeerExecutionReceiver({ ledger, grants, coordinator, caller: async () => pair,
+      version: 'fixture-1.0', terminalProofs: proofs, adapters: { prepare: async () => ({ exact: 'fixture' }), run, reconcile: async () => null } });
+    await receiver.saveGrant({ peerId: pair.peer.id, action: input.intent.action, confirmedHostInstanceId: pair.self.instanceId,
+      confirmedPeerInstanceId: pair.peer.instanceId, previousGrantId: null, expiresInMinutes: 60, allowExecution: true },
+    { portosAuthContext: { method: 'session' } });
+    const { payload } = await receiver.preflight({}, { protocolVersion: 1, requestId: input.requestId, intent: input.intent });
+    const { scope: _scope, senderInstanceId: _sender, targetInstanceId: _target, expiresAt: _expiry, ...dispatch } = payload;
+    await receiver.dispatch({}, dispatch);
+    await vi.waitFor(async () => expect((await receiver.status({}, input)).payload.state).toBe('succeeded'));
+    await receiver.dispatch({}, dispatch);
+    expect(run).toHaveBeenCalledOnce();
+    expect(coordinator.status().state).toBe('normal');
+    expect(await ledger.generationFloor({ hostInstanceId: input.hostInstanceId, peerInstanceId: input.peerInstanceId, action: input.intent.action })).toBe(1);
+  });
   it.each(['acquisition', 'capture-query', 'begin-publication', 'snapshot-publication', 'completion-publication', 'directory-sync'])
     ('resumes only the same legacy empty-adoption owner after %s failure and process reconstruction', async boundary => {
       const { _createPeerExecutionRestore } = await import('./peerExecutionRestore.js');

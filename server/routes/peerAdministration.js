@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import {
-  peerAdminPreflightSchema, peerAdminPlanSchema, peerAdminReceiptSchema,
+  peerAdminPreflightSchema, peerAdminPlanSchema, peerAdminReceiptSchema, peerExecutionPreflightSchema, peerExecutionDispatchSchema,
 } from '../lib/peerAdminValidation.js';
 import {
   createPeerAdminPreflight,
@@ -27,5 +27,20 @@ router.post('/receipt', asyncHandler(async (req, res) => {
 router.post('/execute', asyncHandler(async (req, _res) => {
   const { requestId } = validateRequest(peerAdminReceiptSchema, req.body);
   await rejectPeerAdminExecution(req, requestId);
+}));
+router.post('/execution/preflight', asyncHandler(async (req, res) => {
+  const input = validateRequest(peerExecutionPreflightSchema, req.body);
+  const { peerExecutionRuntime } = await import('../services/peerExecutionRuntime.js');
+  res.json(await (await peerExecutionRuntime()).preflight(req, input));
+}));
+router.post('/execution/dispatch', asyncHandler(async (req, res) => {
+  const input = validateRequest(peerExecutionDispatchSchema, req.body);
+  const { peerExecutionRuntime } = await import('../services/peerExecutionRuntime.js');
+  res.status(202).json(await (await peerExecutionRuntime()).dispatch(req, input));
+}));
+router.post('/execution/status', asyncHandler(async (req, res) => {
+  const input = validateRequest(peerAdminReceiptSchema, req.body);
+  const { peerExecutionRuntime } = await import('../services/peerExecutionRuntime.js');
+  res.json(await (await peerExecutionRuntime()).status(req, input));
 }));
 export default router;

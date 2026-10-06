@@ -37,6 +37,13 @@ const INSTANCES_FILE = dataPath('instances.json');
 export const UNKNOWN_INSTANCE_ID = 'unknown';
 
 const withLock = createMutex();
+// Receiver execution shares the identity writer lock through launch handoff.
+// Registration keeps this identity leaf independent of the execution graph.
+export const withInstanceIdentityLock = fn => withLock(fn);
+let executionAuthorityGuard = null;
+export const registerInstanceExecutionAuthorityGuard = guard => { executionAuthorityGuard = guard; };
+const authorityProjection = data => JSON.stringify({ self: data.self?.instanceId ?? null,
+  peers: (data.peers ?? []).map(peer => ({ id: peer.id, instanceId: peer.instanceId, syncSecret: peer.syncSecret, enabled: peer.enabled !== false })) });
 
 // Default data shape
 const DEFAULT_DATA = {
@@ -64,7 +71,9 @@ async function saveData(data) {
 export async function withData(fn) {
   return withLock(async () => {
     const data = await loadData();
+    const previousAuthority = authorityProjection(data);
     const result = await fn(data);
+    if (previousAuthority !== authorityProjection(data)) await executionAuthorityGuard?.();
     await saveData(data);
     return result;
   });

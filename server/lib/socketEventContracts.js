@@ -44,6 +44,7 @@ const loomRunSnapshot = (production) => Object.freeze({
 });
 
 export const SOCKET_EVENT_CONTRACTS = Object.freeze({
+  'peer-execution:changed': Object.freeze({ direction: 'server-to-client', summary: 'Invalidate authenticated peer execution setup and status; no credentials or operation data.', payloadSchema: { type: 'null' } }),
   'genome:clinvar-progress': {
     direction: 'server-to-client', summary: 'ClinVar download and indexing progress for an optional client request ID.',
     payloadSchema: { type: 'object', required: ['message'], properties: { message: { type: 'string' }, requestId: { type: 'string', format: 'uuid' } } },

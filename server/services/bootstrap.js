@@ -957,7 +957,12 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
       markRecoveryDone();
     }),
 
-    runDatabasePhase: runDatabaseBootPhase,
+    runDatabasePhase: async () => {
+      await runDatabaseBootPhase();
+      const { bindPeerExecutionIo, initializePeerExecution } = await import('./peerExecutionRuntime.js');
+      bindPeerExecutionIo(io);
+      await initializePeerExecution().catch(err => console.error(`❌ Peer execution recovery remains held: ${err.message}`));
+    },
 
     // One-time series cover-thumbnail backfill: derive `series.coverImage` (the
     // rendered volume/issue cover shown on the pipeline list) for series whose

@@ -26,8 +26,8 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | Module | Purpose |
 |---|---|
 | `maintenanceAdmission.js` | Durable machine-local workflow drain, cross-process admission permits, continuation ownership and stale-resume fencing. |
-| `maintenanceExclusive.js` | Coordinator-owned exclusive ready claims, opaque fresh idle observations, durable ownership and verified settlement; internal only, no executor or peer authority. |
-| `peerExecutionAuthority.js` | Non-rewound receiver execution epoch and restore-owner journal; default-deny on stale evidence or pending/conflicting recovery. No grants or adapters. |
+| `maintenanceExclusive.js` | Coordinator-owned exclusive claims, opaque idle observations, durable ownership, one-use fixed-adapter capabilities and verified settlement. Peer credentials alone never grant authority. |
+| `peerExecutionAuthority.js` | Non-rewound receiver execution epoch and restore-owner journal; default-deny on stale evidence or pending/conflicting recovery. Invalidates grants on identity changes and refuses stale epochs. |
 | `appDeployFlags.js` | Shared allowlist of flags PortOS may forward to a managed app's `deploy.sh`, consumed by socket validation and deployment orchestration without reversing the lib/services dependency. |
 | `apiContractSchemas.js` | Canonical Zod request contracts for externally callable APIs plus `zodToOpenApiSchema` (plain JSON Schema — the 3.0.3 conversion happens at the OpenAPI document boundary, not here); runtime routes and OpenAPI use the same schema objects. |
 | `codeAnimationAcceptance.js` | Code Animation production acceptance: splits run evidence into technical/visual/temporal/sound (unmeasured stays unverified), decides promotability, freezes source/audio/render hashes and detects stale acceptance. Pure. |
@@ -856,6 +856,6 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | `forgeMaintenanceTasks.js` | Current forge-maintenance screening version, queue-compatible identity check, task classification, and legacy refusal reason. |
 
-| `peerAdminValidation.js` | Strict planning-only peer administration schemas, fixed actions and grant scope. |
+| `peerAdminValidation.js` | Strict, separate planning and execution schemas with fixed intents, signed receipts and explicit grant scopes. |
 
 | `musicVideoReviewDraft.js` | Pure imported Animatic review candidates, newest immutable version first; exact version URLs remain separate from native production approvals. |

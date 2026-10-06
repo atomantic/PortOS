@@ -1,7 +1,26 @@
-/** Coordinator primitives only. No peer route, grant writer or executor uses these yet. */
+/** Exclusive coordinator ownership and receiver-local one-use launch capabilities. */
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { peerAdminIntentSchema } from './peerAdminValidation.js';
+
+// Tokens never serialize. Reopening an in-flight journal cannot mint another launch.
+const executionCapabilities = new WeakMap();
+export function assertPeerExecutionCapability(capability, intent, evidenceDigest) {
+  const proof = executionCapabilities.get(capability);
+  if (!proof || JSON.stringify(proof.operation.intent) !== JSON.stringify(intent)
+    || proof.operation.evidenceDigest !== evidenceDigest) {
+    throw Object.assign(new Error('A receiver-issued execution capability is required.'), { code: 'PEER_EXECUTION_CAPABILITY_REQUIRED', status: 409 });
+  }
+  proof.assertCurrent();
+  return structuredClone(proof.operation);
+}
+export function consumePeerExecutionCapability(capability, intent, evidenceDigest) {
+  const operation = assertPeerExecutionCapability(capability, intent, evidenceDigest);
+  const proof = executionCapabilities.get(capability);
+  if (proof.consumed) throw Object.assign(new Error('This execution capability was already consumed.'), { code: 'PEER_EXECUTION_CAPABILITY_CONSUMED', status: 409 });
+  proof.consumed = true;
+  return operation;
+}
 
 const uuid = z.string().uuid();
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -30,6 +49,7 @@ const receiptSchema = z.object({ outcome: z.enum(['cancelled', 'succeeded', 'fai
 /** Shares the admission transaction; an independent executor lock cannot fence resume. */
 export function createMaintenanceExclusive({ transaction, read, lockExists, makeId, error, now, verifyReceipt }) {
   const observations = new WeakMap();
+  const startedClaims = new WeakMap();
   const stale = message => { throw error('MAINTENANCE_STALE', message); };
   const copy = value => value ? structuredClone(value) : null;
   const current = (state, expected) => {
@@ -76,7 +96,7 @@ export function createMaintenanceExclusive({ transaction, read, lockExists, make
   };
   const transitionExclusive = (input, phase, evidence) => {
     const expected = expectedSchema.parse(input);
-    return transaction(state => {
+    const result = transaction(state => {
       const claim = current(state, expected);
       const allowed = { reserved: ['in-flight', 'uncertain'], 'in-flight': ['awaiting-reconnect', 'uncertain'],
         'awaiting-reconnect': ['uncertain'], uncertain: [] };
@@ -86,6 +106,24 @@ export function createMaintenanceExclusive({ transaction, read, lockExists, make
       claim.revision++;
       return copy(claim);
     });
+    if (phase === 'in-flight') startedClaims.set(result, { id: result.id, revision: result.revision, fingerprint: result.fingerprint });
+    return result;
+  };
+  const issueExecutionCapability = claim => {
+    if (!startedClaims.has(claim)) stale('Only the fresh in-flight transition can authorize a launch.');
+    const expected = startedClaims.get(claim);
+    startedClaims.delete(claim);
+    const assertCurrent = () => {
+      if (lockExists()) stale('Maintenance state is being changed.');
+      const state = read();
+      const live = current(state, expected);
+      if (live.phase !== 'in-flight' || state.operations.length) stale('Exclusive execution ownership is no longer idle and in-flight.');
+      return live;
+    };
+    const live = assertCurrent();
+    const capability = Object.freeze({});
+    executionCapabilities.set(capability, { operation: copy(live.operation), assertCurrent, consumed: false });
+    return capability;
   };
   const settleExclusive = (input, receiptInput) => {
     const expected = expectedSchema.parse(input);
@@ -126,5 +164,5 @@ export function createMaintenanceExclusive({ transaction, read, lockExists, make
       state.exclusive.revision++;
     }
   };
-  return { observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, observeExistingWork };
+  return { observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, observeExistingWork, issueExecutionCapability };
 }

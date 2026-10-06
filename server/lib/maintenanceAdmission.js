@@ -254,9 +254,9 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     });
     return status();
   };
-  const { observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive } = exclusive;
+  const { observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability } = exclusive;
   return { directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
-    observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive };
+    observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability };
 }
 
 // Resolve the configured data root on first use, after host/test setup.

@@ -30,7 +30,7 @@ one last settlement receipt. They fence admission/resume before the DB is usable
 bind the current operation to its hold and verified evidence, and survive restart.
 They are coordinator authority, **not a parallel execution audit/replay ledger**:
 the last receipt is bounded recovery evidence, not permanent request consumption.
-The eventual peer execution ledger remains receiver-local `db-primary` (below).
+The peer execution ledger remains receiver-local `db-primary` (below).
 Neither a missing verifier nor timeout/restart releases an in-flight owner.
 Older strict journal readers reject the added fields and fail closed; reverting
 to one cannot resume a claimed hold. Old unclaimed v1 journals still read normally.
@@ -823,9 +823,26 @@ or unresolved owner. PostgreSQL restore invokes capture before replay and automa
 reconciliation before generic restore release, including proven rollback. It never
 replays a committed dump to recover execution records.
 
-This is a persistence foundation. No execution-grant writer, peer execution route,
-adapter or terminal certificate uses it. Pairing/receiver identity invalidation,
-filesystem-only restore epoch invalidation, complete shared grant/dispatch locking,
-and verified epoch-bound terminal settlement remain owned implementation steps in
-#10127 before execution can be advertised. Existing planning routes still refuse
-execution; ledger records and restore completion are not permission to launch.
+The execution receiver now uses this ledger with separate `execution-v1` grants,
+a coordinator-issued one-use launch capability, fixed adapters and epoch-bound
+terminal receipts. Existing planning grants remain powerless. Pair identity changes
+and filesystem identity restores rotate the execution epoch before publication,
+under the same identity writer lock used through dispatch handoff. Invalidation
+needs no database write, so an unavailable database cannot preserve stale grants.
+
+`peer-execution-grants.json` and `peer-execution-catalog.json` are machine-local
+`file-primary` operator configuration, not app records or a parallel operation
+ledger. They have bounded, strict schemas; absent files grant nothing.
+They never federate or restore from snapshots. Grant generations are fenced by
+the permanent PostgreSQL floors and the non-rewound epoch. Catalog reviews bind
+immutable source pins, license review, runtime and exact artifact requirements;
+unknown entries deny. No seed/migration creates reviews or execution authority.
+
+`peer-execution/<operation-uuid>/` holds machine-local, file-primary detached
+adapter launch/exit evidence needed across a server restart, indexed by the
+permanent ledger operation identity. It cannot authorize another launch or replace
+ledger consumption. Preserve it across restores with the authority and maintenance
+journal; do not delete unresolved evidence. Status reconciliation re-reads exact
+terminal proof before settling the current claim. A crash after ledger completion
+but before journal settlement or hold release is recoverable without relaunch.
+See [peer administration](features/peer-administration.md) for supported actions.

@@ -125,6 +125,7 @@ export async function startPortosSelfUpdate({
   preflightAlreadyRun = false,
   mode = 'release',
   onStep,
+  peerExecution,
 } = {}) {
   // Never restart PortOS out from under a live CoS agent, in-flight Persistent
   // Mind image work, or an unacknowledged fork. Fast-fail before the lock so
@@ -189,7 +190,7 @@ export async function startPortosSelfUpdate({
       console.error(`❌ Failed to release update lock after launch failure: ${releaseErr.message}`);
     });
   };
-  const launch = await launchUpdate(tag, emit, { forceCleanWorkspaces }).catch(async err => {
+  const launch = await launchUpdate(tag, emit, { forceCleanWorkspaces, ...(peerExecution ? { peerExecution } : {}) }).catch(async err => {
     await reportFailure(err);
     throw err;
   });
