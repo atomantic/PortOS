@@ -47,6 +47,7 @@ import TailcatAddress from '../components/instances/TailcatAddress';
 import TailcatForwardStatus from '../components/instances/TailcatForwardStatus';
 import { timeAgo, timeUntil } from '../utils/formatters';
 import { directionalCounts, describeDirectional } from '../lib/syncCounts';
+import { pluralize } from '../lib/textUtils';
 import PageSkeleton from '../components/ui/PageSkeleton';
 
 const STATUS_COLORS = {
@@ -641,13 +642,13 @@ function FullSyncCoverageBadge({ peerId, peerInstanceId, refreshKey }) {
   }
   if (coverage.fullyMirrored) {
     return (
-      <span className="flex items-center gap-1 text-[10px] text-port-success" title={`All ${coverage.total} record(s) confirmed-delivered to this peer`}>
-        <CheckCircle2 size={11} /> Fully mirrored · {coverage.total} record{coverage.total !== 1 ? 's' : ''}
+      <span className="flex items-center gap-1 text-[10px] text-port-success" title={`All ${pluralize(coverage.total, 'record')} confirmed delivered to this peer`}>
+        <CheckCircle2 size={11} /> Fully mirrored · {pluralize(coverage.total, 'record')}
       </span>
     );
   }
   return (
-    <span className="flex items-center gap-1 text-[10px] text-port-warning" title={`${coverage.pending} of ${coverage.total} record(s) not yet confirmed-delivered`}>
+    <span className="flex items-center gap-1 text-[10px] text-port-warning" title={`${coverage.pending} of ${pluralize(coverage.total, 'record')} not yet confirmed delivered`}>
       <Clock size={11} /> {coverage.pending} pending · {coverage.confirmed}/{coverage.total} mirrored
     </span>
   );

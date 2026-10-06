@@ -45,6 +45,7 @@ import useLocalModels from '../hooks/useLocalModels';
 import useMounted from '../hooks/useMounted';
 import { locateAnchors } from '../lib/manuscriptAnchors';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
+import { pluralize } from '../lib/textUtils';
 import ManuscriptLiveSection from '../components/pipeline/manuscript/ManuscriptLiveSection';
 import AnnotatedManuscriptSection from '../components/pipeline/manuscript/AnnotatedManuscriptSection';
 import ManuscriptCommentIndex from '../components/pipeline/manuscript/ManuscriptCommentIndex';
@@ -314,8 +315,8 @@ function SeriesManuscriptEditor() {
       setReviewMeta({ chunked: !!result?.chunked, chunkCount: result?.chunkCount || 1 });
       const openCount = next.filter((c) => c.status === 'open').length;
       toast.success(result?.chunked
-        ? `Editorial review complete — ${openCount} open notes (reviewed in ${result.chunkCount} chunks)`
-        : `Editorial review complete — ${openCount} open notes`);
+        ? `Editorial review complete — ${pluralize(openCount, 'open note')} (reviewed in ${pluralize(result.chunkCount, 'chunk')})`
+        : `Editorial review complete — ${pluralize(openCount, 'open note')}`);
     },
     { errorMessage: 'Failed to run editorial review' },
   );
@@ -355,8 +356,8 @@ function SeriesManuscriptEditor() {
         }
         const openCount = next.filter((c) => c.status === 'open').length;
         toast.success(meta?.chunked
-          ? `Editorial review complete — ${openCount} open notes with drafted edits (reviewed in ${meta.chunkCount} chunks)`
-          : `Editorial review complete — ${openCount} open notes with drafted edits`);
+          ? `Editorial review complete — ${pluralize(openCount, 'open note')} with drafted edits (reviewed in ${pluralize(meta.chunkCount, 'chunk')})`
+          : `Editorial review complete — ${pluralize(openCount, 'open note')} with drafted edits`);
       })
       .catch((err) => { if (ownsView()) toast.error(err.message || 'Failed to load review'); });
 

@@ -84,6 +84,7 @@ import { autoArrangeScenes } from '../lib/beatGrid.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
 import { sceneTakeList } from '../lib/musicVideoTakes.js';
+import { pluralize } from '../lib/textUtils.js';
 import { deriveAttentionItems } from '../lib/musicVideoAttention.js';
 import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
 import { useMusicVideoReviewDraft } from '../hooks/useMusicVideoReviewDraft.js';
@@ -865,7 +866,7 @@ export default function MusicVideo() {
     splitMusicVideoScene(selected.id, sceneId, backend, { silent: true })
       .then(({ project, scenes }) => {
         replaceProject(project);
-        toast.success(`Split into ${scenes.length} shots`);
+        toast.success(`Split into ${pluralize(scenes.length, 'shot')}`);
       })
       .catch((err) => toast.error(err?.message || 'Failed to split scene'));
   };

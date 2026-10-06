@@ -18,9 +18,10 @@ import {
 } from '../lib/universeBuilderExpand';
 import { totalVariationCount } from '../lib/universeBuilderCounts';
 import { ensureDraftCategories } from '../lib/universeBuilderShared';
+import { pluralize } from '../lib/textUtils';
 
 const expandToast = ({ variationCount, sheetCount, addedCanonCount, saved }) => {
-  const summary = `Expanded into ${variationCount} variations, ${sheetCount} boards, ${addedCanonCount} new canon entries`;
+  const summary = `Expanded into ${pluralize(variationCount, 'variation')}, ${pluralize(sheetCount, 'board')}, ${pluralize(addedCanonCount, 'new canon entry', 'new canon entries')}`;
   return `${summary} — ${saved ? 'saved' : 'review then Save'}`;
 };
 

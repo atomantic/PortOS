@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Loader2, Network } from 'lucide-react';
 import { getUniverseGraph } from '../../../services/api';
+import { pluralize } from '../../../lib/textUtils';
 import {
   GRAPH_EDGE_GROUPS, GRAPH_KIND_ORDER, computeUniverseGaps, edgeDef, indexGraph, neighbourIds,
 } from '../../../lib/universeGraphModel';
@@ -143,8 +144,8 @@ export default function UniverseGraphTab({ universeId, universeName }) {
     (n) => (n.firstIssue || 0) <= timeIndex && n.kind !== 'issue' && n.kind !== 'image',
   ).length), [index, timeIndex]);
 
-  const statsLabel = `${visible.nodes.length} nodes · ${visible.edges.length} links${
-    search ? ` · ${visible.match ? visible.match.size : 0} matches` : ''}`;
+  const statsLabel = `${pluralize(visible.nodes.length, 'node')} · ${pluralize(visible.edges.length, 'link')}${
+    search ? ` · ${pluralize(visible.match ? visible.match.size : 0, 'match', 'matches')}` : ''}`;
 
   if (!universeId) {
     return (

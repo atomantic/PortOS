@@ -6,6 +6,7 @@
 
 import { useEffect, useMemo } from 'react';
 import { Pause, Play } from 'lucide-react';
+import { pluralize } from '../../../lib/textUtils';
 
 // How long each issue holds while playing.
 const PLAY_STEP_MS = 700;
@@ -58,7 +59,7 @@ export default function GraphTimeline({
   const current = timeIndex == null ? null : index.issues[timeIndex];
   const seriesName = current
     ? (index.byId.get(current.seriesId)?.name || '')
-    : `${total} issues across ${index.series.length} series`;
+    : `${pluralize(total, 'issue')} across ${pluralize(index.series.length, 'series', 'series')}`;
 
   return (
     <div className="bg-port-card border border-port-border rounded-lg px-4 pt-2.5 pb-3 flex flex-col gap-2">

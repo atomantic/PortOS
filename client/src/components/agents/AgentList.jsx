@@ -10,6 +10,7 @@ import * as api from '../../services/api';
 import { PERSONALITY_STYLES, DEFAULT_PERSONALITY, DEFAULT_AVATAR } from './constants';
 import { DEFAULT_AVATAR_COLOR } from '../../themes/portosThemes';
 import { filterSelectableModels } from '../../utils/providers';
+import { pluralize } from '../../lib/textUtils';
 
 export default function AgentList() {
   const [agents, setAgents] = useState([]);
@@ -412,7 +413,7 @@ export default function AgentList() {
                 </div>
 
                 <div className="flex items-center gap-3 text-xs text-gray-500">
-                  <span>{accountCounts[agent.id] || 0} accounts</span>
+                  <span>{pluralize(accountCounts[agent.id] || 0, 'account')}</span>
                   <span>{scheduleCounts[agent.id] || 0} schedules</span>
                   <span className={`ml-auto px-2 py-0.5 rounded ${
                     agent.enabled
