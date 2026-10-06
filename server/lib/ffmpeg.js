@@ -582,8 +582,9 @@ const appendFilter = (chain, filter) => {
 // Windows, fs.rename fails when the destination already exists — but a simple
 // unlink-first would destroy the original if the subsequent rename failed
 // (locked file, AV scan, transient permissions). Move the original aside to a
-// .bak first, install the new file, and restore the backup on any failure, so
-// the worst case is "the operation was skipped", never "the video is gone".
+// .bak first, install the new file, and restore the backup on failure. If the
+// restore itself fails, retain that original and signal uncertain publication
+// state so backup admission cannot accept the temporarily missing target.
 //
 // Extracted because three callers here (`trimVideoFromFrame`, `upscaleVideo2x`,
 // `optimizeForStreaming`) need this identical rollback, and a data-loss-
@@ -593,22 +594,29 @@ const appendFilter = (chain, filter) => {
 // `rename` was exactly the copy that never got fixed (#7237). `label` names
 // the operation for the failure message.
 //
-// Returns `{ ok: true, outPath }` or `{ ok: false, reason }`.
+// Returns `{ ok: true, outPath }` or `{ ok: false, reason }`. A failed rollback
+// throws explicitly uncertain publication state and retains the original backup.
 export const installEncodedVideo = async (tmpPath, targetPath, label) => {
   let backupPath = null;
   try {
     if (IS_WIN) {
-      backupPath = `${targetPath}.bak.${randomUUID()}`;
-      await rename(targetPath, backupPath).catch((err) => {
-        if (err?.code === 'ENOENT') { backupPath = null; return; }
-        throw err;
+      const candidate = `${targetPath}.bak.${randomUUID()}`;
+      await rename(targetPath, candidate).then(() => { backupPath = candidate; }).catch((err) => {
+        if (err?.code !== 'ENOENT') throw err;
       });
     }
     await rename(tmpPath, targetPath);
     if (backupPath) await unlink(backupPath).catch(() => {});
     return { ok: true, outPath: targetPath };
   } catch (err) {
-    if (backupPath) await rename(backupPath, targetPath).catch(() => {});
+    if (backupPath) {
+      try { await rename(backupPath, targetPath); }
+      catch (rollbackError) {
+        throw Object.assign(new AggregateError([err, rollbackError], `Failed to restore ${label} video; original retained at ${backupPath}`), {
+          backupPublicationUncertain: true, recoveryPath: backupPath,
+        });
+      }
+    }
     await unlink(tmpPath).catch(() => {});
     return { ok: false, reason: `Failed to install ${label} video: ${err.message}` };
   }

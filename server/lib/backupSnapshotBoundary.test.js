@@ -86,6 +86,7 @@ describe('backup snapshot publication admission', () => {
       }
       const owners = backupPublicationAdmissionStatus().publications;
       expect(owners).toEqual([expect.objectContaining({ kind: 'publication', uncertain: true })]);
+      expect(error).toMatchObject({ recoveryPath: owners[0].path, backupPublicationOwner: { id: owners[0].id, path: owners[0].path } });
       await expect(acquireBackupSnapshotCut({ timeoutMs: 10 })).rejects.toMatchObject({
         code: 'BACKUP_SNAPSHOT_BUSY', blockers: [expect.objectContaining({ id: owners[0].id, uncertain: true })],
       });

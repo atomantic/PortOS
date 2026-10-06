@@ -60,12 +60,22 @@ async function waitForLocalCut(deadline) {
   });
 }
 
+function retainUncertainPublication(scope, error) {
+  if (error?.backupPublicationUncertain !== true) return;
+  scope.uncertain = true;
+  // Diagnostic decoration is best effort; a frozen error cannot release authority.
+  try {
+    error.backupPublicationOwner = { ...scope.sharedLease.owner, path: scope.sharedLease.path };
+    error.recoveryPath ??= scope.sharedLease.path;
+  } catch { /* The durable owner remains the recovery authority. */ }
+}
+
 async function withAdmittedBackupAssetPublication(work, timeoutMs) {
   const scope = publicationScope.getStore();
   if (scope?.active) {
     try { return await work(); }
     catch (error) {
-      if (error?.backupPublicationUncertain === true) scope.uncertain = true;
+      retainUncertainPublication(scope, error);
       throw error;
     }
   }
@@ -87,7 +97,7 @@ async function withAdmittedBackupAssetPublication(work, timeoutMs) {
   try {
     return await publicationScope.run(lease, work);
   } catch (error) {
-    if (error?.backupPublicationUncertain === true) lease.uncertain = true;
+    retainUncertainPublication(lease, error);
     throw error;
   } finally {
     lease.active = false;
