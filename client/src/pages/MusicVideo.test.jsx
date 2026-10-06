@@ -699,11 +699,10 @@ describe('MusicVideo render control (#1760)', () => {
     sseState.latest = { type: 'error', error: 'Renderer stopped' };
     await clickNewProject();
     expect(toast.error).toHaveBeenCalledWith('Renderer stopped');
-    // The picker names the project, not the legacy status word. The failure stays on mv-1.
+    // The picker shows only the project name: no status word or shot counts. The failure stays on mv-1.
     const picker = screen.getByLabelText('Project');
-    expect(picker.querySelector('option[value="mv-1"]')).toHaveTextContent('Neon Run');
-    expect(picker.querySelector('option[value="mv-1"]').textContent).not.toMatch(/\bfailed\b/);
-    expect(picker.querySelector('option[value="mv-other"]').textContent).not.toMatch(/\bready\b/);
+    expect(picker.querySelector('option[value="mv-1"]').textContent).toBe(PROJECT_WITH_CLIP.name);
+    expect(picker.querySelector('option[value="mv-other"]').textContent).toBe(other.name);
     expect(screen.queryByText('Renderer stopped')).not.toBeInTheDocument();
     await selectProject(PROJECT_WITH_CLIP.id);
     await openStage('review');
@@ -2972,7 +2971,7 @@ describe('direct production review navigation', () => {
     listMusicVideoProjects.mockResolvedValue([project]);
     render(<MemoryRouter initialEntries={['/music-video/mv-3/review']}><LocationProbe /><NavTo to={-1} /><NavTo to={1} />{MV_ROUTES}</MemoryRouter>);
     const action = await screen.findByRole('button', { name: 'Review art direction' });
-    expect(screen.getByLabelText('Project')).toHaveTextContent('2 document shots');
+    expect(screen.getByLabelText('Project').querySelector(`option[value="${project.id}"]`).textContent).toBe(project.name);
     fireEvent.click(action);
     // The art approval mounts at the bottom of the Look step, so it only exists once the jump lands.
     await waitFor(() => expect(document.getElementById('mv-review-art')).toHaveFocus());
