@@ -430,6 +430,14 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     modules: ['services/games/compile.js'],
   },
   {
+    // Vendored toolkit stays self-contained: the host injects its boundary as
+    // withAssetPublication via createAIToolkit. Prompt/output creation, CLI/API
+    // completion and recording deletion use it; standalone default is a no-op.
+    id: 'toolkit-recording-publication',
+    status: 'admitted',
+    modules: ['lib/aiToolkit/runner.js', 'lib/aiToolkit/internal/runFinalizer.js'],
+  },
+  {
     // Active run transcripts and their file-primary completion metadata are
     // mutated by server and separate CoS/TUI runner processes. Final output
     // replacement precedes metadata; spool batches append output/state in

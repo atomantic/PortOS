@@ -16,8 +16,14 @@ import { blankComments } from './sourceScan.js';
 const SERVER_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BOUNDARY_MODULE = 'lib/backupSnapshotBoundary.js';
 const STATUSES = new Set(['admitted', 'reference-only', 'outstanding']);
-const takesAdmission = (path) => /\bwithBackupAssetPublication\s*\(/
-  .test(blankComments(readFileSync(join(SERVER_ROOT, path), 'utf8')));
+const INJECTED_TOOLKIT_MODULES = new Set([
+  'lib/aiToolkit/runner.js', 'lib/aiToolkit/internal/runFinalizer.js',
+]);
+const takesAdmission = (path) => {
+  const source = blankComments(readFileSync(join(SERVER_ROOT, path), 'utf8')).join('\n');
+  return /\bwithBackupAssetPublication\s*\(/.test(source)
+    || (INJECTED_TOOLKIT_MODULES.has(path) && /\bwithAssetPublication\s*\(/.test(source));
+};
 const admittedModules = new Set(BACKUP_ASSET_OWNERS
   .filter(owner => owner.status === 'admitted')
   .flatMap(owner => owner.modules));
@@ -29,6 +35,15 @@ describe('backup asset owner inventory', () => {
       expect(STATUSES.has(owner.status), owner.id).toBe(true);
       for (const path of owner.modules) expect(existsSync(join(SERVER_ROOT, path)), path).toBe(true);
     }
+  });
+
+  it('admits injected toolkit writers only through the real host boundary', () => {
+    const source = path => blankComments(readFileSync(join(SERVER_ROOT, path), 'utf8')).join('\n');
+    const bootstrap = source('services/bootstrap.js');
+    expect(bootstrap).toMatch(/import\s*\{\s*withBackupAssetPublication\s*\}\s*from ['"]\.\.\/lib\/backupSnapshotBoundary\.js['"]/);
+    expect(bootstrap).toMatch(/createAIToolkit\(\{[\s\S]*?withAssetPublication:\s*withBackupAssetPublication/);
+    expect(source('lib/aiToolkit/index.js')).toMatch(/createRunnerService\(\{\s*withAssetPublication,/);
+    expect(source('lib/aiToolkit/runner.js')).toMatch(/createRunFinalizer\(\{\s*withAssetPublication,/);
   });
 
   it('lists only modules that hold the admission lease as admitted', () => {

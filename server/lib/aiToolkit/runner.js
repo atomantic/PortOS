@@ -174,6 +174,8 @@ export function createRunnerService(config = {}) {
     providerService,
     providerStatusService = null,
     hooks = {},
+    // Host-owned file-plus-record boundary; standalone toolkit has no coordinator.
+    withAssetPublication = work => work(),
     maxConcurrentRuns: _maxConcurrentRuns = 5
   } = config;
 
@@ -452,9 +454,12 @@ export function createRunnerService(config = {}) {
         outputSize: 0
       };
 
-      await atomicWrite(join(runDir, 'metadata.json'), metadata);
-      await atomicWrite(join(runDir, 'prompt.txt'), prompt);
-      await atomicWrite(join(runDir, 'output.txt'), '');
+      await withAssetPublication(async () => {
+        // The record must never name missing prompt/output bytes after a failure.
+        await atomicWrite(join(runDir, 'prompt.txt'), prompt);
+        await atomicWrite(join(runDir, 'output.txt'), '');
+        await atomicWrite(join(runDir, 'metadata.json'), metadata);
+      });
 
       hooks.onRunCreated?.(metadata);
       console.log(`🤖 AI run [${source}]: ${provider.name}/${metadata.model}`);
@@ -570,8 +575,10 @@ export function createRunnerService(config = {}) {
             let metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
             if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) metadata = {};
             Object.assign(metadata, failMetadata);
-            await atomicWrite(outputPath, output);
-            await atomicWrite(metadataPath, metadata);
+            await withAssetPublication(async () => {
+              await atomicWrite(outputPath, output);
+              await atomicWrite(metadataPath, metadata);
+            });
             Object.assign(failMetadata, metadata);
           } catch (writeErr) {
             console.error(`❌ Run ${runId} spawn-error finalization failed: ${writeErr.message}`);
@@ -618,29 +625,29 @@ export function createRunnerService(config = {}) {
         try {
           releaseRun();
 
-          await atomicWrite(outputPath, output);
-
-          const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
-          metadata.endTime = new Date().toISOString();
-          metadata.duration = Date.now() - startTime;
-          metadata.exitCode = code;
-          metadata.success = code === 0;
-          metadata.outputSize = Buffer.byteLength(output);
-
-          if (!metadata.success) {
-            const errorAnalysis = analyzeError(output, code);
-            metadata.error = errorAnalysis.message || `Process exited with code ${code}`;
-            metadata.errorCategory = errorAnalysis.category;
-            metadata.errorAnalysis = errorAnalysis;
-
-            if (errorAnalysis.hasError &&
-                (errorAnalysis.category === ERROR_CATEGORIES.RATE_LIMIT ||
-                 errorAnalysis.category === ERROR_CATEGORIES.USAGE_LIMIT)) {
-              await handleProviderError(provider.id, errorAnalysis, output);
+          const metadata = await withAssetPublication(async () => {
+            await atomicWrite(outputPath, output);
+            const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
+            metadata.endTime = new Date().toISOString();
+            metadata.duration = Date.now() - startTime;
+            metadata.exitCode = code;
+            metadata.success = code === 0;
+            metadata.outputSize = Buffer.byteLength(output);
+            if (!metadata.success) {
+              const errorAnalysis = analyzeError(output, code);
+              metadata.error = errorAnalysis.message || `Process exited with code ${code}`;
+              metadata.errorCategory = errorAnalysis.category;
+              metadata.errorAnalysis = errorAnalysis;
             }
+            await atomicWrite(metadataPath, metadata);
+            return metadata;
+          });
+          const errorAnalysis = metadata.errorAnalysis;
+          if (errorAnalysis?.hasError &&
+              (errorAnalysis.category === ERROR_CATEGORIES.RATE_LIMIT ||
+               errorAnalysis.category === ERROR_CATEGORIES.USAGE_LIMIT)) {
+            await handleProviderError(provider.id, errorAnalysis, output);
           }
-
-          await atomicWrite(metadataPath, metadata);
 
           // Isolate the completion hooks + onComplete from the outer catch — a
           // throwing onRunCompleted must NOT be reinterpreted as a finalization
@@ -700,6 +707,7 @@ export function createRunnerService(config = {}) {
         onTimeout: bound => finalizer.finalize({ type: 'timeout', bound }),
       });
       finalizer = createRunFinalizer({
+        withAssetPublication,
         runId,
         provider,
         startTime,
@@ -1069,7 +1077,7 @@ export function createRunnerService(config = {}) {
       const runDir = join(RUNS_PATH, runId);
       if (!existsSync(runDir)) return false;
 
-      await rm(runDir, { recursive: true });
+      await withAssetPublication(() => rm(runDir, { recursive: true }));
       return true;
     },
 
@@ -1085,7 +1093,7 @@ export function createRunnerService(config = {}) {
         if (existsSync(metadataPath)) {
           const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
           if (metadata.success === false) {
-            await rm(join(RUNS_PATH, runId), { recursive: true });
+            await withAssetPublication(() => rm(join(RUNS_PATH, runId), { recursive: true }));
             deletedCount++;
           }
         }
