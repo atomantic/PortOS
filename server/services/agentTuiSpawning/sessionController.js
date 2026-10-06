@@ -34,7 +34,7 @@ import { readFile } from 'fs/promises';
 import { emitLog } from '../cosEvents.js';
 import { HOST_SHUTDOWN_REASON } from '../../lib/hostShutdown.js';
 import { missingSentinelLogMessage, parseSentinelPayload } from '../../lib/agentSentinel.js';
-import { SENTINEL_COMPLETION_MARKER } from '../../lib/agentOutputMarkers.js';
+import { LIFECYCLE_LINES, SENTINEL_COMPLETION_MARKER } from '../../lib/agentOutputMarkers.js';
 import { resolveMergeGateVerdict, buildMergeGateReprompt } from '../../lib/mergeGateContract.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../../lib/ansiStrip.js';
 import { createClaudeSessionLimitBannerDetector, createImmediateFallbackSignalDetector, createLocalRuntimeOomDetector, createTruncatedResponseDetector } from '../../lib/aiToolkit/errorDetection.js';
@@ -282,7 +282,7 @@ function createPasteRetryController({
     armAttempt();
     write(`\x1b[200~${prompt}\x1b[201~`);
     const attemptSuffix = attemptNum > 1 ? ` [attempt ${attemptNum}/${PASTE_RETRY_MAX_ATTEMPTS}]` : '';
-    appendLine(`📟 Prompt pasted into TUI session ${sessionLabel} (${reason})${attemptSuffix}`);
+    appendLine(LIFECYCLE_LINES.promptPasted({ session: sessionLabel, reason, attemptSuffix }));
 
     // Confirms the TUI actually received the paste before we submit. The
     // paste-commit marker is authoritative — Claude Code and OpenCode can
@@ -314,7 +314,7 @@ function createPasteRetryController({
         const bootNote = bootActive
           ? ` (waiting for ${tuiConfig.command} MCP servers to finish booting)`
           : '';
-        appendLine(`⚠️ Paste verification failed — prompt text not found in buffer, retrying in ${retryDelayMs}ms${bootNote}`);
+        appendLine(LIFECYCLE_LINES.pasteRetrying({ delayMs: retryDelayMs, bootNote }));
         // The failed attempt's buffer stays live during the backoff (see
         // enterBackoff). A busy TUI can paint its authoritative paste marker
         // only after the verification window closes; dropping output in this
@@ -339,11 +339,9 @@ function createPasteRetryController({
       const summary = bootActive
         ? `${tuiConfig.command} did not finish booting its MCP servers within ${bootSecs}s, so the prompt was never delivered. A slow or hung MCP server in your ~/.codex config (e.g. playwright via npx, or a node_repl) blocks codex from accepting input — disable or fix it, or remove it for headless runs.`
         : `${tuiConfig.command} was still initializing and the paste was silently swallowed. The prompt never appeared in the TUI buffer after ${PASTE_RETRY_MAX_ATTEMPTS} attempts.`;
-      appendLine(
-        bootActive
-          ? `❌ Paste never landed after ${bootSecs}s of waiting for MCP servers to boot — prompt never rendered`
-          : `❌ Paste verification failed after ${PASTE_RETRY_MAX_ATTEMPTS} attempts — prompt never rendered`,
-      );
+      appendLine(bootActive
+        ? LIFECYCLE_LINES.pasteNeverLandedMcpBoot({ seconds: bootSecs })
+        : LIFECYCLE_LINES.pasteNeverRendered({ attempts: PASTE_RETRY_MAX_ATTEMPTS }));
       finishStartupFailure('paste-not-rendered', summary)
         .catch(err => emitLog('error', `TUI agent ${agentId} finishStartupFailure(paste-not-rendered) failed: ${err?.message || err}`, { agentId }));
     };
@@ -833,7 +831,7 @@ export function createTuiSessionController({
     sentinelIngested = false;
     await sentinel.remove();
     doneSentinelWatcher = armSentinelWatcher();
-    appendLine(`🔁 Merge Gate not finished (PR still OPEN, no blocker stated) — re-prompted the session (1 nudge only)`);
+    appendLine(LIFECYCLE_LINES.mergeGateReprompted());
     emitLog('warn', `🔁 Merge-gate contract nudge sent for ${agentId} — PR still OPEN with no stated blocker`, { agentId });
     return true;
   };
@@ -1189,7 +1187,7 @@ export function createTuiSessionController({
     sessionPhase = 'abandoned';
     stopRunMachinery();
 
-    appendLine('🛑 PortOS restarted while this agent was running — the run was interrupted, not completed. Its worktree is preserved and the task will resume.');
+    appendLine(LIFECYCLE_LINES.hostRestarted());
     emitLog('warn', `TUI agent ${agentId} interrupted by a PortOS host restart — preserved for resume`, { agentId, phase: 'interrupted' });
     // Concurrent, not sequential: nothing awaits this function (it runs off the
     // PTY-exit handler, racing the shutdown handler's own process.exit), so the
@@ -1218,7 +1216,7 @@ export function createTuiSessionController({
   // would tag a run that went on to RECOVER with the banner as its error.
   const failOverToFallback = (analysis) => {
     immediateFallbackAnalysis = analysis;
-    appendLine(`⚡ Provider fallback signal: ${analysis.message}`);
+    appendLine(LIFECYCLE_LINES.providerFallbackSignal({ message: analysis.message }));
     return finish({
       success: false,
       exitCode: 1,
@@ -1254,7 +1252,7 @@ export function createTuiSessionController({
     // the session is already gone, and a transcript line saying otherwise would
     // send a post-mortem looking for a paste the provider never received.
     if (pasteController?.resubmit()) {
-      appendLine(`🔁 Provider handshake still open — re-submitted the prompt (attempt ${attempt})`);
+      appendLine(LIFECYCLE_LINES.handshakeResubmitted({ attempt }));
     }
   };
 
@@ -1344,7 +1342,7 @@ export function createTuiSessionController({
             emitLog('warn', `TUI agent ${agentId} could not send Claude low-priority command: ${err?.message || err}`, { agentId });
           }
           if (submitted) {
-            appendLine('⏳ Claude Code session limit reached — sent /low-priority from the provider opt-in');
+            appendLine(LIFECYCLE_LINES.claudeSessionLimit());
             claudeLowPriorityResubmitTimer = setTimeout(() => {
               claudeLowPriorityResubmitTimer = null;
               if (sessionPhase !== 'running') return;
@@ -1356,7 +1354,7 @@ export function createTuiSessionController({
               }
               if (promptResubmitted) {
                 claudeLowPriorityPromptResubmitted = true;
-                appendLine('🔁 Re-submitted the task after enabling Claude low-priority mode');
+                appendLine(LIFECYCLE_LINES.claudeLowPriorityResubmitted());
                 return;
               }
               failOverToFallback({
@@ -1393,7 +1391,7 @@ export function createTuiSessionController({
       // is load-bearing — it lets the gate discount the echo of a prompt IT just
       // re-pasted (see SELF_CLEARING_RESUBMIT_ECHO_MS).
       if (selfClearingGate.observe(stripped, now)) {
-        appendLine(`✅ Provider signal cleared — ${tuiConfig.command} is generating again; continuing the run`);
+        appendLine(LIFECYCLE_LINES.providerSignalCleared({ command: tuiConfig.command }));
       }
 
       const fallbackSignal = detectImmediateFallbackSignal(stripped);
@@ -1405,7 +1403,7 @@ export function createTuiSessionController({
       // when one is already open or the provider already recovered).
       if (fallbackSignal?.graceMs > 0) {
         if (selfClearingGate.arm(fallbackSignal, now)) {
-          appendLine(`⏳ Provider signal (self-clearing): ${fallbackSignal.message} — holding the session up to ${Math.round(fallbackSignal.graceMs / 1000)}s for it to clear`);
+          appendLine(LIFECYCLE_LINES.providerSignalHolding({ message: fallbackSignal.message, seconds: Math.round(fallbackSignal.graceMs / 1000) }));
         }
       } else if (fallbackSignal) {
         await failOverToFallback(fallbackSignal);
@@ -1425,7 +1423,7 @@ export function createTuiSessionController({
         if (agyResumeAwaitingComposer && AGY_INPUT_READY_PATTERN.test(stripped)) {
           agyResumeAwaitingComposer = false;
           if (pasteController?.resubmit({ text: STALL_NUDGE_TEXT, label: 'agy resume nudge' })) {
-            appendLine('🔁 agy resumed its conversation — nudged it to continue');
+            appendLine(LIFECYCLE_LINES.agyResumedNudged());
           }
         }
       }
@@ -1433,7 +1431,7 @@ export function createTuiSessionController({
       if (oomSignal) {
         const armed = oomNudgeGate.arm(oomSignal, now);
         if (armed === 'armed') {
-          appendLine('⏳ Local runtime out of GPU memory — will nudge the session to continue if it goes quiet');
+          appendLine(LIFECYCLE_LINES.localOomPending());
         } else if (armed === 'exhausted') {
           // Nudged its way through OOM_NUDGE_MAX_ATTEMPTS and it came back
           // again: the conversation no longer fits this device, and it only
@@ -1452,7 +1450,7 @@ export function createTuiSessionController({
       if (truncationSignal) {
         const armed = truncationNudgeGate.arm(truncationSignal, now);
         if (armed === 'armed') {
-          appendLine('⏳ Response was truncated before completion — will nudge the session to continue if it goes quiet');
+          appendLine(LIFECYCLE_LINES.truncationPending());
         } else if (armed === 'exhausted') {
           // The truncations outlasted every nudge: this provider is not going
           // to finish this response, so hand the task to a fallback provider.
@@ -1488,7 +1486,7 @@ export function createTuiSessionController({
         // then Enter — lands under both of Ink's selection models, whereas a bare
         // digit is immediate-select in some builds and ignored in others.
         session.write(sessionId, `${'\x1b[B'.repeat(Math.max(0, permissionDialog.noOption - 1))}${SUBMIT_KEY}`);
-        appendLine(`🚫 Declined ${tuiConfig.command} permission prompt for ${permissionDialog.toolCall || 'a tool call'} — an unattended run never widens its scope (${permissionDialog.count}/${TOOL_PERMISSION_DECLINE_MAX})`);
+        appendLine(LIFECYCLE_LINES.permissionDeclined({ command: tuiConfig.command, toolCall: permissionDialog.toolCall || 'a tool call', count: permissionDialog.count, max: TOOL_PERMISSION_DECLINE_MAX }));
       }
 
       if (!promptSentAt) {
@@ -1563,7 +1561,7 @@ export function createTuiSessionController({
     const tail = raw
       ? stripAnsi(raw).split('\n').map((s) => s.trimEnd()).filter(Boolean).slice(-12).join('\n')
       : '';
-    appendLine(`❌ ${summary}`);
+    appendLine(LIFECYCLE_LINES.failure({ summary }));
     await finish({
       success: false,
       exitCode: 1,
@@ -1689,7 +1687,7 @@ export function createTuiSessionController({
       if (answeredBeforeComposer) {
         lastOutputAt = now;
         firstOutputAt = null;
-        appendLine(`📟 ${answeredBeforeComposer.message} for session ${sessionLabel}`);
+        appendLine(LIFECYCLE_LINES.startupDialogAnswered({ message: answeredBeforeComposer.message, session: sessionLabel }));
         return;
       }
 
@@ -1725,7 +1723,7 @@ export function createTuiSessionController({
           write: writeToTuiSession,
         });
         if (answeredAtComposer) {
-          appendLine(`📟 ${answeredAtComposer.message} for session ${sessionLabel}`);
+          appendLine(LIFECYCLE_LINES.startupDialogAnswered({ message: answeredAtComposer.message, session: sessionLabel }));
           return;
         }
         if (inputReady.ready && elapsed >= tuiConfig.promptDelayMs) {
@@ -1782,7 +1780,7 @@ export function createTuiSessionController({
         : null;
       if (modelRejection && !sentinelPresent()) {
         immediateFallbackAnalysis = { ...modelRejection, affectedModel: model, configuredModel: model };
-        appendLine(`❌ ${modelRejection.message}`);
+        appendLine(LIFECYCLE_LINES.failure({ summary: modelRejection.message }));
         finish({ success: false, exitCode: 1, error: modelRejection.message, reason: 'model-access-rejected' })
           .catch(err => emitLog('error', `TUI agent ${agentId} model-access finish failed: ${err?.message || err}`, { agentId }));
         return;
@@ -1812,7 +1810,7 @@ export function createTuiSessionController({
           if (wrote === false) return;
           agyResumeGate.recordRelaunch();
           agyResumeAwaitingComposer = true;
-          appendLine(`🔁 agy exited to the shell — relaunched it on conversation ${resumeId.slice(0, 8)} (attempt ${agyResumeGate.attempts}/${AGY_RESUME_MAX_ATTEMPTS})`);
+          appendLine(LIFECYCLE_LINES.agyRelaunched({ conversation: resumeId.slice(0, 8), attempt: agyResumeGate.attempts, max: AGY_RESUME_MAX_ATTEMPTS }));
         }).catch((err) => emitLog('error', `TUI agent ${agentId} agy resume failed: ${err?.message || err}`, { agentId }));
         return;
       }
@@ -1827,7 +1825,7 @@ export function createTuiSessionController({
       const declined = toolPermissionGate.takeNudge(now, lastOutputAt);
       if (declined) {
         if (pasteController?.resubmit({ text: TOOL_PERMISSION_NUDGE_TEXT, label: 'declined-permission nudge' })) {
-          appendLine(`🔁 Nudged the session to continue after declined permission prompt ${declined}`);
+          appendLine(LIFECYCLE_LINES.permissionDeclineNudged({ declined }));
         }
         return;
       }
@@ -1837,7 +1835,7 @@ export function createTuiSessionController({
       const nudge = oomNudgeGate.takeNudge(now, lastOutputAt);
       if (nudge) {
         if (pasteController?.resubmit({ text: OOM_NUDGE_TEXT, label: 'local-runtime OOM nudge' })) {
-          appendLine(`🔁 Local runtime OOM — nudged the session to continue (attempt ${nudge}/${OOM_NUDGE_MAX_ATTEMPTS})`);
+          appendLine(LIFECYCLE_LINES.localOomNudged({ attempt: nudge, max: OOM_NUDGE_MAX_ATTEMPTS }));
         }
         return;
       }
@@ -1846,7 +1844,7 @@ export function createTuiSessionController({
       const truncationNudge = truncationNudgeGate.takeNudge(now, lastOutputAt);
       if (truncationNudge) {
         if (pasteController?.resubmit({ text: TRUNCATION_NUDGE_TEXT, label: 'truncated-response nudge' })) {
-          appendLine(`🔁 Response was truncated before completion — nudged the session to continue (attempt ${truncationNudge}/${TRUNCATION_NUDGE_MAX_ATTEMPTS})`);
+          appendLine(LIFECYCLE_LINES.truncationNudged({ attempt: truncationNudge, max: TRUNCATION_NUDGE_MAX_ATTEMPTS }));
         }
         return;
       }
@@ -1872,7 +1870,7 @@ export function createTuiSessionController({
         // (a model looping on "continue"). Either way more nudges won't help. There is no ceiling left to reap it, so say
         // so loudly and badge the card — an agent nobody can see is stuck is the
         // condition this gate exists to end, and only a human can end this one.
-        appendLine(`🛑 Session still idle after ${stallNudgeGate.nudgesSent} nudges — it is not finishing; open the Shell tab to take it over`);
+        appendLine(LIFECYCLE_LINES.stallGaveUp({ nudges: stallNudgeGate.nudgesSent }));
         emitLog('warn', `🛑 TUI agent ${agentId} is wedged — still idle after ${stallNudgeGate.nudgesSent} stall nudges`, { agentId });
         persistence.updateAgent(agentId, { metadata: { phase: 'stalled' } }).catch((err) =>
           emitLog('error', `TUI agent ${agentId} stalled-phase update failed: ${err?.message || err}`, { agentId }));
@@ -1883,7 +1881,7 @@ export function createTuiSessionController({
         return;
       }
       if (pasteController?.resubmit({ text: STALL_NUDGE_TEXT, label: 'stalled-session nudge' })) {
-        appendLine(`🔁 Session idle with the task unfinished — nudged it to continue (attempt ${stalled}/${STALL_NUDGE_MAX_ATTEMPTS}, ${stallNudgeGate.nudgesSent}/${STALL_NUDGE_MAX_TOTAL} this run)`);
+        appendLine(LIFECYCLE_LINES.stallNudged({ attempt: stalled, max: STALL_NUDGE_MAX_ATTEMPTS, sent: stallNudgeGate.nudgesSent, total: STALL_NUDGE_MAX_TOTAL }));
       }
     }, PROVIDER_SIGNAL_POLL_MS);
 

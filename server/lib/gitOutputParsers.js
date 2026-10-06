@@ -86,8 +86,8 @@ export function parseSubmoduleStatusLine(line) {
  * Two shapes reach this:
  *   - A TUI agent's `output.txt`, which is lifecycle telemetry plus the
  *     `.agent-done` sentinel summary ingested behind
- *     `SENTINEL_COMPLETION_MARKER`. When that marker is present, everything
- *     after it IS the agent's summary — nothing before it was ever the agent
+ *     `SENTINEL_COMPLETION_MARKER`. When that marker is present, the agent's
+ *     summary is what follows it — nothing before it was ever the agent
  *     talking, so the tool-line walk must not be allowed to reach back into it.
  *   - A CLI agent's streamed output, which ends with a summary after the last
  *     tool-call artifact. That's the fallback walk.
@@ -111,15 +111,17 @@ export function extractAgentSummary(output) {
     ? output.slice(markerIdx + SENTINEL_COMPLETION_MARKER.length)
     : output.slice(-4000);
   const lines = region.split('\n');
+  // A tail cut mid-line leaves a fragment no lifecycle shape can recognize.
+  if (markerIdx < 0 && output.length > 4000 && lines.length > 1) lines.shift();
 
   let summaryLines;
   if (markerIdx >= 0) {
-    // Everything past the marker is the sentinel, appended verbatim and
-    // contiguously by `ingestDoneSentinel` at the top of finalize — no other
-    // `appendLine` runs after it. So take it as-is: filtering here could only
-    // ever delete the agent's own words (a summary is free to contain a line
-    // like "✅ Tests passed").
-    summaryLines = lines;
+    // Past the marker is the sentinel summary — but not only that: a Merge Gate
+    // re-prompt (#5876) appends its own line after it and reopens the run, so a
+    // run that never writes a second sentinel ends with that line and any
+    // nudges after it. The strip matches PortOS's own message shapes only, so
+    // an agent's "✅ Tests passed" survives it.
+    summaryLines = stripLifecycleLines(lines);
   } else {
     // Find the last tool-call artifact line index.
     // Everything after it is the agent's final summary.

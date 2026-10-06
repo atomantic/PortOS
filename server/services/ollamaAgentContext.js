@@ -33,6 +33,7 @@ import {
   resolveOllamaContextLength
 } from '../lib/ollamaContext.js'
 import { ensureContextWindow, getBaseUrl, getModelCapabilities, getRuntimeContextLength } from './ollamaManager.js'
+import { LIFECYCLE_LINES } from '../lib/agentOutputMarkers.js'
 
 /**
  * Prepare the Ollama daemon for an agent harness run.
@@ -78,7 +79,7 @@ export async function ensureOllamaAgentContext(provider, { env = process.env, mo
     applied: false, reason: 'error', error: err.message
   }))
   const warning = result.error
-    ? `⚠️ Could not reload Ollama at a ${contextLength}-token window (${result.error}) — ${providerName || 'the run'} continues on the current window.`
+    ? LIFECYCLE_LINES.ollamaReloadFailed({ contextLength, error: result.error, who: providerName || 'the run' })
     : null
   if (warning) console.warn(warning)
   return { skipped: false, contextLength, applied: !!result.applied, warning }

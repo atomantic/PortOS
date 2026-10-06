@@ -40,6 +40,7 @@ import { resolveAgentCliCwd } from '../lib/spawnCwd.js';
 import { doneSentinelPath as resolveDoneSentinelPath } from '../lib/agentSentinel.js';
 import { createAgentSentinelAccess } from './agentSentinelWatcher.js';
 import { PTY_UNAVAILABLE_PREFIX } from '../lib/ptySpawnDiagnostics.js';
+import { LIFECYCLE_LINES } from '../lib/agentOutputMarkers.js';
 import { finalizeAgentRunCommon, shouldAbandonAgentRun } from './agentRunFinalize.js';
 import { leavesPrForHuman } from '../lib/prDisposition.js';
 import { resolvePrOwnership, PR_OPENED_BY } from '../lib/slashdoInvocation.js';
@@ -443,7 +444,7 @@ export async function spawnTuiAgent({
     ? await ensureOllamaAgentContext(provider, { model })
     : null;
   if (ollamaContext?.warning) appendLine(ollamaContext.warning);
-  if (ollamaContext?.applied) appendLine(`🪟 Reloaded Ollama at a ${ollamaContext.contextLength}-token context window`);
+  if (ollamaContext?.applied) appendLine(LIFECYCLE_LINES.ollamaContextApplied({ contextLength: ollamaContext.contextLength }));
 
   // A spawn failure here (a runner 400 for a command missing from its allowlist,
   // an unreachable runner, a PTY that won't open) used to propagate raw out of
@@ -489,7 +490,7 @@ export async function spawnTuiAgent({
     session.ptyProcess?.onExit?.(() => { maintenanceExited = true; settleMaintenance(); });
   } catch (err) {
     const message = err?.message || String(err);
-    appendLine(`❌ Failed to start ${provider.name || provider.id} TUI: ${message}`);
+    appendLine(LIFECYCLE_LINES.startFailed({ provider: provider.name || provider.id, message }));
     // The durable runner probes the configured executable before it opens a
     // PTY. Distinguish that deterministic configuration failure from a runner
     // outage/refusal so it is blocked with the existing actionable
@@ -573,7 +574,7 @@ export async function spawnTuiAgent({
       },
     });
     if (session.adopted) {
-      appendLine(`🔁 Spawn acknowledgement lost (${session.adoptedReason}) — re-attached to the live runner PTY`);
+      appendLine(LIFECYCLE_LINES.spawnAdopted({ reason: session.adoptedReason }));
       emitLog('warn', `TUI agent ${agentId} spawn acknowledgement was lost; adopted the live runner PTY`, { agentId, taskId: task.id });
     }
   }
@@ -640,7 +641,7 @@ export async function spawnTuiAgent({
     }
   });
 
-  appendLine(`📟 TUI session started: ${sessionId.slice(0, 8)} (${tuiConfig.commandLine})`);
-  appendLine(`💡 Open the Shell tab for live TUI output — this panel only logs lifecycle events.`);
+  appendLine(LIFECYCLE_LINES.sessionStarted({ session: sessionId.slice(0, 8), commandLine: tuiConfig.commandLine }));
+  appendLine(LIFECYCLE_LINES.shellTabHint());
   return agentId;
 }
