@@ -467,6 +467,11 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cle
         // createJobFailureFinalizer's doc comment in sseUtils.js.
         finalizeJobFailure(job, jobId, proc, `Codex post-exit handler failed: ${err?.message || err}`, { force: true });
       }
+    }).catch(err => {
+      // Admission can reject before the publication callback is entered.
+      // EventEmitter does not await this listener, so settle the job here too.
+      clearTimeout(timeoutTimer);
+      finalizeJobFailure(job, jobId, proc, `Codex publication admission failed: ${err?.message || err}`);
     });
   });
 }

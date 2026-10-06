@@ -2,6 +2,15 @@ import { acquireBackupSnapshotCut } from '../../lib/backupSnapshotBoundary.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { posixPath } from '../../lib/testHelper.js';
 
+const admissionFault = vi.hoisted(() => ({ error: null }));
+vi.mock('../../lib/backupSnapshotBoundary.js', async original => {
+  const actual = await original();
+  return { ...actual, withBackupAssetPublication: (...args) => {
+    if (admissionFault.error) return Promise.reject(admissionFault.error);
+    return actual.withBackupAssetPublication(...args);
+  } };
+});
+
 import { mkdir, writeFile, rm, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -503,4 +512,21 @@ describe('grok provider — checkConnection', () => {
     expect(status.connected).toBe(false);
     expect(status.reason).toMatch(/exited 3/);
   });
+});
+
+
+it('settles admission rejection from the actual close event and clears the active slot', async () => {
+  const job = await grok.generateImage({ prompt: 'admission failure' });
+  const child = spawnCalls[0].child;
+  const failed = new Promise(resolve => imageGenEvents.once('failed', resolve));
+  admissionFault.error = new Error('injected publication admission refusal');
+  try {
+    child.emit('close', 0, null);
+    expect((await failed).error).toContain('injected publication admission refusal');
+    expect(grok.getActiveJob()).toBeNull();
+    const response = { writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: new EventEmitter() };
+    expect(grok.attachSseClient(job.jobId, response)).toBe(true);
+    expect(response.write.mock.calls[0][0]).toContain('injected publication admission refusal');
+    response.req.emit('close');
+  } finally { admissionFault.error = null; }
 });
