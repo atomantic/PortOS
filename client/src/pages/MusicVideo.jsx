@@ -341,10 +341,10 @@ export default function MusicVideo() {
   });
   const renderJob = useMusicVideoRenderJob({
     project: selected,
-    // A cancelled or dropped render says nothing about the project's status: ask
-    // the server, or the board keeps showing a render that is gone (#9940).
+    // A finished, cancelled or dropped render updates or resets the project's
+    // status and renderDependencyState: ask the server to sync the full record (#9940).
     onSettled: (reason, projectId) => {
-      if (reason === 'complete' || reason === 'error') return;
+      if (reason === 'error') return;
       getMusicVideoProject(projectId, { silent: true }).then(replaceProject).catch(() => {});
     },
     onRendered: (projectId, result) => patchProject(projectId, (project) => ({

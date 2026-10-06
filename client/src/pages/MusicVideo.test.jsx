@@ -610,6 +610,35 @@ describe('MusicVideo render control (#1760)', () => {
     await waitFor(() => expect(renderMusicVideoProject).toHaveBeenCalledWith('mv-1', { silent: true }));
   });
 
+  it('reloads the project when render finishes so stale render status clears and new render loads', async () => {
+    const staleProject = {
+      ...PROJECT_WITH_CLIP,
+      renderHistoryId: 'rh-old',
+      renderDependencyState: { status: 'stale', reasons: ['Scene clip changed'] },
+    };
+    const freshProject = {
+      ...PROJECT_WITH_CLIP,
+      renderHistoryId: 'rh-new',
+      status: 'complete',
+      renderDependencyState: { status: 'current', reasons: [] },
+    };
+    let currentProject = staleProject;
+    getMusicVideoProject.mockImplementation(async (id) => (id === staleProject.id ? currentProject : null));
+    await openProject(staleProject, 'review');
+    expect(screen.getAllByText(/Final render is out of date/i).length).toBeGreaterThan(0);
+
+    sseState.latest = null;
+    currentProject = freshProject;
+    fireEvent.click(screen.getByRole('button', { name: /^Render final$/ }));
+    await screen.findByTitle('Cancel render');
+
+    sseState.latest = { type: 'complete', result: { id: 'rh-new' } };
+    forceRerender();
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Music video rendered'));
+    await waitFor(() => expect(getMusicVideoProject).toHaveBeenCalledWith(staleProject.id, { silent: true }));
+    await waitFor(() => expect(screen.queryAllByText(/Final render is out of date/i)).toHaveLength(0));
+  });
+
   it('reserves preparation across project navigation and applies completion to the captured project', async () => {
     const other = { ...PROJECT_WITH_CLIP, id: 'mv-other', name: 'Other Project' };
     listMusicVideoProjects.mockResolvedValue([PROJECT_WITH_CLIP, other]);
