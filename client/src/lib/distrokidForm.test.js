@@ -2,7 +2,7 @@
 // browser through page.evaluate, so they are tested here, against a fixture of
 // the upload form's fields (#10337), in the client's DOM environment.
 import { describe, it, expect, beforeEach } from 'vitest';
-import { discloseDistrokidAi, fillDistrokidFields, untickDistrokidExtras } from '../../../server/lib/distrokidForm.js';
+import { discloseDistrokidAi, fillDistrokidFields, setDistrokidArtist, untickDistrokidExtras } from '../../../server/lib/distrokidForm.js';
 
 const radios = (name, values) => values.map((v) => `<label><input type="radio" name="${name}" value="${v}">${v}</label>`).join('');
 const options = (values) => values.map((v) => `<option value="${v}">${v}</option>`).join('');
@@ -113,5 +113,40 @@ describe('DistroKid form recipe', () => {
     const { missed } = fillDistrokidFields(PLAN);
     expect(missed).toEqual(['store profiles: new on all five']);
     expect(document.querySelector('input[name=spotifyArtistID]:checked')).toBeNull();
+  });
+});
+
+describe('DistroKid artist', () => {
+  it('types the artist into the field a multi-artist plan shows', () => {
+    document.body.innerHTML = '<input id="artistName" name="bandname">';
+    expect(setDistrokidArtist('Example Artist')).toEqual({ ok: true, fixed: null });
+    expect(document.querySelector('#artistName').value).toBe('Example Artist');
+  });
+
+  it('picks the artist from a picker by its shown name', () => {
+    document.body.innerHTML = '<select name="bandname"><option value="">Pick</option><option value="a1">Example Artist</option></select>';
+    expect(setDistrokidArtist('example artist')).toEqual({ ok: true, fixed: null });
+    expect(document.querySelector('select').value).toBe('a1');
+  });
+
+  it("accepts a single-artist account's hidden artist when it matches", () => {
+    document.body.innerHTML = '<input type="hidden" id="artistName" name="bandname" value="exampleartist">';
+    expect(setDistrokidArtist('ExampleArtist')).toEqual({ ok: true, fixed: 'exampleartist' });
+  });
+
+  it('matches the hidden artist across case and spacing, and reports the account spelling', () => {
+    document.body.innerHTML = '<input type="hidden" id="artistName" name="bandname" value=" exampleartist ">';
+    expect(setDistrokidArtist('Example Artist')).toEqual({ ok: true, fixed: 'exampleartist' });
+    expect(setDistrokidArtist(' Example  Artist ')).toEqual({ ok: true, fixed: 'exampleartist' });
+  });
+
+  it("names the account's own artist when it differs", () => {
+    document.body.innerHTML = '<input type="hidden" id="artistName" name="bandname" value="exampleartist">';
+    expect(setDistrokidArtist('Someone Else')).toEqual({ ok: false, fixed: 'exampleartist' });
+  });
+
+  it('fails when the form has no artist field', () => {
+    document.body.innerHTML = '';
+    expect(setDistrokidArtist('Example Artist')).toEqual({ ok: false, fixed: null });
   });
 });

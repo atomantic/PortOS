@@ -16,7 +16,7 @@
  * than failing the whole draft.
  */
 import { PUBLISH_STEP_TIMEOUT_MS as T, loginRequired, step } from './browser.js';
-import { discloseDistrokidAi, fillDistrokidFields, untickDistrokidExtras } from '../../../lib/distrokidForm.js';
+import { discloseDistrokidAi, fillDistrokidFields, setDistrokidArtist, untickDistrokidExtras } from '../../../lib/distrokidForm.js';
 
 const label = 'DistroKid';
 const UPLOAD_URL = 'https://distrokid.com/new/';
@@ -58,8 +58,14 @@ export const distrokidAdapter = {
     // The song count rebuilds the form, so it goes first.
     await soft('number of songs (1)', () => setValue(page, '#howManySongsOnThisAlbum, select[name=howmanysongs]', '1'));
     await page.waitForTimeout(1500);
+    let releasedAs = payload.artist;
     await step(label, 'set the artist', async () => {
-      if (!(await setValue(page, '#artistName, [name=bandname]', payload.artist))) throw new Error(`no artist field accepted "${payload.artist}"`);
+      // An account with one artist fixes it in a hidden field, so it is checked, not typed.
+      const { ok, fixed } = await page.evaluate(setDistrokidArtist, payload.artist);
+      if (ok) { releasedAs = fixed || payload.artist; return; }
+      throw new Error(fixed
+        ? `this DistroKid account releases as "${fixed}", not "${payload.artist}"`
+        : `no artist field accepted "${payload.artist}"`);
     });
     await step(label, 'upload the cover', () => page.locator('#artwork, input[type=file][name=artwork]').first().setInputFiles(payload.cover.path, { timeout: T }));
     await step(label, 'upload the audio', () => page.locator('#js-track-upload-1').first().setInputFiles(payload.audio.path, { timeout: T }));
@@ -102,7 +108,7 @@ export const distrokidAdapter = {
 
     const aiParts = [payload.ai.lyrics && 'lyrics', payload.ai.music && 'music', payload.ai.vocals && 'all of the audio'].filter(Boolean);
     return {
-      artist: payload.artist,
+      artist: releasedAs,
       title: payload.title,
       songwriter: `${payload.songwriter.first} ${payload.songwriter.last} (${payload.songwriterRole === 'both' ? 'music and lyrics' : payload.songwriterRole})`,
       releaseDate: payload.releaseDate || 'As soon as possible',
