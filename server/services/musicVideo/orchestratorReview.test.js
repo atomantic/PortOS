@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseOrchestratorVerdict } from './orchestratorReview.js';
+import { buildArtReviewPrompt, parseOrchestratorVerdict } from './orchestratorReview.js';
 
 // The verdict parser is the boundary between free model prose and what an
 // orchestrated run applies to the project, so its refusals are pinned here.
@@ -23,5 +23,17 @@ describe('parseOrchestratorVerdict', () => {
     expect(parseOrchestratorVerdict(JSON.stringify({ verdict: 'approve', changes: [{ text: 'no shot' }, { sceneId: 's1', text: 'Tighter' }],
       fill: [{ sceneId: 's1', camera: 'Push-in', bogus: 'x' }] }), 'storyboard'))
       .toMatchObject({ changes: [{ sceneId: 's1', text: 'Tighter' }], fill: [{ sceneId: 's1', camera: 'Push-in' }] });
+  });
+});
+
+// After a text revision the guide sheet is not redrawn, so a re-review must not
+// keep asking the text to match a sheet drawn from the earlier text.
+describe('buildArtReviewPrompt', () => {
+  it('tells a re-review that the sheet predates its text revisions', () => {
+    const base = { prompt: 'p', concept: {}, draft: { cast: 'A dancer' }, hasImage: true };
+    expect(buildArtReviewPrompt(base)).toContain('does the sheet match the text');
+    const again = buildArtReviewPrompt({ ...base, sheetPredatesEdits: true });
+    expect(again).toContain('drawn before your earlier text revisions');
+    expect(again).not.toContain('does the sheet match the text');
   });
 });

@@ -77,14 +77,14 @@ Return JSON only:
 {"verdict":"approve|retake","score":1-10,"notes":"why"}`;
 }
 
-export function buildArtReviewPrompt({ prompt, guidance, concept, draft, hasImage }) {
-  return `You are the director reviewing the ART DIRECTION for a music video before any shot is planned or rendered. ${UNTRUSTED}${hasImage ? ' The attached image is the cast and environment sheet.' : ''}
+export function buildArtReviewPrompt({ prompt, guidance, concept, draft, hasImage, sheetPredatesEdits = false }) {
+  return `You are the director reviewing the ART DIRECTION for a music video before any shot is planned or rendered. ${UNTRUSTED}${hasImage ? ` The attached image is the cast and environment sheet.${sheetPredatesEdits ? ' It was drawn before your earlier text revisions, so judge the text on its own and do not ask it to match the sheet.' : ''}` : ''}
 
 ${ideaBlock({ prompt, guidance })}
 ${block('VISUAL CONCEPT', [concept?.prompt, concept?.style].filter(Boolean).join('\n'))}
 ${ORCHESTRATOR_ART_FIELDS.map((key) => block(key.toUpperCase(), draft?.[key])).join('\n')}
 
-Judge: is the cast specific and consistent enough to draw the same subject in every shot, do environments, visual language and motion language fit the concept and each other${hasImage ? ', and does the sheet match the text' : ''}? ${RULES}
+Judge: is the cast specific and consistent enough to draw the same subject in every shot, do environments, visual language and motion language fit the concept and each other${hasImage && !sheetPredatesEdits ? ', and does the sheet match the text' : ''}? ${RULES}
 Return JSON only:
 {"verdict":"approve|revise","score":1-10,"notes":"why","changes":[{"field":"cast|environments|visualLanguage|motionLanguage","text":"the COMPLETE replacement text for that field"}]}
 List changes only when verdict is revise.`;

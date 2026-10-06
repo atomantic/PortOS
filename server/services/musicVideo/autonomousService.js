@@ -235,10 +235,14 @@ const orchestratorIdentity = (run, route) => ({ kind: 'orchestrator', runId: run
   providerId: route?.providerId || run.brief.orchestrator.providerId, model: route?.model || run.brief.orchestrator.model || null,
   authorizedBy: run.brief.orchestratorAuthorizedBy || null });
 
-/** Append one decision to the run's review log (oldest dropped past the cap). */
-async function recordReview(projectId, entry) {
+/**
+ * Append one decision to the run's review log (oldest dropped past the cap).
+ * `output` lands in the same write, so a revision is never logged without the
+ * revised value a retry resumes from.
+ */
+async function recordReview(projectId, entry, output) {
   const at = new Date().toISOString();
-  const { run } = await patchRun(projectId, (r) => ({ orchestration: { ...r.orchestration,
+  const { run } = await patchRun(projectId, (r) => ({ ...(output ? { output } : {}), orchestration: { ...r.orchestration,
     reviews: [...(r.orchestration?.reviews || []), { id: randomUUID(), at, ...entry }].slice(-ORCHESTRATOR_REVIEW_LOG_MAX) } }));
   console.log(`🎬 Autonomous music video ${short(run.id)} orchestrator ${entry.verdict} ${entry.checkpoint}${entry.score ? ` (${entry.score}/10)` : ''}`);
   return run;
@@ -258,16 +262,17 @@ const reviewEntry = (checkpoint, review, overrides = {}) => ({
 
 /**
  * Review a text checkpoint until it is approved: `apply(review)` returns the
- * revised value, or null when the review carried nothing to apply. Returns the
- * accepted value.
+ * revised value, or null when the review carried nothing to apply. `persist(value)`
+ * names the run output that holds the value under review, written with each
+ * revision so a retry judges the latest one. Returns the accepted value.
  */
-async function reviewUntilApproved(projectId, run, checkpoint, { value, prompt, apply }) {
+async function reviewUntilApproved(projectId, run, checkpoint, { value, prompt, apply, persist }) {
   let current = value;
   for (;;) {
     const review = await askReview(run, checkpoint, prompt(current));
     const revised = review.verdict === 'revise' ? apply(review, current) : null;
     if (revised !== null && revisionsSpent(await latestRun(projectId), checkpoint) < reviewLimit(run)) {
-      await recordReview(projectId, reviewEntry(checkpoint, review, { verdict: 'revise' }));
+      await recordReview(projectId, reviewEntry(checkpoint, review, { verdict: 'revise' }), persist(revised));
       current = revised;
       continue;
     }
@@ -283,13 +288,15 @@ async function orchestrateLyrics(projectId, run, lyrics) {
     value: lyrics,
     prompt: (current) => buildLyricsReviewPrompt({ ...ideaOf(run), title: run.output.title, description: run.output.musicalDescription, lyrics: current }),
     apply: (review) => review.lyrics || null,
+    persist: (revised) => ({ lyricsForReview: revised }),
   });
 }
 
 /** The sound & look, judged before the song is made and the mood board created from it. */
 async function orchestrateStyle(projectId, run) {
   const { buildStyleReviewPrompt } = await reviewModule();
-  const value = { sunoStyle: run.output.sunoStyle, concept: run.output.concept || {}, moodBoard: run.output.moodBoard || {} };
+  // A retried review resumes from the last revision rather than the first draft.
+  const value = run.output.styleDraft || { sunoStyle: run.output.sunoStyle, concept: run.output.concept || {}, moodBoard: run.output.moodBoard || {} };
   return reviewUntilApproved(projectId, run, 'style', {
     value,
     prompt: (current) => buildStyleReviewPrompt({ ...ideaOf(run), title: run.output.title, description: run.output.musicalDescription, ...current }),
@@ -298,6 +305,7 @@ async function orchestrateStyle(projectId, run) {
       concept: { ...current.concept, ...(review.conceptStyle ? { style: review.conceptStyle } : {}) },
       moodBoard: { ...current.moodBoard, ...(review.lookPrompt ? { stylePrompt: review.lookPrompt } : {}) },
     } : null),
+    persist: (revised) => ({ styleDraft: revised }),
   });
 }
 
@@ -467,7 +475,9 @@ async function reviewArt(run, project) {
   const draft = project.productionReview?.draft || {};
   const guide = project.devArtifacts?.find((a) => a.id === draft.guideArtifactId && !a.deleted);
   const image = guide?.mimeType?.startsWith('image/') ? await deps.guideImagePath(guide).catch(() => null) : null;
-  return askReview(run, 'art', buildArtReviewPrompt({ ...ideaOf(run), concept: project.concept, draft, hasImage: !!image }), image ? [image] : []);
+  // The guide sheet is not redrawn after a text revision, so a re-review is told it shows the earlier text.
+  const sheetPredatesEdits = !!image && revisionsSpent(await latestRun(project.id), 'art') > 0;
+  return askReview(run, 'art', buildArtReviewPrompt({ ...ideaOf(run), concept: project.concept, draft, hasImage: !!image, sheetPredatesEdits }), image ? [image] : []);
 }
 
 async function reviewStoryboard(run, project) {
@@ -484,7 +494,11 @@ async function reviewStoryboard(run, project) {
   return askReview(run, 'storyboard', buildStoryboardReviewPrompt({ ...ideaOf(run), concept: project.concept, shots, incomplete }));
 }
 
-/** Apply a revise verdict to a production stage; returns false when nothing could be applied. */
+/**
+ * Apply a revise verdict to a production stage; returns false when nothing could
+ * be applied. A storyboard re-plan that fails throws, so the stage fails and a
+ * Retry asks again rather than approving shots the orchestrator asked to change.
+ */
 async function applyProductionRevision(projectId, run, stage, review) {
   if (stage === 'art') {
     if (!review.changes.length) return false;
@@ -504,11 +518,14 @@ async function applyProductionRevision(projectId, run, stage, review) {
   const { route, ...plan } = await llmOf(run, 'plan');
   const failure = await deps.reviseFromFeedback(projectId, { stage, ...plan }).then(() => null, (err) => err);
   const created = ((await getProject(projectId)).productionReview?.feedback || []).filter((f) => !before.has(f.id) && !f.resolvedAt);
-  const resolution = failure ? `The re-plan failed (${trimTo(failure.message, 200)}); kept the shot.` : 'Revised by the orchestrator.';
+  const resolution = failure ? `The re-plan failed (${trimTo(failure.message, 200)}); the orchestrator will ask again on Retry.` : 'Revised by the orchestrator.';
   for (const entry of created) {
     await deps.closeFeedback(projectId, { feedbackId: entry.id, resolution, reviewer: orchestratorIdentity(run, review.route) });
   }
-  return !failure;
+  if (failure) {
+    throw runError(502, 'ORCHESTRATOR_REVISION_FAILED', `The storyboard re-plan failed: ${trimTo(failure.message, 200)}`);
+  }
+  return true;
 }
 
 /**
@@ -715,7 +732,7 @@ const STAGES = {
     // The orchestrator judges the sound & look before the mood board is made from it.
     if (isOrchestratedRun(run) && !run.output.styleReviewed) {
       const reviewed = await orchestrateStyle(project.id, run);
-      ({ run } = await save({ output: { ...reviewed, styleReviewed: true } }));
+      ({ run } = await save({ output: { ...reviewed, styleDraft: null, styleReviewed: true } }));
     }
     return createRunStyle({ project, run });
   },

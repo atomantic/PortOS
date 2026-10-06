@@ -889,6 +889,7 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     doubles.orchestrate = vi.fn(async ({ prompt }) => {
       const checkpoint = checkpointOf(prompt);
       const answer = (answers[checkpoint] || []).shift() || { verdict: 'approve', score: 8, notes: 'Ready.' };
+      if (answer instanceof Error) throw answer;
       return { text: `Here is my call:\n${JSON.stringify(answer)}`, route: { providerId: 'orch', model: 'judge' }, visual: false };
     });
     doubles.alignLyrics = stub('align', async () => {});
@@ -932,6 +933,26 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     expect(runOf().orchestration.reviews.find((r) => r.checkpoint === 'song')).toMatchObject({ verdict: 'approve', notes: expect.stringMatching(/spends credits/) });
   });
 
+  it('resumes a retried review from the latest revision instead of the first draft', async () => {
+    answers.lyrics = [{ verdict: 'revise', notes: 'Sharper hook.', lyrics: 'take 2' }, new Error('provider timed out')];
+    answers.style = [{ verdict: 'revise', notes: 'Name the tempo.', sunoStyle: 'synthwave, 96 bpm' }, new Error('provider timed out')];
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], songSource: 'local', orchestrator: ORCHESTRATOR }, { autoApproveAuthorized: true });
+    await settled('failed');
+    expect(runOf().output.lyricsForReview).toBe('take 2');
+
+    await service.resumeAutonomousVideo('mv-auto');
+    await settled('failed');
+    expect(runOf().output).toMatchObject({ lyrics: 'take 2', styleDraft: expect.objectContaining({ sunoStyle: 'synthwave, 96 bpm' }) });
+    const judged = doubles.orchestrate.mock.calls.map(([{ prompt }]) => prompt);
+    expect(judged.filter((prompt) => checkpointOf(prompt) === 'lyrics').at(-1)).toContain('take 2');
+
+    await service.resumeAutonomousVideo('mv-auto');
+    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+    expect(doubles.orchestrate.mock.calls.map(([{ prompt }]) => prompt).filter((prompt) => checkpointOf(prompt) === 'style').at(-1)).toContain('96 bpm');
+    expect(runOf().output).toMatchObject({ sunoStyle: 'synthwave, 96 bpm', styleDraft: null, lyricsForReview: null });
+    expect(reviews()).toEqual(['lyrics:revise', 'lyrics:approve', 'style:revise', 'style:approve', 'song:approve']);
+  });
+
   it('clears art, lyric timing and storyboard like a director, then logs its look at the final video', async () => {
     creativeReview.real = true;
     const actual = await vi.importActual('./productionReview.js');
@@ -952,6 +973,8 @@ describe('orchestrated mode (brief.orchestrator)', () => {
       project.scenes = project.scenes.map((scene) => ({ ...scene, prompt: 'Close on the scarf' }));
       project.productionReview.draft.storyboard = project.productionReview.draft.storyboard.map((shot) => ({ ...shot, action: 'Close on the scarf' }));
     });
+    // The first re-plan fails: the stage fails for a Retry instead of approving the unchanged shot.
+    doubles.reviseFromFeedback.mockRejectedValueOnce(new Error('planner offline'));
     service.__setAutonomousDepsForTests(doubles);
     doubles.analyzeSong.mockImplementation(async () => {
       Object.assign(store.get('mv-auto'), {
@@ -972,20 +995,24 @@ describe('orchestrated mode (brief.orchestrator)', () => {
       });
     });
     answers.art = [{ verdict: 'revise', notes: 'The cast is too vague to draw twice.', changes: [{ field: 'cast', text: 'A paper dancer in a red scarf' }] }];
-    answers.storyboard = [
-      { verdict: 'revise', notes: 'The chorus needs a closer shot.', changes: [{ sceneId: 'shot', text: 'Tighter on the scarf' }], fill: [{ sceneId: 'shot', camera: 'Slow push-in' }] },
-      { verdict: 'approve', notes: 'Clear.' },
-    ];
+    const closer = { verdict: 'revise', notes: 'The chorus needs a closer shot.', changes: [{ sceneId: 'shot', text: 'Tighter on the scarf' }], fill: [{ sceneId: 'shot', camera: 'Slow push-in' }] };
+    answers.storyboard = [closer, closer, { verdict: 'approve', notes: 'Clear.' }];
     answers.final = [{ verdict: 'revise', score: 6, notes: 'The ending drags.', issues: [{ atSec: 18, text: 'Static hold' }] }];
 
     await service.startAutonomousVideo({ prompt: 'p', tools: ['code:render'], authoring: { providerId: 'example', model: 'example-code' }, orchestrator: ORCHESTRATOR },
       { autoApproveAuthorized: true });
+    await settled('failed');
+    expect(runOf()).toMatchObject({ errorCode: 'ORCHESTRATOR_REVISION_FAILED', error: expect.stringContaining('planner offline') });
+    expect(store.get('mv-auto').productionReview.approvals?.storyboard).toBeFalsy();
+    expect(store.get('mv-auto').productionReview.feedback).toEqual([expect.objectContaining({ resolution: expect.stringContaining('ask again on Retry') })]);
+
+    await service.resumeAutonomousVideo('mv-auto');
     await vi.waitFor(() => expect(runOf()?.output.renderJobId).toBe('render-1'));
     const project = store.get('mv-auto');
     expect(project.productionReview.draft).toMatchObject({ cast: 'A paper dancer in a red scarf', timingStatus: 'verified',
       storyboard: [{ camera: 'Slow push-in', action: 'Close on the scarf', lyricCueIds: ['c1', 'c2'] }] });
     // The orchestrator's change request was acted on and closed, so it no longer blocks approval.
-    expect(project.productionReview.feedback).toEqual([expect.objectContaining({ stage: 'storyboard', target: 'shot', resolution: 'Revised by the orchestrator.', resolvedAt: expect.any(String) })]);
+    expect(project.productionReview.feedback.at(-1)).toEqual(expect.objectContaining({ stage: 'storyboard', target: 'shot', resolution: 'Revised by the orchestrator.', resolvedAt: expect.any(String) }));
     expect(project.lyricCues[1]).toMatchObject({ startSec: 4, endSec: 20, words: [{ w: 'neon', conf: 'interpolated' }, { w: 'home', endSec: 20 }] });
     expect(project.productionReview.approvals).toMatchObject({ art: { approvedBy: 'orchestrator', reviewer: { kind: 'orchestrator', providerId: 'orch' } },
       storyboard: { approvedBy: 'orchestrator' } });
