@@ -7,6 +7,33 @@ import { createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJour
 import { join, basename } from 'node:path';
 import { runInNewContext } from 'node:vm';
 
+// The runner body runs in a VM, but its extracted completion helper and
+// publication/rollback boundary must stay real. Share the VM's virtual files
+// with those modules; all other filesystem reads/writes keep their real behavior.
+const storage = vi.hoisted(() => ({ current: null }));
+const virtualPath = vi.hoisted(() => path => {
+  if (typeof path !== 'string') return false;
+  const normalized = path.replaceAll('\\', '/');
+  return normalized === '/example/agents' || normalized.startsWith('/example/agents/');
+});
+vi.mock('fs/promises', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, readFile: (path, ...args) => virtualPath(path)
+    ? storage.current.readFile(path, ...args) : actual.readFile(path, ...args) };
+});
+vi.mock('../lib/fileUtils.js', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual,
+    ensureDir: (path, ...args) => virtualPath(path) ? Promise.resolve() : actual.ensureDir(path, ...args),
+    atomicWrite: (path, data, ...args) => virtualPath(path)
+      ? storage.current.atomicWrite(path, data) : actual.atomicWrite(path, data, ...args),
+    unlinkGuarded: (path, ...args) => virtualPath(path)
+      ? storage.current.unlink(path) : actual.unlinkGuarded(path, ...args),
+  };
+});
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
+import { persistRunnerCompletion } from './completion.js';
+
 vi.mock('../lib/bufferedSpawn.js', () => ({
   killProcessTree: vi.fn((child, signal) => child.kill(signal)),
 }));
@@ -42,6 +69,12 @@ function runner(assertDatabaseAdmission = vi.fn()) {
   const state = { agents: {}, stats: { spawned: 0, completed: 0, failed: 0 } };
   const files = new Map();
   const writeFile = vi.fn(async (path, content) => { files.set(path, content); });
+  const readFile = async path => {
+    if (!files.has(path)) throw Object.assign(new Error('Fixture file absent'), { code: 'ENOENT' });
+    return files.get(path);
+  };
+  const atomicWrite = (path, data) => writeFile(path, typeof data === 'string' || Buffer.isBuffer(data) ? data : JSON.stringify(data, null, 2));
+  storage.current = { readFile, atomicWrite, unlink: async path => { files.delete(path); } };
   const withState = vi.fn(async fn => fn(state));
   const drainState = vi.fn(async () => {});
   const children = [];
@@ -69,13 +102,12 @@ function runner(assertDatabaseAdmission = vi.fn()) {
     watch: vi.fn(() => () => {}),
   }));
   runInNewContext(source, {
-    assertDatabaseAdmission, maintenance,
+    assertDatabaseAdmission, maintenance, withBackupAssetPublication, persistRunnerCompletion,
     express, http: { createServer: () => server }, SocketServer: function () { return io; },
     process, console, Buffer, Date, setTimeout, clearTimeout, join, basename,
     PATHS: { root: '/example', cosAgents: '/example/agents' }, PORTS: { COS: 0 },
     setupProcessErrorHandlers: vi.fn(), existsSync: () => true, ensureDir: async () => {},
-    readFile: async path => files.get(path) ?? '{}', writeFile,
-    atomicWrite: (path, data) => writeFile(path, typeof data === 'string' ? data : JSON.stringify(data, null, 2)),
+    readFile, writeFile, atomicWrite,
     withState, drainState,
     ...requestSchemas,
     createRunnerShutdown, registerRunnerShutdownSignals, createTuiExitHandler, createHttpDrain,
@@ -206,7 +238,11 @@ describe('runner shutdown through its real spawn and signal handlers', () => {
   it.each(['child', 'write', 'socket'])('bounds stalled %s completion and preserves unfinished evidence', async stalled => {
     const run = runner();
     await run.request('/spawn').done;
-    if (stalled === 'write') run.writeFile.mockReturnValueOnce(new Promise(() => {}));
+    const pendingWrite = deferred();
+    if (stalled === 'write') run.writeFile.mockImplementationOnce(async (path, output) => {
+      await pendingWrite.promise;
+      run.files.set(path, output);
+    });
     if (stalled === 'socket') run.io.close.mockImplementation(() => {});
     run.process.exit.mockImplementation(() => { expect(run.io.close).toHaveBeenCalled(); });
     run.process.emit('SIGTERM');
@@ -221,6 +257,10 @@ describe('runner shutdown through its real spawn and signal handlers', () => {
       expect(run.state.stats.completed).toBe(0);
       expect(run.files.has(join('/example/agents', 'agent-1', 'metadata.json'))).toBe(false);
     }
+    // process.exit is a spy: retire the synthetic stalled write after proving
+    // the timeout so the real per-path publication queue cannot leak to a case.
+    pendingWrite.resolve();
+    await vi.advanceTimersByTimeAsync(0);
   });
 
   it('reports a persistence failure without deleting the durable agent record', async () => {
