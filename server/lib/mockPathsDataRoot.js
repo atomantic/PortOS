@@ -45,16 +45,35 @@
  * target the default re-rooting wouldn't produce — it merges last.
  */
 
-import { mkdtempSync, readdirSync, rmSync } from 'fs';
+import { appendFileSync, mkdtempSync, readdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
-import { isAbsolute, join, relative, sep } from 'path';
+import { basename, isAbsolute, join, relative, sep } from 'path';
 
 /**
  * Allocate a unique temp dir suitable for use as `PATHS.data` in a test file.
  * Caller is responsible for cleanup (`rmSync` in afterAll) when needed.
  */
 export function createTempDataRoot(prefix = 'portos-test-') {
-  return mkdtempSync(join(tmpdir(), prefix));
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  recordTempRootOwner(dir);
+  return dir;
+}
+
+/**
+ * Sidecar the run-wide leak guard (`scripts/vitestTempRootSetup.js`) reads so a
+ * leaked `<prefix>XXXXXX` directory is reported with the test file that minted
+ * it. A random-suffixed name alone cannot identify its creator (#10404).
+ * Best-effort and basename-only: diagnostics must never fail a fixture or put a
+ * checkout path in a log.
+ */
+const TEMP_ROOT_OWNERS_FILE = '.leak-owners';
+function recordTempRootOwner(dir) {
+  try {
+    const runRoot = process.env.PORTOS_TEST_TEMP_ROOT;
+    const owner = globalThis.__vitest_worker__?.filepath;
+    if (!runRoot || !owner) return;
+    appendFileSync(join(runRoot, TEMP_ROOT_OWNERS_FILE), `${basename(dir)}\t${basename(owner)}\n`);
+  } catch { /* diagnostics only */ }
 }
 
 /**

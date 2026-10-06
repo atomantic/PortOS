@@ -60,4 +60,19 @@ describe('vitestTempRootSetup teardown', () => {
     expect(leaked.warnings).toEqual(['⚠️ test temp leak: fixture- ×1']);
     expect(leaked.exitCode).toBe(1);
   });
+
+  it('names the test file that minted a leaked root, and never reports the owner sidecar itself', () => {
+    const leaked = runTeardown((root) => {
+      mkdirSync(join(root, 'mv-song-browser-Abc123'));
+      writeFileSync(join(root, 'mv-song-browser-Abc123', 'chrome-profile'), 'x');
+      mkdirSync(join(root, 'unowned-Xyz789'));
+      writeFileSync(join(root, 'unowned-Xyz789', 'data.json'), '{}');
+      writeFileSync(join(root, '.leak-owners'), 'mv-song-browser-Abc123\tsongRevision.browser.test.js\n');
+    });
+    expect(leaked.warnings.sort()).toEqual([
+      '⚠️ test temp leak: mv-song-browser- ×1 (created by songRevision.browser.test.js)',
+      '⚠️ test temp leak: unowned- ×1',
+    ]);
+    expect(leaked.exitCode).toBe(1);
+  });
 });
