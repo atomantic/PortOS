@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Download, Image as ImageIcon, Sparkles } from 'lucide-react';
+import { Download, Image as ImageIcon, Images, Sparkles } from 'lucide-react';
+import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 
 const MAX_SOURCES = 24;
 
@@ -18,6 +19,11 @@ export function coverArtSources(project) {
   for (const ref of project?.visualSpec?.references || []) add('image', ref?.imageId, ref?.label || 'Look reference');
   (project?.scenes || []).forEach((scene, i) => add('image', scene?.referenceImageId, `Shot ${i + 1}${scene?.sectionLabel ? ` (${scene.sectionLabel})` : ''}`));
   (kit.thumbnails || []).forEach((f, i) => add('thumbnail', f, `Video frame ${i + 1}`));
+  // A cover picked from image history or uploaded is not one of the project's own images: show it first so the choice stays visible.
+  const chosen = kit.coverArt?.source;
+  if (chosen?.kind === 'image' && chosen.filename && !seen.has(`image:${chosen.filename}`)) {
+    out.unshift({ kind: 'image', filename: chosen.filename, label: 'Chosen cover image', src: `/data/images/${encodeURIComponent(chosen.filename)}` });
+  }
   return out.slice(0, MAX_SOURCES);
 }
 
@@ -27,8 +33,9 @@ export function coverArtSources(project) {
  * song and steered by what the director types. "Restyle" redrafts the
  * lettering from that direction (or adjusts it); "Make a new image" asks an
  * image backend for a fresh photo (or an adjusted take on the current one).
- * Any image the project has can be the photo; the title and artist are set
- * on it by code, so the lettering stays sharp.
+ * Any image the project has, any image from the image history, or an upload
+ * can be the photo; the title and artist are set on it by code, so the
+ * lettering stays sharp. A finished cover made elsewhere skips the lettering.
  */
 export default function CoverArtPanel({ project, publishKit }) {
   const art = project?.publishKit?.coverArt || {};
@@ -40,9 +47,17 @@ export default function CoverArtPanel({ project, publishKit }) {
   const [focusX, setFocusX] = useState(Number.isFinite(art.focusX) ? art.focusX : 0.5);
   const [notes, setNotes] = useState('');
   const [adjustImage, setAdjustImage] = useState(false);
+  // Off: the picked image is already a finished cover, so the title and artist are not set on it again.
+  const [lettering, setLettering] = useState(art.lettering !== false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const busy = publishKit.composing || publishKit.designing || publishKit.requestingImage;
   const chosen = art.source ? `${art.source.kind}:${art.source.filename}` : null;
-  const look = () => ({ title: title.trim(), ...(tag !== null ? { tag: tag.trim() } : {}), focusX });
+  const look = () => ({ title: title.trim(), ...(tag !== null ? { tag: tag.trim() } : {}), focusX, lettering });
+  const needsTitle = lettering && !title.trim();
+  const pickFromHistory = (item) => {
+    setPickerOpen(false);
+    if (item?.filename) compose({ kind: 'image', filename: item.filename });
+  };
   const compose = (source) => publishKit.composeCover({ ...(source ? { source: { kind: source.kind, filename: source.filename } } : {}), ...look() });
   const generate = () => publishKit.generateCover({
     ...(notes.trim() ? { notes: notes.trim() } : {}),
@@ -83,7 +98,11 @@ export default function CoverArtPanel({ project, publishKit }) {
             <input id={idFor('focus')} type="range" min={0} max={1} step={0.05} value={focusX} onChange={(e) => setFocusX(Number(e.target.value))}
               className="w-full min-h-[44px] sm:min-h-0" />
           </div>
-          <button type="button" onClick={() => compose(null)} disabled={busy || !art.source || !title.trim()}
+          <label htmlFor={idFor('lettering')} className="flex items-center gap-1.5 min-h-[44px] sm:min-h-0">
+            <input id={idFor('lettering')} type="checkbox" checked={lettering} onChange={(e) => setLettering(e.target.checked)} />
+            Set the title and artist on the image
+          </label>
+          <button type="button" onClick={() => compose(null)} disabled={busy || !art.source || needsTitle}
             className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] sm:min-h-0">
             {busy ? 'Setting the cover…' : 'Apply to the cover'}
           </button>
@@ -94,11 +113,17 @@ export default function CoverArtPanel({ project, publishKit }) {
       {art.lastError && !art.pending && <p role="alert" className="text-port-warning">{art.lastError}</p>}
 
       <div className="space-y-1">
-        <span className="text-port-text-muted">Cover image: pick one</span>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-port-text-muted">Cover image: pick one</span>
+          <button type="button" onClick={() => setPickerOpen(true)} disabled={busy || needsTitle}
+            className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] sm:min-h-0">
+            <Images size={13} /> From image history or upload
+          </button>
+        </div>
         {sources.length ? (
           <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
             {sources.map((s) => (
-              <button key={`${s.kind}:${s.filename}`} type="button" onClick={() => compose(s)} disabled={busy || !title.trim()}
+              <button key={`${s.kind}:${s.filename}`} type="button" onClick={() => compose(s)} disabled={busy || needsTitle}
                 aria-pressed={chosen === `${s.kind}:${s.filename}`} aria-label={`Make the cover from ${s.label}`} title={s.label}
                 className={`rounded overflow-hidden border-2 disabled:opacity-60 ${chosen === `${s.kind}:${s.filename}` ? 'border-port-accent' : 'border-transparent'}`}>
                 <img src={s.src} alt="" loading="lazy" className="w-full aspect-square object-cover" />
@@ -136,6 +161,7 @@ export default function CoverArtPanel({ project, publishKit }) {
           )}
         </div>
       </div>
+      <GalleryImagePicker open={pickerOpen} onClose={() => setPickerOpen(false)} onSelect={pickFromHistory} allowUpload />
     </section>
   );
 }

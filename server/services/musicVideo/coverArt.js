@@ -4,7 +4,8 @@
  * `project.publishKit.coverArt` holds one composed square cover: a source
  * image (a kit thumbnail or any gallery image, Cast & Sets renders included)
  * cropped square with the title and artist set over it by code, in the song's
- * own design (coverArtCompose.js). The design is drafted per song by one
+ * own design (coverArtCompose.js), unless `lettering` is false: then the
+ * source is a finished cover made elsewhere and is only squared and sized. The design is drafted per song by one
  * provider call from the song and the director's direction, and redrafted
  * from their adjustments (coverArtDesign.js). The install's default image generator
  * makes the cover photo from the design's image prompt; that job is tagged
@@ -12,7 +13,7 @@
  * musicVideoCoverArtImageHook.js composes the cover from it when it lands.
  * Nothing here runs without a director action (AI Provider Usage Policy).
  *
- *   coverArt: { filename, source: { kind, filename }, title, tag, focusX,
+ *   coverArt: { filename, source: { kind, filename }, title, tag, focusX, lettering,
  *               design, imagePrompt, rationale, direction, designedAt,
  *               composedAt, generated: [galleryFilename…],
  *               pending: { requestId, jobId, mode, requestedAt } | null,
@@ -112,9 +113,9 @@ async function defaultTag() {
 /**
  * Compose the cover from `source` with the title and tag, and make it the
  * release's cover. Unset fields keep the last cover's (title defaults to the
- * project name, tag to the DistroKid artist).
+ * project name, tag to the DistroKid artist, lettering to on).
  */
-export async function composeProjectCoverArt(projectId, { source = null, title, tag, focusX } = {}) {
+export async function composeProjectCoverArt(projectId, { source = null, title, tag, focusX, lettering } = {}) {
   const project = await requireProject(projectId);
   const art = projectCoverArt(project);
   const from = source || art.source;
@@ -125,8 +126,10 @@ export async function composeProjectCoverArt(projectId, { source = null, title, 
     title: typeof title === 'string' ? title.trim() : (art.title ?? project.name ?? ''),
     tag: typeof tag === 'string' ? tag.trim() : (art.tag ?? await defaultTag()),
     focusX: Number.isFinite(focusX) ? focusX : (Number.isFinite(art.focusX) ? art.focusX : 0.5),
+    // Covers stored before this flag existed were all lettered.
+    lettering: typeof lettering === 'boolean' ? lettering : art.lettering !== false,
   };
-  if (!next.title) throw coverError(422, 'VALIDATION_ERROR', 'Give the cover a title');
+  if (next.lettering && !next.title) throw coverError(422, 'VALIDATION_ERROR', 'Give the cover a title');
   await ensureDir(PATHS.videoThumbnails);
   const filename = `cover-${String(projectId).slice(3, 11)}-${randomUUID().slice(0, 8)}.jpg`;
   await deps.compose({ ...next, design: art.design || null, source: path, out: safeUnder(PATHS.videoThumbnails, filename) });

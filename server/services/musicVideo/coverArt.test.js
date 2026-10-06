@@ -78,6 +78,19 @@ describe('release cover art', () => {
     }
   });
 
+  it('uses any gallery image as a finished cover without lettering, and keeps that through a re-compose', async () => {
+    const { id } = await projectWithThumbnail();
+    await mkdir(PATHS.images, { recursive: true });
+    await writeFile(join(PATHS.images, 'finished-example.jpg'), 'jpeg');
+    const { project } = await cover.composeProjectCoverArt(id, { source: { kind: 'image', filename: 'finished-example.jpg' }, title: '', lettering: false });
+    expect(project.publishKit.coverArt).toMatchObject({ lettering: false, title: '', source: { kind: 'image', filename: 'finished-example.jpg' } });
+    expect(compose).toHaveBeenLastCalledWith(expect.objectContaining({ source: join(PATHS.images, 'finished-example.jpg'), lettering: false }));
+    // Restyling or re-applying keeps the cover unlettered until the director turns it back on.
+    expect((await cover.composeProjectCoverArt(id, { focusX: 0.3 })).project.publishKit.coverArt.lettering).toBe(false);
+    await expect(cover.composeProjectCoverArt(id, { lettering: true })).rejects.toMatchObject({ status: 422 });
+    expect((await cover.composeProjectCoverArt(id, { lettering: true, title: 'Example Song' })).project.publishKit.coverArt.lettering).toBe(true);
+  });
+
   it('refuses a thumbnail the kit did not cut and a gallery image that is not there', async () => {
     const { id } = await projectWithThumbnail();
     await expect(cover.composeProjectCoverArt(id, { source: { kind: 'thumbnail', filename: 'other.jpg' } })).rejects.toMatchObject({ status: 422 });
@@ -212,6 +225,10 @@ describe('cover lettering', () => {
       await composeCoverArt({ source, out, title: 'A Much Longer Example Song Title Here', tag: 'Example Artist', design: { layout, backdrop: 'band', tagStyle: 'boxed', rule: true }, size: 600 });
       expect(await sharp(out).metadata()).toMatchObject({ width: 600, height: 600 });
     }
+
+    // A finished cover is only squared and sized: no lettering, so no title is needed.
+    await composeCoverArt({ source, out, title: '', lettering: false, size: 800 });
+    expect(await sharp(out).metadata()).toMatchObject({ format: 'jpeg', width: 800, height: 800 });
 
     // A portrait phone photo stored landscape with an EXIF rotation crops on the upright image.
     const rotated = join(dir, 'rotated.jpg');

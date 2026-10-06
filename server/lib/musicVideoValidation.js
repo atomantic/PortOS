@@ -694,6 +694,8 @@ export const musicVideoCoverArtComposeSchema = z.object({
   title: z.string().max(60).optional(),
   tag: z.string().max(24).optional(),
   focusX: z.number().min(0).max(1).optional(),
+  // false: the source is already a finished cover, so it is only squared and sized.
+  lettering: z.boolean().optional(),
 }).strict();
 export const musicVideoCoverArtDesignSchema = z.object({
   direction: z.string().max(1500).optional(),

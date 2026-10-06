@@ -10,6 +10,12 @@ vi.mock('../../hooks/useProviderModels.js', () => ({
   default: () => ({ providers: [], selectedProviderId: '', selectedModel: '', availableModels: [], setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn() }),
 }));
 vi.mock('../../lib/clipboard.js', () => ({ copyToClipboard: vi.fn() }));
+// The real picker pages the image gallery over HTTP; the stand-in hands back one history image.
+vi.mock('../imageGen/GalleryImagePicker', () => ({
+  default: ({ open, onSelect, allowUpload }) => (open
+    ? <button type="button" onClick={() => onSelect({ filename: 'history-example.png' })}>{allowUpload ? 'Pick history-example.png (uploads allowed)' : 'Pick history-example.png'}</button>
+    : null),
+}));
 
 import PublishKitPanel from './PublishKitPanel.jsx';
 
@@ -66,7 +72,7 @@ describe('PublishKitPanel (#9281)', () => {
     expect(screen.getByText('No cover yet')).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Title on the cover'), { target: { value: 'Example Retitle' } });
     fireEvent.click(screen.getByRole('button', { name: 'Make the cover from Cast & Sets: character' }));
-    expect(k.composeCover).toHaveBeenCalledWith({ source: { kind: 'image', filename: 'sheet.png' }, title: 'Example Retitle', focusX: 0.5 });
+    expect(k.composeCover).toHaveBeenCalledWith({ source: { kind: 'image', filename: 'sheet.png' }, title: 'Example Retitle', focusX: 0.5, lettering: true });
     fireEvent.click(screen.getByRole('button', { name: 'Make the cover from Video frame 1' }));
     expect(k.composeCover).toHaveBeenLastCalledWith(expect.objectContaining({ source: { kind: 'thumbnail', filename: 't1.jpg' } }));
 
@@ -89,5 +95,21 @@ describe('PublishKitPanel (#9281)', () => {
     // While a request is in flight (a first design can take a while) a second click cannot start another.
     rerender(<PublishKitPanel project={{ ...project, publishKit: { ...built, coverArt: { ...art, design: null } } }} publishKit={{ ...k, requestingImage: true }} />);
     expect(screen.getByRole('button', { name: /Designing, then queuing/ })).toBeDisabled();
+  });
+
+  it('makes a finished cover from image history or an upload without setting lettering on it, and keeps that pick visible', () => {
+    const k = hook();
+    const project = { id: 'mv-1', name: 'Example Song', publishKit: built };
+    const { rerender } = render(<PublishKitPanel project={project} publishKit={k} />);
+    // A finished cover needs no title: turn lettering off and clear it.
+    fireEvent.click(screen.getByLabelText('Set the title and artist on the image'));
+    fireEvent.change(screen.getByLabelText('Title on the cover'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: /From image history or upload/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pick history-example.png (uploads allowed)' }));
+    expect(k.composeCover).toHaveBeenCalledWith({ source: { kind: 'image', filename: 'history-example.png' }, title: '', focusX: 0.5, lettering: false });
+
+    const art = { filename: 'cover-2.jpg', title: '', lettering: false, source: { kind: 'image', filename: 'history-example.png' } };
+    rerender(<PublishKitPanel project={{ ...project, publishKit: { ...built, coverArt: art } }} publishKit={k} />);
+    expect(screen.getByRole('button', { name: 'Make the cover from Chosen cover image' }).getAttribute('aria-pressed')).toBe('true');
   });
 });
