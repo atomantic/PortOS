@@ -10,6 +10,21 @@ import { PUBLISH_STEP_TIMEOUT_MS as T, loginRequired, pasteText, step } from './
 
 const COMPOSE_URL = 'https://x.com/compose/post';
 const label = 'X';
+const DIALOG_WAIT_MS = 8000;
+
+/**
+ * The CSS prefix that scopes selectors to the composer we opened. /compose/post opens as a modal over the
+ * home timeline, whose own inline composer reuses the same data-testids (tweetTextarea_0, tweetButton,
+ * fileInput), so an unscoped selector matches both. Without a modal (a full-page composer) it is empty.
+ */
+async function composerScope(page) {
+  // Wait for a composer to exist at all, then give the modal's editor a moment to hydrate before deciding:
+  // a snapshot taken too early would fall back to unscoped selectors and hit the inline composer.
+  await page.locator('[data-testid=tweetTextarea_0]').first().waitFor({ timeout: T }).catch(() => {});
+  const inDialog = await page.locator('[role=dialog] [data-testid=tweetTextarea_0]').first()
+    .waitFor({ timeout: DIALOG_WAIT_MS }).then(() => true, () => false);
+  return inDialog ? '[role=dialog] ' : '';
+}
 
 export const xAdapter = {
   label,
@@ -18,9 +33,10 @@ export const xAdapter = {
     await page.waitForTimeout(4000);
     if (/\/login|\/i\/flow/.test(page.url())) throw loginRequired(label, COMPOSE_URL);
     const account = await page.evaluate(() => (document.querySelector('[data-testid=AppTabBar_Profile_Link]')?.getAttribute('href') || '').replace(/^\//, '') || null).catch(() => null);
+    const scope = await composerScope(page);
     for (const [i, post] of payload.posts.entries()) {
-      const editor = `[data-testid=tweetTextarea_${i}]`;
-      if (i > 0) await step(label, `add post ${i + 1}`, () => page.locator('[data-testid=addButton]').click({ timeout: T }));
+      const editor = `${scope}[data-testid=tweetTextarea_${i}]`;
+      if (i > 0) await step(label, `add post ${i + 1}`, () => page.locator(`${scope}[data-testid=addButton]`).click({ timeout: T }));
       await step(label, `write post ${i + 1}`, async () => {
         await page.locator(editor).waitFor({ timeout: T });
         await pasteText(page, editor, post.text);
@@ -28,20 +44,21 @@ export const xAdapter = {
       if (post.media) {
         await step(label, `attach media to post ${i + 1}`, async () => {
           await page.locator(editor).click();
-          await page.locator('input[data-testid=fileInput]').first().setInputFiles(post.media.path, { timeout: T });
+          await page.locator(`${scope}input[data-testid=fileInput]`).first().setInputFiles(post.media.path, { timeout: T });
         });
       }
     }
-    await step(label, 'wait for the uploads', () => page.waitForFunction(() => {
-      const button = document.querySelector('[data-testid=tweetButton]');
-      const uploading = [...document.querySelectorAll('[data-testid=attachments]')].some((a) => /Uploading|Processing/i.test(a.innerText));
+    await step(label, 'wait for the uploads', () => page.waitForFunction((sc) => {
+      const button = document.querySelector(`${sc}[data-testid=tweetButton]`);
+      const uploading = [...document.querySelectorAll(`${sc}[data-testid=attachments]`)].some((a) => /Uploading|Processing/i.test(a.innerText));
       return button && button.getAttribute('aria-disabled') !== 'true' && !uploading;
-    }, null, { timeout: 600_000 }));
-    const lengths = await page.evaluate((n) => Array.from({ length: n }, (_, i) => document.querySelector(`[data-testid=tweetTextarea_${i}]`)?.innerText.length ?? 0), payload.posts.length);
+    }, scope, { timeout: 600_000 }));
+    const lengths = await page.evaluate(([n, sc]) => Array.from({ length: n }, (_, i) => document.querySelector(`${sc}[data-testid=tweetTextarea_${i}]`)?.innerText.length ?? 0), [payload.posts.length, scope]);
     return { account, posts: payload.posts.length, lengths };
   },
   async submit(page, payload) {
-    await step(label, 'post the thread', () => page.locator('[data-testid=tweetButton]').click({ timeout: T }));
+    const scope = await composerScope(page);
+    await step(label, 'post the thread', () => page.locator(`${scope}[data-testid=tweetButton]`).click({ timeout: T }));
     await step(label, 'wait for it to send', () => page.waitForURL((url) => !/compose/.test(url.toString()), { timeout: 180_000 }));
     const url = await step(label, 'find the new thread', async () => {
       const profile = await page.locator('[data-testid=AppTabBar_Profile_Link]').getAttribute('href', { timeout: T });
