@@ -73,6 +73,24 @@ describe('backup snapshot publication admission', () => {
     await first;
   });
 
+  it('bounds a local publication wait without releasing the cut or leaving a queued callback', async () => {
+    vi.useFakeTimers();
+    const release = await acquireBackupSnapshotCut();
+    const work = vi.fn();
+    try {
+      const pending = withBackupAssetPublication(work, { timeoutMs: 50 });
+      const rejected = expect(pending).rejects.toMatchObject({ code: 'BACKUP_SNAPSHOT_BUSY',
+        owner: expect.objectContaining({ kind: 'snapshot' }) });
+      await vi.advanceTimersByTimeAsync(50);
+      await rejected;
+      expect(work).not.toHaveBeenCalled();
+      await expect(acquireBackupSnapshotCut()).rejects.toMatchObject({ code: 'BACKUP_SNAPSHOT_BUSY' });
+    } finally { release(); }
+    await Promise.resolve();
+    expect(work).not.toHaveBeenCalled();
+    await expect(withBackupAssetPublication(() => 'recovered')).resolves.toBe('recovered');
+  });
+
   it('lets a listener spawned by an admitted workflow join it only while that workflow holds its lease', async () => {
     const listenerWrite = deferred();
     let listener;

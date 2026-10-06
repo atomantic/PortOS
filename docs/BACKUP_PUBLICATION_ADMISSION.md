@@ -10,7 +10,10 @@ separate leases while their parent remains admitted.
 
 A snapshot or live restore atomically creates `data/backup-admission/cut/`, then
 drains every registered publication before reading or replacing either store.
-New publications wait until the cut owner releases it. Readers register before
+New publications wait until the cut owner releases it, for at most two minutes
+by default (`withBackupAssetPublication(work, { timeoutMs })` can set a shorter
+caller deadline). Expiry rejects with `BACKUP_SNAPSHOT_BUSY`, the cut ownership
+and recovery path; no publication callback runs and the cut remains intact. Readers register before
 checking the cut; the cut registers before checking readers. This ordering closes
 the cross-process admission race. A preliminary gate check avoids registering
 and deleting leases repeatedly during a long snapshot. Directory creation and

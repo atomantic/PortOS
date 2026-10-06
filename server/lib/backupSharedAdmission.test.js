@@ -29,7 +29,7 @@ const childSource = `
         process.send({ type: 'entered' });
         await done;
         await writeFile(join(root, 'data', 'metadata.json'), JSON.stringify({ output: process.env.ADMISSION_TEST_VALUE }));
-      });
+      }, { timeoutMs: Number(process.env.ADMISSION_TEST_TIMEOUT || 5000) });
     } else {
       const release = await acquireBackupSnapshotCut({ timeoutMs: Number(process.env.ADMISSION_TEST_TIMEOUT || 5000) });
       process.send({ type: 'entered' });
@@ -38,7 +38,7 @@ const childSource = `
       release(); // stale duplicate releases must be harmless
     }
     process.send({ type: 'finished' });
-  } catch (error) { process.send({ type: 'rejected', code: error.code, message: error.message, blockers: error.blockers }); }
+  } catch (error) { process.send({ type: 'rejected', code: error.code, message: error.message, blockers: error.blockers, owner: error.owner, recoveryPath: error.recoveryPath }); }
 `;
 async function root() {
   const path = await mkdtemp(join(tmpdir(), 'backup-shared-race-'));
@@ -161,6 +161,25 @@ describe('shared snapshot admission between real server and runner processes', (
     expect(await contender.next('rejected')).toMatchObject({ code: 'BACKUP_SNAPSHOT_BUSY', message: expect.stringContaining('reconcile the interrupted backup or restore') });
     const gate = JSON.parse(await readFile(join(path, 'data/backup-admission/cut/owner.json'), 'utf8'));
     expect(gate.pid).toBe(owner.proc.pid);
+    const writer = worker(path, 'publication', 'must not write', 50);
+    expect(await writer.next('rejected')).toMatchObject({ code: 'BACKUP_SNAPSHOT_BUSY',
+      owner: { id: gate.id, pid: owner.proc.pid }, recoveryPath: join(path, 'data/backup-admission/cut') });
+    expect(writer.messages.some(message => message.type === 'entered')).toBe(false);
+    expect(existsSync(join(path, 'data/output.txt'))).toBe(false);
+    expect(JSON.parse(await readFile(join(path, 'data/backup-admission/cut/owner.json'), 'utf8'))).toEqual(gate);
+  });
+
+  it('refuses a child publication after bounded wait on corrupt cut ownership without changing it', async () => {
+    const path = await root();
+    const cutPath = join(path, 'data/backup-admission/cut');
+    await mkdir(cutPath, { recursive: true });
+    await writeFile(join(cutPath, 'owner.json'), '{broken');
+    const writer = worker(path, 'publication', 'must not write', 50);
+    expect(await writer.next('rejected')).toMatchObject({ code: 'BACKUP_SNAPSHOT_BUSY',
+      owner: { path: cutPath, unreadable: true }, recoveryPath: cutPath });
+    expect(writer.messages.some(message => message.type === 'entered')).toBe(false);
+    expect(existsSync(join(path, 'data/output.txt'))).toBe(false);
+    expect(await readFile(join(cutPath, 'owner.json'), 'utf8')).toBe('{broken');
   });
 
   it('fails closed on unreadable ownership and refuses a stale release', async () => {
