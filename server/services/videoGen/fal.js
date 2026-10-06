@@ -25,7 +25,7 @@
 
 import { randomUUID } from 'crypto';
 import { readFile, writeFile, unlink } from 'fs/promises';
-import { join } from 'path';
+import { join, relative, resolve, isAbsolute } from 'path';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
@@ -257,6 +257,20 @@ export async function generateVideo({
   };
 }
 
+const isStagedUpload = (path) => {
+  const rel = relative(PATHS.uploads, resolve(path));
+  return !!rel && !rel.startsWith('..') && !isAbsolute(rel);
+};
+
+// The staged voice clip keeps its upload's extension (a performance slice is always WAV).
+function audioMimeType(path) {
+  const ext = String(path).toLowerCase().split('.').pop();
+  return {
+    mp3: 'audio/mpeg', m4a: 'audio/mp4', mp4: 'audio/mp4', aac: 'audio/aac', ogg: 'audio/ogg', opus: 'audio/ogg',
+    flac: 'audio/flac', webm: 'audio/webm', aif: 'audio/aiff', aiff: 'audio/aiff',
+  }[ext] || 'audio/wav';
+}
+
 async function runFalVideo(job, jobId, {
   apiKey, modelId, prompt, negativePrompt, duration, aspectRatio, sourceImagePath, outputPath, filename, meta,
   audioFilePath = null, enableTranscription = false, requestSpec = null,
@@ -268,7 +282,7 @@ async function runFalVideo(job, jobId, {
   try {
     const imageDataUri = sourceImagePath ? await fileToDataUri(sourceImagePath) : null;
     const audioDataUri = audioFilePath
-      ? `data:audio/wav;base64,${(await readFile(audioFilePath)).toString('base64')}`
+      ? `data:${audioMimeType(audioFilePath)};base64,${(await readFile(audioFilePath)).toString('base64')}`
       : null;
     const body = requestSpec
       ? buildFalVideoRequest({ ...requestSpec, imageUrl: imageDataUri, audioUrl: audioDataUri }).body
@@ -326,6 +340,9 @@ async function runFalVideo(job, jobId, {
     activeRequests.delete(jobId);
     activeJobs.delete(jobId);
     await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta: { ...meta, ...measured }, actualSeed: null, mutateHistory: mutateVideoHistory, publication });
+    // The staged voice clip is spent once the take is published. The queue removes it on failure,
+    // cancel and restart; on success it is ours to drop (only a clip staged under data/uploads).
+    if (audioFilePath && isStagedUpload(audioFilePath)) await unlink(audioFilePath).catch(() => {});
     closeJobAfterDelay(jobs, jobId);
   } catch (err) {
     // Best-effort: an unanticipated throw (e.g. from fetchFalResult or the

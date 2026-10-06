@@ -354,6 +354,8 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
       ...(body.fableLoom ? { fableLoom: body.fableLoom } : {}),
       ...(body.visualConditioning ? { visualConditioning: body.visualConditioning } : {}),
       ...hosted.buildParams(body, prepared),
+      // standalone fal lip sync: the uploaded voice clip (a Music Video performance shot overrides below)
+      ...(prepared.audioFilePath ? { audioFilePath: prepared.audioFilePath, uploadedTempPaths: prepared.uploadedTempPaths, lipSync: { enableTranscription: false } } : {}),
       ...performanceParams,
     });
     return {
