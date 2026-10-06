@@ -89,7 +89,7 @@ An autonomous AI agent orchestrator that manages your development workflow. Subm
 - **Task Learning** — Tracks success rates, error patterns, and model performance to dynamically improve routing decisions ([Memory System docs](./docs/features/memory-system.md))
 - **Goal Tracking** — Define goals and track progress across hundreds of completed tasks with success rate metrics
 - **Scheduled Automation** — Cron-based self-improvement and app-improvement jobs with per-app interval overrides
-- **Error Recovery** — 6 strategies (retry, escalate, fallback, decompose, defer, investigate) for automatic diagnosis and retry ([CoS Enhancement docs](./docs/features/cos-enhancement.md))
+- **Failure Analysis & Retry** — Classifies a failed agent run against known error patterns, retries it a bounded number of times, and files an investigation task (behind a circuit breaker) when retries will not help
 - **Hybrid Memory Search** — BM25 + vector search with Reciprocal Rank Fusion for semantic retrieval across agent history
 - **Activity & Digests** — A runs-per-day activity heatmap on the dashboard, plus AI-generated weekly digests
 - **Decision Transparency** — Every skip, switch, and routing decision is logged with reasons, surfaced on the dashboard

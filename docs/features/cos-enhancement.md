@@ -54,12 +54,14 @@ Priority/description-driven thinking levels and automatic tier changes were
 removed in #8149: a task runs on the model or tier it names, else the provider
 default. See [MODEL_TIERS.md](../MODEL_TIERS.md).
 
-### Phase 5: Agent Architecture
+### Phase 5: Agent Architecture (not built)
 
-- Tool execution state machine (IDLE → START → RUNNING → UPDATE → END → ERROR)
-- Agent gateway with request deduplication and 10-minute cache
-- Error recovery with 6 strategies: retry, escalate, fallback, decompose, defer, investigate
-- Agent run cache for outputs, tool results, and contexts
+Phase 5 services were never built under these names; see the Architecture section above. What was actually shipped for agent failure handling is described in [Error Handling](./error-handling.md).
+
+- Tool execution state machine (IDLE → START → RUNNING → UPDATE → END → ERROR) — not built
+- Agent gateway with request deduplication and 10-minute cache — not built
+- Error recovery with 6 strategies: retry, escalate, fallback, decompose, defer, investigate — not built (see Error Handling)
+- Agent run cache for outputs, tool results, and contexts — not built
 
 ## Execution Lanes
 
