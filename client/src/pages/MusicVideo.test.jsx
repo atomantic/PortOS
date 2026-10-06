@@ -3005,7 +3005,7 @@ describe('stage checklist and project options', () => {
       productionReadiness: { readyForProduction: false, basis: {}, art: { approved: false, problems: [] },
         storyboard: { approved: false, problems: [] }, proof: { approved: false, problems: [] } } };
     await openProject(project, 'cast-sets');
-    const checklist = screen.getByRole('region', { name: 'What this stage needs' });
+    const checklist = screen.getByRole('region', { name: 'What this step needs' });
     expect(checklist).toHaveTextContent('1 of 3 done');
     expect(checklist).toHaveTextContent('Pick a Cast & Sets sheet as the visual guide in the art direction editor below.');
     expect(checklist).toHaveTextContent('Art direction approved');

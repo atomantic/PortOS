@@ -95,6 +95,21 @@ describe('music-video step navigation', () => {
   });
 });
 
+describe('phone layout', () => {
+  it('pins neither the header nor the preview below md: the step gets the screen', () => {
+    render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project' }} stage="review"
+      onStageChange={() => {}} progress={progressFor('review')} spend={{ spentUsd: 0 }}
+      dock={<aside aria-label="Preview">preview</aside>} />);
+    const header = screen.getByRole('heading', { level: 2, name: 'Example Project' }).closest('header');
+    expect(header.className).toMatch(/(^|\s)md:sticky(\s|$)/);
+    expect(header.className).not.toMatch(/(^|\s)sticky(\s|$)/);
+    const dock = screen.getByRole('complementary', { name: 'Preview' }).parentElement;
+    expect(dock.className).not.toMatch(/fixed/);
+    // Below xl the preview row sits above the step, across the full width.
+    expect(dock.className).toMatch(/max-xl:order-first/);
+  });
+});
+
 describe('stepState', () => {
   it('uses one word per state, flagging a changed approval and the step that waits on the director', () => {
     const at = (entry, needsYouStage = null) => stepState({ id: 'board', ...entry }, { needsYouStage }).word;

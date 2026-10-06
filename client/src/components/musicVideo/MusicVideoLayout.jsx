@@ -13,8 +13,11 @@ const STAGE_ICONS = {
 };
 
 // The page's scroll body (the route is full-width, so the page owns its
-// scroll): a new step scrolls it back to the top.
+// scroll): a new step scrolls it back to the top. On a phone the whole page
+// (`MUSIC_VIDEO_PAGE_ID`, title bar included) scrolls instead, so neither
+// header pins down a small screen.
 export const MUSIC_VIDEO_SCROLL_ID = 'mv-scroll';
+export const MUSIC_VIDEO_PAGE_ID = 'mv-page';
 
 const TONE_CLASSES = {
   warn: 'border-port-warning/40 bg-port-warning/10 text-port-warning',
@@ -77,9 +80,10 @@ function StepRail({ stages, stage, onStageChange, needsYouStage, notes }) {
   );
 }
 
-// Below `xl` the preview is a mini-player pinned to the bottom (above the
-// phone's step bar); from `xl` it is a sticky right column under the header.
-const DOCK_CLASSES = 'max-xl:fixed max-xl:inset-x-0 max-xl:bottom-0 max-xl:z-30 max-xl:max-h-[70vh] max-xl:overflow-y-auto max-md:bottom-[calc(env(safe-area-inset-bottom)+3rem)] xl:sticky xl:top-[calc(var(--mv-header-h,9rem)-0.75rem)] xl:max-h-[calc(100vh-var(--mv-header-h,9rem)-2rem)] xl:overflow-y-auto';
+// From `xl` the preview is a sticky right column under the header. Below it,
+// it sits in the page above the step, one folded row until opened, rather than
+// a bar pinned over the content.
+const DOCK_CLASSES = 'min-w-0 max-xl:order-first max-xl:col-span-full xl:sticky xl:top-[calc(var(--mv-header-h,9rem)-0.75rem)] xl:max-h-[calc(100vh-var(--mv-header-h,9rem)-2rem)] xl:overflow-y-auto';
 
 /**
  * The Music Video project frame. A sticky header says where the project stands
@@ -122,7 +126,7 @@ export default function MusicVideoLayout({
   useEffect(() => {
     if (shownStage.current === stage) return;
     shownStage.current = stage;
-    document.getElementById(MUSIC_VIDEO_SCROLL_ID)?.scrollTo?.({ top: 0 });
+    for (const id of [MUSIC_VIDEO_SCROLL_ID, MUSIC_VIDEO_PAGE_ID]) document.getElementById(id)?.scrollTo?.({ top: 0 });
   }, [stage]);
 
   const needsYouStage = status?.needsYouStage || null;
@@ -147,10 +151,10 @@ export default function MusicVideoLayout({
   const ActionIcon = nextAction?.kind === 'run' ? Play : ArrowRight;
 
   return (
-    <div ref={rootRef} className={`space-y-3 ${dockVisible ? 'max-xl:pb-[calc(10rem+env(safe-area-inset-bottom))]' : 'max-md:pb-[calc(5rem+env(safe-area-inset-bottom))]'}`}>
+    <div ref={rootRef} className="space-y-3 max-md:pb-[calc(5rem+env(safe-area-inset-bottom))]">
       <header
         ref={headerRef}
-        className="sticky top-[calc(env(safe-area-inset-top)-1rem)] z-30 -mx-4 -mt-4 space-y-2 border-b border-port-border bg-port-bg px-4 py-2 md:top-[calc(env(safe-area-inset-top)-1.5rem)] md:-mx-6 md:-mt-6 md:px-6"
+        className="z-30 -mx-4 -mt-4 space-y-2 border-b border-port-border bg-port-bg px-4 py-2 md:sticky md:top-[calc(env(safe-area-inset-top)-1.5rem)] md:-mx-6 md:-mt-6 md:px-6"
       >
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <div className="min-w-0 flex-1 basis-full sm:basis-auto">
@@ -167,7 +171,7 @@ export default function MusicVideoLayout({
             </p>
           </div>
           {status && (
-            <p role="status" aria-label="Project status" className={`flex min-h-[36px] min-w-0 items-center rounded-lg border px-2.5 text-sm font-medium ${TONE_CLASSES[status.tone] || TONE_CLASSES.muted}`}>
+            <p role="status" aria-label="Project status" className={`flex min-h-[36px] min-w-0 items-center rounded-lg border px-2.5 text-xs font-medium sm:text-sm ${TONE_CLASSES[status.tone] || TONE_CLASSES.muted}`}>
               {status.headline}
             </p>
           )}
@@ -190,7 +194,8 @@ export default function MusicVideoLayout({
               type="button"
               onClick={() => onOpenSettings('autopilot')}
               aria-label={autopilot.label}
-              className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded-lg border px-2.5 text-sm ${autopilot.tone === 'warn' ? 'border-port-warning/50 text-port-warning' : 'border-port-border text-port-text'}`}
+              // An idle autopilot is one tap away in Project settings; a phone shows the button only for a run.
+              className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded-lg border px-2.5 text-sm ${autopilot.tone === 'warn' ? 'border-port-warning/50 text-port-warning' : 'border-port-border text-port-text'} ${autopilot.label === 'Autopilot' ? 'max-sm:hidden' : ''}`}
             >
               <Bot size={15} aria-hidden="true" />
               <span className="sm:hidden">{autopilot.short || autopilot.label}</span>
@@ -236,8 +241,9 @@ export default function MusicVideoLayout({
         </nav>
       </header>
 
-      <div className={`grid items-start gap-4 md:grid-cols-[13rem_minmax(0,1fr)] ${dockVisible ? 'xl:grid-cols-[13rem_minmax(0,1fr)_minmax(20rem,24rem)]' : ''}`}>
-        <div className="md:sticky md:top-[calc(var(--mv-header-h,9rem)-0.75rem)]">
+      {/* One column on a phone, capped at the screen width so a wide control can't push the step off screen. */}
+      <div className={`grid grid-cols-[minmax(0,1fr)] items-start gap-4 md:grid-cols-[13rem_minmax(0,1fr)] ${dockVisible ? 'xl:grid-cols-[13rem_minmax(0,1fr)_minmax(20rem,24rem)]' : ''}`}>
+        <div className="hidden md:block md:sticky md:top-[calc(var(--mv-header-h,9rem)-0.75rem)]">
           <StepRail stages={progress.stages} stage={stage} onStageChange={onStageChange} needsYouStage={needsYouStage} notes={notes} />
         </div>
         {/* Labelled by its own heading: from md the phone tab bar is hidden and the step list drives it. */}

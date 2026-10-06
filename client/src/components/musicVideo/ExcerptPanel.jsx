@@ -129,7 +129,7 @@ function ExcerptCard({ excerpt, role, proofApproved, activeRenderId, connected, 
                 : <button type="button" disabled={deleting} onClick={() => setConfirmingDelete(true)} className="text-port-error flex items-center gap-1 disabled:opacity-50 min-h-[44px] sm:min-h-0"><Trash2 size={12} /> Delete</button>}
         </div>
       </div>
-      <p className="text-xs text-port-text-muted">{excerpt.dependencyState?.status === 'stale' ? 'Earlier inputs — retained for reference' : excerpt.dependencyState?.status === 'current' ? 'Matches current inputs · production approval is separate' : 'Draft · approval is separate'}{excerpt.createdAt ? ` · ${new Date(excerpt.createdAt).toISOString().replace('T', ' ').slice(0, 19)} UTC` : ''}</p>
+      <p className="text-xs text-port-text-muted">{excerpt.dependencyState?.status === 'stale' ? 'Made before later changes · re-render this range to see them' : excerpt.dependencyState?.status === 'current' ? 'Matches current inputs · production approval is separate' : 'Draft · approval is separate'}{excerpt.createdAt ? ` · ${new Date(excerpt.createdAt).toISOString().replace('T', ' ').slice(0, 19)} UTC` : ''}</p>
       {excerpt.status === 'error' && excerpt.error && <p role="alert" className="text-xs text-port-error">{excerpt.error}</p>}
       {excerpt.status === 'complete' && excerpt.filename && (
         <div className="space-y-2">
@@ -178,12 +178,15 @@ export default function ExcerptPanel({ project, rendering, occupied = rendering,
   const newest = [...excerpts].reverse();
   const latestAttempt = newest[0];
   const roleOf = new Map(newest.map(e => [e.id, excerptRole(project, e)]));
-  // The latest usable excerpt PER ROLE stays visible, so a new social cut never buries the review draft.
+  // The latest finished render per role AND range stays visible: a new social cut never buries the
+  // review draft, and a proof of the second chorus never hides the one of the opening. A render made
+  // before later changes stays the latest of its range (its card says it is out of date) until a
+  // newer one replaces it; only older renders of the same range and failures go to earlier attempts.
   const currentIds = new Set();
-  const seenRoles = new Set();
+  const seen = new Set();
   for (const e of newest) {
-    const role = roleOf.get(e.id);
-    if (e.status === 'complete' && e.filename && e.dependencyState?.status !== 'stale' && !seenRoles.has(role)) { seenRoles.add(role); currentIds.add(e.id); }
+    const key = `${roleOf.get(e.id)}:${e.startSec}:${e.endSec}:${e.aspect || ''}`;
+    if (e.status === 'complete' && e.filename && !seen.has(key)) { seen.add(key); currentIds.add(e.id); }
   }
   const visible = newest.filter(e => e.status === 'rendering' || currentIds.has(e.id));
   const history = newest.filter(e => !visible.includes(e));
@@ -221,7 +224,15 @@ export default function ExcerptPanel({ project, rendering, occupied = rendering,
 
   return (
     <div id="mv-draft-excerpts" tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className="space-y-2">
-      <span className="text-xs text-port-text-muted flex items-center gap-1"><Film size={12} /> Draft excerpt</span>
+      {/* The renders come first, newest first, so the latest proof or draft is the first thing on the step. */}
+      {visible.length > 0 ? <ul aria-label="Current draft and active renders" className="space-y-2">{visible.map(card)}</ul>
+        : <p className="text-xs text-port-text-muted">No drafts yet. Render a range below to check it before the full video.</p>}
+      {history.length > 0 && <details>
+        <summary className="cursor-pointer min-h-[44px] py-2 text-sm">Earlier and failed attempts ({formatCount(history.length)})</summary>
+        <p className="text-xs text-port-text-muted">Older renders of the same range, and failed or cancelled attempts. They do not block approval of the current work.</p>
+        <ul className="space-y-2">{history.map(card)}</ul>
+      </details>}
+      <span className="text-xs text-port-text-muted flex items-center gap-1 pt-2"><Film size={12} /> Render a draft</span>
       <div className="flex flex-wrap items-end gap-2">
         <div>
           <label htmlFor={idFor('start')} className="block text-[10px] text-port-text-muted">Start (sec)</label>
@@ -312,12 +323,6 @@ export default function ExcerptPanel({ project, rendering, occupied = rendering,
           rendering={occupied} autoReview={autoReview} />
       )}
       </details>
-      {visible.length > 0 && <ul aria-label="Current draft and active renders" className="space-y-2">{visible.map(card)}</ul>}
-      {history.length > 0 && <details>
-        <summary className="cursor-pointer min-h-[44px] py-2 text-sm">Earlier and failed attempts ({formatCount(history.length)})</summary>
-        <p className="text-xs text-port-text-muted">Retained for comparison. These attempts do not block approval of the current work.</p>
-        <ul className="space-y-2">{history.map(card)}</ul>
-      </details>}
     </div>
   );
 }
