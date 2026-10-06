@@ -586,6 +586,41 @@ describe('storyboard animatic preview source', () => {
   });
 });
 
+describe('finished outside PortOS', () => {
+  // A video made elsewhere: rendered and posted, with no approval ever recorded here.
+  const external = {
+    id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, lyricCues: [{ id: 'l1', text: 'la la' }], automation: { tools: [] },
+    scenes: [scene()], composition: { mode: 'document', document: { directory: 'd' } }, renderHistoryId: 'rh-1',
+    publishKit: { posts: { youtube: { url: 'https://example.com/v' } } },
+  };
+  const unapproved = { art: { approved: false, problems: ['x'] }, storyboard: { approved: false, problems: ['x'] }, proof: { approved: false, problems: ['x'] }, alignment: { status: 'provisional' } };
+  const marked = { ...external, finishedOutside: { markedAt: '2026-10-05T00:00:00.000Z', note: 'Made elsewhere' } };
+
+  it('without the marker, a published external project reads as stuck on Song', () => {
+    expect(deriveStages(external, unapproved).current).toBe('setup');
+    expect(deriveNextAction(external, { readiness: unapproved })).toMatchObject({ id: 'review-production' });
+  });
+
+  it('counts Song through Make as done, and reads Published once the render and posts are real', () => {
+    const progress = deriveStages(marked, unapproved);
+    expect(progress.stages.map((s) => [s.id, s.state, s.stale])).toEqual(
+      MUSIC_VIDEO_STAGES.map((s) => [s.id, 'done', false]),
+    );
+    const nextAction = deriveNextAction(marked, { readiness: unapproved });
+    expect(nextAction.id).not.toBe('review-production');
+    expect(describeProjectStatus(marked, { progress, nextAction })).toMatchObject({ headline: 'Published', needsYouStage: null });
+    expect(stageChecklist('board', marked, unapproved)).toEqual([{ id: 'finished-outside', label: 'Finished outside PortOS', done: true, detail: 'Made elsewhere' }]);
+    expect(summarizeMusicVideoProject(marked, unapproved).stage).toBe('publish');
+  });
+
+  it('still asks for the final render and the posts it never had', () => {
+    const unrendered = { ...marked, renderHistoryId: null, publishKit: {} };
+    expect(deriveStages(unrendered, unapproved).current).toBe('review');
+    expect(summarizeMusicVideoProject(unrendered, unapproved).stage).toBe('review');
+    expect(stageChecklist('review', unrendered, unapproved)[0]).toMatchObject({ id: 'final', done: false });
+  });
+});
+
 describe('server project summary', () => {
   it('reports the same current step the page derives, for every step', () => {
     const base = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, ...LYRICS };

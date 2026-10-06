@@ -1080,6 +1080,13 @@ export const musicVideoProjectUpdateSchema = z.object({
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
 }).strict();
 
+// Mark a project finished outside PortOS (or clear the marker). The server
+// stamps `markedAt`; the note says where it was made (musicVideoFinishedOutside.js).
+export const musicVideoFinishedOutsideSchema = z.object({
+  finished: z.boolean(),
+  note: z.string().trim().max(500).optional(),
+}).strict();
+
 // Fork a project into its next editable version. The server derives lineage and
 // version numbers from the source; callers may only override the display name
 // and choose whether generated scene media should remain attached. A video

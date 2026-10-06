@@ -13,6 +13,7 @@ import { isNonBlankStr } from './textUtils';
 import { modeLabel } from './imageGenModes.js';
 import { falSceneTake } from './musicVideoShotTiming.js';
 import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
+import { finishedOutside, finishedOutsideCovers } from '../../../server/lib/musicVideoFinishedOutside.js';
 
 /**
  * The six steps of a music video, in the order the director decides them. The
@@ -334,13 +335,16 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
     // #9281/#9282: published once every enabled platform has a recorded post.
     publish: publishPlatformProgress(project, publish).done,
   };
+  // Finished outside PortOS: the steps it made elsewhere count as done, with no approval to go stale.
+  const external = !!finishedOutside(project);
+  if (external) for (const id of Object.keys(done)) if (finishedOutsideCovers(project, id)) done[id] = true;
   const blocked = {
     'cast-sets': castStopped,
     produce: !!run && RUN_BLOCKED_STATUSES.has(run.status),
   };
   // Approved earlier, inputs changed since (#10141): the tab says so rather than
   // reading as never done. The check-in sheet stays approved while stale.
-  const stale = {
+  const stale = external ? {} : {
     'cast-sets': !!readiness?.art?.stale || !!readiness?.castAndSets?.stale,
     board: !!readiness?.storyboard?.stale,
     produce: !!readiness?.proof?.stale,
@@ -395,7 +399,7 @@ export function deriveNextAction(project, {
   const layered = isLayeredComposition(project);
   const footageDone = footageOptional || scenes.every((scene) => sceneRenderReady(scene, { layered }));
   const proofDue = current !== 'produce' || footageDone || (!!run && RESUMABLE_RUN_STATUSES.has(run.status));
-  if (projectHasAudio(project) && project.audioAnalysis && !CAST_WORKING.has(cast?.status) && !readiness?.readyForProduction && (art || board || proofDue)
+  if (!finishedOutside(project) && projectHasAudio(project) && project.audioAnalysis && !CAST_WORKING.has(cast?.status) && !readiness?.readyForProduction && (art || board || proofDue)
     && run?.status !== 'running' && !renderActive && !kickoffRunning
     && !castNeedsOwnAction && !boardNeedsOwnAction) {
     return { id: 'review-production', kind: 'goto', stage: art ? 'cast-sets' : board ? 'board' : 'produce',
@@ -554,6 +558,11 @@ export function stageChecklist(stageId, project, readiness = project?.production
       revert: !approved && stale && readiness[key].stale.revertible?.length ? { stage: key, fields: readiness[key].stale.revertible } : null,
     };
   };
+  const external = finishedOutsideCovers(project, stageId) ? finishedOutside(project) : null;
+  if (external) {
+    return [{ id: 'finished-outside', label: 'Finished outside PortOS', done: true,
+      detail: external.note || 'Marked finished in Project settings; no approval is recorded here.' }];
+  }
   switch (stageId) {
     case 'setup': {
       // An autonomous run that is still going writes the song itself.

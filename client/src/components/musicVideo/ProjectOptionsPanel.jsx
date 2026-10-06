@@ -10,6 +10,8 @@ import { normalizeMusicVideoProductionPolicy } from '../../../../server/lib/musi
 import { MUSIC_VIDEO_AUTOMATION_TOOLS, automationDraftFrom, automationFromDraft } from '../../lib/musicVideoAutomation.js';
 import { musicVideoMediaMode } from '../../../../server/lib/musicVideoMediaPolicy.js';
 import { formatUsd } from '../../utils/formatters.js';
+import { finishedOutside } from '../../../../server/lib/musicVideoFinishedOutside.js';
+import { setMusicVideoFinishedOutside } from '../../services/apiMusicVideo.js';
 
 const TOOL_GROUPS = [['image', 'Image'], ['video', 'Video'], ['code', 'Code']];
 const rowCls = 'grid min-w-0 grid-cols-1 gap-1 sm:grid-cols-[9rem_minmax(0,1fr)] sm:items-start sm:gap-3';
@@ -22,11 +24,25 @@ const headCls = 'pt-1.5 text-xs font-medium text-port-text-muted';
  * the media the design may use (code / images / video), the render style, the
  * image and video services, and, for an autopilot project, the tools the
  * autopilot may spend on and its Cast & Sets check-in. Every change saves to the
- * project through the same paths the Make step's controls use.
+ * project through the same paths the Make step's controls use. A project made
+ * elsewhere can be marked finished outside PortOS, so Song through Make stop
+ * asking for approvals that were never given here (`onProjectUpdated` gets the
+ * saved record).
  */
 export default function ProjectOptionsPanel({
-  project, videoSettings, generatingVideos = false, onMediaMode, onRenderStyle, onSaveAutomation, onSavePolicy,
+  project, videoSettings, generatingVideos = false, onMediaMode, onRenderStyle, onSaveAutomation, onSavePolicy, onProjectUpdated,
 }) {
+  const external = finishedOutside(project);
+  const [outsideNote, setOutsideNote] = useState('');
+  const [outsideSaving, setOutsideSaving] = useState(false);
+  const toggleFinishedOutside = () => {
+    if (outsideSaving) return;
+    setOutsideSaving(true);
+    setMusicVideoFinishedOutside(project.id, { finished: !external, note: outsideNote.trim() || undefined })
+      .then((next) => { setOutsideNote(''); onProjectUpdated?.(next); })
+      .catch(() => {}) // request() already toasted
+      .finally(() => setOutsideSaving(false));
+  };
   const [policyError, setPolicyError] = useState('');
   const [allowanceText, setAllowanceText] = useState(null);
   const policy = normalizeMusicVideoProductionPolicy(project.productionPolicy);
@@ -116,6 +132,34 @@ export default function ProjectOptionsPanel({
         <span className={headCls}>Video service</span>
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <VideoRenderSettings videoSettings={videoSettings} generating={generatingVideos} />
+        </div>
+      </div>
+      <div className={rowCls}>
+        <span className={headCls}>Finished outside PortOS</span>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <ToggleChip
+            id="mv-setup-finished-outside"
+            label={external ? 'Marked finished' : 'Mark finished'}
+            hint="Song, Look, Storyboard and Make count as done; Final render and Publish still need the real render and posts"
+            checked={!!external}
+            onToggle={toggleFinishedOutside}
+          />
+          {!external && (
+            <input
+              type="text"
+              aria-label="Where it was made (optional)"
+              placeholder="Where it was made (optional)"
+              maxLength={500}
+              value={outsideNote}
+              onChange={(e) => setOutsideNote(e.target.value)}
+              className="min-h-[44px] min-w-0 flex-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm sm:min-h-0"
+            />
+          )}
+          <p className="w-full text-xs text-port-text-muted">
+            {external
+              ? `Marked ${new Date(external.markedAt).toLocaleDateString()}${external.note ? `: ${external.note}` : ''}. No approval is recorded; unmark to bring the step checks back.`
+              : 'For a video made elsewhere: Song through Make count as done without recording approvals. Final render and Publish still need the real render and posts.'}
+          </p>
         </div>
       </div>
       {automation && (

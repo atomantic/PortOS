@@ -31,6 +31,10 @@ export const cloneMusicVideoProject = (id, data = {}, options = {}) => request(`
 export const updateMusicVideoProject = (id, patch, options = {}) => request(`/music-video/${encodeURIComponent(id)}`, {
   method: 'PATCH', body: JSON.stringify(patch), ...options,
 });
+// Mark the project finished outside PortOS (or clear it); returns the presented project.
+export const setMusicVideoFinishedOutside = (id, { finished, note } = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/finished-outside`, {
+  method: 'PUT', body: JSON.stringify({ finished, ...(note ? { note } : {}) }), ...options,
+});
 export const deleteMusicVideoProject = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}`, {
   method: 'DELETE', ...options,
 });
