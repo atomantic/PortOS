@@ -244,7 +244,6 @@ export const getUsage = (params = {}) => request(`/usage${usageQuery(params)}`);
 // from the CLI transcripts. Same { period } | { from, to } params as getUsage.
 export const getClaudeCodeModelUsage = (params = {}, options = {}) =>
   request(`/usage/claude-code/models${usageQuery(params)}`, options);
-export const getHourlyUsage = (options = {}) => request('/usage/hourly', options);
 export const getUsageBackfillStatus = (options = {}) => request('/usage/backfill', options);
 // Monthly plan prices per provider family, used to compare subscription spend
 // against the report's estimated API cost. `costs` is a partial patch: an
