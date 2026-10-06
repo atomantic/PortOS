@@ -2,6 +2,13 @@ import { useEffect } from 'react';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 
+const shareSender = (payload) => {
+  const source = payload.source || 'a peer';
+  return payload.producedByVersion && payload.producedByVersion !== 'unknown'
+    ? `${source} (PortOS ${payload.producedByVersion})`
+    : source;
+};
+
 /**
  * Global subscriber for share-bucket notifications. Mirrors useErrorNotifications:
  * mounts once in Layout.jsx so any open page hears about auto-merge updates
@@ -28,20 +35,26 @@ export function useSharingNotifications() {
     };
     const onIncompatibleManifest = (payload) => {
       if (!payload) return;
-      const source = payload.source || 'a peer';
-      const producedBy = payload.producedByVersion && payload.producedByVersion !== 'unknown'
-        ? ` (PortOS ${payload.producedByVersion})`
-        : '';
       toast.error(
-        `Can't import share from ${source}${producedBy} — protocol v${payload.remoteVersion} requires upgrading PortOS (local v${payload.localVersion}).`,
+        `Can't import share from ${shareSender(payload)} — protocol v${payload.remoteVersion} requires upgrading PortOS (local v${payload.localVersion}).`,
+        { duration: 12000 },
+      );
+    };
+    const onSchemaAhead = (payload) => {
+      if (!payload) return;
+      const categories = (payload.ahead || []).map((gap) => gap.category).join(', ') || 'storage';
+      toast.error(
+        `Can't import share from ${shareSender(payload)} yet — it uses a newer ${categories} format. Update PortOS and it imports automatically.`,
         { duration: 12000 },
       );
     };
     socket.on('sharing:manifest-processed', onManifestProcessed);
     socket.on('sharing:incompatible-manifest', onIncompatibleManifest);
+    socket.on('sharing:portos-schema-ahead', onSchemaAhead);
     return () => {
       socket.off('sharing:manifest-processed', onManifestProcessed);
       socket.off('sharing:incompatible-manifest', onIncompatibleManifest);
+      socket.off('sharing:portos-schema-ahead', onSchemaAhead);
     };
   }, []);
 }

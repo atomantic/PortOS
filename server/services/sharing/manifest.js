@@ -47,6 +47,7 @@ const cursorPath = (bucketId) => join(PATHS.data, 'sharing', 'cursors', `${bucke
  *   {
  *     processedById: { '<filename>': '<lastSeenManifestId>' },
  *     processed: ['<filename>', ...],            // legacy: pre-content-aware cursor entries
+ *     refusedById: { '<filename>': { manifestId, localSchema } },
  *     lastProcessedAt: ISO
  *   }
  *
@@ -63,6 +64,7 @@ export async function readCursor(bucketId) {
   return {
     processedById: (raw.processedById && typeof raw.processedById === 'object') ? raw.processedById : {},
     processed: Array.isArray(raw.processed) ? raw.processed : [],
+    refusedById: isPlainObject(raw.refusedById) ? raw.refusedById : {},
     lastProcessedAt: raw.lastProcessedAt || null,
   };
 }
@@ -84,6 +86,7 @@ export async function markProcessed(bucketId, manifestFilename, manifestId = nul
     if (cursor.processed.includes(manifestFilename)) {
       cursor.processed = cursor.processed.filter((f) => f !== manifestFilename);
     }
+    delete cursor.refusedById[manifestFilename];
     const keys = Object.keys(cursor.processedById);
     if (keys.length > 5000) {
       // Drop the lexicographically-smallest 1000 — for timestamp-prefixed
@@ -110,12 +113,36 @@ export async function forgetProcessed(bucketId, manifestFilename) {
     const cursor = await readCursor(bucketId);
     const inMap = cursor.processedById && manifestFilename in cursor.processedById;
     const inLegacy = cursor.processed.includes(manifestFilename);
-    if (!inMap && !inLegacy) return cursor;
+    const inRefused = manifestFilename in cursor.refusedById;
+    if (!inMap && !inLegacy && !inRefused) return cursor;
     if (inMap) delete cursor.processedById[manifestFilename];
     if (inLegacy) cursor.processed = cursor.processed.filter((f) => f !== manifestFilename);
+    if (inRefused) delete cursor.refusedById[manifestFilename];
     await writeCursor(bucketId, cursor);
     return cursor;
   });
+}
+
+/**
+ * Record a manifest this install refused because its own schema is behind the
+ * sender's. Unlike `markProcessed`, the entry is bound to `localSchema` — a
+ * fingerprint of the versions that refused it — so it suppresses the watcher's
+ * replays only until this install's schema changes. The first backlog walk
+ * after an upgrade re-evaluates the manifest and imports it.
+ */
+export async function markRefused(bucketId, manifestFilename, manifestId, localSchema) {
+  return queueCursorWrite(bucketId, async () => {
+    const cursor = await readCursor(bucketId);
+    cursor.refusedById[manifestFilename] = { manifestId: manifestId || '', localSchema };
+    await writeCursor(bucketId, cursor);
+    return cursor;
+  });
+}
+
+/** True when this exact manifest was already refused under the current local schema. */
+export function isRefusalCurrent(cursor, manifestFilename, manifestId, localSchema) {
+  const refusal = cursor?.refusedById?.[manifestFilename];
+  return Boolean(refusal) && refusal.manifestId === (manifestId || '') && refusal.localSchema === localSchema;
 }
 
 /**

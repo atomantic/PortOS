@@ -145,6 +145,27 @@ describe('sharing/manifest', () => {
     expect(manifest.hasBeenProcessed(c, 'sub-universe-abc.json', 'mfst-1')).toBe(false);
   });
 
+  it('a refusal is current only for the same manifest under the same local schema, and survives other cursor writes', async () => {
+    await manifest.markRefused('b1', 'ahead.json', 'mfst-1', 'schema-a');
+    // Every import rewrites the cursor; the refusal must survive that rewrite
+    // or each backlog walk re-announces it.
+    await manifest.markProcessed('b1', 'other.json', 'mfst-9');
+    const c = await manifest.readCursor('b1');
+    expect(manifest.isRefusalCurrent(c, 'ahead.json', 'mfst-1', 'schema-a')).toBe(true);
+    expect(manifest.isRefusalCurrent(c, 'ahead.json', 'mfst-1', 'schema-b')).toBe(false);
+    expect(manifest.isRefusalCurrent(c, 'ahead.json', 'mfst-2', 'schema-a')).toBe(false);
+    expect(manifest.hasBeenProcessed(c, 'ahead.json', 'mfst-1')).toBe(false);
+  });
+
+  it('importing or unsharing a refused manifest clears its refusal', async () => {
+    await manifest.markRefused('b1', 'imported.json', 'mfst-1', 'schema-a');
+    await manifest.markRefused('b1', 'unshared.json', 'mfst-2', 'schema-a');
+    await manifest.markProcessed('b1', 'imported.json', 'mfst-1');
+    await manifest.forgetProcessed('b1', 'unshared.json');
+    const c = await manifest.readCursor('b1');
+    expect(c.refusedById).toEqual({});
+  });
+
   describe('pruneBucketManifests', () => {
     let bucketRoot;
 

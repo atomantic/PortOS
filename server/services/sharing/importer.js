@@ -23,6 +23,7 @@
 
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { join, basename } from 'path';
+import { createHash } from 'crypto';
 import { readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { EventEmitter } from 'events';
@@ -31,7 +32,7 @@ import { PATHS, copyFileGuarded, ensureDir, atomicWrite, readJSONFile } from '..
 import { isSafeRecordId } from '../../lib/validation.js';
 import { logFailureWithStack } from '../../lib/failureLogging.js';
 import { getBucket, bucketBlobPath, bucketBlobSidecarPath, bucketRecordsDir, bucketRecordPath, imageSidecarName, isHexHash } from './buckets.js';
-import { readManifest, markProcessed, readCursor, hasBeenProcessed, forgetProcessed } from './manifest.js';
+import { readManifest, markProcessed, markRefused, readCursor, hasBeenProcessed, isRefusalCurrent, forgetProcessed } from './manifest.js';
 import { SHARING_SCHEMA_VERSION, isManifestCompatible } from './version.js';
 import { PORTOS_SCHEMA_VERSIONS, RECORD_KIND_SCHEMA_CATEGORIES, compareSchemaVersions, scopeVersionDiff, formatVersionGap } from '../../lib/schemaVersions.js';
 import { insertSeriesWithId, updateSeries, getSeries } from '../pipeline/series.js';
@@ -62,6 +63,18 @@ function isSelfAuthored(senderInstanceId, localInstanceId) {
 }
 
 export const sharingEvents = new EventEmitter();
+
+// Everything on the receiving side that the two compatibility gates in
+// `processManifest` read. A refusal recorded under this fingerprint stays quiet
+// until an upgrade changes one of them.
+const LOCAL_SCHEMA_FINGERPRINT = createHash('sha256')
+  .update(JSON.stringify({
+    sharing: SHARING_SCHEMA_VERSION,
+    portos: PORTOS_SCHEMA_VERSIONS,
+    categories: RECORD_KIND_SCHEMA_CATEGORIES,
+  }))
+  .digest('hex')
+  .slice(0, 16);
 
 const queueInboxWrite = createKeyCachedQueue();
 
@@ -954,6 +967,9 @@ export async function processManifest(bucketId, manifestFilename) {
   if (hasBeenProcessed(cursor, manifestFilename, manifest.id)) {
     return { skipped: true, reason: 'already-processed' };
   }
+  if (isRefusalCurrent(cursor, manifestFilename, manifest.id, LOCAL_SCHEMA_FINGERPRINT)) {
+    return { skipped: true, reason: 'already-refused' };
+  }
   // Re-importing our own shares would falsely surface them in the inbox
   // (or no-op merge into their own LWW state). Mark processed so the
   // watcher doesn't replay on every file event.
@@ -967,10 +983,11 @@ export async function processManifest(bucketId, manifestFilename) {
     ? manifest.sharingSchemaVersion
     : (Number.isFinite(manifest.schemaVersion) ? manifest.schemaVersion : null);
   if (remoteVersion !== null && !isManifestCompatible(remoteVersion)) {
-    // Mark processed so the watcher doesn't replay it on every file event,
-    // but emit a clear signal to the UI so the user knows a peer is on a
-    // newer protocol and they should upgrade PortOS to consume their shares.
-    await markProcessed(bucketId, manifestFilename, manifest.id);
+    // Record the refusal so the watcher doesn't replay it on every file event,
+    // and emit a clear signal so the user knows a peer is on a newer protocol.
+    // The refusal lapses when an upgrade changes this install's schema, so
+    // the share imports on the next backlog walk.
+    await markRefused(bucketId, manifestFilename, manifest.id, LOCAL_SCHEMA_FINGERPRINT);
     sharingEvents.emit('incompatible-manifest', {
       bucketId, manifestId: manifest.id, manifestFilename,
       remoteVersion, localVersion: SHARING_SCHEMA_VERSION,
@@ -983,11 +1000,11 @@ export async function processManifest(bucketId, manifestFilename) {
   // PORTOS SCHEMA-VERSION GATE — even when the share-protocol schemaVersion
   // is compatible, the manifest's per-category storage layout versions
   // (`portosSchemaVersions`, e.g. `{ universes: 5 }`) may exceed what this
-  // PortOS can apply. We refuse the import AND mark it processed (see the
-  // dedup rationale in the branch below) — so retry-after-upgrade is NOT
-  // automatic; the user clears the bucket cursor (or unshare/reshares) once
-  // they've upgraded. Emits a `portos-schema-ahead` event the UI uses to
-  // render a persistent "Update PortOS to import this share" badge.
+  // PortOS can apply. We refuse the import and record the refusal against
+  // this install's schema (see the dedup rationale in the branch below), so
+  // the first backlog walk after an upgrade retries it. Emits a
+  // `portos-schema-ahead` event; `shareRefusalNotifier.js` turns it into a
+  // persistent "Update PortOS to import this share" bell card.
   const senderSchemaVersions = isPlainObject(manifest.portosSchemaVersions)
     ? manifest.portosSchemaVersions
     : {};
@@ -997,14 +1014,13 @@ export async function processManifest(bucketId, manifestFilename) {
   const portosFullDiff = compareSchemaVersions(senderSchemaVersions, PORTOS_SCHEMA_VERSIONS);
   const portosDiff = scopeVersionDiff(portosFullDiff, relevantSchemaCategoriesForManifest(manifest));
   if (portosDiff.ahead.length > 0) {
-    // Mark processed so subsequent chokidar fan-outs (every asset/record
+    // Record the refusal so subsequent chokidar fan-outs (every asset/record
     // file landing under the bucket triggers a backlog scan that re-walks
     // every manifest) don't re-fire this event 100× per bundle. Mirrors
-    // the sibling `incompatible-version` branch above. Trade-off: when the
-    // user upgrades PortOS, they must clear the cursor entry to retry the
-    // import (or unshare/reshare from the sender side). Without this dedup,
-    // the event spams logs + the socket channel on every receive cycle.
-    await markProcessed(bucketId, manifestFilename, manifest.id);
+    // the sibling `incompatible-version` branch above. The record is bound to
+    // this install's schema fingerprint, so an upgrade lifts it and the
+    // boot backlog walk imports the share without cursor surgery.
+    await markRefused(bucketId, manifestFilename, manifest.id, LOCAL_SCHEMA_FINGERPRINT);
     sharingEvents.emit('portos-schema-ahead', {
       bucketId, manifestId: manifest.id, manifestFilename,
       ahead: portosDiff.ahead,
@@ -1014,7 +1030,7 @@ export async function processManifest(bucketId, manifestFilename) {
     });
     console.log(
       `⚠️ sharing: bucket=${bucket.name} manifest=${manifest.id} — ${formatVersionGap(portosDiff)} ` +
-      `(producedBy=${manifest.producedByVersion || 'unknown'}). Update PortOS to import; clear the bucket cursor after upgrade to retry.`,
+      `(producedBy=${manifest.producedByVersion || 'unknown'}). Update PortOS to import — it retries after the upgrade.`,
     );
     return {
       skipped: true,
@@ -1329,6 +1345,7 @@ export async function promoteInboxItem(bucketId, manifestId) {
 export async function handleUnshare(bucketId, manifestFilename) {
   const cursor = await readCursor(bucketId);
   const wasTracked = manifestFilename in (cursor.processedById || {})
+    || manifestFilename in (cursor.refusedById || {})
     || (Array.isArray(cursor.processed) && cursor.processed.includes(manifestFilename));
   const inboxHit = await queueInboxWrite(bucketId, async () => {
     const inbox = await readInbox(bucketId);
