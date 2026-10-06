@@ -100,6 +100,7 @@ beforeEach(() => {
     // The render job stays live until a test settles it with a `render` event.
     activeRenderJobId: vi.fn(async () => 'render-1'),
     cancelRender: vi.fn(async () => true),
+    resumeInterruptedCastAndSets: vi.fn(async () => false),
   };
   service.__setAutonomousDepsForTests(doubles);
 });
@@ -874,6 +875,55 @@ describe('auto-approve the rest (brief.autoApprove)', () => {
     expect(renderProductionProof).not.toHaveBeenCalled();
     expect(approvals().proof).toBeUndefined();
     expect(actual.productionReadiness(store.get('mv-auto')).readyForProduction).toBe(true);
+  });
+
+  describe('waiting for Cast & Sets before the art gate (#10431)', () => {
+    const setCast = (castAndSets) => { store.get('mv-auto').castAndSets = castAndSets; };
+    const settleCast = (patch) => {
+      Object.assign(store.get('mv-auto').castAndSets, patch);
+      musicVideoEvents.emit('cast-and-sets', { projectId: 'mv-auto', stage: store.get('mv-auto').castAndSets });
+    };
+    const startWithCastDirecting = async (autoApprove) => {
+      reviewFixture();
+      // The guide is not there yet: no artifact on the draft, Cast & Sets still directing.
+      const analyze = doubles.analyzeSong.getMockImplementation();
+      doubles.analyzeSong.mockImplementation(async (...args) => {
+        await analyze(...args);
+        store.get('mv-auto').productionReview.draft.guideArtifactId = null;
+        setCast({ status: 'directing', processId: 'cast-proc', revision: 1, images: {}, plan: {} });
+      });
+      await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], ...(autoApprove ? { autoApprove } : {}) }, { autoApproveAuthorized: true });
+      await vi.waitFor(() => expect(runOf()?.stages.produce.step).toBe('cast-and-sets'));
+    };
+
+    it('does not park while Cast & Sets is directing, then auto-approves art once it settles', async () => {
+      await startWithCastDirecting(['art', 'storyboard']);
+      expect(runOf()).toMatchObject({ status: 'running', stage: 'produce' });
+      expect(doubles.approveProductionReview).not.toHaveBeenCalled();
+
+      // The guide lands: direction + sheet, stage in review.
+      store.get('mv-auto').productionReview.draft.guideArtifactId = 'guide';
+      settleCast({ status: 'review', direction: { cast: 'x' }, artifactId: 'guide' });
+      await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+      expect(doubles.approveProductionReview.mock.calls.map(([, input]) => input.stage)).toEqual(['art', 'storyboard']);
+    });
+
+    it('without an art grant parks for a human only after the guide exists', async () => {
+      await startWithCastDirecting();
+      expect(runOf().status).toBe('running');
+      store.get('mv-auto').productionReview.draft.guideArtifactId = 'guide';
+      settleCast({ status: 'review', direction: { cast: 'x' }, artifactId: 'guide' });
+      await settled('needs-human');
+      expect(runOf()).toMatchObject({ errorCode: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
+      expect(doubles.approveProductionReview).not.toHaveBeenCalled();
+    });
+
+    it('parks failed with the Cast & Sets error when it fails', async () => {
+      await startWithCastDirecting(['art']);
+      settleCast({ status: 'failed', stopReason: 'The character image failed twice' });
+      await settled('failed');
+      expect(runOf()).toMatchObject({ errorCode: 'CAST_SETS_FAILED', error: expect.stringContaining('The character image failed twice') });
+    });
   });
 });
 

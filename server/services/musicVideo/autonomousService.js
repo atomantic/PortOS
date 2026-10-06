@@ -1,6 +1,7 @@
 import { musicVideoMediaMode, musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 import { prepareProductionReview } from './productionReviewService.js';
 import { assertProductionApproval, productionAlignmentBasis, productionReadiness, productionReviewBasis } from './productionReview.js';
+import { CAST_SETS_WORKING } from './castAndSets.js';
 
 /**
  * Fully-autonomous Music Video — the run orchestrator.
@@ -110,6 +111,13 @@ const defaults = {
   renderVideo: async (...args) => (await import('./render.js')).renderMusicVideo(...args),
   activeRenderJobId: async (projectId) => (await import('./render.js')).getActiveRenderJobId(projectId),
   cancelRender: async (jobId) => (await import('./render.js')).cancelRender(jobId),
+  // An interrupted (previous process) Cast & Sets stage re-pins to this one; true when it did.
+  resumeInterruptedCastAndSets: async (project) => {
+    const { presentProjectCastAndSets, resumeCastAndSets } = await import('./castAndSetsService.js');
+    if (!presentProjectCastAndSets(project).castAndSets?.interrupted) return false;
+    await resumeCastAndSets(project.id);
+    return true;
+  },
   // The review persistence path; session authority was checked on start/resume.
   approveProductionReview: async (...args) => (await import('./productionReviewService.js')).approveProductionReview(...args),
   // Orchestrated mode: the reviewer call, and the edits a reviewer makes by hand.
@@ -181,6 +189,7 @@ const stagePatch = (run, stage, patch) => ({ stages: { [stage]: { ...run.stages[
 // ---- production review auto-approval (brief.autoApprove) --------------------------
 
 const RENDER_STEP = 'rendering';
+const CAST_STEP = 'cast-and-sets';
 const autoApproves = (run, stage) => normalizeAutoApprove(run.brief.autoApprove).includes(stage);
 
 /**
@@ -810,6 +819,15 @@ const STAGES = {
     }
     await prepareProductionReview(project.id);
     project = await getProject(project.id);
+    // The guide is generated in the background; the art gate is only meaningful once it exists.
+    const castStage = project.castAndSets;
+    if (castStage?.status === 'failed') {
+      throw runError(500, 'CAST_SETS_FAILED', `Cast & Sets failed: ${castStage.stopReason || castStage.error || 'unknown error'}`);
+    }
+    if (CAST_SETS_WORKING.includes(castStage?.status) && productionReadiness(project).art.problems.length) {
+      await deps.resumeInterruptedCastAndSets(project);
+      return { output: {}, wait: true, step: CAST_STEP };
+    }
     const artWasApproved = productionReadiness(project).art.approved;
     project = await settleProductionStage(project, run, 'art');
     if (!artWasApproved && productionReadiness(project).art.approved) {
@@ -905,9 +923,15 @@ async function advance(projectId) {
       }
       if (result.wait) {
         await patchRun(projectId, (r) => ({ output: result.output, ...stagePatch(r, stage, { status: 'running', step: result.step || null }) }));
-        console.log(`🎬 Autonomous music video ${short(run.id)} handed ${stage} to ${result.step === RENDER_STEP ? 'the final render' : 'production'}`);
+        console.log(`🎬 Autonomous music video ${short(run.id)} handed ${stage} to ${result.step === RENDER_STEP ? 'the final render' : result.step === CAST_STEP ? 'Cast & Sets' : 'production'}`);
         // The render may have settled before its job id was stored on the run.
         if (result.step === RENDER_STEP) await reconcileFinalRender(projectId);
+        // Cast & Sets may likewise have settled while the wait was being stored.
+        // It runs once this loop releases the project, so the re-entry it triggers is not dropped as "already running".
+        else if (result.step === CAST_STEP) {
+          settlement.promise.then(() => reconcileCastAndSets(projectId))
+            .catch((err) => console.error(`❌ Autonomous music video could not settle on Cast & Sets: ${err.message}`));
+        }
         return;
       }
       const next = nextAutonomousStage(stage);
@@ -1155,6 +1179,33 @@ async function onProductionEvent({ projectId, runId, run: production }) {
     await park(projectId, 'needs-human', { error: reason || `Production is ${production.status}`, errorCode: 'PRODUCTION_PARKED' });
   }
 }
+
+// ---- Cast & Sets completion ------------------------------------------------------
+
+/**
+ * Settle a run waiting on Cast & Sets from the project's own record: still
+ * working → keep waiting; failed → park failed with its error; otherwise
+ * (review/approved/skipped) re-enter `produce`, which now has a guide to review.
+ */
+async function reconcileCastAndSets(projectId) {
+  const project = await getProject(projectId).catch(() => null);
+  const run = projectAutonomousRun(project);
+  if (!run || run.stage !== 'produce' || run.status !== 'running' || run.processId !== PROCESS_ID || run.stages.produce?.step !== CAST_STEP) return;
+  const stage = project.castAndSets;
+  if (CAST_SETS_WORKING.includes(stage?.status)) return;
+  if (stage?.status === 'failed') {
+    const error = trimTo(`Cast & Sets failed: ${stage.stopReason || stage.error || 'unknown error'}`, 500);
+    await patchRun(projectId, (r) => stagePatch(r, 'produce', { status: 'failed', error, step: null }));
+    await park(projectId, 'failed', { error, errorCode: 'CAST_SETS_FAILED' });
+    return;
+  }
+  advanceInBackground(projectId);
+}
+
+musicVideoEvents.on('cast-and-sets', ({ projectId }) => {
+  if (!projectId) return;
+  reconcileCastAndSets(projectId).catch((err) => console.error(`❌ Autonomous music video could not settle on Cast & Sets: ${err.message}`));
+});
 
 // ---- final render completion -----------------------------------------------------
 
