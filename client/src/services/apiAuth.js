@@ -34,3 +34,17 @@ export const revokeAuthSession = (id, options) => request(`/auth/sessions/${enco
   silent: true,
   ...options,
 });
+
+// Agent API key (Settings → Security): state only, never the token itself.
+export const getAgentKeyStatus = (options) => request('/auth/agent-key', options);
+
+export const setAgentKeyEnabled = (enabled) => request('/auth/agent-key', {
+  method: 'PUT',
+  body: JSON.stringify({ enabled }),
+  silent: true,
+});
+
+export const rotateAgentKey = () => request('/auth/agent-key/rotate', {
+  method: 'POST',
+  silent: true,
+});
