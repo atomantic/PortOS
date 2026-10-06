@@ -1,5 +1,5 @@
-/** Real transaction/restore fixtures only; no grants, peers, adapters or providers. */
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+/** Disposable transaction/restore and receiver workflow fixtures; no live peer or provider actions. */
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -38,6 +38,58 @@ afterEach(async () => {
 afterAll(async () => { if (health.connected) await close(); });
 
 describe.skipIf(!runDb)('receiver-local permanent execution consumption', () => {
+  it('executes one fixture adapter through real grant floors, consumption and terminal recovery', async () => {
+    const [{ createPeerExecutionReceiver }, { createPeerExecutionGrants }, { createMaintenanceAdmission }] = await Promise.all([
+      import('./peerExecution.js'), import('./peerExecutionGrants.js'), import('../lib/maintenanceAdmission.js'),
+    ]);
+    const pair = { self: { instanceId: input.hostInstanceId }, peer: { id: 'fixture-pair', instanceId: input.peerInstanceId, syncSecret: 'fixture-secret'.repeat(4) } };
+    let store = { version: 1, grants: [] };
+    const proofs = new Map();
+    const coordinator = createMaintenanceAdmission(directory, { verifyExclusiveReceipt: (claim, receipt) => {
+      const proof = proofs.get(claim.operation.operationId);
+      return proof?.fingerprint === claim.fingerprint && proof.receiptDigest === receipt.receiptDigest;
+    } });
+    const grants = createPeerExecutionGrants({ ledger, identity: async () => pair, readStore: async () => store, writeStore: async value => { store = value; } });
+    const run = vi.fn(async () => ({ state: 'succeeded', code: 'FIXTURE_COMPLETED' }));
+    const receiver = createPeerExecutionReceiver({ ledger, grants, coordinator, caller: async () => pair,
+      version: 'fixture-1.0', terminalProofs: proofs, adapters: { prepare: async () => ({ exact: 'fixture' }), run, reconcile: async () => null } });
+    await receiver.saveGrant({ peerId: pair.peer.id, action: input.intent.action, confirmedHostInstanceId: pair.self.instanceId,
+      confirmedPeerInstanceId: pair.peer.instanceId, previousGrantId: null, expiresInMinutes: 60, allowExecution: true },
+    { portosAuthContext: { method: 'session' } });
+    const { payload } = await receiver.preflight({}, { protocolVersion: 1, requestId: input.requestId, intent: input.intent });
+    const { scope: _scope, senderInstanceId: _sender, targetInstanceId: _target, expiresAt: _expiry, ...dispatch } = payload;
+    await receiver.dispatch({}, dispatch);
+    await vi.waitFor(async () => expect((await receiver.status({}, input)).payload.state).toBe('succeeded'));
+    await receiver.dispatch({}, dispatch);
+    expect(run).toHaveBeenCalledOnce();
+    expect(coordinator.status().state).toBe('normal');
+    expect(await ledger.generationFloor({ hostInstanceId: input.hostInstanceId, peerInstanceId: input.peerInstanceId, action: input.intent.action })).toBe(1);
+  });
+  it('permanently retires unconsumed requests without authorizing work and serializes against delayed consume', async () => {
+    const retired = await ledger.retireUnconsumed(input);
+    expect(retired).toMatchObject({ state: 'failed', revision: 1, claim: null, receipt: { code: 'PEER_EXECUTION_NOT_ACCEPTED' } });
+    expect((await ledger.consume(input)).operation).toEqual(retired);
+    expect((await ledger.consume(input)).isNew).toBe(false);
+    const restarted = createPeerExecutionLedger({ db, dataDir: directory });
+    expect(await restarted.readRequest(input)).toEqual(retired);
+    const other = { ...input, requestId: randomUUID() };
+    const [accepted, observed] = await Promise.all([ledger.consume(other), restarted.retireUnconsumed(other)]);
+    expect(observed.operationId).toBe(accepted.operation.operationId);
+    expect(observed.state).toBe(accepted.operation.state);
+    expect((await ledger.list()).length).toBe(2);
+    const stale = { ...input, requestId: randomUUID() };
+    ledger.authority.invalidate();
+    const denied = await restarted.retireUnconsumed(stale);
+    expect(denied.receipt.executionEpoch).toBe(ledger.authority.read().epoch);
+    expect(denied.binding.executionEpoch).toBe(stale.executionEpoch);
+    const recoveryId = randomUUID();
+    await ledger.prepareRestore(recoveryId);
+    await query('DELETE FROM peer_execution_operations');
+    await query('DELETE FROM peer_execution_generation_floors');
+    await ledger.reconcileRestore(recoveryId);
+    expect((await restarted.readRequest(input)).state).toBe('failed');
+    expect((await restarted.readRequest(stale)).receipt.code).toBe('PEER_EXECUTION_NOT_ACCEPTED');
+  });
   it.each(['acquisition', 'capture-query', 'begin-publication', 'snapshot-publication', 'completion-publication', 'directory-sync'])
     ('resumes only the same legacy empty-adoption owner after %s failure and process reconstruction', async boundary => {
       const { _createPeerExecutionRestore } = await import('./peerExecutionRestore.js');

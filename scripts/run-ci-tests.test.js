@@ -45,8 +45,11 @@ describe('ci.yml shard wiring', () => {
   const runners = Object.entries(workflowJobs(WORKFLOW)).filter(([, body]) => body.includes('run-ci-tests.js'));
 
   it('builds every test runner matrix from the planner and hands each slice to the runner', () => {
-    expect(runners.map(([id]) => id).sort()).toEqual(['client', 'server', 'windows-server']);
-    for (const [id, body] of runners) {
+    expect(runners.map(([id]) => id).sort()).toEqual(['client', 'database', 'server', 'windows-server']);
+    // `database` runs run-ci-tests.js only in `files` mode, for the
+    // cross-workspace browser suites the planner selected (#10312): an exact
+    // file list has nothing to shard, so it is the one runner without a matrix.
+    for (const [id, body] of runners.filter(([id]) => id !== 'database')) {
       // The fan-out is decided by the impact job, never hardcoded here: a
       // scoped plan must collapse to one runner, and a job-level `if` cannot
       // read `matrix` to skip the extra shards itself.
@@ -56,6 +59,20 @@ describe('ci.yml shard wiring', () => {
       // the key the winner's 1/n of the transform artifacts is all that persists.
       expect(body, id).toMatch(/key: vitest-\w+-\$\{\{ runner\.os \}\}-\$\{\{ hashFiles\([^)]*\) \}\}-\$\{\{ matrix\.shard \}\}of\$\{\{ strategy\.job-total \}\}/);
     }
+  });
+
+  it('runs the planner-selected browser suites on the database job with prerequisites required (#10312)', () => {
+    const body = workflowJobs(WORKFLOW).database;
+    expect(body).toContain("if: needs.impact.outputs.db == 'true' || needs.impact.outputs.browser_files != '[]'");
+    const start = body.indexOf('- name: Run cross-workspace browser suites');
+    expect(start).toBeGreaterThan(0);
+    const step = body.slice(start, body.indexOf('- name:', start + 1));
+    expect(step).toContain('CI_TEST_MODE: files');
+    expect(step).toContain('CI_TEST_FILES: ${{ needs.impact.outputs.browser_files }}');
+    expect(step).toContain("PORTOS_REQUIRE_BROWSER_SUITES: '1'");
+    // The client workspace must be installed before the suites bundle it.
+    expect(body.indexOf('npm ci --prefix client')).toBeGreaterThan(0);
+    expect(body.indexOf('npm ci --prefix client')).toBeLessThan(start);
   });
 
   it('runs once-only steps on the first shard alone', () => {

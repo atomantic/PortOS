@@ -2335,6 +2335,15 @@ describe('restoreSnapshot manifest verification', () => {
         subdirFilter: 'brain',
       });
       expect(equalPreview.changedFiles.filter(line => line.includes(relativePath))).toEqual([]);
+
+      // A selected file needs an exact include rule on rsync 3.x; the
+      // directory-only /file/*** pattern silently skips it there.
+      await realFs.writeFile(livePath, liveContent);
+      const filePreview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true, subdirFilter: relativePath });
+      expect(filePreview.changedFiles.some(line => line.includes(relativePath))).toBe(true);
+      expect(await realFs.readFile(livePath, 'utf8')).toBe(liveContent);
+      await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, subdirFilter: relativePath });
+      expect(await realFs.readFile(livePath, 'utf8')).toBe(snapshotContent);
     } finally {
       if (previousRsync === undefined) delete process.env.PORTOS_RSYNC;
       else process.env.PORTOS_RSYNC = previousRsync;
@@ -2383,7 +2392,24 @@ describe('restoreSnapshot manifest verification', () => {
       }
     }
 
-    it.for(['peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance/state.json', 'Workflow-Maintenance/state.json'])
+    it('invalidates execution grants before restoring instance identity bytes', async context => {
+      await withRealRsync(context, async () => {
+        const { createPeerExecutionAuthority } = await import('../lib/peerExecutionAuthority.js');
+        const path = joinPath(PATHS.data, 'peer-execution-authority.json');
+        await realFs.rm(path, { force: true });
+        const authority = createPeerExecutionAuthority(PATHS.data);
+        const before = authority.initialize();
+        const identity = '{"self":{"instanceId":"00000000-0000-4000-8000-000000000001"},"peers":[]}';
+        const hash = await writeSnapshotFile('instances.json', identity);
+        await writeManifest({ 'instances.json': hash });
+        await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, subdirFilter: 'instances.json' });
+        expect(authority.read().epoch).not.toBe(before.epoch);
+        expect(await realFs.readFile(joinPath(PATHS.data, 'instances.json'), 'utf8')).toBe(identity);
+        await realFs.rm(path, { force: true });
+      });
+    });
+
+    it.for(['peer-execution-grants.json', 'peer-execution-catalog.json', 'peer-execution/fixture-operation/evidence.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance/state.json', 'Workflow-Maintenance/state.json'])
     ('preserves non-rewound execution authority and ownership at %s (#10127)', async (path, context) => {
       await withRealRsync(context, async () => {
         const localPath = joinPath(PATHS.data, path);
@@ -3041,6 +3067,9 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=._*',
         // Machine-local admission state is never installed by a restore (#10064).
         '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
+        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]',
+        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[cC][aA][tT][aA][lL][oO][gG].[jJ][sS][oO][nN]',
+        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[gG][rR][aA][nN][tT][sS].[jJ][sS][oO][nN]',
         '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
         '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[rR][eE][cC][oO][vV][eE][rR][yY].[jJ][sS][oO][nN][lL]',
         '--exclude=/[wW][oO][rR][kK][fF][lL][oO][wW]-[mM][aA][iI][nN][tT][eE][nN][aA][nN][cC][eE]',
@@ -3048,6 +3077,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         // Leading `/` is load-bearing: rsync matches an unanchored pattern
         // against the end of every path, so `brain/***` would also restore
         // `data/<anything>/brain/**` — outside the scope the preflight verified.
+        '--include=/brain',
         '--include=/brain/***',
         '--include=*/',
         '--exclude=*',
@@ -3070,6 +3100,9 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=desktop.ini',
         '--exclude=._*',
         '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
+        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]',
+        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[cC][aA][tT][aA][lL][oO][gG].[jJ][sS][oO][nN]',
+        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[gG][rR][aA][nN][tT][sS].[jJ][sS][oO][nN]',
         '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
         '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[rR][eE][cC][oO][vV][eE][rR][yY].[jJ][sS][oO][nN][lL]',
         '--exclude=/[wW][oO][rR][kK][fF][lL][oO][wW]-[mM][aA][iI][nN][tT][eE][nN][aA][nN][cC][eE]',

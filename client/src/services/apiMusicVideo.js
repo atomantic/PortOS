@@ -248,6 +248,14 @@ export const updateMusicVideoPublishCopy = (id, patch, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish-kit/copy`, { method: 'PATCH', body: JSON.stringify(patch || {}), ...options });
 export const selectMusicVideoPublishThumbnail = (id, filename, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish-kit/thumbnail`, { method: 'PUT', body: JSON.stringify({ filename }), ...options });
+// Release cover art: compose from a source image, or queue a fresh source
+// (the result arrives over the `music-video:cover-art` socket event).
+export const composeMusicVideoCoverArt = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/cover-art`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
+export const designMusicVideoCoverArt = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/cover-art/design`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
+export const generateMusicVideoCoverArt = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/cover-art/generate`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
 // ---- Posting (#9282) ----
 // Prepare fills the platform's post in the PortOS Browser → { draftId, target,
 // summary, screenshot }. Manual posting is handled outside this wrapper.

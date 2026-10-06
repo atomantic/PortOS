@@ -26,8 +26,8 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | Module | Purpose |
 |---|---|
 | `maintenanceAdmission.js` | Durable machine-local workflow drain, cross-process admission permits, continuation ownership and stale-resume fencing. |
-| `maintenanceExclusive.js` | Coordinator-owned exclusive ready claims, opaque fresh idle observations, durable ownership and verified settlement; internal only, no executor or peer authority. |
-| `peerExecutionAuthority.js` | Non-rewound receiver execution epoch and restore-owner journal; default-deny on stale evidence or pending/conflicting recovery. No grants or adapters. |
+| `maintenanceExclusive.js` | Coordinator-owned exclusive claims, opaque idle observations, durable ownership, one-use fixed-adapter capabilities and verified settlement. Peer credentials alone never grant authority. |
+| `peerExecutionAuthority.js` | Non-rewound receiver execution epoch and restore-owner journal; default-deny on stale evidence or pending/conflicting recovery. Invalidates grants on identity changes and refuses stale epochs. |
 | `appDeployFlags.js` | Shared allowlist of flags PortOS may forward to a managed app's `deploy.sh`, consumed by socket validation and deployment orchestration without reversing the lib/services dependency. |
 | `apiContractSchemas.js` | Canonical Zod request contracts for externally callable APIs plus `zodToOpenApiSchema` (plain JSON Schema — the 3.0.3 conversion happens at the OpenAPI document boundary, not here); runtime routes and OpenAPI use the same schema objects. |
 | `codeAnimationAcceptance.js` | Code Animation production acceptance: splits run evidence into technical/visual/temporal/sound (unmeasured stays unverified), decides promotability, freezes source/audio/render hashes and detects stale acceptance. Pure. |
@@ -740,6 +740,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
+| `browserSuiteGate.js` | `browserSuiteCanRun(label, prerequisites)` is the `canRun` guard for the cross-workspace `*.browser.test.js` suites (Chrome + ffmpeg + the client bundler). Pass `{ name: discoveredValue }`; a falsy value is missing. Returns `false` with a visible skip log locally, but throws naming the missing prerequisites when `PORTOS_REQUIRE_BROWSER_SUITES` is set — the flag the CI `database` job sets for the browser suites the planner selected (#10312). |
 | `dbTestGate.js` | `requireDbOrSkip(label, dbReady, reason)` keeps a missing local test database as a visible skipped suite, but throws when `PORTOS_REQUIRE_DB` is set so CI cannot pass after DB-backed suites disappear. |
 | `gitTestRepo.js` | Shared real-git sandbox for integration tests (#4394): one initialized template (working tree + bare origin) per worker, then `fs.cp` into a fresh temp dir. `makeGitSandbox({ origin })`, `attachBareOrigin(scratch, repo)`, `materializeGitRepo(dest)`, `destroyGitSandbox`, plus `SKIP_HEAVY_INTEGRATION` (`VITEST_FAST=1`). `resetGitSandbox({ scratch, repo, initialHead })` / `resetGitWorktreeSandbox(repo, initialHead)` restore a sandbox in place (branches, worktrees, remote) so a `describe` can build one sandbox in `beforeAll` and reset between tests instead of paying the fs.cp/rm cycle per test (#5902). Every entry point runs `assertTempPath` first, so a path outside `os.tmpdir()` throws instead of `git init`-ing or `rm -rf`-ing a real checkout (#4554). Still real git — just not rebuilt from `init`+`commit`+`push` in every `beforeEach`. |
 | `mirrorParity.js` | Source-extraction and comparison primitives for declaration-level contract tests: the vendored `aiToolkit/` copy of `TOOL_USE_RE` (`localModelHeuristics.mirror.test.js`), and the bootstrap sequence's body assertions (`bootstrap*.test.js`). A pure module the browser needs is imported by the client rather than mirrored, so no client↔server copy test should need these: `stripCommentsAndNormalize` (so per-side commentary may diverge but logic may not), `extractDeclaration(src, name)` (balanced `{}`/`()`/`[]` walk over `function` / `async function` / `const`), and `compareDeclaration(serverSrc, clientSrc, name)`. Use these instead of hand-rolling a brace-walker per mirror. Pure — no `vitest` import — so callers own the assertions. |
@@ -856,6 +857,6 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | `forgeMaintenanceTasks.js` | Current forge-maintenance screening version, queue-compatible identity check, task classification, and legacy refusal reason. |
 
-| `peerAdminValidation.js` | Strict planning-only peer administration schemas, fixed actions and grant scope. |
+| `peerAdminValidation.js` | Strict, separate planning and execution schemas with fixed intents, signed receipts and explicit grant scopes. |
 
 | `musicVideoReviewDraft.js` | Pure imported Animatic review candidates, newest immutable version first; exact version URLs remain separate from native production approvals. |

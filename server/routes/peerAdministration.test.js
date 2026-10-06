@@ -19,6 +19,10 @@ vi.mock('../services/auth.js', () => ({
   verifyPassword: async () => true,
 }));
 vi.mock('../services/settings.js', () => ({ getSettings: async () => ({}), settingsEvents: new EventEmitter() }));
+// Unit CI deliberately has no database; default-deny must not consult it.
+vi.mock('../lib/db.js', async () => ({
+  ...await vi.importActual('../lib/db.js'), query: vi.fn(async () => { throw new Error('Fixture database unavailable'); }),
+}));
 vi.mock('../lib/peerHttpClient.js', async () => ({
   ...await vi.importActual('../lib/peerHttpClient.js'), peerFetch: vi.fn(),
 }));
@@ -32,6 +36,7 @@ const { authGate, hostControlRouteGate } = await import('../services/authGate.js
 const { default: receiver } = await import('./peerAdministration.js');
 const { default: peerAdminOperatorRoutes } = await import('./peerAdminOperator.js');
 const { errorMiddleware } = await import('../lib/errorHandler.js');
+const { query } = await import('../lib/db.js');
 const { derivePeerAuthToken, peerFetch } = await import('../lib/peerHttpClient.js');
 // Fixture peers sign the wire envelope independently of the receiving service.
 const signPeerAdmin = (peer, purpose, payload) => createHmac('sha256', peer.syncSecret)
@@ -92,6 +97,19 @@ beforeEach(() => {
 afterAll(cleanup);
 
 describe('bounded administration through the real authority boundary', () => {
+  it('keeps planning grants powerless on the independently authenticated execution surface', async () => {
+    await grant();
+    const input = { protocolVersion: 1, requestId: randomUUID(), intent };
+    const denied = await peerRequest('execution/preflight', input);
+    expect(denied.status, JSON.stringify(denied.body)).toBe(403);
+    expect(denied.body.code).toBe('PEER_EXECUTION_GRANT_REQUIRED');
+    expect(query).not.toHaveBeenCalled();
+    expect((await request(app).post(`${ROOT}/execution/preflight`).send(input)).status).toBe(401);
+    expect((await peerRequest('execution/dispatch', { ...input, command: 'fixture-injection' })).status).toBe(400);
+    expect(execution.restart).not.toHaveBeenCalled();
+    expect(execution.update).not.toHaveBeenCalled();
+    expect(execution.install).not.toHaveBeenCalled();
+  });
   it('defaults to deny and never elevates a peer to existing host control', async () => {
     const body = { protocolVersion: 1, challenge: randomUUID(), intent };
     expect((await peerRequest('preflight', body)).body.code).toBe('PEER_ADMIN_GRANT_REQUIRED');

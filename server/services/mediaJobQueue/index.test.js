@@ -278,6 +278,14 @@ describe('mediaJobQueue', () => {
     expect(stubs.generateImage).not.toHaveBeenCalled();
   });
 
+  it('admits release cover art for a code-only video: the cover is not footage in it', async () => {
+    const { getProject } = await import('../musicVideo/projects.js');
+    getProject.mockClear();
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'Synthetic cover', musicVideo: { projectId: 'mv-example', coverArt: { requestId: 'req-example' } } } });
+    expect(mediaJobQueue.getJob(jobId)).toBeTruthy();
+    expect(getProject).not.toHaveBeenCalled();
+  });
+
   it('rejects an unreviewed music-video scene before queue admission and rechecks delayed dispatch', async () => {
     const { assertMusicVideoSceneReview } = await import('../musicVideo/productionReviewService.js');
     const request = { kind: 'video', params: { prompt: 'Synthetic scene', musicVideo: { projectId: 'mv-example', sceneId: 'scene-example' } } };

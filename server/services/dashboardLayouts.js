@@ -54,13 +54,12 @@ export const INTENT_LAYOUTS = [
   {
     id: 'health',
     name: 'Health',
-    widgets: ['death-clock', 'goal-progress', 'daily-post', 'quick-brain', 'hourly-activity', 'meatspace-streak'],
+    widgets: ['death-clock', 'goal-progress', 'daily-post', 'quick-brain', 'meatspace-streak'],
     grid: [
       { id: 'death-clock',      x: 0, w: 4,  order: 0, h: 3 },
       { id: 'goal-progress',    x: 4, w: 5,  order: 1, h: 5 },
       { id: 'quick-brain',      x: 0, w: 4,  order: 2, h: 2 },
       { id: 'daily-post',       x: 9, w: 3,  order: 3, h: 2 },
-      { id: 'hourly-activity',  x: 0, w: 12, order: 4, h: 4 },
       // Gated on any health log existing — hidden on installs with no logs.
       { id: 'meatspace-streak', x: 0, w: 4,  order: 5, h: 4 },
     ],
@@ -111,7 +110,7 @@ const DEFAULT_LAYOUTS = [
       'apps',
       'cos', 'goal-progress', 'upcoming-tasks',
       'proactive-alerts', 'review-hub', 'while-away', 'system-health', 'active-processing', 'network-exposure', 'backup', 'death-clock', 'quick-stats', 'decision-log',
-      'hourly-activity', 'tribe-care', 'feeds', 'today-agenda', 'on-this-day', 'open-threads',
+      'tribe-care', 'feeds', 'today-agenda', 'on-this-day', 'open-threads',
     ],
     // Above-the-fold capture row stretches to h=5 so the Quick Task card
     // can show its expanded options (worktree/PR/simplify/etc.) without
@@ -139,7 +138,6 @@ const DEFAULT_LAYOUTS = [
       { id: 'cos',              x: 4, w: 5,  order: 14, h: 4 },
       { id: 'while-away',       x: 9, w: 3,  order: 15, h: 3 },
       // Full-width visualizations + apps
-      { id: 'hourly-activity',  x: 0, w: 12, order: 16, h: 3 },
       { id: 'apps',             x: 0, w: 12, order: 17, h: 8 },
       // Quick-idea (catalog) is sequenced below apps so the seeded layout
       // doesn't crowd the tightly-packed above-the-fold band.

@@ -1635,7 +1635,9 @@ export function assertMediaQueueRoom(count = 1) {
 // entry, no SSE entry, no snapshot write. The check and the push below run in
 // one synchronous stretch, so concurrent submissions cannot overshoot it.
 async function assertMusicVideoJobPolicy(kind, params) {
-  if (params?.musicVideo?.projectId && ['image', 'video'].includes(kind)) {
+  // Release cover art is not footage in the video, so the media mode (what the
+  // video itself may contain) does not govern it.
+  if (params?.musicVideo?.projectId && !params.musicVideo.coverArt && ['image', 'video'].includes(kind)) {
     const { getProject } = await import('../musicVideo/projects.js');
     const { assertMusicVideoMedia } = await import('../../lib/musicVideoMediaPolicy.js');
     const project = await getProject(params.musicVideo.projectId);

@@ -139,7 +139,13 @@
     return entry.ready;
   }
   // Seek to the middle of the source frame under `local` so a frame boundary
-  // can never round to the previous frame; resolve only on 'seeked'.
+  // can never round to the previous frame. 'seeked' only says the decoder
+  // reached the time; drawImage reads the frame the compositor has PRESENTED,
+  // which can trail it and paints nothing (a black capture) when read too soon.
+  // So resolve on 'seeked' AND the presented-frame callback, which is armed
+  // before the seek so a fast presentation is never missed. Where the browser
+  // never presents a detached element, FRAME_GRACE_MS after 'seeked' stands in.
+  const FRAME_GRACE_MS = 1000;
   function seekVideo(v, media, local) {
     const fps = media.fps || FPS;
     const last = Math.max(0, (Number.isFinite(media.outSec) ? media.outSec : v.duration) - 0.5 / fps);
@@ -147,12 +153,21 @@
     const target = Math.min((Math.floor(clamped * fps + 1e-6) + 0.5) / fps, Math.max(0, v.duration - 1e-3));
     if (Math.abs(v.currentTime - target) < 1e-6 && v.readyState >= 2 && !v.seeking) return Promise.resolve(v);
     return new Promise((resolve, reject) => {
+      let seeked = false;
+      let presented = typeof v.requestVideoFrameCallback !== 'function';
+      let grace = null;
       const timer = setTimeout(() => { cleanup(); reject(new Error(`video seek timed out: ${media.src} @ ${target.toFixed(3)}s`)); }, 15000);
-      const done = () => { cleanup(); resolve(v); };
+      const finish = () => { if (seeked && presented) { cleanup(); resolve(v); } };
+      const onSeeked = () => {
+        seeked = true;
+        if (!presented) grace = setTimeout(() => { presented = true; finish(); }, FRAME_GRACE_MS);
+        finish();
+      };
       const fail = () => { cleanup(); reject(new Error(`video seek failed: ${media.src} (${v.error?.code ?? '?'})`)); };
-      function cleanup() { clearTimeout(timer); v.removeEventListener('seeked', done); v.removeEventListener('error', fail); }
-      v.addEventListener('seeked', done);
+      function cleanup() { clearTimeout(timer); clearTimeout(grace); v.removeEventListener('seeked', onSeeked); v.removeEventListener('error', fail); }
+      v.addEventListener('seeked', onSeeked);
       v.addEventListener('error', fail);
+      if (!presented) v.requestVideoFrameCallback(() => { presented = true; finish(); });
       v.currentTime = target;
     });
   }

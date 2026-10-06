@@ -96,6 +96,13 @@ export function createPeerExecutionAuthority(dataDir, { io = fs, assertWrite = a
   const initialize = () => transaction(current => current ?? {
     version: 1, epoch: makeId(), revision: 1, phase: 'ready', recovery: null, settledRecoveryId: null, emptyAdoptionId: null,
   });
+  const invalidate = () => {
+    if (!read()) return null; // No execution authority to revoke on a new install.
+    return transaction(current => {
+      if (current.phase !== 'ready') throw executionAuthorityError('Execution recovery is pending; authority cannot be rewritten.');
+      return { ...current, epoch: makeId(), revision: current.revision + 1 };
+    });
+  };
   const beginRestore = id => {
     uuid.parse(id);
     return transaction(current => {
@@ -153,6 +160,6 @@ export function createPeerExecutionAuthority(dataDir, { io = fs, assertWrite = a
       throw executionAuthorityError('The execution recovery owner changed.');
     return { ...current, revision: current.revision + 1, phase: 'ready', recovery: null, settledRecoveryId: id };
   });
-  return { read, requireReady, initialize, beginRestore, beginEmptyAdoption, recoverEmptyAdoption,
+  return { read, requireReady, initialize, invalidate, beginRestore, beginEmptyAdoption, recoverEmptyAdoption,
     recordSnapshot, completeRestore, recoveryPath, assertWrite };
 }
