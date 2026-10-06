@@ -1,3 +1,4 @@
+import { publishRuntimeFiles } from '../lib/runtimeFilePublication.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
  * Compatibility shim for PortOS services that import from runner.js
@@ -6,7 +7,7 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
 import { spawn } from '../lib/childProcess.js';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
-import { atomicWrite, ensureDir, tryReadFile, writeFileGuarded, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, tryReadFile, PATHS } from '../lib/fileUtils.js';
 import { resolveSpawnCwd } from '../lib/spawnCwd.js';
 import { hasModelFlag, extractBakedModel, isCodexProvider } from '../lib/providerModels.js';
 import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
@@ -115,68 +116,71 @@ export async function finalizeRunRecord({ runId, output, exitCode, success, erro
   const outputPath = join(runDir, 'output.txt');
   const metadataPath = join(runDir, 'metadata.json');
 
-  await writeFileGuarded(outputPath, output).catch(() => maintenance.markCurrentUnsettled());
-
-  const metadataStr = await readFile(metadataPath, 'utf-8').catch(() => '{}');
-  let metadata = {};
-  try { metadata = JSON.parse(metadataStr); } catch { console.log('⚠️ Corrupted metadata for run, using fresh'); }
-  // A caller that never went through toolkit `createRun` — or whose run record
-  // was lost — leaves `{}` here, and the completion fields below then describe a
-  // run with no id, provider or model. That anonymous record still reaches the
-  // `onRunFailed` hook, which published an investigation task literally titled
-  // "Investigate AI provider failure: undefined (undefined)" and keyed its
-  // dedupe + circuit breaker on `undefined-undefined` — one bucket every such
-  // failure collapses into, suppressing unrelated real ones for the window.
-  // Backfill what the caller already handed us.
-  if (!metadata.id) metadata.id = runId;
-  for (const [key, value] of Object.entries(identity || {})) {
-    if (metadata[key] === undefined && value !== undefined) metadata[key] = value;
-  }
-  metadata.endTime = new Date().toISOString();
-  metadata.duration = Date.now() - startTime;
-  metadata.exitCode = exitCode;
-  metadata.success = success;
-  metadata.outputSize = Buffer.byteLength(output);
-  if (error) metadata.error = error;
-  if (extras && typeof extras === 'object') Object.assign(metadata, extras);
-  const canceled = metadata.canceled === true;
-
-  if (!success && canceled) {
-    // Cancellation is an operator/host lifecycle outcome, not evidence about
-    // provider health. Keep it explicit for /runs without scanning story text
-    // (which may contain quota-like words) or firing the provider-failure hook.
-    metadata.errorCategory = ERROR_CATEGORIES.CANCELED;
-  } else if (!success && toolkit.services.errorDetection) {
-    // Exit 124 is the host's authoritative wall-clock timeout. Do not scan the
-    // model's entire TUI screen/prompt for a competing category in that case:
-    // story text can legitimately contain words such as "credit" or
-    // "billing", which used to turn a plain timeout into quota-exceeded and
-    // bench a healthy provider for an hour. Other failures still analyze the
-    // output because their provider banner is often the only useful signal.
-    const analyzeError = toolkit.services.errorDetection.analyzeError;
-    const analysisInput = exitCode === 124 ? (error || 'Process timed out') : output;
-    let errorAnalysis = analyzeError(analysisInput, exitCode);
-    // When that scan lands on nothing, the caller's own `error` is the better
-    // evidence — and the run that proved it was a local-LLM playground timeout:
-    // the host aborted its OWN deadline, finalized with exit 1 + `Timed out after
-    // Nms`, and handed over the partial generation as `output`. Scanning a
-    // generation that carries no failure signal returns UNKNOWN with its first
-    // line lifted as the "error message", so a plain timeout reached the
-    // provider-failure hook as an uncategorized Tier-4 failure titled with the
-    // story's own headline. Consulted only as a fallback, so a scan that already
-    // found a real category (the CLI/TUI banner case) keeps it.
-    if (error && (!errorAnalysis.category || errorAnalysis.category === ERROR_CATEGORIES.UNKNOWN)) {
-      const statedAnalysis = analyzeError(error, exitCode);
-      if (statedAnalysis.category && statedAnalysis.category !== ERROR_CATEGORIES.UNKNOWN) {
-        errorAnalysis = statedAnalysis;
-      }
+  const metadata = await publishRuntimeFiles([outputPath, metadataPath], async () => {
+    const metadataStr = await readFile(metadataPath, 'utf-8').catch(() => '{}');
+    let metadata = {};
+    try { metadata = JSON.parse(metadataStr); } catch { console.log('⚠️ Corrupted metadata for run, using fresh'); }
+    // A caller that never went through toolkit `createRun` — or whose run record
+    // was lost — leaves `{}` here, and the completion fields below then describe a
+    // run with no id, provider or model. That anonymous record still reaches the
+    // `onRunFailed` hook, which published an investigation task literally titled
+    // "Investigate AI provider failure: undefined (undefined)" and keyed its
+    // dedupe + circuit breaker on `undefined-undefined` — one bucket every such
+    // failure collapses into, suppressing unrelated real ones for the window.
+    // Backfill what the caller already handed us.
+    if (!metadata.id) metadata.id = runId;
+    for (const [key, value] of Object.entries(identity || {})) {
+      if (metadata[key] === undefined && value !== undefined) metadata[key] = value;
     }
-    metadata.error = metadata.error || errorAnalysis.message || `Process exited with code ${exitCode}`;
-    metadata.errorCategory = errorAnalysis.category;
-    metadata.errorAnalysis = errorAnalysis;
-  }
+    metadata.endTime = new Date().toISOString();
+    metadata.duration = Date.now() - startTime;
+    metadata.exitCode = exitCode;
+    metadata.success = success;
+    metadata.outputSize = Buffer.byteLength(output);
+    if (error) metadata.error = error;
+    if (extras && typeof extras === 'object') Object.assign(metadata, extras);
+    const canceled = metadata.canceled === true;
 
-  await atomicWrite(metadataPath, metadata).catch(() => maintenance.markCurrentUnsettled());
+    if (!success && canceled) {
+      // Cancellation is an operator/host lifecycle outcome, not evidence about
+      // provider health. Keep it explicit for /runs without scanning story text
+      // (which may contain quota-like words) or firing the provider-failure hook.
+      metadata.errorCategory = ERROR_CATEGORIES.CANCELED;
+    } else if (!success && toolkit.services.errorDetection) {
+      // Exit 124 is the host's authoritative wall-clock timeout. Do not scan the
+      // model's entire TUI screen/prompt for a competing category in that case:
+      // story text can legitimately contain words such as "credit" or
+      // "billing", which used to turn a plain timeout into quota-exceeded and
+      // bench a healthy provider for an hour. Other failures still analyze the
+      // output because their provider banner is often the only useful signal.
+      const analyzeError = toolkit.services.errorDetection.analyzeError;
+      const analysisInput = exitCode === 124 ? (error || 'Process timed out') : output;
+      let errorAnalysis = analyzeError(analysisInput, exitCode);
+      // When that scan lands on nothing, the caller's own `error` is the better
+      // evidence — and the run that proved it was a local-LLM playground timeout:
+      // the host aborted its OWN deadline, finalized with exit 1 + `Timed out after
+      // Nms`, and handed over the partial generation as `output`. Scanning a
+      // generation that carries no failure signal returns UNKNOWN with its first
+      // line lifted as the "error message", so a plain timeout reached the
+      // provider-failure hook as an uncategorized Tier-4 failure titled with the
+      // story's own headline. Consulted only as a fallback, so a scan that already
+      // found a real category (the CLI/TUI banner case) keeps it.
+      if (error && (!errorAnalysis.category || errorAnalysis.category === ERROR_CATEGORIES.UNKNOWN)) {
+        const statedAnalysis = analyzeError(error, exitCode);
+        if (statedAnalysis.category && statedAnalysis.category !== ERROR_CATEGORIES.UNKNOWN) {
+          errorAnalysis = statedAnalysis;
+        }
+      }
+      metadata.error = metadata.error || errorAnalysis.message || `Process exited with code ${exitCode}`;
+      metadata.errorCategory = errorAnalysis.category;
+      metadata.errorAnalysis = errorAnalysis;
+    }
+
+    await atomicWrite(outputPath, output);
+    await atomicWrite(metadataPath, metadata);
+    return metadata;
+  }).catch(error => { maintenance.markCurrentUnsettled(); throw error; });
+  const canceled = metadata.canceled === true;
 
   // Guarded: these hooks are host-supplied, and every caller of this function
   // runs outside the request lifecycle — the /runs route never awaits its
@@ -582,8 +586,6 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
       await cleanupVisionFiles().catch((error) => console.error(`❌ Failed to clean CLI vision files: ${error.message}`));
       if (spawnError) console.error(`❌ Run ${runId} spawn error: ${spawnError.message}`);
 
-      await writeFileGuarded(outputPath, output);
-
       metadata.endTime = new Date().toISOString();
       metadata.duration = Date.now() - startTime;
       metadata.exitCode = exitCode;
@@ -628,7 +630,10 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
         metadata.errorAnalysis = errorAnalysis;
       }
 
-      await atomicWrite(metadataPath, metadata);
+      await publishRuntimeFiles([outputPath, metadataPath], async () => {
+        await atomicWrite(outputPath, output);
+        await atomicWrite(metadataPath, metadata);
+      });
 
       // Isolate lifecycle hooks from onComplete so a hook failure never changes
       // the terminal result or prevents the caller from settling.

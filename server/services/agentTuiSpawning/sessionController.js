@@ -1,3 +1,4 @@
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 /**
  * Agent TUI session controller
  *
@@ -1197,12 +1198,12 @@ export function createTuiSessionController({
     // the metadata patch — and the two that share the state lock still serialize
     // on it. `phase` is a breadcrumb only: the record stays `running` on purpose,
     // because boot recovery owns the transition.
-    await Promise.all([
+    await withBackupAssetPublication(() => Promise.all([
       drainLines().catch(() => {}),
       drainRaw().catch(() => {}),
       persistence.updateAgent(agentId, { metadata: { phase: 'interrupted', interruptedBy: HOST_SHUTDOWN_REASON } })
         .catch(err => emitLog('warn', `Could not mark TUI agent ${agentId} interrupted: ${err.message}`, { agentId })),
-    ]);
+    ]));
     // NOTE: the active-run entry is intentionally left in place — the shutdown
     // handler reads that map to name the agents in the host-shutdown marker, and
     // there is no reason to shrink it on the way out.

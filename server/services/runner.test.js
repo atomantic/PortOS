@@ -263,7 +263,7 @@ describe('finalizeRunRecord — authoritative timeout classification', () => {
   });
 
   it('never lets identity overwrite what the stored run record already says', async () => {
-    readFile.mockResolvedValueOnce(JSON.stringify({
+    readFile.mockResolvedValue(JSON.stringify({
       id: 'run-real', providerId: 'claude-cli', providerName: 'Claude Code', model: 'claude-opus-5',
     }));
 
@@ -277,6 +277,7 @@ describe('finalizeRunRecord — authoritative timeout classification', () => {
       identity: { providerId: 'wrong', providerName: 'Wrong', model: 'wrong-model' },
     });
 
+    readFile.mockResolvedValue('{}');
     expect(metadata).toMatchObject({
       id: 'run-real', providerId: 'claude-cli', providerName: 'Claude Code', model: 'claude-opus-5',
     });
@@ -1118,9 +1119,10 @@ describe('executeCliRun — close handler crash guard', () => {
 
     await vi.waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
     expect(onRunFailed).toHaveBeenCalledTimes(1);
-    expect(atomicWrite).toHaveBeenCalledTimes(1);
+    const metadataWrites = atomicWrite.mock.calls.filter(([path]) => path.endsWith('metadata.json'));
+    expect(metadataWrites).toHaveLength(1);
 
-    const persisted = atomicWrite.mock.calls[0][1];
+    const persisted = metadataWrites[0][1];
     expect(persisted).toMatchObject({
       id: 'run-spawn-error',
       providerId: 'configured-provider',

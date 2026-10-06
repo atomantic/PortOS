@@ -1,3 +1,5 @@
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
+import { persistRunnerCompletion } from './completion.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import '../services/databaseBootFence.js';
 /**
@@ -19,7 +21,7 @@ import { writeFile, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import http from 'http';
 import { Server as SocketServer } from 'socket.io';
-import { ensureDir, atomicWrite, PATHS } from '../lib/fileUtils.js';
+import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { prepareCliSpawn, killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
@@ -128,28 +130,7 @@ registerRunnerShutdownSignals(process, lifecycle);
 // commands and new namespace connections as soon as shutdown starts.
 io.use((socket, next) => next(lifecycle.isStopping() ? new Error('Runner is shutting down') : undefined));
 
-async function persistCompletion(agentId, output, metadata) {
-  const agentDir = join(AGENTS_DIR, agentId);
-  await ensureDir(agentDir);
-  // atomicWrite (temp + rename): a crash mid-write must not leave a torn file
-  // that the next completion attempt then chokes on.
-  await atomicWrite(join(agentDir, 'output.txt'), output);
-  if (!metadata) return;
-  const metadataPath = join(agentDir, 'metadata.json');
-  const existing = await readFile(metadataPath, 'utf-8').then(JSON.parse).catch(err => {
-    if (err.code === 'ENOENT') return {};
-    // Unreadable/corrupt prior metadata must not block recording the terminal
-    // result — the new fields below are the authoritative completion evidence.
-    if (err instanceof SyntaxError) {
-      console.warn(`⚠️ Agent ${agentId} metadata.json is corrupt (${err.message}) — rewriting from completion data`);
-      return {};
-    }
-    throw err;
-  });
-  await atomicWrite(metadataPath, {
-    ...existing, agentId, ...metadata, outputSize: Buffer.byteLength(output),
-  });
-}
+const persistCompletion = (agentId, output, metadata) => persistRunnerCompletion(AGENTS_DIR, agentId, output, metadata);
 
 /**
  * Emit event to connected portos-server instances
@@ -692,35 +673,36 @@ app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
 
       // Persist output and terminal evidence before publishing completion or
       // removing durable ownership. Failed writes leave recovery evidence intact.
-      await persistCompletion(agentId, output, paused ? null : {
-        taskId,
-        completedAt: new Date().toISOString(),
-        exitCode: code,
-        success: code === 0,
-        duration,
-      });
-      if (paused) {
-        activeAgents.delete(agentId);
-        return;
-      }
+      await withBackupAssetPublication(async () => {
+        await persistCompletion(agentId, output, paused ? null : {
+          taskId,
+          completedAt: new Date().toISOString(),
+          exitCode: code,
+          success: code === 0,
+          duration,
+        });
+        if (paused) {
+          activeAgents.delete(agentId);
+          return;
+        }
 
-      // Emit completion event
-      emitToServer('agent:completed', {
-        agentId,
-        taskId,
-        exitCode: code,
-        success: code === 0,
-        duration,
-        outputLength: output.length
-      });
+        // Emit completion event
+        emitToServer('agent:completed', {
+          agentId,
+          taskId,
+          exitCode: code,
+          success: code === 0,
+          duration,
+          outputLength: output.length
+        });
 
-      // Update state — serialize with the spawn write path via withState.
-      await withState((state) => {
-        state.stats.completed++;
-        if (code !== 0) state.stats.failed++;
-        delete state.agents[agentId];
+        // Update state — serialize with the spawn write path via withState.
+        await withState((state) => {
+          state.stats.completed++;
+          if (code !== 0) state.stats.failed++;
+          delete state.agents[agentId];
+        });
       });
-
       activeAgents.delete(agentId);
     } catch (err) {
       lifecycle.reportFailure(err);
