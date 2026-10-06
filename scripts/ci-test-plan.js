@@ -30,8 +30,8 @@ const MAX_TARGETED_TEST_FILES = 120;
 // An explicit list, not `*.browser.test.js`: only suites that guard `canRun`
 // with server/lib/browserSuiteGate.js can be told to fail instead of skip, and
 // `services/musicVideo/documentRender.browser.test.js` (server-only, pixel
-// thresholds) flaked its first CI run. The registry test in
-// ci-test-plan.test.js fails when a suite importing the gate is left out.
+// thresholds) flaked its first CI run. The registry test
+// (browser-suite-registry.test.js) fails when a suite importing the gate is left out.
 export const BROWSER_SUITES = [
   'server/routes/musicVideoProductionReview.browser.test.js',
   'server/routes/musicVideoRichAuthoring.browser.test.js',
@@ -248,6 +248,9 @@ export const ALWAYS_RUN_TESTS = [
   'docs/deps-doc.test.js',
   'docs/features/product-surfaces.test.js',
   'scripts/agent-instructions-files.test.js',
+  // Whole-tree scanner: a new browser suite can adopt the gate with no import
+  // edge back to the registry it must join (#10312).
+  'scripts/browser-suite-registry.test.js',
   // The union-merged catalogs are `.md` to the planner — documentation-only —
   // so a rebase that doubled a row would otherwise never be re-checked.
   'scripts/catalog-merge-union.test.js',

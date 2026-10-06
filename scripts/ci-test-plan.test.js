@@ -1402,13 +1402,6 @@ describe('cross-workspace browser suites (#10312)', () => {
     expect(plan.suiteReasons.browser).toMatch(/browser suite/);
   });
 
-  it('registers exactly the suites that guard canRun with the browser suite gate', () => {
-    const root = fileURLToPath(new URL('../', import.meta.url));
-    const gated = execFileSync('git', ['grep', '-l', 'browserSuiteGate', '--', 'server/**/*.browser.test.js'], { cwd: root, encoding: 'utf8' })
-      .split('\n').filter(Boolean).sort();
-    expect(gated).toEqual([...BROWSER_SUITES].sort());
-  });
-
   it('runs every registered browser suite on a full plan, and no unregistered browser test', () => {
     const trackedFiles = [
       ...BROWSER_SUITES,
