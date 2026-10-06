@@ -512,6 +512,8 @@ export default function Review() {
                     onResolve={handleQueueResolve}
                     onPromoteAsk={handleQueuePromoteAsk}
                     onTriage={handleQueueTriage}
+                    onFeedbackSaved={fetchQueue}
+                    detailOpen={item.id === actionId}
                     resolving={resolvingQueueIds.has(item.id)}
                   />
                 ))}
@@ -871,7 +873,7 @@ function QueueTriageControls({ item, onTriage, disabled = false }) {
   );
 }
 
-function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, resolving = false }) {
+function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, onFeedbackSaved, detailOpen = false, resolving = false }) {
   const config = QUEUE_SOURCE_CONFIG[item.source] || { icon: Inbox, color: 'text-gray-400' };
   const Icon = config.icon;
   const borderTone = QUEUE_SEVERITY_STYLE[item.severity] || QUEUE_SEVERITY_STYLE.normal;
@@ -886,6 +888,11 @@ function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, 
     ? item.operations.filter(operation => operation && operation.available !== false)
     : [];
   const rateOperation = sourceOperations.find((operation) => operation.id === 'rate' && operation.input?.type === 'rating');
+  // Agent-run feedback renders the shared agent card right in the queue so the
+  // rating can be submitted without opening the detail drawer. While that drawer
+  // is open it hosts the card, so the row defers to it (one live card at a time).
+  const feedbackRun = item.source === 'feedback' && item.available !== false && item.availability !== 'unavailable';
+  const inlineFeedback = feedbackRun && !detailOpen;
   const inlineActions = item.action
     ? [{ id: 'resolve', label: item.action }]
     : sourceOperations.filter((operation) => operation.id !== 'rate');
@@ -930,9 +937,14 @@ function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, 
           </p>
         )}
       </div>
+      {inlineFeedback && (
+        <div className="col-span-2 min-w-0 border-t border-port-border/50 pt-2">
+          <AgentFeedbackReview key={item.sourceRef} item={item} onSaved={onFeedbackSaved} />
+        </div>
+      )}
       <div className="col-span-2 flex min-w-0 items-center gap-2 flex-wrap border-t border-port-border/50 pt-2 sm:col-start-2 sm:col-span-1 [&_button]:min-h-[44px] [&_select]:min-h-[44px]">
         <QueueInvestigation item={item} />
-        {onResolve && rateOperation && (
+        {onResolve && rateOperation && !feedbackRun && (
           <button type="button" onClick={() => onSelect?.(item)} className="inline-flex items-center gap-2 rounded border border-port-accent/30 px-3 py-2 text-sm text-port-accent">
             <Eye size={14} /> Review run and give feedback
           </button>
