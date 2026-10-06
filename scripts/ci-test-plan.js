@@ -26,8 +26,18 @@ const MAX_TARGETED_TEST_FILES = 120;
 // job installs no client workspace, so there they always skip; the `database`
 // job (client deps + Chrome + ffmpeg, PORTOS_REQUIRE_BROWSER_SUITES=1) is where
 // the files selected here run for real (issue #10312).
-const BROWSER_SUITE_RE = /^server\/.*\.browser\.test\.js$/;
-const browserSuitesIn = (paths) => uniqueSorted(paths.filter((path) => BROWSER_SUITE_RE.test(path)));
+//
+// An explicit list, not `*.browser.test.js`: only suites that guard `canRun`
+// with server/lib/browserSuiteGate.js can be told to fail instead of skip, and
+// `services/musicVideo/documentRender.browser.test.js` (server-only, pixel
+// thresholds) flaked its first CI run. The registry test in
+// ci-test-plan.test.js fails when a suite importing the gate is left out.
+export const BROWSER_SUITES = [
+  'server/routes/musicVideoProductionReview.browser.test.js',
+  'server/routes/musicVideoRichAuthoring.browser.test.js',
+  'server/routes/musicVideoSongRevision.browser.test.js',
+];
+const browserSuitesIn = (paths) => uniqueSorted(paths.filter((path) => BROWSER_SUITES.includes(path)));
 
 // Python sidecar scripts (`scripts/generate_ltx2.py`, …). Vitest's import graph
 // cannot reach into them, but their contracts are pinned by suites that read

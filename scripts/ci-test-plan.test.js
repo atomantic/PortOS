@@ -9,6 +9,7 @@ import { staticImportClosure } from '../server/lib/staticImportGraph.js';
 
 import {
   ALWAYS_RUN_TESTS,
+  BROWSER_SUITES,
   buildCiTestPlan,
   collectPlanInputs,
   forceFullReasonFor,
@@ -1389,11 +1390,6 @@ describe('Windows escalation on a full plan (#7440)', () => {
 });
 
 describe('cross-workspace browser suites (#10312)', () => {
-  const BROWSER_SUITES = [
-    'server/routes/musicVideoProductionReview.browser.test.js',
-    'server/routes/musicVideoRichAuthoring.browser.test.js',
-    'server/routes/musicVideoSongRevision.browser.test.js',
-  ];
 
   it('selects every music-video browser suite when a client component they mount changes', () => {
     const cwd = fileURLToPath(new URL('../', import.meta.url));
@@ -1406,11 +1402,19 @@ describe('cross-workspace browser suites (#10312)', () => {
     expect(plan.suiteReasons.browser).toMatch(/browser suite/);
   });
 
-  it('runs every tracked server browser suite on a full plan, and none from client or non-browser tests', () => {
+  it('registers exactly the suites that guard canRun with the browser suite gate', () => {
+    const root = fileURLToPath(new URL('../', import.meta.url));
+    const gated = execFileSync('git', ['grep', '-l', 'browserSuiteGate', '--', 'server/**/*.browser.test.js'], { cwd: root, encoding: 'utf8' })
+      .split('\n').filter(Boolean).sort();
+    expect(gated).toEqual([...BROWSER_SUITES].sort());
+  });
+
+  it('runs every registered browser suite on a full plan, and no unregistered browser test', () => {
     const trackedFiles = [
       ...BROWSER_SUITES,
       'client/src/pages/Shell.browser.test.js',
       'server/routes/browser.test.js',
+      'server/services/musicVideo/documentRender.browser.test.js',
     ];
     const plan = buildCiTestPlan(['package.json'], { trackedFiles });
 
