@@ -257,6 +257,12 @@ export async function generateVideo({
   };
 }
 
+// The staged voice clip keeps its upload's extension (a performance slice is always WAV).
+export function audioMimeType(path) {
+  const ext = String(path).toLowerCase().split('.').pop();
+  return { mp3: 'audio/mpeg', m4a: 'audio/mp4', mp4: 'audio/mp4', aac: 'audio/aac', ogg: 'audio/ogg', flac: 'audio/flac' }[ext] || 'audio/wav';
+}
+
 async function runFalVideo(job, jobId, {
   apiKey, modelId, prompt, negativePrompt, duration, aspectRatio, sourceImagePath, outputPath, filename, meta,
   audioFilePath = null, enableTranscription = false, requestSpec = null,
@@ -268,7 +274,7 @@ async function runFalVideo(job, jobId, {
   try {
     const imageDataUri = sourceImagePath ? await fileToDataUri(sourceImagePath) : null;
     const audioDataUri = audioFilePath
-      ? `data:audio/wav;base64,${(await readFile(audioFilePath)).toString('base64')}`
+      ? `data:${audioMimeType(audioFilePath)};base64,${(await readFile(audioFilePath)).toString('base64')}`
       : null;
     const body = requestSpec
       ? buildFalVideoRequest({ ...requestSpec, imageUrl: imageDataUri, audioUrl: audioDataUri }).body

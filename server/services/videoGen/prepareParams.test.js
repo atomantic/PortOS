@@ -708,3 +708,38 @@ describe('prepareVideoGenParams — i2v reference mode (#4874)', () => {
     })).rejects.toMatchObject({ status: 400, code: 'I2V_REFERENCE_MODE_REQUIRES_IMAGE' });
   });
 });
+
+describe('prepareVideoGenParams — standalone fal lip sync', () => {
+  const LIPSYNC = 'minimax/h3-max/lip-sync/image-to-video';
+  const falSettings = () => ({ imageGen: { local: { pythonPath: '/usr/bin/python3' } }, videoGen: { fal: { apiKey: 'test-key' } } });
+  beforeEach(() => { copyFileMock.mockClear(); unlinkMock.mockClear(); });
+
+  it('stages the uploaded voice clip next to the frame and hands both to the hosted job', async () => {
+    getSettings.mockResolvedValueOnce(falSettings());
+    const prepared = await prepare(
+      { backend: 'fal', falModelId: LIPSYNC, mode: 'image', sourceImageFile: 'face.png' },
+      { audioFile: upload('audioFile', 'line.wav') },
+    );
+    expect(prepared.backend).toBe('fal');
+    expect(posix(prepared.sourceImagePath)).toBe('/mock/images/face.png');
+    expect(posix(prepared.audioFilePath)).toMatch(/^\/mock\/uploads\/video-audio-.+\.wav$/);
+    expect(prepared.uploadedTempPaths).toEqual([prepared.audioFilePath]);
+  });
+
+  it('refuses a lip-sync model without a voice clip, and a voice clip without a lip-sync model', async () => {
+    getSettings.mockResolvedValueOnce(falSettings());
+    await expect(prepare({ backend: 'fal', falModelId: LIPSYNC, mode: 'image', sourceImageFile: 'face.png' }))
+      .rejects.toMatchObject({ status: 400, code: 'VIDEO_GEN_AUDIO_REQUIRED' });
+    getSettings.mockResolvedValueOnce(falSettings());
+    await expect(prepare(
+      { backend: 'fal', falModelId: 'fal-ai/minimax/hailuo-02/standard/image-to-video', mode: 'image', sourceImageFile: 'face.png' },
+      { audioFile: upload('audioFile', 'line.wav') },
+    )).rejects.toMatchObject({ status: 400, code: 'VIDEO_GEN_AUDIO_MODE_MISMATCH' });
+  });
+
+  it('needs a reference frame for the lip sync', async () => {
+    getSettings.mockResolvedValueOnce(falSettings());
+    await expect(prepare({ backend: 'fal', falModelId: LIPSYNC, mode: 'text' }, { audioFile: upload('audioFile', 'line.wav') }))
+      .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+  });
+});

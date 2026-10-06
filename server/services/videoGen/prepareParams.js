@@ -52,6 +52,7 @@ import { getSettings } from '../settings.js';
 import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
 import { getTrack } from '../tracks/index.js';
 import { VIDEO_GEN_MODE, resolveVideoMode } from './modes.js';
+import { getFalVideoModel } from '../../lib/falVideoModels.js';
 import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
 import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
 import {
@@ -458,7 +459,13 @@ async function resolvePreparedParams({
       { status: 400, code: 'VIDEO_GEN_AUDIO_REQUIRED' },
     );
   }
-  if (uploads.audioFile && body.mode !== 'a2v') {
+  // A fal lip-sync model takes the frame plus an uploaded voice clip (no Music Video scene needed).
+  const falLipSync = body.backend === VIDEO_GEN_MODE.FAL && getFalVideoModel(body.falModelId)?.kind === 'lipsync';
+  if (falLipSync && !uploads.audioFile && !body.musicVideo) {
+    await cleanupStaged();
+    throw new ServerError('A fal.ai lip-sync model needs an audioFile upload (the voice to sync to).', { status: 400, code: 'VIDEO_GEN_AUDIO_REQUIRED' });
+  }
+  if (uploads.audioFile && body.mode !== 'a2v' && !falLipSync) {
     await cleanupStaged();
     throw new ServerError(
       `audioFile upload is only valid with mode='a2v' (got mode='${body.mode || 'unset'}').`,
@@ -741,12 +748,23 @@ async function resolvePreparedParams({
       await cleanupStaged();
       throw new ServerError(hosted.errorMessage, { status: 400, code: hosted.errorCode });
     }
+    // A standalone fal lip-sync take: stage the voice clip durably like the frame. The queue owns
+    // and removes it with the job (uploadedTempPaths), as it does for the local a2v lane.
+    let hostedAudioPath = null;
+    if (falLipSync && uploads.audioFile) {
+      if (!sourceImagePath) {
+        await cleanupStaged();
+        throw new ServerError('A fal.ai lip-sync render needs a reference frame (sourceImage or sourceImageFile).', { status: 400, code: 'VALIDATION_ERROR' });
+      }
+      hostedAudioPath = await stageUploadDurable(uploads.audioFile, 'audio');
+    }
     return {
       backend,
       ...extras,
       effectiveModel: { id: backend, supportedModes: ['text', 'image'] },
       sourceImagePath,
       uploadedTempPath,
+      ...(hostedAudioPath ? { audioFilePath: hostedAudioPath, uploadedTempPaths: [hostedAudioPath] } : {}),
       discardSourceImage,
       cleanupStaged,
     };

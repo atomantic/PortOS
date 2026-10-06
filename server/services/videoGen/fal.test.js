@@ -676,3 +676,13 @@ describe('videoGen/fal — recover completed renders (#8564)', () => {
     await expect(readFile(join(FAKE_VIDEOS_DIR, job.filename))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
+
+describe('audioMimeType', () => {
+  it('labels the staged voice clip by its extension, WAV by default', async () => {
+    const { audioMimeType } = await import('./fal.js');
+    expect(audioMimeType('/u/video-audio-1.mp3')).toBe('audio/mpeg');
+    expect(audioMimeType('/u/video-audio-1.M4A')).toBe('audio/mp4');
+    expect(audioMimeType('/u/slice.wav')).toBe('audio/wav');
+    expect(audioMimeType('/u/clip')).toBe('audio/wav');
+  });
+});
