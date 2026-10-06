@@ -42,11 +42,17 @@ describe('ProjectOptionsPanel', () => {
     const saved = { id: 'mv1', finishedOutside: { markedAt: '2026-10-05T00:00:00.000Z', note: 'Studio' } };
     setMusicVideoFinishedOutside.mockResolvedValueOnce(saved);
     const onProjectUpdated = vi.fn();
-    open({}, undefined, onProjectUpdated);
+    open({ renderHistoryId: 'final-1' }, undefined, onProjectUpdated);
     fireEvent.change(screen.getByLabelText('Where it was made (optional)'), { target: { value: ' Studio ' } });
     fireEvent.click(screen.getByLabelText('Mark finished'));
     await waitFor(() => expect(onProjectUpdated).toHaveBeenCalledWith(saved));
     expect(setMusicVideoFinishedOutside).toHaveBeenCalledWith('mv1', { finished: true, note: 'Studio' });
+  });
+
+  it('explains that marking needs the final render first', () => {
+    open({ renderHistoryId: null });
+    expect(screen.queryByLabelText('Mark finished')).toBeNull();
+    expect(screen.getByText(/Bring the finished video in as the final render first/)).toBeInTheDocument();
   });
 
   it('shows an existing marker and clears it', async () => {

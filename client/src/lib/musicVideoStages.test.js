@@ -613,11 +613,24 @@ describe('finished outside PortOS', () => {
     expect(summarizeMusicVideoProject(marked, unapproved).stage).toBe('publish');
   });
 
-  it('still asks for the final render and the posts it never had', () => {
+  it('still asks for the posts it never had', () => {
+    const unposted = { ...marked, publishKit: {} };
+    expect(deriveStages(unposted, unapproved).current).toBe('publish');
+    expect(summarizeMusicVideoProject(unposted, unapproved).stage).toBe('publish');
+  });
+
+  it('does not count without a final render, so the approvals that rendering needs are still asked for', () => {
     const unrendered = { ...marked, renderHistoryId: null, publishKit: {} };
-    expect(deriveStages(unrendered, unapproved).current).toBe('review');
-    expect(summarizeMusicVideoProject(unrendered, unapproved).stage).toBe('review');
-    expect(stageChecklist('review', unrendered, unapproved)[0]).toMatchObject({ id: 'final', done: false });
+    expect(deriveStages(unrendered, unapproved).current).toBe('setup');
+    expect(summarizeMusicVideoProject(unrendered, unapproved).stage).toBe('setup');
+    expect(deriveNextAction(unrendered, { readiness: unapproved })).toMatchObject({ id: 'review-production' });
+    expect(stageChecklist('board', unrendered, unapproved)[0].id).not.toBe('finished-outside');
+  });
+
+  it('says a stale render can only be redone here with the approvals', () => {
+    const stale = { ...marked, renderDependencyState: { status: 'stale' } };
+    expect(deriveStages(stale, unapproved).current).toBe('review');
+    expect(stageChecklist('review', stale, unapproved)[0].detail).toMatch(/needs the Song through Make approvals; unmark Finished outside PortOS/);
   });
 });
 

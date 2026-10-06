@@ -13,7 +13,7 @@ import { isNonBlankStr } from './textUtils';
 import { modeLabel } from './imageGenModes.js';
 import { falSceneTake } from './musicVideoShotTiming.js';
 import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
-import { finishedOutside, finishedOutsideCovers } from '../../../server/lib/musicVideoFinishedOutside.js';
+import { FINISHED_OUTSIDE_RERENDER_NOTE, finishedOutside, finishedOutsideCovers } from '../../../server/lib/musicVideoFinishedOutside.js';
 
 /**
  * The six steps of a music video, in the order the director decides them. The
@@ -639,7 +639,7 @@ export function stageChecklist(stageId, project, readiness = project?.production
     case 'review':
       return [{
         id: 'final', label: 'Final video rendered', done: !!project.renderHistoryId && !isFinalRenderStale(project),
-        detail: isFinalRenderStale(project) ? `${STALE_RENDER_MESSAGE}.` : null,
+        detail: isFinalRenderStale(project) ? `${STALE_RENDER_MESSAGE}.${finishedOutside(project) && !readiness?.readyForProduction ? ` ${FINISHED_OUTSIDE_RERENDER_NOTE}` : ''}` : null,
         action: project.renderHistoryId && !isFinalRenderStale(project) ? null : { label: project.renderHistoryId ? 'Re-render' : 'Render', anchor: 'mv-final-video' },
       }];
     case 'publish': {

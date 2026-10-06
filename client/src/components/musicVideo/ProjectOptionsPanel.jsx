@@ -10,7 +10,7 @@ import { normalizeMusicVideoProductionPolicy } from '../../../../server/lib/musi
 import { MUSIC_VIDEO_AUTOMATION_TOOLS, automationDraftFrom, automationFromDraft } from '../../lib/musicVideoAutomation.js';
 import { musicVideoMediaMode } from '../../../../server/lib/musicVideoMediaPolicy.js';
 import { formatUsd } from '../../utils/formatters.js';
-import { finishedOutside } from '../../../../server/lib/musicVideoFinishedOutside.js';
+import { finishedOutsideBlocker } from '../../../../server/lib/musicVideoFinishedOutside.js';
 import { setMusicVideoFinishedOutside } from '../../services/apiMusicVideo.js';
 
 const TOOL_GROUPS = [['image', 'Image'], ['video', 'Video'], ['code', 'Code']];
@@ -32,7 +32,9 @@ const headCls = 'pt-1.5 text-xs font-medium text-port-text-muted';
 export default function ProjectOptionsPanel({
   project, videoSettings, generatingVideos = false, onMediaMode, onRenderStyle, onSaveAutomation, onSavePolicy, onProjectUpdated,
 }) {
-  const external = finishedOutside(project);
+  // The stored marker, even while it does not count (no final render yet), so it can still be cleared.
+  const external = project.finishedOutside?.markedAt ? project.finishedOutside : null;
+  const outsideBlocker = external ? null : finishedOutsideBlocker(project);
   const [outsideNote, setOutsideNote] = useState('');
   const [outsideSaving, setOutsideSaving] = useState(false);
   const toggleFinishedOutside = () => {
@@ -137,14 +139,14 @@ export default function ProjectOptionsPanel({
       <div className={rowCls}>
         <span className={headCls}>Finished outside PortOS</span>
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <ToggleChip
+          {!outsideBlocker && <ToggleChip
             id="mv-setup-finished-outside"
             label={external ? 'Marked finished' : 'Mark finished'}
             hint="Song, Look, Storyboard and Make count as done; Final render and Publish still need the real render and posts"
             checked={!!external}
             onToggle={toggleFinishedOutside}
-          />
-          {!external && (
+          />}
+          {!external && !outsideBlocker && (
             <input
               type="text"
               aria-label="Where it was made (optional)"
@@ -156,9 +158,9 @@ export default function ProjectOptionsPanel({
             />
           )}
           <p className="w-full text-xs text-port-text-muted">
-            {external
+            {outsideBlocker || (external
               ? `Marked ${new Date(external.markedAt).toLocaleDateString()}${external.note ? `: ${external.note}` : ''}. No approval is recorded; unmark to bring the step checks back.`
-              : 'For a video made elsewhere: Song through Make count as done without recording approvals. Final render and Publish still need the real render and posts.'}
+              : 'For a video made elsewhere: Song through Make count as done without recording approvals. Final render and Publish still need the real render and posts.')}
           </p>
         </div>
       </div>

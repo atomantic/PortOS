@@ -849,7 +849,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | `musicVideoMediaPolicy.js` | Whole-workflow media modes, legacy intent, selection admission and independent document renderer choice. |
 
-| `musicVideoFinishedOutside.js` | `finishedOutside(project)`, `finishedOutsideCovers(project, stageId)` and `FINISHED_OUTSIDE_STAGE_IDS`: the director's explicit "finished outside PortOS" marker, which counts Song through Make as done without recording any approval. Read by the client's stage derivation and `musicVideoSummary.js`. |
+| `musicVideoFinishedOutside.js` | `finishedOutside(project)`, `finishedOutsideCovers(project, stageId)`, `finishedOutsideBlocker(project)`, `FINISHED_OUTSIDE_STAGE_IDS` and `FINISHED_OUTSIDE_RERENDER_NOTE`: the director's explicit "finished outside PortOS" marker, which counts Song through Make as done without recording any approval, only while the project holds a final render. Read by the client's stage derivation and `musicVideoSummary.js`. |
 | `musicVideoSummary.js` | `summarizeMusicVideoProject(project, readiness)` bounded index/picker projection (stage, run status, spend, preview/poster, card badges) and `compareMusicVideoProjectsNewestFirst` for `GET /api/music-video?summary=1` (#10169). |
 
 | `sandboxDelegation.js` | Bounded tool-free worker context, route configuration, and fidelity evaluation schemas. |

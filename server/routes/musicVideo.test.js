@@ -133,7 +133,7 @@ describe('musicVideo routes', () => {
   });
 
   it('PUT /:id/finished-outside stamps the marker server-side, and clears it, without touching approvals', async () => {
-    svc.getProject.mockResolvedValue({ id: 'mv-1', name: 'A' });
+    svc.getProject.mockResolvedValue({ id: 'mv-1', name: 'A', renderHistoryId: 'final-1' });
     const r = await request(app).put('/api/music-video/mv-1/finished-outside').send({ finished: true, note: 'Made in another editor' });
     expect(r.status).toBe(200);
     const patch = svc.updateProject.mock.calls[0][1];
@@ -148,6 +148,16 @@ describe('musicVideo routes', () => {
     // The client never chooses the timestamp.
     const forged = await request(app).put('/api/music-video/mv-1/finished-outside').send({ finished: true, markedAt: '2020-01-01' });
     expect(forged.status).toBe(400);
+  });
+
+  it('PUT /:id/finished-outside refuses to mark a project with no final render, but still clears one', async () => {
+    svc.getProject.mockResolvedValue({ id: 'mv-1', name: 'A', renderHistoryId: null });
+    const r = await request(app).put('/api/music-video/mv-1/finished-outside').send({ finished: true });
+    expect(r.status).toBe(409);
+    expect(svc.updateProject).not.toHaveBeenCalled();
+    const cleared = await request(app).put('/api/music-video/mv-1/finished-outside').send({ finished: false });
+    expect(cleared.status).toBe(200);
+    expect(svc.updateProject).toHaveBeenCalledWith('mv-1', { finishedOutside: null });
   });
 
   it('GET /midi-sources returns only the newest transcription per track, trimmed (#10203)', async () => {
