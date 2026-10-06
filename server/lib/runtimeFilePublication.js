@@ -19,7 +19,10 @@ export function publishRuntimeFiles(paths, work) {
         ? unlinkGuarded(path).catch(err => { if (err.code !== 'ENOENT') throw err; })
         : atomicWrite(path, previous[i])));
       const failures = rollback.filter(result => result.status === 'rejected').map(result => result.reason);
-      if (failures.length) throw new AggregateError([error, ...failures], 'Runtime recording publication and rollback failed');
+      if (failures.length) throw Object.assign(
+        new AggregateError([error, ...failures], 'Runtime recording publication and rollback failed'),
+        { backupPublicationUncertain: true },
+      );
       throw error;
     }
   }));

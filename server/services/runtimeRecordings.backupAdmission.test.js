@@ -28,7 +28,7 @@ const { finalizeRunRecord, setAIToolkit } = await import('./runner.js');
 const { persistRunnerCompletion } = await import('../cos-runner/completion.js');
 const { createTuiExitHandler } = await import('../cos-runner/tuiExit.js');
 const { createOutputSpooler } = await import('./agentTuiSpawning/outputSpooler.js');
-const { acquireBackupSnapshotCut } = await import('../lib/backupSnapshotBoundary.js');
+const { acquireBackupSnapshotCut, backupPublicationAdmissionStatus } = await import('../lib/backupSnapshotBoundary.js');
 const { atomicWrite } = await import('../lib/fileUtils.js');
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 const turn = () => new Promise(resolve => setImmediate(resolve));
@@ -79,6 +79,35 @@ it('rolls back the previous recording when completion metadata fails', async () 
     expect(await readFile(join(dir, 'output.txt'), 'utf8')).toBe('old');
     expect(await readJson(join(dir, 'metadata.json'))).toEqual({ id: 'example', outputSize: 3 });
   } finally { release(); }
+});
+
+it('refuses future snapshots when metadata failure also prevents restoring prior output', async () => {
+  const dir = join(state.root, 'runs', 'example'); await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, 'output.txt'), 'old');
+  await writeFile(join(dir, 'metadata.json'), JSON.stringify({ id: 'example', outputSize: 3 }));
+  state.beforeWrite = async (path, data) => {
+    if (path.endsWith('metadata.json') && data.success === true) throw new Error('injected metadata failure');
+    if (path.endsWith('output.txt') && Buffer.isBuffer(data)) throw new Error('injected rollback failure');
+  };
+  let owners = [];
+  try {
+    await expect(finalizeRunRecord({ runId: 'example', output: 'new result', success: true, exitCode: 0, startTime: Date.now() }))
+      .rejects.toThrow('Runtime recording publication and rollback failed');
+    expect(await readFile(join(dir, 'output.txt'), 'utf8')).toBe('new result');
+    expect(await readJson(join(dir, 'metadata.json'))).toEqual({ id: 'example', outputSize: 3 });
+    owners = backupPublicationAdmissionStatus().publications;
+    const cutError = await acquireBackupSnapshotCut({ timeoutMs: 10 }).then(release => { release(); return null; }, error => error);
+    expect(cutError).toMatchObject({ code: 'BACKUP_SNAPSHOT_BUSY' });
+    expect(owners).toEqual([expect.objectContaining({ uncertain: true })]);
+    expect(cutError.blockers).toEqual([expect.objectContaining({ id: owners[0].id, uncertain: true })]);
+    // A failed cut must preserve the diagnostic blocker for operator recovery.
+    expect(backupPublicationAdmissionStatus().publications).toHaveLength(1);
+  } finally {
+    state.beforeWrite = null;
+    // Explicit teardown only: these owner paths belong to this suite's private fixture.
+    for (const owner of owners) await rm(owner.path, { recursive: true, force: true });
+  }
+  const release = await acquireBackupSnapshotCut(); release();
 });
 
 it('keeps a separate-runner TUI recording and durable ownership removal in one cut', async () => {
