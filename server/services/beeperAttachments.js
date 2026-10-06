@@ -34,6 +34,8 @@ import { dirname, join } from 'path';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import { query } from '../lib/db.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
+import { createRecordWriteQueue } from '../lib/fileWriteQueue.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { PATHS, pathExists } from '../lib/fileUtils.js';
 import {
@@ -70,6 +72,8 @@ const MAX_EVICTIONS_PER_SWEEP = 50;
 
 export const attachmentsRoot = () => PATHS.beeperAttachments;
 const tmpRoot = () => join(attachmentsRoot(), TMP_DIR_NAME);
+const queueAttachment = createRecordWriteQueue();
+const publishAttachment = (path, work) => withBackupAssetPublication(() => queueAttachment(path, work));
 
 const notFound = () => new ServerError('Attachment not found', { status: 404, code: 'NOT_FOUND' });
 
@@ -224,7 +228,7 @@ const tooLarge = (bytes) => new ServerError(
  * declines to report `Content-Length` would otherwise get an unbounded write
  * past a ceiling the pre-flight could not see.
  */
-async function streamAssetToStore(mxcId, { maxBytes, extension }) {
+async function streamAssetToStore(mxcId, { maxBytes, extension, commit }) {
   // Abort on SILENCE, not on elapsed time — see STREAM_IDLE_TIMEOUT_MS. The
   // controller is handed to the client so the abort tears down the live socket,
   // not just this side's reader. `abort()` cannot throw, which matters because
@@ -294,29 +298,29 @@ async function streamAssetToStore(mxcId, { maxBytes, extension }) {
   const sha256 = hash.digest('hex');
   const relativePath = attachmentRelativePath(sha256, extension);
   const destPath = join(attachmentsRoot(), relativePath);
-  await mkdir(dirname(destPath), { recursive: true });
-
-  // `link` is atomic and fails with EEXIST rather than clobbering — which for
-  // a content-addressed store means the bytes are already mirrored under
-  // another row and this download was redundant, not a conflict.
-  const linkError = await link(tmpPath, destPath).catch((err) => err);
-  if (!linkError) {
-    await unlink(tmpPath).catch(() => {});
-    return { sha256, relativePath, bytes: received };
-  }
-  if (linkError.code === 'EEXIST') {
-    await rm(tmpPath, { force: true }).catch(() => {});
-    return { sha256, relativePath, bytes: received, deduped: true };
-  }
-  // EXDEV or a filesystem without hard links: rename is the portable fallback.
-  const renameError = await rename(tmpPath, destPath).catch((err) => err);
-  if (renameError) {
-    await rm(tmpPath, { force: true }).catch(() => {});
-    throw new ServerError(`Could not store attachment: ${renameError.message}`, {
-      status: 500, code: 'ATTACHMENT_STORE_FAILED',
+  try {
+    // The transfer is complete. Serialize installation/dedupe and row commit
+    // with orphan cleanup for this hash; admit BEFORE waiting on that queue.
+    return await publishAttachment(relativePath, async () => {
+      await mkdir(dirname(destPath), { recursive: true });
+      const stored = { sha256, relativePath, bytes: received };
+      // link never replaces already referenced bytes. Portable fallback keeps
+      // this same path queue held through the metadata claim.
+      const linkError = await link(tmpPath, destPath).catch(error => error);
+      if (linkError?.code === 'EEXIST') stored.deduped = true;
+      else if (linkError) {
+        await rename(tmpPath, destPath).catch(error => {
+          throw new ServerError(`Could not store attachment: ${error.message}`, {
+            status: 500, code: 'ATTACHMENT_STORE_FAILED',
+          });
+        });
+      }
+      // A failed row write leaves an immutable unclaimed file for the existing
+      // orphan sweep. Never delete a deduplicated file another row may own.
+      await commit(stored);
+      return stored;
     });
-  }
-  return { sha256, relativePath, bytes: received };
+  } finally { await rm(tmpPath, { force: true }).catch(() => {}); }
 }
 
 async function markUnavailable(row, message) {
@@ -394,24 +398,17 @@ export async function ensureAttachmentBytes(messageId, idx, { force = false } = 
   }
 
   const extension = attachmentExtension({ mimeType: row.mime_type, fileName: row.file_name });
-  const stored = await streamAssetToStore(row.mxc_id, { maxBytes, extension }).catch(async (err) => {
-    if (err?.code === 'ASSET_UNAVAILABLE') await markUnavailable(row, err.message);
-    throw err;
-  });
-
-  // `sha256` is not persisted (audit cluster 06 decision 3): it was written
-  // here but never read back — the content-addressed path is built from the
-  // hash `streamAssetToStore` just computed, not from this column. The VALUE
-  // stays in `stored.sha256` / `stored.relativePath` for that path; only the
-  // column write goes.
-  await query(
+  const stored = await streamAssetToStore(row.mxc_id, { maxBytes, extension, commit: stored => query(
     `UPDATE beeper_attachments
         SET local_path = $3, byte_length = $4,
             fetched_at = NOW(), last_viewed_at = NOW(),
             unavailable_at = NULL, fetch_error = NULL, updated_at = NOW()
       WHERE message_id = $1 AND idx = $2`,
     [row.message_id, row.idx, stored.relativePath, stored.bytes],
-  );
+  ) }).catch(async err => {
+    if (err?.code === 'ASSET_UNAVAILABLE') await markUnavailable(row, err.message);
+    throw err;
+  });
   console.log(`🫧 Beeper attachment mirrored: ${stored.bytes} bytes for message ${row.message_id}#${row.idx}${stored.deduped ? ' (deduped)' : ''}`);
   return {
     filePath: join(attachmentsRoot(), stored.relativePath),
@@ -519,12 +516,14 @@ export async function backfillAttachments({ limit = 500 } = {}) {
  */
 async function releaseRowBytes(row) {
   const relativePath = row.local_path;
-  await query(
-    `UPDATE beeper_attachments SET local_path = NULL, fetched_at = NULL, updated_at = NOW()
-      WHERE message_id = $1 AND idx = $2`,
-    [row.message_id, row.idx],
-  );
-  return unlinkIfUnreferenced(relativePath);
+  return publishAttachment(relativePath, async () => {
+    await query(
+      `UPDATE beeper_attachments SET local_path = NULL, fetched_at = NULL, updated_at = NOW()
+        WHERE message_id = $1 AND idx = $2`,
+      [row.message_id, row.idx],
+    );
+    return unlinkIfUnreferencedNow(relativePath);
+  });
 }
 
 /**
@@ -544,6 +543,10 @@ async function releaseRowBytes(row) {
  * @returns {Promise<{ removed: boolean, bytes: number, failed: boolean }>}
  */
 async function unlinkIfUnreferenced(relativePath) {
+  return publishAttachment(relativePath, () => unlinkIfUnreferencedNow(relativePath));
+}
+
+async function unlinkIfUnreferencedNow(relativePath) {
   const untouched = { removed: false, bytes: 0, failed: false };
   if (!relativePath || !isSafeAttachmentRelativePath(relativePath)) return untouched;
   const others = await query(
