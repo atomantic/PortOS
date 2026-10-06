@@ -20,8 +20,10 @@ export const sunoAdapter = {
     await step(label, 'open the Publish dialog', async () => {
       // A cover's page lists the song it covers first, with its own menu, so the
       // page song's menu is picked by which song card it sits in.
-      const songId = songIdOf(payload.songUrl);
-      if (!songId || !(await page.evaluate(markSunoSongMenu, songId))) throw new Error("no menu for this page's own song");
+      // A share link or redirect can land on the song under another URL; the page's own wins.
+      const songId = songIdOf(page.url()) || songIdOf(payload.songUrl);
+      if (!songId) throw new Error(`no song id in ${payload.songUrl}`);
+      if (!(await page.evaluate(markSunoSongMenu, songId))) throw new Error("no menu for this page's own song (only other songs' menus were found)");
       await page.locator('[data-portos-song-menu]').click({ timeout: T });
       await page.locator('[role=menuitem]').filter({ hasText: /^Publish$/ }).first().click({ timeout: T });
       await page.locator('[role=dialog]').first().waitFor({ timeout: T });

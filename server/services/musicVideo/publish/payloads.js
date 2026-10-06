@@ -168,7 +168,8 @@ const BUILDERS = {
   },
   suno: (project, kit, options = {}) => {
     const song = songUrl(kit, options);
-    if (!/^https:\/\/(www\.)?suno\.com\/song\/[\w-]+/.test(song)) throw missing('Give the Suno song URL to publish (suno.com/song/…)');
+    // The adapter finds the song's own menu by its id, so the URL must carry it.
+    if (!/^https:\/\/(www\.)?suno\.com\/song\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(song)) throw missing('Give the Suno song URL to publish (suno.com/song/…)');
     const video = fullVideoUrl(kit);
     const lead = text(kit.copy?.youtube?.description).split(/\n\s*\n/)[0] || '';
     const caption = [lead, video ? `Music video: ${video}` : ''].filter(Boolean).join(' ').slice(0, 500);
