@@ -819,15 +819,23 @@ function claudeCliArgs(baseArgs, { model, effort, provider }) {
   return args;
 }
 
+const CLAUDE_PERMISSION_POSTURE_FLAGS = [
+  '--permission-mode', '--dangerously-skip-permissions', '--allow-dangerously-skip-permissions',
+];
+
 function claudeSpawnArgs(provider, { effectiveModel, effort, systemPromptFile, settingsEnv }) {
   const providerId = provider?.id || 'claude-code';
+  const providerArgs = provider?.args || [];
+  // A provider that pins its own permission posture (e.g. `--permission-mode auto`)
+  // must not also receive the default bypass, which would override it (#10419).
+  const hasPosture = argvHasFlag(providerArgs, CLAUDE_PERMISSION_POSTURE_FLAGS);
   const args = applyLeanClaudeArgs(provider, [
-    '--dangerously-skip-permissions',
+    ...(hasPosture ? [] : ['--dangerously-skip-permissions']),
     '--print',
     '--output-format', 'stream-json',
     '--verbose',
     '--include-partial-messages',
-    ...(provider?.args || []),
+    ...providerArgs,
   ], provider?.command || 'claude');
   if (systemPromptFile) {
     args.push('--append-system-prompt-file', systemPromptFile);
