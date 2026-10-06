@@ -90,7 +90,7 @@ describe('enrichment document publication', () => {
 });
 
 describe('peer document sync publication', () => {
-  it('drains the meta-first merge through the missing markdown copy', async () => {
+  it('drains the missing markdown copy through the metadata merge', async () => {
     const reached = deferred(); const finish = deferred();
     state.beforeWrite = async path => { if (path.endsWith('EXAMPLE.md')) { reached.resolve(); await finish.promise; } };
     const work = applyDigitalTwinRemote({ meta: { documents: [document('EXAMPLE.md')] }, documents: { 'EXAMPLE.md': '# Example body' } });
@@ -98,6 +98,46 @@ describe('peer document sync publication', () => {
       expect(meta.documents).toEqual(expect.arrayContaining([expect.objectContaining({ filename: 'EXAMPLE.md' })]));
       expect(files['EXAMPLE.md']).toBe('# Example body');
     });
+  });
+
+  it('leaves old metadata and tombstoned bytes intact when a peer document write fails, then retries', async () => {
+    await seed({ documents: [document('OLD.md')] });
+    await writeFile(join(root, 'OLD.md'), '# Old body');
+    const deletedAt = new Date().toISOString();
+    const remote = { meta: { documents: [document('NEW.md')], deletedDocuments: [{ filename: 'OLD.md', deletedAt }] },
+      documents: { 'NEW.md': '# New body' } };
+    state.beforeWrite = async path => { if (path.endsWith('NEW.md')) throw new Error('injected markdown failure'); };
+    await expect(applyDigitalTwinRemote(remote)).rejects.toThrow('injected markdown failure');
+    const release = await acquireBackupSnapshotCut();
+    try {
+      const { files, meta } = await snapshot();
+      expect(meta.documents.map(doc => doc.filename)).toEqual(['OLD.md']);
+      expect(meta.deletedDocuments).toEqual([]);
+      expect(files['OLD.md']).toBe('# Old body');
+      expect(files['NEW.md']).toBeUndefined();
+    } finally { release(); }
+    state.beforeWrite = null;
+    await applyDigitalTwinRemote(remote);
+    const { files, meta } = await snapshot();
+    expect(meta.documents.map(doc => doc.filename)).toEqual(['NEW.md']);
+    expect(meta.deletedDocuments).toEqual([{ filename: 'OLD.md', deletedAt }]);
+    expect(files['NEW.md']).toBe('# New body');
+    expect(files['OLD.md']).toBeUndefined();
+  });
+
+  it('does not reap existing bytes when merged metadata persistence fails', async () => {
+    await seed({ documents: [document('OLD.md')] });
+    await writeFile(join(root, 'OLD.md'), '# Old body');
+    state.beforeWrite = async path => { if (path.endsWith('meta.json')) throw new Error('injected meta failure'); };
+    await expect(applyDigitalTwinRemote({ meta: { documents: [document('NEW.md')],
+      deletedDocuments: [{ filename: 'OLD.md', deletedAt: new Date().toISOString() }] },
+    documents: { 'NEW.md': '# New body' } })).rejects.toThrow('injected meta failure');
+    const release = await acquireBackupSnapshotCut();
+    try {
+      const { files, meta } = await snapshot();
+      expect(meta.documents.map(doc => doc.filename)).toEqual(['OLD.md']);
+      expect(files['OLD.md']).toBe('# Old body');
+    } finally { release(); }
   });
 
   it('keeps the merged tombstone and reaping in the same drained cut', async () => {
