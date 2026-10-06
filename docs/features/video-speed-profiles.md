@@ -133,8 +133,12 @@ treats a confidently wrong number as strictly worse than none.
 2. Set `modes` to only the modes that route through the pipeline you measured.
 3. Name any adapter the schedule depends on in `requiresAdapter`, so a pack
    without it degrades loudly instead of rendering slower than the label claims.
-4. Regenerate `data.reference/media-models.json` and extend migration 295's
-   coverage if you are shipping to an entry id it does not already reach.
+4. Nothing to regenerate for fresh installs: there is no `data.reference/media-models.json`
+   seed (removed in #8443). `DEFAULT_REGISTRY` in `server/lib/mediaModels.js` runs the
+   shipped entries through `applyVideoSpeedProfiles`, so a fresh install picks the new
+   profile up from the table above. Extend migration 295's coverage only if you are
+   shipping to an entry id it does not already reach, so existing installs get the profile
+   written into their `data/media-models.json`.
 
 `validateSpeedProfileTable()` / `sanitizeSpeedProfiles()` warn about and strip a
 malformed profile at load, so a hand-edited `data/media-models.json` can never

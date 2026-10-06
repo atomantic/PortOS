@@ -591,10 +591,7 @@ CoS injects identity context into agent briefings when relevant
 - `server/routes/identity.js` -- API routes
 - `server/lib/identityValidation.js` -- Zod schemas
 - `client/src/components/digital-twin/tabs/IdentityTab.jsx` -- dashboard
-- `client/src/components/digital-twin/identity/ChronotypeEditor.jsx`
-- `client/src/components/digital-twin/identity/TasteQuestionnaire.jsx`
-- `client/src/components/digital-twin/identity/GoalTracker.jsx`
-- `client/src/components/digital-twin/identity/CrossInsights.jsx`
+- The chronotype, taste, goal, and cross-insight panels were folded into `IdentityTab.jsx`, `TasteTab.jsx`, and `GoalsTab.jsx` under `tabs/`; the planned `digital-twin/identity/` component directory was never created
 
 **Modified files:**
 - `client/src/components/digital-twin/constants.js` -- add Identity tab
