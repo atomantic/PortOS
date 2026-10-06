@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import toast from '../components/ui/Toast';
 import {
   deleteMusicVideoArtistStyle,
@@ -12,8 +12,8 @@ import {
 /**
  * What the cover Lettering controls draw on besides the song itself (#10345):
  * the typefaces the director uploaded and the saved style per artist. Both are
- * install-wide server records, loaded once, the first time `enabled` (the
- * Lettering section is open); each mutation applies the server's answer at
+ * install-wide server records, loaded whenever `enabled` (the Lettering
+ * section is open); each mutation applies the server's answer at
  * once. `fonts` / `styles` are null until loaded. Failures toast through the
  * shared request layer and leave the lists as they were.
  */
@@ -21,14 +21,14 @@ export default function useMusicVideoCoverLettering({ enabled = true } = {}) {
   const [fonts, setFonts] = useState(null);
   const [styles, setStyles] = useState(null);
   const [uploading, setUploading] = useState(false);
-  const requested = useRef(false);
 
-  // One load per mount, the first time the section is open; closing it again never drops the answer.
+  // Loaded each time the section opens (the lists are small), so a font or style saved on another device shows up.
   useEffect(() => {
-    if (!enabled || requested.current) return;
-    requested.current = true;
-    getMusicVideoCoverFonts({ silent: true }).then((res) => setFonts(res?.fonts || [])).catch(() => setFonts((prev) => prev || []));
-    getMusicVideoArtistStyles({ silent: true }).then((res) => setStyles(res?.styles || [])).catch(() => setStyles((prev) => prev || []));
+    if (!enabled) return undefined;
+    let active = true;
+    getMusicVideoCoverFonts({ silent: true }).then((res) => { if (active) setFonts(res?.fonts || []); }).catch(() => { if (active) setFonts((prev) => prev || []); });
+    getMusicVideoArtistStyles({ silent: true }).then((res) => { if (active) setStyles(res?.styles || []); }).catch(() => { if (active) setStyles((prev) => prev || []); });
+    return () => { active = false; };
   }, [enabled]);
 
   const uploadFont = useCallback(async (file) => {

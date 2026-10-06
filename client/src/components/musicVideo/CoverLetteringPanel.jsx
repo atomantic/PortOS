@@ -28,20 +28,25 @@ const humanize = (value) => {
 const control = 'w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
 const button = 'flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] sm:min-h-0';
 
-// A face is registered with the page once per upload, so the preview sets the title in the file the server will.
-const loadedFaces = new Set();
+// A face is registered with the page once per upload (a re-upload changes `addedAt`), so the preview sets the title in the file the server will.
+const faceLoads = new Map();
+function loadFace(font) {
+  const key = `${font.id}:${font.addedAt}`;
+  if (!faceLoads.has(key)) {
+    faceLoads.set(key, new FontFace(font.family, `url(${musicVideoCoverFontUrl(font.id)})`).load()
+      .then((face) => { document.fonts.add(face); })
+      .catch(() => { faceLoads.delete(key); }));
+  }
+  return faceLoads.get(key);
+}
+// Re-renders once the uploaded faces are usable, so the preview's text widths are measured in them rather than in a fallback.
 function usePreviewFonts(fonts) {
   const [tick, setTick] = useState(0);
   useEffect(() => {
-    if (typeof FontFace === 'undefined' || typeof document === 'undefined' || !document.fonts) return;
-    for (const font of fonts || []) {
-      const key = `${font.id}:${font.addedAt}`;
-      if (loadedFaces.has(key)) continue;
-      loadedFaces.add(key);
-      new FontFace(font.family, `url(${musicVideoCoverFontUrl(font.id)})`).load()
-        .then((face) => { document.fonts.add(face); setTick((t) => t + 1); })
-        .catch(() => loadedFaces.delete(key));
-    }
+    if (!fonts?.length || typeof FontFace === 'undefined' || typeof document === 'undefined' || !document.fonts) return undefined;
+    let active = true;
+    Promise.all(fonts.map(loadFace)).then(() => { if (active) setTick((t) => t + 1); });
+    return () => { active = false; };
   }, [fonts]);
   return tick;
 }

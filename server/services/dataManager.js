@@ -78,6 +78,7 @@ export const CATEGORIES = {
   'browser-profile': { label: 'Browser Profile', description: 'Chrome/Chromium browser data', archivable: false, deletable: true, purgeScope: 'category' },
   cache: { label: 'Remote API and Reading Cache', description: 'Cached remote API metadata and the author-hosted Accelerando reading source — refetched on demand, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
   'calendar': { label: 'Calendar', description: 'Calendar sync data', archivable: true, deletable: false },
+  'cover-fonts': { label: 'Cover Fonts', description: 'Typefaces uploaded for music video cover lettering; covers made with one fall back to a built-in typeface if it is removed', archivable: true, deletable: false },
   'private': { label: 'Private Keys', description: 'Machine-local integration credentials — managed in Settings > Credentials', archivable: false, deletable: false },
   'certs': { label: 'TLS Certificates', description: 'HTTPS certificate and private key — purging drops the install back to HTTP', archivable: false, deletable: false },
   'launch-videos': { label: 'Launch Videos', description: 'App launch-video compositions, plans, captions and rendered deliverables', archivable: true, deletable: false },

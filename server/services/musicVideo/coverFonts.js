@@ -62,7 +62,8 @@ const isFont = (v) => v && typeof v === 'object' && typeof v.id === 'string' && 
 
 /** The uploaded typefaces, oldest first: `{ id, family, ext, width, addedAt }`. */
 export async function listCoverFonts() {
-  const stored = await readJSONFile(indexFile(), { fonts: [] }, { allowArray: false });
+  // Strict: a present-but-unreadable index is an error, never an empty list the next upload would write over.
+  const stored = await readJSONFile(indexFile(), { fonts: [] }, { allowArray: false, strict: true });
   return (Array.isArray(stored?.fonts) ? stored.fonts : []).filter(isFont);
 }
 
