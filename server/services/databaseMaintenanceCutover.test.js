@@ -43,9 +43,11 @@ const docker = { mode: 'docker', host: 'db.example.invalid', port: 5561, databas
 // (#9368). Racing a clock against that startup made recovery flaky without
 // exercising the cutover; `patient` returns the moment the proof lands, so it
 // costs nothing when the host is healthy.
+import { isProcessAlive } from '../test/processAlive.js';
+
 const fast = { graceMs: 1500, pollMs: 20, proofTimeoutMs: 4000 };
 const patient = { ...fast, proofTimeoutMs: 30_000 };
-const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const alive = isProcessAlive;
 const processStart = async pid => process.platform === 'win32' ? null
   : (await snapshotProcesses()).find(row => row.pid === pid)?.startedAt;
 const savedEnv = { ...process.env };
