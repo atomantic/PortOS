@@ -72,6 +72,13 @@ describe('summarizeGateResults', () => {
     expect(text).toContain('docs/TROUBLESHOOTING.md');
   });
 
+  it('points a cancelled run at the per-job time limit, not only the 6-hour default (#10369)', () => {
+    const text = summarizeGateResults(results({ database: 'cancelled' })).lines.join('\n');
+
+    expect(text).toContain('`timeout-minutes`');
+    expect(text).toContain('exceeded the maximum execution time');
+  });
+
   it('reports a real failure as a failure even when cancelled siblings outnumber it', () => {
     // The repo cancels its own siblings from a failing job, so this shape is
     // the NORMAL red run — calling it "cancelled" would be the worse mistake.
