@@ -47,7 +47,7 @@ describe('Suno prepare', () => {
 
   it("fails before clicking anything when only other songs' menus are on the page", async () => {
     const page = fakePage({ marks: false });
-    await expect(sunoAdapter.prepare(page, { songUrl: `https://suno.com/song/${SONG}` })).rejects.toThrow(/no menu for this page's own song/);
+    await expect(sunoAdapter.prepare(page, { songUrl: `https://suno.com/song/${SONG}` })).rejects.toThrow(/no menu could be tied to this page's own song/);
     expect(page.calls.clicked).toEqual([]);
   });
 
