@@ -242,7 +242,7 @@ describe('ThreadsTab', () => {
       notes: 'Part of **Promote "Example Song"**.\n\n1. Open X.\n2. Attach the clip.\n\n## Ready to paste\n\n**X post**\n````text\nNot a person. ```\n````',
     };
     api.getThread.mockResolvedValue({ ...step, resolvedRefs: [] });
-    api.updateThread.mockImplementation(async (id, patch) => ({ ...step, ...patch, resolvedRefs: [] }));
+    api.updateThread.mockImplementation(async (_id, patch) => ({ ...step, ...patch, resolvedRefs: [] }));
     renderTab('/brain/threads?thread=act');
     const card = await screen.findByRole('region', { name: 'Ready to paste' });
     expect(within(card).getByText('Attach the clip.')).toBeTruthy();
