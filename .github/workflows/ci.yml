@@ -839,6 +839,10 @@ jobs:
         run: node --check server/index.js
 
       - name: Run server tests on Windows
+        # A step timeout FAILS the step (log kept, `if: failure()` reporting
+        # runs); the job-level timeout would cancel the job and lose the log
+        # (#10415). Observed healthy runs take 2-10 minutes.
+        timeout-minutes: 15
         env:
           CI_TEST_MODE: ${{ needs.impact.outputs.windows_mode }}
           CI_TEST_FILES: ${{ needs.impact.outputs.windows_files }}
