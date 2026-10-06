@@ -11,6 +11,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
   actual.PATHS.videos = FAKE_VIDEOS_DIR;
   actual.PATHS.data = FAKE_DATA_DIR;
+  actual.PATHS.videoThumbnails = join(TEST_ROOT, 'thumbnails');
   return {
     ...actual,
     ensureDir: vi.fn(async (dir) => mkdir(dir, { recursive: true })),
@@ -34,7 +35,7 @@ const ffmpeg = await import('../../lib/ffmpeg.js');
 const { videoGenEvents } = await import('./events.js');
 const { loadHistory } = await import('./history.js');
 
-// A returned job (or its early 'complete' status stamp) is not a settled run.
+  // A returned job is not a settled run.
 // Track from 'started', before generateVideo returns, through the terminal
 // event after the real finalization/history tail. Keep mocks and files alive
 // until every started job has reached that boundary, even if a test throws.
@@ -334,15 +335,8 @@ describe('videoGen/fal — generateVideo', () => {
     }
   });
 
-  // Regression (#6831): finalizeGeneratedVideo stamps job.status = 'complete'
-  // BEFORE its own faststart/thumbnail/history tail, and runFalVideo has
-  // already released the request slot by then, so a throw from that tail
-  // lands in the catch-all with the job already reading 'complete'. Without
-  // `force: true` the shared finalizer's idempotency guard made that a silent
-  // no-op — no 'failed' event for the media queue, no SSE error frame for the
-  // client — the window videoGen/grok.js's post-exit catch (fa3796650) and
-  // reactor.js's catch-all already force past.
-  it('still emits failed when finalizeGeneratedVideo throws after job.status is already complete', async () => {
+  // A post-download failure must settle the queue and SSE client after cleanup.
+  it('emits failed when post-download finalization throws', async () => {
     const requestId = 'req-tail';
     const statusUrl = `https://queue.fal.run/fal-ai/x/requests/${requestId}/status`;
     const responseUrl = `https://queue.fal.run/fal-ai/x/requests/${requestId}`;
@@ -355,8 +349,7 @@ describe('videoGen/fal — generateVideo', () => {
       }
       throw new Error(`unexpected fetch: ${url}`);
     }));
-    // The first step after the 'complete' stamp rejects — the download has
-    // already landed on disk, so this is purely the post-processing window.
+    // The download has landed; reject the first post-processing step.
     ffmpeg.optimizeForStreaming.mockRejectedValueOnce(new Error('faststart remux failed'));
 
     const failed = vi.fn();

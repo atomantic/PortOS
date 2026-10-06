@@ -21,8 +21,9 @@ vi.mock('../../lib/detachedSpawn.js', () => ({ spawnDetached: mocks.spawn }));
 vi.mock('../../lib/childProcess.js', () => ({ spawn: () => new EventEmitter() }));
 vi.mock('fs', async (importOriginal) => ({ ...(await importOriginal()), watch: mocks.watch }));
 vi.mock('../../lib/fileUtils.js', () => ({
-  PATHS: { videos: '/mock/videos' },
+  PATHS: { videos: '/mock/videos', videoThumbnails: '/mock/thumbnails' },
   rmGuarded: mocks.rm,
+  unlinkGuarded: vi.fn(async () => {}),
   formatBytes: vi.fn(),
 }));
 vi.mock('../../lib/ffmpeg.js', () => ({

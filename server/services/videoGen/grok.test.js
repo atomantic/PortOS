@@ -65,6 +65,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
   actual.PATHS.videos = FAKE_VIDEOS_DIR;
   actual.PATHS.data = FAKE_DATA_DIR;
+  actual.PATHS.videoThumbnails = join(TEST_ROOT, 'thumbnails');
   return {
     ...actual,
     ensureDir: vi.fn(async (dir) => mkdir(dir, { recursive: true })),
