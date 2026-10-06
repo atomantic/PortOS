@@ -1,4 +1,4 @@
-/** Snapshot/index pairs must be copied together, including unlink-first deletion. */
+/** Snapshot/index pairs must be copied together, including deletion failures. */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -63,7 +63,7 @@ describe.each(cases)('$name snapshot pair', ({ setup }) => {
     expect(after).not.toEqual(before);
   });
 
-  it('drains from the first file mutation through the index commit', async () => {
+  it('drains the complete file and index mutation', async () => {
     const run = await setup();
     const reached = deferred(); const commit = deferred();
     beforeIndexWrite = async () => { reached.resolve(); await commit.promise; };
@@ -90,4 +90,14 @@ it('negative control exposes a copied index naming a file created after the file
     expect(copiedIndex).toHaveLength(1);
     expect(copiedFiles).not.toEqual(copiedIndex);
   } finally { release(); }
+});
+
+it('preserves referenced snapshot bytes when deletion cannot commit its index', async () => {
+  const snapshot = await createSnapshot('Example retained snapshot');
+  const before = await capture();
+  beforeIndexWrite = async () => { throw new Error('synthetic index write failure'); };
+  await expect(deleteSnapshot(snapshot.id)).rejects.toThrow('synthetic index write failure');
+  const release = await acquireBackupSnapshotCut();
+  try { expect(await capture()).toEqual(before); }
+  finally { release(); }
 });
