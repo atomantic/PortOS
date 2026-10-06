@@ -105,6 +105,7 @@ Admission inventory (`withBackupAssetPublication`):
 | Pipeline audio mux (music, voice, generated cues, silent strip), including Creative Director stitch/final assembly | Covered (#9982 partial): encoding runs outside admission; replacement of the already-recorded video and rollback hold the lease. CD final/rough-cut rows only reference the existing history entry |
 | Music Video Making-of export (`makingOf.js`, `makingOfVisuals.js`) | Reference-only: reads existing assets and transforms buffers for the ZIP response; no durable file or row writes |
 | Time Capsule snapshots (`timeCapsule.js`) | Covered (#9982 partial): snapshot creation and deletion lease the file and index entry together, acquiring before the shared index write tail |
+| CoS raw recording compression and purge (`cosAgentStorage.js`) | Covered (#9982 partial): verified gzip publication, storage manifest and plain-file removal share a lease; purge intent and unlinks also share a lease because the manifest is file-primary |
 | Durable replacement/deletion owners not yet classified | Outstanding (#9982) |
 | Snapshot consistency claim (`backupAssetOwners.js`, see below) | Covered (#9982 partial) |
 | Database restore execution and backend-cutover acceptance (`backup.js`, `databasePreflight.js`) | Covered (#9983) |

@@ -406,6 +406,14 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     status: 'admitted',
     modules: ['services/timeCapsule.js'],
   },
+  {
+    // Compression verifies staging outside admission; publishing gzip, recording
+    // its manifest and removing plain bytes take one lease before the state lock.
+    // Purge leases its intent manifest and both unlinks (file-primary records).
+    id: 'cos-recording-compression-and-purge',
+    status: 'admitted',
+    modules: ['services/cosAgentStorage.js'],
+  },
   // Anything the sweep did not reach. A new asset owner lands here until it is
   // classified; the claim cannot become `global` while this entry exists.
   { id: 'unclassified-durable-owners', status: 'outstanding', modules: [] },
