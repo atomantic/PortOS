@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { HardDrive, RefreshCw, Archive, Trash2, ChevronDown, ChevronRight, FolderOpen, File, Package } from 'lucide-react';
 import * as api from '../services/api';
 import { formatBytes, formatCount, formatDateNumeric } from '../utils/formatters';
+import { pluralize } from '../lib/textUtils';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import { SkeletonRegion, SkeletonRows } from '../components/ui/Skeleton';
 import toast from '../components/ui/Toast';
@@ -194,7 +195,7 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
         </div>
         <div className="text-right shrink-0 ml-2">
           <div className="text-sm font-mono text-white">{formatBytes(cat.size)}</div>
-          <div className="text-xs text-gray-500">{cat.fileCount == null ? 'File count unavailable — refresh to retry' : `${formatCount(cat.fileCount)} files`}</div>
+          <div className="text-xs text-gray-500">{cat.fileCount == null ? 'File count unavailable — refresh to retry' : pluralize(cat.fileCount, 'file').replace(/^\d+/, formatCount(cat.fileCount))}</div>
         </div>
       </button>
 
@@ -204,7 +205,7 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
           {confirmingPurge && !busy ? (
             <InlineConfirmRow
               variant="separator"
-              question={`Purge ${cat.fileCount == null ? 'all files' : `all ${formatCount(cat.fileCount)} files`} (${formatBytes(cat.size)}) in ${cat.label}? This permanently deletes the data and cannot be undone.`}
+              question={`Purge ${cat.fileCount == null ? 'all files' : `all ${pluralize(cat.fileCount, 'file', 'files').replace(/^\d+/, formatCount(cat.fileCount))}`} (${formatBytes(cat.size)}) in ${cat.label}? This permanently deletes the data and cannot be undone.`}
               confirmText="Purge"
               confirmTitle="Confirm purge"
               cancelTitle="Cancel purge"
@@ -675,7 +676,7 @@ export default function DataManager() {
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
               <span className="text-gray-300">
                 <span className="font-mono text-white">{overview ? formatBytes(overview.totalSize) : 'Storage unavailable'}</span>
-                {' · '}{totalFiles == null ? 'File count unavailable' : `${formatCount(totalFiles)} files`}
+                {' · '}{totalFiles == null ? 'File count unavailable' : pluralize(totalFiles, 'file').replace(/^\d+/, formatCount(totalFiles))}
                 {' · '}{overview ? `${formatCount(categories.length)} categories` : 'Category count unavailable'}
                 {' · '}{backups ? `${formatCount(backups.length)} backups` : 'Backup count unavailable'}
               </span>
