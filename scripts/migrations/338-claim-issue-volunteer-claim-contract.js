@@ -9,7 +9,8 @@
  * remain untouched.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { writeJsonAtomic } from './_lib.js';
 import { join } from 'path';
 import { DEFAULT_TASK_PROMPTS, PROMPT_VERSIONS } from '../../server/services/taskPromptDefaults.js';
 
@@ -47,7 +48,7 @@ export default {
 
       task.prompt = DEFAULT_TASK_PROMPTS[TASK_TYPE];
       task.promptVersion = PROMPT_VERSIONS[TASK_TYPE];
-      await writeFile(fullPath, `${JSON.stringify(schedule, null, 2)}\n`);
+      await writeJsonAtomic(fullPath, schedule);
       updatedCount += 1;
       console.log(`📝 ${relPath}: upgraded ${TASK_TYPE} prompt v${currentVersion} → v${PROMPT_VERSIONS[TASK_TYPE]}`);
     }

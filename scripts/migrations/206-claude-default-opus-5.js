@@ -35,7 +35,8 @@
  *     opus-4-8 gets that orphan pointer repaired.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { writeJsonAtomic } from './_lib.js';
 import { join } from 'path';
 
 const PROVIDERS_REL_PATH = 'data/providers.json';
@@ -167,7 +168,7 @@ export default {
       return;
     }
 
-    await writeFile(providersPath, `${JSON.stringify(config, null, 2)}\n`);
+    await writeJsonAtomic(providersPath, config);
     const summary = touched.map((t) => `${t.id} (default: ${t.defaultModel})`).join(', ');
     console.log(`📝 ${PROVIDERS_REL_PATH}: updated ${summary} → opus tier claude-opus-5`);
   },

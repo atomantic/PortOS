@@ -13,7 +13,8 @@
  * its default null pin, while an explicit target pin wins.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { writeJsonAtomic } from './_lib.js';
 import { join } from 'path';
 
 const SCHEDULE_REL = 'data/cos/task-schedule.json';
@@ -39,7 +40,7 @@ async function readJson(path) {
 }
 
 async function writeJson(path, value) {
-  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`);
+  await writeJsonAtomic(path, value);
 }
 
 /**

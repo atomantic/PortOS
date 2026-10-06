@@ -20,7 +20,8 @@
  * service layer is wired, so it reads/writes settings.json directly.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { writeJsonAtomic } from './_lib.js';
 import { existsSync } from 'fs';
 import { join } from 'path';
 
@@ -70,7 +71,7 @@ export async function up({ rootDir }) {
     return { ok: true, reason: 'already-present' };
   }
 
-  await writeFile(settingsPath, JSON.stringify(next, null, 2) + '\n');
+  await writeJsonAtomic(settingsPath, next);
   console.log('🔌 api-access-seed: added default apiAccess block (voice + sdapi, not-exposed + passwordless).');
   return { ok: true, reason: 'seeded' };
 }

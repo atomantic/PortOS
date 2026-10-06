@@ -54,7 +54,8 @@
  * selector and server callers both expect every slot to be a real id).
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { writeJsonAtomic } from './_lib.js';
 import { join } from 'path';
 
 const PROVIDERS_REL_PATH = 'data/providers.json';
@@ -242,7 +243,7 @@ export default {
       return;
     }
 
-    await writeFile(providersPath, `${JSON.stringify(config, null, 2)}\n`);
+    await writeJsonAtomic(providersPath, config);
     const summary = touched.map((t) => `${t.id} (default: ${t.defaultModel})`).join(', ');
     console.log(`📝 ${PROVIDERS_REL_PATH}: updated ${summary} → models claude-haiku-4-5 / claude-sonnet-4-6 / claude-opus-4-7`);
   },

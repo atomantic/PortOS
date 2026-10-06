@@ -23,7 +23,8 @@
  * Idempotent: a re-run finds `'self'` (or no stored filter) and makes no change.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { writeJsonAtomic } from './_lib.js';
 import { join } from 'path';
 
 const SCHEDULE_REL_PATH = 'data/task-schedule.json';
@@ -72,7 +73,7 @@ export default {
       return { updated: 0, reason: 'already-applied' };
     }
 
-    await writeFile(schedulePath, `${JSON.stringify(schedule, null, 2)}\n`);
+    await writeJsonAtomic(schedulePath, schedule);
     return { updated: touched };
   },
 };
