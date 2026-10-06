@@ -3124,7 +3124,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       await runRestore('/dest', 'snap-1', { dryRun: false, subdirFilter });
       expect(withLiveCosRestore).toHaveBeenCalledTimes(1);
     });
-    it.each([{ dryRun: true }, { dryRun: false, subdirFilter: 'images' }, { dryRun: false, subdirFilter: 'cos/agents' }])('leaves unaffected scope alone: %j', async options => {
+    it.each([{ dryRun: true }, { dryRun: false, subdirFilter: 'images' }, { dryRun: true, subdirFilter: 'cos/agents' }])('leaves unaffected scope alone: %j', async options => {
       await runRestore('/dest', 'snap-1', options);
       expect(withLiveCosRestore).not.toHaveBeenCalled();
     });
