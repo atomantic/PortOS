@@ -4,6 +4,32 @@ import { posix } from 'node:path';
 import { parse } from '@babel/parser';
 import { ServerError } from '../../lib/errorHandler.js';
 
+/**
+ * A data: module has no usable `import.meta.url`, so bundler asset URLs built from it — Vite's
+ * `new URL('photo-abc.jpg', import.meta.url)` — throw "cannot be parsed as a URL" in the preview.
+ * Each inlined module instead sees a stand-in base under this reserved origin, at its own path in
+ * the document; the preview bootstrap maps URLs under it back to document files (see documentPreview.js).
+ */
+export const PREVIEW_DOCUMENT_BASE = 'https://document.portos.invalid/';
+
+// `import.meta.url` member expressions anywhere in the module (computed `import.meta['url']` included).
+function importMetaUrlRanges(node, out = []) {
+  if (!node || typeof node !== 'object') return out;
+  if (Array.isArray(node)) { for (const child of node) importMetaUrlRanges(child, out); return out; }
+  if (node.type === 'MemberExpression' && node.object?.type === 'MetaProperty'
+    && node.object.meta?.name === 'import' && node.object.property?.name === 'meta'
+    && ((!node.computed && node.property?.name === 'url') || (node.computed && node.property?.value === 'url'))) {
+    out.push({ start: node.start, end: node.end });
+    return out;
+  }
+  for (const key of Object.keys(node)) {
+    if (key === 'loc' || key === 'start' || key === 'end' || key === 'extra' || key === 'comments' || key.endsWith('Comments')) continue;
+    const child = node[key];
+    if (child && typeof child === 'object') importMetaUrlRanges(child, out);
+  }
+  return out;
+}
+
 export async function inlineDocumentModule(entry, files, stack = new Set(), cache = new Map()) {
   if (cache.has(entry)) return cache.get(entry);
   const file = files.get(entry);
@@ -20,6 +46,8 @@ export async function inlineDocumentModule(entry, files, stack = new Set(), cach
     const url = await inlineDocumentModule(key, files, nextStack, cache);
     replacements.push({ start: node.source.start, end: node.source.end, value: JSON.stringify(url) });
   }
+  const base = JSON.stringify(`${PREVIEW_DOCUMENT_BASE}${entry}`);
+  for (const range of importMetaUrlRanges(ast.program)) replacements.push({ ...range, value: base });
   const expandedSize = replacements.reduce((size, item) => size + item.value.length - (item.end - item.start), source.length);
   if (expandedSize > 24 * 1024 * 1024) throw new ServerError('The expanded module graph exceeds the preview budget', { status: 413, code: 'COMPOSITION_MODULE_TOO_LARGE' });
   let output = source;

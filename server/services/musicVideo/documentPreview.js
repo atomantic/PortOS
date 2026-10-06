@@ -1,4 +1,4 @@
-import { inlineDocumentModule } from './documentModules.js';
+import { PREVIEW_DOCUMENT_BASE, inlineDocumentModule } from './documentModules.js';
 import { musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
 /**
  * Music Video — the in-app live preview of a composition document.
@@ -64,8 +64,12 @@ const BOOTSTRAP = `(() => {
   let resolveAssets;
   window.PORTOS_MV_PREVIEW = true;
   window.PORTOS_MV_ASSETS = new Promise((resolve) => { resolveAssets = resolve; });
-  const keyOf = (value) => String(value).replace(/^\\.\\//, '').split(/[?#]/)[0];
-  const relative = (value) => typeof value === 'string' && value && !/^[a-z][a-z0-9+.-]*:/i.test(value) && !value.startsWith('/');
+  // Bundler asset URLs resolved against an inlined module's stand-in import.meta.url (documentModules.js)
+  // land under this origin; they name document files just like a relative src does.
+  const DOC_BASE = ${JSON.stringify(PREVIEW_DOCUMENT_BASE)};
+  const local = (value) => typeof value === 'string' && value.startsWith(DOC_BASE) ? value.slice(DOC_BASE.length) : value;
+  const keyOf = (value) => String(local(value)).replace(/^\\.\\//, '').split(/[?#]/)[0];
+  const relative = (value) => { value = local(value); return typeof value === 'string' && value && !/^[a-z][a-z0-9+.-]*:/i.test(value) && !value.startsWith('/'); };
   const pending = [];
   for (const Ctor of [HTMLMediaElement, HTMLImageElement, HTMLSourceElement]) {
     const desc = Object.getOwnPropertyDescriptor(Ctor.prototype, 'src');
