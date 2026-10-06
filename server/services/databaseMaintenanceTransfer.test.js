@@ -36,12 +36,14 @@ const { createDatabaseMaintenanceJournal } = await import('../lib/databaseMainte
 const { spawnDetached } = await import('../lib/detachedSpawn.js');
 const { runDatabaseTransfer } = await import('./databaseMaintenanceTransfer.js');
 
+import { isProcessAlive } from '../test/processAlive.js';
+
 const native = { mode: 'native', host: 'native.example.invalid', port: 5432, database: 'example_test', user: 'example' };
 const docker = { mode: 'docker', host: 'docker.example.invalid', port: 5561, database: 'example_test', user: 'example' };
 const fast = { graceMs: 1500, pollMs: 20 };
 const endpointArgs = endpoint => `-h ${endpoint.host} -p ${endpoint.port} -U ${endpoint.user} -d ${endpoint.database}`;
 const sha256 = text => createHash('sha256').update(text).digest('hex');
-const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const alive = isProcessAlive;
 const savedEnv = { ...process.env };
 
 let root;

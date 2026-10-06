@@ -38,10 +38,12 @@ function installPm2Stub() {
     { name: 'portos-server', pmId: 13, pid: 1013, status: 'online', cwd: root, script: 'server/start.js' },
   ]));
   const stubModule = join(stubs.dir, 'pm2.mjs');
+  const processAliveUrl = new URL('../test/processAlive.js', import.meta.url).href;
   writeFileSync(stubModule, `import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { launchSurrogateServer, restartedServerEndpoint } from ${JSON.stringify(cutoverFixtureUrl)};
+import { isProcessAlive } from ${JSON.stringify(processAliveUrl)};
 const state = ${JSON.stringify(state)};
-const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const alive = isProcessAlive;
 export async function listMaintenanceProcesses() {
   return JSON.parse(readFileSync(state, 'utf8')).map(row => row.surrogate && !alive(row.pid) ? { ...row, status: 'errored', pid: 0 } : row);
 }

@@ -54,6 +54,7 @@
 import { execFile, spawn } from './childProcess.js';
 import { EventEmitter } from 'events';
 import { constants as osConstants } from 'os';
+import { readFileSync } from 'node:fs';
 import { basename, join } from 'path';
 import { open, readFile, writeFile, rm, stat, readdir } from 'fs/promises';
 import { promisify } from 'util';
@@ -81,7 +82,17 @@ const REAP_GRACE_MS = 12000;
 const GROUP_KILL_MARKER = 'kill-process-group';
 
 const isAlive = (pid) => {
-  try { process.kill(pid, 0); return true; } catch { return false; }
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    return stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3) !== 'Z';
+  } catch {
+    return true;
+  }
 };
 
 // Signal a detached job we hold no child handle for — the reparented POSIX
