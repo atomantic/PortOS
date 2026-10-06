@@ -2971,7 +2971,7 @@ describe('direct production review navigation', () => {
     listMusicVideoProjects.mockResolvedValue([project]);
     render(<MemoryRouter initialEntries={['/music-video/mv-3/review']}><LocationProbe /><NavTo to={-1} /><NavTo to={1} />{MV_ROUTES}</MemoryRouter>);
     const action = await screen.findByRole('button', { name: 'Review art direction' });
-    expect(screen.getByLabelText('Project')).toHaveTextContent(project.name);
+    expect(screen.getByLabelText('Project').querySelector(`option[value="${project.id}"]`).textContent).toBe(project.name);
     fireEvent.click(action);
     // The art approval mounts at the bottom of the Look step, so it only exists once the jump lands.
     await waitFor(() => expect(document.getElementById('mv-review-art')).toHaveFocus());
