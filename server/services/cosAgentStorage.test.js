@@ -6,6 +6,7 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { cosEvents } from './cosEvents.js';
 const fixture = await vi.hoisted(async () => {
   const { mkdtemp } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
@@ -64,10 +65,22 @@ async function seed(id = 'agent-example', metadata = {}) {
   return dir;
 }
 async function settled() {
-  await vi.waitFor(async () => expect((await storage.getAgentStorageStatus()).job?.finishedAt).toBeTruthy());
-  // Completion's config audit is part of the job boundary.
-  await vi.waitFor(() => expect(fixture.config.lastAgentStorageJob).toBeTruthy());
-  return (await storage.getAgentStorageStatus()).job;
+  const completion = Promise.withResolvers();
+  const inspect = () => {
+    void storage.getAgentStorageStatus().then(({ job }) => {
+      // Real compression and backup admission may outlast a polling deadline.
+      // Completion includes the persisted audit for this job, not a prior run.
+      if (job?.finishedAt && fixture.config.lastAgentStorageJob?.id === job.id) completion.resolve(job);
+    }, completion.reject);
+  };
+  cosEvents.on('storage:changed', inspect);
+  inspect(); // Covers a job that finished before this caller subscribed.
+  try {
+    const job = await completion.promise;
+    expect(job.finishedAt).toBeTruthy();
+    expect(fixture.config.lastAgentStorageJob).toMatchObject({ id: job.id, finishedAt: job.finishedAt });
+    return job;
+  } finally { cosEvents.off('storage:changed', inspect); }
 }
 beforeEach(async () => {
   await rm(fixture.root, { recursive: true, force: true }); await mkdir(fixture.root);
