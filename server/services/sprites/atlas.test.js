@@ -994,7 +994,7 @@ describe('atlas backup publication', () => {
   it('drains atlas bytes through the real current-pointer write', async () => {
     const id = await finalizedAmbientPlace();
     const reached = backupDeferred(); const commit = backupDeferred();
-    beforeAssetWrite = async path => { if (path.endsWith('runtime/current.json')) { reached.resolve(); await commit.promise; } };
+    beforeAssetWrite = async path => { if (path === join(TEST_ROOT, 'sprites', id, 'runtime', 'current.json')) { reached.resolve(); await commit.promise; } };
     const work = compileAtlas(id);
     await Promise.race([reached.promise, work.then(() => { throw new Error('missed pointer seam'); })]);
     let ready = false; const cut = acquireBackupSnapshotCut().then(release => { ready = true; return release; });
