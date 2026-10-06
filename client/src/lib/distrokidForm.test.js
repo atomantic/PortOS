@@ -26,7 +26,7 @@ const FORM = `
     <select><option>Music</option><option>Lyrics</option><option>Music and lyrics</option></select>
     <input name="songwriter_real_name_first1"><input name="songwriter_real_name_last1">
   </div>
-  <div class="preview">${radios('previewStart_1', ['no', 'yes'])}<select>${options(range(10))}</select><select>${options(range(60))}</select></div>
+  <div class="preview">${radios('previewStart_1', ['no', 'yes'])}<select><option value=""></option>${options(range(10))}</select><select>${options(range(60))}</select></div>
   <select id="track-1-performer-1-role">${options(['', 'Vocals', 'Synthesizer'])}</select><input id="track-1-performer-1-name">
   <select id="track-1-producer-1-role">${options(['', 'Producer', 'Mixing Engineer'])}</select><input id="track-1-producer-1-name">
   ${radios('ai_gate_cd34', ['0', '1'])}
@@ -93,7 +93,25 @@ describe('DistroKid form recipe', () => {
   });
 
   it('leaves no paid extra ticked, and names the ones it unticked', () => {
-    expect(untickDistrokidExtras()).toEqual(['Social Media Pack', 'Leave a Legacy']);
+    expect(untickDistrokidExtras()).toEqual({ unticked: ['Social Media Pack', 'Leave a Legacy'], stillTicked: [] });
     expect(document.querySelectorAll('input[name=extras]:checked')).toHaveLength(0);
+  });
+
+  it('reports a paid extra whose untick did not take', () => {
+    $('input[value=legacy]').addEventListener('click', (e) => e.preventDefault());
+    expect(untickDistrokidExtras()).toEqual({ unticked: ['Social Media Pack'], stillTicked: ['Leave a Legacy'] });
+  });
+
+  it('starts the preview at minute 0 on the real option, not the blank placeholder', () => {
+    fillDistrokidFields({ ...PLAN, previewStart: { min: 0, sec: 42 } });
+    const [min, sec] = document.querySelectorAll('.preview select');
+    expect([min.selectedIndex, min.value, sec.value]).toEqual([1, '0', '42']);
+  });
+
+  it('leaves a store-profile question DistroKid hid for the director', () => {
+    document.querySelectorAll('input[name=spotifyArtistID]').forEach((r) => r.closest('label').setAttribute('hidden', ''));
+    const { missed } = fillDistrokidFields(PLAN);
+    expect(missed).toEqual(['store profiles: new on all five']);
+    expect(document.querySelector('input[name=spotifyArtistID]:checked')).toBeNull();
   });
 });

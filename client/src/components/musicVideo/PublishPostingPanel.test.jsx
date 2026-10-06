@@ -61,7 +61,7 @@ describe('PublishPostingPanel (#9282)', () => {
     fireEvent.change(within(dk).getByLabelText('Songwriter legal last name'), { target: { value: 'Example' } });
     fireEvent.click(within(dk).getByLabelText('Explicit lyrics'));
     fireEvent.click(within(dk).getByRole('button', { name: 'Fill draft' }));
-    expect(publishing.prepare).toHaveBeenCalledWith('distrokid', { songwriterFirst: 'Alice', songwriterLast: 'Example', aiLyrics: true, explicit: true, newArtistProfile: true });
+    expect(publishing.prepare).toHaveBeenCalledWith('distrokid', { songwriterFirst: 'Alice', songwriterLast: 'Example', aiLyrics: true, explicit: true });
     unmount();
     render(<PublishPostingPanel project={project()} publishing={hook()} />);
     expect(within(row('Spotify (via DistroKid)')).getByLabelText('Songwriter legal first name')).toHaveValue('Alice');
@@ -80,12 +80,16 @@ describe('PublishPostingPanel (#9282)', () => {
     fireEvent.change(within(dk).getByLabelText('Language'), { target: { value: 'Spanish' } });
     fireEvent.click(within(dk).getByLabelText('First release as this artist (new store profiles)'));
     fireEvent.click(within(dk).getByRole('button', { name: 'Fill draft' }));
-    expect(publishing.prepare).toHaveBeenCalledWith('distrokid', expect.objectContaining({ genre: 'Rock', language: 'Spanish', newArtistProfile: false }));
+    expect(publishing.prepare).toHaveBeenCalledWith('distrokid', expect.objectContaining({ genre: 'Rock', language: 'Spanish', newArtistProfile: true }));
     unmount();
-    render(<PublishPostingPanel project={project()} publishing={hook()} />);
+    const later = hook({ platforms: { distrokid: { enabled: true, account: 'Example Artist' } } });
+    render(<PublishPostingPanel project={project()} publishing={later} />);
     const again = row('Spotify (via DistroKid)');
     expect(within(again).getByLabelText('Language')).toHaveValue('Spanish');
+    // New store profiles are asked per release, never carried to the next one.
     expect(within(again).getByLabelText('First release as this artist (new store profiles)')).not.toBeChecked();
+    fireEvent.click(within(again).getByRole('button', { name: 'Fill draft' }));
+    expect(later.prepare.mock.calls[0][1]).not.toHaveProperty('newArtistProfile');
     expect(within(again).getByLabelText('Genre')).toHaveValue('');
   });
 

@@ -134,7 +134,7 @@ describe('buildPublishPayload (#9282)', () => {
       title: 'Song', artist: 'Example Artist', explicit: false, instrumental: false, releaseDate: null,
       ai: { lyrics: false, music: true, vocals: true }, cover: { name: 'thumb-1.jpg' },
       songwriterRole: 'both', language: 'English', genre: null, secondaryGenre: null, newArtistProfile: false, preserveCaps: false,
-      credits: { performer: 'Alice Example', producer: 'Alice Example', performerRole: null }, previewStartSec: 0,
+      credits: { performer: 'Alice Example', producer: 'Alice Example', performerRole: null }, previewStartSec: null,
     });
     // Genre comes from the song's own style words; the director's picks win, and the preview opens on the hook.
     const styled = song({ autonomousRun: { output: { sunoStyle: 'dark synthwave, pop hooks, female vocal' } } });

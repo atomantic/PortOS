@@ -194,7 +194,10 @@ const BUILDERS = {
     const secondary = text(options.secondaryGenre) || suggested.secondary;
     const fullName = `${songwriter.first} ${songwriter.last}`;
     // The store preview (and TikTok clip) opens on the song's strongest hook.
-    const previewStartSec = Number.isFinite(options.previewStartSec) ? options.previewStartSec : (suggestSocialCuts(project, { count: 1 })[0]?.startSec ?? null);
+    // A pick at 0:00 (no hook signal, or a song too short to choose) says
+    // nothing DistroKid's own default doesn't, so the question stays untouched.
+    const hookSec = suggestSocialCuts(project, { count: 1 })[0]?.startSec;
+    const previewStartSec = Number.isFinite(options.previewStartSec) ? options.previewStartSec : (hookSec > 0 ? hookSec : null);
     return {
       title, artist, songwriter, releaseDate: releaseDate || null,
       songwriterRole: options.songwriterRole || (instrumental ? 'music' : 'both'),

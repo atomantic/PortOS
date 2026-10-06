@@ -13,6 +13,9 @@ describe('suggestDistrokidGenres', () => {
 
   it('does not read k-pop as pop, and suggests nothing for a song with no style words', () => {
     expect(suggestDistrokidGenres(song('k-pop anthem'))).toEqual({ primary: 'K-Pop', secondary: null });
+    // ...but a word that merely ends in k still says pop.
+    expect(suggestDistrokidGenres(song('dark pop, female vocal'))).toEqual({ primary: 'Pop', secondary: null });
+    expect(suggestDistrokidGenres(song('punk pop anthem'))).toEqual({ primary: 'Punk', secondary: 'Pop' });
     expect(suggestDistrokidGenres({})).toEqual({ primary: null, secondary: null });
     expect(suggestDistrokidGenres(song('slow, sad, whispered'))).toEqual({ primary: null, secondary: null });
   });

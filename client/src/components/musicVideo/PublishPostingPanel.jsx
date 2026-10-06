@@ -24,9 +24,10 @@ export const PUBLISH_TARGETS = [
 ];
 
 // The DistroKid answers the director gives once (songwriter legal name and
-// role, language, store profiles, Apple performer role), remembered on this device only.
+// role, language, Apple performer role), remembered on this device only. The
+// store-profile answer is never remembered: new profiles are per first release.
 const SONGWRITER_KEY = 'portos.musicVideo.distrokidSongwriter';
-const DISTROKID_REMEMBERED = { songwriterFirst: 'first', songwriterLast: 'last', songwriterRole: 'role', language: 'language', newArtistProfile: 'newArtistProfile', performerRole: 'performerRole' };
+const DISTROKID_REMEMBERED = { songwriterFirst: 'first', songwriterLast: 'last', songwriterRole: 'role', language: 'language', performerRole: 'performerRole' };
 
 const inputCls = 'w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
 
@@ -141,7 +142,7 @@ function TargetOptions({ target, kit, project, options, setOption, flairs, idFor
         <div className="flex flex-wrap gap-x-4">
           {check('explicit', 'Explicit lyrics', false)}
           {check('instrumental', 'Instrumental', !hasLyrics)}
-          {check('newArtistProfile', 'First release as this artist (new store profiles)', true)}
+          {check('newArtistProfile', 'First release as this artist (new store profiles)', false)}
         </div>
         <div role="group" aria-label="Apple Music credits" className="grid sm:grid-cols-3 gap-2">
           {text('performerName', 'Apple performer (real name)', fullName)}
@@ -257,7 +258,7 @@ function TargetRow({ project, kit, entry, publishing }) {
           if (target === 'distrokid' && clean.songwriterFirst && clean.songwriterLast) {
             safeWriteJsonStorage(SONGWRITER_KEY, Object.fromEntries(Object.entries(DISTROKID_REMEMBERED).filter(([opt]) => clean[opt] != null).map(([opt, k]) => [k, clean[opt]])));
           }
-          publishing.prepare(target, target === 'distrokid' ? { newArtistProfile: true, ...clean } : clean);
+          publishing.prepare(target, clean);
         }} disabled={!!busy}
           className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
           {busy === 'prepare' ? 'Filling…' : (draft ? 'Fill again' : 'Fill draft')}

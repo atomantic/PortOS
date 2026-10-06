@@ -29,9 +29,10 @@ export function fillDistrokidFields(plan) {
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
   };
+  // Only a shown variant is answered: a question DistroKid hid (an artist it
+  // already knows) is not answered behind the director's back.
   const radio = (selector, value) => {
-    const all = [...document.querySelectorAll(selector)].filter((r) => r.value === value);
-    const pick = all.find(shown) || all[0];
+    const pick = [...document.querySelectorAll(selector)].filter((r) => r.value === value).find(shown);
     if (!pick) return false;
     if (!pick.checked) pick.click();
     return true;
@@ -96,7 +97,11 @@ export function fillDistrokidFields(plan) {
     if (ok) {
       const selects = [...(around(yes, 'select', 2)?.querySelectorAll('select') || [])];
       const at = (el, n) => {
-        const opt = el && [...el.options].find((o) => Number(o.value || o.textContent) === n);
+        // A blank placeholder is not minute 0.
+        const opt = el && [...el.options].find((o) => {
+          const raw = (o.value || o.textContent).trim();
+          return raw !== '' && Number(raw) === n;
+        });
         if (!opt) return false;
         el.value = opt.value;
         fire(el);
@@ -160,12 +165,17 @@ export function discloseDistrokidAi({ step, ai }) {
     && audio;
 }
 
-/** Untick every paid extra (they share name=extras). Resolves the labels of the ones that were ticked. */
+/**
+ * Untick every paid extra (they share name=extras). Resolves `{ unticked,
+ * stillTicked }`: the labels of the ones it unticked, and of any whose click
+ * did not take (a handler or a confirm blocked it).
+ */
 export function untickDistrokidExtras() {
-  return [...document.querySelectorAll('input[name=extras]')]
-    .filter((b) => b.checked)
-    .map((b) => {
-      b.click();
-      return (b.closest('label')?.textContent || b.value || '').replace(/\s+/g, ' ').trim().slice(0, 60);
-    });
+  const labelOf = (b) => (b.closest('label')?.textContent || b.value || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+  const ticked = [...document.querySelectorAll('input[name=extras]')].filter((b) => b.checked);
+  for (const b of ticked) b.click();
+  return {
+    unticked: ticked.filter((b) => !b.checked).map(labelOf),
+    stillTicked: ticked.filter((b) => b.checked).map(labelOf),
+  };
 }

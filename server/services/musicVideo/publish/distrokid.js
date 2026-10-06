@@ -95,8 +95,9 @@ export const distrokidAdapter = {
       return page.evaluate(discloseDistrokidAi, { step: 'parts', ai: payload.ai });
     });
     // Paid extras are the director's call, every time: none stays ticked.
-    const unticked = await page.evaluate(untickDistrokidExtras).catch(() => null);
-    if (unticked === null) leftForYou.push('check that no paid extras are ticked');
+    const extras = await page.evaluate(untickDistrokidExtras).catch(() => null);
+    if (extras === null) leftForYou.push('check that no paid extras are ticked');
+    else if (extras.stillTicked.length) leftForYou.push(`untick the paid extras: ${extras.stillTicked.join(', ')}`);
     await page.evaluate(() => document.querySelector('#js-track-upload-1')?.scrollIntoView({ block: 'center' })).catch(() => {});
 
     const aiParts = [payload.ai.lyrics && 'lyrics', payload.ai.music && 'music', payload.ai.vocals && 'all of the audio'].filter(Boolean);
@@ -111,7 +112,7 @@ export const distrokidAdapter = {
       ai: aiParts.length ? aiParts.join(', ') : 'None',
       appleCredits: `${payload.credits.performer} (performer), ${payload.credits.producer} (producer)`,
       preview: payload.previewStartSec != null ? `from ${clock(payload.previewStartSec)}` : null,
-      paidExtras: unticked === null ? null : (unticked.length ? `unticked: ${unticked.join(', ')}` : 'none ticked'),
+      paidExtras: extras === null || extras.stillTicked.length ? null : (extras.unticked.length ? `unticked: ${extras.unticked.join(', ')}` : 'none ticked'),
       leftForYou: [...leftForYou, 'which stores (DistroKid picks all by default)', 'the agreement checkboxes', 'Upload'],
     };
   },

@@ -52,7 +52,7 @@ export function suggestDistrokidGenres(project) {
   for (const [re, genre] of STYLE_WORDS) {
     // A "k-pop" or "j-pop" mention is not also a "pop" one.
     for (const m of text.matchAll(re)) {
-      if (genre === 'Pop' && /[kj][\s-]?$/i.test(text.slice(Math.max(0, m.index - 2), m.index))) continue;
+      if (genre === 'Pop' && /(?:^|[^a-z])[kj][\s-]?$/i.test(text.slice(Math.max(0, m.index - 3), m.index))) continue;
       hits.push({ at: m.index, genre });
       break;
     }
