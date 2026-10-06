@@ -1,3 +1,4 @@
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Image Gen — Antigravity (`agy`) CLI provider.
@@ -411,72 +412,75 @@ async function runAgy(job, jobId, bin, args, {
     finalizeJobFailure(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
   });
   proc.on('close', async (code, signal) => {
-    clearTimeout(timeoutTimer);
-    try {
-      if (code !== 0 || processError) {
+    await withBackupAssetPublication(async () => {
+      clearTimeout(timeoutTimer);
+      try {
+        if (code !== 0 || processError) {
+          removeScratch();
+          const reason = processError?.message || (signal ? `Killed by signal ${signal}` : `Exit code ${code}`);
+          return finalizeJobFailure(job, jobId, proc, `Agy generation failed: ${reason}\n${stderrTail.trim().split('\n').slice(-6).join('\n')}`);
+        }
+        const harvested = await harvestStagedImage(stagingPath, harvestTimeoutMs);
+        if (!harvested.found) {
+          removeScratch();
+          const prefix = harvested.invalid ? 'Agy wrote a non-image file at the directed path. ' : '';
+          return finalizeJobFailure(job, jobId, proc, `${prefix}${noImageReason(stdoutTail)}`);
+        }
+        // A PNG landed — but the harvest gate only proves it is image bytes, not
+        // that generate_image made them. Reject a file the agent drew itself.
+        // The narration tail rides along like every other failure path here: it
+        // carries WHY the tool was skipped (the 429 that triggers a fabricated
+        // stand-in is only ever stated there), which the quota card then reads.
+        const fabricated = await checkFabrication(scratchDir, AGY_TOOL);
+        if (fabricated) {
+          removeScratch();
+          return finalizeJobFailure(job, jobId, proc, `${fabricated} ${noImageReason(stdoutTail)}`);
+        }
+        if (harvested.format === 'png') {
+          await copyFileGuarded(stagingPath, outputPath);
+          await unlinkGuarded(stagingPath).catch(() => {});
+        } else {
+          const pngBytes = await sharp(stagingPath).png().toBuffer();
+          await atomicWrite(outputPath, pngBytes);
+        }
         removeScratch();
-        const reason = processError?.message || (signal ? `Killed by signal ${signal}` : `Exit code ${code}`);
-        return finalizeJobFailure(job, jobId, proc, `Agy generation failed: ${reason}\n${stderrTail.trim().split('\n').slice(-6).join('\n')}`);
-      }
-      const harvested = await harvestStagedImage(stagingPath, harvestTimeoutMs);
-      if (!harvested.found) {
+        // Degenerate-frame gate (#4173) — before the sidecar, so a decodable but
+        // contentless canvas never becomes a gallery record.
+        const emptyFrame = await rejectDegenerateFrame(outputPath);
+        if (emptyFrame) {
+          return finalizeJobFailure(job, jobId, proc, emptyFrame);
+        }
+        const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
+        // `job.renderStartedAtMs` is the queue-ingestion instant generateImage
+        // captured, so the spread measures the render itself — not the time the
+        // job spent queued behind other renders.
+        await atomicWrite(sidecar, { ...meta, ...renderTimingFields(job.renderStartedAtMs) });
+        await autoCleanGeneratedImage({
+          cleanC2PA,
+          denoise,
+          pngPath: outputPath,
+          sidecarPath: sidecar,
+          mode: IMAGE_GEN_MODE.AGY,
+        });
+        job.status = 'complete';
+        if (activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
+        activeJobs.delete(jobId);
+        console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (agy)`);
+        const result = { filename, path: `/data/images/${filename}` };
+        dispatchTerminalEvent(
+          jobId,
+          () => broadcastSse(job, { type: 'complete', result }),
+          () => imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.AGY, generationId: jobId, path: result.path, filename }),
+        );
+        closeJobAfterDelay(jobs, jobId);
+      } catch (err) {
+        await Promise.all([outputPath, join(PATHS.images, `${jobId}.metadata.json`)].map(path => unlinkGuarded(path).catch(() => {})));
         removeScratch();
-        const prefix = harvested.invalid ? 'Agy wrote a non-image file at the directed path. ' : '';
-        return finalizeJobFailure(job, jobId, proc, `${prefix}${noImageReason(stdoutTail)}`);
+        // force: true — 'complete' is already stamped above; see
+        // createJobFailureFinalizer's doc comment in sseUtils.js.
+        finalizeJobFailure(job, jobId, proc, `Agy post-exit handler failed: ${err?.message || err}`, { force: true });
       }
-      // A PNG landed — but the harvest gate only proves it is image bytes, not
-      // that generate_image made them. Reject a file the agent drew itself.
-      // The narration tail rides along like every other failure path here: it
-      // carries WHY the tool was skipped (the 429 that triggers a fabricated
-      // stand-in is only ever stated there), which the quota card then reads.
-      const fabricated = await checkFabrication(scratchDir, AGY_TOOL);
-      if (fabricated) {
-        removeScratch();
-        return finalizeJobFailure(job, jobId, proc, `${fabricated} ${noImageReason(stdoutTail)}`);
-      }
-      if (harvested.format === 'png') {
-        await copyFileGuarded(stagingPath, outputPath);
-        await unlinkGuarded(stagingPath).catch(() => {});
-      } else {
-        const pngBytes = await sharp(stagingPath).png().toBuffer();
-        await atomicWrite(outputPath, pngBytes);
-      }
-      removeScratch();
-      // Degenerate-frame gate (#4173) — before the sidecar, so a decodable but
-      // contentless canvas never becomes a gallery record.
-      const emptyFrame = await rejectDegenerateFrame(outputPath);
-      if (emptyFrame) {
-        return finalizeJobFailure(job, jobId, proc, emptyFrame);
-      }
-      const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
-      // `job.renderStartedAtMs` is the queue-ingestion instant generateImage
-      // captured, so the spread measures the render itself — not the time the
-      // job spent queued behind other renders.
-      await atomicWrite(sidecar, { ...meta, ...renderTimingFields(job.renderStartedAtMs) }).catch(() => maintenance.markCurrentUnsettled());
-      await autoCleanGeneratedImage({
-        cleanC2PA,
-        denoise,
-        pngPath: outputPath,
-        sidecarPath: sidecar,
-        mode: IMAGE_GEN_MODE.AGY,
-      });
-      job.status = 'complete';
-      if (activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
-      activeJobs.delete(jobId);
-      console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (agy)`);
-      const result = { filename, path: `/data/images/${filename}` };
-      dispatchTerminalEvent(
-        jobId,
-        () => broadcastSse(job, { type: 'complete', result }),
-        () => imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.AGY, generationId: jobId, path: result.path, filename }),
-      );
-      closeJobAfterDelay(jobs, jobId);
-    } catch (err) {
-      removeScratch();
-      // force: true — 'complete' is already stamped above; see
-      // createJobFailureFinalizer's doc comment in sseUtils.js.
-      finalizeJobFailure(job, jobId, proc, `Agy post-exit handler failed: ${err?.message || err}`, { force: true });
-    }
+    });
   });
 }
 

@@ -11,6 +11,7 @@ vi.mock('../../lib/fileUtils.js', () => ({
   atomicWrite: vi.fn(),
   PATHS: { images: '/tmp/portos-external-image-test' },
 }));
+vi.mock('./frameGuard.js', () => ({ rejectDegenerateFrame: async () => null }));
 vi.mock('../../lib/imageClean.js', () => ({ autoCleanGeneratedImage: vi.fn() }));
 vi.mock('../imageGenEvents.js', () => ({ imageGenEvents }));
 

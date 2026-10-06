@@ -100,8 +100,8 @@ Admission inventory (`withBackupAssetPublication`):
 | YouTube ingest (`youtubeIngest.js`) | Covered (#9982 partial): downloads run outside admission; the index record that first names a transcript or audio file takes the lease, and forgetting an ingest drops the record and unlinks its files under one lease |
 | Digital twin documents and genome upload/delete (`digital-twin-documents.js`, `genome.js`) | Covered (#9982 partial): each document file or raw genome file and the meta record naming it is one lease, including deletion |
 | Derived media index (`mediaAssetIndex/`) | Rebuilt: `media_assets` rows are excluded from snapshot dumps; database restore rebuilds atomically from disk before reopening admission, and relevant file restores refresh the mirror |
-| Remaining durable owners, classified by domain in `backupAssetOwners.js` | Outstanding (#9982): image generation tails |
 | Explicit file purge (`dataManager.js`, `routes/uploads.js`, `routes/attachments.js`) | Covered: single and bulk deletions hold one lease. These operator-directed removals may intentionally leave external references; admission prevents a snapshot from interleaving with the removal, not from preserving that already-deleted state |
+| Image generation completion, upscale/clean tails, variants and sketch pairs (`imageGen/*.js`, `mediaSketches.js`) | Covered (#9982 partial): provider output publication through sidecar and cleanup takes one lease; remote replacement and variant/sketch rewrites restore previous files on failure |
 | Durable replacement/deletion owners not yet classified | Outstanding (#9982) |
 | Snapshot consistency claim (`backupAssetOwners.js`, see below) | Covered (#9982 partial) |
 | Database restore execution and backend-cutover acceptance (`backup.js`, `databasePreflight.js`) | Covered (#9983) |

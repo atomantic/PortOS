@@ -1,3 +1,5 @@
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { publishImageFiles } from './publication.js';
 /**
  * Durable consumer-side adapter for federated image jobs.
  *
@@ -66,6 +68,7 @@ const executor = createRemoteMediaExecutor({
   // filename is the same shape imageGen/local.js uses, which is what lets the
   // gallery, the media index, and the provider-side result guard all agree.
   resolveDestination: ({ jobId }) => ({ dir: PATHS.images, filename: `${jobId}.png` }),
+  publishResult: (work, { path, dir, jobId }) => withBackupAssetPublication(() => publishImageFiles([path, join(dir, `${jobId}.metadata.json`)], work)),
   async finalize({ jobId, dir, filename, request, remoteJob, peerId, renderStartedAtMs }) {
     // Honest sidecar: only fields this render actually had. Seed is the
     // requested one (wire-v1 results carry no rendered seed), so a render that

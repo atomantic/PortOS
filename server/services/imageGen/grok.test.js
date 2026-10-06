@@ -1,3 +1,4 @@
+import { acquireBackupSnapshotCut } from '../../lib/backupSnapshotBoundary.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { posixPath } from '../../lib/testHelper.js';
 
@@ -279,7 +280,12 @@ describe('grok provider — directed-path harvest', () => {
     ]);
     await mkdir(join(tmpdir(), `portos-grok-${job.jobId}`), { recursive: true });
     await writeFile(stagingPathFor(job.jobId), fakePngBytes);
+    const releaseCut = await acquireBackupSnapshotCut();
+    try {
     await closeChild(0, 0);
+      await new Promise(resolve => setImmediate(resolve));
+      expect(existsSync(join(FAKE_IMAGES_DIR, job.filename)), 'provider completion must wait outside a held snapshot').toBe(false);
+    } finally { releaseCut(); }
 
     const deadline = Date.now() + 3000;
     while (Date.now() < deadline && completedListener.mock.calls.length === 0) {

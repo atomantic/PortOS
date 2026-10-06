@@ -1,3 +1,4 @@
+import { acquireBackupSnapshotCut } from '../../lib/backupSnapshotBoundary.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -265,7 +266,12 @@ describe('agy image provider', () => {
       Buffer.from('fakepngbody'),
     ]);
     await writeFile(stagingPathFor(job.jobId), png);
+    const releaseCut = await acquireBackupSnapshotCut();
+    try {
     await closeChild(0, 0);
+      await new Promise(resolve => setImmediate(resolve));
+      expect(existsSync(join(FAKE_IMAGES_DIR, job.filename)), 'provider completion must wait outside a held snapshot').toBe(false);
+    } finally { releaseCut(); }
 
     const deadline = Date.now() + 3000;
     while (Date.now() < deadline && completed.mock.calls.length === 0) {

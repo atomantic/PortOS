@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { EventEmitter } from 'node:events';
+
+// These lifecycle tests drive the child directly; preview watchers are unrelated.
+vi.mock('fs', async original => ({ ...await original(), watch: vi.fn(() => ({ close() {} })) }));
 
 const mockSpawn = vi.fn();
 vi.mock('../../lib/childProcess.js', async (original) => ({ ...await original(), spawn: (...args) => mockSpawn(...args) }));
@@ -52,6 +55,8 @@ beforeAll(async () => {
   vi.resetModules();
   ({ buildArgs, buildSidecarMeta, resolveOutputPlacement, parseImageExecutionMarker, generateImage } = await import('./local.js'));
   ({ PATHS } = await import('../../lib/fileUtils.js'));
+  PATHS.images = join(tmpRegistryDir, 'images');
+  mkdirSync(PATHS.images);
 });
 
 describe('imageGen local.parseImageExecutionMarker', () => {
@@ -1196,4 +1201,42 @@ describe('local render terminal dispatch — SSE/lifecycle decoupling (#8915)', 
     expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('SSE client write failed'));
     errSpy.mockRestore();
   });
+});
+
+
+it('drains a snapshot through local upscale and the sidecar naming the delivered dimensions', async () => {
+  mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+  mockIsFlux2VenvHealthy.mockResolvedValue(true);
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  mockSpawn.mockReturnValue(child);
+  const { default: sharp } = await import('sharp');
+  const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
+  const { imageGenEvents } = await import('../imageGenEvents.js');
+  let reachedFrame;
+  const reached = new Promise(resolve => { reachedFrame = resolve; });
+  let finishFrame;
+  const frame = new Promise(resolve => { finishFrame = resolve; });
+  mockRejectDegenerateFrame.mockImplementationOnce(async () => { reachedFrame(); await frame; return null; });
+  const job = await generateImage({ modelId: 'qwen-image-2.1', prompt: 'example', width: 64, height: 64,
+    upscaleTo: { width: 128, height: 128 } });
+  const pixels = await sharp({ create: { width: 64, height: 64, channels: 3, background: '#123456' } }).png().toBuffer();
+  writeFileSync(join(PATHS.images, job.filename), pixels);
+  const completed = new Promise(resolve => imageGenEvents.once('completed', resolve));
+  child.emit('close', 0);
+  await reached;
+  let cutReady = false;
+  const cut = acquireBackupSnapshotCut().then(release => { cutReady = true; return release; });
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    expect(cutReady, 'snapshot must drain the upscale and metadata tail').toBe(false);
+  } finally { finishFrame(); }
+  await completed;
+  const release = await cut;
+  try {
+    expect(await sharp(join(PATHS.images, job.filename)).metadata()).toMatchObject({ width: 128, height: 128 });
+    expect(JSON.parse(readFileSync(join(PATHS.images, `${job.jobId}.metadata.json`), 'utf8')))
+      .toMatchObject({ width: 128, height: 128, renderWidth: 64, renderHeight: 64 });
+  } finally { release(); }
 });

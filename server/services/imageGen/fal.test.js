@@ -1,3 +1,4 @@
+import { acquireBackupSnapshotCut } from '../../lib/backupSnapshotBoundary.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdir, rm, readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -102,12 +103,18 @@ describe('imageGen/fal — generateImage', () => {
       endpoint: 'fal-ai/nano-banana-2', output: await noiseImage(64, 36, 'jpeg'), result: { seed: 42 },
     });
 
+    const releaseCut = await acquireBackupSnapshotCut();
     const job = await fal.generateImage({
       model: 'fal-ai/nano-banana-2', prompt: ' a neon harbour ', negativePrompt: 'blurry', width: 1920, height: 1080,
     });
     expect(job).toMatchObject({ mode: 'fal', status: 'running', filename: `${job.jobId}.png`, path: `/data/images/${job.jobId}.png` });
     expect(started).toHaveBeenCalledWith(expect.objectContaining({ generationId: job.jobId }));
 
+    try {
+      await vi.waitFor(() => expect(calls.some(call => call.url === CDN_URL)).toBe(true));
+      await new Promise(resolve => setImmediate(resolve));
+      expect(existsSync(join(FAKE_IMAGES_DIR, job.filename))).toBe(false);
+    } finally { releaseCut(); }
     const event = await waitForTerminal(job.jobId);
     expect(event).toMatchObject({ type: 'completed', mode: 'fal', filename: `${job.jobId}.png` });
 

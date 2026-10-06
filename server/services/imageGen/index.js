@@ -1,3 +1,4 @@
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { randomUUID } from 'node:crypto';
 import { imageGenEvents } from '../imageGenEvents.js';
@@ -218,11 +219,13 @@ async function generateAdmittedImage(params) {
  * event that create the gallery record.
  */
 async function guardResolvedFrame(result) {
-  const pngPath = result?.outputPath
-    || (result?.filename && result?.path ? join(PATHS.images, result.filename) : null);
-  const reason = pngPath ? await rejectDegenerateFrame(pngPath) : null;
-  if (reason) throw new ServerError(reason, { status: 502, code: 'DEGENERATE_FRAME' });
-  return result;
+  return withBackupAssetPublication(async () => {
+    const pngPath = result?.outputPath
+      || (result?.filename && result?.path ? join(PATHS.images, result.filename) : null);
+    const reason = pngPath ? await rejectDegenerateFrame(pngPath) : null;
+    if (reason) throw new ServerError(reason, { status: 502, code: 'DEGENERATE_FRAME' });
+    return result;
+  });
 }
 
 // Build the default avatar prompt for the human-centered Character surface (#2677).
