@@ -19,8 +19,8 @@
  * list this replaced was written against nine messages and silently missed every
  * one added after it (merge-gate, stall, OOM and permission nudges, host restart,
  * provider-signal holds), so those leaked into PR bodies again.
- * `agentOutputMarkers.test.js` fails on a literal `appendLine('…')` in an
- * emitter, so a new line can only be added here.
+ * `agentOutputMarkers.test.js` fails on a literal `appendLine('…')` in the TUI
+ * spawner, so a line written there has to be declared here first.
  */
 
 import { escapeRegExp } from './textUtils.js';
@@ -55,7 +55,10 @@ function lifecycleLine(strings, ...keys) {
     throw new Error(`Lifecycle line "${fixedText}" has too little fixed text to anchor on — declare it with emitOnlyLine`);
   }
   const format = formatter(strings, keys);
-  format.pattern = new RegExp(`^\\s*${strings.map(escapeRegExp).join('.*?')}`, 'u');
+  // Whitespace stays flexible because the spooler trims each line: an empty
+  // trailing value would otherwise take the space before it with it.
+  const fixed = strings.map(text => escapeRegExp(text).replace(/\s+/g, '\\s*'));
+  format.pattern = new RegExp(`^\\s*${fixed.join('.*?')}`, 'u');
   return Object.freeze(format);
 }
 

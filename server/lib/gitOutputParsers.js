@@ -86,8 +86,8 @@ export function parseSubmoduleStatusLine(line) {
  * Two shapes reach this:
  *   - A TUI agent's `output.txt`, which is lifecycle telemetry plus the
  *     `.agent-done` sentinel summary ingested behind
- *     `SENTINEL_COMPLETION_MARKER`. When that marker is present, everything
- *     after it IS the agent's summary — nothing before it was ever the agent
+ *     `SENTINEL_COMPLETION_MARKER`. When that marker is present, the agent's
+ *     summary is what follows it — nothing before it was ever the agent
  *     talking, so the tool-line walk must not be allowed to reach back into it.
  *   - A CLI agent's streamed output, which ends with a summary after the last
  *     tool-call artifact. That's the fallback walk.
@@ -111,6 +111,8 @@ export function extractAgentSummary(output) {
     ? output.slice(markerIdx + SENTINEL_COMPLETION_MARKER.length)
     : output.slice(-4000);
   const lines = region.split('\n');
+  // A tail cut mid-line leaves a fragment no lifecycle shape can recognize.
+  if (markerIdx < 0 && output.length > 4000 && lines.length > 1) lines.shift();
 
   let summaryLines;
   if (markerIdx >= 0) {

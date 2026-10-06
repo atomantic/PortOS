@@ -232,12 +232,15 @@ describe('extractAgentSummary', () => {
   // An idle-complete TUI run's output.txt is nothing but PortOS telemetry, so the
   // PR body must fall back to commit messages rather than open with a nudge log.
   // Built from the catalog the emitters write through, so a shape whose derived
-  // pattern misses its own output fails here.
+  // pattern misses its own output fails here — including with every value empty,
+  // trimmed the way the output spooler stores it.
   it('strips every line the TUI emitters can write, leaving no summary', () => {
-    const lines = Object.entries(LIFECYCLE_LINES)
-      .filter(([, line]) => line.pattern)
-      .map(([id, line]) => line(new Proxy({}, { get: (_, key) => `${id}-${String(key)} (1/3)` })));
-    expect(lines.length).toBeGreaterThan(20);
+    const anchored = Object.entries(LIFECYCLE_LINES).filter(([, line]) => line.pattern);
+    const lines = anchored.flatMap(([id, line]) => [
+      line(new Proxy({}, { get: (_, key) => `${id}-${String(key)} (1/3)` })),
+      line({}).trim(),
+    ]);
+    expect(anchored.length).toBeGreaterThan(20);
     expect(extractAgentSummary(lines.join('\n'))).toBeNull();
   });
 
