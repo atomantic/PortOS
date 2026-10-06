@@ -92,6 +92,22 @@ External draft preparation uses the existing authenticated session without passw
 
 The local browser acceptance test (`server/routes/musicVideoProductionReview.browser.test.js`) exercises the real React controls, approval routes, native code renderer, ffmpeg output and video playback with synthetic data. It requires Chrome, ffmpeg and installed client dependencies; server-only CI skips this cross-workspace check. API and orchestration tests run independently of those visual-test prerequisites.
 
+## Orchestrated mode
+
+Choose **Who reviews each step → Orchestrator** in the start drawer to let a model act as the director at every review point, so a run finishes with no human stops. Pick the orchestrator's provider, model and effort (any provider PortOS has configured, local or cloud) and how many revisions it may ask for per step (`limits.maxReviewAttempts`). The request sends `orchestrator: { providerId, model?, effort? }`; the brief stores it with `orchestratorAuthorizedAt`/`orchestratorAuthorizedBy`. Because the orchestrator approves Production review stages, only an authenticated session may start one (401/403 otherwise), and the scheduled task never carries one. An orchestrated brief has no `checkpoints` and ignores `autoApprove`.
+
+| Review point | When | What the orchestrator does |
+|---|---|---|
+| Lyrics | end of **Lyrics** | Approves, or returns rewritten lyrics and judges them again |
+| Sound & look | start of **Mood board & style** | Approves, or sharpens the song style line, the visual style and the look prompt before the song and mood board are made from them |
+| Song | end of **Analyze** | Aligns the vocal to the lyric sheet (and gives skipped lines evenly spaced word timings), then judges duration, sections and the share of lyric words the recognizer heard. A rejected local song is retaken; a Suno song is kept, since a retake spends credits |
+| Art direction | **Produce** | Reads the cast, environments, visual and motion guides (and the guide sheet when it is an image and the model can see), approves or rewrites fields |
+| Lyric timing | **Produce** | Verifies the aligned timings when every line carries bounded word timings |
+| Storyboard | **Produce** | Anchors shots to the lyric lines they overlap, fills blank fields, approves or files change requests that re-plan the named shots, then resolves them |
+| Final video | after the final render | Looks at 24 frames sampled across the film (when the model can see) and logs a verdict with timecoded issues; nothing is re-rendered |
+
+Production's plate and draft reviews use the orchestrator too. Each decision lands in `run.orchestration.reviews` (`checkpoint`, `verdict` of `approve`/`revise`/`retake`/`noted`, `score`, `notes`, `changes`, `issues`, `route`), which the run panel shows as a decision log. When the revision limit is reached the latest version is accepted and the note says so. Each revision is stored with its log entry (`output.lyricsForReview`, `output.styleDraft`), so a Retry after a failed review judges the latest revision rather than the first draft. A storyboard re-plan that fails fails the stage (`ORCHESTRATOR_REVISION_FAILED`) instead of approving the unchanged shot; Retry asks the orchestrator again. A readiness problem the orchestrator cannot fix still parks the run for a human, with the problem named. The orchestrator never publishes.
+
 ## Local song source
 
 `songSource: 'local'` makes the song with the Music Designer engines (ACE-Step, MiniMax, …) through the same audio media-job lane the Music studio uses — no browser, no Suno account. The request goes through `queueMusicGeneration` (`server/services/musicGeneration.js`, the pipeline behind `POST /api/music/generate`), called in-process.
@@ -135,7 +151,7 @@ The Suno adapter fills the form through `placeholder` / role selectors and reads
 
 | Method | Path | |
 |---|---|---|
-| `POST` | `/api/music-video/autonomous` | Start (202 `{ project, run }`). Body: `prompt` plus optional `songSource` (`suno` default, or `local`), `localFallback`, `suno` (Suno form options), `tools`, `models` (per-tool model pin), `budgetUsd`, `limits`, `checkpoints`, `instrumental`, `guidance`, `providerId`/`model`/`effort` (the direction LLM), `llmStages` (per-stage LLM pins), `lyricsReview`, `authoring` (code-rendered video), `autoApprove` (authenticated planning grant, see Production review). |
+| `POST` | `/api/music-video/autonomous` | Start (202 `{ project, run }`). Body: `prompt` plus optional `songSource` (`suno` default, or `local`), `localFallback`, `suno` (Suno form options), `tools`, `models` (per-tool model pin), `budgetUsd`, `limits`, `checkpoints`, `instrumental`, `guidance`, `providerId`/`model`/`effort` (the direction LLM), `llmStages` (per-stage LLM pins), `lyricsReview`, `authoring` (code-rendered video), `autoApprove` (authenticated planning grant, see Production review), `orchestrator` (authenticated; see Orchestrated mode). |
 | `GET` | `/api/music-video/:id/autonomous` | The run. |
 | `POST` | `/api/music-video/:id/autonomous/resume` | Approve the checkpoint, retry the stage that stopped, or resume an interrupted run. Optional `lyrics`, `style`, `suno` edits; `retakeSong: true` at the song checkpoint; `autoApprove` to grant or revoke automatic planning approvals using the authenticated session. |
 | `POST` | `/api/music-video/:id/autonomous/stop` / `cancel` | Pause / cancel (also stops/cancels its production run). |

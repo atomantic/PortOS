@@ -14,7 +14,7 @@ import toast from '../ui/Toast';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import { startAutonomousMusicVideo } from '../../services/apiMusicVideo.js';
 import {
-  AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_CHECKPOINT_LABELS, SUNO_LIMITS, SUNO_VOCAL_GENDERS, autonomousRequestFromDraft, emptyAutonomousDraft,
+  AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LIMIT_BOUNDS, ORCHESTRATOR_CHECKPOINTS, SUNO_LIMITS, SUNO_VOCAL_GENDERS, autonomousRequestFromDraft, emptyAutonomousDraft,
   isSunoModelValid,
 } from '../../lib/musicVideoAutonomous.js';
 
@@ -33,6 +33,10 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
   const [authoringReady, setAuthoringReady] = useState(false);
   const llm = useProviderModels({ allowDefault: true, silent: true, withEffort: true });
   const [effort, setEffort] = useState('');
+  // The orchestrator must name a provider, so its picker opens on the active one.
+  const orchestratorLlm = useProviderModels({ silent: true, withEffort: true });
+  const [orchestratorEffort, setOrchestratorEffort] = useState('');
+  const orchestrated = draft.runMode === 'orchestrated';
   // An explicit per-run grant, authorized by the signed-in session.
   const [autoApprove, setAutoApprove] = useState([]);
   const [grantError, setGrantError] = useState(null);
@@ -42,7 +46,7 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
   });
   const patchSuno = (next) => setDraft((d) => ({ ...d, suno: { ...d.suno, ...next } }));
   const sunoModelValid = draft.songSource !== 'suno' || isSunoModelValid(draft.suno.model);
-  const valid = draft.prompt.trim().length > 0 && authoringReady && sunoModelValid;
+  const valid = draft.prompt.trim().length > 0 && authoringReady && sunoModelValid && (!orchestrated || !!orchestratorLlm.selectedProviderId);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -51,8 +55,11 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
     setGrantError(null);
     startAutonomousMusicVideo(
       {
-        ...autonomousRequestFromDraft(draft, { providerId: llm.selectedProviderId || undefined, model: llm.selectedModel || undefined, effort: effort || undefined }),
-        ...(autoApprove.length ? { autoApprove } : {}),
+        ...autonomousRequestFromDraft({
+          ...draft,
+          orchestrator: { providerId: orchestratorLlm.selectedProviderId || '', model: orchestratorLlm.selectedModel || '', effort: orchestratorEffort },
+        }, { providerId: llm.selectedProviderId || undefined, model: llm.selectedModel || undefined, effort: effort || undefined }),
+        ...(!orchestrated && autoApprove.length ? { autoApprove } : {}),
       },
       { silent: true },
     )
@@ -162,28 +169,76 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
           </div>
         </div>
 
-        <fieldset className="min-w-0" aria-labelledby="mv-auto-checkpoints-label">
-          <span id="mv-auto-checkpoints-label" className="block text-xs text-port-text-muted mb-1">Pause for my approval after (optional)</span>
-          <div className="flex flex-wrap gap-1.5">
-            {AUTONOMOUS_CHECKPOINT_IDS.map((id) => (
-              <ToggleChip
-                key={id}
-                id={`mv-auto-checkpoint-${id}`}
-                label={AUTONOMOUS_CHECKPOINT_LABELS[id]}
-                checked={draft.checkpoints.includes(id)}
-                onToggle={() => toggleCheckpoint(id)}
-              />
-            ))}
-          </div>
-          <p className="text-[11px] text-port-text-muted mt-1">Select automatic planning approvals below if desired. The animated proof always needs a recorded review.</p>
-        </fieldset>
+        <div>
+          <label htmlFor="mv-auto-run-mode" className="block text-xs text-port-text-muted mb-1">Who reviews each step</label>
+          <select id="mv-auto-run-mode" value={draft.runMode} onChange={(e) => { patch({ runMode: e.target.value }); setGrantError(null); }} className={inputClass}>
+            <option value="checkpoints">Me: pause where I choose</option>
+            <option value="orchestrated">Orchestrator: an AI director reviews every step</option>
+          </select>
+        </div>
 
-        <AutoApproveFields
-          idPrefix="mv-auto"
-          value={autoApprove}
-          onChange={(next) => { setAutoApprove(next); setGrantError(null); }}
-          error={grantError}
-        />
+        {orchestrated ? (
+          <fieldset className="min-w-0 space-y-2" aria-labelledby="mv-auto-orchestrator-label">
+            <span id="mv-auto-orchestrator-label" className="block text-xs text-port-text-muted">Orchestrator</span>
+            <ProviderModelSelector
+              providers={orchestratorLlm.providers}
+              selectedProviderId={orchestratorLlm.selectedProviderId}
+              selectedModel={orchestratorLlm.selectedModel}
+              availableModels={orchestratorLlm.availableModels}
+              onProviderChange={(id) => { orchestratorLlm.setSelectedProviderId(id); setOrchestratorEffort(''); }}
+              onModelChange={orchestratorLlm.setSelectedModel}
+              effort={orchestratorEffort}
+              onEffortChange={setOrchestratorEffort}
+              emptyModelOption="Provider default"
+              label="Provider, model and effort"
+              disabled={submitting}
+              modelDisabled={orchestratorLlm.availableModels.length === 0}
+              compact
+            />
+            <div className="max-w-[16rem]">
+              <label htmlFor="mv-auto-review-attempts" className="block text-xs text-port-text-muted mb-1">Revisions per step</label>
+              <input
+                id="mv-auto-review-attempts"
+                type="number"
+                min={AUTONOMOUS_LIMIT_BOUNDS.maxReviewAttempts.min}
+                max={AUTONOMOUS_LIMIT_BOUNDS.maxReviewAttempts.max}
+                step="1"
+                value={draft.maxReviewAttempts}
+                onChange={(e) => patch({ maxReviewAttempts: e.target.value })}
+                className={inputClass}
+              />
+            </div>
+            <p className="text-[11px] text-port-text-muted">
+              It judges {ORCHESTRATOR_CHECKPOINTS.map((c) => c.label.toLowerCase()).join(', ')}, approves each or sends it back, and approves planning stages with your signed-in session. A vision model can also look at the art sheet and the final video. It never publishes.
+            </p>
+            {grantError && <p role="alert" className="text-[11px] text-port-error break-words">{grantError}</p>}
+          </fieldset>
+        ) : (
+          <>
+            <fieldset className="min-w-0" aria-labelledby="mv-auto-checkpoints-label">
+              <span id="mv-auto-checkpoints-label" className="block text-xs text-port-text-muted mb-1">Pause for my approval after (optional)</span>
+              <div className="flex flex-wrap gap-1.5">
+                {AUTONOMOUS_CHECKPOINT_IDS.map((id) => (
+                  <ToggleChip
+                    key={id}
+                    id={`mv-auto-checkpoint-${id}`}
+                    label={AUTONOMOUS_CHECKPOINT_LABELS[id]}
+                    checked={draft.checkpoints.includes(id)}
+                    onToggle={() => toggleCheckpoint(id)}
+                  />
+                ))}
+              </div>
+              <p className="text-[11px] text-port-text-muted mt-1">Select automatic planning approvals below if desired. The animated proof always needs a recorded review.</p>
+            </fieldset>
+
+            <AutoApproveFields
+              idPrefix="mv-auto"
+              value={autoApprove}
+              onChange={(next) => { setAutoApprove(next); setGrantError(null); }}
+              error={grantError}
+            />
+          </>
+        )}
 
         {llm.providers.length > 0 && (
           <ProviderModelSelector

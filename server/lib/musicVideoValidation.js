@@ -956,6 +956,10 @@ export const musicVideoAutonomousStartSchema = z.object({
   // Review and revise the lyric draft with a second pass (the `lyricsReview` stage
   // pin when set, else the direction LLM). Pinning `llmStages.lyricsReview` implies it.
   lyricsReview: z.boolean().optional(),
+  // Orchestrated mode: this provider/model/effort clears every review point a
+  // director would (no checkpoints). Approval authority — the route requires a
+  // signed-in session for it.
+  orchestrator: musicVideoLlmSchema.optional(),
   origin: z.object({
     kind: z.enum(AUTONOMOUS_ORIGINS).optional(),
     ideaId: z.string().max(80).nullable().optional(),
