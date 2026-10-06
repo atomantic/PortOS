@@ -12,7 +12,8 @@ export const NOTIFICATION_CATALOG = {
   DAILY_POST_REMINDER: { key: 'daily_post_reminder', label: 'POST Reminders' },
   CREATIVE_COMMISSION: { key: 'creative_commission', label: 'Creative Commissions' },
   MUSIC_VIDEO_ATTENTION: { key: 'music_video_attention', label: 'Music Video Attention' },
-  ACTION_DUE: { key: 'action_due', label: 'Scheduled Actions Due' }
+  ACTION_DUE: { key: 'action_due', label: 'Scheduled Actions Due' },
+  SHARE_BLOCKED: { key: 'share_blocked', label: 'Blocked Shares' }
 };
 
 export const NOTIFICATION_TYPES = Object.fromEntries(
