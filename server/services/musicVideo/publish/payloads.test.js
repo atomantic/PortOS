@@ -72,7 +72,7 @@ describe('buildPublishPayload (#9282)', () => {
     expect(() => buildPublishPayload('tiktok', project({}, []))).toThrow(/9:16 social cut/);
   });
 
-  it('uses the kit center-crop vertical encode for a 16:9 render with no social cut, and only while the kit is fresh (#10150)', () => {
+  it('uses the kit fit-with-fill vertical encode for a 16:9 render with no social cut, and only while the kit is fresh (#10150)', () => {
     const exports = [{ kind: 'vertical-9x16', filename: 'vertical.mp4', startSec: 5, endSec: 35 }];
     const wide = { ...project({ exports, master: { filename: 'master.mp4', renderHistoryId: 'r1' } }, []), renderHistoryId: 'r1' };
     expect(buildPublishPayload('shorts', wide).video.name).toBe('vertical.mp4');

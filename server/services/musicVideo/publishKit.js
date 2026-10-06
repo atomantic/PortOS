@@ -30,6 +30,8 @@ const projectBuilds = new Map();
 const MAX_THUMBNAILS = 6;
 // X caps a Premium upload's bitrate well under a 1080p master's; ~12 Mbps
 // keeps the analog grain without the upload being re-crushed.
+// 9:16 canvas: the full frame fitted to width over a blurred, cover-scaled copy of itself, so edge text is never cropped.
+export const VERTICAL_FIT_FILTER = 'split[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:4[b];[fg]scale=1080:1920:force_original_aspect_ratio=decrease[f];[b][f]overlay=(W-w)/2:(H-h)/2,setsar=1';
 const X_VIDEO_ARGS = ['-c:v', 'libx264', '-profile:v', 'high', '-preset', 'medium', '-b:v', '10M', '-maxrate', '12M', '-bufsize', '24M', '-pix_fmt', 'yuv420p'];
 const AUDIO_ARGS = ['-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart'];
 
@@ -135,10 +137,11 @@ async function beginPublishKitBuild(projectId, jobId) {
       ...(teaser ? [{ kind: 'teaser', label: `Teaser ${Math.round(teaser.endSec - teaser.startSec)}s`, filename: `${stem}-teaser.mp4`, window: teaser,
         args: ['-ss', String(teaser.startSec), '-t', String(teaser.endSec - teaser.startSec), '-i', masterPath, ...X_VIDEO_ARGS,
           '-af', `asetpts=PTS-STARTPTS${edgeFadeFilter(teaser.endSec - teaser.startSec)}`, ...AUDIO_ARGS] }] : []),
-      // #10150: Shorts/TikTok/Reels need 9:16; a 16:9 render gets a center-crop of the hook window (no generation).
+      // #10150: Shorts/TikTok/Reels need 9:16; a 16:9 render gets the whole frame fitted over a blurred fill
+      // of itself (#10377) — a center-crop silently dropped off-center lyric/title text.
       ...(teaser && musicVideoAspect(project) === '16:9' ? [{ kind: 'vertical-9x16', label: `Vertical 9:16 ${Math.round(teaser.endSec - teaser.startSec)}s`, filename: `${stem}-vertical.mp4`, window: teaser,
         args: ['-ss', String(teaser.startSec), '-t', String(teaser.endSec - teaser.startSec), '-i', masterPath,
-          '-vf', 'crop=trunc(ih*9/32)*2:ih,scale=1080:1920', ...X_VIDEO_ARGS,
+          '-vf', VERTICAL_FIT_FILTER, ...X_VIDEO_ARGS,
           '-af', `asetpts=PTS-STARTPTS${edgeFadeFilter(teaser.endSec - teaser.startSec)}`, ...AUDIO_ARGS] }] : []),
     ];
     const times = thumbnailTimes(project, durationSec);

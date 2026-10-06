@@ -30,7 +30,7 @@ const isVerticalCut = (e) => e?.status === 'complete' && e.aspect === '9:16' && 
 /**
  * The vertical cuts a director can post (#10150), newest last: finished 9:16
  * excerpts flagged stale when the project changed since, plus the kit's
- * center-crop 9:16 encode (16:9 renders) while the kit is fresh.
+ * fit-with-blurred-fill 9:16 encode (16:9 renders) while the kit is fresh.
  */
 function verticalCuts(project) {
   const kit = kitOf(project);
