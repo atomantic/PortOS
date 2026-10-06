@@ -36,6 +36,16 @@ describe('CoverArtPanel', () => {
     expect(publishKit.composeCover).toHaveBeenCalledWith(expect.objectContaining({ lettering: false }));
   });
 
+  it('turns the switch back on when a restyle or a new photo re-letters the cover on the server', () => {
+    const publishKit = kit();
+    const { rerender } = render(<CoverArtPanel project={project({ source: { kind: 'image', filename: 'finished.png' }, lettering: false })} publishKit={publishKit} />);
+    expect(screen.getByLabelText(/Set the title and artist on the image/)).not.toBeChecked();
+    rerender(<CoverArtPanel project={project({ source: { kind: 'image', filename: 'finished.png' }, lettering: true })} publishKit={publishKit} />);
+    expect(screen.getByLabelText(/Set the title and artist on the image/)).toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply to the cover' }));
+    expect(publishKit.composeCover).toHaveBeenCalledWith(expect.objectContaining({ lettering: true }));
+  });
+
   it('keeps an image picked from history among the sources, marked as the current one', () => {
     const sources = coverArtSources(project({ source: { kind: 'image', filename: 'history-example.png' } }));
     expect(sources[0]).toMatchObject({ kind: 'image', filename: 'history-example.png', label: 'Current cover image' });

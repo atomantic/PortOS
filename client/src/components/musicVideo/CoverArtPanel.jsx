@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Download, Image as ImageIcon, Images, Sparkles } from 'lucide-react';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 
@@ -45,6 +45,8 @@ export default function CoverArtPanel({ project, publishKit }) {
   const [notes, setNotes] = useState('');
   const [adjustImage, setAdjustImage] = useState(false);
   const [lettering, setLettering] = useState(art.lettering !== false);
+  // Follow the server: a restyle or a new photo turns lettering back on there.
+  useEffect(() => { setLettering(art.lettering !== false); }, [art.lettering]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const busy = publishKit.composing || publishKit.designing || publishKit.requestingImage;
   const chosen = art.source ? `${art.source.kind}:${art.source.filename}` : null;
