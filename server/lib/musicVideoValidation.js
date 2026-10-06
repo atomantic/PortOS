@@ -736,7 +736,7 @@ export const musicVideoCoverArtGenerateSchema = z.object({
 
 // #9282: posting to a platform through the PortOS Browser. One strict options
 // object covers every target; each target's payload builder reads only its own.
-export const MUSIC_VIDEO_PUBLISH_TARGETS = Object.freeze(['youtube', 'shorts', 'tiktok', 'instagram', 'x', 'reddit', 'stackerNews', 'suno', 'distrokid']);
+export const MUSIC_VIDEO_PUBLISH_TARGETS = Object.freeze(['youtube', 'shorts', 'tiktok', 'instagram', 'x', 'reddit', 'stackerNews', 'suno', 'sunoHook', 'distrokid']);
 export const musicVideoPublishTargetSchema = z.enum(MUSIC_VIDEO_PUBLISH_TARGETS);
 const publishUrl = z.string().url().max(500);
 // #9287: which platforms the director posts to (opt-in), the account for each,
@@ -758,6 +758,8 @@ export const musicVideoPublishPrepareSchema = z.object({
   territory: z.string().max(40),
   songUrl: publishUrl,
   pin: z.boolean(),
+  // Suno Hook: keep the page's lyric overlay (default off: the cut carries its own).
+  showLyrics: z.boolean(),
   prompt: kitText(25000),
   storyImage: z.string().min(1).max(300),
   cutId: z.string().min(1).max(100),

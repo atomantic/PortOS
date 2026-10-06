@@ -7,7 +7,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, within, act } from '@testing-library/react';
 import PublishPostingPanel, { PUBLISH_TARGETS } from './PublishPostingPanel.jsx';
 
-const ALL = ['youtube', 'suno', 'x', 'shorts', 'tiktok', 'instagram', 'reddit', 'stackerNews', 'distrokid'];
+const ALL = ['youtube', 'suno', 'sunoHook', 'x', 'shorts', 'tiktok', 'instagram', 'reddit', 'stackerNews', 'distrokid'];
 const hook = (over = {}) => ({ drafts: {}, busy: {}, errors: {}, prepare: vi.fn(), submit: vi.fn(), discard: vi.fn(), enabledTargets: ALL, platforms: {}, recordPost: vi.fn(async () => null), ...over });
 const project = (kit = {}) => ({ id: 'mv-1', publishKit: { builtAt: '2026-01-01T00:00:00.000Z', thumbnails: ['t1.jpg'], ...kit } });
 const row = (label) => screen.getByText(label, { selector: 'div' }).closest('li');

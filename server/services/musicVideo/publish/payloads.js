@@ -24,6 +24,7 @@ function requireFreshKit(project, kit) {
   if ((kit.master?.renderHistoryId ?? null) !== (project?.renderHistoryId ?? null)) throw stale();
 }
 
+const SUNO_SONG_URL = /^https:\/\/(?:www\.)?suno\.com\/song\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
 const VERTICAL_NEEDS = 'Render a 9:16 social cut on the Review stage (or rebuild the publishing kit for a 16:9 render) first';
 const isVerticalCut = (e) => e?.status === 'complete' && e.aspect === '9:16' && e.filename;
 
@@ -174,6 +175,22 @@ const BUILDERS = {
     const lead = text(kit.copy?.youtube?.description).split(/\n\s*\n/)[0] || '';
     const caption = [lead, video ? `Music video: ${video}` : ''].filter(Boolean).join(' ').slice(0, 500);
     return { songUrl: song, caption, cover: releaseCover(kit), pin: options.pin !== false };
+  },
+  // A Suno Hook (#10375): the vertical cut set to a window of the project's song.
+  sunoHook: (project, kit, options = {}) => {
+    const song = songUrl(kit, options);
+    const songId = song.match(SUNO_SONG_URL)?.[1]?.toLowerCase();
+    if (!songId) throw missing('Give the Suno song URL the Hook plays (suno.com/song/…)');
+    const cut = pickVerticalCut(project, options);
+    const caption = text(kit.copy?.tiktok?.caption) || text(kit.copy?.shorts?.description).slice(0, 300);
+    const duration = Number(project?.audioAnalysis?.durationSec);
+    return {
+      video: { dir: 'videos', name: cut.filename }, songUrl: song, songId, title: text(project?.name),
+      durationSec: Number.isFinite(duration) && duration > 0 ? duration : null,
+      // The audio window opens where the cut's own audio does.
+      startSec: Math.max(0, Number(cut.startSec) || 0),
+      caption, showLyrics: options.showLyrics === true,
+    };
   },
   // The song as a single for Spotify and the other stores. The service adds the
   // project's source audio; the cover is the kit's cover art, else its thumbnail cut square.

@@ -22,12 +22,13 @@ import { xAdapter } from './x.js';
 import { redditAdapter } from './reddit.js';
 import { stackerNewsAdapter } from './stackerNews.js';
 import { sunoAdapter } from './suno.js';
+import { sunoHookAdapter } from './sunoHook.js';
 import { distrokidAdapter } from './distrokid.js';
 import { musicVideoEvents } from '../events.js';
 
 export const PUBLISH_ADAPTERS = Object.freeze({
   youtube: youtubeAdapter, shorts: shortsAdapter, tiktok: tiktokAdapter, instagram: instagramAdapter,
-  x: xAdapter, reddit: redditAdapter, stackerNews: stackerNewsAdapter, suno: sunoAdapter, distrokid: distrokidAdapter,
+  x: xAdapter, reddit: redditAdapter, stackerNews: stackerNewsAdapter, suno: sunoAdapter, sunoHook: sunoHookAdapter, distrokid: distrokidAdapter,
 });
 // The tab stays open past this: the human publishes from it. After the TTL only
 // the CDP session is dropped; the tab closes on Discard, Fill again, or by hand.

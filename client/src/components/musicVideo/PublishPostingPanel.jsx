@@ -10,6 +10,7 @@ import { publishRowAnchor } from '../../lib/musicVideoStages.js';
 export const PUBLISH_TARGETS = [
   { target: 'youtube', label: 'YouTube', note: 'The final render, with chapters, thumbnail and captions' },
   { target: 'suno', label: 'Suno', note: 'Publishes the song with the cover and a link to the video' },
+  { target: 'sunoHook', label: 'Suno Hook', note: 'A 9:16 cut (the newest by default) set to its window of the song. You press Post' },
   { target: 'x', label: 'X thread', note: 'Hook with the 1080p video, then the story, prompt and links' },
   { target: 'shorts', label: 'YouTube Shorts', note: 'A 9:16 cut (the newest by default)' },
   { target: 'tiktok', label: 'TikTok', note: 'A 9:16 cut (the newest by default), labelled AI-generated' },
@@ -64,7 +65,7 @@ function TargetOptions({ target, kit, project, options, setOption, flairs, idFor
   const area = (key, label) => field(key, label,
     <textarea id={idFor(key)} value={options[key] || ''} rows={3} onChange={(e) => setOption(key, e.target.value)} className={inputCls} />);
 
-  if (VERTICAL_TARGETS.includes(target)) {
+  const cutPicker = () => {
     const cuts = verticalCutChoices(project);
     if (cuts.length < 2) return null;
     return field('cutId', 'Vertical cut to post', (
@@ -72,6 +73,18 @@ function TargetOptions({ target, kit, project, options, setOption, flairs, idFor
         <option value="">Newest fresh cut (default)</option>
         {[...cuts].reverse().map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
       </select>));
+  };
+  if (VERTICAL_TARGETS.includes(target)) return cutPicker();
+  if (target === 'sunoHook') {
+    return (
+      <div className="grid sm:grid-cols-2 gap-2 items-end">
+        {text('songUrl', 'Song URL (the take the Hook plays)', kit.links?.song || 'https://suno.com/song/…')}
+        {cutPicker()}
+        <label className="flex items-center gap-1.5 text-xs min-h-[44px] sm:min-h-0">
+          <input type="checkbox" checked={options.showLyrics === true} onChange={(e) => setOption('showLyrics', e.target.checked)} /> Show Suno's lyrics (off when the cut has its own)
+        </label>
+      </div>
+    );
   }
   if (target === 'reddit') {
     return (
@@ -221,7 +234,7 @@ function TargetRow({ project, kit, entry, publishing }) {
   const idFor = (key) => `mv-post-${project.id}-${target}-${key}`;
   const [options, setOptions] = useState(() => {
     // Prefill Suno URL from autonomous run if available
-    if (target === 'suno' && project?.autonomousRun?.output?.sunoSongIds?.length > 0) {
+    if ((target === 'suno' || target === 'sunoHook') && project?.autonomousRun?.output?.sunoSongIds?.length > 0) {
       const songId = project.autonomousRun.output.sunoSongIds[0];
       return { songUrl: `https://suno.com/song/${encodeURIComponent(songId)}` };
     }
