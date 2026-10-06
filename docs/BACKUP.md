@@ -246,10 +246,9 @@ replacement, old-poster cleanup and failed-commit cleanup. Every new poster uses
 a fresh basename; temporary sharing copies stay outside this durable workflow.
 Upload and download completion notifications run after the durable commit, so
 a throwing listener cannot remove files that committed history already names.
-These leases do not repair dangling references or stale derived index metadata.
-The completion-hook and reconcile writes to `media_assets`, and poster edits
-leaving its old thumbnail pointer, are explicitly outstanding as
-`media-asset-index-refresh`; the final sweep must settle their restore semantics.
+These leases do not repair preexisting dangling references. The derived media
+index can lag live edits; it is excluded from dumps and rebuilt from authoritative
+sidecars and history during restore as described below.
 
 Local generated videos (including each batch member) and Grok, fal and Reactor
 videos share an admitted finalizer. Fresh producer output is unreferenced until
@@ -297,10 +296,10 @@ its frames and files the run, as the local completion hook does. The leases are
 taken before the per-record write tail, so a workflow queued behind a long
 reprocess holds its lease while it waits and can stretch a cut's drain by that
 wait. Generation starts, uploads, run records, selections, loop trims, atlas
-compiles, asset deletion and the publish binding take no lease: their row names no
-bytes, versioned outputs are written once, and the record that names them lands
-last. A cut can still copy part of a multi-file sprite tree written by one of those
-workflows, as it can for any file-backed record in `data/`.
+compiles, asset deletion and publication also take admission before the shared
+animation/reference write tails. Their file-primary manifests and runtime
+pointers need the same protection even when the PostgreSQL sprite row contains
+no path: writing a record last alone cannot protect a multi-file rsync pass.
 
 **Snapshot consistency claim.** `server/lib/backupAssetOwners.js` inventories
 each durable owner as `admitted`, `reference-only` or `outstanding`, and its
@@ -330,8 +329,9 @@ from authoritative files instead of preserving cache rows.
 When wrapping one of them, remember the order a cut works in: it copies files,
 then dumps rows. A row that names new bytes therefore has to commit under the
 lease unless the lease already covered the byte write. A deletion that removes
-the row first and the bytes second is safe either way, because the dump that
-follows the copy sees no row. A deletion that unlinks first, or one that leaves
+a PostgreSQL row first and the bytes second is safe either way, because the dump
+that follows the copy sees no row. A file-primary record and its bytes require
+admission even for record-first deletion: rsync copies them independently. A deletion that unlinks first, or one that leaves
 rows naming the removed file, must hold the lease around the unlink.
 
 This is part of [the cross-store consistency work](https://github.com/atomantic/PortOS/issues/9923).
