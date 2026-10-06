@@ -305,10 +305,10 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     modules: ['services/videoGen/generateVideoHelpers.js'],
   },
   {
-    // Federated replacement/replay and derived clips (stitch, upscale,
-    // timeline, HTML composition) have not yet proven their publication tails.
+    // Federated replacement/replay keeps installation and rollback with history.
+    // Derived clips lease poster/history publication after fresh renders finish.
     id: 'video-generation-finalize-and-derived-clips',
-    status: 'outstanding',
+    status: 'admitted',
     modules: [
       'services/videoGen/remote.js',
       'services/videoGen/stitchVideos.js', 'services/videoGen/upscaleVideo.js', 'services/videoGen/upscaleJob.js',

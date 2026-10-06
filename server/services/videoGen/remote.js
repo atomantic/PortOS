@@ -13,6 +13,9 @@
  */
 
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { copyFile, mkdtemp, rm, unlink } from 'node:fs/promises';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { z } from 'zod';
 import { PATHS } from '../../lib/fileUtils.js';
 import { generateThumbnail, optimizeForStreaming } from '../../lib/ffmpeg.js';
@@ -66,6 +69,31 @@ const executor = createRemoteMediaExecutor({
   // `<jobId>.mp4` is videoGen/local.js's own filename shape, which is what the
   // provider-side result guard and the local history row both key on.
   resolveDestination: ({ jobId }) => ({ dir: PATHS.videos, filename: `${jobId}.mp4` }),
+  publishResult: (work, { path, jobId }) => withBackupAssetPublication(async () => {
+    // Replay can replace an already referenced clip and poster. Keep both old
+    // files until the history commit succeeds, and restore them on failure.
+    const scratch = await mkdtemp(join(tmpdir(), 'portos-video-replay-'));
+    const originals = [];
+    try {
+      for (const [index, target] of [path, join(PATHS.videoThumbnails, `${jobId}.jpg`)].entries()) {
+        const backup = join(scratch, String(index));
+        try {
+          await copyFile(target, backup);
+          originals.push({ target, backup });
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw error;
+          originals.push({ target, backup: null });
+        }
+      }
+      try { return await work(); } catch (error) {
+        for (const { target, backup } of originals) {
+          if (backup) await copyFile(backup, target);
+          else await unlink(target).catch(error => { if (error.code !== 'ENOENT') throw error; });
+        }
+        throw error;
+      }
+    } finally { await rm(scratch, { recursive: true, force: true }); }
+  }),
   async finalize({ jobId, path, filename, request, remoteJob, peerId, renderStartedAtMs }) {
     // Both ffmpeg passes are best-effort by construction (they no-op when
     // ffmpeg is absent), exactly as the local finalize path treats them — a
@@ -78,6 +106,8 @@ const executor = createRemoteMediaExecutor({
     const loraFilenames = Array.isArray(request.loraFilenames) ? request.loraFilenames : [];
     const loraLicenses = await readLoraLicensesByFilename(loraFilenames);
     await mutateVideoHistory((history) => {
+      // A reconciled completion replaces its prior row rather than duplicating it.
+      history = history.filter(entry => entry.id !== jobId);
       history.unshift({
         id: jobId,
         prompt: request.prompt,

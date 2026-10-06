@@ -1,3 +1,4 @@
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { cp, lstat, mkdtemp, open, realpath, rm, stat, writeFile } from 'node:fs/promises';
@@ -294,56 +295,63 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
       await page.close({ verify: true });
       page = null;
       signal.throwIfAborted();
-      for (const video of rendered) {
-        video.thumbnail = await generateThumbnail(video.outputPath, video.id, launchPlan ? { atSec: launchPlan.posterSec } : undefined);
-        if (!video.thumbnail) throw new Error('Composition thumbnail generation failed');
-        signal.throwIfAborted();
-      }
-      let launchMetadata;
-      if (deliveryRoot) {
-        // Exclusive creation refuses pre-existing files/symlinks. Publish only the
-        // validated snapshot, never re-read source prose after rendering.
-        for (const name of ['plan.md', 'storyboard.json', 'caption.txt']) {
-          await deliver(join(deliveryRoot, name), handle => handle.writeFile(launchAssets.get(`/${name}`)));
-        }
-        // A multi-format run names each file by its frame; a single-format
-        // render keeps the original video.mp4/poster.jpg names.
-        for (const video of rendered) {
-          const suffix = video.format ? `-${video.format}` : '';
-          for (const [source, name] of [[video.outputPath, `video${suffix}.mp4`], [join(PATHS.videoThumbnails, video.thumbnail), `poster${suffix}.jpg`]]) {
-            await deliver(join(deliveryRoot, name), handle => pipeline(createReadStream(source), handle.createWriteStream()));
+      await withBackupAssetPublication(async () => {
+        try {
+          for (const video of rendered) {
+            video.thumbnail = await generateThumbnail(video.outputPath, video.id, launchPlan ? { atSec: launchPlan.posterSec } : undefined);
+            if (!video.thumbnail) throw new Error('Composition thumbnail generation failed');
+            signal.throwIfAborted();
           }
+          let launchMetadata;
+          if (deliveryRoot) {
+            // Exclusive creation refuses pre-existing files/symlinks. Publish only the
+            // validated snapshot, never re-read source prose after rendering.
+            for (const name of ['plan.md', 'storyboard.json', 'caption.txt']) {
+              await deliver(join(deliveryRoot, name), handle => handle.writeFile(launchAssets.get(`/${name}`)));
+            }
+            // A multi-format run names each file by its frame; a single-format
+            // render keeps the original video.mp4/poster.jpg names.
+            for (const video of rendered) {
+              const suffix = video.format ? `-${video.format}` : '';
+              for (const [source, name] of [[video.outputPath, `video${suffix}.mp4`], [join(PATHS.videoThumbnails, video.thumbnail), `poster${suffix}.jpg`]]) {
+                await deliver(join(deliveryRoot, name), handle => pipeline(createReadStream(source), handle.createWriteStream()));
+              }
+            }
+            launchMetadata = { appId: launchVideo.appId, runId: launchVideo.runId,
+              ...(launchVideo.sourceVideoId ? { sourceVideoId: launchVideo.sourceVideoId } : {}),
+              musicTrack: musicTrack ?? null, synthesizeMusic: Boolean(synthesizeMusic),
+              caption: launchAssets.get('/caption.txt').toString('utf8').trim(), posterSec: launchPlan.posterSec };
+          }
+          signal.throwIfAborted();
+          // Once the shared history write starts, cancellation must be refused.
+          job.committing = true;
+          const createdAt = new Date().toISOString();
+          // One Media History entry per format, linked by launchVideo.runId and
+          // written in a single mutation so a run registers all formats or none.
+          const metas = rendered.map(video => ({
+            id: video.id, prompt: `HTML composition: ${sourceDirectory}`, modelId: 'html-composition', seed: 0,
+            ...frameOf(video.contract), numFrames: Math.round(contract.durationSec * contract.fps),
+            ...(launchMetadata ? { launchVideo: launchMetadata, appId: launchMetadata.appId, posterSec: launchPlan.posterSec } : {}),
+            ...(video.sampleHistogram ? { sampleHistogram: video.sampleHistogram } : {}),
+            ...(video.loudness ? { loudness: video.loudness } : {}),
+            filename: video.filename, thumbnail: video.thumbnail, createdAt,
+          }));
+          await mutateVideoHistory(history => { history.unshift(...metas); return history; });
+          success = true;
+          // `id`/`filename` name a real history entry (the first format); `generationId`
+          // is the job. A single-format render keeps id === generationId as before.
+          // A shutter-blur render reports how many output frames took each
+          // sub-frame count, so the user can see where the render time went.
+          const summary = ({ id, filename, thumbnail, sampleHistogram, loudness }) => ({ id, filename, thumbnail, path: `/data/videos/${filename}`,
+            ...(sampleHistogram ? { sampleHistogram } : {}), ...(loudness ? { loudness } : {}) });
+          const [first] = rendered;
+          result = { ...(launchMetadata ? { appId: launchMetadata.appId } : {}), generationId: jobId, ...summary(first),
+            ...(formats ? { videos: rendered.map(video => ({ format: video.format, ...summary(video) })) } : {}) };
+        } catch (error) {
+          if (!success) for (const path of ownedPaths) await unlinkGuarded(path).catch(error => { if (error.code !== 'ENOENT') maintenance.markCurrentUnsettled(); });
+          throw error;
         }
-        launchMetadata = { appId: launchVideo.appId, runId: launchVideo.runId,
-          ...(launchVideo.sourceVideoId ? { sourceVideoId: launchVideo.sourceVideoId } : {}),
-          musicTrack: musicTrack ?? null, synthesizeMusic: Boolean(synthesizeMusic),
-          caption: launchAssets.get('/caption.txt').toString('utf8').trim(), posterSec: launchPlan.posterSec };
-      }
-      signal.throwIfAborted();
-      // Once the shared history write starts, cancellation must be refused.
-      job.committing = true;
-      const createdAt = new Date().toISOString();
-      // One Media History entry per format, linked by launchVideo.runId and
-      // written in a single mutation so a run registers all formats or none.
-      const metas = rendered.map(video => ({
-        id: video.id, prompt: `HTML composition: ${sourceDirectory}`, modelId: 'html-composition', seed: 0,
-        ...frameOf(video.contract), numFrames: Math.round(contract.durationSec * contract.fps),
-        ...(launchMetadata ? { launchVideo: launchMetadata, appId: launchMetadata.appId, posterSec: launchPlan.posterSec } : {}),
-        ...(video.sampleHistogram ? { sampleHistogram: video.sampleHistogram } : {}),
-        ...(video.loudness ? { loudness: video.loudness } : {}),
-        filename: video.filename, thumbnail: video.thumbnail, createdAt,
-      }));
-      await mutateVideoHistory(history => { history.unshift(...metas); return history; });
-      success = true;
-      // `id`/`filename` name a real history entry (the first format); `generationId`
-      // is the job. A single-format render keeps id === generationId as before.
-      // A shutter-blur render reports how many output frames took each
-      // sub-frame count, so the user can see where the render time went.
-      const summary = ({ id, filename, thumbnail, sampleHistogram, loudness }) => ({ id, filename, thumbnail, path: `/data/videos/${filename}`,
-        ...(sampleHistogram ? { sampleHistogram } : {}), ...(loudness ? { loudness } : {}) });
-      const [first] = rendered;
-      result = { ...(launchMetadata ? { appId: launchMetadata.appId } : {}), generationId: jobId, ...summary(first),
-        ...(formats ? { videos: rendered.map(video => ({ format: video.format, ...summary(video) })) } : {}) };
+      });
     }
   } catch (error) {
     if (job.committing) maintenance.markCurrentUnsettled();

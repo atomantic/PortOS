@@ -1,3 +1,5 @@
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { discardUnpublishedVideo } from './generateVideoHelpers.js';
 /** Non-destructive 2x upscaling for video-history items. */
 
 import { existsSync } from 'fs';
@@ -272,39 +274,48 @@ export async function upscaleHistoryItem(historyId, options = {}) {
     await unlinkGuarded(newPath).catch(() => {});
     throw new ServerError(`Upscale failed: ${result.reason}`, { status: 500, code: 'FFMPEG_FAILED' });
   }
-  const thumbnail = await generateThumbnail(newPath, newId);
-  // Build the new history entry from the original, but bump dimensions and
-  // tag with `upscaledFrom: <id>` + a reusable suffix on the prompt so the
-  // gallery row reads as "<original prompt> (2×)".
-  const newEntry = {
-    // Strip before the spread rather than relying on the override below to win:
-    // `renderTimingFields` reports `{}` when it can't measure the span, and an
-    // override that contributes no keys would silently leave the SOURCE render's
-    // duration on a row that only ran an ffmpeg pass.
-    ...omitRenderTiming(item),
-    id: newId,
-    filename: newFilename,
-    width: (Number(item.width) || 0) * UPSCALE_SCALE,
-    height: (Number(item.height) || 0) * UPSCALE_SCALE,
-    thumbnail,
-    createdAt: new Date().toISOString(),
-    upscaledFrom: item.id,
-    // Provenance (#6509): Lanczos is deterministic and seedless, and runs as an
-    // ffmpeg filter rather than on a BYOV runtime. Recording both explicitly
-    // keeps `upscaleMethod`/`upscaleRuntime` non-null on every upscaled row, so
-    // a reader never has to infer "the old one" from an absent key once the
-    // generative method starts writing its own.
-    upscaleMethod: method,
-    upscaleRuntime: LANCZOS_RUNTIME_ID,
-    prompt: item.prompt ? `${item.prompt} (2×)` : '(upscaled 2×)',
-    // Drop hidden so the upscaled version surfaces in the visible gallery
-    // even when the source clip was hidden.
-    hidden: false,
-    ...renderTimingFields(renderStartedAtMs),
-  };
-  // Serialized append (re-reads inside the mutator) so a concurrent
-  // download/render write can't drop the upscaled entry.
-  await mutateVideoHistory((history) => { history.unshift(newEntry); return history; });
-  console.log(`✅ Upscaled [${newId.slice(0, 8)}]: ${newFilename} (${newEntry.width}×${newEntry.height})`);
-  return newEntry;
+  return withBackupAssetPublication(async () => {
+    let committed = false;
+    try {
+      const thumbnail = await generateThumbnail(newPath, newId);
+      // Build the new history entry from the original, but bump dimensions and
+      // tag with `upscaledFrom: <id>` + a reusable suffix on the prompt so the
+      // gallery row reads as "<original prompt> (2×)".
+      const newEntry = {
+        // Strip before the spread rather than relying on the override below to win:
+        // `renderTimingFields` reports `{}` when it can't measure the span, and an
+        // override that contributes no keys would silently leave the SOURCE render's
+        // duration on a row that only ran an ffmpeg pass.
+        ...omitRenderTiming(item),
+        id: newId,
+        filename: newFilename,
+        width: (Number(item.width) || 0) * UPSCALE_SCALE,
+        height: (Number(item.height) || 0) * UPSCALE_SCALE,
+        thumbnail,
+        createdAt: new Date().toISOString(),
+        upscaledFrom: item.id,
+        // Provenance (#6509): Lanczos is deterministic and seedless, and runs as an
+        // ffmpeg filter rather than on a BYOV runtime. Recording both explicitly
+        // keeps `upscaleMethod`/`upscaleRuntime` non-null on every upscaled row, so
+        // a reader never has to infer "the old one" from an absent key once the
+        // generative method starts writing its own.
+        upscaleMethod: method,
+        upscaleRuntime: LANCZOS_RUNTIME_ID,
+        prompt: item.prompt ? `${item.prompt} (2×)` : '(upscaled 2×)',
+        // Drop hidden so the upscaled version surfaces in the visible gallery
+        // even when the source clip was hidden.
+        hidden: false,
+        ...renderTimingFields(renderStartedAtMs),
+      };
+      // Serialized append (re-reads inside the mutator) so a concurrent
+      // download/render write can't drop the upscaled entry.
+      await mutateVideoHistory((history) => { history.unshift(newEntry); return history; });
+      committed = true;
+      console.log(`✅ Upscaled [${newId.slice(0, 8)}]: ${newFilename} (${newEntry.width}×${newEntry.height})`);
+      return newEntry;
+    } catch (error) {
+      if (!committed) await discardUnpublishedVideo({ jobId: newId, outputPath: newPath });
+      throw error;
+    }
+  });
 }
