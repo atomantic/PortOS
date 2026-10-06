@@ -183,7 +183,8 @@ export function untickDistrokidExtras() {
 /**
  * Set the release's artist. A plan with several artists shows a field (or a
  * picker); an account with one artist renders it as a hidden input that
- * already holds that artist, so there it is only checked. Resolves
+ * already holds that artist, so there it is only checked (ignoring case and
+ * spacing). Resolves
  * `{ ok, fixed }`: `fixed` is the account's own artist when the form does not
  * let it change, so a mismatch can name both.
  */
@@ -205,6 +206,8 @@ export function setDistrokidArtist(artist) {
     field.blur?.();
     return { ok: true, fixed: null };
   }
-  const fixed = fields.find((e) => e.value)?.value || null;
-  return { ok: !!fixed && fixed.toLowerCase() === artist.toLowerCase(), fixed };
+  // DistroKid may store the name with different case or spacing ("exampleartist" for "Example Artist").
+  const squash = (v) => v.replace(/\s+/g, '').toLowerCase();
+  const fixed = fields.find((e) => e.value.trim())?.value.trim() || null;
+  return { ok: !!fixed && squash(fixed) === squash(artist), fixed };
 }

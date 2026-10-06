@@ -134,6 +134,12 @@ describe('DistroKid artist', () => {
     expect(setDistrokidArtist('ExampleArtist')).toEqual({ ok: true, fixed: 'exampleartist' });
   });
 
+  it('matches the hidden artist across case and spacing, and reports the account spelling', () => {
+    document.body.innerHTML = '<input type="hidden" id="artistName" name="bandname" value=" exampleartist ">';
+    expect(setDistrokidArtist('Example Artist')).toEqual({ ok: true, fixed: 'exampleartist' });
+    expect(setDistrokidArtist(' Example  Artist ')).toEqual({ ok: true, fixed: 'exampleartist' });
+  });
+
   it("names the account's own artist when it differs", () => {
     document.body.innerHTML = '<input type="hidden" id="artistName" name="bandname" value="exampleartist">';
     expect(setDistrokidArtist('Someone Else')).toEqual({ ok: false, fixed: 'exampleartist' });

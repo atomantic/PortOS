@@ -58,10 +58,11 @@ export const distrokidAdapter = {
     // The song count rebuilds the form, so it goes first.
     await soft('number of songs (1)', () => setValue(page, '#howManySongsOnThisAlbum, select[name=howmanysongs]', '1'));
     await page.waitForTimeout(1500);
+    let releasedAs = payload.artist;
     await step(label, 'set the artist', async () => {
       // An account with one artist fixes it in a hidden field, so it is checked, not typed.
       const { ok, fixed } = await page.evaluate(setDistrokidArtist, payload.artist);
-      if (ok) return;
+      if (ok) { releasedAs = fixed || payload.artist; return; }
       throw new Error(fixed
         ? `this DistroKid account releases as "${fixed}", not "${payload.artist}"`
         : `no artist field accepted "${payload.artist}"`);
@@ -107,7 +108,7 @@ export const distrokidAdapter = {
 
     const aiParts = [payload.ai.lyrics && 'lyrics', payload.ai.music && 'music', payload.ai.vocals && 'all of the audio'].filter(Boolean);
     return {
-      artist: payload.artist,
+      artist: releasedAs,
       title: payload.title,
       songwriter: `${payload.songwriter.first} ${payload.songwriter.last} (${payload.songwriterRole === 'both' ? 'music and lyrics' : payload.songwriterRole})`,
       releaseDate: payload.releaseDate || 'As soon as possible',
