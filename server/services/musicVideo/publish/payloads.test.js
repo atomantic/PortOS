@@ -3,7 +3,7 @@
  * director's per-platform options, or a 422 naming the missing piece.
  */
 import { describe, expect, it } from 'vitest';
-import { buildPublishPayload } from './payloads.js';
+import { buildPublishPayload, substackPublication } from './payloads.js';
 import { captureMusicVideoEvidence } from '../../../lib/musicVideoDependencies.js';
 
 const kit = (over = {}) => ({
@@ -100,6 +100,18 @@ describe('buildPublishPayload (#9282)', () => {
   it('prefers the recorded YouTube post over the kit link', () => {
     const p = buildPublishPayload('stackerNews', project({ posts: { youtube: { url: 'https://www.youtube.com/watch?v=posted' } } }));
     expect(p).toMatchObject({ url: 'https://www.youtube.com/watch?v=posted', territory: 'art', title: 'Song' });
+  });
+
+  it('reads the Substack publication from a name, a pasted URL or a custom domain', () => {
+    expect(substackPublication('example')).toBe('example.substack.com');
+    expect(substackPublication('https://Example.substack.com/p/old-post')).toBe('example.substack.com');
+    expect(substackPublication('news.example.com')).toBe('news.example.com');
+    expect(substackPublication('not a host')).toBeNull();
+    const copy = { substack: { title: 'Song', subtitle: '', body: 'Body' } };
+    expect(buildPublishPayload('substack', project({ copy }), { publication: 'example' }))
+      .toEqual({ publication: 'example.substack.com', videoUrl: 'https://youtu.be/abc', title: 'Song', subtitle: '', body: 'Body' });
+    expect(() => buildPublishPayload('substack', project({ copy, links: {} }), { publication: 'example' })).toThrow(/publish to YouTube first/);
+    expect(() => buildPublishPayload('substack', project(), { publication: 'example' })).toThrow(/substack title/);
   });
 
   it('posts a native video to r/aivideo by default, and validates other subreddits\' rules', () => {

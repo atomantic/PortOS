@@ -7,7 +7,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, within, act } from '@testing-library/react';
 import PublishPostingPanel, { PUBLISH_TARGETS } from './PublishPostingPanel.jsx';
 
-const ALL = ['youtube', 'suno', 'sunoHook', 'x', 'shorts', 'tiktok', 'instagram', 'reddit', 'stackerNews', 'distrokid'];
+const ALL = ['youtube', 'suno', 'sunoHook', 'x', 'shorts', 'tiktok', 'instagram', 'reddit', 'stackerNews', 'substack', 'distrokid'];
 const hook = (over = {}) => ({ drafts: {}, busy: {}, errors: {}, prepare: vi.fn(), submit: vi.fn(), discard: vi.fn(), enabledTargets: ALL, platforms: {}, recordPost: vi.fn(async () => null), ...over });
 const project = (kit = {}) => ({ id: 'mv-1', publishKit: { builtAt: '2026-01-01T00:00:00.000Z', thumbnails: ['t1.jpg'], ...kit } });
 const row = (label) => screen.getByText(label, { selector: 'div' }).closest('li');
@@ -33,6 +33,18 @@ describe('PublishPostingPanel (#9282)', () => {
     fireEvent.change(within(reddit).getByLabelText('Post type'), { target: { value: 'link' } });
     fireEvent.click(within(reddit).getByRole('button', { name: 'Fill draft' }));
     expect(publishing.prepare).toHaveBeenCalledWith('reddit', { subreddit: 'SunoAI', kind: 'link' });
+  });
+
+  it('fills a Substack draft on the publication typed, else the one under Where you post', () => {
+    const publishing = hook({ platforms: { substack: { enabled: true, account: 'example' } } });
+    render(<PublishPostingPanel project={project()} publishing={publishing} />);
+    const substack = row('Substack');
+    expect(within(substack).getByLabelText('Publication')).toHaveAttribute('placeholder', 'example');
+    fireEvent.click(within(substack).getByRole('button', { name: 'Fill draft' }));
+    expect(publishing.prepare).toHaveBeenCalledWith('substack', {});
+    fireEvent.change(within(substack).getByLabelText('Publication'), { target: { value: 'other' } });
+    fireEvent.click(within(substack).getByRole('button', { name: 'Fill draft' }));
+    expect(publishing.prepare).toHaveBeenLastCalledWith('substack', { publication: 'other' });
   });
 
   it('lets the director pick which 9:16 cut a Shorts draft posts (#10150)', () => {
