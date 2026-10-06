@@ -2878,13 +2878,27 @@ describe('durable remote source-audio settlement', () => {
     const recovery = stubs.generateVideoRemote.mock.calls.find(([params]) => params.jobId === first.jobId)[0];
     expect(recovery.remoteMedia.reconcile).toBe(true);
     expect(stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === next.jobId)).toBe(false);
-    videoGenEvents.emit('completed', { generationId: first.jobId, remoteInputsDisposable: true,
-      remoteRecoverySettlement: remoteRecoverySettlement(first.jobId) });
-    await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === next.jobId));
-    expect(persistedJobs().find((job) => job.id === first.jobId).params.remotePeerReservation).toBe(false);
-    expect(maintenance.status().blockers.filter((entry) => entry.resource === first.jobId)).toEqual([]);
-    expect(mediaJobQueue.getJob(first.jobId).result).not.toHaveProperty('remoteRecoverySettlement');
-    videoGenEvents.emit('completed', { generationId: next.jobId, remoteInputsDisposable: true });
+    // Lane release admits the next peer job before the archive flush completes.
+    // Observe maintenance settlement itself instead of treating dispatch as its signal.
+    let onMaintenanceChanged;
+    const recoveryFinished = new Promise((resolve) => {
+      onMaintenanceChanged = ({ blockers }) => {
+        if (!blockers.some((entry) => entry.resource === first.jobId)) resolve();
+      };
+      maintenance.events.on('changed', onMaintenanceChanged);
+    });
+    try {
+      videoGenEvents.emit('completed', { generationId: first.jobId, remoteInputsDisposable: true,
+        remoteRecoverySettlement: remoteRecoverySettlement(first.jobId) });
+      await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === next.jobId));
+      await recoveryFinished;
+      expect(persistedJobs().find((job) => job.id === first.jobId).params.remotePeerReservation).toBe(false);
+      expect(maintenance.status().blockers.filter((entry) => entry.resource === first.jobId)).toEqual([]);
+      expect(mediaJobQueue.getJob(first.jobId).result).not.toHaveProperty('remoteRecoverySettlement');
+      videoGenEvents.emit('completed', { generationId: next.jobId, remoteInputsDisposable: true });
+    } finally {
+      maintenance.events.off('changed', onMaintenanceChanged);
+    }
   });
 
   it('preserves recovered uncertainty when owned cleanup creates a new mark', async () => {
