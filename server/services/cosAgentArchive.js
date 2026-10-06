@@ -9,6 +9,7 @@
  * (#3450) — callers import from here directly.
  */
 
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { writeFile, rename, readdir, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -22,7 +23,7 @@ import { loadAgentIndex, saveAgentIndex, recordArchivedAgentOrder } from './cosA
 // (metadata.json) by completeAgent(), so removing them from state.json only
 // reduces the size of the in-memory state and the state.json file.
 export async function archiveStaleAgents() {
-  return withStateLock(async () => {
+  return withBackupAssetPublication(() => withStateLock(async () => {
     const state = await loadState();
     const retentionMs = state.config.completedAgentRetentionMs ?? 86400000;
     const cutoff = Date.now() - retentionMs;
@@ -85,12 +86,12 @@ export async function archiveStaleAgents() {
     console.log(`📦 Archived ${staleIds.length} stale agents from state.json (retained on disk)`);
     cosEvents.emit('agents:changed', { action: 'auto-archive', archived: staleIds.length });
     return { archived: staleIds.length };
-  });
+  }));
 }
 
 // Clear completed agents from state, cache, and disk
 export async function clearCompletedAgents() {
-  return withStateLock(async () => {
+  return withBackupAssetPublication(() => withStateLock(async () => {
     const state = await loadState();
     const idx = await loadAgentIndex();
 
@@ -107,6 +108,13 @@ export async function clearCompletedAgents() {
     const dates = new Set(idx.values());
     const totalCleared = idx.size + stateCompleted.filter(id => !idx.has(id)).length;
 
+    // Remove durable references before bytes; a failed index write must leave
+    // the old archive trees readable and its in-memory lookup retryable.
+    const previousEntries = [...idx];
+    idx.clear();
+    try { await saveAgentIndex(); }
+    catch (err) { for (const [id, date] of previousEntries) idx.set(id, date); throw err; }
+
     const removals = [...dates].map(date => {
       const dateDir = join(AGENTS_DIR, date);
       return existsSync(dateDir)
@@ -115,10 +123,6 @@ export async function clearCompletedAgents() {
     });
     await Promise.all(removals);
 
-    // Clear index
-    idx.clear();
-    await saveAgentIndex();
-
     return { cleared: totalCleared };
-  });
+  }));
 }

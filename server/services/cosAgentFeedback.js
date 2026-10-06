@@ -283,6 +283,10 @@ export async function submitAgentFeedback(agentId, feedback) {
     });
   }
 
+  // Lazy index migration takes backup admission. Resolve it before the state
+  // lock so a cut cannot invert admission/state-lock order during first access.
+  const idx = await loadAgentIndex();
+
   // The durable reference is removed only after the source metadata write. Keep
   // that small store mutation outside the CoS state lock so a database/file I/O
   // round trip never serializes unrelated agent state updates.
@@ -317,8 +321,7 @@ export async function submitAgentFeedback(agentId, feedback) {
       return { success: true, agent: state.agents[agentId], feedbackData, clearPendingRef: archived.kind === 'found' };
     }
 
-    // Agent not in state — look up from disk via index
-    const idx = await loadAgentIndex();
+    // Agent not in state — look up from disk via the preloaded index
     const dateStr = idx.get(agentId);
     if (!dateStr) throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
 

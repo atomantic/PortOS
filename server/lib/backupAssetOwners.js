@@ -407,8 +407,8 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     modules: ['services/dataManager.js', 'routes/uploads.js', 'routes/attachments.js'],
   },
   {
-    // Snapshot JSON and its index entry are one pair, including unlink-before-
-    // index deletion. Acquire before the index tail so queued writes drain.
+    // Snapshot JSON and its index entry are one pair. Deletion persists index
+    // removal before unlink; admission precedes the index tail so writes drain.
     id: 'time-capsule-snapshot-index',
     status: 'admitted',
     modules: ['services/timeCapsule.js'],
@@ -420,6 +420,14 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     id: 'cos-recording-compression-and-purge',
     status: 'admitted',
     modules: ['services/cosAgentStorage.js'],
+  },
+  {
+    // Completion, zombie/stale archival and deletion pair moved/removed trees
+    // with state, the primary date index and completion projection. Admission
+    // precedes the state lock. Legacy layout migration owns the same pair.
+    id: 'cos-agent-archive-and-index-publication',
+    status: 'admitted',
+    modules: ['services/cosAgentLifecycle.js', 'services/cosAgentArchive.js', 'services/cosAgentIndex.js'],
   },
   // Anything the sweep did not reach. A new asset owner lands here until it is
   // classified; the claim cannot become `global` while this entry exists.

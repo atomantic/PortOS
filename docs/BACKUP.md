@@ -107,6 +107,7 @@ Admission inventory (`withBackupAssetPublication`):
 | Music Video Making-of export (`makingOf.js`, `makingOfVisuals.js`) | Reference-only: reads existing assets and transforms buffers for the ZIP response; no durable file or row writes |
 | Time Capsule snapshots (`timeCapsule.js`) | Covered (#9982 partial): snapshot creation and deletion lease the file and index entry together, acquiring before the shared index write tail |
 | CoS raw recording compression and purge (`cosAgentStorage.js`) | Covered (#9982 partial): verified gzip publication, storage manifest and plain-file removal share a lease; purge intent and unlinks also share a lease because the manifest is file-primary |
+| CoS agent archive/index publication (`cosAgentLifecycle.js`, `cosAgentArchive.js`, `cosAgentIndex.js`) | Covered (#9982 partial): completion, zombie/stale archival, deletion and legacy layout migration lease directory changes through state and index publication; state-locked workflows acquire admission first |
 | Durable replacement/deletion owners not yet classified | Outstanding (#9982) |
 | Snapshot consistency claim (`backupAssetOwners.js`, see below) | Covered (#9982 partial) |
 | Database restore execution and backend-cutover acceptance (`backup.js`, `databasePreflight.js`) | Covered (#9983) |
