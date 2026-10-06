@@ -39,10 +39,11 @@ const SCREENSHOT = Object.freeze({ format: 'png', optimizeForSpeed: true, fromSu
 // the terminal race releases a pending write on exit, disconnect or cancel.
 // `offsetSec` seeks a window of a longer timeline: frame n is drawn at
 // `offsetSec + n / fps` (a music-video excerpt stays on song time).
-// `continuous` marks a window that continues an earlier one (a parallel
-// segment): its first frame's auto-shutter comparison sees the real previous
-// frame instead of treating the window start as the start of the song.
-export async function encodeComposition(page, contract, outputPath, { musicPath, audio, signal, onProgress, offsetSec = 0, continuous = false, videoFilter = null, master = false, runFfmpeg = runFfmpegProcess, spawnProcess = spawn, locateFfmpeg = findFfmpeg, tagFilter = bt709TagFilter } = {}) {
+// `continuous` marks a window that continues an earlier one and `followed` one
+// that a later window continues (parallel segments): the auto-shutter
+// comparison at each seam sees the real neighbouring frame instead of treating
+// the window edge as an edge of the song.
+export async function encodeComposition(page, contract, outputPath, { musicPath, audio, signal, onProgress, offsetSec = 0, continuous = false, followed = false, videoFilter = null, master = false, runFfmpeg = runFfmpegProcess, spawnProcess = spawn, locateFfmpeg = findFfmpeg, tagFilter = bt709TagFilter } = {}) {
   const ffmpeg = await locateFfmpeg();
   if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
   const tag = await tagFilter();
@@ -147,7 +148,7 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
           // Each frame's centre is captured one frame ahead. A frame whose
           // centre matches both neighbours' did not move this interval, so it
           // costs one capture, same as an unblurred render.
-          const next = n + 1 < numFrames ? await capture((n + 1) / fps) : null;
+          const next = n + 1 < numFrames || followed ? await capture((n + 1) / fps) : null;
           const still = (previous || next) && (!previous || previous.equals(centre)) && (!next || next.equals(centre));
           frame = still ? { rgb: await toRgb(centre), count: 1 }
             : await blurFrame(shutter, width, height, async offset => toRgb(await capture(Math.max(-offsetSec, (n + offset * shutter.shutter) / fps))), await toRgb(centre));
@@ -242,7 +243,7 @@ export async function encodeCompositionSegments(page, contract, outputPath, { op
         segmentPage ??= await openPage(controller.signal);
         const at = Math.round((offsetSec + start / fps) * 1e6) / 1e6;
         const result = await encode(segmentPage, { ...contract, durationSec: frames / fps }, parts[i], {
-          signal: controller.signal, offsetSec: at, continuous: start > 0, videoFilter: videoFilterAt(at),
+          signal: controller.signal, offsetSec: at, continuous: start > 0, followed: i < segments.length - 1, videoFilter: videoFilterAt(at),
           onProgress: (_fraction, detail) => {
             done[i] = detail?.frame ?? 0;
             const frame = done.reduce((sum, value) => sum + value, 0);

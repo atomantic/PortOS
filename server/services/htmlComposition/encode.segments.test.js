@@ -3,7 +3,9 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { encodeCompositionSegments } from './encode.js';
+import { EventEmitter } from 'node:events';
+import sharp from 'sharp';
+import { encodeComposition, encodeCompositionSegments } from './encode.js';
 import { findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
 
 const contract = { fps: 24, durationSec: 60, width: 1920, height: 1080, motionBlur: 1 };
@@ -21,7 +23,7 @@ describe('encodeCompositionSegments', () => {
       openPage: async () => { const p = page(`extra${opened.length}`); opened.push(p); return p; },
       videoFilterAt: (offsetSec) => `grade@${offsetSec}`,
       encode: async (p, c, path, options) => {
-        calls.push({ page: p.name, frames: Math.round(c.durationSec * c.fps), path, offsetSec: options.offsetSec, continuous: options.continuous, filter: options.videoFilter });
+        calls.push({ page: p.name, frames: Math.round(c.durationSec * c.fps), path, offsetSec: options.offsetSec, continuous: options.continuous, followed: options.followed, filter: options.videoFilter });
         options.onProgress(1, { frame: Math.round(c.durationSec * c.fps) });
         return {};
       },
@@ -30,10 +32,10 @@ describe('encodeCompositionSegments', () => {
       onProgress: (fraction) => progress.push(fraction),
     });
     calls.sort((a, b) => a.offsetSec - b.offsetSec);
-    expect(calls.map(({ frames, offsetSec, continuous, filter }) => ({ frames, offsetSec, continuous, filter }))).toEqual([
-      { frames: 480, offsetSec: 30, continuous: false, filter: 'grade@30' },
-      { frames: 480, offsetSec: 50, continuous: true, filter: 'grade@50' },
-      { frames: 480, offsetSec: 70, continuous: true, filter: 'grade@70' },
+    expect(calls.map(({ frames, offsetSec, continuous, followed, filter }) => ({ frames, offsetSec, continuous, followed, filter }))).toEqual([
+      { frames: 480, offsetSec: 30, continuous: false, followed: true, filter: 'grade@30' },
+      { frames: 480, offsetSec: 50, continuous: true, followed: true, filter: 'grade@50' },
+      { frames: 480, offsetSec: 70, continuous: true, followed: false, filter: 'grade@70' },
     ]);
     // The caller's page draws the first segment and stays open; the extra pages close.
     expect(calls[0].page).toBe('first');
@@ -68,6 +70,45 @@ describe('encodeCompositionSegments', () => {
     });
     await expect(run).rejects.toBe(failure);
     expect(extras[0].closed).toBe(1);
+  });
+});
+
+// A real encodeComposition with the encoder stubbed: records every song time
+// the page is seeked to, over identical frames (so auto shutter stays still).
+const PNG = (await sharp({ create: { width: 4, height: 4, channels: 3, background: '#808080' } }).png().toBuffer()).toString('base64');
+async function seeksFor(motionBlur, options) {
+  const seeks = [];
+  const fakePage = {
+    check() {},
+    async evaluate(expression) { const match = /seek\(([^)]+)\)/.exec(expression); if (match) seeks.push(Number(match[1])); },
+    async send(method) { return method === 'Page.captureScreenshot' ? { data: PNG } : {}; },
+  };
+  const spawnProcess = () => {
+    const proc = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.stdin = new EventEmitter();
+    proc.stdin.write = (_bytes, callback) => { callback?.(); return true; };
+    proc.stdin.end = () => proc.emit('close', 0);
+    proc.kill = () => {};
+    return proc;
+  };
+  await encodeComposition(fakePage, { fps: 10, durationSec: 0.3, width: 4, height: 4, motionBlur }, '/tmp/seam.mp4', {
+    spawnProcess, locateFfmpeg: async () => 'ffmpeg', tagFilter: async () => 'format=yuv420p', ...options,
+  });
+  return seeks;
+}
+
+describe('encodeComposition at segment seams', () => {
+  const auto = { shutter: 0.5, samples: 'auto', tolerance: 2 };
+  it('compares an auto shutter against the real neighbours across both seams', async () => {
+    expect(await seeksFor(auto, { offsetSec: 0 })).toEqual([0, 0.1, 0.2]);
+    expect(await seeksFor(auto, { offsetSec: 10, continuous: true, followed: true })).toEqual([9.9, 10, 10.1, 10.2, 10.3]);
+  });
+
+  it('samples a fixed shutter across the window start of a continued segment, but never before song start', async () => {
+    const fixed = { shutter: 0.5, samples: 4, tolerance: 2 };
+    expect(Math.min(...await seeksFor(fixed, { offsetSec: 0 }))).toBe(0);
+    expect(Math.min(...await seeksFor(fixed, { offsetSec: 10, continuous: true }))).toBeLessThan(10);
   });
 });
 
