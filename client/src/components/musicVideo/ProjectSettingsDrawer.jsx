@@ -51,6 +51,7 @@ export default function ProjectSettingsDrawer({ open, tab, onTabChange, onClose,
           onRenderStyle={board.onRenderStyle}
           onSaveAutomation={board.saveAutomation}
           onSavePolicy={(productionPolicy) => board.saveCreativeSetup({ productionPolicy })}
+          onProjectUpdated={board.replaceProject}
         />
       )}
       {tab === 'audio' && (

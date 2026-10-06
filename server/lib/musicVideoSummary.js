@@ -9,6 +9,7 @@
  */
 import { isLayeredComposition, sceneRenderReady } from './musicVideoLayers.js';
 import { latestMusicVideoReviewDraft } from './musicVideoReviewDraft.js';
+import { finishedOutsideCovers } from './musicVideoFinishedOutside.js';
 
 // The six steps (Song, Look, Storyboard, Make, Final render, Publish); Make (`produce`) absorbed Compose.
 const STAGE_IDS = ['setup', 'cast-sets', 'board', 'produce', 'review', 'publish'];
@@ -80,7 +81,8 @@ function currentStage(project, readiness, run) {
     review: Boolean(project.renderHistoryId) && project.renderDependencyState?.status !== 'stale',
     publish: Object.keys(project.publishKit?.posts || {}).length > 0,
   };
-  return STAGE_IDS.find((id) => !done[id]) || 'publish';
+  // Finished outside PortOS — mirrors the client's deriveStages.
+  return STAGE_IDS.find((id) => !done[id] && !finishedOutsideCovers(project, id)) || 'publish';
 }
 
 function projectPreview(project) {

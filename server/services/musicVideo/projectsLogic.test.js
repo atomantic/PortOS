@@ -121,6 +121,13 @@ describe('cloneProjectRecord', () => {
     ]);
   });
 
+  it('starts a clone without the source\'s finished-outside marker, since the new version is made here', () => {
+    const clone = cloneProjectRecord({ ...baseProject(), renderHistoryId: 'final-1', finishedOutside: { markedAt: '2026-01-01T00:00:00.000Z' } },
+      { id: 'mv-2', now: '2026-01-02T00:00:00.000Z' });
+    expect(clone.finishedOutside).toBeNull();
+    expect(cloneProjectRecord(baseProject(), { id: 'mv-3', now: '2026-01-02T00:00:00.000Z' })).not.toHaveProperty('finishedOutside');
+  });
+
   it('starts a clone with no auto-review runs, and adds no field when the source has none', () => {
     const withRuns = cloneProjectRecord({
       ...baseProject(),

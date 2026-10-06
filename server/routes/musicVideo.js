@@ -12,8 +12,9 @@ import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { pipeline } from 'stream/promises';
 import { Router } from 'express';
-import { musicVideoProjectListQuerySchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
+import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
 import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
@@ -318,6 +319,18 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   const data = validateRequest(projectUpdateSchema, req.body);
   const updated = await updateProject(req.params.id, data);
   res.json(updated);
+}));
+
+// Finished outside PortOS: the earlier steps count as done without forging approvals.
+router.put('/:id/finished-outside', asyncHandler(async (req, res) => {
+  const { finished, note } = validateRequest(musicVideoFinishedOutsideSchema, req.body);
+  if (finished) {
+    const blocker = finishedOutsideBlocker(await getProject(req.params.id));
+    if (blocker) throw new ServerError(blocker, { status: 409, code: 'MUSIC_VIDEO_NO_FINAL_RENDER' });
+  }
+  const finishedOutside = finished ? { markedAt: new Date().toISOString(), ...(note ? { note } : {}) } : null;
+  await updateProject(req.params.id, { finishedOutside });
+  res.json(presentProjectForRead(await getProject(req.params.id)));
 }));
 
 // Preview is read-only; Apply rechecks audio and the serialized project basis.
