@@ -1555,6 +1555,8 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
     // `data/brain/youtube/**` over live files the user never selected. The
     // integrity preflight above scopes itself to `data/<filter>/**` only, so an
     // unanchored transfer overwrites bytes it never verified.
+    // Exact files need their own rule: rsync 3 excludes a file from the directory-only /*** pattern.
+    flags.push(`--include=/${subdirFilter}`);
     flags.push(`--include=/${subdirFilter}/***`);
     flags.push('--include=*/');
     flags.push('--exclude=*');
