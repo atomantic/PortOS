@@ -586,8 +586,10 @@ describe('UsagePage custom date range inputs', () => {
     expect(from.value).toBe('0002-09-29');
     expect(api.getUsage.mock.calls.length).toBe(callsBefore);
 
-    fireEvent.change(from, { target: { value: '2026-09-29' } });
-    await waitFor(() => expect(api.getUsage.mock.calls.length).toBeGreaterThan(callsBefore));
+    // The commit has no debounce: it updates the URL param, and an effect then refetches.
+    // Awaiting act flushes that whole chain, so the assertion never races a wall-clock timeout.
+    await act(async () => { fireEvent.change(from, { target: { value: '2026-09-29' } }); });
+    expect(api.getUsage.mock.calls.length).toBeGreaterThan(callsBefore);
     expect(from.value).toBe('2026-09-29');
   });
 });
