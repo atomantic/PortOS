@@ -324,12 +324,21 @@ describe('Review Hub queue-card triage (#3282)', () => {
     ));
   });
 
-  it('opens feedback review from the queue instead of a separate rating form', async () => {
+  it('renders the agent run card inline in the queue and submits feedback without opening the drawer', async () => {
     api.getReviewQueue.mockResolvedValueOnce({ items: [FEEDBACK_ITEM], sources: {}, partial: false });
+    api.getCosAgent.mockResolvedValue({
+      id: 'agent-example', status: 'completed', taskId: 'user-example',
+      startedAt: '2026-08-01T11:00:00Z', completedAt: '2026-08-01T12:00:00Z',
+      metadata: { taskDescription: 'Full example task context', taskType: 'user' },
+      output: [{ line: 'Example diagnostic output', timestamp: '2026-08-01T12:00:00Z' }],
+    });
+    api.submitCosAgentFeedback.mockResolvedValue({ success: true, agent: { id: 'agent-example', feedback: { rating: 'positive' } } });
     render(<Review />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Review run and give feedback' }));
-    expect(routerState.navigate).toHaveBeenCalledWith('/review/feedback%3Aagent-example?view=today');
-    expect(screen.queryByLabelText('Rating (required)')).not.toBeInTheDocument();
+    expect(await screen.findByText('Full example task context')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Review run and give feedback' })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Mark as helpful' }));
+    await waitFor(() => expect(api.submitCosAgentFeedback).toHaveBeenCalledWith('agent-example', { rating: 'positive', comment: undefined }, { silent: true }));
+    expect(routerState.navigate).not.toHaveBeenCalled();
   });
 
   it.each([['positive', 'Mark as helpful'], ['negative', 'Mark as not helpful']])('reviews the completed run and submits %s feedback using the shared agent card', async (rating, label) => {
