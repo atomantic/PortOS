@@ -182,6 +182,24 @@ describe('RapidReader shelf', () => {
     expect(api.getRapidReaderLibraryEntry).toHaveBeenCalledWith('shelf-1', { silent: true });
   });
 
+  it('drops a superseded entry response so the slow earlier load cannot replace the newer pick', async () => {
+    const SECOND = { ...ENTRY, id: 'shelf-2', title: 'Second Article', wordCount: 3 };
+    api.listRapidReaderLibrary.mockResolvedValue([ENTRY, SECOND]);
+    let resolveFirst;
+    api.getRapidReaderLibraryEntry.mockImplementation((id) => id === 'shelf-1'
+      ? new Promise((resolve) => { resolveFirst = resolve; })
+      : Promise.resolve({ ...SECOND, text: 'one two three' }));
+    await renderPage('/rapid-reader/shelf-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Second Article' }));
+    expect(await screen.findByText(/1\/3 words/)).toBeInTheDocument();
+
+    await act(async () => { resolveFirst({ ...ENTRY, text: 'alpha bravo charlie delta echo' }); });
+
+    expect(screen.getByText(/1\/3 words/)).toBeInTheDocument();
+    expect(screen.queryByText(/1\/5 words/)).not.toBeInTheDocument();
+  });
+
   it('puts the opened entry in the URL rather than local state', async () => {
     api.listRapidReaderLibrary.mockResolvedValue([ENTRY]);
     api.getRapidReaderLibraryEntry.mockResolvedValue({ ...ENTRY, text: 'alpha bravo charlie delta' });
