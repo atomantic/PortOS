@@ -456,10 +456,8 @@ describe('source-pipeline import', () => {
   });
 });
 
-// The file-only sprite workflows (loop trims, atlas compile and publication history,
-// asset deletion, run records and selections) are classified reference-only in
-// `backupAssetOwners.js` because the sprite row names none of their bytes. This
-// pins that premise: a row field that holds a data/ path forces a reclassification.
+// The DB sprite row remains metadata-only. Adjacent file-primary records still
+// name bytes and are separately admitted by the shared animation/reference tails.
 describe('sprite row contents', () => {
   it('holds metadata and workflow state only, never a data/ path', () => {
     const record = buildSpriteRecord({ name: 'Example', kind: 'character' }, { id: 'example', now: '2026-01-01T00:00:00.000Z' });

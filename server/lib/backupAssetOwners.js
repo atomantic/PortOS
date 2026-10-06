@@ -287,21 +287,14 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     ],
   },
   {
-    // The sprite row holds metadata and workflow state only, never a path under
-    // data/ (`spriteBackupAdmission.test.js` pins its shape), so a dumped row
-    // cannot dangle at bytes these workflows write, replace or delete: generation
-    // starts and reference uploads, candidate and run records, selections, loop
-    // trims, atlas compile and its runtime pointer, publication history, asset
-    // deletion, and the publish-binding and chroma-key pin row writes. Their
-    // versioned artifacts are write-once and the record naming them is written
-    // last, so a copy that lists the record lists the files.
-    id: 'sprite-file-only-records',
-    status: 'reference-only',
-    modules: [
-      'services/sprites/reference.js', 'services/sprites/walk.js', 'services/sprites/walkTrims.js',
-      'services/sprites/atlas.js', 'services/sprites/assets.js', 'services/sprites/publish.js',
-      'services/sprites/animationTrackWorkflow.js',
-    ],
+    // File-primary run records, reference candidates, loop trims, selections,
+    // atlas versions/current pointer and publication history also need a lease:
+    // rsync can traverse their bytes before it copies a newly written pointer.
+    // Shared animation/reference queues acquire before serialization; long
+    // provider runs remain detached and their completion reacquires admission.
+    id: 'sprite-file-record-publication',
+    status: 'admitted',
+    modules: ['services/sprites/animationWorkflow.js', 'services/sprites/reference.js'],
   },
   // Classified by a code sweep (#9982) but still outside admission. Each entry
   // names the modules whose file-plus-record workflows are not wrapped yet, so a
