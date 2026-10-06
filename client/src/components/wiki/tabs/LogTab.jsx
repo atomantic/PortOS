@@ -80,7 +80,7 @@ export default function LogTab({ vaultId, allNotes }) {
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-medium text-white">Activity Log</h3>
         <div className="flex items-center gap-2 text-xs text-gray-500">
-          <span>{formatCount(entries.length)} entries</span>
+          <span>{formatCount(entries.length)} {entries.length === 1 ? 'entry' : 'entries'}</span>
           {log.modifiedAt && <span>Updated {timeAgo(log.modifiedAt)}</span>}
           <button onClick={loadLog} aria-label="Refresh" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded hover:bg-port-card text-gray-500 hover:text-white">
             <RefreshCw size={12} />

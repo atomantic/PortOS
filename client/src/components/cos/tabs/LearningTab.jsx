@@ -35,6 +35,7 @@ import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import { formatDurationMin, formatDateTime, formatDateNumeric } from '../../../utils/formatters';
+import { pluralize } from '../../../lib/textUtils';
 
 // Evidence pairing (issue #2617): when the server classified a task type on
 // its recency-windowed rate, label the percentage with the WINDOW's sample
@@ -812,7 +813,7 @@ export default function LearningTab() {
                         </div>
                         <div className="flex justify-between text-xs text-gray-500">
                           <span>{info.desc}</span>
-                          <span>{model.completed} tasks • {model.avgDurationMin}m avg</span>
+                          <span>{pluralize(model.completed, 'task')} • {model.avgDurationMin}m avg</span>
                         </div>
                       </div>
                     );

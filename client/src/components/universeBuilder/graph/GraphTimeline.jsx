@@ -74,7 +74,7 @@ export default function GraphTimeline({
         </button>
         <div className="text-xs text-white font-medium min-w-[220px]">
           {current ? current.name : 'Whole universe'}
-          <span className="font-normal text-gray-500"> · {current ? `${seriesName} · ${entriesIntroduced} entries so far` : seriesName}</span>
+          <span className="font-normal text-gray-500"> · {current ? `${seriesName} · ${pluralize(entriesIntroduced, 'entry', 'entries')} so far` : seriesName}</span>
         </div>
         <div className="flex-1" />
         <button

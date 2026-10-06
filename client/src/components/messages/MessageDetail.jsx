@@ -231,7 +231,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
         <div className="flex-1 min-w-0">
           <h2 className="text-sm font-medium text-white truncate">{displayedMessage.subject || '(no subject)'}</h2>
           {hasThread && (
-            <span className="text-xs text-gray-500">{formatCount(threadMessages.length)} messages</span>
+            <span className="text-xs text-gray-500">{formatCount(threadMessages.length)} {threadMessages.length === 1 ? 'message' : 'messages'}</span>
           )}
         </div>
         <div className="flex flex-wrap items-center justify-end gap-1">
