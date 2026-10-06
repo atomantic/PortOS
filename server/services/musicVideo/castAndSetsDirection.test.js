@@ -74,6 +74,17 @@ describe('Cast & Sets direction', () => {
     expect(parseCastAndSetsResponse('no json here')).toBeNull();
   });
 
+  it('keeps a protagonist whose prose fields came back as structure, flattening them to text', () => {
+    const parsed = parseCastAndSetsResponse(JSON.stringify({
+      logline: 'x',
+      protagonist: { name: 'The Vector', description: 'a paper airplane', palette: { primary: '#FFFFFF', accent: '#00F0FF' }, materials: ['paper', 'glow'] },
+      world: { lighting: { key: 'neon', fill: 0 } },
+    }));
+    expect(parsed.protagonist).toMatchObject({ name: 'The Vector', palette: 'primary: #FFFFFF, accent: #00F0FF', materials: 'paper, glow' });
+    expect(parsed.world.lighting).toBe('key: neon, fill: 0');
+    expect(mergeCastAndSetsDirection(null, parsed, { sections, medium: 'procedural' }).missing).not.toContain('protagonist');
+  });
+
   it('on a revision keeps absent keys, applies present ones, and treats an empty value as a clear', () => {
     const { direction: previous } = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...ANSWER, questions: ['Is she right?'], interpretation: 'agents' })), { sections, moodImageCount: 4 });
     const revision = parseCastAndSetsResponse(JSON.stringify({
