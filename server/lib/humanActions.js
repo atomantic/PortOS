@@ -26,6 +26,8 @@ export const HUMAN_ACTION_CATCH_UP_MS = 24 * 60 * 60 * 1000;
 // before `Date.now()` reaches the due time; a step this close counts as due.
 export const HUMAN_ACTION_EARLY_FIRE_MS = 1000;
 
+export const HUMAN_ACTION_NOTES_MAX = 20000;
+
 const planKey = z.string().trim().min(1).max(40)
   .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'planKey must be a lowercase dash slug');
 
@@ -54,7 +56,15 @@ export const humanActionPlanSchema = z.object({
   planKey,
   title: z.string().trim().min(1).max(120),
   steps: z.array(humanActionStepSchema).min(1).max(30),
-}).strict();
+}).strict().superRefine((plan, ctx) => {
+  // Thread notes are capped; reject a step that would not fit rather than cut it
+  // (a cut can drop a fenced block's closing fence or accepted instructions).
+  plan.steps.forEach((step, i) => {
+    if (buildHumanActionNotes(step, { planTitle: plan.title }).length > HUMAN_ACTION_NOTES_MAX) {
+      ctx.addIssue({ code: "custom", path: ["steps", i], message: `step notes exceed ${HUMAN_ACTION_NOTES_MAX} characters; shorten its instructions or content` });
+    }
+  });
+});
 
 export const humanActionPlanTag = (key) => `${HUMAN_ACTION_PLAN_TAG_PREFIX}${key}`;
 
@@ -94,7 +104,7 @@ export function humanActionThreadFields(step, plan) {
     status: 'open',
     priority: step.priority || 'normal',
     nextAction: step.instructions[0].slice(0, 500),
-    notes: buildHumanActionNotes(step, { planTitle: plan.title }).slice(0, 20000),
+    notes: buildHumanActionNotes(step, { planTitle: plan.title }),
     dueAt: new Date(step.dueAt).toISOString(),
     tags: [HUMAN_ACTION_TAG, humanActionPlanTag(plan.planKey)],
     pinned: false,
