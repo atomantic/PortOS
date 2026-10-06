@@ -28,6 +28,7 @@
  */
 
 import { readFile, writeFile, readdir } from 'fs/promises';
+import { writeJsonAtomic } from './_lib.js';
 import { join } from 'path';
 
 const PROVIDERS_REL_PATH = 'data/providers.json';
@@ -154,7 +155,7 @@ async function rewritePinFile(rootDir, relPath) {
     return;
   }
   if (rewriteProviderPins(data)) {
-    await writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`);
+    await writeJsonAtomic(filePath, data);
     console.log(`📝 ${relPath}: repointed ${OLD_ID} provider pins → ${NEW_ID}`);
   }
 }
@@ -256,7 +257,7 @@ export default {
     }
 
     if (changed) {
-      await writeFile(providersPath, `${JSON.stringify(config, null, 2)}\n`);
+      await writeJsonAtomic(providersPath, config);
     } else {
       console.log(`✅ ${PROVIDERS_REL_PATH}: Claude Ollama providers already present — no change`);
     }

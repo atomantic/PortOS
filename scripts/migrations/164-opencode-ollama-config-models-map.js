@@ -24,7 +24,8 @@
  * migrations rather than mutating this one.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { writeJsonAtomic } from './_lib.js';
 import { join } from 'path';
 
 const PROVIDERS_REL_PATH = 'data/providers.json';
@@ -109,7 +110,7 @@ export default {
     }
 
     if (changed) {
-      await writeFile(providersPath, `${JSON.stringify(config, null, 2)}\n`);
+      await writeJsonAtomic(providersPath, config);
     } else {
       console.log(`✅ ${PROVIDERS_REL_PATH}: OpenCode Ollama config models map already up to date — no change`);
     }

@@ -1185,6 +1185,14 @@ const ensureDir = (file) => {
 // shipped row to an existing install) can never mutate the in-memory defaults.
 export const getShippedMediaRegistry = () => structuredClone(DEFAULT_REGISTRY);
 
+// Write-then-rename so a crash mid-write can't truncate the registry — it holds
+// every user-added model and the shipped-defaults ledger the upgrade merge reads.
+const writeRegistryAtomic = (reg) => {
+  const temporary = `${REGISTRY_FILE}.tmp`;
+  writeFileSync(temporary, JSON.stringify(reg, null, 2) + '\n');
+  renameSync(temporary, REGISTRY_FILE);
+};
+
 const seedIfMissing = () => {
   if (existsSync(REGISTRY_FILE)) return;
   ensureDir(REGISTRY_FILE);
@@ -1786,7 +1794,7 @@ export const loadMediaModels = () => {
       parsedShippedImage === null ||
       normalizedImage.list.length !== (parsedShippedImage.list?.length ?? 0);
     if (videoChanged || imageChanged) {
-      writeFileSync(REGISTRY_FILE, JSON.stringify(cached, null, 2) + '\n');
+      writeRegistryAtomic(cached);
       console.log(`📝 Updated media model registry _shippedDefaults: ${REGISTRY_FILE}`);
     }
   }
@@ -1863,9 +1871,7 @@ export const withLiveMediaModelsRestore = (transfer) => {
 // the shared cache in place). Single-user trust model → no file lock needed.
 const persistRegistry = (reg) => {
   ensureDir(REGISTRY_FILE);
-  const temporary = `${REGISTRY_FILE}.tmp`;
-  writeFileSync(temporary, JSON.stringify(reg, null, 2) + '\n');
-  renameSync(temporary, REGISTRY_FILE);
+  writeRegistryAtomic(reg);
   cached = reg;
   return reg;
 };
