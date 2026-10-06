@@ -30,18 +30,23 @@ const DRAFT = { imagePrompt: 'Example image prompt: a grainy profile in blue lig
 const runPrompt = vi.fn(async () => ({ text: JSON.stringify(DRAFT) }));
 const defaultRoute = vi.fn(async () => ({ mode: 'grok', model: null }));
 
+const depsFor = () => ({
+  compose, enqueue, defaultRoute, jobStatus,
+  runner: async () => ({ resolveProviderAndModel: async () => ({ provider: { id: 'example-provider' }, selectedModel: null }), runPromptThroughProvider: runPrompt }),
+  getSettings: async () => ({}),
+  getPlatforms: async () => ({ distrokid: { enabled: true, account: 'Example Artist' } }),
+  imageParams: async (_settings, route, common) => ({ ...common, provider: route.mode }),
+  withStyle: async (_project, params) => params,
+  fonts: async () => [],
+  registerFonts: async () => {},
+  artistStyle: async () => null,
+});
+
 beforeEach(() => {
   compose.mockClear(); enqueue.mockReset(); enqueue.mockResolvedValue({ jobId: 'job-example' }); defaultRoute.mockClear();
   jobStatus.mockReset(); jobStatus.mockResolvedValue('queued');
   runPrompt.mockReset(); runPrompt.mockResolvedValue({ text: JSON.stringify(DRAFT) });
-  cover.__setCoverArtDepsForTests({
-    compose, enqueue, defaultRoute, jobStatus,
-    runner: async () => ({ resolveProviderAndModel: async () => ({ provider: { id: 'example-provider' }, selectedModel: null }), runPromptThroughProvider: runPrompt }),
-    getSettings: async () => ({}),
-    getPlatforms: async () => ({ distrokid: { enabled: true, account: 'Example Artist' } }),
-    imageParams: async (_settings, route, common) => ({ ...common, provider: route.mode }),
-    withStyle: async (_project, params) => params,
-  });
+  cover.__setCoverArtDepsForTests(depsFor());
 });
 
 async function projectWithThumbnail(name = 'Example Song') {
@@ -189,6 +194,47 @@ describe('release cover art', () => {
     const restyled = (await cover.designCoverArt(id, { direction: 'tiny type' })).project.publishKit.coverArt;
     expect(restyled.lettering).toBe(true);
     expect(compose.mock.calls.at(-1)[0].lettering).toBe(true);
+  });
+
+  it('sets the lettering from direct controls with no AI call, merging over the current design and re-setting the cover', async () => {
+    const { id, thumb } = await projectWithThumbnail();
+    await cover.composeProjectCoverArt(id, { source: { kind: 'thumbnail', filename: thumb } });
+    await cover.designCoverArt(id);
+    runPrompt.mockClear();
+    compose.mockClear();
+
+    const art = (await cover.saveCoverDesign(id, { scale: 'small', titleColor: '#ff8800', titleStyle: 'outline' })).project.publishKit.coverArt;
+    expect(runPrompt).not.toHaveBeenCalled();
+    // Only what the controls named changed; the rest of the drafted look stays.
+    expect(art.design).toMatchObject({ layout: 'top-center', typeface: 'serif', scale: 'small', titleColor: '#ff8800', titleStyle: 'outline', tagLayout: 'opposite-corner' });
+    expect(compose).toHaveBeenCalledTimes(1);
+    expect(compose.mock.calls[0][0].design).toMatchObject({ scale: 'small', titleStyle: 'outline' });
+
+    // An uploaded font is accepted by its id while it exists, and falls back to the default typeface once it is gone.
+    const example = { id: 'example-font', family: 'Example Font', ext: 'ttf', width: 0.5 };
+    cover.__setCoverArtDepsForTests({ ...depsFor(), fonts: async () => [example] });
+    expect((await cover.saveCoverDesign(id, { typeface: 'font:example-font' })).project.publishKit.coverArt.design.typeface).toBe('font:example-font');
+    expect(compose.mock.calls.at(-1)[0].fonts).toEqual([example]);
+    cover.__setCoverArtDepsForTests({ ...depsFor(), fonts: async () => [] });
+    expect((await cover.saveCoverDesign(id, { scale: 'large' })).project.publishKit.coverArt.design.typeface).toBe('sans');
+  });
+
+  it("starts a song's first design from the artist's saved style, offers uploaded fonts, and leaves an existing design's adjustment alone", async () => {
+    const { id } = await projectWithThumbnail();
+    const style = { key: 'example artist', name: 'Example Artist', design: { layout: 'bottom-center', typeface: 'mono', weight: 'black', titleColor: '#aabbcc' } };
+    const artistStyle = vi.fn(async () => style);
+    cover.__setCoverArtDepsForTests({ ...depsFor(), artistStyle, fonts: async () => [{ id: 'example-font', family: 'Example Font', ext: 'ttf', width: 0.5 }] });
+    await cover.designCoverArt(id);
+    expect(artistStyle).toHaveBeenCalledWith('Example Artist');
+    const first = runPrompt.mock.calls.at(-1)[0].prompt;
+    expect(first).toContain("The artist's saved style");
+    expect(first).toContain('"titleColor":"#aabbcc"');
+    expect(first).toContain('"font:example-font"');
+
+    artistStyle.mockClear();
+    await cover.designCoverArt(id, { direction: 'warmer' });
+    expect(artistStyle).not.toHaveBeenCalled();
+    expect(runPrompt.mock.calls.at(-1)[0].prompt).not.toContain("The artist's saved style");
   });
 
   it("queues on the install's own default image generator, never a fixed one", async () => {

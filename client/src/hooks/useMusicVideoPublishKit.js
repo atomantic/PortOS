@@ -12,6 +12,7 @@ import {
   composeMusicVideoCoverArt,
   generateMusicVideoCoverArt,
   designMusicVideoCoverArt,
+  saveMusicVideoCoverDesign,
 } from '../services/apiMusicVideo.js';
 import useSseJobSlot from './useSseJobSlot.js';
 
@@ -30,6 +31,7 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
   const [saving, setSaving] = useState(false);
   const [composing, setComposing] = useState(false);
   const [designing, setDesigning] = useState(false);
+  const [savingLettering, setSavingLettering] = useState(false);
   const [requestingImage, setRequestingImage] = useState(false);
 
   const reload = (id) => {
@@ -108,6 +110,14 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
       .catch(() => null)
       .finally(() => setDesigning(false));
   };
+  // The Lettering controls: the song's design set directly (no AI call), the cover re-set in it.
+  const saveCoverDesign = (design) => {
+    setSavingLettering(true);
+    return saveMusicVideoCoverDesign(projectId, design)
+      .then(apply)
+      .catch(() => null)
+      .finally(() => setSavingLettering(false));
+  };
   // In flight from the click until the request is queued (a song with no design
   // drafts one first); after that the record's `pending` reports progress.
   const generateCover = (body) => {
@@ -132,6 +142,8 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
     composeCover,
     designing,
     designCover,
+    savingLettering,
+    saveCoverDesign,
     requestingImage,
     generateCover,
   };

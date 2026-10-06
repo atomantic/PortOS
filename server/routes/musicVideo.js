@@ -48,6 +48,9 @@ import {
   musicVideoPublishThumbnailSchema,
   musicVideoCoverArtComposeSchema,
   musicVideoCoverArtGenerateSchema,
+  musicVideoCoverDesignSaveSchema,
+  musicVideoArtistStyleSaveSchema,
+  musicVideoArtistStyleDeleteSchema,
   musicVideoCoverArtDesignSchema,
   musicVideoPublishTargetSchema,
   musicVideoPublishPrepareSchema,
@@ -129,6 +132,8 @@ import { suggestSocialCuts } from '../services/musicVideo/socialCuts.js';
 import { getActivePublishKitBuild, startPublishKitBuild, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, selectPublishKitThumbnail } from '../services/musicVideo/publishKit.js';
 import { preparePublishDraft, discardPublishDraft, listPublishDrafts, recordPublishPost } from '../services/musicVideo/publish/index.js';
 import { getPublishPlatforms, updatePublishPlatforms, publishHistory } from '../services/musicVideo/publish/platforms.js';
+import { listArtistStyles, saveArtistStyle, removeArtistStyle } from '../services/musicVideo/publish/artistStyles.js';
+import { addCoverFont, coverFontPath, listCoverFonts, MAX_COVER_FONT_BYTES, removeCoverFont } from '../services/musicVideo/coverFonts.js';
 import {
   getDependencyImpact,
   startDependencyRepair,
@@ -945,6 +950,14 @@ router.post('/:id/publish-kit/cover-art/design', asyncHandler(async (req, res) =
   res.json({ project });
 }));
 
+// #10345: the Lettering controls set the design directly, with no AI call.
+router.put('/:id/publish-kit/cover-art/design', asyncHandler(async (req, res) => {
+  const { design } = validateRequest(musicVideoCoverDesignSaveSchema, req.body ?? {});
+  const { saveCoverDesign } = await import('../services/musicVideo/coverArt.js');
+  const { project } = await saveCoverDesign(req.params.id, design);
+  res.json({ project });
+}));
+
 router.post('/:id/publish-kit/cover-art/generate', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoCoverArtGenerateSchema, req.body || {});
   const { generateCoverArtSource } = await import('../services/musicVideo/coverArt.js');
@@ -965,6 +978,46 @@ router.get('/publish/platforms', asyncHandler(async (req, res) => {
 router.put('/publish/platforms', asyncHandler(async (req, res) => {
   const patch = validateRequest(musicVideoPublishPlatformsPatchSchema, req.body || {});
   res.json({ platforms: await updatePublishPlatforms(patch) });
+}));
+
+// #10345: one saved cover design per artist, and the typefaces the director uploaded.
+router.get('/publish/artist-styles', asyncHandler(async (req, res) => {
+  res.json({ styles: await listArtistStyles() });
+}));
+
+router.put('/publish/artist-styles', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoArtistStyleSaveSchema, req.body ?? {});
+  res.json({ style: await saveArtistStyle(input) });
+}));
+
+router.delete('/publish/artist-styles', asyncHandler(async (req, res) => {
+  const { name } = validateRequest(musicVideoArtistStyleDeleteSchema, req.query);
+  await removeArtistStyle(name);
+  res.json({ ok: true });
+}));
+
+const COVER_FONT_MIME = { ttf: 'font/ttf', otf: 'font/otf', woff2: 'font/woff2' };
+const coverFontUpload = uploadSingle('font', { limits: { fileSize: MAX_COVER_FONT_BYTES } });
+
+router.get('/publish/cover-fonts', asyncHandler(async (req, res) => {
+  res.json({ fonts: await listCoverFonts() });
+}));
+
+router.post('/publish/cover-fonts', coverFontUpload, asyncHandler(async (req, res) => {
+  if (!req.file) throw new ServerError('No font file uploaded (multipart field "font")', { status: 400, code: 'VALIDATION_ERROR' });
+  const font = await addCoverFont({ tempPath: req.file.path, originalName: req.file.originalname }).finally(() => unlink(req.file.path).catch(() => {}));
+  res.status(201).json({ font, fonts: await listCoverFonts() });
+}));
+
+router.get('/publish/cover-fonts/:fontId/file', asyncHandler(async (req, res) => {
+  const found = await coverFontPath(req.params.fontId);
+  if (!found) throw new ServerError('Font not found', { status: 404, code: 'NOT_FOUND' });
+  res.type(COVER_FONT_MIME[found.font.ext]).sendFile(found.path);
+}));
+
+router.delete('/publish/cover-fonts/:fontId', asyncHandler(async (req, res) => {
+  await removeCoverFont(req.params.fontId);
+  res.json({ fonts: await listCoverFonts() });
 }));
 
 // Record a post made by hand, or rate one: its link, reception and notes.

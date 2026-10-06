@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Download, Image as ImageIcon, Images, Sparkles } from 'lucide-react';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
+import useMusicVideoCoverLettering from '../../hooks/useMusicVideoCoverLettering.js';
+import CoverLetteringPanel from './CoverLetteringPanel.jsx';
 
 const MAX_SOURCES = 24;
 
@@ -33,6 +35,8 @@ export function coverArtSources(project) {
  * Any image the project has, or any in image history (or uploaded), can be
  * the photo; the title and artist are set on it by code, so the lettering
  * stays sharp. A cover finished elsewhere is used bare ("lettering" off).
+ * The Lettering section sets the song's design directly (no AI), with a live
+ * preview, uploaded fonts and a saved style per artist (#10345).
  */
 export default function CoverArtPanel({ project, publishKit }) {
   const art = project?.publishKit?.coverArt || {};
@@ -48,8 +52,12 @@ export default function CoverArtPanel({ project, publishKit }) {
   // Follow the server: a restyle or a new photo turns lettering back on there.
   useEffect(() => { setLettering(art.lettering !== false); }, [art.lettering]);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const busy = publishKit.composing || publishKit.designing || publishKit.requestingImage;
+  // The Lettering section's open state lives here, not in the panel, which remounts whenever the saved design changes.
+  const [lettersOpen, setLettersOpen] = useState(Boolean(art.source));
+  const letterAssets = useMusicVideoCoverLettering({ enabled: lettering && lettersOpen });
+  const busy = publishKit.composing || publishKit.designing || publishKit.requestingImage || publishKit.savingLettering;
   const chosen = art.source ? `${art.source.kind}:${art.source.filename}` : null;
+  const chosenSource = sources.find((s) => `${s.kind}:${s.filename}` === chosen) || null;
   const look = () => ({ title: title.trim(), ...(tag !== null ? { tag: tag.trim() } : {}), focusX, lettering });
   const needsTitle = lettering && !title.trim();
   const compose = (source) => publishKit.composeCover({ ...(source ? { source: { kind: source.kind, filename: source.filename } } : {}), ...look() });
@@ -131,6 +139,12 @@ export default function CoverArtPanel({ project, publishKit }) {
       </div>
       <GalleryImagePicker open={pickerOpen} onClose={() => setPickerOpen(false)} allowUpload
         onSelect={(item) => item?.filename && compose({ kind: 'image', filename: item.filename })} />
+
+      {lettering && (
+        <CoverLetteringPanel key={JSON.stringify(art.design ?? null)} project={project} art={art} source={chosenSource}
+          title={title} tag={tag ?? art.tag ?? ''} focusX={focusX} publishKit={publishKit} lettering={letterAssets} busy={busy}
+          open={lettersOpen} onToggle={setLettersOpen} />
+      )}
 
       <div className="space-y-1 rounded border border-port-border p-2">
         {art.rationale && <p className="text-port-text-muted">This song's look: {art.rationale}</p>}

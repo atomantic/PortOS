@@ -28,6 +28,7 @@ import { safeUnder } from '../../lib/ffmpeg.js';
 import { resolveGalleryImage } from '../../lib/pathSafety.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { composeCoverArt, normalizeCoverDesign } from './coverArtCompose.js';
+import { listCoverFonts, registerCoverFonts } from './coverFonts.js';
 import { buildCoverDesignPrompt, parseCoverDesign } from './coverArtDesign.js';
 import { musicVideoEvents } from './events.js';
 import { getProject, mutateProjectRecord } from './projects.js';
@@ -50,6 +51,9 @@ const defaults = {
   withStyle: async (...args) => (await import('./styleReferences.js')).withMusicVideoStyle(...args),
   jobStatus: async (jobId) => (await import('../mediaJobQueue/index.js')).getJob(jobId)?.status || null,
   runner: async () => import('../promptRunner.js'),
+  fonts: listCoverFonts,
+  registerFonts: registerCoverFonts,
+  artistStyle: async (name) => (await import('./publish/artistStyles.js')).artistStyleFor(name),
 };
 let deps = { ...defaults };
 export function __setCoverArtDepsForTests(overrides) { deps = { ...defaults, ...overrides }; }
@@ -131,8 +135,10 @@ export async function composeProjectCoverArt(projectId, { source = null, title, 
   };
   if (next.lettering && !next.title) throw coverError(422, 'VALIDATION_ERROR', 'Give the cover a title');
   await ensureDir(PATHS.videoThumbnails);
+  const fonts = await deps.fonts();
+  await deps.registerFonts(fonts);
   const filename = `cover-${String(projectId).slice(3, 11)}-${randomUUID().slice(0, 8)}.jpg`;
-  await deps.compose({ ...next, design: art.design || null, source: path, out: safeUnder(PATHS.videoThumbnails, filename) });
+  await deps.compose({ ...next, design: art.design || null, fonts, source: path, out: safeUnder(PATHS.videoThumbnails, filename) });
   // The JPEG is written in place; the row that first names it commits under a backup lease (#9982).
   const out = await withBackupAssetPublication(() => writeCoverArt(projectId, () => ({
     ...next, filename, composedAt: new Date().toISOString(), lastError: null,
@@ -156,9 +162,12 @@ export async function designCoverArt(projectId, { direction = '', providerId = n
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   if (!provider) throw coverError(503, 'NO_PROVIDER', 'No AI provider is available to design the cover');
   const previous = art.design ? { design: art.design, imagePrompt: art.imagePrompt || '' } : null;
-  const prompt = buildCoverDesignPrompt(project, { direction: trimTo(direction, 1500), previous });
+  const fonts = await deps.fonts();
+  // A fresh design starts from the artist's saved style, when they have one.
+  const artistStyle = previous ? null : await deps.artistStyle(art.tag ?? await defaultTag()).catch(() => null);
+  const prompt = buildCoverDesignPrompt(project, { direction: trimTo(direction, 1500), previous, artistStyle: artistStyle?.design || null, fonts });
   const { text } = await runPromptThroughProvider({ provider, model: selectedModel, prompt, source: 'music-video-cover-design' });
-  const drafted = parseCoverDesign(text);
+  const drafted = parseCoverDesign(text, { fonts });
   if (!drafted) throw coverError(502, 'COVER_DESIGN_UNPARSEABLE', 'The cover design came back without a usable design. Try again or another model');
   const out = await writeCoverArt(projectId, () => ({
     design: drafted.design,
@@ -170,6 +179,25 @@ export async function designCoverArt(projectId, { direction = '', providerId = n
   }));
   console.log(`🖼️ Music Video cover art ${String(projectId).slice(3, 11)}: design ${previous ? 'adjusted' : 'drafted'} (${drafted.design.layout}, ${drafted.design.typeface})`);
   // Restyling the lettering puts it back on a cover that was used bare.
+  if (art.source) return composeProjectCoverArt(projectId, { lettering: true });
+  publish(projectId, out.project);
+  return { project: out.project };
+}
+
+/**
+ * Set the song's lettering from the Lettering controls (or an artist style):
+ * `patch` is any subset of the design, merged over the current one, with no AI
+ * call. A song with a cover is recomposed at once, so the saved JPEG matches
+ * what the preview showed.
+ */
+export async function saveCoverDesign(projectId, patch = {}) {
+  const project = await requireProject(projectId);
+  const art = projectCoverArt(project);
+  const fonts = await deps.fonts();
+  const design = normalizeCoverDesign({ ...normalizeCoverDesign(art.design, { fonts }), ...patch }, { fonts });
+  const out = await writeCoverArt(projectId, () => ({ design, lastError: null }));
+  console.log(`🖼️ Music Video cover art ${String(projectId).slice(3, 11)}: lettering set (${design.layout}, ${design.typeface}, ${design.titleStyle})`);
+  // Like a restyle, setting the lettering puts it back on a cover that was used bare.
   if (art.source) return composeProjectCoverArt(projectId, { lettering: true });
   publish(projectId, out.project);
   return { project: out.project };

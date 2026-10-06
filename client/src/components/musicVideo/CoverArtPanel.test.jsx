@@ -6,6 +6,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import CoverArtPanel, { coverArtSources } from './CoverArtPanel.jsx';
 
+// Lettering data (fonts, artist styles) loads from the server; this suite is about the cover's source and lettering switch.
+vi.mock('../../hooks/useMusicVideoCoverLettering.js', () => ({ default: () => ({ fonts: [], styles: [], uploading: false }) }));
 vi.mock('../imageGen/GalleryImagePicker', () => ({
   default: ({ open, onSelect, allowUpload }) => (open ? (
     <button type="button" data-upload={String(allowUpload)} onClick={() => onSelect({ filename: 'history-example.png' })}>Pick history-example</button>

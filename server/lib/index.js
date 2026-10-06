@@ -199,6 +199,8 @@ export * from './grok.js';
 export * from './falVideoModels.js';
 export * from './filmStyleGrammars.js';
 export * from './grokVideoClip.js';
+export * from './fontMetadata.js';
+export * from './musicVideoCoverOverlay.js';
 export * from './musicVideoShotTiming.js';
 export * from './reactorStartingFrame.js';
 export * from './reactorVideoClip.js';

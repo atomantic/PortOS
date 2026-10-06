@@ -102,6 +102,9 @@ export const PATHS = {
   voiceProfiles: join(INSTALL_ROOT, 'data/voice-profiles'),
   videos: join(INSTALL_ROOT, 'data/videos'),
   videoThumbnails: join(INSTALL_ROOT, 'data/video-thumbnails'),
+  // Music Video cover lettering (#10345): typefaces the director uploaded (.ttf/.otf/.woff2)
+  // plus their index. Machine-local; included in normal data backups.
+  coverFonts: join(INSTALL_ROOT, 'data/cover-fonts'),
   imageThumbnails: join(INSTALL_ROOT, 'data/image-thumbnails'),
   // Sprite Manager (issue #2895): per-record asset trees
   // (sprites/<id>/{reference,walk,runs,runtime,atlas}/...). Records live in
