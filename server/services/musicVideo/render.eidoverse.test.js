@@ -1,6 +1,7 @@
 import { expect, it, vi, afterAll } from 'vitest';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { once } from 'node:events';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 vi.mock('../../lib/paths.js', async load => makePathsProxy(await load(), { dataRoot: () => lazyTempDataRoot('portos-mv-eidoverse-plan-') }));
 vi.mock('./productionReview.js', async load => ({ ...await load(), assertProductionApproval: vi.fn() }));
@@ -22,6 +23,7 @@ const { renderMusicVideo } = await import('./render.js');
 const { startExcerptRender } = await import('./excerptRender.js');
 const { encodeEidoverseComposition } = await import('./eidoverseRender.js');
 const { mutateVideoHistory } = await import('../videoGen/local.js');
+const { musicVideoEvents } = await import('./events.js');
 afterAll(cleanupTempDataRoots);
 async function create(scene = { inlineScript: 'example source' }) {
   await mkdir(PATHS.music, { recursive: true });
@@ -32,12 +34,16 @@ async function create(scene = { inlineScript: 'example source' }) {
 }
 it('routes both the final film and song-window proof through Eidoverse without requiring generated scene clips', async () => {
   const id = await create();
+  const rendered = once(musicVideoEvents, 'render');
   const { jobId } = await renderMusicVideo(id);
-  await vi.waitFor(async () => expect((await projects.getProject(id)).renderHistoryId).toBe(jobId));
+  expect((await rendered)[0]).toMatchObject({ projectId: id, jobId, status: 'completed' });
+  expect((await projects.getProject(id)).renderHistoryId).toBe(jobId);
   expect(mutateVideoHistory).toHaveBeenCalled();
   expect(encodeEidoverseComposition.mock.calls.at(-1)[0]).toMatchObject({ audioPath: join(PATHS.music, 'song.wav'), project: { composition: { mode: 'eidoverse' } } });
+  const excerptRendered = once(musicVideoEvents, 'excerpt-render');
   const { excerptId } = await startExcerptRender(id, { startSec: 2, endSec: 5 });
-  await vi.waitFor(async () => expect((await projects.getProject(id)).excerpts.find(e => e.id === excerptId).status).toBe('complete'));
+  expect((await excerptRendered)[0]).toMatchObject({ projectId: id, excerptId, status: 'complete' });
+  expect((await projects.getProject(id)).excerpts.find(e => e.id === excerptId).status).toBe('complete');
   expect(encodeEidoverseComposition.mock.calls.at(-1)[0]).toMatchObject({ windowStart: 2, windowEnd: 5, audioPath: join(PATHS.music, 'song.wav') });
 });
 it('refuses a missing scene for both render paths and releases their reservations for retry', async () => {

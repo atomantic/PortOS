@@ -10,6 +10,7 @@
  * (#3450) — callers import from here directly.
  */
 
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { readFile, writeFile, rename, readdir, rm, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -32,6 +33,13 @@ let agentIndexPromise = null;
 
 // Load agent index from disk (lazy init, singleton promise prevents concurrent migrations)
 export async function loadAgentIndex() {
+  if (agentIndex) return agentIndex;
+  // Acquire before sharing the lazy-init promise. Otherwise an already-admitted
+  // publisher could await a cold reader queued behind the cut it must drain.
+  return withBackupAssetPublication(loadAgentIndexLeased);
+}
+
+async function loadAgentIndexLeased() {
   if (agentIndex) return agentIndex;
   if (agentIndexPromise) return agentIndexPromise;
 
@@ -59,6 +67,30 @@ export async function loadAgentIndex() {
   return agentIndexPromise;
 }
 
+/**
+ * Refresh the primary lookup after a live file restore. The caller holds the
+ * snapshot cut, which has drained lazy migrations and archive publishers, and
+ * the CoS restore queues. Never call loadAgentIndex here: missing-index
+ * migration would wait for admission behind the cut this restore owns.
+ * Clear both singleton slots before reading so a failed reload cannot retain
+ * a mapping to files the transfer has already replaced.
+ */
+export async function reloadAgentIndexAfterRestore() {
+  agentIndex = null;
+  agentIndexPromise = null;
+  const content = await readFile(INDEX_FILE, 'utf8').catch(error => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  // Defer absent-index migration until the first reader after cut release.
+  if (content === null) return;
+  const parsed = JSON.parse(content);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Restored CoS agent index must be an object');
+  }
+  agentIndex = new Map(Object.entries(parsed));
+}
+
 // Persist agent index to disk via the shared atomicWrite helper (temp file + rename,
 // with Windows backup-swap fallback). Without atomic semantics a mid-write crash
 // truncates index.json and on next boot the date-bucket migration would silently
@@ -68,6 +100,7 @@ export async function saveAgentIndex() {
   const obj = Object.fromEntries(agentIndex);
   await atomicWrite(INDEX_FILE, obj).catch(err => {
     console.error(`❌ Failed to save agent index: ${err.message}`);
+    throw err;
   });
   // The completion-order projection is a subset of this keyspace, so every
   // delete / retention prune / clear-completed sweep drops its rows here rather
@@ -108,16 +141,20 @@ export async function addAgentArchivesToIndex(pairs) {
   if (!Array.isArray(pairs) || pairs.length === 0) return 0;
   const idx = await loadAgentIndex();
   let added = 0;
+  let valid = false;
   for (const pair of pairs) {
     const agentId = pair?.agentId;
     const date = pair?.date;
     if (typeof agentId !== 'string' || !agentId) continue;
     if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    valid = true;
     if (idx.has(agentId)) continue; // already owned — never overwrite (id is authoritative)
     idx.set(agentId, date);
     added += 1;
   }
-  if (added > 0) await saveAgentIndex();
+  // A failed prior save can leave a valid pair in memory only. Persist again
+  // before the peer receiver may mark that manifest reconciled.
+  if (valid) await saveAgentIndex();
   return added;
 }
 
@@ -134,6 +171,10 @@ export function getAgentDir(agentId, dateString) {
 // Migrate flat agent-* directories into YYYY-MM-DD date buckets
 // Runs once when index.json doesn't exist. Idempotent — no-op if already migrated.
 async function migrateAgentsToDateBuckets() {
+  return withBackupAssetPublication(migrateAgentsToDateBucketsLeased);
+}
+
+async function migrateAgentsToDateBucketsLeased() {
   const index = new Map();
 
   if (!existsSync(AGENTS_DIR)) {

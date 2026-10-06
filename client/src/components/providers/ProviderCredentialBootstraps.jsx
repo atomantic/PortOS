@@ -149,7 +149,9 @@ export default function ProviderCredentialBootstraps({ harnesses = [], presets =
         if (!active) return;
         const table = data?.bootstraps && typeof data.bootstraps === 'object' ? data.bootstraps : {};
         setApps(table);
-        setOpen(Object.keys(table).length > 0);
+        // Only ever opens: an empty table landing after the user already expanded the
+        // section must not slam it shut under them.
+        if (Object.keys(table).length > 0) setOpen(true);
       })
       .catch(() => { if (active) setApps(null); });
     return () => { active = false; };

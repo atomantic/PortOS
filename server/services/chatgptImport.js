@@ -22,6 +22,7 @@
 import { join } from 'path';
 import { stripChatgptCitations } from '../lib/chatgptText.js';
 import { unlink } from 'fs/promises';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { atomicWrite, ensureDir, PATHS, tryReadFile, safeJSONParse, safeDate } from '../lib/fileUtils.js';
 import { createMemoryEntry, updateMemoryEntry, query as queryBrain } from './brainStorage.js';
 
@@ -534,7 +535,6 @@ export async function importConversations(parsed, options = {}) {
       continue;
     }
 
-    await archiveConversation(summary, archiveName);
     archived += 1;
 
     const tags = [
@@ -555,8 +555,15 @@ export async function importConversations(parsed, options = {}) {
       sourceUpdatedAt: summary.updateTime || null
     };
 
+    // The archived transcript and the memory row that names it are one backup
+    // workflow; the assets were extracted earlier and are named only by this row.
+    const commit = (write) => withBackupAssetPublication(async () => {
+      await archiveConversation(summary, archiveName);
+      return write();
+    });
+
     if (existingMemory) {
-      const entry = await updateMemoryEntry(existingMemory.id, memoryData);
+      const entry = await commit(() => updateMemoryEntry(existingMemory.id, memoryData));
       results.push({
         id: summary.id,
         memoryId: entry.id,
@@ -570,7 +577,7 @@ export async function importConversations(parsed, options = {}) {
       continue;
     }
 
-    const entry = await createMemoryEntry(memoryData);
+    const entry = await commit(() => createMemoryEntry(memoryData));
 
     results.push({
       id: summary.id,

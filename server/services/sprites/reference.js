@@ -31,6 +31,7 @@ import {
 } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import {
   IMAGE_GEN_MODE, resolveQueueImageMode,
@@ -91,7 +92,8 @@ const manifestRelPath = (id) => `reference/${id}-reference-set-v1.json`;
 // manifest and the second save would erase the first's locked state —
 // breaking the immutability contract. Same convention as the completion
 // hook's per-record queue.
-const manifestWriteTail = createKeyCachedQueue();
+const manifestWriteQueue = createKeyCachedQueue();
+const manifestWriteTail = (recordId, fn) => withBackupAssetPublication(() => manifestWriteQueue(recordId, fn));
 
 // Phase-1 imported manifests are copied verbatim from the source pipeline
 // and carry repo-root paths (`art-source/sprites/<id>/reference/...`), while
@@ -850,7 +852,11 @@ export async function forkSprite(sourceId, body) {
  * gallery into the record's reference/candidates/ with a generation sidecar.
  * Returns the candidate rel path (falsy result = hook logs a skip).
  */
-export async function attachReferenceCandidate(ctx) {
+export function attachReferenceCandidate(ctx) {
+  return withBackupAssetPublication(() => attachReferenceCandidateLeased(ctx));
+}
+
+async function attachReferenceCandidateLeased(ctx) {
   const { recordId, anchorId, filename } = ctx;
   const src = join(PATHS.images, filename);
   if (!await pathExists(src)) return null;
@@ -908,9 +914,15 @@ async function loadCandidateSidecar(candAbs) {
  * square and record it in the manifest as immutable evidence. Locking the
  * main also runs the dynamic chroma-key selection (unless the user already
  * pinned one on the record).
+ *
+ * Lock and unlock each pair the manifest with the record row's status and frozen
+ * chroma key, so they hold one backup admission lease from the first byte through
+ * the last write (#9982). A snapshot copies files and then dumps rows; without the
+ * lease the dump could pair an older manifest with a newer row. The lease is taken
+ * before the per-record tail, never inside it.
  */
 export function lockReference(recordId, args) {
-  return manifestWriteTail(recordId, () => lockReferenceImpl(recordId, args));
+  return withBackupAssetPublication(() => manifestWriteTail(recordId, () => lockReferenceImpl(recordId, args)));
 }
 
 /**
@@ -922,7 +934,7 @@ export function lockReference(recordId, args) {
  * South is intentionally excluded because its anchor is the frozen main.
  */
 export function unlockReferenceAnchor(recordId, args) {
-  return manifestWriteTail(recordId, () => unlockReferenceAnchorImpl(recordId, args));
+  return withBackupAssetPublication(() => manifestWriteTail(recordId, () => unlockReferenceAnchorImpl(recordId, args)));
 }
 
 /**
@@ -931,7 +943,7 @@ export function unlockReferenceAnchor(recordId, args) {
  * coordinates invalidating the south animations before this manifest reset.
  */
 export function unlockReferenceMain(recordId) {
-  return manifestWriteTail(recordId, () => unlockReferenceMainImpl(recordId));
+  return withBackupAssetPublication(() => manifestWriteTail(recordId, () => unlockReferenceMainImpl(recordId)));
 }
 
 /**
@@ -944,7 +956,7 @@ export function unlockReferenceMain(recordId) {
  * than overwriting the evidence the user rejected.
  */
 export function unlockReferenceTurnaround(recordId) {
-  return manifestWriteTail(recordId, () => unlockReferenceTurnaroundImpl(recordId));
+  return withBackupAssetPublication(() => manifestWriteTail(recordId, () => unlockReferenceTurnaroundImpl(recordId)));
 }
 
 async function loadUnlockableReferenceAnchor(recordId, direction) {

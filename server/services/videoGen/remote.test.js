@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,7 +9,16 @@ let tempVideoDir;
 const transport = vi.hoisted(() => ({ fetch: vi.fn() }));
 const federation = vi.hoisted(() => ({ resolve: vi.fn(), peers: [] }));
 const ffmpeg = vi.hoisted(() => ({ thumbnail: vi.fn(), faststart: vi.fn() }));
-const historyState = vi.hoisted(() => ({ rows: [] }));
+const historyState = vi.hoisted(() => ({ rows: [], gate: null, fail: false }));
+const publication = vi.hoisted(() => ({ bypass: false, entered: null }));
+vi.mock('../../lib/backupSnapshotBoundary.js', async original => {
+  const actual = await original();
+  return { ...actual, withBackupAssetPublication: work => {
+    publication.entered?.resolve();
+    return publication.bypass ? work() : actual.withBackupAssetPublication(work);
+  } };
+});
+vi.mock('../../lib/databaseMaintenanceJournal.js', async original => ({ ...(await original()), assertDatabaseAdmission: () => {} }));
 
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
@@ -16,7 +26,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
     ...actual,
     PATHS: new Proxy(actual.PATHS, {
       get(target, key) {
-        if (key === 'videos') return tempVideoDir;
+        if (key === 'videos' || key === 'videoThumbnails') return tempVideoDir;
         return target[key];
       },
     }),
@@ -33,7 +43,13 @@ vi.mock('../../lib/ffmpeg.js', () => ({
 }));
 
 vi.mock('./history.js', () => ({
-  mutateVideoHistory: async (mutator) => { historyState.rows = await mutator(historyState.rows); },
+  mutateVideoHistory: async (mutator) => {
+    historyState.gate?.entered.resolve();
+    if (historyState.gate) await historyState.gate.finish.promise;
+    if (historyState.fail) throw new Error('history refused');
+    historyState.rows = await mutator(structuredClone(historyState.rows));
+    await writeFile(join(tempVideoDir, 'history.json'), JSON.stringify(historyState.rows));
+  },
 }));
 
 vi.mock('../federatedMediaConsumer.js', () => ({
@@ -133,6 +149,9 @@ function captureTerminal(jobId) {
 beforeEach(() => {
   tempVideoDir = mkdtempSync(join(tmpdir(), 'remote-video-test-'));
   historyState.rows = [];
+  historyState.gate = null; historyState.fail = false;
+  publication.bypass = false; publication.entered = null;
+  writeFileSync(join(tempVideoDir, 'history.json'), '[]');
   federation.peers = [peer];
   federation.resolve.mockReset().mockResolvedValue({
     peer,
@@ -336,5 +355,124 @@ describe('federated video consumer adapter', () => {
     const outcome = await terminal;
     expect(outcome).toMatchObject({ type: 'failed', event: { remoteInputsDisposable: false } });
     expect(outcome.event).not.toHaveProperty('remoteRecoverySettlement');
+  });
+});
+
+
+describe('federated video replacement backup cut', () => {
+  const bytes = Buffer.from('verified replacement');
+  const video = () => join(tempVideoDir, `${LOCAL_JOB_ID}.mp4`);
+  const poster = () => join(tempVideoDir, `${LOCAL_JOB_ID}.jpg`);
+  async function prepare() {
+    await writeFile(video(), 'original video');
+    await writeFile(poster(), 'original poster');
+    historyState.rows = [{ id: LOCAL_JOB_ID, filename: `${LOCAL_JOB_ID}.mp4`, thumbnail: `${LOCAL_JOB_ID}.jpg`, prompt: 'Original' }];
+    await writeFile(join(tempVideoDir, 'history.json'), JSON.stringify(historyState.rows));
+    ffmpeg.thumbnail.mockImplementation(async () => { await writeFile(poster(), 'replacement poster'); return `${LOCAL_JOB_ID}.jpg`; });
+    transport.fetch.mockImplementation(async (url) => {
+      if (url.endsWith('/result')) return new Response(bytes, { headers: {
+        'Content-Length': String(bytes.length), 'Content-Type': 'video/mp4', 'X-Content-SHA256': sha256(bytes),
+      } });
+      return jsonResponse(providerJob('completed', { result: {
+        available: true, mimeType: 'video/mp4', sizeBytes: bytes.length, sha256: sha256(bytes),
+        downloadUrl: '/unused', engine: 'local', modelId: 'ltx2', durationSec: 1,
+      } }), 202);
+    });
+  }
+  async function copyAssets() {
+    const target = join(tempVideoDir, 'copied');
+    await mkdir(target, { recursive: true });
+    await cp(video(), join(target, 'clip.mp4'));
+    await cp(poster(), join(target, 'poster.jpg'));
+    return target;
+  }
+  async function copyRows(target) {
+    await cp(join(tempVideoDir, 'history.json'), join(target, 'history.json'));
+    return JSON.parse(await readFile(join(target, 'history.json'), 'utf8'));
+  }
+  const turn = () => new Promise(resolve => setImmediate(resolve));
+
+  it('holds same-name replacement outside a cut and proves a mismatched copied pair when bypassed', async () => {
+    const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
+    await prepare();
+    const cut = await acquireBackupSnapshotCut();
+    let run;
+    try {
+      const copied = await copyAssets();
+      publication.entered = Promise.withResolvers();
+      run = generateVideo(params());
+      await publication.entered.promise; await turn();
+      expect(await readFile(video(), 'utf8')).toBe('original video');
+      expect((await copyRows(copied))[0].prompt).toBe('Original');
+    } finally { cut(); await run; }
+    await prepare();
+    const copied = await copyAssets();
+    publication.bypass = true;
+    await generateVideo(params());
+    expect((await copyRows(copied))[0].prompt).not.toBe('Original');
+    expect(await readFile(join(copied, 'clip.mp4'), 'utf8')).toBe('original video');
+  });
+
+  for (const fail of [false, true]) it(`drains replacement ${fail ? 'rollback' : 'commit'} before copying`, async () => {
+    const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
+    await prepare();
+    historyState.fail = fail;
+    const gate = { entered: Promise.withResolvers(), finish: Promise.withResolvers() };
+    historyState.gate = gate;
+    const run = generateVideo(params());
+    await gate.entered.promise;
+    let acquired = false;
+    const cutting = acquireBackupSnapshotCut().then(cut => { acquired = true; return cut; });
+    try {
+      await turn(); expect(acquired).toBe(false);
+      gate.finish.resolve(); await run;
+      const cut = await cutting;
+      try {
+        const copied = await copyAssets();
+        const rows = await copyRows(copied);
+        expect(rows).toHaveLength(1);
+        expect(await readFile(join(copied, 'clip.mp4'), 'utf8')).toBe(fail ? 'original video' : bytes.toString());
+        expect(await readFile(join(copied, 'poster.jpg'), 'utf8')).toBe(fail ? 'original poster' : 'replacement poster');
+        expect(rows[0].prompt === 'Original').toBe(fail);
+      } finally { cut(); }
+    } finally { gate.finish.resolve(); }
+  });
+
+  it('retains originals and a durable blocker when restoring the previous video fails', async () => {
+    const { acquireBackupSnapshotCut, backupPublicationAdmissionStatus } = await import('../../lib/backupSnapshotBoundary.js');
+    await prepare();
+    ffmpeg.faststart.mockImplementationOnce(async () => {
+      // Force a real restore-copy error after replacement installed, while the
+      // poster restore remains possible and must still be attempted.
+      await rm(video());
+      await mkdir(video());
+      throw new Error('finalizer failed');
+    });
+    const terminal = captureTerminal(LOCAL_JOB_ID);
+    let scratch;
+    try {
+      await generateVideo(params());
+      const outcome = await terminal;
+      expect(outcome.type).toBe('failed');
+      scratch = outcome.event.error.split('originals retained at ')[1];
+      expect(scratch).toContain('portos-video-replay-');
+      expect(await readFile(join(scratch, '0'), 'utf8')).toBe('original video');
+      expect(await readFile(poster(), 'utf8')).toBe('original poster');
+      await expect(acquireBackupSnapshotCut({ timeoutMs: 10 })).rejects.toMatchObject({
+        code: 'BACKUP_SNAPSHOT_BUSY', blockers: [expect.objectContaining({ uncertain: true })],
+      });
+    } finally {
+      for (const owner of backupPublicationAdmissionStatus().publications) rmSync(owner.path, { recursive: true });
+      if (scratch) await rm(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it('replays a matching completed result without duplicate history or another transfer', async () => {
+    await prepare();
+    await generateVideo(params());
+    const calls = transport.fetch.mock.calls.filter(([url]) => url.endsWith('/result')).length;
+    await generateVideo(params());
+    expect(historyState.rows).toHaveLength(1);
+    expect(transport.fetch.mock.calls.filter(([url]) => url.endsWith('/result'))).toHaveLength(calls);
   });
 });

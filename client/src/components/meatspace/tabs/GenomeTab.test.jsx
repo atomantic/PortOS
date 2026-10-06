@@ -15,6 +15,7 @@ vi.mock('../../../services/api', () => ({
 vi.mock('../../ui/Toast', () => ({ default: { success: mocks.success } }));
 vi.mock('../EpigeneticTracker', () => ({ default: () => null }));
 import GenomeTab from './GenomeTab';
+import * as api from '../../../services/api';
 
 const emit = (frame) => act(() => { for (const handler of mocks.listeners) handler(frame); });
 const begin = async () => {
@@ -62,5 +63,25 @@ describe('ClinVar progress interaction', () => {
     render(<GenomeTab />);
     await begin();
     await waitFor(() => expect(mocks.listeners.size).toBe(1));
+  });
+});
+
+describe('genome load failure vs empty', () => {
+  it('shows a retry notice and no upload drop zone when the summary read rejects', async () => {
+    api.getGenomeSummary.mockRejectedValueOnce(new Error('boom'));
+    render(<GenomeTab />);
+    expect(await screen.findByText(/Could not load genome data\. Retry before uploading/)).toBeInTheDocument();
+    expect(screen.queryByText(/Upload your 23andMe raw data export/)).not.toBeInTheDocument();
+    expect(api.getGenomeSummary).toHaveBeenLastCalledWith({ silent: true });
+    api.getGenomeSummary.mockResolvedValueOnce({ uploaded: false });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(/Upload your 23andMe raw data export/)).toBeInTheDocument();
+  });
+
+  it('still shows the upload prompt for a successful empty summary', async () => {
+    api.getGenomeSummary.mockResolvedValueOnce({ uploaded: false });
+    render(<GenomeTab />);
+    expect(await screen.findByText(/Upload your 23andMe raw data export/)).toBeInTheDocument();
+    expect(screen.queryByText(/Could not load genome data/)).not.toBeInTheDocument();
   });
 });

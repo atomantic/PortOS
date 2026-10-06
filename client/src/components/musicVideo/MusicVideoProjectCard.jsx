@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Film, Play, Music, Wand2, Sparkles, Copy, Trash2, ArrowUpRight, ChevronLeft, ChevronRight } from 'lucide-react';
 import MediaImage from '../MediaImage.jsx';
 import ScenePreview from '../creative-director/ScenePreview.jsx';
+import VideoArtifactThumbnail from './VideoArtifactThumbnail.jsx';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { formatUsd } from '../../utils/formatters.js';
 import { selectMusicVideoPreview } from '../../lib/musicVideoPreview.js';
@@ -28,6 +29,7 @@ export default function MusicVideoProjectCard({
   project,
   trackLabel,
   onSelect,
+  onReview,
   onClone,
   isConfirmingDelete = false,
   onRequestDelete,
@@ -42,6 +44,9 @@ export default function MusicVideoProjectCard({
   // The index loads bounded summaries (#10169) that carry these derived values; a
   // full record (just created or forked) still derives them from its own fields.
   const preview = project.preview || selectMusicVideoPreview(project);
+  const [draftMedia, setDraftMedia] = useState(null);
+  const importedDraft = preview.source === 'animatic';
+  const draftAvailable = draftMedia?.src === preview.src && draftMedia?.available;
 
   // When preview target changes, stop playing
   useEffect(() => {
@@ -82,11 +87,11 @@ export default function MusicVideoProjectCard({
     >
       {/* Top Header & Identification */}
       <div className="space-y-1.5 min-w-0">
-        <div className="flex items-start justify-between gap-2">
+        <div className="flex flex-wrap items-start justify-between gap-2">
           <button
             type="button"
             onClick={onSelect}
-            className="text-left font-semibold text-base text-port-text hover:text-port-accent transition-colors truncate max-w-full flex-1"
+            className="text-left font-semibold text-base text-port-text hover:text-port-accent transition-colors break-words max-w-full flex-1 basis-full sm:basis-auto"
             title={project.name}
           >
             {project.name}
@@ -121,35 +126,15 @@ export default function MusicVideoProjectCard({
               </span>
             )}
             <span className={`text-[10px] font-medium px-2 py-0.5 rounded ${STATUS_COLORS[project.status] || 'bg-port-border'}`}>
-              {project.status}
+              {preview.stale ? 'Final out of date' : importedDraft ? (draftMedia?.src === preview.src && draftMedia?.available === false ? 'Draft unavailable' : draftAvailable ? preview.reviewStatus === 'pending' ? 'Ready to review' : preview.reviewStatus === 'approved' ? 'Draft reviewed' : 'Changes requested' : 'Imported draft') : project.status}
             </span>
           </div>
         </div>
 
-        {/* Mode & Stage indicators */}
-        <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
-          {project.mode === 'autonomous' ? (
-            <span className="px-1.5 py-0.5 rounded bg-port-accent/20 text-port-accent border border-port-accent/30 flex items-center gap-1">
-              <Wand2 size={10} aria-hidden="true" /> Autopilot
-            </span>
-          ) : (
-            <span className="px-1.5 py-0.5 rounded bg-port-border/60 text-port-text-muted flex items-center gap-1">
-              <Film size={10} aria-hidden="true" /> Director
-            </span>
-          )}
-          <span className="px-1.5 py-0.5 rounded bg-port-bg border border-port-border text-port-text-muted">
-            Stage: <strong className="text-port-text font-medium">{stageLabel}</strong>
-          </span>
-          {project.concept?.universeId && (
-            <span className="px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/30 flex items-center gap-1">
-              <Sparkles size={10} aria-hidden="true" /> {project.concept.universeId}
-            </span>
-          )}
-        </div>
       </div>
 
       {/* Media Preview Box */}
-      <div className="relative aspect-video rounded bg-black/50 border border-port-border overflow-hidden group shrink-0">
+      <div className={`relative ${preview.kind === 'none' ? 'min-h-[4rem]' : 'aspect-video'} rounded bg-port-bg border border-port-border overflow-hidden group shrink-0`}>
         {preview.kind === 'video' && playing ? (
           resolving ? (
             <div className="w-full h-full flex items-center justify-center text-xs text-port-text-muted">
@@ -173,23 +158,26 @@ export default function MusicVideoProjectCard({
               className="block w-full h-full text-left"
               aria-label={`Open project ${project.name}`}
             >
-              <MediaImage
+              {importedDraft ? <VideoArtifactThumbnail src={preview.src}
+                className="w-full h-full object-cover"
+                onLoadedData={() => setDraftMedia({ src: preview.src, available: true })}
+                onError={() => setDraftMedia({ src: preview.src, available: false })} /> : <MediaImage
                 src={preview.poster}
                 alt={`${project.name} preview`}
                 loading="lazy"
                 className="w-full h-full object-cover"
-              />
+              />}
             </button>
             <button
               type="button"
               onClick={() => setPlaying(true)}
               aria-label={`Play ${preview.label}`}
               title={`Play ${preview.label}`}
-              className="always-dark absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80 hover:scale-105 transition-all shadow-lg focus:outline-none focus:ring-2 focus:ring-port-accent"
+              className="port-media-overlay-strong absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-11 h-11 flex items-center justify-center rounded-full hover:scale-105 transition-all shadow-lg focus:outline-none focus:ring-2 focus:ring-port-accent"
             >
               <Play size={16} className="ml-0.5" aria-hidden="true" />
             </button>
-            <span className="always-dark absolute bottom-1.5 left-1.5 px-1.5 py-0.5 rounded bg-black/70 text-white text-[10px] font-medium pointer-events-none flex items-center gap-1">
+            <span className="port-media-overlay-strong absolute bottom-1.5 left-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium pointer-events-none flex items-center gap-1">
               <Film size={10} aria-hidden="true" /> {preview.label}
             </span>
           </>
@@ -209,7 +197,7 @@ export default function MusicVideoProjectCard({
                 className="w-full h-full object-cover"
               />
             </button>
-            <span className="always-dark absolute bottom-1.5 left-1.5 px-1.5 py-0.5 rounded bg-black/70 text-white text-[10px] font-medium pointer-events-none">
+            <span className="port-media-overlay-strong absolute bottom-1.5 left-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium pointer-events-none">
               {preview.label}
             </span>
           </>
@@ -227,7 +215,30 @@ export default function MusicVideoProjectCard({
       </div>
 
       {/* Rich Configuration Options & Audio Info */}
+      <details className="text-xs">
+      <summary className="min-h-[44px] cursor-pointer flex items-center text-port-text-muted">Production details · {stageLabel}</summary>
       <div className="space-y-2 text-xs">
+        {/* Mode & Stage indicators */}
+        <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+          {project.mode === 'autonomous' ? (
+            <span className="px-1.5 py-0.5 rounded bg-port-accent/20 text-port-accent border border-port-accent/30 flex items-center gap-1">
+              <Wand2 size={10} aria-hidden="true" /> Autopilot
+            </span>
+          ) : (
+            <span className="px-1.5 py-0.5 rounded bg-port-border/60 text-port-text-muted flex items-center gap-1">
+              <Film size={10} aria-hidden="true" /> Director
+            </span>
+          )}
+          <span className="px-1.5 py-0.5 rounded bg-port-bg border border-port-border text-port-text-muted">
+            Stage: <strong className="text-port-text font-medium">{stageLabel}</strong>
+          </span>
+          {project.concept?.universeId && (
+            <span className="px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/30 flex items-center gap-1">
+              <Sparkles size={10} aria-hidden="true" /> {project.concept.universeId}
+            </span>
+          )}
+        </div>
+
         {/* Audio row */}
         <div className="flex items-center justify-between gap-2 text-port-text-muted">
           <span className="flex items-center gap-1.5 truncate font-medium text-port-text" title={audioTitle || 'No audio track'}>
@@ -321,22 +332,23 @@ export default function MusicVideoProjectCard({
         </div>
       </div>
 
+      </details>
       {/* Footer Actions */}
       <div className="flex items-center justify-between gap-2 pt-2 border-t border-port-border mt-auto shrink-0">
         <div className="flex items-center gap-1.5">
           <button
             type="button"
-            onClick={onSelect}
-            className="bg-port-accent hover:bg-port-accent/80 text-white rounded px-2.5 py-1 text-xs font-medium flex items-center gap-1 min-h-[32px] transition-colors"
+            onClick={onReview || onSelect}
+            className="bg-port-accent hover:bg-port-accent/80 text-white rounded px-2.5 py-1 text-xs font-medium flex items-center gap-1 min-h-[44px] transition-colors"
           >
-            Open <ArrowUpRight size={13} aria-hidden="true" />
+            {importedDraft ? 'Review draft' : preview.source === 'final' ? 'Review video' : 'Open'} <ArrowUpRight size={13} aria-hidden="true" />
           </button>
           <button
             type="button"
             onClick={() => onClone?.()}
             disabled={cloning}
             title="Fork this project version"
-            className="bg-port-bg border border-port-border hover:bg-port-border/40 text-port-text rounded px-2 py-1 text-xs flex items-center gap-1 min-h-[32px] disabled:opacity-50 transition-colors"
+            className="bg-port-bg border border-port-border hover:bg-port-border/40 text-port-text rounded px-2 py-1 text-xs flex items-center gap-1 min-h-[44px] disabled:opacity-50 transition-colors"
           >
             <Copy size={13} aria-hidden="true" /> {cloning ? 'Forking…' : 'Fork'}
           </button>
@@ -357,7 +369,7 @@ export default function MusicVideoProjectCard({
             onClick={onRequestDelete}
             title={`Delete project ${project.name}`}
             aria-label={`Delete project ${project.name}`}
-            className="flex min-h-[32px] min-w-[32px] items-center justify-center rounded border border-port-border px-2 py-1 text-xs text-port-error hover:bg-port-error/10 transition-colors"
+            className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded border border-port-border px-2 py-1 text-xs text-port-error hover:bg-port-error/10 transition-colors"
           >
             <Trash2 size={13} aria-hidden="true" />
           </button>

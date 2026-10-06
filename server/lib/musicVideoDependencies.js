@@ -42,7 +42,7 @@ export function captureMusicVideoEvidence(project, { sceneIds = null, startSec =
   for (const scene of project.scenes || []) {
     if (sceneIds ? !sceneIds.includes(scene.sceneId) : !intersects(scene, startSec, endSec)) continue;
     references.push(layerRef(scene));
-    const role = scene.visualLayer === 'still' ? 'plate' : scene.visualLayer === 'card' ? null : 'clip';
+    const role = scene.visualLayer === 'still' ? 'plate' : ['card', 'code'].includes(scene.visualLayer) ? null : 'clip';
     if (!role) continue;
     references.push(assetRef(scene, role));
     const take = selectedTake(scene, role);

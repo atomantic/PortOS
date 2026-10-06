@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const fixture = vi.hoisted(() => ({ dataRoot: null, releaseFault: null }));
+const fixture = vi.hoisted(() => ({ dataRoot: null, releaseFault: null, executionFault: false }));
 vi.mock('node:fs', async (importOriginal) => {
   const fs = await importOriginal();
   return {
@@ -37,6 +37,17 @@ vi.mock('../scripts/run-db-migrations.js', () => ({
 vi.mock('../services/syncOrchestrator.js', () => ({
   rewindPostgresSyncCursors: vi.fn(async () => 2),
 }));
+// This suite isolates generic DB admission/release with a statement-free pg
+// pool. Real execution-ledger SQL/capture/retry lives in the two DB fixtures.
+vi.mock('../services/mediaAssetIndex/db.js', () => ({ reconcileMediaAssets: vi.fn(async () => ({ ok: true })) }));
+vi.mock('../services/peerExecutionRestore.js', () => ({
+  finishPeerExecutionRestore: vi.fn(async () => {
+    if (fixture.executionFault) throw Object.assign(new Error('synthetic execution reconciliation failure'), {
+      code: 'PEER_EXECUTION_AUTHORITY_UNAVAILABLE', status: 503,
+    });
+    return { phase: 'ready' };
+  }),
+}));
 vi.mock('./paths.js', async (importOriginal) => {
   const actual = await importOriginal();
   const { mkdtempSync: mkdtemp } = await import('node:fs');
@@ -60,6 +71,8 @@ vi.mock('pg', async (importOriginal) => ({
 }));
 
 const { query, withTransaction, withDatabaseMaintenance, databaseRestoreRecovery } = await import('./db.js');
+const { acquireBackupSnapshotCut, withBackupAssetPublication } = await import('./backupSnapshotBoundary.js');
+const { reconcileMediaAssets } = await import('../services/mediaAssetIndex/db.js');
 
 const { resumeDatabaseRestore, getDatabaseRestoreRecoveryStatus } = await import('../services/backupRestoreRecovery.js');
 
@@ -71,11 +84,86 @@ const FENCED = { status: 503, code: 'DATABASE_RESTORE_RECOVERY' };
 
 beforeEach(() => {
   rmSync(databaseRestoreRecovery.path, { force: true });
+  fixture.executionFault = false;
   vi.clearAllMocks();
 });
 afterAll(() => rmSync(fixture.dataRoot, { recursive: true, force: true }));
 
 describe('restore recovery admission', () => {
+  it('drains file publication before same-ID recovery and blocks later publication through media repair', async () => {
+    const record = databaseRestoreRecovery.markCommitted(begin().id);
+    const published = join(fixture.dataRoot, 'synthetic-history.json');
+    writeFileSync(published, 'before');
+    const firstReady = Promise.withResolvers();
+    const finishFirst = Promise.withResolvers();
+    const mediaReady = Promise.withResolvers();
+    const finishMedia = Promise.withResolvers();
+    const first = withBackupAssetPublication(async () => {
+      firstReady.resolve();
+      await finishFirst.promise;
+      writeFileSync(published, 'settled');
+    });
+    await firstReady.promise;
+    reconcileMediaAssets.mockImplementationOnce(async () => {
+      expect(readFileSync(published, 'utf8')).toBe('settled');
+      mediaReady.resolve();
+      await finishMedia.promise;
+      expect(readFileSync(published, 'utf8')).toBe('settled');
+      return { ok: true };
+    });
+    const recovery = resumeDatabaseRestore(record.id);
+    let laterPublished = false;
+    const later = withBackupAssetPublication(() => {
+      laterPublished = true;
+      writeFileSync(published, 'later');
+    });
+    try {
+      await new Promise(resolve => setImmediate(resolve));
+      expect(reconcileMediaAssets).not.toHaveBeenCalled();
+      expect(laterPublished).toBe(false);
+      expect(databaseRestoreRecovery.read()).toEqual(record);
+      finishFirst.resolve();
+      await mediaReady.promise;
+      expect(laterPublished).toBe(false);
+      await expect(query('SELECT ordinary')).rejects.toMatchObject({ code: 'DATABASE_MAINTENANCE' });
+      finishMedia.resolve();
+      expect(await recovery).toMatchObject({ status: 'ok', outcome: 'repaired' });
+      await later;
+      expect(readFileSync(published, 'utf8')).toBe('later');
+      expect(getDatabaseRestoreRecoveryStatus()).toEqual({ pending: false });
+    } finally {
+      finishFirst.resolve(); finishMedia.resolve();
+      await Promise.allSettled([first, recovery, later]);
+    }
+  });
+
+  it('does not release a competing snapshot cut or change the pending operation', async () => {
+    const record = databaseRestoreRecovery.markCommitted(begin().id);
+    const release = await acquireBackupSnapshotCut();
+    let published = false;
+    const waiting = withBackupAssetPublication(() => { published = true; });
+    try {
+      await expect(resumeDatabaseRestore(record.id)).rejects.toMatchObject({ code: 'BACKUP_SNAPSHOT_BUSY' });
+      expect(databaseRestoreRecovery.read()).toEqual(record);
+      expect(reconcileMediaAssets).not.toHaveBeenCalled();
+      expect(published).toBe(false);
+    } finally { release(); await waiting; }
+    expect(await resumeDatabaseRestore(record.id)).toMatchObject({ status: 'ok', outcome: 'repaired' });
+  });
+
+  it('retains generic admission when execution reconciliation fails and releases only after same-ID retry succeeds', async () => {
+    const record = databaseRestoreRecovery.markCommitted(begin().id);
+    fixture.executionFault = true;
+    expect(await resumeDatabaseRestore(record.id)).toMatchObject({ status: 'failed', reason: 'restore_execution_reconciliation', recovery: { id: record.id } });
+    expect(databaseRestoreRecovery.read()).toEqual(record);
+    await expect(query('SELECT ordinary')).rejects.toMatchObject(FENCED);
+    const { rewindPostgresSyncCursors } = await import('../services/syncOrchestrator.js');
+    expect(rewindPostgresSyncCursors).not.toHaveBeenCalled();
+    fixture.executionFault = false;
+    expect(await resumeDatabaseRestore(record.id)).toMatchObject({ status: 'ok', outcome: 'repaired' });
+    expect(getDatabaseRestoreRecoveryStatus()).toEqual({ pending: false });
+    await expect(query('SELECT ordinary')).resolves.toEqual({ rows: [] });
+  });
   it('keeps ordinary work fenced after the restore that adopted the operation returns', async () => {
     let id;
     await withDatabaseMaintenance(async ({ adoptRestoreRecovery }) => {

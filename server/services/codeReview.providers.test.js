@@ -140,6 +140,16 @@ describe('configured provider reviewers', () => {
     expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: false });
   });
 
+  it('reports an oversized-input spawn failure as a specific non-verdict, not a credential fault (#10273)', async () => {
+    getProviderById.mockResolvedValue({ ...provider, type: 'tui', command: 'claude' });
+    runCliProviderPrompt.mockResolvedValue({ error: "Prompt is too large for agy's command-line transport (E2BIG); the run was not started. Reduce the input size.", code: 'E2BIG' });
+    const result = await runLocalCodeReview({ backend, diff: 'example diff' });
+    expect(result).toMatchObject({ ok: false, code: 'E2BIG' });
+    expect(result.error).toMatch(/too large/);
+    expect(result.error).not.toMatch(/credential/i);
+    expect(result).not.toHaveProperty('findings');
+  });
+
   // #7720: a bootstrap-credentialed harness has a maintained no-tool recipe and
   // must be usable as a reviewer, not refused at selection time. The record
   // reaches the CLI spawn with its `credentialBootstrap` intact — that is what

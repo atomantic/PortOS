@@ -1,3 +1,4 @@
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { bindMaintenanceIo } from './maintenanceControl.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { noteReadinessChanged } from './readinessNotify.js';
@@ -152,6 +153,7 @@ import { initFableLoomSceneVideoHook } from './fableLoomSceneVideoHook.js';
 import { initMusicVideoSceneImageHook } from './musicVideoSceneImageHook.js';
 import { initMusicVideoSceneVideoHook } from './musicVideoSceneVideoHook.js';
 import { initMusicVideoCastSetsImageHook } from './musicVideoCastSetsImageHook.js';
+import { initMusicVideoCoverArtImageHook } from './musicVideoCoverArtImageHook.js';
 import { initCreativeDirectorMusicBedHook } from './creativeDirectorMusicBedHook.js';
 import { initMusicStudioHook } from './musicStudioHook.js';
 import { initImageGenQuotaHook } from './imageGenQuota.js';
@@ -293,6 +295,7 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       sampleProvidersFile: join(dataReferenceDir, 'providers.json'),
       io,
       asyncHandler,
+      withAssetPublication: withBackupAssetPublication,
       withRunAdmission: handler => (req, res) => maintenance.run('manual-run', 'Runs', () => handler(req, res)),
       // Inject PortOS's ServerError so toolkit route errors normalize into the
       // canonical `{ error, code, timestamp, context? }` envelope (issue #1084).
@@ -401,7 +404,14 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
  * Fire-and-forget service inits + scheduler arming. None of these block the
  * server from listening; each logs its own failure and the boot continues.
  */
-const startBackgroundServices = ({ spawnerReady, io }) => {
+const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
+  // Keep the opt-in agent API key file current (Settings > Security). A no-op
+  // beyond one settings read while the key is off. Disabled under smoke boot
+  // with the rest of this function, so a smoke run never writes to $HOME.
+  import('./agentKey.js')
+    .then(({ initAgentKey }) => initAgentKey({ httpsEnabled, port }))
+    .catch((err) => logBootstrapFailure('❌ Agent API key init failed', err));
+
   // Put npm's global bin directory on PATH before anything spawns a provider
   // CLI. npm's prefix need not be the directory the host's Node installer put
   // on PATH, and a CLI installed there is invisible to the bare-name spawn a
@@ -690,6 +700,9 @@ const initMediaJobDependentHooks = () => {
   // (character sheet, looks, set plates, in-set tests) onto its stage key.
   // It only listens: nothing is generated at boot.
   initMusicVideoCastSetsImageHook();
+  // Music Video cover art hook — composes the release cover from a cover
+  // source image the director asked for. It only listens.
+  initMusicVideoCoverArtImageHook();
   // Creative Director music-bed hook — durably files a queued first-pass
   // audio render onto its project's `musicBed` field on completion, even if
   // the requesting client unmounted mid-render (#1928).
@@ -912,7 +925,7 @@ const announceListening = ({ io, httpServer, localHttpServer, httpsEnabled, port
  */
 export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled, port, host, spawnerReady }) =>
   runPostRouteSequence(gateStepsForSmokeBoot({
-    startBackgroundServices: () => startBackgroundServices({ spawnerReady, io }),
+    startBackgroundServices: () => startBackgroundServices({ spawnerReady, io, httpsEnabled, port }),
 
     // Instance identity + sync log come up before requests are accepted, so a
     // brain mutation can't arrive before the sync log is ready.
@@ -953,7 +966,12 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
       markRecoveryDone();
     }),
 
-    runDatabasePhase: runDatabaseBootPhase,
+    runDatabasePhase: async () => {
+      await runDatabaseBootPhase();
+      const { bindPeerExecutionIo, initializePeerExecution } = await import('./peerExecutionRuntime.js');
+      bindPeerExecutionIo(io);
+      await initializePeerExecution().catch(err => console.error(`❌ Peer execution recovery remains held: ${err.message}`));
+    },
 
     // One-time series cover-thumbnail backfill: derive `series.coverImage` (the
     // rendered volume/issue cover shown on the pipeline list) for series whose

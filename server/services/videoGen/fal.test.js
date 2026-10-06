@@ -11,6 +11,8 @@ vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
   actual.PATHS.videos = FAKE_VIDEOS_DIR;
   actual.PATHS.data = FAKE_DATA_DIR;
+  actual.PATHS.videoThumbnails = join(TEST_ROOT, 'thumbnails');
+  actual.PATHS.uploads = join(TEST_ROOT, 'uploads');
   return {
     ...actual,
     ensureDir: vi.fn(async (dir) => mkdir(dir, { recursive: true })),
@@ -34,7 +36,7 @@ const ffmpeg = await import('../../lib/ffmpeg.js');
 const { videoGenEvents } = await import('./events.js');
 const { loadHistory } = await import('./history.js');
 
-// A returned job (or its early 'complete' status stamp) is not a settled run.
+  // A returned job is not a settled run.
 // Track from 'started', before generateVideo returns, through the terminal
 // event after the real finalization/history tail. Keep mocks and files alive
 // until every started job has reached that boundary, even if a test throws.
@@ -334,15 +336,8 @@ describe('videoGen/fal — generateVideo', () => {
     }
   });
 
-  // Regression (#6831): finalizeGeneratedVideo stamps job.status = 'complete'
-  // BEFORE its own faststart/thumbnail/history tail, and runFalVideo has
-  // already released the request slot by then, so a throw from that tail
-  // lands in the catch-all with the job already reading 'complete'. Without
-  // `force: true` the shared finalizer's idempotency guard made that a silent
-  // no-op — no 'failed' event for the media queue, no SSE error frame for the
-  // client — the window videoGen/grok.js's post-exit catch (fa3796650) and
-  // reactor.js's catch-all already force past.
-  it('still emits failed when finalizeGeneratedVideo throws after job.status is already complete', async () => {
+  // A post-download failure must settle the queue and SSE client after cleanup.
+  it('emits failed when post-download finalization throws', async () => {
     const requestId = 'req-tail';
     const statusUrl = `https://queue.fal.run/fal-ai/x/requests/${requestId}/status`;
     const responseUrl = `https://queue.fal.run/fal-ai/x/requests/${requestId}`;
@@ -355,8 +350,7 @@ describe('videoGen/fal — generateVideo', () => {
       }
       throw new Error(`unexpected fetch: ${url}`);
     }));
-    // The first step after the 'complete' stamp rejects — the download has
-    // already landed on disk, so this is purely the post-processing window.
+    // The download has landed; reject the first post-processing step.
     ffmpeg.optimizeForStreaming.mockRejectedValueOnce(new Error('faststart remux failed'));
 
     const failed = vi.fn();
@@ -681,5 +675,37 @@ describe('videoGen/fal — recover completed renders (#8564)', () => {
     expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'failed', error: expect.stringMatching(/cancel/i) });
     expect(counts).toEqual({ submit: 1, result: 1, video: phase === 'video body' ? 1 : 0 });
     await expect(readFile(join(FAKE_VIDEOS_DIR, job.filename))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+describe('standalone lip-sync take', () => {
+  it('drops the staged voice clip once the take is published, but never a file outside data/uploads', async () => {
+    const { PATHS } = await import('../../lib/fileUtils.js');
+    await mkdir(PATHS.uploads, { recursive: true });
+    const posted = [];
+    const staged = join(PATHS.uploads, 'video-audio-test.mp3');
+    const outside = join(TEST_ROOT, 'keep-me.webm');
+    const frame = join(TEST_ROOT, 'face.png');
+    await writeFile(staged, 'voice'); await writeFile(outside, 'voice'); await writeFile(frame, 'png');
+    const run = async (audioFilePath, requestId) => {
+      const statusUrl = `https://queue.fal.run/fal-ai/y/requests/${requestId}/status`;
+      const responseUrl = `https://queue.fal.run/fal-ai/y/requests/${requestId}`;
+      vi.stubGlobal('fetch', vi.fn(async (url, opts) => {
+        if (url === 'https://queue.fal.run/fal-ai/y') { posted.push(JSON.parse(opts.body)); return jsonResponse({ request_id: requestId, status_url: statusUrl, response_url: responseUrl }); }
+        if (url === statusUrl) return jsonResponse({ status: 'COMPLETED' });
+        if (url === responseUrl) return jsonResponse({ video: { url: `https://cdn.fal.ai/${requestId}.mp4` } });
+        if (url === `https://cdn.fal.ai/${requestId}.mp4`) return { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(Buffer.from('mp4')).buffer };
+        throw new Error(`unexpected fetch: ${url}`);
+      }));
+      const job = await fal.generateVideo({ apiKey: 'test-key', modelId: 'fal-ai/y', sourceImagePath: frame, audioFilePath });
+      expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'completed' });
+    };
+    await run(staged, 'req-staged');
+    await expect(readFile(staged)).rejects.toMatchObject({ code: 'ENOENT' });
+    await run(outside, 'req-outside');
+    expect((await readFile(outside)).toString()).toBe('voice');
+    // the clip's data URI is labelled by its extension, not always WAV
+    expect(JSON.stringify(posted[0])).toContain('data:audio/mpeg;base64,');
+    expect(JSON.stringify(posted[1])).toContain('data:audio/webm;base64,');
   });
 });

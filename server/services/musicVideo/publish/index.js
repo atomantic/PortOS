@@ -22,11 +22,12 @@ import { xAdapter } from './x.js';
 import { redditAdapter } from './reddit.js';
 import { stackerNewsAdapter } from './stackerNews.js';
 import { sunoAdapter } from './suno.js';
+import { distrokidAdapter } from './distrokid.js';
 import { musicVideoEvents } from '../events.js';
 
 export const PUBLISH_ADAPTERS = Object.freeze({
   youtube: youtubeAdapter, shorts: shortsAdapter, tiktok: tiktokAdapter, instagram: instagramAdapter,
-  x: xAdapter, reddit: redditAdapter, stackerNews: stackerNewsAdapter, suno: sunoAdapter,
+  x: xAdapter, reddit: redditAdapter, stackerNews: stackerNewsAdapter, suno: sunoAdapter, distrokid: distrokidAdapter,
 });
 // The tab stays open past this: the human publishes from it. After the TTL only
 // the CDP session is dropped; the tab closes on Discard, Fill again, or by hand.
@@ -96,21 +97,51 @@ function resolveFiles(value) {
   return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, resolveFiles(v)]));
 }
 
-/** Cut the frame a platform shows before play: TikTok's cover (9:16 frame) and Suno's (square). */
+// Square cover sizes: Suno shows 1500px; stores ask distributors for 3000px.
+const SQUARE_COVER_PX = { suno: 1500, distrokid: 3000 };
+
+/** Cut the frame a platform shows before play: TikTok's cover (9:16 frame), Suno's and DistroKid's (square). */
 async function withCovers(target, payload, deps) {
-  if (target !== 'tiktok' && target !== 'suno') return payload;
+  if (target !== 'tiktok' && !SQUARE_COVER_PX[target]) return payload;
   const source = target === 'tiktok' ? payload.video?.path : payload.cover?.path;
   if (!source) return payload;
+  // Composed cover art is already a store-size square.
+  if (target === 'distrokid' && payload.cover?.square) return payload;
   const { findFfmpeg, runFfmpegProcess } = await import('../../../lib/ffmpeg.js');
+  // A store rejects a non-square cover, so DistroKid gets no draft rather than the 16:9 frame.
+  const uncut = () => {
+    if (target === 'distrokid') throw new ServerError('Could not cut the square cover art: ffmpeg is unavailable or failed', { status: 422, code: 'PUBLISH_ASSET_MISSING' });
+    return payload;
+  };
   const ffmpeg = await (deps.findFfmpeg || findFfmpeg)();
-  if (!ffmpeg) return payload;
+  if (!ffmpeg) return uncut();
   await ensureDir(PATHS.videoThumbnails);
   const out = join(PATHS.videoThumbnails, `publish-cover-${target}-${Date.now()}.jpg`);
   const args = target === 'tiktok'
     ? ['-hide_banner', '-loglevel', 'error', '-ss', String(payload.coverAtSec || 0), '-i', source, '-frames:v', '1', '-q:v', '2', '-y', out]
-    : ['-hide_banner', '-loglevel', 'error', '-i', source, '-vf', "crop='min(iw,ih)':'min(iw,ih)',scale=1500:1500", '-frames:v', '1', '-q:v', '2', '-y', out];
+    : ['-hide_banner', '-loglevel', 'error', '-i', source, '-vf', `crop='min(iw,ih)':'min(iw,ih)',scale=${SQUARE_COVER_PX[target]}:${SQUARE_COVER_PX[target]}:flags=lanczos`, '-frames:v', '1', '-q:v', '2', '-y', out];
   const result = await (deps.runFfmpegProcess || runFfmpegProcess)({ bin: ffmpeg, args });
-  return result.ok ? { ...payload, cover: { dir: 'videoThumbnails', name: out.split(/[\\/]/).pop(), path: out } } : payload;
+  return result.ok ? { ...payload, cover: { dir: 'videoThumbnails', name: out.split(/[\\/]/).pop(), path: out } } : uncut();
+}
+
+/** DistroKid's options default the artist to the account named under Where you post. */
+function withPlatformDefaults(target, options, platforms) {
+  if (target !== 'distrokid' || options?.artistName) return options;
+  return { ...options, artistName: platforms?.distrokid?.account || '' };
+}
+
+/** The release audio a distributor uploads: the project's own source song. */
+async function withAudio(target, payload, project, deps) {
+  if (target !== 'distrokid') return payload;
+  const resolveAudio = deps.resolveAudio || (await import('../projectAudio.js')).resolveProjectAudioPath;
+  const noSong = (message) => new ServerError(message, { status: 422, code: 'PUBLISH_ASSET_MISSING' });
+  // The resolver speaks in analysis terms (NO_AUDIO, a stale track link); say what publishing needs instead.
+  const path = await resolveAudio(project).catch((err) => {
+    throw err?.code === 'NO_AUDIO' ? noSong('Set the project\'s song (a track or an uploaded file) before sending it to DistroKid')
+      : noSong(`The project's song can't be found (${err?.message || 'unknown error'}): set the project audio again`);
+  });
+  if (!path || !existsSync(path)) throw noSong('The song file is missing on disk: set the project audio again');
+  return { ...payload, audio: { path } };
 }
 
 /**
@@ -124,7 +155,15 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
   assertPlatformEnabled(platforms, target);
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  let payload = resolveFiles(buildPublishPayload(target, project, options));
+  // A platform already posted to gets a second draft only when the director says so:
+  // otherwise one stray click is one duplicate post.
+  const existing = project.publishKit?.posts?.[target];
+  if (existing && options.again !== true) {
+    const urls = existing.url ? [existing.url] : [];
+    throw new ServerError(`Already posted to ${adapter.label}. Confirm "Post again" to fill another draft`, { status: 409, code: 'PUBLISH_ALREADY_POSTED', context: { target, urls } });
+  }
+  let payload = resolveFiles(buildPublishPayload(target, project, withPlatformDefaults(target, options, platforms)));
+  payload = await withAudio(target, payload, project, deps);
   payload = await withCovers(target, payload, deps);
   for (const draft of [...drafts.values()]) if (draft.projectId === projectId && draft.target === target) await closeDraft(draft, deps);
   return serialize(async () => {

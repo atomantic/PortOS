@@ -4,6 +4,7 @@
  */
 
 import { Router } from 'express';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { readdir, stat } from 'fs/promises';
 import { join, resolve } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -52,7 +53,7 @@ router.get('/:filename', asyncHandler(async (req, res) => {
 }));
 
 // DELETE /api/attachments/:filename - Delete an attachment
-router.delete('/:filename', asyncHandler(async (req, res) => {
+router.delete('/:filename', asyncHandler(async (req, res) => withBackupAssetPublication(async () => {
   const { filename } = req.params;
   const safeFilename = sanitizeFilename(filename);
   const filepath = resolve(ATTACHMENTS_DIR, safeFilename);
@@ -71,7 +72,7 @@ router.delete('/:filename', asyncHandler(async (req, res) => {
   console.log(`🗑️ Attachment deleted: ${safeFilename}`);
 
   res.json({ success: true, filename: safeFilename });
-}));
+})));
 
 // GET /api/attachments - List all attachments (for debugging)
 router.get('/', asyncHandler(async (req, res) => {

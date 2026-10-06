@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { join } from 'node:path';
 
 vi.mock('./git.js', () => ({
   getBranches: vi.fn(),
@@ -75,19 +76,23 @@ vi.mock('../lib/gitRemote.js', () => ({
 // SUPERSEDED verdict cache); the default `tryReadFile` returns null = no ledger,
 // which is the fail-open "analyze everything" path the pre-#3842 suite assumes.
 const tryReadFileMock = vi.fn(async () => null);
-vi.mock('../lib/fileUtils.js', () => ({
-  // `data` added alongside `root`/`cos` because `formatInFlightForPrompt`'s
-  // dispatch-hint lookup now reaches `issueNumberFromRef` from
-  // `issueReconcile.js`, whose module graph (via jira.js) reads `PATHS.data`
-  // at import time — an incomplete PATHS here crashed with a raw TypeError
-  // rather than a test failure.
-  PATHS: { root: '/repo', cos: '/repo/data/cos', data: '/repo/data' },
-  safeJSONParse: (raw, fallback) => { try { return JSON.parse(raw); } catch { return fallback; } },
-  isPathInsideDir: (dir, candidate) => typeof dir === 'string' && typeof candidate === 'string'
-    && candidate.startsWith(`${dir}/`),
-  tryReadFile: (...args) => tryReadFileMock(...args),
-  atomicWrite: vi.fn(async () => {})
-}));
+vi.mock('../lib/fileUtils.js', async () => {
+  // Keep native separator, resolution and platform case-folding semantics while
+  // file I/O stays mocked. A raw startsWith(`${dir}/`) rejects Windows roots.
+  const { isPathInsideDir } = await vi.importActual('../lib/pathSafety.js');
+  return {
+    // `data` added alongside `root`/`cos` because `formatInFlightForPrompt`'s
+    // dispatch-hint lookup now reaches `issueNumberFromRef` from
+    // `issueReconcile.js`, whose module graph (via jira.js) reads `PATHS.data`
+    // at import time — an incomplete PATHS here crashed with a raw TypeError
+    // rather than a test failure.
+    PATHS: { root: '/repo', cos: '/repo/data/cos', data: '/repo/data', worktrees: '/repo/data/cos/worktrees' },
+    safeJSONParse: (raw, fallback) => { try { return JSON.parse(raw); } catch { return fallback; } },
+    isPathInsideDir,
+    tryReadFile: (...args) => tryReadFileMock(...args),
+    atomicWrite: vi.fn(async () => {})
+  };
+});
 
 const backupSupersededBranchMock = vi.fn(async (_repoPath, branch) => ({
   dir: `/repo/data/cos/abandoned-worktree-backups/${branch.branch.replace(/\//g, '-')}`,
@@ -338,27 +343,44 @@ describe('retired claim markers in reconcile', () => {
 });
 
 describe('cleanupMerged', () => {
-  it('removes worktree + deletes branch when merged and clean', async () => {
+  it.each([
+    ['forward-slash fixture', '/repo/.claude/worktrees/next-2190'],
+    ['native-joined fixture', join('/repo', '.claude', 'worktrees', 'next-2190')]
+  ])('removes worktree + deletes branch when merged and clean (%s)', async (_label, worktreePath) => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean worktree
-    const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath: '/wt/2190' }]);
+    const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath }]);
     expect(res.cleaned).toEqual(['next/issue-2190']);
-    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', '/wt/2190', expect.any(Object));
+    expect(res.skipped).toEqual([]);
+    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', worktreePath, expect.any(Object));
     expect(git.deleteBranch).toHaveBeenCalledWith('/repo', 'next/issue-2190', { local: true });
+  });
+
+  it.each([
+    '/repo/.claude/worktrees-other/next-2190',
+    '/repo/.claude/worktrees/../outside/next-2190'
+  ])('holds a merged clean worktree outside the managed root (%s)', async (worktreePath) => {
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+    const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath }]);
+    expect(res.cleaned).toEqual([]);
+    expect(res.skipped).toEqual([{ branch: 'next/issue-2190', reason: 'worktree-unmanaged-location' }]);
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    expect(git.deleteBranch).not.toHaveBeenCalled();
   });
 
   it('does not delete the branch or report it cleaned when the worktree survives removal', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean worktree
     wt.forceRemoveWorktreeDir.mockResolvedValue({ removed: false, warning: 'Worktree cleanup incomplete — retryable' });
-    const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath: '/wt/2190' }]);
+    const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath: '/repo/.claude/worktrees/next-2190' }]);
     expect(res.cleaned).toEqual([]);
     expect(git.deleteBranch).not.toHaveBeenCalled();
   });
 
   it('skips when re-check says not merged (fail closed)', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(false);
-    const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath: '/wt/2190' }]);
+    const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath: '/repo/.claude/worktrees/next-2190' }]);
     expect(res.cleaned).toEqual([]);
     expect(res.skipped).toEqual([{ branch: 'next/issue-2190', reason: 'not-merged-on-recheck' }]);
     expect(git.deleteBranch).not.toHaveBeenCalled();
@@ -367,7 +389,7 @@ describe('cleanupMerged', () => {
   it('skips when the worktree has real uncommitted changes', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     execGit.mockResolvedValue({ stdout: ' M server/index.js', exitCode: 0 }); // dirty
-    const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2196', worktreePath: '/wt/2196' }]);
+    const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2196', worktreePath: '/repo/.claude/worktrees/next-2196' }]);
     expect(res.cleaned).toEqual([]);
     expect(res.skipped).toEqual([{ branch: 'next/issue-2196', reason: 'worktree-dirty' }]);
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
@@ -385,7 +407,7 @@ describe('cleanupMerged', () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     const activeAgentIds = new Set(['agent-abc12345']);
     const res = await cleanupMerged('/repo', 'main', [
-      { branch: 'locked-b', worktreePath: '/wt/locked', worktreeLocked: true },
+      { branch: 'locked-b', worktreePath: '/repo/data/cos/worktrees/locked', worktreeLocked: true },
       { branch: 'claim-b', worktreePath: '/repo/data/cos/worktrees/claim-foo' },
       { branch: 'active-b', worktreePath: '/repo/data/cos/worktrees/agent-abc12345' }
     ], { activeAgentIds });
@@ -414,7 +436,7 @@ describe('cleanupMerged', () => {
   it('releases a retired issue claim with the repository credential after deletion', async () => {
     mockOwnedClaim();
     git.hasBranchMergeEvidence.mockResolvedValue(true);
-    await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-42', worktreePath: '/wt/retired' }]);
+    await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-42', worktreePath: '/repo/.claude/worktrees/retired' }]);
     expect(execGh).toHaveBeenCalledWith([
       'issue', 'edit', '42', '--repo', 'github.com/atomantic/PortOS',
       '--remove-assignee', '@me', '--remove-label', 'in-progress'
@@ -438,7 +460,7 @@ describe('cleanupMerged', () => {
 
   it('leaves markers intact for a live owner or a failed branch deletion', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
-    const branch = { branch: 'claim/issue-42', worktreePath: '/wt/claim-issue-42', worktreeAgeMs: 10 * 24 * 60 * 60 * 1000 };
+    const branch = { branch: 'claim/issue-42', worktreePath: '/repo/data/cos/worktrees/claim-issue-42', worktreeAgeMs: 10 * 24 * 60 * 60 * 1000 };
     const held = await cleanupMerged('/repo', 'main', [branch], { activeAgentIds: new Set(['claim-issue-42']) });
     expect(held.skipped[0].reason).toBe('worktree-active-agent');
     expect(execGh).not.toHaveBeenCalled();
@@ -522,7 +544,7 @@ describe('cleanupMerged', () => {
   it('omits retryAt for holds that do NOT lift on a clock', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     const res = await cleanupMerged('/repo', 'main', [
-      { branch: 'locked-b', worktreePath: '/wt/locked', worktreeLocked: true, worktreeAgeMs: 60 * 1000 },
+      { branch: 'locked-b', worktreePath: '/repo/data/cos/worktrees/locked', worktreeLocked: true, worktreeAgeMs: 60 * 1000 },
       { branch: 'active-b', worktreePath: '/repo/data/cos/worktrees/agent-abc12345', worktreeAgeMs: 60 * 1000 }
     ], { activeAgentIds: new Set(['agent-abc12345']) });
     // A lock and a running agent both end at a time nothing here can predict —

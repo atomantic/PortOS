@@ -1,73 +1,71 @@
+import SharingCopyPanel from '../SharingCopyPanel.jsx';
 import DependencyImpactPanel from '../DependencyImpactPanel.jsx';
 import RenderStatusPanel, { RenderFailure } from '../RenderStatusPanel.jsx';
 import ExcerptPanel from '../ExcerptPanel.jsx';
-import DevArtifactsPanel from '../DevArtifactsPanel.jsx';
-import MakingOfExportPanel from '../MakingOfExportPanel.jsx';
 import StageSection from '../StageSection.jsx';
 import { isFinalRenderStale } from '../../../lib/musicVideoStages.js';
 import { RenderFinalButton } from '../ProjectActionGroups.jsx';
+import ReviewDraftPanel from '../ReviewDraftPanel.jsx';
 
 /**
- * Review & Export: the final render and its player, draft excerpts with review
- * notes, section revision and auto-review (they act on the excerpt window, so
- * they live beside it), and every development file. The external-tool handoff lives on Produce.
+ * Final render: the full render and its player, and the draft excerpts and
+ * proofs with review notes, section revision and auto-review (they act on the
+ * excerpt window, so they live beside it). Until a final render exists the
+ * drafts and proofs lead, since they are what there is to watch. Dependency
+ * repair closes the step. Development files, the external handoff and the
+ * making-of export are in Project settings › Files.
  */
 export default function ReviewStage({ board }) {
   const {
-    project, locked, renderJob, renderBound, finalVideo, excerpts, revisions, autoReview, sceneMedia, devArtifacts,
+    project, locked, renderJob, renderBound, finalVideo, excerpts, revisions, autoReview, sceneMedia,
   } = board;
+  const finalRender = (
+    <section id="mv-final-video" aria-label="Final render" className="min-w-0 space-y-2 rounded-lg border border-port-border bg-port-card p-3">
+      <div className="flex justify-end">
+        <RenderFinalButton project={project} renderJob={renderJob} readiness={board.productionReadiness} />
+      </div>
+      <RenderStatusPanel
+        rendering={renderBound}
+        progress={renderJob.progress}
+        renderHistoryId={project.renderHistoryId}
+        stale={isFinalRenderStale(project)}
+        finalVideo={finalVideo}
+        onOpenPreview={board.openPreview}
+      />
+      {project.renderHistoryId && <SharingCopyPanel key={`${project.id}:${project.renderHistoryId}`} projectId={project.id} />}
+    </section>
+  );
+  // Drafts and proofs are what this step is reviewed by, so they are never folded away.
+  const drafts = (
+    <section aria-label="Drafts and proofs" className="min-w-0 space-y-2">
+      <h4 className="text-sm font-medium">Drafts and proofs</h4>
+      <ExcerptPanel
+        project={project}
+        rendering={excerpts.rendering}
+        occupied={excerpts.occupied}
+        progress={excerpts.progress}
+        activeRenderId={excerpts.activeRenderId}
+        connected={excerpts.connected}
+        excerpts={project.excerpts || []}
+        deletingId={excerpts.deletingId}
+        noteBusyId={excerpts.noteBusyId}
+        startExcerpt={excerpts.startExcerpt}
+        cancelExcerpt={excerpts.cancelExcerpt}
+        deleteExcerpt={excerpts.deleteExcerpt}
+        addNote={excerpts.addNote}
+        editNote={excerpts.editNote}
+        deleteNote={excerpts.deleteNote}
+        revision={{ ...revisions, genScenes: sceneMedia.genScenes, genVideoScenes: sceneMedia.genVideoScenes }}
+        autoReview={autoReview}
+      />
+    </section>
+  );
   return (
     <fieldset disabled={locked} className="min-w-0 space-y-3">
+      {!project.renderHistoryId && <ReviewDraftPanel project={project} onOpen={board.openArtifact} draftState={board.reviewDraftState} />}
       <RenderFailure project={project} renderJob={renderJob} />
+      {project.renderHistoryId ? <>{finalRender}{drafts}</> : <>{drafts}{finalRender}</>}
       <StageSection title="Dependency changes and repair"><DependencyImpactPanel project={project} busy={revisions.busy} onRepair={revisions.repair} /></StageSection>
-      <section id="mv-final-video" aria-label="Final render" className="rounded-lg border border-port-border bg-port-card p-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-sm font-medium">Final render</h3>
-          <RenderFinalButton project={project} renderJob={renderJob} readiness={board.productionReadiness} />
-        </div>
-        <RenderStatusPanel
-          rendering={renderBound}
-          progress={renderJob.progress}
-          renderHistoryId={project.renderHistoryId}
-          stale={isFinalRenderStale(project)}
-          finalVideo={finalVideo}
-          onOpenPreview={board.openPreview}
-        />
-      </section>
-
-      <div className="rounded-lg border border-port-border bg-port-card p-3">
-        <ExcerptPanel
-          project={project}
-          rendering={excerpts.rendering}
-          occupied={excerpts.occupied}
-          progress={excerpts.progress}
-          activeRenderId={excerpts.activeRenderId}
-          connected={excerpts.connected}
-          excerpts={project.excerpts || []}
-          deletingId={excerpts.deletingId}
-          noteBusyId={excerpts.noteBusyId}
-          startExcerpt={excerpts.startExcerpt}
-          cancelExcerpt={excerpts.cancelExcerpt}
-          deleteExcerpt={excerpts.deleteExcerpt}
-          addNote={excerpts.addNote}
-          editNote={excerpts.editNote}
-          deleteNote={excerpts.deleteNote}
-          revision={{ ...revisions, genScenes: sceneMedia.genScenes, genVideoScenes: sceneMedia.genVideoScenes }}
-          autoReview={autoReview}
-        />
-      </div>
-
-      <StageSection title="Development files" summary="Guides, storyboards and contact sheets">
-      <DevArtifactsPanel
-        project={project}
-        busy={devArtifacts.busy}
-        onOpen={board.openArtifact}
-        onUpload={board.onUploadArtifact}
-      />
-      </StageSection>
-
-      <MakingOfExportPanel project={project} />
-
     </fieldset>
   );
 }

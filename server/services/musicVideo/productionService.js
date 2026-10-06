@@ -1,5 +1,5 @@
-import { prepareProductionReview, renderProductionProof, attachProductionPilotProof } from './productionReviewService.js';
-import { productionReadiness, productionProofNeedsRender, productionProofWindow } from './productionReview.js';
+import { prepareProductionReview, attachProductionPilotProof } from './productionReviewService.js';
+import { productionReadiness, productionProofNeedsRender } from './productionReview.js';
 import { currentPlateEvidence, plateRequirementBasis, selectedPlatePasses } from '../../lib/musicVideoPlateEvidence.js';
 import { ensureSceneTakes, selectSceneTake } from './takes.js';
 /**
@@ -33,6 +33,7 @@ import { musicVideoEvents } from './events.js';
 import { isFreeProvider } from '../../lib/modelPricing.js';
 import { isAuthoringOneShotProvider } from '../../lib/providerVendors.js';
 import { codeFirstProductionAssets } from '../../lib/musicVideoMediumPlan.js';
+import { isSelfDrawnLayer } from '../../lib/musicVideoLayers.js';
 import { beginNextAttempt } from './autoReview.js';
 import { withAutopilotCutting } from './composition.js';
 import { currentPilotPass, pilotClass, pilotRepair } from './productionPilot.js';
@@ -153,7 +154,7 @@ const present = (run, project) => {
   return { ...run, interrupted: run.status === 'running' && run.processId !== PROCESS_ID,
     accounting: {
       plannedGenerations: assets ? assets.steps.filter((s) => ['generate-image', 'generate-video'].includes(s.action)).length
-        : (project?.scenes || []).reduce((n, scene) => n + (scene.visualLayer !== 'card' && !scene.referenceImageId && (!scene.videoHistoryId || pilotClass(scene, project) === 'still') ? 1 : 0) + (!scene.videoHistoryId && pilotClass(scene, project) !== 'still' && scene.visualLayer !== 'card' ? 1 : 0), 0),
+        : (project?.scenes || []).reduce((n, scene) => n + (!isSelfDrawnLayer(scene.visualLayer) && !scene.referenceImageId && (!scene.videoHistoryId || pilotClass(scene, project) === 'still') ? 1 : 0) + (!scene.videoHistoryId && pilotClass(scene, project) !== 'still' && !isSelfDrawnLayer(scene.visualLayer) ? 1 : 0), 0),
       reservedUsd: reserved.reduce((n, s) => n + (s.costUsd || 0), 0),
       spentUsd: spent.reduce((n, s) => n + (s.costUsd || 0), 0),
       unpriced: counted.some((s) => s.costUsd == null),
@@ -430,13 +431,6 @@ async function takeSteps(projectId, runId) {
       }
       return halt(projectId, runId, { status: 'blocked', reason: 'Watch and approve the rendered pilot in Production review before bulk generation.' });
     }
-    if (step.type === 'review' && !readiness.proof.approved) {
-      if (productionProofNeedsRender(project, readiness.basis.proof)) {
-        await renderProductionProof(projectId, productionProofWindow(project));
-      }
-      return halt(projectId, runId, { status: 'blocked', reason: 'Watch and approve the animated proof in Production review before the full film.' });
-    }
-
 
     if (step.type === 'idle' || step.type === 'wait') return { project, run, action: step };
     if (step.type === 'plan-pilots') {

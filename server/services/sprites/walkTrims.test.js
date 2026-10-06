@@ -8,19 +8,28 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import sharp from 'sharp';
-import { writeFile, mkdir, readFile } from 'fs/promises';
+import { writeFile, mkdir, readFile, readdir } from 'fs/promises';
 
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-trim-test-'));
 
+let beforeAssetWrite = async () => {};
+let bypassAdmission = false;
+vi.mock('../../lib/backupSnapshotBoundary.js', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, withBackupAssetPublication: work => bypassAdmission ? work() : actual.withBackupAssetPublication(work) };
+});
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
   Object.assign(actual.PATHS, {
     data: TEST_ROOT,
     sprites: join(TEST_ROOT, 'sprites'),
   });
-  return actual;
+  return { ...actual, atomicWrite: async (path, ...args) => {
+    await beforeAssetWrite(path);
+    return actual.atomicWrite(path, ...args);
+  } };
 });
 
 const runFfmpegProcess = vi.fn(async ({ args }) => {
@@ -163,6 +172,7 @@ async function characterWithImportedRun(id, { manifest = 'valid', anchorPaths = 
 }
 
 beforeEach(() => {
+  beforeAssetWrite = async () => {}; bypassAdmission = false;
   runFfmpegProcess.mockClear();
   rmSync(join(TEST_ROOT, 'sprite-records.json'), { force: true });
 });
@@ -320,5 +330,48 @@ describe('saveLoopTrim', () => {
     }));
     await expect(saveLoopTrim(id, { runId: RUN_ID, enabledColumns: [0, 1] }))
       .rejects.toMatchObject({ code: 'RUN_NOT_CANDIDATE' });
+  });
+});
+
+const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
+const backupDeferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
+const backupSettle = () => new Promise(resolve => setImmediate(resolve));
+
+describe('trim backup publication', () => {
+  it('keeps strip, GIF and manifest behind an open cut', async () => {
+    const id = await characterWithRun(newId());
+    const release = await acquireBackupSnapshotCut();
+    const writes = []; beforeAssetWrite = async path => { writes.push(path); };
+    const work = saveLoopTrim(id, { runId: RUN_ID, enabledColumns: [0, 1] });
+    try { await backupSettle(); await backupSettle(); expect(writes).toEqual([]); }
+    finally { release(); }
+    const result = await work;
+    expect(await readFile(join(TEST_ROOT, 'sprites', id, result.loop), 'utf8')).toBe('GIF89a-stub');
+  });
+  it('drains the real strip and GIF writes through their manifest commit', async () => {
+    const id = await characterWithRun(newId());
+    const reached = backupDeferred(); const commit = backupDeferred();
+    beforeAssetWrite = async path => { if (dirname(path) === join(TEST_ROOT, 'sprites', id, 'walk', 'trims') && path.endsWith('.json')) { reached.resolve(); await commit.promise; } };
+    const work = saveLoopTrim(id, { runId: RUN_ID, enabledColumns: [0, 1] });
+    await Promise.race([reached.promise, work.then(() => { throw new Error('missed trim seam'); })]);
+    let ready = false; const cut = acquireBackupSnapshotCut().then(release => { ready = true; return release; });
+    try { await backupSettle(); expect(ready).toBe(false); } finally { commit.resolve(); }
+    const result = await work; const release = await cut;
+    try {
+      const manifest = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, result.manifest), 'utf8'));
+      expect(await readFile(join(TEST_ROOT, 'sprites', id, manifest.gifPath), 'utf8')).toBe('GIF89a-stub');
+      expect(await readFile(join(TEST_ROOT, 'sprites', id, manifest.stripPath))).toBeTruthy();
+    } finally { release(); }
+  });
+  it('negative control exposes a manifest absent from the earlier copied trim files', async () => {
+    const id = await characterWithRun(newId()); bypassAdmission = true;
+    const copiedTrimPaths = await readdir(join(TEST_ROOT, 'sprites', id, 'walk/trims')).catch(err => { if (err.code === 'ENOENT') return []; throw err; });
+    const release = await acquireBackupSnapshotCut();
+    try {
+      const result = await saveLoopTrim(id, { runId: RUN_ID, enabledColumns: [0, 1] });
+      const manifest = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, result.manifest), 'utf8'));
+      expect(copiedTrimPaths).not.toContain(manifest.stripPath.split('/').at(-1));
+      expect(copiedTrimPaths).not.toContain(manifest.gifPath.split('/').at(-1));
+    } finally { release(); }
   });
 });

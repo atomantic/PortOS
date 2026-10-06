@@ -18,6 +18,6 @@ export default function DevArtifactPreview({ projectId, artifact, version = arti
   const title = `${artifact.title} v${version || 1}`;
   const props = { onLoad: () => onReady?.(true), onError: () => { onReady?.(false); setResponse({ url, available: false }); }, className: 'w-full min-w-0 rounded border border-port-border' };
   if (entry.mimeType?.startsWith('image/')) return <img {...props} src={url} alt={title} />;
-  if (entry.mimeType?.startsWith('video/')) return <video {...props} onLoadedData={() => onReady?.(true)} src={url} controls aria-label={title} />;
+  if (entry.mimeType?.startsWith('video/')) return <video {...props} onLoadedData={() => onReady?.(true)} src={url} controls playsInline preload="metadata" aria-label={title} />;
   return <iframe {...props} key={url} src={url} title={title} sandbox="allow-scripts" referrerPolicy="no-referrer" className={`${props.className} h-[55vh] bg-white`} />;
 }

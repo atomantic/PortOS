@@ -25,10 +25,15 @@ export function createRunFinalizer({
   safeJsonParse,
   consumeActiveStop,
   onPersistenceFailure,
+  withAssetPublication = work => work(),
 }) {
   const pendingHooks = [];
   const failed = () => onPersistenceFailure?.();
-  const settleTerminal = (fn, label) => {
+  // Invoke host callbacks only after releasing the recording lease. Hooks can
+  // publish their own assets or wait for other admitted work.
+  const terminalCallbacks = [];
+  const settleTerminal = (fn, label) => terminalCallbacks.push({ fn, label });
+  const runTerminal = (fn, label) => {
     try {
       const result = fn();
       if (result?.then) pendingHooks.push(Promise.resolve(result).catch(err => {
@@ -53,7 +58,7 @@ export function createRunFinalizer({
 
   const openTerminalMetadata = async () => {
     const state = terminalState();
-    if (state.partialOutput) await atomicWrite(outputPath, state.partialOutput).catch(failed);
+    await atomicWrite(outputPath, state.partialOutput);
     const metadata = await readMetadata();
     metadata.endTime = new Date().toISOString();
     metadata.duration = Date.now() - startTime;
@@ -81,9 +86,9 @@ export function createRunFinalizer({
       await atomicWrite(metadataPath, metadata);
 
       if (typeof providerStatusService?.markApiSuccess === 'function') {
-        await providerStatusService.markApiSuccess(provider.id).catch(err => {
+        settleTerminal(() => providerStatusService.markApiSuccess(provider.id).catch(err => {
           console.error(`❌ Failed to clear provider rate-limit state: ${err.message}`);
-        });
+        }), `Run ${runId} provider success hook`);
       }
 
       settleTerminal(() => hooks.onRunCompleted?.(metadata, output), `Run ${runId} onRunCompleted hook`);
@@ -97,7 +102,7 @@ export function createRunFinalizer({
       failMetadata.success = false;
       failMetadata.error = `Run finalization failed: ${writeErr.message}`;
       failMetadata.errorCategory = ERROR_CATEGORIES.UNKNOWN;
-      failMetadata.outputSize = Buffer.byteLength(getOutput());
+      failMetadata.outputSize = (await readFile(outputPath).catch(() => '')).length;
       await atomicWrite(metadataPath, failMetadata).catch(failed);
       settleTerminal(() => hooks.onRunFailed?.(failMetadata, failMetadata.error, getOutput()), `Run ${runId} onRunFailed hook`);
       settleTerminal(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
@@ -168,7 +173,7 @@ export function createRunFinalizer({
     if (errorAnalysis.hasError &&
         (errorAnalysis.category === ERROR_CATEGORIES.RATE_LIMIT ||
          errorAnalysis.category === ERROR_CATEGORIES.USAGE_LIMIT)) {
-      await handleProviderError(provider.id, errorAnalysis, body);
+      settleTerminal(() => handleProviderError(provider.id, errorAnalysis, body), `Run ${runId} provider error hook`);
     }
 
     await atomicWrite(metadataPath, metadata);
@@ -187,7 +192,7 @@ export function createRunFinalizer({
     if (errorAnalysis.hasError &&
         (errorAnalysis.category === ERROR_CATEGORIES.RATE_LIMIT ||
          errorAnalysis.category === ERROR_CATEGORIES.USAGE_LIMIT)) {
-      await handleProviderError(provider.id, errorAnalysis, partialOutput);
+      settleTerminal(() => handleProviderError(provider.id, errorAnalysis, partialOutput), `Run ${runId} provider error hook`);
     }
 
     await atomicWrite(metadataPath, metadata);
@@ -197,11 +202,12 @@ export function createRunFinalizer({
 
   const finalizeHandlerError = async (handlerErr) => {
     const failMetadata = {
+      ...await readMetadata(),
       endTime: new Date().toISOString(),
       duration: Date.now() - startTime,
       success: false,
       error: `Run finalization failed: ${handlerErr.message}`,
-      outputSize: Buffer.byteLength(getOutput()),
+      outputSize: (await readFile(outputPath).catch(() => '')).length,
     };
     await atomicWrite(metadataPath, failMetadata).catch(failed);
     settleTerminal(() => hooks.onRunFailed?.(failMetadata, failMetadata.error, getOutput()), `Run ${runId} onRunFailed hook`);
@@ -211,25 +217,45 @@ export function createRunFinalizer({
   const finalizeOnce = async (cause) => {
     if (!lifecycle.markSettled()) return false;
     activeRuns.delete(runId);
+    let admitted = false;
     try {
-      if (cause.type === 'success') await finalizeSuccess(cause);
-      else if (cause.type === 'timeout') await finalizeTimeout(cause.bound);
-      else if (cause.type === 'response-error') {
-        if (consumeActiveStop(runId)) await finalizeCanceled();
-        else await finalizeHttpError(cause);
-      }
-      else if (cause.type === 'stream-error') {
-        if (consumeActiveStop(runId)) await finalizeCanceled();
-        else await finalizeStreamError(cause.error);
-      }
-      else if (cause.type === 'canceled') await finalizeCanceled();
+      await withAssetPublication(async () => {
+        admitted = true;
+        try {
+          if (cause.type === 'success') await finalizeSuccess(cause);
+          else if (cause.type === 'timeout') await finalizeTimeout(cause.bound);
+          else if (cause.type === 'response-error') {
+            if (consumeActiveStop(runId)) await finalizeCanceled();
+            else await finalizeHttpError(cause);
+          } else if (cause.type === 'stream-error') {
+            if (consumeActiveStop(runId)) await finalizeCanceled();
+            else await finalizeStreamError(cause.error);
+          } else if (cause.type === 'canceled') await finalizeCanceled();
+        } catch (handlerErr) {
+          failed();
+          console.error(`❌ Run ${runId} failure handler error: ${handlerErr.message}`);
+          await finalizeHandlerError(handlerErr);
+        }
+      });
       return true;
-    } catch (handlerErr) {
+    } catch (admissionErr) {
+      // Admission refused (busy/timeout): nothing may be written through the
+      // refused boundary, but callers still need exactly one terminal callback.
+      if (admitted) throw admissionErr;
       failed();
-      console.error(`❌ Run ${runId} failure handler error: ${handlerErr.message}`);
-      await finalizeHandlerError(handlerErr);
+      console.error(`❌ Run ${runId} finalization admission refused: ${admissionErr.message}`);
+      const failMetadata = {
+        runId,
+        endTime: new Date().toISOString(),
+        duration: Date.now() - startTime,
+        success: false,
+        error: `Run finalization deferred: ${admissionErr.message}`,
+      };
+      settleTerminal(() => hooks.onRunFailed?.(failMetadata, failMetadata.error, getOutput()), `Run ${runId} onRunFailed hook`);
+      settleTerminal(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
       return true;
     } finally {
+      for (const { fn, label } of terminalCallbacks) runTerminal(fn, label);
       await Promise.all(pendingHooks);
     }
   };

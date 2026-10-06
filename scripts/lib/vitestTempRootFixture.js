@@ -12,7 +12,11 @@ export function createVitestTempFixture(host, workspace, body) {
     process.platform === 'win32' ? 'junction' : 'dir');
   mkdirSync(join(root, 'src/test'), { recursive: true });
   writeFileSync(join(root, 'src/test/setup.js'), '');
-  writeFileSync(join(root, 'vitest.setup.js'), '');
+  // Generated workflow suites need the same private, real coordinators as the
+  // ordinary server runner, even though their setup omits unrelated mocks.
+  writeFileSync(join(root, 'vitest.setup.js'), workspace === 'server'
+    ? `import ${JSON.stringify(new URL('../../server/test/admissionSetup.js', import.meta.url).href)};\n`
+    : '');
   const testFile = workspace === 'client' ? 'src/lifecycle.test.js' : 'lifecycle.test.js';
   writeFileSync(join(root, testFile), `
     import { test, expect } from 'vitest';

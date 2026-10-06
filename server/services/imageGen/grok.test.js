@@ -1,5 +1,15 @@
+import { acquireBackupSnapshotCut } from '../../lib/backupSnapshotBoundary.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { posixPath } from '../../lib/testHelper.js';
+
+const admissionFault = vi.hoisted(() => ({ error: null }));
+vi.mock('../../lib/backupSnapshotBoundary.js', async original => {
+  const actual = await original();
+  return { ...actual, withBackupAssetPublication: (...args) => {
+    if (admissionFault.error) return Promise.reject(admissionFault.error);
+    return actual.withBackupAssetPublication(...args);
+  } };
+});
 
 import { mkdir, writeFile, rm, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -279,7 +289,12 @@ describe('grok provider — directed-path harvest', () => {
     ]);
     await mkdir(join(tmpdir(), `portos-grok-${job.jobId}`), { recursive: true });
     await writeFile(stagingPathFor(job.jobId), fakePngBytes);
+    const releaseCut = await acquireBackupSnapshotCut();
+    try {
     await closeChild(0, 0);
+      await new Promise(resolve => setImmediate(resolve));
+      expect(existsSync(join(FAKE_IMAGES_DIR, job.filename)), 'provider completion must wait outside a held snapshot').toBe(false);
+    } finally { releaseCut(); }
 
     const deadline = Date.now() + 3000;
     while (Date.now() < deadline && completedListener.mock.calls.length === 0) {
@@ -497,4 +512,21 @@ describe('grok provider — checkConnection', () => {
     expect(status.connected).toBe(false);
     expect(status.reason).toMatch(/exited 3/);
   });
+});
+
+
+it('settles admission rejection from the actual close event and clears the active slot', async () => {
+  const job = await grok.generateImage({ prompt: 'admission failure' });
+  const child = spawnCalls[0].child;
+  const failed = new Promise(resolve => imageGenEvents.once('failed', resolve));
+  admissionFault.error = new Error('injected publication admission refusal');
+  try {
+    child.emit('close', 0, null);
+    expect((await failed).error).toContain('injected publication admission refusal');
+    expect(grok.getActiveJob()).toBeNull();
+    const response = { writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: new EventEmitter() };
+    expect(grok.attachSseClient(job.jobId, response)).toBe(true);
+    expect(response.write.mock.calls[0][0]).toContain('injected publication admission refusal');
+    response.req.emit('close');
+  } finally { admissionFault.error = null; }
 });

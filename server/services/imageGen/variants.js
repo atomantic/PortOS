@@ -1,3 +1,5 @@
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { publishImageFiles } from './publication.js';
 /**
  * Image variant helpers — shared logic for the three synchronous variant
  * endpoints: clean, remove-watermark, and light-regen.
@@ -7,7 +9,7 @@
  * and returns a gallery-compatible response object. The three operations share
  * an identical persist-variant tail:
  *
- *   await Promise.all([writeFile(outPath, data), writeFile(sidecarPath, …)])
+ *   await atomicWrite(outPath, data); await atomicWrite(sidecarPath, …)
  *   const filed = await autoFileCleanedToSourceCollections(src, out)
  *   console.log(…)
  *   return { …variantMeta, filename, path, width, height, … }
@@ -98,32 +100,32 @@ export async function persistVariant({
   // current and future caller.
   const untimedVariantMeta = omitRenderTiming(variantMeta);
 
-  await Promise.all([
-    atomicWrite(outPath, data),
-    atomicWrite(sidecarPath, untimedVariantMeta),
-  ]);
+  return withBackupAssetPublication(() => publishImageFiles([outPath, sidecarPath], async () => {
+    await atomicWrite(outPath, data);
+    await atomicWrite(sidecarPath, untimedVariantMeta);
 
-  await import('../mediaAssetIndex/index.js')
-    .then(m => m.indexImage({ filename: outFilename }))
-    .catch(err => console.error(`❌ Media index variant refresh failed: ${err.message}`));
+    await import('../mediaAssetIndex/index.js')
+      .then(m => m.indexImage({ filename: outFilename }))
+      .catch(err => console.error(`❌ Media index variant refresh failed: ${err.message}`));
 
-  const filedCollections = await autoFileCleanedToSourceCollections(sourceFilename, outFilename).catch((err) => {
-    console.warn(`⚠️ Auto-file ${outFilename} → source collections failed: ${err?.message || err}`);
-    return [];
-  });
+    const filedCollections = await autoFileCleanedToSourceCollections(sourceFilename, outFilename).catch((err) => {
+      console.warn(`⚠️ Auto-file ${outFilename} → source collections failed: ${err?.message || err}`);
+      return [];
+    });
 
-  console.log(`${logLine}${filedCollections.length ? `, filed to ${filedCollections.length} collection(s)` : ''}`);
+    console.log(`${logLine}${filedCollections.length ? `, filed to ${filedCollections.length} collection(s)` : ''}`);
 
-  return {
-    ...untimedVariantMeta,
-    filename: outFilename,
-    path: `/data/images/${outFilename}`,
-    ...(width != null ? { width } : {}),
-    ...(height != null ? { height } : {}),
-    ...(sizeBefore != null ? { sizeBefore } : {}),
-    ...(sizeAfter != null ? { sizeAfter, sizeBytes: sizeAfter } : {}),
-    ...extraFields,
-  };
+    return {
+      ...untimedVariantMeta,
+      filename: outFilename,
+      path: `/data/images/${outFilename}`,
+      ...(width != null ? { width } : {}),
+      ...(height != null ? { height } : {}),
+      ...(sizeBefore != null ? { sizeBefore } : {}),
+      ...(sizeAfter != null ? { sizeAfter, sizeBytes: sizeAfter } : {}),
+      ...extraFields,
+    };
+  }));
 }
 
 // ---------------------------------------------------------------------------

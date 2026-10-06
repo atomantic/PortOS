@@ -52,6 +52,7 @@ import { getSettings } from '../settings.js';
 import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
 import { getTrack } from '../tracks/index.js';
 import { VIDEO_GEN_MODE, resolveVideoMode } from './modes.js';
+import { getFalVideoModel } from '../../lib/falVideoModels.js';
 import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
 import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
 import {
@@ -458,7 +459,13 @@ async function resolvePreparedParams({
       { status: 400, code: 'VIDEO_GEN_AUDIO_REQUIRED' },
     );
   }
-  if (uploads.audioFile && body.mode !== 'a2v') {
+  // A fal lip-sync model takes the frame plus an uploaded voice clip (no Music Video scene needed).
+  const falLipSync = body.backend === VIDEO_GEN_MODE.FAL && getFalVideoModel(body.falModelId)?.kind === 'lipsync';
+  if (falLipSync && !uploads.audioFile && !body.musicVideo) {
+    await cleanupStaged();
+    throw new ServerError('A fal.ai lip-sync model needs an audioFile upload (the voice to sync to).', { status: 400, code: 'VIDEO_GEN_AUDIO_REQUIRED' });
+  }
+  if (uploads.audioFile && body.mode !== 'a2v' && !falLipSync) {
     await cleanupStaged();
     throw new ServerError(
       `audioFile upload is only valid with mode='a2v' (got mode='${body.mode || 'unset'}').`,
@@ -741,12 +748,38 @@ async function resolvePreparedParams({
       await cleanupStaged();
       throw new ServerError(hosted.errorMessage, { status: 400, code: hosted.errorCode });
     }
+    // A standalone fal lip-sync take: stage the voice clip durably like the frame. The queue removes
+    // it if the job fails, is cancelled or is lost to a restart (uploadedTempPaths); the fal worker
+    // removes it once the take is published.
+    let hostedAudioPath = null;
+    if (falLipSync && uploads.audioFile) {
+      if (!sourceImagePath) {
+        await cleanupStaged();
+        throw new ServerError('A fal.ai lip-sync render needs a reference frame (sourceImage or sourceImageFile).', { status: 400, code: 'VALIDATION_ERROR' });
+      }
+      hostedAudioPath = await stageUploadDurable(uploads.audioFile, 'audio');
+      // A paid route: refuse a clip fal would reject (unreadable, or outside the model's window)
+      // before anything is submitted.
+      const window = getFalVideoModel(body.falModelId)?.audioInput || {};
+      const clipSec = await probeVideoDuration(hostedAudioPath).catch(() => null);
+      if (clipSec == null) {
+        await cleanupStaged();
+        throw new ServerError('Could not read the voice clip\'s duration. Upload a valid WAV, MP3, M4A, AAC, FLAC, OGG or WebM file.',
+          { status: 400, code: 'VIDEO_GEN_AUDIO_DURATION_UNREADABLE' });
+      }
+      if ((window.minSec != null && clipSec < window.minSec) || (window.maxSec != null && clipSec > window.maxSec)) {
+        await cleanupStaged();
+        throw new ServerError(`The voice clip is ${clipSec.toFixed(2)} s; this lip-sync model takes ${window.minSec}–${window.maxSec} s (pad a short line with silence).`,
+          { status: 400, code: 'VIDEO_GEN_AUDIO_LENGTH' });
+      }
+    }
     return {
       backend,
       ...extras,
       effectiveModel: { id: backend, supportedModes: ['text', 'image'] },
       sourceImagePath,
       uploadedTempPath,
+      ...(hostedAudioPath ? { audioFilePath: hostedAudioPath, uploadedTempPaths: [hostedAudioPath] } : {}),
       discardSourceImage,
       cleanupStaged,
     };

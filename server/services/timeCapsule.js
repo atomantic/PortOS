@@ -10,6 +10,7 @@ import { join } from 'path';
 import { createHash } from 'crypto';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFile, readJSONFileStrict, tryReadFile } from '../lib/fileUtils.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 
 const DIGITAL_TWIN_DIR = PATHS.digitalTwin;
@@ -159,7 +160,8 @@ export async function createSnapshot(label, description = '') {
     summary: buildSummary(data)
   };
 
-  return queueIndexWrite(async () => {
+  // Admit before the shared write tail: a cut drains the complete file/index pair.
+  return withBackupAssetPublication(() => queueIndexWrite(async () => {
     // Load (and maybe rebuild) the index BEFORE writing this snapshot file so
     // a recovery scan cannot pick up the file we are about to add, then
     // unshift a duplicate of it.
@@ -170,7 +172,7 @@ export async function createSnapshot(label, description = '') {
     await saveIndex(index);
     console.log(`📸 Time capsule created: "${label}" (${snapshot.id.slice(0, 8)})`);
     return snapshot;
-  });
+  }));
 }
 
 /**
@@ -194,22 +196,27 @@ export async function getSnapshot(id) {
  * Delete a snapshot
  */
 export async function deleteSnapshot(id) {
-  return queueIndexWrite(async () => {
+  return withBackupAssetPublication(() => queueIndexWrite(async () => {
     const index = await loadIndex();
     const exists = index.snapshots.find(s => s.id === id);
     if (!exists) return false;
 
     const snapshotFile = join(SNAPSHOTS_DIR, `${id}.json`);
-    await unlink(snapshotFile).catch((err) => {
-      if (err.code !== 'ENOENT') throw err;
-    });
-
+    // Commit reference removal first: a failed index write must retain the
+    // snapshot bytes. Restore the listing on unlink failure so deletion stays retryable.
+    const previousSnapshots = index.snapshots;
     index.snapshots = index.snapshots.filter(s => s.id !== id);
     await saveIndex(index);
+    await unlink(snapshotFile).catch(async err => {
+      if (err.code === 'ENOENT') return;
+      index.snapshots = previousSnapshots;
+      await saveIndex(index);
+      throw err;
+    });
 
     console.log(`🗑️ Time capsule deleted: "${exists.label}" (${id.slice(0, 8)})`);
     return true;
-  });
+  }));
 }
 
 /**

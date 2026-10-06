@@ -1,4 +1,5 @@
 import { useEffect, useId, useState } from 'react';
+import { Link } from 'react-router';
 import * as api from '../../services/api';
 import toast from '../ui/Toast';
 
@@ -25,67 +26,25 @@ const normalizeCapabilities = (value) => ({
 });
 
 const OPTIONS = [
-  { key: 'auditReports', label: 'Allow private CoS process audits', hint: 'Review at most three completed jobs per turn for selected maintainer apps. Requires PortOS reads; synthetic issue filing requires its separate grant. Raw transcripts stay private.' },
-  {
-    key: 'manageToolRecipes',
-    label: 'Allow mind to manage saved tool recipes',
-    hint: 'Definition authority only; underlying reads still require bounded PortOS read access. Mind authoring and invocation arrive in a later phase. You can manage the library below with this grant off.',
-  },
-  {
-    key: 'readPortos',
-    label: 'Allow bounded PortOS reads',
-    hint: 'Lets the mind inspect the selected Brain, goals, journal, calendar, health, feed, catalog, and runtime adapters.',
-  },
-  {
-    key: 'writePortos',
-    label: 'Allow bounded PortOS updates',
-    hint: 'Lets the mind use typed Brain, journal, goals, health-log, and feed-state actions. Process control, browser actions, messaging, and paid generation stay excluded.',
-  },
-  {
-    key: 'createTasks',
-    label: 'Allow mind to queue CoS agent tasks',
-    hint: 'Queues typed tasks through isolated worktrees, capacity, budget, review, CI, and landing-policy gates.',
-  },
-  {
-    key: 'fileIssues',
-    label: 'Allow mind to read and file GitHub/GitLab issues',
-    hint: 'Lets the mind read an authorized app\'s open issues and file new ones with the required dispatch labels. This is the queueing lane that still works when no coding agent is attached to this machine — no editing, closing, or commenting on existing issues.',
-  },
-  {
-    key: 'visitEidoversePeers',
-    label: 'Allow guest travel and chat with federated worlds',
-    hint: 'Lets the mind visit enabled registered peers and exchange live chat with their humans and agents. Messages cross instances; private records and secrets must stay local.',
-  },
-  {
-    key: 'manageEidoverse',
-    label: 'Allow private Eidoverse world management',
-    hint: 'Lets the mind project PortOS resources, apply bounded world-building and role operations, and speak as the persistent CoS identity. This does not grant generic PortOS record writes.',
-  },
-  {
-    key: 'promoteEidoverseFoundations',
-    label: 'Allow promoting Eidoverse foundations to the shared baseline',
-    hint: 'Lets the mind offer a world foundation this install authored to the shared PortOS baseline, so peers can inherit the substance without your style layer. Separate from world management on purpose: building locally never implies publishing. The server re-runs the agent-free resilience assay itself and refuses a payload carrying machine identity, PII, or credentials.',
-  },
-  {
-    key: 'installEidoverseControllers',
-    label: 'Allow installing executable world controllers',
-    hint: 'Lets the mind attach a bounded, PortOS-supervised controller to your private world so it keeps ticking between wakes, and retire one it no longer wants. Controllers are named by id against the fixed registry PortOS ships — a mind can never point one at code you did not install — and every tick is synchronous, so a controller cannot reach an AI provider or the network. A controller speaks or builds only when its install explicitly enables delivery.',
-  },
-  {
-    key: 'manageMind',
-    label: 'Allow mind to clean up its mindspace',
-    hint: 'Lets the mind archive only its own memories, forget older trajectory history, or rebuild derived context. Cleanup remains bounded and auditable.',
-  },
-  {
-    key: 'adjustLocalContext',
-    label: 'Allow mind to adjust local model context (numCtx)',
-    hint: 'Lets the mind raise or lower its own local API provider context window within RAM/GPU safety clamps. Cloud providers stay out of reach; oversized requests are refused so PortOS is not OOMed.',
-  },
-  {
-    key: 'callUser',
-    label: 'Allow mind to call you on FaceTime Audio',
-    hint: 'Lets the mind ring the handle configured in Settings > Voice when nothing on screen can reach you. Honors quiet hours, never dials while a browser tab can speak, and is capped at 3 calls per 24 hours at least 30 minutes apart.',
-  },
+  { group: 'work', key: 'createTasks', label: 'Allow mind to queue CoS agent tasks', hint: 'Queue a task on an authorized app. Budget, review, CI, and landing policy still apply. Model choice is the allowlist below, or every configured coding model when that list is empty.' },
+  { group: 'work', key: 'fileIssues', label: 'Allow mind to read and file GitHub/GitLab issues', hint: 'Read and file issues on authorized trackers. No edits, comments, or closes.' },
+  { group: 'work', key: 'auditReports', label: 'Allow private CoS process audits', hint: 'Review up to three finished jobs per turn. Filing a finding needs the issue grant.' },
+  { group: 'work', key: 'manageToolRecipes', label: 'Allow mind to manage saved tool recipes', hint: 'Lets the mind edit recipes. You can edit the library with this off. Reads still need their own grants.' },
+  { group: 'records', key: 'readPortos', label: 'Allow bounded PortOS reads', hint: 'Brain, goals, journal, calendar, health, feed, catalog, and runtime.' },
+  { group: 'records', key: 'writePortos', label: 'Allow bounded PortOS updates', hint: 'Typed updates to Brain, journal, goals, health logs, and feed state.' },
+  { group: 'records', key: 'manageMind', label: 'Allow mind to clean up its mindspace', hint: 'Archive its own memories, trim history, or rebuild context.' },
+  { group: 'records', key: 'adjustLocalContext', label: 'Allow mind to adjust local model context (numCtx)', hint: 'Change this mind\'s local context window inside RAM and GPU limits.' },
+  { group: 'records', key: 'callUser', label: 'Allow mind to call you on FaceTime Audio', hint: 'Calls the handle in Settings → Voice. Quiet hours apply, at most 3 calls per day.' },
+  { group: 'world', key: 'manageEidoverse', label: 'Allow private Eidoverse world management', hint: 'Build and speak in this install\'s private world.' },
+  { group: 'world', key: 'visitEidoversePeers', label: 'Allow guest travel and chat with federated worlds', hint: 'Visit enabled peers and chat. Private records stay on this install.' },
+  { group: 'world', key: 'promoteEidoverseFoundations', label: 'Allow promoting Eidoverse foundations to the shared baseline', hint: 'Offer a foundation this install authored. The server rechecks it before it is shared.' },
+  { group: 'world', key: 'installEidoverseControllers', label: 'Allow installing executable world controllers', hint: 'Run a controller PortOS already ships. It cannot call a provider or the network.' },
+];
+
+const GROUPS = [
+  { id: 'work', title: 'Work' },
+  { id: 'records', title: 'Records and reach' },
+  { id: 'world', title: 'Eidoverse' },
 ];
 
 /** What each grant can actually do with one managed app, for its row's sub-label. */
@@ -163,32 +122,35 @@ export default function PersistentMindTaskAccessControls({
   };
 
   return (
-    <div className="space-y-4">
-      {OPTIONS.map((option) => {
-        const id = `${idPrefix}-${option.key}`;
-        return (
-          <div key={option.key} className="flex items-start justify-between gap-4">
-            <div>
-              <label htmlFor={id} className="text-sm text-port-text">{option.label}</label>
-              <p className="mt-0.5 text-xs text-port-text-muted">{option.hint}</p>
-            </div>
-            <input
-              id={id}
-              type="checkbox"
-              checked={draft[option.key]}
-              disabled={disabled || saving}
-              onChange={(event) => save(option.key, event.target.checked)}
-              className="mt-1 h-4 w-4 accent-port-accent disabled:opacity-50"
-            />
-          </div>
-        );
-      })}
+    <div className="space-y-5">
+      {GROUPS.map((group) => (
+        <div key={group.id} className="space-y-3">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-port-text-muted">{group.title}</h3>
+          {OPTIONS.filter((option) => option.group === group.id).map((option) => {
+            const id = `${idPrefix}-${option.key}`;
+            return (
+              <div key={option.key} className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <label htmlFor={id} className="text-sm text-port-text">{option.label}</label>
+                  <p className="mt-0.5 text-xs text-port-text-muted">{option.hint}</p>
+                </div>
+                <input
+                  id={id}
+                  type="checkbox"
+                  checked={draft[option.key]}
+                  disabled={disabled || saving}
+                  onChange={(event) => save(option.key, event.target.checked)}
+                  className="mt-1 h-4 w-4 shrink-0 accent-port-accent disabled:opacity-50"
+                />
+              </div>
+            );
+          })}
+        </div>
+      ))}
       {managedApps && (
         <div className="border-t border-port-border pt-4">
-          <div>
-            <p className="text-sm text-port-text">Managed app access</p>
-            <p className="mt-0.5 text-xs text-port-text-muted">Choose which configured apps the task and issue grants may target. One list covers both. Existing installs start with every runnable app allowed.</p>
-          </div>
+          <p className="text-sm text-port-text">Managed app access</p>
+          <p className="mt-0.5 text-xs text-port-text-muted">Apps the task and issue grants may use. Existing installs start with every runnable app allowed.</p>
           {apps.length > 0 ? (
             <div className="mt-3 space-y-3">
               {apps.map((app) => {
@@ -196,9 +158,13 @@ export default function PersistentMindTaskAccessControls({
                 const checked = allowedAppIds ? allowedAppIds.includes(app.id) : app.granted !== false;
                 return (
                   <div key={app.id} className="flex items-start justify-between gap-4">
-                    <div>
+                    <div className="min-w-0">
                       <label htmlFor={id} className="text-sm text-port-text">{app.name}</label>
-                      <p className="mt-0.5 text-xs text-port-text-muted">{managedAppLanes(app)}</p>
+                      <p className="mt-0.5 text-xs text-port-text-muted">
+                        {managedAppLanes(app)}
+                        {' · '}
+                        <Link to={`/apps/${encodeURIComponent(app.id)}/automation`} aria-label={`${app.name} automation`} className="text-port-accent hover:underline">Automation</Link>
+                      </p>
                     </div>
                     <input
                       id={id}
@@ -206,7 +172,7 @@ export default function PersistentMindTaskAccessControls({
                       checked={checked}
                       disabled={disabled || saving || (!draft.createTasks && !draft.fileIssues)}
                       onChange={(event) => saveAllowedAppIds(app.id, event.target.checked)}
-                      className="mt-1 h-4 w-4 accent-port-accent disabled:opacity-50"
+                      className="mt-1 h-4 w-4 shrink-0 accent-port-accent disabled:opacity-50"
                     />
                   </div>
                 );
@@ -215,23 +181,9 @@ export default function PersistentMindTaskAccessControls({
           ) : (
             <p className="mt-3 rounded border border-dashed border-port-border p-3 text-xs text-port-text-muted">No runnable managed apps are currently configured.</p>
           )}
-          {!draft.createTasks && !draft.fileIssues && <p className="mt-3 text-xs text-port-text-muted">Enable the task or issue capability above before selecting managed apps.</p>}
+          {!draft.createTasks && !draft.fileIssues && <p className="mt-3 text-xs text-port-text-muted">Turn on task queueing or issue filing before changing this list.</p>}
         </div>
       )}
-      <div className="rounded border border-port-border bg-port-bg/40 px-3 py-2 text-xs text-port-text-muted">
-        <p className="font-medium text-port-text">Typed authority only</p>
-        <p className="mt-1">Every tool has a closed input schema, explicit side-effect policy, stable request id, and normalized result. Raw PortOS routes are never accepted as tool arguments.</p>
-      </div>
-      <div className="rounded border border-port-border bg-port-bg/40 px-3 py-2 text-xs text-port-text-muted">
-        <p className="font-medium text-port-text">Task landing policy stays authoritative</p>
-        <p className="mt-1">A task can run code review then merge, merge when CI is green, or leave open for human review. The selected per-task landing policy is never widened by this grant.</p>
-      </div>
-      <p className="text-xs text-port-text-muted">
-        An empty model list allows every currently configured coding model. Add exact provider/model pairs below to restrict task creation to a subscription or local-only lane.
-      </p>
-      <p className="text-xs text-port-text-muted">
-        All grants default off. CoS autonomy, capacity, daily budgets, task review defaults, CI, and the tool-specific validation remain authoritative.
-      </p>
     </div>
   );
 }

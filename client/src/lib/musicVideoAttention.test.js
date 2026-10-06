@@ -118,9 +118,9 @@ describe('openRevisionOf', () => {
 });
 
 describe('parked runs (#10156)', () => {
-  it('lists an autonomous run awaiting approval with an Open target and no Resume', () => {
+  it('lists an autonomous run awaiting approval with an Open target (its checkpoint editor in Project settings) and no Resume', () => {
     const [item] = deriveAttentionItems(project({ name: 'Example', autonomousRun: { id: 'auto-1', status: 'awaiting-approval', awaiting: 'lyrics', stage: 'style' } }));
-    expect(item).toMatchObject({ kind: 'autonomous', canResume: false, openTo: 'setup#mv-auto-edit', projectId: 'mv-example' });
+    expect(item).toMatchObject({ kind: 'autonomous', canResume: false, openTo: 'setup?mvPanel=autopilot#mv-auto-edit', projectId: 'mv-example' });
     expect(item.detail).toContain('lyrics');
   });
 
@@ -128,7 +128,8 @@ describe('parked runs (#10156)', () => {
     const stopped = deriveAttentionItems(project({ autonomousRun: { id: 'a', status: 'stopped', stage: 'song' } }));
     const failed = deriveAttentionItems(project({ autonomousRun: { id: 'a', status: 'failed', stage: 'produce', error: 'boom' } }));
     expect(stopped[0]).toMatchObject({ kind: 'autonomous', canResume: true, resumeLabel: 'Resume' });
-    expect(failed[0]).toMatchObject({ canResume: true, resumeLabel: 'Retry', openTo: 'produce' });
+    expect(stopped[0].openTo).toBe('setup?mvPanel=autopilot');
+    expect(failed[0]).toMatchObject({ canResume: true, resumeLabel: 'Retry', openTo: 'produce?mvPanel=autopilot' });
   });
 
   it('lists a stopped or limit-reached auto-review but not older superseded or healthy ones', () => {
@@ -143,7 +144,7 @@ describe('parked runs (#10156)', () => {
   it('lists a production run at its limit, once, even when an autonomous run is parked on it', () => {
     const production = { id: 'prod-1', status: 'limit-reached', stopReason: 'Spend limit' };
     const alone = deriveAttentionItems(project({ productionRuns: [production] }));
-    expect(alone).toEqual([expect.objectContaining({ kind: 'production', runId: 'prod-1', openTo: 'produce', detail: 'Spend limit', canResume: true })]);
+    expect(alone).toEqual([expect.objectContaining({ kind: 'production', runId: 'prod-1', openTo: 'produce?mvPanel=autopilot', detail: 'Spend limit', canResume: true })]);
     const owned = deriveAttentionItems(project({ productionRuns: [production], autonomousRun: { id: 'a', status: 'needs-human', stage: 'produce', output: { productionRunId: 'prod-1' } } }));
     expect(owned.map((i) => i.kind)).toEqual(['autonomous']);
   });

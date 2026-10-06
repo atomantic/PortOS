@@ -354,12 +354,12 @@ describe('persistent mind routes', () => {
         expect.objectContaining({ id: 'mind.cleanup', capability: 'manageMind', granted: false, defaultEnabled: false }),
         expect.objectContaining({ id: 'voice.call-user', capability: 'callUser', granted: false, defaultEnabled: false }),
       ]),
-      // Providers only: the apps live on the one shared roster, so the page
-      // cannot render two managed-app lists that disagree.
-      taskCatalog: { providers: [{ id: 'codex' }] },
+      // Coding providers stay off this settings payload. The page configures
+      // grants and the model allowlist; the wake-time prompt still gets the catalog.
+      taskCatalog: null,
       managedApps: [{ id: 'demo-app', name: 'Demo App', planOnly: true, forge: 'github', granted: true }],
     });
-    expect(res.body.taskCatalog.apps).toBeUndefined();
+    expect(mocks.readPersistentMindTaskCatalog).not.toHaveBeenCalled();
     // The roster never leaks a filesystem path to the browser.
     expect(res.body.managedApps[0].repoPath).toBeUndefined();
     expect(res.body.tools.find((tool) => tool.id === 'cos.create-task').guardrails).toEqual(expect.arrayContaining([

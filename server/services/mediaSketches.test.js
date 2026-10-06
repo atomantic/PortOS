@@ -13,6 +13,11 @@ vi.mock('../lib/fileUtils.js', () => ({
 }));
 
 vi.mock('fs/promises', () => ({
+  readFile: vi.fn(async path => {
+    if (!fileStore.has(path)) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    const value = fileStore.get(path);
+    return Buffer.isBuffer(value) ? value : Buffer.from(JSON.stringify(value));
+  }),
   unlink: vi.fn(async (path) => { fileStore.delete(path); }),
   access: vi.fn(async (path) => { if (!fileStore.has(path)) throw new Error('ENOENT'); }),
 }));

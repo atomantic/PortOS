@@ -1,115 +1,128 @@
-# Peer administration planning (draft)
+# Peer administration
 
-This draft is a **dependency foundation, not executable remote administration**.
-Every advertised action reports `executionSupported: false`. A valid plan stays
-`state: planned`, `queued: false`, `inFlight: false`. It cannot update, restart,
-download, install, cancel active work, or become a queued operation after an
-upgrade. No executor, shell command or maintenance override is wired here.
+Peer administration is receiver-authorized, private federation between paired
+instances. Installation, pairing, discovery, display names, and planning grants
+never authorize execution. Development and fixture tests do not create live
+grants, downloads, updates, or restarts.
 
-The fixed vocabulary is `portos.update`, `portos.restart`, and
-`catalog.install`. Update/restart have no user-provided arguments. Catalog plans
-accept only a shipped catalog key and `ollama` or `lmstudio`; free-form model IDs,
-URLs, filesystem paths, code recipes, tokens, force flags and license-acceptance
-flags are rejected. Gated models and Ollama import recipes require local setup
-and cannot be planned through this surface. No terms are accepted by a plan.
+## Setup and supported actions
 
-## Later operator setup
+On the receiving host, open Instances → the peer → Peer administration. Compare
+both instance UUIDs, then review a separate, action-specific execution grant.
+`execution-v1` requires explicit confirmation; existing `planning-v1` grants
+remain planning-only. The UI grants one hour; the API permits one minute through
+24 hours. The audit identity is the server-derived operator session (including
+delegated agent sessions), or a genuine local operator on a password-free host.
+Setup and local catalog review retain `requireHostControl`.
 
-Nothing is granted by installation, discovery, pairing, sync opt-in, this PR,
-or an instance's display name. No migration creates permission or credentials.
+The fixed action vocabulary accepts no arbitrary commands, credentials, paths,
+URLs, force flags, scripts, import recipes, or license-acceptance flags:
 
-1. On the **receiving host**, use an operator session (including its existing
-   delegated agent session), or a local connection on a password-free install.
-   Enable and pair the known peer using the existing pairing workflow.
-2. Open Instances → the peer → **Peer administration · planning only**. Compare
-   the receiving host UUID and paired caller UUID. These IDs, the existing pair
-   credential binding, and the exact action define authority; names do not.
-3. Review a specific grant, then explicitly allow planning for one hour. The API
-   supports one minute to 24 hours. The API/UI returns a grant ID and timestamps.
-   This is `planning-v1`, not permission to execute. A future execution protocol
-   must require another explicit operator grant with a different scope.
-4. On the sending host, an operator can preview update/restart requirements.
-   The peer must separately have granted that sender planning access. Catalog
-   plans are API-only until source/license/destination review is available.
-5. Revoke an action on the receiving host at any time. Revocation and renewal
-   rotate its grant ID; existing preflights/plans immediately become unusable.
-   Expiry, disabled/deleted peers, identity changes and pair-secret rotation
-   deny access. Disabling suspends the grant; use Revoke to permanently remove
-   its permission. Re-enabling cannot extend its original expiry.
+- `portos.update`: the receiver's clean `main` checkout, pinned to the exact
+  preflight origin commit. Forks must be synchronized locally first. The adapter
+  preserves fork-aware preflight and never forces, resets, or rebases divergent
+  work. Pinned updates use fast-forward only.
+- `portos.restart`: only the receiver's verified PortOS server and CoS processes.
+  Script identities are verified; no unrelated applications are restarted.
+- `catalog.install`: only supported, receiver-reviewed single-file LM Studio
+  GGUF catalog artifacts. Configure `LM_STUDIO_MODELS_DIR` locally to the actual
+  LM Studio model folder; the adapter refuses a guessed default. A local review binds the catalog key, immutable source
+  revision, filename, SHA-256, exact size, license, installed runtime,
+  destination, and runtime memory requirement. Source repositories and actual
+  destinations are derived by the receiver. Unknown, gated, unreviewed, changed,
+  unsupported, or insufficient-resource entries deny. Ollama, MLX, and sharded
+  artifacts are not supported by this execution adapter.
 
-Grant writes compare the prior grant ID to prevent stale browser saves from
-resurrecting revoked permission. Setup is always behind `requireHostControl`;
-that gate and existing update, restart, model, settings and socket routes retain
-their original authority rules. There is no instance-password or Basic fallback
-on this protocol. Operator credentials are never forwarded to the peer.
+Catalog review is configuration, not a download, model launch, acceptance of new
+terms, or permission to execute. A paired sender still needs the separate
+catalog execution grant. Installation verifies the streamed byte count and hash
+before publication and never replaces an existing destination file.
 
-## Protocol and audit identity
+On the sending host, prepare the desired action, inspect its exact signed
+preflight, then request execution. The sender stores the request identity and signed preview before
+sending and refuses dispatch if that recovery record cannot be read back.
+An uncertain response retains the request and offers **Check status**; it never
+starts another attempt automatically. The receiving host owns the durable ledger;
+browser storage retains the evidence needed to recover its receipt. A proven local
+pre-send rejection permits a fresh preview. A timeout or unsigned remote refusal
+never does.
 
-Exact POST routes under `/api/federation/admin/v1/` are `preflight`, `plans`,
-`receipt`, and `execute`. Every route requires the current verified paired
-credential even when the optional instance password is off. The global gate
-only admits these exact paths; it does not give peers host-control authority.
+## Authority and drain
 
-- Preflight: `{ protocolVersion: 1, challenge: <uuid>, intent }`. The receiver
-  validates the action grant and catalog entry, rechecks identity/grant after
-  probes, and signs a snapshot with a domain-separated HMAC using the existing
-  pair secret. It binds sender/receiver UUIDs, version, action, grant ID, unique
-  preflight ID, challenge and a maximum 60-second expiry. The sender verifies
-  that proof, target identity, version contract and freshness before planning.
-- Plan: `{ protocolVersion: 1, requestId: <uuid>, preflightId, grantId, intent }`.
-  The preflight is consumed once. An exact same-request retry returns the same
-  signed receipt; changed payloads reusing a request ID are rejected. A new
-  request ID cannot consume an already-used preflight. Reconciliation uses
-  `receipt` with `{ requestId }`, authenticated and scoped to that peer.
-- Execute: `{ requestId }` verifies ownership/current permission, then returns
-  `503 PEER_ADMIN_EXECUTION_UNAVAILABLE`. It never responds with job acceptance
-  or restart completion and never creates an operation.
+Execution grants are machine-local settings, bound to both instance UUIDs,
+current pair credentials, action, grant ID/generation, expiry and the non-rewound
+execution epoch. Grant changes use compare-and-swap on the previous grant ID and
+advance the PostgreSQL generation floor before publishing policy. A failed policy
+write therefore cannot leave old authority active.
 
-Receipts contain server-derived sender/target UUIDs, request/preflight/grant IDs,
-intent, timestamps, version and blockers. They are **temporary diagnostics, not
-an execution audit ledger**: maximum 128 preflights and 128 plans per process,
-60-second preflights, five-minute plans, additionally limited by grant expiry.
-Expiry or process restart returns not-found/stale, never resumes work. Duplicate
-preflight challenges within the live window are rejected. There is no eviction
-of live receipts to make room. A future durable execution ledger must retain
-idempotency/replay tombstones independently of these ephemeral previews.
+Execution shares the instance identity writer lock through the launch handoff.
+Credential, peer enablement/membership, or receiver identity changes rotate the
+machine execution epoch before publication. This invalidates all execution grants
+on that receiver; review new grants afterward. Ordinary telemetry/name changes
+preserve grants. Restoring instance identity files also rotates the epoch under
+that lock. Grants and execution receipts are never restored from snapshots.
 
-The operator sender makes only an explicitly requested two-hop preview, with
-one ten-second timeout, a 64 KiB response limit and no redirects. It sends only
-existing pair credentials; network failures never cause automatic retries or
-fallback to broad tokens. An unverifiable response is a refusal. Older peers
-without this protocol remain usable for their existing federation surfaces.
+The receiver consumes a request durably before side effects. Its own maintenance
+hold drains admitted agents, provider work, renders, saves and cleanup naturally.
+It never kills or cancels active work. It claims the exact hold ID/revision using
+a fresh coordinator-owned idle observation, then rechecks identity, grants,
+version, source and resource evidence. Resume and ordinary admission share this
+same journal transaction; a separate lock or a ready-status read cannot launch.
 
-## Required before execution can be enabled
+A one-use in-process capability binds the exact in-flight claim to a fixed action
+and evidence digest. Copies, recovered claims, stale revisions and repeated use
+cannot launch. Revocation during drain prevents dispatch. After launch, revocation
+does not interrupt work already running; the receiver reconciles that operation.
 
-- Integrate a **coordinator-owned exclusive claim**, bound to the maintenance
-  hold ID/revision, with fresh trusted idle evidence and a resume fence. The
-  maintenance admission foundation in PR #10122 does not yet provide that
-  atomic claim. `status().state === 'ready'` followed by execution is unsafe;
-  ordinary `admit` and a second independent lock are not substitutes. All
-  admitted agents, provider work, renders and cleanup must settle naturally;
-  no cancel, kill, forced pause or interruption fallback.
-- Implement a durable, receiver-local operation ledger and fixed adapters for
-  the existing fork-aware PortOS update and PortOS-only restart. Recheck target
-  identity/version/capability and permission at dispatch. Persist request and
-  grant identity before launch. Distinguish queued, draining, in-flight,
-  awaiting-reconnect, succeeded, failed and uncertain; request acceptance never
-  proves restart or update completion. Reconcile the same operation after a
-  crash, bound deadlines and expose typed errors. Retain the exclusive hold
-  when side effects are uncertain; never retry a launch based only on timeout.
-- Integrate the existing catalog source/license review and installer preflight
-  for the exact receiver-side entry/backend. Verify actual destination disk
-  capacity including staging/headroom, memory/runtime fit, installed runtime
-  and reviewed source identity. Preserve local terms and code-review gates;
-  unknown size/requirements, new terms, unknown code and changed catalogs deny.
-  This draft reports only advisory data-volume/OS memory telemetry and explicit
-  missing-check flags. It does **not** claim those are installation checks.
-- Surface rollback only when an adapter supplies a verified supported recovery
-  path; otherwise report manual recovery. Never offer generic git reset, shell,
-  command, URL/path execution or deletion as rollback. Test grant revocation
-  during drain, queued cancellation, dispatch races, crash reconciliation,
-  durable replay rejection and no active-work interruption before enabling.
+## Protocol and recovery
 
-These are dependencies, not permission to operate any peer. Enabling grants,
-credentials, live settings, machine updates/restarts and model downloads remains
-a separate later operator action.
+Planning endpoints retain their original behavior under
+`/api/federation/admin/v1/{preflight,plans,receipt,execute}`. Planning `execute`
+always refuses; upgrading never turns a temporary plan into queued work.
+
+Separate execution POST endpoints are
+`/api/federation/admin/v1/execution/{preflight,dispatch,status}`. Every endpoint
+requires the current scoped paired credential, including on password-free hosts.
+The sender never forwards Basic auth, instance passwords, sessions or agent tokens.
+Exact endpoint admission does not grant general host-control access.
+
+Execution preflights expire within 60 seconds and bind the request, both UUIDs,
+grant generation, receiver version, epoch, fixed intent and evidence digest.
+Execution signatures use canonical JSON and a separate HMAC purpose; planning
+wire signatures remain compatible. Dispatch returns acceptance, not completion.
+Changed input under a consumed request ID is refused permanently, including after
+restart, grant renewal or database restore. Identical retries return the existing
+operation; there is no second launch.
+
+States are `queued`, `draining`, `in-flight`, `awaiting-reconnect`, `succeeded`,
+`failed` and `uncertain`. Active ledger rows are capped at 32; preflights at 128.
+Timeouts, disconnected callers, dead PIDs, and general host health never prove
+completion. Unknown side effects retain exclusive ownership. Boot never replays a
+launch; explicit status reads can reconcile exact completion evidence arriving
+after boot. Terminal database persistence, journal settlement and hold release
+are independently recoverable, including crashes between those boundaries.
+
+Status requests can include the original signed preview. When the receiver has
+never consumed that request, it verifies the signature and both instance identities,
+then atomically records a permanent failed receipt under the same database lock
+as dispatch. That receipt proves no launch occurred and prevents any delayed
+dispatch or reused preflight from starting it later. Already accepted requests
+retain their original state. This recovery works after receiver restart, grant
+revocation and epoch rotation while the original pair credential remains valid;
+it never restores authority from the preview. A request without verifiable
+original evidence remains unresolved instead of treating a bare 404 as proof.
+
+Updates and restarts write per-operation launch evidence before starting their
+detached adapter. Reconciliation requires its exact successful exit receipt and
+matching target evidence: restarted fixed process identities, or the expected
+boot/current commit with verified build, dependencies, submodules and migrations.
+Catalog installation requires its verified artifact and completed publication.
+Missing or conflicting evidence remains uncertain. No generic rollback or force
+Ready button exists. Proven completion releases only the operation's own hold and
+re-evaluates the already-saved scheduling policies; it never enables a policy.
+
+The durable receiver ledger and restore reconciliation are documented in
+[STORAGE](../STORAGE.md#receiver-execution-ledger-foundation-10127). Fixtures cover
+authorization refusal, planning compatibility, revocation/rotation during drain,
+replay, resume fencing, crash gaps, delayed completion and negative resource/hash
+checks without operating any live peer.

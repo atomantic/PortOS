@@ -10,6 +10,7 @@
  * literal, and the task text — and the task text had already drifted by a clause.
  */
 
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { GROK_TUI_ID } from '../../lib/grok.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -18,7 +19,9 @@ const animationWriteTail = createKeyCachedQueue();
 
 // Walk and every named action mutate adjacent records under one sprite. Keep
 // their write tail shared so a scanner approval cannot race a walk revision.
-export const withAnimationWriteTail = (recordId, fn) => animationWriteTail(recordId, fn);
+// File-backed run/set/atlas records are copied by the same rsync as their bytes.
+// Admit before the shared queue, including callers that never update a DB row.
+export const withAnimationWriteTail = (recordId, fn) => withBackupAssetPublication(() => animationWriteTail(recordId, fn));
 
 // manifest → record is the frozen chroma-key precedence for every animation
 // track. A run's own key is the strongest provenance rung while packaging.

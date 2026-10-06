@@ -4,6 +4,7 @@ import { join } from 'path';
 import { DIGITAL_TWIN_DIR, generateId, ensureSoulDir } from './digital-twin-helpers.js';
 import { loadMeta, saveMeta } from './digital-twin-meta.js';
 import { extractVersion } from './digital-twin-meta.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { recordTombstone, clearTombstone, tombstoneTimestamp, supersedingTimestamp } from '../lib/tombstones.js';
 
 export async function getDocuments() {
@@ -37,7 +38,14 @@ export async function getDocumentById(id) {
   };
 }
 
-export async function createDocument(data) {
+// The document file and the meta row that names it are one workflow, so each
+// mutation holds the backup lease from its first byte change through the meta
+// write (#9982).
+export const createDocument = (data) => withBackupAssetPublication(() => createDocumentLeased(data));
+export const updateDocument = (id, updates) => withBackupAssetPublication(() => updateDocumentLeased(id, updates));
+export const deleteDocument = (id) => withBackupAssetPublication(() => deleteDocumentLeased(id));
+
+async function createDocumentLeased(data) {
   await ensureSoulDir();
 
   const meta = await loadMeta();
@@ -79,7 +87,7 @@ export async function createDocument(data) {
   return { ...docMeta, content: data.content };
 }
 
-export async function updateDocument(id, updates) {
+async function updateDocumentLeased(id, updates) {
   const meta = await loadMeta();
   const docIndex = meta.documents.findIndex(d => d.id === id);
 
@@ -115,7 +123,7 @@ export async function updateDocument(id, updates) {
   return await getDocumentById(id);
 }
 
-export async function deleteDocument(id) {
+async function deleteDocumentLeased(id) {
   const meta = await loadMeta();
   const docIndex = meta.documents.findIndex(d => d.id === id);
 

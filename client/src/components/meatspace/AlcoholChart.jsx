@@ -4,6 +4,7 @@ import {
 } from 'recharts';
 import * as api from '../../services/api';
 import BrailleSpinner from '../BrailleSpinner';
+import LoadFailureNotice from './LoadFailureNotice';
 import useChartColors from '../../hooks/useChartColors.js';
 import { formatMonthDay, localDateKey } from '../../utils/formatters';
 
@@ -17,6 +18,7 @@ const GRAMS_PER_STD_DRINK = 14;
 
 export default function AlcoholChart({ sex = 'male', onRefreshKey, onViewChange }) {
   const [data, setData] = useState([]);
+  const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('30d');
   const [unit, setUnit] = useState('grams'); // 'grams' or 'drinks'
@@ -31,7 +33,14 @@ export default function AlcoholChart({ sex = 'male', onRefreshKey, onViewChange 
     const fromStr = localDateKey(from);
     const toStr = localDateKey();
 
-    const entries = await api.getDailyAlcohol(fromStr, toStr).catch(() => []);
+    const entries = await api.getDailyAlcohol(fromStr, toStr, { silent: true }).catch(() => null);
+    setFailed(entries === null);
+    if (entries === null) {
+      // Do not zero-fill: a failed load must not read as a month of abstinence.
+      setData([]);
+      setLoading(false);
+      return;
+    }
 
     // Build chart data with all dates in range (fill zeros)
     const chartData = [];
@@ -126,6 +135,11 @@ export default function AlcoholChart({ sex = 'male', onRefreshKey, onViewChange 
         <div className="flex justify-center py-8">
           <BrailleSpinner text="Loading chart" />
         </div>
+      ) : failed ? (
+        <LoadFailureNotice
+          message="Could not load daily alcohol. The chart is hidden so a failed load is not shown as zero drinks."
+          onRetry={fetchData}
+        />
       ) : (
         <ResponsiveContainer width="100%" height={250}>
           <BarChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>

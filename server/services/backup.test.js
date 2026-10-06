@@ -73,6 +73,13 @@ vi.mock('../lib/databaseMaintenanceJournal.js', () => ({
 vi.mock('../scripts/run-db-migrations.js', () => ({
   runDbMigrations: vi.fn().mockResolvedValue(0),
 }));
+const reconcileMediaAssets = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
+vi.mock('./mediaAssetIndex/db.js', () => ({ reconcileMediaAssets }));
+const executionRestore = vi.hoisted(() => ({ prepare: vi.fn(), finish: vi.fn() }));
+vi.mock('./peerExecutionRestore.js', () => ({
+  preparePeerExecutionRestore: executionRestore.prepare,
+  finishPeerExecutionRestore: executionRestore.finish,
+}));
 // Passthrough seam: the snapshot-cut failure tests wrap acquisition to shorten the
 // drain timeout or fail release. Left unset, runBackup uses the real boundary.
 const snapshotCutSeam = vi.hoisted(() => ({ wrap: null }));
@@ -974,6 +981,7 @@ describe('dumpPostgres status classification', () => {
     const result = dumpPostgres('/tmp/example.sql');
     await flush();
     assertPoolToolSpawn(spawn.mock.calls[0]);
+    expect(spawn.mock.calls[0][1]).toContain('--exclude-table-data=media_assets');
     proc.emit('close', 0);
     expect(await result).toMatchObject({ status: 'ok' });
     vi.unstubAllEnvs();
@@ -1245,6 +1253,8 @@ describe('restorePostgres', () => {
     vi.unstubAllEnvs();
     rmSync(RECOVERY_JOURNAL(), { force: true });
     query.mockReset().mockImplementation(restoreDbAnswer());
+    executionRestore.prepare.mockReset().mockResolvedValue(undefined);
+    executionRestore.finish.mockReset().mockResolvedValue(undefined);
     checkHealth.mockResolvedValue({ connected: true });
     getServerMajorVersion.mockResolvedValue(16);
     ({ restorePostgres } = await import('./backup.js'));
@@ -1507,11 +1517,46 @@ describe('restorePostgres', () => {
       expect(atSpawn.env.PGAPPNAME).toBe(`portos-restore-${atSpawn.journal.id}`);
       // Success releases admission.
       expect(readRecoveryJournal()).toBeNull();
+      expect(executionRestore.prepare).toHaveBeenCalledWith(atSpawn.journal.id);
+      expect(executionRestore.prepare.mock.invocationCallOrder[0]).toBeLessThan(spawn.mock.invocationCallOrder[0]);
+      expect(executionRestore.finish).toHaveBeenCalledWith(atSpawn.journal.id);
+    });
+
+    it('never spawns replay when execution recovery capture fails, then recovers the proven unchanged database', async () => {
+      executionRestore.prepare.mockRejectedValueOnce(new Error('fixture capture unavailable'));
+      const result = await restorePostgres('/dest', 'snap-1', { dryRun: false });
+      expect(result).toMatchObject({ status: 'failed', reason: 'restore_execution_reconciliation' });
+      expect(spawn).not.toHaveBeenCalled();
+      const current = readRecoveryJournal();
+      expect(await resumeDatabaseRestore(current.id)).toMatchObject({ status: 'ok', outcome: 'rolled_back' });
+      expect(executionRestore.finish).toHaveBeenCalledWith(current.id, { rolledBack: true });
+      expect(readRecoveryJournal()).toBeNull();
+    });
+
+    it('keeps committed restore fenced through execution reconciliation failure and retries without replay', async () => {
+      executionRestore.finish.mockRejectedValueOnce(new Error('fixture execution evidence unavailable'));
+      const result = await runRestore();
+      expect(result).toMatchObject({ status: 'failed', reason: 'restore_execution_reconciliation' });
+      const current = readRecoveryJournal();
+      const replayCount = spawn.mock.calls.length;
+      expect(await resumeDatabaseRestore(current.id)).toMatchObject({ status: 'ok', outcome: 'repaired' });
+      expect(spawn).toHaveBeenCalledTimes(replayCount);
+      expect(readRecoveryJournal()).toBeNull();
+    });
+
+    it('retains the generic fence when rollback execution reconciliation fails', async () => {
+      executionRestore.finish.mockRejectedValueOnce(new Error('fixture rollback evidence unavailable'));
+      const result = await runRestore({ exitCode: 1 });
+      expect(result).toMatchObject({ status: 'failed', reason: 'restore_execution_reconciliation' });
+      const current = readRecoveryJournal();
+      expect(await resumeDatabaseRestore(current.id)).toMatchObject({ status: 'ok', outcome: 'rolled_back' });
+      expect(readRecoveryJournal()).toBeNull();
     });
 
     it.each([
       ['schema upgrade', () => ensureSchema.mockRejectedValueOnce(new Error('ddl failed')), 'restore_schema_reconciliation'],
       ['ordered migration', () => runDbMigrations.mockRejectedValueOnce(new Error('migration failed')), 'restore_schema_reconciliation'],
+      ['media rebuild', () => reconcileMediaAssets.mockRejectedValueOnce(new Error('media read failed')), 'restore_media_reconciliation'],
       ['cursor write', () => rewindPostgresSyncCursors.mockRejectedValueOnce(new Error('disk full')), 'restore_sync_resync'],
     ])('a %s fault after commit stays fenced, then recovery repairs from the original floors without replaying', async (_case, inject, reason) => {
       inject();
@@ -2294,6 +2339,15 @@ describe('restoreSnapshot manifest verification', () => {
         subdirFilter: 'brain',
       });
       expect(equalPreview.changedFiles.filter(line => line.includes(relativePath))).toEqual([]);
+
+      // A selected file needs an exact include rule on rsync 3.x; the
+      // directory-only /file/*** pattern silently skips it there.
+      await realFs.writeFile(livePath, liveContent);
+      const filePreview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true, subdirFilter: relativePath });
+      expect(filePreview.changedFiles.some(line => line.includes(relativePath))).toBe(true);
+      expect(await realFs.readFile(livePath, 'utf8')).toBe(liveContent);
+      await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, subdirFilter: relativePath });
+      expect(await realFs.readFile(livePath, 'utf8')).toBe(snapshotContent);
     } finally {
       if (previousRsync === undefined) delete process.env.PORTOS_RSYNC;
       else process.env.PORTOS_RSYNC = previousRsync;
@@ -2341,6 +2395,42 @@ describe('restoreSnapshot manifest verification', () => {
         await realFs.rm(joinPath(PATHS.data, 'brain', 'authority-neighbor.json'), { force: true });
       }
     }
+
+    it('invalidates execution grants before restoring instance identity bytes', async context => {
+      await withRealRsync(context, async () => {
+        const { createPeerExecutionAuthority } = await import('../lib/peerExecutionAuthority.js');
+        const path = joinPath(PATHS.data, 'peer-execution-authority.json');
+        await realFs.rm(path, { force: true });
+        const authority = createPeerExecutionAuthority(PATHS.data);
+        const before = authority.initialize();
+        const identity = '{"self":{"instanceId":"00000000-0000-4000-8000-000000000001"},"peers":[]}';
+        const hash = await writeSnapshotFile('instances.json', identity);
+        await writeManifest({ 'instances.json': hash });
+        await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, subdirFilter: 'instances.json' });
+        expect(authority.read().epoch).not.toBe(before.epoch);
+        expect(await realFs.readFile(joinPath(PATHS.data, 'instances.json'), 'utf8')).toBe(identity);
+        await realFs.rm(path, { force: true });
+      });
+    });
+
+    it.for(['peer-execution-grants.json', 'peer-execution-catalog.json', 'peer-execution/fixture-operation/evidence.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance/state.json', 'Workflow-Maintenance/state.json', 'backup-admission/cut/owner.json', 'Backup-Admission/publications/owner.json'])
+    ('preserves non-rewound execution authority and ownership at %s (#10127)', async (path, context) => {
+      await withRealRsync(context, async () => {
+        const localPath = joinPath(PATHS.data, path);
+        await realFs.mkdir(dirname(localPath), { recursive: true });
+        await realFs.writeFile(localPath, 'current receiver authority');
+        for (const withManifest of [true, false]) {
+          await realFs.rm(joinPath(snapshotDir, 'manifest.json'), { force: true });
+          const hash = await writeSnapshotFile(path, 'obsolete snapshot authority');
+          const neighbor = await writeSnapshotFile(RECORD, '{"value":"snapshot"}');
+          if (withManifest) await writeManifest({ [path]: hash, [RECORD]: neighbor });
+          const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true });
+          expect(preview.changedFiles.some(line => line.includes(path))).toBe(false);
+          await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+          expect(await realFs.readFile(localPath, 'utf8')).toBe('current receiver authority');
+        }
+      });
+    });
 
     it.for([
       { name: 'full restore', options: {} },
@@ -2981,10 +3071,18 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=._*',
         // Machine-local admission state is never installed by a restore (#10064).
         '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
+        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]',
+        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[cC][aA][tT][aA][lL][oO][gG].[jJ][sS][oO][nN]',
+        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[gG][rR][aA][nN][tT][sS].[jJ][sS][oO][nN]',
+        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
+        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[rR][eE][cC][oO][vV][eE][rR][yY].[jJ][sS][oO][nN][lL]',
+        '--exclude=/[wW][oO][rR][kK][fF][lL][oO][wW]-[mM][aA][iI][nN][tT][eE][nN][aA][nN][cC][eE]',
+        '--exclude=/[bB][aA][cC][kK][uU][pP]-[aA][dD][mM][iI][sS][sS][iI][oO][nN]',
         '--dry-run',
         // Leading `/` is load-bearing: rsync matches an unanchored pattern
         // against the end of every path, so `brain/***` would also restore
         // `data/<anything>/brain/**` — outside the scope the preflight verified.
+        '--include=/brain',
         '--include=/brain/***',
         '--include=*/',
         '--exclude=*',
@@ -3007,6 +3105,13 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=desktop.ini',
         '--exclude=._*',
         '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
+        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]',
+        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[cC][aA][tT][aA][lL][oO][gG].[jJ][sS][oO][nN]',
+        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[gG][rR][aA][nN][tT][sS].[jJ][sS][oO][nN]',
+        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
+        '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[rR][eE][cC][oO][vV][eE][rR][yY].[jJ][sS][oO][nN][lL]',
+        '--exclude=/[wW][oO][rR][kK][fF][lL][oO][wW]-[mM][aA][iI][nN][tT][eE][nN][aA][nN][cC][eE]',
+        '--exclude=/[bB][aA][cC][kK][uU][pP]-[aA][dD][mM][iI][sS][sS][iI][oO][nN]',
       ]);
     });
 
@@ -3017,11 +3122,11 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
   });
 
   describe('CoS restore ownership boundary', () => {
-    it.each([undefined, 'cos', 'cos/', 'cos/config.json', 'cos/state.json'])('holds the boundary for affected live scope %s', async subdirFilter => {
+    it.each([undefined, 'cos', 'cos/', 'cos/config.json', 'cos/state.json', 'cos/agents', 'cos/agents/', 'cos/agents/index.json'])('holds the boundary for affected live scope %s', async subdirFilter => {
       await runRestore('/dest', 'snap-1', { dryRun: false, subdirFilter });
       expect(withLiveCosRestore).toHaveBeenCalledTimes(1);
     });
-    it.each([{ dryRun: true }, { dryRun: false, subdirFilter: 'images' }, { dryRun: false, subdirFilter: 'cos/agents' }])('leaves unaffected scope alone: %j', async options => {
+    it.each([{ dryRun: true }, { dryRun: false, subdirFilter: 'images' }, { dryRun: true, subdirFilter: 'cos/agents' }])('leaves unaffected scope alone: %j', async options => {
       await runRestore('/dest', 'snap-1', options);
       expect(withLiveCosRestore).not.toHaveBeenCalled();
     });
@@ -3029,6 +3134,108 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       withLiveCosRestore.mockRejectedValueOnce(new Error('Stop CoS before restoring'));
       await expect(restoreSnapshot('/dest', 'snap-1', { dryRun: false, subdirFilter: 'cos' })).rejects.toThrow('Stop CoS');
       expect(spawn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('live file restore publication boundary', () => {
+    afterEach(() => { snapshotCutSeam.wrap = null; });
+
+    it.each([false, true])('drains file publications before domain queues and holds reconciliation (bypass=%s)', async bypass => {
+      const { withBackupAssetPublication } = await import('../lib/backupSnapshotBoundary.js');
+      const marker = join(testDataRoot(), 'restore-publication.txt');
+      const admitted = Promise.withResolvers();
+      const finishPublication = Promise.withResolvers();
+      const requested = Promise.withResolvers();
+      const transferring = Promise.withResolvers();
+      const reconciling = Promise.withResolvers();
+      const finishReconciliation = Promise.withResolvers();
+      snapshotCutSeam.wrap = acquire => {
+        requested.resolve();
+        return bypass ? () => {} : acquire();
+      };
+      const publication = withBackupAssetPublication(async () => {
+        await fs.writeFile(marker, 'old publication started');
+        admitted.resolve();
+        await finishPublication.promise;
+        await fs.writeFile(marker, 'old publication committed');
+      });
+      await admitted.promise;
+      const proc = fakeProc();
+      spawn.mockImplementationOnce(() => {
+        // Real destination bytes at the rsync process boundary, no live data.
+        writeFileSync(marker, 'restored snapshot');
+        transferring.resolve();
+        setImmediate(() => proc.emit('close', 0));
+        return proc;
+      });
+      reloadSettings.mockImplementationOnce(async () => {
+        reconciling.resolve();
+        await finishReconciliation.promise;
+      });
+      const restore = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
+      let later;
+      try {
+        await requested.promise;
+        if (bypass) {
+          await transferring.promise;
+          expect(withLiveSettingsRestore).toHaveBeenCalledTimes(1);
+        } else {
+          await new Promise(resolve => setImmediate(resolve));
+          expect(withLiveSettingsRestore).not.toHaveBeenCalled();
+          expect(withLiveCosRestore).not.toHaveBeenCalled();
+          expect(spawn).not.toHaveBeenCalled();
+        }
+        finishPublication.resolve();
+        await publication;
+        await reconciling.promise;
+        // Without the outer cut, the older in-flight write overwrites restored
+        // bytes. With it, rsync starts only after that publication is durable.
+        expect(await fs.readFile(marker, 'utf8')).toBe(bypass ? 'old publication committed' : 'restored snapshot');
+        let laterRan = false;
+        later = withBackupAssetPublication(async () => {
+          laterRan = true;
+          await fs.writeFile(marker, 'later publication');
+        });
+        await new Promise(resolve => setImmediate(resolve));
+        expect(laterRan).toBe(bypass);
+      } finally {
+        finishPublication.resolve();
+        finishReconciliation.resolve();
+        await Promise.all([publication, restore, later]);
+      }
+      expect(await fs.readFile(marker, 'utf8')).toBe('later publication');
+    });
+
+    it('refuses an owned cut before domain queues or transfer, while preview remains available', async () => {
+      const { acquireBackupSnapshotCut } = await import('../lib/backupSnapshotBoundary.js');
+      const release = await acquireBackupSnapshotCut();
+      try {
+        await expect(restoreSnapshot('/dest', 'snap-1', { dryRun: false }))
+          .rejects.toMatchObject({ code: 'BACKUP_SNAPSHOT_BUSY' });
+        expect(withLiveSettingsRestore).not.toHaveBeenCalled();
+        expect(withLiveCosRestore).not.toHaveBeenCalled();
+        expect(spawn).not.toHaveBeenCalled();
+        await expect(runRestore('/dest', 'snap-1', { dryRun: true })).resolves.toMatchObject({ dryRun: true });
+        // A refused restore must not release the other owner's cut.
+        await expect(acquireBackupSnapshotCut()).rejects.toMatchObject({ code: 'BACKUP_SNAPSHOT_BUSY' });
+      } finally { release(); }
+    });
+
+    it.each(['domain refusal', 'transfer failure', 'reconciliation failure'])('releases its cut after %s', async failure => {
+      const { acquireBackupSnapshotCut } = await import('../lib/backupSnapshotBoundary.js');
+      if (failure === 'domain refusal') {
+        withLiveCosRestore.mockRejectedValueOnce(new Error('restore refused'));
+      } else {
+        const proc = fakeProc();
+        spawn.mockImplementationOnce(() => {
+          setImmediate(() => proc.emit('close', failure === 'transfer failure' ? 1 : 0));
+          return proc;
+        });
+        if (failure === 'reconciliation failure') reloadSettings.mockRejectedValueOnce(new Error('reload failed'));
+      }
+      await expect(restoreSnapshot('/dest', 'snap-1', { dryRun: false })).rejects.toThrow();
+      const release = await acquireBackupSnapshotCut();
+      release();
     });
   });
 
@@ -3156,6 +3363,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
 
       expect(reloadSettings).toHaveBeenCalledTimes(1);
       expect(invalidateBrainCaches).toHaveBeenCalledTimes(1);
+      expect(reconcileMediaAssets).toHaveBeenCalledWith({ rebuild: true });
       // A live restore must not pass --dry-run to rsync.
       expect(spawn.mock.calls[0][1]).not.toContain('--dry-run');
     });
@@ -3170,6 +3378,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       await runRestore('/dest', 'snap-1', { dryRun: false, subdirFilter: 'images' });
 
       expect(invalidateBrainCaches).not.toHaveBeenCalled();
+      expect(reconcileMediaAssets).toHaveBeenCalledWith({ rebuild: true });
     });
 
     it('does not reload settings for a dry run', async () => {
@@ -3178,6 +3387,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       expect(reloadSettings).not.toHaveBeenCalled();
       expect(invalidateBrainCaches).not.toHaveBeenCalled();
       expect(spawn.mock.calls[0][1]).toContain('--dry-run');
+      expect(reconcileMediaAssets).not.toHaveBeenCalled();
     });
 
     it('defaults to a dry run (no settings reload) when no options are given', async () => {
@@ -3472,7 +3682,7 @@ describe('runBackup lifecycle', () => {
     // owner inventory still lists owners outside admission (#9982).
     const { backupAssetConsistency } = await import('../lib/backupAssetOwners.js');
     const claimed = backupAssetConsistency();
-    expect(claimed.scope).toBe('admitted-owners');
+    expect(claimed.scope).toBe('global');
     expect(manifest.assetConsistency).toEqual(claimed);
     expect(result.assetConsistency).toEqual(claimed);
 

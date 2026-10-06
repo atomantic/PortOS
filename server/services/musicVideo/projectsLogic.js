@@ -285,6 +285,8 @@ export function cloneProjectRecord(source, {
     renderDependencies: null,
     // Publishing outputs and posted URLs belong to the source final render.
     ...(source.publishKit ? { publishKit: null } : {}),
+    // Finished outside PortOS describes the source's video; the new version is made here.
+    ...(source.finishedOutside ? { finishedOutside: null } : {}),
     // #9010: the source's in-flight render mark is not the clone's.
     renderingOn: null,
     renderPartialFilename: null,
@@ -478,6 +480,7 @@ function buildScene(input, { order }) {
     visualLayer: input.visualLayer ?? 'footage',
     stillMove: input.stillMove ?? 'hold',
     cardText: input.cardText ?? null,
+    ...(input.codeOverlay ? { codeOverlay: true } : {}),
     cardColor: input.cardColor ?? null,
     // #8977: cutaway (any image-to-video lane) unless the director asks for a
     // lip-synced performance shot, which only a source-audio provider renders.

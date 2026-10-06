@@ -4,7 +4,7 @@ import { SCENE_ATTENTION_LABELS, sceneAttention } from '../../lib/musicVideoScen
 /**
  * One compact cell per shot, from the same `sceneAttention` answer the Board's
  * scene rows use: green when nothing needs doing, amber otherwise, with the
- * reasons in the tooltip. Each cell opens that scene on the Board.
+ * reasons in the tooltip. Each cell opens that scene on the Storyboard.
  */
 export default function ShotStatusStrip({ projectId, scenes, ctx }) {
   if (!scenes?.length) return null;

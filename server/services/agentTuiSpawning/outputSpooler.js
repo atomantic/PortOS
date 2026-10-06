@@ -1,3 +1,4 @@
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 /**
  * Agent TUI output spooler
  *
@@ -49,7 +50,7 @@ export function createTranscriptWriteReporter({ agentId }) {
       console.error(`❌ agent ${agentId} ${fileLabel} write failed (${err.code || 'error'}): ${err.message}`);
 
       // Update agent metadata to flag transcript as incomplete
-      updateAgent(agentId, { metadata: { transcriptWriteFailed: { file: fileLabel, code: err.code || 'unknown' } } })
+      return updateAgent(agentId, { metadata: { transcriptWriteFailed: { file: fileLabel, code: err.code || 'unknown' } } })
         .catch(metaErr => console.error(`❌ agent ${agentId} transcriptWriteFailed metadata write failed: ${metaErr.message}`));
     },
   };
@@ -96,7 +97,7 @@ export function createOutputSpooler({ agentId, outputFile, rawFile }) {
 
   const reporter = createTranscriptWriteReporter({ agentId });
 
-  const flushPendingLines = async () => {
+  const flushPendingLines = () => withBackupAssetPublication(async () => {
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
     if (pendingLines.length === 0) return;
     const batch = pendingLines;
@@ -105,13 +106,13 @@ export function createOutputSpooler({ agentId, outputFile, rawFile }) {
       appendAgentOutputLines(agentId, batch).catch((err) => reporter.report('state', err)),
       appendFile(outputFile, batch.map(l => `${l}\n`).join('')).catch((err) => reporter.report('output.txt', err))
     ]);
-  };
+  });
 
   const scheduleFlush = () => {
     if (flushTimer || flushing) return;
     flushTimer = setTimeout(() => {
       flushTimer = null;
-      flushing = flushPendingLines().finally(() => {
+      flushing = flushPendingLines().catch(err => reporter.report('state', err)).finally(() => {
         flushing = null;
         // Catch chunks that arrived during the in-flight flush — without
         // this, a producer that goes quiet right after the flush starts
@@ -131,7 +132,7 @@ export function createOutputSpooler({ agentId, outputFile, rawFile }) {
   // scheduleRawFlush is gated by rawFlushing); join() runs once per flush
   // tick, so peak in-memory raw data is bounded by one debounce-plus-IO
   // window of TUI output (typically hundreds of KB on a chatty agent).
-  const flushPendingRawChunks = async () => {
+  const flushPendingRawChunks = () => withBackupAssetPublication(async () => {
     if (rawFlushTimer) { clearTimeout(rawFlushTimer); rawFlushTimer = null; }
     if (pendingRawChunks.length === 0) return;
     const batch = pendingRawChunks.join('');
@@ -159,33 +160,34 @@ export function createOutputSpooler({ agentId, outputFile, rawFile }) {
       }
       const writeBytes = typeof writeBuf === 'string' ? batchBytes : writeBuf.length;
       if (!rawSpoolTruncationWarned) {
-        rawSpoolTruncationWarned = true;
         console.warn(`⚠️ TUI agent ${agentId} raw PTY spool reached ${Math.round(RAW_SPOOL_MAX_BYTES / 1024 / 1024)}MB — truncating spool (oldest bytes dropped; tail-read still reflects most recent)`);
-        updateAgent(agentId, { metadata: { rawSpoolTruncated: true } })
-          .catch(err => console.error(`❌ TUI agent ${agentId} rawSpoolTruncated metadata write failed: ${err.message}`));
+        // Publish the warning before dropping bytes; if this fails, preserve
+        // the previous spool and retry the warning on the next flush.
+        await updateAgent(agentId, { metadata: { rawSpoolTruncated: true } });
+        rawSpoolTruncationWarned = true;
       }
       // Only update the byte counter on successful write — a failed write
       // would otherwise inflate rawBytesWritten and make subsequent flush
       // decisions race the actual on-disk state.
-      const wrote = await writeFile(rawFile, writeBuf).then(() => true).catch((err) => {
-        reporter.report('raw.txt', err);
+      const wrote = await writeFile(rawFile, writeBuf).then(() => true).catch(async (err) => {
+        await reporter.report('raw.txt', err);
         return false;
       });
       if (wrote) rawBytesWritten = writeBytes;
       return;
     }
-    const wrote = await appendFile(rawFile, batch).then(() => true).catch((err) => {
-      reporter.report('raw.txt', err);
+    const wrote = await appendFile(rawFile, batch).then(() => true).catch(async (err) => {
+      await reporter.report('raw.txt', err);
       return false;
     });
     if (wrote) rawBytesWritten += batchBytes;
-  };
+  });
 
   const scheduleRawFlush = () => {
     if (rawFlushTimer || rawFlushing) return;
     rawFlushTimer = setTimeout(() => {
       rawFlushTimer = null;
-      rawFlushing = flushPendingRawChunks().finally(() => {
+      rawFlushing = flushPendingRawChunks().catch(err => reporter.report('raw.txt', err)).finally(() => {
         rawFlushing = null;
         // Same re-schedule guard as scheduleFlush: chunks that arrived
         // during the in-flight appendFile would otherwise sit until

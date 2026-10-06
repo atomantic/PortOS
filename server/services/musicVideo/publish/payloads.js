@@ -7,6 +7,8 @@
 import { ServerError } from '../../../lib/errorHandler.js';
 import { chaptersText } from '../publishKitText.js';
 import { musicVideoDependencyChanges } from '../../../lib/musicVideoDependencies.js';
+import { suggestDistrokidGenres } from '../../../lib/distrokidGenres.js';
+import { suggestSocialCuts } from '../socialCuts.js';
 
 const TITLE_LIMITS = { youtube: 100, shorts: 100, reddit: 300, stackerNews: 80 };
 const DEFAULT_SUBREDDIT = 'aivideo';
@@ -14,6 +16,7 @@ const DEFAULT_SUBREDDIT = 'aivideo';
 const missing = (message) => new ServerError(message, { status: 422, code: 'PUBLISH_ASSET_MISSING' });
 const stale = () => new ServerError('The publishing kit was built from an earlier render — rebuild the kit before filling this draft', { status: 409, code: 'PUBLISH_KIT_STALE' });
 const text = (v) => (typeof v === 'string' ? v.trim() : '');
+const titleCase = (name) => name.replace(/\S+/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
 const kitOf = (project) => (project?.publishKit && typeof project.publishKit === 'object' ? project.publishKit : {});
 
 /** Refuse a kit whose master came from a different render than the project's current one. */
@@ -76,6 +79,13 @@ function youtubeDescription(kit) {
 
 // A typed "@" on Instagram opens the mention picker, which swallows the next word.
 const instagramSafe = (caption) => caption.replace(/@(\w)/g, '$1');
+
+// The release cover: the composed cover art when there is one (already square,
+// with the title set), else the kit's thumbnail (cut square at post time).
+const releaseCover = (kit) => {
+  if (kit.coverArt?.filename) return { dir: 'videoThumbnails', name: kit.coverArt.filename, square: true };
+  return kit.thumbnail ? { dir: 'videoThumbnails', name: kit.thumbnail } : null;
+};
 
 const BUILDERS = {
   youtube: (project, kit) => {
@@ -162,7 +172,54 @@ const BUILDERS = {
     const video = fullVideoUrl(kit);
     const lead = text(kit.copy?.youtube?.description).split(/\n\s*\n/)[0] || '';
     const caption = [lead, video ? `Music video: ${video}` : ''].filter(Boolean).join(' ').slice(0, 500);
-    return { songUrl: song, caption, cover: kit.thumbnail ? { dir: 'videoThumbnails', name: kit.thumbnail } : null, pin: options.pin !== false };
+    return { songUrl: song, caption, cover: releaseCover(kit), pin: options.pin !== false };
+  },
+  // The song as a single for Spotify and the other stores. The service adds the
+  // project's source audio; the cover is the kit's cover art, else its thumbnail cut square.
+  distrokid: (project, kit, options = {}) => {
+    const title = text(project?.name);
+    if (!title) throw missing('Name the project first: it is the song title on Spotify');
+    const artist = text(options.artistName);
+    if (!artist) throw missing('Give the artist name the song is released under (or set it as the DistroKid account under Where you post)');
+    const songwriter = { first: text(options.songwriterFirst), last: text(options.songwriterLast) };
+    if (!songwriter.first || !songwriter.last) throw missing("DistroKid needs the songwriter's real first and last name");
+    const cover = releaseCover(kit);
+    if (!cover) throw missing('Make the cover art in the publishing kit first (or pick a thumbnail)');
+    const releaseDate = text(options.releaseDate);
+    if (releaseDate && !/^\d{4}-\d{2}-\d{2}$/.test(releaseDate)) throw missing('Give the release date as YYYY-MM-DD');
+    const hasLyrics = (project?.lyricCues || []).some((cue) => text(cue?.text));
+    const instrumental = typeof options.instrumental === 'boolean' ? options.instrumental : !hasLyrics;
+    const suggested = suggestDistrokidGenres(project);
+    const genre = text(options.genre) || suggested.primary;
+    const secondary = text(options.secondaryGenre) || suggested.secondary;
+    const fullName = `${songwriter.first} ${songwriter.last}`;
+    // The store preview (and TikTok clip) opens on the song's strongest hook.
+    // A pick at 0:00 (no hook signal, or a song too short to choose) says
+    // nothing DistroKid's own default doesn't, so the question stays untouched.
+    const hookSec = suggestSocialCuts(project, { count: 1 })[0]?.startSec;
+    const previewStartSec = Number.isFinite(options.previewStartSec) ? options.previewStartSec : (hookSec > 0 ? hookSec : null);
+    return {
+      title, artist, songwriter, releaseDate: releaseDate || null,
+      songwriterRole: options.songwriterRole || (instrumental ? 'music' : 'both'),
+      explicit: options.explicit === true,
+      instrumental,
+      ai: { lyrics: options.aiLyrics === true, music: options.aiMusic !== false, vocals: options.aiVocals !== false },
+      genre: genre || null,
+      secondaryGenre: secondary && secondary !== genre ? secondary : null,
+      language: text(options.language) || 'English',
+      // DistroKid title-cases names unless told the capitalization is deliberate ("atomantic", "DJ Example").
+      preserveCaps: typeof options.preserveCaps === 'boolean' ? options.preserveCaps : artist !== titleCase(artist),
+      // Store profiles: a first release asks for new ones; otherwise the director links the existing ones.
+      newArtistProfile: options.newArtistProfile === true,
+      // Apple Music requires a performer and a producer credit (real names).
+      credits: {
+        performer: text(options.performerName) || fullName,
+        performerRole: text(options.performerRole) || null,
+        producer: text(options.producerName) || fullName,
+      },
+      previewStartSec: previewStartSec != null ? Math.max(0, Math.floor(previewStartSec)) : null,
+      cover,
+    };
   },
 };
 

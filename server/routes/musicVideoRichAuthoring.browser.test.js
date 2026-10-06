@@ -17,6 +17,7 @@ import { chromium } from 'playwright-core';
 import { createRequire } from 'node:module';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
+import { browserSuiteCanRun } from '../lib/browserSuiteGate.js';
 
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('mv-rich-ui-browser-') }));
 vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: async () => 'synthetic-instance' }));
@@ -41,8 +42,7 @@ try {
 
 // Read-only dependency discovery can still initialize mocked path fixtures.
 // Vitest skips cleanup hooks when no browser test can run.
-const canRun = Boolean(chrome && ffmpeg && clientBundler);
-if (!canRun) cleanupTempDataRoots();
+const canRun = browserSuiteCanRun('musicVideo browser suite', { Chrome: chrome, ffmpeg, 'client workspace dependencies': clientBundler }, { onUnavailable: cleanupTempDataRoots });
 
 let browser, proc, server;
 afterAll(async () => {
@@ -74,7 +74,7 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     await saveProductionDraft(p.id, draft);
 
     const ui = join(PATHS.data, 'review-ui'); await mkdir(ui, { recursive: true });
-    const entry = `import React,{useEffect,useState} from 'react';import{createRoot}from'react-dom/client';import Panel from './src/components/musicVideo/ProductionReviewPanel.jsx';import DocumentPanel from './src/components/musicVideo/DocumentCompositionPanel.jsx';import useReview from './src/hooks/useMusicVideoProductionReview.js';function App(){const[p,setP]=useState(null);useEffect(()=>{fetch('/api/music-video/${p.id}/production-review').then(r=>r.json()).then(r=>setP(r.project))},[]);const review=useReview({project:p,replaceProject:setP});return p?<main style={{maxWidth:1100,margin:'auto',padding:24}}><h1>Music video production review</h1><DocumentPanel project={p} onProject={setP} onSave={async patch=>{const r=await fetch('/api/music-video/${p.id}',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)});setP(await r.json())}}/><Panel project={p} review={review} onOpenArtifact={id=>window.open('/api/music-video/${p.id}/dev-artifacts/'+id+'/file')}/></main>:null}createRoot(document.getElementById('root')).render(<App/>);`;
+    const entry = `import React,{useEffect,useState} from 'react';import{createRoot}from'react-dom/client';import Panel from './src/components/musicVideo/ProductionReviewPanel.jsx';import DocumentPanel from './src/components/musicVideo/DocumentCompositionPanel.jsx';import useReview from './src/hooks/useMusicVideoProductionReview.js';const STEPS=[['art','Look step'],['storyboard','Storyboard step'],['proof','Make step']];function App(){const[p,setP]=useState(null);const[stage,setStage]=useState('art');const planning=useState(null);useEffect(()=>{fetch('/api/music-video/${p.id}/production-review').then(r=>r.json()).then(r=>setP(r.project))},[]);const review=useReview({project:p,replaceProject:setP});return p?<main style={{maxWidth:1100,margin:'auto',padding:24}}><h1>Music video production review</h1><DocumentPanel project={p} onProject={setP} onSave={async patch=>{const r=await fetch('/api/music-video/${p.id}',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)});setP(await r.json())}}/><nav>{STEPS.map(([id,name])=><button key={id} type="button" aria-pressed={stage===id} onClick={()=>setStage(id)}>{name}</button>)}</nav><Panel key={stage} project={p} review={review} stage={stage} planning={planning} onOpenArtifact={id=>window.open('/api/music-video/${p.id}/dev-artifacts/'+id+'/file')}/></main>:null}createRoot(document.getElementById('root')).render(<App/>);`;
     const { build } = await import(clientBundler[0]);
     const { default: react } = await import(clientBundler[1]);
     const { default: tailwind } = await import(clientBundler[2]);
@@ -127,7 +127,7 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     await page.getByLabel('Authoring renderer').selectOption('three');
     expect((await store.getProject(p.id)).mediaMode).toBe('code-only');
     const choreography = 'Energy target: driving chorus with an expansive exit.\n0:00–0:04 / opening downbeats: operator steps toward the door and raises the key; camera pushes in; title lands on the first vocal.\n0:04–0:10 / chorus accent: key turns, door swings outward, operator crosses the threshold; camera arcs around the prop; type clears before the exit.\nRepeat chorus: widen the doorway and increase the operator travel while retaining the copper motif.';
-    await page.getByText('Edit visual guide and storyboard', { exact: true }).click();
+    await page.getByText('Edit art direction and visual guide', { exact: true }).click();
     await page.getByLabel('Timed choreography and energy plan', { exact: true }).fill(choreography);
     const [savedPlan] = await Promise.all([
       page.waitForResponse(response => response.url().endsWith('/production-review') && response.request().method() === 'PUT'),
@@ -153,19 +153,21 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     expect(planned.status()).toBe(200);
     expect((await store.getProject(p.id)).treatment.shotDirections[0].medium).toBe('procedural');
     author.sectionId = buildCodeTimeline(await store.getProject(p.id)).sections[0].id;
+    // Each step's panel records feedback against its own approval.
+    await page.getByRole('button', { name: 'Storyboard step', exact: true }).click();
     await page.getByText('Review feedback and revision history', { exact: true }).click();
-    await page.getByLabel('Feedback stage').selectOption('storyboard');
     await page.getByLabel('Feedback target').fill('shot: chorus / operator');
     await page.getByLabel('Requested change').fill('Move the operator behind the threshold at the exit.');
     await page.getByRole('button', { name: 'Save revision feedback' }).click();
     await page.getByText('Move the operator behind the threshold at the exit.', { exact: true }).waitFor();
     expect(await page.getByRole('button', { name: 'Approve lyric-timed storyboard' }).isDisabled()).toBe(true);
-    await page.getByLabel('Resolution for shot: chorus / operator').fill('Reviewed the updated staging in the storyboard.');
-    await page.getByRole('button', { name: 'Resolve feedback after review' }).click();
+    await page.getByLabel('How it was resolved (optional)').fill('Reviewed the updated staging in the storyboard.');
+    await page.getByRole('button', { name: 'Mark resolved' }).click();
     await page.getByText('Resolution: Reviewed the updated staging in the storyboard.', { exact: true }).waitFor();
     const beforeBoard = await page.evaluate(async id => (await fetch('/api/music-video/' + id + '/production-review')).json(), p.id);
     expect(beforeBoard.readiness.storyboard.problems).toEqual([]);
     await approve('Approve lyric-timed storyboard');
+    await page.getByRole('button', { name: 'Make step', exact: true }).click();
     // Generation response, then the candidate the panel fetches in response to the updated project.
     // Observing both names the failing hop, and they also assert the candidate pointer is the one just staged.
     // A load-sensitive timeout here (#9806) was seen once with the server event loop stalled ~12s while
@@ -182,6 +184,14 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     expect(await candidate.json()).toMatchObject({ candidate: { directory: staged }, source: { directory: staged }, stale: false, providerId: 'stub-provider' });
     await traced('the candidate response did not render a reviewable candidate', () => page.getByRole('button', { name: 'Accept reviewed version' }).waitFor());
     expect(author.prompt).toContain(JSON.stringify(choreography));
+    // The generate response replaces the project, which refetches the candidate and the review readiness.
+    // Clicking Accept while those are still in flight was seen to send no accept request under load, so
+    // the click waits for the page's music-video requests to settle and the button to be enabled.
+    await traced('the page did not settle after generation', async () => {
+      const settleBy = Date.now() + 30000;
+      while (inFlight.size && Date.now() < settleBy) await new Promise(r => setTimeout(r, 100));
+      await page.waitForFunction(() => [...document.querySelectorAll('button')].some(b => b.textContent === 'Accept reviewed version' && !b.disabled));
+    });
     const [accepted] = await Promise.all([
       apiResponse('POST', '/composition/document/accept'),
       page.getByRole('button', { name: 'Accept reviewed version' }).click(),
@@ -194,14 +204,15 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     await page.locator('video').waitFor({ timeout: 120000 });
     await page.locator('video').evaluate(async video => { await video.play(); await new Promise(r => setTimeout(r, 400)); video.pause(); });
     expect(await page.locator('video').evaluate(v => v.videoWidth)).toBeGreaterThan(0);
-    expect(await page.getByRole('region', { name: 'Saved choreography for proof comparison' }).textContent()).toContain(choreography);
-    expect(await page.getByRole('button', { name: 'Approve — I reviewed this proof with audio' }).isDisabled()).toBe(true);
-    await page.getByLabel('Playback energy compared with the saved plan').fill('The synthetic fixture demonstrates a driving chorus: the modeled subject changes pose and travels while the camera moves through the scene.');
-    await page.getByLabel('Timecoded playback notes').fill('0:02 — subject enters the frame; 0:07 — pose and camera position differ and readable type remains clear. This is a synthetic workflow test, not artistic approval of a production video.');
+    expect(await page.locator('[aria-label="Saved choreography for proof comparison"]').textContent()).toContain(choreography);
+    // Played with sound, the proof can be approved at once; the note below is optional.
+    expect(await page.getByRole('button', { name: 'Approve proof — watched with sound' }).isDisabled()).toBe(false);
+    await page.getByLabel('Notes (optional)').fill('0:02 — subject enters the frame; 0:07 — pose and camera position differ and readable type remains clear. This is a synthetic workflow test, not artistic approval of a production video.');
     expect(await page.getByRole('checkbox', { name: /I watched this revision/ }).count()).toBe(0);
-    await page.getByRole('button', { name: 'Approve — I reviewed this proof with audio' }).click();
-    await page.waitForFunction(() => [...document.querySelectorAll('[role=status]')].filter(el => el.textContent === 'Approved for this revision').length === 3);
+    await page.getByRole('button', { name: 'Approve proof — watched with sound' }).click();
+    await page.getByRole('heading', { name: 'Animated proof approved', exact: true }).waitFor();
     const result = await store.getProject(p.id);
+    expect(Object.keys(result.productionReview.approvals).sort()).toEqual(['art', 'proof', 'storyboard']);
     expect(result.productionReview.feedback[0].resolvedAt).toBeTruthy();
     expect(result.productionReview.approvals.proof.proofReview).toMatchObject({ watchedWithAudio: true, excerptId: result.productionReview.proof.excerptId, timecodedNotes: expect.stringContaining('0:02') });
     expect(errors).toEqual([]);

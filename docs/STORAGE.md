@@ -25,6 +25,16 @@ operated browser sessions and unrelated host apps do not count. Maintenance neve
 cancels work, replays a paid submission, or enables a previously disabled policy.
 Resume removes the identified hold only; a stale request cannot remove a later hold.
 
+The same journal also has one optional exclusive-maintenance ownership slot and
+one last settlement receipt. They fence admission/resume before the DB is usable,
+bind the current operation to its hold and verified evidence, and survive restart.
+They are coordinator authority, **not a parallel execution audit/replay ledger**:
+the last receipt is bounded recovery evidence, not permanent request consumption.
+The peer execution ledger remains receiver-local `db-primary` (below).
+Neither a missing verifier nor timeout/restart releases an in-flight owner.
+Older strict journal readers reject the added fields and fail closed; reverting
+to one cannot resume a claimed hold. Old unclaimed v1 journals still read normally.
+
 Operation age or a dead PID is not proof of saved output. On restart, the journal keeps
 unresolved ownership; runner survivors reconnect to their existing operation. A lost
 worker, failed save, or interrupted journal transaction needs recovery through its owning
@@ -239,7 +249,7 @@ goal data together; interrupted intents remain retryable after restore.
 - Beeper attachment mirror (#37) — message media stays on disk under `data/beeper/attachments/<sha256 prefix>/<sha256>.<ext>` (content-addressed, so one forwarded photo is one file); `beeper_attachments` in PostgreSQL holds the metadata plus `local_path` / `sha256` / `byte_length` / `keep`. Machine-local and **never federated** (message content is PII — see the message-bodies ADR); a lazy CACHE rather than an archive, so it is excluded from backup by default (overridable) while the rows that describe it ride the Postgres dump. The bytes are re-fetchable from Beeper Desktop for as long as the source network still holds the media, and the surface renders a labelled reference when it does not.
 - Media collections — many-to-many links over assets/universes/series/catalog media pointers (`db-primary` link tables) pointing at `asset-file-db-indexed` bytes. **Still `data/media-collections/*` JSON today** — a follow-up slice of #1000.
 
-**Media asset index (`media_assets`, #1000).** One row per generated image/video: `media_key` (`<kind>:<ref>`) PK, `kind`/`ref`/`created_at` mirror columns for queries, the full metadata record in `data` JSONB. It is a **derived index** — the on-disk sidecars + `video-history.json` stay authoritative — reconciled from disk at boot (upsert every asset, prune rows whose file is gone) and kept warm by a generation-`completed` hook. Local-only (rebuilt from disk), so no sync cursor/tombstone. Adapter: `server/services/mediaAssetIndex/{logic,db,index}.js`.
+**Media asset index (`media_assets`, #1000).** One row per generated image/video: `media_key` (`<kind>:<ref>`) PK, `kind`/`ref`/`created_at` mirror columns for queries, the full metadata record in `data` JSONB. It is a **derived index** — the on-disk sidecars + `video-history.json` stay authoritative — reconciled from disk at boot (upsert every asset, prune rows whose file is gone) and kept warm by a generation-`completed` hook. Local-only (rebuilt from disk), so no sync cursor/tombstone. Snapshot dumps exclude its rows; database restore atomically rebuilds it from the current local files before releasing recovery admission, and media file restores refresh it as well. Adapter: `server/services/mediaAssetIndex/{logic,db,index}.js`.
 
 **Asset license provenance (#5638).** Every finished image and video stamps `data.provenance` at finalize time: the renderer/model id, every LoRA applied, and each one's license string and source URL *as known when the pixels were made*. Unknown stays `null` (displayed as "unknown") — never a permissive default. A license re-read months later can differ from the one in force at render, so the stamp is written into the authoritative sidecar / video-history row (the derived `media_assets.data` JSONB mirrors it). LoRA installs persist `license` on the `.metadata.json` sidecar so it is available at render rather than re-fetched. Collection and export surfaces roll the distinct sources up into an Attribution & licenses section.
 
@@ -453,6 +463,10 @@ Apply this checklist to **every new feature that persists data**, and require it
 `data/model-comparison.json` is `file-primary`: machine-local PortOS task-benchmark history and legacy downloaded references, directly inspectable/importable as JSON, with no app-record foreign keys, cross-record queries, or search index. It is intentionally never federated because provider access and run interpretation are install-specific. Schema version 1 is seeded for new installs; migration 351 preserves existing catalogs and migration 409 adds GPT-6 provider choices while preserving public evidence (older releases retired AA/SWE scores; the public read merge restores shipped references). Rsync backups include it; no sync cursor or tombstone is added. Run dates, measured-versus-estimated token basis, and benchmark/configuration identities remain attached to metrics. The server rejects future/malformed versions and serializes writes while preserving the last good catalog. The Models → Comparison page merges release-shipped public evidence with researched local observations on read and derives its composite without persisting another store; direct PortOS runs remain machine-local and appear under Models → Performance. See [Models Comparison](MODEL-COMPARISON.md).
 
 Optional SDK environments under `data/venvs/` are machine-local, regenerable runtime files, not application records. Reactor provisions its pinned SDK, private Python and checksum-verified uv manager on the first authorized render (or optionally through `npm run setup:reactor`); no seed, migration, database table, or peer synchronization is needed. Data Manager identifies these environments but does not purge them while render processes may use them.
+
+### Music Video cover lettering
+
+`data/cover-fonts/` is `file-primary`: the typefaces a director uploads for cover lettering (`<id>.ttf|otf|woff2`) plus a small `fonts.json` index (`{ id, family, ext, width, addedAt }`, width measured at upload). Machine-local and never federated: a font is a licensed binary the director chose for this install, and whether it renders depends on this machine's font system. It is included in normal data backups (no new exclude); it relates to no other record and needs no search, so it stays out of the DB. On macOS each font is also mirrored into `~/Library/Fonts/PortOS/`, because CoreText reads only Fonts folders; other platforms register the file with fontconfig through libvips. An upload is refused unless the renderer proves it can set text in it. The per-artist saved cover design is `settings.musicVideoPublishing.artistStyles` in the file-primary `data/settings.json` (keyed by lowercased artist name), beside the machine-local `platforms` choice; settings are not synced between machines. Neither needs a migration: a cover design stored before `titleStyle`/`tagLayout` existed normalizes to the previous look unchanged. Code: `server/services/musicVideo/coverFonts.js`, `publish/artistStyles.js`; layout: `server/lib/musicVideoCoverOverlay.js`.
 
 ### Private integration API keys
 
@@ -774,3 +788,65 @@ restart. No operation can run or be recovered from them. The future execution
 ledger must be `db-primary`, receiver-local, retain replay/idempotency evidence,
 and be covered by PostgreSQL backup before any executor is connected. See
 [peer administration planning](features/peer-administration.md).
+
+### Receiver execution ledger foundation (#10127)
+
+`peer_execution_operations` and `peer_execution_generation_floors` are receiver-local
+`db-primary` records. Consumption is unique on receiver UUID, authenticated sender
+UUID and request UUID, independently of action or grant renewal. Immutable binding
+fingerprints, operation identities, terminal receipts and monotonic generation
+floors are retained permanently; there is no TTL, pruning, grant/peer foreign key
+or cascade deletion. Active records are capped at 32 and lists use 100-row keyset
+pages. Strict bounded inputs contain fixed intents and evidence digests, never
+credentials, shell commands, arbitrary paths or URLs. These tables never federate.
+Boot DDL, fresh-install SQL and ordered DB migration 013 install the same schema;
+PostgreSQL dumps include it. No seed grants or legacy planning promotion occurs.
+
+`data/peer-execution-authority.json` is boot-safe, machine-local `file-primary`
+fencing metadata: a non-rewound execution epoch and the current/last restore owner.
+It is not a grant or another operation ledger. An absent authority can initialize
+only over empty execution tables; damaged authority cannot silently reset existing
+consumption. Restore rotates the epoch before replay, captures minimal request,
+owner and floor facts in `peer-execution-recovery.jsonl`, then merges those facts
+before ordinary database admission reopens. The recovery file is temporary restore
+evidence, streamed in bounded records/pages rather than a writable parallel store.
+Unknown DB commit outcomes retain the fence and retry the same evidence. Conflicts,
+missing capture and interrupted publication fail closed. Nonterminal records remain
+uncertain; missing DB claim evidence never proves that the journal owner did not start.
+Legacy post-replay adoption publishes a fenced exact-ID empty-adoption record
+directly, never a transient ready epoch. Its first publication has an atomic intent
+link. Only that matching intent/record plus both tables proved empty under the
+shared PostgreSQL writer lock can resume adoption or repair its interrupted file
+publication. This bounded exception cannot recover or recapture ordinary rewinds,
+replace missing permanent facts, or steal another restore's ownership by age/PID.
+
+Filesystem restore preserves both execution files and the whole
+`workflow-maintenance/` subtree, case-insensitively, including absent or damaged
+local records. Snapshot bytes cannot replace this machine's epoch, recovery facts
+or unresolved owner. PostgreSQL restore invokes capture before replay and automatic
+reconciliation before generic restore release, including proven rollback. It never
+replays a committed dump to recover execution records.
+
+The execution receiver now uses this ledger with separate `execution-v1` grants,
+a coordinator-issued one-use launch capability, fixed adapters and epoch-bound
+terminal receipts. Existing planning grants remain powerless. Pair identity changes
+and filesystem identity restores rotate the execution epoch before publication,
+under the same identity writer lock used through dispatch handoff. Invalidation
+needs no database write, so an unavailable database cannot preserve stale grants.
+
+`peer-execution-grants.json` and `peer-execution-catalog.json` are machine-local
+`file-primary` operator configuration, not app records or a parallel operation
+ledger. They have bounded, strict schemas; absent files grant nothing.
+They never federate or restore from snapshots. Grant generations are fenced by
+the permanent PostgreSQL floors and the non-rewound epoch. Catalog reviews bind
+immutable source pins, license review, runtime and exact artifact requirements;
+unknown entries deny. No seed/migration creates reviews or execution authority.
+
+`peer-execution/<operation-uuid>/` holds machine-local, file-primary detached
+adapter launch/exit evidence needed across a server restart, indexed by the
+permanent ledger operation identity. It cannot authorize another launch or replace
+ledger consumption. Preserve it across restores with the authority and maintenance
+journal; do not delete unresolved evidence. Status reconciliation re-reads exact
+terminal proof before settling the current claim. A crash after ledger completion
+but before journal settlement or hold release is recoverable without relaunch.
+See [peer administration](features/peer-administration.md) for supported actions.

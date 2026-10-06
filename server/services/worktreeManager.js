@@ -814,12 +814,15 @@ export const SIBLING_NEXT_HOLDER_IDLE_MS = 10 * 60 * 1000;
  * Refuses (returns false) unless ALL hold: the branch is `next/…`; the holder is
  * a linked worktree (never the primary checkout) outside the managed root,
  * unlocked; the readable registry has no branch/repository owner or running/paused
- * agent inside it; nothing in it changed for `idleMs`; the tree is clean, untracked files included; and HEAD is already on
+ * agent inside it; nothing in it changed for `idleMs`; the tree is clean, untracked files included
+ * (unless `allowUntracked`: a detach leaves untracked files exactly where they are, so a
+ * coordinator follow-up may take over a tree whose only dirt is stray untracked files such as
+ * Finder "name 2.js" duplicates — tracked or staged changes still refuse); and HEAD is already on
  * the remote, so nothing is left only in that tree.
  *
  * @param {string} sourceWorkspace
  * @param {string} branchName
- * @param {{ activeWorkspacePaths?: string[], agents?: object[], requestingAgentId?: string, idleMs?: number, nowMs?: number }} [options]
+ * @param {{ activeWorkspacePaths?: string[], agents?: object[], requestingAgentId?: string, idleMs?: number, nowMs?: number, allowUntracked?: boolean }} [options]
  * @returns {Promise<{ path: string }|null>} the released holder, or null
  */
 export async function releaseIdleSiblingNextHolder(sourceWorkspace, branchName, {
@@ -828,6 +831,7 @@ export async function releaseIdleSiblingNextHolder(sourceWorkspace, branchName, 
   requestingAgentId = null,
   idleMs = SIBLING_NEXT_HOLDER_IDLE_MS,
   nowMs = Date.now(),
+  allowUntracked = false,
 } = {}) {
   if (!sourceWorkspace || !branchName?.startsWith('next/')) return null;
 
@@ -855,7 +859,8 @@ export async function releaseIdleSiblingNextHolder(sourceWorkspace, branchName, 
   // Stricter than `classifyWorktreeDirt` on purpose: this tree isn't PortOS's,
   // so no path counts as disposable scratch.
   const porcelain = await git(['--no-optional-locks', 'status', '--porcelain', '--untracked-files=all']).catch(() => null);
-  if (porcelain !== '') return null;
+  if (porcelain === null) return null;
+  if (allowUntracked ? porcelain.split('\n').some(l => l && !l.startsWith('?? ')) : porcelain !== '') return null;
   const remoteRef = await git(['rev-parse', '--verify', '--quiet', `${branchName}@{upstream}`])
     .catch(() => git(['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branchName}`]))
     .catch(() => null);

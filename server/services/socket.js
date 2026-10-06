@@ -323,6 +323,8 @@ const SIMPLE_BRIDGES = [
   { emitter: musicVideoEvents, event: 'dev-artifact', channel: 'music-video:dev-artifact' },
   // A publish draft's tab was filled, closed by hand, or discarded.
   { emitter: musicVideoEvents, event: 'publish-draft', channel: 'music-video:publish-draft' },
+  // The release cover art was composed, or its source image was queued or failed.
+  { emitter: musicVideoEvents, event: 'cover-art', channel: 'music-video:cover-art' },
 ];
 
 let forwardingRegistered = false;

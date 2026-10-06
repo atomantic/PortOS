@@ -67,11 +67,12 @@ function seedVideoHistory(rows) {
 const base = (id) => `/api/music-video/${id}`;
 const reload = (id) => projects.getProject(id);
 
-async function plannedProject({ lyrics = LYRICS, backend } = {}) {
+async function plannedProject({ lyrics = LYRICS, backend, mediaMode } = {}) {
   const project = await projects.createProject({
     name: 'Example Video',
     concept: { prompt: 'a night run through Example City' },
     ...(backend ? { videoSettings: { backend } } : {}),
+    ...(mediaMode ? { mediaMode } : {}),
   });
   await projects.setProjectAnalysis(project.id, ANALYSIS);
   if (lyrics.length) await projects.updateProject(project.id, { lyricCues: lyrics });
@@ -426,6 +427,45 @@ describe('treatment → scene render fields (#8977 shot mode, #8985 visual layer
     // The card draws its own line, so no lyric cue is stacked over it.
     const card = after.scenes[sung];
     expect(after.composition.textCues.some((c) => c.startSec >= card.startSec && c.startSec < card.endSec)).toBe(false);
+  });
+
+  it('turns an unsung code-2d shot into a code shot, not a still, when the media mode allows no images on the legacy policy (#10297)', async () => {
+    const project = await plannedProject({ mediaMode: 'code-only' });
+    const scenes = (await reload(project.id)).scenes;
+    // The planner already types a code-only project's shots as code; reset one to the default layer.
+    expect(scenes.every((sc) => sc.visualLayer === 'code')).toBe(true);
+    const instrumental = scenes.findLastIndex((sc) => !sc.lyricText);
+    await projects.updateScene(project.id, scenes[instrumental].sceneId, { visualLayer: 'footage' });
+    // A code-only project plans code-first by default (no render-field rewrite); this covers a
+    // director who kept the legacy policy, where the treatment still sets render fields.
+    await projects.updateProject(project.id, { productionPolicy: { strategy: 'legacy', maxGeneratedVideoPercent: 0 } });
+    runPromptThroughProvider.mockResolvedValueOnce({
+      text: JSON.stringify({
+        beats: [{ sectionIndex: 0, objective: 'Open' }],
+        shots: [{ index: instrumental, route: 'code-2d', mode: 'graphic', focalSubject: 'rain' }],
+      }),
+    });
+    const modeBefore = (await reload(project.id)).composition?.mode;
+    const { body } = await compile(project.id, { baseRevision: 0 });
+    const res = await request(app).post(`${base(project.id)}/treatment/apply`).send({ revision: body.treatment.revision });
+    expect(res.status).toBe(200);
+    const after = await reload(project.id);
+    expect(after.scenes[instrumental].visualLayer).toBe('code');
+    expect(after.scenes[instrumental].stillMove ?? 'hold').toBe('hold');
+    // Applying the treatment leaves the render style the project chose.
+    expect(after.composition?.mode).toBe(modeBefore);
+  });
+
+  it('plans code shots without switching a plain render to composed, where they would render black (#10297)', async () => {
+    const project = await projects.createProject({ name: 'Example Video', mediaMode: 'code-only' });
+    await projects.updateProject(project.id, { composition: { mode: 'concat' } });
+    await projects.setProjectAnalysis(project.id, ANALYSIS);
+    const plan = await request(app).post(`${base(project.id)}/plan`).send({ seedPrompts: false });
+    expect(plan.status).toBe(200);
+    const after = await reload(project.id);
+    expect(after.scenes.length).toBeGreaterThan(0);
+    expect(after.scenes.every((sc) => sc.visualLayer === 'code')).toBe(true);
+    expect(after.composition.mode).toBe('concat');
   });
 });
 

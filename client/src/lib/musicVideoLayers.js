@@ -6,6 +6,7 @@
 export {
   MUSIC_VIDEO_VISUAL_LAYERS,
   MUSIC_VIDEO_STILL_MOVES,
+  isSelfDrawnLayer,
   sceneVisualLayer,
   sceneHasAuthoredSpan,
   sceneRenderReady,

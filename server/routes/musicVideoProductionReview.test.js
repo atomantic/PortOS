@@ -151,7 +151,8 @@ describe('human-reviewed Music Video workflow', () => {
     const evidence = { watchedWithAudio: true, excerptId: 'older-proof', filename: 'synthetic-proof.mp4',
       energyComparison: 'Matches the chosen playful target.', timecodedNotes: '0:04 the subject reaches the doorway.' };
     expect((await approve('proof', { proofReview: evidence })).body.code).toBe('MUSIC_VIDEO_REVIEW_STALE');
-    expect((await approve('proof', { proofReview: { ...evidence, timecodedNotes: 'Looks good' } })).status).toBe(400);
+    // Notes are optional: a review without them clears validation and fails only on the stale excerpt.
+    expect((await approve('proof', { proofReview: { ...evidence, energyComparison: undefined, timecodedNotes: undefined } })).body.code).toBe('MUSIC_VIDEO_REVIEW_STALE');
     expect((await approve('proof')).status).toBe(200);
     const accepted = await store.getProject(project.id);
     expect(accepted.productionReview.approvals.proof.proofReview).toMatchObject({
@@ -214,7 +215,6 @@ describe('human-reviewed Music Video workflow', () => {
     expect((await request(app).post(`${base}/production-review/alignment`).set('authorization', 'Bearer expired')
       .send({ basis: saved.body.readiness.alignment.basis, notes: draft.timingNotes })).status).toBe(401);
     expect((await reverify(prior.body.readiness.alignment.basis)).body.code).toBe('MUSIC_VIDEO_REVIEW_STALE');
-    expect((await reverify(undefined, ' ')).status).toBe(400);
     expect((await read()).body.readiness.alignment.status).toBe('stale');
     const reviewed = await reverify();
     expect(reviewed.status).toBe(200);
@@ -261,7 +261,8 @@ describe('human-reviewed Music Video workflow', () => {
     const evidence = { watchedWithAudio: true, excerptId: 'older-proof', filename: 'synthetic-proof.mp4',
       energyComparison: 'Matches the chosen playful target.', timecodedNotes: '0:04 the subject reaches the doorway.' };
     expect((await approve('proof', { proofReview: evidence })).body.code).toBe('MUSIC_VIDEO_REVIEW_STALE');
-    expect((await approve('proof', { proofReview: { ...evidence, timecodedNotes: 'Looks good' } })).status).toBe(400);
+    // Notes are optional: a review without them clears validation and fails only on the stale excerpt.
+    expect((await approve('proof', { proofReview: { ...evidence, energyComparison: undefined, timecodedNotes: undefined } })).body.code).toBe('MUSIC_VIDEO_REVIEW_STALE');
     expect((await approve('proof')).status).toBe(200);
     const accepted = await store.getProject(project.id);
     const acceptedStatus = (await read()).body.readiness;
@@ -353,6 +354,10 @@ describe('human-reviewed Music Video workflow', () => {
     auth.authenticated = true;
     expect((await request(app).post(`${base}/publish/youtube/prepare`).set('authorization', 'Bearer synthetic-agent').send({})).status).toBe(200);
     expect(prepareExternalDraft).toHaveBeenCalledWith(project.id, 'youtube', expect.any(Object));
+    // The "post again" confirmation reaches the service; a non-boolean is refused.
+    expect((await request(app).post(`${base}/publish/youtube/prepare`).set('authorization', 'Bearer synthetic-agent').send({ again: true })).status).toBe(200);
+    expect(prepareExternalDraft).toHaveBeenLastCalledWith(project.id, 'youtube', { again: true });
+    expect((await request(app).post(`${base}/publish/youtube/prepare`).set('authorization', 'Bearer synthetic-agent').send({ again: 'yes' })).status).toBe(400);
   });
 });
 

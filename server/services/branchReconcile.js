@@ -23,6 +23,7 @@
  */
 
 import { stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import { isHostShuttingDown } from '../lib/hostShutdown.js';
 import { getBranches, getDefaultBranch, hasBranchMergeEvidence, deleteBranch } from './git.js';
 import { execGit } from '../lib/execGit.js';
@@ -325,23 +326,52 @@ async function getOpenPrsByHead(repoPath, providedOrigin, { forgeExec = null, fo
  *                         UNLESS it is an abandoned one older than `staleClaimIdleMs`
  *                         (`ageMs` supplied) — those are reaped (see STALE_CLAIM_IDLE_MS,
  *                         and SHIPPED_CLAIM_IDLE_MS for a claim proven shipped)
- * Sibling worktrees (`next-issue-*`, etc.) whose basename is none of these fall
- * through to null and are cleaned normally.
+ * With `roots` (what every retirement passes — see `reconcileWorktreeRoots`), a
+ * worktree outside them is `worktree-unmanaged-location` before any of the above:
+ * a directory PortOS never created carries no ownership signal at all.
  *
- * @param {{ path:string, locked?:boolean, activeAgentIds?:Set<string>, ageMs?:number, staleClaimIdleMs?:number }} input
+ * @param {{ path:string, locked?:boolean, activeAgentIds?:Set<string>, ageMs?:number, staleClaimIdleMs?:number, roots?:Array<{path:string, requireAgentId?:boolean}> }} input
  * @returns {string|null}
  */
-export function worktreeProtectionReason({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false }) {
+export function worktreeProtectionReason({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, roots = [] }) {
   if (!path) return null;
   return worktreeOwnershipReason({
     path,
     locked,
     activeAgentIds,
+    roots,
     allowStaleClaim: true,
     allowLiveClaim,
     ageMs,
     staleClaimIdleMs,
   });
+}
+
+/**
+ * The only places unattended branch reconciliation may retire a worktree from:
+ * PortOS's own CoS worktree root (agent and claim checkouts, PortOS's and every
+ * managed app's) and the repository's `.claude/worktrees/` — the same two roots
+ * `reapMergedWorktrees` confines its unattended pass to.
+ *
+ * Anywhere else is a directory some other process made, and nothing about it
+ * proves that process is gone: a checkout freshly cut from the default branch is
+ * clean and an ancestor of it, which is all `cleanupMerged` otherwise asks for,
+ * and its mtime says when it was created, not whether its owner is finished.
+ * Reconcile once deleted a release worktree a minute after a still-running
+ * release run created it (#10270). So such a tree holds, at any age, with its
+ * branch; the operator's explicit merged-branch cleanup (`deleteMergedBranches`,
+ * `includeUnmanagedTrees`) keeps its wider reach.
+ *
+ * Arbitrary names are accepted INSIDE these roots on purpose: claim trees are
+ * `claim-*`, not `agent-*`, and still need their stale/shipped retirement.
+ *
+ * @param {string} repoPath
+ * @returns {Array<{path:string, requireAgentId:boolean}>}
+ */
+function reconcileWorktreeRoots(repoPath) {
+  return [PATHS.worktrees, repoPath && join(repoPath, '.claude', 'worktrees')]
+    .filter(Boolean)
+    .map((path) => ({ path, requireAgentId: false }));
 }
 
 /**
@@ -355,12 +385,13 @@ export function worktreeProtectionReason({ path, locked, activeAgentIds, ageMs, 
  * @param {{ path:string|null, locked?:boolean, activeAgentIds?:Set<string>, ageMs?:number|null, staleClaimIdleMs?:number, allowLiveClaim?:boolean }} input
  * @returns {string|null} ISO timestamp
  */
-export function worktreeProtectionExpiresAt({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false }) {
+export function worktreeProtectionExpiresAt({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, roots = [] }) {
   if (!path) return null;
   return worktreeHoldExpiresAt({
     path,
     locked,
     activeAgentIds,
+    roots,
     allowStaleClaim: true,
     allowLiveClaim,
     ageMs,
@@ -1021,6 +1052,8 @@ async function releaseRetiredClaim(repoPath, branch, { origin, forgeExec, forgeA
  * worktree, then delete the local branch. Safety gates (ALL must hold):
  *   1. `hasBranchMergeEvidence(default)` re-verified true (fail closed).
  *   2. the branch's worktree (if any) has no real uncommitted changes.
+ *   3. that worktree (if any) lives in a managed root (`reconcileWorktreeRoots`)
+ *      and no lock, live owner, or claim window holds it.
  * A failed gate skips the branch (with a reason) — never a force-delete of
  * unmerged or dirty work.
  *
@@ -1220,8 +1253,9 @@ async function retireBranch(repoPath, b, opts) {
 
 async function retireBranchNow(repoPath, b, { activeAgentIds = new Set(), staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, prepare }) {
   if (b.worktreePath) {
-    // Never tear down a worktree that's locked, a RECENT human /claim session, or
-    // an active CoS agent workspace. An abandoned claim worktree (clean and older
+    // Never tear down a worktree outside the managed roots (see
+    // reconcileWorktreeRoots), one that's locked, a RECENT human /claim session,
+    // or an active CoS agent workspace. An abandoned claim worktree (clean and older
     // than the window) falls through and IS retired; that's the "cleaned 0
     // forever" leak this exists to close.
     const gate = {
@@ -1231,6 +1265,7 @@ async function retireBranchNow(repoPath, b, { activeAgentIds = new Set(), staleC
       ageMs: b.worktreeAgeMs,
       staleClaimIdleMs,
       allowLiveClaim,
+      roots: reconcileWorktreeRoots(repoPath),
     };
     const protectedReason = worktreeProtectionReason(gate);
     if (protectedReason) {

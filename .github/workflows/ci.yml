@@ -44,6 +44,7 @@ jobs:
       client_files: ${{ steps.plan.outputs.client_files }}
       client_sources: ${{ steps.plan.outputs.client_sources }}
       db: ${{ steps.plan.outputs.db }}
+      browser_files: ${{ steps.plan.outputs.browser_files }}
       lint_mode: ${{ steps.plan.outputs.lint_mode }}
       lint_files: ${{ steps.plan.outputs.lint_files }}
       build: ${{ steps.plan.outputs.build }}
@@ -103,6 +104,7 @@ jobs:
           SERVER_MODE: ${{ steps.plan.outputs.server_mode }}
           CLIENT_MODE: ${{ steps.plan.outputs.client_mode }}
           DB_MODE: ${{ steps.plan.outputs.db }}
+          BROWSER_FILES: ${{ steps.plan.outputs.browser_files }}
           LINT_MODE: ${{ steps.plan.outputs.lint_mode }}
           BUILD_MODE: ${{ steps.plan.outputs.build }}
           SMOKE_MODE: ${{ steps.plan.outputs.smoke }}
@@ -121,6 +123,7 @@ jobs:
             echo "- Server tests: \`${SERVER_MODE}\` (shards \`${SERVER_SHARDS}\`)"
             echo "- Client tests: \`${CLIENT_MODE}\` (shards \`${CLIENT_SHARDS}\`)"
             echo "- DB tests: \`${DB_MODE}\`"
+            echo "- Cross-workspace browser suites: \`${BROWSER_FILES}\`"
             echo "- Client lint: \`${LINT_MODE}\`"
             echo "- Client build: \`${BUILD_MODE}\`"
             echo "- Server smoke: \`${SMOKE_MODE}\`"
@@ -511,9 +514,15 @@ jobs:
         run: node scripts/cancel-current-ci-run.js
 
   database:
+    # Also the host for the cross-workspace browser suites (issue #10312): the
+    # server job installs no client workspace, so `server/**/*.browser.test.js`
+    # skip there. This job already has ffmpeg and a runner with Chrome, so it
+    # adds the client install and runs the files the planner selected with
+    # PORTOS_REQUIRE_BROWSER_SUITES set, which turns a missing prerequisite into
+    # a failure instead of a green skip. The DB steps run only when `db` is set.
     name: DB tests
     needs: impact
-    if: needs.impact.outputs.db == 'true'
+    if: needs.impact.outputs.db == 'true' || needs.impact.outputs.browser_files != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -635,6 +644,7 @@ jobs:
             vitest-server-${{ runner.os }}-
 
       - name: Provision test database (portos_test)
+        if: needs.impact.outputs.db == 'true'
         run: npm run setup:db:test --prefix server
 
       # Backup restore coverage takes a real pg_dump. The runner's default
@@ -652,6 +662,7 @@ jobs:
           echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
 
       - name: Run DB-backed tests (portos_test)
+        if: needs.impact.outputs.db == 'true'
         run: |
           set +e
           start=$(date +%s)
@@ -662,6 +673,32 @@ jobs:
           exit $status
         env:
           PGDATABASE: portos_test
+
+      # Same client cache entry as the `client` job (see it for the key and why
+      # an exact hit needs no rebuild).
+      - name: Cache client node_modules
+        id: client-modules
+        if: needs.impact.outputs.browser_files != '[]'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: client/node_modules
+          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
+
+      - name: Install client dependencies
+        if: needs.impact.outputs.browser_files != '[]' && steps.client-modules.outputs.cache-hit != 'true'
+        run: npm ci --prefix client
+
+      # Fail-closed: PORTOS_REQUIRE_BROWSER_SUITES makes the suites' canRun guard
+      # throw (see server/lib/browserSuiteGate.js) when Chrome, ffmpeg or the
+      # client bundler is missing, so a skip can never pass this step.
+      - name: Run cross-workspace browser suites
+        if: needs.impact.outputs.browser_files != '[]'
+        env:
+          CI_TEST_MODE: files
+          CI_TEST_FILES: ${{ needs.impact.outputs.browser_files }}
+          PORTOS_REQUIRE_BROWSER_SUITES: '1'
+          PORTOS_TEST_QUIET: 1
+        run: node scripts/run-ci-tests.js server
 
       - name: Report the failure, then cancel sibling CI jobs
         if: failure() && github.event_name == 'pull_request'

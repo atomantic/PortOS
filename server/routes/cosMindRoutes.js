@@ -65,7 +65,7 @@ import {
   previewPersistentMindBundle,
 } from '../services/persistentMindBundle.js';
 import { resolvePersistentMindImageCapability } from '../services/persistentMindImageCapability.js';
-import { readPersistentMindTaskCatalog } from '../services/persistentMindTaskCapability.js';
+
 import { inspectPersistentMindRuntime } from '../services/persistentMindRuntime.js';
 import { readPersistentMindVisibility } from '../services/persistentMindVisibility.js';
 import {
@@ -345,8 +345,7 @@ router.get('/mind/tools', asyncHandler(async (_req, res) => {
     ? import('../services/persistentMindManagedApps.js')
       .then(({ readPersistentMindManagedApps }) => readPersistentMindManagedApps())
     : null;
-  const [taskCatalog, recipes, roster] = await Promise.all([
-    capabilities.createTasks ? readPersistentMindTaskCatalog() : null,
+  const [recipes, roster] = await Promise.all([
     readCosToolRecipeCatalog({ scope: 'mind' }),
     managedApps,
   ]);
@@ -355,9 +354,10 @@ router.get('/mind/tools', asyncHandler(async (_req, res) => {
     schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
     capabilities,
     boundaries: PERSISTENT_MIND_TOOL_BOUNDARIES,
-    // Providers and readiness only: the apps the mind may target come from the
-    // roster, so the page never shows two lists that could disagree.
-    taskCatalog: taskCatalog && { providers: taskCatalog.providers, providerReadiness: taskCatalog.providerReadiness },
+    // The coding-provider catalog stays on the wake-time task prompt. This
+    // settings view configures grants and the allowlist; it does not list
+    // every provider, model, and effort. Apps come from the one shared roster.
+    taskCatalog: null,
     managedApps: roster && roster.map(({ id, name, planOnly, forge, fullName, granted }) => ({
       id, name, planOnly, forge, fullName, granted,
     })),

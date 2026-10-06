@@ -22,7 +22,7 @@ On drop, `onDragEnd` re-flows the whole grid through `reflowToOrder` so its read
 
 **When adding a new dashboard widget:**
 1. Add a `{ id, label, Component, width, defaultH?, gate? }` entry to `WIDGETS` in `widgetRegistry.jsx`. Use a stable `id` (kebab-case) — it's the contract stored in layouts. Pick `defaultH` from the widget's rough content height (default `4`); it only has to be close, since the cell measures itself once painted.
-2. If the widget needs dashboard data (apps/usage/health), read it from the `dashboardState` prop — do NOT issue a duplicate fetch from inside the widget.
+2. If the widget needs dashboard data (apps/health), read it from the `dashboardState` prop — do NOT issue a duplicate fetch from inside the widget.
 3. If the widget only makes sense in some cases (e.g. only when apps exist), add a `gate: (state) => boolean` predicate.
 4. Add the widget id to the built-in `default` layout in `server/services/dashboardLayouts.js` if it should appear out of the box.
 5. Users can toggle widgets on/off per layout via the Dashboard's layout picker → Edit, and arrange/resize them via the "Arrange" button.

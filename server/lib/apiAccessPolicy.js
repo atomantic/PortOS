@@ -50,7 +50,7 @@ export const PEER_API_SURFACE = Object.freeze([
   { path: '/api/peer-sync/push', methods: Object.freeze(['POST']) },
   // Planning-only administration. Each exact endpoint independently verifies
   // the current paired identity and a host-local action grant. Never host control.
-  ...['preflight', 'plans', 'receipt', 'execute'].map(endpoint => ({
+  ...['preflight', 'plans', 'receipt', 'execute', 'execution/preflight', 'execution/dispatch', 'execution/status'].map(endpoint => ({
     path: `/api/federation/admin/v1/${endpoint}`, methods: Object.freeze(['POST']),
   })),
   // Peer-facing provider APIs; each applies its own per-peer admission.

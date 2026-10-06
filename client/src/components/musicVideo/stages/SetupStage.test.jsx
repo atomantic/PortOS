@@ -1,44 +1,83 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import SetupStage from './SetupStage.jsx';
 
 vi.mock('../../songs/MidiVisualization.jsx', () => ({ default: () => null }));
-vi.mock('../ProjectOptionsPanel.jsx', () => ({ default: () => null, projectOptionsSummary: () => '' }));
-vi.mock('../CreativeSetupPanel.jsx', () => ({ default: () => null }));
-vi.mock('../VisualSpecPanel.jsx', () => ({ default: () => null }));
-vi.mock('../TreatmentPanel.jsx', () => ({ default: () => null, treatmentSummary: () => 'Not started' }));
-vi.mock('../VocalStemControl.jsx', () => ({ default: () => <div>vocal-stem</div> }));
-vi.mock('../SoundBedControl.jsx', () => ({ default: () => <div>sound-bed</div> }));
-vi.mock('../SongRevisionPanel.jsx', () => ({ default: () => <div>song-revision</div> }));
 
-const board = (project) => ({
+const review = (over = {}) => ({ readiness: null, current: true, busy: false, error: null, save: vi.fn(async () => ({})), reverifyAlignment: vi.fn(async () => ({})), ...over });
+const board = (project, extra = {}) => ({
   project, tracks: [], trackName: () => 'Song', tempo: { bpm: '', setBpm: vi.fn() }, audioFilename: 'a.wav', locked: false,
   youtube: { editJob: {}, editUrl: '', setEditUrl: vi.fn(), startEdit: vi.fn() },
-  midi: { model: 'base', active: false }, busy: {}, conceptDraft: {}, styleDraft: {}, treatment: {},
-  onAnalyze: vi.fn(), onAlignLyrics: vi.fn(),
+  midi: { model: 'base', active: false }, busy: {},
+  onAnalyze: vi.fn(), onAlignLyrics: vi.fn(), ...extra,
 });
 
-describe('SetupStage Song & lyrics', () => {
-  it('lays out four numbered steps with done states and keeps advanced audio tools in a trailing fold', () => {
-    const project = { id: 'p', trackId: 't', audioAnalysis: { durationSec: 10 }, lyricCues: [{ id: 'c', text: 'hi', words: [{ w: 'hi', startSec: 0, endSec: 1 }] }] };
-    render(<SetupStage board={board(project)} />);
+describe('Song step', () => {
+  it('lays out four open numbered parts with done states and nothing else', () => {
+    const project = {
+      id: 'p', trackId: 't', audioAnalysis: { durationSec: 10 },
+      lyricCues: [{ id: 'c', text: 'hi', words: [{ w: 'hi', startSec: 0, endSec: 1 }] }],
+      productionReview: { draft: { lyricsMode: 'vocal', timingStatus: 'verified' } },
+    };
+    render(<SetupStage board={board(project, { productionReview: review() })} />);
     const steps = screen.getAllByRole('region', { name: /^Step \d/ });
     expect(steps.map((s) => s.getAttribute('aria-label'))).toEqual([
-      'Step 1: Track', 'Step 2: Analyze', 'Step 3: Lyrics', 'Step 4: Align & verify',
+      'Step 1: Track', 'Step 2: Analyze', 'Step 3: Lyrics', 'Step 4: Time and verify',
     ]);
     steps.forEach((s) => expect(within(s).getByText('Done')).toBeTruthy());
-    const advanced = document.getElementById('mv-setup-advanced-audio');
-    expect(advanced.contains(screen.getByText('vocal-stem'))).toBe(true);
-    expect(advanced.contains(screen.getByText('song-revision'))).toBe(true);
-    expect(advanced.contains(screen.getByText('Preview audio timing revision'))).toBe(true);
-    steps.forEach((s) => expect(advanced.contains(s)).toBe(false));
-    // The lyrics editor is inline in step 3, not a nested fold.
-    expect(steps[2].contains(within(steps[2]).getByText(/Lyrics & phrases/).closest('details'))).toBe(false);
+    // Advanced audio and project options moved to Project settings; no folds here.
+    expect(document.getElementById('mv-setup-advanced-audio')).toBeNull();
+    expect(document.querySelector('details#mv-setup-song')).toBeNull();
+    expect(within(steps[3]).getByText('Word timing verified against the current master.')).toBeTruthy();
   });
 
-  it('marks later steps to do for an empty project', () => {
+  it('marks every part to do for an empty project', () => {
     render(<SetupStage board={board({ id: 'p' })} />);
     expect(screen.getAllByText('To do')).toHaveLength(4);
+  });
+
+  it('verifies the timing on the step itself, keeping an unsaved planning draft in step', async () => {
+    const save = vi.fn(async () => ({}));
+    const setPlanning = vi.fn();
+    const project = { id: 'p', trackId: 't', audioAnalysis: {}, lyricCues: [{ id: 'c', text: 'hi', words: [{ w: 'hi' }] }],
+      productionReview: { draft: { cast: 'kept', lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '' } } };
+    render(<SetupStage board={board(project, { productionReview: review({ save }), planningDraft: [{ cast: 'edited', lyricsMode: 'vocal' }, setPlanning] })} />);
+    fireEvent.change(screen.getByLabelText('Notes (optional)'), { target: { value: 'Listened through twice' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Mark timing verified' }));
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ cast: 'kept', lyricsMode: 'vocal', timingStatus: 'verified', timingNotes: 'Listened through twice' }));
+    await vi.waitFor(() => expect(setPlanning).toHaveBeenCalledWith({ cast: 'edited', lyricsMode: 'vocal', timingStatus: 'verified', timingNotes: 'Listened through twice' }));
+  });
+
+  it('re-verifies a stale timing through the alignment route without requiring a note', () => {
+    const reverifyAlignment = vi.fn(async () => ({}));
+    const project = { id: 'p', trackId: 't', audioAnalysis: {}, lyricCues: [{ id: 'c', text: 'hi' }], productionReview: { draft: { lyricsMode: 'vocal', timingStatus: 'verified' } } };
+    render(<SetupStage board={board(project, { productionReview: review({ reverifyAlignment, readiness: { alignment: { status: 'stale' } } }) })} />);
+    const button = screen.getByRole('button', { name: 'Re-verify timing' });
+    expect(button).toBeEnabled();
+    fireEvent.change(screen.getByLabelText('Notes (optional)'), { target: { value: 'New master checked' } });
+    fireEvent.click(button);
+    expect(reverifyAlignment).toHaveBeenCalledWith('New master checked');
+  });
+
+  it('keeps an unsaved planning draft in step after a re-verify', async () => {
+    const setPlanning = vi.fn();
+    const project = { id: 'p', trackId: 't', audioAnalysis: {}, lyricCues: [{ id: 'c', text: 'hi' }], productionReview: { draft: { lyricsMode: 'vocal', timingStatus: 'verified', timingNotes: 'old' } } };
+    render(<SetupStage board={board(project, {
+      productionReview: review({ readiness: { alignment: { status: 'stale' } } }),
+      planningDraft: [{ cast: 'edited', timingStatus: 'verified', timingNotes: 'old' }, setPlanning],
+    })} />);
+    fireEvent.change(screen.getByLabelText('Notes (optional)'), { target: { value: 'New master checked' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Re-verify timing' }));
+    await vi.waitFor(() => expect(setPlanning).toHaveBeenCalledWith({ cast: 'edited', timingStatus: 'verified', timingNotes: 'New master checked' }));
+  });
+
+  it('confirms an instrumental straight away; a note is optional', () => {
+    const save = vi.fn(async () => ({}));
+    const project = { id: 'p', trackId: 't', audioAnalysis: {}, productionReview: { draft: {} } };
+    render(<SetupStage board={board(project, { productionReview: review({ save }) })} />);
+    fireEvent.click(screen.getByRole('radio', { name: 'Instrumental' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm instrumental' }));
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ lyricsMode: 'instrumental', timingNotes: '' }));
   });
 });

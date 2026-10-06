@@ -60,11 +60,10 @@ import MidiGatedModal from '../components/install/MidiGatedModal.jsx';
 import { listTracks, trackAudioUrl } from '../services/apiTracks.js';
 import CreateProjectDrawer from '../components/musicVideo/CreateProjectDrawer.jsx';
 import AutonomousStartDrawer from '../components/musicVideo/AutonomousStartDrawer.jsx';
-import AutonomousRunPanel from '../components/musicVideo/AutonomousRunPanel.jsx';
 import { automationDraftFrom, automationFromDraft } from '../lib/musicVideoAutomation.js';
 import { listUniverseNames } from '../services/apiUniverseBuilder.js';
-import MusicVideoLayout, { MUSIC_VIDEO_SCROLL_ID } from '../components/musicVideo/MusicVideoLayout.jsx';
-import StageSection from '../components/musicVideo/StageSection.jsx';
+import MusicVideoLayout, { MUSIC_VIDEO_PAGE_ID, MUSIC_VIDEO_SCROLL_ID } from '../components/musicVideo/MusicVideoLayout.jsx';
+import ProjectSettingsDrawer, { SETTINGS_TAB_IDS } from '../components/musicVideo/ProjectSettingsDrawer.jsx';
 import MusicVideoProjectCard from '../components/musicVideo/MusicVideoProjectCard.jsx';
 import PreviewDock from '../components/musicVideo/PreviewDock.jsx';
 import NeedsAttentionBanner from '../components/musicVideo/NeedsAttentionBanner.jsx';
@@ -73,7 +72,6 @@ import StageChecklist from '../components/musicVideo/StageChecklist.jsx';
 import CastSetsStage from '../components/musicVideo/stages/CastSetsStage.jsx';
 import BoardStage from '../components/musicVideo/stages/BoardStage.jsx';
 import ProduceStage from '../components/musicVideo/stages/ProduceStage.jsx';
-import ComposeStage from '../components/musicVideo/stages/ComposeStage.jsx';
 import ReviewStage from '../components/musicVideo/stages/ReviewStage.jsx';
 import { PUBLISH_TARGETS } from '../components/musicVideo/PublishPostingPanel.jsx';
 import PublishStage from '../components/musicVideo/stages/PublishStage.jsx';
@@ -87,11 +85,13 @@ import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
 import { sceneTakeList } from '../lib/musicVideoTakes.js';
 import { deriveAttentionItems } from '../lib/musicVideoAttention.js';
+import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
+import { useMusicVideoReviewDraft } from '../hooks/useMusicVideoReviewDraft.js';
 import {
-  productionReviewStopGuidance, deriveNextAction, deriveStages, projectShotSummary, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, compareMusicVideoProjectsNewestFirst,
+  deriveNextAction, deriveStages, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, stepNotes, autopilotStatus, compareMusicVideoProjectsNewestFirst,
 } from '../lib/musicVideoStages.js';
 import { groupMusicVideoProjects } from '../lib/musicVideoProjectList.js';
-import { AUTONOMOUS_STATUS_LABELS, AUTONOMOUS_VIEWABLE_STAGES } from '../lib/musicVideoAutonomous.js';
+import { AUTONOMOUS_VIEWABLE_STAGES } from '../lib/musicVideoAutonomous.js';
 
 // Automation first: a new project defaults to autopilot with the free tools.
 const emptyCreateForm = () => ({
@@ -110,18 +110,15 @@ function autopilotBlocker(project) {
 // A saved art draft needs every field the server schema requires.
 const EMPTY_PRODUCTION_DRAFT = { cast: '', environments: '', visualLanguage: '', motionLanguage: '', guideArtifactId: null,
   lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [] };
-// The tab that owns each production approval (#10151).
-const APPROVAL_STAGE_BY_TAB = { 'cast-sets': 'art', board: 'storyboard', compose: 'proof' };
+// The step each production approval closes (#10151); it sits at the bottom of that step.
+const APPROVAL_STAGE_BY_TAB = { 'cast-sets': 'art', board: 'storyboard', produce: 'proof' };
+// Steps reviewed by watching: the player leads them, with the approval beside it.
+const PLAYER_FIRST_STAGES = new Set(['board', 'produce', 'review']);
 const STAGE_VIEWS = {
-  setup: SetupStage, 'cast-sets': CastSetsStage, board: BoardStage, produce: ProduceStage, compose: ComposeStage, review: ReviewStage, publish: PublishStage,
+  setup: SetupStage, 'cast-sets': CastSetsStage, board: BoardStage, produce: ProduceStage, review: ReviewStage, publish: PublishStage,
 };
 
-// Keep active work open; historical runs remain available behind their summary.
-const autopilotSummary = (run, readiness) => {
-  const label = run.interrupted ? 'Interrupted — resume to continue' : AUTONOMOUS_STATUS_LABELS[run.status] || run.status;
-  const guidance = productionReviewStopGuidance(run, readiness);
-  return run.error ? `${label} — ${guidance?.current || run.error}` : label;
-};
+
 
 export default function MusicVideo() {
   // Deep-linkable project selection: the selected project lives in the URL
@@ -161,7 +158,10 @@ export default function MusicVideo() {
   const deferredPatches = useRef(new Map());
   const [tracks, setTracks] = useState([]);
   const [universes, setUniverses] = useState(null);
-  const selectedId = routeProjectId || null;
+  // A project-less stage URL (/music-video/board, from the nav manifest) names a stage, not a project:
+  // treat it as the index until the summaries resolve, then redirect to the newest project at that stage.
+  const stageOnlyParam = !routeStage && !routeSceneId && !routeArtifactId ? resolveStageParam(routeProjectId) : null;
+  const selectedId = stageOnlyParam ? null : (routeProjectId || null);
   // Summaries load for the index, or once the header picker is used on a deep link;
   // once wanted they stay loaded (disabling the hook would reset its items).
   const [summariesWanted, setSummariesWanted] = useState(!selectedId);
@@ -257,6 +257,11 @@ export default function MusicVideo() {
     if (selected) byId.set(selected.id, selected);
     return [...byId.values()].sort(compareMusicVideoProjectsNewestFirst);
   }, [selected, summaries.items]);
+  useEffect(() => {
+    if (!stageOnlyParam || !summaries.loaded || summaries.error) return;
+    const newest = sortedProjects[0];
+    navigate(newest ? `/music-video/${encodeURIComponent(newest.id)}/${stageOnlyParam}` : "/music-video", { replace: true });
+  }, [stageOnlyParam, summaries.loaded, summaries.error, sortedProjects, navigate]);
   const productionReview = useMusicVideoProductionReview({ project: selected, replaceProject });
   // Posting (#9282): fill each platform's post in the PortOS Browser, post on a second press.
   const publishing = useMusicVideoPublishing({ project: selected, replaceProject });
@@ -269,7 +274,7 @@ export default function MusicVideo() {
   const [openedStage, setOpenedStage] = useState({ id: null, stage: null });
   // The opened stage waits for readiness (or its failure) so a done project never pins to Cast & Sets.
   const statusKnown = !!productionReview.readiness || !!productionReview.readinessError;
-  if (selected && statusKnown && openedStage.id !== selected.id) setOpenedStage({ id: selected.id, stage: progress.current });
+  if (selected && statusKnown && openedStage.id !== selected.id) setOpenedStage({ id: selected.id, stage: latestMusicVideoReviewDraft(selected) && !selected.renderHistoryId ? 'review' : progress.current });
   const pinnedStage = openedStage.id === selected?.id ? openedStage.stage : null;
   const activeStage = resolveStageParam(routeStage) || (routeSceneId ? 'board' : (pinnedStage || progress.current));
 
@@ -427,13 +432,13 @@ export default function MusicVideo() {
   // listening for anymore) and misattribute its progress UI to whichever
   // project is now selected. Block switching until that import settles. (The
   // hook re-asserts the same invariant against URL-driven navigation.)
-  const selectProject = (id) => {
+  const selectProject = (id, stage = null) => {
     if (youtube.editJob.active && id !== selectedId) {
       toast.error(youtube.switchBlockedMessage);
       return;
     }
     const search = searchParams.toString();
-    navigate(id ? `/music-video/${id}${search ? `?${search}` : ''}` : `/music-video${search ? `?${search}` : ''}`);
+    navigate(id ? `/music-video/${id}${stage ? `/${stage}` : ''}${search ? `?${search}` : ''}` : `/music-video${search ? `?${search}` : ''}`);
   };
 
   useEffect(() => {
@@ -921,7 +926,7 @@ export default function MusicVideo() {
         items.push(videoItem(take.assetId, `${take.assetId}.mp4`, take.prompt || scene.prompt || ''));
       }
     }
-    // Scenes can reuse the same frame/clip (the Produce tab's generation controls surface a
+    // Scenes can reuse the same frame/clip (Make's generation controls surface a
     // "Repetition: N unique frames" badge). Dedupe by key so prev/next and
     // openPreview's .find() land on a single item rather than the first of
     // several identical keys with different prompts.
@@ -956,21 +961,33 @@ export default function MusicVideo() {
     const search = next.toString();
     navigate(`/music-video/${encodeURIComponent(selected.id)}/${stage}${search ? `?${search}` : ''}${anchor ? `#${anchor}` : ''}`, { replace: activeStage === stage });
   };
+  // Project settings (render style, audio tools, autopilot, files) is a drawer
+  // over the open step; `?mvPanel=<tab>` says it is open and on which tab.
+  const settingsParam = searchParams.get('mvPanel');
+  const settingsTab = SETTINGS_TAB_IDS.includes(settingsParam) ? settingsParam : null;
+  const setSettingsTab = (tab) => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (tab) next.set('mvPanel', tab);
+    else next.delete('mvPanel');
+    return next;
+  }, { replace: !!tab && !!settingsTab });
 
-  // The docked preview: scene cards seek it; on a phone it is a mini-player
-  // that starts collapsed. Both reset with the project.
+  // The preview: scene cards and storyboard rows seek it. Steps reviewed by
+  // watching put it first (open); elsewhere, below xl, it is a folded row until
+  // the director opens it. `dockCollapsed` is null until they toggle it.
   const [seekRequest, setSeekRequest] = useState(null);
-  const [dockCollapsed, setDockCollapsed] = useState(true);
-  useEffect(() => { setSeekRequest(null); setDockCollapsed(true); }, [selectedId]);
-  const seekToScene = (scene) => {
+  const [dockCollapsed, setDockCollapsed] = useState(null);
+  useEffect(() => { setSeekRequest(null); setDockCollapsed(null); }, [selectedId]);
+  // `play` starts playback from there (a storyboard row); a scene card only cues the shot.
+  const seekToScene = (scene, { play = false } = {}) => {
     if (typeof scene?.startSec !== 'number') return;
-    setSeekRequest((prev) => ({ t: scene.startSec, n: (prev?.n || 0) + 1 }));
+    setSeekRequest((prev) => ({ t: scene.startSec, n: (prev?.n || 0) + 1, play }));
   };
 
   const audioFilename = projectAudioFilename(selected);
   const audioUrl = audioFilename ? trackAudioUrl(audioFilename) : null;
   const autopilotRun = selected?.autonomousRun || null;
-  const nextAction = selected ? deriveNextAction(selected, {
+  const productionNextAction = selected ? deriveNextAction(selected, {
     readiness: productionReview.readiness,
     publish,
     renderActive: renderTargetsSelected,
@@ -985,6 +1002,15 @@ export default function MusicVideo() {
     planning,
     analyzing,
   }) : null;
+  const reviewingDraft = activeStage === 'review' && !!latestMusicVideoReviewDraft(selected) && !selected?.renderHistoryId;
+  const reviewDraftState = useMusicVideoReviewDraft(selected, { enabled: reviewingDraft });
+  const reviewDraft = reviewDraftState.draft;
+  const nextAction = reviewingDraft ? reviewDraftState.checking
+    ? { id: 'review-imported', kind: 'goto', stage: 'review', label: 'Checking review draft', disabled: true, reason: 'Checking exact-version media availability' }
+    : reviewDraft
+      ? { id: 'review-imported', kind: 'goto', stage: 'review', label: 'Review imported draft', shortLabel: 'Review draft' }
+      : { id: 'review-files', kind: 'open', label: 'Choose review file', shortLabel: 'Choose file' }
+    : productionNextAction;
   // What the server holds that this tab might not be showing (#9940): derived
   // from the saved record, so it survives a reload. Work this tab can see
   // progressing (spinning sections, an attached render) is not flagged.
@@ -997,6 +1023,9 @@ export default function MusicVideo() {
   }) : [];
   const runNextAction = () => {
     if (!selected || !nextAction || nextAction.disabled || compositionSavePending > 0) return;
+    if (nextAction.id === 'review-imported') { openArtifact(reviewDraft.artifactId); return; }
+    if (nextAction.id === 'review-files') { setSettingsTab('files'); return; }
+    if (nextAction.id === 'review-autonomous') { setSettingsTab('autopilot'); return; }
     if (nextAction.kind === 'goto') { goToStage(nextAction.stage, nextAction.anchor); return; }
     switch (nextAction.id) {
       case 'kickoff': handleKickoff(); break;
@@ -1020,6 +1049,7 @@ export default function MusicVideo() {
   // use, so a panel moving between tabs never changes a signature here.
   const board = selected ? {
     project: selected,
+    reviewDraftState,
     activeSceneId: routeSceneId || null,
     onToggleSceneExpand: handleToggleSceneExpand,
     autopilotRun,
@@ -1112,17 +1142,27 @@ export default function MusicVideo() {
     // Choose a Development file as the art-direction visual guide (saved with the rest of the draft).
     useAsGuide: (artifactId) => productionReview.save({ ...EMPTY_PRODUCTION_DRAFT, ...(selected.productionReview?.draft || {}), guideArtifactId: artifactId }),
     goToStage,
+    openSettings: setSettingsTab,
+    productionReview,
+    planningDraft,
     openArtifact,
     openPreview,
     openContactSheet: () => setContactSheetOpen(true),
     seekToScene,
   } : null;
   const StageView = STAGE_VIEWS[activeStage];
+  const playerFirst = PLAYER_FIRST_STAGES.has(activeStage);
+  const projectStatus = !selected ? null : statusKnown && productionReview.readiness
+    ? describeProjectStatus(selected, { progress, nextAction: productionNextAction, reviewingDraft, reviewDraftState })
+    : statusKnown
+      ? { headline: `Status unavailable: ${productionReview.readinessError}`, tone: 'warn', needsYouStage: null }
+      : { headline: 'Loading status…', tone: 'muted', needsYouStage: null };
 
-  const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, liveFirst: activeStage === 'compose' }) : [];
+  const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, liveFirst: activeStage === 'produce', draftsFirst: activeStage === 'review', storyboardFirst: activeStage === 'board' }) : [];
 
   return (
-    <div className="flex h-full flex-col">
+    // Below md the whole page scrolls (title bar and project header with it), so the step gets the screen.
+    <div id={MUSIC_VIDEO_PAGE_ID} className="flex h-full flex-col max-md:overflow-auto">
       <MidiInstallModal {...midi.installGate} />
       <MidiGatedModal {...midi.gatedGate} />
       <MediaPreview preview={preview} setPreview={setPreview} items={previewItems} />
@@ -1187,18 +1227,13 @@ export default function MusicVideo() {
             >
               <option value="">{loading ? 'Loading projects…' : 'Select a project…'}</option>
               {sortedProjects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.name} · {project.shotSummary || projectShotSummary(project)}
-                </option>
+                <option key={project.id} value={project.id}>{project.name}</option>
               ))}
             </select>
             {selected && (
-              <span className="flex items-center gap-1">
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-port-border">v{selected.version || 1}</span>
-              </span>
-            )}
-            {selected && (
-              <span className="flex flex-wrap items-center gap-1">
+              <details className="min-w-0">
+                <summary className="min-h-[44px] cursor-pointer rounded border border-port-border px-2 py-1.5 text-sm">Project actions · v{selected.version || 1}</summary>
+                <div className="flex flex-wrap items-center gap-1 py-2">
                 <button
                   type="button"
                   onClick={handleRename}
@@ -1246,7 +1281,8 @@ export default function MusicVideo() {
                     <Trash2 size={15} />
                   </button>
                 )}
-              </span>
+                </div>
+              </details>
             )}
             {!selected && (
               <>
@@ -1313,7 +1349,7 @@ export default function MusicVideo() {
         }}
       />
 
-      <div id={MUSIC_VIDEO_SCROLL_ID} className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
+      <div id={MUSIC_VIDEO_SCROLL_ID} className="min-h-0 flex-1 p-4 max-md:flex-none md:overflow-auto md:p-6">
         {projectsError && !selected && (
           <Banner tone="error" size="md" title="Music video projects unavailable" className="mb-4" actions={(
             <button
@@ -1328,13 +1364,13 @@ export default function MusicVideo() {
             <p>{projectsError}</p>
           </Banner>
         )}
-        {!selected && !loading && !projectsError && routeProjectId && (
+        {!selected && !loading && !projectsError && routeProjectId && !stageOnlyParam && (
           <p className="text-sm text-port-text-muted">
             Project not found — it may have been deleted.{' '}
             <button onClick={() => navigate('/music-video')} className="text-port-accent underline">Back to projects</button>
           </p>
         )}
-        {!selected && (loading || !routeProjectId) && (
+        {!selected && (loading || !routeProjectId || !!stageOnlyParam) && (
           <div className="space-y-6">
             {/* The header already carries New project / Autonomous: keep the hint, not a second pair of buttons. */}
             <p className="text-sm text-port-text-muted">Pick a project above, start a new one — seed a name, universe and board, choose the tools and a budget, and let autopilot churn — or go fully autonomous from a single prompt.</p>
@@ -1377,6 +1413,8 @@ export default function MusicVideo() {
                         project={project}
                         trackLabel={trackName(project.trackId)}
                         onSelect={() => selectProject(project.id)}
+                        onReview={project.preview?.source === 'final' || project.preview?.source === 'animatic' || project.renderHistoryId || latestMusicVideoReviewDraft(project)
+                          ? () => selectProject(project.id, 'review') : null}
                         onClone={(options) => handleClone(project, options)}
                         isConfirmingDelete={isConfirmingDelete(project.id)}
                         onRequestDelete={() => handleDeleteRequest(project.id)}
@@ -1405,6 +1443,9 @@ export default function MusicVideo() {
           </div>
         )}
         {selected && (
+          <ProjectSettingsDrawer open={!!settingsTab} tab={settingsTab || 'project'} onTabChange={setSettingsTab} onClose={() => setSettingsTab(null)} board={board} />
+        )}
+        {selected && (
           <MusicVideoLayout
             project={selected}
             trackLabel={trackName(selected.trackId)}
@@ -1414,11 +1455,31 @@ export default function MusicVideo() {
             nextAction={compositionSavePending > 0 && nextAction ? { ...nextAction, disabled: true, reason: 'Saving composition…' } : nextAction}
             onNextAction={runNextAction}
             spend={projectSpend(selected)}
-            status={statusKnown && productionReview.readiness
-              ? describeProjectStatus(selected, { progress, nextAction, readiness: productionReview.readiness })
-              : statusKnown
-                ? { headline: `Status unavailable: ${productionReview.readinessError}`, tone: 'warn', facts: [] }
-                : { headline: 'Loading status…', tone: 'muted', facts: [] }}
+            status={projectStatus}
+            notes={stepNotes(selected, productionReview.readiness, publish)}
+            autopilot={autopilotStatus(selected)}
+            onOpenSettings={setSettingsTab}
+            playerFirst={playerFirst}
+            lead={(
+              <StageChecklist
+                items={stageChecklist(activeStage, selected, productionReview.readiness, publish)}
+                onAction={(action) => goToStage(action.stage || activeStage, action.anchor, action.params)}
+                onRevert={productionReview.revert}
+                headerAnchor={nextAction?.kind === 'goto' ? nextAction.anchor : null}
+              />
+            )}
+            review={APPROVAL_STAGE_BY_TAB[activeStage] ? (
+              <ProductionReviewPanel
+                key={`${selected.id}-${activeStage}`}
+                project={selected}
+                review={productionReview}
+                onOpenArtifact={openArtifact}
+                stage={APPROVAL_STAGE_BY_TAB[activeStage]}
+                planning={planningDraft}
+                onNavigate={goToStage}
+                onSeek={(startSec) => seekToScene({ startSec }, { play: true })}
+              />
+            ) : null}
             attention={(
               <NeedsAttentionBanner
                 items={attentionItems}
@@ -1435,48 +1496,17 @@ export default function MusicVideo() {
                 }}
               />
             )}
-            dock={previewSources.length ? (
+            dock={(
               <PreviewDock
                 project={selected}
                 sources={previewSources}
                 audioUrl={audioUrl}
                 seekRequest={seekRequest}
-                collapsed={dockCollapsed}
-                onToggleCollapsed={() => setDockCollapsed((c) => !c)}
-              />
-            ) : null}
-            projectPanels={<div className="space-y-3 min-w-0">
-              {autopilotRun && activeStage !== 'setup' && (
-                <StageSection
-                  id="mv-autonomous-run"
-                  key={`autonomous-${selected.id}`}
-                  title="Autonomous run"
-                  summary={autopilotSummary(autopilotRun, productionReview.readiness)}
-                  defaultOpen={!!runStage || autopilotRun.interrupted || ['running', 'awaiting-approval', 'needs-human', 'failed'].includes(autopilotRun.status)}
-                >
-                  <AutonomousRunPanel project={selected} auto={autonomous} readiness={productionReview.readiness} selectedStage={runStage} onSelectStage={setRunStage} framed={false} />
-                </StageSection>
-              )}
-            </div>}
-          >
-            <StageChecklist
-              items={stageChecklist(activeStage, selected, productionReview.readiness, publish)}
-              onAction={(action) => goToStage(action.stage || activeStage, action.anchor, action.params)}
-              onRevert={productionReview.revert}
-              headerAnchor={nextAction?.kind === 'goto' ? nextAction.anchor : null}
-            />
-            {APPROVAL_STAGE_BY_TAB[activeStage] && (
-              <ProductionReviewPanel
-                key={`${selected.id}-${activeStage}`}
-                project={selected}
-                review={productionReview}
-                onOpenArtifact={openArtifact}
-                framed={false}
-                stage={APPROVAL_STAGE_BY_TAB[activeStage]}
-                planning={planningDraft}
-                onNavigate={goToStage}
+                collapsed={dockCollapsed ?? !playerFirst}
+                onToggleCollapsed={() => setDockCollapsed(!(dockCollapsed ?? !playerFirst))}
               />
             )}
+          >
             <StageView key={selected.id} board={board} />
           </MusicVideoLayout>
         )}

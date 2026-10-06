@@ -1,11 +1,13 @@
 /** Real clean-dump restore regressions. Only guarded test databases. */
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it as vitestIt, vi } from 'vitest';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { checkHealth, ensureSchema, query, close, getServerMajorVersion, POOL_CONFIG } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
+import { ownTestBodies } from '../lib/mockPathsDataRoot.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
 import { runDbMigrations } from '../scripts/run-db-migrations.js';
 import { listFolders } from './writersRoom/db.js';
@@ -14,6 +16,8 @@ import { syncFeedTables, syncFeedSequenceName } from '../lib/db/schema/syncFeed.
 // The real rewind rewrites this install's data/instances_sync_cursors.json.
 const rewindPostgresSyncCursors = vi.hoisted(() => vi.fn(async () => 0));
 vi.mock('./syncOrchestrator.js', () => ({ rewindPostgresSyncCursors }));
+// Restore schema fixtures own no gallery files; never scan the live install.
+vi.mock('./imageGen/local.js', () => ({ listGallery: async () => [] }));
 // The restore recovery journal (#9725) lives in data/ and fences the pool; keep
 // it in a disposable data root, never the install's live tree.
 const dataRoot = vi.hoisted(() => ({ path: null }));
@@ -41,7 +45,13 @@ vi.mock('../scripts/run-db-migrations.js', async (importOriginal) => {
 // Load the service before timing restore assertions, as other integration
 // suites do. A cold module graph is setup, not database replay time.
 const { restorePostgres } = await import('./backup.js');
-const pendingRestores = new Set();
+// Vitest's timeout settles a case while its body keeps running: it can still be
+// between queries and start its next restore (or arm the migration fault)
+// after the following case began. Own each WHOLE body, not just its restore
+// promises, so case boundaries and teardown wait for every continuation (#10272).
+const owned = ownTestBodies(vitestIt);
+const it = owned.it;
+let fixtureSetup;
 
 const feedSequenceValues = async () => Object.fromEntries((await query(
   'SELECT sequencename, last_value::text AS v FROM pg_sequences WHERE sequencename = ANY($1::text[])',
@@ -57,21 +67,27 @@ let dumpPath;
 const folderId = 'restore-schema-folder-probe';
 const issueId = 'restore-schema-issue-probe';
 const personId = '00000000-0000-4000-8000-000000000862';
+const executionHostId = randomUUID();
 const pendingMigration = '007-storyboard-scene-durable-ids.js';
 const connectionArgs = ['-h', POOL_CONFIG.host, '-p', String(POOL_CONFIG.port), '-U', POOL_CONFIG.user, '-d', POOL_CONFIG.database];
 const childEnv = { ...process.env, PGPASSWORD: POOL_CONFIG.password };
 const DUMP_COMPLETE = '\n--\n-- PostgreSQL database dump complete';
 
 afterAll(async () => {
-  // Vitest timing out an assertion does not cancel the real restore. Drain it
-  // before cleanup queries, which otherwise race its maintenance fence.
-  await Promise.allSettled([...pendingRestores]);
+  // Vitest timing out a case or hook does not cancel its real restore or
+  // queries. Drain them before cleanup queries, which otherwise race the
+  // restore's maintenance fence; a late body failure is rethrown afterwards.
+  await Promise.allSettled([fixtureSetup]);
+  const drained = owned.drain();
+  await drained.catch(() => {});
   runDbMigrationsFault.next = null;
   try {
     if (ready) {
       await query('DROP SCHEMA IF EXISTS restore_external CASCADE');
       await query('DROP TABLE IF EXISTS public.unexpected_restore_record');
       await ensureSchema({ force: true });
+      await query('DELETE FROM peer_execution_operations WHERE host_instance_id = $1', [executionHostId]);
+      await query('DELETE FROM peer_execution_generation_floors WHERE host_instance_id = $1', [executionHostId]);
       await query('DELETE FROM writers_room_folders WHERE id = $1', [folderId]);
       await query('DELETE FROM pipeline_issues WHERE id = $1', [issueId]);
       await query("DELETE FROM tribe_people WHERE id = $1 OR id = '00000000-0000-4000-8000-000000000863'", [personId]);
@@ -86,19 +102,11 @@ afterAll(async () => {
       dataRoot.path && rm(dataRoot.path, { recursive: true, force: true }),
     ]);
   }
+  await drained;
 });
 
-async function trackRestore(pending) {
-  pendingRestores.add(pending);
-  try {
-    return await pending;
-  } finally {
-    pendingRestores.delete(pending);
-  }
-}
-
 function restore(dryRun = false, snapshotId = 'old-schema') {
-  return trackRestore(restorePostgres(dest, snapshotId, { source: 'fixture-source', dryRun }));
+  return restorePostgres(dest, snapshotId, { source: 'fixture-source', dryRun });
 }
 
 describe.skipIf(!ready)('restore older database schema', () => {
@@ -106,16 +114,24 @@ describe.skipIf(!ready)('restore older database schema', () => {
   let feedBefore;
   const folder = { id: folderId, name: 'Recovered folder' };
 
-  // A timed-out test keeps running. Gate every following case before it can
-  // query the shared database; a failed drain hook skips that case's body.
+  // A timed-out test keeps running. Gate every following case on the previous
+  // body's full settlement before it can query the shared database or arm the
+  // fault; a failed or timed-out drain hook skips that case's body, and a body
+  // that failed after its timeout is reported here rather than dropped.
   beforeEach(async () => {
-    await Promise.all([...pendingRestores]);
-    runDbMigrationsFault.next = null;
+    try {
+      await owned.drain();
+    } finally {
+      runDbMigrationsFault.next = null;
+    }
   });
 
   // Prepare the shared snapshot in a hook so setup failures stop dependent
   // cases and the first test's budget measures restore and its assertions.
-  beforeAll(async () => {
+  // Teardown drains it too: a timed-out hook keeps running like a case does.
+  beforeAll(() => (fixtureSetup = prepareFixture()));
+
+  async function prepareFixture() {
     await ensureSchema({ force: true });
     await runDbMigrations();
     appliedBefore = await query('SELECT id, applied_at FROM schema_migrations WHERE id <> $1 ORDER BY id', [pendingMigration]);
@@ -133,7 +149,8 @@ describe.skipIf(!ready)('restore older database schema', () => {
     await mkdir(snapshotDir, { recursive: true });
     dumpPath = join(snapshotDir, 'portos-db.sql');
     const { binary } = await resolvePgDumpBinary(await getServerMajorVersion());
-    const dump = spawnSync(binary, [...connectionArgs, '--no-owner', '--no-acl', '--clean', '--if-exists', '-f', dumpPath], { env: childEnv, encoding: 'utf8' });
+    const dump = spawnSync(binary, [...connectionArgs, '--no-owner', '--no-acl', '--clean', '--if-exists',
+      '--exclude-table=peer_execution_operations', '--exclude-table=peer_execution_generation_floors', '-f', dumpPath], { env: childEnv, encoding: 'utf8' });
     expect(dump.status, dump.stderr).toBe(0);
     expect(await readFile(dumpPath, 'utf8')).toContain('COMMENT ON EXTENSION');
 
@@ -149,7 +166,7 @@ describe.skipIf(!ready)('restore older database schema', () => {
     // Feed positions handed out after the dump must never be reissued (#8710).
     await query("SELECT nextval('memories_sync_feed_seq') FROM generate_series(1, 5)");
     feedBefore = await feedSequenceValues();
-  });
+  }
 
   it('restores a real pre-FK dump, discards newer rows, and runs schema repair and ordered migrations', async () => {
     expect(await restore()).toMatchObject({ status: 'ok', dryRun: false });
@@ -189,6 +206,27 @@ describe.skipIf(!ready)('restore older database schema', () => {
     expect(await readFile(path, 'utf8')).toBe(sql);
   });
 
+  it('preserves execution consumption and generation floors through a real dump without ledger tables', async () => {
+    const { createPeerExecutionLedger } = await import('./peerExecutionLedger.js');
+    const { withTransaction } = await import('../lib/db.js');
+    const ledger = createPeerExecutionLedger({ db: { query, withTransaction }, dataDir: dataRoot.path });
+    const epoch = (await ledger.initialize()).epoch;
+    const input = { hostInstanceId: executionHostId, peerInstanceId: randomUUID(), requestId: randomUUID(), grantId: randomUUID(),
+      grantGeneration: 1, scope: 'execution-v1', pairBinding: 'a'.repeat(64), intent: { action: 'portos.restart' },
+      receiverVersion: 'fixture-1.0', evidenceDigest: 'b'.repeat(64), executionEpoch: epoch };
+    const saved = (await ledger.consume(input)).operation;
+    await ledger.advanceGenerationFloor({ hostInstanceId: executionHostId, peerInstanceId: input.peerInstanceId,
+      action: input.intent.action, generation: 3, executionEpoch: epoch });
+    expect(await restore()).toMatchObject({ status: 'ok', dryRun: false });
+    expect(await ledger.read(saved.operationId)).toMatchObject({ state: 'uncertain', fingerprint: saved.fingerprint });
+    const current = ledger.authority.read();
+    expect(current.epoch).not.toBe(epoch);
+    await expect(ledger.consume(input)).rejects.toMatchObject({ code: 'PEER_EXECUTION_AUTHORITY_UNAVAILABLE' });
+    await expect(ledger.consume({ ...input, executionEpoch: current.epoch })).rejects.toMatchObject({ code: 'PEER_EXECUTION_REPLAY_CONFLICT' });
+    const { rows: [floor] } = await query('SELECT generation FROM peer_execution_generation_floors WHERE host_instance_id = $1', [executionHostId]);
+    expect(Number(floor.generation)).toBe(3);
+  });
+
   // #9725: a committed replay whose repair fails keeps ordinary work fenced
   // with its receipt and ORIGINAL floors, and recovery repairs without replay.
   it('fences a committed replay whose migrations fail, then recovers from the receipt and original floors', async () => {
@@ -206,8 +244,8 @@ describe.skipIf(!ready)('restore older database schema', () => {
     expect(await restore(true)).toMatchObject({ status: 'failed', reason: 'restore_recovery_pending' });
 
     // Recovery owns the same maintenance fence and pool as replay. If this
-    // assertion times out, later cases and teardown must drain it too.
-    expect(await trackRestore(resumeDatabaseRestore(journal.id))).toMatchObject({ status: 'ok', outcome: 'repaired' });
+    // assertion times out, later cases and teardown drain it with the body.
+    expect(await resumeDatabaseRestore(journal.id)).toMatchObject({ status: 'ok', outcome: 'repaired' });
     expect(databaseRestoreRecovery.read()).toBeNull();
     // The receipt committed with the replay, inside its transaction.
     expect((await query('SELECT dump_sha256 FROM restore_receipts WHERE operation_id = $1', [journal.id])).rows)
@@ -236,10 +274,10 @@ describe.skipIf(!ready)('restore older database schema', () => {
 
   // #8782: a legacy dump without a checksum that parses cleanly but stops early
   // must be refused before the full reset, or it commits an empty database.
-  it.each([
+  for (const [name, truncate] of [
     ['header-only', sql => sql.slice(0, sql.indexOf('SET '))],
     ['truncated between complete statements', sql => sql.slice(0, sql.indexOf('\nCOPY ') + 1)],
-  ])('refuses a %s legacy dump in preview and execution and keeps existing rows', async (name, truncate) => {
+  ]) it(`refuses a ${name} legacy dump in preview and execution and keeps existing rows`, async () => {
     const dir = join(dest, 'snapshots', 'fixture-source', `truncated-${name.split(' ')[0]}`);
     await mkdir(dir);
     await writeFile(join(dir, 'portos-db.sql'), truncate(await readFile(dumpPath, 'utf8')));

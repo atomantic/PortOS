@@ -31,7 +31,7 @@ it('drains promotion fixture writes after another worker triggers fail-fast', ()
     writeFileSync(join(fixture, 'lifecycle.test.js'), source + `
       afterAll(async () => {
         const { existsSync } = await import('node:fs');
-        await expect.poll(() => existsSync(${JSON.stringify(finished)}), { timeout: 1000 }).toBe(true);
+        await vi.waitFor(() => expect(existsSync(${JSON.stringify(finished)})).toBe(true), { timeout: 1000 });
       });
     `);
     writeFileSync(join(fixture, 'failure.test.js'), `
@@ -51,7 +51,7 @@ it('drains promotion fixture writes after another worker triggers fail-fast', ()
     expect(result.status, output).toBe(1);
     expect(output).toContain('controlled sibling failure');
     expect(existsSync(finished), output).toBe(true);
-    expect(output).not.toContain('test temp leak:');
+    expect(output).not.toMatch(/refused|unhandled|test temp leak:/i);
   } finally {
     rmSync(host, { recursive: true, force: true });
   }

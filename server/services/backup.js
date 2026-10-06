@@ -162,6 +162,7 @@ const queueStateWrite = createFileWriteQueue();
 // matches any `loras/` directory anywhere under data/ (e.g. a user's
 // brain/.../loras/ collection), which would silently exclude unrelated user data.
 export const DEFAULT_EXCLUDES = [
+  { path: '/backup-admission/', reason: 'Machine-local publication ownership and snapshot fences', overridable: false },
   { path: '/image-thumbnails/', reason: 'Regenerable image grid previews', overridable: false },
   { path: '/python/laya-mlx/', reason: 'Rebuildable Laya-MLX experiment runtime and pinned model weights', overridable: false },
   { path: '/browser-profile/', reason: 'Browser CDP profile — cache/cookies, can be several GB', overridable: false },
@@ -778,6 +779,9 @@ export async function dumpPostgres(outputPath) {
       // Machine-local replay receipts (#9725) describe this install's past
       // restores, not application data; the table definition is still dumped.
       '--exclude-table-data=restore_receipts',
+      // The asynchronous media mirror can lag its authoritative files. Rebuild
+      // it after restore rather than snapshotting stale file references.
+      '--exclude-table-data=media_assets',
       '-f', outputPath
     ], {
       shell: false,
@@ -1238,6 +1242,13 @@ async function reconcileLiveFileRestore(subdirFilter) {
       ? [{ label: 'Brain cache invalidation', run: invalidateBrainCaches }]
       : []),
     { label: 'settings reload', run: reloadSettings },
+    ...((!subdirFilter || ['images', 'videos', 'video-thumbnails', 'video-history.json']
+      .some(path => subdirFilter === path || subdirFilter.startsWith(`${path}/`)))
+      && getBackendName() !== 'file'
+      ? [{ label: 'media index rebuild', run: async () => {
+        const { reconcileMediaAssets } = await import('./mediaAssetIndex/db.js');
+        await reconcileMediaAssets({ rebuild: true });
+      } }] : []),
   ];
   const results = await Promise.allSettled(
     refreshes.map(({ run }) => Promise.resolve().then(run)),
@@ -1248,7 +1259,7 @@ async function reconcileLiveFileRestore(subdirFilter) {
 
   if (failures.length > 0) {
     throw new Error(
-      `Live restore cache reconciliation failed (${failures.join('; ')}). Restart PortOS before relying on restored settings or Brain data.`,
+      `Live restore cache reconciliation failed (${failures.join('; ')}). Restart PortOS before relying on restored settings, Brain data or media.`,
       { cause: results.find(result => result.status === 'rejected').reason },
     );
   }
@@ -1328,20 +1339,26 @@ const OS_METADATA_RSYNC_EXCLUDES = [...OS_METADATA_FILES, '._*'].map(name => `--
  * filter, the manifest selection and the scope inventory so preview,
  * verification and execution cannot disagree.
  */
-const RESTORE_PRESERVED_FILES = Object.freeze(['database-authority.json']);
+const RESTORE_PRESERVED_FILES = Object.freeze([
+  'database-authority.json', 'peer-execution', 'peer-execution-catalog.json', 'peer-execution-grants.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance', 'backup-admission',
+]);
 // Matched case-insensitively (rsync has no such flag, so each letter becomes a
 // `[xX]` class): on a case-insensitive volume a `Database-Authority.json` entry
 // would otherwise overwrite the destination's lowercase record.
 const caseInsensitiveGlob = (name) => name.replace(/[a-z]/gi, ch => `[${ch.toLowerCase()}${ch.toUpperCase()}]`);
 const RESTORE_PRESERVED_RSYNC_EXCLUDES = RESTORE_PRESERVED_FILES.map(name => `--exclude=/${caseInsensitiveGlob(name)}`);
-const isRestorePreservedPath = (relativePath) => RESTORE_PRESERVED_FILES.includes(relativePath.toLowerCase());
+const isRestorePreservedPath = (relativePath) => {
+  if (typeof relativePath !== 'string') return false;
+  const normalized = relativePath.toLowerCase();
+  return RESTORE_PRESERVED_FILES.some(path => normalized === path || normalized.startsWith(`${path}/`));
+};
 
 // A filter naming a preserved file would otherwise be a silent no-op restore.
 // Compared case-insensitively after dropping empty/`.` segments, so
 // `./Database-Authority.json/` cannot slip past on a case-insensitive volume.
 const restoreScopeIsPreservedFile = (subdirFilter) => {
   const normalized = subdirFilter?.split('/').filter(part => part && part !== '.').join('/').toLowerCase();
-  return RESTORE_PRESERVED_FILES.includes(normalized);
+  return isRestorePreservedPath(normalized);
 };
 
 const snapshotFileIntegrityError = (snapshotId, unmanifestedPath = null) => new ServerError(
@@ -1503,7 +1520,7 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   // never promises a restore that execution would silently skip.
   if (restoreScopeIsPreservedFile(subdirFilter)) {
     throw new ServerError(
-      'database-authority.json is machine-local and is never restored from a snapshot: it records which database backend a cutover completed on THIS machine, and installing another copy would fence the healthy local database. Restore your records with a data or database restore instead; to change the authority, run a database cutover (see docs/STORAGE.md, retired backend).',
+      'These machine-local authority and recovery records (database-authority.json, peer-execution-authority.json, peer-execution-recovery.jsonl workflow-maintenance and backup-admission) are never restored from a snapshot. Restore application records with a data or database restore; existing local authority and unresolved owners must be reconciled on this machine (see docs/STORAGE.md).',
       { status: 400, code: 'BACKUP_RESTORE_MACHINE_LOCAL' },
     );
   }
@@ -1549,6 +1566,8 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
     // `data/brain/youtube/**` over live files the user never selected. The
     // integrity preflight above scopes itself to `data/<filter>/**` only, so an
     // unanchored transfer overwrites bytes it never verified.
+    // Exact files need their own rule: rsync 3 excludes a file from the directory-only /*** pattern.
+    flags.push(`--include=/${subdirFilter}`);
     flags.push(`--include=/${subdirFilter}/***`);
     flags.push('--include=*/');
     flags.push('--exclude=*');
@@ -1561,7 +1580,15 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   // until it finishes (#7302), so this restore's idle floor scales to it.
   const idleTimeoutMs = restoreIdleTimeoutMs(verification.largestFileBytes);
   const restoreFiles = async () => {
-    const [transfer] = await Promise.allSettled([runRsync(srcDir, PATHS.data, flags, { idleTimeoutMs })]);
+    const transferFiles = () => runRsync(srcDir, PATHS.data, flags, { idleTimeoutMs });
+    const transferWithIdentityFence = async () => {
+      if (!dryRun && (!scope || scope === 'instances.json') && await stat(join(srcDir, 'instances.json')).then(info => info.isFile(), error => { if (error.code === 'ENOENT') return false; throw error; })) {
+        const { withPeerExecutionIdentityRestore } = await import('./peerExecutionRuntime.js');
+        return withPeerExecutionIdentityRestore(transferFiles);
+      }
+      return transferFiles();
+    };
+    const [transfer] = await Promise.allSettled([transferWithIdentityFence()]);
     const reconciliationError = !dryRun
       ? await reconcileLiveFileRestore(subdirFilter).then(
         () => null,
@@ -1594,19 +1621,26 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
     return restoreFiles();
   };
   const restoreWithCosBoundary = async () => {
-    if (!dryRun && (!scope || ['cos', 'cos/config.json', 'cos/state.json'].includes(scope))) {
+    if (!dryRun && (!scope || ['cos', 'cos/config.json', 'cos/state.json', 'cos/agents'].includes(scope) || scope.startsWith('cos/agents/'))) {
       const { withLiveCosRestore } = await import('./cosState.js');
       return withLiveCosRestore(restoreWithMediaBoundary);
     }
     return restoreWithMediaBoundary();
   };
-  // Fixed acquisition order: settings -> CoS config -> CoS runtime -> media registry. Settings
-  // writers drain before any CoS queue is held, and remain fenced until both
-  // the transfer and all cache reconciliation (including CoS) have settled.
-  if (!dryRun && (!scope || scope === 'settings.json')) {
-    return withLiveSettingsRestore(restoreWithCosBoundary);
+  // Fixed acquisition order: snapshot cut -> settings -> CoS config -> CoS
+  // runtime -> media registry. Drain publications BEFORE holding any domain
+  // queue they may need to finish, and keep admission closed through transfer
+  // and all cache reconciliation, including a partially failed transfer.
+  const restoreWithSettingsBoundary = () => !dryRun && (!scope || scope === 'settings.json')
+    ? withLiveSettingsRestore(restoreWithCosBoundary)
+    : restoreWithCosBoundary();
+  if (dryRun) return restoreWithSettingsBoundary();
+  const releaseSnapshotCut = await acquireBackupSnapshotCut();
+  try {
+    return await restoreWithSettingsBoundary();
+  } finally {
+    releaseSnapshotCut();
   }
-  return restoreWithCosBoundary();
 }
 
 const DUMP_UNREADABLE = Object.freeze({ status: 'failed', reason: 'dump_unreadable', error: 'The snapshot database dump could not be read or staged for restore. Restore was refused without changing data.' });
@@ -1781,6 +1815,13 @@ async function replayAdmittedDump({ tableCount, sizeBytes, snapshotId, dump, res
         error: 'The restore recovery journal could not be written. Restore was refused without changing data.',
       };
     }
+    try {
+      const { preparePeerExecutionRestore } = await import('./peerExecutionRestore.js');
+      await preparePeerExecutionRestore(record.id);
+    } catch (err) {
+      console.error(`❌ restore: execution consumption capture failed: ${err.message}`);
+      return pendingRecoveryResult('restore_execution_reconciliation', record);
+    }
     const { host: pgHost, port, database: pgDb, user: pgUser } = POOL_CONFIG;
     const pgPort = String(port);
 
@@ -1845,7 +1886,7 @@ async function replayAdmittedDump({ tableCount, sizeBytes, snapshotId, dump, res
       // fenced instead of reopening writes or replaying again.
       const settled = await settleReplayOutcome(record);
       if (settled.outcome === 'rolled_back') return replay;
-      if (settled.outcome === 'uncertain') return pendingRecoveryResult('restore_commit_unknown', record);
+      if (settled.outcome === 'uncertain') return pendingRecoveryResult(settled.reason ?? 'restore_commit_unknown', record);
       record = settled.record;
     }
 

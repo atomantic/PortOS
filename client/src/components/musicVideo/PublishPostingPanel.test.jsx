@@ -7,7 +7,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, within, act } from '@testing-library/react';
 import PublishPostingPanel, { PUBLISH_TARGETS } from './PublishPostingPanel.jsx';
 
-const ALL = ['youtube', 'suno', 'x', 'shorts', 'tiktok', 'instagram', 'reddit', 'stackerNews'];
+const ALL = ['youtube', 'suno', 'x', 'shorts', 'tiktok', 'instagram', 'reddit', 'stackerNews', 'distrokid'];
 const hook = (over = {}) => ({ drafts: {}, busy: {}, errors: {}, prepare: vi.fn(), submit: vi.fn(), discard: vi.fn(), enabledTargets: ALL, platforms: {}, recordPost: vi.fn(async () => null), ...over });
 const project = (kit = {}) => ({ id: 'mv-1', publishKit: { builtAt: '2026-01-01T00:00:00.000Z', thumbnails: ['t1.jpg'], ...kit } });
 const row = (label) => screen.getByText(label, { selector: 'div' }).closest('li');
@@ -46,6 +46,65 @@ describe('PublishPostingPanel (#9282)', () => {
     fireEvent.change(select, { target: { value: 'kit-vertical' } });
     fireEvent.click(within(shorts).getByRole('button', { name: 'Fill draft' }));
     expect(publishing.prepare).toHaveBeenCalledWith('shorts', { cutId: 'kit-vertical' });
+  });
+
+  it('fills a DistroKid release with the songwriter and AI parts, and remembers the songwriter on this device', () => {
+    const publishing = hook({ platforms: { distrokid: { enabled: true, account: 'Example Artist' } } });
+    const p = { ...project(), autonomousRun: { output: { lyrics: 'la la' } } };
+    const { unmount } = render(<PublishPostingPanel project={p} publishing={publishing} />);
+    const dk = row('Spotify (via DistroKid)');
+    expect(within(dk).getByLabelText('Artist name')).toHaveAttribute('placeholder', 'Example Artist');
+    expect(dk).toHaveTextContent('as Example Artist');
+    expect(dk).not.toHaveTextContent('@Example Artist');
+    expect(within(dk).getByLabelText('Instrumental')).toBeChecked(); // no lyric cues
+    fireEvent.change(within(dk).getByLabelText('Songwriter legal first name'), { target: { value: 'Alice' } });
+    fireEvent.change(within(dk).getByLabelText('Songwriter legal last name'), { target: { value: 'Example' } });
+    fireEvent.click(within(dk).getByLabelText('Explicit lyrics'));
+    fireEvent.click(within(dk).getByRole('button', { name: 'Fill draft' }));
+    expect(publishing.prepare).toHaveBeenCalledWith('distrokid', { songwriterFirst: 'Alice', songwriterLast: 'Example', aiLyrics: true, explicit: true });
+    unmount();
+    render(<PublishPostingPanel project={project()} publishing={hook()} />);
+    expect(within(row('Spotify (via DistroKid)')).getByLabelText('Songwriter legal first name')).toHaveValue('Alice');
+  });
+
+  it('suggests a genre from the song and remembers the once-only DistroKid answers', () => {
+    const publishing = hook({ platforms: { distrokid: { enabled: true, account: 'Example Artist' } } });
+    const p = { ...project(), autonomousRun: { output: { sunoStyle: 'dark synthwave, pop hooks' } } };
+    const { unmount } = render(<PublishPostingPanel project={p} publishing={publishing} />);
+    const dk = row('Spotify (via DistroKid)');
+    expect(within(dk).getByLabelText('Genre')).toHaveDisplayValue('Electronic (from the song\'s style)');
+    expect(within(dk).getByLabelText('Secondary genre (optional)')).toHaveDisplayValue('Pop (from the song\'s style)');
+    fireEvent.change(within(dk).getByLabelText('Songwriter legal first name'), { target: { value: 'Alice' } });
+    fireEvent.change(within(dk).getByLabelText('Songwriter legal last name'), { target: { value: 'Example' } });
+    fireEvent.change(within(dk).getByLabelText('Genre'), { target: { value: 'Rock' } });
+    fireEvent.change(within(dk).getByLabelText('Language'), { target: { value: 'Spanish' } });
+    fireEvent.click(within(dk).getByLabelText('First release as this artist (new store profiles)'));
+    fireEvent.click(within(dk).getByRole('button', { name: 'Fill draft' }));
+    expect(publishing.prepare).toHaveBeenCalledWith('distrokid', expect.objectContaining({ genre: 'Rock', language: 'Spanish', newArtistProfile: true }));
+    unmount();
+    const later = hook({ platforms: { distrokid: { enabled: true, account: 'Example Artist' } } });
+    render(<PublishPostingPanel project={project()} publishing={later} />);
+    const again = row('Spotify (via DistroKid)');
+    expect(within(again).getByLabelText('Language')).toHaveValue('Spanish');
+    // New store profiles are asked per release, never carried to the next one.
+    expect(within(again).getByLabelText('First release as this artist (new store profiles)')).not.toBeChecked();
+    fireEvent.click(within(again).getByRole('button', { name: 'Fill draft' }));
+    expect(later.prepare.mock.calls[0][1]).not.toHaveProperty('newArtistProfile');
+    expect(within(again).getByLabelText('Genre')).toHaveValue('');
+  });
+
+  it('asks before filling a second draft for a platform already posted to', () => {
+    const publishing = hook();
+    render(<PublishPostingPanel project={project({ posts: { youtube: { url: 'https://www.youtube.com/watch?v=example' } } })} publishing={publishing} />);
+    const yt = row('YouTube');
+    expect(within(yt).queryByRole('button', { name: 'Fill draft' })).toBeNull();
+    fireEvent.click(within(yt).getByRole('button', { name: 'Post again…' }));
+    expect(publishing.prepare).not.toHaveBeenCalled();
+    fireEvent.click(within(yt).getByRole('button', { name: 'Confirm posting to YouTube again' }));
+    expect(publishing.prepare).toHaveBeenCalledWith('youtube', { again: true });
+    // A platform not yet posted fills straight away, on its own.
+    fireEvent.click(within(row('TikTok')).getByRole('button', { name: 'Fill draft' }));
+    expect(publishing.prepare).toHaveBeenLastCalledWith('tiktok', {});
   });
 
   it('shows no cut picker when there is only one 9:16 cut', () => {

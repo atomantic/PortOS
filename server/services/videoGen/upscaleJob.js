@@ -1,3 +1,4 @@
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 /**
  * Generative video upscale — the media-job lifecycle (#6511).
  *
@@ -430,58 +431,65 @@ export async function runVideoUpscale({
       throw new ServerError(`Failed to finish the upscaled clip: ${finalized.reason}`, { status: 500, code: 'UPSCALE_MUX_FAILED' });
     }
 
-    // Provenance is MEASURED off the deliverable, not assumed from the plan —
-    // a generative render is the one upscale method whose output can legally
-    // differ from 2× the source, so a recorded guess would be a lie.
-    const [measured, duration] = await Promise.all([
-      probeVideoStreamInfo(deliverablePath),
-      probeVideoDuration(deliverablePath),
-    ]);
-    const thumbnail = await generateThumbnail(deliverablePath, newId);
-    // Tracked so a failure between here and the history write cannot leave a
-    // poster for a clip that does not exist.
-    thumbnailPath = thumbnail ? safeUnder(PATHS.videoThumbnails, thumbnail) : null;
-    const newEntry = {
-      ...omitRenderTiming(item),
-      id: newId,
-      filename: newFilename,
-      thumbnail,
-      createdAt: new Date().toISOString(),
-      width: measured.width ?? source.width * UPSCALE_SCALE,
-      height: measured.height ?? source.height * UPSCALE_SCALE,
-      fps: measured.fps ?? source.fps,
-      numFrames: measured.frameCount ?? source.frameCount,
-      duration,
-      seed,
-      upscaledFrom: item.id,
-      upscaleMethod: 'ltx',
-      upscaleRuntime: runtime,
-      upscaleAdapter: adapterKey,
-      // Measured by the runner off the weight it fused (the rule it enforced),
-      // and — in the same shape a plain render's row carries — the exact
-      // ltx/mlx/torch + chip + OS stack this clip rendered on. Both are absent
-      // sentinels when the runner did not report them, never a guessed value.
-      ...(rendered.referenceDownscale !== null ? { upscaleReferenceDownscale: rendered.referenceDownscale } : {}),
-      ...(rendered.runtime ? { runtime: rendered.runtime } : {}),
-      // What the grid actually required of this source, kept beside the result
-      // so a reader can tell a padded render from a conforming one.
-      upscaleAlignment: {
-        padWidth: alignment.padWidth,
-        padHeight: alignment.padHeight,
-        padFrames: alignment.padFrames,
-        trimFrames: alignment.trimFrames,
-      },
-      prompt: upscaledPrompt(item.prompt),
-      hidden: false,
-      ...renderTimingFields(renderStartedAtMs),
-    };
-    await mutateVideoHistory((h) => { h.unshift(newEntry); return h; });
-    console.log(`✅ Upscaled [${newId.slice(0, 8)}]: ${newFilename} (${newEntry.width}×${newEntry.height}, ${Math.round((newEntry.renderMs ?? 0) / 1000)}s)`);
-    result = newEntry;
+    await withBackupAssetPublication(async () => {
+      try {
+        // Provenance is MEASURED off the deliverable, not assumed from the plan —
+        // a generative render is the one upscale method whose output can legally
+        // differ from 2× the source, so a recorded guess would be a lie.
+        const [measured, duration] = await Promise.all([
+          probeVideoStreamInfo(deliverablePath),
+          probeVideoDuration(deliverablePath),
+        ]);
+        const thumbnail = await generateThumbnail(deliverablePath, newId);
+        // Tracked so a failure between here and the history write cannot leave a
+        // poster for a clip that does not exist.
+        thumbnailPath = thumbnail ? safeUnder(PATHS.videoThumbnails, thumbnail) : null;
+        const newEntry = {
+          ...omitRenderTiming(item),
+          id: newId,
+          filename: newFilename,
+          thumbnail,
+          createdAt: new Date().toISOString(),
+          width: measured.width ?? source.width * UPSCALE_SCALE,
+          height: measured.height ?? source.height * UPSCALE_SCALE,
+          fps: measured.fps ?? source.fps,
+          numFrames: measured.frameCount ?? source.frameCount,
+          duration,
+          seed,
+          upscaledFrom: item.id,
+          upscaleMethod: 'ltx',
+          upscaleRuntime: runtime,
+          upscaleAdapter: adapterKey,
+          // Measured by the runner off the weight it fused (the rule it enforced),
+          // and — in the same shape a plain render's row carries — the exact
+          // ltx/mlx/torch + chip + OS stack this clip rendered on. Both are absent
+          // sentinels when the runner did not report them, never a guessed value.
+          ...(rendered.referenceDownscale !== null ? { upscaleReferenceDownscale: rendered.referenceDownscale } : {}),
+          ...(rendered.runtime ? { runtime: rendered.runtime } : {}),
+          // What the grid actually required of this source, kept beside the result
+          // so a reader can tell a padded render from a conforming one.
+          upscaleAlignment: {
+            padWidth: alignment.padWidth,
+            padHeight: alignment.padHeight,
+            padFrames: alignment.padFrames,
+            trimFrames: alignment.trimFrames,
+          },
+          prompt: upscaledPrompt(item.prompt),
+          hidden: false,
+          ...renderTimingFields(renderStartedAtMs),
+        };
+        await mutateVideoHistory((h) => { h.unshift(newEntry); return h; });
+        result = newEntry;
+        console.log(`✅ Upscaled [${newId.slice(0, 8)}]: ${newFilename} (${newEntry.width}×${newEntry.height}, ${Math.round((newEntry.renderMs ?? 0) / 1000)}s)`);
+      } catch (error) {
+        if (!result) for (const path of [deliverablePath, join(PATHS.videoThumbnails, `${newId}.jpg`)]) await removeOwnedFile(path);
+        throw error;
+      }
+    });
   } catch (err) {
     // The history row is written LAST, so nothing here can orphan one — only a
     // partial file can exist, and it is removed before the failure is reported.
-    for (const path of [deliverablePath, thumbnailPath]) {
+    for (const path of result ? [] : [deliverablePath, thumbnailPath]) {
       await removeOwnedFile(path);
     }
     const reason = entry.canceled ? 'Canceled while running' : (err.message || 'Upscale failed');

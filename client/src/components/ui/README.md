@@ -26,6 +26,7 @@ accessibility). Feature-specific components live under their own feature directo
 | `InfoTooltip` | Focusable info/help tooltip — hover, keyboard focus, or tap; opaque body portal with viewport-clamped numeric `width` (default 224), start/center/end alignment, keyboard scrolling, and Esc dismissal. |
 | `InlineConfirmRow` | Inline "question + confirm + cancel" row — PortOS's preferred alternative to `window.confirm`. |
 | `InlineDiff` | Stacked word-level diff — old row (red removals) over new row (green additions). |
+| `LoadFailedState` | Alert shown when a read failed (title, hint, Retry) so a failed load never renders as an empty-list sentence. |
 | `Kbd` | Keycap for rendering a keyboard key in help/cheatsheet UI. |
 | `Modal` | Shared modal chrome — backdrop, Esc handling, click-outside. |
 | `OverflowMenu` | "…" menu that demotes rare or destructive row actions out of the visible control set. |

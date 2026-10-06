@@ -52,6 +52,7 @@ export function createAIToolkit(config = {}) {
     // error page). PortOS injects its own asyncHandler (→ errorMiddleware).
     asyncHandler = defaultAsyncHandler,
     withRunAdmission = handler => handler,
+    withAssetPublication = work => work(),
     // Host-injected HTTP error class (PortOS passes its `ServerError` so route
     // errors normalize into `{ error, code, timestamp, context? }`). Threaded
     // to every router; routes default to the toolkit's own ToolkitHttpError
@@ -103,6 +104,7 @@ export function createAIToolkit(config = {}) {
   }
 
   const runnerService = createRunnerService({
+    withAssetPublication,
     dataDir,
     runsDir,
     screenshotsDir,

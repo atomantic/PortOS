@@ -1,3 +1,4 @@
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Image Gen — xAI Grok Build CLI provider.
@@ -371,80 +372,90 @@ async function runGrok(job, jobId, bin, args, {
   });
 
   proc.on('close', async (code, signal) => {
-    clearTimeout(timeoutTimer);
-    cleanupPromptFile();
-    // EventEmitter doesn't await async listeners — without this try/catch,
-    // a throw from the harvest/copy would surface as an unhandled rejection
-    // and the job would be stuck in 'running' forever with no SSE error.
-    try {
-      if (code !== 0 || processError) {
-        const reason = processError?.message || (signal ? `Killed by signal ${signal}` : `Exit code ${code}`);
-        const tail = stderrTail.trim().split('\n').slice(-6).join('\n');
+    await withBackupAssetPublication(async () => {
+      clearTimeout(timeoutTimer);
+      cleanupPromptFile();
+      // EventEmitter doesn't await async listeners — without this try/catch,
+      // a throw from the harvest/copy would surface as an unhandled rejection
+      // and the job would be stuck in 'running' forever with no SSE error.
+      try {
+        if (code !== 0 || processError) {
+          const reason = processError?.message || (signal ? `Killed by signal ${signal}` : `Exit code ${code}`);
+          const tail = stderrTail.trim().split('\n').slice(-6).join('\n');
+          removeScratch();
+          return finalizeJobFailure(job, jobId, proc, `Grok generation failed: ${reason}\n${tail}`);
+        }
+        // Grok writes the file during the turn; empirically it's on disk by
+        // exit, but poll a few seconds in case of flush lag on slow disks. The
+        // harvest signature-sniffs the bytes so a text error, truncated file,
+        // or non-image payload is never accepted into the gallery as a PNG.
+        const harvested = await harvestStagedImage(stagingPath, harvestTimeoutMs);
+        if (!harvested.found) {
+          removeScratch();
+          const prefix = harvested.invalid ? 'Grok wrote a non-image file at the directed path. ' : '';
+          return finalizeJobFailure(job, jobId, proc, `${prefix}${noImageReason(stdoutTail)}`);
+        }
+        // Image bytes are not proof the image tool made them — reject a picture
+        // the agent drew with code (see fabricationGuard.js). The narration tail
+        // rides along like every other failure path here: it carries WHY the tool
+        // was skipped, which the quota card reads to spot a rate-limit block.
+        const fabricated = await checkFabrication(scratchDir, toolName);
+        if (fabricated) {
+          removeScratch();
+          return finalizeJobFailure(job, jobId, proc, `${fabricated} ${noImageReason(stdoutTail)}`);
+        }
+        if (harvested.format === 'png') {
+          await copyFileGuarded(stagingPath, outputPath);
+          await unlinkGuarded(stagingPath).catch(() => {});
+        } else {
+          // Grok wrote a real image but not a PNG (jpeg/webp/gif) despite the
+          // prompt. The gallery serves by extension and sidecars assume PNG,
+          // so transcode rather than shipping mislabeled bytes.
+          const pngBytes = await sharp(stagingPath).png().toBuffer();
+          await atomicWrite(outputPath, pngBytes);
+        }
         removeScratch();
-        return finalizeJobFailure(job, jobId, proc, `Grok generation failed: ${reason}\n${tail}`);
-      }
-      // Grok writes the file during the turn; empirically it's on disk by
-      // exit, but poll a few seconds in case of flush lag on slow disks. The
-      // harvest signature-sniffs the bytes so a text error, truncated file,
-      // or non-image payload is never accepted into the gallery as a PNG.
-      const harvested = await harvestStagedImage(stagingPath, harvestTimeoutMs);
-      if (!harvested.found) {
+        // Degenerate-frame gate (#4173) — a decline that still emitted a flat
+        // canvas must fail here, not become a gallery record.
+        const emptyFrame = await rejectDegenerateFrame(outputPath);
+        if (emptyFrame) {
+          return finalizeJobFailure(job, jobId, proc, emptyFrame);
+        }
+        // Sidecar metadata so the gallery can recover prompt/ratio/etc.
+        const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
+        // `job.renderStartedAtMs` is the queue-ingestion instant generateImage
+        // captured, so the spread measures the render itself — not the time the
+        // job spent queued behind other renders.
+        await atomicWrite(sidecar, { ...meta, ...renderTimingFields(job.renderStartedAtMs) });
+        // Cleaners run BEFORE the SSE complete + completed events so
+        // subscribers see the cleaned bytes.
+        await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: IMAGE_GEN_MODE.GROK });
+        job.status = 'complete';
+        if (activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
+        activeJobs.delete(jobId);
+        console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (grok)`);
+        const result = { filename, path: `/data/images/${filename}` };
+        dispatchTerminalEvent(
+          jobId,
+          () => broadcastSse(job, { type: 'complete', result }),
+          () => imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.GROK, generationId: jobId, path: `/data/images/${filename}`, filename }),
+        );
+        closeJobAfterDelay(jobs, jobId);
+      } catch (err) {
+        await Promise.all([outputPath, join(PATHS.images, `${jobId}.metadata.json`)].map(path => unlinkGuarded(path).catch(() => {})));
         removeScratch();
-        const prefix = harvested.invalid ? 'Grok wrote a non-image file at the directed path. ' : '';
-        return finalizeJobFailure(job, jobId, proc, `${prefix}${noImageReason(stdoutTail)}`);
+        // force: true — 'complete' is already stamped above; see
+        // createJobFailureFinalizer's doc comment in sseUtils.js.
+        finalizeJobFailure(job, jobId, proc, `Grok post-exit handler failed: ${err?.message || err}`, { force: true });
       }
-      // Image bytes are not proof the image tool made them — reject a picture
-      // the agent drew with code (see fabricationGuard.js). The narration tail
-      // rides along like every other failure path here: it carries WHY the tool
-      // was skipped, which the quota card reads to spot a rate-limit block.
-      const fabricated = await checkFabrication(scratchDir, toolName);
-      if (fabricated) {
-        removeScratch();
-        return finalizeJobFailure(job, jobId, proc, `${fabricated} ${noImageReason(stdoutTail)}`);
-      }
-      if (harvested.format === 'png') {
-        await copyFileGuarded(stagingPath, outputPath);
-        await unlinkGuarded(stagingPath).catch(() => {});
-      } else {
-        // Grok wrote a real image but not a PNG (jpeg/webp/gif) despite the
-        // prompt. The gallery serves by extension and sidecars assume PNG,
-        // so transcode rather than shipping mislabeled bytes.
-        const pngBytes = await sharp(stagingPath).png().toBuffer();
-        await atomicWrite(outputPath, pngBytes);
-      }
+    }).catch(err => {
+      // Admission can reject before the publication callback is entered.
+      // EventEmitter does not await this listener, so settle the job here too.
+      clearTimeout(timeoutTimer);
+      cleanupPromptFile();
       removeScratch();
-      // Degenerate-frame gate (#4173) — a decline that still emitted a flat
-      // canvas must fail here, not become a gallery record.
-      const emptyFrame = await rejectDegenerateFrame(outputPath);
-      if (emptyFrame) {
-        return finalizeJobFailure(job, jobId, proc, emptyFrame);
-      }
-      // Sidecar metadata so the gallery can recover prompt/ratio/etc.
-      const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
-      // `job.renderStartedAtMs` is the queue-ingestion instant generateImage
-      // captured, so the spread measures the render itself — not the time the
-      // job spent queued behind other renders.
-      await atomicWrite(sidecar, { ...meta, ...renderTimingFields(job.renderStartedAtMs) }).catch(() => maintenance.markCurrentUnsettled());
-      // Cleaners run BEFORE the SSE complete + completed events so
-      // subscribers see the cleaned bytes.
-      await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: IMAGE_GEN_MODE.GROK });
-      job.status = 'complete';
-      if (activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
-      activeJobs.delete(jobId);
-      console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (grok)`);
-      const result = { filename, path: `/data/images/${filename}` };
-      dispatchTerminalEvent(
-        jobId,
-        () => broadcastSse(job, { type: 'complete', result }),
-        () => imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.GROK, generationId: jobId, path: `/data/images/${filename}`, filename }),
-      );
-      closeJobAfterDelay(jobs, jobId);
-    } catch (err) {
-      removeScratch();
-      // force: true — 'complete' is already stamped above; see
-      // createJobFailureFinalizer's doc comment in sseUtils.js.
-      finalizeJobFailure(job, jobId, proc, `Grok post-exit handler failed: ${err?.message || err}`, { force: true });
-    }
+      finalizeJobFailure(job, jobId, proc, `Grok publication admission failed: ${err?.message || err}`);
+    });
   });
 }
 

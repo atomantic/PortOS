@@ -1,9 +1,19 @@
+import { acquireBackupSnapshotCut } from '../../lib/backupSnapshotBoundary.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { EventEmitter } from 'events';
+
+const admissionFault = vi.hoisted(() => ({ error: null }));
+vi.mock('../../lib/backupSnapshotBoundary.js', async original => {
+  const actual = await original();
+  return { ...actual, withBackupAssetPublication: (...args) => {
+    if (admissionFault.error) return Promise.reject(admissionFault.error);
+    return actual.withBackupAssetPublication(...args);
+  } };
+});
 
 const spawnCalls = [];
 const makeFakeChild = () => {
@@ -265,7 +275,12 @@ describe('agy image provider', () => {
       Buffer.from('fakepngbody'),
     ]);
     await writeFile(stagingPathFor(job.jobId), png);
+    const releaseCut = await acquireBackupSnapshotCut();
+    try {
     await closeChild(0, 0);
+      await new Promise(resolve => setImmediate(resolve));
+      expect(existsSync(join(FAKE_IMAGES_DIR, job.filename)), 'provider completion must wait outside a held snapshot').toBe(false);
+    } finally { releaseCut(); }
 
     const deadline = Date.now() + 3000;
     while (Date.now() < deadline && completed.mock.calls.length === 0) {
@@ -377,4 +392,21 @@ describe('agy image provider', () => {
     expect(failed).toHaveBeenCalledTimes(1);
     expect(existsSync(join(FAKE_IMAGES_DIR, job.filename))).toBe(false);
   });
+});
+
+
+it('settles admission rejection from the actual close event and clears the active slot', async () => {
+  const job = await agy.generateImage({ prompt: 'admission failure' });
+  const child = spawnCalls[0].child;
+  const failed = new Promise(resolve => imageGenEvents.once('failed', resolve));
+  admissionFault.error = new Error('injected publication admission refusal');
+  try {
+    child.emit('close', 0, null);
+    expect((await failed).error).toContain('injected publication admission refusal');
+    expect(agy.getActiveJob()).toBeNull();
+    const response = { writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: new EventEmitter() };
+    expect(agy.attachSseClient(job.jobId, response)).toBe(true);
+    expect(response.write.mock.calls[0][0]).toContain('injected publication admission refusal');
+    response.req.emit('close');
+  } finally { admissionFault.error = null; }
 });

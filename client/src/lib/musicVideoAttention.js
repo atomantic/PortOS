@@ -131,11 +131,11 @@ export function deriveAttentionItems(project, { generatingSceneIds = null, draft
 }
 
 // Approvals in the order they are given, with the tab (and editor) each is re-given on.
+// The animated proof is optional, so a proof approved on older inputs needs no attention.
 const STALE_APPROVALS = [
   ['castAndSets', 'Cast & Sets check-in', 'cast-sets'],
   ['art', 'Art direction', 'cast-sets#mv-review-art'],
   ['storyboard', 'Timed storyboard', 'board#mv-review-storyboard'],
-  ['proof', 'Animated proof', 'compose#mv-review-proof'],
 ];
 
 // One row for every approval given on inputs that have changed since (#10141),
@@ -172,7 +172,7 @@ export function parkedAutoReview(project) {
   return run && AUTO_REVIEW_PARKED.has(run.status) ? run : null;
 }
 
-/** Whether the Review tab's "Revision and automatic review tools" section should open on its own: a run is live or parked. */
+/** Whether Final render's "Revision and automatic review tools" section should open on its own: a run is live or parked. */
 export const autoReviewNeedsUser = (project) => asList(project?.autoReviews).some((r) => r.status === 'running' && !r.productionRunId) || !!parkedAutoReview(project);
 
 // Rows for runs the server holds that nobody is watching: an autonomous run
@@ -194,7 +194,8 @@ function parkedRunItems(project) {
       projectId: project.id,
       canResume: !awaiting,
       resumeLabel: auto.status === 'failed' ? 'Retry' : 'Resume',
-      openTo: awaiting ? 'setup#mv-auto-edit' : auto.stage === 'produce' ? 'produce' : 'setup',
+      // The run's log and its checkpoint editor live in Project settings › Autopilot.
+      openTo: `${auto.stage === 'produce' ? 'produce' : 'setup'}?mvPanel=autopilot${awaiting ? '#mv-auto-edit' : ''}`,
     });
   }
   const production = currentProductionRun(project);
@@ -207,13 +208,13 @@ function parkedRunItems(project) {
       kind: 'production',
       tone: 'warn',
       title: production.status === 'limit-reached' ? 'Production stopped at its limit' : production.status === 'needs-human' ? 'Production needs you' : 'Production is paused',
-      detail: reason || 'Open Produce to see what it is waiting on.',
+      detail: reason || 'Open Autopilot to see what it is waiting on.',
       projectId: project.id,
       runId: production.id,
-      // Same exits as the header's next action: a needs-human run is cleared on the Produce tab.
+      // Same exits as the header's next action; the run's controls are in Project settings › Autopilot.
       canResume: RESUMABLE_RUN_STATUSES.has(production.status),
       acceptBasis: production.status === 'needs-replan',
-      openTo: 'produce',
+      openTo: 'produce?mvPanel=autopilot',
     });
   }
   const review = parkedAutoReview(project);
@@ -223,7 +224,7 @@ function parkedRunItems(project) {
       kind: 'auto-review-parked',
       tone: 'warn',
       title: review.status === 'limit-reached' ? 'Auto-review stopped at its limit' : review.status === 'stopped' ? 'Auto-review is stopped' : 'Auto-review needs you',
-      detail: review.stopReason || review.error || 'Open the Review tab to resume it or take over.',
+      detail: review.stopReason || review.error || 'Open Final render to resume it or take over.',
       projectId: project.id,
       runId: review.id,
       canResume: review.status !== 'limit-reached',

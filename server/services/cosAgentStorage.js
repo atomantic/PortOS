@@ -8,6 +8,7 @@ import { pipeline } from 'node:stream/promises';
 import { Writable, Transform } from 'node:stream';
 import { z } from 'zod';
 import { atomicWrite, createWriteStreamGuarded, unlinkGuarded } from '../lib/fileUtils.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { AGENTS_DIR, loadConfig, saveConfig, withConfigLock, withStateLock, readAgentsStateForSafetyCheck } from './cosState.js';
 import { cosEvents } from './cosEvents.js';
@@ -186,7 +187,7 @@ async function compress(entry, signal, revalidate) {
     const verifying = pipeline(createReadStream(temporary), gunzip, { signal });
     const [actual] = await Promise.all([hashStream(gunzip, signal), verifying]);
     if (actual !== expected) throw new Error('Recording verification failed');
-    return withStateLock(async () => {
+    return withBackupAssetPublication(() => withStateLock(async () => {
       const fresh = await revalidate();
       if (!fresh || signal.aborted) return 0;
       const zipped = await info(temporary);
@@ -198,11 +199,11 @@ async function compress(entry, signal, revalidate) {
       await atomicWrite(join(entry.dir, MANIFEST), { ...fresh.storage, disposition: 'compressed', sha256: expected, originalBytes: fresh.raw.size, compressedAt: new Date().toISOString() });
       await unlinkGuarded(source);
       return Math.max(0, fresh.raw.size + (fresh.gzip?.size || 0) - zipped.size);
-    });
+    }));
   })().finally(() => unlinkGuarded(temporary).catch(err => { if (err.code !== 'ENOENT') throw err; }));
 }
 async function purge(entry, signal, revalidate) {
-  return withStateLock(async () => {
+  return withBackupAssetPublication(() => withStateLock(async () => {
     const fresh = await revalidate();
     if (!fresh || signal.aborted) return 0;
     // Persist intent before unlink. A crash leaves an explicit disposition and
@@ -215,7 +216,7 @@ async function purge(entry, signal, revalidate) {
       }
       return reclaimed;
     })().catch(err => { err.reclaimedBytes = reclaimed; throw err; });
-  });
+  }));
 }
 export async function startAgentStorage({ token, confirmation }, { automatic = false } = {}) {
   if (controller) throw new ServerError('Recording maintenance already running', { status: 409, code: 'CONFLICT' });

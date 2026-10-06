@@ -1,3 +1,6 @@
+import { publishImageFiles } from './publication.js';
+import { rejectDegenerateFrame } from './frameGuard.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 /**
  * Image Gen — External provider.
  *
@@ -153,19 +156,25 @@ export async function generateImage({ sdapiUrl, prompt, negativePrompt, width, h
     const data = await res.json();
     if (!data.images?.length) throw new Error('SD API returned no images');
 
-    await ensureDir(PATHS.images);
-    const filename = `${randomUUID()}.png`;
-    const pngPath = join(PATHS.images, filename);
-    await atomicWrite(pngPath, Buffer.from(data.images[0], 'base64'));
-    // Auto-clean BEFORE the SSE complete fires so the URL the client opens
-    // serves the cleaned bytes. External mode has no sidecar — pass null so
-    // the helper just patches the PNG in place.
-    await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath, sidecarPath: null, mode: IMAGE_GEN_MODE.EXTERNAL });
-    const path = `/data/images/${filename}`;
-    console.log(`🖼️ Image saved: ${filename}`);
-    activeJob = null;
-    imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.EXTERNAL, generationId, path, filename });
-    return { generationId, filename, path, mode: IMAGE_GEN_MODE.EXTERNAL, model };
+    return await withBackupAssetPublication(async () => {
+      await ensureDir(PATHS.images);
+      const filename = `${randomUUID()}.png`;
+      const pngPath = join(PATHS.images, filename);
+      return publishImageFiles([pngPath], async () => {
+        await atomicWrite(pngPath, Buffer.from(data.images[0], 'base64'));
+        const reason = await rejectDegenerateFrame(pngPath);
+        if (reason) throw new ServerError(reason, { status: 502, code: 'DEGENERATE_FRAME' });
+        // Auto-clean BEFORE the SSE complete fires so the URL the client opens
+        // serves the cleaned bytes. External mode has no sidecar — pass null so
+        // the helper just patches the PNG in place.
+        await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath, sidecarPath: null, mode: IMAGE_GEN_MODE.EXTERNAL });
+        const path = `/data/images/${filename}`;
+        console.log(`🖼️ Image saved: ${filename}`);
+        activeJob = null;
+        imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.EXTERNAL, generationId, path, filename });
+        return { generationId, filename, path, mode: IMAGE_GEN_MODE.EXTERNAL, model };
+      });
+    });
   } catch (err) {
     if (activeJob?.generationId === generationId) activeJob = null;
     imageGenEvents.emit('failed', {

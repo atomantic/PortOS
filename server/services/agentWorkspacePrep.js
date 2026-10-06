@@ -136,7 +136,7 @@ async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, 
       const activeWorkspacePaths = agents
         .filter(a => activeAgentIds.has(a.id))
         .map(a => a.workspacePath || a.metadata?.workspacePath);
-      const released = await releaseIdleSiblingNextHolder(workspacePath, branchName, { activeWorkspacePaths, agents, requestingAgentId: agentId }).catch(err => {
+      const released = await releaseIdleSiblingNextHolder(workspacePath, branchName, { activeWorkspacePaths, agents, requestingAgentId: agentId, allowUntracked: true }).catch(err => {
         emitLog('warn', `🌳 Could not release ${branchName} for task ${taskId}: ${err.message}`, { taskId });
         return null;
       });

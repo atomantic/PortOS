@@ -22,6 +22,7 @@ import { userActionsDdl } from './userActions.js';
 import { reviewQueueTriageDdl } from './reviewQueueTriage.js';
 import { cosAgentFeedbackDdl } from './cosAgentFeedback.js';
 import { aiGraphDdl } from './aiGraph.js';
+import { peerExecutionDdl } from './peerExecution.js';
 import { catalogDdl, catalogUserTypesDdl, catalogPendingAppliesDdl } from './catalog.js';
 import { mediaDdl } from './media.js';
 import { universesDdl } from './universes.js';
@@ -48,6 +49,7 @@ export {
   reviewQueueTriageDdl,
   cosAgentFeedbackDdl,
   aiGraphDdl,
+  peerExecutionDdl,
   catalogDdl,
   catalogUserTypesDdl,
   catalogPendingAppliesDdl,
@@ -85,6 +87,7 @@ export function buildUpgradeDdl() {
     ...reviewQueueTriageDdl,
     ...cosAgentFeedbackDdl,
     ...aiGraphDdl,
+    ...peerExecutionDdl,
   ];
 }
 

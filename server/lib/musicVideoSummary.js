@@ -8,8 +8,11 @@
  * `musicVideoPreview.js`, which still derive them for a full record.
  */
 import { isLayeredComposition, sceneRenderReady } from './musicVideoLayers.js';
+import { latestMusicVideoReviewDraft } from './musicVideoReviewDraft.js';
+import { finishedOutsideCovers } from './musicVideoFinishedOutside.js';
 
-const STAGE_IDS = ['setup', 'cast-sets', 'board', 'produce', 'compose', 'review', 'publish'];
+// The six steps (Song, Look, Storyboard, Make, Final render, Publish); Make (`produce`) absorbed Compose.
+const STAGE_IDS = ['setup', 'cast-sets', 'board', 'produce', 'review', 'publish'];
 const RESUMABLE_RUN_STATUSES = new Set(['running', 'stopped', 'limit-reached', 'blocked', 'needs-replan']);
 const FOOTAGE_OPTIONAL_MODES = new Set(['code', 'document', 'eidoverse']);
 
@@ -48,26 +51,37 @@ function composeDone(project, mode) {
   return true;
 }
 
-// The first stage not yet done; a live production run pins Produce.
+// Song is done once its lyrics are in and their timing verified, or the song
+// is an explicit instrumental — mirrors the client's lyricSetupState.
+function lyricsReady(project, readiness) {
+  const draft = project.productionReview?.draft || {};
+  const instrumental = draft.lyricsMode === 'instrumental';
+  const lines = (project.lyricCues || []).filter((cue) => nonEmptyString(cue?.text)).length;
+  const alignment = readiness?.alignment?.status || (instrumental ? 'instrumental' : draft.timingStatus === 'verified' ? 'verified' : 'provisional');
+  const verified = alignment === 'verified' || alignment === 'instrumental';
+  return Boolean(readiness?.storyboard?.approved) || ((instrumental || lines > 0) && verified);
+}
+
+// The first step not yet done; a live production run pins Make.
 function currentStage(project, readiness, run) {
   if (run && RESUMABLE_RUN_STATUSES.has(run.status)) return 'produce';
   const scenes = project.scenes || [];
   const mode = project.composition?.mode || 'concat';
   const layered = isLayeredComposition(project);
   const planned = Boolean(readiness?.storyboard?.approved);
-  const proofApproved = Boolean(readiness?.proof?.approved);
   const footageReady = FOOTAGE_OPTIONAL_MODES.has(mode) || scenes.every((scene) => sceneRenderReady(scene, { layered }));
   const done = {
-    setup: Boolean(project.trackId || project.uploadedAudioFilename) && Boolean(project.audioAnalysis),
+    setup: Boolean(project.trackId || project.uploadedAudioFilename) && Boolean(project.audioAnalysis) && lyricsReady(project, readiness),
     'cast-sets': Boolean(readiness?.art?.approved),
     board: planned,
-    // The proof closes Compose, not Produce (#10140) — mirrors the client's deriveStages.
-    produce: planned && footageReady,
-    compose: composeDone(project, mode) && proofApproved,
-    review: Boolean(project.renderHistoryId),
+    // Make needs footage and the composition over it; the animated proof is optional (mirrors the client's deriveStages).
+    produce: planned && footageReady && composeDone(project, mode),
+    // A render made before later scene edits no longer counts as the final video — mirrors the client's isFinalRenderStale.
+    review: Boolean(project.renderHistoryId) && project.renderDependencyState?.status !== 'stale',
     publish: Object.keys(project.publishKit?.posts || {}).length > 0,
   };
-  return STAGE_IDS.find((id) => !done[id]) || 'publish';
+  // Finished outside PortOS — mirrors the client's deriveStages.
+  return STAGE_IDS.find((id) => !done[id] && !finishedOutsideCovers(project, id)) || 'publish';
 }
 
 function projectPreview(project) {
@@ -75,7 +89,11 @@ function projectPreview(project) {
   const video = (jobId, label, src = `/data/videos/${jobId}.mp4`) => ({
     kind: 'video', jobId, src, poster: jobId ? `/data/video-thumbnails/${jobId}.jpg` : null, label,
   });
-  if (finalId) return video(finalId, 'Final video');
+  if (finalId) return { ...video(finalId, project.renderDependencyState?.status === 'stale' ? 'Previous final' : 'Final video'), source: 'final',
+    ...(project.renderDependencyState?.status === 'stale' ? { stale: true } : {}) };
+
+  const draft = latestMusicVideoReviewDraft(project);
+  if (draft) return draft;
 
   const excerpts = Array.isArray(project.excerpts) ? project.excerpts : [];
   const excerpt = [...excerpts].reverse().find((e) => e.status === 'complete' && (e.filename || e.jobId));

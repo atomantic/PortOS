@@ -1,3 +1,5 @@
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { discardUnpublishedVideo } from './generateVideoHelpers.js';
 /** Lossless hand stitching and trim-aware chained-video assembly. */
 
 import { existsSync } from 'fs';
@@ -201,95 +203,104 @@ export async function stitchVideos(videoIds, opts = {}) {
     if (listFileWritten) await unlinkGuarded(listFile).catch(() => {});
   }
 
-  const thumb = await generateThumbnail(outPath, id);
-  const stitchedMeta = {
-    id,
-    prompt: promptOverride != null
-      ? promptOverride
-      : `Stitched: ${videos.map((v) => v.prompt).join(' + ')}`,
-    modelId: videos[0].modelId,
-    seed: videos[0].seed ?? 0,
-    width: videos[0].width,
-    height: videos[0].height,
-    // What each input actually contributes. A measured plan wins over the
-    // entry's own `numFrames` either way — but when the cuts didn't make it
-    // into the output, the input contributes its WHOLE measured length
-    // (`startFrame + frames`), not the trimmed length we asked for.
-    numFrames: videos.reduce((sum, v, i) => {
-      const plan = trimPlan[i];
-      const measured = plan?.frames == null
-        ? null
-        : (trimsApplied ? plan.frames : plan.startFrame + plan.frames);
-      return sum + (measured ?? v.numFrames ?? 0);
-    }, 0),
-    fps: videos[0].fps,
-    filename: outFilename,
-    thumbnail: thumb,
-    createdAt: new Date().toISOString(),
-    ...chainRenderTiming(videos, historyKey),
-    [historyKey]: videoIds,
-    ...(Array.isArray(chunkPrompts) ? { chunkPrompts } : {}),
-    // The stitched clip is the chain's visible history row, so it must carry
-    // the same render controls and provenance as the hidden chunks. Preserve
-    // meaningful falsey values (guidance 0, audio enabled, empty conditioning)
-    // while keeping legacy/partial entries free of explicit undefined fields.
-    ...Object.fromEntries([
-      'steps',
-      'guidanceScale',
-      'tiling',
-      'disableAudio',
-      'mode',
-      'textEncoderId',
-      'imageStrength',
-      'i2vReferenceMode',
-      'conditioning',
-      'renderInputsVersion',
-      // Speed profile (#4875) — the REQUESTED schedule and what the runner
-      // actually applied. Inherited for a stronger reason than the dials above:
-      // a chain's chunk entries are written `hidden: true`, so this stitched
-      // record is the ONLY one the user ever sees. Without it the lightbox's
-      // "Speed profile" row never renders for a chained render — including a
-      // chain whose TeaCache or adapter was unavailable, which is exactly the
-      // silent speed claim the feature exists to prevent — and a Remix quietly
-      // reverts to Quality. A chain applies its profile to every chunk or to
-      // none (resolveVideoSpeedProfileForModes), so videos[0] speaks for all.
-      'speedProfileId',
-      'speedProfileApplied',
-      // Draft decode REQUEST (#5423) — chain-wide by construction: every chunk
-      // is submitted with the same `draftDecode`, and the gate that resolves it
-      // is mode-independent, so videos[0] speaks for all. Inherited for the same
-      // reason as the speed profile above — the chunks are hidden, so without it
-      // the stitched record could never say the clip was decoded at preview
-      // fidelity, and a Remix would quietly revert to Full.
-      'draftDecode',
-      // Block-streaming REQUEST (#6499) — same reasoning as draftDecode above:
-      // every chunk is submitted with the same streamingMode, and the chunks
-      // are hidden, so without inheriting it the stitched record could never
-      // show which mode the chain was rendered with.
-      'streamingMode',
-    ].flatMap((key) => videos[0][key] === undefined ? [] : [[key, videos[0][key]]])),
-    // The draft-decode OUTCOME is decided per child process — the runner falls
-    // back to the full decoder on any load failure — so unlike the request
-    // above, videos[0] does NOT speak for the chain. Inherited only when every
-    // chunk agrees; on a mixed chain the field is omitted, which the lightbox
-    // already renders as "outcome not reported". Asserting chunk 0's verdict
-    // over a clip whose later chunks decoded differently would be exactly the
-    // false fidelity claim this field exists to prevent.
-    ...unanimousDraftDecodeOutcome(videos),
-    ...unanimousStreamingPolicyOutcome(videos),
-    // Inherit applied LoRAs from the first constituent clip (a chunk chain
-    // shares one LoRA set across all chunks), so the visible stitched entry
-    // round-trips LoRAs on Remix the same way a single render does — mirrors
-    // how modelId/seed/width above are taken from videos[0].
-    ...(Array.isArray(videos[0].loraFilenames) && videos[0].loraFilenames.length ? {
-      loraFilenames: videos[0].loraFilenames,
-      loraScales: videos[0].loraScales,
-    } : {}),
-  };
-  // Serialized append against the shared history tail (re-reads the freshest
-  // list inside the mutator) so a concurrent download/render write can't drop
-  // this stitched entry.
-  await mutateVideoHistory((history) => { history.unshift(stitchedMeta); return history; });
-  console.log(`🎬 Stitched ${videos.length} videos → ${outFilename}`);
-  return stitchedMeta;
+  return withBackupAssetPublication(async () => {
+    let committed = false;
+    try {
+      const thumb = await generateThumbnail(outPath, id);
+      const stitchedMeta = {
+        id,
+        prompt: promptOverride != null
+          ? promptOverride
+          : `Stitched: ${videos.map((v) => v.prompt).join(' + ')}`,
+        modelId: videos[0].modelId,
+        seed: videos[0].seed ?? 0,
+        width: videos[0].width,
+        height: videos[0].height,
+        // What each input actually contributes. A measured plan wins over the
+        // entry's own `numFrames` either way — but when the cuts didn't make it
+        // into the output, the input contributes its WHOLE measured length
+        // (`startFrame + frames`), not the trimmed length we asked for.
+        numFrames: videos.reduce((sum, v, i) => {
+          const plan = trimPlan[i];
+          const measured = plan?.frames == null
+            ? null
+            : (trimsApplied ? plan.frames : plan.startFrame + plan.frames);
+          return sum + (measured ?? v.numFrames ?? 0);
+        }, 0),
+        fps: videos[0].fps,
+        filename: outFilename,
+        thumbnail: thumb,
+        createdAt: new Date().toISOString(),
+        ...chainRenderTiming(videos, historyKey),
+        [historyKey]: videoIds,
+        ...(Array.isArray(chunkPrompts) ? { chunkPrompts } : {}),
+        // The stitched clip is the chain's visible history row, so it must carry
+        // the same render controls and provenance as the hidden chunks. Preserve
+        // meaningful falsey values (guidance 0, audio enabled, empty conditioning)
+        // while keeping legacy/partial entries free of explicit undefined fields.
+        ...Object.fromEntries([
+          'steps',
+          'guidanceScale',
+          'tiling',
+          'disableAudio',
+          'mode',
+          'textEncoderId',
+          'imageStrength',
+          'i2vReferenceMode',
+          'conditioning',
+          'renderInputsVersion',
+          // Speed profile (#4875) — the REQUESTED schedule and what the runner
+          // actually applied. Inherited for a stronger reason than the dials above:
+          // a chain's chunk entries are written `hidden: true`, so this stitched
+          // record is the ONLY one the user ever sees. Without it the lightbox's
+          // "Speed profile" row never renders for a chained render — including a
+          // chain whose TeaCache or adapter was unavailable, which is exactly the
+          // silent speed claim the feature exists to prevent — and a Remix quietly
+          // reverts to Quality. A chain applies its profile to every chunk or to
+          // none (resolveVideoSpeedProfileForModes), so videos[0] speaks for all.
+          'speedProfileId',
+          'speedProfileApplied',
+          // Draft decode REQUEST (#5423) — chain-wide by construction: every chunk
+          // is submitted with the same `draftDecode`, and the gate that resolves it
+          // is mode-independent, so videos[0] speaks for all. Inherited for the same
+          // reason as the speed profile above — the chunks are hidden, so without it
+          // the stitched record could never say the clip was decoded at preview
+          // fidelity, and a Remix would quietly revert to Full.
+          'draftDecode',
+          // Block-streaming REQUEST (#6499) — same reasoning as draftDecode above:
+          // every chunk is submitted with the same streamingMode, and the chunks
+          // are hidden, so without inheriting it the stitched record could never
+          // show which mode the chain was rendered with.
+          'streamingMode',
+        ].flatMap((key) => videos[0][key] === undefined ? [] : [[key, videos[0][key]]])),
+        // The draft-decode OUTCOME is decided per child process — the runner falls
+        // back to the full decoder on any load failure — so unlike the request
+        // above, videos[0] does NOT speak for the chain. Inherited only when every
+        // chunk agrees; on a mixed chain the field is omitted, which the lightbox
+        // already renders as "outcome not reported". Asserting chunk 0's verdict
+        // over a clip whose later chunks decoded differently would be exactly the
+        // false fidelity claim this field exists to prevent.
+        ...unanimousDraftDecodeOutcome(videos),
+        ...unanimousStreamingPolicyOutcome(videos),
+        // Inherit applied LoRAs from the first constituent clip (a chunk chain
+        // shares one LoRA set across all chunks), so the visible stitched entry
+        // round-trips LoRAs on Remix the same way a single render does — mirrors
+        // how modelId/seed/width above are taken from videos[0].
+        ...(Array.isArray(videos[0].loraFilenames) && videos[0].loraFilenames.length ? {
+          loraFilenames: videos[0].loraFilenames,
+          loraScales: videos[0].loraScales,
+        } : {}),
+      };
+      // Serialized append against the shared history tail (re-reads the freshest
+      // list inside the mutator) so a concurrent download/render write can't drop
+      // this stitched entry.
+      await mutateVideoHistory((history) => { history.unshift(stitchedMeta); return history; });
+      committed = true;
+      console.log(`🎬 Stitched ${videos.length} videos → ${outFilename}`);
+      return stitchedMeta;
+    } catch (error) {
+      if (!committed) await discardUnpublishedVideo({ jobId: id, outputPath: outPath });
+      throw error;
+    }
+  });
 }

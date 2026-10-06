@@ -3,6 +3,7 @@ import { Trash2 } from 'lucide-react';
 import * as api from '../services/api';
 import { formatTime, formatRuntime, formatDateTime } from '../utils/formatters';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import LoadFailedState from '../components/ui/LoadFailedState';
 import Banner from '../components/ui/Banner';
 import { clickableProps, onActivateKeyDown } from '../lib/a11yKeyboard.js';
 
@@ -10,6 +11,7 @@ export function HistoryPage() {
   const [history, setHistory] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [historyFailed, setHistoryFailed] = useState(false);
   const [filter, setFilter] = useState({ action: '', success: '' });
   const [actions, setActions] = useState([]);
   const [confirmingClear, setConfirmingClear] = useState(false);
@@ -22,11 +24,12 @@ export function HistoryPage() {
         limit: 100,
         action: filter.action || undefined,
         success: filter.success !== '' ? filter.success === 'true' : undefined
-      }).catch(() => ({ entries: [] })),
+      }).catch(() => null),
       api.getHistoryStats().catch(() => null),
       api.getHistoryActions().catch(() => [])
     ]);
-    setHistory(historyData.entries || []);
+    setHistoryFailed(historyData === null);
+    if (historyData) setHistory(historyData.entries || []);
     setStats(statsData);
     setActions(actionsData);
     setLoading(false);
@@ -163,7 +166,9 @@ export function HistoryPage() {
 
       {/* History List */}
       <div className="bg-port-card border border-port-border rounded-xl overflow-hidden">
-        {history.length === 0 ? (
+        {historyFailed ? (
+          <LoadFailedState title="Could not load history." hint="Retry." onRetry={loadData} />
+        ) : history.length === 0 ? (
           <div className="text-center py-12 text-gray-500">No history entries</div>
         ) : (
           <div className="divide-y divide-port-border">

@@ -26,6 +26,7 @@ import {
   ensureDir, atomicWrite, readJSONFile, pathExists, sha256File, rmGuarded,
 } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { executeTuiRun } from '../tuiPromptRunner.js';
 import { GROK_TUI_ID } from '../../lib/grok.js';
 import { getSettings } from '../settings.js';
@@ -1137,7 +1138,9 @@ async function runWalkTuiRender(recordId, { runId, direction, grokPath, task, ge
   }).catch((err) => {
     console.error(`❌ sprite walk grok-tui run failed ${recordId}/${runId}: ${err?.message || err}`);
   });
-  await walkWriteTail(recordId, () => attachTuiWalkResult(recordId, runId, videoAbs));
+  // The lease comes first, like the completion hook's: the clip grok wrote, the
+  // decoded frames and the run record naming them are one publication (#9982).
+  await withBackupAssetPublication(() => walkWriteTail(recordId, () => attachTuiWalkResult(recordId, runId, videoAbs)));
 }
 
 /**
@@ -1608,7 +1611,7 @@ export async function getWalkSourceFrames(recordId, runId, { extract = false } =
  * walk-complete — after which the set is immutable.
  */
 export function approveWalkDirection(recordId, args) {
-  return walkWriteTail(recordId, () => approveWalkDirectionImpl(recordId, args));
+  return withBackupAssetPublication(() => walkWriteTail(recordId, () => approveWalkDirectionImpl(recordId, args)));
 }
 
 /**
@@ -1632,7 +1635,7 @@ export function approveWalkDirection(recordId, args) {
  * REGENERATE the set can say so.
  */
 export function unlockWalkSet(recordId, { acknowledgeNoClips = false } = {}) {
-  return walkWriteTail(recordId, () => unlockWalkSetImpl(recordId, { acknowledgeNoClips }));
+  return withBackupAssetPublication(() => walkWriteTail(recordId, () => unlockWalkSetImpl(recordId, { acknowledgeNoClips })));
 }
 
 /**
@@ -1899,7 +1902,9 @@ async function unlockWalkSetImpl(recordId, { acknowledgeNoClips = false } = {}) 
  * anchor can provide its fresh-render recovery.
  */
 export function reopenWalkDirection(recordId, { direction, acknowledgeNoClips = false }) {
-  return walkWriteTail(recordId, () => reopenWalkDirectionImpl(recordId, direction, { acknowledgeNoClips }));
+  return withBackupAssetPublication(() => walkWriteTail(
+    recordId, () => reopenWalkDirectionImpl(recordId, direction, { acknowledgeNoClips }),
+  ));
 }
 
 /**
@@ -1911,7 +1916,9 @@ export function reopenWalkDirection(recordId, { direction, acknowledgeNoClips = 
  * stays on disk; only its approval pointer is removed.
  */
 export function invalidateWalkDirectionForAnchorRevision(recordId, { direction }) {
-  return walkWriteTail(recordId, () => invalidateWalkDirectionForAnchorRevisionImpl(recordId, direction));
+  return withBackupAssetPublication(() => walkWriteTail(
+    recordId, () => invalidateWalkDirectionForAnchorRevisionImpl(recordId, direction),
+  ));
 }
 
 /**
@@ -2005,7 +2012,7 @@ export async function unlockTurnaroundReference(recordId) {
 }
 
 function invalidateWalkForTurnaroundRevision(recordId) {
-  return walkWriteTail(recordId, async () => {
+  return withBackupAssetPublication(() => walkWriteTail(recordId, async () => {
     const invalidated = [];
     for (const direction of SPRITE_DIRECTIONS) {
       if (await invalidateWalkDirectionForAnchorRevisionImpl(recordId, direction)) {
@@ -2013,7 +2020,7 @@ function invalidateWalkForTurnaroundRevision(recordId) {
       }
     }
     return invalidated;
-  });
+  }));
 }
 
 async function invalidateWalkDirectionForAnchorRevisionImpl(recordId, direction) {

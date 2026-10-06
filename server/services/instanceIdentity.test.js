@@ -31,19 +31,40 @@ vi.mock('../lib/asyncMutex.js', () => ({
   createMutex: () => (fn) => fn()
 }));
 
-import { readJSONFile } from '../lib/fileUtils.js';
+import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import {
   ensureSelf,
   getSelf,
   getInstanceId,
   ensureInstanceId,
-  updateSelf,
+  updateSelf, withData, registerInstanceExecutionAuthorityGuard,
 } from './instanceIdentity.js';
 
 describe('instanceIdentity.js', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    registerInstanceExecutionAuthorityGuard(null);
     readJSONFile.mockResolvedValue({ self: null, peers: [] });
+  });
+
+  it('invalidates execution authority before changing paired credentials and refuses publication if invalidation fails', async () => {
+    const peer = { id: 'fixture-peer', instanceId: 'fixture-instance', syncSecret: 'fixture-old-secret', enabled: true };
+    readJSONFile.mockResolvedValue({ self: { instanceId: 'fixture-host' }, peers: [peer] });
+    const guard = vi.fn(async () => {
+      expect(atomicWrite).not.toHaveBeenCalled();
+      throw new Error('fixture authority unavailable');
+    });
+    registerInstanceExecutionAuthorityGuard(guard);
+    await expect(withData(data => { data.peers[0].enabled = false; })).rejects.toThrow('fixture authority unavailable');
+    expect(guard).toHaveBeenCalledOnce();
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+  it('preserves execution grants during non-authority telemetry updates', async () => {
+    readJSONFile.mockResolvedValue({ self: { instanceId: 'fixture-host' }, peers: [{ id: 'fixture-peer', status: 'online' }] });
+    const guard = vi.fn(); registerInstanceExecutionAuthorityGuard(guard);
+    await withData(data => { data.peers[0].status = 'offline'; });
+    expect(guard).not.toHaveBeenCalled();
+    expect(atomicWrite).toHaveBeenCalledOnce();
   });
 
   describe('ensureSelf', () => {

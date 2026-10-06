@@ -1,4 +1,4 @@
-import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 /**
  * Image Gen — fal.ai queue REST API provider.
  *
@@ -336,53 +336,62 @@ async function runFal(job, jobId, {
     });
     if (entry.aborted) return finalizeCanceled(job, jobId);
 
-    // Signature-sniff before anything reaches the gallery: an error page or
-    // truncated body must never be accepted as an image. The gallery serves
-    // by extension and sidecars assume PNG, so a JPEG/WebP result is
-    // transcoded rather than shipped mislabeled.
-    const format = detectImageFormat(bytes)?.format;
-    if (!format) return finalizeJobFailure(job, jobId, null, 'fal.ai returned a file that is not an image');
-    await atomicWrite(outputPath, format === 'png' ? bytes : await sharp(bytes).png().toBuffer());
-    wroteOutput = true;
-    if (entry.aborted) {
-      await unlinkGuarded(outputPath).catch(() => {});
-      return finalizeCanceled(job, jobId);
-    }
+    await withBackupAssetPublication(async () => {
+      try {
+        // Signature-sniff before anything reaches the gallery: an error page or
+        // truncated body must never be accepted as an image. The gallery serves
+        // by extension and sidecars assume PNG, so a JPEG/WebP result is
+        // transcoded rather than shipped mislabeled.
+        const format = detectImageFormat(bytes)?.format;
+        if (!format) return finalizeJobFailure(job, jobId, null, 'fal.ai returned a file that is not an image');
+        await atomicWrite(outputPath, format === 'png' ? bytes : await sharp(bytes).png().toBuffer());
+        wroteOutput = true;
+        if (entry.aborted) {
+          await unlinkGuarded(outputPath).catch(() => {});
+          return finalizeCanceled(job, jobId);
+        }
 
-    // Degenerate-frame gate (#4173) — a moderated/blank result must fail
-    // here, not become a gallery record.
-    const emptyFrame = await rejectDegenerateFrame(outputPath);
-    if (emptyFrame) {
-      await unlinkGuarded(outputPath).catch(() => {});
-      return finalizeJobFailure(job, jobId, null, emptyFrame);
-    }
+        // Degenerate-frame gate (#4173) — a moderated/blank result must fail
+        // here, not become a gallery record.
+        const emptyFrame = await rejectDegenerateFrame(outputPath);
+        if (emptyFrame) {
+          await unlinkGuarded(outputPath).catch(() => {});
+          return finalizeJobFailure(job, jobId, null, emptyFrame);
+        }
 
-    const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
-    const actualSeed = Number.isInteger(result?.seed) ? result.seed : (request.body.seed ?? null);
-    await atomicWrite(sidecar, {
-      ...meta,
-      ...(request.body.aspect_ratio ? { aspectRatio: request.body.aspect_ratio } : {}),
-      ...(request.resolution ? { resolution: request.resolution } : {}),
-      ...(actualSeed != null ? { seed: actualSeed } : {}),
-      // An ESTIMATE from the catalog's published prices — fal.ai bills the
-      // account; this only lets a gallery record say roughly what it cost.
-      estimatedCostUsd: request.estimatedCostUsd,
-      ...renderTimingFields(job.renderStartedAtMs),
-    }).catch(() => maintenance.markCurrentUnsettled());
-    // Cleaners run BEFORE the SSE complete + completed events so subscribers
-    // see the cleaned bytes.
-    await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: MODE });
-    job.status = 'complete';
-    if (activeRequests.get(jobId) === entry) activeRequests.delete(jobId);
-    activeJobs.delete(jobId);
-    console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (fal ${request.endpointId}, ~$${request.estimatedCostUsd})`);
-    const done = { filename, path: `/data/images/${filename}` };
-    dispatchTerminalEvent(
-      jobId,
-      () => broadcastSse(job, { type: 'complete', result: done }),
-      () => imageGenEvents.emit('completed', { mode: MODE, generationId: jobId, path: done.path, filename }),
-    );
-    closeJobAfterDelay(jobs, jobId);
+        const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
+        const actualSeed = Number.isInteger(result?.seed) ? result.seed : (request.body.seed ?? null);
+        await atomicWrite(sidecar, {
+          ...meta,
+          ...(request.body.aspect_ratio ? { aspectRatio: request.body.aspect_ratio } : {}),
+          ...(request.resolution ? { resolution: request.resolution } : {}),
+          ...(actualSeed != null ? { seed: actualSeed } : {}),
+          // An ESTIMATE from the catalog's published prices — fal.ai bills the
+          // account; this only lets a gallery record say roughly what it cost.
+          estimatedCostUsd: request.estimatedCostUsd,
+          ...renderTimingFields(job.renderStartedAtMs),
+        });
+        // Cleaners run BEFORE the SSE complete + completed events so subscribers
+        // see the cleaned bytes.
+        await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: MODE });
+        job.status = 'complete';
+        if (activeRequests.get(jobId) === entry) activeRequests.delete(jobId);
+        activeJobs.delete(jobId);
+        console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (fal ${request.endpointId}, ~$${request.estimatedCostUsd})`);
+        const done = { filename, path: `/data/images/${filename}` };
+        dispatchTerminalEvent(
+          jobId,
+          () => broadcastSse(job, { type: 'complete', result: done }),
+          () => imageGenEvents.emit('completed', { mode: MODE, generationId: jobId, path: done.path, filename }),
+        );
+        closeJobAfterDelay(jobs, jobId);
+      } catch (err) {
+        if (wroteOutput && job.status !== 'complete') {
+          await Promise.all([outputPath, join(PATHS.images, `${jobId}.metadata.json`)].map(path => unlinkGuarded(path).catch(() => {})));
+        }
+        throw err;
+      }
+    });
   } catch (err) {
     // An unanticipated throw (input encode, retrieval, transcode) may still
     // leave the remote request queued or running — cancel it. cancelFalRequest
@@ -390,7 +399,6 @@ async function runFal(job, jobId, {
     // submitted. `force` because the success tail stamps 'complete' before its
     // last awaits.
     await cancelFalRequest(entry);
-    if (wroteOutput && job.status !== 'complete') await unlinkGuarded(outputPath).catch(() => {});
     if (entry.aborted) return finalizeCanceled(job, jobId);
     finalizeJobFailure(job, jobId, null, `fal.ai image generation failed: ${err?.message || err}`, { force: true });
   }

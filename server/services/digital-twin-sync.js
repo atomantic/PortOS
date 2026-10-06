@@ -1,3 +1,4 @@
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 /**
  * Digital Twin Sync
  *
@@ -802,21 +803,8 @@ async function applyMerge(path, remote, mergeFn, { dir } = {}) {
   return 1;
 }
 
-/**
- * The set of document filenames a delete tombstone currently suppresses (#3530).
- *
- * Read straight off META_FILE rather than through `loadMeta()`: loadMeta's
- * missing-file path REBUILDS meta from a disk scan and saves it, which is
- * exactly the side effect the meta-before-documents ordering below exists to
- * avoid. applyMeta has already written the merged tombstones, so the file is
- * current.
- *
- * A filename that survived the merge as a live document entry is never
- * suppressed — that is the re-created-after-delete case, where the document's
- * `createdAt` superseded the tombstone.
- */
-async function readSuppressedDocuments() {
-  const meta = await readJSONFile(META_FILE, null, { strict: true });
+// Compute suppression from the prepared merge before publishing references.
+function suppressedDocuments(meta) {
   if (!isPlainObject(meta)) return new Set();
   const live = new Set(
     (Array.isArray(meta.documents) ? meta.documents : [])
@@ -930,19 +918,21 @@ export async function applyDigitalTwinRemote(remoteData) {
   // derivedAt; taste also preserves the newest user-triggered AI interpretation.
   count += await applyMerge(TASTE_OBSERVED_FILE, remoteData.tasteObserved, mergeTasteObserved);
   count += await applyMerge(CHRONOTYPE_OBSERVED_FILE, remoteData.chronotypeObserved, mergeChronotypeObserved);
-  // Meta BEFORE documents: applyMeta()'s loadMeta() rebuilds meta from a disk
-  // .md scan when no meta.json exists, creating DEFAULT document entries. If the
-  // peer's .md files were written first, that rebuild would manufacture default
-  // entries and mergeMeta's add-only policy would then keep them, discarding the
-  // sender's real document metadata (title/category/priority/weight). Merging
-  // meta first preserves the sender's entries; the files are written after.
-  count += await applyMeta(remoteData.meta);
-  // Delete tombstones (#3530) gate both directions of the document apply: reap
-  // local files a peer's delete covers, and skip re-writing anything this
-  // machine deleted. Read AFTER applyMeta so the merged tombstone list is on disk.
-  const suppressed = await readSuppressedDocuments();
-  count += await reapTombstonedDocuments(suppressed);
-  count += await applyDocuments(remoteData.documents, suppressed);
+  count += await withBackupAssetPublication(async () => {
+    // Load before copying: a missing meta file is rebuilt from local markdown,
+    // and must not manufacture defaults for the peer's not-yet-published files.
+    const { loadMeta } = await import('./digital-twin-meta.js');
+    const local = await loadMeta();
+    const prepared = isPlainObject(remoteData.meta) ? mergeMeta(local, remoteData.meta).merged : local;
+    // A failed file write must leave the durable metadata unchanged. Re-merge
+    // after the I/O so concurrent local metadata updates are retained. Persist
+    // tombstones before removing their bytes, so failure cannot strand a live
+    // document reference pointing at an already-reaped file.
+    let documentCount = await applyDocuments(remoteData.documents, suppressedDocuments(prepared));
+    documentCount += await applyMeta(remoteData.meta);
+    documentCount += await reapTombstonedDocuments(suppressedDocuments(await loadMeta()));
+    return documentCount;
+  });
 
   if (isPlainObject(remoteData.autobiography)) {
     // stories only — config (prompt schedule) is intentionally machine-local.
@@ -953,8 +943,7 @@ export async function applyDigitalTwinRemote(remoteData) {
 
   count += await applySocialAccounts(remoteData.socialAccounts);
 
-  // Meta is saved before document files land. Reconcile again only after the
-  // complete sync so status cannot remain at the pre-document count.
+  // Refresh status after the complete document and metadata publication.
   if (count > 0) {
     const { digitalTwinEvents } = await import('./digital-twin-meta.js');
     digitalTwinEvents.emit('sync:completed');

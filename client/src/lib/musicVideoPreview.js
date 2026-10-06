@@ -1,4 +1,5 @@
 import { videoSrcForJob, videoPosterForJob } from './creativeDirectorPreview.js';
+import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
 
 const nonEmptyString = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
 
@@ -30,12 +31,17 @@ export function selectMusicVideoPreview(project) {
   if (finalId) {
     return {
       kind: 'video',
+      source: 'final',
       jobId: finalId,
       src: videoSrcForJob(finalId),
       poster: videoPosterForJob(finalId),
-      label: 'Final video',
+      label: project.renderDependencyState?.status === 'stale' ? 'Previous final' : 'Final video',
+      ...(project.renderDependencyState?.status === 'stale' ? { stale: true } : {}),
     };
   }
+
+  const draft = latestMusicVideoReviewDraft(project);
+  if (draft) return draft;
 
   // 2. Latest completed excerpt render
   const excerpts = Array.isArray(project.excerpts) ? project.excerpts : [];

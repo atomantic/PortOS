@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { join } from 'path';
 
+// This suite doubles fs.existsSync for spawn branches; it must not invent a database fence.
+vi.mock('../lib/databaseMaintenanceJournal.js', () => ({ assertDatabaseAdmission() {} }));
+
 // Heavy modules needed only by spawnDirectly — mock them all before importing.
 vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() }, emitLog: vi.fn() }));
 vi.mock('./cosAgentLifecycle.js', () => {
@@ -11,7 +14,7 @@ vi.mock('./cosAgentLifecycle.js', () => {
   // and, on flush(), routes them through the mocked appendAgentOutputLines while
   // swallowing+logging failures (mirrors the real createAgentOutputBatcher in
   // cosAgentLifecycle.js — whose error handling is unit-tested in cosAgentLifecycle.test.js).
-  const createAgentOutputBatcher = vi.fn((agentId) => {
+  const createAgentOutputBatcher = vi.fn((agentId, { flushBatch } = {}) => {
     let pending = [];
     return {
       push(lineOrLines) {
@@ -22,7 +25,7 @@ vi.mock('./cosAgentLifecycle.js', () => {
         if (pending.length === 0) return;
         const batch = pending;
         pending = [];
-        await appendAgentOutputLines(agentId, batch).catch((err) =>
+        await (flushBatch ? flushBatch(batch) : appendAgentOutputLines(agentId, batch)).catch((err) =>
           console.error(`❌ agent ${agentId} output batch flush failed: ${err.message}`));
       },
     };
@@ -778,7 +781,7 @@ describe('stream error containment', () => {
     // Assert: error was swallowed into console.error, not an unhandled rejection
     expect(unhandledRejections).toHaveLength(0);
     const logged = consoleSpy.mock.calls.some(
-      (args) => typeof args[0] === 'string' && args[0].startsWith('❌ agent agent-test output batch flush failed:')
+      (args) => typeof args[0] === 'string' && args[0].startsWith('❌ agent agent-test state write failed')
     );
     expect(logged).toBe(true);
   });
@@ -841,9 +844,59 @@ describe('stream error containment', () => {
 
     expect(unhandledRejections).toHaveLength(0);
     const logged = consoleSpy.mock.calls.some(
-      (args) => typeof args[0] === 'string' && args[0].startsWith('❌ agent agent-test output batch flush failed:')
+      (args) => typeof args[0] === 'string' && args[0].startsWith('❌ agent agent-test state write failed')
     );
     expect(logged).toBe(true);
+  });
+
+  it('publishes a CLI transcript flush with its state batch before admitting a snapshot', async () => {
+    const fs = await vi.importActual('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { writeFileGuarded } = await import('../lib/fileUtils.js');
+    const { activeAgents } = await import('./agentState.js');
+    const { acquireBackupSnapshotCut } = await import('../lib/backupSnapshotBoundary.js');
+    const dir = await fs.mkdtemp(join(tmpdir(), 'cli-publication-'));
+    let reached; let finish;
+    const reachedPromise = new Promise(resolve => { reached = resolve; });
+    const finishPromise = new Promise(resolve => { finish = resolve; });
+    writeFileGuarded.mockImplementation((path, bytes) => fs.writeFile(path, bytes));
+    const persistedLines = [];
+    agentStateMocks.appendAgentOutputLines.mockImplementation(async (_id, batch) => {
+      reached(); await finishPromise;
+      persistedLines.push(...batch);
+      await fs.writeFile(join(dir, 'state.json'), JSON.stringify({ lines: persistedLines }));
+    });
+    try {
+      await spawnDirectly({ ...minimalArgs, agentDir: dir,
+        cliConfig: { command: 'claude', args: [], stdinMode: 'prompt', streamFormat: 'text' } });
+      fakeProcess.stdout.emit('data', Buffer.from('complete batch\n'));
+      const flushing = activeAgents.get('agent-test').flushOutput();
+      await reachedPromise;
+      // A later chunk must not change either member of the in-flight batch.
+      fakeProcess.stdout.emit('data', Buffer.from('later batch\n'));
+      await new Promise(resolve => setImmediate(resolve));
+      let acquired = false;
+      const cut = acquireBackupSnapshotCut().then(release => { acquired = true; return release; });
+      try { await new Promise(resolve => setImmediate(resolve)); expect(acquired).toBe(false); }
+      finally { finish(); }
+      await flushing;
+      const release = await cut;
+      try {
+        expect(await fs.readFile(join(dir, 'output.txt'), 'utf8')).toBe('complete batch\n');
+        expect(JSON.parse(await fs.readFile(join(dir, 'state.json'), 'utf8')).lines).toEqual(['complete batch\n']);
+      } finally { release(); }
+      await activeAgents.get('agent-test').flushOutput();
+      expect(await fs.readFile(join(dir, 'output.txt'), 'utf8')).toBe('complete batch\nlater batch\n');
+      expect(JSON.parse(await fs.readFile(join(dir, 'state.json'), 'utf8')).lines)
+        .toEqual(['complete batch\n', 'later batch\n']);
+      fakeProcess.emit('close', 0);
+      await vi.waitFor(() => expect(runSpawnerCompletionCleanup).toHaveBeenCalled());
+    } finally {
+      finish();
+      writeFileGuarded.mockResolvedValue(undefined);
+      agentStateMocks.appendAgentOutputLines.mockResolvedValue(undefined);
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('detects a fallback signal and terminates immediately even while an earlier transcript write is blocked, keeping output ordered (#2384)', async () => {

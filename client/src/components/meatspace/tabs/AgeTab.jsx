@@ -3,6 +3,7 @@ import { Dna, Calendar, Pencil, Check, X } from 'lucide-react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import ProvenanceChip from '../../ui/ProvenanceChip';
+import LoadFailureNotice from '../LoadFailureNotice';
 
 function BirthDateSection({ birthDate, onUpdate }) {
   const [editing, setEditing] = useState(false);
@@ -108,13 +109,17 @@ function BirthDateSection({ birthDate, onUpdate }) {
 export default function AgeTab() {
   const [birthDate, setBirthDate] = useState(null);
   const [epigeneticData, setEpigeneticData] = useState(null);
+  const [birthFailed, setBirthFailed] = useState(false);
+  const [epigeneticFailed, setEpigeneticFailed] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const fetchData = useCallback(async () => {
     const [birthResult, epigenetic] = await Promise.all([
-      api.getMeatspaceBirthDate().catch(() => ({ birthDate: null })),
-      api.getEpigeneticTests().catch(() => ({ tests: [] }))
+      api.getMeatspaceBirthDate({ silent: true }).catch(() => null),
+      api.getEpigeneticTests({ silent: true }).catch(() => null)
     ]);
+    setBirthFailed(birthResult === null);
+    setEpigeneticFailed(epigenetic === null);
     setBirthDate(birthResult?.birthDate || null);
     setEpigeneticData(epigenetic);
     setLoading(false);
@@ -137,12 +142,18 @@ export default function AgeTab() {
 
   return (
     <div className="space-y-6">
-      <BirthDateSection
-        birthDate={birthDate}
-        onUpdate={(newDate) => setBirthDate(newDate)}
-      />
+      {birthFailed ? (
+        <LoadFailureNotice message="Could not load the birth date. Retry before entering one." onRetry={fetchData} />
+      ) : (
+        <BirthDateSection
+          birthDate={birthDate}
+          onUpdate={(newDate) => setBirthDate(newDate)}
+        />
+      )}
 
-      {latestEpigenetic ? (
+      {epigeneticFailed ? (
+        <LoadFailureNotice message="Could not load epigenetic age. Retry." onRetry={fetchData} />
+      ) : latestEpigenetic ? (
         <div className="bg-port-card border border-port-border rounded-xl p-6">
           <div className="flex items-center gap-2 mb-4">
             <Dna size={18} className="text-port-accent-2" />

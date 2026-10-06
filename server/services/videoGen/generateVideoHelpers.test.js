@@ -3,6 +3,7 @@ import { writeFileSync, rmSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { EventEmitter } from 'events';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { makeVideoGenLineHandler, isWatchdogSuccess, finalizeGeneratedVideo, parseByteProgress, formatBytes, formatDownloadMessage, describeSignalDeath, formatRuntimeFingerprint, describeRenderConditioning, isPromptEncodingMetalWatchdog, planPromptEncodingRetry, DEFAULT_GEMMA_MAX_LENGTH, RETRY_GEMMA_MAX_LENGTH, bufferChildExit, isNativeTeardownAbort, verifyPostCompletionOutputs, POST_COMPLETION_ABORT_RUNTIME, RENDER_INPUTS_VERSION, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
 
 describe('parseByteProgress', () => {
@@ -110,6 +111,10 @@ vi.mock('../../lib/ffmpeg.js', () => ({
   probeFrameCount: probeMock.frames,
   probeVideoDuration: probeMock.duration,
 }));
+vi.mock('../../lib/fileUtils.js', async importOriginal => makePathsProxy(await importOriginal(), {
+  dataRoot: () => lazyTempDataRoot('portos-video-finalizer-metadata-'),
+}));
+afterAll(() => cleanupTempDataRoots());
 
 const PYTHON_NOISE_RE = /^(Loading|Fetching|tokenizer|Some weights)/;
 

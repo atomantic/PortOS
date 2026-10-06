@@ -199,6 +199,8 @@ export * from './grok.js';
 export * from './falVideoModels.js';
 export * from './filmStyleGrammars.js';
 export * from './grokVideoClip.js';
+export * from './fontMetadata.js';
+export * from './musicVideoCoverOverlay.js';
 export * from './musicVideoShotTiming.js';
 export * from './reactorStartingFrame.js';
 export * from './reactorVideoClip.js';
@@ -643,6 +645,8 @@ export * from './assetRoutePrefixes.js';
 export * from './asyncMutex.js';
 export * from './concurrencyGate.js';
 export * from './dispatchLabels.js';
+export * from './distrokidForm.js';
+export * from './distrokidGenres.js';
 export * from './domainAutonomy.js';
 export * from './domainBudgets.js';
 export * from './eidoverseCreativeToolkit.js';
@@ -715,6 +719,7 @@ export * from './gitTestRepo.js';
 export * from './mockPathsDataRoot.js';
 export * from './settingsTestUtil.js';
 export * from './dbTestGate.js';
+export * from './browserSuiteGate.js';
 export * from './runtimeEnv.js';
 export * from './testDataIsolation.js';
 export * from './testHelper.js';
@@ -809,6 +814,7 @@ export * from './musicVideoAspect.js';
 export * from './musicVideoMotion.js';
 
 export * from './musicVideoMediumPlan.js';
+export * from './musicVideoFinishedOutside.js';
 
 // Flat: validation re-exports these same bindings.
 export * from './imageLimits.js';
@@ -834,5 +840,11 @@ export * from './sandboxDelegation.js';
 export * from './forgeMaintenanceTasks.js';
 
 export * from './maintenanceAdmission.js';
+export * from './maintenanceExclusive.js';
+export * from './peerExecutionAuthority.js';
 export * as peerAdminValidation from './peerAdminValidation.js';
 export * from './speechMatch.js';
+
+export * from './musicVideoReviewDraft.js';
+export * from './backupSharedAdmission.js';
+export * from './runtimeFilePublication.js';

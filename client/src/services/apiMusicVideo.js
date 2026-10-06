@@ -31,6 +31,10 @@ export const cloneMusicVideoProject = (id, data = {}, options = {}) => request(`
 export const updateMusicVideoProject = (id, patch, options = {}) => request(`/music-video/${encodeURIComponent(id)}`, {
   method: 'PATCH', body: JSON.stringify(patch), ...options,
 });
+// Mark the project finished outside PortOS (or clear it); returns the presented project.
+export const setMusicVideoFinishedOutside = (id, { finished, note } = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/finished-outside`, {
+  method: 'PUT', body: JSON.stringify({ finished, ...(note ? { note } : {}) }), ...options,
+});
 export const deleteMusicVideoProject = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}`, {
   method: 'DELETE', ...options,
 });
@@ -244,6 +248,32 @@ export const updateMusicVideoPublishCopy = (id, patch, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish-kit/copy`, { method: 'PATCH', body: JSON.stringify(patch || {}), ...options });
 export const selectMusicVideoPublishThumbnail = (id, filename, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish-kit/thumbnail`, { method: 'PUT', body: JSON.stringify({ filename }), ...options });
+// Release cover art: compose from a source image, or queue a fresh source
+// (the result arrives over the `music-video:cover-art` socket event).
+export const composeMusicVideoCoverArt = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/cover-art`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
+export const designMusicVideoCoverArt = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/cover-art/design`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
+export const generateMusicVideoCoverArt = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/cover-art/generate`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
+// Lettering controls (#10345): `design` is any subset of the cover design, merged over the song's; recomposes at once.
+export const saveMusicVideoCoverDesign = (id, design, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/cover-art/design`, { method: 'PUT', body: JSON.stringify({ design }), ...options });
+// One saved cover design per artist, and the typefaces the director uploaded (#10345).
+export const getMusicVideoArtistStyles = (options = {}) => request('/music-video/publish/artist-styles', options);
+export const saveMusicVideoArtistStyle = (body, options = {}) =>
+  request('/music-video/publish/artist-styles', { method: 'PUT', body: JSON.stringify(body), ...options });
+export const deleteMusicVideoArtistStyle = (name, options = {}) =>
+  request(`/music-video/publish/artist-styles?name=${encodeURIComponent(name)}`, { method: 'DELETE', ...options });
+export const getMusicVideoCoverFonts = (options = {}) => request('/music-video/publish/cover-fonts', options);
+export const uploadMusicVideoCoverFont = (file, options = {}) => {
+  const body = new FormData();
+  body.append('font', file, file.name || 'font');
+  return request('/music-video/publish/cover-fonts', { method: 'POST', body, ...options });
+};
+export const deleteMusicVideoCoverFont = (id, options = {}) =>
+  request(`/music-video/publish/cover-fonts/${encodeURIComponent(id)}`, { method: 'DELETE', ...options });
+export const musicVideoCoverFontUrl = (id) => `/api/music-video/publish/cover-fonts/${encodeURIComponent(id)}/file`;
 // ---- Posting (#9282) ----
 // Prepare fills the platform's post in the PortOS Browser → { draftId, target,
 // summary, screenshot }. Manual posting is handled outside this wrapper.
@@ -500,3 +530,8 @@ export const actOnMusicVideoSongRevision = (id, action, data, options = {}) => {
 };
 
 export const importMusicVideoDocumentShots = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/document-shots`, { method: 'POST', body: JSON.stringify(body), ...options });
+
+// Source-bound private sharing export; the server rejects stale download URLs.
+export const getMusicVideoSharingCopy = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/sharing-copy`, options);
+export const prepareMusicVideoSharingCopy = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/sharing-copy`, { method: 'POST', ...options });
+export const musicVideoSharingCopyDownloadUrl = (id) => `/api/music-video/${encodeURIComponent(id)}/sharing-copy/download`;

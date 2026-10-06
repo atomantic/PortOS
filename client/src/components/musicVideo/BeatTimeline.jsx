@@ -290,7 +290,7 @@ export default function BeatTimeline({ audioAnalysis, scenes, lyricCues, narrati
         </div>
       </div>
       {narrative.events.length > 0 && <p className="text-xs text-port-text-muted">Narrative event lane · click an event to seek its resolved song frame.</p>}
-      {narrative.unresolved.length > 0 && <p role="status" className="text-xs text-port-warning">Rebind {narrative.unresolved.length} unresolved narrative events in Compose.</p>}
+      {narrative.unresolved.length > 0 && <p role="status" className="text-xs text-port-warning">Rebind {narrative.unresolved.length} unresolved narrative events in Make.</p>}
     </div>
   );
 }

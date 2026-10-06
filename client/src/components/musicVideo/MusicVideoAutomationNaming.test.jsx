@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 
 vi.mock('../../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn() },
@@ -95,20 +96,23 @@ describe('Music Video Automation Naming Canonical Conventions (#10166)', () => {
       }],
     };
     render(
-      <AutopilotPanel
-        project={project}
-        production={{ busy: false }}
-        readiness={{}}
-        onSave={vi.fn()}
-        onKickoff={vi.fn()}
-      />
+      <MemoryRouter initialEntries={['/music-video/p1/board']}>
+        <AutopilotPanel
+          project={project}
+          production={{ busy: false }}
+          readiness={{}}
+          onSave={vi.fn()}
+          onKickoff={vi.fn()}
+        />
+      </MemoryRouter>
     );
 
     expect(screen.queryByText(/Production run \(opt-in\)/)).toBeNull();
     expect(screen.getByText('Production run')).toBeInTheDocument();
     const link = screen.getByRole('link', { name: 'Started by the autonomous run' });
     expect(link).toBeInTheDocument();
-    expect(link).toHaveAttribute('href', '/music-video/p1/setup#mv-autonomous-run');
+    // It stays on the open step and opens Project settings › Autopilot at the run log.
+    expect(link).toHaveAttribute('href', '/music-video/p1/board?mvPanel=autopilot#mv-autonomous-run');
   });
 
   it('renders Auto-review (opt-in) on Review when not started by autonomous run', () => {
@@ -143,21 +147,24 @@ describe('Music Video Automation Naming Canonical Conventions (#10166)', () => {
       }],
     };
     render(
-      <AutoReviewPanel
-        project={project}
-        startSec={0}
-        endSec={5}
-        rangeValid={true}
-        rendering={false}
-        autoReview={{ busy: false }}
-      />
+      <MemoryRouter initialEntries={['/music-video/p1/board']}>
+        <AutoReviewPanel
+          project={project}
+          startSec={0}
+          endSec={5}
+          rangeValid={true}
+          rendering={false}
+          autoReview={{ busy: false }}
+        />
+      </MemoryRouter>
     );
 
     expect(screen.queryByText(/Auto-review \(opt-in\)/)).toBeNull();
     expect(screen.getByText('Auto-review')).toBeInTheDocument();
     const link = screen.getByRole('link', { name: 'Started by the autonomous run' });
     expect(link).toBeInTheDocument();
-    expect(link).toHaveAttribute('href', '/music-video/p1/setup#mv-autonomous-run');
+    // It stays on the open step and opens Project settings › Autopilot at the run log.
+    expect(link).toHaveAttribute('href', '/music-video/p1/board?mvPanel=autopilot#mv-autonomous-run');
   });
 
   it('renders "Draft art direction and shots" in Production approvals', () => {
@@ -189,6 +196,7 @@ describe('Music Video Automation Naming Canonical Conventions (#10166)', () => {
         project={project}
         review={review}
         onOpenArtifact={vi.fn()}
+        stage="art"
       />
     );
 

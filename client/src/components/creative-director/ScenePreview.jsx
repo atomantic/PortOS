@@ -90,12 +90,12 @@ export default function ScenePreview({ jobId, label, aspectClass = 'aspect-video
     });
   }, [autoPlay, src, jobId, attempt]);
 
-  if (!jobId) {
+  if (!jobId && !src) {
     return <div className={`bg-port-bg ${aspectClass} flex items-center justify-center text-port-text-muted text-xs`}>no render yet</div>;
   }
-  const cacheBust = attempt > 0 ? `?retry=${attempt}` : '';
+  const cacheBust = attempt > 0 ? `${src?.includes('?') ? '&' : '?'}retry=${attempt}` : '';
   const videoSrc = `${src || videoSrcForJob(jobId)}${cacheBust}`;
-  const posterSrc = `${videoPosterForJob(jobId)}${cacheBust}`;
+  const posterSrc = jobId ? `${videoPosterForJob(jobId)}${attempt > 0 ? `?retry=${attempt}` : ''}` : undefined;
   if (missing) {
     return (
       <div className={`bg-port-bg ${aspectClass} flex flex-col items-center justify-center text-port-text-muted text-xs gap-2`}>

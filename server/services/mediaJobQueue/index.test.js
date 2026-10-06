@@ -84,6 +84,8 @@ const stubs = {
   hasSurvivingTrainer: vi.fn(async () => false),
   runVideoUpscale: vi.fn(() => new Promise(() => {})),
   cancelVideoUpscale: vi.fn(),
+  runSharingCopy: vi.fn(async () => ({})),
+  cancelSharingCopy: vi.fn(() => true),
   renderComposition: vi.fn(async () => ({})),
   cancelComposition: vi.fn(),
   renderSuperCollider: vi.fn(() => new Promise(() => {})),
@@ -101,6 +103,12 @@ vi.mock('../videoGen/local.js', () => ({
   generateVideo: (...args) => stubs.generateVideo(...args),
   generateChainedVideo: (...args) => stubs.generateChainedVideo(...args),
   cancel: (...args) => stubs.cancelVideo(...args),
+}));
+
+vi.mock('../musicVideo/sharingCopy.js', () => ({
+  runSharingCopy: (...args) => stubs.runSharingCopy(...args),
+  cancel: (...args) => stubs.cancelSharingCopy(...args),
+  cleanupInterruptedSharingCopy: vi.fn(async () => {}),
 }));
 
 vi.mock('../htmlComposition/index.js', () => ({
@@ -270,6 +278,14 @@ describe('mediaJobQueue', () => {
     expect(stubs.generateImage).not.toHaveBeenCalled();
   });
 
+  it('admits release cover art for a code-only video: the cover is not footage in it', async () => {
+    const { getProject } = await import('../musicVideo/projects.js');
+    getProject.mockClear();
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'Synthetic cover', musicVideo: { projectId: 'mv-example', coverArt: { requestId: 'req-example' } } } });
+    expect(mediaJobQueue.getJob(jobId)).toBeTruthy();
+    expect(getProject).not.toHaveBeenCalled();
+  });
+
   it('rejects an unreviewed music-video scene before queue admission and rechecks delayed dispatch', async () => {
     const { assertMusicVideoSceneReview } = await import('../musicVideo/productionReviewService.js');
     const request = { kind: 'video', params: { prompt: 'Synthetic scene', musicVideo: { projectId: 'mv-example', sceneId: 'scene-example' } } };
@@ -388,6 +404,50 @@ describe('mediaJobQueue', () => {
     expect(stubs.cancelComposition).toHaveBeenCalledWith(jobId);
     videoGenEvents.emit('failed', { generationId: jobId, error: 'Render canceled' });
     await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'canceled');
+  });
+
+  it('dispatches private sharing copies through the serialized lane and preserves physical cancellation settlement', async () => {
+    stubs.runSharingCopy.mockImplementation(() => new Promise(() => {}));
+    stubs.cancelSharingCopy.mockReturnValue(true);
+    const params = { sharingProjectId: 'mv-example', renderHistoryId: 'final-example', sourceHash: 'a'.repeat(64) };
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video-sharing', params });
+    await waitFor(() => stubs.runSharingCopy.mock.calls.length === 1);
+    expect(stubs.runSharingCopy).toHaveBeenCalledWith(expect.objectContaining({ ...params, jobId }));
+    expect(mediaJobQueue.isRemoteMediaJob(mediaJobQueue.getJob(jobId))).toBe(false);
+    expect(mediaJobQueue.laneConcurrencyFor(mediaJobQueue.getJob(jobId))).toBe(1);
+    videoGenEvents.emit('status', { generationId: jobId, message: 'Encoding sharing copy' });
+    expect(mediaJobQueue.getJob(jobId).statusMsg).toBe('Encoding sharing copy');
+    expect(await mediaJobQueue.cancelJob(jobId)).toMatchObject({ ok: true, status: 'canceling' });
+    expect(stubs.cancelSharingCopy).toHaveBeenCalledWith(jobId);
+    expect(mediaJobQueue.getJob(jobId).status).toBe('running');
+    videoGenEvents.emit('failed', { generationId: jobId, error: 'Sharing export cancelled' });
+    await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'canceled');
+  });
+
+  it('keeps sharing exports queued during maintenance and draining until process settlement', async () => {
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    let releaseProcess;
+    stubs.runSharingCopy.mockImplementation(() => new Promise(resolve => { releaseProcess = resolve; }));
+    stubs.cancelSharingCopy.mockReturnValue(true);
+    const params = { sharingProjectId: 'mv-example', renderHistoryId: 'final-example', sourceHash: 'a'.repeat(64) };
+    const first = await mediaJobQueue.enqueueJob({ kind: 'video-sharing', params });
+    await waitFor(() => stubs.runSharingCopy.mock.calls.length === 1);
+    const { hold } = maintenance.begin({ reason: 'Sharing fixture drain', owner: 'Operator' });
+    try {
+      const second = await mediaJobQueue.enqueueJob({ kind: 'video-sharing', params: { ...params, sharingProjectId: 'mv-other' } });
+      await mediaJobQueue.cancelJob(first.jobId);
+      expect(maintenance.status().state).toBe('draining');
+      expect(stubs.runSharingCopy).toHaveBeenCalledTimes(1);
+      expect(mediaJobQueue.getJob(second.jobId).status).toBe('queued');
+      videoGenEvents.emit('failed', { generationId: first.jobId, error: 'Sharing export cancelled' });
+      await waitFor(() => mediaJobQueue.getJob(first.jobId).status === 'canceled');
+      expect(maintenance.status().state).toBe('draining');
+      releaseProcess();
+      await waitFor(() => maintenance.status().state === 'ready');
+      expect(stubs.runSharingCopy).toHaveBeenCalledTimes(1);
+      expect(mediaJobQueue.getJob(first.jobId).status).toBe('canceled');
+      await mediaJobQueue.cancelJob(second.jobId);
+    } finally { releaseProcess?.(); maintenance.resume({ id: hold.id, revision: hold.revision }); }
   });
 
   // SuperCollider renders (#9413) are local-only audio jobs: progress rides the
@@ -2818,13 +2878,27 @@ describe('durable remote source-audio settlement', () => {
     const recovery = stubs.generateVideoRemote.mock.calls.find(([params]) => params.jobId === first.jobId)[0];
     expect(recovery.remoteMedia.reconcile).toBe(true);
     expect(stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === next.jobId)).toBe(false);
-    videoGenEvents.emit('completed', { generationId: first.jobId, remoteInputsDisposable: true,
-      remoteRecoverySettlement: remoteRecoverySettlement(first.jobId) });
-    await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === next.jobId));
-    expect(persistedJobs().find((job) => job.id === first.jobId).params.remotePeerReservation).toBe(false);
-    expect(maintenance.status().blockers.filter((entry) => entry.resource === first.jobId)).toEqual([]);
-    expect(mediaJobQueue.getJob(first.jobId).result).not.toHaveProperty('remoteRecoverySettlement');
-    videoGenEvents.emit('completed', { generationId: next.jobId, remoteInputsDisposable: true });
+    // Lane release admits the next peer job before the archive flush completes.
+    // Observe maintenance settlement itself instead of treating dispatch as its signal.
+    let onMaintenanceChanged;
+    const recoveryFinished = new Promise((resolve) => {
+      onMaintenanceChanged = ({ blockers }) => {
+        if (!blockers.some((entry) => entry.resource === first.jobId)) resolve();
+      };
+      maintenance.events.on('changed', onMaintenanceChanged);
+    });
+    try {
+      videoGenEvents.emit('completed', { generationId: first.jobId, remoteInputsDisposable: true,
+        remoteRecoverySettlement: remoteRecoverySettlement(first.jobId) });
+      await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === next.jobId));
+      await recoveryFinished;
+      expect(persistedJobs().find((job) => job.id === first.jobId).params.remotePeerReservation).toBe(false);
+      expect(maintenance.status().blockers.filter((entry) => entry.resource === first.jobId)).toEqual([]);
+      expect(mediaJobQueue.getJob(first.jobId).result).not.toHaveProperty('remoteRecoverySettlement');
+      videoGenEvents.emit('completed', { generationId: next.jobId, remoteInputsDisposable: true });
+    } finally {
+      maintenance.events.off('changed', onMaintenanceChanged);
+    }
   });
 
   it('preserves recovered uncertainty when owned cleanup creates a new mark', async () => {

@@ -130,9 +130,10 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   useEffect(() => {
     if (!seekRequest || duration <= 0 || appliedSeek.current === seekRequest.n) return;
     appliedSeek.current = seekRequest.n;
-    audioRef.current?.pause?.();
-    setPlaying(false);
     seek(seekRequest.t);
+    // A storyboard row asks to play from the shot (`play`); a scene card only cues it.
+    if (seekRequest.play && audioRef.current) { audioRef.current.play?.()?.catch?.(() => {}); setPlaying(true); }
+    else { audioRef.current?.pause?.(); setPlaying(false); }
   }, [seekRequest, duration, seek]);
 
   useEffect(() => {
@@ -164,7 +165,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     <div className="space-y-2" aria-label="Composition preview">
       {previewError && <p className="text-xs text-port-error" role="alert">{previewError}</p>}
       {status && <p className="text-xs text-port-text-muted">{status}</p>}
-      <div className={`overflow-hidden rounded border border-port-border bg-black mx-auto ${collapsed ? 'max-lg:hidden' : ''}`}
+      <div className={`overflow-hidden rounded border border-port-border bg-black mx-auto ${collapsed ? 'max-xl:hidden' : ''}`}
         style={{ aspectRatio: aspect, maxHeight: '70vh', maxWidth: '100%' }}>
         {preview?.html ? (
           <iframe ref={iframeRef} title={draft ? 'Composition candidate preview' : 'Composition document preview'} sandbox="allow-scripts" srcDoc={preview.html} className="h-full w-full" />

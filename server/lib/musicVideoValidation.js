@@ -1,5 +1,6 @@
 import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
+import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
 /**
  * Music Video production mode — Zod schemas + shared enums (issue #1760, Phase 1).
  *
@@ -509,6 +510,8 @@ const sceneLayerFields = {
   visualLayer: z.enum(MUSIC_VIDEO_VISUAL_LAYERS).optional(),
   stillMove: z.enum(MUSIC_VIDEO_STILL_MOVES).optional(),
   cardText: z.string().max(500).nullable().optional(),
+  // #10302: footage that the composition also draws code over; still counts as footage.
+  codeOverlay: z.boolean().optional(),
   cardColor: z.string().regex(/^#[0-9a-f]{6}$/i, 'card color is #rrggbb').nullable().optional(),
 };
 
@@ -684,9 +687,51 @@ export const musicVideoPublishCopyDraftSchema = z.object({
 }).strict();
 export const musicVideoPublishThumbnailSchema = z.object({ filename: z.string().min(1).max(300) }).strict();
 
+// Release cover art: a source (a kit thumbnail or a gallery image) composed
+// with the title and artist tag, or a fresh source image from a backend.
+const coverArtSourceSchema = z.object({ kind: z.enum(['thumbnail', 'image']), filename: z.string().min(1).max(300) }).strict();
+export const musicVideoCoverArtComposeSchema = z.object({
+  source: coverArtSourceSchema.optional(),
+  title: z.string().max(60).optional(),
+  tag: z.string().max(24).optional(),
+  focusX: z.number().min(0).max(1).optional(),
+  // false = a finished cover from elsewhere: squared and sized, no title or tag set on it.
+  lettering: z.boolean().optional(),
+}).strict();
+export const musicVideoCoverArtDesignSchema = z.object({
+  direction: z.string().max(1500).optional(),
+  providerId: z.string().min(1).max(200).optional(),
+  model: z.string().min(1).max(200).optional(),
+}).strict();
+// #10345: the Lettering controls. A design is every COVER_DESIGN_OPTIONS field
+// plus tracking, colors and the rule; any subset is a patch over the song's
+// current design. `typeface` is a free string here (a built-in name or a
+// `font:<id>` for an uploaded font) and is resolved against the uploaded fonts
+// when the design is normalized.
+const coverHex = z.string().regex(/^#[0-9a-f]{6}$/i);
+const coverDesignFields = Object.fromEntries(Object.entries(COVER_DESIGN_OPTIONS)
+  .map(([key, list]) => [key, key === 'typeface' ? z.string().min(1).max(60) : z.enum(list)]));
+export const musicVideoCoverDesignSchema = z.object({
+  ...coverDesignFields,
+  tracking: z.number().min(-0.05).max(0.3),
+  titleColor: coverHex,
+  accentColor: coverHex,
+  rule: z.boolean(),
+}).partial().strict();
+export const musicVideoCoverDesignSaveSchema = z.object({ design: musicVideoCoverDesignSchema }).strict();
+export const musicVideoArtistStyleSaveSchema = z.object({
+  name: z.string().trim().min(1).max(60),
+  design: musicVideoCoverDesignSchema,
+}).strict();
+export const musicVideoArtistStyleDeleteSchema = z.object({ name: z.string().trim().min(1).max(60) }).strict();
+export const musicVideoCoverArtGenerateSchema = z.object({
+  notes: z.string().max(1500).optional(),
+  reference: z.object({ kind: z.literal('image'), filename: z.string().min(1).max(300) }).strict().optional(),
+}).strict();
+
 // #9282: posting to a platform through the PortOS Browser. One strict options
 // object covers every target; each target's payload builder reads only its own.
-export const MUSIC_VIDEO_PUBLISH_TARGETS = Object.freeze(['youtube', 'shorts', 'tiktok', 'instagram', 'x', 'reddit', 'stackerNews', 'suno']);
+export const MUSIC_VIDEO_PUBLISH_TARGETS = Object.freeze(['youtube', 'shorts', 'tiktok', 'instagram', 'x', 'reddit', 'stackerNews', 'suno', 'distrokid']);
 export const musicVideoPublishTargetSchema = z.enum(MUSIC_VIDEO_PUBLISH_TARGETS);
 const publishUrl = z.string().url().max(500);
 // #9287: which platforms the director posts to (opt-in), the account for each,
@@ -711,6 +756,28 @@ export const musicVideoPublishPrepareSchema = z.object({
   prompt: kitText(25000),
   storyImage: z.string().min(1).max(300),
   cutId: z.string().min(1).max(100),
+  // Fill a draft for a platform the release was already posted to.
+  again: z.boolean(),
+  // DistroKid (the song as a Spotify single): who it is by and the store flags.
+  artistName: z.string().trim().min(1).max(100),
+  songwriterFirst: z.string().trim().min(1).max(100),
+  songwriterLast: z.string().trim().min(1).max(100),
+  releaseDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  explicit: z.boolean(),
+  instrumental: z.boolean(),
+  aiLyrics: z.boolean(),
+  aiMusic: z.boolean(),
+  aiVocals: z.boolean(),
+  genre: z.string().trim().min(1).max(60),
+  secondaryGenre: z.string().trim().min(1).max(60),
+  language: z.string().trim().min(1).max(60),
+  songwriterRole: z.enum(['music', 'lyrics', 'both']),
+  newArtistProfile: z.boolean(),
+  preserveCaps: z.boolean(),
+  performerName: z.string().trim().min(1).max(100),
+  performerRole: z.string().trim().min(1).max(60),
+  producerName: z.string().trim().min(1).max(100),
+  previewStartSec: z.number().min(0).max(3600),
 }).partial().strict();
 
 export const musicVideoExcerptNoteSchema = z.object({
@@ -1068,6 +1135,13 @@ export const musicVideoProjectUpdateSchema = z.object({
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
 }).strict();
 
+// Mark a project finished outside PortOS (or clear the marker). The server
+// stamps `markedAt`; the note says where it was made (musicVideoFinishedOutside.js).
+export const musicVideoFinishedOutsideSchema = z.object({
+  finished: z.boolean(),
+  note: z.string().trim().max(500).optional(),
+}).strict();
+
 // Fork a project into its next editable version. The server derives lineage and
 // version numbers from the source; callers may only override the display name
 // and choose whether generated scene media should remain attached. A video
@@ -1096,7 +1170,7 @@ export const musicVideoProductionDraftSchema = z.object({
   }).strict()).max(2000),
 }).strict();
 export const musicVideoAlignmentReviewSchema = z.object({
-  basis: z.string().min(1).max(128), notes: z.string().trim().min(1).max(4000),
+  basis: z.string().min(1).max(128), notes: z.string().trim().max(4000).default(''),
 }).strict();
 export const musicVideoDocumentShotsSchema = z.object({
   documentDirectory: z.string().min(1).max(500), audioBasis: z.string().min(1).max(128),
@@ -1125,9 +1199,8 @@ export const musicVideoProductionApprovalSchema = z.object({
       limitations: z.string().trim().min(1).max(4000),
     }).strict().optional(),
     excerptId: z.string().min(1).max(200), filename: z.string().min(1).max(200),
-    energyComparison: z.string().trim().min(1).max(4000),
-    timecodedNotes: z.string().trim().min(1).max(4000)
-      .regex(/(?:\b\d{1,2}:\d{2}(?:\.\d+)?\b|\b\d+(?:\.\d+)?s\b)/, 'Include a playback time such as 0:04 or 4.5s.'),
+    energyComparison: z.string().trim().max(4000).optional(),
+    timecodedNotes: z.string().trim().max(4000).optional(),
   }).strict().optional(),
 }).strict();
 export const musicVideoProductionProofSchema = z.object({
@@ -1351,7 +1424,7 @@ export const musicVideoProductionRevertSchema = z.object({
   stage: z.enum(['art', 'storyboard', 'proof', 'castAndSets']), field: z.string().trim().min(1).max(100),
 }).strict();
 export const musicVideoProductionFeedbackResolutionSchema = z.object({
-  feedbackId: z.string().min(1).max(128), resolution: z.string().trim().min(1).max(8000), password: z.string().max(1024).optional(),
+  feedbackId: z.string().min(1).max(128), resolution: z.string().trim().max(8000).default(''), password: z.string().max(1024).optional(),
 }).strict();
 
 // GET /api/music-video query (#10169). Passthrough strings, like the other list

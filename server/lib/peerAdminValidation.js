@@ -40,3 +40,30 @@ export const peerAdminPlanSchema = z.object({
 }).strict();
 export const peerAdminReceiptSchema = z.object({ requestId: uuid }).strict();
 export const peerAdminRemotePlanSchema = z.object({ peerId, intent: peerAdminIntentSchema }).strict();
+
+// Independent confirmation: planning records never authorize execution.
+export const PEER_EXECUTION_SCOPE = 'execution-v1';
+export const peerExecutionGrantSchema = peerAdminGrantSchema.omit({ allowPlanning: true }).extend({
+  allowExecution: z.boolean(), confirmation: z.literal(PEER_EXECUTION_SCOPE),
+}).strict();
+export const peerExecutionPreflightSchema = z.object({ protocolVersion: z.literal(1), requestId: uuid, intent: peerAdminIntentSchema }).strict();
+export const peerExecutionDispatchSchema = peerExecutionPreflightSchema.extend({
+  grantId: uuid, grantGeneration: z.number().int().positive().safe(),
+  evidenceDigest: z.string().regex(/^[a-f0-9]{64}$/), executionEpoch: uuid,
+  version: z.string().min(1).max(100),
+}).strict();
+export const peerExecutionPreflightPayloadSchema = peerExecutionDispatchSchema.extend({
+  scope: z.literal(PEER_EXECUTION_SCOPE), senderInstanceId: uuid, targetInstanceId: uuid,
+  expiresAt: z.number().int().positive().safe(),
+}).strict();
+const executionPreflightEnvelope = z.object({ payload: peerExecutionPreflightPayloadSchema, signature: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+export const peerExecutionRemoteDispatchSchema = peerAdminPeerSchema.extend({ preflight: executionPreflightEnvelope }).strict();
+export const peerExecutionStatusSchema = z.object({ requestId: uuid, preflight: executionPreflightEnvelope.optional() }).strict();
+export const peerExecutionRemoteStatusSchema = peerExecutionStatusSchema.extend({ peerId }).strict();
+
+export const peerExecutionReceiptPayloadSchema = z.object({
+  protocolVersion: z.literal(1), scope: z.literal(PEER_EXECUTION_SCOPE), requestId: uuid,
+  senderInstanceId: uuid, targetInstanceId: uuid, operationId: uuid,
+  state: z.enum(['queued', 'draining', 'in-flight', 'awaiting-reconnect', 'succeeded', 'failed', 'uncertain']),
+  revision: z.number().int().positive().safe(), code: z.string().regex(/^[A-Z0-9_]{1,100}$/).nullable(),
+}).strict();

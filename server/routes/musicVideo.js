@@ -10,9 +10,11 @@
 
 import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
+import { pipeline } from 'stream/promises';
 import { Router } from 'express';
-import { musicVideoProjectListQuerySchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
+import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
 import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
@@ -44,6 +46,12 @@ import {
   musicVideoPublishCopyPatchSchema,
   musicVideoPublishCopyDraftSchema,
   musicVideoPublishThumbnailSchema,
+  musicVideoCoverArtComposeSchema,
+  musicVideoCoverArtGenerateSchema,
+  musicVideoCoverDesignSaveSchema,
+  musicVideoArtistStyleSaveSchema,
+  musicVideoArtistStyleDeleteSchema,
+  musicVideoCoverArtDesignSchema,
   musicVideoPublishTargetSchema,
   musicVideoPublishPrepareSchema,
   musicVideoPublishPlatformsPatchSchema,
@@ -114,6 +122,7 @@ import {
 import { analyzeAudioFileManual, buildManualAnalysisFromCached } from '../services/musicVideo/audioAnalysis.js';
 import { analyzeProjectSong, resolveProjectAudioPath } from '../services/musicVideo/projectAudio.js';
 import { listInFlightSceneJobs } from '../services/musicVideo/sceneJobs.js';
+import { getSharingCopy, prepareSharingCopy, sharingCopyDownload } from '../services/musicVideo/sharingCopy.js';
 import { renderMusicVideo, attachRenderSseClient, cancelRender, getActiveRenderJobId } from '../services/musicVideo/render.js';
 import { prepareCodeRender } from '../services/musicVideo/codeRender.js';
 import { generateMusicVideoCode, regenerateMusicVideoCodeSection } from '../services/musicVideo/codeGeneration.js';
@@ -123,6 +132,8 @@ import { suggestSocialCuts } from '../services/musicVideo/socialCuts.js';
 import { getActivePublishKitBuild, startPublishKitBuild, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, selectPublishKitThumbnail } from '../services/musicVideo/publishKit.js';
 import { preparePublishDraft, discardPublishDraft, listPublishDrafts, recordPublishPost } from '../services/musicVideo/publish/index.js';
 import { getPublishPlatforms, updatePublishPlatforms, publishHistory } from '../services/musicVideo/publish/platforms.js';
+import { listArtistStyles, saveArtistStyle, removeArtistStyle } from '../services/musicVideo/publish/artistStyles.js';
+import { addCoverFont, coverFontPath, listCoverFonts, MAX_COVER_FONT_BYTES, removeCoverFont } from '../services/musicVideo/coverFonts.js';
 import {
   getDependencyImpact,
   startDependencyRepair,
@@ -313,6 +324,18 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   const data = validateRequest(projectUpdateSchema, req.body);
   const updated = await updateProject(req.params.id, data);
   res.json(updated);
+}));
+
+// Finished outside PortOS: the earlier steps count as done without forging approvals.
+router.put('/:id/finished-outside', asyncHandler(async (req, res) => {
+  const { finished, note } = validateRequest(musicVideoFinishedOutsideSchema, req.body);
+  if (finished) {
+    const blocker = finishedOutsideBlocker(await getProject(req.params.id));
+    if (blocker) throw new ServerError(blocker, { status: 409, code: 'MUSIC_VIDEO_NO_FINAL_RENDER' });
+  }
+  const finishedOutside = finished ? { markedAt: new Date().toISOString(), ...(note ? { note } : {}) } : null;
+  await updateProject(req.params.id, { finishedOutside });
+  res.json(presentProjectForRead(await getProject(req.params.id)));
 }));
 
 // Preview is read-only; Apply rechecks audio and the serialized project basis.
@@ -577,6 +600,54 @@ router.post('/transcribe-midi/:jobId/cancel', (req, res) => {
 });
 
 // --- Render (#1760, Phase 2) ---
+// Private local export; no publication or provider submission.
+router.get('/:id/sharing-copy', asyncHandler(async (req, res) => {
+  res.json(await getSharingCopy(req.params.id));
+}));
+router.post('/:id/sharing-copy', asyncHandler(async (req, res) => {
+  res.status(202).json(await prepareSharingCopy(req.params.id));
+}));
+router.get('/:id/sharing-copy/download', asyncHandler(async (req, res) => {
+  const { file, copy, modifiedAt } = await sharingCopyDownload(req.params.id);
+  let stream;
+  const abort = () => { if (!res.writableFinished) stream?.destroy(); };
+  try {
+    if (req.aborted || res.destroyed) return;
+    const etag = `"${copy.hash}"`;
+    res.attachment(copy.filename).type('video/mp4');
+    res.set({ 'Cache-Control': 'private, no-store', 'Accept-Ranges': 'bytes', ETag: etag, 'Last-Modified': modifiedAt.toUTCString() });
+    const matches = value => value === '*' || value?.split(',').some(tag => tag.trim() === etag);
+    const unmodified = Date.parse(req.get('If-Unmodified-Since'));
+    if ((req.get('If-Match') && !matches(req.get('If-Match'))) || (!req.get('If-Match') && Number.isFinite(unmodified) && Math.floor(modifiedAt.getTime() / 1000) > Math.floor(unmodified / 1000))) {
+      res.status(412).end(); return;
+    }
+    if (req.fresh) { res.status(304).end(); return; }
+    let start = 0; let end = copy.bytes - 1;
+    const ifRange = req.get('If-Range');
+    const rangeCurrent = !ifRange || ifRange === etag || (!ifRange.includes('"') && Number.isFinite(Date.parse(ifRange)) && modifiedAt.getTime() <= Date.parse(ifRange) + 999);
+    if (req.get('Range') && rangeCurrent) {
+      const ranges = req.range(copy.bytes, { combine: true });
+      if (ranges === -1) { res.set('Content-Range', `bytes */${copy.bytes}`); res.status(416).end(); return; }
+      // Like res.download, malformed/non-byte/multipart ranges fall back to 200.
+      if (Array.isArray(ranges) && ranges.type === 'bytes' && ranges.length === 1) {
+        ({ start, end } = ranges[0]);
+        res.status(206).set('Content-Range', `bytes ${start}-${end}/${copy.bytes}`);
+      }
+    }
+    res.set('Content-Length', String(end - start + 1));
+    if (req.method === 'HEAD') { res.end(); return; }
+    stream = file.createReadStream({ start, end, autoClose: false });
+    res.once('close', abort);
+    req.once('aborted', abort);
+    await pipeline(stream, res);
+  } finally {
+    res.off('close', abort);
+    req.off('aborted', abort);
+    stream?.destroy();
+    await file.close();
+  }
+}));
+
 // Assemble the scenes' i2v clips into one MP4 over the track as the master audio
 // bed. Kickoff returns { jobId }; progress streams over SSE (mirrors
 // videoTimeline). Per-project mutex returns 409 with the live jobId for re-attach.
@@ -862,6 +933,38 @@ router.put('/:id/publish-kit/thumbnail', asyncHandler(async (req, res) => {
   res.json({ project });
 }));
 
+// Release cover art: the song's own design (drafted, or adjusted from the
+// director's direction), compose from a chosen image, or queue a fresh cover
+// photo whose completion hook composes the cover.
+router.post('/:id/publish-kit/cover-art', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCoverArtComposeSchema, req.body || {});
+  const { composeProjectCoverArt } = await import('../services/musicVideo/coverArt.js');
+  const { project } = await composeProjectCoverArt(req.params.id, input);
+  res.json({ project });
+}));
+
+router.post('/:id/publish-kit/cover-art/design', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCoverArtDesignSchema, req.body || {});
+  const { designCoverArt } = await import('../services/musicVideo/coverArt.js');
+  const { project } = await designCoverArt(req.params.id, input);
+  res.json({ project });
+}));
+
+// #10345: the Lettering controls set the design directly, with no AI call.
+router.put('/:id/publish-kit/cover-art/design', asyncHandler(async (req, res) => {
+  const { design } = validateRequest(musicVideoCoverDesignSaveSchema, req.body ?? {});
+  const { saveCoverDesign } = await import('../services/musicVideo/coverArt.js');
+  const { project } = await saveCoverDesign(req.params.id, design);
+  res.json({ project });
+}));
+
+router.post('/:id/publish-kit/cover-art/generate', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCoverArtGenerateSchema, req.body || {});
+  const { generateCoverArtSource } = await import('../services/musicVideo/coverArt.js');
+  const { project } = await generateCoverArtSource(req.params.id, input);
+  res.json({ project });
+}));
+
 // --- Posting (#9282) ---
 // Fill a platform's post in the PortOS Browser and return a screenshot; post
 // only on a second, explicit request naming that live draft.
@@ -875,6 +978,46 @@ router.get('/publish/platforms', asyncHandler(async (req, res) => {
 router.put('/publish/platforms', asyncHandler(async (req, res) => {
   const patch = validateRequest(musicVideoPublishPlatformsPatchSchema, req.body || {});
   res.json({ platforms: await updatePublishPlatforms(patch) });
+}));
+
+// #10345: one saved cover design per artist, and the typefaces the director uploaded.
+router.get('/publish/artist-styles', asyncHandler(async (req, res) => {
+  res.json({ styles: await listArtistStyles() });
+}));
+
+router.put('/publish/artist-styles', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoArtistStyleSaveSchema, req.body ?? {});
+  res.json({ style: await saveArtistStyle(input) });
+}));
+
+router.delete('/publish/artist-styles', asyncHandler(async (req, res) => {
+  const { name } = validateRequest(musicVideoArtistStyleDeleteSchema, req.query);
+  await removeArtistStyle(name);
+  res.json({ ok: true });
+}));
+
+const COVER_FONT_MIME = { ttf: 'font/ttf', otf: 'font/otf', woff2: 'font/woff2' };
+const coverFontUpload = uploadSingle('font', { limits: { fileSize: MAX_COVER_FONT_BYTES } });
+
+router.get('/publish/cover-fonts', asyncHandler(async (req, res) => {
+  res.json({ fonts: await listCoverFonts() });
+}));
+
+router.post('/publish/cover-fonts', coverFontUpload, asyncHandler(async (req, res) => {
+  if (!req.file) throw new ServerError('No font file uploaded (multipart field "font")', { status: 400, code: 'VALIDATION_ERROR' });
+  const font = await addCoverFont({ tempPath: req.file.path, originalName: req.file.originalname }).finally(() => unlink(req.file.path).catch(() => {}));
+  res.status(201).json({ font, fonts: await listCoverFonts() });
+}));
+
+router.get('/publish/cover-fonts/:fontId/file', asyncHandler(async (req, res) => {
+  const found = await coverFontPath(req.params.fontId);
+  if (!found) throw new ServerError('Font not found', { status: 404, code: 'NOT_FOUND' });
+  res.type(COVER_FONT_MIME[found.font.ext]).sendFile(found.path);
+}));
+
+router.delete('/publish/cover-fonts/:fontId', asyncHandler(async (req, res) => {
+  await removeCoverFont(req.params.fontId);
+  res.json({ fonts: await listCoverFonts() });
 }));
 
 // Record a post made by hand, or rate one: its link, reception and notes.

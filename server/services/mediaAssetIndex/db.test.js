@@ -11,6 +11,18 @@
 import { describe, it, expect, afterAll, beforeAll, vi } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
+import { writeFile, mkdir, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+
+const gallery = vi.hoisted(() => ({ root: null }));
+vi.mock('../../lib/fileUtils.js', async importOriginal => {
+  const actual = await importOriginal();
+  const { mkdtemp } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  gallery.root = await mkdtemp(join(tmpdir(), 'portos-index-restore-'));
+  return { ...actual, PATHS: { ...actual.PATHS, images: join(gallery.root, 'images'), data: gallery.root } };
+});
+afterAll(async () => { if (gallery.root) await rm(gallery.root, { recursive: true, force: true }); });
 
 vi.mock('../../lib/db.js', async importOriginal => {
   const actual = await importOriginal();
@@ -228,6 +240,64 @@ describe.skipIf(!runDb)('media asset index DB round-trip', () => {
 
     const vids = await db.listAssets({ kind: 'video' });
     expect(vids.some((x) => x.id === `${PFX}vid1`)).toBe(true);
+  });
+
+  it('rejects corrupt or non-file gallery sources instead of silently replacing restored metadata', async () => {
+    // Invoke the real restore reader, not an injected permissive gallery list.
+    await db.reconcileMediaAssets({ rebuild: true });
+    const dir = join(gallery.root, 'images');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'example.PNG'), 'pixels');
+    await writeFile(join(dir, 'example.PNG.metadata.json'), JSON.stringify({ prompt: 'retained metadata' }));
+    await db.reconcileMediaAssets({ rebuild: true });
+    expect(await db.listAssets()).toEqual([expect.objectContaining({ filename: 'example.PNG', prompt: 'retained metadata' })]);
+    const before = await db.listAssets();
+    await writeFile(join(dir, 'example.metadata.json'), '{broken');
+    await expect(db.reconcileMediaAssets({ rebuild: true })).rejects.toThrow('authoritative files');
+    expect(await db.listAssets()).toEqual(before);
+    await rm(join(dir, 'example.metadata.json'));
+    await mkdir(join(dir, 'not-an-image.png'));
+    await expect(db.reconcileMediaAssets({ rebuild: true })).rejects.toThrow('authoritative files');
+    expect(await db.listAssets()).toEqual(before);
+    await rm(dir, { recursive: true });
+  });
+
+  it('drains an earlier source read before a restore rebuild can replace its mirror', async () => {
+    let start, finish;
+    const entered = new Promise(resolve => { start = resolve; });
+    const proceed = new Promise(resolve => { finish = resolve; });
+    const stale = db.reconcileMediaAssets({ listGallery: async () => {
+      start(); await proceed; return [{ filename: 'old.png' }];
+    }, loadHistory: async () => [] });
+    await entered;
+    const restored = db.reconcileMediaAssets({ rebuild: true,
+      listGallery: async () => [{ filename: 'restored.png' }], loadHistory: async () => [] });
+    finish();
+    await Promise.all([stale, restored]);
+    expect(await db.listAssets()).toEqual([expect.objectContaining({ filename: 'restored.png' })]);
+  });
+
+  it('rebuilds a restored mirror solely from authoritative files, including future-dated stale rows', async () => {
+    await db.upsertAsset({ mediaKey: `video:${PFX}restored`, kind: 'video', ref: `${PFX}restored`,
+      data: { id: `${PFX}restored`, thumbnail: 'missing.jpg' }, createdAt: '2026-01-01T00:00:00.000Z' });
+    await query(`UPDATE media_assets SET indexed_at = NOW() + INTERVAL '1 day' WHERE ref = $1`, [`${PFX}restored`]);
+    await db.reconcileMediaAssets({ rebuild: true, listGallery: async () => [],
+      loadHistory: async () => [{ id: `${PFX}current`, filename: 'current.mp4', thumbnail: 'current.jpg' }] });
+    expect(await db.listAssets()).toEqual([expect.objectContaining({ id: `${PFX}current`, thumbnail: 'current.jpg' })]);
+  });
+
+  it('preserves the prior mirror on failed source reads or a failed transactional rebuild', async () => {
+    await db.reconcileMediaAssets({ rebuild: true, listGallery: async () => [], loadHistory: async () => [] });
+    await db.upsertAsset({ mediaKey: `image:${PFX}keep.png`, kind: 'image', ref: `${PFX}keep.png`,
+      data: { filename: `${PFX}keep.png` }, createdAt: '2026-01-01T00:00:00.000Z' });
+    await expect(db.reconcileMediaAssets({ rebuild: true,
+      listGallery: async () => { throw new Error('unreadable'); }, loadHistory: async () => [],
+    })).rejects.toThrow('authoritative files');
+    // Serialization fails AFTER the DELETE; the transaction must restore it.
+    await expect(db.reconcileMediaAssets({ rebuild: true,
+      listGallery: async () => [{ filename: 'broken.png', prompt: 1n }], loadHistory: async () => [],
+    })).rejects.toThrow();
+    expect(await db.listAssets()).toEqual([{ filename: `${PFX}keep.png` }]);
   });
 
   it('does not prune a row indexed after reconcile started (concurrent generation)', async () => {

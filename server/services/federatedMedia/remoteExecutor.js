@@ -87,6 +87,9 @@ const isRetryableTransportError = (error) =>
  *   stays kind-specific; the executor only lends the channel.
  * @param {(ctx: object) => {dir: string, filename: string}} config.resolveDestination -
  *   Where the verified result lands. Called per job so a PATHS proxy stays live.
+ * @param {(work: Function, ctx: object) => Promise<object>} [config.publishResult]
+ *   Owns verified-file installation plus finalize, including replacement rollback.
+ *   Downloads complete before admission; matching-file replays still finalize.
  * @param {(ctx: object) => Promise<object>} config.finalize - Register the downloaded
  *   result locally; its return value is merged into the `completed` event payload.
  *   Its ctx carries `renderStartedAtMs` (this install's ingestion instant) for
@@ -100,6 +103,7 @@ export function createRemoteMediaExecutor({
   buildRequest,
   resolveDestination,
   finalize,
+  publishResult = work => work(),
 }) {
   let pollDelayMs = 1_000;
   let retryDelayMs = 2_000;
@@ -424,6 +428,7 @@ export function createRemoteMediaExecutor({
           callback(null, chunk);
         },
       });
+      let verified = false;
       try {
         await pipeline(responseStream(response.body), meter, createWriteStream(partialPath, { flags: 'wx' }));
         const digest = hasher.digest('hex');
@@ -432,13 +437,12 @@ export function createRemoteMediaExecutor({
             code: 'MEDIA_PROVIDER_RESULT_INTEGRITY_FAILED',
           });
         }
-        // POSIX rename replaces an existing file atomically. Do not unlink the
-        // destination first: consumers should never observe a missing final path
-        // between integrity verification and promotion.
-        await rename(partialPath, finalPath);
-        return { filename, dir, path: finalPath };
+        // Promotion waits for the adapter's publication boundary. The verified
+        // staging file is never named by a history record.
+        verified = true;
+        return { filename, dir, path: finalPath, stagedPath: partialPath };
       } finally {
-        await unlink(partialPath).catch((error) => { if (error.code !== 'ENOENT') maintenance.markCurrentUnsettled(); });
+        if (!verified) await unlink(partialPath).catch((error) => { if (error.code !== 'ENOENT') maintenance.markCurrentUnsettled(); });
       }
     }, { timeoutMs: null });
   }
@@ -478,20 +482,31 @@ export function createRemoteMediaExecutor({
     const completed = await pollProviderJob(state, submitted);
     const downloaded = await downloadResult(state, completed);
     state.finalizing = true;
-    const local = await finalize({
-      jobId: state.jobId,
-      peerId: state.peerId,
-      request,
-      remoteJob: completed,
-      // Wall-clock render timing (#5878). Measured from THIS install's
-      // ingestion of the job — submission, the peer's own queue wait and
-      // render, download, verification — because that whole span is what the
-      // user waited through here. The peer's internal render time is not on
-      // the wire, and asking for it would be a status payload crossing the
-      // federation boundary.
-      renderStartedAtMs: state.renderStartedAtMs,
-      ...downloaded,
-    });
+    let local;
+    try {
+      local = await publishResult(async () => {
+        // Atomic installation preserves an existing path until its replacement lands.
+        if (downloaded.stagedPath) await rename(downloaded.stagedPath, downloaded.path);
+        return finalize({
+          jobId: state.jobId,
+          peerId: state.peerId,
+          request,
+          remoteJob: completed,
+          // Wall-clock render timing (#5878). Measured from THIS install's
+          // ingestion of the job — submission, the peer's own queue wait and
+          // render, download, verification — because that whole span is what the
+          // user waited through here. The peer's internal render time is not on
+          // the wire, and asking for it would be a status payload crossing the
+          // federation boundary.
+          renderStartedAtMs: state.renderStartedAtMs,
+          ...downloaded,
+        });
+      }, { ...downloaded, jobId: state.jobId });
+    } finally {
+      if (downloaded.stagedPath) await unlink(downloaded.stagedPath).catch(error => {
+        if (error.code !== 'ENOENT') maintenance.markCurrentUnsettled();
+      });
+    }
     state.finalizing = false;
     return {
       ...local,

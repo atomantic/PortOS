@@ -25,7 +25,7 @@ import { readdirSync, readFileSync } from 'fs';
 import { join, relative, sep } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { DEFAULT_EXCLUDES } from './backup.js';
-import { CATEGORIES, UNKNOWN_CATEGORY_DESCRIPTION, purgeCategory } from './dataManager.js';
+import { CATEGORIES, UNKNOWN_CATEGORY_DESCRIPTION, purgeCategory, archiveCategory } from './dataManager.js';
 
 // A path segment that is a file, not a directory (`settings.json`, `TASKS.md`).
 const isFileSegment = (segment) => segment.includes('.');
@@ -158,6 +158,13 @@ describe('dataManager purge scope (#3327)', () => {
     expect(CATEGORIES.screenshots.purgeScope).toBe('category');
   });
 
+  it('protects durable backup admission authority from archive and both purge forms', async () => {
+    expect(CATEGORIES['backup-admission']).toMatchObject({ archivable: false, deletable: false });
+    await expect(archiveCategory('backup-admission')).rejects.toThrow(/is not archivable/);
+    await expect(purgeCategory('backup-admission')).rejects.toThrow(/is not purgeable/);
+    await expect(purgeCategory('backup-admission', { subPath: 'cut' })).rejects.toThrow(/is not purgeable/);
+  });
+
   // Audit cluster 04, decision 2: `data/beeper/` holds one subdirectory
   // (`attachments/`), so neither purge form was ever reachable — a category
   // wipe needs `purgeScope: 'category'` and a per-item purge refuses a
@@ -178,6 +185,8 @@ describe('dataManager purge scope (#3327)', () => {
     await expect(purgeCategory('loras', { subPath: 'anything' })).rejects.toThrow(/is not purgeable/);
     await expect(purgeCategory('beeper')).rejects.toThrow(/is not purgeable/);
     await expect(purgeCategory('beeper', { subPath: 'attachments' })).rejects.toThrow(/is not purgeable/);
+    await expect(purgeCategory('peer-execution')).rejects.toThrow(/is not purgeable/);
+    await expect(purgeCategory('peer-execution', { subPath: 'fixture-operation/evidence.json' })).rejects.toThrow(/is not purgeable/);
   });
 
   it('fails closed when a deletable category has no recognized purgeScope', async () => {

@@ -283,6 +283,20 @@ export const LOCAL_LLM_CATALOG = [
     ollama: 'gemma3:4b',
     lmstudio: 'lmstudio-community/gemma-3-4b-it-GGUF'
   },
+  {
+    key: 'gemma4-e4b',
+    name: 'Gemma 4 E4B',
+    category: 'lightweight',
+    recommendedFor: ['lightweight', 'general', 'vision', 'reasoning'],
+    params: 'E4B',
+    size: '6.6 GB',
+    family: 'gemma',
+    description: "Google's edge multimodal Gemma 4 (4.5B effective params) — on-device reasoning with thinking mode, tools, vision, and a 128K context window.",
+    capabilities: ['chat', 'reasoning', 'tools', 'vision'],
+    context: 131072,
+    ollama: 'gemma4:e4b',
+    lmstudio: 'lmstudio-community/gemma-4-E4B-it-GGUF'
+  },
   // ── General-purpose laptop tier (16–32GB) ──
   {
     key: 'lfm2.5-8b-a1b',
@@ -620,6 +634,20 @@ export const LOCAL_LLM_CATALOG = [
     context: 16384,
     ollama: 'phi4',
     lmstudio: 'lmstudio-community/phi-4-GGUF'
+  },
+  {
+    key: 'phi-4-reasoning-14b',
+    name: 'Phi-4 Reasoning 14B',
+    category: 'reasoning',
+    recommendedFor: ['reasoning'],
+    params: '14B',
+    size: '11 GB',
+    family: 'phi',
+    description: "Microsoft's 14B open-weight reasoning model — specialized chain-of-thought thinking for complex math, logic, and multi-step reasoning.",
+    capabilities: ['chat', 'reasoning'],
+    context: 32768,
+    ollama: 'phi4-reasoning:14b',
+    lmstudio: 'lmstudio-community/Phi-4-reasoning-GGUF'
   },
   {
     key: 'gemma4-31b',
@@ -973,6 +1001,20 @@ export const LOCAL_LLM_CATALOG = [
     context: 128000,
     ollama: 'aya-expanse:32b',
     lmstudio: 'lmstudio-community/Aya-Expanse-32B-GGUF'
+  },
+  {
+    key: 'translategemma-12b',
+    name: 'TranslateGemma 12B',
+    category: 'multilingual',
+    recommendedFor: ['multilingual', 'chat'],
+    params: '12B',
+    size: '8.1 GB',
+    family: 'gemma',
+    description: "Google's open translation model built on Gemma 3 — high-fidelity translation across 55 languages with vision and a 128K context window.",
+    capabilities: ['chat', 'multilingual', 'vision'],
+    context: 131072,
+    ollama: 'translategemma:12b',
+    lmstudio: 'lmstudio-community/TranslateGemma-12B-IT-GGUF'
   },
   // ── Text embeddings ──
   // PortOS's memory/recall pipeline expects 768-dimension vectors

@@ -259,7 +259,7 @@ function referencePaths(stage, item) {
 }
 
 /** Job params for one image on the stage's route (cloud provider bag or the local model). */
-async function imageJobParams(settings, route, common) {
+export async function imageJobParams(settings, route, common) {
   const [{ resolveRenderTargetConfig }, { resolveImageCleaners }, { resolveLocalImageModel }] = await Promise.all([
     import('../imageGen/cloudProviderConfig.js'),
     import('../imageGen/index.js'),

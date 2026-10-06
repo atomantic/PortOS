@@ -51,6 +51,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 
 ## Feature deep dives (`features/`)
 
+- [Music Video private sharing copy](./features/music-video-sharing-copy.md) — source-bound 720p downloads strictly under 100 MB, private local export and media queue lifecycle
 - [Music Video making-of export](./features/music-video-making-of.md) — local multi-variant planning packages, inventory previews, source planning retention and publication boundaries
 
 Start with the [product surface map](./features/product-surfaces.md) for a complete, user-facing inventory of the application. The focused guides below explain the features with their own operating contracts.
@@ -86,6 +87,8 @@ Comms & voice: [beeper](./features/beeper.md) · [messages-browser-send](./featu
 - **media/** — screenshots and logo used by the root README.
 
 - [Local managed-app visitor broker](features/managed-visitors.md) — opt-in credential provisioning, versioned nonhumanoid scope and host negotiation.
+
+- [Agent API key](./AGENT_API_KEY.md) — opt-in local credential and `scripts/portos-api.js` CLI for agents PortOS did not spawn.
 
 - [Peer push authentication](./PEER_PUSH_AUTH.md)
 

@@ -1,3 +1,4 @@
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { getConfig, updateTask } from './cos.js';
@@ -159,24 +160,6 @@ export async function dispatchAgentRun(context, { spawnViaRunner } = {}) {
     });
   }
 
-  const agentDir = join(AGENTS_DIR, agentId);
-  if (!existsSync(agentDir)) {
-    await ensureDir(agentDir);
-  }
-  await writeFileGuarded(join(agentDir, 'prompt.txt'), prompt);
-  let systemPromptFile = null;
-  if (systemPrompt) {
-    systemPromptFile = join(agentDir, 'system-prompt.md');
-    await writeFileGuarded(systemPromptFile, systemPrompt);
-  }
-  const { runId } = await createAgentRun({
-    agentId,
-    task,
-    model: selectedModel,
-    provider,
-    workspacePath,
-    appName: resolvedAppName,
-  });
   const executionMode = resolveExecutionMode({ spawnHeadless, useRunner: dispatchUseRunner });
   const sourceWorkspace = worktreeInfo
     ? (task.metadata?.app ? await getAppWorkspace(task.metadata.app) : ROOT_DIR)
@@ -195,31 +178,52 @@ export async function dispatchAgentRun(context, { spawnViaRunner } = {}) {
       : resolveRepoForgeTarget(workspacePath),
     sourceWorkspace ? capturePrimaryCheckoutState(sourceWorkspace) : null,
   ]);
-  await registerAgent(agentId, task.id, buildAgentRegistration({
-    task,
-    provider,
-    instanceId,
-    workspacePath,
-    sourceWorkspace,
-    repoIssueUrl: repoIssueUrlBase(forgeTarget),
-    primaryCheckoutBaseline,
-    worktreeInfo,
-    explicitWorktree,
-    jiraBranchName,
-    providerEndpoint: providerBaseUrl(provider),
-    localPromptBudget,
-    leanMode,
-    prOpenedBy,
-    claimFlowTask,
-    selectedModel,
-    effort: taskEffort,
-    modelSelection,
-    runId,
-    dispatchUseRunner,
-    executionMode,
-    publicReviewPosture,
-    resolvedAppName,
-  }));
+  let systemPromptFile = null;
+  const agentDir = join(AGENTS_DIR, agentId);
+  const { runId } = await withBackupAssetPublication(async () => {
+    if (!existsSync(agentDir)) {
+      await ensureDir(agentDir);
+    }
+    await writeFileGuarded(join(agentDir, 'prompt.txt'), prompt);
+    if (systemPrompt) {
+      systemPromptFile = join(agentDir, 'system-prompt.md');
+      await writeFileGuarded(systemPromptFile, systemPrompt);
+    }
+    const { runId } = await createAgentRun({
+      agentId,
+      task,
+      model: selectedModel,
+      provider,
+      workspacePath,
+      appName: resolvedAppName,
+    });
+    await registerAgent(agentId, task.id, buildAgentRegistration({
+      task,
+      provider,
+      instanceId,
+      workspacePath,
+      sourceWorkspace,
+      repoIssueUrl: repoIssueUrlBase(forgeTarget),
+      primaryCheckoutBaseline,
+      worktreeInfo,
+      explicitWorktree,
+      jiraBranchName,
+      providerEndpoint: providerBaseUrl(provider),
+      localPromptBudget,
+      leanMode,
+      prOpenedBy,
+      claimFlowTask,
+      selectedModel,
+      effort: taskEffort,
+      modelSelection,
+      runId,
+      dispatchUseRunner,
+      executionMode,
+      publicReviewPosture,
+      resolvedAppName,
+    }));
+    return { runId };
+  });
 
   emitLog('info', `Agent ${agentId} initializing...${worktreeInfo ? ' (worktree)' : ''}${jiraBranchName ? ` (JIRA: ${jiraTicket?.ticketId})` : ''}`, { agentId, taskId: task.id });
   const newSpawnCount = (Number(task.metadata?.totalSpawnCount) || 0) + 1;

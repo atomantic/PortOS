@@ -1270,7 +1270,7 @@ it('blocks unreviewed production, resumes an approved board, and refuses a revoc
   expect(theRun().steps[0]).toMatchObject({ status: 'refused', errorCode: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
 });
 
-it('retries canceled proof evidence on Resume and keeps a late chorus window inside the master', async () => {
+it('moves past the optional animated proof to review without rendering or waiting on one', async () => {
   creativeReview.real = true;
   const { approveProductionStage, productionReviewBasis } = await vi.importActual('./productionReview.js');
   const { renderProductionProof } = await import('./productionReviewService.js');
@@ -1298,17 +1298,7 @@ it('retries canceled proof evidence on Resume and keeps a late chorus window ins
     store.set(project.id, approveProductionStage(project, { stage, basis: productionReviewBasis(project)[stage] }));
   }
   await start();
-  expect(theRun().status).toBe('blocked');
-  expect(renderProductionProof).toHaveBeenCalledOnce();
-  expect(renderProductionProof).toHaveBeenLastCalledWith('mv-example', { startSec: 80, endSec: 100 });
-  await service.resumeProduction('mv-example', theRun().id);
-  await settle();
-  expect(renderProductionProof).toHaveBeenCalledOnce();
-  store.get('mv-example').excerpts[0].status = 'canceled';
-  await service.resumeProduction('mv-example', theRun().id);
-  await settle();
-  expect(renderProductionProof).toHaveBeenCalledTimes(2);
-  expect(dispatch).not.toHaveBeenCalled();
-  expect(startAutoReview).not.toHaveBeenCalled();
-  expect(theRun().status).toBe('blocked');
+  expect(renderProductionProof).not.toHaveBeenCalled();
+  expect(JSON.stringify(theRun())).not.toMatch(/animated proof/);
+  expect(startAutoReview).toHaveBeenCalled();
 });

@@ -1,0 +1,129 @@
+name: Eidoverse real acceptance (opt-in)
+
+on:
+  workflow_dispatch:
+    inputs:
+      reviewed_source:
+        description: Reviewed pinned upstream source, AGPL/GPL and bundled asset terms; authorize these two builds
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eidoverse-acceptance-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  acceptance:
+    # Free standard public-repository runner only. Its documented 14GB storage
+    # is NOT a guarantee of the 60GiB prerequisite. Fail unavailable if short.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      PORTOS_EIDOVERSE_LIVE: '1'
+      PORTOS_EIDOVERSE_SOURCE_REVIEWED: ${{ inputs.reviewed_source && '1' || '0' }}
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.x
+
+      - name: Read-only native host and resource preflight
+        run: |
+          export EIDOVERSE_REPORT="$RUNNER_TEMP/eidoverse-acceptance-report.json"
+          printf 'EIDOVERSE_REPORT=%s\n' "$EIDOVERSE_REPORT" >> "$GITHUB_ENV"
+          node scripts/eidoverse-acceptance.js --preflight --report "$EIDOVERSE_REPORT"
+
+      - name: Require source and license review
+        id: source_review
+        run: test "$PORTOS_EIDOVERSE_SOURCE_REVIEWED" = 1
+
+      - name: Independent pinned upstream source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: anima-research/eidoverse-video
+          ref: 959a95c3d3963c334422d170317062e00936c573
+          path: eidoverse-upstream
+          persist-credentials: false
+
+      - name: Install acceptance dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --prefix server
+
+      - name: Build render-only base and PortOS adapter
+        id: build
+        timeout-minutes: 55
+        run: |
+          upstream_sha=959a95c3d3963c334422d170317062e00936c573
+          test "$(git -C eidoverse-upstream rev-parse HEAD)" = "$upstream_sha"
+          docker build --label "org.portos.eidoverse.upstream=$upstream_sha" \
+            -f eidoverse-upstream/docker/Dockerfile --build-arg AGENT=none \
+            -t eidoverse:render eidoverse-upstream/docker
+          docker build --label "org.portos.eidoverse.upstream=$upstream_sha" \
+            --label "org.portos.eidoverse.portos=$GITHUB_SHA" \
+            -f docker/eidoverse-video/Dockerfile -t portos-eidoverse-video:1 eidoverse-upstream
+
+      - name: Real production render, decoded geometry, audio and cleanup
+        timeout-minutes: 62
+        run: node scripts/eidoverse-acceptance.js --live --upstream eidoverse-upstream --report "$EIDOVERSE_REPORT"
+
+      - name: Per-criterion report (never turn unavailable into green)
+        if: always()
+        run: |
+          if test -f "$EIDOVERSE_REPORT"; then
+            if test '${{ steps.source_review.outcome }}' = failure; then
+              node scripts/eidoverse-acceptance.js --source-unavailable --report "$EIDOVERSE_REPORT"
+            elif test '${{ steps.build.outcome }}' = failure; then
+              node scripts/eidoverse-acceptance.js --build-failed --report "$EIDOVERSE_REPORT"
+            else
+              node scripts/eidoverse-acceptance.js --summary --report "$EIDOVERSE_REPORT"
+            fi
+          else
+            echo 'Acceptance unavailable: setup did not produce a report.' >> "$GITHUB_STEP_SUMMARY"
+            exit 2
+          fi
+
+      - name: Bound synthetic evidence before upload
+        id: evidence_bound
+        if: always()
+        run: |
+          node --input-type=module <<'NODE'
+          import { lstat, readdir } from 'node:fs/promises';
+          const report = process.env.EIDOVERSE_REPORT;
+          const info = await lstat(report);
+          if (!info.isFile() || info.isSymbolicLink()) throw new Error('Invalid report');
+          let bytes = info.size;
+          if (bytes > 65536) throw new Error('Report exceeds 64KiB');
+          const frames = `${report}.frames`;
+          const names = await readdir(frames).catch(e => { if (e.code === 'ENOENT') return []; throw e; });
+          if (names.length > 6) throw new Error('Too many preview files');
+          for (const name of names) {
+            if (!/^(landscape|portrait)-(0|24|47)\.png$/.test(name)) throw new Error('Unexpected evidence filename');
+            const info = await lstat(`${frames}/${name}`);
+            if (!info.isFile() || info.isSymbolicLink()) throw new Error('Invalid evidence file');
+            bytes += info.size;
+          }
+          if (bytes > 262144) throw new Error('Synthetic evidence exceeds 256KiB');
+          NODE
+
+      - name: Save only bounded synthetic report and decoded previews
+        if: always() && steps.evidence_bound.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: eidoverse-synthetic-evidence
+          retention-days: 1
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/eidoverse-acceptance-report.json
+            ${{ runner.temp }}/eidoverse-acceptance-report.json.frames/landscape-*.png
+            ${{ runner.temp }}/eidoverse-acceptance-report.json.frames/portrait-*.png
+      # No image publication, dependency/build caches, or broad artifacts.

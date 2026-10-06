@@ -223,3 +223,17 @@ describe('Wiki vault URL wiring', () => {
     await waitFor(() => expect(screen.getByTestId('overview')).toHaveTextContent('overview:vault-a'));
   });
 });
+
+describe('Wiki vault load failure (#10279)', () => {
+  it('does not claim no vault is connected when the vault list fails, and retries', async () => {
+    getNotesVaults.mockRejectedValueOnce(new Error('offline'));
+    renderWiki('/wiki/overview');
+
+    expect(await screen.findByText('Could not load Obsidian vaults.')).toBeInTheDocument();
+    expect(screen.queryByText('No Obsidian vaults connected')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByText('Could not load Obsidian vaults.')).not.toBeInTheDocument());
+    expect(getNotesVaults).toHaveBeenCalledTimes(2);
+  });
+});

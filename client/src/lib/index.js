@@ -75,6 +75,7 @@ export * from './musicVideoAspect.js';
 export * from './musicVideoMotion.js';
 export * from './musicVideoTakes.js';
 export * from './musicVideoSceneAttention.js';
+export * from './musicVideoCoverOverlay.js';
 export * from './musicVideoShotTiming.js';
 export * from './musicVideoStages.js';
 export * from './musicVideoAttention.js';

@@ -7,7 +7,7 @@ PortOS backs up two things together, into a single timestamped snapshot:
 
 ### Consistency while assets are changing
 
-The backup service closes a process-local publication boundary before copying
+The backup service closes a shared cross-process publication boundary before copying
 `data/`, drains music-track take publications already in progress, and keeps
 new take publications waiting through the SQL dump and manifest write. Browser
 code takes, SuperCollider takes, chiptune renders, and painted-waveform renders
@@ -15,7 +15,9 @@ stage encoding outside that boundary, then publish their final audio bytes and
 track row together inside it. Manual and scheduled backups use the same cut.
 If an admitted take does not drain within two minutes, or the cut cannot be
 released, the snapshot is marked failed (never published or used for retention
-pruning) and take publication reopens.
+pruning). A normal drain timeout releases its own cut; an unreadable or interrupted
+owner remains blocked until its data is reconciled. The protocol and deliberate
+recovery procedure are documented in [Shared publication admission](./BACKUP_PUBLICATION_ADMISSION.md).
 
 **Media-job completion (#9981).** A render's completion holds the same admission
 from staging its terminal queue row (`media-jobs.json`) through the `completed`
@@ -53,8 +55,9 @@ stops PM2 to obtain it:
   operation reopens everything; nothing stays held.
 - Every release is owner-scoped: a failed or cancelled operation releases only the
   cut it acquired and leaves the maintenance journal and restore-recovery
-  incomplete guards exactly as they were. The boundary is process-local; the
-  detached cutover worker runs only after the server stops.
+  incomplete guards exactly as they were. Durable ownership coordinates the
+  server and CoS runner sharing this install. Both processes must run the updated
+  protocol; the detached cutover worker still runs only after the server stops.
 
 Admission inventory (`withBackupAssetPublication`):
 
@@ -64,38 +67,56 @@ Admission inventory (`withBackupAssetPublication`):
 | Media-job completion: queue terminal row + `completed` fan-out (`mediaJobQueue/index.js`) | Covered |
 | Attach hooks on `completed` via `mediaJobImageHook.js` (writers-room, catalog, music-video scene image/video/cast-sets, CD scene image/music bed, FableLoom scene image/video, sprite references, deck cards, music studio) | Covered |
 | Pipeline filename hooks (`filenameHookFactory.js` comic pages and storyboards, `seasonCoverFilenameHook.js`) | Covered |
-| Recovery commit of a completion whose terminal write failed (`mediaJobQueue/index.js`) | Covered: only an admitted snapshot commits it (#9982 partial) |
-| Universe Builder completion listeners: collection filing, canon entry-ref append, and sidecar enrichment (`universeBuilderCollectionHook.js`); character reference sheet copy and pointer stamp (`universeCharacterSheet.js`) | Covered (#9982 partial) |
-| Creative Director evaluation frames: render-completion sampling (`creativeDirector/sceneRunner.js`) and the resume pass that re-samples missing frames in place (`creativeDirector/completionHook.js`) | Covered from the first `${jobId}-fN.jpg` write through the scene row that names them (#9982 partial) |
+| Recovery commit of a completion whose terminal write failed (`mediaJobQueue/index.js`) | Covered: only an admitted snapshot commits it (#9982) |
+| Universe Builder completion listeners: collection filing, canon entry-ref append, and sidecar enrichment (`universeBuilderCollectionHook.js`); character reference sheet copy and pointer stamp (`universeCharacterSheet.js`) | Covered (#9982) |
+| Creative Director evaluation frames: render-completion sampling (`creativeDirector/sceneRunner.js`) and the resume pass that re-samples missing frames in place (`creativeDirector/completionHook.js`) | Covered from the first `${jobId}-fN.jpg` write through the scene row that names them (#9982) |
 | Creative Director render settlement (scene status and auto-accept, plan-step settle, seed-frame wait) and Music Video production step settlement (`musicVideo/productionService.js`) | Reference-only: these write no bytes, and the render they name was on disk before its admitted completion published |
-| Sprite animation completion: clip copy, frame packaging and run record (`sprites/localAnimationJobHook.js`) | Covered from clip staging through the run record that names the packaged frames (#9982 partial) |
-| Direct gallery upload, image prompt/visibility sidecar replacement, and image deletion (`imageGen/local.js`) | Covered as one file/sidecar/index workflow (#9982 partial) |
-| Gallery image deletion's universe canon purge (`galleryImageDeletion.js`) and character reference sheet deletion (`universeCharacterSheet.js`) | Covered from file removal through the universe pointer purge (#9982 partial) |
-| Video-history deletion, including downloaded-video deletion (`videoGen/historyOps.js`) | Covered through file/history/index removal (#9982 partial) |
-| LoRA dataset uploads, gallery imports, reference-sheet crops, generated completion/recovery copies, image/dataset deletion, and queued record edits (`loraDatasets.js`, `loraDatasetGenerate.js`) | Covered as complete file/record workflows (#9982 partial) |
-| Voice Studio audition and character assignment (`voice/studio.js`) | Covered from source-file write/copy through profile-row commit and failed-write cleanup (#9982 partial) |
-| Music Video development artifact import/generated save and vocal-stem attachment (`musicVideo/devArtifactService.js`, `musicVideo/vocalStem.js`) | Covered from final file copy/write through project-record commit and failed-write cleanup (#9982 partial) |
-| Music-library upload copy and deletion (`pipeline/musicLibrary.js`) | Covered (#9982 partial): the copy and the unlink each hold one lease; the delete route intentionally leaves existing issue/project references to the removed file |
-| Voice benchmark audio and row (`voice/profileBenchmarks.js`), cloned-candidate recording and row (`voice/profiles.js`), and the fine-tune job record that names each sealed checkpoint (`voice/fineTuning.js`) | Covered (#9982 partial); promoting a checkpoint writes only a row naming bytes the job record already named |
-| Pipeline audio stage rows: generated music, cue render and voice-over line render (`routes/pipeline/audio.js`) | Covered (#9982 partial): the row that first names the WAV takes the lease; the sidecar or synthesizer writes the WAV before it |
+| Sprite animation completion: clip copy, frame packaging and run record (`sprites/localAnimationJobHook.js`) | Covered from clip staging through the run record that names the packaged frames (#9982) |
+| Sprite reference lock and unlock, walk set finalization, unlock, reopen and anchor/turnaround revision, source-pipeline import, and the grok-TUI attach lanes for walk and named tracks (`sprites/reference.js`, `sprites/walk.js`, `sprites/importer.js`, `sprites/animationTrackWorkflow.js`) | Covered (#9982): each holds one lease from its first byte through the sprite row it pairs with (or, for the attach lanes, the run record naming the packaged frames) |
+| Sprite generation starts, reference uploads, candidate and run records, selections, loop trims, atlas compile, publication history, asset deletion and the publish-binding row (`sprites/walkTrims.js`, `atlas.js`, `assets.js`, `publish.js`, and the non-lock paths of `reference.js`, `walk.js`, `animationTrackWorkflow.js`) | Covered (#9982): shared animation/reference queues acquire admission before serialization; file-primary records and their bytes must drain together, regardless of the metadata-only sprite DB row |
+| Direct gallery upload, image prompt/visibility sidecar replacement, and image deletion (`imageGen/local.js`) | Covered as one file/sidecar/index workflow (#9982) |
+| Gallery image deletion's universe canon purge (`galleryImageDeletion.js`) and character reference sheet deletion (`universeCharacterSheet.js`) | Covered from file removal through the universe pointer purge (#9982) |
+| Video-history deletion, including downloaded-video deletion (`videoGen/historyOps.js`) | Covered through file/history/index removal (#9982) |
+| Gallery video upload, download finalization and poster edits (`videoUpload.js`, `videoDownload.js`, `videoGen/poster.js`) | Covered (#9982): uploads lease byte installation through history and rollback; downloads lease poster creation through history and rollback after yt-dlp finishes; poster edits lease creation, history and cleanup |
+| LoRA dataset uploads, gallery imports, reference-sheet crops, generated completion/recovery copies, image/dataset deletion, and queued record edits (`loraDatasets.js`, `loraDatasetGenerate.js`) | Covered as complete file/record workflows (#9982) |
+| Voice Studio audition and character assignment (`voice/studio.js`) | Covered from source-file write/copy through profile-row commit and failed-write cleanup (#9982) |
+| Music Video development artifact import/generated save and vocal-stem attachment (`musicVideo/devArtifactService.js`, `musicVideo/vocalStem.js`) | Covered from final file copy/write through project-record commit and failed-write cleanup (#9982) |
+| Music-library upload copy and deletion (`pipeline/musicLibrary.js`) | Covered (#9982): the copy and the unlink each hold one lease; the delete route intentionally leaves existing issue/project references to the removed file |
+| Voice benchmark audio and row (`voice/profileBenchmarks.js`), cloned-candidate recording and row (`voice/profiles.js`), and the fine-tune job record that names each sealed checkpoint (`voice/fineTuning.js`) | Covered (#9982); promoting a checkpoint writes only a row naming bytes the job record already named |
+| Pipeline audio stage rows: generated music, cue render and voice-over line render (`routes/pipeline/audio.js`) | Covered (#9982): the row that first names the WAV takes the lease; the sidecar or synthesizer writes the WAV before it |
 | Music-library upload attach: Music Designer upload, pipeline music upload and YouTube import (`routes/tracks.js`, `routes/pipeline/audio.js`, `trackYoutubeImport.js`) | Reference-only: the admitted library import copies the file first and the track or issue row commits after it |
-| LoRA training and deployed LoRAs: trained-adapter registration, checkpoint promotion over the deployed adapter, the promoted-checkpoint preview copy, the progress row naming trainer-written samples and checkpoints, run deletion, and LoRA deletion from the LoRA manager or Media Models (`loraTraining/index.js`, `loras.js`) | Covered (#9982 partial): registration and promotion hold one lease from the adapter write through the run row and dataset flag; Civitai and Hugging Face installs admit the sidecar that first names the already-linked weights |
-| Music Video final and excerpt renders, publishing-kit builds and composition document versions (`musicVideo/render.js`, `musicVideo/excerptRender.js`, `musicVideo/publishKit.js`, `musicVideo/compositionDocument.js`) | Covered (#9982 partial): the encoder or import writes the files in place; the history entry and project row that first name them commit under one lease |
+| LoRA training and deployed LoRAs: trained-adapter registration, checkpoint promotion over the deployed adapter, the promoted-checkpoint preview copy, the progress row naming trainer-written samples and checkpoints, run deletion, and LoRA deletion from the LoRA manager or Media Models (`loraTraining/index.js`, `loras.js`) | Covered (#9982): registration and promotion hold one lease from the adapter write through the run row and dataset flag; Civitai and Hugging Face installs admit the sidecar that first names the already-linked weights |
+| Music Video final and excerpt renders, publishing-kit builds and composition document versions (`musicVideo/render.js`, `musicVideo/excerptRender.js`, `musicVideo/publishKit.js`, `musicVideo/compositionDocument.js`) | Covered (#9982): the encoder or import writes the files in place; the history entry and project row that first name them commit under one lease |
 | Music Video excerpt deletion (`musicVideo/excerptService.js`) | Reference-only: the project row drops the excerpt before its unreferenced video and contact sheet are unlinked |
-| Music Video performance repair, MIDI transcription and the autonomous Suno song (`musicVideo/performanceRepair.js`, `audioMidiTranscription.js`, `musicVideo/autonomousService.js`) | Covered (#9982 partial): the boundary frame or `.mid` is written first; the row that first names it (repair revision, project MIDI pointer, track render) commits under one lease, and a declined MIDI result is unlinked inside it |
-| Writers Room draft bodies: new work, draft save and version snapshot (`writersRoom/local.js`) | Covered (#9982 partial): each holds one lease from the `.md` write through the manifest row that names it; a draft save replaces its body in place |
+| Music Video performance repair, MIDI transcription and the autonomous Suno song (`musicVideo/performanceRepair.js`, `audioMidiTranscription.js`, `musicVideo/autonomousService.js`) | Covered (#9982): the boundary frame or `.mid` is written first; the row that first names it (repair revision, project MIDI pointer, track render) commits under one lease, and a declined MIDI result is unlinked inside it |
+| Writers Room draft bodies: new work, draft save and version snapshot (`writersRoom/local.js`) | Covered (#9982): each holds one lease from the `.md` write through the manifest row that names it; a draft save replaces its body in place |
 | Writers Room tombstone prune (`writersRoom/sync.js`) and polish snapshots (`writersRoom/polish.js`) | Reference-only: the prune drops the rows before it removes their directories, and polish snapshots are JSON files no row names (revert writes the draft through the admitted save) |
-| Image-to-3D mesh completion and AR export (`imageTo3d/models.js`) | Covered (#9982 partial): the runner writes `model.glb` outside admission and only the row that marks it ready takes the lease; the AR export's file write and the row stamping it are one lease |
+| Image-to-3D mesh completion and AR export (`imageTo3d/models.js`) | Covered (#9982): the runner writes `model.glb` outside admission and only the row that marks it ready takes the lease; the AR export's file write and the row stamping it are one lease |
 | Image-to-3D record deletion (`imageTo3d/models.js`) | Reference-only: the row is soft-deleted before the render directory is removed |
-| Rigging and animation retarget (`rigging/autoSkin.js`, `rigging/retarget.js`) | Covered (#9982 partial): the pair is published into its own directory and verified outside admission; the row that first names it takes the lease |
-| Catalog ingredient media and voice-memo scraps, imported round reference audio, Persistent Mind screenshots and songbook attachments (`catalogMedia.js`, `catalogIngestSources.js`, `roundReferenceAudioImport.js`, `persistentMindAttachments.js`, `routes/brainSongbook.js`) | Covered (#9982 partial): the row that first names a landed file takes the lease; the file-backed Persistent Mind and songbook records hold it through their deletions too |
-| Mood board re-hosting, Pinterest and X imports, frame extraction and collages (`moodBoard/*.js`) | Covered (#9982 partial): downloads and renders run outside admission; the board row that first names them, and each in-place rewrite of a URL-keyed download, take the lease |
-| Code Animation generated HTML, package import and repair revisions, production stage-run artifacts, Blender film publication and the soundtrack mux install (`codeAnimation/index.js`, `projects.js`, `stages.js`, `blenderRender.js`, `sound.js`) | Covered (#9982 partial): write-once revision trees and run artifacts land first, and the revision, run or history row that first names them commits under the lease; the mux's in-place install over an already-named render takes it too |
+| Rigging and animation retarget (`rigging/autoSkin.js`, `rigging/retarget.js`) | Covered (#9982): the pair is published into its own directory and verified outside admission; the row that first names it takes the lease |
+| Catalog ingredient media and voice-memo scraps, imported round reference audio, Persistent Mind screenshots and songbook attachments (`catalogMedia.js`, `catalogIngestSources.js`, `roundReferenceAudioImport.js`, `persistentMindAttachments.js`, `routes/brainSongbook.js`) | Covered (#9982): the row that first names a landed file takes the lease; the file-backed Persistent Mind and songbook records hold it through their deletions too |
+| Mood board re-hosting, Pinterest and X imports, frame extraction and collages (`moodBoard/*.js`) | Covered (#9982): downloads and renders run outside admission; the board row that first names them, and each in-place rewrite of a URL-keyed download, take the lease |
+| Code Animation generated HTML, package import and repair revisions, production stage-run artifacts, Blender film publication and the soundtrack mux install (`codeAnimation/index.js`, `projects.js`, `stages.js`, `blenderRender.js`, `sound.js`) | Covered (#9982): write-once revision trees and run artifacts land first, and the revision, run or history row that first names them commits under the lease; the mux's in-place install over an already-named render takes it too |
 | Code Animation export staging and output acceptance (`codeAnimation/export.js`, `codeAnimation/acceptance.js`) | Reference-only: staging directories and worker workspaces are scratch no row names, and acceptance names a render that was already durable |
-| Peer asset, draft-body and bible pulls, share bucket asset import and the peer library sweep (`sharing/peerSyncAssets.js`, `importer.js`, `peerMediaLibrarySync.js`) | Covered (#9982 partial): downloads run outside admission; the write that lands the bytes with its sidecar, poster and `media_assets` row, the draft or bible replacement, the bucket's asset copy and the sweep's index rebuild each take the lease |
-| Remaining durable owners, classified by domain in `backupAssetOwners.js` | Outstanding (#9982): sprites, video generation, image generation tails, archive and document imports |
-| Durable replacement/deletion owners not yet classified | Outstanding (#9982) |
-| Snapshot consistency claim (`backupAssetOwners.js`, see below) | Covered (#9982 partial) |
+| Peer asset, draft-body and bible pulls, share bucket asset import and the peer library sweep (`sharing/peerSyncAssets.js`, `importer.js`, `peerMediaLibrarySync.js`) | Covered (#9982): downloads run outside admission; the write that lands the bytes with its sidecar, poster and `media_assets` row, the draft or bible replacement, the bucket's asset copy and the sweep's index rebuild each take the lease |
+| Peer CoS archive imports (`sharing/peerCosSync.js`) | Covered (#9982): verified downloads stage outside admission; final files, index reconciliation and present-but-unindexed recovery take one lease |
+| ChatGPT archive import and import-memory deletion (`chatgptImport.js`, `brain.js`; the ZIP's asset extraction in `chatgptZipImport.js`) | Covered (#9982): assets are extracted outside admission and named only by the memory row; each conversation's archived transcript and that row commit under one lease, and deleting an import memory drops the record and unlinks its transcript and unreferenced assets under one lease |
+| YouTube ingest (`youtubeIngest.js`) | Covered (#9982): downloads run outside admission; the index record that first names a transcript or audio file takes the lease, and forgetting an ingest drops the record and unlinks its files under one lease |
+| Digital twin documents, enrichment answers/lists, peer document sync and genome upload/delete (`digital-twin-documents.js`, `digital-twin-enrichment.js`, `digital-twin-sync.js`, `genome.js`) | Covered (#9982): each document file or raw genome file and the meta record naming it is one lease, including deletion; enrichment provider work stays outside, while peer sync holds the lease from document copying through metadata save and tombstone reaping |
+| Derived media index (`mediaAssetIndex/`) | Rebuilt: `media_assets` rows are excluded from snapshot dumps; database restore rebuilds atomically from disk before reopening admission, and relevant file restores refresh the mirror |
+| Explicit file purge (`dataManager.js`, `routes/uploads.js`, `routes/attachments.js`) | Covered: single and bulk deletions hold one lease. These operator-directed removals may intentionally leave external references; admission prevents a snapshot from interleaving with the removal, not from preserving that already-deleted state |
+| Image generation completion, upscale/clean tails, variants and sketch pairs (`imageGen/*.js`, `mediaSketches.js`) | Covered (#9982): provider output publication through sidecar and cleanup takes one lease; remote replacement and variant/sketch rewrites restore previous files on failure |
+| Pipeline audio mux (music, voice, generated cues, silent strip), including Creative Director stitch/final assembly | Covered (#9982): encoding runs outside admission; replacement of the already-recorded video and rollback hold the lease. CD final/rough-cut rows only reference the existing history entry |
+| Music Video Making-of export (`makingOf.js`, `makingOfVisuals.js`) | Reference-only: reads existing assets and transforms buffers for the ZIP response; no durable file or row writes |
+| Time Capsule snapshots (`timeCapsule.js`) | Covered (#9982): snapshot creation and deletion lease the file and index entry together, acquiring before the shared index write tail |
+| CoS raw recording compression and purge (`cosAgentStorage.js`) | Covered (#9982): verified gzip publication, storage manifest and plain-file removal share a lease; purge intent and unlinks also share a lease because the manifest is file-primary |
+| CoS agent archive/index publication (`cosAgentLifecycle.js`, `cosAgentArchive.js`, `cosAgentIndex.js`) | Covered (#9982): completion, zombie/stale archival, deletion and legacy layout migration lease directory changes through state and index publication; state-locked workflows acquire admission first |
+| Game compiled manifests (`games/compile.js`) | Covered (#9982): versioned manifest and game compiled/history pointers hold one lease before the per-game queue |
+| Toolkit run creation, CLI/API terminal recording and deletion (`aiToolkit/runner.js`, `internal/runFinalizer.js`) | Covered through the host-injected `withAssetPublication` boundary. Standalone toolkit defaults to direct execution. Terminal hooks run after release; output failures retain truthful persisted byte counts. The injected boundary coordinates the server and separate runner processes |
+| Beeper attachment mirror (`beeperAttachments.js`) | Covered (#9982): network transfer stays outside admission; content-addressed installation/dedupe and its `local_path` row commit share admission and a path queue with eviction/orphan cleanup. This also protects snapshots that opt into the normally excluded attachment bytes |
+| Runtime recording completion tails (`runtimeFilePublication.js`, server runner/TUI finalizers, CoS runner completion, loop iterations, TUI spooler) | Covered (#9982): output and completion metadata are admitted together with rollback on write failure; CoS completion retains admission through runner ownership removal. Each parsed/raw spool flush and CLI transcript/state batch is a short lease, including durable truncation/failure flags. Spawn prompt files/run creation/registration publish after forge preparation; old run pruning and feature-agent row/directory deletion are admitted. Model execution stays outside. Uses the shared process admission protocol in both server and CoS runner |
+| Agent usage run creation and completion (`agentRunTracking.js`) | Covered: prompt/output creation precedes metadata inside one lease; completion holds output replacement through terminal metadata, with usage and event callbacks after release |
+| Snapshot consistency claim (`backupAssetOwners.js`, see below) | Covered (#9982) |
 | Database restore execution and backend-cutover acceptance (`backup.js`, `databasePreflight.js`) | Covered (#9983) |
 
 Direct gallery uploads encode before admission, then publish the final image,
@@ -214,6 +235,38 @@ repeat, so that write takes the lease too. Removing a board item or a board
 removes no bytes. A row that fails after its file landed leaves an unreferenced
 file, as before.
 
+Gallery video uploads hold admission from the first byte installation through
+their thumbnail and history entry; failed history writes remove both outputs
+before releasing admission. The yt-dlp producer downloads fresh, unreferenced
+files outside admission, then the poster and history commit take one lease,
+including rollback. Failed or canceled producers remove their unreferenced
+fragments through the existing download core. Poster edits take admission before
+the shared history write tail and retain it through poster creation, history
+replacement, old-poster cleanup and failed-commit cleanup. Every new poster uses
+a fresh basename; temporary sharing copies stay outside this durable workflow.
+Upload and download completion notifications run after the durable commit, so
+a throwing listener cannot remove files that committed history already names.
+These leases do not repair preexisting dangling references. The derived media
+index can lag live edits; it is excluded from dumps and rebuilt from authoritative
+sidecars and history during restore as described below.
+
+Local generated videos (including each batch member) and Grok, fal and Reactor
+videos share an admitted finalizer. Fresh producer output is unreferenced until
+that finalizer takes admission before faststart and poster creation, then commits
+serialized history or removes the owned video, possible partial poster and
+faststart staging file before releasing the lease. A missing thumbnail retains
+the existing thumbnail-less behavior. Terminal status and notifications follow
+the durable commit. Caller publication latches keep committed outputs and earlier
+batch members out of later failure or cancellation cleanup. Federated video
+transfers verify a staging file outside admission, then lease replacement,
+poster generation and history together. A failed replacement restores the prior
+clip and poster before releasing admission; replay replaces the existing row.
+Derived stitch, inline and queued upscale, timeline and HTML-composition renders
+produce fresh output outside admission, then lease poster and history publication
+through rollback. HTML compositions commit all formats together. 
+
+The derived media index is excluded from snapshot dumps: its asynchronous refresh may lag authoritative files, so preserving its rows would preserve stale file references. Both legacy and new database restores rebuild it atomically from local sidecars and video history before reopening admission. Unreadable sources or SQL failure keep recovery fenced for a same-operation retry, without replaying the dump. Full and media-selective file restores rebuild it too; a failed rebuild is reported as a reconciliation failure. This does not make unadmitted authoritative media workflows consistent.
+
 Code Animation writes its HTML, revision trees and run artifacts before the row
 that first names them. A generated animation's HTML and the job row marking it
 completed hold one lease. A package import or repair stages its revision into a
@@ -224,8 +277,29 @@ Every production run-row write takes the lease, because the row is what first
 names the stage's frames, soundtrack WAV and Blender bake. A Blender film is
 copied under a fresh name and muxed before its history entry commits under the
 lease. A browser render's history entry is written by the HTML-composition job
-(still outstanding with video generation), so the soundtrack mux holds the lease
+under admission, so the soundtrack mux holds the lease
 across its in-place install over that file, but not across the encode.
+
+A sprite's row holds metadata and workflow state (status, the frozen chroma key,
+the publish binding), never a path, and its bytes live under `data/sprites/<id>/`.
+The workflows whose row mirrors a file state therefore hold one lease: reference
+lock and unlock (manifest and row), walk set finalization (the set, then the
+row that says `walk-complete`), and unlock, reopen and revision (remove the set,
+then downgrade the row). A copy that predates the set paired with a row dumped
+after it would advertise a finished walk with nothing behind it, which the write
+order was chosen to prevent against a crash but cannot against a copy-then-dump
+snapshot. A source-pipeline import holds a lease per subject, a character or a
+props family, from its first copied byte through the row marking it imported, so a
+multi-subject import lets a cut in between subjects. The grok-TUI lanes run the
+terminal session outside admission and take the lease for the attach that packages
+its frames and files the run, as the local completion hook does. The leases are
+taken before the per-record write tail, so a workflow queued behind a long
+reprocess holds its lease while it waits and can stretch a cut's drain by that
+wait. Generation starts, uploads, run records, selections, loop trims, atlas
+compiles, asset deletion and publication also take admission before the shared
+animation/reference write tails. Their file-primary manifests and runtime
+pointers need the same protection even when the PostgreSQL sprite row contains
+no path: writing a record last alone cannot protect a multi-file rsync pass.
 
 **Snapshot consistency claim.** `server/lib/backupAssetOwners.js` inventories
 each durable owner as `admitted`, `reference-only` or `outstanding`, and its
@@ -238,19 +312,26 @@ and `outstanding` lists the owner ids still outside admission. An unrecognized
 status counts as outstanding, never as covered. Snapshots written before this
 field existed carry no claim and must be treated as partial.
 
-The remaining inventory is the `outstanding` entries in `backupAssetOwners.js`,
-grouped by domain with the modules whose file-plus-record workflows still run
-outside admission, plus an `unclassified-durable-owners` entry for anything a
-code sweep did not reach. Their persistence adapters and direct filesystem calls
-still need workflow-level classification; independently locking `fileCore` or
-SQL primitives would not cover the gap between writes. No domain is excluded
-from the snapshot to satisfy the claim.
+The completed inventory covers the identified managed runtime workflows in this
+repository. New byte-plus-record workflows must be classified before they can
+participate in the guarantee; an `outstanding` or unknown status downgrades the
+snapshot claim. The global scope requires both server and CoS runner to use the
+shared protocol. It excludes arbitrary external scripts/tools and does not repair
+preexisting missing assets, deliberate operator deletion, or corruption left by a
+failed migration. Managed startup migrations finish before backup routes and the
+scheduler become available; this ordering prevents concurrent capture, not a
+claim that every migration necessarily succeeded.
+
+No authoritative asset domain is excluded merely to satisfy readiness. Existing
+explicit backup exclusions still apply; the derived media index is reconstructed
+from authoritative files instead of preserving cache rows.
 
 When wrapping one of them, remember the order a cut works in: it copies files,
 then dumps rows. A row that names new bytes therefore has to commit under the
 lease unless the lease already covered the byte write. A deletion that removes
-the row first and the bytes second is safe either way, because the dump that
-follows the copy sees no row. A deletion that unlinks first, or one that leaves
+a PostgreSQL row first and the bytes second is safe either way, because the dump
+that follows the copy sees no row. A file-primary record and its bytes require
+admission even for record-first deletion: rsync copies them independently. A deletion that unlinks first, or one that leaves
 rows naming the removed file, must hold the lease around the unlink.
 
 This is part of [the cross-store consistency work](https://github.com/atomantic/PortOS/issues/9923).

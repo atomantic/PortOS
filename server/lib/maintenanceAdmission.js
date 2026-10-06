@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { PATHS } from './paths.js';
 import { assertNotRealDataWrite } from './testDataIsolation.js';
+import { createMaintenanceExclusive, maintenanceExclusiveSchema, maintenanceExclusiveReceiptSchema } from './maintenanceExclusive.js';
 
 const operationSchema = z.object({
   id: z.string().uuid(), kind: z.string().min(1), resource: z.string().max(256),
@@ -19,7 +20,10 @@ const schema = z.object({
     reason: z.string().min(1).max(500), owner: z.string().min(1).max(128), requestedAt: z.string().datetime(),
   }).strict().nullable(),
   operations: z.array(operationSchema),
-}).strict();
+  exclusive: maintenanceExclusiveSchema.nullable().optional(),
+  exclusiveReceipt: maintenanceExclusiveReceiptSchema.optional(),
+}).strict().refine(state => !state.exclusive || (state.hold?.id === state.exclusive.holdId
+  && state.hold?.revision === state.exclusive.holdRevision));
 export const maintenanceBeginSchema = z.object({ reason: z.string().trim().min(1).max(500) }).strict();
 export const maintenanceResumeSchema = z.object({ id: z.string().uuid(), revision: z.number().int().positive() }).strict();
 const empty = () => ({ version: 1, revision: 0, hold: null, operations: [] });
@@ -33,7 +37,8 @@ function syncDirectory(path, io) {
   try { io.fsyncSync(fd); } finally { io.closeSync(fd); }
 }
 
-export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, assertWrite = assertNotRealDataWrite, makeId = randomUUID } = {}) {
+export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, assertWrite = assertNotRealDataWrite,
+  makeId = randomUUID, now = Date.now, verifyExclusiveReceipt = () => false } = {}) {
   const directory = join(dataDir, 'workflow-maintenance');
   const file = join(directory, 'state.json');
   const lock = join(directory, 'transaction');
@@ -55,9 +60,11 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     } catch { throw unavailable(); }
   };
   const project = state => ({
-    state: state.hold ? (state.operations.length ? 'draining' : 'ready') : 'normal',
+    state: state.hold ? (state.operations.length || state.exclusive ? 'draining' : 'ready') : 'normal',
     revision: state.revision, hold: state.hold,
-    blockers: state.operations.map(({ kind, resource, startedAt, pid, unsettled }) => ({ kind, resource, startedAt, pid, unsettled })),
+    blockers: [...state.operations.map(({ kind, resource, startedAt, pid, unsettled }) => ({ kind, resource, startedAt, pid, unsettled })),
+      ...(state.exclusive ? [{ kind: 'exclusive-maintenance', resource: state.exclusive.operation.operationId,
+        startedAt: state.exclusive.claimedAt, unsettled: state.exclusive.phase === 'uncertain' }] : [])],
     scope: 'PortOS agents, mind turns, provider runs, media renders and scheduled shell/script work, through cleanup and saving. Unrelated host applications are outside this scope.',
   });
   const status = () => {
@@ -118,6 +125,8 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     } });
     return result;
   };
+  const exclusive = createMaintenanceExclusive({ transaction, read, lockExists: () => exists(lock), makeId, error, now,
+    verifyReceipt: verifyExclusiveReceipt });
   const held = () => status().state !== 'normal';
   const assertOpen = () => { if (held()) throw error(status().state === 'unavailable' ? 'MAINTENANCE_UNAVAILABLE' : 'MAINTENANCE_HELD'); };
   const currentId = () => context.getStore() ?? null;
@@ -169,6 +178,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
       const existing = state.operations.find(op => op.kind === kind && op.resource === resource);
       if (existing) { recovery = recoverySnapshot(existing); return existing.id; }
       const id = makeId();
+      exclusive.observeExistingWork(state);
       state.operations.push({ id, kind, resource, pid: process.pid, startedAt: new Date().toISOString() });
       return id;
     });
@@ -238,11 +248,15 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     transaction(state => {
       if (state.hold?.id !== expected.id || state.hold?.revision !== expected.revision)
         throw error('MAINTENANCE_STALE', 'This maintenance hold changed. Refresh before resuming.');
+      if (state.exclusive)
+        throw error('MAINTENANCE_STALE', 'An exclusive maintenance operation owns this hold until verified reconciliation.');
       state.hold = null;
     });
     return status();
   };
-  return { directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events };
+  const { observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability } = exclusive;
+  return { directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
+    observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability };
 }
 
 // Resolve the configured data root on first use, after host/test setup.

@@ -4,10 +4,12 @@ import ProjectOptionsPanel from './ProjectOptionsPanel.jsx';
 
 vi.mock('./VideoRenderSettings.jsx', () => ({ default: () => null }));
 vi.mock('../imageGen/RecordRenderPinRow.jsx', () => ({ default: () => null }));
+vi.mock('../../services/apiMusicVideo.js', () => ({ setMusicVideoFinishedOutside: vi.fn() }));
+import { setMusicVideoFinishedOutside } from '../../services/apiMusicVideo.js';
 
-const open = (project = {}, onSavePolicy = vi.fn(async () => {})) => {
+const open = (project = {}, onSavePolicy = vi.fn(async () => {}), onProjectUpdated = vi.fn()) => {
   render(<ProjectOptionsPanel project={{ id: 'mv1', ...project }} videoSettings={{ changeFramePin: vi.fn() }}
-    onMediaMode={vi.fn()} onRenderStyle={vi.fn()} onSaveAutomation={vi.fn()} onSavePolicy={onSavePolicy} />);
+    onMediaMode={vi.fn()} onRenderStyle={vi.fn()} onSaveAutomation={vi.fn()} onSavePolicy={onSavePolicy} onProjectUpdated={onProjectUpdated} />);
   return onSavePolicy;
 };
 
@@ -34,5 +36,31 @@ describe('ProjectOptionsPanel', () => {
     fireEvent.blur(allowance);
     expect(await screen.findByRole('alert')).toHaveTextContent('0 to 100%');
     expect(onSavePolicy).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks a project finished outside PortOS with a note, hands back the saved record, and unmarks it', async () => {
+    const saved = { id: 'mv1', finishedOutside: { markedAt: '2026-10-05T00:00:00.000Z', note: 'Studio' } };
+    setMusicVideoFinishedOutside.mockResolvedValueOnce(saved);
+    const onProjectUpdated = vi.fn();
+    open({ renderHistoryId: 'final-1' }, undefined, onProjectUpdated);
+    fireEvent.change(screen.getByLabelText('Where it was made (optional)'), { target: { value: ' Studio ' } });
+    fireEvent.click(screen.getByLabelText('Mark finished'));
+    await waitFor(() => expect(onProjectUpdated).toHaveBeenCalledWith(saved));
+    expect(setMusicVideoFinishedOutside).toHaveBeenCalledWith('mv1', { finished: true, note: 'Studio' });
+  });
+
+  it('explains that marking needs the final render first', () => {
+    open({ renderHistoryId: null });
+    expect(screen.queryByLabelText('Mark finished')).toBeNull();
+    expect(screen.getByText(/Bring the finished video in as the final render first/)).toBeInTheDocument();
+  });
+
+  it('shows an existing marker and clears it', async () => {
+    setMusicVideoFinishedOutside.mockResolvedValueOnce({ id: 'mv1', finishedOutside: null });
+    open({ finishedOutside: { markedAt: '2026-10-05T12:00:00.000Z', note: 'Studio' } });
+    expect(screen.getByText(/: Studio\. No approval is recorded/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Where it was made (optional)')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Marked finished'));
+    await waitFor(() => expect(setMusicVideoFinishedOutside).toHaveBeenLastCalledWith('mv1', { finished: false, note: undefined }));
   });
 });

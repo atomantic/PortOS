@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { atomicWrite, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { parseFilesystemStats } from '../lib/fileCore.js';
+import { canonicalStringify } from '../lib/objects.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { loadData } from './instanceIdentity.js';
@@ -42,7 +43,7 @@ const sameSecret = (a, b) => {
   const right = Buffer.from(b);
   return left.length === right.length && timingSafeEqual(left, right);
 };
-const binding = (peer, self) => createHmac('sha256', peer.syncSecret)
+export const peerAdminPairBinding = (peer, self) => createHmac('sha256', peer.syncSecret)
   .update(`portos-peer-admin:binding:v1:${self.instanceId}:${peer.id}:${peer.instanceId}`).digest('hex');
 const wireGrant = ({ pairBinding: _pairBinding, ...grant }) => grant;
 
@@ -53,12 +54,12 @@ async function readGrants() {
   return parsed.data;
 }
 
-export async function peerAdminIdentity(peerId) {
+export async function peerAdminIdentity(peerId, { allowInactive = false } = {}) {
   const { self, peers } = await loadData();
   const peer = peers?.find(entry => entry.id === peerId);
   if (!uuid.safeParse(self?.instanceId).success || !uuid.safeParse(peer?.instanceId).success
-    || peer.instanceId === self.instanceId || peer.enabled === false
-    || typeof peer.syncSecret !== 'string' || peer.syncSecret.length < 32) {
+    || peer.instanceId === self.instanceId || (!allowInactive && (peer.enabled === false
+    || typeof peer.syncSecret !== 'string' || peer.syncSecret.length < 32))) {
     refuse('PEER_ADMIN_PAIR_REQUIRED', 'An enabled pair with verified instance identities is required');
   }
   return { peer, self };
@@ -67,7 +68,7 @@ export async function peerAdminIdentity(peerId) {
 // Revalidate the CURRENT pair credential at each receiver operation and after
 // preflight probes. Names, headers alone, Basic and operator sessions cannot
 // impersonate a paired caller on the receiver endpoints, even with auth off.
-async function caller(req) {
+export async function peerAdminCaller(req) {
   if (req.portosAuthContext?.method !== 'peer' || req.portosAuthContext?.authenticated !== true) {
     refuse('PEER_ADMIN_PEER_REQUIRED', 'A scoped paired-peer credential is required');
   }
@@ -85,7 +86,7 @@ async function currentGrant(identity, action) {
   const grant = store.grants.find(entry => entry.peerId === peer.id && entry.action === action);
   if (!grant || !grant.allowed || grant.expiresAt <= Date.now() || grant.scope !== PEER_ADMIN_SCOPE
     || grant.peerInstanceId !== peer.instanceId || grant.hostInstanceId !== self.instanceId
-    || !sameSecret(grant.pairBinding, binding(peer, self))) {
+    || !sameSecret(grant.pairBinding, peerAdminPairBinding(peer, self))) {
     refuse('PEER_ADMIN_GRANT_REQUIRED', 'This paired identity has no current grant for that action');
   }
   return grant;
@@ -105,7 +106,7 @@ export async function describePeerAdminSetup(peerId) {
       const grant = store.grants.find(entry => entry.peerId === peerId && entry.action === action);
       const active = Boolean(paired && grant?.allowed && grant.expiresAt > Date.now()
         && grant.hostInstanceId === self.instanceId && grant.peerInstanceId === peer.instanceId
-        && sameSecret(grant.pairBinding, binding(peer, self)));
+        && sameSecret(grant.pairBinding, peerAdminPairBinding(peer, self)));
       return { action, grant: grant ? wireGrant(grant) : null, active };
     }),
   };
@@ -132,7 +133,7 @@ export const savePeerAdminGrant = (input, req) => withLock(async () => {
   const grant = {
     id: randomUUID(), peerId: peer.id, peerInstanceId: peer.instanceId, hostInstanceId: self.instanceId,
     action: input.action, scope: PEER_ADMIN_SCOPE,
-    pairBinding: input.allowPlanning ? binding(peer, self) : store.grants[index].pairBinding,
+    pairBinding: input.allowPlanning ? peerAdminPairBinding(peer, self) : store.grants[index].pairBinding,
     allowed: input.allowPlanning, createdAt: now, expiresAt: now + input.expiresInMinutes * 60_000,
     authority: req.portosAuthContext.method === 'session' ? 'operator-session' : 'local-operator',
   };
@@ -148,8 +149,8 @@ function sweep() {
   for (const map of [preflights, plans]) for (const [id, value] of map) if (value.expiresAt <= now) map.delete(id);
 }
 
-function signPeerAdmin(peer, purpose, payload) {
-  return createHmac('sha256', peer.syncSecret).update(`portos-peer-admin:v1:${purpose}:${JSON.stringify(payload)}`).digest('hex');
+export function signPeerAdmin(peer, purpose, payload) {
+  return createHmac('sha256', peer.syncSecret).update(`portos-peer-admin:v1:${purpose}:${purpose.startsWith('execution-') ? canonicalStringify(payload) : JSON.stringify(payload)}`).digest('hex');
 }
 export const verifyPeerAdminSignature = (peer, purpose, payload, signature) => sameSecret(signPeerAdmin(peer, purpose, payload), signature);
 
@@ -180,7 +181,7 @@ async function resourceSnapshot() {
 
 export const createPeerAdminPreflight = (req, input) => withLock(async () => {
   sweep();
-  const identity = await caller(req);
+  const identity = await peerAdminCaller(req);
   const grant = await currentGrant(identity, input.intent.action);
   const model = catalogTarget(input.intent);
   if (preflights.has(input.challenge)) refuse('PEER_ADMIN_REPLAY', 'Use a fresh preflight challenge', 409);
@@ -188,7 +189,7 @@ export const createPeerAdminPreflight = (req, input) => withLock(async () => {
   const version = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).version;
   const resources = await resourceSnapshot();
   // Re-read after probes, so rotation/revocation during I/O invalidates admission.
-  const fresh = await caller(req);
+  const fresh = await peerAdminCaller(req);
   const freshGrant = await currentGrant(fresh, input.intent.action);
   if (freshGrant.id !== grant.id) refuse('PEER_ADMIN_GRANT_CHANGED', 'Grant changed during preflight', 409);
   const now = Date.now();
@@ -207,7 +208,7 @@ export const createPeerAdminPreflight = (req, input) => withLock(async () => {
 
 export const createPeerAdminPlan = (req, input) => withLock(async () => {
   sweep();
-  const identity = await caller(req);
+  const identity = await peerAdminCaller(req);
   const grant = await currentGrant(identity, input.intent.action);
   if (grant.id !== input.grantId) refuse('PEER_ADMIN_GRANT_CHANGED', 'The preflight grant is stale', 409);
   const key = `${identity.peer.id}:${input.requestId}`;
@@ -240,7 +241,7 @@ export const createPeerAdminPlan = (req, input) => withLock(async () => {
 
 export const getPeerAdminPlan = (req, requestId) => withLock(async () => {
   sweep();
-  const identity = await caller(req);
+  const identity = await peerAdminCaller(req);
   const receipt = plans.get(`${identity.peer.id}:${requestId}`);
   if (!receipt) refuse('PEER_ADMIN_PLAN_NOT_FOUND', 'Plan expired or not found; it has not been queued', 404);
   const grant = await currentGrant(identity, receipt.payload.intent.action);

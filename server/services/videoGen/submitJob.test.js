@@ -198,6 +198,20 @@ describe('submitVideoGenJob', () => {
     expect(prepared.cleanupStaged).toHaveBeenCalledTimes(1);
   });
 
+  it('enqueues a standalone fal lip sync with the staged voice clip, owned by the queue', async () => {
+    mocks.prepareVideoGenParams.mockResolvedValue({
+      backend: 'fal', cleanupStaged: vi.fn(async () => {}), sourceImagePath: '/example/images/face.png', uploadedTempPath: null,
+      audioFilePath: '/example/uploads/video-audio-1.wav', uploadedTempPaths: ['/example/uploads/video-audio-1.wav'],
+    });
+    await submitVideoGenJob({ prompt: 'lip sync', backend: 'fal', falModelId: 'minimax/h3-max/lip-sync/image-to-video', mode: 'image' }, {});
+    const { params } = mocks.enqueueJob.mock.calls.at(-1)[0];
+    expect(params).toMatchObject({
+      mode: 'fal', modelId: 'minimax/h3-max/lip-sync/image-to-video', sourceImagePath: '/example/images/face.png',
+      audioFilePath: '/example/uploads/video-audio-1.wav', uploadedTempPaths: ['/example/uploads/video-audio-1.wav'],
+      lipSync: { enableTranscription: false },
+    });
+  });
+
   describe('music-video performance shots (#8977)', () => {
     const musicVideo = { projectId: 'mv-1', sceneId: 'mvs-1' };
     const falPrepared = () => ({

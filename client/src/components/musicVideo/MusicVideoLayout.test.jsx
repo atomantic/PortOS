@@ -1,55 +1,90 @@
-import { describe, expect, it } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
-import MusicVideoLayout from './MusicVideoLayout.jsx';
+import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import MusicVideoLayout, { stepState } from './MusicVideoLayout.jsx';
 import { MUSIC_VIDEO_STAGES } from '../../lib/musicVideoStages.js';
 
-describe('music-video stage navigation', () => {
-  it('renders one stage row: the tabs carry the status marks, with no separate progress strip', () => {
-    const states = ['done', 'active', 'blocked', 'todo', 'todo', 'todo', 'todo'];
-    render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project' }} stage="cast-sets" trackLabel="Example Track"
-      onStageChange={() => {}} progress={{ current: 'cast-sets', stages: MUSIC_VIDEO_STAGES.map((stage, i) => ({ ...stage, state: states[i] })) }}
+// Both the step list (md+) and the phone icon bar are "Steps"; only one shows at a time.
+const stepNavs = () => screen.getAllByRole('navigation', { name: 'Steps' });
+const rail = () => stepNavs().find((nav) => nav.querySelector('ol'));
+const phoneBar = () => stepNavs().find((nav) => nav.querySelector('[role="tablist"]'));
+const progressFor = (current, states = {}) => ({
+  current, stages: MUSIC_VIDEO_STAGES.map((stage) => ({ ...stage, state: states[stage.id] || (stage.id === current ? 'active' : 'todo') })),
+});
+
+describe('music-video step navigation', () => {
+  it('lists the six steps with a state word and one fact each, and opens a step on click', () => {
+    const onStageChange = vi.fn();
+    render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project', version: 2 }} stage="board" trackLabel="Example Track"
+      onStageChange={onStageChange} progress={progressFor('board', { setup: 'done', 'cast-sets': 'done' })}
+      status={{ headline: 'Step 3 of 6: Storyboard needs you', tone: 'warn', needsYouStage: 'board' }}
+      notes={{ setup: '4:40 · 70 lyric lines', board: '26 shots' }}
       spend={{ spentUsd: 3, capUsd: 10 }} />);
-    expect(screen.queryByRole('list', { name: 'Progress' })).not.toBeInTheDocument();
-    const tabs = within(screen.getByRole('navigation', { name: 'Stages' })).getAllByRole('tab');
-    expect(tabs).toHaveLength(MUSIC_VIDEO_STAGES.length);
-    expect(within(tabs[0]).getByLabelText('done')).toBeInTheDocument();
-    expect(within(tabs[1]).getByLabelText('in progress')).toBeInTheDocument();
-    expect(within(tabs[2]).getByLabelText('needs you')).toBeInTheDocument();
-    // The track and spend chips survive the strip's removal.
+    expect(stepNavs()).toHaveLength(2);
+    const steps = within(rail()).getAllByRole('button');
+    expect(steps.map((step) => step.textContent)).toEqual([
+      'Song' + 'Done' + '4:40 · 70 lyric lines',
+      'Look' + 'Done',
+      '3Storyboard' + 'Needs you' + '26 shots',
+      '4Make' + 'Not started',
+      '5Final render' + 'Not started',
+      '6Publish' + 'Not started',
+    ]);
+    expect(steps[2]).toHaveAttribute('aria-current', 'step');
+    fireEvent.click(steps[3]);
+    expect(onStageChange).toHaveBeenCalledWith('produce');
+    // The phone bar says each state to screen readers, since it shows only icons.
+    expect(within(phoneBar()).getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+      'Song, Done', 'Look, Done', 'Storyboard, Needs you', 'Make, Not started', 'Final render, Not started', 'Publish, Not started',
+    ]);
+    // The step names what "done" means under its title, and labels the panel.
+    expect(screen.getByRole('tabpanel', { name: 'Storyboard' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 3, name: 'Storyboard' })).toBeInTheDocument();
+    expect(screen.getByText(MUSIC_VIDEO_STAGES[2].doneWhen)).toBeInTheDocument();
+    // The track, version and spend stay in the header.
     expect(screen.getByText('Example Track')).toBeInTheDocument();
+    expect(screen.getByText('v2')).toBeInTheDocument();
     expect(screen.getByText(/\$3\.00 \/ \$10\.00/)).toBeInTheDocument();
   });
 
-  it('says where the project stands under its name', () => {
+  it('says where the project stands in one line, and a status error marks no step as needing you', () => {
     render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project' }} stage="cast-sets"
-      onStageChange={() => {}} progress={{ current: 'cast-sets', stages: MUSIC_VIDEO_STAGES.map((stage) => ({ ...stage, state: 'todo' })) }}
-      spend={{ spentUsd: 0 }}
-      status={{ headline: 'Stage 2 of 7: Cast & Sets · needs you', tone: 'warn', facts: [{ id: 'render', label: 'Nothing rendered yet', tone: 'muted' }] }} />);
+      onStageChange={() => {}} progress={progressFor('cast-sets')} spend={{ spentUsd: 0 }}
+      status={{ headline: 'Status unavailable: offline', tone: 'warn', needsYouStage: null }} />);
     const status = screen.getByRole('status', { name: 'Project status' });
-    expect(status).toHaveTextContent('Stage 2 of 7: Cast & Sets · needs you');
-    expect(status).toHaveTextContent('Nothing rendered yet');
-    // Phone collapses the facts behind one line; the wide line stays for sm+.
-    expect(screen.getByRole('button', { name: /Stage 2 of 7/ })).toHaveClass('sm:hidden');
+    expect(status).toHaveTextContent(/^Status unavailable: offline$/);
+    expect(within(rail()).queryByText('Needs you')).not.toBeInTheDocument();
+  });
+
+  it('opens Project settings and its Autopilot tab from the header', () => {
+    const onOpenSettings = vi.fn();
+    render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project' }} stage="setup"
+      onStageChange={() => {}} progress={progressFor('setup')} spend={{ spentUsd: 0 }}
+      autopilot={{ label: 'Autonomous run: writing the lyric draft', short: 'Autopilot running', tone: 'muted' }} onOpenSettings={onOpenSettings} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Project settings' }));
+    expect(onOpenSettings).toHaveBeenLastCalledWith('project');
+    const autopilot = screen.getByRole('button', { name: /Autonomous run: writing the lyric draft/ });
+    // A phone shows the short label so the sticky header stays one row.
+    expect(autopilot.querySelector('.sm\\:hidden')).toHaveTextContent('Autopilot running');
+    fireEvent.click(autopilot);
+    expect(onOpenSettings).toHaveBeenLastCalledWith('autopilot');
   });
 
   it('keeps the project name from a long next action on a phone (#10170)', () => {
     render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project Name' }} stage="board"
-      onStageChange={() => {}} progress={{ current: 'board', stages: MUSIC_VIDEO_STAGES.map((stage) => ({ ...stage, state: 'todo' })) }}
-      spend={{ spentUsd: 1.2, capUsd: 10 }}
+      onStageChange={() => {}} progress={progressFor('board')} spend={{ spentUsd: 1.2, capUsd: 10 }}
       nextAction={{ id: 'review-production', kind: 'goto', label: 'Review timed storyboard', shortLabel: 'Board' }}
       onNextAction={() => {}} />);
     const name = screen.getByRole('heading', { level: 2, name: 'Example Project Name' });
-    expect(name).toHaveClass('min-w-0', 'truncate');
+    expect(name).toHaveClass('truncate');
+    expect(name.parentElement).toHaveClass('min-w-0');
     const action = screen.getByRole('button', { name: 'Review timed storyboard' });
-    expect(action).toHaveTextContent('Board');
     expect(action.querySelector('.sm\\:hidden')).toHaveTextContent('Board');
   });
 
-  it('keeps every fixed stage in the compact icon row after adding Publish', () => {
+  it('keeps every step in the phone icon bar, each with its own icon', () => {
     render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project' }} stage="publish"
-      onStageChange={() => {}} progress={{ current: 'publish', stages: MUSIC_VIDEO_STAGES.map((stage) => ({ ...stage, state: 'todo' })) }}
-      spend={{ spentUsd: 0 }} />);
-    const navigation = within(screen.getByRole('navigation', { name: 'Stages' }));
+      onStageChange={() => {}} progress={progressFor('publish')} spend={{ spentUsd: 0 }} />);
+    const navigation = within(phoneBar());
     expect(navigation.queryByRole('combobox')).not.toBeInTheDocument();
     const tabs = navigation.getAllByRole('tab');
     expect(tabs).toHaveLength(MUSIC_VIDEO_STAGES.length);
@@ -57,5 +92,60 @@ describe('music-video stage navigation', () => {
     expect(icons.every(Boolean)).toBe(true);
     expect(new Set(icons).size).toBe(tabs.length);
     expect(navigation.getByRole('tab', { name: /^Publish/ })).toHaveAttribute('aria-selected', 'true');
+  });
+});
+
+describe('phone layout', () => {
+  it('pins neither the header nor the preview below md: the step gets the screen', () => {
+    render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project' }} stage="review"
+      onStageChange={() => {}} progress={progressFor('review')} spend={{ spentUsd: 0 }}
+      dock={<aside aria-label="Preview">preview</aside>} />);
+    const header = screen.getByRole('heading', { level: 2, name: 'Example Project' }).closest('header');
+    expect(header.className).toMatch(/(^|\s)md:sticky(\s|$)/);
+    expect(header.className).not.toMatch(/(^|\s)sticky(\s|$)/);
+    const dock = screen.getByRole('complementary', { name: 'Preview' }).parentElement;
+    expect(dock.className).not.toMatch(/fixed/);
+    // Below xl the preview row sits above the step, across the full width.
+    expect(dock.className).toMatch(/max-xl:order-first/);
+  });
+});
+
+describe('player-first steps', () => {
+  const renderStep = (playerFirst) => render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project' }} stage="board"
+    onStageChange={() => {}} progress={progressFor('board')} spend={{ spentUsd: 0 }} playerFirst={playerFirst}
+    lead={<section aria-label="Checklist">checklist</section>}
+    review={<section aria-label="Approval">approve</section>}
+    dock={<aside aria-label="Preview">preview</aside>}>
+    <section aria-label="Work">work</section>
+  </MusicVideoLayout>);
+
+  it('puts the player and the approval side by side at the top of a step reviewed by watching', () => {
+    renderStep(true);
+    const panel = screen.getByRole('tabpanel');
+    const order = ['Checklist', 'Preview', 'Approval', 'Work'].map((name) => within(panel).getByRole(name === 'Preview' ? 'complementary' : 'region', { name }));
+    for (let i = 1; i < order.length; i += 1) expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('docks the player at the side and closes the step with the approval otherwise', () => {
+    renderStep(false);
+    const panel = screen.getByRole('tabpanel');
+    expect(within(panel).queryByRole('complementary', { name: 'Preview' })).toBeNull();
+    expect(panel.lastElementChild).toHaveAccessibleName('Approval');
+  });
+});
+
+describe('stepState', () => {
+  it('uses one word per state, flagging a changed approval and the step that waits on the director', () => {
+    const at = (entry, needsYouStage = null) => stepState({ id: 'board', ...entry }, { needsYouStage }).word;
+    expect(at({ state: 'done' })).toBe('Done');
+    expect(at({ state: 'done', stale: true })).toBe('Changed since approval');
+    expect(at({ state: 'blocked' })).toBe('Needs you');
+    expect(at({ state: 'active' }, 'board')).toBe('Needs you');
+    // An approval on a later step marks that step, not the first unfinished one.
+    expect(at({ state: 'todo' }, 'board')).toBe('Needs you');
+    expect(at({ state: 'active' }, 'cast-sets')).toBe('In progress');
+    expect(at({ state: 'active' })).toBe('In progress');
+    expect(at({ state: 'todo', stale: true })).toBe('Changed since approval');
+    expect(at({ state: 'todo' })).toBe('Not started');
   });
 });

@@ -11,7 +11,7 @@ import SceneTakeStrip from './SceneTakeStrip.jsx';
 import { MUSIC_VIDEO_VISUAL_LAYERS, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
 
 // #8985: what a composed render shows for this scene's span.
-const LAYER_LABELS = { footage: 'Footage', still: 'Still image', card: 'Title card' };
+const LAYER_LABELS = { footage: 'Footage', still: 'Still image', card: 'Title card', code: 'Code-drawn' };
 const STILL_MOVE_LABELS = [['hold', 'Hold'], ['push', 'Push in'], ['pan', 'Pan']];
 import {
   falSceneTake, grokCoverage, isPerformanceScene, performanceBlockedReason, performanceCapability, planPerformanceWindow, shotSplitLimit,
@@ -44,8 +44,10 @@ const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
  * same for an existing gallery clip.
  *
  * The layer picker (#8985) chooses what a composed render (`layered`) shows
- * for the scene's span: its footage, its selected frame with a camera move, or
- * a title card. A plain render always plays footage, and says so.
+ * for the scene's span: its footage, its selected frame with a camera move, a
+ * title card, or a code shot the composition draws (#10297; no frame or clip
+ * controls — and, unless `documentComposition`, a note that a composed render
+ * shows it as a black frame). A plain render always plays footage, and says so.
  * The shot mode (#8977) picks Cutaway (any image-to-video lane) or Performance
  * (a singer lip-synced to the master recording). `lipSyncBackend` is the lane a
  * render would use ('' = install default); a performance shot on a lane without
@@ -69,7 +71,7 @@ export default function SceneCard({
   settingsSaving, videoBlockedReason, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
   onGenerateFrame, onGenerateVideo, onContinueVideo,
-  onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false, layered = false,
+  onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false, layered = false, documentComposition = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
   expanded, onToggleExpand, footageOptional = false, failedScenes = null,
 }) {
@@ -110,6 +112,8 @@ export default function SceneCard({
   const applyPatch = (patch) => { onEditLocal(scene.sceneId, patch); onSave(scene.sceneId, patch); };
   const layer = MUSIC_VIDEO_VISUAL_LAYERS.includes(scene.visualLayer) ? scene.visualLayer : 'footage';
   const fieldId = (name) => `mv-scene-${scene.sceneId}-${name}`;
+  // #10297: a code shot is drawn by the composition, so it has no frame or clip to make.
+  const codeShot = layered && layer === 'code';
   const performance = isPerformanceScene(scene);
   const capability = performance ? performanceCapability(lipSyncBackend) : null;
   const timedSpan = typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec
@@ -311,7 +315,7 @@ export default function SceneCard({
         )}
         {layer !== 'footage' && layered && !sceneHasAuthoredSpan(scene) && (
           <p role="alert" className="text-[11px] text-port-warning">
-            Set a start and end — a {layer === 'card' ? 'title card' : 'still'} runs for exactly its span.
+            Set a start and end — a {{ card: 'title card', code: 'code-drawn shot' }[layer] || 'still'} runs for exactly its span.
           </p>
         )}
         {performance && performanceBlocked && (
@@ -358,6 +362,12 @@ export default function SceneCard({
               className="rounded bg-port-bg border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0 text-port-text">Loop clip</button>
           </div>
         )}
+        {codeShot ? (
+          <p className="text-xs text-port-text-muted" data-testid="code-shot-note">
+            The composition draws this shot, so it needs no frame or clip.
+            {!documentComposition && ' A composed render shows it as a black frame under the typography; render from a composition document to draw it.'}
+          </p>
+        ) : (<>
         {/* Reference frame — the still image that seeds this shot (Phase 1b) */}
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
           <textarea
@@ -482,6 +492,7 @@ export default function SceneCard({
           onSelect={(take) => onSelectTake?.(scene, take)}
           onReview={(take, review) => onReviewTake?.(scene, take, review)}
           onOpenPreview={onOpenPreview} />
+        </>)}
       </div>
     </details>
     {failure && (

@@ -1090,7 +1090,7 @@ Forgets the budget and recommends lodging that exceeds it.
       expect(result.category).toBe('core_memories');
       expect(result.targetDoc).toBe('MEMORIES.md');
       // Should write to the document file and save meta
-      expect(writeFile).toHaveBeenCalled();
+      expect(atomicWrite).toHaveBeenCalledWith(expect.stringContaining('MEMORIES.md'), expect.stringContaining('My first coding project.'));
     });
 
     it('should throw for unknown category', async () => {
@@ -1117,7 +1117,7 @@ Forgets the budget and recommends lodging that exceeds it.
       });
 
       // Should write with header since file didn't exist
-      const docWriteCall = writeFile.mock.calls.find(c => c[0].includes('MEMORIES.md'));
+      const docWriteCall = atomicWrite.mock.calls.find(c => c[0].includes('MEMORIES.md'));
       expect(docWriteCall).toBeTruthy();
       expect(docWriteCall[1]).toContain('# Core Memories');
     });

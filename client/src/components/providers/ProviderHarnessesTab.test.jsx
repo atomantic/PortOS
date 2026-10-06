@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { __resetProviderCatalogCache } from '../../hooks/useProviderCatalog';
 
@@ -294,6 +294,18 @@ describe('credential bootstraps section', () => {
     }, { silent: true }));
     await waitFor(() => expect(api.getProviderCatalog).toHaveBeenCalledTimes(2));
     expect(screen.getByText('Vault wrapper')).toBeInTheDocument();
+  });
+
+  it('keeps the section open when an empty table arrives after the user expanded it', async () => {
+    let resolveTable;
+    api.getProviderBootstraps.mockReturnValue(new Promise((resolve) => { resolveTable = resolve; }));
+    renderTab();
+    const header = await screen.findByRole('button', { name: /Credential bootstraps/ });
+    fireEvent.click(header);
+    expect(header).toHaveAttribute('aria-expanded', 'true');
+    await act(async () => { resolveTable({ bootstraps: {} }); });
+    expect(header).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'Add bootstrap' })).toBeInTheDocument();
   });
 
   it('refuses a slug the composite grammar cannot carry', async () => {

@@ -55,8 +55,7 @@ export default function PersistentMindSandboxControls({ capabilities, disabled, 
   };
   return <section className="rounded border border-port-border p-4 space-y-3" aria-labelledby={`${id}-heading`}>
     <h3 id={`${id}-heading`} className="font-semibold text-port-text">Tool-free model delegation</h3>
-    <p className="text-sm text-port-text-muted">Let the mind outsource coding, text, or animation source without queueing a CoS agent. Workers receive only the context packet the mind supplies. A trusted API model checks every criterion; neither model can use OS tools or execute the result.</p>
-    <p className="text-xs text-port-text-muted">Approving a route permits its provider calls and transmission of supplied context. Choose free workers as desired; the evaluator may use paid quota. Evaluation is advisory. Keep credentials and private records out of context.</p>
+    <p className="text-sm text-port-text-muted">Let the mind send a context packet to an approved API model and have a different model check the result. Neither model gets tools or runs the output. Leave credentials and private records out of the packet.</p>
     <label htmlFor={`${id}-enabled`} className="flex gap-2 text-sm text-port-text">
       <input id={`${id}-enabled`} type="checkbox" checked={enabled} disabled={disabled || saving} onChange={(event) => setEnabled(event.target.checked)} /> Allow tool-free delegation
     </label>

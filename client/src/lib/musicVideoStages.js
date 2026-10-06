@@ -4,24 +4,36 @@
  * spend. Pure functions over the project record so the header, the progress
  * strip and the tests all read the same answer.
  */
-import { isLayeredComposition, sceneRenderReady } from './musicVideoLayers.js';
+import { isLayeredComposition, isSelfDrawnLayer, sceneRenderReady, sceneVisualLayer } from './musicVideoLayers.js';
 import {
   AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LYRICS_STEP_LABELS, AUTONOMOUS_SONG_STEP_LABELS, AUTONOMOUS_STATUS_LABELS,
 } from './musicVideoAutonomous.js';
-import { formatCount, formatTimecode } from '../utils/formatters.js';
+import { formatCount, formatDurationSec, formatTimecode } from '../utils/formatters.js';
 import { isNonBlankStr } from './textUtils';
 import { modeLabel } from './imageGenModes.js';
 import { falSceneTake } from './musicVideoShotTiming.js';
+import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
+import { FINISHED_OUTSIDE_RERENDER_NOTE, finishedOutside, finishedOutsideCovers } from '../../../server/lib/musicVideoFinishedOutside.js';
 
+/**
+ * The six steps of a music video, in the order the director decides them. The
+ * ids are the route's `:stage` values and stay stable across the relabel
+ * (#10297 follow-up): Song is `setup`, Look is `cast-sets`, Storyboard is
+ * `board`, Make is `produce` (footage and the composition over it; an
+ * animated proof is an optional check) and Final render is `review`. `doneWhen` is the one line a step
+ * shows under its title.
+ */
 export const MUSIC_VIDEO_STAGES = [
-  { id: 'setup', label: 'Setup', title: 'Setup' },
-  { id: 'cast-sets', label: 'Cast & Sets', title: 'Cast & Sets' },
-  { id: 'board', label: 'Board', title: 'Board' },
-  { id: 'produce', label: 'Produce', title: 'Produce' },
-  { id: 'compose', label: 'Compose', title: 'Compose' },
-  { id: 'review', label: 'Review', title: 'Review & Export' },
-  { id: 'publish', label: 'Publish', title: 'Publish' },
+  { id: 'setup', label: 'Song', title: 'Song', doneWhen: 'Done when the track is analyzed and every lyric word is timed to the vocal.' },
+  { id: 'cast-sets', label: 'Look', title: 'Look', doneWhen: 'Done when the art direction is written, a visual guide is chosen, and you approve it.' },
+  { id: 'board', label: 'Storyboard', title: 'Storyboard', doneWhen: 'Done when shots cover the whole song and you approve the timed storyboard.' },
+  { id: 'produce', label: 'Make', title: 'Make', doneWhen: 'Done when every shot has its picture and the composition is ready.' },
+  { id: 'review', label: 'Final render', title: 'Final render', doneWhen: 'Done when the full video is rendered from the approved plan and is up to date.' },
+  { id: 'publish', label: 'Publish', title: 'Publish', doneWhen: 'Done when every platform you turned on has a post.' },
 ];
+
+// Old links name the Compose tab, which is now part of Make.
+const LEGACY_STAGE_IDS = { compose: 'produce' };
 
 
 export const isStageId = (value) => MUSIC_VIDEO_STAGES.some((stage) => stage.id === value);
@@ -38,8 +50,11 @@ export const currentProductionRun = (project) => {
   return runs.find((r) => RESUMABLE_RUN_STATUSES.has(r.status)) || runs[runs.length - 1] || null;
 };
 
-/** Current review guidance for a stopped approval-gated run; retain other failures. */
-export function productionReviewStopGuidance(run, readiness, through = 'proof') {
+/**
+ * Current review guidance for a stopped approval-gated run; retain other failures.
+ * Runs wait on art and storyboard only: the animated proof is optional.
+ */
+export function productionReviewStopGuidance(run, readiness, through = 'storyboard') {
   const reason = run?.stopReason || run?.error;
   if (!readiness || !reason || !['blocked', 'needs-human', 'stopped', 'failed'].includes(run.status)) return null;
   const approvalStop = run.errorCode === 'MUSIC_VIDEO_APPROVAL_REQUIRED'
@@ -98,10 +113,13 @@ export function projectSpend(project) {
  * What generating the rest of the board takes (#10157): scenes still missing a
  * frame or a clip, the generation limit that covers them plus a 25% review
  * allowance, and the known fal.ai price of the missing clips. A frame, or a
- * clip on a route with no quote, counts as unpriced.
+ * clip on a route with no quote, counts as unpriced. Card and code shots in a
+ * layered composition are drawn, not generated (#10297), so they need neither.
  */
 export function boardJobEstimate(project) {
-  const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
+  const layered = isLayeredComposition(project);
+  const scenes = (Array.isArray(project?.scenes) ? project.scenes : [])
+    .filter((scene) => !isSelfDrawnLayer(sceneVisualLayer(scene, { layered })));
   const settings = project?.videoSettings || {};
   const missingFrames = scenes.filter((scene) => !scene?.referenceImageId).length;
   const missingClips = scenes.filter((scene) => !scene?.videoHistoryId);
@@ -121,13 +139,17 @@ export function boardJobEstimate(project) {
 /**
  * Everything the docked preview can play, in the order it picks a default:
  * the final render (its resolved `finalVideoSrc`), the composition document,
- * then each finished draft excerpt, newest first. While editing the
+ * then each finished draft excerpt, newest first (`draftsFirst`, on Final
+ * render, puts the drafts before the composition; `storyboardFirst`, on
+ * Storyboard, puts the live document, then the animatic, first). While editing the
  * composition (`liveFirst`, the Compose stage) the live document leads so an
  * old final render is not what the user sees by default. A final render whose
- * inputs changed is labelled out of date. Each entry has a stable `id`
- * (the `?play=` value) and a `label` for the source picker.
+ * inputs changed is labelled out of date. Last comes the storyboard animatic —
+ * the song under each shot's frame or card — so a project with a track and
+ * shots always has something to watch. Each entry has a stable `id` (the
+ * `?play=` value) and a `label` for the source picker.
  */
-export function listPreviewSources(project, { finalVideoSrc = null, liveFirst = false } = {}) {
+export function listPreviewSources(project, { finalVideoSrc = null, liveFirst = false, draftsFirst = false, storyboardFirst = false } = {}) {
   const sources = [];
   const final = project?.renderHistoryId && finalVideoSrc
     ? { id: 'final', kind: 'video', label: project.renderDependencyState?.status === 'stale' ? 'Final render (out of date)' : 'Final render', src: finalVideoSrc, startSec: 0, endSec: null }
@@ -135,14 +157,20 @@ export function listPreviewSources(project, { finalVideoSrc = null, liveFirst = 
   const live = project?.composition?.mode === 'document' && project.composition.document
     ? { id: 'document', kind: 'document', label: 'Composition (live)' }
     : null;
-  sources.push(...(liveFirst ? [live, final] : [final, live]).filter(Boolean));
-  const excerpts = (project?.excerpts || []).filter((e) => e.status === 'complete' && e.filename).reverse();
-  for (const excerpt of excerpts) {
-    sources.push({
-      id: `excerpt:${excerpt.id}`, kind: 'video', src: `/data/videos/${excerpt.filename}`,
-      startSec: excerpt.startSec, endSec: excerpt.endSec,
-      label: `${excerpt.dependencyState?.status === 'stale' ? 'Older draft' : 'Draft'} ${formatTimecode(excerpt.startSec)}–${formatTimecode(excerpt.endSec)} · ${excerpt.id.slice(-6)}`,
-    });
+  const drafts = (project?.excerpts || []).filter((e) => e.status === 'complete' && e.filename).reverse().map((excerpt) => ({
+    id: `excerpt:${excerpt.id}`, kind: 'video', src: `/data/videos/${excerpt.filename}`,
+    startSec: excerpt.startSec, endSec: excerpt.endSec,
+    label: `${excerpt.dependencyState?.status === 'stale' ? 'Older draft' : 'Draft'} ${formatTimecode(excerpt.startSec)}–${formatTimecode(excerpt.endSec)} · ${excerpt.id.slice(-6)}`,
+  }));
+  // Final render is reviewed by watching its drafts until the final render exists.
+  const ordered = liveFirst || storyboardFirst ? [live, final, ...drafts] : draftsFirst ? [final, ...drafts, live] : [final, live, ...drafts];
+  sources.push(...ordered.filter(Boolean));
+  if (projectHasAudio(project) && (project?.scenes || []).length > 0) {
+    const animatic = { id: 'animatic', kind: 'animatic', label: 'Storyboard animatic' };
+    // On Storyboard the storyboard itself leads (the live document, else the animatic): a draft
+    // clip covers only its own range, so most shots could not be played from it.
+    if (storyboardFirst) sources.splice(live ? 1 : 0, 0, animatic);
+    else sources.push(animatic);
   }
   return sources;
 }
@@ -153,38 +181,14 @@ const PRODUCTION_RUN_LABELS = {
   'limit-reached': 'Production at its limit', 'needs-replan': 'Production needs a replan',
 };
 
-const APPROVAL_LABELS = { art: 'art', storyboard: 'storyboard', proof: 'proof' };
-
-/** One line for the production-approval gate: which of the three approvals the current revision holds. */
-export function approvalSummary(readiness) {
-  if (!readiness) return null;
-  const keys = Object.keys(APPROVAL_LABELS);
-  const approved = keys.filter((key) => readiness[key]?.approved).length;
-  const missing = keys.filter((key) => !readiness[key]?.approved).map((key) => APPROVAL_LABELS[key]);
-  return approved === keys.length ? 'All 3 approved' : `${approved} of 3 approved · needs ${missing.join(', ')}`;
-}
-
 /**
- * The project's "where does it stand" line for the sticky header: the stage it
- * is in (and whether that stage is waiting on the director), plus short facts
- * for the autopilot run, the production run, the approvals and what there is to
- * watch. `progress` is `deriveStages(…)`; `nextAction` is `deriveNextAction(…)`.
- * Fact tones are `ok`, `warn` or `muted`.
+ * What the header's Autopilot button says: the autonomous run's current step or
+ * state, else a live or parked production run, else just "Autopilot". Tones are
+ * `ok`, `warn` or `muted`; `short` is the phone label.
  */
-export function describeProjectStatus(project, { progress, nextAction = null, readiness = project?.productionReadiness } = {}) {
-  if (!project || !progress) return null;
-  const index = MUSIC_VIDEO_STAGES.findIndex((stage) => stage.id === progress.current);
-  const entry = progress.stages.find((stage) => stage.id === progress.current);
-  const allDone = progress.stages.every((stage) => stage.state === 'done');
-  // A goto into Production review is a human approval, not something the app does by itself.
-  const needsYou = entry?.state === 'blocked' || nextAction?.id === 'review-production' || nextAction?.id === 'approve-cast-sets';
-  const activeEvidence = ['draft-progress', 'proof-progress'].includes(nextAction?.id);
-  const headline = activeEvidence ? 'Review render in progress' : allDone
-    ? 'Published'
-    : `Stage ${index + 1} of ${MUSIC_VIDEO_STAGES.length}: ${entry?.label || ''}${needsYou ? ' · needs you' : ''}`;
-  const facts = [];
-  const auto = project.autonomousRun;
-  if (auto && nextAction?.id !== 'review-production' && !activeEvidence) {
+export function autopilotStatus(project) {
+  const auto = project?.autonomousRun;
+  if (auto && auto.status !== 'canceled') {
     let label;
     if (auto.status === 'running' && !auto.interrupted) {
       const step = auto.stages?.[auto.stage]?.step;
@@ -197,21 +201,47 @@ export function describeProjectStatus(project, { progress, nextAction = null, re
       label = `Autonomous run ${statusLabel}`;
     }
     const tone = auto.status === 'completed' ? 'ok' : auto.status === 'running' && !auto.interrupted ? 'muted' : 'warn';
-    facts.push({ id: 'autopilot', label, tone });
+    if (auto.status !== 'completed') return { label, short: tone === 'warn' ? 'Autopilot needs you' : 'Autopilot running', tone };
   }
   const run = currentProductionRun(project);
   if (run && RESUMABLE_RUN_STATUSES.has(run.status)) {
-    facts.push({ id: 'production', label: PRODUCTION_RUN_LABELS[run.status] || 'Production paused', tone: run.status === 'running' ? 'muted' : 'warn' });
+    const running = run.status === 'running';
+    return { label: PRODUCTION_RUN_LABELS[run.status] || 'Production paused', short: running ? 'Autopilot running' : 'Autopilot needs you', tone: running ? 'muted' : 'warn' };
   }
-  const approvals = approvalSummary(readiness);
-  const showApprovals = progress.current !== 'setup' || (project.scenes || []).length > 0;
-  if (approvals && showApprovals) facts.push({ id: 'approvals', label: `Approvals: ${approvals}`, tone: readiness.readyForProduction ? 'ok' : 'warn' });
-  const drafts = (project.excerpts || []).filter((e) => e.status === 'complete' && e.filename).length;
-  if (isFinalRenderStale(project)) facts.push({ id: 'render', label: STALE_RENDER_MESSAGE, tone: 'warn' });
-  else if (project.renderHistoryId) facts.push({ id: 'render', label: 'Final render ready', tone: 'ok' });
-  else if (drafts) facts.push({ id: 'render', label: `${drafts} draft ${drafts === 1 ? 'excerpt' : 'excerpts'}, no final render`, tone: 'muted' });
-  else facts.push({ id: 'render', label: 'Nothing rendered yet', tone: 'muted' });
-  return { headline, tone: activeEvidence ? 'muted' : allDone ? 'ok' : needsYou ? 'warn' : 'muted', facts };
+  return { label: 'Autopilot', short: 'Autopilot', tone: 'muted' };
+}
+
+/**
+ * The project's "where does it stand" line for the sticky header: the step it
+ * is in, or the step waiting on the director (`needsYouStage`, also marked in
+ * the step list). A stopped step, an approval to give (`review-production`,
+ * which may sit on a later step than the first unfinished one), a Cast & Sets
+ * check-in or an autonomous checkpoint all need the director. `progress` is
+ * `deriveStages(…)`; `nextAction` is `deriveNextAction(…)`.
+ */
+export function describeProjectStatus(project, { progress, nextAction = null, reviewingDraft = false, reviewDraftState } = {}) {
+  if (!project || !progress) return null;
+  const entry = progress.stages.find((stage) => stage.id === progress.current);
+  const allDone = progress.stages.every((stage) => stage.state === 'done');
+  const blocked = entry?.state === 'blocked';
+  const asksForYou = ['review-production', 'approve-cast-sets', 'review-autonomous'].includes(nextAction?.id);
+  const needsYou = blocked || asksForYou;
+  const needsYouStage = !needsYou ? null : blocked ? progress.current
+    : nextAction.id === 'approve-cast-sets' ? 'cast-sets' : nextAction.stage || progress.current;
+  const shownId = needsYouStage || progress.current;
+  const index = MUSIC_VIDEO_STAGES.findIndex((stage) => stage.id === shownId);
+  const shown = progress.stages.find((stage) => stage.id === shownId);
+  const activeEvidence = ['draft-progress', 'proof-progress'].includes(nextAction?.id);
+  const reviewDraft = reviewingDraft && reviewDraftState ? reviewDraftState.draft : latestMusicVideoReviewDraft(project);
+  const headline = reviewingDraft ? reviewDraftState?.checking ? 'Checking review draft' : reviewDraft ? 'Imported draft for review' : 'Choose an available review file' : activeEvidence ? 'Review render in progress' : allDone
+    ? 'Published'
+    : `Step ${index + 1} of ${MUSIC_VIDEO_STAGES.length}: ${shown?.label || ''}${needsYou ? ' needs you' : ''}`;
+  const quiet = reviewingDraft || activeEvidence || allDone;
+  return {
+    headline,
+    tone: reviewingDraft || activeEvidence ? 'muted' : allDone ? 'ok' : needsYou ? 'warn' : 'muted',
+    needsYouStage: quiet ? null : needsYouStage,
+  };
 }
 
 export const STALE_RENDER_MESSAGE = 'Final render is out of date — re-render';
@@ -235,8 +265,8 @@ export function publishPlatformProgress(project, publish = {}) {
   return { rows, posted, total: rows.length, done: rows.length ? posted === rows.length : posted > 0 };
 }
 
-/** Resolve the `:stage` route param; an unknown or missing value is null. */
-export const resolveStageParam = (value) => (isStageId(value) ? value : null);
+/** Resolve the `:stage` route param (a retired id maps to its step); an unknown or missing value is null. */
+export const resolveStageParam = (value) => (isStageId(value) ? value : LEGACY_STAGE_IDS[value] || null);
 
 // Footage-optional modes draw their own picture, so scene footage never gates Produce.
 export const FOOTAGE_OPTIONAL_MODES = new Set(['code', 'document', 'eidoverse']);
@@ -279,11 +309,9 @@ export function lyricSetupState(project, readiness = project?.productionReadines
  * changed since — plus `current`, the first stage that is not done. A live production
  * run owns the project, so it pins `current` to Produce.
  *
- * The animated proof is the last step of Compose (#10140): its basis covers the
- * whole composition (typography, grade), so it can only be judged once that
- * work exists. Produce is done on footage alone; Compose needs the composition
- * work and an approved proof over it. A later typography or grade edit makes
- * the proof stale on Compose without reopening Produce.
+ * Make (`produce`) holds the footage and the composition over it. Its animated
+ * proof is an optional check: the composition preview already shows the
+ * picture, so neither Make nor the final render waits on a proof approval.
  */
 export function deriveStages(project, readiness = project?.productionReadiness, publish = {}) {
   const scenes = project?.scenes || [];
@@ -303,23 +331,24 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
     setup: projectHasAudio(project) && !!project?.audioAnalysis && lyricSetupState(project, readiness).ok,
     'cast-sets': castDone,
     board: planned,
-    produce: produceDone,
-    compose: composeDone(project || {}, mode) && !!readiness?.proof.approved,
+    produce: produceDone && composeDone(project || {}, mode),
     // A render made before later scene edits no longer counts as the final video.
     review: !!project?.renderHistoryId && !isFinalRenderStale(project),
     // #9281/#9282: published once every enabled platform has a recorded post.
     publish: publishPlatformProgress(project, publish).done,
   };
+  // Finished outside PortOS: the steps it made elsewhere count as done, with no approval to go stale.
+  const external = !!finishedOutside(project);
+  if (external) for (const id of Object.keys(done)) if (finishedOutsideCovers(project, id)) done[id] = true;
   const blocked = {
     'cast-sets': castStopped,
     produce: !!run && RUN_BLOCKED_STATUSES.has(run.status),
   };
   // Approved earlier, inputs changed since (#10141): the tab says so rather than
   // reading as never done. The check-in sheet stays approved while stale.
-  const stale = {
+  const stale = external ? {} : {
     'cast-sets': !!readiness?.art?.stale || !!readiness?.castAndSets?.stale,
     board: !!readiness?.storyboard?.stale,
-    compose: !!readiness?.proof?.stale,
   };
   const current = liveRun
     ? 'produce'
@@ -335,7 +364,8 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
 
 /**
  * The single primary action the sticky header offers. `kind: 'run'` calls a
- * handler the page owns (keyed by `id`); `kind: 'goto'` opens a stage (and
+ * handler the page owns (keyed by `id`); `kind: 'open'` opens a Project
+ * settings tab (`review-autonomous` → Autopilot); `kind: 'goto'` opens a stage (and
  * optionally scrolls to `anchor`). `label` is the full control name; `shortLabel`
  * is what a phone shows so the project name keeps room. `disabled` carries the
  * reason it can't run yet. A live production run, a render in flight and a
@@ -352,7 +382,7 @@ export function deriveNextAction(project, {
   const cast = project.castAndSets || null;
   const scenes = project.scenes || [];
 
-  if (proofActive) return { id: 'proof-progress', kind: 'goto', stage: 'compose', anchor: 'mv-review-render', label: 'View review render', shortLabel: 'Review' };
+  if (proofActive) return { id: 'proof-progress', kind: 'goto', stage: 'produce', anchor: 'mv-review-render', label: 'View review render', shortLabel: 'Review' };
   if (draftActive) return { id: 'draft-progress', kind: 'goto', stage: 'review', anchor: 'mv-draft-excerpts', label: 'View draft render', shortLabel: 'Draft' };
   const art = !readiness?.art.approved;
   const board = !readiness?.storyboard.approved;
@@ -360,17 +390,20 @@ export function deriveNextAction(project, {
   // nothing built yet (no check-in, no shots) offers Start / Plan, and an open
   // or interrupted check-in offers Approve / Resume — those come from the stage switch below.
   const castNeedsOwnAction = art && ((!cast && scenes.length === 0) || (cast && (cast.status === 'review' || cast.interrupted || cast.status === 'failed')));
-  const boardNeedsOwnAction = !art && board && scenes.length === 0;
-  // The proof closes Compose, so it waits until Produce is done — unless a
-  // production run is parked on its pilot proof, which only the approval frees.
-  const proofDue = current !== 'produce' || (!!run && RESUMABLE_RUN_STATUSES.has(run.status));
-  if (projectHasAudio(project) && project.audioAnalysis && !CAST_WORKING.has(cast?.status) && !readiness?.readyForProduction && (art || board || proofDue)
+  // A document storyboard brings its shots from the authored source, so it has nothing to plan on the board.
+  const draftReview = project.productionReview?.draft || {};
+  const documentShots = draftReview.storyboardSource === 'document' && (draftReview.storyboard || []).length > 0;
+  const boardNeedsOwnAction = !art && board && scenes.length === 0 && !documentShots;
+  // The animated proof is optional, so the header sends the director to it only
+  // when a production run is parked on its pilot proof before paid bulk generation.
+  const pilotParked = !!run && RESUMABLE_RUN_STATUSES.has(run.status) && !!run.pilot?.scenes?.length && !readiness?.proof?.approved;
+  if (!finishedOutside(project) && projectHasAudio(project) && project.audioAnalysis && !CAST_WORKING.has(cast?.status) && (art || board || pilotParked)
     && run?.status !== 'running' && !renderActive && !kickoffRunning
     && !castNeedsOwnAction && !boardNeedsOwnAction) {
-    return { id: 'review-production', kind: 'goto', stage: art ? 'cast-sets' : board ? 'board' : 'compose',
+    return { id: 'review-production', kind: 'goto', stage: art ? 'cast-sets' : board ? 'board' : 'produce',
       anchor: art ? 'mv-review-art' : board ? 'mv-review-storyboard' : 'mv-review-proof',
-      label: art ? 'Review art direction' : board ? 'Review timed storyboard' : 'Review animated proof',
-      shortLabel: art ? 'Art' : board ? 'Board' : 'Proof' };
+      label: art ? 'Review art direction' : board ? 'Review timed storyboard' : 'Review pilot proof',
+      shortLabel: art ? 'Review art' : board ? 'Review storyboard' : 'Review proof' };
   }
   if (run && RESUMABLE_RUN_STATUSES.has(run.status)) {
     if (run.status === 'running' && !run.interrupted) return { id: 'stop-production', kind: 'run', label: 'Stop production', shortLabel: 'Stop', runId: run.id };
@@ -401,7 +434,8 @@ export function deriveNextAction(project, {
     }
     if (auto.status === 'awaiting-approval') {
       const target = AUTONOMOUS_CHECKPOINT_LABELS[auto.awaiting] || auto.awaiting || 'checkpoint';
-      return { id: 'review-autonomous', kind: 'goto', stage: 'setup', anchor: 'mv-auto-edit', label: `Review ${target}`, shortLabel: 'Review' };
+      // The checkpoint editor is in Project settings › Autopilot; the page opens it.
+      return { id: 'review-autonomous', kind: 'open', label: `Review ${target}`, shortLabel: 'Review' };
     }
     if (auto.interrupted || auto.status === 'stopped' || auto.status === 'needs-human') {
       return { id: 'resume-autonomous', kind: 'run', label: 'Resume autonomous run', shortLabel: 'Resume' };
@@ -417,7 +451,11 @@ export function deriveNextAction(project, {
       if (project.automation && scenes.length === 0) {
         return { id: 'kickoff', kind: 'run', label: 'Run autopilot', shortLabel: 'Autopilot', disabled: !!kickoffBlockedReason, reason: kickoffBlockedReason || undefined };
       }
-      return { id: 'analyze', kind: 'run', label: 'Analyze song', shortLabel: 'Analyze' };
+      if (!project.audioAnalysis) return { id: 'analyze', kind: 'run', label: 'Analyze song', shortLabel: 'Analyze' };
+      // Analyzed: what keeps Song open is the lyrics or their timing, finished on the step itself.
+      return lyricSetupState(project, readiness).imported
+        ? { id: 'verify-timing', kind: 'goto', stage: 'setup', anchor: 'mv-lyric-timing', label: 'Verify lyric timing', shortLabel: 'Timing' }
+        : { id: 'import-lyrics', kind: 'goto', stage: 'setup', anchor: 'mv-lyrics-import', label: 'Add the lyrics', shortLabel: 'Lyrics' };
     case 'cast-sets':
       if (cast?.status === 'review') return { id: 'approve-cast-sets', kind: 'run', label: 'Approve cast & sets', shortLabel: 'Approve' };
       if (cast && (cast.interrupted || cast.status === 'failed')) return { id: 'resume-cast-sets', kind: 'run', label: 'Resume cast & sets', shortLabel: 'Resume' };
@@ -426,18 +464,25 @@ export function deriveNextAction(project, {
       return { id: 'kickoff', kind: 'run', label: 'Run autopilot', shortLabel: 'Autopilot', disabled: !!kickoffBlockedReason, reason: kickoffBlockedReason || undefined };
     case 'board':
       return { id: 'plan', kind: 'run', label: 'Plan the shots', shortLabel: 'Plan', disabled: !project.audioAnalysis, reason: project.audioAnalysis ? undefined : 'Analyze the track first' };
-    case 'produce':
+    case 'produce': {
+      const footageDone = FOOTAGE_OPTIONAL_MODES.has(project.composition?.mode || 'concat')
+        || scenes.every((scene) => sceneRenderReady(scene, { layered: isLayeredComposition(project) }));
       if (run?.status === 'needs-human') return { id: 'goto-review', kind: 'goto', stage: 'review', label: 'Review the draft', shortLabel: 'Review' };
-      return { id: 'goto-produce', kind: 'goto', stage: 'produce', anchor: 'mv-production-start', label: 'Set up production', shortLabel: 'Produce' };
-    case 'compose': {
+      if (!footageDone) return { id: 'goto-produce', kind: 'goto', stage: 'produce', anchor: 'mv-generation', label: 'Make the footage', shortLabel: 'Make' };
       const label = { document: 'Attach a composition', eidoverse: 'Save the Eidoverse scene', code: 'Generate the code video' }[project.composition?.mode] || 'Add typography';
       const shortLabel = { document: 'Attach', eidoverse: 'Save', code: 'Generate' }[project.composition?.mode] || 'Type';
-      return { id: 'goto-compose', kind: 'goto', stage: 'compose', label, shortLabel };
+      return { id: 'goto-compose', kind: 'goto', stage: 'produce', anchor: 'mv-composition', label, shortLabel };
     }
-    case 'publish':
-      return project.publishKit?.builtAt
-        ? { id: 'goto-publish', kind: 'goto', stage: 'publish', label: 'Publish the release', shortLabel: 'Publish' }
-        : { id: 'goto-publish', kind: 'goto', stage: 'publish', label: 'Build the publishing kit', shortLabel: 'Kit' };
+    case 'publish': {
+      if (!project.publishKit?.builtAt) return { id: 'goto-publish', kind: 'goto', stage: 'publish', label: 'Build the publishing kit', shortLabel: 'Kit' };
+      // One platform at a time, never "publish everything": the next platform
+      // not yet posted, so a click can't repeat a post that already went out.
+      const { rows, total, posted } = publishPlatformProgress(project, publish);
+      const next = rows.find((row) => row.state !== 'posted');
+      return next
+        ? { id: 'goto-publish', kind: 'goto', stage: 'publish', anchor: publishRowAnchor(next.target), label: `Next: post to ${next.label} · ${total - posted} left`, shortLabel: next.label }
+        : { id: 'goto-publish', kind: 'goto', stage: 'publish', anchor: PUBLISH_ANCHOR, label: total ? 'All posted' : 'Open publishing', shortLabel: 'Publish' };
+    }
     default:
       if (isFinalRenderStale(project)) {
         return {
@@ -466,15 +511,19 @@ export function changedFieldsText(changedFields, limit = 4) {
   return `${changedFields.slice(0, limit).join(', ')}${more}`;
 }
 const APPROVAL_ANCHORS = { art: 'mv-review-art', storyboard: 'mv-review-storyboard', proof: 'mv-review-proof' };
-const APPROVAL_STAGES = { art: 'cast-sets', storyboard: 'board', proof: 'compose' };
+const APPROVAL_STAGES = { art: 'cast-sets', storyboard: 'board', proof: 'produce' };
 const PUBLISH_ANCHOR = 'mv-publish-kit';
+/** The anchor of one platform's row in the posting panel. */
+export const publishRowAnchor = (target) => `mv-post-${target}`;
 
 // Storyboard readiness problems, grouped by what the user has to go fix. The
 // server returns plain sentences; the first matching rule picks the group.
 const STORYBOARD_PROBLEM_GROUPS = [
   { id: 'art', label: 'Art direction', test: /art direction|art feedback/i, action: { label: 'Review art direction', anchor: APPROVAL_ANCHORS.art } },
-  { id: 'lyrics', label: 'Lyrics', test: /lyrics|instrumental/i, action: { label: 'Import lyrics', anchor: 'mv-lyrics-import' } },
-  { id: 'timing', label: 'Lyric timing', test: /alignment|timing|vocal|master song/i, action: { label: 'Verify timing', anchor: APPROVAL_ANCHORS.storyboard } },
+  // A document storyboard needs a manifest from its current build; its message mentions timing, so it is matched first.
+  { id: 'manifest', label: 'Document shot manifest', test: /shot manifest/i, action: { label: 'Import the shot manifest', anchor: 'mv-review-planning' } },
+  { id: 'lyrics', label: 'Lyrics', test: /lyrics|instrumental/i, action: { label: 'Import lyrics', stage: 'setup', anchor: 'mv-lyrics-import' } },
+  { id: 'timing', label: 'Lyric timing', test: /alignment|timing|vocal|master song/i, action: { label: 'Verify timing', stage: 'setup', anchor: 'mv-lyric-timing' } },
   { id: 'coverage', label: 'Shot coverage', test: /cover the master|gaps or overlaps|create a timed/i, action: { label: 'Open the treatment', anchor: 'mv-board-treatment' } },
   { id: 'shots', label: 'Shot details', test: /./, action: { label: 'Edit the storyboard', anchor: APPROVAL_ANCHORS.storyboard } },
 ];
@@ -517,6 +566,11 @@ export function stageChecklist(stageId, project, readiness = project?.production
       revert: !approved && stale && readiness[key].stale.revertible?.length ? { stage: key, fields: readiness[key].stale.revertible } : null,
     };
   };
+  const external = finishedOutsideCovers(project, stageId) ? finishedOutside(project) : null;
+  if (external) {
+    return [{ id: 'finished-outside', label: 'Finished outside PortOS', done: true,
+      detail: external.note || 'Marked finished in Project settings; no approval is recorded here.' }];
+  }
   switch (stageId) {
     case 'setup': {
       // An autonomous run that is still going writes the song itself.
@@ -526,16 +580,16 @@ export function stageChecklist(stageId, project, readiness = project?.production
       return [
         { id: 'track', label: 'Track attached', done: hasAudio, detail: !hasAudio && autoSong ? 'The autonomous run is making the song.' : null,
           action: hasAudio || autoSong ? null : { label: 'Attach a track', anchor: 'mv-track' } },
-        { id: 'analysis', label: 'Song analyzed', done: !!project.audioAnalysis, detail: project.audioAnalysis ? null : 'Analyze the song from the header or Song & lyrics.',
-          action: project.audioAnalysis ? null : { label: 'Open Song & lyrics', anchor: 'mv-setup-song' } },
-        { id: 'lyrics', label: lyrics.instrumental ? 'Instrumental — no lyrics needed' : 'Lyrics imported', done: lyrics.imported || lyrics.ok,
-          detail: 'Import the lyrics, or mark the song instrumental in Production approvals.',
+        { id: 'analysis', label: 'Song analyzed', done: !!project.audioAnalysis,
+          action: project.audioAnalysis ? null : { label: 'Analyze', anchor: 'mv-analyze' } },
+        { id: 'lyrics', label: lyrics.instrumental ? 'Instrumental, no lyrics needed' : 'Lyrics imported', done: lyrics.imported || lyrics.ok,
+          detail: 'Import the lyrics, or mark the song instrumental under Time and verify.',
           action: autoSong ? null : { label: 'Import lyrics', anchor: 'mv-lyrics-import' } },
-        { id: 'timing', label: lyrics.instrumental ? 'Instrumental exception confirmed' : 'Lyric timing verified', done: lyrics.verified || lyrics.ok,
+        { id: 'timing', label: lyrics.instrumental ? 'Instrumental confirmed' : 'Lyric timing verified', done: lyrics.verified || lyrics.ok,
           detail: lyrics.alignment === 'stale' ? 'Word timings or the master changed since you verified them; verify again.'
-            : lyrics.instrumental ? 'Explain the instrumental exception in Production approvals.'
-              : 'Align the words, listen to them against the vocal, then verify the timing in Production approvals.',
-          action: autoSong ? null : { label: 'Verify timing', anchor: APPROVAL_ANCHORS.storyboard } },
+            : lyrics.instrumental ? 'Confirm the song is instrumental under Time and verify.'
+              : 'Align the words, listen back, then mark the timing verified under Time and verify.',
+          action: autoSong ? null : { label: 'Verify timing', anchor: 'mv-lyric-timing' } },
       ];
     }
     case 'cast-sets': {
@@ -552,30 +606,33 @@ export function stageChecklist(stageId, project, readiness = project?.production
     }
     case 'board': {
       const planned = scenes.length > 0 || (draft.storyboard || []).length > 0;
+      const problems = storyboardProblemItems(readiness);
+      const storyboardApproval = approval('storyboard', 'Timed storyboard', 'Ready for your review below.');
       return [
         { id: 'shots', label: 'Shots planned', done: planned, detail: planned ? null : 'Plan the shots from the header, or add scenes by hand.',
           action: planned ? null : { label: 'Open the treatment', anchor: 'mv-board-treatment' } },
-        ...storyboardProblemItems(readiness),
-        approval('storyboard', 'Timed storyboard', 'Ready for your review below.'),
+        ...problems,
+        // The problems are listed above, one row per group; the approval row need not repeat the first.
+        // A stale approval keeps its "changed since" text: it is the only place the checklist names what changed.
+        problems.length && !storyboardApproval.stale ? { ...storyboardApproval, detail: 'Approve once the items above are done.' } : storyboardApproval,
       ];
     }
     case 'produce': {
-      if (FOOTAGE_OPTIONAL_MODES.has(mode)) {
-        const planned = !!readiness?.storyboard?.approved;
-        return [{ id: 'footage', label: 'No footage needed for this render style', done: planned,
-          action: planned ? null : { label: 'Review timed storyboard', anchor: APPROVAL_ANCHORS.storyboard } }];
+      // Make: footage (unless the render style draws its own picture), the
+      // composition over it, then the optional proof (see deriveStages).
+      const items = [];
+      if (!FOOTAGE_OPTIONAL_MODES.has(mode)) {
+        const layered = isLayeredComposition(project);
+        const ready = scenes.filter((scene) => sceneRenderReady(scene, { layered })).length;
+        const footageDone = scenes.length > 0 && ready === scenes.length;
+        items.push({ id: 'footage', label: `Footage for every shot (${formatCount(ready)} of ${formatCount(scenes.length)})`, done: footageDone,
+          action: footageDone ? null : { label: 'Make the footage', anchor: 'mv-generation' } });
       }
-      const layered = isLayeredComposition(project);
-      const ready = scenes.filter((scene) => sceneRenderReady(scene, { layered })).length;
-      const footageDone = scenes.length > 0 && ready === scenes.length;
-      return [{ id: 'footage', label: `Footage for every shot (${formatCount(ready)} of ${formatCount(scenes.length)})`, done: footageDone,
-        action: footageDone ? null : { label: 'Show shots missing footage', stage: 'board', params: { scenes: 'missing' }, anchor: 'mv-scene-board' } }];
-    }
-    case 'compose': {
-      // The proof closes Compose: it is judged over the finished composition (see deriveStages).
-      const proof = approval('proof', 'Animated proof', 'Render the proof over this composition, watch it with sound, then approve it below.');
+      const proofApproval = approval('proof', 'Animated proof', null);
+      // Optional: shown so it can be found, never counted toward the step being done.
+      const proof = { ...proofApproval, label: proofApproval.done ? proofApproval.label : 'Animated proof (optional)', optional: true, detail: null };
       const composition = project.composition || {};
-      let work = { id: 'composition', label: 'Nothing to compose for this render style', done: true };
+      let work = null;
       if (mode === 'composed') work = { id: 'composition', label: 'Timed typography added', done: (composition.textCues || []).length > 0, action: { label: 'Add typography', anchor: 'mv-typo-font' } };
       else if (mode === 'document') work = { id: 'composition', label: 'Composition document attached', done: !!composition.document, action: { label: 'Attach a document', anchor: 'mv-doc-folder' } };
       else if (mode === 'eidoverse') {
@@ -587,12 +644,12 @@ export function stageChecklist(stageId, project, readiness = project?.production
           detail: done ? null : 'Generate the code video from the Code Video panel.',
           action: done ? null : { label: 'Open Code Video', anchor: 'mv-code-section' } };
       }
-      return [work, proof];
+      return [...items, ...(work ? [work] : []), proof];
     }
     case 'review':
       return [{
         id: 'final', label: 'Final video rendered', done: !!project.renderHistoryId && !isFinalRenderStale(project),
-        detail: isFinalRenderStale(project) ? `${STALE_RENDER_MESSAGE}.` : null,
+        detail: isFinalRenderStale(project) ? `${STALE_RENDER_MESSAGE}.${finishedOutside(project) && !readiness?.readyForProduction ? ` ${FINISHED_OUTSIDE_RERENDER_NOTE}` : ''}` : null,
         action: project.renderHistoryId && !isFinalRenderStale(project) ? null : { label: project.renderHistoryId ? 'Re-render' : 'Render', anchor: 'mv-final-video' },
       }];
     case 'publish': {
@@ -608,12 +665,54 @@ export function stageChecklist(stageId, project, readiness = project?.production
       if (!progress.rows.length) return [...items, { id: 'posted', label: 'Posted to a platform', done: progress.done, action: progress.done ? null : { label: 'Open publishing', anchor: PUBLISH_ANCHOR } }];
       items.push({ id: 'posted', label: `Posted to every enabled platform (${formatCount(progress.posted)} of ${formatCount(progress.total)})`, done: progress.done, action: progress.done ? null : { label: 'Open publishing', anchor: PUBLISH_ANCHOR } });
       const STATE_LABELS = { posted: 'posted', draft: 'draft filled', none: 'not started' };
-      for (const row of progress.rows) items.push({ id: `post-${row.target}`, label: `${row.label}: ${STATE_LABELS[row.state]}`, done: row.state === 'posted', action: row.state === 'posted' ? null : { label: 'Open publishing', anchor: PUBLISH_ANCHOR } });
+      for (const row of progress.rows) {
+        items.push({
+          id: `post-${row.target}`, label: `${row.label}: ${STATE_LABELS[row.state]}`, done: row.state === 'posted',
+          action: row.state === 'posted' ? null : { label: row.state === 'draft' ? 'Finish this post' : 'Post here', anchor: publishRowAnchor(row.target) },
+        });
+      }
       return items;
     }
     default:
       return [];
   }
+}
+
+/**
+ * One short fact per step for the step list, so where the project stands reads
+ * without opening any step: the song's length and lyric count, the visual
+ * guide, the shot count, how many shots have their picture, the final render's
+ * state and how many platforms have a post. Keyed by stage id; a step with
+ * nothing to say yet maps to an empty string.
+ */
+export function stepNotes(project, readiness = project?.productionReadiness, publish = {}) {
+  if (!project) return {};
+  const scenes = project.scenes || [];
+  const lines = (project.lyricCues || []).filter((cue) => isNonBlankStr(cue.text)).length;
+  const duration = project.audioAnalysis?.durationSec;
+  const lyrics = lyricSetupState(project, readiness);
+  const song = [
+    Number.isFinite(duration) ? formatDurationSec(duration) : projectHasAudio(project) ? 'Track attached' : 'No track yet',
+    lyrics.instrumental ? 'instrumental' : lines ? `${formatCount(lines)} lyric ${lines === 1 ? 'line' : 'lines'}` : null,
+  ].filter(Boolean).join(' · ');
+  const draft = project.productionReview?.draft || {};
+  const guide = (project.devArtifacts || []).find((a) => a.id === draft.guideArtifactId && !a.deleted);
+  const look = guide ? 'Visual guide chosen' : project.castAndSets ? 'Cast and sets built' : '';
+  const board = scenes.length ? `${formatCount(scenes.length)} ${scenes.length === 1 ? 'shot' : 'shots'}` : '';
+  const mode = project.composition?.mode || 'concat';
+  let make = '';
+  if (scenes.length && !FOOTAGE_OPTIONAL_MODES.has(mode)) {
+    const layered = isLayeredComposition(project);
+    const ready = scenes.filter((scene) => sceneRenderReady(scene, { layered })).length;
+    make = `${formatCount(ready)} of ${formatCount(scenes.length)} shots have their picture`;
+  } else if (scenes.length) make = 'Picture drawn by the composition';
+  // Before a final render, the drafts and proofs to watch are what Final render holds.
+  const drafts = (project.excerpts || []).filter((e) => e.status === 'complete' && e.filename).length;
+  const review = isFinalRenderStale(project) ? 'Out of date' : project.renderHistoryId ? 'Rendered'
+    : drafts ? `${formatCount(drafts)} ${drafts === 1 ? 'draft' : 'drafts'} to watch` : '';
+  const posts = publishPlatformProgress(project, publish);
+  const publishNote = posts.total ? `${formatCount(posts.posted)} of ${formatCount(posts.total)} posted` : posts.posted ? 'Posted' : '';
+  return { setup: song, 'cast-sets': look, board, produce: make, review, publish: publishNote };
 }
 
 /**

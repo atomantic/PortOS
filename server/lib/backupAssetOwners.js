@@ -1,5 +1,9 @@
 /**
  * Inventory of durable asset owners for backup snapshot consistency (#9923).
+ * Scope: enumerated managed runtime writers using the shared install protocol.
+ * External tools and preexisting corruption are outside this concurrency claim.
+ * Startup migrations finish before backup routes/scheduling become available.
+ * New managed byte-plus-record workflows must enter this inventory.
  * An owner is one workflow that writes, replaces or deletes bytes under `data/`
  * together with a row (PostgreSQL or a `data/` record) that names them.
  *
@@ -13,10 +17,12 @@
  *   neither captured.
  * - `reference-only`: writes rows naming bytes that were already durable before
  *   its trigger was published, and writes no bytes itself, so there is no gap
- *   for a cut to land in. A deletion that commits the row that stops naming
- *   its bytes before it removes them belongs here too: the dump that follows a
+ *   for a cut to land in. A deletion that commits the PostgreSQL row that stops
+ *   naming its bytes before it removes them belongs here too: the dump that follows a
  *   cut's file copy either sees no row, or sees one whose bytes were removed
- *   only after the copy finished. So does a record whose bytes no row names:
+ *   only after the copy finished. File-primary indexes require admission because
+ *   their copy order relative to referenced bytes is not guaranteed. So does a
+ *   record whose bytes no row names:
  *   the copy takes it whole or not at all, and no dumped row can dangle.
  * - `outstanding`: still changes bytes and rows outside admission.
  *
@@ -69,6 +75,27 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
       'services/creativeDirector/completionHook.js',
     ],
   },
+  {
+    // Creative Director audio passes replace a video already named by history.
+    // Each mux encodes outside admission and leases only installation/rollback.
+    id: 'pipeline-audio-mux-installation',
+    status: 'admitted',
+    modules: ['services/pipeline/audioMux.js'],
+  },
+  {
+    // Final/rough-cut rows name the existing timeline history entry; these
+    // callers' audio replacements are admitted by the shared mux helpers.
+    id: 'creative-director-cut-settlement',
+    status: 'reference-only',
+    modules: ['services/creativeDirector/stitchRunner.js', 'services/creativeDirector/videoAssembly.js'],
+  },
+  {
+    // Reads existing assets, transforms in buffers, returns a ZIP response.
+    // No durable file or row is written by either making-of module.
+    id: 'music-video-making-of-export',
+    status: 'reference-only',
+    modules: ['services/musicVideo/makingOf.js', 'services/musicVideo/makingOfVisuals.js'],
+  },
   { id: 'music-video-production-settlement', status: 'reference-only', modules: ['services/musicVideo/productionService.js'] },
   { id: 'sprite-animation-completion', status: 'admitted', modules: ['services/sprites/localAnimationJobHook.js'] },
   { id: 'music-library-import-and-deletion', status: 'admitted', modules: ['services/pipeline/musicLibrary.js'] },
@@ -120,6 +147,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     modules: [
       'services/musicVideo/render.js', 'services/musicVideo/excerptRender.js',
       'services/musicVideo/publishKit.js', 'services/musicVideo/compositionDocument.js',
+      'services/musicVideo/sharingCopy.js', 'services/musicVideo/coverArt.js',
     ],
   },
   {
@@ -248,44 +276,84 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     status: 'reference-only',
     modules: ['services/codeAnimation/export.js', 'services/codeAnimation/acceptance.js'],
   },
+  {
+    // Reference lock and the three unlocks (manifest plus the row's status and
+    // frozen chroma key), walk set finalization (the walk set, then the row that
+    // says walk-complete) and the unlock, reopen and anchor/turnaround revision
+    // paths that remove it and downgrade the row, and each source-pipeline import
+    // subject (the copied tree, then the row that marks it imported). The grok-TUI
+    // lanes' attach (walk and named tracks) runs outside the completion hook, so
+    // it takes its own lease. Every one takes the lease before the per-record
+    // write tail, like the completion hook.
+    id: 'sprite-reference-walk-and-import-commits',
+    status: 'admitted',
+    modules: [
+      'services/sprites/reference.js', 'services/sprites/walk.js', 'services/sprites/importer.js',
+      'services/sprites/animationTrackWorkflow.js',
+    ],
+  },
+  {
+    // File-primary run records, reference candidates, loop trims, selections,
+    // atlas versions/current pointer and publication history also need a lease:
+    // rsync can traverse their bytes before it copies a newly written pointer.
+    // Shared animation/reference queues acquire before serialization; long
+    // provider runs remain detached and their completion reacquires admission.
+    id: 'sprite-file-record-publication',
+    status: 'admitted',
+    modules: ['services/sprites/animationWorkflow.js', 'services/sprites/reference.js'],
+  },
   // Classified by a code sweep (#9982) but still outside admission. Each entry
   // names the modules whose file-plus-record workflows are not wrapped yet, so a
   // continuation can take one and move it up. Entries are per domain, not per
   // function: a module listed here may also hold already-admitted workflows.
   {
-    // Reference lock, loop trim, atlas compile, asset delete and source import,
-    // plus the grok-TUI lane's attach, which runs outside the completion hook.
-    id: 'sprite-workflows',
-    status: 'outstanding',
-    modules: [
-      'services/sprites/reference.js', 'services/sprites/walkTrims.js', 'services/sprites/atlas.js',
-      'services/sprites/assets.js', 'services/sprites/importer.js', 'services/sprites/walk.js',
-      'services/sprites/animationTrackWorkflow.js',
-    ],
+    // Gallery uploads hold one lease from byte installation through their
+    // history entry and rollback. Downloads run yt-dlp outside admission, then
+    // lease the poster and history commit with rollback. Poster edits acquire
+    // before the history tail and keep creation, commit and cleanup together.
+    id: 'video-library-import-and-poster-publication',
+    status: 'admitted',
+    modules: ['services/videoUpload.js', 'services/videoDownload.js', 'services/videoGen/poster.js'],
   },
   {
-    // Local, cloud and federated finalize, derived clips (stitch, upscale,
-    // timeline, HTML composition), poster replacement, upload and download.
+    // The shared local, batch and cloud (Grok/fal/Reactor) finalize owns
+    // faststart, poster, serialized history and rollback. Caller latches keep
+    // committed outputs out of later failure/cancellation cleanup. Long fresh
+    // producers remain outside admission; only unreferenced outputs are discarded.
+    id: 'generated-video-shared-finalizer',
+    status: 'admitted',
+    modules: ['services/videoGen/generateVideoHelpers.js'],
+  },
+  {
+    // Federated replacement/replay keeps installation and rollback with history.
+    // Derived clips lease poster/history publication after fresh renders finish.
     id: 'video-generation-finalize-and-derived-clips',
-    status: 'outstanding',
+    status: 'admitted',
     modules: [
-      'services/videoGen/generateVideoHelpers.js', 'services/videoGen/spawnWatch.js', 'services/videoGen/grok.js',
-      'services/videoGen/fal.js', 'services/videoGen/reactor.js', 'services/videoGen/remote.js',
+      'services/videoGen/remote.js',
       'services/videoGen/stitchVideos.js', 'services/videoGen/upscaleVideo.js', 'services/videoGen/upscaleJob.js',
-      'services/videoGen/poster.js', 'services/videoTimeline/local.js', 'services/htmlComposition/index.js',
-      'services/videoUpload.js', 'services/videoDownload.js',
+      'services/videoTimeline/local.js', 'services/htmlComposition/index.js',
     ],
   },
   {
-    // The post-exit tails of the generation lanes (upscale, sidecar, auto-clean),
-    // variants and sketch pairs. `imageGen/local.js` takes the lease only for
-    // gallery upload, sidecar edits and deletion, not for its generation tail.
+    // Derived rows are excluded from snapshot dumps. Restore reconstructs
+    // them from authoritative sidecars/history before releasing the DB fence;
+    // failed reads or SQL retain the fence and cannot report success. File
+    // restores refresh the same mirror. No asset bytes are owned here.
+    id: 'media-asset-index-refresh',
+    status: 'reference-only',
+    modules: ['services/mediaAssetIndex/index.js', 'services/mediaAssetIndex/db.js'],
+  },
+  {
+    // Provider completion (upscale, sidecar, auto-clean), remote promotion,
+    // variants and sketch pairs retain admission through their failure cleanup.
     id: 'image-generation-completion-tails',
-    status: 'outstanding',
+    status: 'admitted',
     modules: [
       'services/imageGen/local.js', 'services/imageGen/agy.js', 'services/imageGen/codex.js',
       'services/imageGen/grok.js', 'services/imageGen/fal.js', 'services/imageGen/external.js',
       'services/imageGen/remote.js', 'services/imageGen/variants.js', 'services/mediaSketches.js',
+      'services/imageGen/publication.js', 'services/imageGen/index.js',
     ],
   },
   {
@@ -300,18 +368,104 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     ],
   },
   {
-    // ChatGPT archive import and memory-asset deletion, YouTube ingest, and the
-    // digital twin and genome document stores.
-    id: 'archive-and-document-imports',
-    status: 'outstanding',
-    modules: [
-      'services/chatgptZipImport.js', 'services/chatgptImport.js', 'services/youtubeIngest.js',
-      'services/digital-twin-documents.js', 'services/genome.js',
-    ],
+    // Verified peer archive bytes stay in scratch until files and the primary
+    // agentId-to-date index can publish under the same lease.
+    id: 'peer-cos-archive-import',
+    status: 'admitted',
+    modules: ['services/sharing/peerCosSync.js'],
   },
-  // Anything the sweep did not reach. A new asset owner lands here until it is
-  // classified; the claim cannot become `global` while this entry exists.
-  { id: 'unclassified-durable-owners', status: 'outstanding', modules: [] },
+  {
+    // The ChatGPT zip import extracts assets before any row names them; each
+    // conversation's archived transcript and the memory row that names it (and
+    // its assets) commit under one lease. Deleting an import memory drops the
+    // record, then its transcript and unreferenced assets, under one lease.
+    id: 'chatgpt-import-and-memory-asset-deletion',
+    status: 'admitted',
+    modules: ['services/chatgptImport.js', 'services/brain.js'],
+  },
+  {
+    // The ingest index record that first names a landed transcript or audio
+    // file commits under the lease; forgetting an ingest drops the record and
+    // unlinks its files under one lease. The long yt-dlp downloads stay outside.
+    id: 'youtube-ingest',
+    status: 'admitted',
+    modules: ['services/youtubeIngest.js'],
+  },
+  {
+    // Digital twin document files plus the meta row naming them, and the genome
+    // raw file plus its metadata: each create, edit, upload and delete is one
+    // workflow.
+    id: 'digital-twin-documents-and-genome',
+    status: 'admitted',
+    modules: ['services/digital-twin-documents.js', 'services/digital-twin-enrichment.js', 'services/digital-twin-sync.js', 'services/genome.js'],
+  },
+  {
+    // Explicit file cleanup can leave external references by design, but one
+    // lease keeps its single/bulk deletion out of a copy-then-dump snapshot.
+    id: 'operator-file-purge', status: 'admitted',
+    modules: ['services/dataManager.js', 'routes/uploads.js', 'routes/attachments.js'],
+  },
+  {
+    // Snapshot JSON and its index entry are one pair. Deletion persists index
+    // removal before unlink; admission precedes the index tail so writes drain.
+    id: 'time-capsule-snapshot-index',
+    status: 'admitted',
+    modules: ['services/timeCapsule.js'],
+  },
+  {
+    // Compression verifies staging outside admission; publishing gzip, recording
+    // its manifest and removing plain bytes take one lease before the state lock.
+    // Purge leases its intent manifest and both unlinks (file-primary records).
+    id: 'cos-recording-compression-and-purge',
+    status: 'admitted',
+    modules: ['services/cosAgentStorage.js'],
+  },
+  {
+    // Completion, zombie/stale archival and deletion pair moved/removed trees
+    // with state, the primary date index and completion projection. Admission
+    // precedes the state lock. Legacy layout migration owns the same pair.
+    id: 'cos-agent-archive-and-index-publication',
+    status: 'admitted',
+    modules: ['services/cosAgentLifecycle.js', 'services/cosAgentArchive.js', 'services/cosAgentIndex.js'],
+  },
+  {
+    // Versioned manifest plus the compiledManifest/history pointers in the
+    // game row; admission precedes the per-game write tail.
+    id: 'game-compiled-manifest',
+    status: 'admitted',
+    modules: ['services/games/compile.js'],
+  },
+  {
+    // Vendored toolkit stays self-contained: the host injects its boundary as
+    // withAssetPublication via createAIToolkit. Prompt/output creation, CLI/API
+    // completion and recording deletion use it; standalone default is a no-op.
+    id: 'toolkit-recording-publication',
+    status: 'admitted',
+    modules: ['lib/aiToolkit/runner.js', 'lib/aiToolkit/internal/runFinalizer.js'],
+  },
+  {
+    // Bounded output/metadata replacement, spool ticks and terminal ownership
+    // settlement delegate to the shared process-aware publication boundary.
+    id: 'runtime-recording-publication-tails',
+    status: 'admitted',
+    modules: ['lib/runtimeFilePublication.js', 'services/agentTuiSpawning/outputSpooler.js',
+      'services/agentTuiSpawning/sessionController.js', 'cos-runner/index.js', 'cos-runner/tuiExit.js',
+      'services/agentCliSpawning.js', 'services/agentSpawnDispatch.js',
+      'services/subAgentSpawner.js', 'services/featureAgents.js',
+      'services/runner.js', 'services/loops.js', 'cos-runner/completion.js'],
+  },
+  {
+    id: 'agent-run-recording-publication',
+    status: 'admitted',
+    modules: ['services/agentRunTracking.js'],
+  },
+  {
+    // Downloads remain staged outside admission. Hash-path installation/dedupe
+    // and the local_path row commit share a lease/queue with eviction and orphan
+    // cleanup. The byte mirror is an overridable backup exclusion.
+    id: 'beeper-attachment-mirror', status: 'admitted',
+    modules: ['services/beeperAttachments.js'],
+  },
 ]);
 
 /**
