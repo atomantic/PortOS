@@ -135,7 +135,9 @@ export function boardJobEstimate(project) {
 /**
  * Everything the docked preview can play, in the order it picks a default:
  * the final render (its resolved `finalVideoSrc`), the composition document,
- * then each finished draft excerpt, newest first. While editing the
+ * then each finished draft excerpt, newest first (`draftsFirst`, on Final
+ * render, puts the drafts before the composition; `storyboardFirst`, on
+ * Storyboard, puts the live document, then the animatic, first). While editing the
  * composition (`liveFirst`, the Compose stage) the live document leads so an
  * old final render is not what the user sees by default. A final render whose
  * inputs changed is labelled out of date. Last comes the storyboard animatic —
@@ -143,7 +145,7 @@ export function boardJobEstimate(project) {
  * shots always has something to watch. Each entry has a stable `id` (the
  * `?play=` value) and a `label` for the source picker.
  */
-export function listPreviewSources(project, { finalVideoSrc = null, liveFirst = false } = {}) {
+export function listPreviewSources(project, { finalVideoSrc = null, liveFirst = false, draftsFirst = false, storyboardFirst = false } = {}) {
   const sources = [];
   const final = project?.renderHistoryId && finalVideoSrc
     ? { id: 'final', kind: 'video', label: project.renderDependencyState?.status === 'stale' ? 'Final render (out of date)' : 'Final render', src: finalVideoSrc, startSec: 0, endSec: null }
@@ -151,17 +153,20 @@ export function listPreviewSources(project, { finalVideoSrc = null, liveFirst = 
   const live = project?.composition?.mode === 'document' && project.composition.document
     ? { id: 'document', kind: 'document', label: 'Composition (live)' }
     : null;
-  sources.push(...(liveFirst ? [live, final] : [final, live]).filter(Boolean));
-  const excerpts = (project?.excerpts || []).filter((e) => e.status === 'complete' && e.filename).reverse();
-  for (const excerpt of excerpts) {
-    sources.push({
-      id: `excerpt:${excerpt.id}`, kind: 'video', src: `/data/videos/${excerpt.filename}`,
-      startSec: excerpt.startSec, endSec: excerpt.endSec,
-      label: `${excerpt.dependencyState?.status === 'stale' ? 'Older draft' : 'Draft'} ${formatTimecode(excerpt.startSec)}–${formatTimecode(excerpt.endSec)} · ${excerpt.id.slice(-6)}`,
-    });
-  }
+  const drafts = (project?.excerpts || []).filter((e) => e.status === 'complete' && e.filename).reverse().map((excerpt) => ({
+    id: `excerpt:${excerpt.id}`, kind: 'video', src: `/data/videos/${excerpt.filename}`,
+    startSec: excerpt.startSec, endSec: excerpt.endSec,
+    label: `${excerpt.dependencyState?.status === 'stale' ? 'Older draft' : 'Draft'} ${formatTimecode(excerpt.startSec)}–${formatTimecode(excerpt.endSec)} · ${excerpt.id.slice(-6)}`,
+  }));
+  // Final render is reviewed by watching its drafts until the final render exists.
+  const ordered = liveFirst || storyboardFirst ? [live, final, ...drafts] : draftsFirst ? [final, ...drafts, live] : [final, live, ...drafts];
+  sources.push(...ordered.filter(Boolean));
   if (projectHasAudio(project) && (project?.scenes || []).length > 0) {
-    sources.push({ id: 'animatic', kind: 'animatic', label: 'Storyboard animatic' });
+    const animatic = { id: 'animatic', kind: 'animatic', label: 'Storyboard animatic' };
+    // On Storyboard the storyboard itself leads (the live document, else the animatic): a draft
+    // clip covers only its own range, so most shots could not be played from it.
+    if (storyboardFirst) sources.splice(live ? 1 : 0, 0, animatic);
+    else sources.push(animatic);
   }
   return sources;
 }
@@ -584,11 +589,15 @@ export function stageChecklist(stageId, project, readiness = project?.production
     }
     case 'board': {
       const planned = scenes.length > 0 || (draft.storyboard || []).length > 0;
+      const problems = storyboardProblemItems(readiness);
+      const storyboardApproval = approval('storyboard', 'Timed storyboard', 'Ready for your review below.');
       return [
         { id: 'shots', label: 'Shots planned', done: planned, detail: planned ? null : 'Plan the shots from the header, or add scenes by hand.',
           action: planned ? null : { label: 'Open the treatment', anchor: 'mv-board-treatment' } },
-        ...storyboardProblemItems(readiness),
-        approval('storyboard', 'Timed storyboard', 'Ready for your review below.'),
+        ...problems,
+        // The problems are listed above, one row per group; the approval row need not repeat the first.
+        // A stale approval keeps its "changed since" text: it is the only place the checklist names what changed.
+        problems.length && !storyboardApproval.stale ? { ...storyboardApproval, detail: 'Approve once the items above are done.' } : storyboardApproval,
       ];
     }
     case 'produce': {

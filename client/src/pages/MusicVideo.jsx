@@ -112,6 +112,8 @@ const EMPTY_PRODUCTION_DRAFT = { cast: '', environments: '', visualLanguage: '',
   lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [] };
 // The step each production approval closes (#10151); it sits at the bottom of that step.
 const APPROVAL_STAGE_BY_TAB = { 'cast-sets': 'art', board: 'storyboard', produce: 'proof' };
+// Steps reviewed by watching: the player leads them, with the approval beside it.
+const PLAYER_FIRST_STAGES = new Set(['board', 'produce', 'review']);
 const STAGE_VIEWS = {
   setup: SetupStage, 'cast-sets': CastSetsStage, board: BoardStage, produce: ProduceStage, review: ReviewStage, publish: PublishStage,
 };
@@ -970,14 +972,16 @@ export default function MusicVideo() {
     return next;
   }, { replace: !!tab && !!settingsTab });
 
-  // The docked preview: scene cards seek it; on a phone it is a mini-player
-  // that starts collapsed. Both reset with the project.
+  // The preview: scene cards and storyboard rows seek it. Steps reviewed by
+  // watching put it first (open); elsewhere, below xl, it is a folded row until
+  // the director opens it. `dockCollapsed` is null until they toggle it.
   const [seekRequest, setSeekRequest] = useState(null);
-  const [dockCollapsed, setDockCollapsed] = useState(true);
-  useEffect(() => { setSeekRequest(null); setDockCollapsed(true); }, [selectedId]);
-  const seekToScene = (scene) => {
+  const [dockCollapsed, setDockCollapsed] = useState(null);
+  useEffect(() => { setSeekRequest(null); setDockCollapsed(null); }, [selectedId]);
+  // `play` starts playback from there (a storyboard row); a scene card only cues the shot.
+  const seekToScene = (scene, { play = false } = {}) => {
     if (typeof scene?.startSec !== 'number') return;
-    setSeekRequest((prev) => ({ t: scene.startSec, n: (prev?.n || 0) + 1 }));
+    setSeekRequest((prev) => ({ t: scene.startSec, n: (prev?.n || 0) + 1, play }));
   };
 
   const audioFilename = projectAudioFilename(selected);
@@ -1147,13 +1151,14 @@ export default function MusicVideo() {
     seekToScene,
   } : null;
   const StageView = STAGE_VIEWS[activeStage];
+  const playerFirst = PLAYER_FIRST_STAGES.has(activeStage);
   const projectStatus = !selected ? null : statusKnown && productionReview.readiness
     ? describeProjectStatus(selected, { progress, nextAction: productionNextAction, reviewingDraft, reviewDraftState })
     : statusKnown
       ? { headline: `Status unavailable: ${productionReview.readinessError}`, tone: 'warn', needsYouStage: null }
       : { headline: 'Loading status…', tone: 'muted', needsYouStage: null };
 
-  const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, liveFirst: activeStage === 'produce' }) : [];
+  const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, liveFirst: activeStage === 'produce', draftsFirst: activeStage === 'review', storyboardFirst: activeStage === 'board' }) : [];
 
   return (
     // Below md the whole page scrolls (title bar and project header with it), so the step gets the screen.
@@ -1454,6 +1459,27 @@ export default function MusicVideo() {
             notes={stepNotes(selected, productionReview.readiness, publish)}
             autopilot={autopilotStatus(selected)}
             onOpenSettings={setSettingsTab}
+            playerFirst={playerFirst}
+            lead={(
+              <StageChecklist
+                items={stageChecklist(activeStage, selected, productionReview.readiness, publish)}
+                onAction={(action) => goToStage(action.stage || activeStage, action.anchor, action.params)}
+                onRevert={productionReview.revert}
+                headerAnchor={nextAction?.kind === 'goto' ? nextAction.anchor : null}
+              />
+            )}
+            review={APPROVAL_STAGE_BY_TAB[activeStage] ? (
+              <ProductionReviewPanel
+                key={`${selected.id}-${activeStage}`}
+                project={selected}
+                review={productionReview}
+                onOpenArtifact={openArtifact}
+                stage={APPROVAL_STAGE_BY_TAB[activeStage]}
+                planning={planningDraft}
+                onNavigate={goToStage}
+                onSeek={(startSec) => seekToScene({ startSec }, { play: true })}
+              />
+            ) : null}
             attention={(
               <NeedsAttentionBanner
                 items={attentionItems}
@@ -1476,29 +1502,12 @@ export default function MusicVideo() {
                 sources={previewSources}
                 audioUrl={audioUrl}
                 seekRequest={seekRequest}
-                collapsed={dockCollapsed}
-                onToggleCollapsed={() => setDockCollapsed((c) => !c)}
+                collapsed={dockCollapsed ?? !playerFirst}
+                onToggleCollapsed={() => setDockCollapsed(!(dockCollapsed ?? !playerFirst))}
               />
             )}
           >
-            <StageChecklist
-              items={stageChecklist(activeStage, selected, productionReview.readiness, publish)}
-              onAction={(action) => goToStage(action.stage || activeStage, action.anchor, action.params)}
-              onRevert={productionReview.revert}
-              headerAnchor={nextAction?.kind === 'goto' ? nextAction.anchor : null}
-            />
             <StageView key={selected.id} board={board} />
-            {APPROVAL_STAGE_BY_TAB[activeStage] && (
-              <ProductionReviewPanel
-                key={`${selected.id}-${activeStage}`}
-                project={selected}
-                review={productionReview}
-                onOpenArtifact={openArtifact}
-                stage={APPROVAL_STAGE_BY_TAB[activeStage]}
-                planning={planningDraft}
-                onNavigate={goToStage}
-              />
-            )}
           </MusicVideoLayout>
         )}
       </div>

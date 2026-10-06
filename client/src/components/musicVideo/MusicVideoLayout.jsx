@@ -100,14 +100,20 @@ const DOCK_CLASSES = 'min-w-0 max-xl:order-first max-xl:col-span-full xl:sticky 
  * `autopilotStatus(…)` (`{ label, short, tone }`) for the header's Autopilot
  * button (or null to hide it);
  * `onOpenSettings(tab)` opens Project settings. `dock` is the `PreviewDock`.
+ * `lead` (the step checklist) opens the step; `review` is the step's approval.
+ * With `playerFirst` the player and the approval sit together at the top of the
+ * step; otherwise the player docks at the side and the approval closes the step.
  */
 export default function MusicVideoLayout({
   project, trackLabel, stage, onStageChange, progress, nextAction, onNextAction, spend, status = null,
-  attention = null, dock = null, notes = null, autopilot = null, onOpenSettings = null, children,
+  attention = null, dock = null, notes = null, autopilot = null, onOpenSettings = null,
+  playerFirst = false, lead = null, review = null, children,
 }) {
   const headerRef = useRef(null);
   const rootRef = useRef(null);
-  const dockVisible = !!dock;
+  // On a step reviewed by watching (Storyboard, Make, Final render) the player is the main
+  // element: full width at the top of the step with the approval beside it, not a side column.
+  const sideDock = !!dock && !playerFirst;
 
   // The dock sticks just under the header, whose height depends on wrapping.
   useEffect(() => {
@@ -242,7 +248,7 @@ export default function MusicVideoLayout({
       </header>
 
       {/* One column on a phone, capped at the screen width so a wide control can't push the step off screen. */}
-      <div className={`grid grid-cols-[minmax(0,1fr)] items-start gap-4 md:grid-cols-[13rem_minmax(0,1fr)] ${dockVisible ? 'xl:grid-cols-[13rem_minmax(0,1fr)_minmax(20rem,24rem)]' : ''}`}>
+      <div className={`grid grid-cols-[minmax(0,1fr)] items-start gap-4 md:grid-cols-[13rem_minmax(0,1fr)] ${sideDock ? 'xl:grid-cols-[13rem_minmax(0,1fr)_minmax(20rem,24rem)]' : ''}`}>
         <div className="hidden md:block md:sticky md:top-[calc(var(--mv-header-h,9rem)-0.75rem)]">
           <StepRail stages={progress.stages} stage={stage} onStageChange={onStageChange} needsYouStage={needsYouStage} notes={notes} />
         </div>
@@ -257,9 +263,17 @@ export default function MusicVideoLayout({
             <h3 id={`mv-step-title-${stage}`} className="text-xl font-semibold">{stageEntry?.title || stageEntry?.label}</h3>
             {stageEntry?.doneWhen && <p className="text-sm text-port-text-muted">{stageEntry.doneWhen}</p>}
           </div>
+          {lead}
+          {playerFirst && (dock || review) && (
+            <div className={`grid min-w-0 items-start gap-3 ${dock && review ? 'xl:grid-cols-[minmax(0,3fr)_minmax(20rem,2fr)]' : ''}`}>
+              {dock && <div className="min-w-0">{dock}</div>}
+              {review}
+            </div>
+          )}
           {children}
+          {!playerFirst && review}
         </div>
-        {dockVisible ? <div className={DOCK_CLASSES}>{dock}</div> : null}
+        {sideDock ? <div className={DOCK_CLASSES}>{dock}</div> : null}
       </div>
     </div>
   );

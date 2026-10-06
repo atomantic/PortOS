@@ -130,9 +130,10 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   useEffect(() => {
     if (!seekRequest || duration <= 0 || appliedSeek.current === seekRequest.n) return;
     appliedSeek.current = seekRequest.n;
-    audioRef.current?.pause?.();
-    setPlaying(false);
     seek(seekRequest.t);
+    // A storyboard row asks to play from the shot (`play`); a scene card only cues it.
+    if (seekRequest.play && audioRef.current) { audioRef.current.play?.()?.catch?.(() => {}); setPlaying(true); }
+    else { audioRef.current?.pause?.(); setPlaying(false); }
   }, [seekRequest, duration, seek]);
 
   useEffect(() => {

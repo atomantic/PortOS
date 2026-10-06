@@ -184,6 +184,14 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     expect(await candidate.json()).toMatchObject({ candidate: { directory: staged }, source: { directory: staged }, stale: false, providerId: 'stub-provider' });
     await traced('the candidate response did not render a reviewable candidate', () => page.getByRole('button', { name: 'Accept reviewed version' }).waitFor());
     expect(author.prompt).toContain(JSON.stringify(choreography));
+    // The generate response replaces the project, which refetches the candidate and the review readiness.
+    // Clicking Accept while those are still in flight was seen to send no accept request under load, so
+    // the click waits for the page's music-video requests to settle and the button to be enabled.
+    await traced('the page did not settle after generation', async () => {
+      const settleBy = Date.now() + 30000;
+      while (inFlight.size && Date.now() < settleBy) await new Promise(r => setTimeout(r, 100));
+      await page.waitForFunction(() => [...document.querySelectorAll('button')].some(b => b.textContent === 'Accept reviewed version' && !b.disabled));
+    });
     const [accepted] = await Promise.all([
       apiResponse('POST', '/composition/document/accept'),
       page.getByRole('button', { name: 'Accept reviewed version' }).click(),
@@ -196,7 +204,7 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     await page.locator('video').waitFor({ timeout: 120000 });
     await page.locator('video').evaluate(async video => { await video.play(); await new Promise(r => setTimeout(r, 400)); video.pause(); });
     expect(await page.locator('video').evaluate(v => v.videoWidth)).toBeGreaterThan(0);
-    expect(await page.getByRole('region', { name: 'Saved choreography for proof comparison' }).textContent()).toContain(choreography);
+    expect(await page.locator('[aria-label="Saved choreography for proof comparison"]').textContent()).toContain(choreography);
     expect(await page.getByRole('button', { name: 'Approve — I reviewed this proof with audio' }).isDisabled()).toBe(true);
     await page.getByLabel('Playback energy compared with the saved plan').fill('The synthetic fixture demonstrates a driving chorus: the modeled subject changes pose and travels while the camera moves through the scene.');
     await page.getByLabel('Timecoded playback notes').fill('0:02 — subject enters the frame; 0:07 — pose and camera position differ and readable type remains clear. This is a synthetic workflow test, not artistic approval of a production video.');
