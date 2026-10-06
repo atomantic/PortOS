@@ -29,6 +29,9 @@ import { getProject, mutateProjectRecord } from './projects.js';
 import { projectPublishKit, releaseKitFiles } from './publishKit.js';
 
 const MAX_GENERATED = 12;
+const LIVE_JOB = new Set(['queued', 'running', 'canceling']);
+// A reservation that never got its job id (the process died mid-enqueue) stops blocking after this.
+const RESERVATION_TTL_MS = 2 * 60 * 1000;
 // Codex renders square at 1024; the compose scales it to the store size.
 const SOURCE_PX = 1024;
 
@@ -40,6 +43,7 @@ const defaults = {
   chooseRoute: async (project, opts) => (await import('./castAndSetsService.js')).chooseCastAndSetsRoute(project, opts),
   imageParams: async (settings, route, common) => (await import('./castAndSetsService.js')).imageJobParams(settings, route, common),
   withStyle: async (...args) => (await import('./styleReferences.js')).withMusicVideoStyle(...args),
+  jobStatus: async (jobId) => (await import('../mediaJobQueue/index.js')).getJob(jobId)?.status || null,
 };
 let deps = { ...defaults };
 export function __setCoverArtDepsForTests(overrides) { deps = { ...defaults, ...overrides }; }
@@ -134,6 +138,17 @@ function buildCoverArtPrompt(project, { notes = '' } = {}) {
 }
 
 /**
+ * Whether a recorded request still has a render on the way. One whose job left
+ * the queue without its terminal event reaching the hook (a restart mid-render)
+ * is not, so it never locks the director out of asking again.
+ */
+async function pendingIsLive(pending) {
+  if (!pending) return false;
+  if (pending.jobId) return LIVE_JOB.has(await deps.jobStatus(pending.jobId).catch(() => null));
+  return Date.now() - Date.parse(pending.requestedAt || 0) < RESERVATION_TTL_MS;
+}
+
+/**
  * Ask an image backend (Codex when enabled) for a new cover source. The
  * completion hook composes the cover from it with the current title and tag.
  * `reference` (a gallery image) keeps the singer's likeness; it defaults to
@@ -141,7 +156,8 @@ function buildCoverArtPrompt(project, { notes = '' } = {}) {
  */
 export async function generateCoverArtSource(projectId, { notes = '', reference = null } = {}) {
   const project = await requireProject(projectId);
-  if (projectCoverArt(project).pending) throw coverError(409, 'COVER_ART_IN_PROGRESS', 'A cover image is already being made');
+  const previous = projectCoverArt(project).pending;
+  if (await pendingIsLive(previous)) throw coverError(409, 'COVER_ART_IN_PROGRESS', 'A cover image is already being made');
   const settings = await deps.getSettings();
   const route = await deps.chooseRoute(project, { preferred: { mode: 'codex' }, settings })
     || await deps.chooseRoute(project, { settings });
@@ -150,6 +166,13 @@ export async function generateCoverArtSource(projectId, { notes = '', reference 
   const refPath = refName ? resolveGalleryImage(refName) : null;
   if (reference?.filename && !refPath) throw coverError(422, 'PUBLISH_ASSET_MISSING', `The reference image is missing (${basename(reference.filename)})`);
   const requestId = randomUUID();
+  // Reserve before queueing, so a job that settles at once finds its request
+  // current. The check runs again inside the write: a second click that raced
+  // past the one above loses here.
+  await writeCoverArt(projectId, (art) => {
+    if ((art.pending?.requestId || null) !== (previous?.requestId || null)) throw coverError(409, 'COVER_ART_IN_PROGRESS', 'A cover image is already being made');
+    return { pending: { requestId, jobId: null, mode: route.mode, requestedAt: new Date().toISOString() }, lastError: null };
+  });
   const common = {
     prompt: buildCoverArtPrompt(project, { notes }),
     width: SOURCE_PX,
@@ -159,12 +182,18 @@ export async function generateCoverArtSource(projectId, { notes = '', reference 
     // `castAndSets`, so the scene and Cast & Sets hooks ignore the job.
     musicVideo: { projectId: project.id, coverArt: { requestId } },
   };
-  const params = await deps.withStyle(project, await deps.imageParams(settings, route, common), route.mode, route.model, settings);
-  const sent = await deps.enqueue({ kind: 'image', params, owner: `music-video-cover-art:${project.id}` });
-  const out = await writeCoverArt(projectId, () => ({
-    pending: { requestId, jobId: typeof sent?.jobId === 'string' ? sent.jobId : null, mode: route.mode, requestedAt: new Date().toISOString() },
-    lastError: null,
-  }));
+  const sent = await deps.imageParams(settings, route, common)
+    .then((params) => deps.withStyle(project, params, route.mode, route.model, settings))
+    .then((params) => deps.enqueue({ kind: 'image', params, owner: `music-video-cover-art:${project.id}` }))
+    .catch(async (err) => {
+      const failed = await writeCoverArt(projectId, (art) => (art.pending?.requestId === requestId
+        ? { pending: null, lastError: trimTo(`The cover image could not be queued: ${err.message}`, 300) } : {}));
+      publish(projectId, failed.project);
+      throw err;
+    });
+  const jobId = typeof sent?.jobId === 'string' ? sent.jobId : null;
+  // The job may already have settled and cleared the reservation; only a still-current one gets its id.
+  const out = await writeCoverArt(projectId, (art) => (art.pending?.requestId === requestId && jobId ? { pending: { ...art.pending, jobId } } : {}));
   console.log(`🖼️ Music Video cover art ${String(projectId).slice(3, 11)}: source image queued on ${route.mode}`);
   publish(projectId, out.project);
   return { project: out.project };

@@ -78,6 +78,5 @@ describe('PublishKitPanel (#9281)', () => {
     rerender(<PublishKitPanel project={{ ...project, publishKit: { ...built, coverArt: art } }} publishKit={k} />);
     expect(screen.getByAltText('Cover art for Example Song')).toBeTruthy();
     expect(screen.getByText(/Making a cover image on codex/)).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Making/ })).toBeDisabled();
   });
 });

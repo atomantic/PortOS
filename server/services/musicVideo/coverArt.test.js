@@ -25,12 +25,14 @@ afterAll(() => cleanupTempDataRoots());
 
 const compose = vi.fn(async ({ out }) => { await writeFile(out, 'jpeg'); return { width: 3000, height: 3000 }; });
 const enqueue = vi.fn(async () => ({ jobId: 'job-example' }));
+const jobStatus = vi.fn(async () => 'queued');
 const chooseRoute = vi.fn(async (_project, { preferred } = {}) => (preferred?.mode === 'codex' ? { mode: 'codex', model: null } : null));
 
 beforeEach(() => {
-  compose.mockClear(); enqueue.mockClear(); chooseRoute.mockClear();
+  compose.mockClear(); enqueue.mockReset(); enqueue.mockResolvedValue({ jobId: 'job-example' }); chooseRoute.mockClear();
+  jobStatus.mockReset(); jobStatus.mockResolvedValue('queued');
   cover.__setCoverArtDepsForTests({
-    compose, enqueue, chooseRoute,
+    compose, enqueue, chooseRoute, jobStatus,
     getSettings: async () => ({}),
     getPlatforms: async () => ({ distrokid: { enabled: true, account: 'Example Artist' } }),
     imageParams: async (_settings, route, common) => ({ ...common, provider: route.mode }),
@@ -113,6 +115,36 @@ describe('release cover art', () => {
     expect(art).toMatchObject({ pending: null, lastError: 'Codex refused the prompt' });
   });
 
+  it('files a render that settles before the queue call returns, and frees a failed enqueue', async () => {
+    const { id } = await projectWithThumbnail();
+    await mkdir(PATHS.images, { recursive: true });
+    await writeFile(join(PATHS.images, 'fast-example.png'), 'png');
+    // The hook fires while enqueue is still in flight: the reservation is already current.
+    enqueue.mockImplementationOnce(async (job) => {
+      await cover.onCoverArtImageSettled({ projectId: id, requestId: job.params.musicVideo.coverArt.requestId, filename: 'fast-example.png' });
+      return { jobId: 'job-fast' };
+    });
+    const { project } = await cover.generateCoverArtSource(id);
+    expect(project.publishKit.coverArt).toMatchObject({ pending: null, source: { kind: 'image', filename: 'fast-example.png' } });
+
+    enqueue.mockRejectedValueOnce(new Error('Codex is signed out'));
+    await expect(cover.generateCoverArtSource(id)).rejects.toThrow('Codex is signed out');
+    const art = (await projects.getProject(id)).publishKit.coverArt;
+    expect(art.pending).toBeNull();
+    expect(art.lastError).toMatch(/Codex is signed out/);
+  });
+
+  it('lets the director ask again once a pending render is no longer in the queue', async () => {
+    const { id } = await projectWithThumbnail();
+    const first = (await cover.generateCoverArtSource(id)).project.publishKit.coverArt.pending;
+    await expect(cover.generateCoverArtSource(id)).rejects.toMatchObject({ status: 409 });
+    // A restart lost the job's terminal event: the queue no longer holds it live.
+    jobStatus.mockResolvedValue('failed');
+    const next = (await cover.generateCoverArtSource(id)).project.publishKit.coverArt.pending;
+    expect(next.requestId).not.toBe(first.requestId);
+    expect(enqueue).toHaveBeenCalledTimes(2);
+  });
+
   it('says so when no image backend is enabled', async () => {
     const { id } = await projectWithThumbnail();
     chooseRoute.mockResolvedValue(null);
@@ -132,5 +164,11 @@ describe('cover lettering', () => {
     await composeCoverArt({ source, out, title: 'Example Song', tag: 'Example Artist', size: 1000 });
     const meta = await sharp(out).metadata();
     expect(meta).toMatchObject({ format: 'jpeg', width: 1000, height: 1000 });
+
+    // A portrait phone photo stored landscape with an EXIF rotation crops on the upright image.
+    const rotated = join(dir, 'rotated.jpg');
+    await sharp({ create: { width: 640, height: 360, channels: 3, background: '#775533' } }).jpeg().withMetadata({ orientation: 6 }).toFile(rotated);
+    await composeCoverArt({ source: rotated, out, title: 'Example Song', focusX: 1, size: 1000 });
+    expect(await sharp(out).metadata()).toMatchObject({ width: 1000, height: 1000 });
   });
 });

@@ -119,9 +119,10 @@ export default function CoverArtPanel({ project, publishKit }) {
               Keep the likeness of the current cover image
             </label>
           )}
-          <button type="button" onClick={generate} disabled={!!art.pending}
-            className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] sm:min-h-0">
-            <Sparkles size={13} /> {art.pending ? 'Making…' : 'Make with Codex'}
+          {/* Never disabled by `pending`: the server tells a live render from one a restart lost. */}
+          <button type="button" onClick={generate}
+            className="flex items-center gap-1 bg-port-accent/20 text-port-accent rounded px-2 py-1.5 min-h-[44px] sm:min-h-0">
+            <Sparkles size={13} /> Make with Codex
           </button>
         </div>
       </div>

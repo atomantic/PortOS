@@ -75,14 +75,14 @@ function coverOverlaySvg({ title, tag = '', accent = COVER_ART_ACCENT, size = CO
  */
 export async function composeCoverArt({ source, out, title, tag = '', accent = COVER_ART_ACCENT, focusX = 0.5, size = COVER_ART_SIZE }, deps = {}) {
   const sharp = deps.sharp || (await import('sharp')).default;
-  const meta = await sharp(source).metadata();
-  const side = Math.min(meta.width, meta.height);
+  // Apply the EXIF orientation first, so the crop is measured on the upright image.
+  const { data, info } = await sharp(source).rotate().toBuffer({ resolveWithObject: true });
+  const side = Math.min(info.width, info.height);
   const fx = Math.min(1, Math.max(0, Number.isFinite(focusX) ? focusX : 0.5));
-  const left = Math.round((meta.width - side) * fx);
-  const top = Math.round((meta.height - side) / 2);
+  const left = Math.round((info.width - side) * fx);
+  const top = Math.round((info.height - side) / 2);
   const overlay = Buffer.from(coverOverlaySvg({ title, tag, accent, size }));
-  await sharp(source)
-    .rotate()
+  await sharp(data)
     .extract({ left, top, width: side, height: side })
     .resize(size, size, { kernel: 'lanczos3' })
     .composite([{ input: overlay, top: 0, left: 0 }])
