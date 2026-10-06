@@ -443,7 +443,9 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     id: 'runtime-recording-publication-tails',
     status: 'admitted',
     modules: ['lib/runtimeFilePublication.js', 'services/agentTuiSpawning/outputSpooler.js',
-      'services/agentTuiSpawning/sessionController.js', 'cos-runner/index.js', 'cos-runner/tuiExit.js'],
+      'services/agentTuiSpawning/sessionController.js', 'cos-runner/index.js', 'cos-runner/tuiExit.js',
+      'services/agentCliSpawning.js', 'services/agentSpawnDispatch.js',
+      'services/subAgentSpawner.js', 'services/featureAgents.js'],
   },
   {
     id: 'agent-run-recording-publication',

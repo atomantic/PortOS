@@ -322,7 +322,7 @@ const OUTPUT_FLUSH_INTERVAL_MS = 250;
 //
 // Callers MUST `await flush()` in their finish/cleanup path before the
 // completion event so the final lines land before the agent is marked done.
-export function createAgentOutputBatcher(agentId, { intervalMs = OUTPUT_FLUSH_INTERVAL_MS } = {}) {
+export function createAgentOutputBatcher(agentId, { intervalMs = OUTPUT_FLUSH_INTERVAL_MS, flushBatch } = {}) {
   let pending = [];
   let timer = null;
   let flushing = null;
@@ -338,7 +338,7 @@ export function createAgentOutputBatcher(agentId, { intervalMs = OUTPUT_FLUSH_IN
     // try/catch" exception). The authoritative transcript lives in output.txt;
     // a dropped live-tail batch is non-fatal. Mirrors the TUI spawner's
     // `.catch(() => {})` on its own batched append.
-    await appendAgentOutputLines(agentId, batch).catch((err) => {
+    await (flushBatch ? flushBatch(batch) : appendAgentOutputLines(agentId, batch)).catch((err) => {
       console.error(`❌ agent ${agentId} output batch flush failed: ${err.message}`);
     });
   };

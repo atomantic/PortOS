@@ -1,3 +1,4 @@
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { maintenance, isMaintenanceHold } from '../lib/maintenanceAdmission.js';
 /**
  * Sub-Agent Spawner Service — the agent cluster's EVENT WIRING.
@@ -261,7 +262,7 @@ async function runInitSpawner() {
       const runDir = join(RUNS_DIR, entry.name);
       const dirStat = await stat(runDir).catch(() => null);
       if (dirStat && dirStat.mtime.getTime() < cutoff) {
-        await rmGuarded(runDir, { recursive: true }).catch(() => {});
+        await withBackupAssetPublication(() => rmGuarded(runDir, { recursive: true })).catch(() => {});
         pruned++;
       }
     }
