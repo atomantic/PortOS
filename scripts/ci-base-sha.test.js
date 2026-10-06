@@ -56,8 +56,11 @@ describe('ci.yml checkout depth', () => {
   });
 
   it('resolves the diff base in every job that consumes it', () => {
+    // The `database` job's run-ci-tests.js step is CI_TEST_MODE=files with the
+    // planner's exact browser-suite list (#10312): it diffs nothing, so it needs
+    // neither the base nor a depth-2 clone.
     const consumers = Object.entries(jobs)
-      .filter(([, body]) => /run-ci-tests\.js|ci-test-plan\.js/.test(body));
+      .filter(([id, body]) => id !== 'database' && /run-ci-tests\.js|ci-test-plan\.js/.test(body));
 
     expect(consumers.map(([id]) => id).sort())
       .toEqual(['client', 'impact', 'server', 'windows-server']);
