@@ -114,7 +114,7 @@ function TargetOptions({ target, kit, project, options, setOption, flairs, idFor
         <div className="grid sm:grid-cols-2 gap-2">
           {text('artistName', 'Artist name', account || 'Your artist name')}
           {field('releaseDate', 'Release date (blank = as soon as possible)',
-            <input id={idFor('releaseDate')} type="date" value={options.releaseDate || ''} onChange={(e) => setOption('releaseDate', e.target.value)} className={inputCls} />)}
+            <input id={idFor('releaseDate')} type="date" aria-label="Release date" value={options.releaseDate || ''} onChange={(e) => setOption('releaseDate', e.target.value)} className={inputCls} />)}
           {text('songwriterFirst', 'Songwriter legal first name', 'First')}
           {text('songwriterLast', 'Songwriter legal last name', 'Last')}
         </div>
