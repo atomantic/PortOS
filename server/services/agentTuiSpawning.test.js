@@ -2906,7 +2906,7 @@ describe('spawnTuiAgent runtime', () => {
 
     await spawnPromise;
 
-    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1));
 
     // The completed-agent details view reads output.txt (getAgent) and the
     // in-state output stream (live view / fallback). Both must carry the
@@ -3024,9 +3024,9 @@ describe('spawnTuiAgent runtime', () => {
       await flushMicrotasks();
       await spawnPromise;
 
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+      await vi.waitFor(() => expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
         expect.objectContaining({ agentId: 'agent-1', success: true })
-      );
+      ));
     });
 
     // The backstop for a SIGKILL'd or crashed portos-server, which never runs its

@@ -1,3 +1,4 @@
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 /**
@@ -16,7 +17,7 @@ import { cosEvents, emitLog } from './cosEvents.js';
 // The DEFINING module, not a barrel (#3450) — see the note in
 // `agentManagement.js`. This module is a LEAF that `agentLifecycle.js` imports,
 // which puts it inside the facade's closure, so the facade is out of reach here.
-import { updateAgent, completeAgent, createAgentOutputBatcher } from './cosAgentLifecycle.js';
+import { updateAgent, completeAgent, createAgentOutputBatcher, appendAgentOutputLines } from './cosAgentLifecycle.js';
 import { release } from './executionLanes.js';
 import { completeExecution, errorExecution } from './toolStateMachine.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
@@ -420,12 +421,22 @@ export async function spawnDirectly({
   // events fire per chunk (and stream-json yields many lines per chunk), so a
   // per-line/per-chunk appendAgentOutput would round-trip a full state
   // load+save each time. The batcher coalesces a ~250ms window; the close/error
-  // handlers `await outputBatcher.flush()` so the final lines persist before
-  // the agent is finalized. (output.txt is written separately below.)
+  // handlers `await outputBatcher.flush()` so the final transcript and state
+  // lines persist as one admitted batch before the agent is finalized.
   // Findings stay in the local transcript/report, never the shared agent stream.
-  const outputBatcher = isPrivateSecurityTask(task)
-    ? { push() {}, async flush() {} }
-    : createAgentOutputBatcher(agentId);
+  const outputBatcher = createAgentOutputBatcher(agentId, { flushBatch: batch => {
+    // Capture bytes at the same instant as this batch, before waiting for the
+    // cut. Chunks received during I/O belong to the next flush, not this pair.
+    const bytes = outputBuffer;
+    return withBackupAssetPublication(() => Promise.all([
+      writeFileGuarded(outputFile, bytes).catch(err => {
+        maintenance.markResourceUnsettled('agent', agentId);
+        return transcriptWriteReporter.report('output.txt', err);
+      }),
+      isPrivateSecurityTask(task) ? undefined : appendAgentOutputLines(agentId, batch)
+        .catch(err => transcriptWriteReporter.report('state', err)),
+    ]));
+  } });
   if (ollamaContext?.warning) outputBatcher.push(ollamaContext.warning);
   if (ollamaContext?.applied) outputBatcher.push(`🪟 Reloaded Ollama at a ${ollamaContext.contextLength}-token context window`);
 
@@ -442,11 +453,9 @@ export async function spawnDirectly({
     await outputBatcher.flush();
   };
 
-  // Serialize the transcript-mutating body of every stdout/stderr `data` event
-  // onto a single per-agent tail promise. Both handlers mutate the same shared
-  // `outputBuffer`/`rawStreamBuffer` and write the same `output.txt`, so their
-  // interleaved awaits (e.g. one chunk's `writeFile` yielding while the next
-  // chunk appends) would otherwise reorder the transcript (#2384). Fallback
+  // Serialize stdout/stderr buffer updates before their shared debounced file
+  // and state flush, so interleaved setup awaits cannot reorder the transcript
+  // (#2384). Fallback
   // detection stays OUTSIDE this chain — it runs synchronously in the raw
   // listener before the enqueue, so a blocked earlier write can never delay
   // killing the provider on a usage-limit signal. The close/error handlers
@@ -520,10 +529,6 @@ export async function spawnDirectly({
           const lines = streamParser.processChunk(text);
           for (const line of lines) outputBuffer += line + '\n';
           outputBatcher.push(lines);
-          await writeFileGuarded(outputFile, outputBuffer).catch((err) => {
-            maintenance.markResourceUnsettled('agent', agentId);
-            transcriptWriteReporter.report('output.txt', err);
-          });
         } else {
           // Non-stream providers: emit stdout as-is once decolored. A chunk that
           // was purely terminal control has nothing left to show. Unlike stderr
@@ -531,10 +536,6 @@ export async function spawnDirectly({
           // formatting when it isn't wearing an `[stderr]` tag.
           if (!text) return;
           outputBuffer += text;
-          await writeFileGuarded(outputFile, outputBuffer).catch((err) => {
-            maintenance.markResourceUnsettled('agent', agentId);
-            transcriptWriteReporter.report('output.txt', err);
-          });
           outputBatcher.push(text);
         }
       });
@@ -556,10 +557,6 @@ export async function spawnDirectly({
           const lines = codexStderrFormatter.processChunk(text);
           for (const line of lines) outputBuffer += line + '\n';
           outputBatcher.push(lines);
-          await writeFileGuarded(outputFile, outputBuffer).catch((err) => {
-            maintenance.markResourceUnsettled('agent', agentId);
-            transcriptWriteReporter.report('output.txt', err);
-          });
           return;
         }
         // A chunk that decolors down to whitespace was pure terminal control
@@ -568,10 +565,6 @@ export async function spawnDirectly({
         const trimmed = text.trim();
         if (!trimmed || isKnownCliStderrNoise(trimmed)) return;
         outputBuffer += `[stderr] ${text}`;
-        await writeFileGuarded(outputFile, outputBuffer).catch((err) => {
-          maintenance.markResourceUnsettled('agent', agentId);
-          transcriptWriteReporter.report('output.txt', err);
-        });
         outputBatcher.push(`[stderr] ${text}`);
       });
     } catch (err) {
@@ -734,11 +727,12 @@ export async function spawnDirectly({
     // Drain pending output to state before finalize so the transcript tail
     // lands before the agent's terminal record (covers the paused early-return
     // below too, since output.txt is written next).
-    await outputBatcher.flush();
-
-    await writeFileGuarded(outputFile, outputBuffer).catch((err) => {
-      maintenance.markResourceUnsettled('agent', agentId);
-      transcriptWriteReporter.report('output.txt', err);
+    await withBackupAssetPublication(async () => {
+      await outputBatcher.flush();
+      await writeFileGuarded(outputFile, outputBuffer).catch((err) => {
+        maintenance.markResourceUnsettled('agent', agentId);
+        return transcriptWriteReporter.report('output.txt', err);
+      });
     });
 
     // The teardown both in-process spawners share: paused early return, then

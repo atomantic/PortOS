@@ -1,3 +1,4 @@
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 /**
  * Feature Agents Service
  *
@@ -138,7 +139,7 @@ export async function updateFeatureAgent(id, updates) {
  * Delete a feature agent and clean up resources
  */
 export async function deleteFeatureAgent(id) {
-  return withLock(async () => {
+  return withBackupAssetPublication(() => withLock(async () => {
     const data = await readData();
     const idx = data.agents.findIndex(a => a.id === id);
     if (idx === -1) return false;
@@ -169,7 +170,7 @@ export async function deleteFeatureAgent(id) {
     console.log(`🤖 Feature agent deleted: ${agent.name} (${id})`);
     cosEvents.emit(`${EVT}:status`, { id, status: 'deleted', name: agent.name });
     return true;
-  });
+  }));
 }
 
 /**
