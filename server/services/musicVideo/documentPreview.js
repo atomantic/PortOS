@@ -1,4 +1,4 @@
-import { inlineDocumentModule } from './documentModules.js';
+import { PREVIEW_DOCUMENT_BASE, inlineDocumentModule, previewDocumentPath } from './documentModules.js';
 import { musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
 /**
  * Music Video — the in-app live preview of a composition document.
@@ -64,8 +64,14 @@ const BOOTSTRAP = `(() => {
   let resolveAssets;
   window.PORTOS_MV_PREVIEW = true;
   window.PORTOS_MV_ASSETS = new Promise((resolve) => { resolveAssets = resolve; });
-  const keyOf = (value) => String(value).replace(/^\\.\\//, '').split(/[?#]/)[0];
-  const relative = (value) => typeof value === 'string' && value && !/^[a-z][a-z0-9+.-]*:/i.test(value) && !value.startsWith('/');
+  // Bundler asset URLs resolved against an inlined module's stand-in import.meta.url (documentModules.js)
+  // land under this origin; they name document files just like a relative src does.
+  const DOC_BASE = ${JSON.stringify(PREVIEW_DOCUMENT_BASE)};
+  const local = (value) => (${previewDocumentPath.toString()})(value, DOC_BASE);
+  // A stand-in-base URL is already a decoded document path (a literal ? or # in it is part of the name);
+  // anything else is a relative src whose query and hash are not.
+  const keyOf = (value) => { const path = local(value); return path !== value ? String(path) : String(value).replace(/^\\.\\//, '').split(/[?#]/)[0]; };
+  const relative = (value) => { value = local(value); return typeof value === 'string' && value && !/^[a-z][a-z0-9+.-]*:/i.test(value) && !value.startsWith('/'); };
   const pending = [];
   for (const Ctor of [HTMLMediaElement, HTMLImageElement, HTMLSourceElement]) {
     const desc = Object.getOwnPropertyDescriptor(Ctor.prototype, 'src');
@@ -92,7 +98,7 @@ const BOOTSTRAP = `(() => {
     if (!message || typeof message !== 'object') return;
     if (message.type === 'portos-mv:assets' && !resolved) {
       for (const [key, blob] of Object.entries(message.files || {})) {
-        if (blob instanceof Blob) map.set(keyOf(key), URL.createObjectURL(blob));
+        if (blob instanceof Blob) map.set(String(key).replace(/^\\.\\//, ''), URL.createObjectURL(blob));
       }
       resolved = true;
       for (const [el, desc, value] of pending.splice(0)) desc.set.call(el, map.get(keyOf(value)) || value);
@@ -131,12 +137,10 @@ export async function buildDocumentPreview(project, { draft = false } = {}) {
     generated: project.composition?.document?.source?.kind === 'generated' });
 
   let inlined = 0;
-  const inlinedKeys = new Set();
   const dataUrl = async (rel) => {
     const file = files.get(rel);
     if (!file || file.size > INLINE_FILE_MAX || inlined + file.size > INLINE_TOTAL_MAX) return null;
     inlined += file.size;
-    inlinedKeys.add(rel);
     return `data:${documentMimeType(rel)};base64,${(await readFile(file.abs)).toString('base64')}`;
   };
   const rewriteCss = async (css) => {
@@ -204,7 +208,9 @@ export async function buildDocumentPreview(project, { draft = false } = {}) {
     assets.push({ key: scene.media.src, url: `/data/${m.kind === 'video' ? 'videos' : 'images'}/${encodeURIComponent(name)}`, bytes: null });
   }
   for (const [rel, file] of files) {
-    if (inlinedKeys.has(rel) || !BRIDGED.has(extname(rel).toLowerCase())) continue;
+    // Media is posted even when CSS or an <img> tag already inlined it as data:, because document code
+    // can also reach the same file through a relative src or a bundler URL (new URL(…, import.meta.url)).
+    if (!BRIDGED.has(extname(rel).toLowerCase())) continue;
     assets.push({ key: rel, url: `/api/music-video/${encodeURIComponent(project.id)}/composition/document/file?path=${encodeURIComponent(rel)}${draft ? '&draft=1' : ''}`, bytes: file.size });
   }
   return { html, assets, width: frame.width, height: frame.height, fps: clock.fps, durationSec: clock.durationSec };
