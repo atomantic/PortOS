@@ -429,6 +429,20 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     status: 'admitted',
     modules: ['services/games/compile.js'],
   },
+  {
+    // Active run transcripts and their file-primary completion metadata are
+    // mutated by server and separate CoS/TUI runner processes. Final output
+    // replacement precedes metadata; spool batches append output/state in
+    // parallel and raw truncation flags are separate writes. A server-local
+    // lease cannot drain the other process; requires a cross-process barrier.
+    id: 'runtime-recording-publication-across-processes',
+    status: 'outstanding',
+    modules: [
+      'services/runner.js', 'lib/tuiPromptRunner.js',
+      'services/agentTuiSpawning/outputSpooler.js',
+      'services/agentTuiSpawning/sessionController.js',
+    ],
+  },
   // Anything the sweep did not reach. A new asset owner lands here until it is
   // classified; the claim cannot become `global` while this entry exists.
   { id: 'unclassified-durable-owners', status: 'outstanding', modules: [] },
