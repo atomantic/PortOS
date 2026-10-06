@@ -114,12 +114,12 @@ export function extractAgentSummary(output) {
 
   let summaryLines;
   if (markerIdx >= 0) {
-    // Everything past the marker is the sentinel, appended verbatim and
-    // contiguously by `ingestDoneSentinel` at the top of finalize — no other
-    // `appendLine` runs after it. So take it as-is: filtering here could only
-    // ever delete the agent's own words (a summary is free to contain a line
-    // like "✅ Tests passed").
-    summaryLines = lines;
+    // Past the marker is the sentinel summary — but not only that: a Merge Gate
+    // re-prompt (#5876) appends its own line after it and reopens the run, so a
+    // run that never writes a second sentinel ends with that line and any
+    // nudges after it. The strip matches PortOS's own message shapes only, so
+    // an agent's "✅ Tests passed" survives it.
+    summaryLines = stripLifecycleLines(lines);
   } else {
     // Find the last tool-call artifact line index.
     // Everything after it is the agent's final summary.
