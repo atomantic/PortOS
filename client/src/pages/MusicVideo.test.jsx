@@ -105,6 +105,8 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   musicVideoPublishKitEventsUrl: (jobId) => `/api/music-video/publish-kit/${jobId}/events`,
   cancelMusicVideoPublishKit: vi.fn(async () => ({ ok: true })),
   draftMusicVideoPublishCopy: vi.fn(),
+  getMusicVideoPromotionPlan: vi.fn(async () => ({ steps: [] })),
+  planMusicVideoPromotion: vi.fn(),
   updateMusicVideoPublishCopy: vi.fn(),
   selectMusicVideoPublishThumbnail: vi.fn(),
   prepareMusicVideoPublishDraft: vi.fn(),
