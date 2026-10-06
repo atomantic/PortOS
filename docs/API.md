@@ -1014,11 +1014,27 @@ All errors return JSON with consistent structure:
 }
 ```
 
-Common error codes:
-- `NOT_FOUND` - Resource not found
-- `VALIDATION_ERROR` - Invalid request data
-- `COMMAND_NOT_ALLOWED` - Shell command not in allowlist
-- `INTERNAL_ERROR` - Server error
+When a route throws without naming a `code`, it is derived from the HTTP status
+(`ERROR_CODES_BY_STATUS` in `server/lib/errorHandler.js`, the same table the
+agent-tool resource advertises):
+
+| Status | Code | Meaning |
+|--------|------|---------|
+| 400 | `BAD_REQUEST` | Malformed request |
+| 401 | `UNAUTHORIZED` | Authentication missing or rejected |
+| 403 | `FORBIDDEN` | Refused, including a shell command outside the allowlist |
+| 404 | `NOT_FOUND` | Resource not found |
+| 409 | `CONFLICT` | State conflict (duplicate, stale, or already running) |
+| 422 | `VALIDATION_ERROR` | Request understood but invalid |
+| 500 | `INTERNAL_ERROR` | Server error (also the fallback for any unlisted status) |
+| 502 | `BAD_GATEWAY` | An upstream service failed |
+| 503 | `SERVICE_UNAVAILABLE` | A dependency is not available |
+
+Zod request validation (`validateRequest`) answers `400` with
+`VALIDATION_ERROR` and the field errors in `context.details`. Domain routes may
+also set their own code (for example `MERGE_METHOD_NOT_ALLOWED`) on top of the
+status — branch on the status first, and treat an unfamiliar `code` as a
+refinement of it.
 
 
 ### Catalog scrap graph commits
