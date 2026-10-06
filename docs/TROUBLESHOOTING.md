@@ -73,7 +73,7 @@ pm2 logs portos-server --lines 100
 
 # Common causes:
 # - Missing dependencies: npm run install:all
-# - Missing data directory: mkdir -p data
+# - Missing data directory or files: npm run setup:data (see below)
 # - Port conflict: check EADDRINUSE errors
 ```
 
@@ -83,9 +83,14 @@ pm2 logs portos-server --lines 100
 
 **Solution**:
 ```bash
-# Copy sample data files
-cp -r data.reference/* data/
+# Seed only what is missing — never overwrites an existing file
+npm run setup:data
+npm run pm2:restart
 ```
+
+`setup:data` (`scripts/setup-data.js`) creates `data/` from `data.reference/` when it is absent. Otherwise it copies only the missing files, adds new starter entries to `providers.json` and the prompt configs without touching yours, and expands `__PORTOS_ROOT__` in `apps.json`. It also skips any path a migration derives from your own records (`scripts/lib/migrationOwnedPaths.js`). Pending migrations run when the server boots.
+
+**Never copy `data.reference/` over `data/` by hand** (`cp -r data.reference/* data/`). The seed tree includes `settings.json`, `apps.json`, `providers.json`, `cos/state.json`, `TASKS.md`, Brain settings (`brain/meta.json`), the digital-twin documents and every prompt template. Copying it overwrites your copies of all of them with shipped defaults, and nothing reports what was lost.
 
 ## Connection Issues
 
@@ -448,8 +453,10 @@ Universes, series, catalog ingredients, memories, and other relational records l
 
 **Solution** (touch only the affected split):
 ```bash
-# 1. Stop PortOS, then back up the source, the target layout and the ledger
-pm2 stop all
+# 1. Stop PortOS, then back up the source, the target layout and the ledger.
+#    npm run pm2:stop stops only PortOS's apps — never `pm2 stop all`, which also
+#    stops every other app on the shared PM2 daemon.
+npm run pm2:stop
 cp -R data/pipeline-issues data/pipeline-issues.bak-manual 2>/dev/null
 mkdir -p data/manual-backup && cp data/pipeline-issues.json* data/manual-backup/ 2>/dev/null
 cp data/migrations.applied.json data/migrations.applied.json.bak-manual
@@ -462,7 +469,7 @@ cp data/migrations.applied.json data/migrations.applied.json.bak-manual
 
 # 4. Re-run migrations; records already split are kept, only missing ones are added
 node scripts/run-migrations.js
-pm2 start all
+npm run pm2:start
 ```
 
 The split never overwrites a record directory that already exists. If a later Postgres import (`server/scripts/migrateUniversesToDB.js` and similar) already ran, re-run that explicit legacy-import tool after the split rather than resetting import markers or schema versions.
