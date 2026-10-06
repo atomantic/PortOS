@@ -2526,7 +2526,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
     expect(dialog.contains(document.getElementById('mv-auto-edit'))).toBe(true);
   });
 
-  it('puts the selected step before its own approval, keeps the run in Project settings, and keeps unsaved planning edits across steps', async () => {
+  it('leads Storyboard and Make with the player and their approval, closes Look with its approval, keeps the run in Project settings and unsaved planning edits across steps', async () => {
     listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP,
       autonomousRun: { status: 'needs-human', stage: 'video', output: {}, brief: {} },
     }]);
@@ -2547,9 +2547,16 @@ describe('MusicVideo stage tabs (#9243)', () => {
       const title = selectedTab().textContent.split(',')[0];
       expect(within(panel).getByRole('heading', { level: 3, name: title })).toBeInTheDocument();
       expect(panel).toHaveAccessibleName(title);
-      // The step's own work comes first; the one approval that closes it sits at the bottom.
       const stageReview = within(panel).getByRole('region', { name: 'Production review' });
-      expect(panel.lastElementChild).toBe(stageReview);
+      if (stage === 'cast-sets') {
+        // Look is reviewed through its visual guide: the step's work comes first and the approval closes it.
+        expect(panel.lastElementChild).toBe(stageReview);
+      } else {
+        // Storyboard and Make are reviewed by watching: the player leads, the approval beside it, then the work.
+        const player = within(panel).getByRole('complementary', { name: 'Preview' });
+        expect(player.compareDocumentPosition(stageReview) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(stageReview.parentElement).toBe(player.parentElement.parentElement);
+      }
       expect(within(stageReview).getAllByRole('region', { name: /^Approve: / })).toHaveLength(1);
       expect(within(stageReview).getByRole('region', { name: `Approve: ${approvals[stage]}` })).toBeInTheDocument();
       // The run is no longer a shared panel under every step.

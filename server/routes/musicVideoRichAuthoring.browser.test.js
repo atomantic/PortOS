@@ -74,7 +74,7 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     await saveProductionDraft(p.id, draft);
 
     const ui = join(PATHS.data, 'review-ui'); await mkdir(ui, { recursive: true });
-    const entry = `import React,{useEffect,useState} from 'react';import{createRoot}from'react-dom/client';import Panel from './src/components/musicVideo/ProductionReviewPanel.jsx';import DocumentPanel from './src/components/musicVideo/DocumentCompositionPanel.jsx';import useReview from './src/hooks/useMusicVideoProductionReview.js';function App(){const[p,setP]=useState(null);useEffect(()=>{fetch('/api/music-video/${p.id}/production-review').then(r=>r.json()).then(r=>setP(r.project))},[]);const review=useReview({project:p,replaceProject:setP});return p?<main style={{maxWidth:1100,margin:'auto',padding:24}}><h1>Music video production review</h1><DocumentPanel project={p} onProject={setP} onSave={async patch=>{const r=await fetch('/api/music-video/${p.id}',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)});setP(await r.json())}}/><Panel project={p} review={review} onOpenArtifact={id=>window.open('/api/music-video/${p.id}/dev-artifacts/'+id+'/file')}/></main>:null}createRoot(document.getElementById('root')).render(<App/>);`;
+    const entry = `import React,{useEffect,useState} from 'react';import{createRoot}from'react-dom/client';import Panel from './src/components/musicVideo/ProductionReviewPanel.jsx';import DocumentPanel from './src/components/musicVideo/DocumentCompositionPanel.jsx';import useReview from './src/hooks/useMusicVideoProductionReview.js';function App(){const[p,setP]=useState(null);useEffect(()=>{fetch('/api/music-video/${p.id}/production-review').then(r=>r.json()).then(r=>setP(r.project))},[]);const review=useReview({project:p,replaceProject:setP});return p?<main style={{maxWidth:1100,margin:'auto',padding:24}}><h1>Music video production review</h1><DocumentPanel project={p} onProject={setP} onSave={async patch=>{const r=await fetch('/api/music-video/${p.id}',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)});setP(await r.json())}}/>{['art','storyboard','proof'].map(stage=><div key={stage} data-stage={stage}><Panel stage={stage} project={p} review={review} onOpenArtifact={id=>window.open('/api/music-video/${p.id}/dev-artifacts/'+id+'/file')}/></div>)}</main>:null}createRoot(document.getElementById('root')).render(<App/>);`;
     const { build } = await import(clientBundler[0]);
     const { default: react } = await import(clientBundler[1]);
     const { default: tailwind } = await import(clientBundler[2]);
@@ -127,11 +127,13 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     await page.getByLabel('Authoring renderer').selectOption('three');
     expect((await store.getProject(p.id)).mediaMode).toBe('code-only');
     const choreography = 'Energy target: driving chorus with an expansive exit.\n0:00–0:04 / opening downbeats: operator steps toward the door and raises the key; camera pushes in; title lands on the first vocal.\n0:04–0:10 / chorus accent: key turns, door swings outward, operator crosses the threshold; camera arcs around the prop; type clears before the exit.\nRepeat chorus: widen the doorway and increase the operator travel while retaining the copper motif.';
-    await page.getByText('Edit visual guide and storyboard', { exact: true }).click();
-    await page.getByLabel('Timed choreography and energy plan', { exact: true }).fill(choreography);
+    // One panel per step's approval (#10305), as the page mounts them on Look, Storyboard and Make.
+    const panel = (stage) => page.locator(`[data-stage="${stage}"]`);
+    await panel('art').getByText('Edit art direction and visual guide', { exact: true }).click();
+    await panel('art').getByLabel('Timed choreography and energy plan', { exact: true }).fill(choreography);
     const [savedPlan] = await Promise.all([
       page.waitForResponse(response => response.url().endsWith('/production-review') && response.request().method() === 'PUT'),
-      page.getByRole('button', { name: 'Save planning edits' }).click(),
+      panel('art').getByRole('button', { name: 'Save planning edits' }).click(),
     ]);
     expect(savedPlan.status()).toBe(200);
     expect((await store.getProject(p.id)).productionReview.draft.motionLanguage).toBe(choreography);
@@ -153,16 +155,17 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     expect(planned.status()).toBe(200);
     expect((await store.getProject(p.id)).treatment.shotDirections[0].medium).toBe('procedural');
     author.sectionId = buildCodeTimeline(await store.getProject(p.id)).sections[0].id;
-    await page.getByText('Review feedback and revision history', { exact: true }).click();
-    await page.getByLabel('Feedback stage').selectOption('storyboard');
-    await page.getByLabel('Feedback target').fill('shot: chorus / operator');
-    await page.getByLabel('Requested change').fill('Move the operator behind the threshold at the exit.');
-    await page.getByRole('button', { name: 'Save revision feedback' }).click();
-    await page.getByText('Move the operator behind the threshold at the exit.', { exact: true }).waitFor();
+    // Feedback goes to the panel's own step: the storyboard's.
+    const board = panel('storyboard');
+    await board.getByText('Review feedback and revision history', { exact: true }).click();
+    await board.getByLabel('Feedback target').fill('shot: chorus / operator');
+    await board.getByLabel('Requested change').fill('Move the operator behind the threshold at the exit.');
+    await board.getByRole('button', { name: 'Save revision feedback' }).click();
+    await board.getByText('Move the operator behind the threshold at the exit.', { exact: true }).waitFor();
     expect(await page.getByRole('button', { name: 'Approve lyric-timed storyboard' }).isDisabled()).toBe(true);
-    await page.getByLabel('Resolution for shot: chorus / operator').fill('Reviewed the updated staging in the storyboard.');
-    await page.getByRole('button', { name: 'Resolve feedback after review' }).click();
-    await page.getByText('Resolution: Reviewed the updated staging in the storyboard.', { exact: true }).waitFor();
+    await board.getByLabel('Resolution for shot: chorus / operator').fill('Reviewed the updated staging in the storyboard.');
+    await board.getByRole('button', { name: 'Resolve feedback after review' }).click();
+    await board.getByText('Resolution: Reviewed the updated staging in the storyboard.', { exact: true }).waitFor();
     const beforeBoard = await page.evaluate(async id => (await fetch('/api/music-video/' + id + '/production-review')).json(), p.id);
     expect(beforeBoard.readiness.storyboard.problems).toEqual([]);
     await approve('Approve lyric-timed storyboard');
@@ -194,13 +197,13 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     await page.locator('video').waitFor({ timeout: 120000 });
     await page.locator('video').evaluate(async video => { await video.play(); await new Promise(r => setTimeout(r, 400)); video.pause(); });
     expect(await page.locator('video').evaluate(v => v.videoWidth)).toBeGreaterThan(0);
-    expect(await page.getByRole('region', { name: 'Saved choreography for proof comparison' }).textContent()).toContain(choreography);
+    expect(await page.locator('[aria-label="Saved choreography for proof comparison"]').textContent()).toContain(choreography);
     expect(await page.getByRole('button', { name: 'Approve — I reviewed this proof with audio' }).isDisabled()).toBe(true);
     await page.getByLabel('Playback energy compared with the saved plan').fill('The synthetic fixture demonstrates a driving chorus: the modeled subject changes pose and travels while the camera moves through the scene.');
     await page.getByLabel('Timecoded playback notes').fill('0:02 — subject enters the frame; 0:07 — pose and camera position differ and readable type remains clear. This is a synthetic workflow test, not artistic approval of a production video.');
     expect(await page.getByRole('checkbox', { name: /I watched this revision/ }).count()).toBe(0);
     await page.getByRole('button', { name: 'Approve — I reviewed this proof with audio' }).click();
-    await page.waitForFunction(() => [...document.querySelectorAll('[role=status]')].filter(el => el.textContent === 'Approved for this revision').length === 3);
+    for (const heading of ['Art direction approved', 'Lyric-timed storyboard approved', 'Animated proof approved']) await page.getByRole('heading', { name: heading }).waitFor();
     const result = await store.getProject(p.id);
     expect(result.productionReview.feedback[0].resolvedAt).toBeTruthy();
     expect(result.productionReview.approvals.proof.proofReview).toMatchObject({ watchedWithAudio: true, excerptId: result.productionReview.proof.excerptId, timecodedNotes: expect.stringContaining('0:02') });

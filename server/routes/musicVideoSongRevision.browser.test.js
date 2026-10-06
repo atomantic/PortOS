@@ -69,7 +69,7 @@ describe.skipIf(!canRun)('song revision in Chrome (client dependencies required)
     } });
     const ui = join(PATHS.data, 'ui'); await mkdir(ui, { recursive: true });
     await symlink(join(client, 'node_modules'), join(ui, 'node_modules'), 'dir');
-    const entry = `import React,{useState} from 'react';import{createRoot}from'react-dom/client';import{BrowserRouter,useNavigate}from'react-router';import Panel from '${client}/src/components/musicVideo/SongRevisionPanel.jsx';import ReviewPanel from '${client}/src/components/musicVideo/ProductionReviewPanel.jsx';import useReview from '${client}/src/hooks/useMusicVideoProductionReview.js';import{cloneMusicVideoProject}from'${client}/src/services/apiMusicVideo.js';function App(){const[p,setP]=useState(${JSON.stringify(before)});const nav=useNavigate();const review=useReview({project:p,replaceProject:setP});return <main style={{maxWidth:1000,margin:'auto',padding:20}}><Panel key={p.id} project={p} onUpdated={setP} onFork={()=>cloneMusicVideoProject(p.id).then(next=>{setP(next);nav('/music-video/'+next.id+'/setup')})}/><ReviewPanel key={'review-'+p.id} project={p} review={review} onOpenArtifact={()=>{}}/></main>}createRoot(document.getElementById('root')).render(<BrowserRouter><App/></BrowserRouter>);`;
+    const entry = `import React,{useState} from 'react';import{createRoot}from'react-dom/client';import{BrowserRouter,useNavigate}from'react-router';import Panel from '${client}/src/components/musicVideo/SongRevisionPanel.jsx';import ReviewPanel from '${client}/src/components/musicVideo/ProductionReviewPanel.jsx';import useReview from '${client}/src/hooks/useMusicVideoProductionReview.js';import{cloneMusicVideoProject}from'${client}/src/services/apiMusicVideo.js';function App(){const[p,setP]=useState(${JSON.stringify(before)});const nav=useNavigate();const review=useReview({project:p,replaceProject:setP});return <main style={{maxWidth:1000,margin:'auto',padding:20}}><Panel key={p.id} project={p} onUpdated={setP} onFork={()=>cloneMusicVideoProject(p.id).then(next=>{setP(next);nav('/music-video/'+next.id+'/setup')})}/><ReviewPanel key={'art-'+p.id} stage="art" project={p} review={review} onOpenArtifact={()=>{}}/><ReviewPanel key={'board-'+p.id} stage="storyboard" project={p} review={review} onOpenArtifact={()=>{}}/></main>}createRoot(document.getElementById('root')).render(<BrowserRouter><App/></BrowserRouter>);`;
     await writeFile(join(ui, 'entry.jsx'), `import ${JSON.stringify(join(client, 'src/index.css'))};\n` + entry);
     await writeFile(join(ui, 'index.html'), '<html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="root"></div><script type="module" src="/entry.jsx"></script></body></html>');
     const { build } = await import(bundler[0]); const { default: react } = await import(bundler[1]); const { default: tailwind } = await import(bundler[2]);
@@ -100,7 +100,9 @@ describe.skipIf(!canRun)('song revision in Chrome (client dependencies required)
     const { productionAlignmentBasis } = await import('../services/musicVideo/productionReview.js');
     const doc = await importDocumentTemplate(selected.id, 'layered');
     musicVideoEvents.emit('song-revision', { projectId: selected.id, project: doc.project });
-    await page.getByText('Edit visual guide and storyboard', { exact: true }).click();
+    // Each step's approval carries its own planning fold (#10305): art direction on Look, shots on Storyboard.
+    await page.getByText('Edit art direction and visual guide', { exact: true }).click();
+    await page.getByText('Edit storyboard shots', { exact: true }).click();
     const manifest = { documentDirectory: doc.document.directory, audioBasis: productionAlignmentBasis(doc.project), sourceFile: 'engine.js',
       shots: [{ id: 'authored-shot', sceneId: null, startSec: 0, endSec: 1, lyricCueIds: [], action: 'Open door', staging: 'Figure left', camera: 'Track', transition: 'Cut' }] };
     const upload = () => page.getByLabel('Import document shot manifest', { exact: true }).setInputFiles({ name: 'shots.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(manifest)) });
@@ -111,7 +113,7 @@ describe.skipIf(!canRun)('song revision in Chrome (client dependencies required)
     musicVideoEvents.emit('song-revision', { projectId: selected.id, project: replacement.project });
     await page.waitForFunction(directory => document.body.textContent.includes(directory), replacement.document.directory);
     await upload();
-    await page.getByRole('alert').filter({ hasText: 'composition version changed' }).waitFor();
+    await page.getByRole('alert').filter({ hasText: 'composition version changed' }).first().waitFor();
     expect((await store.getProject(selected.id)).productionReview.documentStoryboard.directory).toBe(doc.document.directory);
 
     const priorVersion = await store.getProject(selected.id);

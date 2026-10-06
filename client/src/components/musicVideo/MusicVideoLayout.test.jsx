@@ -110,6 +110,30 @@ describe('phone layout', () => {
   });
 });
 
+describe('player-first steps', () => {
+  const renderStep = (playerFirst) => render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project' }} stage="board"
+    onStageChange={() => {}} progress={progressFor('board')} spend={{ spentUsd: 0 }} playerFirst={playerFirst}
+    lead={<section aria-label="Checklist">checklist</section>}
+    review={<section aria-label="Approval">approve</section>}
+    dock={<aside aria-label="Preview">preview</aside>}>
+    <section aria-label="Work">work</section>
+  </MusicVideoLayout>);
+
+  it('puts the player and the approval side by side at the top of a step reviewed by watching', () => {
+    renderStep(true);
+    const panel = screen.getByRole('tabpanel');
+    const order = ['Checklist', 'Preview', 'Approval', 'Work'].map((name) => within(panel).getByRole(name === 'Preview' ? 'complementary' : 'region', { name }));
+    for (let i = 1; i < order.length; i += 1) expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('docks the player at the side and closes the step with the approval otherwise', () => {
+    renderStep(false);
+    const panel = screen.getByRole('tabpanel');
+    expect(within(panel).queryByRole('complementary', { name: 'Preview' })).toBeNull();
+    expect(panel.lastElementChild).toHaveAccessibleName('Approval');
+  });
+});
+
 describe('stepState', () => {
   it('uses one word per state, flagging a changed approval and the step that waits on the director', () => {
     const at = (entry, needsYouStage = null) => stepState({ id: 'board', ...entry }, { needsYouStage }).word;

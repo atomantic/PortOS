@@ -307,7 +307,7 @@ describe('Production proof playback evidence', () => {
     expect(screen.getByRole('button', { name: 'Approve art direction' }).disabled).toBe(true);
     view.rerender(<Steps stage="proof" />);
     fireEvent.loadedData(screen.getByLabelText('Animated proof with master audio'));
-    expect(screen.getByText('Save your planning edits before approving this revision.', { selector: '#mv-review-example-project-proof-approval-help' })).toBeTruthy();
+    expect(screen.getByText('Save your planning edits before approving this revision.', { selector: '#mv-review-example-project-proof-proof-approval-help' })).toBeTruthy();
     expect(screen.getByLabelText('Timecoded playback notes').disabled).toBe(true);
     expect(screen.getByRole('button', { name: proofAction }).disabled).toBe(true);
     expect(review.approve).not.toHaveBeenCalled();

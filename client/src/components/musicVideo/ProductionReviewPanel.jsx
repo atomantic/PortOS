@@ -31,10 +31,11 @@ function ApprovalBox({ id, label, approved, children }) {
  * the page so unsaved edits survive a step switch; `onNavigate(step, anchor)`
  * jumps steps.
  */
-export default function ProductionReviewPanel({ project, review, onOpenArtifact, stage, planning = null, onNavigate = null }) {
+export default function ProductionReviewPanel({ project, review, onOpenArtifact, stage, planning = null, onNavigate = null, onSeek = null }) {
   const showArt = stage === 'art';
   const showBoard = stage === 'storyboard';
-  const fieldId = key => `mv-review-${project.id}-${key}`;
+  // Scoped by stage too, so two step panels mounted together never share a field id.
+  const fieldId = key => `mv-review-${project.id}-${stage}-${key}`;
   const saved = project.productionReview?.draft || EMPTY;
   const [visibleArt, setVisibleArt] = useState(null);
   const [proofMedia, setProofMedia] = useState(null);
@@ -154,12 +155,12 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
     {excerpt && <p className="text-xs text-port-text-muted break-words">{excerpt.filename || excerpt.status} · {project.productionReview?.proof?.basis === ready?.basis.proof ? 'Current source revision' : 'Source changed — render a new proof'}</p>}
     {excerpt?.status === 'error' && excerpt.error && <p role="alert" className="text-sm text-port-error break-words">{excerpt.error}</p>}
 
-      <p className="text-sm">Finish the composition above (typography, grade, render style), then render a 10–45 second chorus with its entry and exit. Watch with sound at normal speed and compare the chosen energy target and timed choreography below against the actual subject, props, camera, typography and transitions. Check accents against beat and lyric anchors, readable holds and repeated-chorus escalation. A strong static frame does not prove the motion works.</p>
-      <section aria-label="Saved choreography for proof comparison" className="rounded border border-port-border bg-port-bg p-3">
-        <h4 className="text-sm font-medium">Saved energy target and timed choreography</h4>
+      <p className="text-sm">Render a 10–45 second chorus over the finished composition and watch it with sound at normal speed.</p>
+      <details aria-label="Saved choreography for proof comparison" className="rounded border border-port-border bg-port-bg p-3">
+        <summary className="min-h-[44px] cursor-pointer text-sm font-medium">Saved energy target and timed choreography</summary>
         <p className="mt-1 whitespace-pre-wrap text-sm">{saved.motionLanguage || 'Save an energy target and timed choreography in the planning editor before judging the proof.'}</p>
         <p className="mt-2 text-xs text-port-text-muted">Compare playback with this saved plan. If the chosen energy or actions are missing, record revision feedback with a time range before approving.</p>
-      </section>
+      </details>
       <div id="mv-review-render" tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className="flex flex-wrap items-end gap-2">
         <label htmlFor={fieldId('proof-start')} className="text-sm">Proof start (seconds)<input id={fieldId('proof-start')} type="number" min="0" step="0.01" value={startSec} onChange={e => setStartSec(Number(e.target.value))} className={fieldClass} /></label>
         <label htmlFor={fieldId('proof-end')} className="text-sm">Proof end (seconds)<input id={fieldId('proof-end')} type="number" min="0" step="0.01" value={endSec} onChange={e => setEndSec(Number(e.target.value))} className={fieldClass} /></label>
@@ -224,7 +225,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
     {review.error && <p role="alert" className="text-port-error">{review.error}</p>}
     <ApprovalBox id={`mv-review-${key}`} label={label} approved={!!ready?.[key].approved}>
         <div id={fieldId(`${key}-prerequisites`)}>{(ready?.[key].problems || []).map(problem => <p key={problem} className="mt-1 text-xs text-port-text-muted">{problem}</p>)}</div>
-        {key === 'proof' ? proofContent : <ProductionReviewContext stage={key} project={project} basis={ready?.basis[key]} approved={ready?.[key].approved} onOpenArtifact={onOpenArtifact} onArtReady={available => setVisibleArt(available ? artIdentity : null)} />}
+        {key === 'proof' ? proofContent : <ProductionReviewContext stage={key} project={project} basis={ready?.basis[key]} approved={ready?.[key].approved} onOpenArtifact={onOpenArtifact} onArtReady={available => setVisibleArt(available ? artIdentity : null)} onSeek={onSeek} />}
         <p id={fieldId(`${key}-approval-help`)} role="status" className="mt-2 text-sm text-port-text-muted">{approvalHelp(key)}</p>
         <button type="button" className={`${buttonClass} mt-2`} onClick={() => approve(key)}
           aria-describedby={`${fieldId(`${key}-prerequisites`)} ${fieldId(`${key}-approval-help`)}${key === 'proof' && !machineReview ? ` ${fieldId('playback-attestation')}` : ''}`}

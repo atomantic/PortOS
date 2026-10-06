@@ -451,6 +451,8 @@ describe('stageChecklist', () => {
     const items = stageChecklist('board', castProject({ scenes: [scene()] }), readiness);
     expect(items.find((i) => i.id === 'board-manifest')).toMatchObject({ label: 'Document shot manifest', action: { label: 'Import the shot manifest', anchor: 'mv-review-planning' } });
     expect(items.some((i) => i.id === 'board-timing')).toBe(false);
+    // The approval row points at the items above instead of repeating the first problem.
+    expect(items.at(-1)).toMatchObject({ id: 'approve-storyboard', detail: 'Approve once the items above are done.' });
   });
   it('keeps Setup open until lyrics are imported and their timing verified, unless the song is instrumental', () => {
     const base = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS };
@@ -549,6 +551,14 @@ describe('stepNotes', () => {
     expect(stepNotes({ ...project, renderHistoryId: 'r', renderDependencyState: { status: 'stale' } }).review).toBe('Out of date');
     // Before the final render, Final render says how many drafts and proofs there are to watch.
     expect(stepNotes({ ...project, excerpts: [{ id: 'a', status: 'complete', filename: 'a.mp4' }, { id: 'b', status: 'complete', filename: 'b.mp4' }, { id: 'c', status: 'error' }] }).review).toBe('2 drafts to watch');
+  });
+});
+
+describe('preview source order on Final render', () => {
+  it('puts the drafts ahead of the live composition until a final render exists', () => {
+    const project = { composition: { mode: 'document', document: { directory: 'd' } }, excerpts: [{ id: 'aaaaaa', status: 'complete', filename: 'a.mp4', startSec: 0, endSec: 5 }] };
+    expect(listPreviewSources(project).map((s) => s.id)).toEqual(['document', 'excerpt:aaaaaa']);
+    expect(listPreviewSources(project, { draftsFirst: true }).map((s) => s.id)).toEqual(['excerpt:aaaaaa', 'document']);
   });
 });
 
