@@ -19,6 +19,7 @@ import { useSocketResource } from '../hooks/useSocketResource';
 import { useTimeTick } from '../hooks/useTimeTick';
 import { equalByKeys, equalListByKeys } from '../lib/compareHelpers';
 import { timeAgo, timeUntil } from '../utils/formatters';
+import { pluralize } from '../lib/textUtils';
 
 const RESOURCE_EVENTS = ['backup:changed'];
 
@@ -318,7 +319,7 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
                   ? 'Still being written…'
                   : snap.failed
                     ? 'Backup failed — download available for salvage'
-                    : `${snap.fileCount} files`}
+                    : pluralize(snap.fileCount, 'file')}
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-1">
@@ -448,7 +449,7 @@ const BackupWidget = memo(function BackupWidget() {
               {status?.lastRun ? timeAgo(status.lastRun) : '—'}
             </div>
             {status?.filesChanged != null && (
-              <div className="text-xs text-gray-600">{status.filesChanged} files changed</div>
+              <div className="text-xs text-gray-600">{pluralize(status.filesChanged, 'file')} changed</div>
             )}
           </div>
           <div className="bg-port-bg/50 rounded-lg p-3">

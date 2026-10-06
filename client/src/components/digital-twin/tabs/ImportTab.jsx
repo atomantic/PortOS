@@ -19,6 +19,7 @@ import toast from '../../ui/Toast';
 import TwinProviderPicker from '../TwinProviderPicker.jsx';
 import { formatBytes } from '../../../utils/formatters';
 import FilePickerButton from '../../ui/FilePickerButton';
+import { pluralize } from '../../../lib/textUtils';
 
 const SOURCE_ICONS = {
   goodreads: BookOpen,
@@ -99,7 +100,7 @@ export default function ImportTab() {
       toast.error(result.error);
     } else {
       setAnalysisResult(result);
-      toast.success(`Analyzed ${result.itemCount} items from ${selectedSource.name}`);
+      toast.success(`Analyzed ${pluralize(result.itemCount, 'item')} from ${selectedSource.name}`);
     }
 
     setAnalyzing(false);
