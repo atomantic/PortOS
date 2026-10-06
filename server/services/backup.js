@@ -1328,20 +1328,26 @@ const OS_METADATA_RSYNC_EXCLUDES = [...OS_METADATA_FILES, '._*'].map(name => `--
  * filter, the manifest selection and the scope inventory so preview,
  * verification and execution cannot disagree.
  */
-const RESTORE_PRESERVED_FILES = Object.freeze(['database-authority.json']);
+const RESTORE_PRESERVED_FILES = Object.freeze([
+  'database-authority.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance',
+]);
 // Matched case-insensitively (rsync has no such flag, so each letter becomes a
 // `[xX]` class): on a case-insensitive volume a `Database-Authority.json` entry
 // would otherwise overwrite the destination's lowercase record.
 const caseInsensitiveGlob = (name) => name.replace(/[a-z]/gi, ch => `[${ch.toLowerCase()}${ch.toUpperCase()}]`);
 const RESTORE_PRESERVED_RSYNC_EXCLUDES = RESTORE_PRESERVED_FILES.map(name => `--exclude=/${caseInsensitiveGlob(name)}`);
-const isRestorePreservedPath = (relativePath) => RESTORE_PRESERVED_FILES.includes(relativePath.toLowerCase());
+const isRestorePreservedPath = (relativePath) => {
+  if (typeof relativePath !== 'string') return false;
+  const normalized = relativePath.toLowerCase();
+  return RESTORE_PRESERVED_FILES.some(path => normalized === path || normalized.startsWith(`${path}/`));
+};
 
 // A filter naming a preserved file would otherwise be a silent no-op restore.
 // Compared case-insensitively after dropping empty/`.` segments, so
 // `./Database-Authority.json/` cannot slip past on a case-insensitive volume.
 const restoreScopeIsPreservedFile = (subdirFilter) => {
   const normalized = subdirFilter?.split('/').filter(part => part && part !== '.').join('/').toLowerCase();
-  return RESTORE_PRESERVED_FILES.includes(normalized);
+  return isRestorePreservedPath(normalized);
 };
 
 const snapshotFileIntegrityError = (snapshotId, unmanifestedPath = null) => new ServerError(
@@ -1503,7 +1509,7 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   // never promises a restore that execution would silently skip.
   if (restoreScopeIsPreservedFile(subdirFilter)) {
     throw new ServerError(
-      'database-authority.json is machine-local and is never restored from a snapshot: it records which database backend a cutover completed on THIS machine, and installing another copy would fence the healthy local database. Restore your records with a data or database restore instead; to change the authority, run a database cutover (see docs/STORAGE.md, retired backend).',
+      'These machine-local authority and recovery records (database-authority.json, peer-execution-authority.json, peer-execution-recovery.jsonl and workflow-maintenance) are never restored from a snapshot. Restore application records with a data or database restore; existing local authority and unresolved owners must be reconciled on this machine (see docs/STORAGE.md).',
       { status: 400, code: 'BACKUP_RESTORE_MACHINE_LOCAL' },
     );
   }
@@ -1781,6 +1787,13 @@ async function replayAdmittedDump({ tableCount, sizeBytes, snapshotId, dump, res
         error: 'The restore recovery journal could not be written. Restore was refused without changing data.',
       };
     }
+    try {
+      const { preparePeerExecutionRestore } = await import('./peerExecutionRestore.js');
+      await preparePeerExecutionRestore(record.id);
+    } catch (err) {
+      console.error(`❌ restore: execution consumption capture failed: ${err.message}`);
+      return pendingRecoveryResult('restore_execution_reconciliation', record);
+    }
     const { host: pgHost, port, database: pgDb, user: pgUser } = POOL_CONFIG;
     const pgPort = String(port);
 
@@ -1845,7 +1858,7 @@ async function replayAdmittedDump({ tableCount, sizeBytes, snapshotId, dump, res
       // fenced instead of reopening writes or replaying again.
       const settled = await settleReplayOutcome(record);
       if (settled.outcome === 'rolled_back') return replay;
-      if (settled.outcome === 'uncertain') return pendingRecoveryResult('restore_commit_unknown', record);
+      if (settled.outcome === 'uncertain') return pendingRecoveryResult(settled.reason ?? 'restore_commit_unknown', record);
       record = settled.record;
     }
 

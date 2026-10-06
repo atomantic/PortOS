@@ -31,6 +31,7 @@ const SESSION_SETTLE_MS = 200;
 const MESSAGES = {
   restore_commit_unknown: 'The restore could not confirm whether the database dump was committed. Ordinary database work stays paused and the dump will NOT be replayed; retry recovery from Settings > Backup once PostgreSQL is reachable.',
   restore_schema_reconciliation: 'The database dump was applied, but schema recovery is incomplete. It was not rolled back and will not be replayed. Ordinary database work stays paused: retry recovery from Settings > Backup, or restart PortOS to retry automatically. If it keeps failing, check the server logs.',
+  restore_execution_reconciliation: 'Execution request consumption and unresolved ownership are awaiting reconciliation. Database work stays paused; the dump will not be replayed. Recovery retries automatically at startup and can also be retried from Settings > Backup.',
   restore_sync_resync: 'The database dump was applied, but peer sync could not be reset yet. It will not be replayed. Ordinary database work stays paused: retry recovery from Settings > Backup, or restart PortOS to retry automatically.',
   restore_recovery_release: 'The database dump was applied and repaired, but the recovery journal could not be cleared. Ordinary database work stays paused: retry recovery from Settings > Backup.',
   restore_recovery_pending: 'A previous database restore is awaiting recovery. Finish it from Settings > Backup before starting another restore.',
@@ -168,6 +169,14 @@ export async function repairCommittedRestore(record) {
     console.error(`❌ DB restore ${record.id}: schema reconciliation failed: ${reconciliationError.message}`);
     return pendingRecoveryResult('restore_schema_reconciliation', record);
   }
+  const executionError = await (async () => {
+    const { finishPeerExecutionRestore } = await import('./peerExecutionRestore.js');
+    await finishPeerExecutionRestore(record.id);
+  })().then(() => null, error => error);
+  if (executionError) {
+    console.error(`❌ DB restore ${record.id}: execution reconciliation failed: ${executionError.message}`);
+    return pendingRecoveryResult('restore_execution_reconciliation', record);
+  }
   const resync = await resyncFederationAfterRestore(record.feedPositions).then(
     (syncCursorsRewound) => ({ syncCursorsRewound }),
     (err) => ({ err }),
@@ -195,6 +204,13 @@ export async function repairCommittedRestore(record) {
 export async function settleReplayOutcome(record) {
   const outcome = await inspectReplayOutcome(record);
   if (outcome === 'rolled_back') {
+    try {
+      const { finishPeerExecutionRestore } = await import('./peerExecutionRestore.js');
+      await finishPeerExecutionRestore(record.id, { rolledBack: true });
+    } catch (err) {
+      console.error(`❌ DB restore ${record.id}: rollback execution reconciliation failed: ${err.message}`);
+      return { outcome: 'uncertain', record, reason: 'restore_execution_reconciliation' };
+    }
     databaseRestoreRecovery.release(record.id);
     console.log(`💾 DB restore ${record.id}: replay rolled back; database admission reopened without changes`);
     return { outcome, record };
@@ -226,7 +242,7 @@ export async function resumeDatabaseRestore(id) {
     if (current.stage === 'replaying') {
       const settled = await settleReplayOutcome(current);
       if (settled.outcome === 'rolled_back') return { status: 'ok', outcome: 'rolled_back' };
-      if (settled.outcome === 'uncertain') return pendingRecoveryResult('restore_commit_unknown', current);
+      if (settled.outcome === 'uncertain') return pendingRecoveryResult(settled.reason ?? 'restore_commit_unknown', current);
       current = settled.record;
     }
     const repaired = await repairCommittedRestore(current);

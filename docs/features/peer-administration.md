@@ -171,3 +171,62 @@ The remaining sequence stays owned by #10127, which this slice does not close:
 
 These are sequential implementation steps, not external blockers or authority
 to change live peers. Keep execution unavailable until all four are complete.
+
+## Durable ledger foundation (#10127, second slice)
+
+The internal receiver ledger now persists request consumption and bounded operation
+states in PostgreSQL. A receiver/sender/request identity has one immutable binding
+fingerprint and operation UUID for its lifetime. Changed action, pairing evidence,
+grant generation or receiver evidence conflicts with that consumed identity;
+renewal and peer removal cannot erase it. Generation floors only increase and
+their writes require the current ready execution epoch under the shared database
+writer lock, including after lock waits. No grant is created by recording a floor.
+
+Persistence transitions use exact revisions and cannot move uncertain work back
+to launch. A recorded claim/receipt is storage evidence, not proof of authorization,
+adapter cleanup or completion: the future receiver must verify those facts before
+calling the internal persistence API. No route imports that API today.
+
+Database restore rotates a machine-local epoch, captures permanent consumption,
+generation floors and owners outside the rewind, and reconciles those facts before
+reopening database admission. Capture failure prevents replay. Generic committed
+or rollback recovery retains its fence until execution reconciliation finishes;
+startup retries the same restore without another replay. Missing or conflicting
+facts cannot be replaced with an empty history. Queued/draining storage may sit
+behind a journal start whose DB write rolled back, so all nonterminal restored
+records remain uncertain. Stronger same-owner claim evidence survives, conflicting
+owners refuse reconciliation, and the preserved journal must match and remain
+stable. Restore never releases a coordinator claim or interrupts active work.
+
+Legacy committed restores that predate this ledger may adopt only a positively
+empty pair of ledger tables. Adoption persists the exact recovery ID directly in
+a fenced capture state, with an atomic same-ID intent covering first publication.
+Database-lock waits, capture failures and interrupted publication resume only that
+empty-adoption owner after another empty-table proof. Ordinary committed rewinds
+never recapture an empty database. Downstream repair retries reuse the settled ID.
+
+Filesystem restore preserves the epoch/recovery files and maintenance-owner
+subtree, including scoped and mixed-case requests. It does not yet invalidate
+execution authority for filesystem-only identity/configuration restores.
+
+The remaining owned sequence is concrete:
+
+1. Coordinate pair rotation, unpairing, disablement, receiver identity changes
+   and filesystem-only restore with durable invalidation before their file write.
+   Offline disablement must remain possible without acknowledging a generation
+   update that was not persisted. Stable slots/floors and deterministic lock order
+   must cover every authority writer.
+2. Add separately confirmed execution grants and receiver authentication/current
+   grant checks. Planning grants keep their existing scope. Bind grant/preflight
+   evidence to the non-rewound epoch and recheck expiry after waits.
+3. Implement bounded adapter ownership handoff under the same authority lock and
+   coordinator claim, with immediate fixed-input resource/source checks. Journal
+   start plus DB rollback/disconnect stays uncertain and never retries launch.
+4. Implement receiver-owned terminal cleanup verification and epoch-bound one-use
+   settlement certificates. Re-read committed terminal evidence before reminting
+   after restart/publication failure; restore/cutover fences invalidate old proofs.
+5. Complete real disposable-Postgres pairing/revocation/expiry/handoff/certificate
+   fixtures, then connect the receiver/sender UI and fixed adapters.
+
+This slice does not close #10127 or enable execution. These are implementation
+steps owned by the issue, with no additional live setup or creative approval gate.
