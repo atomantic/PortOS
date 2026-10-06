@@ -1,4 +1,4 @@
-import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 /**
  * Image Gen — Codex CLI provider.
  *
@@ -37,7 +37,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { randomUUID } from 'crypto';
-import { atomicWrite, copyFileGuarded, ensureDir, PATHS, sleep } from '../../lib/fileUtils.js';
+import { atomicWrite, copyFileGuarded, ensureDir, PATHS, sleep, unlinkGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
@@ -398,73 +398,76 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cle
   });
 
   proc.on('close', async (code, signal) => {
-    clearTimeout(timeoutTimer);
-    // Don't clear activeProcess yet — the post-exit handler still does
-    // async work (harvest + copyFile + sidecar). Clearing the
-    // module-scoped guard up front would let a new generation start
-    // while we're still finalizing this one, then the in-flight
-    // finalizer could clobber the new job's activeJob snapshot.
-    // EventEmitter doesn't await async listeners — without this try/catch,
-    // a throw from harvestLatestImage / copyFile would surface as an
-    // unhandled rejection (process-killing on Node ≥15) and the job would
-    // be stuck in 'running' forever with no SSE error to the client.
-    try {
-      if (code !== 0 || processError) {
-        const reason = processError?.message || (signal ? `Killed by signal ${signal}` : `Exit code ${code}`);
-        const tail = stderrTail.trim().split('\n').slice(-6).join('\n');
-        return finalizeJobFailure(job, jobId, proc, `Codex generation failed: ${reason}\n${tail}`);
+    await withBackupAssetPublication(async () => {
+      clearTimeout(timeoutTimer);
+      // Don't clear activeProcess yet — the post-exit handler still does
+      // async work (harvest + copyFile + sidecar). Clearing the
+      // module-scoped guard up front would let a new generation start
+      // while we're still finalizing this one, then the in-flight
+      // finalizer could clobber the new job's activeJob snapshot.
+      // EventEmitter doesn't await async listeners — without this try/catch,
+      // a throw from harvestLatestImage / copyFile would surface as an
+      // unhandled rejection (process-killing on Node ≥15) and the job would
+      // be stuck in 'running' forever with no SSE error to the client.
+      try {
+        if (code !== 0 || processError) {
+          const reason = processError?.message || (signal ? `Killed by signal ${signal}` : `Exit code ${code}`);
+          const tail = stderrTail.trim().split('\n').slice(-6).join('\n');
+          return finalizeJobFailure(job, jobId, proc, `Codex generation failed: ${reason}\n${tail}`);
+        }
+        if (!sessionId) {
+          return finalizeJobFailure(job, jobId, proc, 'Codex returned no session id — output format may have changed');
+        }
+        // Codex writes the PNG asynchronously while it's wrapping up the turn.
+        // Empirically the file is on disk by the time `codex exec` exits, but
+        // poll for a few seconds in case there's a flush lag on slow disks.
+        const harvested = await harvestGeneratedImage(sessionId, harvestTimeoutMs);
+        if (!harvested) {
+          return finalizeJobFailure(job, jobId, proc, noImageReason(stdoutTail));
+        }
+        if (harvested.path) {
+          await copyFileGuarded(harvested.path, outputPath);
+        } else {
+          await atomicWrite(outputPath, harvested.buffer);
+        }
+        // Degenerate-frame gate (#4173) — before the sidecar, so a decodable but
+        // contentless canvas never becomes a gallery record.
+        const emptyFrame = await rejectDegenerateFrame(outputPath);
+        if (emptyFrame) {
+          return finalizeJobFailure(job, jobId, proc, emptyFrame);
+        }
+        // Sidecar metadata so the gallery can recover prompt/seed/etc. The
+        // codex sessionId is the closest analogue to a seed for gpt-image-2
+        // (which doesn't expose one) — uniquely identifies the run and is
+        // useful for traceability even though it doesn't reproduce the output.
+        const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
+        // `job.renderStartedAtMs` is the queue-ingestion instant generateImage
+        // captured, so the spread measures the render itself — not the time the
+        // job spent queued behind other renders.
+        await atomicWrite(sidecar, { ...meta, codexSessionId: sessionId, ...renderTimingFields(job.renderStartedAtMs) });
+        // Cleaners run BEFORE the SSE complete + completed events so subscribers
+        // see the cleaned bytes. codex output is the highest-value target for
+        // C2PA stripping because gpt-image is the one provider that embeds
+        // provenance metadata.
+        await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: IMAGE_GEN_MODE.CODEX });
+        job.status = 'complete';
+        if (activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
+        activeJobs.delete(jobId);
+        console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (codex)`);
+        const result = { filename, path: `/data/images/${filename}` };
+        dispatchTerminalEvent(
+          jobId,
+          () => broadcastSse(job, { type: 'complete', result }),
+          () => imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.CODEX, generationId: jobId, path: `/data/images/${filename}`, filename }),
+        );
+        closeJobAfterDelay(jobs, jobId);
+      } catch (err) {
+        await Promise.all([outputPath, join(PATHS.images, `${jobId}.metadata.json`)].map(path => unlinkGuarded(path).catch(() => {})));
+        // force: true — 'complete' is already stamped above; see
+        // createJobFailureFinalizer's doc comment in sseUtils.js.
+        finalizeJobFailure(job, jobId, proc, `Codex post-exit handler failed: ${err?.message || err}`, { force: true });
       }
-      if (!sessionId) {
-        return finalizeJobFailure(job, jobId, proc, 'Codex returned no session id — output format may have changed');
-      }
-      // Codex writes the PNG asynchronously while it's wrapping up the turn.
-      // Empirically the file is on disk by the time `codex exec` exits, but
-      // poll for a few seconds in case there's a flush lag on slow disks.
-      const harvested = await harvestGeneratedImage(sessionId, harvestTimeoutMs);
-      if (!harvested) {
-        return finalizeJobFailure(job, jobId, proc, noImageReason(stdoutTail));
-      }
-      if (harvested.path) {
-        await copyFileGuarded(harvested.path, outputPath);
-      } else {
-        await atomicWrite(outputPath, harvested.buffer);
-      }
-      // Degenerate-frame gate (#4173) — before the sidecar, so a decodable but
-      // contentless canvas never becomes a gallery record.
-      const emptyFrame = await rejectDegenerateFrame(outputPath);
-      if (emptyFrame) {
-        return finalizeJobFailure(job, jobId, proc, emptyFrame);
-      }
-      // Sidecar metadata so the gallery can recover prompt/seed/etc. The
-      // codex sessionId is the closest analogue to a seed for gpt-image-2
-      // (which doesn't expose one) — uniquely identifies the run and is
-      // useful for traceability even though it doesn't reproduce the output.
-      const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
-      // `job.renderStartedAtMs` is the queue-ingestion instant generateImage
-      // captured, so the spread measures the render itself — not the time the
-      // job spent queued behind other renders.
-      await atomicWrite(sidecar, { ...meta, codexSessionId: sessionId, ...renderTimingFields(job.renderStartedAtMs) }).catch(() => maintenance.markCurrentUnsettled());
-      // Cleaners run BEFORE the SSE complete + completed events so subscribers
-      // see the cleaned bytes. codex output is the highest-value target for
-      // C2PA stripping because gpt-image is the one provider that embeds
-      // provenance metadata.
-      await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: IMAGE_GEN_MODE.CODEX });
-      job.status = 'complete';
-      if (activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
-      activeJobs.delete(jobId);
-      console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (codex)`);
-      const result = { filename, path: `/data/images/${filename}` };
-      dispatchTerminalEvent(
-        jobId,
-        () => broadcastSse(job, { type: 'complete', result }),
-        () => imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.CODEX, generationId: jobId, path: `/data/images/${filename}`, filename }),
-      );
-      closeJobAfterDelay(jobs, jobId);
-    } catch (err) {
-      // force: true — 'complete' is already stamped above; see
-      // createJobFailureFinalizer's doc comment in sseUtils.js.
-      finalizeJobFailure(job, jobId, proc, `Codex post-exit handler failed: ${err?.message || err}`, { force: true });
-    }
+    });
   });
 }
 

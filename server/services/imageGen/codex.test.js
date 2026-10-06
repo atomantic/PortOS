@@ -59,6 +59,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
 
 // imageGenEvents is fine to import for real, but we don't want stray
 // listeners between tests. Reset its emitter state in beforeEach.
+const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
 const codex = await import('./codex.js');
 const { imageGenEvents } = await import('../imageGenEvents.js');
 
@@ -395,7 +396,12 @@ describe('codex provider — image harvest', () => {
     child.stderr.emit('data', Buffer.from(`session id: ${sessionId}\n`));
     // Then close cleanly.
     child.exitCode = 0;
+    const releaseCut = await acquireBackupSnapshotCut();
+    try {
     child.emit('close', 0, null);
+      await new Promise(resolve => setImmediate(resolve));
+      expect(existsSync(join(FAKE_IMAGES_DIR, job.filename)), 'provider completion must wait outside a held snapshot').toBe(false);
+    } finally { releaseCut(); }
 
     // Poll until the completed event fires (the harvest is async).
     const deadline = Date.now() + 3000;

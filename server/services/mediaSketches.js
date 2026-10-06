@@ -1,3 +1,5 @@
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
+import { publishImageFiles } from './imageGen/publication.js';
 /**
  * Sketch & annotation overlays for generated media, keyed by `<kind>:<ref>`.
  *
@@ -160,34 +162,39 @@ export async function saveSketch(key, input) {
     throw makeErr('Only image media or blank-canvas sketches can be annotated', ERR_VALIDATION);
   }
   const clean = sanitizeSketchInput(input);
-  await ensureDir(SKETCH_DIR);
+  return withBackupAssetPublication(() => publishImageFiles([pngPathFor(key), jsonPathFor(key)], async () => {
+    await ensureDir(SKETCH_DIR);
 
-  if (clean.strokes.length === 0) {
-    await removeSketch(key);
-    return { key, width: clean.width, height: clean.height, strokes: [], updatedAt: null, hasPng: false };
-  }
+    if (clean.strokes.length === 0) {
+      await unlinkGuarded(jsonPathFor(key)).catch(error => { if (error.code !== 'ENOENT') throw error; });
+      await unlinkGuarded(pngPathFor(key)).catch(error => { if (error.code !== 'ENOENT') throw error; });
+      return { key, width: clean.width, height: clean.height, strokes: [], updatedAt: null, hasPng: false };
+    }
 
-  const hasPng = !!clean.png;
-  if (hasPng) await atomicWrite(pngPathFor(key), clean.png);
-  // A re-save that carries only vectors (no PNG) must drop any prior flattened
-  // export, otherwise `hasPng:false` in the JSON disagrees with a stale
-  // `<id>.png` that getSketchPng() would keep streaming.
-  else await unlinkGuarded(pngPathFor(key)).catch(() => {});
-  const record = {
-    key,
-    width: clean.width,
-    height: clean.height,
-    strokes: clean.strokes,
-    updatedAt: new Date().toISOString(),
-    hasPng,
-  };
-  await atomicWrite(jsonPathFor(key), record);
-  return record;
+    const hasPng = !!clean.png;
+    if (hasPng) await atomicWrite(pngPathFor(key), clean.png);
+    // A re-save that carries only vectors (no PNG) must drop any prior flattened
+    // export, otherwise `hasPng:false` in the JSON disagrees with a stale
+    // `<id>.png` that getSketchPng() would keep streaming.
+    else await unlinkGuarded(pngPathFor(key)).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    const record = {
+      key,
+      width: clean.width,
+      height: clean.height,
+      strokes: clean.strokes,
+      updatedAt: new Date().toISOString(),
+      hasPng,
+    };
+    await atomicWrite(jsonPathFor(key), record);
+    return record;
+  }));
 }
 
 /** Remove a key's sidecar (json + png). Idempotent. */
 export async function removeSketch(key) {
   if (!isValidKey(key)) throw makeErr(`Invalid key: ${key}`, ERR_VALIDATION);
-  await unlinkGuarded(jsonPathFor(key)).catch(() => {});
-  await unlinkGuarded(pngPathFor(key)).catch(() => {});
+  return withBackupAssetPublication(() => publishImageFiles([pngPathFor(key), jsonPathFor(key)], async () => {
+    await unlinkGuarded(jsonPathFor(key)).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    await unlinkGuarded(pngPathFor(key)).catch(error => { if (error.code !== 'ENOENT') throw error; });
+  }));
 }

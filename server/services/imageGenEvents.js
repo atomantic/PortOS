@@ -1,3 +1,4 @@
+import { runOutsideBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { EventEmitter } from 'events';
 import { makeEmitterFaultIsolating } from '../lib/faultIsolatedEmitter.js';
 
@@ -11,3 +12,11 @@ export const imageGenEvents = makeEmitterFaultIsolating(new EventEmitter());
 // memory growth in pm2 status, not as the warning. 200 leaves headroom for
 // short overlap during job churn.
 imageGenEvents.setMaxListeners(200);
+
+// Async completion listeners own their leases instead of borrowing the provider's.
+const emit = imageGenEvents.emit;
+imageGenEvents.emit = function (event, ...args) {
+  return event === 'completed'
+    ? runOutsideBackupAssetPublication(() => emit.call(this, event, ...args))
+    : emit.call(this, event, ...args);
+};

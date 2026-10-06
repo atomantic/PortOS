@@ -325,15 +325,15 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     modules: ['services/mediaAssetIndex/index.js', 'services/mediaAssetIndex/db.js'],
   },
   {
-    // The post-exit tails of the generation lanes (upscale, sidecar, auto-clean),
-    // variants and sketch pairs. `imageGen/local.js` takes the lease only for
-    // gallery upload, sidecar edits and deletion, not for its generation tail.
+    // Provider completion (upscale, sidecar, auto-clean), remote promotion,
+    // variants and sketch pairs retain admission through their failure cleanup.
     id: 'image-generation-completion-tails',
-    status: 'outstanding',
+    status: 'admitted',
     modules: [
       'services/imageGen/local.js', 'services/imageGen/agy.js', 'services/imageGen/codex.js',
       'services/imageGen/grok.js', 'services/imageGen/fal.js', 'services/imageGen/external.js',
       'services/imageGen/remote.js', 'services/imageGen/variants.js', 'services/mediaSketches.js',
+      'services/imageGen/publication.js', 'services/imageGen/index.js',
     ],
   },
   {
