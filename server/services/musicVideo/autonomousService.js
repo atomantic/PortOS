@@ -348,6 +348,22 @@ function repairLyricWordTimings(cues, durationSec) {
   return { cues: out, repaired };
 }
 
+/**
+ * Align the vocal to the lyric sheet and time the lines alignment skipped —
+ * the timings the storyboard gate needs. Returns the alignment error, if any;
+ * the repair still runs so a failed alignment leaves what it can.
+ */
+async function alignRunLyrics(projectId, run) {
+  if (run.brief.instrumental || !(await getProject(projectId))?.lyricCues?.some((c) => cueText(c))) return null;
+  let alignError = null;
+  await deps.alignLyrics(projectId).catch((err) => { alignError = err.message; });
+  await mutateProjectRecord(projectId, (current) => {
+    const { cues, repaired } = repairLyricWordTimings(current.lyricCues || [], current.audioAnalysis?.durationSec);
+    return { project: repaired ? { ...current, lyricCues: cues } : current };
+  });
+  return alignError;
+}
+
 /** The song as measurements: analysis plus how much of the written lyric the recognizer heard. */
 function songFacts(project, run, alignError) {
   const analysis = project.audioAnalysis || {};
@@ -377,14 +393,7 @@ function songFacts(project, run, alignError) {
  * credits the operator did not approve, so that song is kept and the reason logged.
  */
 async function orchestrateSong(projectId, run) {
-  let alignError = null;
-  if (!run.brief.instrumental && (await getProject(projectId))?.lyricCues?.some((c) => cueText(c))) {
-    await deps.alignLyrics(projectId).catch((err) => { alignError = err.message; });
-    await mutateProjectRecord(projectId, (current) => {
-      const { cues, repaired } = repairLyricWordTimings(current.lyricCues || [], current.audioAnalysis?.durationSec);
-      return { project: repaired ? { ...current, lyricCues: cues } : current };
-    });
-  }
+  const alignError = await alignRunLyrics(projectId, run);
   const { buildSongReviewPrompt } = await reviewModule();
   const project = await getProject(projectId);
   const facts = songFacts(project, run, alignError);
@@ -405,12 +414,16 @@ async function orchestrateSong(projectId, run) {
 }
 
 /**
- * Verify the lyric timing for the storyboard gate. Alignment already ran at the
- * song checkpoint; this records the orchestrator's check of it (every line has
- * bounded word timings) as the verification a director gives by listening.
- * An instrumental is marked as one. Problems it cannot fix stay for readiness to name.
+ * Verify the lyric timing for the storyboard gate. Alignment already ran after
+ * analysis; this records the check of it (every line has bounded word timings)
+ * as the verification a director gives by listening — by the orchestrator, or
+ * by an autopilot the operator granted storyboard approval. An instrumental is
+ * marked as one. Problems it cannot fix stay for readiness to name.
  */
-async function orchestrateAlignment(projectId, run) {
+async function settleLyricTiming(projectId, run) {
+  const orchestrated = isOrchestratedRun(run);
+  const record = (verdict, notes) => (orchestrated
+    ? recordReview(projectId, { checkpoint: 'alignment', verdict, score: null, notes, route: null, visual: false }) : null);
   const project = await getProject(projectId);
   const draft = project.productionReview?.draft;
   if (!draft || draft.storyboardSource === 'document') return;
@@ -421,19 +434,20 @@ async function orchestrateAlignment(projectId, run) {
     if (!run.brief.instrumental) return;
     await mutateProjectRecord(projectId, (current) => ({ project: { ...current, productionReview: { ...current.productionReview,
       draft: { ...current.productionReview.draft, lyricsMode: 'instrumental', timingNotes: 'Instrumental song: no lyric timing to verify.' } } } }));
-    await recordReview(projectId, { checkpoint: 'alignment', verdict: 'approve', score: null, notes: 'Instrumental song: no lyric timing to verify.', route: null, visual: false });
+    await record('approve', 'Instrumental song: no lyric timing to verify.');
     return;
   }
   const words = cues.flatMap((c) => c.words || []);
   const timed = cues.filter((c) => c.words?.length && validSpan(c.startSec, c.endSec)).length;
   const matched = words.filter((w) => w.conf === 'matched').length;
-  const notes = `Checked by the orchestrator: ${timed} of ${cues.length} lines carry word timings; ${matched} of ${words.length} words were heard by the recognizer, the rest interpolated.`;
+  const notes = `Checked by the ${orchestrated ? 'orchestrator' : 'autopilot'}: ${timed} of ${cues.length} lines carry word timings; ${matched} of ${words.length} words were heard by the recognizer, the rest interpolated.`;
   if (timed < cues.length) {
-    await recordReview(projectId, { checkpoint: 'alignment', verdict: 'revise', score: null, notes: `${notes} Lines without timings need a director.`, route: null, visual: false });
+    await record('revise', `${notes} Lines without timings need a director.`);
     return;
   }
-  await deps.verifyAlignment(projectId, { basis: productionAlignmentBasis(project), notes, reviewer: orchestratorIdentity(run) });
-  await recordReview(projectId, { checkpoint: 'alignment', verdict: 'approve', score: null, notes, route: null, visual: false });
+  const reviewer = orchestrated ? orchestratorIdentity(run) : { kind: 'autopilot', runId: run.id, authorizedBy: run.brief.autoApproveAuthorizedBy || null };
+  await deps.verifyAlignment(projectId, { basis: productionAlignmentBasis(project), notes, reviewer });
+  await record('approve', notes);
 }
 
 /** Anchor every storyboard shot to the lyric lines it overlaps (the "Review lyric anchors" chore). */
@@ -797,6 +811,8 @@ const STAGES = {
 
   async analyze({ project, run }) {
     await deps.analyzeSong(project.id);
+    // A storyboard grant needs the lyric timings production verifies, so the autopilot aligns too.
+    if (!isOrchestratedRun(run) && autoApproves(run, 'storyboard')) await alignRunLyrics(project.id, run);
     if (isOrchestratedRun(run) && (await orchestrateSong(project.id, run)).retake) {
       // A local fallback stays local: the retake must not send the run back to Suno.
       const reset = Object.fromEntries(SONG_OUTPUT_KEYS.filter((key) => key !== 'songSource' && key !== 'songFallbackReason').map((key) => [key, null]));
@@ -835,8 +851,10 @@ const STAGES = {
       await prepareProductionReview(project.id);
       project = await getProject(project.id);
     }
-    if (isOrchestratedRun(run)) {
-      await orchestrateAlignment(project.id, run);
+    if (isOrchestratedRun(run) || autoApproves(run, 'storyboard')) {
+      await settleLyricTiming(project.id, run);
+      // The orchestrator anchors inside its storyboard review; the autopilot does it here.
+      if (!isOrchestratedRun(run)) await anchorStoryboardLyrics(project.id);
       project = await getProject(project.id);
     }
     project = await settleProductionStage(project, run, 'storyboard');
