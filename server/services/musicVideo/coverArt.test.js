@@ -7,7 +7,7 @@
  */
 import { describe, expect, it, vi, afterAll, beforeEach } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
@@ -268,23 +268,25 @@ describe('cover lettering', () => {
     await sharp({ create: { width: 640, height: 360, channels: 3, background: '#335577' } }).png().toFile(source);
     const out = join(dir, 'cover.jpg');
     await composeCoverArt({ source, out, title: 'Example Song', tag: 'Example Artist', size: 1000 });
-    const meta = await sharp(out).metadata();
+    // Inspect bytes so libvips cannot retain a file mapping that blocks the
+    // next overwrite on Windows. Production composes to a fresh filename.
+    const meta = await sharp(await readFile(out)).metadata();
     expect(meta).toMatchObject({ format: 'jpeg', width: 1000, height: 1000 });
     // Every layout renders (the vertical one rotates its line).
     for (const layout of ['top-center', 'center', 'vertical-left']) {
       await composeCoverArt({ source, out, title: 'A Much Longer Example Song Title Here', tag: 'Example Artist', design: { layout, backdrop: 'band', tagStyle: 'boxed', rule: true }, size: 600 });
-      expect(await sharp(out).metadata()).toMatchObject({ width: 600, height: 600 });
+      expect(await sharp(await readFile(out)).metadata()).toMatchObject({ width: 600, height: 600 });
     }
 
     // A finished cover is only squared and sized: nothing is set over it. The
     // source is one flat colour, so any lettering or backdrop shows up as variation.
     await composeCoverArt({ source, out, title: 'Example Song', tag: 'Example Artist', size: 600, lettering: false });
-    expect(Math.max(...(await sharp(out).stats()).channels.map((c) => c.stdev))).toBeLessThan(2);
+    expect(Math.max(...(await sharp(await readFile(out)).stats()).channels.map((c) => c.stdev))).toBeLessThan(2);
 
     // A portrait phone photo stored landscape with an EXIF rotation crops on the upright image.
     const rotated = join(dir, 'rotated.jpg');
     await sharp({ create: { width: 640, height: 360, channels: 3, background: '#775533' } }).jpeg().withMetadata({ orientation: 6 }).toFile(rotated);
     await composeCoverArt({ source: rotated, out, title: 'Example Song', focusX: 1, size: 1000 });
-    expect(await sharp(out).metadata()).toMatchObject({ width: 1000, height: 1000 });
+    expect(await sharp(await readFile(out)).metadata()).toMatchObject({ width: 1000, height: 1000 });
   });
 });

@@ -87,7 +87,7 @@ const { runVideoUpscale } = await import('./upscaleJob.js');
 const { stitchVideos } = await import('./stitchVideos.js');
 const { upscaleHistoryItem } = await import('./upscaleVideo.js');
 const { renderComposition } = await import('../htmlComposition/index.js');
-const { renderProject, getRenderJobStatus } = await import('../videoTimeline/local.js');
+const { renderProject, getRenderJobStatus, attachSseClient } = await import('../videoTimeline/local.js');
 const sourceIds = [randomUUID(), randomUUID()];
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const gates = [];
@@ -117,8 +117,24 @@ const lanes = {
   composition: () => renderComposition({ directory: 'compositions/fixture', jobId: randomUUID() }),
   timeline: async () => {
     const { jobId } = await renderProject('fixture');
-    await vi.waitFor(() => expect(getRenderJobStatus(jobId).status).not.toBe('running'));
-    if (getRenderJobStatus(jobId).status !== 'complete') throw new Error(getRenderJobStatus(jobId).error);
+    // These contracts deliberately hold publication/rollback open. Await the
+    // public terminal event rather than racing those gates against waitFor's
+    // polling deadline (especially while Windows is copying backup assets).
+    const terminal = Promise.withResolvers();
+    const req = new EventEmitter();
+    expect(attachSseClient(jobId, {
+      req,
+      writeHead: () => {},
+      write: frame => {
+        const payload = JSON.parse(frame.slice('data: '.length).trim());
+        if (['complete', 'error', 'canceled'].includes(payload.type)) terminal.resolve(payload);
+      },
+    })).toBe(true);
+    try {
+      const payload = await terminal.promise;
+      if (payload.type !== 'complete') throw new Error(payload.error);
+      expect(getRenderJobStatus(jobId).status).toBe('complete');
+    } finally { req.emit('close'); }
   },
 };
 beforeEach(async () => {
