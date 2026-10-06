@@ -42,11 +42,37 @@ describe('buildSrt (#9281)', () => {
 
 describe('publish copy prompt + parser (#9281)', () => {
   it('states only the facts it was given', () => {
-    const withSpend = buildPublishCopyPrompt(project, { notes: 'hummed it in the car', spentUsd: 37.876, links: { youtube: 'https://example.com/v' } });
+    const withSpend = buildPublishCopyPrompt(project, { notes: 'hummed it in the car', spentUsd: 37.876, links: { youtube: 'https://example.com/v' }, include: { spend: true } });
     expect(withSpend).toContain('Video generation spend: $37.88');
     expect(withSpend).toContain('Full video URL: https://example.com/v');
     expect(withSpend).toContain('hummed it in the car');
     expect(buildPublishCopyPrompt(project, {})).not.toContain('spend:');
+  });
+
+  it('leaves out lyrics, spend and hashtags unless the director ticked them', () => {
+    const lyricProject = { ...project, name: 'Example Song', lyricCues: [cue('a sung line', 1, 2)] };
+    const plain = buildPublishCopyPrompt(lyricProject, { spentUsd: 12 });
+    expect(plain).toContain('Song title: Example Song');
+    expect(plain).not.toContain('a sung line');
+    expect(plain).not.toContain('spend:');
+    expect(plain).toContain('no hashtags anywhere');
+    expect(plain).toContain('a sentence or two');
+    expect(plain).not.toContain('#shorts');
+    expect(plain).not.toContain('"tags"');
+    const all = buildPublishCopyPrompt(lyricProject, { spentUsd: 12, include: { title: false, lyrics: true, spend: true, hashtags: true }, length: 'full' });
+    expect(all).not.toContain('Song title:');
+    expect(all).toContain('a sung line');
+    expect(all).toContain('#shorts');
+    expect(all).toContain('the making-of as a long post');
+  });
+
+  it('strips hashtags the model added unasked, keeping markdown headings', () => {
+    const reply = JSON.stringify({ tiktok: { caption: 'Made this one slowly. #music #aivideo' }, youtube: { title: 'T', description: '# Heading\nA line #tagged here', tags: ['music'] } });
+    const copy = parsePublishCopy(reply, ['tiktok', 'youtube'], { hashtags: false });
+    expect(copy.tiktok.caption).toBe('Made this one slowly.');
+    expect(copy.youtube.description).toBe('# Heading\nA line here');
+    expect(copy.youtube.tags).toEqual([]);
+    expect(parsePublishCopy(reply, ['tiktok']).tiktok.caption).toContain('#music');
   });
 
   it('clips each field to its platform limit and rejects an empty or non-JSON reply', () => {

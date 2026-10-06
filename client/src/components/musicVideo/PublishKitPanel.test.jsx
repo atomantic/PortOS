@@ -36,14 +36,39 @@ describe('PublishKitPanel (#9281)', () => {
     expect(k.build).toHaveBeenCalled();
   });
 
-  it('drafts copy from the notes and only well-formed links', () => {
+  it('drafts copy from the notes, only well-formed links and only what is ticked', () => {
     const k = hook();
-    render(<PublishKitPanel project={{ id: 'mv-1', renderHistoryId: 'rh-1' }} publishKit={k} />);
+    const project = { id: 'mv-1', name: 'Example Song', renderHistoryId: 'rh-1', lyricCues: [{ text: 'a line', startSec: 1 }], productionRuns: [{ usage: { spentUsd: 4.5 } }] };
+    render(<PublishKitPanel project={project} publishKit={k} />);
     fireEvent.change(screen.getByLabelText(/Making-of notes/), { target: { value: 'hummed it in the car' } });
     fireEvent.change(screen.getByLabelText(/Full video URL/), { target: { value: 'https://example.com/v' } });
     fireEvent.change(screen.getByLabelText(/Song URL/), { target: { value: 'not a url' } });
+    // By default only the song title goes in, kept to a sentence or two, with no hashtags.
+    expect(screen.getByLabelText(/Song title/)).toBeChecked();
+    expect(screen.getByLabelText(/Hashtags and YouTube tags/)).not.toBeChecked();
+    expect(screen.getByLabelText('A sentence or two')).toBeChecked();
     fireEvent.click(screen.getByRole('button', { name: /Draft copy/ }));
-    expect(k.draftCopy).toHaveBeenCalledWith({ notes: 'hummed it in the car', links: { youtube: 'https://example.com/v' } });
+    const none = { title: true, lyrics: false, chapters: false, spend: false, hashtags: false };
+    expect(k.draftCopy).toHaveBeenLastCalledWith({ notes: 'hummed it in the car', links: { youtube: 'https://example.com/v' }, include: none, length: 'short' });
+
+    fireEvent.click(screen.getByLabelText(/Song title/));
+    fireEvent.click(screen.getByLabelText(/Lyrics/));
+    fireEvent.click(screen.getByLabelText(/Generation spend/));
+    fireEvent.click(screen.getByLabelText(/Hashtags and YouTube tags/));
+    fireEvent.click(screen.getByLabelText('Full making-of'));
+    fireEvent.click(screen.getByRole('button', { name: /Draft copy/ }));
+    expect(k.draftCopy).toHaveBeenLastCalledWith(expect.objectContaining({ include: { ...none, title: false, lyrics: true, spend: true, hashtags: true }, length: 'full' }));
+  });
+
+  it('cannot tick lyrics or spend the project does not have, and lets you write a post without drafting', () => {
+    const k = hook();
+    render(<PublishKitPanel project={{ id: 'mv-1', name: 'Example Song', renderHistoryId: 'rh-1' }} publishKit={k} enabledTargets={['x']} />);
+    expect(screen.getByLabelText(/Lyrics/)).toBeDisabled();
+    expect(screen.getByLabelText(/Generation spend/)).toBeDisabled();
+    const hook_ = screen.getByLabelText('Hook post (no links)');
+    fireEvent.change(hook_, { target: { value: 'One sentence of my own.' } });
+    fireEvent.blur(hook_);
+    expect(k.saveCopy).toHaveBeenCalledWith({ x: { hook: 'One sentence of my own.' } });
   });
 
   it('shows the built kit, saves an edited field on blur and picks a thumbnail', () => {

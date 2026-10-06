@@ -23,7 +23,7 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '
 import { getProject, listProjects, mutateProjectRecord } from './projects.js';
 import { suggestSocialCuts } from './socialCuts.js';
 import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
-import { buildChapters, buildSrt, buildPublishCopyPrompt, parsePublishCopy, PUBLISH_PLATFORMS } from './publishKitText.js';
+import { buildChapters, buildSrt, buildPublishCopyPrompt, parsePublishCopy, normalizeCopyOptions, PUBLISH_PLATFORMS } from './publishKitText.js';
 
 const jobs = new Map();
 const projectBuilds = new Map();
@@ -242,9 +242,10 @@ function spentUsd(project) {
 
 /**
  * Draft the copy for every platform the director posts to, in ONE provider call they asked for.
- * `notes` (their making-of story) is saved with the kit so a redraft reuses it.
+ * `notes` (their making-of story) and what they chose to include (`include`,
+ * `length`) are saved with the kit so a redraft reuses them.
  */
-export async function draftPublishKitCopy(projectId, { providerId = null, model = null, notes = '', links = {} } = {}, deps = {}) {
+export async function draftPublishKitCopy(projectId, { providerId = null, model = null, notes = '', links = {}, include, length } = {}, deps = {}) {
   const project = await requireProject(projectId);
   const { getPublishPlatforms, publishHistory } = await import('./publish/platforms.js');
   const enabled = deps.platforms || await getPublishPlatforms();
@@ -256,12 +257,13 @@ export async function draftPublishKitCopy(projectId, { providerId = null, model 
   const { resolveProviderAndModel, runPromptThroughProvider } = deps.runner || await import('../promptRunner.js');
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   if (!provider) throw kitError(503, 'NO_PROVIDER', 'No AI provider is available to draft the copy');
-  const prompt = buildPublishCopyPrompt(project, { notes, spentUsd: spentUsd(project), links, platforms, lessons });
+  const options = normalizeCopyOptions({ include, length });
+  const prompt = buildPublishCopyPrompt(project, { notes, spentUsd: spentUsd(project), links, platforms, lessons, ...options });
   const { text } = await runPromptThroughProvider({ provider, model: selectedModel, prompt, source: 'music-video-publish-copy' });
-  const copy = parsePublishCopy(text, platforms);
+  const copy = parsePublishCopy(text, platforms, { hashtags: options.include.hashtags });
   if (!copy) throw kitError(502, 'PUBLISH_COPY_UNPARSEABLE', 'The copy draft came back without usable JSON — try again or another model');
   return mutateProjectRecord(projectId, (current) => {
     const kit = projectPublishKit(current);
-    return { project: { ...current, publishKit: { ...kit, copy: { ...(kit.copy || {}), ...copy }, notes, links: { ...(kit.links || {}), ...links }, copyDraftedAt: new Date().toISOString() } } };
+    return { project: { ...current, publishKit: { ...kit, copy: { ...(kit.copy || {}), ...copy }, notes, draftOptions: options, links: { ...(kit.links || {}), ...links }, copyDraftedAt: new Date().toISOString() } } };
   });
 }

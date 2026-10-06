@@ -141,7 +141,9 @@ describe('publishing kit copy (#9281)', () => {
     const { project } = await kit.draftPublishKitCopy(id, { notes: 'made it on a Sunday', links: { youtube: 'https://example.com/v' } }, deps);
     expect(deps.runner.runPromptThroughProvider).toHaveBeenCalledTimes(1);
     expect(deps.runner.runPromptThroughProvider.mock.calls[0][0]).toMatchObject({ source: 'music-video-publish-copy' });
-    expect(project.publishKit).toMatchObject({ notes: 'made it on a Sunday', links: { youtube: 'https://example.com/v' }, copy: { youtube: { title: 'A title' }, x: { hook: 'a hook' } } });
+    // Nothing beyond the title is ticked by default, so the model's tags are dropped and the choice is kept for a redraft.
+    expect(project.publishKit).toMatchObject({ notes: 'made it on a Sunday', links: { youtube: 'https://example.com/v' }, copy: { youtube: { title: 'A title', tags: [] }, x: { hook: 'a hook' } } });
+    expect(project.publishKit.draftOptions).toEqual({ include: { title: true, lyrics: false, spend: false, chapters: false, hashtags: false }, length: 'short' });
     const edited = await kit.updatePublishKitCopy(id, { x: { hook: 'my own hook' } });
     expect(edited.project.publishKit.copy.x).toEqual({ hook: 'my own hook', story: 'story' });
     expect(edited.project.publishKit.copy.youtube.title).toBe('A title');
