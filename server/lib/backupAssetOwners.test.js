@@ -19,10 +19,13 @@ const STATUSES = new Set(['admitted', 'reference-only', 'outstanding']);
 const INJECTED_TOOLKIT_MODULES = new Set([
   'lib/aiToolkit/runner.js', 'lib/aiToolkit/internal/runFinalizer.js',
 ]);
+const RUNTIME_DELEGATES = new Set(['services/runner.js', 'services/loops.js', 'cos-runner/completion.js']);
 const takesAdmission = (path) => {
   const source = blankComments(readFileSync(join(SERVER_ROOT, path), 'utf8')).join('\n');
   return /\bwithBackupAssetPublication\s*\(/.test(source)
-    || (INJECTED_TOOLKIT_MODULES.has(path) && /\bwithAssetPublication\s*\(/.test(source));
+    || (INJECTED_TOOLKIT_MODULES.has(path) && /\bwithAssetPublication\s*\(/.test(source))
+    || (RUNTIME_DELEGATES.has(path) && /import \{ publishRuntimeFiles \} from ['"]\.\.\/lib\/runtimeFilePublication\.js['"]/.test(source)
+      && /\bpublishRuntimeFiles\s*\(/.test(source));
 };
 const admittedModules = new Set(BACKUP_ASSET_OWNERS
   .filter(owner => owner.status === 'admitted')
@@ -79,9 +82,9 @@ describe('backupAssetConsistency', () => {
       .toEqual({ scope: 'admitted-owners', outstanding: ['example-typo'] });
   });
 
-  it('reports the shipped inventory as partial while owners remain outside admission', () => {
+  it('claims readiness only after every identified managed runtime owner is classified', () => {
     const outstanding = BACKUP_ASSET_OWNERS.filter(owner => owner.status === 'outstanding').map(owner => owner.id);
-    expect(outstanding.length).toBeGreaterThan(0);
-    expect(backupAssetConsistency()).toEqual({ scope: 'admitted-owners', outstanding });
+    expect(outstanding).toEqual([]);
+    expect(backupAssetConsistency()).toEqual({ scope: 'global', outstanding });
   });
 });

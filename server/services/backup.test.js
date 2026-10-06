@@ -3682,7 +3682,7 @@ describe('runBackup lifecycle', () => {
     // owner inventory still lists owners outside admission (#9982).
     const { backupAssetConsistency } = await import('../lib/backupAssetOwners.js');
     const claimed = backupAssetConsistency();
-    expect(claimed.scope).toBe('admitted-owners');
+    expect(claimed.scope).toBe('global');
     expect(manifest.assetConsistency).toEqual(claimed);
     expect(result.assetConsistency).toEqual(claimed);
 
