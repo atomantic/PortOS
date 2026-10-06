@@ -87,6 +87,9 @@ const isRetryableTransportError = (error) =>
  *   stays kind-specific; the executor only lends the channel.
  * @param {(ctx: object) => {dir: string, filename: string}} config.resolveDestination -
  *   Where the verified result lands. Called per job so a PATHS proxy stays live.
+ * @param {(work: Function, ctx: object) => Promise<object>} [config.publishResult]
+ *   Owns verified-file installation plus finalize, including replacement rollback.
+ *   Downloads complete before admission; matching-file replays still finalize.
  * @param {(ctx: object) => Promise<object>} config.finalize - Register the downloaded
  *   result locally; its return value is merged into the `completed` event payload.
  *   Its ctx carries `renderStartedAtMs` (this install's ingestion instant) for
@@ -100,6 +103,7 @@ export function createRemoteMediaExecutor({
   buildRequest,
   resolveDestination,
   finalize,
+  publishResult = work => work(),
 }) {
   let pollDelayMs = 1_000;
   let retryDelayMs = 2_000;
@@ -424,6 +428,7 @@ export function createRemoteMediaExecutor({
           callback(null, chunk);
         },
       });
+      let verified = false;
       try {
         await pipeline(responseStream(response.body), meter, createWriteStream(partialPath, { flags: 'wx' }));
         const digest = hasher.digest('hex');
@@ -435,10 +440,10 @@ export function createRemoteMediaExecutor({
         // POSIX rename replaces an existing file atomically. Do not unlink the
         // destination first: consumers should never observe a missing final path
         // between integrity verification and promotion.
-        await rename(partialPath, finalPath);
-        return { filename, dir, path: finalPath };
+        verified = true;
+        return { filename, dir, path: finalPath, stagedPath: partialPath };
       } finally {
-        await unlink(partialPath).catch((error) => { if (error.code !== 'ENOENT') maintenance.markCurrentUnsettled(); });
+        if (!verified) await unlink(partialPath).catch((error) => { if (error.code !== 'ENOENT') maintenance.markCurrentUnsettled(); });
       }
     }, { timeoutMs: null });
   }
@@ -478,7 +483,11 @@ export function createRemoteMediaExecutor({
     const completed = await pollProviderJob(state, submitted);
     const downloaded = await downloadResult(state, completed);
     state.finalizing = true;
-    const local = await finalize({
+    let local;
+    try {
+      local = await publishResult(async () => {
+        if (downloaded.stagedPath) await rename(downloaded.stagedPath, downloaded.path);
+        return finalize({
       jobId: state.jobId,
       peerId: state.peerId,
       request,
@@ -491,8 +500,14 @@ export function createRemoteMediaExecutor({
       // federation boundary.
       renderStartedAtMs: state.renderStartedAtMs,
       ...downloaded,
-    });
-    state.finalizing = false;
+        });
+      }, { ...downloaded, jobId: state.jobId });
+    } finally {
+      if (downloaded.stagedPath) await unlink(downloaded.stagedPath).catch(error => {
+        if (error.code !== 'ENOENT') maintenance.markCurrentUnsettled();
+      });
+      state.finalizing = false;
+    }
     return {
       ...local,
       federatedMedia: {
