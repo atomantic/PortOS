@@ -337,6 +337,34 @@ describe('authGate middleware', () => {
     expect(result.called).toBe(true);
   });
 
+  it('rejects a page on another loopback port (a managed app is a different principal)', async () => {
+    const auth = await import('./auth.js');
+    const { token } = await auth.setPassword({ newPassword: 'correct-horse' });
+    const { authGate } = await import('./authGate.js');
+    for (const origin of ['http://localhost:3000', 'http://127.0.0.1:8080', 'http://[::1]:4173']) {
+      const result = await runGate(authGate, {
+        path: '/api/cos',
+        headers: { host: 'localhost:5555', origin, cookie: `portos_auth=${token}` },
+      });
+      expect(result.called, origin).toBe(false);
+      expect(result.res.statusCode).toBe(403);
+    }
+  });
+
+  it('allows the same loopback port under another loopback name and PortOS-owned ports', async () => {
+    const auth = await import('./auth.js');
+    const { token } = await auth.setPassword({ newPassword: 'correct-horse' });
+    const { authGate } = await import('./authGate.js');
+    for (const [host, origin] of [
+      ['127.0.0.1:5555', 'http://localhost:5555'],
+      ['localhost:5560', 'http://localhost:5555'],
+      ['localhost:5555', 'http://localhost:5553'],
+    ]) {
+      const result = await runGate(authGate, { path: '/api/cos', headers: { host, origin, cookie: `portos_auth=${token}` } });
+      expect(result.called, `${origin} -> ${host}`).toBe(true);
+    }
+  });
+
   it('rejects a cross-origin logout (public path still gets the CSRF check)', async () => {
     const auth = await import('./auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
