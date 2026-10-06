@@ -88,6 +88,8 @@ Comms & voice: [beeper](./features/beeper.md) · [messages-browser-send](./featu
 
 - [Local managed-app visitor broker](features/managed-visitors.md) — opt-in credential provisioning, versioned nonhumanoid scope and host negotiation.
 
+- [Agent API key](./AGENT_API_KEY.md) — opt-in local credential and `scripts/portos-api.js` CLI for agents PortOS did not spawn.
+
 - [Peer push authentication](./PEER_PUSH_AUTH.md)
 
 - [Tool-free model delegation](SANDBOX_DELEGATION.md) — approved API workers, context packets, and advisory fidelity evaluation for Persistent Mind.

@@ -10,6 +10,9 @@ vi.mock('../../services/api', () => ({
   clearAuthPassword: vi.fn(),
   listAuthSessions: vi.fn(),
   revokeAuthSession: vi.fn(),
+  getAgentKeyStatus: vi.fn(),
+  setAgentKeyEnabled: vi.fn(),
+  rotateAgentKey: vi.fn(),
 }));
 
 vi.mock('../ui/Toast', () => ({
@@ -35,6 +38,35 @@ describe('SecurityTab', () => {
     // Most tests don't exercise the sessions panel — default to an empty list
     // so the effect that fetches it doesn't reject unhandled in every test.
     api.listAuthSessions.mockResolvedValue({ sessions: [] });
+    api.getAgentKeyStatus.mockResolvedValue({ enabled: false, authEnabled: true, path: '~/.portos/agent-key.json', active: false, expiresAt: null });
+  });
+
+  it('turns the agent API key on and off from the Security tab', async () => {
+    api.getAuthStatus.mockResolvedValue({ enabled: true });
+    api.setAgentKeyEnabled.mockImplementation(async (on) => ({
+      enabled: on, authEnabled: true, path: '~/.portos/agent-key.json', active: on, expiresAt: on ? Date.now() + 86_400_000 : null,
+    }));
+
+    render(<SecurityTab />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Turn on' }));
+    expect(await screen.findByText('Agent API key on')).toBeInTheDocument();
+    expect(screen.getByText('~/.portos/agent-key.json')).toBeInTheDocument();
+    expect(api.setAgentKeyEnabled).toHaveBeenCalledWith(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Turn off and revoke' }));
+    expect(await screen.findByText('Agent API key off')).toBeInTheDocument();
+    expect(api.setAgentKeyEnabled).toHaveBeenLastCalledWith(false);
+  });
+
+  it('hides the agent API key card while no password is set', async () => {
+    api.getAuthStatus.mockResolvedValue({ enabled: false });
+
+    render(<SecurityTab />);
+
+    expect(await screen.findByText('Login password disabled')).toBeInTheDocument();
+    expect(screen.queryByText(/Agent API key/)).not.toBeInTheDocument();
+    expect(api.getAgentKeyStatus).not.toHaveBeenCalled();
   });
 
   afterEach(() => {

@@ -4,6 +4,7 @@ import toast from '../ui/Toast';
 import Banner from '../ui/Banner';
 import FormField from '../ui/FormField';
 import BrailleSpinner from '../BrailleSpinner';
+import AgentKeyCard from './AgentKeyCard';
 import { getAuthStatus, setAuthPassword, clearAuthPassword, listAuthSessions, revokeAuthSession } from '../../services/api';
 import { formatDateShort } from '../../utils/formatters';
 
@@ -293,6 +294,8 @@ export function SecurityTab() {
         </div>
       )}
       </div>
+
+      {enabled && <AgentKeyCard />}
 
       {enabled && agentSessions.length > 0 && (
         <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">

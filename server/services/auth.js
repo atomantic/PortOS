@@ -325,6 +325,30 @@ export const revokeSessionById = async (id) => {
   return false;
 };
 
+// Revoke every session carrying `label` except the one addressed by `keepId`.
+// The local agent key (services/agentKey.js) keeps exactly one live session:
+// a rotation mints the replacement first, then drops the rest here. Like
+// revokeSessionById, no socket kick — these are non-interactive credentials.
+export const revokeSessionsByLabel = async (label, { keepId = null } = {}) => {
+  await ensureLoaded();
+  let removed = 0;
+  for (const [tokenHash, entry] of sessions) {
+    if (entry.label !== label || entry.id === keepId) continue;
+    sessions.delete(tokenHash);
+    removed += 1;
+  }
+  if (removed) await writeSessions();
+  return removed;
+};
+
+// The live session a plaintext token addresses — `{ id, label, expiresAt }` —
+// or null when the token does not verify. Never exposes `tokenHash`.
+export const describeSession = async (token) => {
+  if (!await verifySession(token)) return null;
+  const entry = sessions.get(hashToken(token));
+  return entry ? { id: entry.id, label: entry.label, expiresAt: entry.expiresAt } : null;
+};
+
 export const verifySession = async (token) => {
   if (typeof token !== 'string' || token.length === 0) return false;
   await ensureLoaded();

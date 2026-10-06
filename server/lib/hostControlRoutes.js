@@ -129,6 +129,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Setting a password mints an operator session: bootstrap must be local,
   // and rotation must already hold operator authority (#8771).
   'POST /api/auth/password',
+  // The agent API key writes an operator session token to the host user's
+  // home directory (services/agentKey.js); enabling and rotating mint it.
+  'PUT /api/auth/agent-key',
+  'POST /api/auth/agent-key/rotate',
 
   // Generic runs accept arbitrary prompts/workspaces, including API-to-CLI fallback.
   'POST /api/runs',
