@@ -8,7 +8,7 @@ import { backupSharedAdmission } from './backupSharedAdmission.js';
  *
  * Database maintenance shares the boundary. A cut is refused while a maintenance
  * fence is up, and maintenance that must not observe or replace a half-published
- * pair takes the same cut around its own destructive step. Publication itself is
+ * pair takes the same cut around its own destructive step. Publication itself
  * waits for a snapshot; unreadable ownership fails closed. Under a database
  * fence the database already rejects the row write.
  * Every retryable refusal carries BACKUP_SNAPSHOT_BUSY.
@@ -33,21 +33,48 @@ function releasePublications() {
 }
 
 /** Hold one admission across an entire file-plus-row workflow. Nested calls reuse it. */
-export async function withBackupAssetPublication(work) {
-  return maintenance.continueSettlement(() => withAdmittedBackupAssetPublication(work));
+export async function withBackupAssetPublication(work, { timeoutMs = DEFAULT_DRAIN_TIMEOUT_MS } = {}) {
+  return maintenance.continueSettlement(() => withAdmittedBackupAssetPublication(work, timeoutMs));
 }
 
-async function withAdmittedBackupAssetPublication(work) {
+function publicationTimeoutError() {
+  let owner;
+  try { owner = backupSharedAdmission.status().cut; }
+  catch (error) { owner = { unreadable: true, error: error.message }; }
+  return Object.assign(busyError(`Timed out waiting for backup publication admission${owner?.path ? ` at ${owner.path}` : ''}. No publication writes started. Reconcile the interrupted backup or restore before retiring its exact ownership record; do not remove it by age or PID.`), {
+    owner, ...(owner?.path ? { recoveryPath: owner.path } : {}),
+  });
+}
+
+async function waitForLocalCut(deadline) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw publicationTimeoutError();
+  await new Promise((resolve, reject) => {
+    const clear = () => {
+      clearTimeout(timer);
+      publicationWaiters = publicationWaiters.filter(waiter => waiter !== resumed);
+    };
+    const resumed = () => { clear(); resolve(); };
+    const timer = setTimeout(() => { clear(); reject(publicationTimeoutError()); }, remaining);
+    publicationWaiters.push(resumed);
+  });
+}
+
+async function withAdmittedBackupAssetPublication(work, timeoutMs) {
   const scope = publicationScope.getStore();
   if (scope?.active) return work();
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 0) throw new TypeError('Publication timeoutMs must be a non-negative finite number');
+  const deadline = Date.now() + timeoutMs;
   // Work spawned by a still-admitted lease joins it: the cut already waits for that lease.
   const joinsAdmitted = scope?.spawnedBy?.active === true;
   while (!joinsAdmitted && (cutRequested || cutActive)) {
-    await new Promise(resolve => publicationWaiters.push(resolve));
+    await waitForLocalCut(deadline);
   }
   let sharedLease;
   while (!(sharedLease = backupSharedAdmission.tryPublication({ parent: joinsAdmitted ? scope.spawnedBy.sharedLease : null }))) {
-    await new Promise(resolve => setTimeout(resolve, 25));
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw publicationTimeoutError();
+    await new Promise(resolve => setTimeout(resolve, Math.min(25, remaining)));
   }
   admitted += 1;
   const lease = { active: true, sharedLease };
