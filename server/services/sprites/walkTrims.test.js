@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import sharp from 'sharp';
 import { writeFile, mkdir, readFile, readdir } from 'fs/promises';
 
@@ -351,7 +351,7 @@ describe('trim backup publication', () => {
   it('drains the real strip and GIF writes through their manifest commit', async () => {
     const id = await characterWithRun(newId());
     const reached = backupDeferred(); const commit = backupDeferred();
-    beforeAssetWrite = async path => { if (path.includes('/trims/') && path.endsWith('.json')) { reached.resolve(); await commit.promise; } };
+    beforeAssetWrite = async path => { if (dirname(path) === join(TEST_ROOT, 'sprites', id, 'walk', 'trims') && path.endsWith('.json')) { reached.resolve(); await commit.promise; } };
     const work = saveLoopTrim(id, { runId: RUN_ID, enabledColumns: [0, 1] });
     await Promise.race([reached.promise, work.then(() => { throw new Error('missed trim seam'); })]);
     let ready = false; const cut = acquireBackupSnapshotCut().then(release => { ready = true; return release; });
