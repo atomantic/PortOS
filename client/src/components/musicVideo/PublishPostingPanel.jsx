@@ -116,7 +116,7 @@ function TargetOptions({ target, kit, project, options, setOption, flairs, idFor
     const suggested = suggestDistrokidGenres(project);
     const fullName = [options.songwriterFirst, options.songwriterLast].map((v) => v?.trim()).filter(Boolean).join(' ') || 'Songwriter legal name';
     const genreSelect = (key, label, suggestion, noneLabel) => field(key, label,
-      <select id={idFor(key)} value={options[key] || ''} onChange={(e) => setOption(key, e.target.value)} className={inputCls}>
+      <select id={idFor(key)} aria-label={label} value={options[key] || ''} onChange={(e) => setOption(key, e.target.value)} className={inputCls}>
         <option value="">{suggestion ? `${suggestion} (from the song's style)` : noneLabel}</option>
         {DISTROKID_GENRES.map((g) => <option key={g} value={g}>{g}</option>)}
       </select>);
@@ -129,7 +129,7 @@ function TargetOptions({ target, kit, project, options, setOption, flairs, idFor
           {text('songwriterFirst', 'Songwriter legal first name', 'First')}
           {text('songwriterLast', 'Songwriter legal last name', 'Last')}
           {field('songwriterRole', 'Songwriter wrote',
-            <select id={idFor('songwriterRole')} value={options.songwriterRole || (instrumental ? 'music' : 'both')} onChange={(e) => setOption('songwriterRole', e.target.value)} className={inputCls}>
+            <select id={idFor('songwriterRole')} aria-label="Songwriter wrote" value={options.songwriterRole || (instrumental ? 'music' : 'both')} onChange={(e) => setOption('songwriterRole', e.target.value)} className={inputCls}>
               <option value="both">Music and lyrics</option>
               <option value="music">Music</option>
               <option value="lyrics">Lyrics</option>
