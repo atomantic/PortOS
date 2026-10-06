@@ -492,3 +492,67 @@ describe('bulkUpdateAppTaskTypeOverride legacy migration', () => {
     expect(saved.taskTypeOverrides.y.enabled).toBe(true);
   });
 });
+
+describe('apps.json write serialization', () => {
+  // A stateful fake disk with real latency on read and write, so two writers
+  // that are not serialized each start from their own snapshot of the file.
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+  let disk;
+
+  beforeEach(() => {
+    invalidateCache();
+    vi.clearAllMocks();
+    disk = JSON.stringify({
+      apps: {
+        'app-a': { name: 'A', description: 'a0' },
+        'app-b': { name: 'B', description: 'b0' },
+      },
+    });
+    readJSONFile.mockImplementation(async () => { const snapshot = JSON.parse(disk); await tick(); return snapshot; });
+    atomicWrite.mockImplementation(async (_file, data) => { const payload = JSON.stringify(data); await tick(); disk = payload; });
+  });
+
+  it('keeps both of two concurrent updates to different apps when the cache is cold', async () => {
+    await Promise.all([
+      updateApp('app-a', { description: 'a1' }),
+      updateApp('app-b', { description: 'b1' }),
+    ]);
+
+    const saved = JSON.parse(disk).apps;
+    expect(saved['app-a'].description).toBe('a1');
+    expect(saved['app-b'].description).toBe('b1');
+  });
+
+  it('keeps an app created while a bulk task-type update is in flight', async () => {
+    const [, created] = await Promise.all([
+      bulkUpdateAppTaskTypeOverride('pr-watcher', { enabled: false }),
+      createApp({ name: 'New App', repoPath: '/tmp/new-app' }),
+    ]);
+
+    const saved = JSON.parse(disk).apps;
+    expect(saved[created.id]).toBeDefined();
+    expect(saved['app-a'].taskTypeOverrides['pr-watcher'].enabled).toBe(false);
+  });
+
+  it('does not let a read that started before a write re-cache the stale snapshot', async () => {
+    await getAllApps(); // warm the cache
+    invalidateCache();
+    const staleRead = getAllApps();
+    await updateApp('app-a', { description: 'a1' });
+    await staleRead;
+
+    await updateApp('app-b', { description: 'b1' });
+
+    const saved = JSON.parse(disk).apps;
+    expect(saved['app-a'].description).toBe('a1');
+    expect(saved['app-b'].description).toBe('b1');
+  });
+
+  it('drops uncommitted edits from the cache when the write fails', async () => {
+    atomicWrite.mockRejectedValueOnce(new Error('ENOSPC'));
+    await expect(updateApp('app-a', { description: 'lost' })).rejects.toThrow('ENOSPC');
+
+    const apps = await getAllApps();
+    expect(apps.find(({ id }) => id === 'app-a').description).toBe('a0');
+  });
+});

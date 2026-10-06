@@ -11,6 +11,7 @@ import { NON_PM2_TYPES } from './appProcessTypes.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from './taskScheduleRegistry.js';
 import { sanitizeTaskMetadata } from '../lib/cosValidation.js';
 import { isPlainObject } from '../lib/objects.js';
+import { createMutex } from '../lib/asyncMutex.js';
 import { resolveAppWorkTracker } from '../lib/workTracker.js';
 import { PORTS } from '../lib/ports.js';
 import { hasTailscaleCert } from '../../lib/tailscale-https.js';
@@ -75,6 +76,15 @@ function buildPortosApp() {
 // Event emitter for apps changes
 export const appsEvents = new EventEmitter();
 
+// Every apps.json read-modify-write runs under this mutex. Without it, two
+// writers that both missed the cache (or that interleave across an await such
+// as resetWatchersIfDisabled) each mutate their own snapshot and the later
+// atomicWrite silently reverts the earlier writer's change.
+const withAppsLock = createMutex();
+// Bumped on every save/invalidate so a read that began before a write cannot
+// install its stale snapshot into the cache after the write lands.
+let cacheGeneration = 0;
+
 // In-memory cache for apps data
 let appsCache = null;
 let cacheTimestamp = 0;
@@ -92,6 +102,7 @@ async function loadApps() {
     return appsCache;
   }
 
+  const generation = cacheGeneration;
   await ensureDir(DATA_DIR);
 
   // STRICT (#4115): this reader WRITES — an empty `data.apps` makes the baseline
@@ -154,9 +165,14 @@ async function loadApps() {
     }
   }
 
-  appsCache = data;
-  cacheTimestamp = now;
-  return appsCache;
+  // A write (or invalidate) that landed while we were reading means this
+  // snapshot is stale: hand it to our caller but never cache it, or the next
+  // locked writer would start from it and revert that write.
+  if (generation === cacheGeneration) {
+    appsCache = data;
+    cacheTimestamp = now;
+  }
+  return data;
 }
 
 /**
@@ -166,14 +182,32 @@ async function saveApps(data) {
   await ensureDir(DATA_DIR);
   await atomicWrite(APPS_FILE, data);
   // Update cache with saved data
+  cacheGeneration += 1;
   appsCache = data;
   cacheTimestamp = Date.now();
+}
+
+/**
+ * Run a read-modify-write of apps.json exclusively. The cached object is mutated
+ * in place, so a body that throws before saving would leave uncommitted edits in
+ * the cache for readers; drop the cache so the next read reflects the file.
+ */
+function withAppsWrite(fn) {
+  return withAppsLock(async () => {
+    try {
+      return await fn();
+    } catch (err) {
+      invalidateCache();
+      throw err;
+    }
+  });
 }
 
 /**
  * Invalidate the apps cache (call after external changes)
  */
 export function invalidateCache() {
+  cacheGeneration += 1;
   appsCache = null;
   cacheTimestamp = 0;
 }
@@ -225,7 +259,11 @@ export async function getAppById(id) {
 /**
  * Create a new app
  */
-export async function createApp(appData) {
+export function createApp(appData) {
+  return withAppsWrite(() => createAppUnlocked(appData));
+}
+
+async function createAppUnlocked(appData) {
   const data = await loadApps();
   const id = uuidv4();
   const now = new Date().toISOString();
@@ -298,7 +336,11 @@ export async function createApp(appData) {
 /**
  * Update an existing app
  */
-export async function updateApp(id, updates) {
+export function updateApp(id, updates) {
+  return withAppsWrite(() => updateAppUnlocked(id, updates));
+}
+
+async function updateAppUnlocked(id, updates) {
   const data = await loadApps();
 
   if (!data.apps[id]) {
@@ -335,7 +377,11 @@ export async function updateApp(id, updates) {
  * Remove an app from PortOS's registry (the repository on disk is untouched).
  * The PortOS baseline app cannot be removed.
  */
-export async function deleteApp(id) {
+export function deleteApp(id) {
+  return withAppsWrite(() => deleteAppUnlocked(id));
+}
+
+async function deleteAppUnlocked(id) {
   if (id === PORTOS_APP_ID) return false;
 
   const data = await loadApps();
@@ -389,9 +435,11 @@ function migrateTaskTypeOverridesInData(data, id) {
  * Persist the legacy → taskTypeOverrides migration for one app. Writes to disk
  * when it migrated, so it only runs once per app.
  */
-async function migrateTaskTypeOverrides(id) {
-  const data = await loadApps();
-  if (migrateTaskTypeOverridesInData(data, id)) await saveApps(data);
+function migrateTaskTypeOverrides(id) {
+  return withAppsWrite(async () => {
+    const data = await loadApps();
+    if (migrateTaskTypeOverridesInData(data, id)) await saveApps(data);
+  });
 }
 
 /**
@@ -455,7 +503,11 @@ export async function getAppLayeredIntelligenceConfig(id) {
  * stay absent and keep resolving to the shipped default via getEffectiveConfig.
  * Returns the updated app, or null if unknown.
  */
-export async function updateAppLayeredIntelligence(id, updates = {}) {
+export function updateAppLayeredIntelligence(id, updates = {}) {
+  return withAppsWrite(() => updateAppLayeredIntelligenceUnlocked(id, updates));
+}
+
+async function updateAppLayeredIntelligenceUnlocked(id, updates) {
   const app = await getAppById(id);
   if (!app) return null;
   const stored = (app.layeredIntelligence && typeof app.layeredIntelligence === 'object' && !Array.isArray(app.layeredIntelligence))
@@ -468,7 +520,7 @@ export async function updateAppLayeredIntelligence(id, updates = {}) {
   if (updates.handoff && typeof updates.handoff === 'object') {
     merged.handoff = { ...(stored.handoff && typeof stored.handoff === 'object' ? stored.handoff : {}), ...updates.handoff };
   }
-  return updateApp(id, { layeredIntelligence: merged });
+  return updateAppUnlocked(id, { layeredIntelligence: merged });
 }
 
 /**
@@ -599,19 +651,21 @@ export async function updateAppTaskTypeOverride(id, taskType, patch = {}) {
  * @param {Record<string, object>} patches - Task type → override patch
  * @returns {Promise<object|null>} The updated app record, or null when unknown
  */
-export async function updateAppTaskTypeOverrides(id, patches = {}) {
-  const data = await loadApps();
-  if (!data.apps[id]) return null;
+export function updateAppTaskTypeOverrides(id, patches = {}) {
+  return withAppsWrite(async () => {
+    const data = await loadApps();
+    if (!data.apps[id]) return null;
 
-  const appRecord = await commitTaskTypeOverrides(data, id, async (overrides, record) => {
-    for (const [taskType, patch] of Object.entries(patches)) {
-      mergeTaskTypeOverride(overrides, taskType, patch);
-      await resetWatchersIfDisabled(record, id, taskType, patch);
-    }
+    const appRecord = await commitTaskTypeOverrides(data, id, async (overrides, record) => {
+      for (const [taskType, patch] of Object.entries(patches)) {
+        mergeTaskTypeOverride(overrides, taskType, patch);
+        await resetWatchersIfDisabled(record, id, taskType, patch);
+      }
+    });
+    await saveAndAnnounceTaskTypes(data);
+
+    return { id, ...appRecord };
   });
-  await saveAndAnnounceTaskTypes(data);
-
-  return { id, ...appRecord };
 }
 
 /**
@@ -644,75 +698,83 @@ async function resetWatcherCooldown(taskType, appId) {
  * re-enable baselines silently instead of dispatching the backlog of PRs
  * opened while it was paused. See prWatcher.js.
  */
-export async function clearAllPrWatcherState() {
-  const data = await loadApps();
-  let changed = false;
-  for (const app of Object.values(data.apps)) {
-    if (app.prWatcherState) {
-      delete app.prWatcherState;
-      changed = true;
+export function clearAllPrWatcherState() {
+  return withAppsWrite(async () => {
+    const data = await loadApps();
+    let changed = false;
+    for (const app of Object.values(data.apps)) {
+      if (app.prWatcherState) {
+        delete app.prWatcherState;
+        changed = true;
+      }
     }
-  }
-  if (changed) await saveApps(data);
-  return { changed };
+    if (changed) await saveApps(data);
+    return { changed };
+  });
 }
 
 /** Clear issue-watcher cursors/pending approvals on global disable. */
-export async function clearAllIssueWatcherState() {
-  const data = await loadApps();
-  let changed = false;
-  for (const app of Object.values(data.apps)) {
-    if (app.issueWatcherState) {
-      delete app.issueWatcherState;
-      changed = true;
+export function clearAllIssueWatcherState() {
+  return withAppsWrite(async () => {
+    const data = await loadApps();
+    let changed = false;
+    for (const app of Object.values(data.apps)) {
+      if (app.issueWatcherState) {
+        delete app.issueWatcherState;
+        changed = true;
+      }
     }
-  }
-  if (changed) await saveApps(data);
-  return { changed };
+    if (changed) await saveApps(data);
+    return { changed };
+  });
 }
 
 /**
  * Bulk update a task type override for all active (non-archived) apps
  */
-export async function bulkUpdateAppTaskTypeOverride(taskType, { enabled } = {}) {
-  const data = await loadApps();
-  const activeIds = Object.entries(data.apps)
-    .filter(([, app]) => !app.archived)
-    .map(([id]) => id);
+export function bulkUpdateAppTaskTypeOverride(taskType, { enabled } = {}) {
+  return withAppsWrite(async () => {
+    const data = await loadApps();
+    const activeIds = Object.entries(data.apps)
+      .filter(([, app]) => !app.archived)
+      .map(([id]) => id);
 
-  for (const id of activeIds) {
-    await commitTaskTypeOverrides(data, id, async (overrides, record) => {
-      mergeTaskTypeOverride(overrides, taskType, { enabled });
-      await resetWatchersIfDisabled(record, id, taskType, { enabled });
-    });
-  }
+    for (const id of activeIds) {
+      await commitTaskTypeOverrides(data, id, async (overrides, record) => {
+        mergeTaskTypeOverride(overrides, taskType, { enabled });
+        await resetWatchersIfDisabled(record, id, taskType, { enabled });
+      });
+    }
 
-  await saveAndAnnounceTaskTypes(data);
+    await saveAndAnnounceTaskTypes(data);
 
-  return { count: activeIds.length };
+    return { count: activeIds.length };
+  });
 }
 
 /**
  * Toggle all task types for a single app to enabled or disabled
  */
-export async function toggleAllAppTaskTypes(id, enabled) {
-  const data = await loadApps();
-  if (!data.apps[id]) return null;
+export function toggleAllAppTaskTypes(id, enabled) {
+  return withAppsWrite(async () => {
+    const data = await loadApps();
+    if (!data.apps[id]) return null;
 
-  const appRecord = await commitTaskTypeOverrides(data, id, async (overrides, record) => {
-    for (const taskType of SELF_IMPROVEMENT_TASK_TYPES) {
-      const existing = overrides[taskType] || {};
-      overrides[taskType] = { ...existing, enabled };
-    }
-    // Disabling everything disables the watchers too — same reset as any other
-    // path that moves their gate, so a later re-enable baselines promptly.
-    for (const watcher of ['pr-watcher', 'issue-watcher']) {
-      await resetWatchersIfDisabled(record, id, watcher, { enabled });
-    }
+    const appRecord = await commitTaskTypeOverrides(data, id, async (overrides, record) => {
+      for (const taskType of SELF_IMPROVEMENT_TASK_TYPES) {
+        const existing = overrides[taskType] || {};
+        overrides[taskType] = { ...existing, enabled };
+      }
+      // Disabling everything disables the watchers too — same reset as any other
+      // path that moves their gate, so a later re-enable baselines promptly.
+      for (const watcher of ['pr-watcher', 'issue-watcher']) {
+        await resetWatchersIfDisabled(record, id, watcher, { enabled });
+      }
+    });
+    await saveAndAnnounceTaskTypes(data);
+
+    return { id, ...appRecord };
   });
-  await saveAndAnnounceTaskTypes(data);
-
-  return { id, ...appRecord };
 }
 
 /**
