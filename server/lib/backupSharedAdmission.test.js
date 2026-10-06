@@ -8,6 +8,7 @@ import { pinPlatform } from './testHelper.js';
 import { join } from 'node:path';
 import { once } from 'node:events';
 import { createBackupSharedAdmission } from './backupSharedAdmission.js';
+import { DISPOSABLE_ROOT_MARKER } from './dataRoot.js';
 
 const roots = [];
 const children = [];
@@ -45,6 +46,9 @@ async function root() {
   const path = await mkdtemp(join(tmpdir(), 'backup-shared-race-'));
   roots.push(path);
   await mkdir(join(path, 'data'));
+  // A checkout under data/cos/worktrees refuses a live PORTOS_DATA_ROOT pin; the
+  // marker declares this throwaway root disposable so the child honors it there too.
+  await writeFile(join(path, DISPOSABLE_ROOT_MARKER), '');
   return path;
 }
 function worker(path, mode, value = '', timeout = 5000) {
