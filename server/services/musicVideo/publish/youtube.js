@@ -75,15 +75,36 @@ function adapter(label) {
       await step(label, 'set the Music category', () => selectDropdownItem(page, 'ytcp-form-select#category ytcp-dropdown-trigger', 'Music'));
       await step(label, 'go to Video elements', () => page.locator('#next-button').click({ timeout: T }));
       let captions = false;
+      const leftForYou = [];
       if (payload.captions) {
-        await step(label, 'upload the lyric captions', async () => {
-          await page.locator('ytcp-button').filter({ hasText: /^Add$/ }).first().click({ timeout: T });
-          await page.locator('button').filter({ hasText: 'Upload file' }).first().click({ timeout: T });
-          await page.locator('#captions-file-loader').setInputFiles(payload.captions.path, { timeout: T });
+        // Studio's subtitles controls change often; a miss must not fail the draft.
+        // The labels are matched loosely (button/ytcp-button, "Add"/"Upload file"/"Upload")
+        // and the hidden file input is used whenever it is present.
+        const SOFT_MS = 15_000;
+        const clickIfVisible = async (loc) => {
+          const target = loc.first();
+          if (!(await target.isVisible().catch(() => false))) return false;
+          await target.click({ timeout: SOFT_MS });
+          return true;
+        };
+        captions = await (async () => {
+          const input = page.locator('input[type=file]#captions-file-loader, input[type=file][id*=caption i], input[type=file][accept*=".srt"], input[type=file][accept*=".sbv"]');
+          if (!(await input.count())) {
+            const subtitles = page.locator('ytcp-video-metadata-subtitles, ytcp-video-metadata-editor-advanced, #subtitles-section').first();
+            const scope = (await subtitles.count()) ? subtitles : page;
+            const opened = await clickIfVisible(scope.locator('ytcp-button, button, [role=button]').filter({ hasText: /^\s*(Add|Add subtitles|Upload)\s*$/i }));
+            if (!opened) return false;
+            await page.waitForTimeout(800);
+            await clickIfVisible(page.locator('tp-yt-paper-item, button, [role=menuitem], [role=button]').filter({ hasText: /^\s*Upload file\s*$/i }));
+          }
+          const loader = page.locator('input[type=file]#captions-file-loader, input[type=file][id*=caption i], input[type=file][accept*=".srt"], input[type=file][accept*=".sbv"]').first();
+          if (!(await loader.count())) return false;
+          await loader.setInputFiles(payload.captions.path, { timeout: SOFT_MS });
           await page.waitForTimeout(3000);
-          await page.locator('button').filter({ hasText: /^Done$/ }).last().click({ timeout: T });
-        });
-        captions = true;
+          await clickIfVisible(page.locator('button, ytcp-button').filter({ hasText: /^\s*(Done|Continue)\s*$/i }).last());
+          return true;
+        })().catch(() => false);
+        if (!captions) leftForYou.push('lyric captions (upload the subtitles file in Video elements)');
       }
       await step(label, 'go to Visibility', async () => {
         await page.locator('#next-button').click({ timeout: T });
@@ -92,7 +113,7 @@ function adapter(label) {
       });
       await step(label, 'choose Public', () => page.locator('tp-yt-paper-radio-button[name=PUBLIC]').click({ timeout: T }));
       const link = normalizeLink(await page.evaluate((re) => (document.querySelector('ytcp-uploads-dialog')?.innerText.match(new RegExp(re)) || [])[0] || null, LINK_RE.source));
-      return { title: payload.title, link, thumbnail, captions };
+      return { title: payload.title, link, thumbnail, captions, ...(leftForYou.length ? { leftForYou } : {}) };
     },
     async submit(page) {
       await step(label, 'publish', () => page.locator('#done-button').click({ timeout: T }));
