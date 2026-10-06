@@ -29,6 +29,37 @@ import { videoReviewStages, applyVideoReviewAction } from '../../lib/creativeDir
 import { runVideoAssembly, validateVideoCut } from './videoAssembly.js';
 const exec = promisify(execFile);
 let ffmpeg;
+
+// A timed-out assembly keeps the shared project id in flight and writes through
+// the same mocks the next case resets. Invalidate the superseded project, wait
+// until that run and its ffmpeg child have stopped, then install the next fixture.
+function ownAssembly(promise) {
+  const tracked = promise.finally(() => { if (state.owned === tracked) state.owned = null; });
+  state.owned = tracked;
+  return promise;
+}
+
+async function drainOwnedAssembly() {
+  const jobId = state.project?.videoExecution?.assembly?.jobId ?? null;
+  if (state.project?.videoExecution) {
+    state.project = {
+      ...state.project,
+      status: 'paused',
+      videoExecution: { ...state.project.videoExecution, authorized: false },
+    };
+  }
+  const owned = state.owned;
+  state.owned = null;
+  if (owned) await owned.catch(() => {});
+  if (!jobId) return;
+  const { cancelRender, getRenderJobStatus } = await import('../videoTimeline/local.js');
+  let signalled = false;
+  while (['running', 'pending'].includes(getRenderJobStatus(jobId)?.status)) {
+    if (!signalled) signalled = cancelRender(jobId) === true;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+}
+
 beforeAll(async () => {
   ffmpeg = await findFfmpeg();
   if (!ffmpeg || !await findFfprobe()) { ffmpeg = null; return; }
@@ -36,8 +67,12 @@ beforeAll(async () => {
   for (const [index, color] of ['red', 'blue'].entries()) await exec(ffmpeg, ['-y', '-f', 'lavfi', '-i', `color=c=${color}:s=64x64:r=24:d=3`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-an', join(state.root, 'videos', `reactor-${index}.mp4`)]);
   await exec(ffmpeg, ['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', join(state.root, 'music', 'example-bed.wav')]);
 }, 30000);
-afterAll(async () => { await rm(state.root, { recursive: true, force: true }); });
-beforeEach(() => {
+afterAll(async () => {
+  await drainOwnedAssembly();
+  await rm(state.root, { recursive: true, force: true });
+});
+beforeEach(async () => {
+  await drainOwnedAssembly();
   state.collection = [];
   state.tracks = [{ id: 'example-track', audioFilename: 'example-bed.wav' }];
   state.history = [0, 1].map(i => ({ id: `00000000-0000-4000-8000-00000000000${i}`, filename: `reactor-${i}.mp4`, width: 64, height: 64, fps: 24, numFrames: 72, modelId: 'reactor' }));
@@ -55,7 +90,7 @@ it('assembles a one-minute standalone cut from fake Reactor clips through real T
   state.project.videoDraft.durationRange = { min: 60, max: 180 };
   state.project.treatment.scenes = Array.from({ length: 20 }, (_, order) => ({ ...state.project.treatment.scenes[order % 2], sceneId: `shot-${order}`, order }));
   state.project.videoExecution.inputRevision = videoConfigurationRevision(state.project);
-  await runVideoAssembly('example-video');
+  await ownAssembly(runVideoAssembly('example-video'));
   expect(state.project.failureReason).toBeNull();
   expect(state.project.status).toBe('complete');
   expect(state.project.finalVideoId).not.toBe('00000000-0000-4000-8000-000000000001');
@@ -78,17 +113,17 @@ it('holds real rough/final artifacts for distinct approvals and reuses the rende
     state.project = applyVideoReviewAction(state.project, { action: 'approve', stage, revision: row.revision }, 'example-owner').project;
   };
   approve('script-shot-plan');
-  await runVideoAssembly('example-video');
+  await ownAssembly(runVideoAssembly('example-video'));
   expect(state.project.status).toBe('stitching');
   expect(state.project.videoRoughCut.videoId).toBeTruthy();
   expect(state.project.videoFinalCut).toBeUndefined();
   const rendered = state.history.length;
   approve('rough-cut');
-  await runVideoAssembly('example-video');
+  await ownAssembly(runVideoAssembly('example-video'));
   expect(state.project.videoFinalCut.videoId).toBe(state.project.videoRoughCut.videoId);
   expect(state.project.finalVideoId).toBeUndefined();
   approve('final-cut');
-  await runVideoAssembly('example-video');
+  await ownAssembly(runVideoAssembly('example-video'));
   expect(state.project.status).toBe('complete');
   expect(state.history.length).toBe(rendered);
 }, 30000);
@@ -100,7 +135,7 @@ it('assembles directive clips and repeats an imported standalone soundtrack in t
   state.project.videoDraft.audio = { mode: 'imported', trackId: 'example-track' };
   state.project.videoExecution.choices.audio = { ...state.project.videoDraft.audio, filename: 'example-bed.wav' };
   state.project.videoExecution.inputRevision = videoConfigurationRevision(state.project);
-  await runVideoAssembly('example-video');
+  await ownAssembly(runVideoAssembly('example-video'));
   expect(state.project.failureReason).toBeNull();
   expect(state.project.status).toBe('complete');
   const { getProject } = await import('../videoTimeline/local.js');
@@ -134,7 +169,7 @@ it('mutes a selected shot in the real cut while retaining the next shot audio', 
   state.project.videoExecution.choices.audio = { mode: 'native' };
   state.project.treatment.scenes[0].muteAudio = true;
   state.project.videoExecution.inputRevision = videoConfigurationRevision(state.project);
-  await runVideoAssembly('example-video');
+  await ownAssembly(runVideoAssembly('example-video'));
   expect(state.project.failureReason).toBeNull();
   expect(state.project.status).toBe('complete');
   const output = join(state.root, 'videos', state.project.videoFinalCut.filename);
@@ -158,10 +193,36 @@ it('uses the highest-scoring accepted scene midpoint on a three-scene timeline',
     evaluation: { score: [0.2, 0.9, 0.3][order] },
   }));
   state.project.videoExecution.inputRevision = videoConfigurationRevision(state.project);
-  await runVideoAssembly('example-video');
+  await ownAssembly(runVideoAssembly('example-video'));
   expect(state.project.failureReason).toBeNull();
   const final = state.history.find(item => item.id === state.project.finalVideoId);
   const { stdout } = await exec(ffmpeg, ['-v', 'error', '-i', join(state.root, 'thumbnails', final.thumbnail), '-vf', 'scale=1:1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { encoding: 'buffer' });
   expect(stdout[2]).toBeGreaterThan(200);
   expect(stdout[0]).toBeLessThan(30);
+}, 30000);
+
+it('drains a superseded assembly before the next case reuses the project and files', async context => {
+  requireFfmpeg(context);
+  state.project.targetDurationSeconds = 60;
+  state.project.videoDraft.durationRange = { min: 60, max: 180 };
+  state.project.treatment.scenes = Array.from({ length: 20 }, (_, order) => ({ ...state.project.treatment.scenes[order % 2], sceneId: `shot-${order}`, order }));
+  state.project.videoExecution.inputRevision = videoConfigurationRevision(state.project);
+  const owned = ownAssembly(runVideoAssembly('example-video'));
+  const { getRenderJobStatus } = await import('../videoTimeline/local.js');
+  await vi.waitFor(() => {
+    const jobId = state.project.videoExecution?.assembly?.jobId;
+    expect(['running', 'pending'].includes(getRenderJobStatus(jobId)?.status)).toBe(true);
+  }, { timeout: 20000, interval: 20 });
+  await drainOwnedAssembly();
+  const sentinel = { id: 'next-case', marker: 'stable-next-case' };
+  state.project = sentinel;
+  state.history = [{ id: 'next-history' }];
+  const sentinelFile = join(state.root, 'videos', 'next-case-owned.txt');
+  await writeFile(sentinelFile, 'owned by the next case');
+  await new Promise(resolve => setTimeout(resolve, 100));
+  expect(state.project).toBe(sentinel);
+  expect(state.history).toEqual([{ id: 'next-history' }]);
+  const { readFile } = await import('node:fs/promises');
+  expect(await readFile(sentinelFile, 'utf8')).toBe('owned by the next case');
+  await expect(owned).resolves.toBeUndefined();
 }, 30000);
