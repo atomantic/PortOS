@@ -163,6 +163,10 @@ describe('publishing kit build (#9281)', () => {
     const first = (await projects.getProject(id)).publishKit;
     expect(first.exports.map((e) => e.kind)).toEqual(['x-1080p', 'preview-720p', 'teaser', 'vertical-9x16']);
     for (const e of first.exports) expect(existsSync(join(PATHS.videos, e.filename))).toBe(true);
+    // #10377: the vertical cut fits the whole frame over a blurred fill instead of center-cropping text away.
+    const vertical = first.exports.find((e) => e.kind === 'vertical-9x16');
+    const probed = await runFfmpegProcess({ bin: ffmpeg, args: ['-hide_banner', '-i', join(PATHS.videos, vertical.filename), '-f', 'null', '-'] });
+    expect(probed.ok).toBe(true);
     expect(first.thumbnails).toHaveLength(2); // the two performance shots
     expect(first.thumbnail).toBe(first.thumbnails[0]);
     expect(await readFile(join(PATHS.videos, first.captionsFilename), 'utf8')).toContain('the chorus line');

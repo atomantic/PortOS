@@ -47,7 +47,7 @@ function verticalCutChoices(project) {
     .map((e) => ({ id: e.id, label: `Social cut ${fmtSec(e.startSec ?? 0)}-${fmtSec(e.endSec ?? 0)}` }));
   const crop = (kit.exports || []).find((e) => e.kind === 'vertical-9x16' && e.filename);
   if (crop && (kit.master?.renderHistoryId ?? null) === (project?.renderHistoryId ?? null)) {
-    cuts.unshift({ id: 'kit-vertical', label: `Kit center-crop ${fmtSec(crop.startSec ?? 0)}-${fmtSec(crop.endSec ?? 0)}` });
+    cuts.unshift({ id: 'kit-vertical', label: `Kit vertical (fit) ${fmtSec(crop.startSec ?? 0)}-${fmtSec(crop.endSec ?? 0)}` });
   }
   return cuts;
 }
