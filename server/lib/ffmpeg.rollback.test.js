@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pinPlatform } from './testHelper.js';
 
 let failRestore = false;
 let failInitialMove = false;
@@ -18,12 +19,11 @@ vi.mock('./childProcess.js', () => ({ execFile: vi.fn(), spawn: vi.fn() }));
 vi.mock('./processEnv.js', () => ({ safeChildProcessOptions: () => ({}), whichFirst: vi.fn() }));
 vi.mock('./fileUtils.js', () => ({ ensureDir: vi.fn(), PATHS: {} }));
 // Load the Windows branch on every CI host, then immediately restore the host.
-const descriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+const restorePlatform = pinPlatform('win32');
 let installEncodedVideo;
 try {
-  Object.defineProperty(process, 'platform', { ...descriptor, value: 'win32' });
   ({ installEncodedVideo } = await import('./ffmpeg.js'));
-} finally { Object.defineProperty(process, 'platform', descriptor); }
+} finally { restorePlatform(); }
 const { withBackupAssetPublication, acquireBackupSnapshotCut, backupPublicationAdmissionStatus } = await import('./backupSnapshotBoundary.js');
 const root = await mkdtemp(join(tmpdir(), 'portos-ffmpeg-rollback-'));
 const target = join(root, 'video.mp4');
