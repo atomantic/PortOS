@@ -17,7 +17,8 @@ import { getSkipReason } from './cosTaskClaim.js';
 
 import { DEVELOPMENT_ACTIVE_STATUSES, developmentWorkIdentity, sameDevelopmentWork } from '../lib/developmentWorkIdentity.js';
 import { reviewerModelsFromDefaults } from '../lib/reviewerConfig.js';
-import { readFile, writeFile, stat } from 'fs/promises';
+import { readFile, stat } from 'fs/promises';
+import { atomicWrite } from '../lib/fileUtils.js';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { parseTasksMarkdown, groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, generateTasksMarkdown, hasKnownPrefix, toRepresentableTask, PRIORITY_VALUES } from '../lib/taskParser.js';
@@ -220,7 +221,11 @@ async function findTaskInFile(filePath, taskId) {
  */
 async function writeTaskFile(filePath, markdown) {
   parsedTaskCache.delete(filePath);
-  await writeFile(filePath, markdown);
+  // Temp-file + rename, never an in-place truncate: TASKS.md is the user's whole
+  // task list, and a plain writeFile killed mid-write (PM2 restart, crash, full
+  // disk) leaves it empty or half-written — which parses as "no tasks" and is
+  // then persisted by the next write.
+  await atomicWrite(filePath, markdown);
 }
 
 /** Test hook: forget every cached parse. */
