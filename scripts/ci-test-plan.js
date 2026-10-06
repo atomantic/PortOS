@@ -30,14 +30,14 @@ const MAX_TARGETED_TEST_FILES = 125;
 // the files selected here run for real (issue #10312).
 //
 // An explicit list, not `*.browser.test.js`: only suites that guard `canRun`
-// with server/lib/browserSuiteGate.js can be told to fail instead of skip, and
-// `services/musicVideo/documentRender.browser.test.js` (server-only, pixel
-// thresholds) flaked its first CI run. The registry test
-// (browser-suite-registry.test.js) fails when a suite importing the gate is left out.
+// with server/lib/browserSuiteGate.js can be told to fail instead of skip. The
+// registry test (browser-suite-registry.test.js) fails when a suite importing
+// the gate is left out.
 export const BROWSER_SUITES = [
   'server/routes/musicVideoProductionReview.browser.test.js',
   'server/routes/musicVideoRichAuthoring.browser.test.js',
   'server/routes/musicVideoSongRevision.browser.test.js',
+  'server/services/musicVideo/documentRender.browser.test.js',
 ];
 const browserSuitesIn = (paths) => uniqueSorted(paths.filter((path) => BROWSER_SUITES.includes(path)));
 
