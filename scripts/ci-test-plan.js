@@ -20,7 +20,9 @@ const TEST_FILE_GLOBS = ['*.test.*', '*.spec.*'];
 const CLIENT_LINT_RE = /^client\/src\/.*\.(?:js|jsx)$/i;
 const EXECUTABLE_RE = /\.(?:cjs|css|html|js|jsx|json|mjs|sql|ts|tsx|ya?ml)$/i;
 const MAX_CHANGED_CODE_FILES = 30;
-const MAX_TARGETED_TEST_FILES = 120;
+// 125, not 120: the always-run guards grew to the old edge, and the real-repo
+// editorial-leaf planner test sat exactly on it (#10312).
+const MAX_TARGETED_TEST_FILES = 125;
 
 // Server-runner suites that drive real client components in Chrome. The server
 // job installs no client workspace, so there they always skip; the `database`

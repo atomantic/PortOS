@@ -854,7 +854,7 @@ successor run".
 - Database adapters, DB scripts, and relevant migrations add the complete
   serial DB suite.
 - Unmapped executable files use related-test mode. Unclassified artifacts,
-  shared roots/config, more than 30 executable changes, or more than 120
+  shared roots/config, more than 30 executable changes, or more than 125
   selected tests fail safe to full CI.
 
 ## Release Workflow (`release.yml`)
