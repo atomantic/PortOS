@@ -20,7 +20,26 @@ const TEST_FILE_GLOBS = ['*.test.*', '*.spec.*'];
 const CLIENT_LINT_RE = /^client\/src\/.*\.(?:js|jsx)$/i;
 const EXECUTABLE_RE = /\.(?:cjs|css|html|js|jsx|json|mjs|sql|ts|tsx|ya?ml)$/i;
 const MAX_CHANGED_CODE_FILES = 30;
-const MAX_TARGETED_TEST_FILES = 120;
+// 125, not 120: the always-run guards grew to the old edge, and the real-repo
+// editorial-leaf planner test sat exactly on it (#10312).
+const MAX_TARGETED_TEST_FILES = 125;
+
+// Server-runner suites that drive real client components in Chrome. The server
+// job installs no client workspace, so there they always skip; the `database`
+// job (client deps + Chrome + ffmpeg, PORTOS_REQUIRE_BROWSER_SUITES=1) is where
+// the files selected here run for real (issue #10312).
+//
+// An explicit list, not `*.browser.test.js`: only suites that guard `canRun`
+// with server/lib/browserSuiteGate.js can be told to fail instead of skip, and
+// `services/musicVideo/documentRender.browser.test.js` (server-only, pixel
+// thresholds) flaked its first CI run. The registry test
+// (browser-suite-registry.test.js) fails when a suite importing the gate is left out.
+export const BROWSER_SUITES = [
+  'server/routes/musicVideoProductionReview.browser.test.js',
+  'server/routes/musicVideoRichAuthoring.browser.test.js',
+  'server/routes/musicVideoSongRevision.browser.test.js',
+];
+const browserSuitesIn = (paths) => uniqueSorted(paths.filter((path) => BROWSER_SUITES.includes(path)));
 
 // Python sidecar scripts (`scripts/generate_ltx2.py`, …). Vitest's import graph
 // cannot reach into them, but their contracts are pinned by suites that read
@@ -231,6 +250,9 @@ export const ALWAYS_RUN_TESTS = [
   'docs/deps-doc.test.js',
   'docs/features/product-surfaces.test.js',
   'scripts/agent-instructions-files.test.js',
+  // Whole-tree scanner: a new browser suite can adopt the gate with no import
+  // edge back to the registry it must join (#10312).
+  'scripts/browser-suite-registry.test.js',
   // The union-merged catalogs are `.md` to the planner — documentation-only —
   // so a rebase that doubled a row would otherwise never be re-checked.
   'scripts/catalog-merge-union.test.js',
@@ -591,6 +613,9 @@ const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
       : plan.full
         ? `full matrix: ${plan.reason}`
         : 'client-impacting source changed',
+  browser: plan.browserFiles.length > 0
+    ? (plan.full ? `full matrix: ${plan.reason}` : `${plan.browserFiles.length} cross-workspace browser suite(s) selected`)
+    : 'skipped: no cross-workspace browser suite selected',
   db: plan.db ? (plan.full ? `full matrix: ${plan.reason}` : 'database-risk source changed') : 'skipped: no database-risk source changed',
   lint: plan.lint.mode === 'skip' ? 'skipped: no changed client source needs linting' : plan.full ? `full matrix: ${plan.reason}` : 'changed client source',
   build: plan.build ? (plan.full ? `full matrix: ${plan.reason}` : 'client-impacting source changed') : 'skipped: no client-impacting source changed',
@@ -688,6 +713,7 @@ export function buildCiTestPlan(changedFiles, {
       changedFiles: changed,
       server: alwaysRunServer.length > 0 ? { mode: 'files', files: alwaysRunServer, sources: [] } : skippedRunner(),
       client: alwaysRunClient.length > 0 ? { mode: 'files', files: alwaysRunClient, sources: [] } : skippedRunner(),
+      browserFiles: browserSuitesIn(alwaysRun),
       db: false,
       lint: { mode: 'skip', files: [] },
       build: false,
@@ -845,6 +871,7 @@ export function buildCiTestPlan(changedFiles, {
     changedFiles: changed,
     server,
     client,
+    browserFiles: browserSuitesIn(serverFiles),
     db,
     lint: {
       // Same deleted-path guard as directTests above — ESLint given a
@@ -905,6 +932,7 @@ function fullPlan(changedFiles, reason, options = {}) {
     changedFiles,
     server: { mode: 'full', files: [], sources: [] },
     client: { mode: 'full', files: [], sources: [] },
+    browserFiles: browserSuitesIn([...trackedSet]),
     db: true,
     lint: { mode: 'full', files: [] },
     build: true,
@@ -942,6 +970,7 @@ export function emitGitHubPlan(plan) {
     client_mode: plan.client.mode,
     client_files: JSON.stringify(plan.client.files),
     client_sources: JSON.stringify(plan.client.sources),
+    browser_files: JSON.stringify(plan.browserFiles),
     db: plan.db,
     lint_mode: plan.lint.mode,
     lint_files: JSON.stringify(plan.lint.files),

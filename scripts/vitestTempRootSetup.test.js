@@ -26,6 +26,26 @@ describe('vitestTempRootSetup teardown', () => {
     return result;
   }
 
+  it('ignores browser-owned Chrome scratch directories but still fails on a leaked fixture beside them', () => {
+    const browserOnly = runTeardown((root) => {
+      for (const name of ['com.google.Chrome.aB3dE9', '.com.google.Chrome.xY7zQ2', '.org.chromium.Chromium.k9L2mN']) {
+        mkdirSync(join(root, name));
+        writeFileSync(join(root, name, 'sock'), 'x');
+      }
+    });
+    expect(browserOnly.warnings).toEqual([]);
+    expect(browserOnly.exitCode).toBeUndefined();
+
+    const withFixture = runTeardown((root) => {
+      mkdirSync(join(root, 'com.google.Chrome.aB3dE9'));
+      writeFileSync(join(root, 'com.google.Chrome.aB3dE9', 'sock'), 'x');
+      mkdirSync(join(root, 'mv-review-browser-Abc123'));
+      writeFileSync(join(root, 'mv-review-browser-Abc123', 'data.json'), '{}');
+    });
+    expect(withFixture.warnings).toEqual(['⚠️ test temp leak: mv-review-browser- ×1']);
+    expect(withFixture.exitCode).toBe(1);
+  });
+
   it('ignores the macOS xcrun cache but still fails on a real leaked fixture', () => {
     const clean = runTeardown((root) => writeFileSync(join(root, 'xcrun_db'), 'cache'));
     expect(clean.warnings).toEqual([]);
