@@ -11,17 +11,18 @@ function VideoPreview({ source, seekRequest, collapsed }) {
   const videoRef = useRef(null);
   const pending = useRef(null);
   const applied = useRef(null);
-  const seekTo = (t) => {
+  const seekTo = (t, play = false) => {
     const video = videoRef.current;
     if (!video) return;
     if (video.readyState >= 1) video.currentTime = Math.min(t, video.duration || t);
     else pending.current = t;
+    if (play) video.play?.()?.catch?.(() => {});
   };
   useEffect(() => {
     if (!seekRequest || applied.current === seekRequest.n) return;
     applied.current = seekRequest.n;
     const t = seekRequest.t - source.startSec;
-    if (t >= 0 && (source.endSec == null || t <= source.endSec - source.startSec)) seekTo(t);
+    if (t >= 0 && (source.endSec == null || t <= source.endSec - source.startSec)) seekTo(t, !!seekRequest.play);
   }, [seekRequest, source.startSec, source.endSec]);
   return (
     <video

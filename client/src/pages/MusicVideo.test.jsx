@@ -2776,13 +2776,16 @@ describe('MusicVideo stage tabs (#9243)', () => {
           { id: 'mve-2', startSec: 10, endSec: 20, status: 'complete', filename: 'excerpt-new.mp4', notes: [] },
         ],
       };
-      await openProject(project, 'board');
+      // Final render plays the newest draft; Storyboard leads with the storyboard animatic instead.
+      await openProject(project, 'review');
       const player = await screen.findByLabelText('Draft excerpt preview');
       expect(player.getAttribute('src')).toBe('/data/videos/excerpt-new.mp4');
       expect(screen.queryByTitle('Composition document preview')).toBeNull();
       // Every finished draft stays reachable from the dock's source picker.
       fireEvent.change(screen.getByLabelText('Preview source'), { target: { value: 'excerpt:mve-1' } });
       await waitFor(() => expect(screen.getByLabelText('Draft excerpt preview').getAttribute('src')).toBe('/data/videos/excerpt-old.mp4'));
+      await openStage('board', false);
+      await waitFor(() => expect(screen.getByLabelText('Preview source')).toHaveValue('excerpt:mve-1'));
     });
 
     it('plays the final render first and keeps a picked draft across stage tabs', async () => {

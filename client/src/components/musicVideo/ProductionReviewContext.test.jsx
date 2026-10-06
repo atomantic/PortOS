@@ -27,6 +27,8 @@ describe('ProductionReviewContext', () => {
     // The recipe sits inside each shot's closed fold, not on the page.
     const fold = screen.getByText('Lights come up').closest('details');
     expect(fold.open).toBe(false);
+    // The flex summary draws its own disclosure chevron.
+    expect(fold.querySelector('summary svg')).toBeTruthy();
     expect(within(rows[0]).getByText('Opening')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Play shot 2 in the preview' }));
     expect(onSeek).toHaveBeenCalledWith(72);

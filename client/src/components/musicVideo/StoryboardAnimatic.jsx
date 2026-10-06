@@ -30,6 +30,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
     applied.current = seekRequest.n;
     audioRef.current.currentTime = seekRequest.t;
     setTime(seekRequest.t);
+    if (seekRequest.play) audioRef.current.play?.()?.catch?.(() => {});
   }, [seekRequest]);
   const shot = shotAt(scenes, time);
   const timed = timedShots(scenes);

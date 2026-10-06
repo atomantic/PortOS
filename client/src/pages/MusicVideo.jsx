@@ -978,9 +978,10 @@ export default function MusicVideo() {
   const [seekRequest, setSeekRequest] = useState(null);
   const [dockCollapsed, setDockCollapsed] = useState(null);
   useEffect(() => { setSeekRequest(null); setDockCollapsed(null); }, [selectedId]);
-  const seekToScene = (scene) => {
+  // `play` starts playback from there (a storyboard row); a scene card only cues the shot.
+  const seekToScene = (scene, { play = false } = {}) => {
     if (typeof scene?.startSec !== 'number') return;
-    setSeekRequest((prev) => ({ t: scene.startSec, n: (prev?.n || 0) + 1 }));
+    setSeekRequest((prev) => ({ t: scene.startSec, n: (prev?.n || 0) + 1, play }));
   };
 
   const audioFilename = projectAudioFilename(selected);
@@ -1157,7 +1158,7 @@ export default function MusicVideo() {
       ? { headline: `Status unavailable: ${productionReview.readinessError}`, tone: 'warn', needsYouStage: null }
       : { headline: 'Loading status…', tone: 'muted', needsYouStage: null };
 
-  const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, liveFirst: activeStage === 'produce', draftsFirst: activeStage === 'review' }) : [];
+  const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, liveFirst: activeStage === 'produce', draftsFirst: activeStage === 'review', storyboardFirst: activeStage === 'board' }) : [];
 
   return (
     // Below md the whole page scrolls (title bar and project header with it), so the step gets the screen.
@@ -1476,7 +1477,7 @@ export default function MusicVideo() {
                 stage={APPROVAL_STAGE_BY_TAB[activeStage]}
                 planning={planningDraft}
                 onNavigate={goToStage}
-                onSeek={(startSec) => seekToScene({ startSec })}
+                onSeek={(startSec) => seekToScene({ startSec }, { play: true })}
               />
             ) : null}
             attention={(

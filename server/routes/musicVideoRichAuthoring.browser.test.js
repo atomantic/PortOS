@@ -184,6 +184,14 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     expect(await candidate.json()).toMatchObject({ candidate: { directory: staged }, source: { directory: staged }, stale: false, providerId: 'stub-provider' });
     await traced('the candidate response did not render a reviewable candidate', () => page.getByRole('button', { name: 'Accept reviewed version' }).waitFor());
     expect(author.prompt).toContain(JSON.stringify(choreography));
+    // The generate response replaces the project, which refetches the candidate and the review readiness.
+    // Clicking Accept while those are still in flight was seen to send no accept request under load, so
+    // the click waits for the page's music-video requests to settle and the button to be enabled.
+    await traced('the page did not settle after generation', async () => {
+      const settleBy = Date.now() + 30000;
+      while (inFlight.size && Date.now() < settleBy) await new Promise(r => setTimeout(r, 100));
+      await page.waitForFunction(() => [...document.querySelectorAll('button')].some(b => b.textContent === 'Accept reviewed version' && !b.disabled));
+    });
     const [accepted] = await Promise.all([
       apiResponse('POST', '/composition/document/accept'),
       page.getByRole('button', { name: 'Accept reviewed version' }).click(),

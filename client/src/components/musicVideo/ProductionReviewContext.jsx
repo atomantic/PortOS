@@ -1,4 +1,4 @@
-import { Play } from 'lucide-react';
+import { ChevronRight, Play } from 'lucide-react';
 import DevArtifactPreview from './DevArtifactPreview.jsx';
 import { formatTimecode, formatCount } from '../../utils/formatters.js';
 
@@ -45,8 +45,10 @@ export default function ProductionReviewContext({ stage, project, basis, approve
               ? <button type="button" onClick={() => onSeek(scene.startSec)} aria-label={`Play shot ${index + 1} in the preview`}
                 className="mt-1.5 flex h-8 w-8 shrink-0 items-center justify-center rounded text-port-accent hover:bg-port-border/40"><Play size={14} aria-hidden="true" /></button>
               : <span className="w-8 shrink-0" />}
-            <details className="min-w-0 flex-1">
-              <summary className={`${FOLD} flex items-center gap-2`}>
+            <details className="group min-w-0 flex-1">
+              {/* A flex summary drops the native marker, so the row draws its own chevron. */}
+              <summary className={`${FOLD} flex items-center gap-2 marker:content-none [&::-webkit-details-marker]:hidden`}>
+                <ChevronRight size={14} aria-hidden="true" className="shrink-0 text-port-text-muted transition-transform group-open:rotate-90" />
                 <span className="w-12 shrink-0 font-mono text-xs text-port-text-muted">{timed ? formatTimecode(scene.startSec).replace(/\.\d+$/, '') : '—'}</span>
                 <span className="min-w-0 truncate">{scene?.label || shot.label || shot.id || `Shot ${index + 1}`}</span>
               </summary>
