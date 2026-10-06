@@ -101,11 +101,21 @@ export default function RapidReaderPage() {
   // The URL owns which shelf entry is open, so the row click only navigates —
   // the effect below is the single place that loads the record's text.
   const openShelf = (id) => navigate(`/rapid-reader/${id}`);
-  const loadShelfEntry = useCallback(async (id) => {
-    const entry = await getRapidReaderLibraryEntry(id, { silent: true }).catch((error) => { setShelfError(error?.message || 'Could not open shelf entry'); return null; });
-    if (entry?.text) { setText(entry.text); setActive({ text: entry.text, initialWordIndex: 0, documentId: rapidReaderDocumentId(entry.text), wordCount: entry.wordCount }); }
-  }, []);
-  useEffect(() => { if (shelfId) loadShelfEntry(shelfId); }, [shelfId, loadShelfEntry]);
+  // A book's text is large and its request slow, so the user can pick another
+  // shelf entry (or leave the route) before this one resolves. The guard drops a
+  // superseded response so it can't open the wrong book under the current URL.
+  useEffect(() => {
+    if (!shelfId) return undefined;
+    let current = true;
+    getRapidReaderLibraryEntry(shelfId, { silent: true })
+      .catch((error) => { if (current) setShelfError(error?.message || 'Could not open shelf entry'); return null; })
+      .then((entry) => {
+        if (!current || !entry?.text) return;
+        setText(entry.text);
+        setActive({ text: entry.text, initialWordIndex: 0, documentId: rapidReaderDocumentId(entry.text), wordCount: entry.wordCount });
+      });
+    return () => { current = false; };
+  }, [shelfId]);
   const addToShelf = (entry) => setShelf((previous) => [Object.fromEntries(Object.entries(entry).filter(([key]) => key !== 'text')), ...previous]);
   const [saveToShelf, savingShelf] = useAsyncAction(async () => {
     const entry = await createRapidReaderLibraryEntry({ title: saveTitle, text: documentText }, { silent: true }).catch((error) => { setShelfError(error?.message || 'Could not save to shelf'); return null; });
