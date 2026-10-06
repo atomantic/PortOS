@@ -506,8 +506,8 @@ export function createRemoteMediaExecutor({
       if (downloaded.stagedPath) await unlink(downloaded.stagedPath).catch(error => {
         if (error.code !== 'ENOENT') maintenance.markCurrentUnsettled();
       });
-      state.finalizing = false;
     }
+    state.finalizing = false;
     return {
       ...local,
       federatedMedia: {
