@@ -429,6 +429,13 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     status: 'admitted',
     modules: ['services/cosAgentLifecycle.js', 'services/cosAgentArchive.js', 'services/cosAgentIndex.js'],
   },
+  {
+    // Versioned manifest plus the compiledManifest/history pointers in the
+    // game row; admission precedes the per-game write tail.
+    id: 'game-compiled-manifest',
+    status: 'admitted',
+    modules: ['services/games/compile.js'],
+  },
   // Anything the sweep did not reach. A new asset owner lands here until it is
   // classified; the claim cannot become `global` while this entry exists.
   { id: 'unclassified-durable-owners', status: 'outstanding', modules: [] },

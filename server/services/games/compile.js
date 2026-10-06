@@ -7,6 +7,7 @@
  */
 
 import { join } from 'path';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { atomicWrite, pathExists, sha256File, sha256Text } from '../../lib/fileUtils.js';
 import { canonicalStringify } from '../../lib/objects.js';
@@ -22,7 +23,7 @@ export async function compileGameAssets(id) {
     throw new ServerError('Game not found', { status: 404, code: 'NOT_FOUND' });
   }
   let result;
-  await queueGameWrite(id, async () => {
+  await withBackupAssetPublication(() => queueGameWrite(id, async () => {
     const game = sanitizeGame(await readRaw(id));
     if (!game) throw new ServerError('Game not found', { status: 404, code: 'NOT_FOUND' });
     const app = await getAppById(game.appId);
@@ -89,6 +90,6 @@ export async function compileGameAssets(id) {
     });
     await writeRaw(id, next);
     result = { ...pointer, created: true };
-  });
+  }));
   return result;
 }
