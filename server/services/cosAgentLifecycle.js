@@ -10,6 +10,7 @@
  * (#3450) — callers import from here directly.
  */
 
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { readFile, writeFile, rename, readdir, rm, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -131,7 +132,7 @@ async function archiveCompletedAgent(agentId, agent) {
   }
 
   // Update index — deliberately NOT gated on the in-memory map already holding
-  // this entry. `saveAgentIndex` swallows its own write errors, so a failed write
+  // this entry. A failed `saveAgentIndex` leaves the map updated, so a failed write
   // leaves the map correct while index.json on disk is missing the agent; after a
   // restart the archive would be unreachable from history. Re-running the write
   // is cheap (a small map, atomically written) and repairs exactly that.
@@ -148,7 +149,7 @@ export async function completeAgent(agentId, result = {}) {
   // tail below (budget ledger + `agent:completed`) is skipped too — see #3384.
   let alreadyCompleted = false;
 
-  const completed = await withStateLock(async () => {
+  const completed = await withBackupAssetPublication(() => withStateLock(async () => {
     const state = await loadState();
 
     if (!state.agents[agentId]) {
@@ -212,7 +213,7 @@ export async function completeAgent(agentId, result = {}) {
     await archiveCompletedAgent(agentId, state.agents[agentId]);
 
     return state.agents[agentId];
-  });
+  }));
 
   // A duplicate completion never runs the completion tail: re-recording the
   // domain-usage action would double-charge the daily budget, and re-emitting
@@ -684,7 +685,7 @@ export async function cleanupZombieAgents() {
       .map((row) => [row.id, row]),
   );
 
-  return withStateLock(async () => {
+  return withBackupAssetPublication(() => withStateLock(async () => {
     const state = await loadState();
     const runningAgents = Object.values(state.agents).filter(a => a.status === 'running');
     const cleaned = [];
@@ -794,12 +795,12 @@ export async function cleanupZombieAgents() {
     }
 
     return { cleaned, count: cleaned.length };
-  });
+  }));
 }
 
 // Delete a single agent from state and disk
 export async function deleteAgent(agentId) {
-  return withStateLock(async () => {
+  return withBackupAssetPublication(() => withStateLock(async () => {
     const state = await loadState();
     const idx = await loadAgentIndex();
 
@@ -812,17 +813,18 @@ export async function deleteAgent(agentId) {
     delete state.agents[agentId];
     await saveState(state);
 
-    // Remove from disk (date-bucketed or flat)
+    // Persist reference removal before deleting bytes. Failed index writes
+    // retain both the disk tree and its cached lookup for a safe retry.
     const agentDir = getAgentDir(agentId);
+    const previousDate = idx.get(agentId);
+    idx.delete(agentId);
+    try { await saveAgentIndex(); }
+    catch (err) { if (inIndex) idx.set(agentId, previousDate); throw err; }
     if (existsSync(agentDir)) {
       await rm(agentDir, { recursive: true }).catch(() => {});
     }
 
-    // Remove from index
-    idx.delete(agentId);
-    await saveAgentIndex();
-
     cosEvents.emit('agents:changed', { action: 'deleted', agentId });
     return { success: true, agentId };
-  });
+  }));
 }
