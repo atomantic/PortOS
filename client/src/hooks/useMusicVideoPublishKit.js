@@ -30,6 +30,7 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
   const [saving, setSaving] = useState(false);
   const [composing, setComposing] = useState(false);
   const [designing, setDesigning] = useState(false);
+  const [requestingImage, setRequestingImage] = useState(false);
 
   const reload = (id) => {
     if (!id) return;
@@ -107,7 +108,15 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
       .catch(() => null)
       .finally(() => setDesigning(false));
   };
-  const generateCover = (body) => generateMusicVideoCoverArt(projectId, body).then(apply).catch(() => null);
+  // In flight from the click until the request is queued (a song with no design
+  // drafts one first); after that the record's `pending` reports progress.
+  const generateCover = (body) => {
+    setRequestingImage(true);
+    return generateMusicVideoCoverArt(projectId, body)
+      .then(apply)
+      .catch(() => null)
+      .finally(() => setRequestingImage(false));
+  };
 
   return {
     building: job.active,
@@ -123,6 +132,7 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
     composeCover,
     designing,
     designCover,
+    requestingImage,
     generateCover,
   };
 }

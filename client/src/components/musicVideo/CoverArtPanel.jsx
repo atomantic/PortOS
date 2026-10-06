@@ -40,7 +40,7 @@ export default function CoverArtPanel({ project, publishKit }) {
   const [focusX, setFocusX] = useState(Number.isFinite(art.focusX) ? art.focusX : 0.5);
   const [notes, setNotes] = useState('');
   const [adjustImage, setAdjustImage] = useState(false);
-  const busy = publishKit.composing || publishKit.designing;
+  const busy = publishKit.composing || publishKit.designing || publishKit.requestingImage;
   const chosen = art.source ? `${art.source.kind}:${art.source.filename}` : null;
   const look = () => ({ title: title.trim(), ...(tag !== null ? { tag: tag.trim() } : {}), focusX });
   const compose = (source) => publishKit.composeCover({ ...(source ? { source: { kind: source.kind, filename: source.filename } } : {}), ...look() });
@@ -123,10 +123,10 @@ export default function CoverArtPanel({ project, publishKit }) {
             className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] sm:min-h-0">
             <Sparkles size={13} /> {publishKit.designing ? 'Designing…' : (art.design ? 'Restyle the lettering' : 'Design the cover')}
           </button>
-          {/* Never disabled by `pending`: the server tells a live render from one a restart lost. */}
-          <button type="button" onClick={generate}
-            className="flex items-center gap-1 bg-port-accent/20 text-port-accent rounded px-2 py-1.5 min-h-[44px] sm:min-h-0">
-            <ImageIcon size={13} /> Make a new image
+          {/* Disabled only while this click is in flight, never by `pending`: the server tells a live render from one a restart lost. */}
+          <button type="button" onClick={generate} disabled={busy}
+            className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] sm:min-h-0">
+            <ImageIcon size={13} /> {publishKit.requestingImage ? (art.design ? 'Queuing the image…' : 'Designing, then queuing…') : 'Make a new image'}
           </button>
           {art.source?.kind === 'image' && (
             <label htmlFor={idFor('adjust-image')} className="flex items-center gap-1.5 min-h-[44px] sm:min-h-0">

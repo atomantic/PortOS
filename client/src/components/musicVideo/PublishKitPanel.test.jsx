@@ -86,5 +86,8 @@ describe('PublishKitPanel (#9281)', () => {
     fireEvent.click(screen.getByLabelText('Start from the current image'));
     fireEvent.click(screen.getByRole('button', { name: /Make a new image/ }));
     expect(k.generateCover).toHaveBeenLastCalledWith({ notes: 'warmer light', reference: { kind: 'image', filename: 'sheet.png' } });
+    // While a request is in flight (a first design can take a while) a second click cannot start another.
+    rerender(<PublishKitPanel project={{ ...project, publishKit: { ...built, coverArt: { ...art, design: null } } }} publishKit={{ ...k, requestingImage: true }} />);
+    expect(screen.getByRole('button', { name: /Designing, then queuing/ })).toBeDisabled();
   });
 });
