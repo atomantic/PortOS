@@ -174,6 +174,23 @@ describe('release cover art', () => {
     await expect(cover.designCoverArt(id)).rejects.toMatchObject({ status: 502, code: 'COVER_DESIGN_UNPARSEABLE' });
   });
 
+  it('uses an image from history as a finished cover with no lettering, until a restyle sets it again', async () => {
+    const { id } = await projectWithThumbnail();
+    await mkdir(PATHS.images, { recursive: true });
+    await writeFile(join(PATHS.images, 'finished-example.png'), 'png');
+    const { project } = await cover.composeProjectCoverArt(id, { source: { kind: 'image', filename: 'finished-example.png' }, title: '', lettering: false });
+    expect(project.publishKit.coverArt).toMatchObject({ lettering: false, source: { kind: 'image', filename: 'finished-example.png' } });
+    expect(compose.mock.calls.at(-1)[0]).toMatchObject({ lettering: false, source: join(PATHS.images, 'finished-example.png') });
+    // A recompose (a new crop) keeps it bare; a lettered cover still needs a title.
+    await cover.composeProjectCoverArt(id, { focusX: 0.3 });
+    expect(compose.mock.calls.at(-1)[0].lettering).toBe(false);
+    await expect(cover.composeProjectCoverArt(id, { title: '', lettering: true })).rejects.toMatchObject({ status: 422 });
+
+    const restyled = (await cover.designCoverArt(id, { direction: 'tiny type' })).project.publishKit.coverArt;
+    expect(restyled.lettering).toBe(true);
+    expect(compose.mock.calls.at(-1)[0].lettering).toBe(true);
+  });
+
   it("queues on the install's own default image generator, never a fixed one", async () => {
     const { id } = await projectWithThumbnail();
     cover.__setCoverArtDepsForTests({
@@ -212,6 +229,11 @@ describe('cover lettering', () => {
       await composeCoverArt({ source, out, title: 'A Much Longer Example Song Title Here', tag: 'Example Artist', design: { layout, backdrop: 'band', tagStyle: 'boxed', rule: true }, size: 600 });
       expect(await sharp(out).metadata()).toMatchObject({ width: 600, height: 600 });
     }
+
+    // A finished cover is only squared and sized: nothing is set over it. The
+    // source is one flat colour, so any lettering or backdrop shows up as variation.
+    await composeCoverArt({ source, out, title: 'Example Song', tag: 'Example Artist', size: 600, lettering: false });
+    expect(Math.max(...(await sharp(out).stats()).channels.map((c) => c.stdev))).toBeLessThan(2);
 
     // A portrait phone photo stored landscape with an EXIF rotation crops on the upright image.
     const rotated = join(dir, 'rotated.jpg');

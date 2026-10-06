@@ -193,8 +193,9 @@ async function measureWidths(sharp, texts, font) {
 /**
  * Write `out` (a JPEG): `source` cropped to its largest square at `focusX`
  * (0 = left edge, 1 = right edge), scaled to `size`, with the song's design on top.
+ * `lettering: false` leaves the image bare: a finished cover designed elsewhere.
  */
-export async function composeCoverArt({ source, out, title, tag = '', design = null, focusX = 0.5, size = COVER_ART_SIZE }, deps = {}) {
+export async function composeCoverArt({ source, out, title, tag = '', design = null, focusX = 0.5, size = COVER_ART_SIZE, lettering = true }, deps = {}) {
   const sharp = deps.sharp || (await import('sharp')).default;
   // Apply the EXIF orientation first, so the crop is measured on the upright image.
   const { data, info } = await sharp(source).rotate().toBuffer({ resolveWithObject: true });
@@ -202,16 +203,18 @@ export async function composeCoverArt({ source, out, title, tag = '', design = n
   const fx = Math.min(1, Math.max(0, Number.isFinite(focusX) ? focusX : 0.5));
   const left = Math.round((info.width - side) * fx);
   const top = Math.round((info.height - side) / 2);
-  const d = normalizeCoverDesign(design);
-  const widths = {
-    title: await measureWidths(sharp, titleLinesFor(title, d, size), titleFont(d, PROBE_PX)),
-    tag: await measureWidths(sharp, [tagTextFor(tag, d)], tagFont(d, PROBE_PX)),
-  };
-  const overlay = Buffer.from(coverOverlaySvg({ title, tag, design: d, size, widths }));
-  await sharp(data)
+  let image = sharp(data)
     .extract({ left, top, width: side, height: side })
-    .resize(size, size, { kernel: 'lanczos3' })
-    .composite([{ input: overlay, top: 0, left: 0 }])
+    .resize(size, size, { kernel: 'lanczos3' });
+  if (lettering) {
+    const d = normalizeCoverDesign(design);
+    const widths = {
+      title: await measureWidths(sharp, titleLinesFor(title, d, size), titleFont(d, PROBE_PX)),
+      tag: await measureWidths(sharp, [tagTextFor(tag, d)], tagFont(d, PROBE_PX)),
+    };
+    image = image.composite([{ input: Buffer.from(coverOverlaySvg({ title, tag, design: d, size, widths })), top: 0, left: 0 }]);
+  }
+  await image
     .jpeg({ quality: 92, chromaSubsampling: '4:4:4' })
     .toFile(out);
   return { width: size, height: size };
