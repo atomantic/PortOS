@@ -33,10 +33,11 @@ vi.mock('../lib/backupSharedAdmission.js', async (importOriginal) => {
   const actual = await importOriginal();
   const io = await vi.importActual('node:fs');
   const { randomUUID } = await vi.importActual('node:crypto');
+  const { type } = await vi.importActual('node:os');
   const root = io.mkdtempSync(join(tmpdir(), 'backup-admission-workflow-'));
   const entry = { io, root, closed: false };
   coordinatorTestRoots.push(entry);
-  return { ...actual, backupSharedAdmission: actual.createBackupSharedAdmission(root, { io, makeId: randomUUID, assertWrite: path => {
+  return { ...actual, backupSharedAdmission: actual.createBackupSharedAdmission(root, { io, makeId: randomUUID, syncDirectories: type() !== 'Windows_NT', assertWrite: path => {
     if (entry.closed || path !== root) throw new Error('Unexpected backup admission test path');
   } }) };
 });

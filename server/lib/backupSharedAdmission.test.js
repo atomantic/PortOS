@@ -3,7 +3,8 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import * as syncFs from 'node:fs';
 import { existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, type as hostOsType } from 'node:os';
+import { pinPlatform } from './testHelper.js';
 import { join } from 'node:path';
 import { once } from 'node:events';
 import { createBackupSharedAdmission } from './backupSharedAdmission.js';
@@ -135,6 +136,31 @@ describe('shared snapshot admission between real server and runner processes', (
         expect(synced.indexOf(join(path, 'data'))).toBeLessThan(synced.indexOf(join(lease.path, 'owner.json')));
       }
     } finally { lease.release(); }
+  });
+
+  it('keeps real filesystem durability when a caller pins the opposite platform', async () => {
+    const path = await root();
+    const directory = join(path, 'data/backup-admission');
+    const nativeWindows = hostOsType() === 'Windows_NT';
+    const opened = new Map();
+    const synced = [];
+    const io = { ...syncFs,
+      openSync(path, ...args) { const fd = syncFs.openSync(path, ...args); opened.set(fd, path); return fd; },
+      fsyncSync(fd) { synced.push(opened.get(fd)); syncFs.fsyncSync(fd); },
+    };
+    const restorePlatform = pinPlatform(nativeWindows ? 'darwin' : 'win32');
+    try {
+      const admission = createBackupSharedAdmission(directory, { io });
+      const lease = admission.tryPublication();
+      expect(synced).toContain(join(lease.path, 'owner.json'));
+      expect(synced.includes(directory)).toBe(!nativeWindows);
+      const cut = admission.reserveCut();
+      expect(admission.status().publications).toHaveLength(1);
+      lease.release();
+      expect(admission.status().publications).toHaveLength(0);
+      cut.release();
+      expect(admission.status().cut).toBeNull();
+    } finally { restorePlatform(); }
   });
 
   it('keeps a killed writer as a durable blocker across coordinator restarts', async () => {
