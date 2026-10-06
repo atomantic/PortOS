@@ -188,8 +188,7 @@ export async function stitchVideos(videoIds, opts = {}) {
         // inputs were never re-encoded, so they're still in codec lockstep and
         // the stream-copy concat below can salvage the clip. The cost is the
         // echoed context replaying at each trimmed seam.
-        committed = true;
-      console.log(`⚠️ Trimmed concat failed (${failure.message}) — falling back to a stream copy; ${cutCount} seam(s) will repeat their context`);
+        console.log(`⚠️ Trimmed concat failed (${failure.message}) — falling back to a stream copy; ${cutCount} seam(s) will repeat their context`);
         trimsApplied = false;
       }
     }
