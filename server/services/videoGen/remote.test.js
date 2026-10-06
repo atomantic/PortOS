@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -436,6 +436,35 @@ describe('federated video replacement backup cut', () => {
         expect(rows[0].prompt === 'Original').toBe(fail);
       } finally { cut(); }
     } finally { gate.finish.resolve(); }
+  });
+
+  it('retains originals and a durable blocker when restoring the previous video fails', async () => {
+    const { acquireBackupSnapshotCut, backupPublicationAdmissionStatus } = await import('../../lib/backupSnapshotBoundary.js');
+    await prepare();
+    ffmpeg.faststart.mockImplementationOnce(async () => {
+      // Force a real restore-copy error after replacement installed, while the
+      // poster restore remains possible and must still be attempted.
+      await rm(video());
+      await mkdir(video());
+      throw new Error('finalizer failed');
+    });
+    const terminal = captureTerminal(LOCAL_JOB_ID);
+    let scratch;
+    try {
+      await generateVideo(params());
+      const outcome = await terminal;
+      expect(outcome.type).toBe('failed');
+      scratch = outcome.event.error.split('originals retained at ')[1];
+      expect(scratch).toContain('portos-video-replay-');
+      expect(await readFile(join(scratch, '0'), 'utf8')).toBe('original video');
+      expect(await readFile(poster(), 'utf8')).toBe('original poster');
+      await expect(acquireBackupSnapshotCut({ timeoutMs: 10 })).rejects.toMatchObject({
+        code: 'BACKUP_SNAPSHOT_BUSY', blockers: [expect.objectContaining({ uncertain: true })],
+      });
+    } finally {
+      for (const owner of backupPublicationAdmissionStatus().publications) rmSync(owner.path, { recursive: true });
+      if (scratch) await rm(scratch, { recursive: true, force: true });
+    }
   });
 
   it('replays a matching completed result without duplicate history or another transfer', async () => {

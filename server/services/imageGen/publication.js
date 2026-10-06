@@ -15,12 +15,12 @@ export function publishImageFiles(paths, work) {
     try {
       return await work();
     } catch (error) {
-      // Wait for every rollback before releasing admission, including a failed one.
+      // Settle every rollback; a failed rollback retains the durable admission owner.
       const restored = await Promise.allSettled(paths.map((path, i) => previous[i] === null
         ? unlinkGuarded(path).catch(err => { if (err.code !== 'ENOENT') throw err; })
         : atomicWrite(path, previous[i])));
       const failures = restored.filter(result => result.status === 'rejected').map(result => result.reason);
-      if (failures.length) throw new AggregateError([error, ...failures], 'Image publication and rollback failed');
+      if (failures.length) throw Object.assign(new AggregateError([error, ...failures], 'Image publication and rollback failed'), { backupPublicationUncertain: true });
       throw error;
     }
   }));

@@ -62,7 +62,13 @@ async function waitForLocalCut(deadline) {
 
 async function withAdmittedBackupAssetPublication(work, timeoutMs) {
   const scope = publicationScope.getStore();
-  if (scope?.active) return work();
+  if (scope?.active) {
+    try { return await work(); }
+    catch (error) {
+      if (error?.backupPublicationUncertain === true) scope.uncertain = true;
+      throw error;
+    }
+  }
   if (!Number.isFinite(timeoutMs) || timeoutMs < 0) throw new TypeError('Publication timeoutMs must be a non-negative finite number');
   const deadline = Date.now() + timeoutMs;
   // Work spawned by a still-admitted lease joins it: the cut already waits for that lease.
@@ -80,14 +86,27 @@ async function withAdmittedBackupAssetPublication(work, timeoutMs) {
   const lease = { active: true, sharedLease };
   try {
     return await publicationScope.run(lease, work);
+  } catch (error) {
+    if (error?.backupPublicationUncertain === true) lease.uncertain = true;
+    throw error;
   } finally {
     lease.active = false;
-    sharedLease.release();
-    admitted -= 1;
-    if (admitted === 0) {
-      const waiters = drainWaiters;
-      drainWaiters = [];
-      for (const resolve of waiters) resolve();
+    try {
+      if (lease.uncertain) {
+        // The owner was already durable before work started. A diagnostic
+        // marker failure must never release that existing recovery blocker.
+        try { sharedLease.markUncertain(); }
+        catch (error) { console.error(`❌ Backup publication recovery marker failed at ${sharedLease.path}: ${error.message}`); }
+      } else sharedLease.release();
+    } finally {
+      // Settled local callbacks no longer count as running. The retained
+      // shared owner supplies concrete diagnostics to the next refused cut.
+      admitted -= 1;
+      if (admitted === 0) {
+        const waiters = drainWaiters;
+        drainWaiters = [];
+        for (const resolve of waiters) resolve();
+      }
     }
   }
 }

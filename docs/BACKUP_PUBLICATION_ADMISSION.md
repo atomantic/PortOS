@@ -20,6 +20,12 @@ and deleting leases repeatedly during a long snapshot. Directory creation and
 removal work on Windows and POSIX; ownership files are fsynced, with directory
 fsync on POSIX (Windows does not support opening a directory that way).
 
+If a publication cannot restore its previous pair, throw an error with
+`backupPublicationUncertain: true`. The boundary settles its local callback count
+but retains the durable owner with an uncertainty marker. Even a nested failure
+caught by its caller retains this blocker; ordinary errors after successful
+rollback release admission normally. The next snapshot refuses until recovery.
+
 Every owner has a random ID, process generation, PID, kind, and timestamp. Only
 the matching owner may release its directory. Neither elapsed time nor a missing
 PID permits automatic removal: a dead publication may have left an incomplete

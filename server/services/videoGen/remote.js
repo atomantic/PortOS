@@ -74,6 +74,7 @@ const executor = createRemoteMediaExecutor({
     // files until the history commit succeeds, and restore them on failure.
     const scratch = await mkdtemp(join(tmpdir(), 'portos-video-replay-'));
     const originals = [];
+    let retainScratch = false;
     try {
       for (const [index, target] of [path, join(PATHS.videoThumbnails, `${jobId}.jpg`)].entries()) {
         const backup = join(scratch, String(index));
@@ -86,13 +87,20 @@ const executor = createRemoteMediaExecutor({
         }
       }
       try { return await work(); } catch (error) {
-        for (const { target, backup } of originals) {
+        const restored = await Promise.allSettled(originals.map(async ({ target, backup }) => {
           if (backup) await copyFile(backup, target);
           else await unlink(target).catch(error => { if (error.code !== 'ENOENT') throw error; });
+        }));
+        const failures = restored.filter(result => result.status === 'rejected').map(result => result.reason);
+        if (failures.length) {
+          retainScratch = true;
+          throw Object.assign(new AggregateError([error, ...failures], `Video publication rollback failed; originals retained at ${scratch}`), {
+            backupPublicationUncertain: true, recoveryPath: scratch,
+          });
         }
         throw error;
       }
-    } finally { await rm(scratch, { recursive: true, force: true }); }
+    } finally { if (!retainScratch) await rm(scratch, { recursive: true, force: true }); }
   }),
   async finalize({ jobId, path, filename, request, remoteJob, peerId, renderStartedAtMs }) {
     // Both ffmpeg passes are best-effort by construction (they no-op when
