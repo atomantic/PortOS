@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
-import { mkdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { execFileSync, spawnSync } from 'child_process';
 import { join } from 'path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
@@ -50,6 +51,7 @@ vi.mock('../services/promptRunner.js', () => ({
   runPromptThroughProvider: vi.fn(),
   resolveProviderAndModel: vi.fn(),
   assertProvider: vi.fn(),
+  assertVisionRunUsedImages: vi.fn(),
 }));
 vi.mock('../services/mediaJobQueue/index.js', () => ({
   enqueueJob: vi.fn(async () => ({ jobId: 'media-export', position: 1, status: 'queued' })),
@@ -625,6 +627,18 @@ describe('POST /api/code-animation/generate', () => {
     expect(call.prompt).toContain('attached to this request');
   });
 
+  it('attaches the references for a vision-capable CLI provider instead of only naming their paths', async () => {
+    getProviderById.mockResolvedValue({ id: 'cli-claude', type: 'cli', command: 'claude', enabled: true });
+    runPromptThroughProvider.mockResolvedValue({ text: '```html\n<!DOCTYPE html><html></html>\n```', provider: { id: 'cli-claude', type: 'cli', command: 'claude' } });
+    const app = makeApp();
+    const res = await request(app).post('/api/code-animation/generate').send({ ...brief, providerId: 'cli-claude' });
+    expect(res.status).toBe(202);
+    await pollUntilSettled(app, res.body.id);
+    const call = runPromptThroughProvider.mock.calls[0][0];
+    expect(call.screenshots).toEqual([join(PATHS.imageRefs, 'style-ref.png'), join(PATHS.images, 'pin.png'), join(PATHS.imageRefs, 'sheet.png')]);
+    expect(call.prompt).toContain(join(PATHS.images, 'pin.png'));
+  });
+
   it('fails the job when the response holds no HTML document', async () => {
     getProviderById.mockResolvedValue({ id: 'cli-1', type: 'cli', enabled: true });
     runPromptThroughProvider.mockResolvedValue({ text: 'I wrote the file to disk.', provider: { id: 'cli-1' } });
@@ -653,5 +667,45 @@ describe('POST /api/code-animation/generate', () => {
 
   it('404s an unknown job', async () => {
     expect((await request(makeApp()).get('/api/code-animation/generate/nope')).status).toBe(404);
+  });
+});
+
+// A real (tiny) Media History video through real ffmpeg: a red second then a
+// blue second, so the measured rhythm has exactly one cut at 1s.
+const hasFfmpeg = spawnSync('ffmpeg', ['-version']).status === 0;
+describe.skipIf(!hasFfmpeg)('reference video', () => {
+  beforeAll(() => {
+    mkdirSync(PATHS.videos, { recursive: true });
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=red:s=320x180:d=1:r=24', '-f', 'lavfi', '-i', 'color=blue:s=320x180:d=1:r=24',
+      '-filter_complex', '[0][1]concat=n=2:v=1', '-pix_fmt', 'yuv420p', join(PATHS.videos, 'reference-take.mp4')]);
+  });
+
+  it('samples a Media History video into stills and a measured cut rhythm for the prompt', async () => {
+    const app = makeApp();
+    const res = await request(app).post('/api/code-animation/prompt')
+      .send({ ...brief, referenceVideo: { filename: 'reference-take.mp4', label: 'Kakigori short', note: 'the finish' } });
+    expect(res.status).toBe(200);
+    expect(res.body.prompt).toContain('REFERENCE VIDEO — "Kakigori short"');
+    expect(res.body.prompt).toContain('2 shots in 2.0s');
+    expect(res.body.prompt).toContain('cuts at 1.0s');
+    expect(res.body.prompt).toContain('What to take from it: the finish');
+    const fromVideo = res.body.attachments.filter((item) => item.origin === 'reference-video');
+    expect(fromVideo).toHaveLength(3);
+    for (const item of fromVideo) expect(existsSync(join(PATHS.videoThumbnails, decodeURIComponent(item.url.split('/').pop())))).toBe(true);
+    // The stills take the first reference slots; the brief still fits 8 in all.
+    expect(res.body.attachments[0].origin).toBe('reference-video');
+    expect(res.body.attachments.length).toBeLessThanOrEqual(8);
+  });
+
+  it('refuses an unknown video and a brief whose images leave no room for its stills', async () => {
+    const app = makeApp();
+    const missing = await request(app).post('/api/code-animation/prompt').send({ ...brief, referenceVideo: { filename: 'nope.mp4' } });
+    expect(missing.status).toBe(400);
+    expect(missing.body.code).toBe('REFERENCE_NOT_FOUND');
+    const crowded = await request(app).post('/api/code-animation/prompt').send({ ...brief,
+      referenceImages: Array.from({ length: 6 }, () => ({ filename: 'abc12345-hero.png' })),
+      referenceVideo: { filename: 'reference-take.mp4' } });
+    expect(crowded.status).toBe(400);
+    expect(crowded.body.code).toBe('REFERENCE_LIMIT');
   });
 });

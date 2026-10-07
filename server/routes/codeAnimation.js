@@ -116,6 +116,12 @@ const briefSchema = z.object({
     label: z.string().trim().max(200).default(''),
     note: z.string().trim().max(L.referenceNoteMax).default(''),
   })).max(L.referenceImagesMax).default([]),
+  // A Media History video (data/videos basename) studied as the quality bar.
+  referenceVideo: z.object({
+    filename: uploadFilenameSchema,
+    label: z.string().trim().max(200).default(''),
+    note: z.string().trim().max(L.referenceNoteMax).default(''),
+  }).strict().nullable().optional(),
   audio: audioSchema,
 }).strict();
 
