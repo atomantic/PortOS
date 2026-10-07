@@ -13,6 +13,7 @@
 
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { persistentMindMemoryProtection } from '../lib/persistentMindMemory.js';
+import { DEFAULT_MEMORY_LINK_TYPE, isSymmetricMemoryLinkType } from '../lib/memoryLinkTypes.js';
 import { cosEvents } from './cosEvents.js';
 import { findTopK, findAboveThreshold, clusterBySimilarity } from '../lib/vectorMath.js';
 import * as notifications from './notifications.js';
@@ -606,7 +607,16 @@ export async function getRelatedMemories(id, limit = 10) {
   for (const relId of memory.relatedMemories) {
     const meta = indexMap.get(relId);
     if (meta && meta.status === 'active') {
-      related.push({ ...meta, relationship: 'linked', similarity: 1.0 });
+      related.push({ ...meta, relationship: 'linked', similarity: 1.0, linkType: DEFAULT_MEMORY_LINK_TYPE, direction: 'outgoing' });
+    }
+  }
+  for (const link of memory.typedLinks || []) {
+    const meta = indexMap.get(link.targetId);
+    if (meta && meta.status === 'active') {
+      related.push({
+        ...meta, relationship: 'linked', similarity: 1.0, linkId: link.id, linkType: link.linkType,
+        direction: 'outgoing', note: link.note, createdBy: link.createdBy
+      });
     }
   }
 
@@ -668,8 +678,12 @@ export async function getGraphData() {
       const edgeKey = [memory.id, targetId].sort().join('-');
       if (!seenEdges.has(edgeKey)) {
         seenEdges.add(edgeKey);
-        edges.push({ source: memory.id, target: targetId, type: 'linked', weight: 1.0 });
+        edges.push({ source: memory.id, target: targetId, type: 'linked', linkType: DEFAULT_MEMORY_LINK_TYPE, weight: 1.0 });
       }
+    }
+    for (const link of full.typedLinks || []) {
+      if (!memoriesById.has(link.targetId)) continue;
+      edges.push({ source: memory.id, target: link.targetId, type: 'linked', linkType: link.linkType, weight: 1.0 });
     }
   }
 
@@ -712,12 +726,25 @@ export async function getMemoryIdsMissingEmbedding() {
 /**
  * Link two memories
  */
-export async function linkMemories(sourceId, targetId) {
+export async function linkMemories(sourceId, targetId, { linkType = DEFAULT_MEMORY_LINK_TYPE, note = null, createdBy = 'user' } = {}) {
   return withMemoryLock(async () => {
     const source = await loadMemory(sourceId);
     const target = await loadMemory(targetId);
 
     if (!source || !target) return { success: false, error: 'Memory not found' };
+
+    // Directed types live on the source record only (dev/test file backend).
+    if (!isSymmetricMemoryLinkType(linkType)) {
+      source.typedLinks = source.typedLinks || [];
+      let link = source.typedLinks.find(l => l.targetId === targetId && l.linkType === linkType);
+      if (!link) {
+        link = { id: uuidv4(), targetId, linkType, note, createdBy, createdAt: new Date().toISOString() };
+        source.typedLinks.push(link);
+        source.updatedAt = link.createdAt;
+        await saveMemory(source);
+      }
+      return { success: true, sourceId, targetId, linkType, linkId: link.id };
+    }
 
     // Add bidirectional links
     if (!source.relatedMemories.includes(targetId)) {
@@ -732,7 +759,7 @@ export async function linkMemories(sourceId, targetId) {
       await saveMemory(target);
     }
 
-    return { success: true, sourceId, targetId };
+    return { success: true, sourceId, targetId, linkType, linkId: null };
   });
 }
 
