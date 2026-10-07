@@ -278,6 +278,87 @@ export function updateItem(board, itemId, patch) {
   return { board: next, item: updated };
 }
 
+// ─── Text note → image render (#10531) ───────────────────────────────────────
+// A text note can be rendered into an image. While the job runs the note carries
+// `render: { status, jobId, error, queuedAt }`; when it completes the note turns
+// into an image item in place (same id and position) — the one sanctioned type
+// change, since the render IS the note's visual form.
+
+function findItemIndex(board, itemId) {
+  const items = Array.isArray(board.items) ? board.items : [];
+  const idx = items.findIndex((it) => it && it.id === itemId);
+  if (idx === -1) throw new ServerError('Item not found', { status: 404, code: 'NOT_FOUND' });
+  return { items, idx };
+}
+
+function replaceItem(board, items, idx, item) {
+  const nextItems = [...items];
+  nextItems[idx] = item;
+  return { ...board, items: nextItems, updatedAt: nowIso() };
+}
+
+// Mark a text note queued before its job is enqueued, so a second click (or an
+// autopilot retry) can't queue a duplicate. `isLive(jobId)` says whether an
+// earlier render's job is still queued/running; a dead one may be replaced. A
+// claim that never got its job id (the process died mid-enqueue) expires.
+const RENDER_CLAIM_TTL_MS = 10 * 60 * 1000;
+
+export function claimItemRender(board, itemId, { isLive = () => false, now = nowIso() } = {}) {
+  const { items, idx } = findItemIndex(board, itemId);
+  const current = items[idx];
+  if (current.type !== 'text') {
+    throw new ServerError('Only a text note can be rendered', { status: 409, code: 'MOOD_BOARD_ITEM_NOT_TEXT' });
+  }
+  const render = current.render;
+  const pending = render?.status === 'queued' && (render.jobId
+    ? isLive(render.jobId)
+    : Date.parse(now) - Date.parse(render.queuedAt) < RENDER_CLAIM_TTL_MS);
+  if (pending) {
+    throw new ServerError('This note is already rendering', { status: 409, code: 'MOOD_BOARD_RENDER_BUSY' });
+  }
+  const item = { ...current, render: { status: 'queued', jobId: null, error: null, queuedAt: now } };
+  return { board: replaceItem(board, items, idx, item), item };
+}
+
+// Record the queued job id, or a failure. Applies only while the note is still
+// the text item this render claimed: a job that already finished (the note is
+// now an image) or a newer claim (a different jobId) leaves the board untouched.
+export function settleItemRender(board, itemId, { jobId, status, error = null }) {
+  const { items, idx } = findItemIndex(board, itemId);
+  const current = items[idx];
+  const render = current.render;
+  if (current.type !== 'text' || !render || (render.jobId && render.jobId !== jobId)) {
+    return { board, item: current, changed: false };
+  }
+  const item = { ...current, render: { ...render, jobId: jobId ?? render.jobId, status, error } };
+  return { board: replaceItem(board, items, idx, item), item, changed: true };
+}
+
+// Turn the rendered note into an image item. The note text becomes the caption
+// (the schema's caption bound) and the submitted prompt the item prompt, so the
+// board's analyze step skips it. Skips a stale job, as settleItemRender does.
+export function applyRenderedItem(board, itemId, { jobId, filename, prompt }) {
+  const { items, idx } = findItemIndex(board, itemId);
+  const current = items[idx];
+  const render = current.render;
+  if (current.type !== 'text' || !render || (render.jobId && render.jobId !== jobId)) {
+    return { board, item: current, changed: false };
+  }
+  const item = {
+    id: current.id,
+    type: 'image',
+    mediaKey: `image:${filename}`,
+    imageUrl: null,
+    text: null,
+    prompt: isStr(prompt) && prompt.trim() ? prompt.trim().slice(0, 8000) : null,
+    caption: current.text.slice(0, 2000),
+    source: current.source ?? null,
+    createdAt: current.createdAt,
+    renderedAt: nowIso(),
+  };
+  return { board: replaceItem(board, items, idx, item), item, changed: true };
+}
+
 // Remove an item by id. Returns `removed: false` (no write) when the id is
 // absent so the db layer can skip a wasted row rewrite.
 export function removeItem(board, itemId) {

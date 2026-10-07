@@ -59,6 +59,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { probeVideoDuration } from '../../lib/ffmpeg.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { trimTo } from '../../lib/textUtils.js';
+import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { assertFootageVideoModelsCapable, loadPoolEnv } from './productionPool.js';
 import { PRODUCTION_RESUMABLE_STATUSES } from './production.js';
 import {
@@ -97,7 +98,7 @@ const defaults = {
   draftCreativeBrief: async (args) => (await import('./autonomousBrief.js')).draftCreativeBrief(args),
   writeLyrics: async (args) => (await import('../musicDesigner.js')).writeLyrics(args),
   reviewLyrics: async (args) => (await import('../musicDesigner.js')).reviewLyrics(args),
-  createMoodBoard: async (spec) => (await import('./autonomousBoard.js')).createAutonomousMoodBoard(spec),
+  createMoodBoard: async (spec, opts) => (await import('./autonomousBoard.js')).createAutonomousMoodBoard(spec, opts),
   generateSunoSong: async (fields, opts) => (await import('./autonomousSuno.js')).generateSunoSong(fields, opts),
   generateLocalSong: async (args) => (await import('./autonomousLocalSong.js')).generateLocalSong(args),
   cancelLocalSong: async (jobId) => (await import('../mediaJobQueue/index.js')).cancelJob(jobId),
@@ -837,13 +838,25 @@ async function writeRunLyrics({ project, run, save }) {
   } };
 }
 
+// The board's notes render on the run's first image tool with its pinned model,
+// or on the install's Music Video default when the run names no image tool.
+// Only reached in a mode that allows images (code-only builds no board).
+function boardRenderRoute(run) {
+  const tool = (run.brief.tools || []).find((id) => id.startsWith('image:'));
+  return {
+    target: RENDER_TARGET.MUSIC_VIDEO,
+    ...(tool ? { mode: tool.slice('image:'.length), model: run.brief.models?.[tool] || undefined } : {}),
+  };
+}
+
 async function createRunStyle({ project, run }) {
   if (musicVideoMediaMode(project) === 'code-only') {
     await deps.updateProject(project.id, { concept: { prompt: run.output.concept.prompt, style: run.output.concept.style || run.output.moodBoard?.stylePrompt || '' } });
     return { output: { moodBoardId: null } };
   }
   const board = run.output.moodBoard;
-  const moodBoardId = run.brief.moodBoardId || run.output.moodBoardId || (await deps.createMoodBoard(board)).id;
+  const moodBoardId = run.brief.moodBoardId || run.output.moodBoardId
+    || (await deps.createMoodBoard(board, { renderRoute: boardRenderRoute(run) })).id;
   // The board is also the project's linked mood board; the server derives the
   // authored style snapshot from it (styleSnapshots.js).
   await deps.updateProject(project.id, {

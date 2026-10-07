@@ -31,6 +31,9 @@ import {
   addItem,
   updateItem,
   removeItem,
+  claimItemRender,
+  settleItemRender,
+  applyRenderedItem,
   mergeBoardRecord,
   applyPinterestLink,
   healPinterestFeedRecord,
@@ -244,6 +247,32 @@ export async function updateBoardItem(id, itemId, patch) {
   const { result } = await withLockedBoard(id, (b) => {
     const { board, item } = updateItem(b, itemId, patch);
     return { board, result: item };
+  });
+  return result;
+}
+
+// Text note render lifecycle (#10531) — see the logic.js transforms. The two
+// settle steps skip the write when the note moved on (stale job).
+export async function claimBoardItemRender(id, itemId, opts) {
+  const { result } = await withLockedBoard(id, (b) => {
+    const { board, item } = claimItemRender(b, itemId, opts);
+    return { board, result: item };
+  });
+  return result;
+}
+
+export async function settleBoardItemRender(id, itemId, patch) {
+  const { result } = await withLockedBoard(id, (b) => {
+    const { board, item, changed } = settleItemRender(b, itemId, patch);
+    return { board, result: changed ? item : null, skipPersist: !changed };
+  });
+  return result;
+}
+
+export async function applyBoardItemRender(id, itemId, rendered) {
+  const { result } = await withLockedBoard(id, (b) => {
+    const { board, item, changed } = applyRenderedItem(b, itemId, rendered);
+    return { board, result: changed ? item : null, skipPersist: !changed };
   });
   return result;
 }

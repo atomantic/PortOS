@@ -197,3 +197,10 @@ export const moodBoardCollageSchema = z.object({
 export const moodBoardExtractFramesSchema = z.object({
   count: z.number().int().min(1).max(24),
 }).strict();
+
+// Render a text note into an image (#10531). Both optional: an omitted backend
+// renders on the install's default image backend.
+export const moodBoardItemRenderSchema = z.object({
+  mode: z.string().trim().min(1).max(32).optional(),
+  model: z.string().trim().min(1).max(256).optional(),
+}).strict();

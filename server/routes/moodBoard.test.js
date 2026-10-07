@@ -22,6 +22,7 @@ vi.mock('../services/moodBoard/index.js', () => ({
   importXPost: vi.fn(),
   composeBoardCollage: vi.fn(),
   extractItemFrames: vi.fn(),
+  renderBoardItem: vi.fn(),
 }));
 
 // The synthesis service pulls the aiProvider/promptRunner stack — stub it so
@@ -205,6 +206,14 @@ describe('mood-board routes', () => {
       expect(ok.status).toBe(200);
       expect(svc.extractItemFrames).toHaveBeenCalledWith('mb-1', 'i1', { count: 4 });
       expect((await request(makeApp()).post('/api/mood-boards/mb-1/items/i1/extract-frames').send({})).status).toBe(400);
+    });
+
+    it('queues a note render (202) on an optional backend pin', async () => {
+      svc.renderBoardItem.mockResolvedValueOnce({ jobId: 'job-1', item: { id: 'i1' } });
+      const ok = await request(makeApp()).post('/api/mood-boards/mb-1/items/i1/render').send({});
+      expect(ok.status).toBe(202);
+      expect(svc.renderBoardItem).toHaveBeenCalledWith('mb-1', 'i1', {});
+      expect((await request(makeApp()).post('/api/mood-boards/mb-1/items/i1/render').send({ target: 'deck' })).status).toBe(400);
     });
   });
 });

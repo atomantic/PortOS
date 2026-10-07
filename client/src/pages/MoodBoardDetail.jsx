@@ -11,7 +11,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router';
-import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign, Download, Sparkles, Clapperboard } from 'lucide-react';
+import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign, Download, Sparkles, Clapperboard, Paintbrush } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import TabPills from '../components/ui/TabPills';
@@ -37,7 +37,9 @@ import {
   importMoodBoardXPost,
   localizeMoodBoardMedia,
   extractMoodBoardItemFrames,
+  renderMoodBoardItem,
 } from '../services/api';
+import socket from '../services/socket';
 import { moodBoardItemSrc, moodBoardItemVideoSrc, moodBoardItemAnalysisSource } from '../lib/moodBoardItemSrc';
 import {
   moodBoardAnalysisFromResult,
@@ -85,6 +87,12 @@ function MoodBoardEditor({ id }) {
   // Per-video frame extraction: requested frame count + the item in flight.
   const [frameCount, setFrameCount] = useState(4);
   const [extractingItemId, setExtractingItemId] = useState(null);
+
+  // Text note → image render (#10531): the note whose request is in flight.
+  // The queued state itself lives on the item (`item.render`).
+  const [renderingItemId, setRenderingItemId] = useState(null);
+  // The request already toasts its own refusal; the echoed socket event must not.
+  const renderRequestRef = useRef(null);
 
   // Pinterest link/sync.
   const [pinUrl, setPinUrl] = useState('');
@@ -135,6 +143,20 @@ function MoodBoardEditor({ id }) {
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+
+  // A note render was queued, finished or failed — possibly started by
+  // autopilot or another tab — so swap in the board's current items.
+  useEffect(() => {
+    const onRender = async (evt) => {
+      if (evt?.boardId !== id) return;
+      const fresh = await getMoodBoard(id, { silent: true }).catch(() => null);
+      if (!mountedRef.current || !fresh) return;
+      setBoard((prev) => (prev ? { ...prev, items: fresh.items, updatedAt: fresh.updatedAt } : fresh));
+      if (evt.status === 'failed' && evt.error && renderRequestRef.current !== evt.itemId) toast.error(`Render failed: ${evt.error}`);
+    };
+    socket.on('mood-board:item-render', onRender);
+    return () => socket.off('mood-board:item-render', onRender);
+  }, [id, mountedRef]);
 
   const metaDirty = board && (name.trim() !== (board.name || '') || description !== (board.description || ''));
 
@@ -311,6 +333,21 @@ function MoodBoardEditor({ id }) {
     if (!res?.board) return;
     setBoard(res.board);
     toast.success(res.added ? `Added ${res.added} frame${res.added === 1 ? '' : 's'} to the board` : 'Those frames are already on the board');
+  };
+
+  const handleRenderItem = async (itemId) => {
+    if (!mountedRef.current) return;
+    setRenderingItemId(itemId);
+    renderRequestRef.current = itemId;
+    const res = await renderMoodBoardItem(id, itemId, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Could not render this note'); return null; });
+    renderRequestRef.current = null;
+    if (!mountedRef.current) return;
+    setRenderingItemId(null);
+    if (!res?.item) return;
+    setBoard((prev) => (prev
+      ? { ...prev, items: (prev.items || []).map((it) => (it.id === itemId && it.type === 'text' ? res.item : it)) }
+      : prev));
   };
 
   const handleRemoveItem = async (itemId) => {
@@ -603,6 +640,15 @@ function MoodBoardEditor({ id }) {
                         </div>
                       )}
 
+                      {item.type === 'text' && item.render?.status === 'queued' ? (
+                        <div
+                          data-testid="item-rendering"
+                          className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-1.5 bg-black/60 py-1.5 text-xs text-white"
+                        >
+                          <Paintbrush className="w-3.5 h-3.5 animate-pulse" aria-hidden="true" /> Rendering…
+                        </div>
+                      ) : null}
+
                       {/* Status indicator: whether it has been analyzed (or already has a prompt) */}
                       {(isAnalyzed || hasPrompt) && (
                         <div className="absolute top-1.5 right-1.5 flex flex-col items-end gap-1 pointer-events-none z-10">
@@ -669,6 +715,11 @@ function MoodBoardEditor({ id }) {
                       {item.source ? (
                         <span className="min-w-0 text-[10px] text-gray-500 truncate" title={item.source}>{item.source}</span>
                       ) : null}
+                      {item.type === 'text' && item.render?.status === 'failed' ? (
+                        <span className="min-w-0 text-[10px] text-port-error break-words">
+                          Render failed{item.render.error ? `: ${item.render.error}` : ''}
+                        </span>
+                      ) : null}
                       <div className="flex flex-wrap items-center justify-end gap-1">
                         {/* Keep the frame count with its extraction action when wrapping. */}
                         {videoSrc ? (
@@ -693,6 +744,18 @@ function MoodBoardEditor({ id }) {
                               <Clapperboard className={`w-3.5 h-3.5 ${extractingItemId === item.id ? 'animate-pulse' : ''}`} aria-hidden="true" />
                             </button>
                           </span>
+                        ) : null}
+                        {item.type === 'text' ? (
+                          <button
+                            type="button"
+                            onClick={() => handleRenderItem(item.id)}
+                            disabled={renderingItemId === item.id || item.render?.status === 'queued'}
+                            title="Render this note as an image on the default image backend"
+                            className="min-h-[44px] shrink-0 inline-flex items-center gap-1.5 px-2 mr-auto text-xs text-gray-300 hover:text-white disabled:opacity-50 transition-colors"
+                          >
+                            <Paintbrush className={`w-3.5 h-3.5 ${renderingItemId === item.id ? 'animate-pulse' : ''}`} aria-hidden="true" />
+                            {item.render?.status === 'queued' ? 'Rendering…' : 'Render'}
+                          </button>
                         ) : null}
                         {analysisSource ? (
                           <button
