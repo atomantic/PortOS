@@ -40,7 +40,7 @@ vi.mock('../../services/appQualitySchedule.js', () => ({
   buildQualitySchedulePlan: vi.fn(),
   applyQualitySchedulePlan: vi.fn()
 }));
-vi.mock('../../services/cosTaskGenerator.js', async (importActual) => ({
+vi.mock('../../services/cosTaskClaimWork.js', async (importActual) => ({
   ...(await importActual()),
   resolveClaimWorkMetadata: vi.fn(),
   resolveAppClaimReviewers: vi.fn()
@@ -50,7 +50,7 @@ import * as appsService from '../../services/apps.js';
 import { listOutcomesResult } from '../../services/layeredIntelligenceOutcomes.js';
 import { listWorkItems } from '../../services/workItems.js';
 import { buildQualitySchedulePlan, applyQualitySchedulePlan } from '../../services/appQualitySchedule.js';
-import { resolveClaimWorkMetadata, resolveAppClaimReviewers } from '../../services/cosTaskGenerator.js';
+import { resolveClaimWorkMetadata, resolveAppClaimReviewers } from '../../services/cosTaskClaimWork.js';
 
 describe('Apps Task-Type Routes', () => {
   let app;
@@ -129,7 +129,7 @@ describe('Apps Task-Type Routes', () => {
   // `source` label the UI acts on, and publish only the fields a claim flow can
   // honor. The reviewer RESOLUTION it previews (layer precedence, copilot guard,
   // emitted CSV) belongs to `resolveAppClaimReviewers`, which the claim builder
-  // shares — covered in cosTaskGenerator.test.js and reviewerConfig.test.js.
+  // shares — covered in cosTaskClaimWork.test.js and reviewerConfig.test.js.
   describe('GET /api/apps/:id/claim-reviewers', () => {
     const RESOLVED = {
       reviewers: ['codex', 'claude'], usernames: [], optionalReviewers: [],

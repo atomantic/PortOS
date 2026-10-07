@@ -79,9 +79,6 @@ import {
   applyOnDemandConsent,
   isConfiguredApprovalRequired,
   PERPETUAL_TRANSIENT_ESCALATION_THRESHOLD,
-  buildJiraTicketTask,
-  buildClaimWorkTask,
-  resolveAppClaimReviewers,
   buildImprovementDedupSets,
   queueDueInstallWideImprovementTasks,
   generateManagedAppImprovementTaskForType,
@@ -96,6 +93,7 @@ import {
   applyUserActionDeliveryMode,
   applyUserActionDetectorSection
 } from './cosTaskGenerator.js';
+import { buildJiraTicketTask, buildClaimWorkTask, resolveAppClaimReviewers } from './cosTaskClaimWork.js';
 import * as cosTaskGenerator from './cosTaskGenerator.js';
 import * as cosTaskPreStepBlocks from './cosTaskPreStepBlocks.js';
 import * as prReviewerPipeline from './prReviewerPipeline.js';
@@ -106,11 +104,16 @@ import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const GEN_SRC = readFileSync(join(__dirname, 'cosTaskGenerator.js'), 'utf-8');
 const PRESTEP_SRC = readFileSync(join(__dirname, 'cosTaskPreStepBlocks.js'), 'utf-8');
-// The CoS task-generation layer spans the selection engine (cosTaskGenerator.js)
-// and the prompt pre-step module it composes (cosTaskPreStepBlocks.js). A guard
-// about WHERE a call sits reads one file; a guard about the call's SHAPE reads
-// both, so moving code between them can neither break it nor silently disarm it.
-const LAYER_SRC = `${GEN_SRC}\n${PRESTEP_SRC}`;
+// The manual claim / JIRA / replan prompt builders (cosTaskClaimWork.js) share
+// their reviewer + claim-metadata resolution with the scheduled claim-work router
+// that stays in cosTaskGenerator.js.
+const CLAIM_SRC = readFileSync(join(__dirname, 'cosTaskClaimWork.js'), 'utf-8');
+// The CoS task-generation layer spans the selection engine (cosTaskGenerator.js),
+// the manual claim builders (cosTaskClaimWork.js), and the prompt pre-step module
+// they compose (cosTaskPreStepBlocks.js). A guard about WHERE a call sits reads
+// one file; a guard about the call's SHAPE reads the layer, so moving code between
+// them can neither break it nor silently disarm it.
+const LAYER_SRC = `${GEN_SRC}\n${CLAIM_SRC}\n${PRESTEP_SRC}`;
 const COS_SRC = readFileSync(join(__dirname, 'cos.js'), 'utf-8');
 // The ONE Priority-0 on-demand loop body both engines delegate to (#6618).
 const DRAIN_SRC = readFileSync(join(__dirname, 'onDemandDrain.js'), 'utf-8');
@@ -452,8 +455,8 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
     // Every claim path layers the app's claim-work metadata over the defaults
     // through claimReviewersFrom — no path may resolve the defaults alone with
     // a bare `{}` (that silently drops a pinned override; #6210).
-    expect(GEN_SRC).not.toContain('resolveClaimReviewerConfig({}, codeReviewDefaults, codeReviewDefaults?.reviewers)');
-    expect(GEN_SRC).not.toMatch(/normalizeReviewers\(metadata\)(?!,)/);
+    expect(LAYER_SRC).not.toContain('resolveClaimReviewerConfig({}, codeReviewDefaults, codeReviewDefaults?.reviewers)');
+    expect(LAYER_SRC).not.toMatch(/normalizeReviewers\(metadata\)(?!,)/);
   });
 
   it('keeps local-LLM reviewers and appends their fail-closed invocation procedure', () => {
@@ -471,8 +474,8 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
     // The models ride along because cursor's effort is a variant of its model id
     // rather than a flag — without them a cursor pin would have no invocation to
     // name (see `reviewerModelArg`).
-    expect(GEN_SRC).toContain('appendReviewerEffortBlock(reviewersList, promptReviewerEfforts, promptReviewerModels)');
-    expect(GEN_SRC).toContain('appendReviewerEffortBlock(list, reviewerEfforts, reviewerModels)');
+    expect(CLAIM_SRC).toContain('appendReviewerEffortBlock(reviewersList, promptReviewerEfforts, promptReviewerModels)');
+    expect(CLAIM_SRC).toContain('appendReviewerEffortBlock(list, reviewerEfforts, reviewerModels)');
     expect(PRESTEP_SRC).toContain('appendReviewerEffortBlock(promptReviewers, promptReviewerEfforts, promptReviewerModels)');
     expect(LAYER_SRC).not.toMatch(/buildReviewerEffortNote\([^)]*reviewWith/);
   });
@@ -495,9 +498,9 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
     // run if the CSV carries it. Both the scheduled path and buildClaimWorkTask
     // feed the cap into the shared claim resolver, which applies task-over-default
     // precedence (unit-tested in reviewerConfig.test.js).
-    expect(GEN_SRC).toContain('reviewerMaxRounds: reviewerMaxRounds ?? metadata?.reviewerMaxRounds');
+    expect(CLAIM_SRC).toContain('reviewerMaxRounds: reviewerMaxRounds ?? metadata?.reviewerMaxRounds');
     expect(GEN_SRC).toContain('resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers)');
-    expect(GEN_SRC).not.toContain('resolveReviewerMaxRounds(');
+    expect(LAYER_SRC).not.toContain('resolveReviewerMaxRounds(');
   });
 
   it('threads per-reviewer model pins into the prompt CSV on both claim paths (#3133)', () => {
@@ -511,18 +514,18 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
     // agy model id can carry its effort as a suffix, so a path that resolved the
     // models alone would emit `--model <suffixed> --effort <tier>`, a pair agy
     // rejects, while the other paths emitted the split form.
-    expect(GEN_SRC).toContain('reviewerModels: reviewerModels ?? metadata?.reviewerModels');
-    expect(GEN_SRC).toContain('reviewerEfforts: reviewerEfforts ?? metadata?.reviewerEfforts');
+    expect(CLAIM_SRC).toContain('reviewerModels: reviewerModels ?? metadata?.reviewerModels');
+    expect(CLAIM_SRC).toContain('reviewerEfforts: reviewerEfforts ?? metadata?.reviewerEfforts');
     // All three claim paths layer claim-work metadata over the defaults via
     // claimReviewersFrom — including the JIRA play button (#6210). No path may
     // resolve the defaults alone with a bare `{}`.
-    expect(GEN_SRC).toContain('claimReviewersFrom(metadata, codeReviewDefaults)');
-    expect(GEN_SRC).not.toContain('resolveClaimReviewerConfig({}, codeReviewDefaults, codeReviewDefaults?.reviewers)');
+    expect(CLAIM_SRC).toContain('claimReviewersFrom(metadata, codeReviewDefaults)');
+    expect(LAYER_SRC).not.toContain('resolveClaimReviewerConfig({}, codeReviewDefaults, codeReviewDefaults?.reviewers)');
     // No path may resolve one map without the other — or reach past the shared
     // claim resolver, which wraps `resolveReviewerPins` for all three sites.
-    expect(GEN_SRC).not.toContain('resolveReviewerModels(');
-    expect(GEN_SRC).not.toContain('resolveReviewerEfforts(');
-    expect(GEN_SRC).not.toContain('resolveReviewerPins(');
+    expect(LAYER_SRC).not.toContain('resolveReviewerModels(');
+    expect(LAYER_SRC).not.toContain('resolveReviewerEfforts(');
+    expect(LAYER_SRC).not.toContain('resolveReviewerPins(');
   });
 });
 
@@ -566,18 +569,18 @@ describe('claim-work single-source routing', () => {
     // selecting the generic commit-only handoff. The hook stays so a future
     // delegated type that DOES need CoS-managed isolation would have its
     // DEFAULT_TASK_INTERVALS metadata applied here.
-    expect(GEN_SRC).toContain('taskSchedule.DEFAULT_TASK_INTERVALS[promptTaskType]?.taskMetadata');
-    expect(GEN_SRC).toContain("'useWorktree' in delegatedMeta");
-    expect(GEN_SRC).toContain("'openPR' in delegatedMeta");
-    expect(GEN_SRC).toContain('const taskMetadata = { ...reviewerConfigMetadata(claimReviewers), claimFlow: true }');
+    expect(CLAIM_SRC).toContain('taskSchedule.DEFAULT_TASK_INTERVALS[promptTaskType]?.taskMetadata');
+    expect(CLAIM_SRC).toContain("'useWorktree' in delegatedMeta");
+    expect(CLAIM_SRC).toContain("'openPR' in delegatedMeta");
+    expect(CLAIM_SRC).toContain('const taskMetadata = { ...reviewerConfigMetadata(claimReviewers), claimFlow: true }');
     expect(GEN_SRC).toContain('metadata.claimFlow = true');
   });
 
   it('exposes buildClaimWorkTask so the manual /do:next button reuses the same router', () => {
-    expect(GEN_SRC).toContain('export async function buildClaimWorkTask(');
+    expect(CLAIM_SRC).toContain('export async function buildClaimWorkTask(');
     // Same tracker resolution + delegated isolation posture as the scheduler.
-    expect(GEN_SRC).toMatch(/buildClaimWorkTask[\s\S]*resolveAppWorkTracker, trackerToClaimTaskType/);
-    expect(GEN_SRC).toMatch(/buildClaimWorkTask[\s\S]*resolveIssueAuthorFilterBlock\(promptTaskType/);
+    expect(CLAIM_SRC).toMatch(/buildClaimWorkTask[\s\S]*resolveAppWorkTracker, trackerToClaimTaskType/);
+    expect(CLAIM_SRC).toMatch(/buildClaimWorkTask[\s\S]*resolveIssueAuthorFilterBlock\(promptTaskType/);
   });
 
   it('buildClaimWorkTask resolves issueAuthorFilter + reviewers from configured claim-work metadata (parity with scheduler)', () => {
@@ -585,15 +588,15 @@ describe('claim-work single-source routing', () => {
     // (issueAuthorFilter:'any', non-Copilot reviewers), not force owner+copilot.
     // The metadata merge itself lives in resolveClaimWorkMetadata, shared with the
     // work-item picker route so both scan under the SAME author filter.
-    const resolver = GEN_SRC.slice(GEN_SRC.indexOf('export async function resolveClaimWorkMetadata('));
+    const resolver = CLAIM_SRC.slice(CLAIM_SRC.indexOf('export async function resolveClaimWorkMetadata('));
     expect(resolver).toContain("taskType = 'claim-work'");
     expect(resolver).toMatch(/getTaskInterval\(taskType\)/);
     expect(resolver).toMatch(/getAppTaskTypeOverrides\(app\.id\)/);
     expect(resolver).toMatch(/stripManagedAgentOptionsFromOverride\(\s*taskType/);
     // issueAuthorFilter: explicit option > configured metadata > 'self'
     // (the slashdo /do:next --self security boundary).
-    expect(GEN_SRC).toMatch(/return explicit \?\? metadata\?\.issueAuthorFilter \?\? 'self'/);
-    const fn = GEN_SRC.slice(GEN_SRC.indexOf('export async function buildClaimWorkTask('));
+    expect(CLAIM_SRC).toMatch(/return explicit \?\? metadata\?\.issueAuthorFilter \?\? 'self'/);
+    const fn = CLAIM_SRC.slice(CLAIM_SRC.indexOf('export async function buildClaimWorkTask('));
     expect(fn).toMatch(/resolveClaimWorkMetadata\(app\)/);
     expect(fn).toMatch(/resolveClaimAuthorFilter\(issueAuthorFilter, metadata\)/);
     // Reviewers layer an explicit per-field option over the configured claim-work
@@ -603,7 +606,7 @@ describe('claim-work single-source routing', () => {
     // claim-reviewer lookup route, so the preview the UI shows and the run it
     // previews can't resolve differently.
     expect(fn).toMatch(/claimReviewersFrom\(metadata, codeReviewDefaults, \{/);
-    const layering = GEN_SRC.slice(GEN_SRC.indexOf('function claimReviewersFrom('));
+    const layering = CLAIM_SRC.slice(CLAIM_SRC.indexOf('function claimReviewersFrom('));
     expect(layering).toMatch(/resolveClaimReviewerConfig\(\{\s*\.\.\.metadata,/);
     expect(layering).toMatch(/reviewers: reviewers !== undefined/);
     expect(fn).toMatch(/buildLocalReviewerInstructions\(reviewersList/);
@@ -741,7 +744,7 @@ describe('work-item target', () => {
   });
 
   it('wires the prefetch block into the manual claim prompt assembly', () => {
-    const claimBuilder = GEN_SRC.slice(GEN_SRC.indexOf('export async function buildClaimWorkTask('));
+    const claimBuilder = CLAIM_SRC.slice(CLAIM_SRC.indexOf('export async function buildClaimWorkTask('));
     expect(claimBuilder).toContain('appendPrefetchedIssueContext(promptTaskType, targetRef, issueContext)');
     expect(claimBuilder).toContain('appendClaimOverrideContext(overrideContext)');
   });
@@ -800,14 +803,14 @@ describe('buildJiraTicketTask', () => {
   });
 
   it('is exported so the /tasks/jira-ticket route reuses the shared assembly', () => {
-    expect(GEN_SRC).toContain('export async function buildJiraTicketTask(');
+    expect(CLAIM_SRC).toContain('export async function buildJiraTicketTask(');
     // Routes the JIRA flow directly, not via buildClaimWorkTask.
-    expect(GEN_SRC).toMatch(/buildJiraTicketTask[\s\S]*getTaskPrompt\('claim-issue-jira'\)/);
-    expect(GEN_SRC).toMatch(/buildJiraTicketTask[\s\S]*appendTargetWorkItemBlock\('claim-issue-jira', key\)/);
+    expect(CLAIM_SRC).toMatch(/buildJiraTicketTask[\s\S]*getTaskPrompt\('claim-issue-jira'\)/);
+    expect(CLAIM_SRC).toMatch(/buildJiraTicketTask[\s\S]*appendTargetWorkItemBlock\('claim-issue-jira', key\)/);
     // The play button layers the app's claim-work metadata, not the defaults
     // alone (#6210) — the app travels into the reviewer resolution.
-    expect(GEN_SRC).toMatch(/buildJiraTicketTask[\s\S]*resolveClaimReviewerPrompt\(app\)/);
-    expect(GEN_SRC).toMatch(/async function resolveClaimReviewerPrompt\(app\)/);
+    expect(CLAIM_SRC).toMatch(/buildJiraTicketTask[\s\S]*resolveClaimReviewerPrompt\(app\)/);
+    expect(CLAIM_SRC).toMatch(/async function resolveClaimReviewerPrompt\(app\)/);
   });
 });
 

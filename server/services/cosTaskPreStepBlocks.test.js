@@ -26,12 +26,13 @@ import { DISPATCH_HINT_FANOUT_GUIDANCE } from '../lib/dispatchLabels.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const GEN_SRC = readFileSync(join(__dirname, 'cosTaskGenerator.js'), 'utf-8');
+const CLAIM_SRC = readFileSync(join(__dirname, 'cosTaskClaimWork.js'), 'utf-8');
 const PRESTEP_SRC = readFileSync(join(__dirname, 'cosTaskPreStepBlocks.js'), 'utf-8');
-// The CoS task-generation layer spans the selection engine and the pre-step
-// module it composes. A guard about WHERE a call sits reads one file; a guard
-// about the call's shape reads both, so moving code between them can neither
-// break it nor silently disarm it.
-const LAYER_SRC = `${GEN_SRC}\n${PRESTEP_SRC}`;
+// The CoS task-generation layer spans the selection engine, the manual claim
+// builders, and the pre-step module they compose. A guard about WHERE a call sits
+// reads one file; a guard about the call's shape reads the layer, so moving code
+// between them can neither break it nor silently disarm it.
+const LAYER_SRC = `${GEN_SRC}\n${CLAIM_SRC}\n${PRESTEP_SRC}`;
 
 // #6112 — an abandoned volunteer claim is released deterministically, and the
 // release must happen BEFORE the "no zombies → park" early return. A repo whose
@@ -133,7 +134,7 @@ describe('resolveIssueExcludeLabelsBlock', () => {
   });
 
   it('buildClaimWorkTask threads the resolved block into the pinned-target constraint, not just the {issueExcludeLabels} placeholder', () => {
-    expect(GEN_SRC).toContain('appendTargetWorkItemBlock(promptTaskType, targetRef, issueExcludeLabelsBlock)');
+    expect(CLAIM_SRC).toContain('appendTargetWorkItemBlock(promptTaskType, targetRef, issueExcludeLabelsBlock)');
   });
 });
 
@@ -262,7 +263,7 @@ describe('swarm block wiring', () => {
   it('prepends resolveSwarmBlock(...) to the rendered prompt at both render sites', () => {
     const occurrences = LAYER_SRC.match(/resolveSwarmBlock\(promptTaskType, metadata\.swarmCount\)/g) || [];
     expect(occurrences.length).toBe(2);
-    expect(GEN_SRC).toContain('`${swarmBlock}${template}`');
+    expect(CLAIM_SRC).toContain('`${swarmBlock}${template}`');
     expect(PRESTEP_SRC).toContain('`${swarmBlock}${promptTemplate}`');
   });
 });
