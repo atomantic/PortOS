@@ -1,6 +1,6 @@
 import { musicVideoMediaMode, musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 import { prepareProductionReview } from './productionReviewService.js';
-import { assertProductionApproval, productionAlignmentBasis, productionReadiness, productionReviewBasis } from './productionReview.js';
+import { ALIGNMENT_UNVERIFIED_PROBLEM, assertProductionApproval, productionAlignmentBasis, productionReadiness, productionReviewBasis } from './productionReview.js';
 import { CAST_SETS_WORKING } from './castAndSets.js';
 
 /**
@@ -895,8 +895,13 @@ const STAGES = {
       project = await getProject(project.id);
     }
     project = await settleProductionStage(project, run, 'storyboard');
-    // Name why the timing was left unverified rather than only that it is provisional.
-    if (timingHeld && !productionReadiness(project).storyboard.approved) throw runError(409, 'MUSIC_VIDEO_APPROVAL_REQUIRED', trimTo(timingHeld, 500));
+    // Name why the timing was left unverified rather than only that it is provisional,
+    // with the storyboard's other open problems so one resume can clear them all.
+    const storyboard = productionReadiness(project).storyboard;
+    if (timingHeld && !storyboard.approved) {
+      const others = storyboard.problems.filter((p) => p !== ALIGNMENT_UNVERIFIED_PROBLEM);
+      throw runError(409, 'MUSIC_VIDEO_APPROVAL_REQUIRED', trimTo([timingHeld, ...others].join(' '), 500));
+    }
     assertProductionApproval(project, 'storyboard');
     // The authoring stage's pin, else the run's code-authoring pin taken as
     // given (production checks it exactly), else the direction LLM.
