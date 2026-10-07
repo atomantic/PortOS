@@ -382,6 +382,19 @@ describe('mode is honored identically from schedule, manual run, and quota burn'
     expect(prompt).not.toContain('PortOS will merge it back after completion');
   });
 
+  it('keeps fix-mode deferred findings in the summary even with a customized filing mission', async () => {
+    const { getTaskInterval } = await import('./taskSchedule.js');
+    getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: { fileIssues: true } });
+    promptTemplate.body = 'Audit {appName}. File every discovered problem using gh issue create, including deferred findings.';
+    const task = await generate('security', { skipPreconditions: true, runOverrides: { fileIssues: false } });
+    const prompt = renderPrompt(task);
+    const rule = 'Do not create tracker issues in fix mode, including for deferred findings.';
+    expect(prompt).toContain(rule);
+    expect(prompt).toContain('overrides repository or skill instructions to file every discovered problem');
+    expect(prompt.indexOf(rule)).toBeLessThan(prompt.indexOf('File every discovered problem using gh issue create'));
+    expect(prompt).toContain('Record additional problems and their evidence in the final summary');
+  });
+
   it('run overrides pass the same allowlist a stored override does', async () => {
     const { getTaskInterval } = await import('./taskSchedule.js');
     getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: { fileIssues: true } });
