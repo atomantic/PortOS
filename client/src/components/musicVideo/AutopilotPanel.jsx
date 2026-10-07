@@ -7,6 +7,7 @@ import { supportsToolFreeOneShot, toolFreeOneShotSelectionPolicy } from '../../u
 import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import ToggleChip from '../ui/ToggleChip.jsx';
+import { VideoModelField } from './ToolPicker.jsx';
 import MediumPlanSummary from './MediumPlanSummary.jsx';
 import { codeFirstProductionAssets } from '../../../../server/lib/musicVideoMediumPlan.js';
 import {
@@ -62,6 +63,8 @@ function StepRow({ step }) {
 
 function RunView({ run, production, codeFirst, project, readiness }) {
   const [budget, setBudget] = useState(null);
+  // The video model the director picked for a refused clip: { [route index]: model id ('' = install default) }.
+  const [videoSwaps, setVideoSwaps] = useState({});
   const live = RESUMABLE_RUN_STATUSES.has(run.status);
   const steps = run.steps || [];
   const failures = steps.filter((s) => s.error);
@@ -71,6 +74,16 @@ function RunView({ run, production, codeFirst, project, readiness }) {
     && Number.isInteger(budget.maxReviewAttempts) && budget.maxReviewAttempts >= run.limits.maxReviewAttempts && budget.maxReviewAttempts <= 10
     && (budget.spendCapUsd == null || (Number.isFinite(budget.spendCapUsd) && budget.spendCapUsd >= cap && budget.spendCapUsd <= 100000)));
   const guidance = productionReviewStopGuidance(run, readiness, 'storyboard');
+  // A refused clip only blocks while its route is still allowed, so a parked run can swap the video model and continue.
+  const swappable = run.status === 'blocked' && steps.some((step) => step.kind === 'clip' && step.retryBlocked);
+  const videoRoutes = swappable ? (run.pool || []).map((route, index) => ({ route, index })).filter(({ route }) => route.kind === 'video') : [];
+  const swappedPool = Object.keys(videoSwaps).length
+    ? (run.pool || []).map((route, index) => {
+      if (!(index in videoSwaps)) return route;
+      const { model: _previous, ...rest } = route;
+      return videoSwaps[index] ? { ...rest, model: videoSwaps[index] } : rest;
+    })
+    : null;
   const hint = run.interrupted
     ? 'The server restarted — nothing is running. Resume to continue.'
     : guidance?.current || run.stopReason;
@@ -112,7 +125,14 @@ function RunView({ run, production, codeFirst, project, readiness }) {
       </div>}
       {guidance?.historical && <p className="text-port-text-muted break-words">Historical stop reason: {guidance.historical}</p>}
       {hint && <p className="text-port-warning break-words">{hint}</p>}
-      {steps.some((step) => step.retryBlocked) && <p className="text-port-warning">Terminal refusal recorded: unchanged inputs will not be submitted again on Resume. Repair the shot or cancel and choose another supported route. No new spend is reserved while blocked.</p>}
+      {steps.some((step) => step.retryBlocked) && <p className="text-port-warning">Terminal refusal recorded: unchanged inputs will not be submitted again on Resume. {videoRoutes.length > 0 ? 'Repair the shot or pick another video model below and Resume.' : 'Repair the shot or cancel and choose another supported route.'} No new spend is reserved while blocked.</p>}
+      {videoRoutes.length > 0 && <fieldset aria-label="Swap the video model" className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))] gap-3">
+        {videoRoutes.map(({ route, index }) => (
+          <VideoModelField key={index} id={`production-video-model-${run.id}-${index}`} tool={{ id: `video:${route.mode}`, label: toolLabel.get(`video:${route.mode}`) || `video ${route.mode}` }}
+            value={index in videoSwaps ? videoSwaps[index] : route.model || ''}
+            onChange={(value) => setVideoSwaps((cur) => ({ ...cur, [index]: value }))} />
+        ))}
+      </fieldset>}
       {run.error && <p role="status" className="text-port-error break-words">{run.error}</p>}
       {failures.length > 0 && <p className="text-port-error">{failures.length} step{failures.length === 1 ? '' : 's'} failed — see the list below.</p>}
       {steps.length > 0 && (
@@ -143,7 +163,7 @@ function RunView({ run, production, codeFirst, project, readiness }) {
         )}
         {live && (!codeFirst || run.authoring) && (run.status !== 'running' || run.interrupted) && (
           <button type="button" disabled={production.busy || !resumeValid}
-            onClick={() => production.resume(run.id, { ...(needsReplan ? { acceptBasis: true } : {}), ...(budget ? { limits: budget } : {}) })}
+            onClick={() => production.resume(run.id, { ...(needsReplan ? { acceptBasis: true } : {}), ...(budget ? { limits: budget } : {}), ...(swappedPool ? { pool: swappedPool } : {}) })}
             className="flex items-center gap-1 bg-port-accent text-white rounded px-3 py-2 min-h-[44px] sm:min-h-0 sm:px-2 sm:py-1 disabled:opacity-50">
             <Play size={12} /> {needsReplan ? 'Resume with the new setup' : 'Resume'}
           </button>
