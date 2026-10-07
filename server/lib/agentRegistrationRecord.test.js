@@ -121,3 +121,10 @@ describe('buildAgentRegistration — claim ownership', () => {
     expect(record.claimPicksOwnBranch).toBeUndefined();
   });
 });
+
+it('accepts audit source provenance only from server capture, never task metadata', () => {
+  const injected = { status: 'captured', revision: 'model-claim' };
+  expect(buildAgentRegistration(args({ auditSourceEvidence: injected })).auditSourceEvidence).toBeNull();
+  const observed = { status: 'unavailable', version: 1 };
+  expect(buildAgentRegistration({ ...args({ auditSourceEvidence: injected }), auditSourceEvidence: observed }).auditSourceEvidence).toEqual(observed);
+});

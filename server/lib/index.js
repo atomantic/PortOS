@@ -258,6 +258,7 @@ export * from './quotaBurnLegacyConversion.js';
 export * from './quotaBurnOrigin.js';
 export * from './quotaBurnPresets.js';
 export * from './auditCatalog.js';
+export * from './auditSourceEvidence.js';
 export * from './quotaBurnTaskRef.js';
 export * from './quotaBurnValidation.js';
 export * from './quotaReset.js';

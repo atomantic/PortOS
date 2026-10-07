@@ -33,6 +33,7 @@ import { copyToClipboard } from '../../../lib/clipboard';
 import { estimateCosDuration } from '../../../lib/cosDurationEstimate';
 import { isAgentFeedbackUpdateTarget, isSystemAgent as isSystemAgentRecord } from '../../../lib/cosAgentFeedback';
 import AgentResultLine from '../AgentResultLine';
+import AuditSourceEvidence from '../AuditSourceEvidence';
 import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
 import { formatBytes, formatCount, formatDurationMs, formatDateTime, formatTimeOfDay, shortClaudeModelName } from '../../../utils/formatters';
 import { useSocketResource } from '../../../hooks/useSocketResource';
@@ -1119,6 +1120,8 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
           progress={progress}
           remainingTime={remainingTime}
         />
+
+        <AuditSourceEvidence evidence={agent.metadata?.auditSourceEvidence} />
 
         {agent.result && (
           <div className="flex items-center gap-4 flex-wrap">
