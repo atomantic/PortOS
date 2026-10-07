@@ -81,6 +81,53 @@ beforeEach(() => {
   api.getMemoryBackendStatus.mockResolvedValue({ backend: 'postgres' });
 });
 
+describe('MemoryTab graph filters', () => {
+  it('hides list-only controls in graph mode and restores selections when returning', async () => {
+    api.getMemories.mockResolvedValue({ memories: [activeMemory] });
+    api.searchMemories.mockResolvedValue({ memories: [{ ...activeMemory, summary: 'Filtered summary' }] });
+    renderTab();
+    await screen.findAllByText('Original summary');
+    fireEvent.click(screen.getByRole('button', { name: 'Brain' }));
+    await waitFor(() => expect(api.getMemories).toHaveBeenCalledWith(
+      expect.objectContaining({ appId: 'brain' }), expect.any(Object)
+    ));
+
+    fireEvent.click(screen.getByRole('button', { name: 'fact' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search memories' }), { target: { value: 'saved query' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search', exact: true }));
+    await screen.findByText('Filtered summary');
+    expect(screen.getByRole('button', { name: 'fact' })).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Graph' }));
+    expect(screen.queryByRole('textbox', { name: 'Search memories' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'fact' })).not.toBeInTheDocument();
+    expect(screen.getByText('Pending approval source:')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Brain' })).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'List' }));
+    expect(screen.getByText('Source:')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Search memories' })).toHaveValue('saved query');
+    expect(screen.getByRole('button', { name: 'fact' })).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() => expect(api.searchMemories).toHaveBeenLastCalledWith(
+      'saved query', expect.objectContaining({ appId: 'brain' }), expect.any(Object)
+    ));
+  });
+
+  it('keeps source selection scoped to pending approvals in graph mode', async () => {
+    api.getMemories.mockImplementation(async params => ({ memories: params.appId === 'brain' ? [pending] : [] }));
+    renderTab('/cos/memory?view=graph');
+    await screen.findByText('Graph view');
+    expect(screen.queryByRole('textbox', { name: 'Search memories' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'fact' })).not.toBeInTheDocument();
+    expect(screen.getByText('Pending approval source:')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Brain' }));
+    expect(await screen.findByText('A synthetic pending memory')).toBeInTheDocument();
+    await waitFor(() => expect(api.getMemories).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending_approval', appId: 'brain' }), expect.any(Object)
+    ));
+  });
+});
+
 describe('MemoryTab live approvals', () => {
   it('shows a newly pending memory when cos:memory:approval-needed arrives, without navigation', async () => {
     render(

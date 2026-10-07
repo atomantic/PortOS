@@ -213,8 +213,8 @@ export default function MemoryTab({ apps = [] }) {
         </div>
       </div>
 
-      {/* Search */}
-      <div className="flex gap-2">
+      {/* Search and type filters only apply to the list and timeline. */}
+      {view !== 'graph' && <div className="flex gap-2">
         <input
           type="text"
           value={searchQuery}
@@ -239,14 +239,15 @@ export default function MemoryTab({ apps = [] }) {
             <X size={18} />
           </button>
         )}
-      </div>
+      </div>}
 
-      {/* Source + Type Filters */}
+      {/* Source selection scopes pending approvals in every view. */}
       <div className="flex flex-wrap items-center gap-2">
-        {/* Source filter */}
+        <span className="text-xs text-gray-500">{view === 'graph' ? 'Pending approval source:' : 'Source:'}</span>
         {['all', 'cos', 'brain'].map(src => (
           <button
             key={src}
+            aria-pressed={sourceFilter === src}
             onClick={() => setSourceFilter(src)}
             className={`px-3 py-2 min-h-[36px] text-xs rounded-full border transition-colors flex items-center gap-1.5 ${
               sourceFilter === src
@@ -259,10 +260,11 @@ export default function MemoryTab({ apps = [] }) {
             {src === 'all' ? 'All Sources' : src === 'cos' ? 'CoS' : 'Brain'}
           </button>
         ))}
-        <span className="w-px h-5 bg-port-border" />
-        {MEMORY_TYPES.map(type => (
+        {view !== 'graph' && <span className="w-px h-5 bg-port-border" />}
+        {view !== 'graph' && MEMORY_TYPES.map(type => (
           <button
             key={type}
+            aria-pressed={filters.types.includes(type)}
             onClick={() => {
               const newTypes = filters.types.includes(type)
                 ? filters.types.filter(t => t !== type)
