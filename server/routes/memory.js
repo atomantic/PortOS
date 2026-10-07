@@ -7,6 +7,7 @@ import * as memory from '../services/memoryBackend.js';
 import { ensureBackend } from '../services/memoryBackend.js';
 import * as embeddings from '../services/memoryEmbeddings.js';
 import * as memorySync from '../services/memorySync.js';
+import { findRecentRunsUsingMemory } from '../services/memoryRunUsage.js';
 import { checkHealth } from '../lib/db.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, parsePagination } from '../lib/validation.js';
@@ -177,6 +178,12 @@ router.get('/:id/related', asyncHandler(async (req, res) => {
   const { limit } = parsePagination(req.query, { defaultLimit: 10, maxLimit: 500 });
   const related = await memory.getRelatedMemories(req.params.id, limit);
   res.json(related);
+}));
+
+// GET /api/memory/:id/runs - Recent agent runs whose prompt included this memory
+router.get('/:id/runs', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(memoryIdParamSchema, req.params);
+  res.json({ runs: await findRecentRunsUsingMemory(id) });
 }));
 
 // PUT /api/memory/:id - Update a memory
