@@ -241,6 +241,7 @@ vi.mock('../services/apiTracks.js', () => ({
   listTracks: vi.fn(async () => []),
   trackAudioUrl: (filename) => `/data/music/${encodeURIComponent(filename)}`,
   importTrackFromYoutube: vi.fn(async () => ({ jobId: 'yt-job-1' })),
+  importTrackFromSuno: vi.fn(async () => ({ jobId: 'suno-job-1' })),
   trackImportEventsUrl: (jobId) => `/api/tracks/import/${jobId}/events`,
   cancelTrackImport: vi.fn(async () => ({ ok: true })),
 }));
@@ -272,7 +273,7 @@ import {
   getMusicVideoPublishPlatforms, draftMusicVideoPublishCopy,
 } from '../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../services/apiSystem.js';
-import { importTrackFromYoutube, trackImportEventsUrl, listTracks } from '../services/apiTracks.js';
+import { importTrackFromYoutube, importTrackFromSuno, trackImportEventsUrl, listTracks } from '../services/apiTracks.js';
 import { generateVideo, getVideoGenStatus, getVideoHistoryItem } from '../services/apiImageVideo.js';
 import { getUniverse } from '../services/apiUniverseBuilder.js';
 import { downloadBlob } from '../lib/downloadBlob.js';
@@ -1828,7 +1829,7 @@ describe('MusicVideo concept & style editor (#3168)', () => {
 describe('MusicVideo YouTube audio import (#1945)', () => {
   it('starts an import from the detail view and attaches the finished track to the project', async () => {
     await openProject(PROJECT_NO_CLIP, 'setup');
-    const urlInput = screen.getByPlaceholderText(/Import audio from a YouTube URL/i);
+    const urlInput = screen.getByPlaceholderText(/Paste a YouTube or Suno link/i);
     fireEvent.change(urlInput, { target: { value: 'https://youtu.be/dQw4w9WgXcQ' } });
     const row = urlInput.closest('div');
     fireEvent.click(within(row).getByRole('button', { name: /Import/i }));
@@ -1846,6 +1847,16 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith('mv-2', { trackId: 'track-yt-1' }, { silent: true }));
   });
 
+  it('imports a pasted Suno song link through the Suno import', async () => {
+    await openProject(PROJECT_NO_CLIP, 'setup');
+    const urlInput = screen.getByPlaceholderText(/Paste a YouTube or Suno link/i);
+    const songUrl = 'https://suno.com/song/11111111-2222-4333-8444-555555555555';
+    fireEvent.change(urlInput, { target: { value: songUrl } });
+    fireEvent.click(within(urlInput.closest('div')).getByRole('button', { name: /Import/i }));
+    await waitFor(() => expect(importTrackFromSuno).toHaveBeenCalledWith(songUrl, { silent: true }));
+    expect(importTrackFromYoutube).not.toHaveBeenCalled();
+  });
+
   it('disables the Import button until a URL is entered', async () => {
     await openProject(PROJECT_NO_CLIP, 'setup');
     // Exact name: other stages also carry "Import take" / handoff import controls.
@@ -1861,7 +1872,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
       .mockResolvedValueOnce({ jobId: 'yt-job-create' })
       .mockResolvedValueOnce({ jobId: 'yt-job-edit' });
 
-    const inputs = screen.getAllByPlaceholderText(/Import audio from a YouTube URL/i);
+    const inputs = screen.getAllByPlaceholderText(/Paste a YouTube or Suno link/i);
     const createInput = inputs.find((el) => el.id === 'mv-yt-create');
     const editInput = inputs.find((el) => el.id !== 'mv-yt-create');
 
@@ -1902,7 +1913,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     renderMV();
     const picker = await selectProject(PROJECT_NO_CLIP.id);
 
-    const editInput = screen.getAllByPlaceholderText(/Import audio from a YouTube URL/i)
+    const editInput = screen.getAllByPlaceholderText(/Paste a YouTube or Suno link/i)
       .find((el) => el.id !== 'mv-yt-create');
     fireEvent.change(editInput, { target: { value: 'https://youtu.be/xyz' } });
     fireEvent.click(within(editInput.closest('div')).getByRole('button', { name: /Import/i }));
@@ -1922,7 +1933,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     // Open mv-2 and start its detail-view import.
     await selectProject(PROJECT_NO_CLIP.id);
     await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/music-video/mv-2'));
-    const editInput = screen.getAllByPlaceholderText(/Import audio from a YouTube URL/i)
+    const editInput = screen.getAllByPlaceholderText(/Paste a YouTube or Suno link/i)
       .find((el) => el.id !== 'mv-yt-create');
     fireEvent.change(editInput, { target: { value: 'https://youtu.be/xyz' } });
     fireEvent.click(within(editInput.closest('div')).getByRole('button', { name: /Import/i }));
@@ -1938,7 +1949,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
 
   it('blocks deleting the selected project while its import is in flight', async () => {
     await openProject(PROJECT_NO_CLIP, 'setup');
-    const editInput = screen.getAllByPlaceholderText(/Import audio from a YouTube URL/i)
+    const editInput = screen.getAllByPlaceholderText(/Paste a YouTube or Suno link/i)
       .find((el) => el.id !== 'mv-yt-create');
     fireEvent.change(editInput, { target: { value: 'https://youtu.be/xyz' } });
     fireEvent.click(within(editInput.closest('div')).getByRole('button', { name: /Import/i }));
@@ -1972,7 +1983,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     listMusicVideoProjects.mockResolvedValue([]);
     renderMV();
     await openCreateForm();
-    const createInput = await screen.findByPlaceholderText(/Import audio from a YouTube URL/i);
+    const createInput = await screen.findByPlaceholderText(/Paste a YouTube or Suno link/i);
     fireEvent.change(createInput, { target: { value: 'https://youtu.be/enterkey' } });
     fireEvent.keyDown(createInput, { key: 'Enter' });
     await waitFor(() => expect(importTrackFromYoutube).toHaveBeenCalledWith('https://youtu.be/enterkey', { silent: true }));
@@ -1985,7 +1996,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     importTrackFromYoutube.mockImplementation(() => new Promise((resolve) => { resolveKickoff = resolve; }));
     renderMV();
     await openCreateForm();
-    const createInput = await screen.findByPlaceholderText(/Import audio from a YouTube URL/i);
+    const createInput = await screen.findByPlaceholderText(/Paste a YouTube or Suno link/i);
     fireEvent.change(createInput, { target: { value: 'https://youtu.be/doubleclick' } });
     const importBtn = within(createInput.closest('div')).getByRole('button', { name: /Import/i });
     fireEvent.click(importBtn);
@@ -2002,7 +2013,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     renderMV();
     const picker = await selectProject(PROJECT_NO_CLIP.id);
 
-    const editInput = screen.getAllByPlaceholderText(/Import audio from a YouTube URL/i)
+    const editInput = screen.getAllByPlaceholderText(/Paste a YouTube or Suno link/i)
       .find((el) => el.id !== 'mv-yt-create');
     fireEvent.change(editInput, { target: { value: 'https://youtu.be/pending' } });
     fireEvent.click(within(editInput.closest('div')).getByRole('button', { name: /Import/i }));
@@ -2027,7 +2038,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     await openCreateForm();
     const nameInput = await screen.findByPlaceholderText('Project name');
     fireEvent.change(nameInput, { target: { value: 'New MV' } });
-    const createInput = screen.getAllByPlaceholderText(/Import audio from a YouTube URL/i)
+    const createInput = screen.getAllByPlaceholderText(/Paste a YouTube or Suno link/i)
       .find((el) => el.id === 'mv-yt-create');
     fireEvent.change(createInput, { target: { value: 'https://youtu.be/xyz' } });
     fireEvent.click(within(createInput.closest('div')).getByRole('button', { name: /Import/i }));
@@ -2228,7 +2239,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     fireEvent.change(trackSelect, { target: { value: 'other-track' } });
     expect(updateMusicVideoProject).not.toHaveBeenCalled();
 
-    const editInput = screen.getAllByPlaceholderText(/Import audio from a YouTube URL/i)
+    const editInput = screen.getAllByPlaceholderText(/Paste a YouTube or Suno link/i)
       .find((el) => el.id !== 'mv-yt-create');
     expect(editInput).toHaveProperty('disabled', true);
   });

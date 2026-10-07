@@ -7,7 +7,8 @@
  *   POST   /api/tracks                 → Track
  *   GET    /api/tracks/library         → { tracks } (shared music library list)
  *   POST   /api/tracks/import/youtube  → { jobId }  (download + extract audio from a YouTube URL)
- *   GET    /api/tracks/import/:jobId/events → SSE progress for a YouTube import job
+ *   POST   /api/tracks/import/suno     → { jobId }  (a Suno song's audio, title, lyrics and style)
+ *   GET    /api/tracks/import/:jobId/events → SSE progress for a YouTube or Suno import job
  *   POST   /api/tracks/import/:jobId/cancel → { ok }
  *   GET    /api/tracks/:id              → Track
  *   PATCH  /api/tracks/:id              → Track
@@ -58,6 +59,8 @@ import {
   startYoutubeImport, attachImportSseClient, cancelYoutubeImport,
 } from '../services/trackYoutubeImport.js';
 import { YOUTUBE_VIDEO_URL_RE, YOUTUBE_URL_INVALID_MESSAGE } from '../lib/youtubeUrl.js';
+import { startSunoImport, attachSunoImportSseClient, cancelSunoImport } from '../services/trackSunoImport.js';
+import { SUNO_SONG_URL_RE, SUNO_URL_INVALID_MESSAGE } from '../lib/sunoSong.js';
 import { generateChiptuneScore, renderChiptuneTrack, publishChiptuneTrack } from '../services/chiptune.js';
 import { drawWaveSketchForTrack, renderWaveSketchToTrack } from '../services/musicWaveform.js';
 import { PAINTED_CANVAS_LIMITS } from '../lib/paintedCanvas.js';
@@ -134,6 +137,10 @@ const youtubeImportSchema = z.object({
   url: z.string().trim().regex(YOUTUBE_VIDEO_URL_RE, YOUTUBE_URL_INVALID_MESSAGE),
 });
 
+const sunoImportSchema = z.object({
+  url: z.string().trim().regex(SUNO_SONG_URL_RE, SUNO_URL_INVALID_MESSAGE),
+});
+
 // Reuse the pipeline audio stage's multipart upload contract (50MB, audio MIME).
 const musicUpload = uploadSingle('track', {
   limits: { fileSize: MUSIC_UPLOAD_MAX_BYTES },
@@ -189,14 +196,21 @@ router.post('/import/youtube', asyncHandler(async (req, res) => {
   res.status(202).json(await startYoutubeImport(url));
 }));
 
+// Suno song import: the song's audio plus the title, lyrics and style its page
+// carries, as a Track. Its jobs share the events/cancel routes below.
+router.post('/import/suno', asyncHandler(async (req, res) => {
+  const { url } = validateRequest(sunoImportSchema, req.body ?? {});
+  res.status(202).json(await startSunoImport(url));
+}));
+
 router.get('/import/:jobId/events', (req, res) => {
-  if (!attachImportSseClient(req.params.jobId, res)) {
+  if (!attachImportSseClient(req.params.jobId, res) && !attachSunoImportSseClient(req.params.jobId, res)) {
     throw new ServerError('Import job not found or expired', { status: 404, code: 'NOT_FOUND' });
   }
 });
 
 router.post('/import/:jobId/cancel', (req, res) => {
-  res.json({ ok: cancelYoutubeImport(req.params.jobId) });
+  res.json({ ok: cancelYoutubeImport(req.params.jobId) || cancelSunoImport(req.params.jobId) });
 });
 
 router.post('/', asyncHandler(async (req, res) => {

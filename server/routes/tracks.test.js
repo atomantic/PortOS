@@ -99,6 +99,12 @@ vi.mock('../services/trackYoutubeImport.js', () => ({
   attachImportSseClient: vi.fn(() => true),
   cancelYoutubeImport: vi.fn(() => true),
 }));
+vi.mock('../services/trackSunoImport.js', () => ({
+  startSunoImport: vi.fn(async () => ({ jobId: 'suno-job' })),
+  attachSunoImportSseClient: vi.fn(() => false),
+  cancelSunoImport: vi.fn(() => false),
+}));
+import * as sunoImport from '../services/trackSunoImport.js';
 
 import * as musicLibrary from '../services/pipeline/musicLibrary.js';
 import * as albums from '../services/albums/index.js';
@@ -201,6 +207,35 @@ describe('tracks routes', () => {
       expect(r.status).toBe(200);
       expect(r.body).toEqual({ ok: true });
       expect(ytImport.cancelYoutubeImport).toHaveBeenCalledWith('job-1');
+    });
+  });
+
+  describe('Suno import', () => {
+    it.each([
+      'https://suno.com/song/62cd2904-a9ad-41fc-8097-c85cebe08586',
+      'https://suno.com/s/AbCdEf123456',
+    ])('POST /import/suno starts a job for %s', async (url) => {
+      const r = await request(app).post('/api/tracks/import/suno').send({ url });
+      expect(r.status).toBe(202);
+      expect(r.body).toEqual({ jobId: 'suno-job' });
+      expect(sunoImport.startSunoImport).toHaveBeenCalledWith(url);
+    });
+
+    it('POST /import/suno rejects a non-Suno URL (never reaches the service)', async () => {
+      const r = await request(app).post('/api/tracks/import/suno').send({ url: 'https://example.com/song/62cd2904-a9ad-41fc-8097-c85cebe08586' });
+      expect(r.status).toBe(400);
+      expect(sunoImport.startSunoImport).not.toHaveBeenCalled();
+    });
+
+    it('a Suno job streams and cancels through the shared import routes', async () => {
+      ytImport.attachImportSseClient.mockReturnValueOnce(false);
+      sunoImport.attachSunoImportSseClient.mockImplementationOnce((_id, res) => { res.status(200).end(); return true; });
+      expect((await request(app).get('/api/tracks/import/suno-job/events')).status).toBe(200);
+      ytImport.cancelYoutubeImport.mockReturnValueOnce(false);
+      sunoImport.cancelSunoImport.mockReturnValueOnce(true);
+      const r = await request(app).post('/api/tracks/import/suno-job/cancel');
+      expect(r.body).toEqual({ ok: true });
+      expect(sunoImport.cancelSunoImport).toHaveBeenCalledWith('suno-job');
     });
   });
 

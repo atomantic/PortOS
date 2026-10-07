@@ -470,12 +470,12 @@ export default function MusicVideo() {
   const handleCreate = (e) => {
     e.preventDefault();
     if (!form.name.trim()) return;
-    // A YouTube import in flight hasn't set form.trackId yet — creating now
+    // An audio import in flight hasn't set form.trackId yet — creating now
     // would make a track-less project, and the import's later completion
     // would only fill in the (already-reset) form's trackId instead of
     // attaching to the project the user just created.
     if (youtube.createJob.active) {
-      toast.error('Finish or cancel the in-progress YouTube import before creating the project');
+      toast.error('Finish or cancel the in-progress audio import before creating the project');
       return;
     }
     if (creating) return;
@@ -505,7 +505,7 @@ export default function MusicVideo() {
 
   const handleDeleteRequest = (id) => {
     if (youtube.editJob.active && id === selectedId) {
-      toast.error('Finish or cancel the in-progress YouTube import before deleting this project');
+      toast.error('Finish or cancel the in-progress audio import before deleting this project');
       return;
     }
     requestDelete(id);
@@ -516,7 +516,7 @@ export default function MusicVideo() {
     // in-flight edit-surface import targets would still finish server-side
     // and try to PATCH a now-deleted project.
     if (youtube.editJob.active && id === selectedId) {
-      toast.error('Finish or cancel the in-progress YouTube import before deleting this project');
+      toast.error('Finish or cancel the in-progress audio import before deleting this project');
       return;
     }
     deleteMusicVideoProject(id, { silent: true })
