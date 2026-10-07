@@ -206,6 +206,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'PUT /api/cos/schedule/task/:taskType',
   'POST /api/cos/schedule/trigger',
   'POST /api/cos/schedule/maintenance-runs',
+  // Editing a pending stage changes the provider used by deferred host work.
+  'PATCH /api/cos/schedule/maintenance-runs/:id/steps/:stepId',
   'POST /api/cos/schedule/maintenance-runs/:id/resume',
   'POST /api/cos/tools/call',
 
@@ -452,6 +454,15 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/pipeline/issues/:id/stages/comicPages/pages/:pageIndex/render',
   'POST /api/pipeline/issues/:id/stages/comicPages/pages/:pageIndex/refine-render',
   'POST /api/pipeline/issues/:id/stages/storyboards/scenes/:sceneIndex/shots/:shotIndex/render',
+
+  // Writers Room authoring reaches the staged runner, including CLI/TUI
+  // fallback. Stored prose and live cursor text are caller-controlled; a
+  // configured provider or live-mode budget does not grant host authority.
+  'POST /api/writers-room/works/:id/analysis',
+  'POST /api/writers-room/works/:id/polish/start',
+  'POST /api/writers-room/works/:id/live-suggest',
+  'POST /api/writers-room/works/:id/cd-bridge/suggest',
+  'POST /api/writers-room/works/:id/characters/:characterId/augment',
 
   // Autopilots and support requests that queue CoS agents.
   'POST /api/pipeline/series/:id/autopilot/start',
