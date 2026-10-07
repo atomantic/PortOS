@@ -59,6 +59,12 @@ vi.mock('../services/catalogExtraction.js', () => ({}));
 import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
 import writersRoomRoutes from './writersRoom.js';
+import cosScheduleRoutes from './cosScheduleRoutes.js';
+const maintenance = vi.hoisted(() => ({
+  updateMaintenanceStep: vi.fn(async (id, stepId, pins) => ({ id, steps: [{ id: stepId, ...pins }] })),
+}));
+vi.mock('../services/maintenanceRun.js', () => maintenance);
+vi.mock('../services/taskSchedule.js', () => ({}));
 
 const work = '/api/writers-room/works/wr-work-example';
 const operations = [
@@ -77,6 +83,7 @@ const appFor = (address = '192.0.2.10') => {
   });
   app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/writers-room', writersRoomRoutes);
+  app.use('/api/cos', cosScheduleRoutes);
   app.use(errorMiddleware);
   return app;
 };
@@ -149,5 +156,41 @@ describe('Writers Room authoring authority', () => {
     expect(effects.listAnalyses).toHaveBeenCalledOnce();
     expect(effects.cancel).toHaveBeenCalledOnce();
     for (const [, , effect] of operations) expect(effect).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('Deferred maintenance stage authority', () => {
+  const path = '/api/cos/schedule/maintenance-runs/example-run/steps/example-stage';
+  const pins = { providerId: 'example-cli', model: 'example-model', effort: 'medium' };
+  it('refuses remote edits before changing a pending automatic dispatch', async () => {
+    for (const [address, headers] of [
+      ['192.0.2.10', {}],
+      ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
+    ]) {
+      const pending = request(appFor(address)).patch(path);
+      for (const [key, value] of Object.entries(headers)) pending.set(key, value);
+      const response = await pending.send(pins);
+      expect([response.status, response.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    expect(maintenance.updateMaintenanceStep).not.toHaveBeenCalled();
+  });
+  it('preserves local, operator and delegated-agent provider edits', async () => {
+    const owner = await createSession();
+    const agent = await createSession({ label: 'agent' });
+    for (const [enabled, address, headers] of [
+      [false, '127.0.0.1', {}],
+      [true, '192.0.2.10', { Cookie: `portos_auth=${owner.token}` }],
+      [true, '127.0.0.1', { Authorization: `Bearer ${agent.token}` }],
+    ]) {
+      auth.enabled = enabled;
+      const pending = request(appFor(address)).patch(path);
+      for (const [key, value] of Object.entries(headers)) pending.set(key, value);
+      const response = await pending.send(pins);
+      expect(response.status).toBe(200);
+      expect(response.body.run.steps[0]).toMatchObject(pins);
+    }
+    expect(maintenance.updateMaintenanceStep).toHaveBeenCalledTimes(3);
+    expect(maintenance.updateMaintenanceStep).toHaveBeenLastCalledWith('example-run', 'example-stage', pins);
   });
 });

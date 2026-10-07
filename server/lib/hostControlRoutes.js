@@ -206,6 +206,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'PUT /api/cos/schedule/task/:taskType',
   'POST /api/cos/schedule/trigger',
   'POST /api/cos/schedule/maintenance-runs',
+  // Editing a pending stage changes the provider used by deferred host work.
+  'PATCH /api/cos/schedule/maintenance-runs/:id/steps/:stepId',
   'POST /api/cos/schedule/maintenance-runs/:id/resume',
   'POST /api/cos/tools/call',
 
