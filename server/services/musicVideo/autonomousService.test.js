@@ -1380,7 +1380,18 @@ describe('orchestrated mode (brief.orchestrator)', () => {
       expect(runOf()).toMatchObject({ status: 'needs-human', errorCode: 'FINAL_REVISION_NEEDS_HUMAN',
         error: expect.stringContaining('cannot be generated automatically'), output: { finalAutoReviewId: 'mvar-fix', renderJobId: 'render-1' } });
 
-      doubles.resumeAutoReview.mockRejectedValueOnce(Object.assign(new Error('This run is needs-human'), { code: 'AUTO_REVIEW_CLOSED' }));
+      // Resume before the director finished the revision keeps the run parked.
+      const closed = () => Object.assign(new Error('This run is needs-human'), { code: 'AUTO_REVIEW_CLOSED' });
+      Object.assign(store.get('mv-auto'), { autoReviews: [{ id: 'mvar-fix', status: 'needs-human', attempts: [{ n: 1, revisionId: 'rev-1' }] }],
+        revisions: [{ id: 'rev-1', status: 'open' }] });
+      doubles.resumeAutoReview.mockRejectedValueOnce(closed());
+      await service.resumeAutonomousVideo('mv-auto');
+      expect(runOf()).toMatchObject({ status: 'needs-human', errorCode: 'FINAL_REVISION_NEEDS_HUMAN',
+        error: expect.stringContaining('Finish or cancel the open revision'), output: { finalAutoReviewId: 'mvar-fix' } });
+      expect(doubles.renderVideo).toHaveBeenCalledOnce();
+
+      store.get('mv-auto').revisions[0].status = 'complete';
+      doubles.resumeAutoReview.mockRejectedValueOnce(closed());
       await rendersAgain();
       await service.resumeAutonomousVideo('mv-auto');
       expect(runOf()).toMatchObject({ status: 'running', output: { renderJobId: 'render-2', finalAutoReviewId: null } });

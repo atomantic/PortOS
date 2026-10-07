@@ -357,14 +357,21 @@ export function resumeAutoReviewOnProject(project, runId, { limits } = {}, now =
   }, now);
 }
 
+/** The revision a run's current attempt left open (or rendering), if any — work a director still has to finish or cancel. */
+export function openAttemptRevisionId(project, runId) {
+  const run = projectAutoReviews(project).find((r) => r.id === runId);
+  const revisionId = run ? currentAttempt(run).revisionId : null;
+  const revision = revisionId ? projectRevisions(project).find((r) => r.id === revisionId) : null;
+  return revision && (revision.status === 'open' || revision.status === 'rendering') ? revision.id : null;
+}
+
 /** Cancel (terminal). Returns the open revision the caller must cancel too, if any. */
 export function cancelAutoReviewOnProject(project, runId, now = new Date().toISOString()) {
   const run = findRun(project, runId);
   if (!RESUMABLE.has(run.status)) throw autoReviewError(409, 'AUTO_REVIEW_CLOSED', `This run is already ${run.status}`);
-  const revisionId = currentAttempt(run).revisionId;
-  const revision = revisionId ? projectRevisions(project).find((r) => r.id === revisionId) : null;
+  const revisionId = openAttemptRevisionId(project, runId);
   const out = haltAutoReview(project, runId, { status: 'canceled', reason: 'Cancelled by the director' }, now);
-  return { ...out, revisionId: revision && (revision.status === 'open' || revision.status === 'rendering') ? revision.id : null };
+  return { ...out, revisionId };
 }
 
 /**

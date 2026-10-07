@@ -1278,6 +1278,12 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
       const parked = await park(projectId, 'needs-human', { error: trimTo(`The final revision could not resume: ${failure.message}`, 500), errorCode: failure.code || null });
       return { project: parked.project, run: presentAutonomousRun(parked.run) };
     }
+    // A hand-off the director has not finished yet still holds its revision open.
+    const { openAttemptRevisionId } = await import('./autoReview.js');
+    if (openAttemptRevisionId(await getProject(projectId), out.run.output.finalAutoReviewId)) {
+      const parked = await park(projectId, 'needs-human', { error: 'Finish or cancel the open revision of the final video first, then Resume.', errorCode: 'FINAL_REVISION_NEEDS_HUMAN' });
+      return { project: parked.project, run: presentAutonomousRun(parked.run) };
+    }
     const { run } = await patchRun(projectId, () => ({ output: { finalAutoReviewId: null } }));
     await startFinalRender(projectId, run);
     const latest = await getProject(projectId);
