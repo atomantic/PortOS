@@ -156,12 +156,13 @@ function createPost(THREE, renderer) {
       return mix(c, vec3(np), 1. - 1. / (.15 * (p - np) + 1.));
     }
     vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1. / 2.4)) - .055, step(.0031308, c)); }
+    // The frame is wrapped so sin() stays in precise range late in a long song.
     float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
     void main(){
       vec3 c = (texture2D(tColor, vUv).rgb + texture2D(tBloom, vUv).rgb * uBloom) * uExposure;
       c = srgb(clamp(neutral(max(c, 0.)), 0., 1.));
       vec2 q = vUv - .5; c *= 1. - dot(q, q) * uVignette * 1.8;
-      c += (hash(vUv * uRes + uFrame * 7.13) - .5) * uGrain;
+      c += (hash(vUv * uRes + mod(uFrame, 251.) * 7.13) - .5) * uGrain;
       gl_FragColor = vec4(clamp(c, 0., 1.), 1.);
     }`, { tColor: { value: null }, tBloom: { value: null }, uRes: { value: new THREE.Vector2() }, uBloom: { value: 0 }, uExposure: { value: 1 }, uVignette: { value: 0 }, uGrain: { value: 0 }, uFrame: { value: 0 } });
   let targets = [];
@@ -181,7 +182,12 @@ function createPost(THREE, renderer) {
     render(world, view, lens, frame) {
       const px = h / 1080;
       const num = (value, fallback, lo, hi) => Number.isFinite(value) ? Math.min(hi, Math.max(lo, value)) : fallback;
-      const focus = lens.focus?.isVector3 ? lens.focus.distanceTo(view.position) : num(lens.focus, LENS_DEFAULTS.focus, 0.01, 1e5);
+      // The DOF shader compares view-space depth, so a focus point is projected
+      // into camera space: off-axis subjects and rig-parented cameras both stay sharp.
+      // renderer.render has not refreshed the camera matrices yet.
+      let focus;
+      if (lens.focus?.isVector3) { view.updateMatrixWorld(); focus = Math.max(0.01, -lens.focus.clone().applyMatrix4(view.matrixWorldInverse).z); }
+      else focus = num(lens.focus, LENS_DEFAULTS.focus, 0.01, 1e5);
       renderer.setRenderTarget(hdr); renderer.clear(); renderer.render(world, view);
       dof.uniforms.tColor.value = hdr.texture; dof.uniforms.tDepth.value = hdr.depthTexture;
       dof.uniforms.uRes.value.set(w, h);

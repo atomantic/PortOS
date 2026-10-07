@@ -197,6 +197,38 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     const focused = await edgeEnergy();
     await withLens({ grain: 0, focus: 1, aperture: 24, maxBlur: 24 });
     expect(await edgeEnergy()).toBeLessThan(focused * 0.8);
+    // A Vector3 focus is view-space depth, not straight-line distance from the
+    // camera's local position: an off-axis head seen through a rig-parented
+    // camera stays as sharp as with no depth of field at all.
+    const headSharpness = (aperture) => page.evaluate(async (aperture) => {
+      window.PORTOS_MV_GENERATED.sections.world = (ctx, env) => {
+        window.authoredWorld(ctx, env);
+        const { THREE, scene, camera } = ctx;
+        const rig = new THREE.Group(); rig.position.set(2.5, 0, 4); scene.add(rig); rig.add(camera);
+        // A striped target card at the focus point: its edges blur visibly if
+        // the focal plane misses it.
+        const head = new THREE.Vector3(0, 2.2, 0.6);
+        rig.updateMatrixWorld(true);
+        const card = new THREE.Group(); card.position.copy(head); scene.add(card);
+        card.add(new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ color: 0x000000 })));
+        for (let i = -2; i <= 2; i++) { const bar = new THREE.Mesh(new THREE.PlaneGeometry(0.06, 1), new THREE.MeshBasicMaterial({ color: 0xffffff })); bar.position.set(i * 0.18, 0, 0.001); card.add(bar); }
+        card.lookAt(camera.getWorldPosition(new THREE.Vector3()));
+        Object.assign(ctx.lens, { grain: 0, vignette: 0, bloom: 0, focus: head, aperture, maxBlur: 24 });
+        window.headOnScreen = head.clone().project(camera);
+      };
+      await window.portosComposition.seek(0);
+      const world = document.getElementById('world');
+      const x = Math.round((window.headOnScreen.x + 1) / 2 * world.width) - 40, y = Math.round((1 - window.headOnScreen.y) / 2 * world.height) - 40;
+      const probe = document.createElement('canvas'); probe.width = 80; probe.height = 80;
+      const g = probe.getContext('2d'); g.drawImage(world, x, y, 80, 80, 0, 0, 80, 80);
+      const { data } = g.getImageData(0, 0, 80, 80);
+      let sum = 0; for (let i = 4; i < data.length; i += 4) sum += Math.abs(data[i] - data[i - 4]);
+      return { sum, offAxis: Math.abs(window.headOnScreen.x) };
+    }, aperture);
+    const sharpHead = await headSharpness(0);
+    const focusedHead = await headSharpness(18);
+    expect(sharpHead.offAxis).toBeGreaterThan(0.1);
+    expect(focusedHead.sum).toBeGreaterThan(sharpHead.sum * 0.99); // straight-line distance from the local position gives ~0.95
     expect(await page.evaluate(() => window.liveTextureCount())).toBe(textures);
     expect(warnings.filter((text) => text.includes('PCFSoftShadowMap'))).toEqual([]);
     expect(errors).toEqual([]);
