@@ -292,10 +292,13 @@ const flatten = (v) => (v == null ? ''
   : typeof v === 'object' ? Object.entries(v).map(([k, x]) => [k, flatten(x)]).filter(([, x]) => x).map(([k, x]) => `${k}: ${x}`).join(', ')
   : typeof v === 'number' || typeof v === 'boolean' ? String(v) : v);
 const prose = (max) => z.preprocess(flatten, text(max));
-// A list field answered as one string (or null) instead of an array of strings.
+// A list field answered as one string instead of an array of strings.
 const proseList = (max) => z.preprocess((v) => (v == null ? [] : Array.isArray(v) ? v : [v]), z.array(prose(max)).transform((items) => items.filter(Boolean)));
+// A null field means "nothing to change" (models write it when told to keep the rest), so it
+// reads as absent and a revision keeps the current value; an empty string or list clears.
+const withoutNulls = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).filter(([, x]) => x != null)) : v);
 
-const protagonistSchema = z.object({
+const protagonistSchema = z.preprocess(withoutNulls, z.object({
   name: prose(SHORT).optional(),
   description: prose(TEXT).optional(),
   face: prose(TEXT).optional(),
@@ -310,14 +313,14 @@ const protagonistSchema = z.object({
   palette: prose(300).optional(),
   movement: prose(TEXT).optional(),
   expressions: proseList(300).optional(),
-}).passthrough();
-const worldSchema = z.object({
+}).passthrough());
+const worldSchema = z.preprocess(withoutNulls, z.object({
   layout: prose(TEXT).optional(),
   depth: prose(500).optional(),
   lighting: prose(500).optional(),
   camera: prose(500).optional(),
   transitions: prose(500).optional(),
-}).passthrough();
+}).passthrough());
 // Unusable definitions (not an object, or no character survives validation) count as
 // absent so the merge keeps the current ones; `{ characters: [] }` is a deliberate clear.
 const definitionsSchema = z.unknown().transform((value, ctx) => {

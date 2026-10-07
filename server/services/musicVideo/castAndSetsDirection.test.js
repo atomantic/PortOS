@@ -92,9 +92,20 @@ describe('Cast & Sets direction', () => {
         rules: 'Never lands', expressions: null },
       world: { camera: null },
     }));
-    expect(parsed.protagonist).toMatchObject({ name: 'A', gesture: '', signature: 'true', palette: 'primary: #fff', rules: ['Never lands'], expressions: [] });
-    expect(parsed.world.camera).toBe('');
+    expect(parsed.protagonist).toMatchObject({ name: 'A', signature: 'true', palette: 'primary: #fff', rules: ['Never lands'] });
+    expect(parsed.protagonist).not.toHaveProperty('gesture');
+    expect(parsed.protagonist).not.toHaveProperty('expressions');
+    expect(parsed.world).not.toHaveProperty('camera');
     expect(mergeCastAndSetsDirection(null, parsed, { sections, medium: 'procedural' }).missing).not.toContain('protagonist');
+  });
+
+  it('treats a null field in a revision as no change, and an empty one as a clear', () => {
+    const { direction: previous } = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...ANSWER,
+      protagonist: { ...ANSWER.protagonist, gesture: 'wave', rules: ['r1'] }, world: { camera: 'slow dolly' } })), { sections, moodImageCount: 4, medium: 'procedural' });
+    const revision = parseCastAndSetsResponse(JSON.stringify({ protagonist: { hair: 'red', gesture: null, rules: null }, world: { camera: null, layout: '' } }));
+    const { direction } = mergeCastAndSetsDirection(previous, revision, { sections, moodImageCount: 4, medium: 'procedural' });
+    expect(direction.protagonist).toMatchObject({ hair: 'red', gesture: 'wave', rules: ['r1'] });
+    expect(direction.world).toMatchObject({ camera: 'slow dolly', layout: '' });
   });
 
   it('on a revision keeps absent keys, applies present ones, and treats an empty value as a clear', () => {
