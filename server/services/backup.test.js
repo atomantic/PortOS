@@ -3411,9 +3411,16 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
 
     it('reconciles settings and Brain state when rsync fails a live restore', async () => {
       const proc = fakeProc();
-      spawn.mockReturnValue(proc);
+      const spawned = Promise.withResolvers();
+      spawn.mockImplementation(() => {
+        spawned.resolve();
+        return proc;
+      });
       const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
-      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      // Admission performs real journal I/O. Wait for the actual process boundary,
+      // not vi.waitFor's one-second deadline (too short on a loaded Windows runner).
+      // A pre-spawn failure must still surface instead of leaving the barrier pending.
+      await Promise.race([spawned.promise, pending]);
       proc.stderr.emit('data', Buffer.from('boom'));
       proc.emit('close', 1);
 
