@@ -89,7 +89,7 @@ describe('human-reviewed Music Video workflow', () => {
       lyricCueIds: ['line-a'], action: 'A paper figure opens a painted doorway.', camera: 'Chase cam behind the plane', transition: 'Warp streaks' })]);
   });
 
-  it('ignores a skipped Cast & Sets sheet''s world when drafting storyboard shots', async () => {
+  it('ignores the world of a skipped Cast & Sets sheet when drafting storyboard shots', async () => {
     await save({ ...draft, storyboard: [] });
     await store.mutateProjectRecord(project.id, current => ({ project: { ...current,
       castAndSets: { status: 'skipped', direction: { world: { camera: 'Stale chase cam', transitions: 'Stale streaks' } } } } }));
