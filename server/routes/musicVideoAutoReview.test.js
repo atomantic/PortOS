@@ -220,7 +220,7 @@ describe('opt-in automatic review/retries (#8988)', () => {
     await projects.updateProject(p.id, { scenes: p.scenes.map((scene) => scene.sceneId === 's1'
       ? { ...scene, startSec: 0, endSec: 10, direction: { actionContract: { version: 1, purpose: 'The listener decides to stay',
         reactions: [{ startSec: 6, endSec: 8, subject: 'Listener', description: 'Turns back' }], acceptanceCriteria: ['Both people remain visible'] } } }
-      : scene) });
+      : scene.sceneId === 's2' ? { ...scene, startSec: 10, endSec: 20 } : scene) });
     h.verdicts.push(FAIL_S2, PASS);
     const r = await start(p.id, { maxAttempts: 2, maxGenerations: 1 });
     expect(r.status).toBe(201);
@@ -236,6 +236,8 @@ describe('opt-in automatic review/retries (#8988)', () => {
     expect(reviewerPrompt).toContain('Both people remain visible');
     expect(reviewerPrompt).toContain('"sceneStartSec":-5');
     expect(reviewerPrompt).toContain('Still frames cannot prove completion');
+    // A shot without an action contract still carries its own prompt, so it is judged on it.
+    expect(reviewerPrompt).toContain('"shotPrompt":"shot s2"');
     expect(attempt1.review).toMatchObject({ verdict: 'revise', checks: { composition: 'fail', audioSync: 'pass', motion: 'pass' } });
     expect(attempt1.review.evidence).toMatchObject({ continuous: true, continuousFrames: 12 });
     const draft = current.excerpts.find((e) => e.id === attempt1.excerptId);
