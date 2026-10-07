@@ -208,15 +208,18 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
         // A striped target card at the focus point: its edges blur visibly if
         // the focal plane misses it.
         const head = new THREE.Vector3(0, 2.2, 0.6);
-        rig.updateMatrixWorld(true);
+        // No manual matrix update: the engine must resolve the rig itself.
+        const at = camera.position.clone().add(rig.position);
         const card = new THREE.Group(); card.position.copy(head); scene.add(card);
         card.add(new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ color: 0x000000 })));
         for (let i = -2; i <= 2; i++) { const bar = new THREE.Mesh(new THREE.PlaneGeometry(0.06, 1), new THREE.MeshBasicMaterial({ color: 0xffffff })); bar.position.set(i * 0.18, 0, 0.001); card.add(bar); }
-        card.lookAt(camera.getWorldPosition(new THREE.Vector3()));
+        card.lookAt(at);
         Object.assign(ctx.lens, { grain: 0, vignette: 0, bloom: 0, focus: head, aperture, maxBlur: 24 });
-        window.headOnScreen = head.clone().project(camera);
+        window.projectHead = () => head.clone().project(camera);
       };
       await window.portosComposition.seek(0);
+      // The render has refreshed every matrix, so the projection is exact here.
+      window.headOnScreen = window.projectHead();
       const world = document.getElementById('world');
       const x = Math.round((window.headOnScreen.x + 1) / 2 * world.width) - 40, y = Math.round((1 - window.headOnScreen.y) / 2 * world.height) - 40;
       const probe = document.createElement('canvas'); probe.width = 80; probe.height = 80;

@@ -190,9 +190,9 @@ function createPost(THREE, renderer) {
       const num = (value, fallback, lo, hi) => Number.isFinite(value) ? Math.min(hi, Math.max(lo, value)) : fallback;
       // The DOF shader compares view-space depth, so a focus point is projected
       // into camera space: off-axis subjects and rig-parented cameras both stay sharp.
-      // renderer.render has not refreshed the camera matrices yet.
+      // renderer.render has not refreshed the camera or a rig it was just parented to.
       let focus;
-      if (lens.focus?.isVector3) { view.updateMatrixWorld(); focus = Math.max(0.01, -lens.focus.clone().applyMatrix4(view.matrixWorldInverse).z); }
+      if (lens.focus?.isVector3) { view.updateWorldMatrix(true, false); focus = Math.max(0.01, -lens.focus.clone().applyMatrix4(view.matrixWorldInverse).z); }
       else focus = num(lens.focus, LENS_DEFAULTS.focus, 0.01, 1e5);
       renderer.setRenderTarget(hdr); renderer.clear(); renderer.render(world, view);
       dof.uniforms.tColor.value = hdr.texture; dof.uniforms.tDepth.value = hdr.depthTexture;
