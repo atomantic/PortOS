@@ -1242,7 +1242,7 @@ function CopyDrill({ prefs, progress, updatePrefs, ensureCtx, claimSession, rele
           <Volume2 size={14} /> Replay
         </button>
       </div>
-      {selection && <p className="text-xs text-gray-500 text-center">{selection.reason}</p>}
+      {verdictOpen && selection && <p className="text-xs text-gray-500 text-center">{selection.reason}</p>}
       <div className="text-center py-6">
         {playing ? (
           <div className="text-cyan-400 text-sm animate-pulse">▮ ▮ ▮ playing...</div>

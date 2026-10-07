@@ -322,6 +322,27 @@ describe('MorseTrainer per-question feedback', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
   }
 
+  it.each(['copy', 'head-copy'])('hides answer-bearing selection details until submission in %s', async (mode) => {
+    getMorseProgress.mockResolvedValueOnce({
+      days: 30, kochLevel: 2, kochLevelSet: false, settings: null, totalRounds: 1,
+      series: { copy: [], 'head-copy': [], send: [] }, confusionMatrix: {}, confusionPairs: [],
+      charAccuracy: [
+        { char: 'K', attempts: 10, accuracy: 0 },
+        { char: 'M', attempts: 10, accuracy: 0 },
+      ],
+    });
+    const input = await startCopyRound(mode);
+    expect(screen.queryByText(/Targeting .*rotation\./)).toBeNull();
+
+    answer(input);
+    await screen.findByTestId('morse-verdict');
+    expect(screen.getByText(/Targeting .*rotation\./)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Next$/ }));
+    await waitFor(() => expect(screen.queryByTestId('morse-verdict')).toBeNull());
+    expect(screen.queryByText(/Targeting .*rotation\./)).toBeNull();
+  });
+
   it('shows what was sent, its Morse, and the pattern the user typed instead', async () => {
     const input = await startCopyRound();
     answer(input);
