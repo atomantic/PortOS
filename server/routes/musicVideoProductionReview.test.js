@@ -78,6 +78,26 @@ beforeEach(async () => {
 afterAll(cleanupTempDataRoots);
 
 describe('human-reviewed Music Video workflow', () => {
+  it('drafts storyboard shots for planned scenes, taking camera and transition from the Cast & Sets world', async () => {
+    await save({ ...draft, storyboard: [] });
+    await store.mutateProjectRecord(project.id, current => ({ project: { ...current,
+      castAndSets: { status: 'approved', direction: { world: { camera: 'Chase cam behind the plane', transitions: 'Warp streaks' } } } } }));
+    expect((await approve('art')).status).toBe(200);
+    const prepared = await request(app).post(`${base}/production-review/prepare`).send({});
+    expect(prepared.status).toBe(200);
+    expect(prepared.body.project.productionReview.draft.storyboard).toEqual([expect.objectContaining({
+      lyricCueIds: ['line-a'], action: 'A paper figure opens a painted doorway.', camera: 'Chase cam behind the plane', transition: 'Warp streaks' })]);
+  });
+
+  it('ignores the world of a skipped Cast & Sets sheet when drafting storyboard shots', async () => {
+    await save({ ...draft, storyboard: [] });
+    await store.mutateProjectRecord(project.id, current => ({ project: { ...current,
+      castAndSets: { status: 'skipped', direction: { world: { camera: 'Stale chase cam', transitions: 'Stale streaks' } } } } }));
+    expect((await approve('art')).status).toBe(200);
+    const prepared = await request(app).post(`${base}/production-review/prepare`).send({});
+    expect(prepared.body.project.productionReview.draft.storyboard).toEqual([expect.objectContaining({ camera: '', transition: '' })]);
+  });
+
   it('prepares an absent code-first medium plan before human storyboard approval and real authoring admission', async () => {
     await store.updateProject(project.id, { mediaMode: 'code-only', composition: { mode: 'document', authoringRenderer: 'canvas' },
       productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } });
