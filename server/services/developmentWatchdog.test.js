@@ -14,8 +14,10 @@ vi.mock('./instances.js', () => ({ getPeers: async () => m.peers }));
 vi.mock('../lib/workTracker.js', () => ({ resolveAppForgeTarget: async () => ({ tracker: 'github', target: { fullName: 'atomantic/example', repoSpec: 'github.com/atomantic/example', apiHost: 'github.com' } }) }));
 vi.mock('./appPullRequests.js', () => ({ listAppPullRequests: async () => ({ pullRequests: ++m.prReads > 1 && m.nextPrs ? m.nextPrs : m.prs, transient: false }) }));
 vi.mock('./perpetualWork.js', async importOriginal => ({ ...(await importOriginal()), detectActionableWork: async () => ({ count: m.backlog.length, items: m.backlog }), listConfiguredForgeIssues: async () => ({ ok: true, truncated: m.issueTruncated, issues: m.backlog.map(i => ({ number: Number(i.ref), labels: [], assignees: [] })) }) }));
-vi.mock('./cosTaskGenerator.js', () => ({
+vi.mock('./cosTaskClaimWork.js', () => ({
   resolveClaimWorkMetadata: (...args) => m.metadata(...args),
+}));
+vi.mock('./cosTaskGenerator.js', () => ({
   resolveAutonomyBudget: async () => ({ cosAutonomyMode: 'execute', autonomousActionsRemaining: 10 }),
   prepareManagedAppImprovementTask: (...args) => m.prepare(...args),
   recordDeferredPerpetualDispatch: (...args) => m.record(...args),

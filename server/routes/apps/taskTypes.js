@@ -26,7 +26,7 @@ import { PORTOS_APP_ID } from '../../services/apps.js';
 import { sanitizeTaskMetadata, ISSUE_AUTHOR_FILTERS, validateRequest, qualitySchedulePlanSchema, appTaskTypeToggleBodySchema, appTaskTypeOverrideBodySchema } from '../../lib/validation.js';
 import { buildQualitySchedulePlan, applyQualitySchedulePlan } from '../../services/appQualitySchedule.js';
 import { listWorkItems } from '../../services/workItems.js';
-import { resolveClaimWorkMetadata, resolveClaimAuthorFilter, resolveAppClaimReviewers } from '../../services/cosTaskGenerator.js';
+import { resolveClaimWorkMetadata, resolveClaimAuthorFilter, resolveAppClaimReviewers } from '../../services/cosTaskClaimWork.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../../services/taskScheduleConstants.js';
 import { findCronExpressionError } from '../../lib/cronValidation.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';

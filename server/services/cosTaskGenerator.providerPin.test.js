@@ -67,7 +67,8 @@ vi.mock('./perpetualWork.js', async importOriginal => ({
 
 import { detectActionableWork } from './perpetualWork.js';
 import { recordPerpetualStall } from './taskSchedule.js';
-import { generateManagedAppImprovementTaskForType, prepareManagedAppImprovementTask, resolveClaimWorkMetadata } from './cosTaskGenerator.js';
+import { generateManagedAppImprovementTaskForType, prepareManagedAppImprovementTask } from './cosTaskGenerator.js';
+import { resolveClaimWorkMetadata } from './cosTaskClaimWork.js';
 
 const APP = { id: 'app-1', name: 'Example App', repoPath: '/tmp/example-repo' };
 const STATE = { config: { confidenceAutoApproval: { enabled: false }, idleReviewPriority: 'MEDIUM' } };
