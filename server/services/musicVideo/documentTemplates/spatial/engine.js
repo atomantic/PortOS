@@ -100,7 +100,7 @@ const LENS_DEFAULTS = Object.freeze({ focus: 10, aperture: 0, maxBlur: 16, bloom
 
 // Persistent cinematic post stack: the scene renders once into an HDR target
 // with depth, then a depth-aware gather DOF, a thresholded quarter-res bloom
-// and a composite that tone maps (Khronos PBR Neutral), encodes sRGB and adds
+// and a composite that compresses highlights (PBR Neutral shoulder), encodes sRGB and adds
 // a vignette and frame-keyed grain. Every pass runs every frame so GPU
 // resources are allocated once and seeks stay deterministic.
 function createPost(THREE, renderer) {
@@ -149,8 +149,9 @@ function createPost(THREE, renderer) {
   const composite = pass(/* glsl */`
     varying vec2 vUv; uniform sampler2D tColor, tBloom; uniform vec2 uRes;
     uniform float uBloom, uExposure, uVignette, uGrain, uFrame;
+    // Khronos PBR Neutral's highlight shoulder without its toe offset, so
+    // everything below .76 passes through and existing worlds keep their darks.
     vec3 neutral(vec3 c){
-      float x = min(c.r, min(c.g, c.b)), off = x < .08 ? x - 6.25 * x * x : .04; c -= off;
       float p = max(c.r, max(c.g, c.b)); if (p < .76) return c;
       float np = 1. - .0576 / (p - .52); c *= np / p;
       return mix(c, vec3(np), 1. - 1. / (.15 * (p - np) + 1.));
