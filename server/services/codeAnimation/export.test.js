@@ -105,6 +105,22 @@ describe('startCodeAnimationExport', () => {
     expect(staged).toContain('"bpm":100');
   });
 
+  it('stages a three.js film with the host import map and the hashed vendored modules beside it, and a plain film with neither (#10464)', async () => {
+    state.html = '<html><head><script type="importmap">{"imports":{"three":"https://cdn.example.com/three.js"}}</script></head><body><script type="module">import * as THREE from \'three\';</script></body></html>';
+    await startCodeAnimationExport(JOB_ID, { enqueueJob, beatGrid: vi.fn(async () => null) });
+    const dir = join(state.dataRoot, enqueueDirectory());
+    const staged = await readFile(join(dir, 'index.html'), 'utf8');
+    expect(staged).not.toContain('cdn.example.com');
+    expect(staged).toContain('"three":"./vendor/three.module.js"');
+    expect(staged.indexOf('portosComposition')).toBeLessThan(staged.indexOf('import * as THREE'));
+    expect((await readFile(join(dir, 'vendor/three.module.js'), 'utf8'))).toContain("from './three.core.js'");
+    expect(JSON.parse(await readFile(join(dir, 'dependencies.json'), 'utf8')).network).toBe(false);
+
+    state.html = '<html><head></head><body><canvas></canvas></body></html>';
+    await startCodeAnimationExport(JOB_ID, { enqueueJob, beatGrid: vi.fn(async () => null) });
+    await expect(readFile(join(state.dataRoot, enqueueDirectory(), 'dependencies.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('exports uploaded-audio and over-long films with explanatory notes', async () => {
     state.job = { ...state.job, audioUrl: '/api/uploads/take.wav', frame: { ...state.job.frame, durationSeconds: 180 } };
     const result = await startCodeAnimationExport(JOB_ID, { enqueueJob, beatGrid: vi.fn() });
