@@ -23,7 +23,7 @@ import { terminateAgentViaRunner, killAgentViaRunner, pauseAgentViaRunner, getAg
 import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
-import { activeAgents, runnerAgents, userTerminatedAgents, pausedAgents, whenPausedAgentExits, useRunner, unregisterSpawnedAgent } from './agentState.js';
+import { activeAgents, runnerAgents, spawningTasks, userTerminatedAgents, pausedAgents, whenPausedAgentExits, useRunner, unregisterSpawnedAgent } from './agentState.js';
 // Both were extracted out of agentLifecycle.js (issue #2837) so this module no
 // longer depends on the lifecycle orchestrator — which depends on THIS module
 // for handleOrphanedTask. Importing them from their own leaf modules is what
@@ -1124,6 +1124,9 @@ async function retireStrandedPausedAgents(agents) {
   }
 }
 
+// A running record with no pid this young may still be mid-spawn.
+const SPAWN_GRACE_MS = 30000;
+
 export function cleanupOrphanedAgents() {
   if (!orphanCleanupPromise) {
     orphanCleanupPromise = runCleanupOrphanedAgents().finally(() => {
@@ -1231,6 +1234,15 @@ async function runCleanupOrphanedAgents() {
       // the durable record running forever.
       if (activeAgents.has(agent.id)) continue;
       if (inRemoteRunner) continue;
+      // The record is written before the spawn finishes (prompt build, task claim,
+      // PTY open), so a fresh one has no pid and no handle yet. Retiring it here
+      // completes a run that goes on to launch — its claim ownership bind then
+      // fails with owner-not-running. Mirrors the zombie sweep's guards.
+      if (agent.taskId && spawningTasks.has(agent.taskId)) continue;
+      if (!agent.pid) {
+        const startedAtMs = agent.startedAt ? Date.parse(agent.startedAt) : 0;
+        if (Date.now() - startedAtMs < SPAWN_GRACE_MS) continue;
+      }
       if (runnerAgents.has(agent.id)) runnerAgents.delete(agent.id);
 
       // Before marking as orphaned, check if the process is actually still running
