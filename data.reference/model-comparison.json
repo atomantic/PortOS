@@ -55537,7 +55537,7 @@
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "Anthropic published list price for Claude Sonnet 5.5 (/MTok base input, /MTok output). Cache writes (.50/MTok 5m, /MTok 1h) and cache reads (zsh.20/MTok, 0.1x base) are separate token classes not represented by this schema. Reasoning tokens are not separately priced by Anthropic; reasoningPerMillion stays null rather than assuming output-rate billing. No quality, latency, throughput or benchmark task cost is published on this page."
+      "notes": "Anthropic published list price for Claude Sonnet 5.5 ($2/MTok base input, $10/MTok output). Cache writes ($2.50/MTok 5m, $4/MTok 1h) and cache reads ($0.10/MTok, 0.05x base, halved from $0.20 on 2026-10-07) are separate token classes not represented by this schema. Reasoning tokens are not separately priced by Anthropic; reasoningPerMillion stays null rather than assuming output-rate billing. No quality, latency, throughput or benchmark task cost is published on this page."
     },
     {
       "id": "anthropic-claude-sonnet-5.5-pricing-2026-09-28-batch",
@@ -55569,7 +55569,7 @@
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "Anthropic published Message Batches pricing for Claude Sonnet 5.5 (/MTok base input, /MTok output). 24h turnaround window."
+      "notes": "Anthropic published Message Batches pricing for Claude Sonnet 5.5 ($1/MTok base input, $5/MTok output). 24h turnaround window."
     },
     {
       "id": "anthropic-claude-haiku-5.5-pricing-2026-10-07-standard",
@@ -55634,6 +55634,1832 @@
       "tokensPerSecond": null,
       "quota": null,
       "notes": "Anthropic published Message Batches pricing for Claude Haiku 5.5 (50% off base input and output)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-gdpval-aa-v2.1-claude-haiku-5.5-max",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "max",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): GDPval-AA v2.1 (Elo, as reported)",
+      "quality": {
+        "value": 1620,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact Elo as reported from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": {
+        "value": 0.87,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per task in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run GDPval-AA v2.1 (Elo, as reported) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic labels this effort level on the chart."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-gdpval-aa-v2.1-claude-4.5-haiku-unspecified",
+      "provider": "Anthropic",
+      "model": "claude-4.5-haiku",
+      "effort": "unspecified",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 4.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): GDPval-AA v2.1 (Elo, as reported)",
+      "quality": {
+        "value": 735,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact Elo as reported from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": {
+        "value": 0.24,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per task in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run GDPval-AA v2.1 (Elo, as reported) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not state the Haiku 4.5 configuration, so effort stays unspecified."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-gdpval-aa-v2.1-gpt-6-luna-max",
+      "provider": "OpenAI",
+      "model": "gpt-6-luna",
+      "effort": "max",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (GPT-6 Luna); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): GDPval-AA v2.1 (Elo, as reported)",
+      "quality": {
+        "value": 1437,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact Elo as reported from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": {
+        "value": 0.089,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per task in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run GDPval-AA v2.1 (Elo, as reported) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-gdpval-aa-v2.1-claude-sonnet-5.5-max",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "max",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Sonnet 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): GDPval-AA v2.1 (Elo, as reported)",
+      "quality": {
+        "value": 1840,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact Elo as reported from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": {
+        "value": 6.8,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per task in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run GDPval-AA v2.1 (Elo, as reported) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-aa-briefcase-v1.1-claude-haiku-5.5-max",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "max",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): AA-Briefcase v1.1 (Elo)",
+      "quality": {
+        "value": 1578,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact Elo from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run AA-Briefcase v1.1 (Elo) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Effort recorded as max: every charted max-effort point equals its launch table value, and only one table cell (Sonnet 5.5 FrontierCode, Xhigh) is labeled otherwise."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-aa-briefcase-v1.1-claude-4.5-haiku-unspecified",
+      "provider": "Anthropic",
+      "model": "claude-4.5-haiku",
+      "effort": "unspecified",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 4.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): AA-Briefcase v1.1 (Elo)",
+      "quality": {
+        "value": 614,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact Elo from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run AA-Briefcase v1.1 (Elo) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not state the Haiku 4.5 configuration, so effort stays unspecified."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-aa-briefcase-v1.1-gpt-6-luna-max",
+      "provider": "OpenAI",
+      "model": "gpt-6-luna",
+      "effort": "max",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (GPT-6 Luna); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): AA-Briefcase v1.1 (Elo)",
+      "quality": {
+        "value": 1336,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact Elo from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run AA-Briefcase v1.1 (Elo) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Effort recorded as max: every charted max-effort point equals its launch table value, and only one table cell (Sonnet 5.5 FrontierCode, Xhigh) is labeled otherwise."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-aa-briefcase-v1.1-claude-sonnet-5.5-max",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "max",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Sonnet 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): AA-Briefcase v1.1 (Elo)",
+      "quality": {
+        "value": 1824,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact Elo from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run AA-Briefcase v1.1 (Elo) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Effort recorded as max: every charted max-effort point equals its launch table value, and only one table cell (Sonnet 5.5 FrontierCode, Xhigh) is labeled otherwise."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-osworld-2.1-offline-claude-haiku-5.5-max",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "max",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): OSWorld 2.1 offline subset (partial-credit %)",
+      "quality": {
+        "value": 72.4,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact partial-credit score (%) from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": {
+        "value": 0.61,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run OSWorld 2.1 offline subset (partial-credit %) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic labels this effort level on the chart."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-osworld-2.1-offline-claude-4.5-haiku-unspecified",
+      "provider": "Anthropic",
+      "model": "claude-4.5-haiku",
+      "effort": "unspecified",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 4.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): OSWorld 2.1 offline subset (partial-credit %)",
+      "quality": {
+        "value": 15.7,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact partial-credit score (%) from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": {
+        "value": 1.45,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run OSWorld 2.1 offline subset (partial-credit %) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not state the Haiku 4.5 configuration, so effort stays unspecified."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-osworld-2.1-offline-gpt-6-luna-max",
+      "provider": "OpenAI",
+      "model": "gpt-6-luna",
+      "effort": "max",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (GPT-6 Luna); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): OSWorld 2.1 offline subset (partial-credit %)",
+      "quality": {
+        "value": 48.9,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact partial-credit score (%) from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": {
+        "value": 0.205,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run OSWorld 2.1 offline subset (partial-credit %) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-osworld-2.1-offline-claude-sonnet-5.5-max",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "max",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Sonnet 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): OSWorld 2.1 offline subset (partial-credit %)",
+      "quality": {
+        "value": 83.9,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact partial-credit score (%) from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": {
+        "value": 5.7,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run OSWorld 2.1 offline subset (partial-credit %) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-hle-no-tools-claude-haiku-5.5-max",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "max",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): Humanity's Last Exam, no tools (%)",
+      "quality": {
+        "value": 45.9,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact score (%) from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": {
+        "value": 0.21,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run Humanity's Last Exam, no tools (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic labels this effort level on the chart."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-hle-no-tools-claude-4.5-haiku-unspecified",
+      "provider": "Anthropic",
+      "model": "claude-4.5-haiku",
+      "effort": "unspecified",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 4.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): Humanity's Last Exam, no tools (%)",
+      "quality": {
+        "value": 10.2,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact score (%) from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": {
+        "value": 0.09,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run Humanity's Last Exam, no tools (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not state the Haiku 4.5 configuration, so effort stays unspecified."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-hle-no-tools-claude-sonnet-5.5-max",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "max",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Sonnet 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): Humanity's Last Exam, no tools (%)",
+      "quality": {
+        "value": 56.9,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact score (%) from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": {
+        "value": 0.9,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run Humanity's Last Exam, no tools (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-hle-with-tools-claude-haiku-5.5-max",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "max",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): Humanity's Last Exam, with tools (%)",
+      "quality": {
+        "value": 57.4,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact score (%) from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run Humanity's Last Exam, with tools (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Effort recorded as max: every charted max-effort point equals its launch table value, and only one table cell (Sonnet 5.5 FrontierCode, Xhigh) is labeled otherwise."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-hle-with-tools-claude-4.5-haiku-unspecified",
+      "provider": "Anthropic",
+      "model": "claude-4.5-haiku",
+      "effort": "unspecified",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 4.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): Humanity's Last Exam, with tools (%)",
+      "quality": {
+        "value": 18.7,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact score (%) from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run Humanity's Last Exam, with tools (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not state the Haiku 4.5 configuration, so effort stays unspecified."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-hle-with-tools-claude-sonnet-5.5-max",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "max",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Sonnet 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): Humanity's Last Exam, with tools (%)",
+      "quality": {
+        "value": 64.5,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact score (%) from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run Humanity's Last Exam, with tools (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Effort recorded as max: every charted max-effort point equals its launch table value, and only one table cell (Sonnet 5.5 FrontierCode, Xhigh) is labeled otherwise."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-terminal-bench-4.0-claude-haiku-5.5-max",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "max",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): Terminal-Bench 4.0 (%)",
+      "quality": {
+        "value": 39.2,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact pass rate (%) from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run Terminal-Bench 4.0 (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Effort recorded as max: every charted max-effort point equals its launch table value, and only one table cell (Sonnet 5.5 FrontierCode, Xhigh) is labeled otherwise."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-terminal-bench-4.0-claude-4.5-haiku-unspecified",
+      "provider": "Anthropic",
+      "model": "claude-4.5-haiku",
+      "effort": "unspecified",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 4.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): Terminal-Bench 4.0 (%)",
+      "quality": {
+        "value": 0.0,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact pass rate (%) from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run Terminal-Bench 4.0 (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not state the Haiku 4.5 configuration, so effort stays unspecified."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-terminal-bench-4.0-gpt-6-luna-max",
+      "provider": "OpenAI",
+      "model": "gpt-6-luna",
+      "effort": "max",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (GPT-6 Luna); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): Terminal-Bench 4.0 (%)",
+      "quality": {
+        "value": 16.4,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact pass rate (%) from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run Terminal-Bench 4.0 (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Effort recorded as max: every charted max-effort point equals its launch table value, and only one table cell (Sonnet 5.5 FrontierCode, Xhigh) is labeled otherwise."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-terminal-bench-4.0-claude-sonnet-5.5-max",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "max",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Sonnet 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): Terminal-Bench 4.0 (%)",
+      "quality": {
+        "value": 70.6,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact pass rate (%) from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run Terminal-Bench 4.0 (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Effort recorded as max: every charted max-effort point equals its launch table value, and only one table cell (Sonnet 5.5 FrontierCode, Xhigh) is labeled otherwise."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-frontiercode-1.1-main-claude-haiku-5.5-max",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "max",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): FrontierCode 1.1 Main (%)",
+      "quality": {
+        "value": 46.4,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact score (%) from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run FrontierCode 1.1 Main (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Effort recorded as max: every charted max-effort point equals its launch table value, and only one table cell (Sonnet 5.5 FrontierCode, Xhigh) is labeled otherwise."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-frontiercode-1.1-main-gpt-6-luna-max",
+      "provider": "OpenAI",
+      "model": "gpt-6-luna",
+      "effort": "max",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (GPT-6 Luna); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): FrontierCode 1.1 Main (%)",
+      "quality": {
+        "value": 42.4,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact score (%) from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run FrontierCode 1.1 Main (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Effort recorded as max: every charted max-effort point equals its launch table value, and only one table cell (Sonnet 5.5 FrontierCode, Xhigh) is labeled otherwise."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-frontiercode-1.1-main-claude-sonnet-5.5-xhigh",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "xhigh",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Sonnet 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): FrontierCode 1.1 Main (%)",
+      "quality": {
+        "value": 52.1,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact score (%) from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run FrontierCode 1.1 Main (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Effort recorded as labeled in the table (Xhigh)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-chartography-no-tools-claude-haiku-5.5-max",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "max",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): Chartography, no tools (%)",
+      "quality": {
+        "value": 46.4,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact score (%) from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run Chartography, no tools (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Effort recorded as max: every charted max-effort point equals its launch table value, and only one table cell (Sonnet 5.5 FrontierCode, Xhigh) is labeled otherwise."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-chartography-no-tools-claude-4.5-haiku-unspecified",
+      "provider": "Anthropic",
+      "model": "claude-4.5-haiku",
+      "effort": "unspecified",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 4.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): Chartography, no tools (%)",
+      "quality": {
+        "value": 6.4,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact score (%) from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run Chartography, no tools (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not state the Haiku 4.5 configuration, so effort stays unspecified."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-chartography-no-tools-gpt-6-luna-max",
+      "provider": "OpenAI",
+      "model": "gpt-6-luna",
+      "effort": "max",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (GPT-6 Luna); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): Chartography, no tools (%)",
+      "quality": {
+        "value": 29.1,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact score (%) from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run Chartography, no tools (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Effort recorded as max: every charted max-effort point equals its launch table value, and only one table cell (Sonnet 5.5 FrontierCode, Xhigh) is labeled otherwise."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-chartography-no-tools-claude-sonnet-5.5-max",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "max",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Sonnet 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): Chartography, no tools (%)",
+      "quality": {
+        "value": 61.6,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894042235166750",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Exact score (%) from Anthropic's Haiku 5.5 launch table."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run Chartography, no tools (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Effort recorded as max: every charted max-effort point equals its launch table value, and only one table cell (Sonnet 5.5 FrontierCode, Xhigh) is labeled otherwise."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-osworld-2.1-offline-claude-haiku-5.5-low",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "low",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): OSWorld 2.1 offline subset (partial-credit %)",
+      "quality": {
+        "value": 42,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Partial-credit score (%) read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.07,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run OSWorld 2.1 offline subset (partial-credit %) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic labels this effort level on the chart."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-osworld-2.1-offline-claude-haiku-5.5-medium",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "medium",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): OSWorld 2.1 offline subset (partial-credit %)",
+      "quality": {
+        "value": 53,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Partial-credit score (%) read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.13,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run OSWorld 2.1 offline subset (partial-credit %) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic labels this effort level on the chart."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-osworld-2.1-offline-claude-haiku-5.5-high",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "high",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): OSWorld 2.1 offline subset (partial-credit %)",
+      "quality": {
+        "value": 61,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Partial-credit score (%) read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.18,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run OSWorld 2.1 offline subset (partial-credit %) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic labels this effort level on the chart."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-osworld-2.1-offline-claude-haiku-5.5-xhigh",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "xhigh",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): OSWorld 2.1 offline subset (partial-credit %)",
+      "quality": {
+        "value": 68,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Partial-credit score (%) read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.28,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run OSWorld 2.1 offline subset (partial-credit %) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic labels this effort level on the chart."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-osworld-2.1-offline-claude-sonnet-5.5-low",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "low",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Sonnet 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): OSWorld 2.1 offline subset (partial-credit %)",
+      "quality": {
+        "value": 58,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Partial-credit score (%) read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.68,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run OSWorld 2.1 offline subset (partial-credit %) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-osworld-2.1-offline-claude-sonnet-5.5-medium",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "medium",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Sonnet 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): OSWorld 2.1 offline subset (partial-credit %)",
+      "quality": {
+        "value": 66,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Partial-credit score (%) read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.93,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run OSWorld 2.1 offline subset (partial-credit %) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-osworld-2.1-offline-claude-sonnet-5.5-high",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "high",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Sonnet 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): OSWorld 2.1 offline subset (partial-credit %)",
+      "quality": {
+        "value": 73,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Partial-credit score (%) read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 1.4,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run OSWorld 2.1 offline subset (partial-credit %) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-osworld-2.1-offline-claude-sonnet-5.5-xhigh",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "xhigh",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Sonnet 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): OSWorld 2.1 offline subset (partial-credit %)",
+      "quality": {
+        "value": 81,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Partial-credit score (%) read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 2.2,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run OSWorld 2.1 offline subset (partial-credit %) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-osworld-2.1-offline-gpt-6-luna-low",
+      "provider": "OpenAI",
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (GPT-6 Luna); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): OSWorld 2.1 offline subset (partial-credit %)",
+      "quality": {
+        "value": 19,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Partial-credit score (%) read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.038,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run OSWorld 2.1 offline subset (partial-credit %) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-osworld-2.1-offline-gpt-6-luna-medium",
+      "provider": "OpenAI",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (GPT-6 Luna); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): OSWorld 2.1 offline subset (partial-credit %)",
+      "quality": {
+        "value": 37.5,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Partial-credit score (%) read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.126,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run OSWorld 2.1 offline subset (partial-credit %) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-osworld-2.1-offline-gpt-6-luna-high",
+      "provider": "OpenAI",
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (GPT-6 Luna); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): OSWorld 2.1 offline subset (partial-credit %)",
+      "quality": {
+        "value": 42,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Partial-credit score (%) read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.144,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run OSWorld 2.1 offline subset (partial-credit %) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-osworld-2.1-offline-gpt-6-luna-xhigh",
+      "provider": "OpenAI",
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (GPT-6 Luna); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): OSWorld 2.1 offline subset (partial-credit %)",
+      "quality": {
+        "value": 45,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Partial-credit score (%) read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.168,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run OSWorld 2.1 offline subset (partial-credit %) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-gdpval-aa-v2.1-claude-haiku-5.5-low",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "low",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): GDPval-AA v2.1 (Elo, as reported)",
+      "quality": {
+        "value": 1125,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Elo as reported read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.012,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per task in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run GDPval-AA v2.1 (Elo, as reported) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic labels this effort level on the chart."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-gdpval-aa-v2.1-claude-haiku-5.5-medium",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "medium",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): GDPval-AA v2.1 (Elo, as reported)",
+      "quality": {
+        "value": 1280,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Elo as reported read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.03,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per task in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run GDPval-AA v2.1 (Elo, as reported) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic labels this effort level on the chart."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-gdpval-aa-v2.1-claude-haiku-5.5-high",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "high",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): GDPval-AA v2.1 (Elo, as reported)",
+      "quality": {
+        "value": 1420,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Elo as reported read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.089,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per task in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run GDPval-AA v2.1 (Elo, as reported) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic labels this effort level on the chart."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-gdpval-aa-v2.1-claude-haiku-5.5-xhigh",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "xhigh",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): GDPval-AA v2.1 (Elo, as reported)",
+      "quality": {
+        "value": 1515,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Elo as reported read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.27,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per task in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run GDPval-AA v2.1 (Elo, as reported) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic labels this effort level on the chart."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-gdpval-aa-v2.1-claude-sonnet-5.5-low",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "low",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Sonnet 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): GDPval-AA v2.1 (Elo, as reported)",
+      "quality": {
+        "value": 1180,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Elo as reported read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.22,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per task in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run GDPval-AA v2.1 (Elo, as reported) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-gdpval-aa-v2.1-claude-sonnet-5.5-medium",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "medium",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Sonnet 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): GDPval-AA v2.1 (Elo, as reported)",
+      "quality": {
+        "value": 1325,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Elo as reported read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.27,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per task in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run GDPval-AA v2.1 (Elo, as reported) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-gdpval-aa-v2.1-claude-sonnet-5.5-high",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "high",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Sonnet 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): GDPval-AA v2.1 (Elo, as reported)",
+      "quality": {
+        "value": 1550,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Elo as reported read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.62,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per task in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run GDPval-AA v2.1 (Elo, as reported) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-gdpval-aa-v2.1-claude-sonnet-5.5-xhigh",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "xhigh",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Sonnet 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): GDPval-AA v2.1 (Elo, as reported)",
+      "quality": {
+        "value": 1730,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Elo as reported read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 1.9,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per task in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run GDPval-AA v2.1 (Elo, as reported) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-gdpval-aa-v2.1-gpt-6-luna-low",
+      "provider": "OpenAI",
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (GPT-6 Luna); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): GDPval-AA v2.1 (Elo, as reported)",
+      "quality": {
+        "value": 1035,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Elo as reported read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.0038,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per task in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run GDPval-AA v2.1 (Elo, as reported) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-gdpval-aa-v2.1-gpt-6-luna-medium",
+      "provider": "OpenAI",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (GPT-6 Luna); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): GDPval-AA v2.1 (Elo, as reported)",
+      "quality": {
+        "value": 1265,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Elo as reported read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.02,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per task in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run GDPval-AA v2.1 (Elo, as reported) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-gdpval-aa-v2.1-gpt-6-luna-high",
+      "provider": "OpenAI",
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (GPT-6 Luna); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): GDPval-AA v2.1 (Elo, as reported)",
+      "quality": {
+        "value": 1345,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Elo as reported read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.03,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per task in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run GDPval-AA v2.1 (Elo, as reported) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-gdpval-aa-v2.1-gpt-6-luna-xhigh",
+      "provider": "OpenAI",
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (GPT-6 Luna); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): GDPval-AA v2.1 (Elo, as reported)",
+      "quality": {
+        "value": 1365,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Elo as reported read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.05,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per task in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run GDPval-AA v2.1 (Elo, as reported) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-hle-no-tools-claude-haiku-5.5-low",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "low",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): Humanity's Last Exam, no tools (%)",
+      "quality": {
+        "value": 31,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Score (%) read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.0034,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run Humanity's Last Exam, no tools (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic labels this effort level on the chart."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-hle-no-tools-claude-haiku-5.5-medium",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "medium",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): Humanity's Last Exam, no tools (%)",
+      "quality": {
+        "value": 35.5,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Score (%) read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.007,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run Humanity's Last Exam, no tools (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic labels this effort level on the chart."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-hle-no-tools-claude-haiku-5.5-high",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "high",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): Humanity's Last Exam, no tools (%)",
+      "quality": {
+        "value": 40,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Score (%) read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.02,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run Humanity's Last Exam, no tools (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic labels this effort level on the chart."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-hle-no-tools-claude-haiku-5.5-xhigh",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "xhigh",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Haiku 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): Humanity's Last Exam, no tools (%)",
+      "quality": {
+        "value": 44,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Score (%) read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.063,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run Humanity's Last Exam, no tools (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic labels this effort level on the chart."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-hle-no-tools-claude-sonnet-5.5-low",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "low",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Sonnet 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): Humanity's Last Exam, no tools (%)",
+      "quality": {
+        "value": 41.5,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Score (%) read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.029,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run Humanity's Last Exam, no tools (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-hle-no-tools-claude-sonnet-5.5-medium",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "medium",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Sonnet 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): Humanity's Last Exam, no tools (%)",
+      "quality": {
+        "value": 43.5,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Score (%) read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.033,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run Humanity's Last Exam, no tools (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-hle-no-tools-claude-sonnet-5.5-high",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "high",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Sonnet 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): Humanity's Last Exam, no tools (%)",
+      "quality": {
+        "value": 48,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Score (%) read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.075,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run Humanity's Last Exam, no tools (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
+    },
+    {
+      "id": "anthropic-haiku-5.5-launch-hle-no-tools-claude-sonnet-5.5-xhigh",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "xhigh",
+      "configuration": "Anthropic-run evaluation published with the Claude Haiku 5.5 launch (Claude Sonnet 5.5); harness per the Haiku 5.5 System Card",
+      "billing": "api",
+      "benchmark": "Anthropic publisher (Haiku 5.5 launch): Humanity's Last Exam, no tools (%)",
+      "quality": {
+        "value": 53,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Score (%) read from Anthropic's effort-level chart at pixel precision (about ±0.5 points or ±10 Elo); Anthropic prints no data labels."
+        }
+      },
+      "costPerTask": {
+        "value": 0.19,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894048753164362",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Cost per attempt in USD read from Anthropic's log-scale effort chart at pixel precision (about ±10%); Anthropic prints no data labels."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-run Humanity's Last Exam, no tools (%) result from Anthropic's 2026-10-07 Haiku 5.5 launch, not an Artificial Analysis measurement; keep separate from AA-run results of the same eval. Anthropic does not label this series; effort is assigned by its position on the low-to-max ladder (ordered by cost, matching the labeled Haiku 5.5 points)."
     },
     {
       "id": "aa-v4.3.2-anthropic-claude-sonnet-5.5-max",

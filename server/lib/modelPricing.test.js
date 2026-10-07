@@ -97,6 +97,13 @@ describe('resolveModelRates', () => {
     expect(resolveModelRates('claude-code', 'claude-opus-5')).toMatchObject({ inputPer1M: 5, outputPer1M: 25 });
   });
 
+  it('prices Sonnet 5.5 cache reads at the rate halved on 2026-10-07', () => {
+    expect(resolveModelRates('claude-code', 'claude-sonnet-5-5')).toMatchObject({
+      matched: 'exact', inputPer1M: 2, outputPer1M: 10, cacheReadPer1M: 0.1, cacheWritePer1M: 2.5,
+    });
+    expect(resolveModelRates('claude-code', 'claude-sonnet-5')).toMatchObject({ cacheReadPer1M: 0.2 });
+  });
+
   it('resolves Bedrock-prefixed ids through family rules', () => {
     const r = resolveModelRates('claude-code-bedrock', 'global.anthropic.claude-opus-4-8');
     expect(r).toMatchObject({ rateModel: 'claude-opus-4-8', matched: 'family' });

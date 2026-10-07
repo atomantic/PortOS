@@ -35,7 +35,7 @@ export const PRICING_AS_OF = '2026-09-01';
 // does not imply that every vendor's pricing was re-verified on that date.
 const MODEL_RATE_AS_OF = Object.freeze({
   'claude-haiku-5-5': '2026-10-07',
-  'claude-sonnet-5-5': '2026-09-28',
+  'claude-sonnet-5-5': '2026-10-07',
   'claude-opus-5-5': '2026-09-23',
   'gpt-6.1-sol': '2026-09-29',
   'gpt-6-sol': '2026-09-22',
@@ -232,6 +232,8 @@ const CACHE_MULTIPLIER_RULES = [
   { test: /^claude-fable-5-1/, read: 0.025, write: 1.25 },
   // Opus 5.5 cache reads are $0.20/MTok against a $4 input rate.
   { test: /^claude-opus-5-5/, read: 0.05, write: 1.25 },
+  // Sonnet 5.5 cache reads were halved to $0.10/MTok (2026-10-07) against a $2 input rate.
+  { test: /^claude-sonnet-5-5/, read: 0.05, write: 1.25 },
 ];
 
 const cacheMultipliers = (rateModel) => {
