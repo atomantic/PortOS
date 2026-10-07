@@ -123,12 +123,12 @@ async function listRepoFiles(repoPath) {
  * @param {object} app - The managed app record (needs `repoPath`, optionally `uiPort`)
  * @returns {Promise<{ capabilities: Record<string, boolean>, scanned: number }>}
  */
-export async function detectRepoCapabilities(app) {
+export async function detectRepoCapabilities(app, { refresh = false } = {}) {
   const empty = Object.fromEntries(AUDIT_REPO_CAPABILITIES.map(key => [key, false]));
   if (!app?.repoPath) return { capabilities: empty, scanned: 0, complete: false };
 
   const cached = capabilityCache.get(app.repoPath);
-  const scan = cached && Date.now() - cached.at < CAPABILITY_TTL_MS
+  const scan = !refresh && cached && Date.now() - cached.at < CAPABILITY_TTL_MS
     ? cached.value
     : await scanRepoCapabilities(app.repoPath);
   if (scan !== cached?.value) capabilityCache.set(app.repoPath, { at: Date.now(), value: scan });

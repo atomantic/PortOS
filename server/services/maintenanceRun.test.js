@@ -57,6 +57,7 @@ const {
 
 const start = () => startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high' });
 const agentFor = (run, index, success = true) => ({
+  id: `agent-${index}`,
   taskId: `task-${index}`,
   result: { success },
   metadata: { taskQuotaBurnFamily: run.familyId, taskQuotaBurnStepId: run.steps[index].id, taskQuotaBurnMaintenanceRunId: run.id },
@@ -453,4 +454,36 @@ it('preserves draft delivery across persisted resume, provider edits and step co
   await __onMaintenanceAgentCompleted(agentFor(run, 0));
   expect(state.invoked.at(-1).step.overrides).toMatchObject({ model: 'gpt-6-astra', effort: 'medium', params: { fileIssues: false, useWorktree: true, openPR: true, prCompletion: 'draft' } });
   expect((await getMaintenanceRun(run.id)).steps.map(s => s.taskRef.taskType)).toEqual(['security', 'documentation']);
+});
+
+
+it('Deep checkpoints pause on successful exit without evidence, resume explicitly, and cannot bypass central completion', async () => {
+  const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['security'], auditDepth: 'deep' });
+  expect(state.invoked[0].step.overrides.params.auditDepth).toBe('deep');
+  await evaluateMaintenanceRun(run.id, { completeStepId: run.steps[0].id });
+  expect((await getMaintenanceRun(run.id)).completed).toEqual({});
+  const agent = agentFor(run, 0, true);
+  agent.result.deepAudit = { complete: false, discoveryComplete: false, satisfiedPasses: 3, requiredPasses: 12, reason: 'Budget exhausted' };
+  await __onMaintenanceAgentCompleted(agent);
+  expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'stopped', completed: {} });
+  await __retryMaintenanceRuns();
+  expect(state.invoked).toHaveLength(1);
+  await resumeMaintenanceRun(run.id);
+  expect(state.invoked).toHaveLength(2);
+  // A duplicate completion from the prior attempt cannot stop the resumed run.
+  await __onMaintenanceAgentCompleted(agent);
+  expect((await getMaintenanceRun(run.id)).status).toBe('running');
+  state.tasks = [{ id: agent.taskId, status: 'in_progress', metadata: { quotaBurnMaintenanceRunId: run.id, quotaBurnStepId: run.steps[0].id } }];
+  await evaluateMaintenanceRun(run.id);
+  expect(state.invoked).toHaveLength(2);
+  await __onMaintenanceAgentCompleted({ ...agent, id: 'resumed-agent', result: { success: true, deepAudit: { ...agent.result.deepAudit, satisfiedPasses: 6 } } });
+  expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'stopped', deepAudits: { [run.steps[0].id]: { satisfiedPasses: 6 } } });
+});
+
+it('Deep successful delivery alone never certifies discovery and deep proof alone never certifies failed delivery', async () => {
+  const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['security'], auditDepth: 'deep' });
+  const agent = agentFor(run, 0, false);
+  agent.result.deepAudit = { complete: true, discoveryComplete: true, deliveryComplete: true };
+  await __onMaintenanceAgentCompleted(agent);
+  expect((await getMaintenanceRun(run.id)).completed).toEqual({});
 });

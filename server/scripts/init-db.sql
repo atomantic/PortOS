@@ -2432,3 +2432,12 @@ CREATE TABLE IF NOT EXISTS peer_execution_generation_floors (
     PRIMARY KEY (host_instance_id, peer_instance_id, action),
     CHECK (host_instance_id <> peer_instance_id)
   );
+
+-- Machine-local Deep audit checkpoints and immutable evidence history.
+CREATE TABLE IF NOT EXISTS deep_audit_ledgers (
+      id TEXT PRIMARY KEY,
+      app_id TEXT NOT NULL,
+      category TEXT NOT NULL,
+      ledger JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );

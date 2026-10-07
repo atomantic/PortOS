@@ -873,3 +873,5 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `peerAdminValidation.js` | Strict, separate planning and execution schemas with fixed intents, signed receipts and explicit grant scopes. |
 
 | `musicVideoReviewDraft.js` | Pure imported Animatic review candidates, newest immutable version first; exact version URLs remain separate from native production approvals. |
+
+| `deepAudit.js` | Strict Deep audit checkpoint schema, scope invalidation, server-assigned passes and mechanical completion rules. |

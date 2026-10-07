@@ -52,7 +52,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { atomicWrite, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
-import { buildMaintenanceSteps } from '../lib/maintenanceSequence.js';
+import { buildMaintenanceSteps, MAINTENANCE_TASK_ORDER } from '../lib/maintenanceSequence.js';
 import { familyForProvider } from '../lib/providerFamilies.js';
 import { quotaBurnProvenance } from '../lib/quotaBurnOrigin.js';
 import { QUOTA_BURN_UNAVAILABLE } from '../lib/quotaBurnTaskRef.js';
@@ -123,7 +123,7 @@ export async function listMaintenanceRuns() {
  */
 async function writeRuns(runs) {
   let finished = 0;
-  await atomicWrite(runsFile(), { runs: runs.filter((entry) => entry.status === MAINTENANCE_RUN_STATUS.RUNNING || ++finished <= RUN_HISTORY_LIMIT) });
+  await atomicWrite(runsFile(), { runs: runs.filter((entry) => entry.status === MAINTENANCE_RUN_STATUS.RUNNING || (entry.auditDepth === 'deep' && entry.status !== MAINTENANCE_RUN_STATUS.COMPLETED) || ++finished <= RUN_HISTORY_LIMIT) });
 }
 
 const insertRun = (run) => writeQueue(async () => {
@@ -178,7 +178,7 @@ async function assertNoRunningRun(appId) {
  * The first evaluation runs before this returns, so the caller learns whether
  * step one actually went out (or why it is holding) in the same response.
  */
-export async function startMaintenanceRun({ appId, providerId, model = null, effort = null, mode = 'file-issues', prCompletion = null, claimBetweenAudits = true, claimHandler = null, taskTypes = null, explicitCheck = false }) {
+export async function startMaintenanceRun({ appId, providerId, model = null, effort = null, mode = 'file-issues', prCompletion = null, claimBetweenAudits = true, claimHandler = null, taskTypes = null, explicitCheck = false, auditDepth = 'quick' }) {
   const [{ getAppById }, { getProviderById }, { resolveBurnProvider }] = await Promise.all([
     import('./apps.js'), import('./providers.js'), import('./scheduledHandlers/providerPick.js'),
   ]);
@@ -187,6 +187,8 @@ export async function startMaintenanceRun({ appId, providerId, model = null, eff
   const familyId = familyForProvider(provider);
   const pinned = await resolveBurnProvider({ job: { providerId }, family: manualBurnFamily(familyId) });
   if (!pinned) throw new ServerError(unavailableProvider(providerId), { status: 400, code: 'MAINTENANCE_RUN_PROVIDER_UNAVAILABLE' });
+  // Deep launches never drain unrelated work, and a checkpoint requires explicit resume.
+  if (auditDepth === 'deep') taskTypes = taskTypes || [...MAINTENANCE_TASK_ORDER];
   // File-only runs never validate or retain a hidden claim selection.
   const effectiveClaimHandler = !taskTypes && (mode === 'fix' || claimBetweenAudits) ? claimHandler : null;
   let claimFamilyId = familyId;
@@ -206,9 +208,9 @@ export async function startMaintenanceRun({ appId, providerId, model = null, eff
   const pins = { providerId, model: model || null, effort: effort || null };
   const run = await insertRun({
     id, appId, familyId, claimFamilyId, ...pins, prCompletion,
-    taskTypes,
+    taskTypes, ...(auditDepth === 'deep' ? { auditDepth, deepAudits: {}, deepCheckpointTaskIds: [], deepCheckpointAgentIds: [] } : {}),
     status: MAINTENANCE_RUN_STATUS.RUNNING,
-    steps: buildMaintenanceSteps({ appId, idPrefix: id, ...pins, mode, prCompletion, claimBetweenAudits, claimHandler: effectiveClaimHandler, taskTypes, explicitCheck }),
+    steps: buildMaintenanceSteps({ appId, idPrefix: id, ...pins, mode, prCompletion, claimBetweenAudits, claimHandler: effectiveClaimHandler, taskTypes, explicitCheck, auditDepth }),
     completed: {},
     active: null,
     reason: null,
@@ -293,7 +295,13 @@ export async function resumeMaintenanceRun(id) {
  * the ledger between the completion and the evaluation it triggers.
  */
 export const evaluateMaintenanceRun = (id, { ignoreTaskId = null, completeStepId = null } = {}) => perRun(id, async () => {
-  if (completeStepId) await patchRun(id, { completed: { [completeStepId]: new Date().toISOString() }, active: null });
+  if (completeStepId) {
+    const run = await getMaintenanceRun(id);
+    if (run?.auditDepth === 'deep' && run.deepAudits?.[completeStepId]?.complete !== true) {
+      return { dispatched: false, reason: 'Deep coverage and delivery are incomplete' };
+    }
+    await patchRun(id, { completed: { [completeStepId]: new Date().toISOString() }, active: null });
+  }
   return evaluate(id, { ignoreTaskId });
 });
 
@@ -306,6 +314,7 @@ async function holdForOutstandingWork(id, run, ignoreTaskId) {
   const [{ getAllTasks }, { getOnDemandRequests }] = await Promise.all([import('./cosTaskStore.js'), import('./taskSchedule.js')]);
   const { user, cos } = await getAllTasks();
   const ownTask = [...(user?.tasks || []), ...(cos?.tasks || [])].find((task) => task.id !== ignoreTaskId
+    && !(task.status === 'blocked' && run.deepCheckpointTaskIds?.includes(task.id))
     && quotaBurnProvenance(task.metadata).maintenanceRunId === id && ACTIVE_TASK_STATUSES.has(task.status));
   if (ownTask) {
     const { loadState } = await import('./cosState.js');
@@ -380,6 +389,9 @@ async function finishExhaustedSequence(id, run, { completed, skipped }) {
 async function evaluate(id, { ignoreTaskId }) {
   const run = await getMaintenanceRun(id);
   if (!run) return { skipped: 'unknown run' };
+  if (run.auditDepth === 'deep' && Object.keys(run.completed || {}).some(stepId => !run.deepAudits?.[stepId]?.complete && !run.skipped?.[stepId])) {
+    return holdRun(id, run, 'Deep completion evidence is missing; no further dispatch');
+  }
   if (run.status !== MAINTENANCE_RUN_STATUS.RUNNING) return { skipped: run.status };
 
   const outstanding = await holdForOutstandingWork(id, run, ignoreTaskId);
@@ -424,8 +436,23 @@ function onMaintenanceAgentCompleted(agent) {
   const stepId = agent.metadata?.taskQuotaBurnStepId;
   const success = agent.result?.success === true;
   return getMaintenanceRun(id)
-    .then((run) => {
+    .then(async (run) => {
       if (!run) return { skipped: 'unknown run' };
+      if (run.auditDepth === 'deep') {
+        return perRun(id, async () => {
+          const current = await getMaintenanceRun(id);
+          const proof = agent.result?.deepAudit || agent.metadata?.deepAudit || { complete: false, reason: 'Deep checkpoint missing' };
+          // Duplicate events cannot stop a resumed run or regress its newer proof.
+          if (agent.id && current.deepCheckpointAgentIds?.includes(agent.id)) return { skipped: 'checkpoint already recorded' };
+          return patchRun(id, { status: MAINTENANCE_RUN_STATUS.STOPPED, active: null,
+            deepAudits: { ...current.deepAudits, [stepId]: proof },
+            deepCheckpointTaskIds: [...new Set([...(current.deepCheckpointTaskIds || []), agent.taskId].filter(Boolean))],
+            deepCheckpointAgentIds: [...(current.deepCheckpointAgentIds || []), agent.id].filter(Boolean),
+            ...(proof.complete && success ? { completed: { [stepId]: new Date().toISOString() } } : {}),
+            reason: proof.complete && success ? 'Deep step complete; resume to continue remaining checks' : `Deep audit partial — ${proof.reason || 'required evidence or delivery missing'}. Resume explicitly to continue.`,
+            finishedAt: new Date().toISOString() });
+        });
+      }
       const step = run.steps.find((entry) => entry.id === stepId);
       const completeStepId = success && step && !step.drain ? step.id : null;
       return evaluateMaintenanceRun(id, { ignoreTaskId: success ? agent.taskId || null : null, completeStepId });

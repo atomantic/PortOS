@@ -14,6 +14,7 @@ export const DB_TEST_INCLUDE = [
   'services/voice/studio.db.test.js',
   '../scripts/perf/collectionFixture.db.test.js',
   'services/appQuality.db.test.js',
+  'services/deepAudit.db.test.js',
   '**/db.test.js',
   'services/codeAnimation/stages.db.test.js',
   'services/codeAnimation/sound.db.test.js',

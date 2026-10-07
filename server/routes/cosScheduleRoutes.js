@@ -45,6 +45,7 @@ const maintenanceRunStartSchema = z.object({
   // so each runs even where the repository scan says it cannot apply.
   explicitCheck: z.boolean().optional(),
   mode: z.enum(['file-issues', 'fix']).optional(),
+  auditDepth: z.enum(['quick', 'deep']).optional(),
   prCompletion: z.enum([...PR_COMPLETION_VALUES, 'inherit']).optional(),
   claimBetweenAudits: z.boolean().optional(),
   claimHandler: z.object({
@@ -290,6 +291,14 @@ router.post('/schedule/trigger', asyncHandler(async (req, res) => {
 
 // Manual maintenance runs — the Schedule tab's "Run maintenance now"; see
 // services/maintenanceRun.js for why this is not a quota burn.
+router.get('/schedule/deep-audits/:id', asyncHandler(async (req, res) => {
+  const { getDeepAuditLedger } = await import('../services/deepAudit.js');
+  const ledger = await getDeepAuditLedger(req.params.id);
+  if (!ledger) throw new ServerError('Deep audit not found', { status: 404 });
+  const { deepAuditProgress } = await import('../lib/deepAudit.js');
+  res.json({ ...ledger, progress: deepAuditProgress(ledger) });
+}));
+
 router.get('/schedule/maintenance-runs', asyncHandler(async (_req, res) => {
   res.json({ runs: await listMaintenanceRuns() });
 }));

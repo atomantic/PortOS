@@ -855,3 +855,5 @@ export * from './speechMatch.js';
 export * from './musicVideoReviewDraft.js';
 export * from './backupSharedAdmission.js';
 export * from './runtimeFilePublication.js';
+
+export * from './deepAudit.js';
