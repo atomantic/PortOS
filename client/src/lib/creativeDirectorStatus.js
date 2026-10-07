@@ -11,10 +11,12 @@
  * tab already on screen is dropped — the work is already in front of the user.
  */
 
+import { pluralize } from './textUtils.js';
+
 const sceneProgress = (project) => {
   const scenes = project.treatment?.scenes || [];
   if (!scenes.length) return null;
-  return `${scenes.filter((scene) => scene.status === 'accepted').length} of ${scenes.length} scenes accepted`;
+  return `${scenes.filter((scene) => scene.status === 'accepted').length} of ${pluralize(scenes.length, 'scene')} accepted`;
 };
 
 const videoNext = (project, { cut, activeTab }) => {

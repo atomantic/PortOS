@@ -4,6 +4,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { RefreshCw } from 'lucide-react';
 import { getAppQualityHistory } from '../../services/apiApps';
 import InfoTooltip from '../ui/InfoTooltip';
+import { pluralize } from '../../lib/textUtils';
 
 export default function AppQualityHistory({ appId, categories = [] }) {
   const [params, setParams] = useSearchParams();
@@ -57,7 +58,7 @@ export default function AppQualityHistory({ appId, categories = [] }) {
         </div>
       </div>
       {(state.data?.federation?.failed || state.data?.federation?.unavailable > 0) && <p className="text-xs text-port-warning">
-        {state.data.federation.failed ? 'Peer quality could not be loaded; history may be incomplete.' : `${state.data.federation.unavailable} peers unavailable or incompatible; history may be incomplete.`}
+        {state.data.federation.failed ? 'Peer quality could not be loaded; history may be incomplete.' : `${pluralize(state.data.federation.unavailable, 'peer')} unavailable or incompatible; history may be incomplete.`}
       </p>}
       {state.loading ? <p role="status">Loading quality history…</p> : state.error ? <p role="alert">Quality history could not be loaded. Use Refresh history to retry.</p> : !measured.length ? <p className="text-sm text-gray-400">No scored assessments in this period. Run an audit to start the history.</p> : <>
         <div className="h-56 w-full" role="img" aria-label="Daily quality scores from 0 to 100; values and evidence are available in the history table below">

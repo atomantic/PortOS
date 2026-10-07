@@ -675,7 +675,7 @@ it('exposes a sparse Month date separately while preserving direct chip activati
   }]));
   await act(async () => render(<MemoryRouter initialEntries={['/calendar/month?month=2027-01']}><MonthView accounts={ACCOUNTS} /></MemoryRouter>));
   fireEvent.click(screen.getByRole('button', { name: `View day events for ${formatDateFull(new Date(2027, 0, 12))}` }));
-  expect(within(screen.getByRole('dialog')).getByText('1 events')).toBeInTheDocument();
+  expect(within(screen.getByRole('dialog')).getByText('1 event')).toBeInTheDocument();
   fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /Design Review/ }));
   expect(screen.getByRole('dialog', { name: 'Design Review' })).toBeInTheDocument();
 });

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Bug, Shield, Zap, Package, ChevronDown, ChevronUp, Plus } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
+import { pluralize } from '../../../lib/textUtils';
 
 const SEVERITY_CONFIG = {
   CRITICAL: { color: 'text-port-error border-port-error/30 bg-port-error/10', icon: Shield, label: 'Critical' },
@@ -43,7 +44,7 @@ export default function GsdConcernsPanel({ appId, concerns, onTaskCreated }) {
     });
     setCreating(null);
     if (result) {
-      toast.success(`Created ${result.created || 0} tasks from concerns`);
+      toast.success(`Created ${pluralize(result.created || 0, 'task')} from concerns`);
       onTaskCreated?.();
     }
   };

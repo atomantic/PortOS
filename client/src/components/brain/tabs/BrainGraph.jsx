@@ -17,6 +17,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import useGraphNodeDetail from '../../../hooks/useGraphNodeDetail';
 import usePrefersReducedMotion from '../../../hooks/usePrefersReducedMotion';
 import { formatDateNumeric, formatPercent } from '../../../utils/formatters';
+import { pluralize } from '../../../lib/textUtils';
 
 const EDGE_COLORS = {
   similar: '#3b82f6',
@@ -290,7 +291,7 @@ export default function BrainGraph() {
     setSyncing(false);
     if (stats) {
       const archivedNote = stats.archived ? `, ${stats.archived} archived` : '';
-      toast.success(`Synced ${stats.synced} records (${stats.skipped} skipped${archivedNote})`, { id: toastId });
+      toast.success(`Synced ${pluralize(stats.synced, 'record')} (${stats.skipped} skipped${archivedNote})`, { id: toastId });
       // Refresh the missing-embeddings count and reload the current view to pick
       // up the new edges.
       api.getEmbeddingsStatus().then(setEmbeddingStatus).catch(() => {});

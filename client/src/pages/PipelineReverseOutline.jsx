@@ -25,6 +25,7 @@ import { useSeriesRunLifecycle } from '../hooks/useSeriesRunLifecycle';
 import RunRecoveryBanner from '../components/pipeline/RunRecoveryBanner';
 import useUrlParams from '../hooks/useUrlParams';
 import { buildPlotlineGrid, sceneComponentCount } from '../lib/reverseOutlineGrid.js';
+import { pluralize } from '../lib/textUtils';
 
 export default function PipelineReverseOutline() {
   const { seriesId } = useParams();
@@ -65,7 +66,7 @@ export default function PipelineReverseOutline() {
       if (frame.type === 'complete') {
         reloadOutline();
         if (frame.status === 'no-content') toast.warning('Nothing drafted yet — write or import a manuscript first');
-        else toast.success(`Reverse outline ready — ${frame.sceneCount || 0} scenes`);
+        else toast.success(`Reverse outline ready — ${pluralize(frame.sceneCount || 0, 'scene')}`);
       } else if (frame.type === 'canceled') {
         toast.success('Reverse outline canceled');
       } else {

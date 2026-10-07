@@ -12,6 +12,7 @@ import Modal from '../ui/Modal.jsx';
 import AppContextPicker from '../AppContextPicker.jsx';
 import { importSprites } from '../../services/apiSprites.js';
 import { getApps } from '../../services/apiApps.js';
+import { pluralize } from '../../lib/textUtils';
 
 export default function ImportPanel({ onImported }) {
   const [open, setOpen] = useState(false);
@@ -44,7 +45,7 @@ export default function ImportPanel({ onImported }) {
         setImportErrors(results.flatMap((r) => r.errors.map((e) => `${r.id}: ${e}`)));
         toast.error(`Import finished with ${totals.errors} error${totals.errors === 1 ? '' : 's'} — details below`);
       } else {
-        toast.success(`Imported ${totals.subjects} subjects (${totals.files} files, ${totals.verified} hash-verified)`);
+        toast.success(`Imported ${pluralize(totals.subjects, 'subject')} (${pluralize(totals.files, 'file')}, ${totals.verified} hash-verified)`);
         setOpen(false);
       }
       onImported();
