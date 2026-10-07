@@ -3,11 +3,12 @@ import { sunoAdapter } from './suno.js';
 import { markSunoSongMenu } from '../../../lib/sunoPage.js';
 
 const SONG = '12345678-abcd-4abc-8abc-123456789abc';
+const SONG_URL = `https://suno.com/song/${SONG}`;
 const LANDED = '87654321-dcba-4cba-8cba-cba987654321';
 
 // A song page: `marks` is what markSunoSongMenu finds; the Publish dialog
 // opens on the marked button's click and the run stops there.
-const fakePage = ({ url = `https://suno.com/song/${SONG}`, marks = true } = {}) => {
+const fakePage = ({ url = SONG_URL, marks = true } = {}) => {
   const calls = { marked: [], clicked: [] };
   return {
     calls,

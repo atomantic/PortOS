@@ -1,0 +1,17 @@
+{
+  "$schema": "../client/node_modules/@biomejs/biome/configuration_schema.json",
+  "root": true,
+  "files": { "includes": ["**/*.js", "**/*.mjs", "!node_modules", "!native"] },
+  "formatter": { "enabled": false },
+  "assist": { "enabled": false },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "none",
+      "correctness": {
+        "noUndeclaredVariables": "error",
+        "noUnusedVariables": "warn"
+      }
+    }
+  }
+}
