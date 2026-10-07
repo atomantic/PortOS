@@ -100,7 +100,7 @@ async function until(check, label, diagnostics) {
         const details = diagnostics ? `: ${JSON.stringify(await diagnostics())}` : '';
         throw new Error(`timed out waiting for ${label}${details}`);
       }
-      const observed = changes;
+      const _observed = changes;
       const remaining = deadline - Date.now();
       // Wait for event with a small timeout to re-check the condition
       // even if no event fires (e.g., state changed before subscription).

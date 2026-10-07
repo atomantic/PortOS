@@ -7,6 +7,8 @@ afterEach(() => vi.unstubAllGlobals());
 it.each([
   { mode: 'fix', claimBetweenAudits: true, claimHandler: { providerId: 'claude', model: 'sonnet', effort: 'low' } },
   { mode: 'file-issues', claimBetweenAudits: false },
+  { mode: 'fix', prCompletion: 'draft', claimBetweenAudits: false, taskTypes: ['security'], effort: 'medium' },
+  { mode: 'fix', prCompletion: 'inherit', claimBetweenAudits: false, taskTypes: ['security'] },
 ])('sends maintenance choices to the server: %j', async choices => {
   const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 201, json: async () => ({ run: { id: 'example' } }) });
   vi.stubGlobal('fetch', fetchMock);

@@ -344,6 +344,9 @@ function fillReconcileAgentId(task, agentId) {
  *   `{ userPrompt, systemPrompt }` (see `buildLightContextPromptParts`) instead
  *   of a single string, for providers spawned with `--append-system-prompt-file`.
  *   Ignored on the full/api path, which always returns a string.
+ * @param {object} [options.promptTrace] - Out-parameter: the full path sets
+ *   `promptTrace.injectedMemories` to the `[{ id, version, relevance }]` list
+ *   whose text went into the prompt. Untouched on the light path (no memory).
  */
 export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo = null, options = {}) {
   // Undo the queue-path description/context split so a round-tripped generated
@@ -437,9 +440,11 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // Architect doctrine for an orchestrated run (#5992). '' for every direct-mode
   // task, which is the default, so this is inert unless a profile is configured.
   const orchestrationSection = buildOrchestrationDoctrineSection(task);
-  const { memorySection, agentInstructionsSection, digitalTwinSection } = await loadDeveloperContext(
+  const { memorySection, injectedMemories, agentInstructionsSection, digitalTwinSection } = await loadDeveloperContext(
     task, config, workspaceDir, skipDevContext,
   );
+  // Hand the memory lineage to the caller that creates the run record (#10495).
+  if (options.promptTrace) options.promptTrace.injectedMemories = injectedMemories;
 
   // Build context compaction section if task is retrying after a context-limit failure
   const compactionSection = task.metadata?.compaction?.needed ? buildCompactionSection(task) : '';
@@ -649,10 +654,14 @@ function resolveTaskMetadataFlags(task, worktreeInfo) {
 /** Load independent developer context concurrently, unless this is a content-only task. */
 async function loadDeveloperContext(task, config, workspaceDir, skipDevContext) {
   if (skipDevContext) {
-    return { memorySection: null, agentInstructionsSection: null, digitalTwinSection: null };
+    return { memorySection: null, injectedMemories: [], agentInstructionsSection: null, digitalTwinSection: null };
   }
+  let injectedMemories = [];
   const [memorySection, agentInstructionsSection, digitalTwinSection] = await Promise.all([
-    getMemorySection(task, { maxTokens: config.memory?.maxContextTokens || 2000 })
+    getMemorySection(task, {
+      maxTokens: config.memory?.maxContextTokens || 2000,
+      onInjected: (injected) => { injectedMemories = injected; },
+    })
       .catch(err => { console.log(`⚠️ Memory retrieval failed: ${err.message}`); return null; }),
     getAgentInstructionsContext(workspaceDir)
       .catch(err => { console.log(`⚠️ Agent instructions retrieval failed: ${err.message}`); return null; }),
@@ -660,7 +669,7 @@ async function loadDeveloperContext(task, config, workspaceDir, skipDevContext) 
     getDigitalTwinForPrompt({ maxTokens: config.digitalTwin?.maxContextTokens || config.soul?.maxContextTokens || 2000, personaId: 'active' })
       .catch(err => { console.log(`⚠️ Digital twin context retrieval failed: ${err.message}`); return null; }),
   ]);
-  return { memorySection, agentInstructionsSection, digitalTwinSection };
+  return { memorySection, injectedMemories, agentInstructionsSection, digitalTwinSection };
 }
 
 /**
@@ -819,6 +828,7 @@ return `${agentInstructionsSection || ''}
 ${memorySection || ''}
 ${digitalTwinSection ? `\n${digitalTwinSection}\n` : ''}
 
+${task.metadata?.prCompletion === PR_COMPLETIONS.DRAFT ? DRAFT_PR_RULE : ''}
 ${taskBlock.description}
 ${contextBlock ? (contextBlock.includes('\n') ? `\n### Task Context\n\n${contextBlock.trimEnd()}\n` : `\n### Task Context\n\n${contextBlock}\n`) : ''}
 ${taskBlock.targetApp}
@@ -907,6 +917,9 @@ export function buildLightContextPromptParts(task, workspaceDir, worktreeInfo, o
     systemPrompt: contractSections.length ? contractSections.join('\n\n') + '\n' : null,
   };
 }
+
+const DRAFT_PR_RULE = `## Draft pull request delivery
+This run must leave its changes in a DRAFT pull request for human review. This overrides other publication instructions, including repository skills and saved defaults. Use gh pr create --draft or glab mr create --draft when you own PR creation. If a workflow opens a ready PR, convert it to draft before completion. Verify it is still open and draft. Never mark it ready, merge, enable auto-merge, deploy, or publish quality snapshots. If PortOS owns PR creation, commit in the assigned worktree and let PortOS open the draft.`;
 
 const BEGIN_WORKING_LINE = 'Begin working on the task now.';
 
@@ -1028,6 +1041,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
   // actually stalled on an approval gate, and "no human will answer you" is not
   // something the agent can infer from AGENTS.md or its cwd.
   contractSections.push(UNATTENDED_RUN_RULE);
+  if (task.metadata?.prCompletion === PR_COMPLETIONS.DRAFT) contractSections.push(DRAFT_PR_RULE);
   if (isUiAuditTask(task)) contractSections.push(UI_AUDIT_RUNTIME_RULE);
 
   // --- Issue filing labels and planner attribution --------------------------

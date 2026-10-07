@@ -21,6 +21,7 @@ import { PATHS } from '../../lib/paths.js';
 import { atomicWrite } from '../../lib/fileUtils.js';
 import { getCodeAnimationJobRecord, isCodeAnimationJobId, readCodeAnimationHtml } from './jobStore.js';
 import { CODE_ANIMATION_SONG_GLOBAL } from './prompt.js';
+import { importsThree, injectThreeImportMap, threeStagedFiles } from './threeVendor.js';
 
 // The frames the composition renderer accepts (htmlCompositionContractSchema).
 export const EXPORT_FRAME_SIZES = Object.freeze(['1920x1080', '1080x1920', '1080x1080', '1280x720']);
@@ -155,7 +156,14 @@ async function startAdmittedExport(id, deps) {
   const dir = join(PATHS.data, directory);
   await sweepStaleStagings(join(PATHS.data, EXPORT_DIRECTORY_ROOT, id));
   await mkdir(dir, { recursive: true });
-  await atomicWrite(join(dir, 'index.html'), injectExportShim(html, buildExportShim({ song })));
+  // A three.js film imports `three` by bare name; the host's import map plus the
+  // hashed vendored modules beside it are the only code the render may load.
+  const three = importsThree(html);
+  const page = three ? injectThreeImportMap(html) : html;
+  await atomicWrite(join(dir, 'index.html'), injectExportShim(page, buildExportShim({ song })));
+  if (three) {
+    for (const { rel, data } of await threeStagedFiles()) await atomicWrite(join(dir, rel), data);
+  }
   const queued = await enqueueJob({ kind: 'html-composition', params: { directory, ...(musicTrack ? { musicTrack } : {}) } });
   console.log(`🎬 Code animation ${id.slice(0, 8)} frame-exact export queued as ${queued.jobId}`);
   return { ...queued, notes };

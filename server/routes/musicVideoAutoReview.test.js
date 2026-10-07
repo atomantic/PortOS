@@ -65,9 +65,6 @@ vi.mock('../lib/processEnv.js', async (importOriginal) => ({
 }));
 vi.mock('../lib/ffmpeg.js', async (importOriginal) => {
   const real = await importOriginal();
-  const { writeFileSync: write, mkdirSync: mkdir } = await import('fs');
-  const { join: joinPath } = await import('path');
-  const { PATHS } = await import('../lib/fileUtils.js');
   return {
     ...real,
     findFfmpeg: vi.fn(async () => (h.analysisAvailable ? 'ffmpeg' : null)),
@@ -280,7 +277,9 @@ describe('opt-in automatic review/retries (#8988)', () => {
     const runId = run(current).id;
     const reviewed = run(current).attempts[0].review;
     // The server submits the flagged section before the director pauses.
-    await vi.waitFor(() => expect(h.jobs).toHaveLength(1), { timeout: 5000, interval: 20 });
+    // Compare the jobs' identity (not just the count) so a flake that enqueues a
+    // second job prints which section it was for, instead of a collapsed array (#10467).
+    await vi.waitFor(() => expect(h.jobs.map((j) => ({ id: j.id, kind: j.kind, sceneId: j.params.musicVideo.sceneId }))).toEqual([{ id: 'job-1', kind: 'video', sceneId: 's2' }]), { timeout: 5000, interval: 20 });
 
     expect((await request(app).post(`${base(p.id)}/auto-reviews/${runId}/stop`)).body.run.status).toBe('stopped');
     // The take the board already paid for still lands — but a stopped run

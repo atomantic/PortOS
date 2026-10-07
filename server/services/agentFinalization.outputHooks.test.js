@@ -126,6 +126,17 @@ describe('recovery output-hook dispatch (#3182)', () => {
   // Landing the app's `.quality.json` PR is opt-in and runs outside the request
   // lifecycle, so it must never fire for an un-opted app nor fail a completion.
   // Each dispatch needs its own agent id — dispatchTaskOutputHookOnce caches by id.
+  it.each(['draft', 'leave-open'])('retains measurements without publishing snapshots for %s, on completion', async prCompletion => {
+    const task = { ...TASK, metadata: { ...TASK.metadata, analysisType: 'security', prCompletion } };
+    appsRegistry.getAppById.mockResolvedValue({ id: 'app-example', repoPath: '/repo', publishQualitySnapshot: true });
+    snapshotFile.publishAppQualitySnapshot.mockClear();
+    await dispatchTaskOutputHookOnce({ agentId: `review-only-${prCompletion}`, task, success: true, workspacePath: '/worktree' });
+    expect(recordAuditQuality).toHaveBeenCalledWith(expect.objectContaining({ task, success: true }));
+    expect(snapshotFile.publishAppQualitySnapshot).not.toHaveBeenCalled();
+    await dispatchRecoveredTaskOutputHook({ agentId: persistedAgent.id, task, success: true });
+    expect(snapshotFile.publishAppQualitySnapshot).not.toHaveBeenCalled();
+  });
+
   it('commits a repo snapshot only for an opted-in app that just recorded a measurement', async () => {
     const task = { ...TASK, metadata: { ...TASK.metadata, analysisType: 'better-complexity' } };
     let run = 0;

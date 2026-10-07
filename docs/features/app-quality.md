@@ -194,7 +194,7 @@ the auditing agent read the repository, so its ruling wins until it ages out
 (a repository that later gains a UI gets its UI audits back). Otherwise applicability comes from the shapes
 present in the tracked files (`git ls-files`): the UI lenses (UX, accessibility,
 mobile/responsive, UI bugs, console errors, UI lifecycle, copy) need a user
-interface or a configured UI port, typing needs TypeScript sources, dependency
+interface or a configured UI port, typing needs typed-language sources (including native Swift, TypeScript, Rust, Go, Java, Kotlin, C#, C/C++, Scala, Dart, and F#), dependency
 freedom needs a dependency manifest, test quality needs existing tests, and API
 contracts need a route/API surface, and infrastructure needs IaC, container,
 deployment, process-manager, or CI configuration. Test **coverage** is deliberately never gated

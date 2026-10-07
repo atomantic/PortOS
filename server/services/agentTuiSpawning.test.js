@@ -1263,7 +1263,7 @@ describe('spawnTuiAgent runtime', () => {
     // raw.txt tail surfaced in the error.
     vi.mocked(readFile).mockResolvedValue('Error: claude exited at startup\n');
 
-    const spawnPromise = runSpawn();
+    const _spawnPromise = runSpawn();
     await flushMicrotasks();
 
     await capturedOnData(Buffer.from('booting...\n' + CODEX_COMPOSER));

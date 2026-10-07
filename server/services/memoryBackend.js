@@ -215,9 +215,9 @@ export async function getMemoryIdsMissingEmbedding() {
   return b.getMemoryIdsMissingEmbedding();
 }
 
-export async function linkMemories(sourceId, targetId) {
+export async function linkMemories(sourceId, targetId, options) {
   const b = await getBackend();
-  return b.linkMemories(sourceId, targetId);
+  return b.linkMemories(sourceId, targetId, options);
 }
 
 export async function consolidateMemories(threshold, dryRun) {

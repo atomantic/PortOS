@@ -109,7 +109,7 @@ export async function deriveFromManuscript(seriesId, { providerOverride, modelOv
       ERR_VALIDATION,
     );
   }
-  const { arc, seasons, raw, runId, providerId, model } = await generateArcFromSource(seriesId, {
+  const { arc, seasons, runId, providerId, model } = await generateArcFromSource(seriesId, {
     sourceText, providerOverride, modelOverride,
   });
   const issues = (await listIssues({ seriesId })).sort(compareIssuesInSeries);

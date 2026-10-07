@@ -39,9 +39,9 @@ vi.mock('./agentRepoStateVerification.js', () => ({
   verifyAgentRepoState: vi.fn().mockResolvedValue({ verified: true, issues: [] }),
 }));
 
-import { cleanupAgentWorktree } from './agentWorktreeCleanup.js';
+import { cleanupAgentWorktree, spawnMergeRecoveryTask } from './agentWorktreeCleanup.js';
 import { verifyAgentRepoState } from './agentRepoStateVerification.js';
-import { getAgent, getAgentRecord } from './cos.js';
+import { getAgent, getAgentRecord, addTask } from './cos.js';
 import { removeWorktree } from './worktreeManager.js';
 
 const worktreeAgent = {
@@ -167,4 +167,11 @@ describe('cleanupAgentWorktree → repo-state audit', () => {
     expect(verifyAgentRepoState.mock.calls[0][0].cleanupWarnings)
       .toEqual(['Worktree preserved — uncommitted changes detected']);
   });
+});
+
+it.each(['draft', 'leave-open'])('does not queue unrestricted recovery for %s delivery', async prCompletion => {
+  for (const warning of ['PR creation failed for branch topic: unavailable', 'Auto-merge failed for branch topic']) {
+    await spawnMergeRecoveryTask([warning], 'a1', { metadata: { prCompletion } }, 'App', '/repo');
+  }
+  expect(addTask).not.toHaveBeenCalled();
 });

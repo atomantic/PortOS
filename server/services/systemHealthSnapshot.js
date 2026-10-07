@@ -392,7 +392,7 @@ export async function getSystemHealthSnapshot() {
   const uptime = process.uptime();
   const uptimeFormatted = formatDuration(uptime * 1000);
 
-  const responseTime = Date.now() - startTime;
+  const _responseTime = Date.now() - startTime;
 
   return {
     timestamp: new Date().toISOString(),

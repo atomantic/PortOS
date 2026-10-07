@@ -81,7 +81,6 @@ export function analyzeEpisodeContinuity({
 
   const {
     orderedNodes,
-    depthById,
     predecessorsByNodeId,
     convergenceNodeIds,
     unreachableNodeIds,

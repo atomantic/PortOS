@@ -112,7 +112,7 @@ export async function execGlabJson(args, cwd, timeoutMs = DEFAULT_EXEC_GLAB_TIME
  * @param {string} cwd - repo root (glab resolves the project from its cwd)
  * @returns {Promise<{ status: 'found'|'none'|'unavailable', number: number|null, url: string|null, body: string|null, detail: string|null }>}
  */
-export async function findMergeRequestForBranch(branch, cwd) {
+export async function findMergeRequestForBranch(branch, cwd, { includeDraft = false } = {}) {
   if (!branch || !cwd) return { status: 'unavailable', number: null, url: null, detail: 'no branch or repo path' };
   const { rows, reason } = await execGlabJson(['mr', 'list', '--source-branch', branch, '--all', '-P', '1'], cwd);
   // Both failure modes are "we could not ask" here — a zero-exit glab that
@@ -123,7 +123,7 @@ export async function findMergeRequestForBranch(branch, cwd) {
   }
   const mr = rows[0];
   if (!mr) return { status: 'none', number: null, url: null, detail: null };
-  return { status: 'found', number: mr.iid ?? null, url: mr.web_url || null, body: typeof mr.description === 'string' ? mr.description : null, detail: mr.state || null };
+  return { status: 'found', number: mr.iid ?? null, url: mr.web_url || null, body: typeof mr.description === 'string' ? mr.description : null, detail: mr.state || null, ...(includeDraft ? { isDraft: mr.draft === true || mr.work_in_progress === true } : {}) };
 }
 
 /**

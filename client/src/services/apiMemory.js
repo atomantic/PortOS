@@ -16,6 +16,7 @@ export const getMemories = (options = {}) => {
   return request(`/memory?${params}`);
 };
 export const getMemory = (id) => request(`/memory/${id}`);
+export const getMemoryRuns = (id, options) => request(`/memory/${id}/runs`, options);
 export const updateMemory = (id, data, options = {}) => request(`/memory/${id}`, {
   method: 'PUT',
   body: JSON.stringify(data),

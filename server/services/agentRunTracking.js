@@ -26,8 +26,11 @@ const RUNS_DIR = PATHS.runs;
  * @param {{ id: string, name: string, defaultModel?: string }} options.provider
  * @param {string} options.workspacePath
  * @param {string} [options.appName] - Defaults to 'portos'.
+ * @param {Array<{ id: string, version: number|null, relevance: number|null }>} [options.injectedMemories]
+ *   The memories whose text went into the prompt. Always stored (empty list
+ *   when none) so a missing field only ever means a pre-upgrade record.
  */
-export async function createAgentRun({ agentId, task, model, provider, workspacePath, appName }) {
+export async function createAgentRun({ agentId, task, model, provider, workspacePath, appName, injectedMemories }) {
   const runId = uuidv4();
   const runDir = join(RUNS_DIR, runId);
 
@@ -50,6 +53,7 @@ export async function createAgentRun({ agentId, task, model, provider, workspace
     // Full prompt size (chars) for input-token estimation on completion —
     // `prompt` above is truncated for display.
     promptLength: (task.description || '').length,
+    injectedMemories: Array.isArray(injectedMemories) ? injectedMemories : [],
     startTime: new Date().toISOString(),
     endTime: null,
     duration: null,

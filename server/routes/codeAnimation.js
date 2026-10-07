@@ -3,6 +3,7 @@
  * animation film (and optionally run it to get the HTML).
  *
  *   GET  /api/code-animation/options        formats, limits, host contract
+ *   GET  /api/code-animation/vendor/three   the vendored three.js modules the preview inlines
  *   POST /api/code-animation/brief          write a brief from the universe → { brief }
  *   POST /api/code-animation/prompt         resolve configurations → { prompt, attachments, frame }
  *   POST /api/code-animation/generate       start a provider run → 202 job
@@ -40,6 +41,7 @@ import {
 import { startCodeAnimationExport } from '../services/codeAnimation/export.js';
 import { getBlenderStarterPackage } from '../services/codeAnimation/blenderStarter.js';
 import { exportCodeAnimationPackage } from '../services/codeAnimation/package.js';
+import { readThreeVendor } from '../services/codeAnimation/threeVendor.js';
 import { codeAnimationPackageSchema, summarizeCodeAnimationPackage } from '../lib/codeAnimationPackage.js';
 import { codeAnimationProjectSchema, codeAnimationProjectPatchSchema, codeAnimationStageRunSchema } from '../lib/codeAnimationProjects.js';
 import { acceptProductionOutput, getProductionAcceptance, listAcceptedAssets } from '../services/codeAnimation/acceptance.js';
@@ -157,6 +159,15 @@ const briefIdeaSchema = z.object({
 router.get('/options', (_req, res) => {
   res.json(getCodeAnimationOptions());
 });
+
+// The preview iframe has an opaque origin, so it cannot fetch these itself: the
+// client reads them once here and inlines them. Fixed for the installed three
+// version, hence cacheable.
+router.get('/vendor/three', asyncHandler(async (_req, res) => {
+  const { version, files } = await readThreeVendor();
+  res.set('Cache-Control', 'private, max-age=86400');
+  res.json({ version, files: files.filter(({ path }) => path.endsWith('.js')).map(({ path, data, sha256 }) => ({ path, sha256, text: data.toString('utf8') })) });
+}));
 
 router.post('/brief', asyncHandler(async (req, res) => {
   res.json(await generateCodeAnimationBrief(validateRequest(briefIdeaSchema, req.body ?? {})));

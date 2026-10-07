@@ -61,7 +61,7 @@ describe.skipIf(!runDb)('privacy opt-out engine DB round-trip', () => {
     await query(`DELETE FROM privacy_broker_cases`).catch(() => {});
     // A web-form broker + an email broker, inserted directly (auto source so the
     // curated seed idempotency is untouched).
-    for (const [id, name, optout, antibot] of [
+    for (const [id, name, optout, _antibot] of [
       [brokerId, 'Test OptOut Broker', { method: 'web_form', url: 'https://test-optout.example/optout', playbook: ['step 1'] }, false],
       [emailBrokerId, 'Test OptOut Email', { method: 'email', email: 'privacy@test-optout.example', url: 'https://test-optout.example' }, false],
     ]) {

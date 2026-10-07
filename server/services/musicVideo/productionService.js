@@ -642,15 +642,23 @@ export async function startProduction(projectId, { directive, pool: requested, l
 
 /**
  * Resume a run: settle its steps against the queue, re-pin it to this process
- * (optionally raising limits / accepting a changed creative setup), resume its
- * paused review, and continue. Returns `{ project, run }`.
+ * (optionally raising limits / accepting a changed creative setup / replacing
+ * its pool, e.g. a refused video model, #10473), resume its paused review, and
+ * continue. A replacement pool is validated exactly like Start's.
+ * Returns `{ project, run }`.
  */
-export async function resumeProduction(projectId, runId, { limits, acceptBasis = false } = {}) {
+export async function resumeProduction(projectId, runId, { limits, acceptBasis = false, pool: requested } = {}) {
   const before = await requireProject(projectId);
-  const priorReviewId = findProductionRun(before, runId).reviewRunId;
+  const prior = findProductionRun(before, runId);
+  const priorReviewId = prior.reviewRunId;
+  const pool = requested ? normalizeProductionPool(requested, { allowEmpty: !!prior.authoring }) : null;
+  if (pool) await assertPoolEligible(pool, await deps.loadEnv());
   const jobs = await liveJobs();
   await mutateProjectRecord(projectId, (current) => reconcileProductionSteps(current, runId, jobs));
-  const out = await mutateProjectRecord(projectId, (current) => resumeProductionOnProject(current, runId, { limits, acceptBasis, processId: PROCESS_ID }));
+  const out = await mutateProjectRecord(projectId, (current) => resumeProductionOnProject(current, runId, {
+    limits, acceptBasis, processId: PROCESS_ID, ...(pool ? { pool, pricing: poolPricing(pool, current) } : {}),
+  }));
+  if (pool) console.log(`🎬 Music Video production ${short(runId)} resumed with a replaced pool: ${pool.length} allowed route(s)`);
   if (priorReviewId && !out.run.reviewRunId) {
     const oldReview = before.autoReviews?.find((entry) => entry.id === priorReviewId);
     if (oldReview && ['running', 'stopped', 'limit-reached'].includes(oldReview.status)) await (await deps.autoReview()).cancelAutoReview(projectId, priorReviewId);

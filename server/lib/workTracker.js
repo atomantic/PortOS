@@ -298,7 +298,7 @@ function metricLabelNoun(count) {
 export function formatTrackerInstructions(tracker, options = {}) {
   const referenceWatchPreset = TRACKER_FILING_PRESETS['reference-watch'];
   const {
-    slugPrefix, label, issueLabel, labelDescription,
+    slugPrefix, issueLabel, labelDescription,
     extraLabels = [],
     planItemBody, bodyRequirements, planCommitMessage,
   } = { ...referenceWatchPreset, ...options };

@@ -58,6 +58,24 @@ describe('audit applicability gate', () => {
     expect((await resolveAuditApplicability(app, 'infrastructure')).applicable).toBe(false);
   });
 
+  it('offers and schedules typing for native Swift in a JavaScript app without pretending it has TypeScript', async () => {
+    const app = appWith([...NODE_SERVICE, 'server/native/facetime-ax/main.swift']);
+    const resolved = await resolveQualityChecks(app);
+    expect(resolved.capabilities).toMatchObject({ typed: true, typescript: false });
+    expect(resolved.checks.find(check => check.taskType === 'typing').applicable).toBe(true);
+    expect(await resolveAuditApplicability(app, 'typing')).toEqual({ applicable: true, reason: null });
+    const plan = await buildQualitySchedulePlan(app);
+    expect(plan.plan.slots.some(slot => slot.taskType === 'typing')).toBe(true);
+  });
+
+  it('recognizes typed source across supported stacks but ignores vendored and built artifacts', async () => {
+    for (const path of ['src/index.ts', 'src/lib.rs', 'main.go', 'src/App.java', 'src/App.kt', 'App.cs', 'main.cpp', 'main.c', 'main.scala', 'lib/main.dart', 'Program.fs']) {
+      expect((await resolveAuditApplicability(appWith([path]), 'typing')).applicable, path).toBe(true);
+    }
+    const app = appWith([...NODE_SERVICE, 'vendor/Library.swift', 'build/generated.ts', 'docs/Swift.md']);
+    expect(await resolveAuditApplicability(app, 'typing')).toEqual({ applicable: false, reason: 'no supported typed-language sources found in this repository' });
+  });
+
   it('recognizes deployment configuration as infrastructure', async () => {
     for (const file of ['infra/main.tf', 'Dockerfile', 'deploy/values.yaml', '.github/workflows/ci.yml', 'ecosystem.config.cjs', 'charts/api/Chart.yaml']) {
       const { capabilities } = await detectRepoCapabilities(appWith(['package.json', file]));

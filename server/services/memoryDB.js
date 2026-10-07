@@ -14,6 +14,7 @@ import { cosEvents } from './cosEvents.js';
 import * as notifications from './notifications.js';
 import { DEFAULT_MEMORY_CONFIG, generateSummary, decrementAgentPendingApproval } from './memoryConfig.js';
 import { getInstanceId } from './instanceIdentity.js';
+import { DEFAULT_MEMORY_LINK_TYPE, isSymmetricMemoryLinkType } from '../lib/memoryLinkTypes.js';
 
 const protectedMindMemoryTags = Object.values(PERSISTENT_MIND_MEMORY_PROTECTION_TAGS);
 
@@ -741,15 +742,31 @@ export async function getRelatedMemories(id, limit = 10) {
   const related = [];
 
   // Get explicitly linked memories
+  // Symmetric links are stored as a reverse pair, so the outgoing row covers
+  // them; a directed link is one row, so also read the ones pointing AT this
+  // memory (direction 'incoming') or "B supersedes A" would be invisible from A.
   const links = await query(`
-    SELECT m.id, m.type, m.category, m.tags, m.summary, m.importance, m.created_at, m.status, m.source_app_id
+    SELECT m.id, m.type, m.category, m.tags, m.summary, m.importance, m.created_at, m.status, m.source_app_id,
+           ml.id AS link_id, ml.link_type, ml.note, ml.created_by,
+           CASE WHEN ml.source_id = $1 THEN 'outgoing' ELSE 'incoming' END AS direction
     FROM memory_links ml
-    JOIN memories m ON m.id = ml.target_id
-    WHERE ml.source_id = $1 AND m.status = 'active'
+    JOIN memories m ON m.id = CASE WHEN ml.source_id = $1 THEN ml.target_id ELSE ml.source_id END
+    WHERE (ml.source_id = $1 OR (ml.target_id = $1 AND ml.link_type <> 'related'))
+      AND m.status = 'active'
+    ORDER BY ml.created_at
   `, [id]);
 
   for (const row of links.rows) {
-    related.push({ ...rowToMeta(row), relationship: 'linked', similarity: 1.0 });
+    related.push({
+      ...rowToMeta(row),
+      relationship: 'linked',
+      similarity: 1.0,
+      linkId: row.link_id,
+      linkType: row.link_type,
+      direction: row.direction,
+      note: row.note,
+      createdBy: row.created_by
+    });
   }
 
   // Get similar by embedding
@@ -803,18 +820,21 @@ export async function getGraphData() {
     }));
 
     // Build edges from explicit links
+    // A symmetric 'related' pair is stored twice; keep one row per pair. Directed
+    // types are one row each and keep their source -> target orientation.
     const linksResult = await client.query(`
-      SELECT DISTINCT ON (LEAST(source_id, target_id), GREATEST(source_id, target_id))
-        source_id AS source, target_id AS target
+      SELECT ml.source_id AS source, ml.target_id AS target, ml.link_type
       FROM memory_links ml
       JOIN memories ms ON ms.id = ml.source_id AND ms.status = 'active'
       JOIN memories mt ON mt.id = ml.target_id AND mt.status = 'active'
+      WHERE ml.link_type <> 'related' OR ml.source_id < ml.target_id
     `);
 
     const edges = linksResult.rows.map(r => ({
       source: r.source,
       target: r.target,
       type: 'linked',
+      linkType: r.link_type,
       weight: 1.0
     }));
 
@@ -880,7 +900,7 @@ export async function getMemoryIdsMissingEmbedding() {
 /**
  * Link two memories
  */
-export async function linkMemories(sourceId, targetId) {
+export async function linkMemories(sourceId, targetId, { linkType = DEFAULT_MEMORY_LINK_TYPE, note = null, createdBy = 'user' } = {}) {
   // Verify both exist
   const check = await query(
     'SELECT id FROM memories WHERE id = ANY($1)',
@@ -888,14 +908,21 @@ export async function linkMemories(sourceId, targetId) {
   );
   if (check.rows.length < 2) return { success: false, error: 'Memory not found' };
 
-  // Insert bidirectional links
+  // Only the symmetric 'related' type gets a reverse row; a directed type is one row.
+  const values = isSymmetricMemoryLinkType(linkType)
+    ? '($1, $2, $3, $4, $5), ($2, $1, $3, $4, $5)'
+    : '($1, $2, $3, $4, $5)';
   await query(
-    `INSERT INTO memory_links (source_id, target_id) VALUES ($1, $2), ($2, $1)
+    `INSERT INTO memory_links (source_id, target_id, link_type, note, created_by) VALUES ${values}
      ON CONFLICT DO NOTHING`,
-    [sourceId, targetId]
+    [sourceId, targetId, linkType, note, createdBy]
   );
 
-  return { success: true, sourceId, targetId };
+  const stored = await query(
+    'SELECT id FROM memory_links WHERE source_id = $1 AND target_id = $2 AND link_type = $3',
+    [sourceId, targetId, linkType]
+  );
+  return { success: true, sourceId, targetId, linkType, linkId: stored.rows[0]?.id ?? null };
 }
 
 // =============================================================================

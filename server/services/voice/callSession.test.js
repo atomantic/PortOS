@@ -216,6 +216,54 @@ describe('FaceTime call session', () => {
     );
   });
 
+  it.each(['state-unconfirmed', 'action-failed'])('ends the app session but preserves an uncertain physical disconnect (%s)', async code => {
+    vi.useFakeTimers();
+    attachHost(socket());
+    await startCall({ origin: 'mind' });
+    recordTurn('caller', 'Goodbye');
+    hangup.mockRejectedValue(Object.assign(new Error('native action failed'), { code }));
+    const outcome = code === 'state-unconfirmed' ? 'unconfirmed' : 'failed';
+    const state = await endCall('user-hangup');
+    expect(state).toMatchObject({ state: 'idle', active: false, turns: 0, physicalDisconnect: outcome });
+    expect(getCallState()).toMatchObject({ physicalDisconnect: outcome });
+    expect(appendJournal).toHaveBeenCalledTimes(1);
+    expect(addNotification).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Check FaceTime to confirm the call disconnected',
+      metadata: { source: 'voice-facetime-disconnect', outcome },
+    }));
+    expect(enqueueMindMessage.mock.calls[0][0]).toContain(`FaceTime disconnect ${outcome}`);
+    expect(enqueueMindMessage.mock.calls[0][0]).toContain('PortOS session ended');
+    const calls = probe.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(PROBE_INTERVAL_MS * 2);
+    expect(probe).toHaveBeenCalledTimes(calls);
+    // Ending an already-ended session neither retries AX nor duplicates records.
+    await endCall();
+    expect(hangup).toHaveBeenCalledTimes(1);
+    expect(appendJournal).toHaveBeenCalledTimes(1);
+    hangup.mockResolvedValue({ state: 'ended' });
+    await startCall();
+    expect(getCallState().physicalDisconnect).toBeNull();
+    expect(await endCall()).toMatchObject({ physicalDisconnect: 'confirmed', active: false });
+  });
+
+  it('uses an observed remote disconnect without pressing a vanished hangup control', async () => {
+    attachHost(socket());
+    await startCall({ origin: 'mind' });
+    probe.mockResolvedValue({ state: 'idle' });
+    expect(await pollCall()).toMatchObject({ active: false, physicalDisconnect: 'confirmed' });
+    expect(hangup).not.toHaveBeenCalled();
+    expect(addNotification).not.toHaveBeenCalled();
+    expect(enqueueMindMessage.mock.calls[0][0]).toContain('FaceTime disconnect confirmed');
+  });
+
+  it('finishes teardown even when the disconnect warning cannot be persisted', async () => {
+    attachHost(socket());
+    await startCall();
+    hangup.mockRejectedValue(Object.assign(new Error('unknown state'), { code: 'state-unconfirmed' }));
+    addNotification.mockRejectedValueOnce(new Error('notification store unavailable'));
+    expect(await endCall()).toMatchObject({ state: 'idle', active: false, physicalDisconnect: 'unconfirmed' });
+  });
+
   it('writes nothing for a call where no one said anything', async () => {
     attachHost(socket());
     await startCall();

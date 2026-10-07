@@ -235,6 +235,7 @@ export * from './terminalFit.js';
 export * from './terminalScroll.js';
 export * from './terminalTheme.js';
 export * from './textUtils.js';
+export * from './threeVendorImportMap.js';
 export * from './threadRefKinds.js';
 export * from './brainThreads.js';
 export * from './threejsAnimation.js';

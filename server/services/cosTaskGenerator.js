@@ -59,7 +59,7 @@ import { isRecoveryTask } from './recoveryTasks.js';
 import { getCodeReviewDefaults } from './codeReview.js';
 import { getSkipReason } from './cosTaskClaim.js';
 import { ensureInstanceId } from './instanceIdentity.js';
-import { PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
+import { PR_COMPLETIONS, PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
 import { resolveTrackerFilingBlock } from '../lib/workTracker.js';
 import {
   isAuditTaskType,
@@ -1666,6 +1666,9 @@ function initializePipelineMetadata(metadata) {
   const stageReadOnly = stage0.readOnly ?? false;
   for (const flag of PIPELINE_STAGE_BEHAVIOR_FLAGS) {
     if (metadata[flag] !== undefined) metadata.pipeline.taskDefaults[flag] = metadata[flag];
+    // Draft delivery constrains the whole run, including read-only stages whose
+    // audit output could otherwise publish an automatically merged snapshot.
+    if (flag === 'prCompletion' && metadata.pipeline.taskDefaults.prCompletion === PR_COMPLETIONS.DRAFT) continue;
     if (flag in stage0) {
       metadata[flag] = stage0[flag];
     } else if (stageReadOnly) {
