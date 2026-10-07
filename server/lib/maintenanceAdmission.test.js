@@ -19,6 +19,32 @@ const gate = () => {
 afterEach(() => { vi.useRealTimers(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe('durable graceful maintenance', () => {
+  it('binds operator publication reconciliation to the exact hold and owner and publishes before retirement', async () => {
+    const { root, admission } = gate();
+    const owner = admission.admit('settlement', 'Output publication');
+    owner.markUnsettled();
+    const other = admission.admit('agent', 'unrelated');
+    const hold = admission.begin({ reason: 'Inspect refused publication', owner: 'Operator' }).hold;
+    const expected = JSON.parse(fs.readFileSync(join(root, 'workflow-maintenance', 'state.json'))).operations.find(op => op.id === owner.id);
+    let receipt;
+    const publish = vi.fn(() => {
+      expect(JSON.parse(fs.readFileSync(join(root, 'workflow-maintenance', 'state.json'))).operations)
+        .toContainEqual(expect.objectContaining({ id: owner.id, kind: 'settlement' }));
+      receipt ??= { operation: expected, disposition: 'operator-reconciled' };
+      return receipt;
+    });
+    const replay = vi.fn(() => receipt);
+    expect(() => admission.reconcilePublicationRefusal({ hold: { ...hold, revision: hold.revision + 1 }, expected, publish, replay })).toThrow('hold changed');
+    expect(() => admission.reconcilePublicationRefusal({ hold, expected: { ...expected, uncertaintyStamp: 'changed' }, publish, replay })).toThrow('reservation changed');
+    expect(publish).not.toHaveBeenCalled();
+    expect(admission.reconcilePublicationRefusal({ hold, expected, publish, replay })).toBe(receipt);
+    expect(admission.status()).toMatchObject({ hold, blockers: [{ resource: 'unrelated' }] });
+    expect(admission.reconcilePublicationRefusal({ hold, expected, publish, replay })).toBe(receipt);
+    expect(publish).toHaveBeenCalledOnce();
+    expect(replay).toHaveBeenCalledOnce();
+    await other.finish();
+  });
+
   it('mints completion only when trusted recovery reuses an existing operation', () => {
     const { admission } = gate();
     expect(admission.admit('media', 'new')).not.toHaveProperty('completeRecovery');

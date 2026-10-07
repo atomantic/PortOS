@@ -163,6 +163,23 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
       return true;
     });
   };
+  // Local owning-service recovery after explicit operator disposition of a
+  // legacy pre-admission refusal. The service must preserve inspected evidence
+  // in publish(), durably and replayably, before this exact owner is retired.
+  const reconcilePublicationRefusal = ({ hold, expected, publish, replay }) => transaction(state => {
+    if (!hold || state.hold?.id !== hold.id || state.hold?.revision !== hold.revision || state.exclusive)
+      throw error('MAINTENANCE_STALE', 'The maintenance hold changed.');
+    if (expected?.kind !== 'settlement' || expected.resource !== 'Output publication'
+      || expected.unsettled !== true || !expected.uncertaintyStamp)
+      throw error('MAINTENANCE_STALE', 'An exact uncertain publication reservation is required.');
+    const index = state.operations.findIndex(op => op.id === expected.id);
+    if (index < 0) return replay();
+    if (JSON.stringify(state.operations[index]) !== JSON.stringify(expected))
+      throw error('MAINTENANCE_STALE', 'The publication reservation changed.');
+    const receipt = publish();
+    state.operations.splice(index, 1);
+    return receipt;
+  });
   const permitFor = (id, recovery) => ({
     id,
     run: fn => context.run(id, fn),
@@ -227,11 +244,22 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     const id = currentId();
     if (id) markUnsettled(op => op.id === id);
   };
-  const continueSettlement = fn => currentId() ? run('settlement', 'Output publication', fn, { continuation: true }) : fn();
+  // A publication boundary may prove its callback never started. Keep the
+  // reservation while it waits, but do not mistake refused admission for an
+  // uncertain write. Callers without that proof retain the conservative default.
+  const continueSettlement = (fn, { hasStarted } = {}) => currentId()
+    ? run('settlement', 'Output publication', fn, { continuation: true, hasStarted }) : fn();
   const run = async (kind, resource, fn, options) => {
     const permit = admit(kind, resource, options);
     try { return await permit.run(fn); }
-    catch (err) { if (kind === 'settlement') permit.markUnsettled(); throw err; }
+    catch (err) {
+      if (kind === 'settlement') {
+        let started = true;
+        try { started = options?.hasStarted?.() !== false; } catch { /* Missing proof remains uncertain. */ }
+        if (started) permit.markUnsettled();
+      }
+      throw err;
+    }
     finally { await permit.finish(); }
   };
   const begin = ({ reason, owner }) => {
@@ -270,7 +298,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     return receipt;
   });
   const { observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability } = exclusive;
-  return { directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
+  return { directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, reconcilePublicationRefusal, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
     observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability, reconcileAbandonedAgent };
 }
 
