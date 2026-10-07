@@ -230,9 +230,9 @@ function batchSectionIds(ids, promptFor, budget) {
 }
 
 // The requested section functions a response carries (possibly fewer than asked for). With
-// `lenient`, a section that fails its source check is left out (to be retried) instead of
-// failing the whole answer.
-function returnedSections(text, ids, { lenient = false } = {}) {
+// `lenient`, a section that fails its source check is left out (with its reason in
+// `rejected`, to be retried) instead of failing the whole answer.
+function returnedSections(text, ids, { lenient = false, rejected = null } = {}) {
   const wanted = new Set(ids);
   const accepted = new Map();
   for (const entry of extractCodeSections(text)) {
@@ -241,6 +241,7 @@ function returnedSections(text, ids, { lenient = false } = {}) {
       accepted.set(entry.id, checkedFunction(entry.source));
     } catch (err) {
       if (!lenient) throw err;
+      rejected?.set(entry.id, err.message);
       console.warn(`⚠️ Music-video document: section ${entry.id} failed its source check (${err.message}); retrying it on its own`);
     }
   }
@@ -337,23 +338,29 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
     ? batchSectionIds(ids, (batchIds) => withFeedback(promptFor(batchIds)), promptBudgetChars) : null;
   const updated = new Map();
   let run;
+  // Keep what an answer got right, then ask once more for each missing or rejected section
+  // on its own, telling the model why (a local model often drops a section, breaks the JSON
+  // of a multi-section answer, or reaches for Math.random despite the rules).
+  const takeAnswer = async (askedIds) => {
+    const rejected = new Map();
+    const returned = returnedSections(run.text, askedIds, { lenient: true, rejected });
+    for (const [id, source] of returned) updated.set(id, source);
+    for (const id of askedIds.filter((sectionId) => !returned.has(sectionId))) {
+      const reason = rejected.get(id) || 'it was missing from the answer or its JSON did not parse';
+      console.log(`🎬 Music-video document: re-authoring section ${id} on its own (${reason})`);
+      run = await runBatch(`${withFeedback(promptFor([id]))}\n\nYour previous answer for section ${JSON.stringify(id)} was rejected: ${reason}. Return that one section again, corrected, keeping every determinism rule above.`);
+      for (const [sectionId, source] of acceptedSections(run.text, [id])) updated.set(sectionId, source);
+    }
+  };
   if (batches) {
     console.log(`🎬 Music-video document prompt is ${fullPrompt.length} chars; authoring ${ids.length} sections in ${batches.length} batches on a local model`);
     for (const batch of batches) {
       run = await runBatch(withFeedback(promptFor(batch)));
-      const returned = returnedSections(run.text, batch, { lenient: true });
-      for (const [id, source] of returned) updated.set(id, source);
-      // A local model often drops a section, breaks the JSON of a multi-section answer or
-      // writes one section that fails its check: ask once more for each on its own.
-      for (const id of batch.filter((sectionId) => !returned.has(sectionId))) {
-        console.log(`🎬 Music-video document: re-authoring section ${id} on its own (missing from its batch)`);
-        run = await runBatch(withFeedback(promptFor([id])));
-        for (const [sectionId, source] of acceptedSections(run.text, [id])) updated.set(sectionId, source);
-      }
+      await takeAnswer(batch);
     }
   } else {
     run = await runBatch(fullPrompt);
-    for (const [id, source] of acceptedSections(run.text, ids)) updated.set(id, source);
+    await takeAnswer(ids);
   }
   const merged = new Map((prior?.manifest.sections || []).map((section) => [section.id, section.source]));
   for (const [id, source] of updated) merged.set(id, source);
