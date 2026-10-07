@@ -188,6 +188,24 @@ describe('socket.js — initSocket', () => {
     }
   });
 
+  it('invalidates active memories after approval/rejection only for CoS subscribers', () => {
+    const subscriber = makeSocket('memory-subscriber');
+    const outsider = makeSocket('memory-outsider');
+    createdSockets.push(subscriber, outsider);
+    io.connect(subscriber);
+    io.connect(outsider);
+    subscriber.handlers['cos:subscribe']();
+    for (const event of ['memory:approved', 'memory:rejected']) {
+      queueListeners.cos.filter(([name]) => name === event).forEach(([, handler]) =>
+        handler({ id: 'example-memory', memory: { content: 'Example record body' } }));
+    }
+    expect(subscriber.emitted.filter(([name]) => name === 'cos:memory:updated')).toEqual([
+      ['cos:memory:updated', { id: 'example-memory' }],
+      ['cos:memory:updated', { id: 'example-memory' }],
+    ]);
+    expect(outsider.emitted.filter(([name]) => name === 'cos:memory:updated')).toEqual([]);
+  });
+
   it('forwards model identity invalidations through the existing socket transport', () => {
     io.emitted.length = 0;
     modelLifecycleEvents.emit('image-to-3d:changed', { id: 'example-image-model' });
