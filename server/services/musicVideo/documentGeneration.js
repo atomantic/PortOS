@@ -343,7 +343,16 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
   // of a multi-section answer, or reaches for Math.random despite the rules).
   const takeAnswer = async (askedIds) => {
     const rejected = new Map();
-    const returned = returnedSections(run.text, askedIds, { lenient: true, rejected });
+    let returned = returnedSections(run.text, askedIds, { lenient: true, rejected });
+    // An answer with no usable section at all (a refusal, a truncated stream, prose) gets one
+    // retry of the same request, not one call per section.
+    if (!returned.size && !rejected.size && askedIds.length > 1) {
+      console.log(`🎬 Music-video document: no usable section in the answer for ${askedIds.join(', ')}; asking once more`);
+      run = await runBatch(`${withFeedback(promptFor(askedIds))}\n\nYour previous answer contained no usable section functions. Return every requested section as the JSON described above.`);
+      returned = returnedSections(run.text, askedIds, { lenient: true, rejected });
+      // Still nothing: fail now rather than fan out a call per section.
+      if (!returned.size) acceptedSections(run.text, askedIds);
+    }
     for (const [id, source] of returned) updated.set(id, source);
     for (const id of askedIds.filter((sectionId) => !returned.has(sectionId))) {
       const reason = rejected.get(id) || 'it was missing from the answer or its JSON did not parse';

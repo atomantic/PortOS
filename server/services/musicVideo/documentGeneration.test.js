@@ -186,6 +186,15 @@ describe('treatment-driven mixed-media document authoring', () => {
     expect(manifest.sections.find((s) => s.id === 'intro').source).toContain('#123456');
   });
 
+  it('retries an answer with no usable section once as a whole, then fails without a call per section', async () => {
+    const id = await fixture();
+    h.calls = 0;
+    h.onSubmit = async () => { h.response = 'I cannot help with that.'; };
+    await expect(generateMixedMediaDocument(id, { providerId: 'stub-provider' })).rejects.toMatchObject({ code: 'MISSING_SECTION_SOURCE' });
+    expect(h.calls).toBe(2);
+    expect(h.prompt).toContain('contained no usable section functions');
+  });
+
   it('names the prompt size when authoring times out with no output (#10515)', async () => {
     const id = await fixture();
     h.onSubmit = async () => { throw new Error('API execution timed out after 600000ms with no stream progress'); };
