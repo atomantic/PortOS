@@ -1072,6 +1072,10 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
   if (retake) assertAtSongCheckpoint(run);
   const modelsChanged = modelsPatch !== null && JSON.stringify(modelsPatch) !== JSON.stringify(run.brief.models || {});
   const limitsPatch = edits.limits ? { ...run.brief.limits, ...edits.limits } : null;
+  // A production run only takes raised limits; refuse a lower one before anything changes.
+  if (edits.limits && run.stage === 'produce' && Object.entries(edits.limits).some(([key, value]) => value != null && value < (run.brief.limits?.[key] ?? 0))) {
+    throw runError(400, 'VALIDATION_ERROR', 'Resuming production can only raise a limit');
+  }
   // Stop changes the record immediately, but its stage may still be settling.
   // Let that attempt release ownership before marking a new attempt running.
   await inflight.get(projectId);
@@ -1155,8 +1159,9 @@ async function resumeDelegatedProduction(projectId, run, { restart = false, limi
     .filter((r) => ADOPTABLE_PRODUCTION.has(r.status) && String(r.createdAt || '') >= String(run.createdAt || ''))
     .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0] || null;
   if (!adopt) {
-    if (current && PRODUCTION_LIVE.has(current.status)) await deps.cancelProduction(projectId, current.id).catch(() => {});
+    // Unlink first: the old run's own "canceled" event must no longer match this run.
     const out = await patchRun(projectId, (r) => ({ output: { productionRunId: null }, ...stagePatch(r, 'produce', { status: 'pending', error: null, step: null }) }));
+    if (current && PRODUCTION_LIVE.has(current.status)) await deps.cancelProduction(projectId, current.id).catch(() => {});
     console.log(`🎬 Autonomous music video ${short(run.id)} starting a new production run${restart ? ' with the new models' : ''}`);
     advanceInBackground(projectId);
     return { project: out.project, run: presentAutonomousRun(out.run) };
@@ -1168,7 +1173,8 @@ async function resumeDelegatedProduction(projectId, run, { restart = false, limi
   if (adopt.status === 'completed') {
     await patchRun(projectId, () => ({ output: { productionDone: true } }));
     await reconcileFinalRender(projectId, { restart: true });
-  } else if (adopt.status !== 'running') {
+  } else {
+    // Resuming a "running" run is safe and re-pins one left by a previous server process.
     const productionLimits = limits ? Object.fromEntries(Object.entries(limits).filter(([, v]) => v != null)) : undefined;
     const failure = await deps.resumeProduction(projectId, adopt.id, { acceptBasis: true, ...(productionLimits ? { limits: productionLimits } : {}) })
       .then(() => null, (err) => err);
