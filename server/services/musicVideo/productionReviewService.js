@@ -225,11 +225,13 @@ export async function prepareProductionReview(id, options = {}) {
   const { project: planned } = await mutateProjectRecord(id, current => {
     const latest = current.productionReview.draft;
     if (latest.storyboardSource === 'document') return { project: current };
+    // New shots borrow the Cast & Sets world's camera and transition language when the scene has none.
+    const world = current.castAndSets?.direction?.world || {};
     const storyboard = [...latest.storyboard, ...current.scenes.filter(scene => !latest.storyboard.some(shot => shot.sceneId === scene.sceneId)).map(scene => ({
       sceneId: scene.sceneId,
       lyricCueIds: (current.lyricCues || []).filter(c => c.startSec < scene.endSec && c.endSec > scene.startSec).map(c => c.id),
       action: scene.visualIntent || scene.prompt || '', staging: scene.framePrompt || '',
-      camera: scene.direction?.camera || d.world?.camera || '', transition: d.world?.transitions || '',
+      camera: scene.direction?.camera || world.camera || '', transition: world.transitions || '',
     }))];
     return { project: { ...current, productionReview: { ...current.productionReview, draft: { ...latest, storyboard } } } };
   });
