@@ -24,7 +24,7 @@ vi.mock('./productionReviewService.js', () => ({
  * checkpoints, failure parking and retry, and the hand-off to production.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const store = new Map();
 let writeTail = Promise.resolve();
@@ -924,6 +924,80 @@ describe('auto-approve the rest (brief.autoApprove)', () => {
       await settled('failed');
       expect(runOf()).toMatchObject({ errorCode: 'CAST_SETS_FAILED', error: expect.stringContaining('The character image failed twice') });
     });
+  });
+});
+
+describe('autopilot clears the gates it was granted on its own', () => {
+  let actual;
+  let prepare;
+  beforeEach(async () => {
+    creativeReview.real = true;
+    actual = await vi.importActual('./productionReview.js');
+    ({ prepareProductionReview: prepare } = await import('./productionReviewService.js'));
+    doubles.approveProductionReview = stub('approve', async (id, input) => {
+      store.set(id, clone(actual.approveProductionStage(clone(store.get(id)), input)));
+    });
+    doubles.verifyAlignment = stub('verify', async (id, { basis, notes, reviewer }) => {
+      const project = store.get(id);
+      project.productionReview = { ...project.productionReview, alignmentBasis: basis, alignmentReview: { basis, reviewer },
+        draft: { ...project.productionReview.draft, timingStatus: 'verified', timingNotes: notes } };
+    });
+    doubles.alignLyrics = stub('align', async () => {});
+    service.__setAutonomousDepsForTests(doubles);
+  });
+  afterEach(() => { prepare.mockReset(); prepare.mockImplementation(async () => {}); });
+
+  const GUIDE = { cast: 'Paper dancer', environments: 'Theatre', visualLanguage: 'Ink silhouettes', motionLanguage: 'Slow orbit', guideArtifactId: 'guide' };
+  const shot = { sceneId: 'shot', lyricCueIds: [], action: 'Dancer unfolds', staging: 'Wide theatre', camera: 'Orbit', transition: 'Fade' };
+  const analyzed = (extra) => doubles.analyzeSong.mockImplementation(async () => {
+    Object.assign(store.get('mv-auto'), {
+      audioAnalysis: { durationSec: 20, sections: [{ id: 'chorus', label: 'Chorus', startSec: 0, endSec: 20 }] },
+      scenes: [{ sceneId: 'shot', startSec: 0, endSec: 20, label: 'Chorus' }],
+      devArtifacts: [{ id: 'guide', version: 1, file: 'guide.html', mimeType: 'text/html' }],
+      ...extra,
+    });
+  });
+  const GRANT = [{ autoApprove: ['art', 'storyboard'] }, { autoApproveAuthorized: true }];
+
+  it('aligns, times and verifies the lyrics of a vocal song, then approves the storyboard', async () => {
+    analyzed({
+      lyricCues: [
+        { id: 'c1', text: 'rain on glass', startSec: 1, endSec: 4, words: [
+          { w: 'rain', startSec: 1, endSec: 2, conf: 'matched' }, { w: 'on', startSec: 2, endSec: 3, conf: 'matched' }, { w: 'glass', startSec: 3, endSec: 4, conf: 'matched' }] },
+        { id: 'c2', text: 'neon home', startSec: null, endSec: null },
+      ],
+      productionReview: { draft: { ...GUIDE, lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [shot] } },
+    });
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], ...GRANT[0] }, GRANT[1]);
+    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+    const project = store.get('mv-auto');
+    expect(doubles.alignLyrics).toHaveBeenCalledWith('mv-auto');
+    expect(project.lyricCues[1]).toMatchObject({ startSec: 4, endSec: 20, words: [{ w: 'neon', conf: 'interpolated' }, { w: 'home' }] });
+    expect(project.productionReview.alignmentReview.reviewer).toMatchObject({ kind: 'autopilot', runId: runOf().id });
+    expect(project.productionReview.draft.storyboard[0].lyricCueIds).toEqual(['c1', 'c2']);
+    expect(project.productionReview.approvals).toMatchObject({ art: { approvedBy: 'autopilot' }, storyboard: { approvedBy: 'autopilot' } });
+  });
+
+  it('marks an instrumental song as one instead of asking for lyrics', async () => {
+    analyzed({ productionReview: { draft: { ...GUIDE, lyricsMode: 'vocal', storyboard: [shot] } } });
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], instrumental: true, ...GRANT[0] }, GRANT[1]);
+    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+    expect(store.get('mv-auto').productionReview.draft.lyricsMode).toBe('instrumental');
+    expect(doubles.alignLyrics).not.toHaveBeenCalled();
+  });
+
+  it('still parks for a human on a lyric line it cannot time', async () => {
+    analyzed({
+      audioAnalysis: { durationSec: 20 },
+      lyricCues: [{ id: 'c1', text: 'rain on glass', startSec: null, endSec: null }, { id: 'c2', text: 'neon home', startSec: 0, endSec: 20,
+        words: [{ w: 'neon', startSec: 0, endSec: 10, conf: 'matched' }, { w: 'home', startSec: 10, endSec: 20, conf: 'matched' }] }],
+      productionReview: { draft: { ...GUIDE, lyricsMode: 'vocal', timingStatus: 'provisional', storyboard: [shot] } },
+    });
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], ...GRANT[0] }, GRANT[1]);
+    await settled('needs-human');
+    expect(runOf().errorCode).toBe('MUSIC_VIDEO_APPROVAL_REQUIRED');
+    expect(doubles.verifyAlignment).not.toHaveBeenCalled();
+    expect(doubles.startProduction).not.toHaveBeenCalled();
   });
 });
 
