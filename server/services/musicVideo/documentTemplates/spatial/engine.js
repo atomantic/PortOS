@@ -169,18 +169,27 @@ function createPost(THREE, renderer) {
       gl_FragColor = vec4(clamp(c, 0., 1.), 1.);
     }`, { tColor: { value: null }, tBloom: { value: null }, uRes: { value: new THREE.Vector2() }, uBloom: { value: 0 }, uExposure: { value: 1 }, uVignette: { value: 0 }, uGrain: { value: 0 }, uFrame: { value: 0 } });
   let targets = [];
-  let hdr, colour, small, smallB, w = 1, h = 1;
+  let hdr, hdrDepth, colour, small, smallB, w = 1, h = 1;
+  // A software rasterizer (CI, GPU-less hosts) multiplies every MSAA sample, so
+  // it renders single-sampled; real GPUs keep 4x.
+  const gl = renderer.getContext();
+  const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+  const software = /swiftshader|llvmpipe|softpipe|software/i.test(String(gl.getParameter(debugInfo ? debugInfo.UNMASKED_RENDERER_WEBGL : gl.RENDERER)));
+  const samples = software ? 0 : 4;
   const draw = (material, target) => { quad.material = material; renderer.setRenderTarget(target); renderer.render(stage, camera); };
   return {
     resize(width, height) {
       for (const target of targets) { target.depthTexture?.dispose(); target.dispose(); }
       w = width; h = height;
       const linear = { type: THREE.HalfFloatType, depthBuffer: false };
-      hdr = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, samples: 4, depthTexture: new THREE.DepthTexture(w, h, THREE.FloatType) });
+      // Depth is only sampled for depth of field, so only that target carries a
+      // depth texture (resolving one is a full extra copy every frame).
+      hdr = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, samples });
+      hdrDepth = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, samples, depthTexture: new THREE.DepthTexture(w, h, THREE.FloatType) });
       colour = new THREE.WebGLRenderTarget(w, h, linear);
       small = new THREE.WebGLRenderTarget(Math.ceil(w / 4), Math.ceil(h / 4), linear);
       smallB = new THREE.WebGLRenderTarget(Math.ceil(w / 4), Math.ceil(h / 4), linear);
-      targets = [hdr, colour, small, smallB];
+      targets = [hdr, hdrDepth, colour, small, smallB];
       // Allocate every target now: passes a lens skips must not create GPU
       // textures on a later seek.
       for (const target of targets) renderer.initRenderTarget(target);
@@ -194,16 +203,18 @@ function createPost(THREE, renderer) {
       let focus;
       if (lens.focus?.isVector3) { view.updateWorldMatrix(true, false); focus = Math.max(0.01, -lens.focus.clone().applyMatrix4(view.matrixWorldInverse).z); }
       else focus = num(lens.focus, LENS_DEFAULTS.focus, 0.01, 1e5);
-      renderer.setRenderTarget(hdr); renderer.clear(); renderer.render(world, view);
-      dof.uniforms.tColor.value = hdr.texture; dof.uniforms.tDepth.value = hdr.depthTexture;
-      dof.uniforms.uRes.value.set(w, h);
-      dof.uniforms.uNear.value = view.near; dof.uniforms.uFar.value = view.far; dof.uniforms.uFocus.value = focus;
       const aperture = num(lens.aperture, 0, 0, 64) * px, maxBlur = num(lens.maxBlur, LENS_DEFAULTS.maxBlur, 0, 48) * px;
       const bloom = num(lens.bloom, LENS_DEFAULTS.bloom, 0, 4);
-      // Software-rendered captures (CI, GPU-less hosts) pay per full-screen
-      // pass, so a lens setting that does nothing skips its pass outright.
-      let sharp = hdr.texture;
-      if (aperture > 0 && maxBlur >= 0.5) {
+      // Software-rendered captures pay per full-screen pass, so a lens setting
+      // that does nothing skips its pass outright.
+      const focusing = aperture > 0 && maxBlur >= 0.5;
+      const sceneTarget = focusing ? hdrDepth : hdr;
+      renderer.setRenderTarget(sceneTarget); renderer.clear(); renderer.render(world, view);
+      let sharp = sceneTarget.texture;
+      if (focusing) {
+        dof.uniforms.tColor.value = sceneTarget.texture; dof.uniforms.tDepth.value = sceneTarget.depthTexture;
+        dof.uniforms.uRes.value.set(w, h);
+        dof.uniforms.uNear.value = view.near; dof.uniforms.uFar.value = view.far; dof.uniforms.uFocus.value = focus;
         dof.uniforms.uAperture.value = aperture; dof.uniforms.uMaxBlur.value = maxBlur;
         draw(dof, colour);
         sharp = colour.texture;
