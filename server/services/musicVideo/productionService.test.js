@@ -77,7 +77,9 @@ const autoReview = { startAutoReview, resumeAutoReview: vi.fn(), stopAutoReview:
 const env = {
   settings: { imageGen: { local: { pythonPath: '/opt/example/python' }, codex: { enabled: true, model: 'codex-image' }, grok: { enabled: false } } },
   imageModels: [{ id: 'flux2-dev', runner: 'flux2' }, { id: 'sd-basic', runner: 'mflux' }],
-  resolveVideoModel: async (id) => ({ model: id === 'ltx-example' ? { id } : null }),
+  resolveVideoModel: async (id) => ({ model: {
+    'ltx-example': { id }, 'ltx-alt': { id }, 'example-text': { id, name: 'Example Text Model', supportedModes: ['text'] },
+  }[id] || null }),
   isVideoModeUsable: (_settings, mode) => mode === 'local',
 };
 
@@ -423,6 +425,29 @@ describe('music video production run (#9066)', () => {
     await settle();
     expect(dispatch).toHaveBeenCalledTimes(3);
     expect(theRun().usage.generations).toBe(2);
+  });
+
+  it('continues a run blocked on its video model once Resume swaps that model, refusing a text-only one like Start', async () => {
+    seedProject();
+    await start();
+    completeJob('job-1');
+    completeJob('job-2');
+    dispatch.mockRejectedValueOnce(Object.assign(new Error('Model does not support image-to-video'), { status: 422, code: 'VIDEO_MODE_UNSUPPORTED' }));
+    await settle();
+    expect(theRun()).toMatchObject({ status: 'blocked', stopReason: expect.stringMatching(/refused/) });
+    const clips = () => dispatch.mock.calls.filter(([a]) => a.stepKind === 'clip').map(([a]) => a.route.model);
+    expect(clips()).toEqual(['ltx-example']);
+
+    const swapTo = (model) => POOL.map((route) => (route.kind === 'video' ? { ...route, model } : route));
+    await expect(service.resumeProduction('mv-example', theRun().id, { pool: swapTo('example-text') }))
+      .rejects.toMatchObject({ code: 'PRODUCTION_ROUTE_INELIGIBLE', message: expect.stringMatching(/Example Text Model.*image-to-video/) });
+    expect(theRun()).toMatchObject({ status: 'blocked', pool: POOL });
+
+    await service.resumeProduction('mv-example', theRun().id, { pool: swapTo('ltx-alt') });
+    await settle();
+    expect(theRun()).toMatchObject({ status: 'running', pool: swapTo('ltx-alt') });
+    expect(theRun().pricing).toHaveProperty(['video:local:ltx-alt']);
+    expect(clips()).toEqual(['ltx-example', 'ltx-alt', 'ltx-alt']);
   });
 
   it('allows explicit Resume after a transient submission failure without spending on the refusal', async () => {
