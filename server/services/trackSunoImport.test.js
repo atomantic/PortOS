@@ -11,12 +11,14 @@ vi.mock('./pipeline/musicLibrary.js', () => ({
 }));
 vi.mock('./tracks/index.js', () => ({ createTrack: vi.fn(async (input) => ({ id: 'track-new', ...input })) }));
 vi.mock('../lib/sseUtils.js', () => ({ broadcastSse: vi.fn(), attachSseClient: vi.fn(() => true), closeJobAfterDelay: vi.fn() }));
+vi.mock('./musicVideo/autonomousSuno.js', () => ({ generateSunoSong: vi.fn() }));
 vi.mock('../lib/safeUrlFetch.js', () => ({ fetchPublicText: vi.fn(), fetchPublicBinary: vi.fn(), resolvePublicUrl: vi.fn() }));
 
 const { broadcastSse } = await import('../lib/sseUtils.js');
 const { probeVideoDuration, runFfmpegProcess } = await import('../lib/ffmpeg.js');
 const { fetchPublicText, fetchPublicBinary, resolvePublicUrl } = await import('../lib/safeUrlFetch.js');
 const { importUploadedTrack } = await import('./pipeline/musicLibrary.js');
+const { generateSunoSong } = await import('./musicVideo/autonomousSuno.js');
 const { createTrack } = await import('./tracks/index.js');
 const { startSunoImport, cancelSunoImport } = await import('./trackSunoImport.js');
 
@@ -34,6 +36,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   probeVideoDuration.mockResolvedValue(200);
   runFfmpegProcess.mockResolvedValue({ ok: true });
+  generateSunoSong.mockRejectedValue(new Error('Sign in to Suno in the PortOS Browser'));
   fetchPublicBinary.mockResolvedValue({ buffer: Buffer.from('ID3audio'), contentType: 'audio/mpeg' });
 });
 
@@ -90,6 +93,25 @@ describe('startSunoImport', () => {
     await startSunoImport(`https://suno.com/song/${ID}`);
     expect(await terminal()).toMatchObject({ type: 'error', error: expect.stringMatching(message) });
     expect(importUploadedTrack).not.toHaveBeenCalled();
+  });
+
+  it('exports a private song through the signed-in browser, taking its title and lyrics from that page', async () => {
+    fetchPublicText.mockResolvedValue(null); // the anonymous page shows nothing for a private song
+    fetchPublicBinary.mockResolvedValue(null);
+    generateSunoSong.mockImplementation(async (_fields, deps) => {
+      deps.onSongPage(songPage({ id: ID, title: 'Unreleased', metadata: { prompt: 'draft words', tags: 'lo-fi' } }));
+      const { mkdtemp, writeFile, rm } = await import('fs/promises');
+      const srcDir = await mkdtemp(`${(await import('os')).tmpdir()}/suno-test-`);
+      await writeFile(`${srcDir}/song.m4a`, 'm4a');
+      await deps.importAudio(`${srcDir}/song.m4a`, 'song.m4a').finally(() => rm(srcDir, { recursive: true, force: true }));
+      return { songId: ID };
+    });
+    await startSunoImport(`https://suno.com/song/${ID}`);
+    expect(await terminal()).toMatchObject({ type: 'complete' });
+    expect(generateSunoSong).toHaveBeenCalledWith({}, expect.objectContaining({ songIds: [ID], signal: expect.any(AbortSignal) }));
+    expect(fetchPublicBinary.mock.calls.map(([url]) => url)).not.toContain(`https://cdn1.suno.ai/${ID}.mp4`);
+    expect(importUploadedTrack).toHaveBeenCalledWith(expect.stringMatching(/song\.m4a$/), 'Unreleased.m4a');
+    expect(createTrack).toHaveBeenCalledWith(expect.objectContaining({ title: 'Unreleased', lyrics: 'draft words', prompt: 'lo-fi' }));
   });
 
   it('takes the audio out of the public video when Suno withholds the audio file', async () => {
