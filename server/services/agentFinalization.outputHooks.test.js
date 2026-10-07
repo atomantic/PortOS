@@ -1,3 +1,4 @@
+vi.mock('../lib/gitCommitProbe.js', () => ({ committedDuringRun: vi.fn(async () => false) }));
 vi.mock('./appQuality.js', () => ({ recordAuditQuality: vi.fn(async () => true) }));
 import { recordAuditQuality } from './appQuality.js';
 // Hoisted doubles rather than static imports: the audit path reaches both modules
@@ -32,12 +33,13 @@ vi.mock('./taskTypeHooks.js', () => ({
   getTaskOutputHook: vi.fn(),
   getTaskOutputPayloadPredicate: vi.fn(async () => null),
   declaresNoCommitCriterion: vi.fn(() => false),
+  isClaimFlowDispatch: vi.fn(() => false),
   isProgrammaticIoTaskType: vi.fn(() => true),
   resolveTaskHookType: vi.fn(task => task?.metadata?.analysisType || null),
 }));
 
 import { getAgent, updateAgent, completeAgent } from './cosAgentLifecycle.js';
-import { canRunTaskOutputHookWithoutPayload, getTaskOutputHook } from './taskTypeHooks.js';
+import { canRunTaskOutputHookWithoutPayload, getTaskOutputHook, isProgrammaticIoTaskType } from './taskTypeHooks.js';
 import {
   finalizeAgent,
   dispatchRecoveredTaskOutputHook,
@@ -115,10 +117,10 @@ describe('recovery output-hook dispatch (#3182)', () => {
   it('captures audit telemetry on the shared completion path without waiving fix-mode delivery criteria', async () => {
     const task = { ...TASK, metadata: { ...TASK.metadata, analysisType: 'better-complexity' } };
     await expect(dispatchTaskOutputHookOnce({ agentId: 'agent-audit', task, success: true, workspacePath: '/worktree' }))
-      .resolves.toEqual({ ran: false });
+      .resolves.toEqual({ ran: false, auditAssessment: { status: 'recorded' } });
     expect(recordAuditQuality).toHaveBeenCalledWith({ task, taskType: 'better-complexity', agentId: 'agent-audit', success: true, workspacePath: '/worktree', assessedAt: persistedAgent.startedAt });
     expect(hook).not.toHaveBeenCalled();
-    expect(updateAgent).not.toHaveBeenCalled();
+    expect(updateAgent).toHaveBeenCalledWith('agent-audit', { metadata: { auditAssessment: { status: 'recorded' } } });
   });
 
   // Landing the app's `.quality.json` PR is opt-in and runs outside the request
@@ -127,11 +129,11 @@ describe('recovery output-hook dispatch (#3182)', () => {
   it('commits a repo snapshot only for an opted-in app that just recorded a measurement', async () => {
     const task = { ...TASK, metadata: { ...TASK.metadata, analysisType: 'better-complexity' } };
     let run = 0;
-    const dispatch = () => dispatchTaskOutputHookOnce({ agentId: `agent-snapshot-${run += 1}`, task, success: true, workspacePath: '/worktree' });
+    const dispatch = () => { persistedAgent.metadata = {}; return dispatchTaskOutputHookOnce({ agentId: `agent-snapshot-${run += 1}`, task, success: true, workspacePath: '/worktree' }); };
     const optedIn = { id: 'app-example', repoPath: '/repo/example-app', publishQualitySnapshot: true };
 
     appsRegistry.getAppById.mockResolvedValue(optedIn);
-    await expect(dispatch()).resolves.toEqual({ ran: false });
+    await expect(dispatch()).resolves.toEqual({ ran: false, auditAssessment: { status: 'recorded' } });
     expect(snapshotFile.publishAppQualitySnapshot).toHaveBeenCalledWith(optedIn);
 
     for (const app of [{ ...optedIn, publishQualitySnapshot: false }, { ...optedIn, publishQualitySnapshot: 'true' },
@@ -150,12 +152,57 @@ describe('recovery output-hook dispatch (#3182)', () => {
 
     // A locked index or an unreadable registry must not fail the completion.
     snapshotFile.publishAppQualitySnapshot.mockRejectedValueOnce(new Error('index.lock exists'));
-    await expect(dispatch()).resolves.toEqual({ ran: false });
+    await expect(dispatch()).resolves.toEqual({ ran: false, auditAssessment: { status: 'recorded' } });
     appsRegistry.getAppById.mockRejectedValueOnce(new Error('registry unreadable'));
-    await expect(dispatch()).resolves.toEqual({ ran: false });
+    await expect(dispatch()).resolves.toEqual({ ran: false, auditAssessment: { status: 'recorded' } });
     for (const reason of ['index.lock exists', 'registry unreadable']) {
       expect(emitLog).toHaveBeenCalledWith('error', `❌ Quality snapshot publish failed for app app-example: ${reason}`, { appId: 'app-example' });
     }
+  });
+
+  it('records assessment failure independently and allows recovery to persist it later', async () => {
+    const task = { ...TASK, metadata: { ...TASK.metadata, analysisType: 'security' } };
+    recordAuditQuality.mockRejectedValueOnce(new Error('storage unavailable'));
+    const first = await dispatchTaskOutputHookOnce({ agentId: 'audit-recovery', task, success: true, workspacePath: '/worktree' });
+    expect(first).toEqual({ ran: false, auditAssessment: { status: 'persistence-failed' } });
+    expect(persistedAgent.metadata.auditAssessment.status).toBe('persistence-failed');
+    await expect(dispatchRecoveredTaskOutputHook({ agentId: 'audit-recovery', task, success: true, workspacePath: '/worktree' }))
+      .resolves.toEqual({ ran: false, auditAssessment: { status: 'recorded' } });
+    expect(persistedAgent.metadata.auditAssessment.status).toBe('recorded');
+    recordAuditQuality.mockClear();
+    await dispatchRecoveredTaskOutputHook({ agentId: 'audit-recovery', task, success: true });
+    expect(recordAuditQuality).not.toHaveBeenCalled();
+  });
+
+  it('retains a saved result when an older failure marker survived a metadata write error', async () => {
+    const task = { ...TASK, metadata: { ...TASK.metadata, analysisType: 'security' } };
+    persistedAgent.metadata.auditAssessment = { status: 'persistence-failed' };
+    persistedAgent.result = { auditAssessment: { status: 'recorded' } };
+    await expect(dispatchRecoveredTaskOutputHook({ agentId: 'saved-result', task, success: true }))
+      .resolves.toEqual({ ran: false, auditAssessment: { status: 'recorded' } });
+    expect(recordAuditQuality).not.toHaveBeenCalled();
+  });
+
+  it('persists assessment and delivery verdicts without rewriting a clean execution', async () => {
+    isProgrammaticIoTaskType.mockImplementation(type => type !== 'security');
+    const task = { ...TASK, metadata: { ...TASK.metadata, analysisType: 'security' } };
+    recordAuditQuality.mockResolvedValueOnce(false);
+    await finalizeAgent({ agentId: 'audit-final', task, success: true, exitCode: 0, duration: 1000,
+      workspacePath: '/missing-audit-worktree', startedAt: Date.now() - 1000, outputBuffer: 'Audit complete' });
+    expect(completeAgent).toHaveBeenCalledWith('audit-final', expect.objectContaining({
+      success: true, validationPassed: false, auditAssessment: { status: 'not-recorded' },
+    }));
+    isProgrammaticIoTaskType.mockReturnValue(true);
+  });
+
+  it('distinguishes a clean execution with no usable assessment from a failed execution', async () => {
+    const task = { ...TASK, metadata: { ...TASK.metadata, analysisType: 'security' } };
+    recordAuditQuality.mockResolvedValue(false);
+    await expect(dispatchTaskOutputHookOnce({ agentId: 'audit-no-report', task, success: true, workspacePath: '/worktree' }))
+      .resolves.toEqual({ ran: false, auditAssessment: { status: 'not-recorded' } });
+    await expect(dispatchTaskOutputHookOnce({ agentId: 'audit-execution-failed', task, success: false, workspacePath: '/worktree' }))
+      .resolves.toEqual({ ran: false, auditAssessment: { status: 'not-attempted' } });
+    recordAuditQuality.mockResolvedValue(true);
   });
 
   it.each([
