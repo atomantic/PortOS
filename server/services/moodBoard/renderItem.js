@@ -82,7 +82,11 @@ export async function renderBoardItem(boardId, itemId, route = {}) {
   if (!board) throw new ServerError('Mood board not found', { status: 404, code: 'NOT_FOUND' });
   const priorJobId = board.items?.find((it) => it?.id === itemId)?.render?.jobId;
   const priorLive = priorJobId ? isLiveStatus(await deps.getJob(priorJobId)) : false;
-  const claimed = await store.claimBoardItemRender(boardId, itemId, { isLive: () => priorLive });
+  // A job id this request never saw (a concurrent render settled it after the
+  // read above) counts as live, so the lock can't let a duplicate through.
+  const claimed = await store.claimBoardItemRender(boardId, itemId, {
+    isLive: (jobId) => jobId !== priorJobId || priorLive,
+  });
 
   const prompt = buildItemRenderPrompt(board, claimed);
   const negativePrompt = isNonBlankStr(board.style?.negativePrompt) ? board.style.negativePrompt.trim() : undefined;

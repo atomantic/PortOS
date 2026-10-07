@@ -69,6 +69,8 @@ describe('renderBoardItem', () => {
     enqueue.mockResolvedValueOnce({ jobId: 'job-2' });
     await renderBoardItem('mb-1', 'n1');
     expect(store.claimBoardItemRender.mock.calls[0][2].isLive('old')).toBe(false);
+    // A job id settled by a concurrent request after the read counts as busy.
+    expect(store.claimBoardItemRender.mock.calls[0][2].isLive('concurrent')).toBe(true);
   });
 });
 

@@ -378,6 +378,17 @@ describe('startAutonomousVideo', () => {
     });
   });
 
+  it('keeps the board text-only when the run names no image tool, or caps spend on a paid one', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['video:local'] });
+    await vi.waitFor(() => expect(doubles.createMoodBoard).toHaveBeenCalledOnce());
+    expect(doubles.createMoodBoard.mock.calls[0][1]).toEqual({ renderRoute: null });
+    store.clear();
+    doubles.createMoodBoard.mockClear();
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:fal'], budgetUsd: 5 });
+    await vi.waitFor(() => expect(doubles.createMoodBoard).toHaveBeenCalledOnce());
+    expect(doubles.createMoodBoard.mock.calls[0][1]).toEqual({ renderRoute: null });
+  });
+
   it('parks needs-human when production parks, and failed when it fails', async () => {
     await service.startAutonomousVideo({ prompt: 'p' });
     await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));

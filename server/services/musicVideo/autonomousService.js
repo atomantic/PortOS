@@ -60,6 +60,7 @@ import { probeVideoDuration } from '../../lib/ffmpeg.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
+import { IMAGE_GEN_MODE } from '../../lib/generationModes.js';
 import { assertFootageVideoModelsCapable, loadPoolEnv } from './productionPool.js';
 import { PRODUCTION_RESUMABLE_STATUSES } from './production.js';
 import {
@@ -838,15 +839,18 @@ async function writeRunLyrics({ project, run, save }) {
   } };
 }
 
-// The board's notes render on the run's first image tool with its pinned model,
-// or on the install's Music Video default when the run names no image tool.
+// The board's notes render on the run's first image tool with its pinned model.
+// Null keeps the board text-only: the brief names no image tool (its tool list
+// is what autopilot may use), or the run has a dollar cap and the tool is not
+// the free local backend — these pre-production renders are not counted
+// against production's spend cap, so a capped run never spends on them.
 // Only reached in a mode that allows images (code-only builds no board).
 function boardRenderRoute(run) {
   const tool = (run.brief.tools || []).find((id) => id.startsWith('image:'));
-  return {
-    target: RENDER_TARGET.MUSIC_VIDEO,
-    ...(tool ? { mode: tool.slice('image:'.length), model: run.brief.models?.[tool] || undefined } : {}),
-  };
+  if (!tool) return null;
+  const mode = tool.slice('image:'.length);
+  if (run.brief.budgetUsd != null && mode !== IMAGE_GEN_MODE.LOCAL) return null;
+  return { target: RENDER_TARGET.MUSIC_VIDEO, mode, model: run.brief.models?.[tool] || undefined };
 }
 
 async function createRunStyle({ project, run }) {
