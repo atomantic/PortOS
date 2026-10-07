@@ -5,6 +5,7 @@ import {
   buildMixedMediaDocumentPrompt,
   PACING_RULE,
   extractAnimationHtml,
+  extractCodeSections,
   resolveFrameSize,
   CODE_ANIMATION_AUDIO_GLOBAL,
   CODE_ANIMATION_MESSAGES,
@@ -250,5 +251,24 @@ describe('music-video craft and measured choreography', () => {
         expect(prompt).toContain('audio feature data is unavailable');
       }
     }
+  });
+});
+
+describe('extractCodeSections', () => {
+  const fn = 'function render(ctx, env) { ctx.fillRect(0, 0, 1, 1); }';
+  const valid = JSON.stringify({ sections: [{ id: 'beat-3', source: fn }] });
+  it('parses a fenced answer and ignores sections without an id or source', () => {
+    expect(extractCodeSections(`\`\`\`json\n${JSON.stringify({ sections: [{ id: 'a', source: fn }, { id: 'b' }] })}\n\`\`\``)).toEqual([{ id: 'a', source: fn }]);
+  });
+  it('recovers an answer with stray characters after the closing brackets', () => {
+    expect(extractCodeSections(`\`\`\`json\n${valid}"}\n\`\`\``)).toEqual([{ id: 'beat-3', source: fn }]);
+  });
+  it('recovers an answer that left its last section object unclosed', () => {
+    const unclosed = `{"sections":[{"id":"beat-3","source":${JSON.stringify(fn)}]}`;
+    expect(extractCodeSections(`\`\`\`json\n${unclosed}\n\`\`\``)).toEqual([{ id: 'beat-3', source: fn }]);
+  });
+  it('returns nothing for text with no usable JSON', () => {
+    expect(extractCodeSections('no json here')).toEqual([]);
+    expect(extractCodeSections('```json\n{"sections": [ {"id": \n```')).toEqual([]);
   });
 });
