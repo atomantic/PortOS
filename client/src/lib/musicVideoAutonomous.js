@@ -200,6 +200,7 @@ export const AUTONOMOUS_SONG_STEP_LABELS = Object.freeze({
 export const AUTONOMOUS_PRODUCE_STEP_LABELS = Object.freeze({
   rendering: 'Rendering final video',
   'final-review': 'The orchestrator is watching the final video',
+  'final-revision': 'Revising the sections the orchestrator flagged',
 });
 
 /**
