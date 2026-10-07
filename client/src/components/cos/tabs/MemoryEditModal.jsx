@@ -56,6 +56,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (saving || fullMemory?.id !== memory.id) return;
     if (!formData.content.trim()) {
       toast.error('Content is required');
       return;
@@ -329,7 +330,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
             </button>
             <button
               type="submit"
-              disabled={saving || !fullMemory || !formData.content.trim()}
+              disabled={saving || fullMemory?.id !== memory.id || !formData.content.trim()}
               className="flex items-center justify-center gap-2 px-5 py-3 min-h-[44px] bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Save size={18} />
