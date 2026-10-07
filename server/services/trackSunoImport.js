@@ -57,12 +57,12 @@ async function fetchSongAudio(urls) {
 }
 
 // Copy the video's audio track out (Suno's is AAC); transcode only if a copy fails.
-async function extractAudio(videoPath, outPath) {
+async function extractAudio(videoPath, outPath, signal) {
   const bin = await findFfmpeg();
   if (!bin) throw new Error('Suno only offers this song as a video, and ffmpeg is needed to take its audio out');
   for (const codec of [['-c:a', 'copy'], ['-c:a', 'aac', '-b:a', '256k']]) {
-    const res = await runFfmpegProcess({ bin, args: ['-y', '-i', videoPath, '-vn', '-map', '0:a:0', ...codec, outPath] });
-    if (res.ok) return;
+    const res = await runFfmpegProcess({ bin, signal, args: ['-y', '-i', videoPath, '-vn', '-map', '0:a:0', ...codec, outPath] });
+    if (res.ok || signal?.aborted) return;
     console.warn(`⚠️ Suno audio extract (${codec[1]}) failed: ${res.reason}`);
   }
   throw new Error('Could not take the audio out of the video Suno offers for this song');
@@ -80,6 +80,7 @@ export function cancelSunoImport(jobId) {
   const job = importJobs.get(jobId);
   if (!job || job.canceled || job.status !== 'running') return false;
   job.canceled = true;
+  job.abort.abort(); // stops an audio extraction in flight
   return true;
 }
 
@@ -103,7 +104,7 @@ export async function startSunoImport(url) {
   if (!isSunoSongUrl(url)) throw new ServerError(SUNO_URL_INVALID_MESSAGE, { status: 400, code: 'SUNO_URL_INVALID' });
 
   const jobId = randomUUID();
-  const job = { id: jobId, status: 'running', clients: [], canceled: false };
+  const job = { id: jobId, status: 'running', clients: [], canceled: false, abort: new AbortController() };
   importJobs.set(jobId, job);
   console.log(`🎶 Suno import ${shortId(jobId)} — ${url}`);
 
@@ -147,7 +148,7 @@ export async function startSunoImport(url) {
         const videoPath = join(dir, 'song.mp4');
         await writeFile(videoPath, video.buffer);
         tempPath = join(dir, 'song.m4a');
-        await extractAudio(videoPath, tempPath);
+        await extractAudio(videoPath, tempPath, job.abort.signal);
         if (abortIfCanceled()) return;
       }
 

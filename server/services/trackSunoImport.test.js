@@ -106,7 +106,7 @@ describe('startSunoImport', () => {
     expect(fetchPublicBinary.mock.calls.map(([url]) => url)).toEqual([
       `https://cdn1.suno.ai/${ID}.mp3`, `https://cdn1.suno.ai/${ID}.mp4`,
     ]);
-    expect(runFfmpegProcess).toHaveBeenCalledWith({ bin: '/usr/local/bin/ffmpeg', args: expect.arrayContaining(['-vn', '-c:a', 'copy']) });
+    expect(runFfmpegProcess).toHaveBeenCalledWith({ bin: '/usr/local/bin/ffmpeg', signal: expect.any(AbortSignal), args: expect.arrayContaining(['-vn', '-c:a', 'copy']) });
     expect(importUploadedTrack).toHaveBeenCalledWith(expect.stringMatching(/song\.m4a$/), 'Airplane Mode.m4a');
     expect(createTrack).toHaveBeenCalledWith(expect.objectContaining({ title: 'Airplane Mode', lyrics: '[Verse]\nno signal' }));
   });
@@ -125,6 +125,20 @@ describe('startSunoImport', () => {
     await startSunoImport(`https://suno.com/song/${ID}`);
     expect(await terminal()).toMatchObject({ type: 'error', error: expect.stringMatching(/take the audio out/) });
     expect(createTrack).not.toHaveBeenCalled();
+  });
+
+  it('stops the audio extraction when cancelled during it', async () => {
+    fetchPublicText.mockResolvedValue(null);
+    fetchPublicBinary.mockImplementation(async (url) => (url.endsWith('.mp4') ? { buffer: Buffer.from('v'), contentType: 'video/mp4' } : null));
+    runFfmpegProcess.mockImplementation(({ signal }) => new Promise((resolve) => {
+      signal.addEventListener('abort', () => resolve({ ok: false, reason: 'cancelled (SIGTERM)' }));
+    }));
+    const { jobId } = await startSunoImport(`https://suno.com/song/${ID}`);
+    await vi.waitFor(() => expect(runFfmpegProcess).toHaveBeenCalled());
+    expect(cancelSunoImport(jobId)).toBe(true);
+    expect(await terminal()).toEqual({ type: 'canceled' });
+    expect(runFfmpegProcess).toHaveBeenCalledTimes(1); // no transcode retry after a cancel
+    expect(importUploadedTrack).not.toHaveBeenCalled();
   });
 
   it('ends as cancelled, creating no track, when cancelled mid-download', async () => {
