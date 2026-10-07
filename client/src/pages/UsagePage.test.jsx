@@ -577,6 +577,10 @@ describe('UsagePage custom date range inputs', () => {
   it('keeps a half-typed date instead of resetting it, and commits once complete', async () => {
     api.getUsage.mockResolvedValue(usage);
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    // Settle mount-time fetches before interacting with the form. ClaudeCodeModelTokensCard
+    // calls getClaudeCodeModelUsage on mount; waiting here ensures all mount effects complete
+    // before we read the input value, avoiding act warnings from deferred state updates.
+    await act(async () => {});
     const from = await screen.findByLabelText('From date');
     const callsBefore = api.getUsage.mock.calls.length;
 

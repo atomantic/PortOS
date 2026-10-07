@@ -10,12 +10,17 @@ import { publishRowAnchor } from '../../lib/musicVideoStages.js';
 export const PUBLISH_TARGETS = [
   { target: 'youtube', label: 'YouTube', note: 'The final render, with chapters, thumbnail and captions' },
   { target: 'suno', label: 'Suno', note: 'Publishes the song with the cover and a link to the video' },
+  { target: 'sunoHook', label: 'Suno Hook', note: 'A 9:16 cut (the newest by default) set to its window of the song. You press Post' },
   { target: 'x', label: 'X thread', note: 'Hook with the 1080p video, then the story, prompt and links' },
   { target: 'shorts', label: 'YouTube Shorts', note: 'A 9:16 cut (the newest by default)' },
   { target: 'tiktok', label: 'TikTok', note: 'A 9:16 cut (the newest by default), labelled AI-generated' },
   { target: 'instagram', label: 'Instagram Reels', note: 'A 9:16 cut (the newest by default), with the AI label' },
   { target: 'reddit', label: 'Reddit', note: 'A native video post to r/aivideo (title and flair, no body)' },
   { target: 'stackerNews', label: 'Stacker News', note: 'A link post to the full video' },
+  {
+    target: 'substack', label: 'Substack', accountPlaceholder: 'name.substack.com',
+    note: 'A post with the full video at the top, then your title, subtitle and body. Substack keeps it in Drafts; you choose who gets it and press Publish',
+  },
   {
     // `accountPlaceholder` marks an account that is a name, not an @handle.
     target: 'distrokid', label: 'Spotify (via DistroKid)', accountPlaceholder: 'Artist name',
@@ -47,7 +52,7 @@ function verticalCutChoices(project) {
     .map((e) => ({ id: e.id, label: `Social cut ${fmtSec(e.startSec ?? 0)}-${fmtSec(e.endSec ?? 0)}` }));
   const crop = (kit.exports || []).find((e) => e.kind === 'vertical-9x16' && e.filename);
   if (crop && (kit.master?.renderHistoryId ?? null) === (project?.renderHistoryId ?? null)) {
-    cuts.unshift({ id: 'kit-vertical', label: `Kit center-crop ${fmtSec(crop.startSec ?? 0)}-${fmtSec(crop.endSec ?? 0)}` });
+    cuts.unshift({ id: 'kit-vertical', label: `Kit vertical (fit) ${fmtSec(crop.startSec ?? 0)}-${fmtSec(crop.endSec ?? 0)}` });
   }
   return cuts;
 }
@@ -64,7 +69,7 @@ function TargetOptions({ target, kit, project, options, setOption, flairs, idFor
   const area = (key, label) => field(key, label,
     <textarea id={idFor(key)} value={options[key] || ''} rows={3} onChange={(e) => setOption(key, e.target.value)} className={inputCls} />);
 
-  if (VERTICAL_TARGETS.includes(target)) {
+  const cutPicker = () => {
     const cuts = verticalCutChoices(project);
     if (cuts.length < 2) return null;
     return field('cutId', 'Vertical cut to post', (
@@ -72,6 +77,18 @@ function TargetOptions({ target, kit, project, options, setOption, flairs, idFor
         <option value="">Newest fresh cut (default)</option>
         {[...cuts].reverse().map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
       </select>));
+  };
+  if (VERTICAL_TARGETS.includes(target)) return cutPicker();
+  if (target === 'sunoHook') {
+    return (
+      <div className="grid sm:grid-cols-2 gap-2 items-end">
+        {text('songUrl', 'Song URL (the take the Hook plays)', kit.links?.song || 'https://suno.com/song/…')}
+        {cutPicker()}
+        <label className="flex items-center gap-1.5 text-xs min-h-[44px] sm:min-h-0">
+          <input type="checkbox" checked={options.showLyrics === true} onChange={(e) => setOption('showLyrics', e.target.checked)} /> Show Suno's lyrics (off when the cut has its own)
+        </label>
+      </div>
+    );
   }
   if (target === 'reddit') {
     return (
@@ -94,6 +111,9 @@ function TargetOptions({ target, kit, project, options, setOption, flairs, idFor
   }
   if (target === 'stackerNews') {
     return <div className="grid sm:grid-cols-2 gap-2">{text('territory', 'Territory', 'art')}<div className="sm:col-span-2">{area('firstComment', 'First comment (optional)')}</div></div>;
+  }
+  if (target === 'substack') {
+    return text('publication', 'Publication', account || 'name.substack.com');
   }
   if (target === 'suno') {
     // Prefill from kit links or run output if available
@@ -221,7 +241,7 @@ function TargetRow({ project, kit, entry, publishing }) {
   const idFor = (key) => `mv-post-${project.id}-${target}-${key}`;
   const [options, setOptions] = useState(() => {
     // Prefill Suno URL from autonomous run if available
-    if (target === 'suno' && project?.autonomousRun?.output?.sunoSongIds?.length > 0) {
+    if ((target === 'suno' || target === 'sunoHook') && project?.autonomousRun?.output?.sunoSongIds?.length > 0) {
       const songId = project.autonomousRun.output.sunoSongIds[0];
       return { songUrl: `https://suno.com/song/${encodeURIComponent(songId)}` };
     }

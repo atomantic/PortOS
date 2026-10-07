@@ -25,6 +25,7 @@ describe('describeCreativeDirectorStatus', () => {
       treatment: { scenes: [{ status: 'accepted' }, { status: 'rendering' }, { status: 'pending' }] },
     }), { activeAgents: 2 });
     expect(status).toMatchObject({ tone: 'muted', headline: 'Rendering · 1 of 3 scenes accepted', next: null });
+    expect(describeCreativeDirectorStatus(project({ status: 'rendering', treatment: { scenes: [{ status: 'accepted' }] } })).headline).toBe('Rendering · 1 of 1 scene accepted');
     expect(status.facts).toEqual([{ id: 'agents', label: '2 agents working', tone: 'muted' }]);
   });
 

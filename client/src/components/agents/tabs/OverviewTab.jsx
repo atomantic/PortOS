@@ -11,6 +11,7 @@ import { PERSONALITY_STYLES, DEFAULT_PERSONALITY, DEFAULT_AVATAR, PLATFORM_TYPES
 import { DEFAULT_AVATAR_COLOR } from '../../../themes/portosThemes';
 import { useCooldownTick } from '../../../hooks/useCooldownTick';
 import { formatCooldown, formatDateTime } from '../../../utils/formatters';
+import { pluralize } from '../../../lib/textUtils';
 
 export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   const navigate = useNavigate();
@@ -217,7 +218,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
     const result = await api.moltworldExplore({ accountId: quickAccountId, agentId }).catch(() => null);
     setExploring(false);
     if (!result) return;
-    toast.success(`Explored (${result.x}, ${result.y}) — ${result.nearby || 0} agents nearby`);
+    toast.success(`Explored (${result.x}, ${result.y}) — ${pluralize(result.nearby || 0, 'agent')} nearby`);
     refetchRateLimits();
   };
 

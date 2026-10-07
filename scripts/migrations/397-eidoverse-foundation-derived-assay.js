@@ -33,7 +33,8 @@
  * has nothing to migrate and writes nothing.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { writeJsonAtomic } from './_lib.js';
 import { join } from 'path';
 import { derivedContributionId } from '../../server/lib/eidoverseFoundations.js';
 import { foundationSandbox } from '../../server/lib/eidoverseFoundationSandbox.js';
@@ -89,7 +90,7 @@ export default {
     }
 
     if (rewritten === 0) return { updated: 0, reason: 'already-derived' };
-    await writeFile(file, `${JSON.stringify({ ...parsed, foundations }, null, 2)}\n`);
+    await writeJsonAtomic(file, { ...parsed, foundations });
     console.log(`🔁 migration 397: re-bound ${rewritten} Eidoverse foundation(s) to body-derived assay evidence (${dePromoted} returned to vernacular)`);
     return { updated: rewritten, dePromoted };
   },

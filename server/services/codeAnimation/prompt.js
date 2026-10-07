@@ -60,7 +60,7 @@ export const CODE_ANIMATION_ASPECT_RATIOS = Object.freeze({
 // particle or oil-stroke style inside a real-time frame budget.
 export const CODE_ANIMATION_RESOLUTIONS = Object.freeze({ '720p': 720, '1080p': 1080 });
 
-export const CODE_ANIMATION_RENDERERS = Object.freeze(['auto', 'canvas2d', 'webgl', 'svg']);
+export const CODE_ANIMATION_RENDERERS = Object.freeze(['auto', 'canvas2d', 'webgl', 'svg', 'three']);
 
 export const CODE_ANIMATION_LIMITS = Object.freeze({
   durationMin: 3,
@@ -73,15 +73,22 @@ export const CODE_ANIMATION_LIMITS = Object.freeze({
   textMax: 4_000,
   styleNotesMax: 2_000,
   referenceImagesMax: 8,
+  // A reference video becomes a contact sheet plus two keyframes.
+  referenceVideoImageSlots: 3,
   referenceNoteMax: 300,
   audioNotesMax: 1_500,
 });
+
+// The host vendors three.js and a fixed set of addons next to the page and
+// writes the import map itself (threeVendor.js), so the model only imports.
+const THREE_GUIDANCE = `Render with three.js (WebGL, real 3D). The host serves three locally and adds the import map: write \`<script type="module">\` and import by bare name — \`import * as THREE from 'three';\` plus only these addons: three/addons/postprocessing/{EffectComposer,RenderPass,ShaderPass,UnrealBloomPass,OutputPass,BokehPass,MaskPass,Pass}.js, three/addons/shaders/{CopyShader,LuminosityHighPassShader,OutputShader,BokehShader}.js, three/addons/geometries/RoundedBoxGeometry.js, three/addons/environments/RoomEnvironment.js (an asset-free PBR environment map) and three/addons/utils/BufferGeometryUtils.js. Do NOT write an import map or any CDN URL, and load no textures, models or fonts: build every material from colours and procedural CanvasTexture, and every shape from geometry. Create ONE renderer whose canvas is the film canvas (new THREE.WebGLRenderer({ antialias: false, preserveDrawingBuffer: true }), setPixelRatio(1), setSize(W, H, false)), ONE persistent scene and camera, and in renderFrame(t) only pose the scene analytically from t, then render once (composer.render() when you use post-processing). No simulation that accumulates between calls, no THREE.Clock, no Math.random: renderFrame(t) twice must give the same pixels. The page is a module, so it is deferred: define window.ANIMATION_META and window.renderFrame at module top level, not inside a load callback. For a cinematic finish render HDR through EffectComposer (HalfFloatType render target) and finish with OutputPass (tone mapping + sRGB): an UnrealBloomPass whose threshold sits above the sky (about 2.0 by day, 0.95 at night — a threshold of 1.0 turns every daytime frame milky), emissives driven above 1 (new THREE.Color(3, 1.6, 0.8)) so only lamps, screens and sparks glow, a depth-aware depth of field (BokehPass; focus on the subject, aperture small for wide shots and larger for close-ups, animate focus for rack focus), THREE.PCFShadowMap shadows (PCFSoftShadowMap was removed in r186) from a key light that casts shadows plus a soft fill near the camera so faces stay readable, and a vignette and light grain keyed to the frame time. Keep additive particles small and away from the lens. Software-rendered exports are slow: keep geometry modest and shadow maps at or below 2048.`;
 
 const RENDERER_GUIDANCE = {
   auto: 'Pick the renderer that best serves the style: Canvas 2D for most illustrative looks, raw WebGL (no libraries) when you need thousands of primitives or shader effects.',
   canvas2d: 'Render with the Canvas 2D API.',
   webgl: 'Render with raw WebGL / WebGL2 and hand-written shaders (no libraries).',
   svg: 'Render with inline SVG driven from script, rasterized onto the recording canvas each frame (draw the serialized SVG via an Image) so recording still captures it.',
+  three: THREE_GUIDANCE,
 };
 
 /** Even pixel dimensions for an aspect ratio at a short-side resolution. */
@@ -137,10 +144,26 @@ function referenceImagesSection(images, delivery) {
   const rows = images.map((image, index) => {
     const where = delivery === 'cli' && image.path ? ` (${image.path})` : '';
     const note = isNonBlankStr(image.note) ? ` — ${trimTo(image.note, CODE_ANIMATION_LIMITS.referenceNoteMax)}` : '';
-    const origin = { 'mood-board': ' [from the mood board]', universe: ' [universe style image]' }[image.origin] || '';
+    const origin = { 'mood-board': ' [from the mood board]', universe: ' [universe style image]', 'reference-video': ' [from the reference video]' }[image.origin] || '';
     return `${index + 1}. ${image.label}${origin}${where}${note}`;
   });
   return `${intro}\n${rows.join('\n')}\nUse them for palette, composition, silhouettes, texture, and lighting. Do NOT embed, fetch, or base64 them — recreate what matters procedurally in code.`;
+}
+
+// A model cannot watch the video: it gets the sampled stills (listed with the
+// reference images) plus the measured cut rhythm, and is told what to take.
+function referenceVideoSection(video) {
+  if (!video) return '';
+  const { durationSec, cuts } = video;
+  const shots = (cuts?.length ?? 0) + 1;
+  const rhythm = !cuts
+    ? `${durationSec.toFixed(1)}s long; its cut rhythm could not be measured, so read it from the contact sheet.`
+    : cuts.length
+    ? `${shots} shots in ${durationSec.toFixed(1)}s (average ${(durationSec / shots).toFixed(1)}s per shot); cuts at ${cuts.map((t) => `${t.toFixed(1)}s`).join(', ')}.`
+    : `One continuous ${durationSec.toFixed(1)}s shot with no detected cuts.`;
+  const note = isNonBlankStr(video.note) ? `\nWhat to take from it: ${trimTo(video.note, CODE_ANIMATION_LIMITS.referenceNoteMax)}` : '';
+  return `REFERENCE VIDEO — "${video.label}": the quality bar to match. Its contact sheet and two keyframes are among the reference images below. ${cuts ? 'Measured rhythm: ' : ''}${rhythm}${note}
+Study and match its craft, not its content: shot rhythm and coverage (wides, close-ups, inserts), camera moves and focus pulls, lighting and time of day, how it renders surfaces, and its finish (depth of field, bloom on light sources, colour grade, grain). Scale its cut rhythm to this piece's duration. Reproduce that fidelity with your own original subject, characters and story — never copy its characters, logos, text or shots.`;
 }
 
 function audioSection({ audio, soundtrack, durationSeconds }) {
@@ -209,7 +232,10 @@ const DIRECTION = `DIRECTION — make it feel like a studio short, not a tech de
 // pre-answer check against the failures one-shot animation code shows most.
 const SELF_REVIEW = `SELF-REVIEW before you answer: step through renderFrame at every beat's key frame in your head and score it honestly on character on-model, emotion readable from the face and body alone, story clear without sound, composition, depth, scale, lighting, and phone-size readability. Fix anything that would score below 8/10. Hunt especially for: stiff or dead secondary motion, sliding feet or wheels, faces that look like stickers, missing weight on stops and landings, identical-looking transitions, text overlapping during swaps, centered-on-gradient shots, muddy or unreadable text, off-model proportions, empty or static stretches, and beats the brief asked for that never made it on screen.`;
 
-function runtimeContract({ width, height, fps, durationSeconds, interactive, hasAudio }) {
+function runtimeContract({ width, height, fps, durationSeconds, interactive, hasAudio, renderer }) {
+  const selfContained = renderer === 'three'
+    ? 'Self-contained: no external scripts, stylesheets, fonts, images, or network requests of any kind; system fonts only. The ONE exception is the host-provided import map for three.js and its addons (see FORMAT): import those by bare name and nothing else.'
+    : 'Self-contained: no external scripts, stylesheets, fonts, images, or network requests of any kind; system fonts only.';
   const m = CODE_ANIMATION_MESSAGES;
   const audioTrack = hasAudio
     ? ' Mix the audio in: route the audio graph into a MediaStreamAudioDestinationNode and add its track to the recorded stream.'
@@ -227,7 +253,7 @@ function runtimeContract({ width, height, fps, durationSeconds, interactive, has
 7. postMessage handshake with the embedding host (always target "*"):
    - once ready: \`parent.postMessage({ type: '${m.ready}', meta: window.ANIMATION_META }, '*')\`
    - listen for \`{ type: '${m.record}' }\` → run recordAnimation(); while recording post \`{ type: '${m.progress}', t }\` about once per second; on success post \`{ type: '${m.recorded}', blob, mimeType }\`; on failure post \`{ type: '${m.error}', message }\`.${interaction}
-${interactive ? '9' : '8'}. Self-contained: no external scripts, stylesheets, fonts, images, or network requests of any kind; system fonts only. It must run from a sandboxed iframe (scripts allowed, no same-origin) and as a local file.
+${interactive ? '9' : '8'}. ${selfContained} It must run from a sandboxed iframe (scripts allowed, no same-origin) and as a local file.
 ${interactive ? '10' : '9'}. Hold ${fps}fps: pre-render static layers and textures to offscreen canvases once, reuse typed arrays, and avoid per-frame allocation.`;
 }
 
@@ -242,7 +268,7 @@ ${interactive ? '10' : '9'}. Hold ${fps}fps: pre-render static layers and textur
  * @param {string} [input.styleNotes] - refinements on top of the universe style
  * @param {string|null} [input.styleGrammarId] - film style grammar id (#10253); unknown ids throw a 400
  * @param {{ durationSeconds: number, aspectRatio: string, resolution: string, fps: number }} input.format
- * @param {'auto'|'canvas2d'|'webgl'|'svg'} [input.renderer]
+ * @param {'auto'|'canvas2d'|'webgl'|'svg'|'three'} [input.renderer]
  * @param {boolean} [input.interactive]
  * @param {'none'|'procedural'} [input.soundtrack]
  * @param {{ name: string, durationSeconds?: number|null, notes?: string }|null} [input.audio]
@@ -267,6 +293,7 @@ export function buildCodeAnimationPrompt({
   universe = null,
   moodBoard = null,
   referenceImages = [],
+  referenceVideo = null,
   delivery = 'copy',
 }) {
   const { width, height } = resolveFrameSize(format.aspectRatio, format.resolution);
@@ -282,12 +309,14 @@ export function buildCodeAnimationPrompt({
   sections.push(`ART DIRECTION:\n${artDirectionSection({ universe, styleNotes, styleGrammarId, hasMoodBoard: !!moodBoard })}`);
   const boardText = moodBoardSection(moodBoard);
   if (boardText) sections.push(boardText);
+  const videoText = referenceVideoSection(referenceVideo);
+  if (videoText) sections.push(videoText);
   const imagesText = referenceImagesSection(referenceImages, delivery);
   if (imagesText) sections.push(imagesText);
   sections.push(`SOUND:\n${audioSection({ audio, soundtrack, durationSeconds })}`);
   sections.push(`FORMAT: ${format.aspectRatio} at ${width}×${height}px, ${fps}fps, ${durationSeconds}s. ${RENDERER_GUIDANCE[renderer] || RENDERER_GUIDANCE.auto}`);
   sections.push(DIRECTION);
-  sections.push(runtimeContract({ width, height, fps, durationSeconds, interactive, hasAudio: !!audio || soundtrack === 'procedural' }));
+  sections.push(runtimeContract({ width, height, fps, durationSeconds, interactive, hasAudio: !!audio || soundtrack === 'procedural', renderer }));
   sections.push(SELF_REVIEW);
   sections.push(`OUTPUT: Return ONLY the finished HTML document in a single \`\`\`html fenced code block, starting with <!DOCTYPE html>. No explanation before or after it.${delivery === 'cli' ? ' Do not create or edit any files — print the document as your final answer.' : ''}`);
   return sections.join('\n\n');
@@ -415,7 +444,7 @@ export function buildMixedMediaDocumentPrompt({ title, song, palette, treatment,
   const sections = (song.sections || []).filter((section) => !onlySectionId || section.id === onlySectionId);
   return [
     `MEDIA POLICY: ${mediaMode}. Code always authors composition, staging, characters, camera, text, motion and timing. Never generate guide images in code-only mode.`,
-    renderer === 'three' ? `Write complete authored Three.js worlds, one function render(ctx, env) per section. ctx = { THREE, scene, camera, text }; THREE is the installed locally packaged library; scene is a fresh Scene on EACH seek, camera a PerspectiveCamera, text a transparent Canvas2D overlay with local MV Mono font. Build modeled characters with articulated limbs and expressive poses, environments with depth/lighting/shadows, props, narrative action and camera choreography. Position every object analytically from env.t/localT; no simulation accumulation. Add geometry/lights to ctx.scene and set ctx.camera explicitly. Use ctx.text for designed typography. Render fills the whole frame; a particle field or text overlays alone are not a scene. Do not create a renderer, DOM elements, textures loaded from files, or another clock. env provides t, localT, frame, width, height, song, section, palette, safe, events and reactiveGain. No imports, require, fetch, Math.random, Date, performance, globalThis, window, document or external assets. The host draws aligned subtitles after your text; reserve lower title-safe space. Use reusable local functions within each section for anatomy and world construction.` : `Write original Canvas 2D section functions for a mixed-media music-video document titled ${JSON.stringify(trimTo(title, 200))}. The host owns the document, song clock, selected local media and lyric pass. Return code functions only; do not request or generate image/video assets.`,
+    renderer === 'three' ? `Write complete authored Three.js worlds, one function render(ctx, env) per section. ctx = { THREE, scene, camera, text, lens }; THREE is the installed locally packaged library; scene is a fresh Scene on EACH seek, camera a PerspectiveCamera, text a transparent Canvas2D overlay with local MV Mono font, lens a per-frame object you set to direct the host post stack. LENS: every lens setting starts off; once any is set the host renders HDR then applies depth of field, bloom, a PBR Neutral highlight shoulder, vignette and grain. For a finished look set ctx.lens.bloom 0.3, vignette 0.3 and grain 0.02 alongside your focus. Set ctx.lens.focus (camera distance, or a THREE.Vector3 such as the subject's head) and ctx.lens.aperture (blur pixels at 1080p; 0 is sharp, 3-6 for wide shots, 10-18 for character close-ups) and animate focus from env.t for rack focus; ctx.lens.maxBlur caps it (default 16). Only colours above ctx.lens.bloomThreshold (default 1) glow, so drive emissive screens, lamps and sparks above 1 (e.g. new THREE.Color(3, 1.6, 0.8)) and raise the threshold above a bright daytime sky so daylight does not haze; exposure is also settable (default 1). Light a character with a key that casts shadows plus a soft fill near the camera so faces stay readable in night or backlit shots, and keep additive particles small and away from the lens. Build modeled characters with articulated limbs and expressive poses, environments with depth/lighting/shadows, props, narrative action and camera choreography. Position every object analytically from env.t/localT; no simulation accumulation. Add geometry/lights to ctx.scene and set ctx.camera explicitly. Use ctx.text for designed typography. Render fills the whole frame; a particle field or text overlays alone are not a scene. Do not create a renderer, DOM elements, textures loaded from files, or another clock. env provides t, localT, frame, width, height, song, section, palette, safe, events and reactiveGain. No imports, require, fetch, Math.random, Date, performance, globalThis, window, document or external assets. The host draws aligned subtitles after your text; reserve lower title-safe space. Use reusable local functions within each section for anatomy and world construction.` : `Write original Canvas 2D section functions for a mixed-media music-video document titled ${JSON.stringify(trimTo(title, 200))}. The host owns the document, song clock, selected local media and lyric pass. Return code functions only; do not request or generate image/video assets.`,
     renderer === 'three' ? '' : CODE_VIDEO_RULES.replace('- Canvas 2D only. No external assets, fonts, or network.', '- Canvas 2D only. No network, remote URLs, filesystem paths or font loading. The host binds only the listed selected project assets; draw over footage/stills without obscuring them, and draw the entire authored world for card scenes, including characters, environments, camera staging, lighting and narrative actions. Local packaged fonts MV Mono, MV Cond and MV Stencil are available; authored titles are allowed, but do not duplicate host subtitles.'),
     MUSIC_VIDEO_DIRECTION,
     MUSIC_VIDEO_CHOREOGRAPHY,

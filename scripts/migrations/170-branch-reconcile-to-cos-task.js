@@ -26,7 +26,8 @@
  * old reconciler was disabled, only the dead key is removed (no task is enabled).
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { writeJsonAtomic } from './_lib.js';
 import { join } from 'path';
 
 const SETTINGS_REL = 'data/settings.json';
@@ -87,7 +88,7 @@ export default {
           autoMerge: on(actions, 'autoMerge')
         };
         schedule.tasks['branch-reconcile'] = task;
-        await writeFile(schedulePath, `${JSON.stringify(schedule, null, 2)}\n`);
+        await writeJsonAtomic(schedulePath, schedule);
         console.log('📝 branch-reconcile: carried the enabled PortOS reconciler into the new per-app CoS task');
       } else {
         console.log('⚠️ branch-reconcile: no task-schedule.json to configure — loadSchedule will install the on-demand default; manual Run is available under Chief of Staff');
@@ -107,7 +108,7 @@ export default {
           scoped += 1;
         }
         if (scoped > 0) {
-          await writeFile(appsPath, `${JSON.stringify(appsData, null, 2)}\n`);
+          await writeJsonAtomic(appsPath, appsData);
           console.log(`📝 branch-reconcile: preserved PortOS-only scope — disabled on ${scoped} other managed app(s) (re-enable per app under Chief of Staff)`);
         }
       }
@@ -115,7 +116,7 @@ export default {
 
     // 2. Drop the dead settings key.
     delete settings.branchReconcile;
-    await writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    await writeJsonAtomic(settingsPath, settings);
     console.log(`✅ branch-reconcile: removed dead settings.branchReconcile key (was ${wasEnabled ? 'enabled → migrated to CoS task' : 'disabled'})`);
     return { updated: 1, wasEnabled };
   }

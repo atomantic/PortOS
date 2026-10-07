@@ -3,7 +3,7 @@
  * redirects temp APIs before Vitest creates its module-transform cache.
  * The server's exclusive capture projects share this single global owner.
  */
-import { readdirSync, rmSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { OWNER_FILE } from './lib/vitestStaleRunRoots.js';
 
@@ -29,6 +29,23 @@ const TOOLCHAIN_CACHE_PREFIXES = new Set([
   'org.chromium.Chromium.',
   '.org.chromium.Chromium.',
 ]);
+
+// Written by server/lib/mockPathsDataRoot.js (`<dir>\t<test file>` per root it
+// minted). Kept as a literal here: this setup file imports no server code.
+const OWNERS_FILE = '.leak-owners';
+
+function readLeakOwners(root) {
+  const owners = new Map();
+  let text = '';
+  try {
+    text = readFileSync(join(root, OWNERS_FILE), 'utf8');
+  } catch { /* no PATHS-mocking suite ran */ }
+  for (const line of text.split('\n')) {
+    const [dir, file] = line.split('\t');
+    if (dir && file) owners.set(dir, file);
+  }
+  return owners;
+}
 
 export function groupLeakPrefix(name) {
   return name.replace(/[0-9a-zA-Z]{6,}$/, '') || name;
@@ -63,18 +80,23 @@ export function teardown() {
     return;
   }
   entries = entries
-    .filter((name) => name !== OWNER_FILE)
+    .filter((name) => name !== OWNER_FILE && name !== OWNERS_FILE)
     .filter((name) => !VITEST_INTERNAL_SCRATCH_DIR.test(name))
     .filter((name) => !TOOLCHAIN_CACHE_PREFIXES.has(groupLeakPrefix(name)))
     .filter((name) => !isEffectivelyEmpty(join(root, name)));
 
+  const owners = readLeakOwners(root);
   const byPrefix = new Map();
   for (const name of entries) {
     const prefix = groupLeakPrefix(name);
-    byPrefix.set(prefix, (byPrefix.get(prefix) || 0) + 1);
+    const group = byPrefix.get(prefix) || { count: 0, files: new Set() };
+    group.count++;
+    if (owners.has(name)) group.files.add(owners.get(name));
+    byPrefix.set(prefix, group);
   }
-  for (const [prefix, count] of byPrefix) {
-    console.warn(`⚠️ test temp leak: ${prefix} ×${count}`);
+  for (const [prefix, { count, files }] of byPrefix) {
+    const by = files.size ? ` (created by ${[...files].join(', ')})` : '';
+    console.warn(`⚠️ test temp leak: ${prefix} ×${count}${by}`);
   }
   if (entries.length) process.exitCode = 1;
 

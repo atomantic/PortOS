@@ -11,6 +11,7 @@ import DeclareChangeDrawer from './DeclareChangeDrawer';
 import { VAULT_TYPES, CHANGE_KINDS, labelFor } from './constants';
 import { isHttpUrl } from '../../utils/urlNormalize';
 import { formatDateNumeric } from '../../utils/formatters';
+import useLatestRequest from '../../hooks/useLatestRequest';
 
 // A slim progress bar over pending/updated/removed. Done = zero pending.
 function ProgressBar({ progress }) {
@@ -114,18 +115,21 @@ export default function PrivacyChangesTab({ subjectId }) {
   const [detail, setDetail] = useState(null); // { event, oldRecord, replacementRecord, progress }
   const [detailLoading, setDetailLoading] = useState(false);
 
+  const beginRequest = useLatestRequest();
   const load = useCallback(() => {
+    const isCurrent = beginRequest();
     setLoading(true);
     // A change event inherits its subject from the vault record it replaces, so
     // scoping the record list is what keeps the Declare form on one person.
     Promise.allSettled([
       getPrivacyChanges({ subjectId }), getVaultRecords(undefined, { subjectId }),
     ]).then(([e, v]) => {
+      if (!isCurrent()) return;
       setEvents(e.status === 'fulfilled' ? e.value : []);
       setVaultRecords(v.status === 'fulfilled' ? v.value : []);
       setLoading(false);
     });
-  }, [subjectId]);
+  }, [subjectId, beginRequest]);
 
   useEffect(() => { load(); }, [load]);
 

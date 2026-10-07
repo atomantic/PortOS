@@ -18,7 +18,9 @@ const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded 
  * A pin the catalog no longer lists stays selected, so a save cannot drop it.
  */
 function localModelSelectState({ catalog, failed, pinned, kind }) {
-  const models = Array.isArray(catalog?.models) ? catalog.models : [];
+  // Footage production always animates a frame, so a text-only video model can never render a clip.
+  const models = (Array.isArray(catalog?.models) ? catalog.models : [])
+    .filter((model) => kind !== 'video' || !Array.isArray(model.supportedModes) || model.supportedModes.includes('image'));
   const loading = catalog == null && !failed;
   const defaultId = typeof catalog?.defaultModel === 'string' ? catalog.defaultModel : '';
   const defaultName = models.find((model) => model.id === defaultId)?.name || defaultId;
@@ -167,5 +169,36 @@ export default function ToolPicker({ idPrefix = 'mv-auto', tools, models, onChan
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * One video tool's model swap, for a parked run's Resume. Local video gen picks from the
+ * same image-capable catalog the start drawer uses (text-only models are hidden);
+ * other tools take a model id. A blank value is the install default.
+ */
+export function VideoModelField({ id, tool, value, onChange }) {
+  const local = tool.id === LOCAL_VIDEO_TOOL_ID;
+  const { catalog, failed } = useLocalVideoModels(local);
+  const label = `${tool.label} model`;
+  if (!local) {
+    return (
+      <div className="min-w-0">
+        <label htmlFor={id} className="block text-xs text-port-text-muted mb-1">{label}</label>
+        <input id={id} value={value} onChange={(e) => onChange(e.target.value)} placeholder="Install default" maxLength={200} className={inputClass} />
+      </div>
+    );
+  }
+  const select = localModelSelectState({ catalog, failed, pinned: value, kind: 'video' });
+  const statusId = `${id}-status`;
+  return (
+    <div className="min-w-0">
+      <label htmlFor={id} className="block text-xs text-port-text-muted mb-1">{label}</label>
+      <select id={id} value={value} disabled={select.disabled} aria-describedby={select.status ? statusId : undefined} onChange={(e) => onChange(e.target.value)} className={inputClass}>
+        <option value="">{select.blankLabel}</option>
+        {select.options.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+      </select>
+      {select.status && <p id={statusId} role="status" className="text-[11px] text-port-warning mt-1">{select.status}</p>}
+    </div>
   );
 }

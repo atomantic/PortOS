@@ -3,6 +3,7 @@ import { Upload, Trash2, Download, FileText, Image, File, FolderOpen, RefreshCw 
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { formatDateTime } from '../utils/formatters';
+import { pluralize } from '../lib/textUtils';
 import toast from '../components/ui/Toast';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import FilePickerButton from '../components/ui/FilePickerButton';
@@ -95,7 +96,7 @@ export default function Uploads() {
     });
 
     if (result?.success) {
-      toast.success(`Deleted ${result.deleted} files (${result.freedSpaceFormatted})`);
+      toast.success(`Deleted ${pluralize(result.deleted, 'file')} (${result.freedSpaceFormatted})`);
       fetchUploads();
     }
     setConfirmingDeleteAll(false);
@@ -147,7 +148,7 @@ export default function Uploads() {
           {uploads.length > 0 && (
             confirmingDeleteAll ? (
               <ConfirmButtonPair
-                prompt={`Delete all ${uploads.length} files? This cannot be undone.`}
+                prompt={`Delete all ${pluralize(uploads.length, 'file')}? This cannot be undone.`}
                 confirmText="Delete all"
                 confirmIcon={Trash2}
                 onConfirm={handleDeleteAll}

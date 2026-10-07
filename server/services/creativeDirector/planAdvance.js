@@ -36,6 +36,7 @@ import { isAutopilotActive } from '../pipeline/seriesAutopilot/session.js';
 import { getSeries } from '../pipeline/series.js';
 import { MAX_REPLAN_ROUNDS, PLAN_STEP_TERMINAL_SUCCESS } from '../../lib/creativeDirectorPresets.js';
 import { blockedStageReason, closeDeliverableStreak, exhaustedDeliverableStreak } from './deliverableGate.js';
+import { logFailureWithStack } from '../../lib/failureLogging.js';
 
 // The registry tool that runs Series Autopilot as a plan step. A long-running
 // step whose dispatch returns a run handle (a `runId`, not a media `jobId`)
@@ -546,7 +547,7 @@ function armPlanJobListener(projectId, stepId, jobId, runId, expectedProductionR
         await updatePlanStep(projectId, stepId, { ...(expectedProductionRevision === undefined ? {} : { expectedProductionRevision }), status: 'failed', result: { jobId, jobStatus: job.status } });
         await handlePlanStepFailure(projectId, { stepId, toolName: '(long-running job)', retryCount: 0 });
       }
-    }).catch((e) => console.log(`⚠️ CD plan ${projectId} job settle for ${stepId} failed: ${e.message}`));
+    }).catch((e) => logFailureWithStack(`❌ CD plan ${projectId} job settle for ${stepId} failed`, e));
   }
   mediaJobEvents.on('completed', settle);
   mediaJobEvents.on('failed', settle);
@@ -667,7 +668,7 @@ function armAutopilotListener(projectId, stepId, seriesId, runId, apResult, expe
         await finishRun(projectId, runId, 'failed', `autopilot run stalled — no activity for ${Math.round(AUTOPILOT_LISTENER_IDLE_MS / 60000)}m`);
         await updatePlanStep(projectId, stepId, { ...(expectedProductionRevision === undefined ? {} : { expectedProductionRevision }), status: 'failed', result: { error: 'autopilot run stalled (idle backstop)' } });
         await handlePlanStepFailure(projectId, { stepId, toolName: '(series autopilot)', retryCount: 0 });
-      })().catch((e) => console.log(`⚠️ CD plan ${projectId} autopilot idle-backstop settle for ${stepId} failed: ${e.message}`));
+      })().catch((e) => logFailureWithStack(`❌ CD plan ${projectId} autopilot idle-backstop settle for ${stepId} failed`, e));
     }, AUTOPILOT_LISTENER_IDLE_MS);
     idleTimer.unref?.();
   };
@@ -682,7 +683,7 @@ function armAutopilotListener(projectId, stepId, seriesId, runId, apResult, expe
     fired = true;
     teardown();
     settleAutopilotStep(projectId, stepId, runId, payload, expectedProductionRevision)
-      .catch((e) => console.log(`⚠️ CD plan ${projectId} autopilot settle for ${stepId} failed: ${e.message}`));
+      .catch((e) => logFailureWithStack(`❌ CD plan ${projectId} autopilot settle for ${stepId} failed`, e));
   }
   autopilotEvents.on(seriesId, handler);
   planJobCleanups.set(key, teardown);
@@ -699,7 +700,7 @@ function armAutopilotListener(projectId, stepId, seriesId, runId, apResult, expe
         teardown();
         await settleAutopilotStep(projectId, stepId, runId, marker, expectedProductionRevision);
       }
-    })().catch((e) => console.log(`⚠️ CD plan ${projectId} autopilot marker settle for ${stepId} failed: ${e.message}`));
+    })().catch((e) => logFailureWithStack(`❌ CD plan ${projectId} autopilot marker settle for ${stepId} failed`, e));
   }
 }
 

@@ -8,6 +8,7 @@ import IconPicker from '../components/IconPicker';
 import FolderPicker from '../components/FolderPicker';
 import Banner from '../components/ui/Banner';
 import { NON_PM2_TYPES, isStandardizable, getAppTypeLabel } from '../components/apps/constants';
+import { pluralize } from '../lib/textUtils';
 
 const DETECTION_STEPS_PM2 = [
   { id: 'validate', label: 'Validating path' },
@@ -584,7 +585,7 @@ export default function CreateApp() {
                   onClick={() => setShowLog(!showLog)}
                   className="text-xs text-gray-500 hover:text-gray-400"
                 >
-                  {showLog ? 'Hide' : 'Show'} detection log ({detectionLog.length} entries)
+                  {showLog ? 'Hide' : 'Show'} detection log ({pluralize(detectionLog.length, 'entry', 'entries')})
                 </button>
                 {showLog && (
                   <div className="mt-2 p-2 bg-port-bg rounded text-xs font-mono text-gray-400 max-h-40 overflow-auto">

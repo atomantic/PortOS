@@ -121,7 +121,7 @@ vi.mock('../services/subAgentSpawner.js', () => ({
 // real buildJiraTicketTask runs so the `/tasks/jira-ticket` route still exercises
 // the extracted prompt assembly — it resolves getTaskPrompt/getCodeReviewDefaults,
 // which are mocked below, so the route-level assertions stay verbatim.
-vi.mock('../services/cosTaskGenerator.js', async (importActual) => ({
+vi.mock('../services/cosTaskClaimWork.js', async (importActual) => ({
   ...(await importActual()),
   buildClaimWorkTask: vi.fn(),
   buildIssueReplanTask: vi.fn()
@@ -153,7 +153,7 @@ import * as appActivity from '../services/appActivity.js';
 import * as claudeChangelog from '../services/claudeChangelog.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import { loadSlashdoCommand } from '../services/subAgentSpawner.js';
-import { buildClaimWorkTask, buildIssueReplanTask } from '../services/cosTaskGenerator.js';
+import { buildClaimWorkTask, buildIssueReplanTask } from '../services/cosTaskClaimWork.js';
 import { getAppById, getAppWorkTracker } from '../services/apps.js';
 import { getTaskPrompt } from '../services/taskPromptService.js';
 import { getCodeReviewDefaults } from '../services/codeReview.js';

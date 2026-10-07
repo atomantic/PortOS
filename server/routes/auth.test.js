@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
@@ -266,6 +266,61 @@ describe('auth routes', () => {
       .send({ currentPassword: 'correct-horse' });
     expect(good.status).toBe(200);
     expect(good.body).toEqual({ enabled: false });
+  });
+});
+
+describe('security audit trail', () => {
+  // Every line logSecurityEvent emits, whichever sink it chose.
+  const captureTrail = () => {
+    const lines = [];
+    const sink = (line) => lines.push(String(line));
+    vi.spyOn(console, 'log').mockImplementation(sink);
+    vi.spyOn(console, 'warn').mockImplementation(sink);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    return () => lines.filter((line) => line.includes('Security ['));
+  };
+  afterEach(() => vi.restoreAllMocks());
+
+  it('records the password lifecycle, sign-ins and failures — never the password', async () => {
+    const trail = captureTrail();
+    let app = await buildApp();
+    await request(app).post('/api/auth/password').send({ newPassword: 'correct-horse' });
+    app = await buildApp();
+    await request(app).post('/api/auth/login').send({ password: 'wrong-guess' });
+    await request(app).post('/api/auth/login').send({ password: 'correct-horse' });
+    await request(app).post('/api/auth/password').send({ newPassword: 'rotated-horse', currentPassword: 'correct-horse' });
+    await request(app).delete('/api/auth/password').send({ currentPassword: 'rotated-horse' });
+
+    const lines = trail();
+    expect(lines.map((l) => l.match(/Security \[([^\]]+)\]/)[1])).toEqual([
+      'password.set', 'login.failed', 'login.ok', 'password.rotated', 'password.cleared',
+    ]);
+    expect(lines.find((l) => l.includes('login.failed'))).toMatch(/^⛔ .* ip=\S+/);
+    expect(lines.find((l) => l.includes('login.ok'))).toMatch(/^🔐 .* session=[a-f0-9]+/);
+    expect(lines.join('\n')).not.toMatch(/horse|wrong-guess/);
+  });
+
+  it('logs one throttle line when the failure window fills, not one per blocked request', async () => {
+    const trail = captureTrail();
+    let app = await buildApp();
+    await request(app).post('/api/auth/password').send({ newPassword: 'correct-horse' });
+    app = await buildApp();
+    for (let i = 0; i < 12; i++) await request(app).post('/api/auth/login').send({ password: `wrong-${i}` });
+
+    const lines = trail();
+    expect(lines.filter((l) => l.includes('login.failed'))).toHaveLength(10);
+    expect(lines.filter((l) => l.includes('login.throttled'))).toHaveLength(1);
+  });
+
+  it('records a refused host-control call with the caller and path', async () => {
+    const trail = captureTrail();
+    const app = await buildApp({ remoteAddress: '192.0.2.10' });
+    const refused = await request(app).post('/api/commands/execute').send({});
+    expect(refused.status).toBe(403);
+    const [line] = trail().filter((l) => l.includes('host-control.refused'));
+    expect(line).toMatch(/^⛔ /);
+    expect(line).toContain('path=/api/commands/execute');
+    expect(line).toContain('auth=none');
   });
 });
 

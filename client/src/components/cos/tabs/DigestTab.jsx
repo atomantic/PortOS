@@ -19,6 +19,7 @@ import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
 import { formatDateNumeric } from '../../../utils/formatters';
+import { pluralize } from '../../../lib/textUtils';
 
 export default function DigestTab() {
   const [currentDigest, setCurrentDigest] = useState(null);
@@ -129,7 +130,7 @@ export default function DigestTab() {
             >
               {digestList.map(d => (
                 <option key={d.weekId} value={d.weekId}>
-                  {d.weekId} ({d.totalTasks} tasks)
+                  {d.weekId} ({pluralize(d.totalTasks, 'task')})
                 </option>
               ))}
             </select>

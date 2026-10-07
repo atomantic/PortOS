@@ -25,7 +25,8 @@
  * user added is preserved in order, so the rest of their customization survives.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { writeJsonAtomic } from './_lib.js';
 import { join } from 'path';
 
 const PROVIDERS_REL_PATH = 'data/providers.json';
@@ -70,6 +71,6 @@ export default {
       return;
     }
 
-    await writeFile(providersPath, `${JSON.stringify(config, null, 2)}\n`);
+    await writeJsonAtomic(providersPath, config);
   },
 };

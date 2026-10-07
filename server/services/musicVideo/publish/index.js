@@ -21,13 +21,15 @@ import { instagramAdapter } from './instagram.js';
 import { xAdapter } from './x.js';
 import { redditAdapter } from './reddit.js';
 import { stackerNewsAdapter } from './stackerNews.js';
+import { substackAdapter } from './substack.js';
 import { sunoAdapter } from './suno.js';
+import { sunoHookAdapter } from './sunoHook.js';
 import { distrokidAdapter } from './distrokid.js';
 import { musicVideoEvents } from '../events.js';
 
 export const PUBLISH_ADAPTERS = Object.freeze({
   youtube: youtubeAdapter, shorts: shortsAdapter, tiktok: tiktokAdapter, instagram: instagramAdapter,
-  x: xAdapter, reddit: redditAdapter, stackerNews: stackerNewsAdapter, suno: sunoAdapter, distrokid: distrokidAdapter,
+  x: xAdapter, reddit: redditAdapter, stackerNews: stackerNewsAdapter, substack: substackAdapter, suno: sunoAdapter, sunoHook: sunoHookAdapter, distrokid: distrokidAdapter,
 });
 // The tab stays open past this: the human publishes from it. After the TTL only
 // the CDP session is dropped; the tab closes on Discard, Fill again, or by hand.
@@ -124,10 +126,12 @@ async function withCovers(target, payload, deps) {
   return result.ok ? { ...payload, cover: { dir: 'videoThumbnails', name: out.split(/[\\/]/).pop(), path: out } } : uncut();
 }
 
-/** DistroKid's options default the artist to the account named under Where you post. */
+/** Options named once under Where you post: DistroKid's artist, Substack's publication. */
+const ACCOUNT_OPTION = { distrokid: 'artistName', substack: 'publication' };
 function withPlatformDefaults(target, options, platforms) {
-  if (target !== 'distrokid' || options?.artistName) return options;
-  return { ...options, artistName: platforms?.distrokid?.account || '' };
+  const key = ACCOUNT_OPTION[target];
+  if (!key || options?.[key]) return options;
+  return { ...options, [key]: platforms?.[target]?.account || '' };
 }
 
 /** The release audio a distributor uploads: the project's own source song. */

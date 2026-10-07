@@ -407,7 +407,7 @@ describe('videoGen/fal — cancel abandoned renders (#8340)', () => {
 
     const completed = vi.fn();
     videoGenEvents.on('completed', completed);
-    const job = await fal.generateVideo({ apiKey: 'test-key', modelId: 'fal-ai/x', prompt: 'retry me' });
+    const _job = await fal.generateVideo({ apiKey: 'test-key', modelId: 'fal-ai/x', prompt: 'retry me' });
 
     // Two failed status attempts, each separated by the normal poll interval,
     // then a third attempt that reports COMPLETED.

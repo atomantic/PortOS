@@ -28,6 +28,8 @@ const mock = vi.hoisted(() => ({
   mtimes: new Map(),
   // Counts real parses so the cache tests can prove a hit did no work.
   parseCalls: 0,
+  // When set, atomicWrite rejects with it (a write that dies before the rename).
+  atomicFailure: null,
   state: null,
   events: [],
   // Controls the mocked codeReview.js for resolveTaskChallengeWithRecheck (#2471).
@@ -48,14 +50,25 @@ vi.mock('fs', async (importOriginal) => {
   };
 });
 
+// Task files are written through atomicWrite (temp file + rename). The mock
+// applies the same in-memory write the fs/promises writeFile mock used to, and
+// `mock.atomicFailure` lets a test simulate the write dying before the rename.
+vi.mock('../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    atomicWrite: vi.fn(async (p, content) => {
+      if (mock.atomicFailure) throw mock.atomicFailure;
+      mock.files.set(p, content);
+      mock.mtimes.set(p, (mock.mtimes.get(p) || 0) + 1000);
+    })
+  };
+});
+
 vi.mock('fs/promises', () => ({
   readFile: vi.fn(async (p) => {
     if (!mock.files.has(p)) throw new Error(`ENOENT: ${p}`);
     return mock.files.get(p);
-  }),
-  writeFile: vi.fn(async (p, content) => {
-    mock.files.set(p, content);
-    mock.mtimes.set(p, (mock.mtimes.get(p) || 0) + 1000);
   }),
   // The parsed-task cache stamps on mtimeMs + size, so the mock must model both.
   stat: vi.fn(async (p) => {
@@ -142,6 +155,7 @@ const baseState = () => ({
 });
 
 beforeEach(() => {
+  mock.atomicFailure = null;
   mock.files = new Map();
   mock.mtimes = new Map();
   mock.parseCalls = 0;
@@ -630,6 +644,14 @@ describe('cosTaskStore.addTask', () => {
     expect(task.priorityValue).toBe(PRIORITY_VALUES.MEDIUM);
     expect(task.status).toBe('pending');
     expect(mock.events.some(e => e.name === 'tasks:changed' && e.payload.action === 'added' && e.payload.type === 'user')).toBe(true);
+  });
+
+  it('keeps the existing task list intact and surfaces the error when the file write fails', async () => {
+    await addTask({ description: 'survivor', id: 'task-survivor' }, 'user');
+    mock.atomicFailure = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    await expect(addTask({ description: 'lost write', id: 'task-lost' }, 'user')).rejects.toThrow('ENOSPC');
+    mock.atomicFailure = null;
+    expect((await getUserTasks()).tasks.map(t => t.id)).toEqual(['task-survivor']);
   });
 
   it('persists the no-change success marker for an autonomous audit', async () => {
@@ -2011,12 +2033,19 @@ describe('parsed-task cache — no bypass (source guards, #3497)', () => {
     expect(bypasses, `direct readFile call(s): ${bypasses.join(' | ')}`).toEqual([]);
   });
 
+  it('writeTaskFile persists through atomicWrite, never an in-place fs writeFile', () => {
+    // An in-place truncate killed mid-write leaves TASKS.md empty/half-written,
+    // which parses as "no tasks" and is persisted by the next write.
+    expect(STORE_SRC).toMatch(/import \{ atomicWrite \} from '\.\.\/lib\/fileUtils\.js'/);
+    expect(STORE_SRC).not.toMatch(/import \{[^}]*\bwriteFile\b[^}]*\} from 'fs\/promises'/);
+  });
+
   it('every task-file write goes through writeTaskFile', () => {
     // A write calling writeFile directly leaves the previous parse cached, and
     // mtime granularity is too coarse to be relied on to catch it — the next
     // read would serve pre-write tasks.
-    const bypasses = outsideAccessors.filter(line => /\bwriteFile\(/.test(line));
-    expect(bypasses, `direct writeFile call(s): ${bypasses.join(' | ')}`).toEqual([]);
+    const bypasses = outsideAccessors.filter(line => /\b(writeFile|atomicWrite)\(/.test(line));
+    expect(bypasses, `direct writeFile/atomicWrite call(s): ${bypasses.join(' | ')}`).toEqual([]);
   });
 });
 
@@ -2068,7 +2097,7 @@ describe('cosTaskStore.mergePeerTasks', () => {
   it('is a no-op (no write, no event) when the peer payload changes nothing', async () => {
     await addTask({ description: 'same', priority: 'MEDIUM', id: 'task-same' }, 'user');
     mock.events = [];
-    const writeSpy = (await import('fs/promises')).writeFile;
+    const writeSpy = (await import('../lib/fileUtils.js')).atomicWrite;
     writeSpy.mockClear();
     const remote = [{ id: 'task-same', taskType: 'user', status: 'pending', priority: 'MEDIUM', description: 'same', metadata: {} }];
     const res = await mergePeerTasks('user', remote, { now: NOW });

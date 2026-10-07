@@ -25,7 +25,7 @@ export default function CalendarDayEvents({
       open={!!date && !selectedEvent && (events.length > 0 || !loading)}
       onClose={onClose}
       title={date ? formatDateFull(date) : ''}
-      subtitle={`${formatCount(dayEvents.length)} events${complete ? '' : ' loaded'}`}
+      subtitle={`${formatCount(dayEvents.length)} ${dayEvents.length === 1 ? 'event' : 'events'}${complete ? '' : ' loaded'}`}
       closeLabel="Close day events"
     >
       <div className="space-y-2">

@@ -16,6 +16,8 @@ export default function VideoDownloaderPage() {
   const [downloads, setDownloads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState(null);
+  // Thumbnail filenames that failed to load; keyed by value so a new thumbnail retries.
+  const [failedThumbs, setFailedThumbs] = useState(() => new Set());
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   useEffect(() => {
@@ -127,11 +129,12 @@ export default function VideoDownloaderPage() {
                   rel="noreferrer"
                   className="shrink-0 block w-28 aspect-video rounded overflow-hidden bg-port-bg border border-port-border"
                 >
-                  {d.thumbnail ? (
+                  {d.thumbnail && !failedThumbs.has(d.thumbnail) ? (
                     <img
                       src={`/data/video-thumbnails/${d.thumbnail}`}
                       alt=""
                       className="w-full h-full object-cover"
+                      onError={() => setFailedThumbs((prev) => new Set(prev).add(d.thumbnail))}
                     />
                   ) : (
                     <span className="w-full h-full flex items-center justify-center text-gray-600">

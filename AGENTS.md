@@ -24,6 +24,10 @@ npm run install:all   # includes git submodule update --init --recursive
 # per workspace from the repository root to scope to one — both are Vitest:
 npm test --prefix server         # Vitest (node) — ALSO globs ../scripts, ../lib, ../autofixer
 npm test --prefix client         # Vitest (happy-dom) — component/unit tests
+# Supported FULL local validation (same worker cap as CI). A focused file run
+# is not a full-suite result; unbounded npm test can time out heavy cases on a
+# loaded machine. See docs/CONTRIBUTING.md.
+# PORTOS_PREGATE_MAX_WORKERS=4 npm test
 # No NODE_ENV prefix needed: server/vitest.config.js FORCES NODE_ENV=test (#4554),
 # because PortOS runs under PM2 with NODE_ENV=development and a suite that
 # inherits it aims at the real Postgres.

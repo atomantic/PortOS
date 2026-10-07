@@ -55,6 +55,9 @@ afterAll(() => cleanupTempDataRoots());
 // Long enough for an unadmitted commit's file-backed project write to land, so
 // a workflow still parked afterwards is parked on the cut.
 const settleSeveral = () => new Promise(resolve => setTimeout(resolve, 100));
+// vi.waitFor defaults to 1s, which a template import copying its tree file by
+// file can exceed on a loaded Windows shard; the 30s test timeout is the real bound.
+const waitFor = (assertion) => vi.waitFor(assertion, { timeout: 15_000 });
 const deferred = () => {
   let resolve;
   const promise = new Promise(done => { resolve = done; });
@@ -100,12 +103,12 @@ describe('final render', () => {
     const release = await acquireBackupSnapshotCut();
     try {
       const { jobId } = await renderMusicVideo(id);
-      await vi.waitFor(() => expect(encodeDocumentComposition).toHaveBeenCalledOnce());
+      await waitFor(() => expect(encodeDocumentComposition).toHaveBeenCalledOnce());
       await settleSeveral();
       expect(mutateVideoHistory).not.toHaveBeenCalled();
       expect((await projects.getProject(id)).renderHistoryId ?? null).toBeNull();
       release();
-      await vi.waitFor(async () => expect((await projects.getProject(id)).renderHistoryId).toBe(jobId));
+      await waitFor(async () => expect((await projects.getProject(id)).renderHistoryId).toBe(jobId));
     } finally {
       release();
     }
@@ -119,12 +122,12 @@ describe('draft excerpt render', () => {
     const release = await acquireBackupSnapshotCut();
     try {
       const { excerptId } = await startExcerptRender(id, { startSec: 1, endSec: 3 });
-      await vi.waitFor(() => expect(encodeDocumentComposition).toHaveBeenCalledOnce());
+      await waitFor(() => expect(encodeDocumentComposition).toHaveBeenCalledOnce());
       await settleSeveral();
       const pending = (await projects.getProject(id)).excerpts.find(e => e.id === excerptId);
       expect(pending).toMatchObject({ status: 'rendering', filename: null });
       release();
-      await vi.waitFor(async () => {
+      await waitFor(async () => {
         const excerpt = (await projects.getProject(id)).excerpts.find(e => e.id === excerptId);
         expect(excerpt.status).toBe('complete');
         expect(existsSync(join(PATHS.videos, excerpt.filename))).toBe(true);
@@ -143,7 +146,7 @@ describe('composition document import', () => {
     const release = await acquireBackupSnapshotCut();
     try {
       const importing = importDocumentTemplate(id);
-      await vi.waitFor(async () => expect((await readdir(root)).filter(name => !name.startsWith('.'))).toHaveLength(2));
+      await waitFor(async () => expect((await readdir(root)).filter(name => !name.startsWith('.'))).toHaveLength(2));
       await settleSeveral();
       expect((await projects.getProject(id)).composition.document.directory).toBe(before);
       release();
@@ -168,13 +171,13 @@ describe('publishing kit build', () => {
     try {
       await startPublishKitBuild(id);
       // Thumbnails are the build's last ffmpeg step.
-      await vi.waitFor(async () => expect((await readdir(PATHS.videoThumbnails)).some(name => name.endsWith('-thumb-6.jpg'))).toBe(true));
+      await waitFor(async () => expect((await readdir(PATHS.videoThumbnails)).some(name => name.endsWith('-thumb-6.jpg'))).toBe(true));
       await settleSeveral();
       const encoded = runFfmpegProcess.mock.calls.length;
       expect(encoded).toBeGreaterThan(6);
       expect((await projects.getProject(id)).publishKit?.exports).toBeUndefined();
       release();
-      await vi.waitFor(async () => expect((await projects.getProject(id)).publishKit?.exports?.length).toBe(encoded - 6));
+      await waitFor(async () => expect((await projects.getProject(id)).publishKit?.exports?.length).toBe(encoded - 6));
       for (const { filename } of (await projects.getProject(id)).publishKit.exports) {
         expect(existsSync(join(PATHS.videos, filename))).toBe(true);
       }

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Clock3, Copy, FileCode2, Globe, ImagePlus, LoaderCircle, Music2, PenLine, Sparkles, Wand2, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Clock3, Copy, FileCode2, Film, Globe, ImagePlus, LoaderCircle, Music2, PenLine, Sparkles, Wand2, X } from 'lucide-react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import PageHeader from '../components/PageHeader';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import AlbumTrackPicker from '../components/music/AlbumTrackPicker';
 import CodeAnimationPreview from '../components/codeAnimation/CodeAnimationPreview';
 import FilmStylePicker from '../components/codeAnimation/FilmStylePicker';
+import GalleryVideoPicker from '../components/videoGen/GalleryVideoPicker';
 import ProductionProjects from '../components/codeAnimation/ProductionProjects';
 import UniverseMoodBoardPicker, { BOARD_FOLLOW_UNIVERSE, BOARD_NONE, useStyleSourceLists } from '../components/media/UniverseMoodBoardPicker';
 import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
@@ -26,6 +27,7 @@ import {
   uploadFile,
 } from '../services/api';
 import { copyToClipboard } from '../lib/clipboard';
+import { pluralize } from '../lib/textUtils';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../lib/safeStorage';
 import { UPLOAD_IMAGE_ACCEPT, validateImageFile } from '../utils/fileUpload';
 import { formatCount, timeAgo } from '../utils/formatters';
@@ -45,6 +47,7 @@ const DEFAULT_DRAFT = {
   moodBoardChoice: BOARD_FOLLOW_UNIVERSE,
   includeMoodBoardImages: true,
   referenceImages: [],
+  referenceVideo: null,
   audio: null,
   soundtrack: 'none',
   format: { durationSeconds: 20, aspectRatio: '16:9', resolution: '1080p', fps: 30 },
@@ -145,6 +148,9 @@ function toBrief(draft) {
     universeId: draft.universeId || null,
     includeMoodBoardImages: draft.includeMoodBoardImages,
     referenceImages: draft.referenceImages.map(({ filename, label, note }) => ({ filename, label, note })),
+    referenceVideo: draft.referenceVideo
+      ? { filename: draft.referenceVideo.filename, label: draft.referenceVideo.label, note: draft.referenceVideo.note }
+      : null,
     audio: draft.audio
       ? draft.audio.source === 'track'
         ? {
@@ -208,6 +214,7 @@ function draftFromJob(job) {
       ...image,
       url: `/api/uploads/${encodeURIComponent(image.filename)}`,
     })),
+    referenceVideo: isRecord(input.referenceVideo) ? { ...input.referenceVideo, previewUrl: null } : null,
     audio: input.audio
       ? input.audio.source === 'track'
         ? {
@@ -281,6 +288,7 @@ function FastCodeAnimation() {
   const [trackPickerOpen, setTrackPickerOpen] = useState(false);
   const [draft, setDraft] = useState(loadDraft);
   const [uploading, setUploading] = useState(false);
+  const [videoPickerOpen, setVideoPickerOpen] = useState(false);
   const [building, setBuilding] = useState(false);
   const [writingBrief, setWritingBrief] = useState(false);
   // The last built prompt, tagged with the brief it was built from.
@@ -345,7 +353,10 @@ function FastCodeAnimation() {
   const briefKey = useMemo(() => JSON.stringify(brief), [brief]);
   const promptStale = !!built && built.briefKey !== briefKey;
   const limits = options?.limits;
-  const maxRefs = limits?.referenceImagesMax ?? 8;
+  // A reference video is studied as a contact sheet plus keyframes, which
+  // occupy reference-image slots.
+  const maxRefs = (limits?.referenceImagesMax ?? 8) - (draft.referenceVideo ? limits?.referenceVideoImageSlots ?? 3 : 0);
+  const videoRoom = (limits?.referenceImagesMax ?? 8) - draft.referenceImages.length >= (limits?.referenceVideoImageSlots ?? 3);
   const audioAccept = (options?.audioExtensions || ['mp3', 'wav', 'ogg', 'm4a']).map((ext) => `.${ext}`).join(',');
   const generating = job?.id === jobId && job.status === 'running';
   const canBuild = draft.concept.trim().length > 0 && !building && !uploading;
@@ -414,7 +425,7 @@ function FastCodeAnimation() {
     event.target.value = '';
     if (!files.length) return;
     const room = Math.max(0, maxRefs - draft.referenceImages.length);
-    if (files.length > room) toast.error(`Only ${room} more reference image(s) fit`);
+    if (files.length > room) toast.error(`Only ${pluralize(room, 'more reference image')} fit`);
     const valid = files.slice(0, room).filter((file) => {
       const invalid = validateImageFile(file, Infinity);
       if (invalid) toast.error(invalid);
@@ -724,6 +735,24 @@ function FastCodeAnimation() {
                   ))}
                 </ul>
               )}
+            </div>
+            <div>
+              <span className={labelClass}>Reference video <span className="text-gray-600">(optional; the quality bar — its pacing, camera and finish, never its content)</span></span>
+              {draft.referenceVideo ? (
+                <div className="flex items-center gap-2">
+                  {draft.referenceVideo.previewUrl
+                    ? <img src={draft.referenceVideo.previewUrl} alt="" className="h-12 w-20 shrink-0 rounded object-cover" />
+                    : <Film className="h-5 w-5 shrink-0 text-gray-500" aria-hidden="true" />}
+                  <input aria-label={`Note for ${draft.referenceVideo.label}`} value={draft.referenceVideo.note} maxLength={limits?.referenceNoteMax} onChange={(event) => update({ referenceVideo: { ...draft.referenceVideo, note: event.target.value } })} placeholder={`${draft.referenceVideo.label}: what to match (cut rhythm, depth of field, grade…)`} className={`${inputClass} min-w-0`} />
+                  <button type="button" aria-label="Remove reference video" onClick={() => update({ referenceVideo: null })} className="shrink-0 text-gray-500 hover:text-port-error"><X className="h-4 w-4" /></button>
+                </div>
+              ) : (
+                <button type="button" onClick={() => setVideoPickerOpen(true)} disabled={!videoRoom} title={videoRoom ? undefined : `A reference video needs ${limits?.referenceVideoImageSlots ?? 3} free reference slots`} className="inline-flex items-center gap-1.5 rounded border border-port-border px-2.5 py-1.5 text-xs text-gray-200 hover:border-port-accent disabled:opacity-50">
+                  <Film className="h-3.5 w-3.5" aria-hidden="true" /> Pick or upload a video…
+                </button>
+              )}
+              <GalleryVideoPicker open={videoPickerOpen} onClose={() => setVideoPickerOpen(false)} allowUpload uploadToGallery
+                onSelect={(item) => update({ referenceVideo: { filename: item.filename, label: item.prompt && item.prompt !== '(no prompt)' ? item.prompt.slice(0, 120) : item.filename, note: '', previewUrl: item.previewUrl } })} />
             </div>
             <div>
               <label htmlFor="ca-audio" className={`${labelClass} flex items-center gap-1`}><Music2 className="h-3 w-3" /> Audio track <span className="text-gray-600">(optional; the animation syncs to it)</span></label>

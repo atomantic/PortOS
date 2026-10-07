@@ -22,6 +22,7 @@ import {
   reviseMusicVideoMixedMediaEvents, updateMusicVideoProject,
   getMusicVideoMixedMediaCandidate, acceptMusicVideoMixedMediaDocument, discardMusicVideoMixedMediaDocument,
 } from '../../services/apiMusicVideo.js';
+import { pluralize } from '../../lib/textUtils';
 
 const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
 const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
@@ -232,7 +233,7 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
       <div className="flex items-center gap-2 text-sm text-port-text">
         <span>Composition document</span>
         {doc && <span className="text-xs text-port-text-muted">
-          {doc.files != null && `${doc.files} files`}
+          {doc.files != null && pluralize(doc.files, 'file')}
           {doc.bytes != null && ` · ${formatBytes(doc.bytes)}`}
           {doc.updatedAt && ` · updated ${timeAgo(doc.updatedAt)}`}
         </span>}

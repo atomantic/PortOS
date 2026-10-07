@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'no
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createVitestTempFixture } from './lib/vitestTempRootFixture.js';
+import { createVitestTempFixture, fixtureReadyFailureSource } from './lib/vitestTempRootFixture.js';
 
 // Pins the regression uniquely: a different worker's --bail=1 failure cancels a
 // process-audit test while its body still owns fixture writes (an archived job
@@ -31,14 +31,7 @@ it('drains process-audit fixture writes after another worker triggers fail-fast'
         return;`);
     expect(source).toContain('await cancelled;');
     writeFileSync(join(fixture, 'lifecycle.test.js'), source);
-    writeFileSync(join(fixture, 'failure.test.js'), `
-      import { it, expect } from 'vitest';
-      import { existsSync } from 'node:fs';
-      it('controlled sibling failure', async () => {
-        await expect.poll(() => existsSync(${JSON.stringify(ready)}), { timeout: 10000 }).toBe(true);
-        throw new Error('controlled sibling failure');
-      });
-    `);
+    writeFileSync(join(fixture, 'failure.test.js'), fixtureReadyFailureSource(ready));
     const workerIndex = args.indexOf('--maxWorkers');
     args[workerIndex + 1] = '2';
     args.push('--bail=1');

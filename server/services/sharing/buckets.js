@@ -17,6 +17,7 @@ import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils
 import { SHARING_SCHEMA_VERSION } from './version.js';
 import { isStr, trimTo } from '../../lib/textUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
+import { codedError } from '../../lib/codedError.js';
 
 const REGISTRY_PATH = () => join(PATHS.data, 'sharing', 'buckets.json');
 
@@ -35,7 +36,6 @@ export const ERR_PATH_UNUSABLE = 'SHARING_BUCKET_PATH_UNUSABLE';
 // queue would still let two snapshots overwrite each other.
 const queueRegistryWrite = createFileWriteQueue();
 
-const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 const sanitizeBucket = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
@@ -68,16 +68,16 @@ async function assertPathUsable(path) {
   let st;
   try {
     st = await stat(path);
-  } catch (err) {
-    throw makeErr(`Bucket path does not exist or is unreadable: ${path}`, ERR_PATH_UNUSABLE);
+  } catch (_err) {
+    throw codedError(`Bucket path does not exist or is unreadable: ${path}`, ERR_PATH_UNUSABLE);
   }
   if (!st.isDirectory()) {
-    throw makeErr(`Bucket path is not a directory: ${path}`, ERR_PATH_UNUSABLE);
+    throw codedError(`Bucket path is not a directory: ${path}`, ERR_PATH_UNUSABLE);
   }
   try {
     await access(path, constants.R_OK | constants.W_OK);
-  } catch (err) {
-    throw makeErr(`Bucket path is not writable: ${path}`, ERR_PATH_UNUSABLE);
+  } catch (_err) {
+    throw codedError(`Bucket path is not writable: ${path}`, ERR_PATH_UNUSABLE);
   }
 }
 
@@ -99,11 +99,11 @@ const HEX_HASH_RE = /^[0-9a-f]{64}$/;
 export function isHexHash(v) { return typeof v === 'string' && HEX_HASH_RE.test(v); }
 export function bucketBlobsDir(bucketPath) { return join(bucketPath, 'assets', 'blobs'); }
 export function bucketBlobPath(bucketPath, hash) {
-  if (!isHexHash(hash)) throw makeErr(`Invalid asset hash: ${hash}`, ERR_VALIDATION);
+  if (!isHexHash(hash)) throw codedError(`Invalid asset hash: ${hash}`, ERR_VALIDATION);
   return join(bucketBlobsDir(bucketPath), hash);
 }
 export function bucketBlobSidecarPath(bucketPath, hash) {
-  if (!isHexHash(hash)) throw makeErr(`Invalid asset hash: ${hash}`, ERR_VALIDATION);
+  if (!isHexHash(hash)) throw codedError(`Invalid asset hash: ${hash}`, ERR_VALIDATION);
   return join(bucketBlobsDir(bucketPath), `${hash}.metadata.json`);
 }
 // Sidecar mapping `<sourcePath>:<mtimeMs>:<size> → <hash>` so the exporter can
@@ -187,15 +187,15 @@ export async function listBuckets() {
 export async function getBucket(id) {
   const { buckets } = await readRegistry();
   const found = buckets.find((b) => b.id === id);
-  if (!found) throw makeErr(`Bucket not found: ${id}`, ERR_NOT_FOUND);
+  if (!found) throw codedError(`Bucket not found: ${id}`, ERR_NOT_FOUND);
   return found;
 }
 
 export async function createBucket(input = {}) {
   const name = trimTo(input.name, NAME_MAX);
-  if (!name) throw makeErr(`Bucket name is required (1..${NAME_MAX} chars)`, ERR_VALIDATION);
+  if (!name) throw codedError(`Bucket name is required (1..${NAME_MAX} chars)`, ERR_VALIDATION);
   const path = trimTo(input.path, PATH_MAX);
-  if (!path) throw makeErr('Bucket path is required', ERR_VALIDATION);
+  if (!path) throw codedError('Bucket path is required', ERR_VALIDATION);
   await assertPathUsable(path);
   return queueRegistryWrite(async () => {
     const state = await readRegistry();
@@ -203,7 +203,7 @@ export async function createBucket(input = {}) {
     // claim the same on-disk folder (they would fight over bucket.json + the
     // watcher would double-fire on every manifest).
     if (state.buckets.some((b) => b.path === path)) {
-      throw makeErr(`A bucket is already registered at: ${path}`, ERR_VALIDATION);
+      throw codedError(`A bucket is already registered at: ${path}`, ERR_VALIDATION);
     }
     const now = new Date().toISOString();
     const bucket = sanitizeBucket({
@@ -228,7 +228,7 @@ export function updateBucket(id, patch = {}) {
   return queueRegistryWrite(async () => {
     const state = await readRegistry();
     const idx = state.buckets.findIndex((b) => b.id === id);
-    if (idx < 0) throw makeErr(`Bucket not found: ${id}`, ERR_NOT_FOUND);
+    if (idx < 0) throw codedError(`Bucket not found: ${id}`, ERR_NOT_FOUND);
     const cur = state.buckets[idx];
     const merged = sanitizeBucket({
       ...cur,
@@ -238,7 +238,7 @@ export function updateBucket(id, patch = {}) {
       ...('bioOverride' in patch ? { bioOverride: patch.bioOverride } : {}),
       updatedAt: new Date().toISOString(),
     });
-    if (!merged) throw makeErr('Invalid bucket payload', ERR_VALIDATION);
+    if (!merged) throw codedError('Invalid bucket payload', ERR_VALIDATION);
     // `path` is intentionally NOT patchable — if the user wants to move a
     // bucket, they delete and re-register so the registry can re-validate and
     // re-layout the new path.
@@ -253,7 +253,7 @@ export function deleteBucket(id) {
     const state = await readRegistry();
     const before = state.buckets.length;
     state.buckets = state.buckets.filter((b) => b.id !== id);
-    if (state.buckets.length === before) throw makeErr(`Bucket not found: ${id}`, ERR_NOT_FOUND);
+    if (state.buckets.length === before) throw codedError(`Bucket not found: ${id}`, ERR_NOT_FOUND);
     await writeRegistry(state);
     return { id };
   });

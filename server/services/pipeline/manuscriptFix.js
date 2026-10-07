@@ -20,10 +20,10 @@ import { getIssue, updateStageWithLatest, updateStagesWithLatest } from './issue
 import { collectManuscriptSections, stageVersionsOf, sectionsCorpus, manuscriptSectionHeader } from './arcPlanner.js';
 import { getComment, updateComment } from './manuscriptComments.js';
 import { escapeRegExp } from '../../lib/textUtils.js';
+import { codedError } from '../../lib/codedError.js';
 
 export const ERR_VALIDATION = 'PIPELINE_MANUSCRIPT_FIX_VALIDATION';
 export const ERR_NOT_FOUND = 'PIPELINE_MANUSCRIPT_FIX_NOT_FOUND';
-const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 // Output before input: the drafted artifact wins over the upstream seed.
 // Mirrors arcPlanner's stageTextOf (inlined there to avoid an import cycle).
@@ -36,7 +36,7 @@ const textHash = (s) => createHash('sha256').update(typeof s === 'string' ? s : 
 
 async function loadStageText(issueId, stageId) {
   const issue = await getIssue(issueId).catch(() => null);
-  if (!issue) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
+  if (!issue) throw codedError(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
   return stageTextOf(issue.stages?.[stageId]);
 }
 
@@ -63,13 +63,13 @@ async function resolveTargets(seriesId, comment) {
   if (comment.issueNumber != null) {
     const section = sections.find((s) => s.number === comment.issueNumber);
     if (section) return [section];
-    throw makeErr(
+    throw codedError(
       'This comment points to an issue that no longer has drafted manuscript text — regenerate the editorial review',
       ERR_VALIDATION,
     );
   }
   if (sections.length) return sections;
-  throw makeErr('No drafted manuscript text is available to edit', ERR_VALIDATION);
+  throw codedError('No drafted manuscript text is available to edit', ERR_VALIDATION);
 }
 
 function normalizeModelEdits(content) {
@@ -190,7 +190,7 @@ function editsFromAcceptRequest({ comment, find, replace, edits }) {
   }
   if (find) {
     if (typeof replace !== 'string') {
-      throw makeErr('replace is required when find is provided', ERR_VALIDATION);
+      throw codedError('replace is required when find is provided', ERR_VALIDATION);
     }
     return [{
       issueId: comment.issueId,
@@ -287,17 +287,17 @@ async function planEditsBySection(edits, comment) {
   const planned = [];
   for (const group of groups.values()) {
     const issue = await getIssue(group.issueId).catch(() => null);
-    if (!issue) throw makeErr(`Issue not found: ${group.issueId}`, ERR_NOT_FOUND);
+    if (!issue) throw codedError(`Issue not found: ${group.issueId}`, ERR_NOT_FOUND);
     const originalText = stageTextOf(issue.stages?.[group.stageId]);
     const spans = [];
     for (const edit of group.edits) {
       const located = locateFindSpan(originalText, edit.find, comment.anchorQuote);
       if (!located) {
-        throw makeErr('Anchor text is no longer present in the manuscript — regenerate the fix', ERR_VALIDATION);
+        throw codedError('Anchor text is no longer present in the manuscript — regenerate the fix', ERR_VALIDATION);
       }
       const span = { start: located.start, end: located.end, replace: edit.replace };
       if (spans.some((other) => span.start < other.end && other.start < span.end)) {
-        throw makeErr('Selected edits overlap in the manuscript — regenerate the fix', ERR_VALIDATION);
+        throw codedError('Selected edits overlap in the manuscript — regenerate the fix', ERR_VALIDATION);
       }
       spans.push(span);
     }
@@ -317,7 +317,7 @@ async function applyPlannedEdits(seriesId, planned) {
     stageId: group.stageId,
     computeFn: (cur) => {
       if (stageTextOf(cur) !== group.originalText) {
-        throw makeErr('Manuscript changed while applying the fix — regenerate the fix', ERR_VALIDATION);
+        throw codedError('Manuscript changed while applying the fix — regenerate the fix', ERR_VALIDATION);
       }
       return { output: group.output, status: 'edited', lastRunId: `fix-${randomUUID()}` };
     },
@@ -339,7 +339,7 @@ async function applyPlannedEdits(seriesId, planned) {
  */
 export async function saveManuscriptSection(seriesId, { issueId, stageId, output } = {}) {
   if (!MANUSCRIPT_TYPES.includes(stageId)) {
-    throw makeErr(`Not an editable manuscript stage: ${stageId}`, ERR_VALIDATION);
+    throw codedError(`Not an editable manuscript stage: ${stageId}`, ERR_VALIDATION);
   }
   const { issue, stage } = await updateStageWithLatest(
     issueId,
@@ -383,7 +383,7 @@ const wordSkeleton = (s) => (typeof s === 'string'
 // the AI pass is held to "change not one letter".
 function assertWordsPreserved(before, after) {
   if (wordSkeleton(before) === wordSkeleton(after)) return;
-  throw makeErr(
+  throw codedError(
     'AI reformat changed the wording, so it was discarded and the text is unchanged. Try again or use the plain Format button.',
     ERR_VALIDATION,
   );
@@ -415,7 +415,7 @@ export async function reformatManuscriptText(text, { stageId = 'prose', provider
     source: 'pipeline-manuscript-reformat',
   });
   const cleaned = stripReformatWrapper(r?.content);
-  if (!cleaned) throw makeErr('The model returned no text — try again', ERR_VALIDATION);
+  if (!cleaned) throw codedError('The model returned no text — try again', ERR_VALIDATION);
   assertWordsPreserved(body, cleaned);
   return { text: cleaned, runId: r?.runId || null, changed: cleaned !== body };
 }
@@ -429,10 +429,10 @@ export async function reformatManuscriptText(text, { stageId = 'prose', provider
  */
 export async function reformatManuscriptStageText(text, { stageId, providerOverride, modelOverride } = {}) {
   if (!MANUSCRIPT_TYPES.includes(stageId)) {
-    throw makeErr(`Not an editable manuscript stage: ${stageId}`, ERR_VALIDATION);
+    throw codedError(`Not an editable manuscript stage: ${stageId}`, ERR_VALIDATION);
   }
   if (!(typeof text === 'string' && text.trim())) {
-    throw makeErr('There is no drafted text to reformat', ERR_VALIDATION);
+    throw codedError('There is no drafted text to reformat', ERR_VALIDATION);
   }
   return reformatManuscriptText(text, { stageId, providerOverride, modelOverride });
 }
@@ -467,11 +467,11 @@ function mergeFixes(fixes) {
 export async function generateManuscriptFix(seriesId, { commentId, providerOverride, providerDefault, modelOverride, modelDefault, effortDefault } = {}) {
   const series = await getSeries(seriesId);
   const comment = await getComment(seriesId, commentId);
-  if (!comment) throw makeErr(`Comment not found: ${commentId}`, ERR_NOT_FOUND);
+  if (!comment) throw codedError(`Comment not found: ${commentId}`, ERR_NOT_FOUND);
 
   const targets = await resolveTargets(seriesId, comment);
   if (targets.every((s) => !s.content)) {
-    throw makeErr('There is no drafted text to edit', ERR_VALIDATION);
+    throw codedError('There is no drafted text to edit', ERR_VALIDATION);
   }
 
   const arc = series.arc || {};
@@ -547,7 +547,7 @@ export async function generateManuscriptFix(seriesId, { commentId, providerOverr
     fix = mergeFixes(fixes);
     runId = first?.runId;
   }
-  if (!fix) throw makeErr('The model did not return a usable fix — try again', ERR_VALIDATION);
+  if (!fix) throw codedError('The model did not return a usable fix — try again', ERR_VALIDATION);
 
   const updated = await updateComment(seriesId, commentId, { fix });
   return {
@@ -567,17 +567,17 @@ export async function generateManuscriptFix(seriesId, { commentId, providerOverr
  */
 export async function acceptManuscriptFix(seriesId, { commentId, find, replace, edits } = {}) {
   const comment = await getComment(seriesId, commentId);
-  if (!comment) throw makeErr(`Comment not found: ${commentId}`, ERR_NOT_FOUND);
+  if (!comment) throw codedError(`Comment not found: ${commentId}`, ERR_NOT_FOUND);
   const acceptedEdits = await resolveMissingEditTargets(
     seriesId,
     comment,
     editsFromAcceptRequest({ comment, find, replace, edits }),
   );
   if (acceptedEdits.length === 0) {
-    throw makeErr('No applicable edits were selected', ERR_VALIDATION);
+    throw codedError('No applicable edits were selected', ERR_VALIDATION);
   }
   if (acceptedEdits.some((e) => !e.issueId || !e.stageId || !e.find)) {
-    throw makeErr('One selected edit is not anchored to a manuscript section — regenerate the fix', ERR_VALIDATION);
+    throw codedError('One selected edit is not anchored to a manuscript section — regenerate the fix', ERR_VALIDATION);
   }
 
   const planned = await planEditsBySection(acceptedEdits, comment);
@@ -615,17 +615,17 @@ export async function acceptManuscriptFix(seriesId, { commentId, find, replace, 
  */
 export async function undoManuscriptFix(seriesId, { commentId } = {}) {
   const comment = await getComment(seriesId, commentId);
-  if (!comment) throw makeErr(`Comment not found: ${commentId}`, ERR_NOT_FOUND);
+  if (!comment) throw codedError(`Comment not found: ${commentId}`, ERR_NOT_FOUND);
   const snapshot = comment.acceptedSnapshot;
   if (!snapshot || !Array.isArray(snapshot.sections) || snapshot.sections.length === 0) {
-    throw makeErr('There is no accepted edit to undo for this finding', ERR_VALIDATION);
+    throw codedError('There is no accepted edit to undo for this finding', ERR_VALIDATION);
   }
   const updates = snapshot.sections.map((s) => ({
     issueId: s.issueId,
     stageId: s.stageId,
     computeFn: (cur) => {
       if (s.appliedHash && textHash(stageTextOf(cur)) !== s.appliedHash) {
-        throw makeErr(
+        throw codedError(
           'The manuscript changed since this fix was accepted, so undo is unavailable — revert via the section version history instead',
           ERR_VALIDATION,
         );

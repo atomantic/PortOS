@@ -77,7 +77,6 @@ export {
   getPendingAgentFeedbackCount,
   getPendingAgentFeedbackPage,
   initializeAgentFeedback,
-  extractTaskType,
 } from './cosAgentFeedback.js';
 export { archiveStaleAgents, clearCompletedAgents } from './cosAgentArchive.js';
 

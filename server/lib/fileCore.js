@@ -40,7 +40,7 @@ const WIN_RETRY_DELAY_MS = 10;
 // "this rename can never work".
 const WIN_RENAME_LOCK_CODES = ['EPERM', 'EACCES', 'EEXIST', 'EBUSY'];
 // read failures with the same transient meaning on the reader side.
-const WIN_READ_LOCK_CODES = ['EPERM', 'EACCES', 'EBUSY'];
+const _WIN_READ_LOCK_CODES = ['EPERM', 'EACCES', 'EBUSY'];
 const FILE_WATCH_FALLBACK_POLL_MS = 5000;
 
 /** Normalize Node statfs block counts into byte totals and compatibility aliases. */

@@ -618,7 +618,7 @@ describe('CI test impact planner', () => {
       server: { mode: 'related' },
       client: { mode: 'files' },
       db: false,
-      lint: { mode: 'skip' },
+      lint: { mode: 'files' },
       build: false,
       smoke: true,
     });

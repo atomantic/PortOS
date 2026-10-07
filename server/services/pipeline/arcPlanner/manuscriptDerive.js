@@ -9,8 +9,9 @@ import { getSeries, updateSeries } from '../series.js';
 import { getIssue, listIssues, recomputeIssueNumbersForSeries, updateIssue, updateStage } from '../issues.js';
 import { emitRecordUpdated, withReexportSuppressed } from '../../sharing/recordEvents.js';
 import { buildSeason, sanitizeArc, sanitizeSeason } from '../../../lib/storyArc.js';
-import { ERR_VALIDATION, collectIssueSourceText, makeErr, shapeSeasonOutlines } from './context.js';
+import { ERR_VALIDATION, collectIssueSourceText, shapeSeasonOutlines } from './context.js';
 import { commitSeasonsWithRemap, mergeSeasonsWithLocks } from './arcCore.js';
+import { codedError } from '../../../lib/codedError.js';
 
 /**
  * Reverse-engineer an arc + seasons from EXISTING finished work (a concatenated
@@ -29,13 +30,13 @@ export async function generateArcFromSource(seriesId, {
 } = {}) {
   const series = await getSeries(seriesId);
   if (series.locked?.arc === true) {
-    throw makeErr(
+    throw codedError(
       'Arc is locked — unlock it on the Arc Canvas before regenerating',
       ERR_VALIDATION,
     );
   }
   const source = String(sourceText || '').trim();
-  if (!source) throw makeErr('No source content to extract an arc from', ERR_VALIDATION);
+  if (!source) throw codedError('No source content to extract an arc from', ERR_VALIDATION);
   const { content, runId, providerId, model } = await runStagedLLM(
     'importer-arc-extract',
     {
@@ -99,16 +100,16 @@ export function issueSynopsisFromSeason(season) {
 export async function deriveFromManuscript(seriesId, { providerOverride, modelOverride } = {}) {
   const series = await getSeries(seriesId);
   if (series.locked?.arc === true) {
-    throw makeErr('Arc is locked — unlock it on the Arc Canvas before deriving from the manuscript', ERR_VALIDATION);
+    throw codedError('Arc is locked — unlock it on the Arc Canvas before deriving from the manuscript', ERR_VALIDATION);
   }
   const sourceText = await collectIssueSourceText(seriesId);
   if (!sourceText) {
-    throw makeErr(
+    throw codedError(
       'No issue manuscript to derive from — write a comic script, prose, or teleplay on at least one issue first',
       ERR_VALIDATION,
     );
   }
-  const { arc, seasons, raw, runId, providerId, model } = await generateArcFromSource(seriesId, {
+  const { arc, seasons, runId, providerId, model } = await generateArcFromSource(seriesId, {
     sourceText, providerOverride, modelOverride,
   });
   const issues = (await listIssues({ seriesId })).sort(compareIssuesInSeries);
@@ -179,7 +180,7 @@ export async function seedIssueSynopsis(issueId, synopsis) {
 export async function commitDerivedManuscript(seriesId, { arc, bible, volume, issues = [] } = {}) {
   const series = await getSeries(seriesId);
   if (series.locked?.arc === true) {
-    throw makeErr('Arc is locked — unlock it on the Arc Canvas before applying', ERR_VALIDATION);
+    throw codedError('Arc is locked — unlock it on the Arc Canvas before applying', ERR_VALIDATION);
   }
 
   // 1) Bible — top-level series fields the Arc Canvas sidebar reads. These are

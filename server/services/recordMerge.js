@@ -39,6 +39,7 @@ import {
   bulkUpdateCollectionItems, deleteCollection,
 } from './mediaCollections.js';
 import { isStr } from '../lib/textUtils.js';
+import { codedError } from '../lib/codedError.js';
 
 // Own error code (both the universe-builder and pipeline routers map it to
 // 400). get*() NOT_FOUND errors propagate with their own per-record codes,
@@ -56,7 +57,6 @@ export const ERR_VALIDATION = 'MERGE_VALIDATION';
 // context (via `buildCascadeContext`) so the UI can name which children stuck.
 export const ERR_CASCADE = 'MERGE_CASCADE_INCOMPLETE';
 
-const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 // Build the resumable cascade error. `failed` is `[{ id, name, error, step? }]`.
 const cascadeError = (kind, survivorId, loserId, failed) =>
@@ -335,7 +335,7 @@ export const buildSeriesUnion = (survivor, loser, fieldChoices = {}, fieldOverri
 
 const requireResolved = (conflicts) => {
   if (conflicts.length > 0) {
-    throw makeErr(
+    throw codedError(
       `Unresolved conflicting field(s): ${conflicts.map((c) => c.field).join(', ')}`,
       ERR_VALIDATION,
     );
@@ -351,7 +351,7 @@ const requireResolved = (conflicts) => {
  */
 export async function mergeUniverses(survivorId, loserId, fieldChoices = {}, { dryRun = false, fieldOverrides = {} } = {}) {
   if (!survivorId || !loserId || survivorId === loserId) {
-    throw makeErr('survivorId and loserId must be distinct', ERR_VALIDATION);
+    throw codedError('survivorId and loserId must be distinct', ERR_VALIDATION);
   }
   const survivor = await getUniverse(survivorId);
   const loser = await getUniverse(loserId);
@@ -427,7 +427,7 @@ export async function mergeUniverses(survivorId, loserId, fieldChoices = {}, { d
  */
 export async function mergeSeries(survivorId, loserId, fieldChoices = {}, { dryRun = false, fieldOverrides = {} } = {}) {
   if (!survivorId || !loserId || survivorId === loserId) {
-    throw makeErr('survivorId and loserId must be distinct', ERR_VALIDATION);
+    throw codedError('survivorId and loserId must be distinct', ERR_VALIDATION);
   }
   const survivor = await getSeries(survivorId);
   const loser = await getSeries(loserId);
@@ -437,10 +437,10 @@ export async function mergeSeries(survivorId, loserId, fieldChoices = {}, { dryR
     // Orphan series are surfaced separately as "never merged"; merging two
     // unrelated orphans (both universeId null) would fold issues/collections
     // across unrelated works. Require linking into a universe first.
-    throw makeErr('Orphan series (no universe) cannot be merged — link them into a universe first', ERR_VALIDATION);
+    throw codedError('Orphan series (no universe) cannot be merged — link them into a universe first', ERR_VALIDATION);
   }
   if (survivorUniverseId !== loserUniverseId) {
-    throw makeErr('Series can only be merged within the same universe', ERR_VALIDATION);
+    throw codedError('Series can only be merged within the same universe', ERR_VALIDATION);
   }
 
   const { record, conflicts, autoResolved, unionSummary } = buildSeriesUnion(survivor, loser, fieldChoices, fieldOverrides);

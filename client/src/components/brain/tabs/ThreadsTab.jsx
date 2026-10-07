@@ -23,6 +23,7 @@ import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import toast from '../../ui/Toast';
 import ThreadRefChip from '../ThreadRefChip';
 import ThreadSourceClosedAction from '../ThreadSourceClosedAction';
+import ThreadPasteBlocks from '../ThreadPasteBlocks';
 import { THREAD_REF_KIND_IDS, threadRefLabel } from '../../../lib/threadRefKinds.js';
 import {
   THREAD_STATUSES, THREAD_PRIORITIES, THREAD_ACTIVE_STATUSES,
@@ -82,7 +83,20 @@ const toDraft = (thread) => ({
   notes: thread.notes ?? '',
 });
 
-const draftToPatch = (draft) => ({
+// The form edits a calendar day, but a scheduled step is due at a time of day
+// (its reminder fires then). An unchanged day keeps the stored instant, and a
+// moved day keeps its local time, so saving any other field never resets the
+// due time to midnight.
+const pad2 = (n) => String(n).padStart(2, '0');
+function dueAtPatch(draftDay, stored) {
+  if (!draftDay) return null;
+  const prev = typeof stored === 'string' && Number.isFinite(Date.parse(stored)) ? new Date(stored) : null;
+  if (prev && localDateKey(prev) === draftDay) return stored;
+  const time = prev ? `${pad2(prev.getHours())}:${pad2(prev.getMinutes())}` : '00:00';
+  return new Date(`${draftDay}T${time}:00`).toISOString();
+}
+
+const draftToPatch = (draft, stored = {}) => ({
   title: draft.title.trim(),
   status: draft.status,
   priority: draft.priority,
@@ -90,7 +104,7 @@ const draftToPatch = (draft) => ({
   nextAction: draft.nextAction,
   waitingOn: draft.waitingOn,
   // Explicit null clears a stored date (absent would preserve it).
-  dueAt: draft.dueAt ? new Date(`${draft.dueAt}T00:00:00`).toISOString() : null,
+  dueAt: dueAtPatch(draft.dueAt, stored.dueAt),
   tags: tagsToArray(draft.tags),
   notes: draft.notes,
 });
@@ -312,7 +326,7 @@ export default function ThreadsTab() {
       setDrawerTab('details');
       return null;
     }
-    const updated = await api.updateThread(record.id, draftToPatch(draft), { silent: true });
+    const updated = await api.updateThread(record.id, draftToPatch(draft, record), { silent: true });
     // A PUT answers with the bare record; keep the hydrated refs we already hold.
     const full = { ...record, ...updated };
     adoptRecord(full);
@@ -469,6 +483,7 @@ export default function ThreadsTab() {
 
             {drawerTab === 'details' && (
               <div className="space-y-3">
+                <ThreadPasteBlocks notes={record.notes} tags={record.tags} />
                 <FormField label="Title">
                   <input value={draft.title} onChange={(e) => patchDraft({ title: e.target.value })} className={inputClass} maxLength={200} />
                 </FormField>

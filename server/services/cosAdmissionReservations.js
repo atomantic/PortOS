@@ -10,7 +10,7 @@ const globalReservations = new Map();
 const actionReservations = new Map();
 let reservationSequence = 0;
 
-const noopRelease = () => {};
+const _noopRelease = () => {};
 
 function reserve(map, reservationId) {
   const token = ++reservationSequence;

@@ -37,11 +37,11 @@ describe('locateCutSpan', () => {
   it('refuses ambiguous quote (multiple occurrences)', () => {
     const text = 'The fox jumps high. Another fox jumps high. A third fox jumps high.';
     const quote = 'fox jumps high. Another fox jumps'; // appears once exactly, so need different test
-    const result = locateCutSpan(text, quote);
+    const _result = locateCutSpan(text, quote);
     // This particular quote is unique, so let's test a truly ambiguous case
     const text2 = 'She said hello and he replied hello and then she said hello again.';
     const quote2 = 'said hello and he replied hello';
-    const result2 = locateCutSpan(text2, quote2);
+    const _result2 = locateCutSpan(text2, quote2);
     // Actually this is also unique. Let's use a simpler case.
     const text3 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZ';
     const quote3 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';

@@ -12,7 +12,7 @@ const kit = (over = {}) => ({
   thumbnail: 'thumb-1.jpg',
   captionsFilename: 'captions.srt',
   chapters: [{ startSec: 0, label: 'Intro' }, { startSec: 30, label: 'Chorus' }, { startSec: 75, label: 'Outro' }],
-  links: { youtube: 'https://youtu.be/abc', song: 'https://suno.com/song/1234-abcd' },
+  links: { youtube: 'https://youtu.be/abc', song: 'https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc' },
   copy: {
     youtube: { title: 'Song — Music Video', description: 'The story.\n\nMore.', tags: ['ai music', ' '] },
     shorts: { title: 'Song #Shorts', description: 'Hook' },
@@ -72,7 +72,7 @@ describe('buildPublishPayload (#9282)', () => {
     expect(() => buildPublishPayload('tiktok', project({}, []))).toThrow(/9:16 social cut/);
   });
 
-  it('uses the kit center-crop vertical encode for a 16:9 render with no social cut, and only while the kit is fresh (#10150)', () => {
+  it('uses the kit fit-with-fill vertical encode for a 16:9 render with no social cut, and only while the kit is fresh (#10150)', () => {
     const exports = [{ kind: 'vertical-9x16', filename: 'vertical.mp4', startSec: 5, endSec: 35 }];
     const wide = { ...project({ exports, master: { filename: 'master.mp4', renderHistoryId: 'r1' } }, []), renderHistoryId: 'r1' };
     expect(buildPublishPayload('shorts', wide).video.name).toBe('vertical.mp4');
@@ -91,7 +91,7 @@ describe('buildPublishPayload (#9282)', () => {
 
   it('threads X: hook with the 1080p encode, story, prompt, then links with the full video last', () => {
     const { posts } = buildPublishPayload('x', project(), { prompt: 'the prompt', storyImage: 'still.png' });
-    expect(posts.map((p) => p.text)).toEqual(['Watch this', 'How it was made', 'the prompt', 'The song: https://suno.com/song/1234-abcd\nFull video: https://youtu.be/abc']);
+    expect(posts.map((p) => p.text)).toEqual(['Watch this', 'How it was made', 'the prompt', 'The song: https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc\nFull video: https://youtu.be/abc']);
     expect(posts[0].media).toEqual({ dir: 'videos', name: 'x.mp4' });
     expect(posts[1].media).toEqual({ dir: 'videoThumbnails', name: 'still.png' });
     expect(() => buildPublishPayload('x', project({ exports: [] }))).toThrow(/1080p/);
@@ -100,6 +100,21 @@ describe('buildPublishPayload (#9282)', () => {
   it('prefers the recorded YouTube post over the kit link', () => {
     const p = buildPublishPayload('stackerNews', project({ posts: { youtube: { url: 'https://www.youtube.com/watch?v=posted' } } }));
     expect(p).toMatchObject({ url: 'https://www.youtube.com/watch?v=posted', territory: 'art', title: 'Song' });
+  });
+
+  it('reads the Substack publication from a name, a pasted URL or a custom domain', () => {
+    const copy = { substack: { title: 'Song', subtitle: '', body: 'Body' } };
+    const host = (publication) => buildPublishPayload('substack', project({ copy }), { publication }).publication;
+    expect(host('https://Example.substack.com/p/old-post')).toBe('example.substack.com');
+    expect(host('news.example.com')).toBe('news.example.com');
+    expect(() => host('not a host')).toThrow(/Substack publication/);
+    expect(host('https://open.substack.com/pub/example/p/old-post?r=abc')).toBe('example.substack.com');
+    expect(() => host('https://substack.com/@example')).toThrow(/Substack publication/);
+    expect(() => host('www.substack.com')).toThrow(/Substack publication/);
+    expect(buildPublishPayload('substack', project({ copy }), { publication: 'example' }))
+      .toEqual({ publication: 'example.substack.com', videoUrl: 'https://youtu.be/abc', title: 'Song', subtitle: '', body: 'Body' });
+    expect(() => buildPublishPayload('substack', project({ copy, links: {} }), { publication: 'example' })).toThrow(/publish to YouTube first/);
+    expect(() => buildPublishPayload('substack', project(), { publication: 'example' })).toThrow(/substack title/);
   });
 
   it('posts a native video to r/aivideo by default, and validates other subreddits\' rules', () => {
@@ -115,9 +130,11 @@ describe('buildPublishPayload (#9282)', () => {
 
   it('needs a suno.com song URL and captions it with the full video', () => {
     const p = buildPublishPayload('suno', project());
-    expect(p).toMatchObject({ songUrl: 'https://suno.com/song/1234-abcd', pin: true, cover: { name: 'thumb-1.jpg' } });
+    expect(p).toMatchObject({ songUrl: 'https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc', pin: true, cover: { name: 'thumb-1.jpg' } });
     expect(p.caption).toBe('The story. Music video: https://youtu.be/abc');
     expect(() => buildPublishPayload('suno', project({ links: {} }))).toThrow(/Suno song URL/);
+    // The adapter needs the song's id to find its menu, so an id-less song URL is refused up front.
+    expect(() => buildPublishPayload('suno', project({ links: {} }), { songUrl: 'https://suno.com/song/example' })).toThrow(/Suno song URL/);
   });
 
   it('rejects an unknown target', () => {
@@ -149,6 +166,6 @@ describe('buildPublishPayload (#9282)', () => {
     const withCover = song({ publishKit: kit({ coverArt: { filename: 'cover-1.jpg' } }) });
     expect(buildPublishPayload('distrokid', withCover, who).cover).toEqual({ dir: 'videoThumbnails', name: 'cover-1.jpg', square: true });
     expect(buildPublishPayload('distrokid', { ...withCover, publishKit: kit({ thumbnail: null, coverArt: { filename: 'cover-1.jpg' } }) }, who).cover.name).toBe('cover-1.jpg');
-    expect(buildPublishPayload('suno', withCover, { songUrl: 'https://suno.com/song/example' }).cover.name).toBe('cover-1.jpg');
+    expect(buildPublishPayload('suno', withCover, { songUrl: 'https://suno.com/song/87654321-dcba-4cba-8cba-cba987654321' }).cover.name).toBe('cover-1.jpg');
   });
 });

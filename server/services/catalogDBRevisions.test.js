@@ -90,7 +90,7 @@ vi.mock('./instanceIdentity.js', () => ({
   getInstanceId: vi.fn(async () => 'inst-test'),
 }));
 
-const db = await import('../lib/db.js');
+const _db = await import('../lib/db.js');
 const {
   createIngredient,
   updateIngredient,

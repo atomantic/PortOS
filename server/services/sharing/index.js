@@ -15,6 +15,7 @@ import { installSubscriptionListener } from './subscriptions.js';
 import { installPeerSyncListener, uninstallPeerSyncListener, peerSyncEvents, syncMediaLibraryWithAllPeers, syncCosHistoryWithAllPeers, syncCosTasksWithAllPeers, syncEidoverseFoundationsWithAllPeers } from './peerSync.js';
 import { hasSubscriptionAdapter } from './recordEvents.js';
 import { initAnnotationsSync } from './annotationsSync.js';
+import { installShareRefusalNotifier } from './shareRefusalNotifier.js';
 
 export { sharingEvents } from './importer.js';
 export { attachWatcher, detachWatcher, listAttachedWatchers };
@@ -93,6 +94,10 @@ export async function initSharing({ io: socketIo } = {}) {
   await ensureDir(join(PATHS.data, 'sharing'));
   await ensureDir(join(PATHS.data, 'sharing', 'cursors'));
   await ensureDir(join(PATHS.data, 'sharing', 'inbox'));
+
+  // A share refused because this install is behind reaches the bell even when
+  // no browser is open while the bucket fills.
+  installShareRefusalNotifier(sharingEvents);
 
   // Wire socket events for the client UI.
   if (io) {

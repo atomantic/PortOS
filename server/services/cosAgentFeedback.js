@@ -1,7 +1,7 @@
 /**
  * CoS Agent Feedback Module
  *
- * Per-agent feedback capture + aggregation and the task-type classifier.
+ * Per-agent feedback capture + aggregation.
  * Extracted from the former monolithic cosAgents.js (issue #2530).
  *
  * The `cosAgents.js` barrel that used to re-export this module is retired
@@ -36,6 +36,7 @@ import {
   removePendingAgentFeedbackRef,
   upsertPendingAgentFeedbackRef,
 } from './cosAgentFeedbackStore.js';
+import { extractTaskType } from './taskLearning/store.js';
 
 const ARCHIVE_READ_BATCH_SIZE = 50;
 const hasValidFeedback = hasValidAgentFeedback;
@@ -354,7 +355,11 @@ export async function submitAgentFeedback(agentId, feedback) {
       taskId: response.agent?.taskId ?? null,
       rating: feedbackData.rating,
       comment: feedbackData.comment,
-      taskType: extractTaskType(response.agent?.metadata?.taskDescription),
+      taskType: extractTaskType({
+        description: response.agent?.metadata?.taskDescription,
+        metadata: response.agent?.metadata,
+        taskType: response.agent?.metadata?.taskType,
+      }),
     },
     source: { service: 'cosAgentFeedback', fn: 'submitAgentFeedback' },
     happenedAt: feedbackData.submittedAt,
@@ -384,7 +389,11 @@ export async function getFeedbackStats() {
   // Group by task type
   const byTaskType = {};
   withFeedback.forEach(a => {
-    const taskType = extractTaskType(a.metadata?.taskDescription);
+    const taskType = extractTaskType({
+      description: a.metadata?.taskDescription,
+      metadata: a.metadata,
+      taskType: a.metadata?.taskType,
+    });
     if (!byTaskType[taskType]) {
       byTaskType[taskType] = { positive: 0, negative: 0, neutral: 0, total: 0 };
     }
@@ -437,23 +446,3 @@ export function initializeAgentFeedback() {
   });
 }
 
-// Helper to extract task type from description (mirrors client-side logic)
-export function extractTaskType(description) {
-  if (!description) return 'general';
-  const d = description.toLowerCase();
-  if (d.includes('fix') || d.includes('bug') || d.includes('error') || d.includes('issue')) return 'bug-fix';
-  if (d.includes('refactor') || d.includes('clean up') || d.includes('improve') || d.includes('optimize')) return 'refactor';
-  if (d.includes('test')) return 'testing';
-  if (d.includes('document') || d.includes('readme') || d.includes('docs')) return 'documentation';
-  if (d.includes('review') || d.includes('audit')) return 'code-review';
-  if (d.includes('mobile') || d.includes('responsive')) return 'mobile-responsive';
-  if (d.includes('security') || d.includes('vulnerability')) return 'security';
-  if (d.includes('performance') || d.includes('speed')) return 'performance';
-  if (d.includes('ui') || d.includes('ux') || d.includes('design') || d.includes('style')) return 'ui-ux';
-  if (d.includes('api') || d.includes('endpoint') || d.includes('route')) return 'api';
-  if (d.includes('database') || d.includes('migration')) return 'database';
-  if (d.includes('deploy') || d.includes('ci') || d.includes('cd')) return 'devops';
-  if (d.includes('investigate') || d.includes('debug')) return 'investigation';
-  if (d.includes('self-improvement') || d.includes('feature idea')) return 'self-improvement';
-  return 'feature';
-}

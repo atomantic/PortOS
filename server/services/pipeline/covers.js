@@ -76,7 +76,7 @@ export function composeComicCoverPrompt({
 export function composeTitleScreenPrompt({
   series, world, issue, extraStyle = '',
 }) {
-  const seriesName = (series?.name || '').trim();
+  const _seriesName = (series?.name || '').trim();
   const issueNumber = Number.isFinite(issue?.number) ? Math.max(1, Math.floor(issue.number)) : null;
   const issueTitle = (issue?.title || '').trim();
 

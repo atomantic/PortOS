@@ -42,6 +42,7 @@ import {
   humanizeIntegrityField,
   incompleteCoverage,
 } from '../../lib/characterIntegrity';
+import { pluralize } from '../../lib/textUtils';
 
 const TONE_CLASS = {
   emerald: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
@@ -194,8 +195,8 @@ export default function CastIntegrityPanel({ open, universeId, onClose, onUniver
               <div className="flex flex-wrap items-center gap-2 justify-between">
                 <p className="text-xs text-gray-400">
                   {passed
-                    ? `All ${report.castCount} characters reviewed and clean.`
-                    : `${findings.length} finding${findings.length === 1 ? '' : 's'} across ${report.castCount} character${report.castCount === 1 ? '' : 's'}.`}
+                    ? `All ${pluralize(report.castCount, 'character')} reviewed and clean.`
+                    : `${pluralize(findings.length, 'finding')} across ${pluralize(report.castCount, 'character')}.`}
                   {incomplete.length ? (
                     <span className="text-gray-500"> {incomplete.length} not fully reviewed.</span>
                   ) : null}

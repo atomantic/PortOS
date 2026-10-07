@@ -11,11 +11,11 @@ import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isValidKey } from '../lib/mediaItemKey.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
 import { resolveLocalAuthorName } from './sharing/annotationIdentity.js';
+import { codedError } from '../lib/codedError.js';
 
 const STATE_PATH = join(PATHS.data, 'media-annotations.json');
 
 export const ERR_VALIDATION = 'VALIDATION_ERROR';
-const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 export const NOTE_MAX_LENGTH = 2000;
 
@@ -242,23 +242,23 @@ export async function mergePeerAnnotations(payload) {
  * Returns the post-write projection `{ own, others }` for this key.
  */
 export async function setAnnotation(key, patch) {
-  if (!isValidKey(key)) throw makeErr(`Invalid key: ${key}`, ERR_VALIDATION);
+  if (!isValidKey(key)) throw codedError(`Invalid key: ${key}`, ERR_VALIDATION);
   if (!patch || typeof patch !== 'object') {
-    throw makeErr('patch must include starred and/or note', ERR_VALIDATION);
+    throw codedError('patch must include starred and/or note', ERR_VALIDATION);
   }
   const hasStarred = Object.prototype.hasOwnProperty.call(patch, 'starred');
   const hasNote = Object.prototype.hasOwnProperty.call(patch, 'note');
   if (!hasStarred && !hasNote) {
-    throw makeErr('patch must include starred and/or note', ERR_VALIDATION);
+    throw codedError('patch must include starred and/or note', ERR_VALIDATION);
   }
   if (hasStarred && typeof patch.starred !== 'boolean') {
-    throw makeErr('starred must be boolean', ERR_VALIDATION);
+    throw codedError('starred must be boolean', ERR_VALIDATION);
   }
   if (hasNote && typeof patch.note !== 'string') {
-    throw makeErr('note must be string', ERR_VALIDATION);
+    throw codedError('note must be string', ERR_VALIDATION);
   }
   if (hasNote && patch.note.length > NOTE_MAX_LENGTH) {
-    throw makeErr(`note exceeds max length (${NOTE_MAX_LENGTH})`, ERR_VALIDATION);
+    throw codedError(`note exceeds max length (${NOTE_MAX_LENGTH})`, ERR_VALIDATION);
   }
 
   return queueWrite(async () => {
@@ -268,7 +268,7 @@ export async function setAnnotation(key, patch) {
       resolveLocalAuthorName().catch(() => ''),
     ]);
     if (!localInstanceId || localInstanceId === UNKNOWN_INSTANCE_ID) {
-      throw makeErr('Local instance identity not initialized', ERR_VALIDATION);
+      throw codedError('Local instance identity not initialized', ERR_VALIDATION);
     }
 
   const priorAuthors = all[key]?.authors ?? {};

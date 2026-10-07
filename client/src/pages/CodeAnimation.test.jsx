@@ -31,6 +31,11 @@ vi.mock('../services/api', () => ({
   uploadFile: vi.fn(),
   uploadGalleryVideo: vi.fn(),
 }));
+vi.mock('../components/videoGen/GalleryVideoPicker', () => ({
+  default: ({ open, onSelect, onClose }) => (open ? (
+    <button type="button" onClick={() => { onSelect({ filename: 'take.mp4', prompt: '(no prompt)', previewUrl: '/data/video-thumbnails/take.jpg' }); onClose(); }}>Choose example video</button>
+  ) : null),
+}));
 vi.mock('../hooks/useProviderModels', () => ({
   default: () => ({
     providers: [{ id: 'api-1', name: 'Example API', type: 'api', enabled: true }],
@@ -278,6 +283,22 @@ describe('Code Animation page', () => {
     // Editing the brief marks the built prompt stale until it is rebuilt.
     await user.type(screen.getByLabelText(/style refinements/i), 'more fog');
     expect(screen.getByText(/brief changed since this prompt was built/i)).toBeInTheDocument();
+  });
+
+  it('sends a picked Media History reference video with its note and reserves its image slots', async () => {
+    const user = userEvent.setup();
+    await renderPage();
+    expect(screen.getByText('Reference images (0/8)')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /pick or upload a video/i }));
+    await user.click(screen.getByRole('button', { name: 'Choose example video' }));
+    expect(screen.getByText('Reference images (0/5)')).toBeInTheDocument();
+    await user.type(screen.getByLabelText('Note for take.mp4'), 'cut rhythm');
+    await user.type(screen.getByLabelText(/what happens/i), 'A lantern drifts over a harbor');
+    await user.click(screen.getByRole('button', { name: /build prompt/i }));
+    await waitFor(() => expect(buildCodeAnimationPrompt).toHaveBeenCalledTimes(1));
+    expect(buildCodeAnimationPrompt.mock.calls[0][0].referenceVideo).toEqual({ filename: 'take.mp4', label: 'take.mp4', note: 'cut rhythm' });
+    await user.click(screen.getByRole('button', { name: 'Remove reference video' }));
+    expect(screen.getByText('Reference images (0/8)')).toBeInTheDocument();
   });
 
   it('writes the brief from the universe and drops it into the form', async () => {

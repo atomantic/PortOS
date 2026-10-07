@@ -17,7 +17,8 @@
  * `weekdaysOnly`, and every other field are preserved.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { writeJsonAtomic } from './_lib.js';
 import { join } from 'path';
 import {
   INTERVAL_TYPES,
@@ -46,7 +47,7 @@ async function readJson(path) {
   }
 }
 
-const writeJson = (path, value) => writeFile(path, `${JSON.stringify(value, null, 2)}\n`);
+const writeJson = (path, value) => writeJsonAtomic(path, value);
 
 /** Migrate one task config in place. Returns true when it changed. */
 export function migrateTaskConfig(taskType, config) {

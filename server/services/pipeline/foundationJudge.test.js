@@ -68,7 +68,6 @@ const arcPlanner = await import('./arcPlanner.js');
 const issuesSvc = await import('./issues.js');
 const {
   judgeFoundation,
-  getFoundationJudge,
   computeWeightedScore,
   weakestDimension,
   foundationGateStatus,

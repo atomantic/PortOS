@@ -15,7 +15,8 @@
  * other than `claude-code`, or once `claude-code-tui.enabled` is true.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { writeJsonAtomic } from './_lib.js';
 import { join } from 'path';
 
 const PROVIDERS_REL_PATH = 'data/providers.json';
@@ -65,7 +66,7 @@ export default {
     }
 
     if (changed) {
-      await writeFile(providersPath, `${JSON.stringify(config, null, 2)}\n`);
+      await writeJsonAtomic(providersPath, config);
       console.log(`📝 ${PROVIDERS_REL_PATH}: switched default provider to claude-code-tui`);
     } else {
       console.log(`✅ ${PROVIDERS_REL_PATH}: already on claude-code-tui (or a user-selected provider), no changes`);

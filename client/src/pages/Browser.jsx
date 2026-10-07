@@ -17,6 +17,7 @@ import BrailleSpinner from '../components/BrailleSpinner';
 import toast from '../components/ui/Toast';
 import { FormField } from '../components/ui/FormField';
 import { formatBytes, formatDateTime, formatDurationMs } from '../utils/formatters';
+import { pluralize } from '../lib/textUtils';
 
 const STATUS_EVENTS = ['browser:changed'];
 const readStatus = () => getBrowserStatus({ silent: true });
@@ -673,7 +674,7 @@ export default function BrowserPage() {
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-gray-400 text-sm">Downloads</span>
-                <span className="text-sm font-medium text-port-success">{status?.downloads?.files?.length ?? 0} files</span>
+                <span className="text-sm font-medium text-port-success">{pluralize(status?.downloads?.files?.length ?? 0, 'file')}</span>
               </div>
             </div>
           </div>

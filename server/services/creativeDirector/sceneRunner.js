@@ -44,6 +44,7 @@ import { getSettings } from '../settings.js';
 import { updateScene, updateProject, getProject } from './local.js';
 import { dispatchSceneEvaluation } from './sceneEvaluator.js';
 import { videoAudioIsDisabled } from './videoAudio.js';
+import { logFailureWithStack } from '../../lib/failureLogging.js';
 
 // Max render+eval attempts per scene (shared with the evaluator so render-retry
 // and eval-retry caps can't silently diverge — both bump the same scene.retryCount).
@@ -379,7 +380,7 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
       await updateProject(projectId, {
         status: 'failed',
         failureReason: `i2v continuation regression detected: ${reason}`,
-      }).catch((e) => console.log(`⚠️ CD updateProject(failed) for ${projectId} failed: ${e.message}`));
+      }).catch((e) => logFailureWithStack(`❌ CD updateProject(failed) for ${projectId} failed`, e));
       return;
     }
     const videoPath = join(PATHS.videos, `${jobId}.mp4`);
@@ -398,7 +399,7 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
       await updateProject(projectId, {
         status: 'failed',
         failureReason: `unplayable render detected: ${reason}`,
-      }).catch((e) => console.log(`⚠️ CD updateProject(failed) for ${projectId} failed: ${e.message}`));
+      }).catch((e) => logFailureWithStack(`❌ CD updateProject(failed) for ${projectId} failed`, e));
       return;
     }
     await updateScene(projectId, sceneId, { ...(opts.workRevision === undefined ? {} : { expectedWorkRevision: opts.workRevision }),

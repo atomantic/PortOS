@@ -376,7 +376,7 @@ export async function getGsdPendingActions(appId) {
   if (!project) return []
 
   const actions = []
-  const currentPhase = project.state?.frontmatter?.current_phase
+  const _currentPhase = project.state?.frontmatter?.current_phase
 
   for (const phase of project.phases) {
     const hasPlans = phase.plans?.length > 0

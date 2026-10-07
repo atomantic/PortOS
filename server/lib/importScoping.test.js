@@ -366,6 +366,10 @@ const HOISTED = [
     'warms the peer-sync route graph once, for the same vi.resetModules() reason'],
   ['routes/peerSyncAuthIntegration.test.js', '../services/auth.js',
     'warms the auth service the first test reaches before it can build an app'],
+  ['lib/workTracker.trackerInstructions.test.js', '../services/taskPromptDefaults.js',
+    'the shipped prompt catalog cold-transforms past the expansion test budget under full-run contention'],
+  ['lib/workTracker.trackerInstructions.test.js', './auditCatalog.js',
+    'the audit catalog loads with that same expansion and must stay outside the test budget'],
 ];
 
 // Everything up to the first test/hook registration is module-collection scope.

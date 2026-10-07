@@ -22,7 +22,8 @@
  * flags (any other combination) is left alone.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { writeJsonAtomic } from './_lib.js';
 import { join } from 'path';
 
 const PROVIDERS_REL_PATH = 'data/providers.json';
@@ -75,7 +76,7 @@ export default {
     }
 
     provider.args = [...NEW_ARGS];
-    await writeFile(providersPath, `${JSON.stringify(config, null, 2)}\n`);
+    await writeJsonAtomic(providersPath, config);
     console.log(`📝 ${PROVIDERS_REL_PATH}: ${TARGET_ID} args → --dangerously-bypass-approvals-and-sandbox (headless network + no approval walls)`);
   },
 };

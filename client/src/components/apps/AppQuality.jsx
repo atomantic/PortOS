@@ -11,6 +11,7 @@ import InfoTooltip from '../ui/InfoTooltip';
 import OverflowMenu from '../ui/OverflowMenu';
 import Drawer from '../Drawer';
 import useDrawerTab from '../../hooks/useDrawerTab';
+import { pluralize } from '../../lib/textUtils';
 
 // Run/schedule forms live in a slide-out keyed by ?qualityPanel so the page
 // itself stays a metrics view; the value is the drawer title.
@@ -132,7 +133,7 @@ export default function AppQuality({ app, detail = false }) {
           <OverflowMenu label="More quality actions" items={menuItems} />
         </div>
         {(federation?.failed || federation?.unavailable > 0) && <p className="basis-full text-xs text-port-warning">
-          {federation.failed ? 'Peer quality could not be loaded; the score may be incomplete.' : `${federation.unavailable} peers unavailable or incompatible; the score may be incomplete.`}
+          {federation.failed ? 'Peer quality could not be loaded; the score may be incomplete.' : `${pluralize(federation.unavailable, 'peer')} unavailable or incompatible; the score may be incomplete.`}
         </p>}
         {score == null && !quality?.unavailable && <p className="basis-full text-sm text-gray-400">
           {hasAssessments ? 'Saved assessments do not qualify for an overall score yet. See the breakdown for coverage, confidence and age.' : 'No audit assessment saved yet. Run checks to collect one.'}

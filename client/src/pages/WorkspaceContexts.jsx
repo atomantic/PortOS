@@ -264,7 +264,7 @@ export default function WorkspaceContexts() {
         Save and restore each project's working context — the active git branch, the
         shell sessions rooted in its repo, and the tasks scoped to it.
       </p>
-      {appId ? <ContextDetail appId={appId} /> : <ContextList />}
+      {appId ? <ContextDetail key={appId} appId={appId} /> : <ContextList />}
     </div>
   );
 }

@@ -7,7 +7,7 @@ This doc covers the quantitative-modeling layer. The document workflow (Document
 ## Architecture
 
 - **Digital Twin Service** (`server/services/digital-twin.js`, with logic split across ~20 `digital-twin-*.js` modules plus `feedbackLoop.js`): trait analysis, confidence scoring, gap recommendations, testing suites, personas, imports
-- **Digital Twin Routes** (`server/routes/digital-twin.js`): REST API under `/api/digital-twin/*`
+- **Digital Twin Routes** (`server/routes/digital-twin/`): REST API under `/api/digital-twin/*`
 - **Digital Twin Validation** (`server/lib/digitalTwinValidation.js`): Zod schemas for trait data
 
 ## Quantitative Personality Modeling

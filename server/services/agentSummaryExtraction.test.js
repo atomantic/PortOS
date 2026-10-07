@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { extractFinalSummary, extractSimplifySummaries } from './agentSummaryExtraction.js';
+import { LIFECYCLE_LINES } from '../lib/agentOutputMarkers.js';
 
 describe('sentinel summary precedence', () => {
   it.each(['Thinking: I will now run /simplify.', 'tokens used\n123\nEarlier assistant reply.'])(
@@ -11,7 +12,7 @@ describe('sentinel summary precedence', () => {
         transcript,
         '✅ Agent signaled completion',
         summary,
-        '💡 Open the Shell tab to view the session',
+        LIFECYCLE_LINES.shellTabHint(),
       ].join('\n');
       expect(extractFinalSummary(output)).toBe(summary);
       expect(extractSimplifySummaries(output)).toEqual({ taskSummary: summary, simplifySummary: null });

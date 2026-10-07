@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router';
-import { Bell, X, CheckCheck, Trash2, Brain, ListTodo, AlertTriangle, Code, HelpCircle, BellRing, Film, Sparkles } from 'lucide-react';
+import { Bell, X, CheckCheck, Trash2, Brain, ListTodo, AlertTriangle, Code, HelpCircle, BellRing, Film, Sparkles, AlarmClock, Share2 } from 'lucide-react';
 import { timeAgo, formatCount } from '../utils/formatters';
 import { useActionQueue } from '../hooks/useActionQueue';
 import ActionQueuePreview from './ActionQueuePreview';
@@ -53,6 +53,16 @@ const NOTIFICATION_TYPE_CONFIG = {
   },
   music_video_attention: {
     icon: Film,
+    color: 'text-orange-400',
+    bgColor: 'bg-orange-500/20'
+  },
+  action_due: {
+    icon: AlarmClock,
+    color: 'text-port-accent',
+    bgColor: 'bg-port-accent/20'
+  },
+  share_blocked: {
+    icon: Share2,
     color: 'text-orange-400',
     bgColor: 'bg-orange-500/20'
   }

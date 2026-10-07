@@ -7,7 +7,7 @@ import { z } from 'zod';
 import * as cos from '../services/cos.js';
 import * as taskWatcher from '../services/taskWatcher.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
-import { buildClaimWorkTask, buildIssueReplanTask, buildJiraTicketTask } from '../services/cosTaskGenerator.js';
+import { buildClaimWorkTask, buildIssueReplanTask, buildJiraTicketTask } from '../services/cosTaskClaimWork.js';
 import { getAppById, getAppWorkTracker, PORTOS_APP_ID } from '../services/apps.js';
 import { prepareAppIssueClaim } from '../services/appIssues.js';
 import { getAssignableInstances } from '../services/instances.js';

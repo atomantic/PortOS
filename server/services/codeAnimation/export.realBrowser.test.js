@@ -2,7 +2,7 @@
 // the staged document runs in real Chrome, renderComposition encodes it with
 // real ffmpeg, and the MP4 is compared to direct renderFrame(t) screenshots.
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import { join } from 'node:path';
@@ -28,6 +28,7 @@ vi.mock('./jobStore.js', () => ({
 
 const { startCodeAnimationExport } = await import('./export.js');
 const { renderComposition } = await import('../htmlComposition/index.js');
+const { openComposition } = await import('../htmlComposition/browser.js');
 const { PATHS } = await import('../../lib/fileUtils.js');
 
 const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
@@ -66,6 +67,41 @@ window.renderFrame = (t) => {
 };
 </script></body></html>`;
 
+// A three-renderer film (#10464): imports three and addons by bare name and
+// never writes an import map, so the host's map and the vendored modules are the
+// only way it can run. The post stack is the bloom + OutputPass finish the prompt teaches.
+const THREE_FIXTURE = `<!doctype html><html><head><style>body { margin: 0; background: #000; }</style></head><body>
+<canvas id="film" width="${WIDTH}" height="${HEIGHT}"></canvas>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+window.ANIMATION_META = { title: 'Three', duration: 1, fps: ${FPS}, width: ${WIDTH}, height: ${HEIGHT} };
+const film = document.getElementById('film');
+const renderer = new THREE.WebGLRenderer({ canvas: film, antialias: false, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(${WIDTH}, ${HEIGHT}, false);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x101820);
+const camera = new THREE.PerspectiveCamera(45, ${WIDTH} / ${HEIGHT}, 0.1, 50);
+camera.position.set(0, 1, 6);
+scene.add(new THREE.HemisphereLight(0xaaccff, 0x222233, 1.2));
+const box = new THREE.Mesh(new RoundedBoxGeometry(1.6, 1.6, 1.6, 4, 0.2), new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: new THREE.Color(3, 1.6, 0.8), emissiveIntensity: 0.6 }));
+scene.add(box);
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(${WIDTH}, ${HEIGHT}), 0.6, 0.4, 1.2));
+composer.addPass(new OutputPass());
+window.renderFrame = (t) => {
+  box.rotation.set(t * 3, t * 5, 0);
+  box.position.x = Math.sin(t * 4) * 1.5;
+  composer.render();
+};
+</script></body></html>`;
+
 let proc;
 let browser;
 const decodeRaw = (input, extra = []) => execFileSync(ffmpeg, ['-v', 'error', '-i', input, ...extra, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 80 * 1024 * 1024 });
@@ -78,7 +114,7 @@ const meanAbsDiff = (a, b) => {
 describe.skipIf(!chrome || !ffmpeg || !ffprobe)('Code Animation frame-exact export with real Chrome and ffmpeg', () => {
   beforeAll(async () => {
     const profile = join(lazyTempDataRoot('portos-code-animation-export-'), 'chrome-test-profile');
-    proc = spawn(chrome, ['--headless=new', '--mute-audio', '--no-sandbox', '--no-first-run', '--disable-background-networking', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    proc = spawn(chrome, ['--headless=new', '--mute-audio', '--no-sandbox', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--no-first-run', '--disable-background-networking', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
     try {
       const ws = await _waitForTestChrome(proc);
       endpoint = new URL(ws).origin.replace('ws:', 'http:');
@@ -132,5 +168,37 @@ describe.skipIf(!chrome || !ffmpeg || !ffprobe)('Code Animation frame-exact expo
     } finally {
       await context.close();
     }
+  }, 120000);
+
+  it('runs a three.js film from the vendored modules alone: repeated renderFrame(t) is pixel-identical, the render is network-free, and the files are hashed', async () => {
+    state.html = THREE_FIXTURE;
+    const { directory } = await startCodeAnimationExport('11111111-2222-4333-8444-555555555556', {
+      enqueueJob: async ({ params }) => ({ jobId: 'three', directory: params.directory }),
+    });
+    const manifest = JSON.parse(readFileSync(join(PATHS.data, directory, 'dependencies.json'), 'utf8'));
+    expect(manifest).toMatchObject({ network: false, packages: [{ name: 'three' }] });
+    for (const { path, sha256 } of manifest.packages[0].files) {
+      expect(createHash('sha256').update(readFileSync(join(PATHS.data, directory, path))).digest('hex')).toBe(sha256);
+    }
+
+    const page = await openComposition(directory);
+    const shots = [];
+    try {
+      const contract = await page.evaluate('(() => { const c = globalThis.portosComposition; return { width: c.width, height: c.height }; })()');
+      await page.send('Emulation.setDeviceMetricsOverride', { width: contract.width, height: contract.height, deviceScaleFactor: 1, mobile: false });
+      // 0.25, 0.75, then 0.25 again on the same page and the same persistent scene.
+      for (const t of [0.25, 0.75, 0.25]) {
+        await page.evaluate(`globalThis.portosComposition.seek(${t})`);
+        const shot = await page.send('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false });
+        shots.push(createHash('sha256').update(Buffer.from(shot.data, 'base64')).digest('hex'));
+      }
+      // close({ verify }) rejects when the page tried a refused (non-vendored) request.
+      await page.close({ verify: true });
+    } catch (error) {
+      await page.close();
+      throw error;
+    }
+    expect(shots[0]).toBe(shots[2]);
+    expect(shots[0]).not.toBe(shots[1]);
   }, 120000);
 });

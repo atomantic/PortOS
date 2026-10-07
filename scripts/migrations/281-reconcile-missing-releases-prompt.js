@@ -5,7 +5,8 @@
  * to ensure stored task prompt versions for release-check upgrade to v9 when uncustomized.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { writeJsonAtomic } from './_lib.js';
 import { join } from 'path';
 import { DEFAULT_TASK_PROMPTS, PROMPT_VERSIONS } from '../../server/services/taskPromptDefaults.js';
 
@@ -28,7 +29,7 @@ async function readJson(path) {
 }
 
 async function writeJson(path, value) {
-  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`);
+  await writeJsonAtomic(path, value);
 }
 
 export default {

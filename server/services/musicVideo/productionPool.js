@@ -32,6 +32,7 @@ import { musicVideoConditioningReferences } from '../../lib/musicVideoConditioni
 import { MUSIC_VIDEO_AUTOMATION_TOOLS } from '../../lib/musicVideoAutomation.js';
 import { falSceneTake, isPerformanceScene, performanceBlockedReason } from '../../lib/musicVideoShotTiming.js';
 import { maxInputImages, supportsCloudModelOverride } from '../../lib/imageGenCapabilities.js';
+import { resolveVideoSupportedModes } from '../../lib/videoModeProfiles.js';
 import { isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { RUNNER_FAMILIES } from '../../lib/runners.js';
 import { poolHasRoute, routeKey } from './production.js';
@@ -170,6 +171,10 @@ async function routeEligibility(route, env) {
     const label = requested || modelId || '(none)';
     if (!model) return { ok: false, reason: `Local video model "${label}" is not installed` };
     if (!isHardwareCompatible(model.hardwareCompatibility)) return { ok: false, reason: `Local video model "${label}" cannot run on this hardware` };
+    // Footage always animates a generated or chosen frame, so the model must take an image.
+    if (!resolveVideoSupportedModes(model).includes('image')) {
+      return { ok: false, reason: `Local video model "${model.name || label}" does not support image-to-video, which footage production needs — choose another video model` };
+    }
   }
   return { ok: true, reason: null };
 }
@@ -203,6 +208,22 @@ async function routeIncapableReason(route, requirement, env) {
 export async function routeUnavailableReason(route, requirement, env) {
   const { ok, reason } = await routeEligibility(route, env);
   return ok ? routeIncapableReason(route, requirement, env) : reason;
+}
+
+/**
+ * Refuse a pinned local video model that cannot animate a frame, so a text-only
+ * model fails the start request instead of the first clip. Narrower than
+ * assertPoolEligible: it ignores install state (keys, toggles) the run may still fix.
+ */
+export async function assertFootageVideoModelsCapable(pool, env) {
+  for (const route of pool) {
+    const pinned = route.kind === 'video' && route.mode === 'local' && typeof route.model === 'string' ? route.model.trim() : '';
+    if (!pinned) continue;
+    const { model } = await env.resolveVideoModel(pinned);
+    if (model && !resolveVideoSupportedModes(model).includes('image')) {
+      throw new ServerError(`Local video model "${model.name || pinned}" does not support image-to-video, which footage production needs — choose another video model`, { status: 400, code: 'VIDEO_MODEL_TEXT_ONLY', context: { model: pinned } });
+    }
+  }
 }
 
 /** Start-time check: every route in the pool must be eligible now. Throws 409 with every reason. */

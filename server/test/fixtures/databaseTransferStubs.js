@@ -51,7 +51,18 @@ ${phase('dump', 'start')}
 trap '${phase('dump', 'exit')}' EXIT
 writer=none
 if [ -s "$R/writer.pid" ]; then
-  if kill -0 "$(cat "$R/writer.pid")" 2>/dev/null; then writer=alive; else writer=dead; fi
+  wpid=$(cat "$R/writer.pid")
+  if kill -0 "$wpid" 2>/dev/null; then
+    if [ -f "/proc/$wpid/stat" ] && awk '{if ($NF=="") exit; sub(/^.*\)/, ""); if ($1=="Z") exit 1}' "/proc/$wpid/stat" 2>/dev/null; then
+      writer=alive
+    elif [ ! -f "/proc/$wpid/stat" ]; then
+      writer=alive
+    else
+      writer=dead
+    fi
+  else
+    writer=dead
+  fi
 fi
 echo "dump writer=$writer" >> "$R/events.log"
 if [ "$mode" = pause ]; then ${pause('dump')}; fi

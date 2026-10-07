@@ -9,7 +9,8 @@
  * on read applies. A user-edited prompt is left alone.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { writeJsonAtomic } from './_lib.js';
 import { join } from 'path';
 import { DEFAULT_TASK_PROMPTS, PROMPT_VERSIONS } from '../../server/services/taskPromptDefaults.js';
 import { currentTaskTypeName } from '../../server/lib/scheduledTaskTypes.js';
@@ -64,7 +65,7 @@ export default {
         updatedCount += 1;
         console.log(`📝 ${relPath}: upgraded ${key} prompt v${currentVersion} → v${PROMPT_VERSIONS[promptKey]}`);
       }
-      if (dirty) await writeFile(fullPath, `${JSON.stringify(schedule, null, 2)}\n`);
+      if (dirty) await writeJsonAtomic(fullPath, schedule);
     }
     return { updated: updatedCount };
   },

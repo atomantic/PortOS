@@ -65,7 +65,7 @@ it('identifies federated evidence and incomplete scores without linking to a loc
   ] } };
   render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
   await screen.findByText(/No scored assessments/);
-  expect(screen.getByText(/1 peers unavailable or incompatible/)).toBeInTheDocument();
+  expect(screen.getByText(/1 peer unavailable or incompatible/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Security actions' }));
   expect(screen.getByRole('menuitem', { name: 'View instances' })).toHaveAttribute('href', '/instances');
   expect(screen.queryByRole('menuitem', { name: 'View audit run' })).not.toBeInTheDocument();

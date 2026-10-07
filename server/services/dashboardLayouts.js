@@ -14,6 +14,7 @@
 import { join } from 'path';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../lib/fileUtils.js';
 import { HHMM_STRICT_RE } from '../lib/timezone.js';
+import { codedError } from '../lib/codedError.js';
 
 const STATE_PATH = join(PATHS.data, 'dashboard-layouts.json');
 
@@ -21,7 +22,6 @@ const STATE_PATH = join(PATHS.data, 'dashboard-layouts.json');
 // without string-matching on err.message (which breaks on rename/i18n).
 export const ERR_NOT_FOUND = 'NOT_FOUND';
 export const ERR_BUILTIN_PROTECTED = 'BUILTIN_PROTECTED';
-const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 // Widget ids are the contract between this file and the client registry —
 // see client/src/components/dashboard/widgetRegistry.jsx. If a layout refers
@@ -455,7 +455,7 @@ export function setActiveLayout(id) {
   return queueLayoutsWrite(async () => {
     const state = await getState();
     if (!state.layouts.find((l) => l.id === id)) {
-      throw makeErr(`Unknown layout id: ${id}`, ERR_NOT_FOUND);
+      throw codedError(`Unknown layout id: ${id}`, ERR_NOT_FOUND);
     }
     const next = { activeLayoutId: id, layouts: state.layouts };
     await atomicWrite(STATE_PATH, next);
@@ -507,8 +507,8 @@ export function deleteLayout(id) {
   return queueLayoutsWrite(async () => {
     const state = await getState();
     const target = state.layouts.find((l) => l.id === id);
-    if (!target) throw makeErr(`Unknown layout id: ${id}`, ERR_NOT_FOUND);
-    if (target.builtIn) throw makeErr(`Cannot delete built-in layout: ${id}`, ERR_BUILTIN_PROTECTED);
+    if (!target) throw codedError(`Unknown layout id: ${id}`, ERR_NOT_FOUND);
+    if (target.builtIn) throw codedError(`Cannot delete built-in layout: ${id}`, ERR_BUILTIN_PROTECTED);
     const remaining = state.layouts.filter((l) => l.id !== id);
     // Guard against the pathological case where the JSON was hand-edited to
     // remove every built-in — fall back to reseeding defaults rather than

@@ -109,7 +109,7 @@ describe('httpClient', () => {
       mockFetch.mockResolvedValueOnce(json({ id: 1 }, 201))
       const client = createHttpClient({ baseURL: 'http://localhost:3000' })
 
-      const result = await client.post('/items', { name: 'test' })
+      const _result = await client.post('/items', { name: 'test' })
 
       const calledOptions = mockFetch.mock.calls[0][1]
       expect(calledOptions.method).toBe('POST')

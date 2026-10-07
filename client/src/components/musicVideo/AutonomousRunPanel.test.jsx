@@ -37,8 +37,13 @@ vi.mock('../../services/apiImageVideo.js', () => ({
   })),
 }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
+// A picker with no Auto option (the orchestrator's) opens on the active provider.
 vi.mock('../../hooks/useProviderModels.js', () => ({
-  default: ({ filter } = {}) => ({
+  default: ({ filter, allowDefault } = {}) => (!filter && !allowDefault ? {
+    providers: [{ id: 'fixture-api', name: 'Fixture API', type: 'api', enabled: true, defaultModel: 'fixture-model', models: ['fixture-model'] }],
+    selectedProviderId: 'fixture-api', selectedModel: 'fixture-model', availableModels: ['fixture-model'],
+    setSelectedProviderId: () => {}, setSelectedModel: () => {},
+  } : {
     providers: filter ? [
       { id: 'fixture-api', name: 'Fixture API', type: 'api', enabled: true, defaultModel: 'fixture-model', models: ['fixture-model'] },
       { id: 'fixture-tui', name: 'Fixture TUI', type: 'tui', enabled: true },
@@ -130,6 +135,49 @@ describe('AutonomousRunPanel', () => {
     render(<Harness initial={baseRun({ status: 'awaiting-approval', awaiting: 'song', stage: 'analyze' })} />);
     fireEvent.click(screen.getByRole('button', { name: /retake song/i }));
     await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', { retakeSong: true }, { silent: true }));
+  });
+
+  it('offers Resume, not Cancel, for a run canceled while it waited on production', async () => {
+    api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
+    render(<Harness initial={baseRun({ status: 'canceled', stage: 'produce', error: 'Production was canceled' })} />);
+    expect(screen.queryByRole('button', { name: /cancel/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /resume/i }));
+    await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', {}, { silent: true }));
+  });
+
+  it('offers nothing to resume for a run canceled before production', () => {
+    render(<Harness initial={baseRun({ status: 'canceled', stage: 'song' })} />);
+    expect(screen.queryByRole('button', { name: /resume/i })).toBeNull();
+  });
+
+  it('swaps the video model on Resume of a run parked in production, offering only image-capable models', async () => {
+    getVideoGenModelContext.mockResolvedValueOnce({
+      models: [
+        { id: 'example-ltx', name: 'Example LTX', supportedModes: ['text', 'image'] },
+        { id: 'example-text-only', name: 'Example text only', supportedModes: ['text'] },
+      ],
+      defaultModel: 'example-ltx',
+    });
+    api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
+    render(<Harness initial={baseRun({
+      status: 'needs-human', stage: 'produce', error: 'Video model refused',
+      brief: { origin: { kind: 'manual' }, tools: ['image:local', 'video:local'], models: { 'video:local': 'example-wan' } },
+      output: { productionRunId: 'prod-1' },
+    })} />);
+    const select = await screen.findByLabelText('Local video gen model');
+    await waitFor(() => expect(select.disabled).toBe(false));
+    expect(screen.queryByRole('option', { name: 'Example text only' })).toBeNull();
+    fireEvent.change(select, { target: { value: 'example-ltx' } });
+    fireEvent.click(screen.getByRole('button', { name: /resume/i }));
+    await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', { models: { 'video:local': 'example-ltx' } }, { silent: true }));
+  });
+
+  it('sends no models on Resume when the video model was not changed', async () => {
+    api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
+    render(<Harness initial={baseRun({ status: 'needs-human', stage: 'produce', brief: { origin: { kind: 'manual' }, tools: ['video:local'] } })} />);
+    await screen.findByLabelText('Local video gen model');
+    fireEvent.click(screen.getByRole('button', { name: /resume/i }));
+    await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', {}, { silent: true }));
   });
 
   it('offers a retry for a run that needs the director, and shows why', async () => {
@@ -404,5 +452,43 @@ describe('Current autonomous review guidance', () => {
     view.rerender(<MemoryRouter><AutonomousRunPanel project={project} auto={auto} readiness={{ ...readiness, storyboard: { approved: true, problems: [] } }} /></MemoryRouter>);
     expect(screen.getByRole('status')).toHaveTextContent('ready to resume explicitly');
     expect(auto.resume).not.toHaveBeenCalled();
+  });
+});
+
+describe('orchestrated mode', () => {
+  it('sends the orchestrator instead of checkpoints and planning grants, and shows a sign-in refusal inline', async () => {
+    const refusal = Object.assign(new Error('Sign in to start an orchestrated run: the orchestrator approves stages for you.'), { status: 401, code: 'AUTH_REQUIRED' });
+    api.startAutonomousMusicVideo.mockRejectedValueOnce(refusal).mockResolvedValue({ project: { id: 'mv-new' }, run: baseRun() });
+    render(<AutonomousStartDrawer open onClose={() => {}} onStarted={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'p' } });
+    fireEvent.change(screen.getByLabelText('Code authoring provider'), { target: { value: 'fixture-api' } });
+    fireEvent.click(screen.getByLabelText('Lyrics', { selector: '#mv-auto-checkpoint-lyrics' }));
+    fireEvent.change(screen.getByLabelText('Who reviews each step'), { target: { value: 'orchestrated' } });
+    // The orchestrator clears every review point, so the director's stops and grants go away.
+    expect(screen.queryByLabelText('Lyrics', { selector: '#mv-auto-checkpoint-lyrics' })).toBeNull();
+    expect(screen.queryByLabelText('Art', { selector: '#mv-auto-auto-approve-art' })).toBeNull();
+    fireEvent.change(screen.getByLabelText('Revisions per step'), { target: { value: '2' } });
+    const submit = screen.getByRole('button', { name: /start autonomous video/i });
+    fireEvent.click(submit);
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Sign in to start an orchestrated run'));
+    const [body] = api.startAutonomousMusicVideo.mock.calls[0];
+    expect(body).toMatchObject({ checkpoints: [], orchestrator: { providerId: 'fixture-api', model: 'fixture-model' }, limits: { maxGenerations: 40, maxReviewAttempts: 2 } });
+    expect(body.autoApprove).toBeUndefined();
+  });
+
+  it('shows who orchestrates and its latest decision, folding the earlier ones', () => {
+    const run = baseRun({ status: 'running', stage: 'produce', brief: { origin: { kind: 'manual' }, orchestrator: { providerId: 'fixture-api', model: 'judge', effort: 'high' } },
+      orchestration: { reviews: [
+        { id: 'r1', checkpoint: 'lyrics', verdict: 'revise', score: 5, notes: 'The hook never repeats.', route: { providerId: 'fixture-api' } },
+        { id: 'r2', checkpoint: 'final', verdict: 'noted', score: 6, notes: 'The ending drags.', issues: [{ atSec: 75, text: 'Static hold' }], route: { providerId: 'fixture-api' } },
+      ] } });
+    render(<Harness initial={run} />);
+    expect(screen.getByText('Orchestrated by fixture-api / judge · high')).toBeTruthy();
+    const log = screen.getByLabelText('Orchestrator decisions');
+    expect(log.textContent).toContain('Final video');
+    expect(log.textContent).toContain('1:15.00 Static hold');
+    expect(screen.getByText('Earlier decisions (1)')).toBeTruthy();
+    // The orchestrator approves planning, so the run offers no grant chips.
+    expect(screen.queryByLabelText('Art', { selector: '#mv-run-auto-approve-art' })).toBeNull();
   });
 });

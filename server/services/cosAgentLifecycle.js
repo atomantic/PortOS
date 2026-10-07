@@ -11,7 +11,7 @@
  */
 
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
-import { readFile, writeFile, rename, readdir, rm, stat } from 'fs/promises';
+import { readFile, rm, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { cosEvents } from './cosEvents.js';
@@ -21,7 +21,7 @@ import { atomicWrite, ensureDir, readFileTail, safeJSONParse, tryReadFile } from
 import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { repairCodexTaskSummary } from './codexSummaryRepair.js';
-import { loadAgentIndex, saveAgentIndex, getAgentDir, recordArchivedAgentOrder } from './cosAgentIndex.js';
+import { loadAgentIndex, saveAgentIndex, getAgentDir, recordArchivedAgentOrder, moveAgentDir } from './cosAgentIndex.js';
 import { isAgentHandoff } from '../lib/agentOutcome.js';
 
 export async function registerAgent(agentId, taskId, metadata = {}) {
@@ -81,14 +81,6 @@ export async function updateAgent(agentId, updates) {
   });
 }
 
-async function copyDirContents(fromDir, toDir) {
-  const files = await readdir(fromDir);
-  for (const file of files) {
-    const content = await readFile(join(fromDir, file));
-    await writeFile(join(toDir, file), content);
-  }
-}
-
 /**
  * Move a completed agent's directory into its `YYYY-MM-DD` bucket and index it.
  * Split out of `completeAgent` and made idempotent so the duplicate-completion
@@ -115,20 +107,10 @@ async function archiveCompletedAgent(agentId, agent) {
     await atomicWrite(join(flatDir, 'metadata.json'), agentWithoutOutput);
 
     // Move entire agent dir into date bucket (atomic on same filesystem)
-    await rename(flatDir, targetDir).catch(async () => {
-      // Fallback for cross-filesystem: copy files then remove
-      await ensureDir(targetDir);
-      await copyDirContents(flatDir, targetDir).catch(async (err) => {
-        // Roll the half-copied target back. `existsSync(targetDir)` is what every
-        // later archive attempt (including the duplicate-completion repair) reads
-        // as "already archived", so leaving a partial directory behind would
-        // strand the rest of the run's output.txt/prompt.txt permanently.
-        await rm(targetDir, { recursive: true, force: true })
-          .catch(rmErr => console.error(`❌ Failed to roll back partial archive for ${agentId}: ${rmErr.message}`));
-        throw err;
-      });
-      await rm(flatDir, { recursive: true });
-    });
+    // Cross-filesystem / Windows-handle fallback copies bytes and rolls back a
+    // partial target (the duplicate-completion repair reads an existing
+    // `targetDir` as "already archived", so a partial one would strand the run).
+    await moveAgentDir(flatDir, targetDir);
   }
 
   // Update index — deliberately NOT gated on the in-memory map already holding
@@ -772,17 +754,7 @@ export async function cleanupZombieAgents() {
 
         // Move to date bucket
         const targetDir = join(bucketDir, agentId);
-        if (!existsSync(targetDir)) {
-          await rename(flatDir, targetDir).catch(async () => {
-            await ensureDir(targetDir);
-            const files = await readdir(flatDir);
-            for (const file of files) {
-              const content = await readFile(join(flatDir, file));
-              await writeFile(join(targetDir, file), content);
-            }
-            await rm(flatDir, { recursive: true });
-          });
-        }
+        if (!existsSync(targetDir)) await moveAgentDir(flatDir, targetDir);
 
         idx.set(agentId, dateStr);
         archived.push({ ...agent, id: agentId });

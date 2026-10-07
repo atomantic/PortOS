@@ -66,7 +66,7 @@ export function transformAAModelsToObservations(models, options = {}) {
 
   for (const m of models) {
     if (!m || !m.name) continue;
-    const { baseName, modelSlug, effort, configDetail } = parseModelNameAndEffort(m.name);
+    const { modelSlug, effort, configDetail } = parseModelNameAndEffort(m.name);
     const provider = m.model_creator?.name || 'Unknown';
     const providerSlug = slugify(provider);
 

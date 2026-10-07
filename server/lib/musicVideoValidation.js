@@ -677,6 +677,7 @@ export const musicVideoPublishCopyPatchSchema = z.object({
   instagram: z.object({ caption: kitText(2200) }).partial().strict().optional(),
   reddit: z.object({ title: kitText(300), body: kitText(40000) }).partial().strict().optional(),
   stackerNews: z.object({ title: kitText(80), body: kitText(40000) }).partial().strict().optional(),
+  substack: z.object({ title: kitText(100), subtitle: kitText(250), body: kitText(40000) }).partial().strict().optional(),
   notes: kitText(8000).optional(),
 }).strict();
 export const musicVideoPublishCopyDraftSchema = z.object({
@@ -684,6 +685,19 @@ export const musicVideoPublishCopyDraftSchema = z.object({
   model: z.string().max(200).nullable().optional(),
   notes: kitText(8000).optional(),
   links: z.object({ youtube: z.string().url().max(500), song: z.string().url().max(500) }).partial().strict().optional(),
+  // What the draft may use beyond the notes and links; omitted keys keep their defaults (title on, the rest off).
+  include: z.object({ title: z.boolean(), lyrics: z.boolean(), spend: z.boolean(), chapters: z.boolean(), hashtags: z.boolean() }).partial().strict().optional(),
+  length: z.enum(['short', 'full']).optional(),
+  // The director agreed to replace posts written or edited by hand since the last draft.
+  replaceEdited: z.boolean().optional(),
+}).strict();
+// Plan the promotion as scheduled steps for the artist (Review Hub › Actions).
+export const musicVideoPromotionPlanSchema = z.object({
+  providerId: z.string().max(200).nullable().optional(),
+  model: z.string().max(200).nullable().optional(),
+  goal: z.string().trim().max(1500).optional(),
+  audience: z.string().trim().max(1000).optional(),
+  days: z.number().int().min(1).max(30).optional(),
 }).strict();
 export const musicVideoPublishThumbnailSchema = z.object({ filename: z.string().min(1).max(300) }).strict();
 
@@ -731,7 +745,7 @@ export const musicVideoCoverArtGenerateSchema = z.object({
 
 // #9282: posting to a platform through the PortOS Browser. One strict options
 // object covers every target; each target's payload builder reads only its own.
-export const MUSIC_VIDEO_PUBLISH_TARGETS = Object.freeze(['youtube', 'shorts', 'tiktok', 'instagram', 'x', 'reddit', 'stackerNews', 'suno', 'distrokid']);
+export const MUSIC_VIDEO_PUBLISH_TARGETS = Object.freeze(['youtube', 'shorts', 'tiktok', 'instagram', 'x', 'reddit', 'stackerNews', 'substack', 'suno', 'sunoHook', 'distrokid']);
 export const musicVideoPublishTargetSchema = z.enum(MUSIC_VIDEO_PUBLISH_TARGETS);
 const publishUrl = z.string().url().max(500);
 // #9287: which platforms the director posts to (opt-in), the account for each,
@@ -751,8 +765,12 @@ export const musicVideoPublishPrepareSchema = z.object({
   flairText: z.string().max(64),
   firstComment: kitText(10000),
   territory: z.string().max(40),
+  // Substack: the publication (name.substack.com or a custom domain); defaults to the account under Where you post.
+  publication: z.string().trim().min(1).max(200),
   songUrl: publishUrl,
   pin: z.boolean(),
+  // Suno Hook: keep the page's lyric overlay (default off: the cut carries its own).
+  showLyrics: z.boolean(),
   prompt: kitText(25000),
   storyImage: z.string().min(1).max(300),
   cutId: z.string().min(1).max(100),
@@ -856,10 +874,12 @@ export const musicVideoProductionStartSchema = z.object({
   model: z.string().min(1).max(200).nullable().optional(),
 }).strict();
 
-// Resume may RAISE a limit; `acceptBasis` continues against a changed creative setup.
+// Resume may RAISE a limit; `acceptBasis` continues against a changed creative setup;
+// `pool` replaces the allowed routes (e.g. swaps a refused video model), validated like Start.
 export const musicVideoProductionResumeSchema = z.object({
   limits: musicVideoProductionLimitsSchema.partial().optional(),
   acceptBasis: z.boolean().optional(),
+  pool: z.array(musicVideoProductionRouteSchema).max(12).optional(),
 }).strict();
 
 // ---- Fully-autonomous run: one prompt → lyrics → Suno song → video --------------
@@ -938,6 +958,10 @@ export const musicVideoAutonomousStartSchema = z.object({
   // Review and revise the lyric draft with a second pass (the `lyricsReview` stage
   // pin when set, else the direction LLM). Pinning `llmStages.lyricsReview` implies it.
   lyricsReview: z.boolean().optional(),
+  // Orchestrated mode: this provider/model/effort clears every review point a
+  // director would (no checkpoints). Approval authority — the route requires a
+  // signed-in session for it.
+  orchestrator: musicVideoLlmSchema.optional(),
   origin: z.object({
     kind: z.enum(AUTONOMOUS_ORIGINS).optional(),
     ideaId: z.string().max(80).nullable().optional(),
@@ -958,6 +982,13 @@ export const musicVideoAutonomousResumeSchema = z.object({
   localMusic: musicVideoLocalMusicOptionsSchema.nullable().optional(),
   // At the song checkpoint: discard the song and generate a new one.
   retakeSong: z.boolean().optional(),
+  // Swap a tool's model (null clears the pin) and raise or lower the run's limits. A changed
+  // model at the produce stage starts a new production run with the new pool.
+  models: z.partialRecord(z.enum(MUSIC_VIDEO_AUTOMATION_TOOL_IDS), z.string().trim().min(1).max(200).nullable()).optional(),
+  limits: z.object({
+    maxGenerations: z.number().int().min(AUTONOMOUS_LIMIT_BOUNDS.maxGenerations.min).max(AUTONOMOUS_LIMIT_BOUNDS.maxGenerations.max).optional(),
+    maxReviewAttempts: z.number().int().min(AUTONOMOUS_LIMIT_BOUNDS.maxReviewAttempts.min).max(AUTONOMOUS_LIMIT_BOUNDS.maxReviewAttempts.max).optional(),
+  }).strict().optional(),
   // Replace the brief's auto-approve grant ("auto-approve the rest").
   ...musicVideoAutoApproveFields,
 }).strict();

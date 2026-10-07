@@ -33,7 +33,8 @@
  * file is absent (fresh install → no-op).
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { writeJsonAtomic } from './_lib.js';
 import { join } from 'path';
 
 const JOBS_REL = 'data/cos/autonomous-jobs.json';
@@ -60,7 +61,7 @@ async function readJson(path) {
 }
 
 async function writeJson(path, value) {
-  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`);
+  await writeJsonAtomic(path, value);
 }
 
 /**

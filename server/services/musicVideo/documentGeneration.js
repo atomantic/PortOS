@@ -11,7 +11,10 @@ import { isDeterministicCodeSource } from '../../lib/musicVideoValidation.js';
 import { summarizeMusicVideoMediumPlan } from '../../lib/musicVideoMediumPlan.js';
 import { buildMixedMediaDocumentPrompt, extractCodeSections } from '../codeAnimation/prompt.js';
 import { buildCodeTimeline, buildSongDocument, paletteFromProject } from './codeTimeline.js';
+import { isOllamaBackedProvider } from '../../lib/aiToolkit/internal/ollamaBacked.js';
+import { isLocalInstanceEndpoint } from '../../lib/localEndpoint.js';
 import { castAndSetsCodeContext, runModel, styleLinesFor } from './codeGeneration.js';
+import { resolveMusicVideoLlm } from './llmRoute.js';
 import { getProject } from './projects.js';
 import { buildDocumentData, documentAspect, documentRenderClock, documentSongDuration, DOCUMENT_FRAME_SIZES, resolveSceneMedia } from './documentRender.js';
 import { acceptGeneratedDocument, readDocumentFiles, stageGeneratedDocument } from './compositionDocument.js';
@@ -196,6 +199,30 @@ async function authoringContext(project) {
   return { song, scenes, basis: basisFor(project), structuralBasis: basisFor(project, false), palette: paletteFromProject(project) };
 }
 
+// A local model spends the whole stream-stall window evaluating a huge prompt before the first
+// token, which the stall timer cannot tell apart from a hang (#10515). Above this, a local
+// provider authors sections in bounded batches instead of one whole-song request.
+export const LOCAL_PROMPT_BUDGET_CHARS = 100_000;
+
+const isLocalProvider = (provider) => isOllamaBackedProvider(provider) || isLocalInstanceEndpoint(provider?.endpoint);
+
+// Greedily pack consecutive section ids into batches whose prompt stays within budget.
+function batchSectionIds(ids, promptFor, budget) {
+  const batches = [];
+  let current = [];
+  for (const id of ids) {
+    const next = [...current, id];
+    const size = promptFor(next).length;
+    if (current.length && size > budget) { batches.push(current); current = [id]; } else current = next;
+  }
+  if (current.length) batches.push(current);
+  for (const batch of batches) {
+    const size = promptFor(batch).length;
+    if (size > budget) throw fail(`The authoring prompt for section ${batch.join(', ')} is ${size} characters, over the ${budget}-character budget for a local model. Trim the treatment, cast or style context, or choose a provider with a larger context.`, 'COMPOSITION_PROMPT_TOO_LARGE');
+  }
+  return batches;
+}
+
 function acceptedSections(text, ids) {
   const parsed = extractCodeSections(text);
   const wanted = new Set(ids);
@@ -230,7 +257,7 @@ async function priorManifest(project) {
   return { pointer, manifest };
 }
 
-async function runAuthoring(projectId, { providerId, model, effort, sectionId = null, eventRevision = false, expectedDraft = null, feedback = '', beforeSubmit = null, verifyCurrent = () => {} } = {}) {
+async function runAuthoring(projectId, { providerId, model, effort, sectionId = null, eventRevision = false, expectedDraft = null, feedback = '', beforeSubmit = null, verifyCurrent = () => {}, promptBudgetChars = LOCAL_PROMPT_BUDGET_CHARS } = {}) {
   const project = await getProject(projectId);
   if (!project) throw fail('Project not found', 'NOT_FOUND', 404);
   assertProductionApproval(project, 'storyboard');
@@ -256,21 +283,45 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
     styleLines: [...await styleLinesFor(project), ...styleGrammarLines(project)],
     ...(project.composition?.styleGrammarId ? { styleGrammarId: project.composition.styleGrammarId } : {}),
   };
-  const prompt = buildMixedMediaDocumentPrompt({
+  const promptFor = (batchIds) => buildMixedMediaDocumentPrompt({
     renderer: musicVideoDocumentRenderer(project), mediaMode: musicVideoMediaMode(project),
-    title: project.name, song: { ...context.song, sections: context.song.sections.filter((section) => ids.includes(section.id)) }, palette: context.palette, treatment: project.treatment,
+    title: project.name, song: { ...context.song, sections: context.song.sections.filter((section) => batchIds.includes(section.id)) }, palette: context.palette, treatment: project.treatment,
     visualSpec: project.visualSpec, scenes: context.scenes, styleLines: sharedStyle.styleLines,
     onlySectionId: sectionId, sharedStyle, directionContext: castAndSetsCodeContext(project),
   });
-  const directedPrompt = feedback ? `${prompt}\n\nReview findings for this section (retain the approved medium and selected assets; never invent a footage fallback):\n${feedback.slice(0, 8000)}` : prompt;
-  const run = await runModel({ providerId, model, effort, automation: project.automation, prompt: directedPrompt, source: 'music-video-document', beforeSubmit: async (submission) => {
+  const withFeedback = (prompt) => (feedback ? `${prompt}\n\nReview findings for this section (retain the approved medium and selected assets; never invent a footage fallback):\n${feedback.slice(0, 8000)}` : prompt);
+  const guardedBeforeSubmit = async (submission) => {
     const current = await getProject(projectId);
     assertProductionApproval(current, 'storyboard');
     verifyCurrent(current);
     if (basisFor(current) !== context.basis) throw fail('The approved plan changed before authoring', 'COMPOSITION_DRAFT_STALE', 409);
     await beforeSubmit?.(submission);
-  } });
-  const updated = acceptedSections(run.text, ids);
+  };
+  const runBatch = async (prompt) => {
+    try {
+      return await runModel({ providerId, model, effort, automation: project.automation, prompt, source: 'music-video-document', beforeSubmit: guardedBeforeSubmit });
+    } catch (err) {
+      if (/timed out/i.test(err?.message || '') && !/prompt was \d+ characters/.test(err.message)) err.message += ` (prompt was ${prompt.length} characters)`;
+      throw err;
+    }
+  };
+  // Resolve the provider only when there is something to split, so single-section runs are unchanged.
+  const fullPrompt = withFeedback(promptFor(ids));
+  const batches = ids.length > 1 && fullPrompt.length > promptBudgetChars
+    && isLocalProvider((await resolveMusicVideoLlm({ providerId, model, effort, automation: project.automation, stage: 'authoring' })).provider)
+    ? batchSectionIds(ids, (batchIds) => withFeedback(promptFor(batchIds)), promptBudgetChars) : null;
+  const updated = new Map();
+  let run;
+  if (batches) {
+    console.log(`🎬 Music-video document prompt is ${fullPrompt.length} chars; authoring ${ids.length} sections in ${batches.length} batches on a local model`);
+    for (const batch of batches) {
+      run = await runBatch(withFeedback(promptFor(batch)));
+      for (const [id, source] of acceptedSections(run.text, batch)) updated.set(id, source);
+    }
+  } else {
+    run = await runBatch(fullPrompt);
+    for (const [id, source] of acceptedSections(run.text, ids)) updated.set(id, source);
+  }
   const merged = new Map((prior?.manifest.sections || []).map((section) => [section.id, section.source]));
   for (const [id, source] of updated) merged.set(id, source);
   const manifest = {

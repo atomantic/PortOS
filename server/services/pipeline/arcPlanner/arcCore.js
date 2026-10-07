@@ -17,12 +17,13 @@ import { getSeason } from '../seasons.js';
 import { ARC_LIMITS, READER_MAP_BEAT_KINDS, TICKING_CLOCK_LIMITS, buildSeason, cleanThemes, renderArcShapeGuidance, renderArcShapePositionSummary, sanitizeArc, sanitizeReaderMap, sanitizeSeason, sanitizeSeasonList, sanitizeTickingClock } from '../../../lib/storyArc.js';
 import { sanitizeCharacterArcList } from '../../../lib/seriesCharacterArc.js';
 import { runPromptRefineRaw, trimChanges } from '../refineHelpers.js';
-import { ERR_VALIDATION, SHAPE_GUIDANCE_NONE, appendTickingClock, buildArcBaseContext, buildArcOverviewContext, buildNeighborVolumes, buildReaderMapContext, buildResolveContext, buildVerifyContext, compareIssuesByPosition, findingIdSet, makeErr, matchIssueForEpisodeEdit, matchResolvedFindings, renderVolumeFields, renderVolumeIssue, resolveWorldContext, seasonIdByNumberOf, shapeEpisodeResolutions, shapeFindings, shapeSeasonOutlines, shapeVerifyIssues } from './context.js';
+import { ERR_VALIDATION, SHAPE_GUIDANCE_NONE, appendTickingClock, buildArcBaseContext, buildArcOverviewContext, buildNeighborVolumes, buildReaderMapContext, buildResolveContext, buildVerifyContext, compareIssuesByPosition, findingIdSet, matchIssueForEpisodeEdit, matchResolvedFindings, renderVolumeFields, renderVolumeIssue, resolveWorldContext, seasonIdByNumberOf, shapeEpisodeResolutions, shapeFindings, shapeSeasonOutlines, shapeVerifyIssues } from './context.js';
+import { codedError } from '../../../lib/codedError.js';
 
 export async function generateArcOverview(seriesId, options = {}) {
   const series = await getSeries(seriesId);
   if (series.locked?.arc === true) {
-    throw makeErr(
+    throw codedError(
       'Arc is locked — unlock it on the Arc Canvas before regenerating',
       ERR_VALIDATION,
     );
@@ -86,7 +87,7 @@ export async function generateArcOverview(seriesId, options = {}) {
 // (`locked.arcFields.readerMap`) does. The locked arc is read as INPUT here.
 export function assertReaderMapUnlocked(series) {
   if (series.locked?.arcFields?.readerMap === true) {
-    throw makeErr('Reader map is locked — unlock it before regenerating', ERR_VALIDATION);
+    throw codedError('Reader map is locked — unlock it before regenerating', ERR_VALIDATION);
   }
 }
 
@@ -126,7 +127,7 @@ export async function generateReaderMap(seriesId, options = {}) {
   // rather than letting the caller persist `readerMap: null` over an existing
   // map (silent data loss).
   if (!readerMap) {
-    throw makeErr('LLM returned an empty reader map — try regenerating', ERR_VALIDATION);
+    throw codedError('LLM returned an empty reader map — try regenerating', ERR_VALIDATION);
   }
   return { readerMap, raw: content, runId, providerId, model };
 }
@@ -160,7 +161,7 @@ export async function refineReaderMap(seriesId, feedback, options = {}) {
   // nothing usable (mirrors the AGENTS.md absent-vs-empty rule).
   const safeReaderMap = readerMap || arc.readerMap || null;
   if (!safeReaderMap) {
-    throw makeErr('LLM returned an empty reader map and there is none to preserve', ERR_VALIDATION);
+    throw codedError('LLM returned an empty reader map and there is none to preserve', ERR_VALIDATION);
   }
   // When the refine produced nothing usable and we fell back to the existing
   // map, the LLM's `changes`/`rationale` describe an attempt that was DISCARDED
@@ -193,7 +194,7 @@ export async function refineReaderMap(seriesId, feedback, options = {}) {
 export async function refineArc(seriesId, feedback, options = {}) {
   const series = await getSeries(seriesId);
   if (series.locked?.arc === true) {
-    throw makeErr('Arc is locked — unlock it on the Arc Canvas before refining', ERR_VALIDATION);
+    throw codedError('Arc is locked — unlock it on the Arc Canvas before refining', ERR_VALIDATION);
   }
   const arc = series.arc || {};
   const { content, rationale, runId, providerId, model } = await runPromptRefineRaw({
@@ -248,7 +249,7 @@ export async function refineArc(seriesId, feedback, options = {}) {
   // because every field above falls back to the current arc, means the current
   // arc was ALSO empty and the LLM added nothing. Nothing to preserve, so error.
   if (!refinedArc) {
-    throw makeErr('LLM returned an empty arc and there is none to preserve', ERR_VALIDATION);
+    throw codedError('LLM returned an empty arc and there is none to preserve', ERR_VALIDATION);
   }
   return { arc: refinedArc, changes: trimChanges(content.changes), rationale, runId, providerId, model };
 }

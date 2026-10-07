@@ -33,9 +33,9 @@ import { resolveExportSettings, TRIM_SIZES, DEFAULT_TRIM_SIZE } from '../../lib/
 import { getSeries } from './series.js';
 import { listSeasons } from './seasons.js';
 import { collectManuscriptSections } from './arcPlanner.js';
+import { codedError } from '../../lib/codedError.js';
 
 export const ERR_NO_PROSE = 'PIPELINE_PROSE_EXPORT_NO_CONTENT';
-const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 // ---------------------------------------------------------------------------
 // Section gathering — the shared front for all three exports.
@@ -58,7 +58,7 @@ export async function gatherProse(seriesId) {
   // either way (never export an outline as finished prose).
   const sections = await collectManuscriptSections(seriesId, { stageOrder: ['prose'] });
   if (!sections.length) {
-    throw makeErr(
+    throw codedError(
       'No drafted prose to export — write or import prose on at least one issue first.',
       ERR_NO_PROSE,
     );

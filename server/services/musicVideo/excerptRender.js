@@ -229,6 +229,31 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
   return { jobId, excerptId };
 }
 
+/**
+ * Render [startSec, endSec) of a seekable composition (document, code, Eidoverse) at `aspect`
+ * straight to `outputPath`, with no excerpt record: the publishing kit's native 9:16 cut.
+ * Resolves the encode's frame (`{ width, height, … }`), or null when the project has no
+ * seekable composition. A document that does not lay itself out at that frame throws
+ * COMPOSITION_DOCUMENT_FORMAT, which the caller takes as "not available".
+ * `deps` (tests): `renderers` stands in for the seeked renderers, `resolveAudio` for the master lookup.
+ */
+export async function renderSeekedWindow(stored, { startSec, endSec, aspect, fade = false, outputPath, jobId, signal, onProgress }, { renderers = SEEKED_EXCERPTS, resolveAudio = resolveMasterAudioPath } = {}) {
+  const renderer = renderers[stored?.composition?.mode];
+  if (!renderer) return null;
+  const project = musicVideoAtAspect(stored, aspect);
+  const prepared = await renderer.prepare(project);
+  const audioPath = await resolveAudio(project);
+  if (renderer.performanceTakes) {
+    assertCurrentClipDependencies(project);
+    await assertCurrentPerformanceTakes(project, audioPath);
+  }
+  const soundBed = renderer.soundBed ? await resolveSoundBedPath(project) : null;
+  return renderer.encode({
+    prepared, project, projectId: project.id, jobId, audioPath, soundBed, outputPath, signal,
+    startSec, endSec: Math.min(endSec, prepared.totalSec), fade, onProgress,
+  });
+}
+
 export async function startExcerptRender(projectId, { startSec, endSec, aspect = null, fade = false }, { revisionId = null, pilotSceneId = null, verifyCurrent = null } = {}) {
   const stored = await getProject(projectId);
   if (!stored) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });

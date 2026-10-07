@@ -69,11 +69,11 @@ lsof -i :5555
 **Solution**:
 ```bash
 # Check PM2 logs for errors
-pm2 logs portos-server --lines 100
+npm run pm2:logs -- portos-server --lines 100
 
 # Common causes:
 # - Missing dependencies: npm run install:all
-# - Missing data directory: mkdir -p data
+# - Missing data directory or files: npm run setup:data (see below)
 # - Port conflict: check EADDRINUSE errors
 ```
 
@@ -83,9 +83,14 @@ pm2 logs portos-server --lines 100
 
 **Solution**:
 ```bash
-# Copy sample data files
-cp -r data.reference/* data/
+# Seed only what is missing — never overwrites an existing file
+npm run setup:data
+npm run pm2:restart
 ```
+
+`setup:data` (`scripts/setup-data.js`) creates `data/` from `data.reference/` when it is absent. Otherwise it copies only the missing files, adds new starter entries to `providers.json` and the prompt configs without touching yours, and expands `__PORTOS_ROOT__` in `apps.json`. It also skips any path a migration derives from your own records (`scripts/lib/migrationOwnedPaths.js`). Pending migrations run when the server boots.
+
+**Never copy `data.reference/` over `data/` by hand** (`cp -r data.reference/* data/`). The seed tree includes `settings.json`, `apps.json`, `providers.json`, `cos/state.json`, `TASKS.md`, Brain settings (`brain/meta.json`), the digital-twin documents and every prompt template. Copying it overwrites your copies of all of them with shipped defaults, and nothing reports what was lost.
 
 ## Connection Issues
 
@@ -111,7 +116,7 @@ netstat -an | grep 5555
 
 **Solution**:
 - Check browser console for WebSocket errors
-- Verify server is running: `pm2 status`
+- Verify server is running: `npm run pm2:status`
 - Restart server: `npm run pm2:restart`
 
 ## Browser Console Warnings
@@ -268,10 +273,10 @@ daemon default (`OLLAMA_CONTEXT_LENGTH`).
 **Solution**:
 ```bash
 # Check CoS runner is running
-pm2 status | grep portos-cos
+npm run pm2:status | grep portos-cos
 
 # Check runner logs
-pm2 logs portos-cos --lines 100
+npm run pm2:logs -- portos-cos --lines 100
 
 # Verify Claude CLI is available
 which claude
@@ -299,7 +304,7 @@ see `server/lib/ptySpawnDiagnostics.js`.
 # In the PRIMARY checkout, never in a worktree
 npm install --prefix server
 npm install --prefix client
-pm2 restart portos-cos
+npx pm2 restart portos-cos
 ```
 
 **Prevention**: ordinary CoS worktrees share dependencies through symlinks, so
@@ -376,6 +381,8 @@ For anywhere else, set `PORTOS_WORKSPACE_ROOTS`. Separate entries with `;` on Wi
 
 ## PM2 Issues
 
+All PM2 commands below use the bundled copy at `node ./node_modules/pm2/bin/pm2`, accessed through npm scripts (`npm run pm2:*`) or `npx pm2 …`. A globally installed `pm2` works too, but these forms need nothing beyond `npm run setup`.
+
 ### Process Keeps Restarting
 
 **Symptom**: PM2 shows high restart count, app unstable.
@@ -383,7 +390,7 @@ For anywhere else, set `PORTOS_WORKSPACE_ROOTS`. Separate entries with `;` on Wi
 **Solution**:
 ```bash
 # Check for crash reason
-pm2 logs portos-server --lines 200
+npm run pm2:logs -- portos-server --lines 200
 
 # Common causes:
 # - Unhandled exceptions (check error handling)
@@ -393,16 +400,16 @@ pm2 logs portos-server --lines 200
 
 ### Cannot Stop Processes
 
-**Symptom**: `pm2 stop` doesn't work or processes restart.
+**Symptom**: `npm run pm2:stop` doesn't work or processes restart.
 
 **Solution**:
 ```bash
-# Stop specific ecosystem
-pm2 stop ecosystem.config.cjs
+# Stop specific ecosystem (scoped to PortOS's apps)
+npm run pm2:stop
 
 # Never use these (affects all PM2 apps):
-# pm2 kill        ← Don't use
-# pm2 delete all  ← Don't use
+# npx pm2 kill        ← Don't use
+# npx pm2 delete all  ← Don't use
 ```
 
 ### Old Code Running After Changes
@@ -448,8 +455,10 @@ Universes, series, catalog ingredients, memories, and other relational records l
 
 **Solution** (touch only the affected split):
 ```bash
-# 1. Stop PortOS, then back up the source, the target layout and the ledger
-pm2 stop all
+# 1. Stop PortOS, then back up the source, the target layout and the ledger.
+#    npm run pm2:stop stops only PortOS's apps — never `pm2 stop all`, which also
+#    stops every other app on the shared PM2 daemon.
+npm run pm2:stop
 cp -R data/pipeline-issues data/pipeline-issues.bak-manual 2>/dev/null
 mkdir -p data/manual-backup && cp data/pipeline-issues.json* data/manual-backup/ 2>/dev/null
 cp data/migrations.applied.json data/migrations.applied.json.bak-manual
@@ -462,7 +471,7 @@ cp data/migrations.applied.json data/migrations.applied.json.bak-manual
 
 # 4. Re-run migrations; records already split are kept, only missing ones are added
 node scripts/run-migrations.js
-pm2 start all
+npm run pm2:start
 ```
 
 The split never overwrites a record directory that already exists. If a later Postgres import (`server/scripts/migrateUniversesToDB.js` and similar) already ran, re-run that explicit legacy-import tool after the split rather than resetting import markers or schema versions.
@@ -496,7 +505,7 @@ cat data/apps.json | jq .
 ### Slow UI Loading
 
 **Causes and Solutions**:
-1. **Large log files**: Clear old logs with `pm2 flush`
+1. **Large log files**: Clear PortOS logs with `npx pm2 flush portos-server` (or `npx pm2 flush portos-cos`, etc.). Never use bare `npx pm2 flush`, which also clears every other app's logs.
 2. **Many apps**: Pagination added in recent versions
 3. **Network latency**: Use local access when possible
 
@@ -505,7 +514,7 @@ cat data/apps.json | jq .
 **Solution**:
 ```bash
 # Check PM2 memory usage
-pm2 monit
+npx pm2 monit
 
 # Set memory limits in ecosystem.config.cjs
 max_memory_restart: '500M'
@@ -562,7 +571,7 @@ git submodule update --init --recursive
 **Symptom**: Frontend changes require manual refresh.
 
 **Solution**:
-- Check Vite is running: `pm2 logs portos-ui`
+- Check Vite is running: `npm run pm2:logs -- portos-ui`
 - Ensure file watchers aren't exhausted: `fs.inotify.max_user_watches`
 
 ### Tests Failing
@@ -877,7 +886,7 @@ a test, and update macOS + `mflux`/`mlx`.
 
 ## Getting Help
 
-1. **Check logs**: `pm2 logs` shows all process output
+1. **Check logs**: `npm run pm2:logs` shows all PortOS process output
 2. **Browser console**: F12 → Console for frontend errors
 3. **Server logs**: Look for emoji prefixes (❌ errors, ⚠️ warnings)
 4. **GitHub Issues**: Report bugs at https://github.com/atomantic/PortOS/issues

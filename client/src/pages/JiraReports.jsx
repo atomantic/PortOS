@@ -173,14 +173,16 @@ export default function JiraReports() {
 
   const loadReports = async () => {
     setLoading(true);
-    const result = await api.getJiraReports();
-    setReports(result || []);
+    // request() toasts a failure; keep the list we have and leave the loading state.
+    const result = await api.getJiraReports().catch(() => null);
+    if (result) setReports(result);
     setLoading(false);
   };
 
   const handleGenerate = async (appId = null) => {
     setGenerating(true);
-    const result = await api.generateJiraReport(appId);
+    // A failed generation must re-enable the Generate buttons (request() toasts the error).
+    const result = await api.generateJiraReport(appId).catch(() => null);
     if (result) {
       toast.success(appId ? 'Report generated' : `Generated ${Array.isArray(result) ? result.length : 1} report(s)`);
       await loadReports();

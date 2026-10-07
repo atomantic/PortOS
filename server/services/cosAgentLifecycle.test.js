@@ -47,9 +47,14 @@ vi.mock('fs/promises', async (importOriginal) => {
       if (failsFor(to)) throw Object.assign(new Error('EXDEV: cross-device link'), { code: 'EXDEV' });
       return actual.rename(from, to, ...rest);
     },
-    writeFile: async (path, ...rest) => {
-      if (failsFor(path)) throw new Error('simulated copy failure');
-      return actual.writeFile(path, ...rest);
+    // The archive fallback copies with `cp`; the destination dir is created
+    // before the failure so the rollback has a half-copied target to remove.
+    cp: async (from, to, ...rest) => {
+      if (failsFor(to)) {
+        await actual.mkdir(to, { recursive: true });
+        throw new Error('simulated copy failure');
+      }
+      return actual.cp(from, to, ...rest);
     }
   };
 });

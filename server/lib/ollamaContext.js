@@ -25,6 +25,7 @@
 // and the dispatch gate, both inside the server suite's import budget. The leaf
 // imports nothing.
 import { isOllamaBackedProvider, ollamaBaseFromProvider, withRuntimeContextWindow } from './aiToolkit/internal/ollamaBacked.js'
+import { LIFECYCLE_LINES } from './agentOutputMarkers.js'
 
 /**
  * Smallest runtime window an Ollama-backed *agent harness* can realistically
@@ -249,8 +250,11 @@ export function describeOllamaContextOverflow(overflow, { model = null, provider
  * @returns {string}
  */
 export function describeOllamaContextTooSmall(runtimeContext, { providerName = null } = {}) {
-  const who = providerName ? `${providerName}` : 'This provider'
-  return `⚠️ ${who} is running on an Ollama window of ${tokenLabel(runtimeContext)} — below the ` +
-    `${tokenLabel(OLLAMA_AGENT_MIN_CONTEXT)} an agent harness usually needs. Set "Local num_ctx" in AI Providers ` +
-    `to reload Ollama at a larger window (VRAM permitting), or the run will fail partway through.`
+  // A pre-spawn warning that lands in the agent's output buffer, so its text is
+  // the lifecycle line the PR-body reader knows to strip.
+  return LIFECYCLE_LINES.ollamaContextTooSmall({
+    who: providerName || 'This provider',
+    runtime: tokenLabel(runtimeContext),
+    minimum: tokenLabel(OLLAMA_AGENT_MIN_CONTEXT),
+  })
 }

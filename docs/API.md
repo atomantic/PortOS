@@ -561,6 +561,21 @@ settings controls and source-closed UI prompts are tracked separately in #7664.
 | GET | `/agents/activity/run-events/reconcile` | Where the ledger and the durable run records disagree (filters: `runId`, `limit`) — read-only |
 | POST | `/agents/activity/run-events/reconcile` | Close the run records the ledger proves are finished; reports what it closed |
 
+### Human Actions
+
+Steps only the person can take (press Post, answer replies, upload a file), scheduled for a time.
+Each step becomes a Brain thread tagged `human-action` and `plan:<planKey>`, so it appears in
+Review Hub › Actions on its day, and an `action_due` notification fires at its due time on the
+machine that created it. Planning the same `planKey` again archives that plan's open steps and
+leaves finished ones alone. Agents outside PortOS call these with `node scripts/portos-api.js`.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/human-actions` | List open steps, soonest first (`?planKey=`, `?includeDone=true`) |
+| POST | `/human-actions/plans` | Schedule `{ planKey, title, steps: [{ title, dueAt, instructions[], content[{label,text}], links[{label,url}], priority }] }` (`dueAt` needs a UTC offset) |
+| GET | `/music-video/:id/publish/promotion-plan` | A music video's open promotion steps |
+| POST | `/music-video/:id/publish/promotion-plan` | Plan its promotion with one provider call `{ goal?, audience?, days?, providerId?, model? }` and schedule the steps |
+
 ### Notifications
 
 | Method | Endpoint | Description |
@@ -732,6 +747,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/data` | Data manager/sync |
 | `/api/datadog`, `/api/jira`, `/api/github`, `/api/telegram` | External integrations |
 | `/api/health` | Apple Health metrics, ingest, and XML import |
+| `/api/human-actions` | Scheduled steps only the human can take, as Brain threads with reminders ([Human Actions](#human-actions)) |
 | `/api/insights` | Cross-domain insights |
 | `/api/instances`, `/api/sync`, `/api/peer-sync`, `/api/sharing` | Federation / peer sync (see [COMPANION_APP_API.md](./COMPANION_APP_API.md)) |
 | `/api/federation/media/v1` | Authenticated queued peer audio provider (see [FEDERATED_MEDIA_PROVIDERS.md](./FEDERATED_MEDIA_PROVIDERS.md)) |
@@ -774,7 +790,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/sprites` | Sprite catalog / export |
 | `/api/threejs-models` | Procedural Three.js models |
 | `/api/film-styles` | Read-only film style grammar catalog: picker list (`GET /`), full grammar record (`GET /:id`) and rendered prompt-section preview (`GET /:id/prompt?parts=motion,camera`) |
-| `/api/code-animation` | Code Animation: LLM-written briefs, prompt building, persistent jobs gallery, generated HTML retrieval, frame-exact MP4 export (`POST /:id/export` → HTML-composition media job), portable source download (`GET /:id/package`), and data-only package validation (`POST /packages/validate`; [contract](CODE_ANIMATION_PACKAGES.md)) |
+| `/api/code-animation` | Code Animation: LLM-written briefs, prompt building, persistent jobs gallery, generated HTML retrieval, frame-exact MP4 export (`POST /:id/export` → HTML-composition media job), the vendored three.js modules the `three` renderer's preview inlines (`GET /vendor/three`; the export stages the same files, hashed, beside the page), portable source download (`GET /:id/package`), and data-only package validation (`POST /packages/validate`; [contract](CODE_ANIMATION_PACKAGES.md)) |
 | `/api/code-animation/execution` | Code Animation contained production execution: platform sandbox and lane readiness (`GET /`), operator-owned tool paths (`PUT /tools`, host control) and the on-demand adversarial containment check (`POST /probe`, host control) ([contract](CODE_ANIMATION_PACKAGES.md#contained-production-execution)) |
 | `/api/image-to-3d` | Image-to-3D conversion |
 | `/api/rigging` | Auto-skin rigging and animation retargeting for image-to-3D models |
@@ -998,11 +1014,27 @@ All errors return JSON with consistent structure:
 }
 ```
 
-Common error codes:
-- `NOT_FOUND` - Resource not found
-- `VALIDATION_ERROR` - Invalid request data
-- `COMMAND_NOT_ALLOWED` - Shell command not in allowlist
-- `INTERNAL_ERROR` - Server error
+When a route throws without naming a `code`, it is derived from the HTTP status
+(`ERROR_CODES_BY_STATUS` in `server/lib/errorHandler.js`, the same table the
+agent-tool resource advertises):
+
+| Status | Code | Meaning |
+|--------|------|---------|
+| 400 | `BAD_REQUEST` | Malformed request |
+| 401 | `UNAUTHORIZED` | Authentication missing or rejected |
+| 403 | `FORBIDDEN` | Refused, including a shell command outside the allowlist |
+| 404 | `NOT_FOUND` | Resource not found |
+| 409 | `CONFLICT` | State conflict (duplicate, stale, or already running) |
+| 422 | `VALIDATION_ERROR` | Request understood but invalid |
+| 500 | `INTERNAL_ERROR` | Server error (also the fallback for any unlisted status) |
+| 502 | `BAD_GATEWAY` | An upstream service failed |
+| 503 | `SERVICE_UNAVAILABLE` | A dependency is not available |
+
+Zod request validation (`validateRequest`) answers `400` with
+`VALIDATION_ERROR` and the field errors in `context.details`. Domain routes may
+also set their own code (for example `MERGE_METHOD_NOT_ALLOWED`) on top of the
+status — branch on the status first, and treat an unfamiliar `code` as a
+refinement of it.
 
 
 ### Catalog scrap graph commits

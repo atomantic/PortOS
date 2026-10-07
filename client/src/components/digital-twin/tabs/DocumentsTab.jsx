@@ -51,12 +51,15 @@ export default function DocumentsTab({ onRefresh }) {
   const handleSave = async () => {
     if (!selectedDoc) return;
     setSaving(true);
-    await api.updateSoulDocument(selectedDoc.id, { content: editContent });
+    // request() already toasted a failure; release Save either way so the unsaved
+    // edit can be retried instead of stranding the editor behind a disabled button.
+    const saved = await api.updateSoulDocument(selectedDoc.id, { content: editContent }).then(() => true, () => false);
+    setSaving(false);
+    if (!saved) return;
     toast.success('Document saved');
     await loadDocuments();
     await loadDocument(selectedDoc.id);
     setEditMode(false);
-    setSaving(false);
     onRefresh();
   };
 
@@ -89,15 +92,16 @@ export default function DocumentsTab({ onRefresh }) {
     const filename = newDoc.filename.endsWith('.md') ? newDoc.filename : `${newDoc.filename}.md`;
 
     setSaving(true);
-    await api.createSoulDocument({
+    const created = await api.createSoulDocument({
       ...newDoc,
       filename
-    });
+    }).then(() => true, () => false);
+    setSaving(false);
+    if (!created) return;
     toast.success('Document created');
     await loadDocuments();
     setShowCreate(false);
     setNewDoc({ filename: '', title: '', category: 'core', content: '' });
-    setSaving(false);
     onRefresh();
   };
 

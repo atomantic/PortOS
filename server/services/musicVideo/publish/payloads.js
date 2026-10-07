@@ -10,7 +10,7 @@ import { musicVideoDependencyChanges } from '../../../lib/musicVideoDependencies
 import { suggestDistrokidGenres } from '../../../lib/distrokidGenres.js';
 import { suggestSocialCuts } from '../socialCuts.js';
 
-const TITLE_LIMITS = { youtube: 100, shorts: 100, reddit: 300, stackerNews: 80 };
+const TITLE_LIMITS = { youtube: 100, shorts: 100, reddit: 300, stackerNews: 80, substack: 100 };
 const DEFAULT_SUBREDDIT = 'aivideo';
 
 const missing = (message) => new ServerError(message, { status: 422, code: 'PUBLISH_ASSET_MISSING' });
@@ -24,13 +24,14 @@ function requireFreshKit(project, kit) {
   if ((kit.master?.renderHistoryId ?? null) !== (project?.renderHistoryId ?? null)) throw stale();
 }
 
+const SUNO_SONG_URL = /^https:\/\/(?:www\.)?suno\.com\/song\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
 const VERTICAL_NEEDS = 'Render a 9:16 social cut on the Review stage (or rebuild the publishing kit for a 16:9 render) first';
 const isVerticalCut = (e) => e?.status === 'complete' && e.aspect === '9:16' && e.filename;
 
 /**
  * The vertical cuts a director can post (#10150), newest last: finished 9:16
  * excerpts flagged stale when the project changed since, plus the kit's
- * center-crop 9:16 encode (16:9 renders) while the kit is fresh.
+ * fit-with-blurred-fill 9:16 encode (16:9 renders) while the kit is fresh.
  */
 function verticalCuts(project) {
   const kit = kitOf(project);
@@ -79,6 +80,22 @@ function youtubeDescription(kit) {
 
 // A typed "@" on Instagram opens the mention picker, which swallows the next word.
 const instagramSafe = (caption) => caption.replace(/@(\w)/g, '$1');
+
+/**
+ * The publication's host from what the director typed: a bare name means
+ * name.substack.com; a custom domain or a pasted URL keeps only its host.
+ */
+function substackPublication(value) {
+  const address = text(value).toLowerCase().replace(/^https?:\/\//, '');
+  // A share link (open.substack.com/pub/name/p/…) names the publication in its path.
+  const shared = address.match(/^open\.substack\.com\/pub\/([a-z0-9-]{1,63})(?:[/?#]|$)/)?.[1];
+  if (shared) return `${shared}.substack.com`;
+  const host = address.split(/[/?#]/)[0];
+  if (/^[a-z0-9-]{1,63}$/.test(host)) return `${host}.substack.com`;
+  // substack.com itself (a profile link like substack.com/@name) is not a publication.
+  if (/^(?:(?:www|open)\.)?substack\.com$/.test(host)) return null;
+  return /^(?:[a-z0-9-]{1,63}\.)+[a-z]{2,}$/.test(host) ? host : null;
+}
 
 // The release cover: the composed cover art when there is one (already square,
 // with the title set), else the kit's thumbnail (cut square at post time).
@@ -166,13 +183,41 @@ const BUILDERS = {
     if (!/^[A-Za-z0-9_]{1,32}$/.test(territory)) throw missing('Name the Stacker News territory');
     return { territory, title: requireTitle('stackerNews', text(kit.copy?.stackerNews?.title)), url, body: text(kit.copy?.stackerNews?.body), firstComment: text(options.firstComment) || null };
   },
+  substack: (project, kit, options = {}) => {
+    const publication = substackPublication(options.publication);
+    if (!publication) throw missing('Name your Substack publication (name.substack.com) under Where you post');
+    const videoUrl = fullVideoUrl(kit);
+    if (!videoUrl) throw missing('Substack posts embed the full video: publish to YouTube first, or add its URL to the kit');
+    return {
+      publication, videoUrl,
+      title: requireTitle('substack', text(kit.copy?.substack?.title)),
+      subtitle: text(kit.copy?.substack?.subtitle), body: text(kit.copy?.substack?.body),
+    };
+  },
   suno: (project, kit, options = {}) => {
     const song = songUrl(kit, options);
-    if (!/^https:\/\/(www\.)?suno\.com\/song\/[\w-]+/.test(song)) throw missing('Give the Suno song URL to publish (suno.com/song/…)');
+    // The adapter finds the song's own menu by its id, so the URL must carry it.
+    if (!/^https:\/\/(www\.)?suno\.com\/song\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(song)) throw missing('Give the Suno song URL to publish (suno.com/song/…)');
     const video = fullVideoUrl(kit);
     const lead = text(kit.copy?.youtube?.description).split(/\n\s*\n/)[0] || '';
     const caption = [lead, video ? `Music video: ${video}` : ''].filter(Boolean).join(' ').slice(0, 500);
     return { songUrl: song, caption, cover: releaseCover(kit), pin: options.pin !== false };
+  },
+  // A Suno Hook (#10375): the vertical cut set to a window of the project's song.
+  sunoHook: (project, kit, options = {}) => {
+    const song = songUrl(kit, options);
+    const songId = song.match(SUNO_SONG_URL)?.[1]?.toLowerCase();
+    if (!songId) throw missing('Give the Suno song URL the Hook plays (suno.com/song/…)');
+    const cut = pickVerticalCut(project, options);
+    const caption = text(kit.copy?.tiktok?.caption) || text(kit.copy?.shorts?.description).slice(0, 300);
+    const duration = Number(project?.audioAnalysis?.durationSec);
+    return {
+      video: { dir: 'videos', name: cut.filename }, songUrl: song, songId, title: text(project?.name),
+      durationSec: Number.isFinite(duration) && duration > 0 ? duration : null,
+      // The audio window opens where the cut's own audio does.
+      startSec: Math.max(0, Number(cut.startSec) || 0),
+      caption, showLyrics: options.showLyrics === true,
+    };
   },
   // The song as a single for Spotify and the other stores. The service adds the
   // project's source audio; the cover is the kit's cover art, else its thumbnail cut square.

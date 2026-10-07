@@ -125,6 +125,7 @@ it('runs parallel units before exclusive, nonduplicated captures and cutover pro
       ['html', 'services/htmlComposition/index.test.js'],
       ['music', 'services/musicVideo/documentRender.browser.test.js'],
       ['cutover', 'services/databaseMaintenanceCutover.test.js'],
+      ['assembly', 'services/creativeDirector/videoAssembly.test.js'],
     ]) {
       put(path, common + `test('${name}', async () => {
         expect(existsSync(marker('unit-a-done')) && existsSync(marker('unit-b-done'))).toBe(true);
@@ -146,7 +147,7 @@ it('runs parallel units before exclusive, nonduplicated captures and cutover pro
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     const events = readFileSync(join(fixture, 'events'), 'utf8').trim().split('\n');
     expect(events.slice(0, 2).sort()).toEqual(['unit-a', 'unit-b']);
-    expect(events.slice(2).sort()).toEqual(['cutover', 'html', 'music']);
+    expect(events.slice(2).sort()).toEqual(['assembly', 'cutover', 'html', 'music']);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

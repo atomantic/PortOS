@@ -14,7 +14,8 @@
  * cannot drift out of sync with the presets, and it keeps the migration short.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { writeJsonAtomic } from './_lib.js';
 import { join } from 'path';
 import { QUOTA_BURN_PROMPT_PRESETS } from '../../server/lib/quotaBurnPresets.js';
 
@@ -80,7 +81,7 @@ export default {
       }
     }
 
-    if (updatedCount) await writeFile(fullPath, `${JSON.stringify(config, null, 2)}\n`);
+    if (updatedCount) await writeJsonAtomic(fullPath, config);
     if (skippedCustom) console.log(`✋ ${QUOTA_BURN_PATH}: left ${skippedCustom} user-edited prompt(s) untouched`);
     return { updated: updatedCount, skipped: skippedCustom };
   },

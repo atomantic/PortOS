@@ -25,6 +25,18 @@ export function selectClientFiles(repoFiles) {
     .map((path) => path.replace(/^client\//, ''));
 }
 
+/** True when a changed-file list touches server code or its Biome config. */
+export function touchesServer(repoFiles) {
+  return repoFiles.some((path) => /^server\/(?!node_modules\/).*\.(?:m?js)$|^server\/biome\.jsonc$/i.test(path));
+}
+
+/**
+ * Biome argv for the server tree. Only `noUndeclaredVariables` is an error; the
+ * unused-variable rule is a warning (server/biome.jsonc), so no `--error-on-warnings`.
+ * Diagnostics are capped so the known unused-variable backlog does not drown real errors.
+ */
+export const SERVER_LINT_ARGS = ['lint', '--max-diagnostics=20', '.'];
+
 /** Build the Biome argv for a lint run. Pure, so the CI matrix is testable. */
 export function buildLintArgs({ mode, clientFiles = [] }) {
   // `--error-on-warnings` holds the client's documented lint policy: every rule is
@@ -38,6 +50,15 @@ export function buildLintArgs({ mode, clientFiles = [] }) {
   return [...base, '--no-errors-on-unmatched', ...clientFiles];
 }
 
+function runBiome(args, cwd) {
+  const result = spawnSync(process.execPath, [BIOME_BIN, ...args], { cwd, stdio: 'inherit', env: process.env });
+  if (result.error) {
+    console.error(result.error.message);
+    return 1;
+  }
+  return result.status ?? 1;
+}
+
 function main() {
   const mode = process.env.CI_LINT_MODE || 'full';
   if (!LINT_MODES.includes(mode)) {
@@ -45,9 +66,12 @@ function main() {
     process.exit(2);
   }
 
-  const clientFiles = selectClientFiles(JSON.parse(process.env.CI_LINT_FILES || '[]'));
-  if (mode === 'files' && clientFiles.length === 0) {
-    console.log('No changed client JavaScript files require linting.');
+  const repoFiles = JSON.parse(process.env.CI_LINT_FILES || '[]');
+  const clientFiles = selectClientFiles(repoFiles);
+  const lintClient = mode === 'full' || clientFiles.length > 0;
+  const lintServer = mode === 'full' || touchesServer(repoFiles);
+  if (!lintClient && !lintServer) {
+    console.log('No changed client or server JavaScript files require linting.');
     process.exit(0);
   }
 
@@ -56,18 +80,16 @@ function main() {
     process.exit(1);
   }
 
-  console.log(`Running client lint in ${mode} mode${mode === 'files' ? ` (${clientFiles.length} file(s))` : ''}.`);
-  const result = spawnSync(process.execPath, [BIOME_BIN, ...buildLintArgs({ mode, clientFiles })], {
-    cwd: join(repoRoot, 'client'),
-    stdio: 'inherit',
-    env: process.env,
-  });
-
-  if (result.error) {
-    console.error(result.error.message);
-    process.exit(1);
+  let status = 0;
+  if (lintClient) {
+    console.log(`Running client lint in ${mode} mode${mode === 'files' ? ` (${clientFiles.length} file(s))` : ''}.`);
+    status = runBiome(buildLintArgs({ mode, clientFiles }), join(repoRoot, 'client')) || status;
   }
-  process.exit(result.status ?? 1);
+  if (lintServer) {
+    console.log('Running server lint (whole tree).');
+    status = runBiome(SERVER_LINT_ARGS, join(repoRoot, 'server')) || status;
+  }
+  process.exit(status);
 }
 
 if (isDirectlyInvoked(import.meta.url)) main();

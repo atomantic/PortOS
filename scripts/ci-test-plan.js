@@ -17,7 +17,11 @@ const MODULE_SOURCE_RE = /\.[cm]?[jt]sx?$/i;
 // runnerForTest(isTestFile) filter already narrows a broad hit back down, so
 // over-matching here costs nothing.
 const TEST_FILE_GLOBS = ['*.test.*', '*.spec.*'];
+// The server tree is linted whole (fast, ~1s) by the same Biome the client installs,
+// so any server JavaScript or its lint config selects the lint job.
 const CLIENT_LINT_RE = /^client\/src\/.*\.(?:js|jsx)$/i;
+const SERVER_LINT_RE = /^server\/(?!node_modules\/).*\.(?:m?js)$|^server\/biome\.jsonc$/i;
+const isLintSurface = (path) => CLIENT_LINT_RE.test(path) || SERVER_LINT_RE.test(path);
 const EXECUTABLE_RE = /\.(?:cjs|css|html|js|jsx|json|mjs|sql|ts|tsx|ya?ml)$/i;
 const MAX_CHANGED_CODE_FILES = 30;
 // 125, not 120: the always-run guards grew to the old edge, and the real-repo
@@ -876,8 +880,8 @@ export function buildCiTestPlan(changedFiles, {
     lint: {
       // Same deleted-path guard as directTests above — ESLint given a
       // nonexistent explicit path exits non-zero instead of skipping it.
-      mode: changed.some((path) => CLIENT_LINT_RE.test(path) && trackedSet.has(path)) ? 'files' : 'skip',
-      files: changed.filter((path) => CLIENT_LINT_RE.test(path) && trackedSet.has(path)),
+      mode: changed.some((path) => isLintSurface(path) && trackedSet.has(path)) ? 'files' : 'skip',
+      files: changed.filter((path) => isLintSurface(path) && trackedSet.has(path)),
     },
     build: hasClientSource,
     smoke: hasServerSource,

@@ -53,6 +53,23 @@ describe('buildCodeAnimationPrompt', () => {
     expect(at('Refinements for this animation')).toBeLessThan(at('SOUND:'));
   });
 
+  it('teaches the three renderer to import through the host import map, and leaves the other renderers untouched (#10464)', () => {
+    const input = { concept: 'A lantern drifts over a sleeping city', format };
+    const three = buildCodeAnimationPrompt({ ...input, renderer: 'three' });
+    expect(three).toContain("import * as THREE from 'three'");
+    expect(three).toContain('host serves three locally and adds the import map');
+    expect(three).toContain('three/addons/postprocessing/');
+    expect(three).toContain('about 2.0 by day');
+    expect(three).toContain('PCFSoftShadowMap was removed');
+    // The no-library rule gains exactly one exception, and only for three.
+    expect(three).toContain('The ONE exception is the host-provided import map');
+    for (const renderer of ['auto', 'canvas2d', 'webgl', 'svg']) {
+      const prompt = buildCodeAnimationPrompt({ ...input, renderer });
+      expect(prompt).not.toContain('import map');
+      expect(prompt).toContain('no external scripts, stylesheets, fonts, images, or network requests of any kind; system fonts only. It must run');
+    }
+  });
+
   it('rejects an unknown style grammar id', () => {
     expect(() => buildCodeAnimationPrompt({ concept: 'x', format, styleGrammarId: 'no-such-style' })).toThrow(/Unknown film style grammar/);
   });
@@ -161,6 +178,16 @@ describe('extractAnimationHtml', () => {
   });
 });
 
+describe('reference video rhythm', () => {
+  // A failed scene-detection pass must not read as a measured "no cuts".
+  it('says an unmeasured rhythm is unmeasured instead of reporting one continuous shot', () => {
+    const video = (cuts) => buildCodeAnimationPrompt({ concept: 'x', format, referenceVideo: { label: 'Reference', durationSec: 12, cuts, note: '' } });
+    expect(video(null)).toContain('its cut rhythm could not be measured');
+    expect(video(null)).not.toContain('Measured rhythm');
+    expect(video([])).toContain('Measured rhythm: One continuous 12.0s shot with no detected cuts.');
+  });
+});
+
 // Exercise the production song adapter, not a prompt-only field nobody supplies.
 describe('music-video craft and measured choreography', () => {
   const builders = [
@@ -205,6 +232,13 @@ describe('music-video craft and measured choreography', () => {
     expect(snapshot.features.envelopes.low).toEqual(samples.filter((_, index) => index % 3 === 0));
     expect(snapshot.features.envelopes.low.length).toBeLessThanOrEqual(240);
     expect(song.features.envelopes.low).toEqual(samples); // runtime retains original sampling grid
+  });
+
+  it('teaches the Three.js author the host lens contract', () => {
+    const prompt = buildMixedMediaDocumentPrompt({ title: 'Lens', song: buildSongDocument(project), palette: {}, scenes: [], renderer: 'three' });
+    expect(prompt).toContain('ctx = { THREE, scene, camera, text, lens }');
+    expect(prompt).toContain('ctx.lens.focus');
+    expect(prompt).toContain('ctx.lens.bloomThreshold');
   });
 
   it('does not manufacture features for a legacy or malformed analysis', () => {

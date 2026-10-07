@@ -4,6 +4,7 @@ import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import { copyToClipboard } from '../../lib/clipboard.js';
 import CoverArtPanel from './CoverArtPanel.jsx';
+import { formatCount, formatUsd } from '../../utils/formatters.js';
 
 const fmtTime = (sec) => {
   const s = Math.max(0, Math.floor(sec));
@@ -24,7 +25,15 @@ export const PUBLISH_FIELDS = [
   { platform: 'instagram', label: 'Instagram Reels', fields: [{ key: 'caption', label: 'Caption', max: 2200, multiline: true }] },
   { platform: 'reddit', label: 'Reddit', fields: [{ key: 'title', label: 'Title', max: 300 }, { key: 'body', label: 'Body (markdown)', multiline: true }] },
   { platform: 'stackerNews', label: 'Stacker News', fields: [{ key: 'title', label: 'Title', max: 80 }, { key: 'body', label: 'Body (markdown)', multiline: true }] },
+  { platform: 'substack', label: 'Substack', fields: [{ key: 'title', label: 'Title', max: 100 }, { key: 'subtitle', label: 'Subtitle', max: 250 }, { key: 'body', label: 'Body (under the video)', multiline: true }] },
 ];
+
+// What the writer may use beyond the notes and links; mirrors the server's
+// DEFAULT_COPY_INCLUDE (song title on, everything else off, no hashtags).
+const DEFAULT_INCLUDE = { title: true, lyrics: false, spend: false, chapters: false, hashtags: false };
+// Generation spend across the project's production runs, as the server totals it for the draft.
+const projectSpend = (project) => (project?.productionRuns || [])
+  .reduce((sum, run) => sum + (Number.isFinite(Number(run?.usage?.spentUsd)) ? Number(run.usage.spentUsd) : 0), 0);
 
 const fieldValue = (copy, platform, field) => {
   const v = copy?.[platform]?.[field.key];
@@ -74,6 +83,24 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
   const [notes, setNotes] = useState(kit.notes || '');
   const [youtubeUrl, setYoutubeUrl] = useState(kit.links?.youtube || '');
   const [songUrl, setSongUrl] = useState(kit.links?.song || '');
+  const [include, setInclude] = useState({ ...DEFAULT_INCLUDE, ...(kit.draftOptions?.include || {}) });
+  const [length, setLength] = useState(kit.draftOptions?.length === 'full' ? 'full' : 'short');
+  // Same filter as the server's timedLines: only cues with text and a start time reach the writer.
+  const lyricLines = (project?.lyricCues || [])
+    .filter((c) => typeof c?.text === 'string' && c.text.trim() && typeof c.startSec === 'number' && Number.isFinite(c.startSec)).length;
+  const [confirmReplace, setConfirmReplace] = useState(false);
+  // Mirrors the server's copyEditedSinceDraft: a draft would replace posts written or edited by hand.
+  const editedAt = Date.parse(kit.copyEditedAt || '');
+  const draftedAt = Date.parse(kit.copyDraftedAt || '');
+  const editedSinceDraft = Number.isFinite(editedAt) && (!Number.isFinite(draftedAt) || editedAt > draftedAt);
+  const spend = projectSpend(project);
+  const includeRows = [
+    { key: 'title', label: 'Song title', detail: project?.name ? `"${project.name}"` : 'no title yet', available: !!project?.name },
+    { key: 'lyrics', label: 'Lyrics', detail: lyricLines ? `${formatCount(lyricLines)} timed line${lyricLines === 1 ? '' : 's'}` : 'no timed lyrics', available: lyricLines > 0 },
+    { key: 'chapters', label: 'Chapters', detail: kit.chapters?.length ? `${formatCount(kit.chapters.length)} from the kit` : 'from the song sections', available: true },
+    { key: 'spend', label: 'Generation spend', detail: spend > 0 ? formatUsd(spend) : 'none recorded', available: spend > 0 },
+    { key: 'hashtags', label: 'Hashtags and YouTube tags', detail: 'none are added unless ticked', available: true },
+  ];
   const {
     providers, selectedProviderId, selectedModel, availableModels, setSelectedProviderId, setSelectedModel,
   } = useProviderModels({ allowDefault: true, silent: true });
@@ -83,11 +110,15 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
     ...(/^https?:\/\//.test(youtubeUrl.trim()) ? { youtube: youtubeUrl.trim() } : {}),
     ...(/^https?:\/\//.test(songUrl.trim()) ? { song: songUrl.trim() } : {}),
   };
-  const draft = () => publishKit.draftCopy({
+  const draft = (replaceEdited = false) => publishKit.draftCopy({
     ...(selectedProviderId ? { providerId: selectedProviderId } : {}),
     ...(selectedModel ? { model: selectedModel } : {}),
     notes, links,
+    include: Object.fromEntries(includeRows.map(({ key, available }) => [key, available && include[key]])),
+    length,
+    ...(replaceEdited ? { replaceEdited: true } : {}),
   });
+  const onDraft = () => (editedSinceDraft ? setConfirmReplace(true) : draft());
 
   return (
     <div className="space-y-3">
@@ -166,7 +197,7 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
 
       <section aria-label="Release copy" className="rounded-lg border border-port-border bg-port-card p-3 space-y-2 text-xs">
         <h3 className="text-sm font-medium flex items-center gap-1.5"><Sparkles size={14} /> Release copy</h3>
-        <p className="text-port-text-muted">The draft only states what you give it here, plus the song, its lyrics and its generation spend. Nothing runs until you press Draft.</p>
+        <p className="text-port-text-muted">Each post below is exactly what goes out. Write it yourself, or have the writer draft it from your notes, the links and only what you tick under Draft from. Nothing runs until you press Draft.</p>
         <div className="space-y-0.5">
           <label htmlFor={idFor('notes')} className="text-[11px] text-port-text-muted">Making-of notes (your story, in your words)</label>
           <textarea id={idFor('notes')} value={notes} maxLength={8000} rows={4} onChange={(e) => setNotes(e.target.value)}
@@ -184,6 +215,26 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
               className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0" />
           </div>
         </div>
+        <fieldset className="space-y-1 rounded border border-port-border p-2">
+          <legend className="px-1 text-[11px] font-medium">Draft from (plus your notes and links)</legend>
+          {includeRows.map(({ key, label, detail, available }) => (
+            <label key={key} htmlFor={idFor(`include-${key}`)} className={`flex items-center gap-2 min-h-[44px] sm:min-h-0 ${available ? '' : 'opacity-50'}`}>
+              <input id={idFor(`include-${key}`)} type="checkbox" checked={available && include[key]} disabled={!available || publishKit.drafting}
+                onChange={(e) => setInclude((cur) => ({ ...cur, [key]: e.target.checked }))} />
+              <span>{label} <span className="text-port-text-muted">· {detail}</span></span>
+            </label>
+          ))}
+        </fieldset>
+        <fieldset className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <legend className="text-[11px] text-port-text-muted mb-0.5">Length</legend>
+          {[['short', 'A sentence or two'], ['full', 'Full making-of']].map(([value, label]) => (
+            <label key={value} htmlFor={idFor(`length-${value}`)} className="flex items-center gap-1.5 min-h-[44px] sm:min-h-0">
+              <input id={idFor(`length-${value}`)} type="radio" name={idFor('length')} value={value} checked={length === value}
+                disabled={publishKit.drafting} onChange={() => setLength(value)} />
+              {label}
+            </label>
+          ))}
+        </fieldset>
         <div className="flex flex-wrap items-end gap-2">
           {providers.length > 0 && (
             <ProviderModelSelector providers={providers} selectedProviderId={selectedProviderId} selectedModel={selectedModel}
@@ -191,13 +242,22 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
               label="Writer" compact alwaysShowModel modelDisabled={availableModels.length === 0}
               emptyProviderOption="Active provider (default)" emptyModelOption="Default model" disabled={publishKit.drafting} />
           )}
-          <button type="button" onClick={draft} disabled={publishKit.drafting || noPlatforms}
+          <button type="button" onClick={onDraft} disabled={publishKit.drafting || publishKit.saving || noPlatforms || confirmReplace}
             className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
             <Sparkles size={13} /> {publishKit.drafting ? 'Drafting…' : (kit.copy ? 'Redraft copy' : 'Draft copy')}
           </button>
         </div>
+        {confirmReplace && (
+          <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-port-warning/50 bg-port-warning/10 p-2">
+            <span className="flex-1 min-w-[12rem]">Drafting replaces the posts you wrote or edited below.</span>
+            <button type="button" onClick={() => { setConfirmReplace(false); draft(true); }}
+              className="bg-port-warning/20 text-port-warning rounded px-2 py-1.5 min-h-[44px] sm:min-h-0">Replace them</button>
+            <button type="button" onClick={() => setConfirmReplace(false)}
+              className="text-port-text-muted px-2 py-1.5 min-h-[44px] sm:min-h-0">Keep mine</button>
+          </div>
+        )}
         {noPlatforms && <p className="text-port-text-muted">Turn on a platform under Where you post to draft its copy.</p>}
-        {kit.copy && (
+        {!noPlatforms && (
           <div className="space-y-3" key={kit.copyDraftedAt || 'copy'}>
             {copyFields.map(({ platform, label, fields }) => (
               <fieldset key={platform} className="space-y-1.5 rounded border border-port-border p-2">

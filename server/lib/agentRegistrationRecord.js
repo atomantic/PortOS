@@ -62,6 +62,7 @@ export function buildAgentRegistration({
   executionMode,
   publicReviewPosture,
   resolvedAppName,
+  injectedMemories = [],
 }) {
   return {
     instanceId,
@@ -259,6 +260,9 @@ export function buildAgentRegistration({
     // to avoid provisioning a nested worktree. Preserve that distinction in
     // the run record so completion diagnostics cannot mistake the claim path
     // for the generic commit-only handoff.
+    // Which memories steered this run's prompt ([{ id, version, relevance }]).
+    // Empty for a run whose prompt carried none; absent only on a pre-#10495 record.
+    injectedMemories,
     configClaimFlow: claimFlowTask,
     // The claim branch this run owns (or `claimPicksOwnBranch` when it picks one
     // itself, as a swarm orchestrator does). The `claim-*` tree is cut by the

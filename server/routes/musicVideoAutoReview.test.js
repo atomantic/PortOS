@@ -65,9 +65,6 @@ vi.mock('../lib/processEnv.js', async (importOriginal) => ({
 }));
 vi.mock('../lib/ffmpeg.js', async (importOriginal) => {
   const real = await importOriginal();
-  const { writeFileSync: write, mkdirSync: mkdir } = await import('fs');
-  const { join: joinPath } = await import('path');
-  const { PATHS } = await import('../lib/fileUtils.js');
   return {
     ...real,
     findFfmpeg: vi.fn(async () => (h.analysisAvailable ? 'ffmpeg' : null)),
@@ -220,7 +217,7 @@ describe('opt-in automatic review/retries (#8988)', () => {
     await projects.updateProject(p.id, { scenes: p.scenes.map((scene) => scene.sceneId === 's1'
       ? { ...scene, startSec: 0, endSec: 10, direction: { actionContract: { version: 1, purpose: 'The listener decides to stay',
         reactions: [{ startSec: 6, endSec: 8, subject: 'Listener', description: 'Turns back' }], acceptanceCriteria: ['Both people remain visible'] } } }
-      : scene) });
+      : scene.sceneId === 's2' ? { ...scene, startSec: 10, endSec: 20, visualIntent: 'The chorus lifts off' } : scene) });
     h.verdicts.push(FAIL_S2, PASS);
     const r = await start(p.id, { maxAttempts: 2, maxGenerations: 1 });
     expect(r.status).toBe(201);
@@ -236,6 +233,9 @@ describe('opt-in automatic review/retries (#8988)', () => {
     expect(reviewerPrompt).toContain('Both people remain visible');
     expect(reviewerPrompt).toContain('"sceneStartSec":-5');
     expect(reviewerPrompt).toContain('Still frames cannot prove completion');
+    // A shot without an action contract still carries its own prompt, so it is judged on it.
+    expect(reviewerPrompt).toContain('"shotPrompt":"shot s2"');
+    expect(reviewerPrompt).toContain('"phraseIntent":"The chorus lifts off"');
     expect(attempt1.review).toMatchObject({ verdict: 'revise', checks: { composition: 'fail', audioSync: 'pass', motion: 'pass' } });
     expect(attempt1.review.evidence).toMatchObject({ continuous: true, continuousFrames: 12 });
     const draft = current.excerpts.find((e) => e.id === attempt1.excerptId);
@@ -277,7 +277,9 @@ describe('opt-in automatic review/retries (#8988)', () => {
     const runId = run(current).id;
     const reviewed = run(current).attempts[0].review;
     // The server submits the flagged section before the director pauses.
-    await vi.waitFor(() => expect(h.jobs).toHaveLength(1), { timeout: 5000, interval: 20 });
+    // Compare the jobs' identity (not just the count) so a flake that enqueues a
+    // second job prints which section it was for, instead of a collapsed array (#10467).
+    await vi.waitFor(() => expect(h.jobs.map((j) => ({ id: j.id, kind: j.kind, sceneId: j.params.musicVideo.sceneId }))).toEqual([{ id: 'job-1', kind: 'video', sceneId: 's2' }]), { timeout: 5000, interval: 20 });
 
     expect((await request(app).post(`${base(p.id)}/auto-reviews/${runId}/stop`)).body.run.status).toBe('stopped');
     // The take the board already paid for still lands — but a stopped run

@@ -19,7 +19,7 @@ vi.mock('../lib/workTracker.js', async (importActual) => ({
   resolveAppForgeTarget: (...args) => resolveAppForgeTarget(...args),
 }));
 
-import { buildIssueReplanTask } from './cosTaskGenerator.js';
+import { buildIssueReplanTask } from './cosTaskClaimWork.js';
 
 const APP = { id: 'my-app', name: 'MyApp', repoPath: '/repo' };
 

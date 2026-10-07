@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router';
 import { MockEventSource, lastEventSource } from '../test/mockEventSource';
 
@@ -919,7 +919,9 @@ describe('StoryBuilder — detail stepper', () => {
       staleSteps: [], llm: { provider: '', model: '' }, activeSteps,
     });
     beforeEach(() => { MockEventSource.reset(); global.EventSource = MockEventSource; });
-    afterEach(() => { delete global.EventSource; });
+    // afterEach hooks run in reverse registration order, so RTL's auto-cleanup would fire AFTER this
+    // hook; unmount first so a late useSseProgress effect never sees EventSource gone.
+    afterEach(() => { cleanup(); delete global.EventSource; });
 
     it('attaches to the surviving run, shows it, disables the kickoff and reloads once on completion', async () => {
       api.getStorySession.mockResolvedValue(liveSession([

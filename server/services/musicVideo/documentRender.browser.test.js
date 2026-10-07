@@ -148,6 +148,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     expect(preview.html).toContain("img-src 'none'");
     const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
     const errors = []; page.on('pageerror', (error) => errors.push(error.message));
+    const warnings = []; page.on('console', (message) => { if (message.type() === 'warning') warnings.push(message.text()); });
     await page.evaluate(() => {
       const live = new Set();
       const create = WebGL2RenderingContext.prototype.createTexture;
@@ -177,6 +178,64 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     const pixels = await sharp(Buffer.from(first.world.split(',')[1], 'base64')).resize(64,36).removeAlpha().raw().toBuffer();
     const orange = [...Array(pixels.length / 3).keys()].filter((i) => pixels[i*3] > pixels[i*3+2] * 1.5 && pixels[i*3] > 100).length;
     expect(orange).toBeGreaterThan(15); // authored character, not a blank backdrop/overlay-only fallback
+    expect(errors).toEqual([]);
+    // ctx.lens drives the host post stack: a wide aperture focused in front of
+    // the character softens every edge without allocating new GPU textures.
+    const edgeEnergy = () => page.evaluate(async () => {
+      await window.portosComposition.seek(0);
+      const probe = document.createElement('canvas'); probe.width = 480; probe.height = 270;
+      const g = probe.getContext('2d'); g.drawImage(document.getElementById('world'), 0, 0, 480, 270);
+      const { data } = g.getImageData(0, 0, 480, 270);
+      let sum = 0; for (let i = 4; i < data.length; i += 4) sum += Math.abs(data[i] - data[i - 4]);
+      return sum;
+    });
+    const withLens = (lens) => page.evaluate((lens) => {
+      window.authoredWorld ??= window.PORTOS_MV_GENERATED.sections.world;
+      window.PORTOS_MV_GENERATED.sections.world = (ctx, env) => { window.authoredWorld(ctx, env); Object.assign(ctx.lens, lens); };
+    }, lens);
+    await withLens({ grain: 0 });
+    const focused = await edgeEnergy();
+    await withLens({ grain: 0, focus: 1, aperture: 24, maxBlur: 24 });
+    expect(await edgeEnergy()).toBeLessThan(focused * 0.8);
+    // A Vector3 focus is view-space depth, not straight-line distance from the
+    // camera's local position: an off-axis head seen through a rig-parented
+    // camera stays as sharp as with no depth of field at all.
+    // focus 'card' passes the Vector3; 'local' passes the straight-line distance
+    // from the camera's local position, the depth the old code used.
+    const headSharpness = (focusOn) => page.evaluate(async (focusOn) => {
+      window.PORTOS_MV_GENERATED.sections.world = (ctx, env) => {
+        window.authoredWorld(ctx, env);
+        const { THREE, scene, camera } = ctx;
+        const rig = new THREE.Group(); rig.position.set(2.5, 0, 8); scene.add(rig); rig.add(camera);
+        // A striped target card at the focus point: its edges blur visibly if
+        // the focal plane misses it.
+        const head = new THREE.Vector3(0, 2.2, 0.6);
+        // No manual matrix update: the engine must resolve the rig itself.
+        const at = camera.position.clone().add(rig.position);
+        const card = new THREE.Group(); card.position.copy(head); scene.add(card);
+        card.add(new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ color: 0x000000 })));
+        for (let i = -2; i <= 2; i++) { const bar = new THREE.Mesh(new THREE.PlaneGeometry(0.06, 1), new THREE.MeshBasicMaterial({ color: 0xffffff })); bar.position.set(i * 0.18, 0, 0.001); card.add(bar); }
+        card.lookAt(at);
+        Object.assign(ctx.lens, { focus: focusOn === 'card' ? head : head.distanceTo(camera.position), aperture: 24, maxBlur: 32 });
+        window.projectHead = () => head.clone().project(camera);
+      };
+      await window.portosComposition.seek(0);
+      // The render has refreshed every matrix, so the projection is exact here.
+      window.headOnScreen = window.projectHead();
+      const world = document.getElementById('world');
+      const x = Math.round((window.headOnScreen.x + 1) / 2 * world.width) - 40, y = Math.round((1 - window.headOnScreen.y) / 2 * world.height) - 40;
+      const probe = document.createElement('canvas'); probe.width = 80; probe.height = 80;
+      const g = probe.getContext('2d'); g.drawImage(world, x, y, 80, 80, 0, 0, 80, 80);
+      const { data } = g.getImageData(0, 0, 80, 80);
+      let sum = 0; for (let i = 4; i < data.length; i += 4) sum += Math.abs(data[i] - data[i - 4]);
+      return { sum, offAxis: Math.abs(window.headOnScreen.x) };
+    }, focusOn);
+    const focusedHead = await headSharpness('card');
+    const missedHead = await headSharpness('local');
+    expect(focusedHead.offAxis).toBeGreaterThan(0.1);
+    expect(focusedHead.sum).toBeGreaterThan(missedHead.sum * 1.5);
+    expect(await page.evaluate(() => window.liveTextureCount())).toBe(textures);
+    expect(warnings.filter((text) => text.includes('PCFSoftShadowMap'))).toEqual([]);
     expect(errors).toEqual([]);
     await page.close();
     await mkdir(PATHS.music, { recursive: true }); await mkdir(PATHS.videos, { recursive: true });

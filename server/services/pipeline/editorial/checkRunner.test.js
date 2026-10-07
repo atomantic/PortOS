@@ -1321,7 +1321,7 @@ describe('runEditorialChecks — dependency-aware staleness (#1627)', () => {
   // dependent's finding is re-fingerprinted as stale (its own source is canon).
   it('marks a dependency-consuming finding stale when the dependency\'s source drifts', async () => {
     const naming = getCheck('naming.dissimilar-names');     // deterministic, sources: ['canon']
-    const infoDump = getCheck('prose.info-dumping');        // LLM, sources: ['manuscript']
+    const _infoDump = getCheck('prose.info-dumping');        // LLM, sources: ['manuscript']
     const hadDeps = Object.prototype.hasOwnProperty.call(naming, 'dependsOn');
     const originalDeps = naming.dependsOn;
     naming.dependsOn = ['prose.info-dumping'];              // naming now depends on a manuscript reader

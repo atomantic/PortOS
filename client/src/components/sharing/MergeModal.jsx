@@ -10,6 +10,7 @@ import { Loader2, GitMerge, Sparkles } from 'lucide-react';
 import Modal from '../ui/Modal';
 import InlineDiff from '../ui/InlineDiff';
 import { MERGE_CHOICE } from '../../hooks/useRecordMerge';
+import { pluralize } from '../../lib/textUtils';
 
 // Conflict values can be strings or structured (arrays/objects). Render strings
 // as-is so InlineDiff can word-diff them; pretty-print everything else.
@@ -157,8 +158,8 @@ export default function MergeModal({ merge, setMerge, onExecute, onRepreview, on
         {preview && (
           <div className="text-xs text-gray-400 border-t border-port-border pt-3">
             Cascade: {kind === 'universe'
-              ? `${cascade.seriesToRepoint?.length || 0} child series re-pointed · ${cascade.loserCollectionItemCount || 0} media items folded`
-              : `${cascade.issuesToRepoint || 0} issues re-pointed · ${cascade.loserCollectionItemCount || 0} media items folded`}
+              ? `${cascade.seriesToRepoint?.length || 0} child series re-pointed · ${pluralize(cascade.loserCollectionItemCount || 0, 'media item')} folded`
+              : `${pluralize(cascade.issuesToRepoint || 0, 'issue')} re-pointed · ${pluralize(cascade.loserCollectionItemCount || 0, 'media item')} folded`}
           </div>
         )}
 

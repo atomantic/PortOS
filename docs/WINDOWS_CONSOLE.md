@@ -147,7 +147,7 @@ That holds because the pinned node-pty is ConPTY-only — its Windows agent has
 no winpty fallback path. It is a property of this dependency, not of PTYs in
 general, so re-check it on a node-pty major bump. All PTY spawns go through the
 one module (`server/services/shell.js`, `server/cos-runner/index.js`,
-`server/lib/tuiPromptRunner.js`, `server/lib/tuiUsageScrape.js`), so the blast
+`server/services/tuiPromptRunner.js`, `server/lib/tuiUsageScrape.js`), so the blast
 radius of that assumption is real.
 
 **`detached: true` spawns.** Windows ignores `CREATE_NO_WINDOW` when

@@ -97,7 +97,7 @@ router.post('/publish-post', asyncHandler(async (req, res) => {
 
   console.log(`🛠️ POST /api/agents/tools/publish-post agent=${data.agentId} submolt=${data.submolt}`);
 
-  const { client, agent, account } = await getClientAndAgent(data.accountId, data.agentId);
+  const { client, agent } = await getClientAndAgent(data.accountId, data.agentId);
   client.aiConfig = agent.aiConfig?.challenge || agent.aiConfig;
   const result = await client.createPost(data.submolt, data.title, data.content);
   const post = result?.post || result;

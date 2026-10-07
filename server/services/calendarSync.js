@@ -3,6 +3,7 @@ import { join } from 'path';
 import { atomicWrite, ensureDir, filterBySearch as genericFilterBySearch, PATHS, readJSONFile, safeDate, UUID_RE } from '../lib/fileUtils.js';
 import { createKeyedFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { calendarTouchpointDedupeKey } from '../lib/tribeMatch.js';
 import { getUserTimezone } from './userTimezone.js';
 import { getAccount, updateSyncStatus } from './calendarAccounts.js';
 
@@ -317,7 +318,7 @@ export async function logCalendarTouchpoints(accountId, events = []) {
       happenedAt: startedAt,
       channel: event.location || 'Calendar',
       summary: event.title || 'Calendar touchpoint',
-      dedupeKey: `cal:${accountId}:${eventKey}`,
+      dedupeKey: calendarTouchpointDedupeKey(accountId, event),
       calendarAccountId: accountId,
       calendarEventId: eventKey,
       metadata: {

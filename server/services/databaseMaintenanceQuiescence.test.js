@@ -28,8 +28,10 @@ const target = { ...source, mode: 'docker', port: 5561 };
 const producers = ['portos-cos', 'portos-server'].map((name, pmId) => ({
   name, pmId, pid: 100 + pmId, cwd: '/example/portos', script: `${name}.js`, status: 'online',
 }));
+import { isProcessAlive } from '../test/processAlive.js';
+
 const fast = { graceMs: 1500, pollMs: 20 };
-const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const alive = isProcessAlive;
 let root;
 let journal;
 let registry;

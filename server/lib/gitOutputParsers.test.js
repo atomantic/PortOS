@@ -8,6 +8,7 @@ import {
   extractAgentSummary,
   isBenignConcurrentFetchRefRace
 } from './gitOutputParsers.js';
+import { LIFECYCLE_LINES } from './agentOutputMarkers.js';
 
 describe('parseStatus', () => {
   it('maps known porcelain codes to labels', () => {
@@ -179,8 +180,7 @@ describe('extractAgentSummary', () => {
     expect(summary).toBe('Fixed the scan-report route so deep links resolve to the SPA.');
   });
 
-  // The sentinel is appended verbatim and nothing else writes after it, so a
-  // summary is free to use emoji-led checklist lines of its own — stripping any
+  // A summary is free to use emoji-led checklist lines of its own — stripping any
   // emoji-prefixed line would delete the agent's actual words, and a summary made
   // mostly of them could fall under the minimum length and lose the body entirely.
   it('keeps the agent\'s own emoji checklist lines inside the sentinel summary', () => {
@@ -226,6 +226,40 @@ describe('extractAgentSummary', () => {
 
     expect(extractAgentSummary(output)).toBe(
       'Rewired the exporter so every frame lands in the atlas rather than the first eight.'
+    );
+  });
+
+  // An idle-complete TUI run's output.txt is nothing but PortOS telemetry, so the
+  // PR body must fall back to commit messages rather than open with a nudge log.
+  // Built from the catalog the emitters write through, so a shape whose derived
+  // pattern misses its own output fails here — including with every value empty,
+  // trimmed the way the output spooler stores it.
+  it('strips every line the TUI emitters can write, leaving no summary', () => {
+    const anchored = Object.entries(LIFECYCLE_LINES).filter(([, line]) => line.pattern);
+    const lines = anchored.flatMap(([id, line]) => [
+      line(new Proxy({}, { get: (_, key) => `${id}-${String(key)} (1/3)` })),
+      line({}).trim(),
+    ]);
+    expect(anchored.length).toBeGreaterThan(20);
+    expect(extractAgentSummary(lines.join('\n'))).toBeNull();
+  });
+
+  // A Merge Gate re-prompt appends its line AFTER the completion marker and
+  // reopens the run; one that then stalls without a second sentinel ends the
+  // buffer with nudges, which used to be carried into the summary verbatim.
+  it('drops the merge-gate and stall telemetry appended after the completion marker', () => {
+    const output = [
+      '📟 TUI session started: abc12345 (claude)',
+      '✅ Agent signaled completion',
+      'Moved the lifecycle lines into one catalog so the PR body reader cannot drift.',
+      '✅ Tests passed',
+      '🔁 Merge Gate not finished (PR still OPEN, no blocker stated) — re-prompted the session (1 nudge only)',
+      '🔁 Session idle with the task unfinished — nudged it to continue (attempt 1/3, 1/6 this run)',
+      '🛑 Session still idle after 6 nudges — it is not finishing; open the Shell tab to take it over',
+    ].join('\n');
+
+    expect(extractAgentSummary(output)).toBe(
+      'Moved the lifecycle lines into one catalog so the PR body reader cannot drift.\n✅ Tests passed'
     );
   });
 

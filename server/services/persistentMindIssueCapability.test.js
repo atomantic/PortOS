@@ -66,7 +66,7 @@ const openIssue = (overrides = {}) => ({
   ...overrides,
 });
 
-const okList = (issues) => ({ issues, reason: 'ok', transient: false, fullName: 'example/demo' });
+const okList = (issues, enumeration = { capped: false, bodiesClipped: false }) => ({ issues, enumeration, reason: 'ok', transient: false, fullName: 'example/demo' });
 
 const fileRequest = (overrides = {}) => ({
   appId: 'demo-app', title: 'Add a retry to the sync poller', body: 'Body prose.',
@@ -198,7 +198,38 @@ describe('persistent mind issue capability', () => {
     expect((await listPersistentMindIssues({ appId: 'demo-app', search: 'POLLER' })).issues.map((i) => i.number)).toEqual([1]);
     // A page cut short must say so — otherwise a partial read reads as the
     // whole backlog when the mind checks for an existing item.
-    expect(await listPersistentMindIssues({ appId: 'demo-app', limit: 1 })).toMatchObject({ truncated: true, totalOpen: 2 });
+    expect(await listPersistentMindIssues({ appId: 'demo-app', limit: 1 })).toMatchObject({ truncated: true, totalOpen: 2, complete: false, truncationReasons: ['row-limit'], matchedCount: 2, returnedCount: 1 });
+  });
+
+  describe('lookup completeness', () => {
+    const fourteen = () => Array.from({ length: 14 }, (_, i) => openIssue({
+      number: i + 1, title: `Synthetic issue ${i + 1}`, body: 'x'.repeat(600), url: `https://github.com/example/demo/issues/${i + 1}`,
+    }));
+
+    it('reports a fully enumerated zero-match search as complete, not truncated', async () => {
+      mocks.listAppIssues.mockResolvedValue(okList(fourteen()));
+      expect(await listPersistentMindIssues({ appId: 'demo-app', search: 'no-such-synthetic-term' })).toMatchObject({
+        issues: [], totalOpen: 14, matchedCount: 0, returnedCount: 0, complete: true, truncated: false, truncationReasons: [],
+      });
+    });
+
+    it('fits 14 long-bodied rows under the result budget with identities kept', async () => {
+      mocks.listAppIssues.mockResolvedValue(okList(fourteen()));
+      const result = await listPersistentMindIssues({ appId: 'demo-app' });
+      expect(JSON.stringify(result).length).toBeLessThanOrEqual(3_500);
+      expect(result.issues.length).toBeGreaterThan(0);
+      expect(result.issues[0]).toMatchObject({ number: 1, url: expect.stringContaining('/issues/1') });
+      expect(result.returnedCount).toBe(result.issues.length);
+      if (result.issues.length < 14) expect(result).toMatchObject({ complete: false, truncationReasons: ['response-budget'] });
+    });
+
+    it('never certifies a capped page or clipped bodies as a conclusive negative', async () => {
+      mocks.listAppIssues.mockResolvedValue(okList(fourteen(), { capped: true, bodiesClipped: true }));
+      expect(await listPersistentMindIssues({ appId: 'demo-app', search: 'no-such-synthetic-term' })).toMatchObject({
+        issues: [], totalOpen: null, fetchedCount: 14, complete: false, truncated: true,
+        truncationReasons: ['source-limit', 'body-clipped'],
+      });
+    });
   });
 
   it('surfaces an unreadable tracker as a failed read, never as an empty backlog', async () => {

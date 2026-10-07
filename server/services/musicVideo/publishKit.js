@@ -8,8 +8,9 @@
  * field on the whole-record LWW body (same posture as `excerpts`), so an older
  * peer carries it through untouched.
  *
- * The build runs ffmpeg only; the copy is ONE user-triggered LLM call (AI
- * Provider Usage Policy) and every field stays editable afterwards.
+ * The build runs ffmpeg, plus one browser render of the 9:16 cut when the
+ * composition lays itself out at that frame; the copy is ONE user-triggered
+ * LLM call (AI Provider Usage Policy) and every field stays editable afterwards.
  */
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
@@ -23,13 +24,16 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '
 import { getProject, listProjects, mutateProjectRecord } from './projects.js';
 import { suggestSocialCuts } from './socialCuts.js';
 import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
-import { buildChapters, buildSrt, buildPublishCopyPrompt, parsePublishCopy, PUBLISH_PLATFORMS } from './publishKitText.js';
+import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
+import { buildChapters, buildSrt, buildPublishCopyPrompt, parsePublishCopy, normalizeCopyOptions, PUBLISH_PLATFORMS } from './publishKitText.js';
 
 const jobs = new Map();
 const projectBuilds = new Map();
 const MAX_THUMBNAILS = 6;
 // X caps a Premium upload's bitrate well under a 1080p master's; ~12 Mbps
 // keeps the analog grain without the upload being re-crushed.
+// 9:16 canvas: the full frame fitted to width over a blurred, cover-scaled copy of itself, so edge text is never cropped.
+export const VERTICAL_FIT_FILTER = 'split[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:4[b];[fg]scale=1080:1920:force_original_aspect_ratio=decrease[f];[b][f]overlay=(W-w)/2:(H-h)/2,setsar=1';
 const X_VIDEO_ARGS = ['-c:v', 'libx264', '-profile:v', 'high', '-preset', 'medium', '-b:v', '10M', '-maxrate', '12M', '-bufsize', '24M', '-pix_fmt', 'yuv420p'];
 const AUDIO_ARGS = ['-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart'];
 
@@ -135,10 +139,16 @@ async function beginPublishKitBuild(projectId, jobId) {
       ...(teaser ? [{ kind: 'teaser', label: `Teaser ${Math.round(teaser.endSec - teaser.startSec)}s`, filename: `${stem}-teaser.mp4`, window: teaser,
         args: ['-ss', String(teaser.startSec), '-t', String(teaser.endSec - teaser.startSec), '-i', masterPath, ...X_VIDEO_ARGS,
           '-af', `asetpts=PTS-STARTPTS${edgeFadeFilter(teaser.endSec - teaser.startSec)}`, ...AUDIO_ARGS] }] : []),
-      // #10150: Shorts/TikTok/Reels need 9:16; a 16:9 render gets a center-crop of the hook window (no generation).
+      // #10150: Shorts/TikTok/Reels need 9:16. A composition that lays itself out at 9:16
+      // (portosComposition.formats) renders the window natively; otherwise the 16:9 master's whole
+      // frame is fitted over a blurred fill of itself (#10377) — a center-crop dropped off-center text.
       ...(teaser && musicVideoAspect(project) === '16:9' ? [{ kind: 'vertical-9x16', label: `Vertical 9:16 ${Math.round(teaser.endSec - teaser.startSec)}s`, filename: `${stem}-vertical.mp4`, window: teaser,
+        layout: 'fit',
+        native: async (outputPath, onProgress) => (await import('./excerptRender.js')).renderSeekedWindow(project, {
+          startSec: teaser.startSec, endSec: teaser.endSec, aspect: '9:16', fade: true, outputPath, jobId: `${jobId}-vertical`, signal: job.abort.signal, onProgress,
+        }),
         args: ['-ss', String(teaser.startSec), '-t', String(teaser.endSec - teaser.startSec), '-i', masterPath,
-          '-vf', 'crop=trunc(ih*9/32)*2:ih,scale=1080:1920', ...X_VIDEO_ARGS,
+          '-vf', VERTICAL_FIT_FILTER, ...X_VIDEO_ARGS,
           '-af', `asetpts=PTS-STARTPTS${edgeFadeFilter(teaser.endSec - teaser.startSec)}`, ...AUDIO_ARGS] }] : []),
     ];
     const times = thumbnailTimes(project, durationSec);
@@ -146,8 +156,38 @@ async function beginPublishKitBuild(projectId, jobId) {
     const written = [];
     let done = 0;
     const step = () => broadcastSse(job, { type: 'progress', progress: Math.min(0.99, ++done / total) });
+    // The native cut renders the composition as it is now; the rest of the kit is the master.
+    // Only when the master was rendered from exactly this composition do they match.
+    const matchesMaster = Boolean(project.renderDependencies) && !musicVideoDependencyChanges(project, project.renderDependencies).length;
+    // A native cut that isn't available (footage, a document without the 9:16 frame, a composition
+    // changed since the master, a failed render) falls back to the fitted master; a cancel still
+    // cancels and leaves no partial file behind.
+    const renderNative = async (encode, out) => {
+      if (!matchesMaster) {
+        console.log(`📐 ${encode.label} [${tag}]: the composition changed since the final render (or was never recorded), fitting the master`);
+        return false;
+      }
+      try {
+        const slot = done;
+        const progress = (fraction) => broadcastSse(job, { type: 'progress', progress: Math.min(0.99, (slot + Math.max(0, Math.min(1, fraction))) / total) });
+        if (await encode.native(out, progress)) { encode.layout = 'native'; return true; }
+      } catch (error) {
+        if (job.abort.signal.aborted) {
+          await unlink(out).catch(() => {});
+          throw error;
+        }
+        console.warn(`⚠️ Native ${encode.label} unavailable [${tag}], fitting the master instead: ${error.message}`);
+      }
+      await unlink(out).catch(() => {});
+      return false;
+    };
     for (const encode of encodes) {
       const out = join(PATHS.videos, encode.filename);
+      if (encode.native && await renderNative(encode, out)) {
+        written.push(encode.filename);
+        step();
+        continue;
+      }
       const result = await runFfmpegProcess({ bin: ffmpeg, signal: job.abort.signal, args: ['-hide_banner', '-loglevel', 'error', ...encode.args, '-y', out] });
       if (!result.ok) throw new Error(`${encode.label} encode failed: ${result.reason || 'ffmpeg error'}`);
       written.push(encode.filename);
@@ -173,7 +213,7 @@ async function beginPublishKitBuild(projectId, jobId) {
         ...kit,
         builtAt: new Date().toISOString(),
         master: { filename: entry.filename, renderHistoryId: project.renderHistoryId },
-        exports: encodes.map(({ kind, label, filename, window }) => ({ kind, label, filename, ...(window ? { startSec: window.startSec, endSec: window.endSec } : {}) })),
+        exports: encodes.map(({ kind, label, filename, window, layout }) => ({ kind, label, filename, ...(window ? { startSec: window.startSec, endSec: window.endSec } : {}), ...(layout ? { layout } : {}) })),
         thumbnails,
         thumbnail: thumbnails.includes(kit.thumbnail) ? kit.thumbnail : (thumbnails[0] || null),
         captionsFilename,
@@ -234,6 +274,16 @@ export async function updatePublishKitCopy(projectId, patch) {
   });
 }
 
+const sameTags = (a, b) => Array.isArray(b) && b.length > 0 && a.length === b.length && a.every((t, i) => t === b[i]);
+
+/** True when a post was written or edited by hand after the last draft (or with no draft yet). */
+function copyEditedSinceDraft(kit) {
+  const edited = Date.parse(kit?.copyEditedAt || '');
+  if (!Number.isFinite(edited)) return false;
+  const drafted = Date.parse(kit?.copyDraftedAt || '');
+  return !Number.isFinite(drafted) || edited > drafted;
+}
+
 /** Generation spend across the project's production runs (what the copy may claim). */
 function spentUsd(project) {
   const total = (project.productionRuns || []).reduce((sum, run) => sum + (Number.isFinite(Number(run?.usage?.spentUsd)) ? Number(run.usage.spentUsd) : 0), 0);
@@ -242,10 +292,18 @@ function spentUsd(project) {
 
 /**
  * Draft the copy for every platform the director posts to, in ONE provider call they asked for.
- * `notes` (their making-of story) is saved with the kit so a redraft reuses it.
+ * `notes` (their making-of story) and what they chose to include (`include`,
+ * `length`) are saved with the kit so a redraft reuses them. A draft replaces
+ * the posts' text, so once a post was written or edited by hand since the last
+ * draft it is refused (409 PUBLISH_COPY_EDITED) unless `replaceEdited` says the
+ * director agreed to replace it. Fields the draft does not return (YouTube tags
+ * with hashtags off) keep what was there.
  */
-export async function draftPublishKitCopy(projectId, { providerId = null, model = null, notes = '', links = {} } = {}, deps = {}) {
+export async function draftPublishKitCopy(projectId, { providerId = null, model = null, notes = '', links = {}, include, length, replaceEdited = false } = {}, deps = {}) {
   const project = await requireProject(projectId);
+  if (!replaceEdited && copyEditedSinceDraft(projectPublishKit(project))) {
+    throw kitError(409, 'PUBLISH_COPY_EDITED', 'The posts were edited by hand since the last draft; confirm replacing them to draft again');
+  }
   const { getPublishPlatforms, publishHistory } = await import('./publish/platforms.js');
   const enabled = deps.platforms || await getPublishPlatforms();
   // Only where the director posts (#9287); Suno's caption reuses the YouTube description.
@@ -256,12 +314,23 @@ export async function draftPublishKitCopy(projectId, { providerId = null, model 
   const { resolveProviderAndModel, runPromptThroughProvider } = deps.runner || await import('../promptRunner.js');
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   if (!provider) throw kitError(503, 'NO_PROVIDER', 'No AI provider is available to draft the copy');
-  const prompt = buildPublishCopyPrompt(project, { notes, spentUsd: spentUsd(project), links, platforms, lessons });
+  const options = normalizeCopyOptions({ include, length });
+  const prompt = buildPublishCopyPrompt(project, { notes, spentUsd: spentUsd(project), links, platforms, lessons, ...options });
   const { text } = await runPromptThroughProvider({ provider, model: selectedModel, prompt, source: 'music-video-publish-copy' });
-  const copy = parsePublishCopy(text, platforms);
+  const copy = parsePublishCopy(text, platforms, { hashtags: options.include.hashtags });
   if (!copy) throw kitError(502, 'PUBLISH_COPY_UNPARSEABLE', 'The copy draft came back without usable JSON — try again or another model');
   return mutateProjectRecord(projectId, (current) => {
     const kit = projectPublishKit(current);
-    return { project: { ...current, publishKit: { ...kit, copy: { ...(kit.copy || {}), ...copy }, notes, links: { ...(kit.links || {}), ...links }, copyDraftedAt: new Date().toISOString() } } };
+    const merged = { ...(kit.copy || {}) };
+    for (const [platform, fields] of Object.entries(copy)) merged[platform] = { ...(merged[platform] || {}), ...fields };
+    // With hashtags off the draft returns no tags: typed tags stay, but tags an
+    // earlier draft wrote (still unedited) go, so none remain unasked.
+    const youtube = merged.youtube;
+    if (copy.youtube && !('tags' in copy.youtube) && Array.isArray(youtube?.tags) && sameTags(youtube.tags, kit.draftedTags)) {
+      merged.youtube = { ...youtube, tags: [] };
+    }
+    // A draft without YouTube keeps the record of what the last YouTube draft wrote.
+    const draftedTags = copy.youtube ? (Array.isArray(copy.youtube.tags) ? copy.youtube.tags : []) : (kit.draftedTags || []);
+    return { project: { ...current, publishKit: { ...kit, copy: merged, draftedTags, notes, draftOptions: options, links: { ...(kit.links || {}), ...links }, copyDraftedAt: new Date().toISOString() } } };
   });
 }

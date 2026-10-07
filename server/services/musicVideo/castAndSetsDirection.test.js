@@ -74,6 +74,40 @@ describe('Cast & Sets direction', () => {
     expect(parseCastAndSetsResponse('no json here')).toBeNull();
   });
 
+  it('keeps a protagonist whose prose fields came back as structure, flattening them to text', () => {
+    const parsed = parseCastAndSetsResponse(JSON.stringify({
+      logline: 'x',
+      protagonist: { name: 'The Vector', description: 'a paper airplane', palette: { primary: '#FFFFFF', accent: '#00F0FF' }, materials: ['paper', 'glow'] },
+      world: { lighting: { key: 'neon', fill: 0 } },
+    }));
+    expect(parsed.protagonist).toMatchObject({ name: 'The Vector', palette: 'primary: #FFFFFF, accent: #00F0FF', materials: 'paper, glow' });
+    expect(parsed.world.lighting).toBe('key: neon, fill: 0');
+    expect(mergeCastAndSetsDirection(null, parsed, { sections, medium: 'procedural' }).missing).not.toContain('protagonist');
+  });
+
+  it('keeps a protagonist with null, boolean or single-string answers in its fields', () => {
+    const parsed = parseCastAndSetsResponse(JSON.stringify({
+      logline: 'x',
+      protagonist: { name: 'A', description: 'b', gesture: null, signature: true, palette: { primary: '#fff', accent: null },
+        rules: 'Never lands', expressions: null },
+      world: { camera: null },
+    }));
+    expect(parsed.protagonist).toMatchObject({ name: 'A', signature: 'true', palette: 'primary: #fff', rules: ['Never lands'] });
+    expect(parsed.protagonist).not.toHaveProperty('gesture');
+    expect(parsed.protagonist).not.toHaveProperty('expressions');
+    expect(parsed.world).not.toHaveProperty('camera');
+    expect(mergeCastAndSetsDirection(null, parsed, { sections, medium: 'procedural' }).missing).not.toContain('protagonist');
+  });
+
+  it('treats a null field in a revision as no change, and an empty one as a clear', () => {
+    const { direction: previous } = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...ANSWER,
+      protagonist: { ...ANSWER.protagonist, gesture: 'wave', rules: ['r1'] }, world: { camera: 'slow dolly' } })), { sections, moodImageCount: 4, medium: 'procedural' });
+    const revision = parseCastAndSetsResponse(JSON.stringify({ protagonist: { hair: 'red', gesture: null, rules: null }, world: { camera: null, layout: '' } }));
+    const { direction } = mergeCastAndSetsDirection(previous, revision, { sections, moodImageCount: 4, medium: 'procedural' });
+    expect(direction.protagonist).toMatchObject({ hair: 'red', gesture: 'wave', rules: ['r1'] });
+    expect(direction.world).toMatchObject({ camera: 'slow dolly', layout: '' });
+  });
+
   it('on a revision keeps absent keys, applies present ones, and treats an empty value as a clear', () => {
     const { direction: previous } = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...ANSWER, questions: ['Is she right?'], interpretation: 'agents' })), { sections, moodImageCount: 4 });
     const revision = parseCastAndSetsResponse(JSON.stringify({

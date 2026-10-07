@@ -1653,7 +1653,7 @@ describe('sharing round-trip', () => {
 
   it('migrates legacy series canon arrays into the linked universe on import (pre-B.4 peer)', async () => {
     const bucket = await buckets.createBucket({ name: 'LegacyCanonBucket', path: tempBucket, mode: 'auto-merge' });
-    const fs = await import('fs');
+    const _fs = await import('fs');
 
     // Local target universe — the migration writes incoming canon here.
     const uni = await universeSvc.createUniverse({ name: 'Pre-B.4 Universe' });
@@ -2186,11 +2186,15 @@ describe('sharing round-trip', () => {
       producedByVersion: '9.99.0',
     });
 
-    // A second process is dedup'd via the cursor (we marked it processed to
-    // prevent the watcher replay loop).
+    // A second process is dedup'd via the cursor's refusal record (prevents the
+    // watcher replay loop) without re-announcing — and without marking it
+    // processed, so an upgraded install can still import it.
     const replay = await importer.processManifest(bucket.id, filename);
     expect(replay.skipped).toBe(true);
-    expect(replay.reason).toBe('already-processed');
+    expect(replay.reason).toBe('already-refused');
+    expect(events).toHaveLength(1);
+    const { readCursor, hasBeenProcessed } = await import('./manifest.js');
+    expect(hasBeenProcessed(await readCursor(bucket.id), filename, futureManifest.id)).toBe(false);
   });
 
   it('annotation manifest round-trip: peer record merges into local annotations without touching pipeline records', async () => {
@@ -2437,6 +2441,47 @@ describe('sharing round-trip', () => {
       expect(result.producedByVersion).toBe('99.0.0');
       // Series stayed tombstoned (or absent) — apply was refused.
       await expect(series.getSeries(s.id)).rejects.toThrow();
+    });
+
+    it('a refused manifest stays quiet on replay, then imports once this install is upgraded', async () => {
+      const { sharingEvents } = await import('./importer.js');
+      const { markRefused, readCursor, hasBeenProcessed } = await import('./manifest.js');
+      const bucket = await buckets.createBucket({ name: 'RetryAfterUpgradeBucket', path: tempBucket, mode: 'auto-merge' });
+      const s = await series.createSeries({ name: 'Arrives Early', logline: 'x' });
+      const exp = await exporter.exportSeries(s.id, bucket.id);
+      await series.deleteSeries(s.id);
+      simulateRemoteSender(tempBucket, exp.filename);
+      const manifestPath = join(tempBucket, 'manifests', exp.filename);
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+      const compatibleVersions = manifest.portosSchemaVersions;
+      manifest.portosSchemaVersions = { ...compatibleVersions, pipelineSeries: 99 };
+      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+      const announced = [];
+      const onAhead = (p) => announced.push(p);
+      sharingEvents.on('portos-schema-ahead', onAhead);
+      try {
+        expect((await importer.processManifest(bucket.id, exp.filename)).reason).toBe('portos-schema-ahead');
+        // Every bundle file landing re-walks the backlog: the replay must not
+        // re-announce the same refusal.
+        expect((await importer.processManifest(bucket.id, exp.filename)).reason).toBe('already-refused');
+        expect(announced).toHaveLength(1);
+      } finally {
+        sharingEvents.off('portos-schema-ahead', onAhead);
+      }
+
+      // Upgrade: the refusal was recorded by the previous build's schema, and
+      // the new build reads the sender's layout. The boot backlog re-walk then
+      // imports the share with no manual cursor surgery.
+      await markRefused(bucket.id, exp.filename, manifest.id, 'previous-build-schema');
+      manifest.portosSchemaVersions = compatibleVersions;
+      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+      await importer.processBacklog(bucket.id);
+
+      expect((await series.getSeries(s.id)).id).toBe(s.id);
+      const cursor = await readCursor(bucket.id);
+      expect(hasBeenProcessed(cursor, exp.filename, manifest.id)).toBe(true);
+      expect(cursor.refusedById[exp.filename]).toBeUndefined();
     });
 
     it('importer IMPORTS a manifest when the sender is ahead only on a category the manifest does NOT carry', async () => {

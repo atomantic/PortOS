@@ -435,6 +435,10 @@ describe('stageChecklist', () => {
     expect(stageChecklist('setup', { id: 'p' })[0].action).toEqual({ label: 'Attach a track', anchor: 'mv-track' });
     // A running autonomous run writes the song itself, so there is nothing to attach.
     expect(stageChecklist('setup', { id: 'p', autonomousRun: { status: 'running' } })[0]).toMatchObject({ action: null, detail: 'The autonomous run is making the song.' });
+    // A parked run is not making anything; the row says to resume it instead.
+    expect(stageChecklist('setup', { id: 'p', autonomousRun: { status: 'running', interrupted: true } })[0]).toMatchObject({ action: null, detail: 'The autonomous run is paused. Resume it to make the song.' });
+    expect(stageChecklist('setup', { id: 'p', autonomousRun: { status: 'stopped' } })[0].detail).toBe('The autonomous run is paused. Resume it to make the song.');
+    expect(stageChecklist('setup', { id: 'p', autonomousRun: { status: 'awaiting-approval' } })[0].detail).toBe('The autonomous run is waiting for your approval.');
     expect(stageChecklist('board', castProject({ scenes: [scene()] }), NOT_APPROVED).map((i) => [i.id, i.done]))
       .toEqual([['shots', true], ['board-art', false], ['approve-storyboard', false]]);
     expect(stageChecklist('produce', castProject({ scenes: [scene(), scene({ sceneId: 's2', videoHistoryId: null })] }), APPROVED)[0])

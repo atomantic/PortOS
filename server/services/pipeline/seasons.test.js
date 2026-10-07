@@ -87,7 +87,7 @@ describe('pipeline seasons service', () => {
   it('updateSeason re-sorts when number changes', async () => {
     const s = await setupSeries();
     const a = await svc.createSeason(s.id, { title: 'A', number: 1 });
-    const b = await svc.createSeason(s.id, { title: 'B', number: 2 });
+    const _b = await svc.createSeason(s.id, { title: 'B', number: 2 });
     await svc.updateSeason(s.id, a.id, { number: 3 });
     const seasons = await svc.listSeasons(s.id);
     expect(seasons.map((x) => x.title)).toEqual(['B', 'A']);

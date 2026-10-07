@@ -84,6 +84,7 @@ import { autoArrangeScenes } from '../lib/beatGrid.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
 import { sceneTakeList } from '../lib/musicVideoTakes.js';
+import { pluralize } from '../lib/textUtils.js';
 import { deriveAttentionItems } from '../lib/musicVideoAttention.js';
 import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
 import { useMusicVideoReviewDraft } from '../hooks/useMusicVideoReviewDraft.js';
@@ -97,6 +98,13 @@ import { AUTONOMOUS_VIEWABLE_STAGES } from '../lib/musicVideoAutonomous.js';
 const emptyCreateForm = () => ({
   name: '', mode: 'autonomous', trackId: '', universeId: '', moodBoardId: '', automation: automationDraftFrom(null),
 });
+
+// Format project label for the header dropdown: omit trailing media type parentheticals
+// like "(experimental, images)" or "(revision)" so the title remains clean.
+function formatProjectPickerLabel(name) {
+  if (typeof name !== 'string') return '';
+  return name.replace(/\s*\([^)]*\)$/, '').trim();
+}
 
 // Why the autopilot kickoff can't run yet, or null when it can.
 function autopilotBlocker(project) {
@@ -334,10 +342,10 @@ export default function MusicVideo() {
   });
   const renderJob = useMusicVideoRenderJob({
     project: selected,
-    // A cancelled or dropped render says nothing about the project's status: ask
-    // the server, or the board keeps showing a render that is gone (#9940).
+    // A finished, cancelled or dropped render updates or resets the project's
+    // status and renderDependencyState: ask the server to sync the full record (#9940).
     onSettled: (reason, projectId) => {
-      if (reason === 'complete' || reason === 'error') return;
+      if (reason === 'error') return;
       getMusicVideoProject(projectId, { silent: true }).then(replaceProject).catch(() => {});
     },
     onRendered: (projectId, result) => patchProject(projectId, (project) => ({
@@ -858,7 +866,7 @@ export default function MusicVideo() {
     splitMusicVideoScene(selected.id, sceneId, backend, { silent: true })
       .then(({ project, scenes }) => {
         replaceProject(project);
-        toast.success(`Split into ${scenes.length} shots`);
+        toast.success(`Split into ${pluralize(scenes.length, 'shot')}`);
       })
       .catch((err) => toast.error(err?.message || 'Failed to split scene'));
   };
@@ -1020,6 +1028,7 @@ export default function MusicVideo() {
     draftRendering: excerpts.rendering,
     finalRenderAttached: renderTargetsSelected,
     readiness: productionReview.readiness,
+    headerAction: nextAction,
   }) : [];
   const runNextAction = () => {
     if (!selected || !nextAction || nextAction.disabled || compositionSavePending > 0) return;
@@ -1227,13 +1236,13 @@ export default function MusicVideo() {
             >
               <option value="">{loading ? 'Loading projects…' : 'Select a project…'}</option>
               {sortedProjects.map((project) => (
-                <option key={project.id} value={project.id}>{project.name}</option>
+                <option key={project.id} value={project.id}>{formatProjectPickerLabel(project.name)}</option>
               ))}
             </select>
             {selected && (
               <details className="min-w-0">
                 <summary className="min-h-[44px] cursor-pointer rounded border border-port-border px-2 py-1.5 text-sm">Project actions · v{selected.version || 1}</summary>
-                <div className="flex flex-wrap items-center gap-1 py-2">
+                <div className="flex flex-wrap items-center gap-1 pt-1.5 pb-0">
                 <button
                   type="button"
                   onClick={handleRename}

@@ -105,6 +105,8 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   musicVideoPublishKitEventsUrl: (jobId) => `/api/music-video/publish-kit/${jobId}/events`,
   cancelMusicVideoPublishKit: vi.fn(async () => ({ ok: true })),
   draftMusicVideoPublishCopy: vi.fn(),
+  getMusicVideoPromotionPlan: vi.fn(async () => ({ steps: [] })),
+  planMusicVideoPromotion: vi.fn(),
   updateMusicVideoPublishCopy: vi.fn(),
   selectMusicVideoPublishThumbnail: vi.fn(),
   prepareMusicVideoPublishDraft: vi.fn(),
@@ -608,6 +610,35 @@ describe('MusicVideo render control (#1760)', () => {
 
     fireEvent.click(renderBtn);
     await waitFor(() => expect(renderMusicVideoProject).toHaveBeenCalledWith('mv-1', { silent: true }));
+  });
+
+  it('reloads the project when render finishes so stale render status clears and new render loads', async () => {
+    const staleProject = {
+      ...PROJECT_WITH_CLIP,
+      renderHistoryId: 'rh-old',
+      renderDependencyState: { status: 'stale', reasons: ['Scene clip changed'] },
+    };
+    const freshProject = {
+      ...PROJECT_WITH_CLIP,
+      renderHistoryId: 'rh-new',
+      status: 'complete',
+      renderDependencyState: { status: 'current', reasons: [] },
+    };
+    let currentProject = staleProject;
+    getMusicVideoProject.mockImplementation(async (id) => (id === staleProject.id ? currentProject : null));
+    await openProject(staleProject, 'review');
+    expect(screen.getAllByText(/Final render is out of date/i).length).toBeGreaterThan(0);
+
+    sseState.latest = null;
+    currentProject = freshProject;
+    fireEvent.click(screen.getByRole('button', { name: /^Render final$/ }));
+    await screen.findByTitle('Cancel render');
+
+    sseState.latest = { type: 'complete', result: { id: 'rh-new' } };
+    forceRerender();
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Music video rendered'));
+    await waitFor(() => expect(getMusicVideoProject).toHaveBeenCalledWith(staleProject.id, { silent: true }));
+    await waitFor(() => expect(screen.queryAllByText(/Final render is out of date/i)).toHaveLength(0));
   });
 
   it('reserves preparation across project navigation and applies completion to the captured project', async () => {
@@ -1361,6 +1392,25 @@ describe('MusicVideo project versions', () => {
     await waitFor(() => expect(cloneMusicVideoProject).toHaveBeenCalledWith('mv-1', {}, { silent: true }));
     await screen.findByRole('heading', { level: 2, name: 'Neon Run v2' });
     expect(screen.getByText('Project actions · v2')).toBeTruthy();
+  });
+
+  it('omits media type parenthetical in the project picker options and compacts actions padding', async () => {
+    const parentheticalProject = {
+      ...PROJECT_WITH_CLIP,
+      id: 'mv-exp',
+      name: 'You Are the Room - Blueprint v7 (experimental, images)',
+    };
+    await openProject(parentheticalProject);
+
+    const picker = await screen.findByLabelText('Project');
+    const option = Array.from(picker.options).find((opt) => opt.value === 'mv-exp');
+    expect(option).toBeDefined();
+    expect(option?.textContent).toBe('You Are the Room - Blueprint v7');
+
+    const actionsSummary = screen.getByText(/^Project actions ·/);
+    const actionsContent = actionsSummary.parentElement?.querySelector('div');
+    expect(actionsContent).toHaveClass('pt-1.5');
+    expect(actionsContent).toHaveClass('pb-0');
   });
 });
 
@@ -2590,9 +2640,9 @@ describe('MusicVideo stage tabs (#9243)', () => {
     expect(await screen.findByLabelText(/Making-of notes/)).toHaveValue('Example second story');
     expect(screen.getByLabelText(/Full video URL/)).toHaveValue('https://example.com/second');
     fireEvent.click(screen.getByRole('button', { name: 'Draft copy' }));
-    await waitFor(() => expect(draftMusicVideoPublishCopy).toHaveBeenCalledWith(second.id, {
-      notes: 'Example second story', links: { youtube: 'https://example.com/second' },
-    }));
+    await waitFor(() => expect(draftMusicVideoPublishCopy).toHaveBeenCalledWith(second.id, expect.objectContaining({
+      notes: 'Example second story', links: { youtube: 'https://example.com/second' }, length: 'short',
+    })));
   });
 
   it('opens the stage named in the URL, falls back to the project\'s own stage for an unknown one, and the tabs navigate', async () => {
