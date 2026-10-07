@@ -500,6 +500,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `bm25.js` | BM25 ranking + inverted-index helpers. |
 | `vectorMath.js` | Vector math utilities (cosine, etc.). |
+| `memoryLinkTypes.js` | Closed vocabulary for CoS memory links (`MEMORY_LINK_TYPES`: `related` symmetric, `supersedes` / `contradicts` / `derived-from` / `applies-to` directed), `DEFAULT_MEMORY_LINK_TYPE`, `isSymmetricMemoryLinkType`. |
 | `memoryQuery.js` | Pure memory-index helpers: meta projection, filter/sort, search/hybrid meta filters, RRF fusion. |
 | `memoryStats.js` | macOS-correct memory accounting (handles "Pages free" quirk). |
 | `rrfRanking.js` | Pure `reciprocalRankFusion(textResults, vectorResults, options)` — merges two ranked lists via RRF scoring (Cormack 2009). Used by `catalogDB.hybridSearchIngredients`. |

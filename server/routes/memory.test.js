@@ -50,7 +50,7 @@ vi.mock('../services/memorySync.js', () => ({
   applyRemoteChanges: vi.fn()
 }));
 
-import { ensureBackend, getMemories, getTimeline, archiveMemory, purgeMemory, applyDecay } from '../services/memoryBackend.js';
+import { ensureBackend, getMemories, getTimeline, archiveMemory, purgeMemory, applyDecay, linkMemories } from '../services/memoryBackend.js';
 import { checkHealth } from '../lib/db.js';
 import * as memorySync from '../services/memorySync.js';
 import { findRecentRunsUsingMemory } from '../services/memoryRunUsage.js';
@@ -439,6 +439,40 @@ describe('Memory Routes', () => {
       const response = await request(app).post('/api/memory/decay').send({ decayRate: 0.02 });
       expect(response.status).toBe(200);
       expect(applyDecay).toHaveBeenCalledWith(0.02);
+    });
+  });
+
+  describe('POST /api/memory/link', () => {
+    const sourceId = '550e8400-e29b-41d4-a716-446655440000';
+    const targetId = '550e8400-e29b-41d4-a716-446655440001';
+
+    it('passes a typed link and its note through to the backend', async () => {
+      linkMemories.mockResolvedValue({ success: true, sourceId, targetId, linkType: 'supersedes', linkId: 'id-1' });
+
+      const response = await request(app).post('/api/memory/link')
+        .send({ sourceId, targetId, linkType: 'supersedes', note: 'newer decision' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.linkType).toBe('supersedes');
+      expect(linkMemories).toHaveBeenCalledWith(sourceId, targetId, { linkType: 'supersedes', note: 'newer decision', createdBy: undefined });
+    });
+
+    it('keeps an untyped legacy call valid (backend defaults it to related)', async () => {
+      linkMemories.mockResolvedValue({ success: true, sourceId, targetId, linkType: 'related', linkId: 'id-2' });
+
+      const response = await request(app).post('/api/memory/link').send({ sourceId, targetId });
+
+      expect(response.status).toBe(200);
+      expect(linkMemories).toHaveBeenCalledWith(sourceId, targetId, { linkType: undefined, note: undefined, createdBy: undefined });
+    });
+
+    it('rejects an unknown link type and a directed self-link with 400', async () => {
+      const unknown = await request(app).post('/api/memory/link').send({ sourceId, targetId, linkType: 'befriends' });
+      const self = await request(app).post('/api/memory/link').send({ sourceId, targetId: sourceId, linkType: 'supersedes' });
+
+      expect(unknown.status).toBe(400);
+      expect(self.status).toBe(400);
+      expect(linkMemories).not.toHaveBeenCalled();
     });
   });
 });
