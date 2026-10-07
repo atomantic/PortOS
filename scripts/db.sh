@@ -433,6 +433,18 @@ fix_native() {
 }
 
 # Setup native PostgreSQL — detects and reuses existing system installation
+# Run one role statement as the system user without the password in argv.
+# The statement arrives on stdin; psql reads the role name and password from
+# the environment (\getenv, PostgreSQL 15+) and quotes them as an identifier
+# (:"role") and a literal (:'pw'). The values are scoped to this one command and
+# deliberately not PG* variables, so they never authenticate the connection.
+provision_role() {
+  local sys_user="$1" statement="$2"
+  printf '%s\n%s\n%s\n' '\getenv role PORTOS_BOOTSTRAP_ROLE' '\getenv pw PORTOS_BOOTSTRAP_PASSWORD' "$statement" |
+    PORTOS_BOOTSTRAP_ROLE="$PGUSER" PORTOS_BOOTSTRAP_PASSWORD="$PGPASSWORD" \
+      psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -v ON_ERROR_STOP=1 -X -q
+}
+
 cmd_setup_native() {
   info "Setting up native PostgreSQL for PortOS..."
 
@@ -518,14 +530,12 @@ cmd_setup_native() {
   sys_user="$(whoami)"
   if ! psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='$PGUSER'" 2>/dev/null | grep -q 1; then
     info "Creating database user: $PGUSER"
-    psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres \
-      -c "CREATE ROLE $PGUSER WITH LOGIN PASSWORD '$PGPASSWORD' CREATEDB SUPERUSER;"
+    provision_role "$sys_user" 'CREATE ROLE :"role" WITH LOGIN PASSWORD :'"'"'pw'"'"' CREATEDB SUPERUSER;'
     log "User $PGUSER created"
   else
     log "User $PGUSER already exists"
     # Ensure password and superuser are set correctly (superuser needed for extension management)
-    psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres \
-      -c "ALTER USER $PGUSER WITH PASSWORD '$PGPASSWORD' SUPERUSER;" 2>/dev/null || true
+    provision_role "$sys_user" 'ALTER USER :"role" WITH PASSWORD :'"'"'pw'"'"' SUPERUSER;' 2>/dev/null || true
   fi
 
   # Step 4: Create portos database if it doesn't exist
@@ -579,7 +589,7 @@ run_psql() {
   if command -v psql >/dev/null 2>&1; then
     PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
   elif [ "$mode" = "docker" ] && docker_running; then
-    docker exec -i -e PGPASSWORD="$PGPASSWORD" portos-db psql -U "$PGUSER" -d "$PGDATABASE" "$@"
+    PGPASSWORD="$PGPASSWORD" docker exec -i -e PGPASSWORD portos-db psql -U "$PGUSER" -d "$PGDATABASE" "$@"
   else
     err "psql not found on host and Docker DB is not running"
     exit 1
@@ -595,7 +605,7 @@ run_pg_dump() {
   local mode
   mode=$(get_mode)
   if [ "$mode" = "docker" ] && docker_running; then
-    docker exec -e PGPASSWORD="$PGPASSWORD" portos-db pg_dump -U "$PGUSER" -d "$PGDATABASE" "$@"
+    PGPASSWORD="$PGPASSWORD" docker exec -e PGPASSWORD portos-db pg_dump -U "$PGUSER" -d "$PGDATABASE" "$@"
   elif command -v pg_dump >/dev/null 2>&1; then
     PGPASSWORD="$PGPASSWORD" pg_dump -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
   else

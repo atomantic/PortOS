@@ -348,4 +348,66 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     expect(down.status).not.toBe(0);
     expect(psqlCalls().every(call => !call.includes('-p 5433 '))).toBe(true);
   });
+
+  // #10484: a custom password must reach the target process through its
+  // environment or stdin only, never as an argument a process list can show.
+  describe('credential handling', () => {
+    const SECRET = "p'a\"ss w;rd $(touch pwned) & \\back`tick`";
+
+    const PROVISION_PSQL_STUB = `#!/bin/sh
+echo "psql $*" >> "$STUB_LOG"
+case "$*" in
+  *pg_roles*) [ -n "$ROLE_EXISTS" ] && echo 1; exit 0 ;;
+  *-lqt*) echo " $PGDATABASE |"; exit 0 ;;
+  *--single-transaction*) cat >> "$IMPORT_LOG"; exit 0 ;;
+  *-c*|*-f*) exit 0 ;;
+esac
+cat >> "$STUB_LOG_DIR/psql.stdin"
+printf '%s|%s' "$PORTOS_BOOTSTRAP_ROLE" "$PORTOS_BOOTSTRAP_PASSWORD" >> "$STUB_LOG_DIR/psql.env"
+exit "\${PROVISION_EXIT:-0}"
+`;
+
+    const DOCKER_ENV_STUB = DOCKER_STUB.replace('\n', '\nprintf "%s" "$PGPASSWORD" >> "$STUB_LOG_DIR/docker.env"\n');
+
+    it.each([
+      ['create', {}, 'CREATE ROLE :"role"'],
+      ['alter', { ROLE_EXISTS: '1' }, 'ALTER USER :"role"'],
+    ])('setup-native %s keeps the password out of argv and quotes it inside psql', (_name, extra, sql) => {
+      writeStub(join(root, 'bin'), 'psql', PROVISION_PSQL_STUB);
+      const result = run(['setup-native'], 'ok', { PGPASSWORD: SECRET, PGUSER: 'role"x', STUB_LOG_DIR: root, PGDATABASE: 'example_db', ...extra });
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(stubLog, 'utf8')).not.toContain('p\'a');
+      expect(result.stdout + result.stderr).not.toContain('w;rd');
+      expect(existsSync(join(root, 'pwned'))).toBe(false);
+      const stdin = readFileSync(join(root, 'psql.stdin'), 'utf8');
+      expect(stdin).toContain(sql);
+      expect(stdin).toContain("PASSWORD :'pw'");
+      expect(stdin).not.toContain('w;rd');
+      expect(readFileSync(join(root, 'psql.env'), 'utf8')).toBe('role"x|' + SECRET);
+    });
+
+    it('setup-native fails when role provisioning fails', () => {
+      writeStub(join(root, 'bin'), 'psql', PROVISION_PSQL_STUB);
+      const result = run(['setup-native'], 'ok', { PGPASSWORD: SECRET, STUB_LOG_DIR: root, PROVISION_EXIT: '3' });
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).not.toContain('Native PostgreSQL is ready');
+      expect(result.stdout + result.stderr).not.toContain('w;rd');
+    });
+
+    it('docker export and import pass the password via the docker client environment only', () => {
+      writeStub(join(root, 'bin'), 'docker', DOCKER_ENV_STUB);
+      rmSync(join(root, 'bin', 'psql'));
+      rmSync(join(root, 'bin', 'pg_dump'));
+      const exported = run(['export', 'secret'], 'ok', { PGPASSWORD: SECRET, STUB_LOG_DIR: root });
+      expect(exported.status, exported.stderr).toBe(0);
+      const dump = join(dumpDir, 'portos-secret.sql');
+      const imported = run(['import', dump], 'ok', { PGPASSWORD: SECRET, STUB_LOG_DIR: root });
+      expect(imported.status, imported.stderr).toBe(0);
+      expect(readFileSync(stubLog, 'utf8')).toMatch(/docker exec .*-e PGPASSWORD portos-db pg_dump/);
+      expect(readFileSync(stubLog, 'utf8')).toMatch(/docker exec -i .*-e PGPASSWORD portos-db psql/);
+      expect(readFileSync(stubLog, 'utf8') + readFileSync(importLog, 'utf8')).not.toContain('w;rd');
+      expect(readFileSync(join(root, 'docker.env'), 'utf8')).toContain(SECRET);
+      expect(exported.stdout + exported.stderr + imported.stdout + imported.stderr).not.toContain('w;rd');
+    });
+  });
 });
