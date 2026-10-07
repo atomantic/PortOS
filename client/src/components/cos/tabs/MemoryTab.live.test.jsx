@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, Routes, Route } from 'react-router';
 
 vi.mock('../../../services/api', () => ({
   getCosConfig: vi.fn(),
@@ -12,6 +12,8 @@ vi.mock('../../../services/api', () => ({
   updateMemory: vi.fn(),
   getMemory: vi.fn(),
   searchMemories: vi.fn(),
+  getMemoryVersions: vi.fn(),
+  getMemoryVersion: vi.fn(),
 }));
 
 const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
@@ -49,7 +51,9 @@ const deferred = () => {
   return { promise, resolve };
 };
 const activeMemory = { id: 'synthetic-active', content: 'Original body', summary: 'Original summary', type: 'fact', status: 'active' };
-const renderTab = (entry = '/cos/memory') => render(<MemoryRouter initialEntries={[entry]}><MemoryTab /></MemoryRouter>);
+const renderTab = (entry = '/cos/memory') => render(<MemoryRouter initialEntries={[entry]}>
+  <Routes><Route path="/cos/memory/:agentId?" element={<MemoryTab />} /></Routes>
+</MemoryRouter>);
 
 const pending = {
   id: 'synthetic-pending-1',
@@ -69,6 +73,8 @@ beforeEach(() => {
   socket.off.mockImplementation((event, handler) => handlers.get(event)?.delete(handler));
   api.getMemories.mockReset();
   api.getCosConfig.mockResolvedValue({});
+  api.getMemory.mockResolvedValue({ ...activeMemory, version: 1 });
+  api.getMemoryVersions.mockResolvedValue({ versions: [] });
   api.getMemories.mockResolvedValue({ memories: [] });
   api.getMemoryStats.mockResolvedValue({ active: 0, pendingApproval: 0 });
   api.getEmbeddingStatus.mockResolvedValue({ available: false });
@@ -183,11 +189,14 @@ describe('MemoryTab lifecycle reconciliation', () => {
     renderTab();
     await screen.findByText('Original summary');
     fireEvent.click(screen.getByRole('button', { name: 'Edit memory' }));
+    await screen.findByDisplayValue('Original body');
     fireEvent.change(screen.getByRole('textbox', { name: /Content/ }), { target: { value: 'Unsaved draft' } });
+    api.getMemory.mockResolvedValue({ ...activeMemory, version: 2, content: 'Remote body', summary: 'Remote summary' });
     api.getMemories.mockImplementation(async params => ({ memories: params.status ? [] : [{ ...activeMemory, content: 'Remote body', summary: 'Remote summary' }] }));
     await dispatch('cos:memory:updated', { id: activeMemory.id });
     expect(screen.getByRole('textbox', { name: /Content/ })).toHaveValue('Unsaved draft');
     expect(screen.getByRole('textbox', { name: /Summary/ })).toHaveValue('Original summary');
+    expect(screen.getByText(/A newer revision exists/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Close edit memory' }));
     // Search remains a server-wide query and refreshes the submitted term,
     // even when the unsubmitted input has since changed.
