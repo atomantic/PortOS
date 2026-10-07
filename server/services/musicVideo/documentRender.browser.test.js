@@ -206,7 +206,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
       window.PORTOS_MV_GENERATED.sections.world = (ctx, env) => {
         window.authoredWorld(ctx, env);
         const { THREE, scene, camera } = ctx;
-        const rig = new THREE.Group(); rig.position.set(2.5, 0, 4); scene.add(rig); rig.add(camera);
+        const rig = new THREE.Group(); rig.position.set(2.5, 0, 8); scene.add(rig); rig.add(camera);
         // A striped target card at the focus point: its edges blur visibly if
         // the focal plane misses it.
         const head = new THREE.Vector3(0, 2.2, 0.6);
@@ -216,7 +216,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
         card.add(new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ color: 0x000000 })));
         for (let i = -2; i <= 2; i++) { const bar = new THREE.Mesh(new THREE.PlaneGeometry(0.06, 1), new THREE.MeshBasicMaterial({ color: 0xffffff })); bar.position.set(i * 0.18, 0, 0.001); card.add(bar); }
         card.lookAt(at);
-        Object.assign(ctx.lens, { focus: focusOn === 'card' ? head : head.distanceTo(camera.position), aperture: 18, maxBlur: 24 });
+        Object.assign(ctx.lens, { focus: focusOn === 'card' ? head : head.distanceTo(camera.position), aperture: 24, maxBlur: 32 });
         window.projectHead = () => head.clone().project(camera);
       };
       await window.portosComposition.seek(0);
@@ -233,7 +233,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     const focusedHead = await headSharpness('card');
     const missedHead = await headSharpness('local');
     expect(focusedHead.offAxis).toBeGreaterThan(0.1);
-    expect(focusedHead.sum).toBeGreaterThan(missedHead.sum * 1.03);
+    expect(focusedHead.sum).toBeGreaterThan(missedHead.sum * 1.5);
     expect(await page.evaluate(() => window.liveTextureCount())).toBe(textures);
     expect(warnings.filter((text) => text.includes('PCFSoftShadowMap'))).toEqual([]);
     expect(errors).toEqual([]);
