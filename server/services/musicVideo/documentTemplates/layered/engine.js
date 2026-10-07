@@ -438,6 +438,32 @@
     }
   }
 
+  // A view of ctx for authored code drawn over footage: a fill or clear covering most of the
+  // canvas is limited to a translucent wash (clears are dropped), everything else passes
+  // through. Authored functions are told to leave footage visible; this keeps it so when a
+  // model paints a full-frame background anyway.
+  const FOOTAGE_WASH_ALPHA = 0.25;
+  function footageOverlayContext(target) {
+    const covers = (w, h) => Math.abs(w * h) >= W * H * 0.9;
+    return new Proxy(target, {
+      get(obj, prop) {
+        if (prop === 'fillRect') {
+          return (x, y, w, h) => {
+            if (!covers(w, h)) return obj.fillRect(x, y, w, h);
+            const alpha = obj.globalAlpha;
+            obj.globalAlpha = Math.min(alpha, FOOTAGE_WASH_ALPHA);
+            obj.fillRect(x, y, w, h);
+            obj.globalAlpha = alpha;
+          };
+        }
+        if (prop === 'clearRect') return (x, y, w, h) => { if (!covers(w, h)) obj.clearRect(x, y, w, h); };
+        const value = Reflect.get(obj, prop, obj);
+        return typeof value === 'function' ? value.bind(obj) : value;
+      },
+      set(obj, prop, value) { return Reflect.set(obj, prop, value, obj); },
+    });
+  }
+
   function render(t, scene, source, state) {
     ctx.fillStyle = C.ink; ctx.fillRect(0, 0, W, H);
     const authored = sectionFunction(t);
@@ -456,7 +482,9 @@
       const inset = 0.1;
       ctx.save();
       try {
-        authored.fn(ctx, {
+        // Over footage or a still, the authored code is an overlay: a full-canvas fill
+        // becomes a translucent wash so the selected media stays visible.
+        authored.fn(source ? footageOverlayContext(ctx) : ctx, {
           t, localT: t - authored.section.startSec, frame: frameOf(t), width: W, height: H,
           song: GENERATED.song, palette: GENERATED.palette, section: authored.section,
           safe: { x: W * inset, y: H * inset, w: W * (1 - 2 * inset), h: H * (1 - 2 * inset) },
