@@ -229,13 +229,20 @@ function batchSectionIds(ids, promptFor, budget) {
   return batches;
 }
 
-// The requested section functions a response carries (possibly fewer than asked for).
-function returnedSections(text, ids) {
+// The requested section functions a response carries (possibly fewer than asked for). With
+// `lenient`, a section that fails its source check is left out (to be retried) instead of
+// failing the whole answer.
+function returnedSections(text, ids, { lenient = false } = {}) {
   const wanted = new Set(ids);
   const accepted = new Map();
   for (const entry of extractCodeSections(text)) {
     if (!wanted.has(entry.id) || accepted.has(entry.id)) continue;
-    accepted.set(entry.id, checkedFunction(entry.source));
+    try {
+      accepted.set(entry.id, checkedFunction(entry.source));
+    } catch (err) {
+      if (!lenient) throw err;
+      console.warn(`⚠️ Music-video document: section ${entry.id} failed its source check (${err.message}); retrying it on its own`);
+    }
   }
   return accepted;
 }
@@ -334,10 +341,10 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
     console.log(`🎬 Music-video document prompt is ${fullPrompt.length} chars; authoring ${ids.length} sections in ${batches.length} batches on a local model`);
     for (const batch of batches) {
       run = await runBatch(withFeedback(promptFor(batch)));
-      const returned = returnedSections(run.text, batch);
+      const returned = returnedSections(run.text, batch, { lenient: true });
       for (const [id, source] of returned) updated.set(id, source);
-      // A local model often drops a section or breaks the JSON of a multi-section answer:
-      // ask once more for each missing section on its own before giving up.
+      // A local model often drops a section, breaks the JSON of a multi-section answer or
+      // writes one section that fails its check: ask once more for each on its own.
       for (const id of batch.filter((sectionId) => !returned.has(sectionId))) {
         console.log(`🎬 Music-video document: re-authoring section ${id} on its own (missing from its batch)`);
         run = await runBatch(withFeedback(promptFor([id])));

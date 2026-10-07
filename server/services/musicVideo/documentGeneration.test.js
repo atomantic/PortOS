@@ -151,6 +151,16 @@ describe('treatment-driven mixed-media document authoring', () => {
     expect(manifest.sections.every((s) => s.source.includes('function render'))).toBe(true);
     expect(h.calls).toBeGreaterThan(2);
 
+    // A returned section that fails its source check is retried on its own too.
+    h.onSubmit = async () => {
+      const asked = sectionsAsked(h.prompt);
+      h.response = asked.length > 1
+        ? JSON.stringify({ sections: asked.map((s, i) => ({ id: s, source: i === asked.length - 1 ? 'function render(ctx, env) { ctx.fillRect(Math.random(), 0, 1, 1); }' : source('#010203') })) })
+        : all;
+    };
+    const retried = await manifestAt((await generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget })).document);
+    expect(retried.sections.every((s) => !s.source.includes('Math.random'))).toBe(true);
+
     // The retry missing it too is a hard failure naming the count.
     h.onSubmit = async () => { h.response = response({ intro: '#010203' }); };
     await expect(generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget }))
