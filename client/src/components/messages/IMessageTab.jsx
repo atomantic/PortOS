@@ -11,6 +11,7 @@ import * as api from '../../services/api';
 import { formatClockTime, formatCount, timeAgo, formatDateNumeric } from '../../utils/formatters';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { IMessageSettingsPanel } from './IMessageSettingsPanel';
+import useLatestRequest from '../../hooks/useLatestRequest';
 
 // Comms → Messages → iMessage (#2413). Browse / manage PortOS-side activity
 // ingested from macOS chat.db. Deletes and blocklists never write Apple's Messages database.
@@ -470,16 +471,19 @@ export default function IMessageTab() {
     return () => clearTimeout(t);
   }, [query]);
 
+  const beginListRequest = useLatestRequest();
   const loadList = useCallback(async () => {
+    const isCurrent = beginListRequest();
     setListLoading(true);
     const [statsRes, convRes] = await Promise.all([
       api.getImessageStats({ silent: true }).catch(() => null),
       api.getImessageConversations({ q: debouncedQ || undefined, silent: true }).catch(() => null),
     ]);
+    if (!isCurrent()) return;
     setStats(statsRes);
     setConversations(convRes?.conversations || []);
     setListLoading(false);
-  }, [debouncedQ]);
+  }, [debouncedQ, beginListRequest]);
 
   useEffect(() => {
     loadList();

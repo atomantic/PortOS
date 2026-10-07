@@ -7,6 +7,7 @@ import toast from '../ui/Toast';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import VaultRecordDrawer from './VaultRecordDrawer';
 import { VAULT_TYPES, SENSITIVE_TYPES } from './constants';
+import useLatestRequest from '../../hooks/useLatestRequest';
 
 // Toggle switch for share_with_twin / use_for_scans — optimistic PATCH, reverts
 // on failure. Disabled + off for the toggle when the type forbids it.
@@ -28,16 +29,21 @@ export default function PrivacyVaultTab({ subjectId }) {
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [keyConfigured, setKeyConfigured] = useState(true);
 
+  // `?subject=` switches reuse this mounted tab: without the guard a slow read
+  // for the previous subject lands last and shows their records under this one.
+  const beginRequest = useLatestRequest();
   const load = useCallback(() => {
+    const isCurrent = beginRequest();
     setLoading(true);
     Promise.allSettled([
       getVaultRecords(undefined, { subjectId }), getPrivacyStatus({ subjectId }),
     ]).then(([recs, status]) => {
+      if (!isCurrent()) return;
       setRecords(recs.status === 'fulfilled' ? recs.value : []);
       if (status.status === 'fulfilled') setKeyConfigured(status.value.keyConfigured !== false);
       setLoading(false);
     });
-  }, [subjectId]);
+  }, [subjectId, beginRequest]);
 
   useEffect(() => { load(); }, [load]);
 

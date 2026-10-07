@@ -11,6 +11,7 @@ import MessageDetail from './MessageDetail';
 import AddToThreadButton from '../threads/AddToThreadButton';
 import { messageReadState, partitionAccountsBySyncMode } from '../../lib/messageSyncModes';
 import LoadFailedState from '../ui/LoadFailedState';
+import useLatestRequest from '../../hooks/useLatestRequest';
 
 const ACTION_CONFIG = {
   reply:   { icon: Reply,   color: 'text-port-accent',  bg: 'bg-port-accent/10',  hoverBg: 'hover:bg-port-accent/20',  label: 'Reply' },
@@ -229,16 +230,21 @@ export default function InboxTab({ accounts }) {
     return () => clearTimeout(debounceRef.current);
   }, [search]);
 
+  // A fast typist fires overlapping searches; an older, slower response must not
+  // replace the list for the query now in the box.
+  const beginRequest = useLatestRequest();
   const fetchMessages = useCallback(async () => {
+    const isCurrent = beginRequest();
     setLoading(true);
     const params = { summary: true };
     if (selectedAccount) params.accountId = selectedAccount;
     if (debouncedSearch) params.search = debouncedSearch;
     const result = await api.getMessageInbox(params, { silent: true }).catch(() => null);
+    if (!isCurrent()) return;
     setLoadFailed(result === null);
     if (result) setMessages(result.messages || []);
     setLoading(false);
-  }, [selectedAccount, debouncedSearch]);
+  }, [selectedAccount, debouncedSearch, beginRequest]);
 
   useEffect(() => {
     fetchMessages();
