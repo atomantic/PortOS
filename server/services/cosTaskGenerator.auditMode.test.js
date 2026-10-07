@@ -382,6 +382,13 @@ describe('mode is honored identically from schedule, manual run, and quota burn'
     expect(prompt).not.toContain('PortOS will merge it back after completion');
   });
 
+  it('allows a verified no-change completion only in fix mode', async () => {
+    const fix = await generate('security', { skipPreconditions: true, runOverrides: { fileIssues: false } });
+    expect(fix.metadata.noChangeSuccess).toBe(true);
+    const filing = await generate('security', { skipPreconditions: true, runOverrides: { fileIssues: true } });
+    expect(filing.metadata.noChangeSuccess).not.toBe(true);
+  });
+
   it('keeps fix-mode deferred findings in the summary even with a customized filing mission', async () => {
     const { getTaskInterval } = await import('./taskSchedule.js');
     getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: { fileIssues: true } });

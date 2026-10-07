@@ -2641,6 +2641,7 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // Tracker-filing types (reference-watch, or an audit type with fileIssues):
   // the {trackerInstructions} block for the app's resolved work tracker.
   const fileIssues = isFileIssuesMode(taskType, metadata);
+  if (isAuditTaskType(taskType)) metadata.noChangeSuccess = !fileIssues;
   const trackerFiling = await resolveTrackerFilingBlock(app, taskType, { fileIssues });
   if (trackerFiling.workTracker) {
     // Traceability + deliverable posture, derived from the SAME resolved tracker
