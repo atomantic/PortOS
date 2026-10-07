@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { spawnSync } from 'child_process';
@@ -54,7 +54,7 @@ const device = (overrides = {}) => ({
 
 describe('FaceTime Audio control protocol', () => {
   // swiftc compiles are runner-budgeted, not product behavior: a cold/contended
-  // full-suite worker can take >10s on the default testTimeout, so these two
+  // full-suite worker can take >10s on the default testTimeout, so these
   // compile tests carry their own budget (same reasoning as vitest.config.js).
   it.runIf(process.platform === 'darwin')('compiles the native helper and preserves its strict JSON boundary', () => {
     const sourceDir = join(import.meta.dirname, '..', '..', 'native', 'facetime-ax');
@@ -90,6 +90,39 @@ guard !matcher.matches(["Incoming call from +44 1555 123 4567"]) else { exit(4) 
       expect(compiled.status, compiled.stderr).toBe(0);
       const result = spawnSync(binary, [], { encoding: 'utf8' });
       expect(result.status, result.stderr).toBe(0);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it.runIf(process.platform === 'darwin')('reports unconfirmed native actions as failures and preserves observed states', () => {
+    const sourceDir = join(import.meta.dirname, '..', '..', 'native', 'facetime-ax');
+    const tempDir = mkdtempSync(join(process.env.PORTOS_TEST_TMPDIR || tmpdir(), 'portos-facetime-confirmation-'));
+    const runner = join(tempDir, 'main.swift');
+    const binary = join(tempDir, 'confirmation-test');
+    try {
+      // Exercise the native serialization/exit boundary without reading AX
+      // surfaces, pressing controls, or waiting on a real call.
+      const source = readFileSync(join(sourceDir, 'main.swift'), 'utf8');
+      const declarations = source.slice(0, source.indexOf('let arguments = CommandLine.arguments'));
+      writeFileSync(runner, `${declarations}
+let state = CommandLine.arguments[2] == "unconfirmed"
+  ? waitForState([], matcher: IdentityMatcher(handle: "+15551234567", identity: "Example Caller"), timeout: 0)
+  : State(rawValue: CommandLine.arguments[2])
+completeAction(command: CommandLine.arguments[1], confirmedState: state, action: "test-action", message: "confirmed")
+`);
+      const compiled = spawnSync('swiftc', ['-warnings-as-errors', join(sourceDir, 'identityMatcher.swift'), runner, '-o', binary], { encoding: 'utf8' });
+      expect(compiled.status, compiled.stderr).toBe(0);
+      for (const [command, state] of [['answer', 'unconfirmed'], ['hangup', 'unconfirmed'], ['answer', 'connected'], ['hangup', 'ended'], ['hangup', 'idle']]) {
+        const result = spawnSync(binary, [command, state], { encoding: 'utf8' });
+        const confirmed = state !== 'unconfirmed';
+        expect(result.status, result.stderr).toBe(confirmed ? 0 : 1);
+        const parsed = facetimeControlResultSchema.parse(JSON.parse(result.stdout));
+        expect(parsed).toMatchObject({
+          ok: confirmed, command, state: confirmed ? state : 'unknown',
+          action: 'test-action', errorCode: confirmed ? null : 'state-unconfirmed',
+        });
+      }
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -281,6 +314,20 @@ guard !matcher.matches(["Incoming call from +44 1555 123 4567"]) else { exit(4) 
             status: 502,
             code: 'invalid-helper-result',
           });
+        },
+      );
+    });
+
+    it('preserves a native confirmation failure at the bridge boundary', async () => {
+      const unconfirmed = {
+        ...validResult, ok: false, command: 'hangup', state: 'unknown',
+        action: 'press-call-action', message: 'FaceTime action was sent, but its resulting state could not be confirmed',
+        errorCode: 'state-unconfirmed',
+      };
+      await withReadyHelper(
+        { success: false, code: 1, signal: null, stdout: JSON.stringify(unconfirmed), stderr: '', timedOut: false },
+        async () => {
+          await expect(run('hangup', readyConfig)).rejects.toMatchObject({ status: 502, code: 'state-unconfirmed' });
         },
       );
     });
