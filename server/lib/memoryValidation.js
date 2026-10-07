@@ -64,7 +64,10 @@ export const memorySchema = memoryCreateSchema.extend({
 
 // Partial schema for updates
 export const memoryUpdateSchema = partialWithoutDefaults(memoryCreateSchema).extend({
-  status: memoryStatusEnum.optional()
+  status: memoryStatusEnum.optional(),
+  expectedVersion: z.number().int().positive().optional(),
+  changedBy: z.string().trim().min(1).max(100).optional(),
+  changeReason: z.string().max(2000).optional()
 });
 
 // Search query schema
@@ -176,7 +179,8 @@ export const memoryExtractSchema = z.object({
 // Memory consolidation request schema
 export const memoryConsolidateSchema = z.object({
   similarityThreshold: z.number().min(0.5).max(1).optional().default(0.9),
-  dryRun: z.boolean().optional().default(false)
+  dryRun: z.boolean().optional().default(false),
+  reason: z.string().max(2000).optional()
 });
 
 // Decay request schema — 0.02 is 2x the shipped default; higher rates purge rather than tune
@@ -217,10 +221,34 @@ const syncMemoryItemSchema = z.object({
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   originInstanceId: z.string().max(36).nullable().optional(),
+  version: z.number().int().positive().optional(),
   syncSequence: z.string().regex(/^\d+$/).optional()
 });
 
 // Sync request body schema
 export const memorySyncSchema = z.object({
-  memories: z.array(syncMemoryItemSchema).max(1000)
+  memories: z.array(syncMemoryItemSchema).max(1000),
+  schemaVersion: z.number().int().nonnegative().optional()
+});
+
+// History is local. The wire version is an explicit receiver capability.
+export const memoryVersionQuerySchema = z.object({
+  version: z.coerce.number().int().positive().optional()
+});
+export const memoryVersionsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  offset: z.coerce.number().int().min(0).default(0)
+});
+export const memoryRetireSchema = z.object({
+  reason: z.string().max(2000).optional(),
+  supersededBy: z.string().guid().optional()
+});
+export const memoryDeleteQuerySchema = memoryRetireSchema.extend({
+  hard: z.enum(['true', 'false']).default('false')
+});
+
+export const memorySyncQuerySchema = z.object({
+  since: z.string().regex(/^\d+$/).default('0'),
+  limit: z.coerce.number().int().min(1).transform(value => Math.min(value, 1000)).default(100),
+  schemaVersion: z.coerce.number().int().nonnegative().optional()
 });

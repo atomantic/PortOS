@@ -325,8 +325,8 @@ describe.skipIf(!runDb)('memoryDB CRUD (#3447)', () => {
 
     const doomed = await memoryDB.createMemory({ type: 'fact', content: 'Reject me.', status: 'pending_approval' });
     expect(await memoryDB.rejectMemory(doomed.id)).toEqual({ success: true, id: doomed.id });
-    // Rejection is a hard delete, not an archive.
-    expect(await memoryDB.peekMemory(doomed.id)).toBeNull();
+    // Rejection preserves the record and reason for inspection.
+    expect(await memoryDB.peekMemory(doomed.id)).toMatchObject({ status: 'archived', archiveReason: 'Rejected' });
 
     expect(await memoryDB.approveMemory('00000000-0000-4000-8000-00000000dead')).toEqual({ success: false, error: 'Memory not found' });
     expect(await memoryDB.rejectMemory('00000000-0000-4000-8000-00000000dead')).toEqual({ success: false, error: 'Memory not found' });
@@ -592,6 +592,11 @@ describe.skipIf(!runDb)('memoryDB consolidateMemories (#3447)', () => {
 
     expect(await statusOf(keeper.id)).toBe('active');
     expect(await statusOf(duplicate.id)).toBe('archived');
+    expect((await memoryDB.getMemory(duplicate.id)).supersededBy).toEqual([keeper.id]);
+    expect((await memoryDB.peekMemory(duplicate.id)).archiveReason).toBe('Consolidated duplicate');
+    const links = await query("SELECT source_id, target_id FROM memory_links WHERE link_type = 'supersedes'");
+    expect(links.rows).toEqual([{ source_id: keeper.id, target_id: duplicate.id }]);
+
     // A memory with no near neighbour is never part of a cluster.
     expect(await statusOf(lone.id)).toBe('active');
 
@@ -985,4 +990,70 @@ describe.skipIf(!runDb)('memoryDB bounded graph snapshot (#9526)', () => {
       });
     }
   }, 60000);
+});
+
+describe.skipIf(!runDb)('memory history and stale-write contract (#10494)', () => {
+  beforeEach(resetMemories);
+
+  it('retains exact earlier texts, permits deliberate clears and ignores operational updates', async () => {
+    const first = await memoryDB.createMemory({ type: 'fact', content: 'First text', summary: 'First', tags: ['a'] }, VEC_A);
+    expect(first.version).toBe(1);
+    const second = await memoryDB.updateMemory(first.id, {
+      content: 'Second text', summary: '', expectedVersion: 1, changeReason: 'Correction', changedBy: 'test-agent'
+    });
+    expect(second).toMatchObject({ version: 2, summary: '' });
+    const third = await memoryDB.updateMemory(first.id, { type: 'decision', category: 'workflow', tags: ['b'], expectedVersion: 2 });
+    expect(third.version).toBe(3);
+    expect(await memoryDB.getMemoryVersion(first.id, 1)).toMatchObject({
+      content: 'First text', summary: 'First', type: 'fact', tags: ['a'], changedBy: 'test-agent', changeReason: 'Correction'
+    });
+    expect(await memoryDB.getMemoryVersion(first.id, 2)).toMatchObject({ content: 'Second text', summary: '', tags: ['a'] });
+    expect(await memoryDB.getMemoryVersion(first.id, 3)).toMatchObject({ content: 'Second text', type: 'decision' });
+    expect(await memoryDB.getMemoryVersion(first.id, 99)).toBeNull();
+    await memoryDB.getMemory(first.id);
+    await memoryDB.updateMemoryEmbedding(first.id, VEC_FAR);
+    await memoryDB.updateMemory(first.id, { importance: 0.7, content: 'Second text', summary: '', tags: ['b'] });
+    await memoryDB.applyDecay();
+    expect((await memoryDB.peekMemory(first.id)).version).toBe(3);
+    expect((await memoryDB.getMemoryVersions(first.id)).map(row => row.version)).toEqual([2, 1]);
+    expect((await memoryDB.getMemoryVersions(first.id, { limit: 1, offset: 1 })).map(row => row.version)).toEqual([1]);
+  });
+
+  it('serializes competing guarded writers and rolls back history with failed link edits', async () => {
+    const first = await memoryDB.createMemory({ type: 'fact', content: 'Original' });
+    const results = await Promise.allSettled([
+      memoryDB.updateMemory(first.id, { content: 'Edit A', expectedVersion: 1 }),
+      memoryDB.updateMemory(first.id, { content: 'Edit B', expectedVersion: 1 })
+    ]);
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.find(result => result.status === 'rejected').reason).toMatchObject({ status: 409 });
+    expect((await memoryDB.peekMemory(first.id)).version).toBe(2);
+    await expect(memoryDB.updateMemory(first.id, {
+      content: 'Must roll back', relatedMemories: ['00000000-0000-4000-8000-00000000dead']
+    })).rejects.toThrow();
+    expect((await memoryDB.peekMemory(first.id)).version).toBe(2);
+    expect(await memoryDB.getMemoryVersions(first.id)).toHaveLength(1);
+    await memoryDB.purgeMemory(first.id);
+    expect(await memoryDB.getMemoryVersions(first.id)).toEqual([]);
+  });
+
+  it('archives with replacement atomically and legacy relation edits preserve supersedes', async () => {
+    const old = await memoryDB.createMemory({ type: 'fact', content: 'Old' });
+    const replacement = await memoryDB.createMemory({ type: 'fact', content: 'New' });
+    await expect(memoryDB.archiveMemory(old.id, { supersededBy: '00000000-0000-4000-8000-00000000dead' })).rejects.toMatchObject({ status: 404 });
+    expect(await statusOf(old.id)).toBe('active');
+    await memoryDB.archiveMemory(old.id, { reason: 'Corrected', supersededBy: replacement.id });
+    await memoryDB.updateMemory(replacement.id, { relatedMemories: [] });
+    expect(await memoryDB.getMemory(old.id)).toMatchObject({ status: 'archived', archiveReason: 'Corrected', supersededBy: [replacement.id] });
+    expect(await memoryDB.getMemoryVersions(old.id)).toEqual([]);
+  });
+
+  it('upgrades idempotently without rewriting existing content or manufacturing history', async () => {
+    const original = await memoryDB.createMemory({ type: 'fact', content: 'Keep me' });
+    const { up } = await import('../scripts/db-migrations/014-memory-version-history.js');
+    await withTransaction(up);
+    await withTransaction(up);
+    expect(await memoryDB.peekMemory(original.id)).toMatchObject({ content: 'Keep me', version: 1 });
+    expect(await memoryDB.getMemoryVersions(original.id)).toEqual([]);
+  });
 });

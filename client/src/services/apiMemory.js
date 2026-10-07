@@ -15,7 +15,9 @@ export const getMemories = (options = {}) => {
   if (options.sortOrder) params.set('sortOrder', options.sortOrder);
   return request(`/memory?${params}`);
 };
-export const getMemory = (id) => request(`/memory/${id}`);
+export const getMemory = (id, options) => request(`/memory/${id}`, options);
+export const getMemoryVersion = (id, version, options) => request(`/memory/${id}?version=${version}`, options);
+export const getMemoryVersions = (id, offset = 0, options) => request(`/memory/${id}/versions?limit=20&offset=${offset}`, options);
 export const getMemoryRuns = (id, options) => request(`/memory/${id}/runs`, options);
 export const updateMemory = (id, data, options = {}) => request(`/memory/${id}`, {
   method: 'PUT',

@@ -81,6 +81,23 @@ describe.skipIf(!runDb)('memorySync.applyRemoteChanges', () => {
   beforeAll(async () => {
     memorySync = await import('./memorySync.js');
   });
+
+  it('negotiates versions without importing peer counters or history', async () => {
+    await query('DELETE FROM memories');
+    await memorySync.applyRemoteChanges([remoteMemory(ID_A, '2026-01-01T00:00:00.000Z', { content: 'Original', version: 90 })], 1);
+    await memorySync.applyRemoteChanges([remoteMemory(ID_A, '2099-01-01T00:00:00.000Z', { content: 'Replacement', version: 91 })], 1);
+    const local = (await query('SELECT content, version FROM memories WHERE id = $1', [ID_A])).rows[0];
+    expect(local).toEqual({ content: 'Replacement', version: 2 });
+    expect((await query('SELECT version, content FROM memory_versions WHERE memory_id = $1', [ID_A])).rows).toEqual([{ version: 1, content: 'Original' }]);
+    const legacy = await memorySync.getChangesSince('0', 100);
+    expect(legacy.memories[0]).not.toHaveProperty('version');
+    const modern = await memorySync.getChangesSince('0', 100, 1);
+    expect(modern.memories[0].version).toBe(2);
+    expect(modern).not.toHaveProperty('versions');
+    await expect(memorySync.applyRemoteChanges([remoteMemory(ID_B, '2099-02-01T00:00:00.000Z')], 2)).rejects.toMatchObject({ status: 409 });
+    await expect(memorySync.getChangesSince('0', 100, 2)).rejects.toMatchObject({ status: 409 });
+    expect(await contentOf(ID_B)).toBeNull();
+  });
   beforeEach(async () => {
     await query(`DELETE FROM memories`);
   });

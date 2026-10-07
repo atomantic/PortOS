@@ -13,6 +13,8 @@ vi.mock('../services/memoryBackend.js', () => ({
   getTimeline: vi.fn(),
   getGraphData: vi.fn(),
   getMemory: vi.fn(),
+  getMemoryVersion: vi.fn(),
+  getMemoryVersions: vi.fn(),
   getRelatedMemories: vi.fn(),
   createMemory: vi.fn(),
   updateMemory: vi.fn(),
@@ -112,7 +114,7 @@ describe('Memory Routes', () => {
       const response = await request(app).delete('/api/memory/mem-42');
 
       expect(response.status).toBe(200);
-      expect(archiveMemory).toHaveBeenCalledWith('mem-42');
+      expect(archiveMemory).toHaveBeenCalledWith('mem-42', {});
       expect(purgeMemory).not.toHaveBeenCalled();
     });
   });
@@ -474,5 +476,27 @@ describe('Memory Routes', () => {
       expect(self.status).toBe(400);
       expect(linkMemories).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('Memory version API', () => {
+  it('validates version reads and propagates stale-write conflicts without embedding work', async () => {
+    const backend = await import('../services/memoryBackend.js');
+    const embeddings = await import('../services/memoryEmbeddings.js');
+    const { errorMiddleware, ServerError } = await import('../lib/errorHandler.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/memory', memoryRoutes);
+    app.use(errorMiddleware);
+    backend.getMemoryVersion.mockResolvedValue({ id: 'mem-1', version: 1, content: 'Original' });
+    expect((await request(app).get('/api/memory/mem-1?version=1')).body.content).toBe('Original');
+    expect((await request(app).get('/api/memory/mem-1?version=-1')).status).toBe(400);
+    backend.getMemoryVersions.mockResolvedValue([{ version: 1 }]);
+    expect((await request(app).get('/api/memory/mem-1/versions?limit=1')).body.versions).toEqual([{ version: 1 }]);
+    backend.updateMemory.mockRejectedValue(new ServerError('Stale memory', { status: 409 }));
+    embeddings.generateMemoryEmbedding.mockClear();
+    const response = await request(app).put('/api/memory/mem-1').send({ content: 'Overwrite', expectedVersion: 1 });
+    expect(response.status).toBe(409);
+    expect(embeddings.generateMemoryEmbedding).not.toHaveBeenCalled();
   });
 });

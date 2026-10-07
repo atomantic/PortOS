@@ -40,15 +40,13 @@ export default function MemoryTab({ apps = [] }) {
   }, [setSearchParams]);
   const [embeddingStatus, setEmbeddingStatus] = useState(null);
   const [backendStatus, setBackendStatus] = useState(null);
-  const [editingMemory, setEditingMemory] = useState(null);
   // /cos/memory/:id deep-links one memory (e.g. from an agent card's "Memories
   // used"). The shared `cos/:tab/:agentId` route names that segment `agentId`.
   const { agentId: linkedMemoryId } = useParams();
   const navigate = useNavigate();
   const linkedMemory = useMemo(() => (linkedMemoryId ? { id: linkedMemoryId } : null), [linkedMemoryId]);
-  const openMemory = editingMemory || linkedMemory;
+  const openMemory = linkedMemory;
   const closeMemory = useCallback(() => {
-    setEditingMemory(null);
     if (linkedMemoryId) navigate('/cos/memory', { replace: true });
   }, [linkedMemoryId, navigate]);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
@@ -327,7 +325,7 @@ export default function MemoryTab({ apps = [] }) {
                 </div>
                 <div className="flex gap-2 sm:flex-col md:flex-row">
                   <button
-                    onClick={() => setEditingMemory(memory)}
+                    onClick={() => navigate(`/cos/memory/${encodeURIComponent(memory.id)}`)}
                     disabled={actionInFlight === memory.id}
                     className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-port-accent/20 text-port-accent hover:bg-port-accent/30 active:bg-port-accent/40 rounded-lg transition-colors disabled:opacity-50"
                     title="Edit before approving"
@@ -472,7 +470,7 @@ export default function MemoryTab({ apps = [] }) {
                   </div>
                   <div className="flex gap-2 sm:gap-1">
                     <button
-                      onClick={() => setEditingMemory(memory)}
+                      onClick={() => navigate(`/cos/memory/${encodeURIComponent(memory.id)}`)}
                       className="p-3 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-500 hover:text-port-accent transition-colors"
                       title="Edit memory"
                       aria-label="Edit memory"

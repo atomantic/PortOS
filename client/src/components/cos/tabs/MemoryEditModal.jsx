@@ -6,6 +6,7 @@ import { FormField } from '../../ui/FormField';
 import * as api from '../../../services/api';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
 import { getAppName, formatPercent } from '../../../utils/formatters';
+import MemoryHistory from './MemoryHistory';
 import MemoryRunsUsedBy from './MemoryRunsUsedBy';
 
 export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
@@ -21,14 +22,19 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
   });
   const [newTag, setNewTag] = useState('');
   const [saving, setSaving] = useState(false);
-  const [fullMemory, setFullMemory] = useState(null);
+  const [fullMemory, setFullMemory] = useState(memory.content ? memory : null);
+  const [changeReason, setChangeReason] = useState('');
+  const [loadError, setLoadError] = useState(null);
 
   // Fetch full memory data if we only have index data
   useEffect(() => {
     let active = true;
     const fetchFullMemory = async () => {
       if (!memory.content && memory.id) {
-        const full = await api.getMemory(memory.id).catch(() => null);
+        const full = await api.getMemory(memory.id, { silent: true }).catch(err => {
+          if (active) setLoadError(err.message || 'Unable to load memory');
+          return null;
+        });
         if (full && active) {
           setFullMemory(full);
           setFormData({
@@ -57,8 +63,10 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
 
     setSaving(true);
     const result = await api.updateMemory(memory.id, {
+      expectedVersion: fullMemory?.version,
+      changeReason: changeReason || undefined,
       content: formData.content,
-      summary: formData.summary || undefined,
+      summary: formData.summary,
       type: formData.type,
       category: formData.category,
       tags: formData.tags,
@@ -142,6 +150,9 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
               ))}
             </div>
           </div>
+
+          {loadError && <p role="alert" className="text-port-error">{loadError}</p>}
+          {!fullMemory && !loadError && <p role="status">Loading memory…</p>}
 
           {/* Content */}
           <FormField
@@ -301,6 +312,12 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
             </div>
           )}
 
+          <FormField label="Reason for change" labelClassName="block text-sm text-gray-400 mb-2">
+            <input value={changeReason} onChange={e => setChangeReason(e.target.value)}
+              maxLength={2000} className="w-full rounded-lg border border-port-border bg-port-bg px-3 py-2" />
+          </FormField>
+          {fullMemory && <MemoryHistory memory={fullMemory} />}
+
           {/* Actions */}
           <div className="flex flex-col-reverse sm:flex-row justify-end gap-2 pt-4">
             <button
@@ -312,7 +329,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
             </button>
             <button
               type="submit"
-              disabled={saving || !formData.content.trim()}
+              disabled={saving || !fullMemory || !formData.content.trim()}
               className="flex items-center justify-center gap-2 px-5 py-3 min-h-[44px] bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Save size={18} />

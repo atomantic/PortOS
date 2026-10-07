@@ -444,6 +444,23 @@ For an install with an unusually large pre-v2 catalog, treat the update as plann
 
 ---
 
+### CoS memory history
+
+`memory_versions` is `db-primary`, linked to `memories` by a cascading foreign key
+and included in database backups. Additive boot DDL and DB migration 014 initialize
+existing memories at version 1 without changing text. A row trigger snapshots the
+previous semantic fields and increments the local counter atomically; access,
+embedding, importance and status changes do not create versions. Guarded edits
+lock the row before checking `expectedVersion`.
+
+History, retirement reasons and relationship links remain machine-local. Memory
+sync keeps its existing current-row, last-writer-wins behavior. A receiver requesting
+`schemaVersion=PORTOS_SCHEMA_VERSIONS.memoryHistory` also receives the sender's
+version; legacy pulls omit it, and unsupported future wire versions are rejected.
+Received counters never replace local counters: a peer replacement snapshots this
+machine's prior text and advances its own revision. Rejection now archives with a
+reason; explicit purge deletes the memory and its history.
+
 ## Adding a new data store? Answer these
 
 Apply this checklist to **every new feature that persists data**, and require it in PR review. A new `data/*.json` store must *justify* itself against these questions — the default for app-native records is PostgreSQL.
