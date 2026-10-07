@@ -1,3 +1,16 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+vi.mock('../../lib/paths.js', async (load) => makePathsProxy(await load(), { dataRoot: () => lazyTempDataRoot('portos-production-authoring-') }));
+const localAuthor = vi.hoisted(() => ({ submit: null }));
+vi.mock('../promptRunner.js', () => ({
+  assertProvider: () => {},
+  resolveProviderAndModel: async () => ({ provider: { id: 'local-fixture', type: 'api', endpoint: 'http://localhost:11434' }, selectedModel: 'fixture-model' }),
+  runPromptThroughProvider: async ({ prompt, beforeExecute }) => {
+    await beforeExecute?.({ provider: { id: 'local-fixture', type: 'api', endpoint: 'http://localhost:11434' }, model: 'fixture-model' });
+    return localAuthor.submit(prompt);
+  },
+}));
 // Existing engine cases isolate the creative review boundary; explicit approval-flow
 // cases below switch to the real model and verify pause/resume without providers.
 const creativeReview = vi.hoisted(() => ({ real: false }));
@@ -29,7 +42,7 @@ import { captureMusicVideoEvidence } from '../../lib/musicVideoDependencies.js';
  * rules (productionPool.js) are real.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { EventEmitter } from 'events';
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
 
@@ -39,6 +52,7 @@ let writeTail = Promise.resolve();
 const clone = (v) => JSON.parse(JSON.stringify(v));
 vi.mock('./projects.js', () => ({
   getProject: async (id) => (store.has(id) ? clone(store.get(id)) : null),
+  listProjects: async () => [...store.values()].map(clone),
   mutateProjectRecord: (id, transform) => {
     const run = writeTail.then(() => {
       if (!store.has(id)) throw Object.assign(new Error('Project not found'), { status: 404 });
@@ -182,6 +196,7 @@ beforeEach(() => {
 
 // A test's background advances finish before the next test resets the doubles.
 afterEach(settle);
+afterAll(cleanupTempDataRoots);
 
 describe('music video production run (#9066)', () => {
   it('refuses mutable peer placement before starting an immutable production budget', async () => {
@@ -661,7 +676,7 @@ function seedCodeFirst({ scenes, directions, percent = 0, ...patch } = {}) {
     treatment: { revision: 1, appliedRevision: 1, shotDirections: directions || [{ sceneId: 'mvs-code', medium: 'procedural', mediumRationale: 'Typography' }] }, ...patch,
   });
 }
-function documentDoubles() {
+function documentDoubles(realDocuments = null) {
   let version = 0;
   const author = vi.fn(async (_id, input) => {
     await input.beforeSubmit({ provider: authorProvider, model: AUTHORING.model });
@@ -686,7 +701,7 @@ function documentDoubles() {
   const render = vi.fn(async (_id, options) => { options.verifyCurrent(current()); return { jobId: 'final-render' }; });
   const cancelRender = vi.fn();
   service.__setProductionDepsForTests({ loadEnv: async () => env, dispatch, queue: async () => queue,
-    autoReview: async () => autoReview, documents: async () => documents,
+    autoReview: async () => autoReview, documents: async () => realDocuments || documents,
     render: async () => ({ renderMusicVideo: render, cancelRender }),
     resolveAuthoring: async (input) => {
       if (!input?.providerId) throw Object.assign(new Error('Select an authoring model'), { code: 'PRODUCTION_AUTHORING_REQUIRED' });
@@ -709,6 +724,43 @@ function failOwnedReview(atSec = 6) {
 }
 
 describe('code-first production execution (#9301)', () => {
+  it('resumes production after a later local author batch fails without repeating completed sections (#10528)', async () => {
+    const ids = ['intro', 'verse', 'hook'];
+    const scenes = ids.map((id, i) => ({ sceneId: `mvs-${id}`, label: id, startSec: i * 10, endSec: (i + 1) * 10 }));
+    seedCodeFirst({ scenes, directions: scenes.map((scene) => ({ sceneId: scene.sceneId, medium: 'procedural', mediumRationale: 'Draw the approved geometry' })),
+      audioAnalysis: { durationSec: 30, sections: ids.map((id, i) => ({ id, label: id, startSec: i * 10, endSec: (i + 1) * 10 })) },
+      productionReview: { draft: { storyboard: scenes.map((scene) => ({ sceneId: scene.sceneId, action: 'Planned choreography. '.repeat(2000) })) } },
+    });
+    const documents = await import('./documentGeneration.js');
+    documentDoubles(documents);
+    const asked = [];
+    localAuthor.submit = async (prompt) => {
+      const sections = ids.filter((id) => prompt.includes(`"id":"${id}"`));
+      asked.push(sections);
+      if (asked.length === 2) throw new Error('Later local batch timed out');
+      return { text: JSON.stringify({ sections: sections.map((id) => ({ id, source: 'function render(ctx, env) { ctx.fillStyle = "#112233"; }' })) }) };
+    };
+    await start({ pool: [], authoring: AUTHORING });
+    expect(theRun().steps.filter((step) => step.kind === 'author')).toEqual([expect.objectContaining({ status: 'failed' })]);
+    const finished = asked[0];
+    expect(finished.length).toBeGreaterThan(0);
+    expect(finished.length).toBeLessThan(ids.length);
+    asked.length = 0;
+    localAuthor.submit = async (prompt) => {
+      const sections = ids.filter((id) => prompt.includes(`"id":"${id}"`));
+      asked.push(sections);
+      return { text: JSON.stringify({ sections: sections.map((id) => ({ id, source: 'function render(ctx, env) { ctx.fillStyle = "#aabbcc"; }' })) }) };
+    };
+    await service.resumeProduction('mv-example', theRun().id);
+    await settle();
+    expect(asked.flat()).toEqual(ids.filter((id) => !finished.includes(id)));
+    const { PATHS } = await import('../../lib/paths.js');
+    const manifest = JSON.parse(await readFile(join(PATHS.data, current().composition.document.directory, 'manifest.json'), 'utf8'));
+    expect(manifest.sections.filter((section) => finished.includes(section.id)).every((section) => section.source.includes('#112233'))).toBe(true);
+    expect(theRun().documentCheckpoint.directory).toBe(current().composition.document.directory);
+    expect(theRun().steps.filter((step) => step.kind === 'author').map((step) => step.status)).toEqual(['failed', 'completed']);
+  });
+
   it('reserves one author step for a document authored in several local batches', async () => {
     seedCodeFirst(); const { author } = documentDoubles();
     const single = author.getMockImplementation();
