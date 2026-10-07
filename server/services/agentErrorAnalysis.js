@@ -1,3 +1,4 @@
+import { PR_COMPLETIONS, resolvePrCompletion } from '../lib/prDisposition.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 /**
  * Agent Error Analysis
@@ -1406,6 +1407,10 @@ export const API_ACCESS_ERROR_CATEGORIES = new Set([
 ]);
 
 export async function maybeCreateInvestigationTask(agentId, task, analysis) {
+  if (resolvePrCompletion(task?.metadata) === PR_COMPLETIONS.LEAVE_OPEN) {
+    emitLog('warn', `Review-only task ${task.id} needs attention; automatic investigation suppressed`, { agentId, taskId: task.id });
+    return;
+  }
   if (API_ACCESS_ERROR_CATEGORIES.has(analysis?.category)) {
     emitLog('debug', `⏭️ Skipping investigation task for ${task.id}: API access error (${analysis.category})`, { agentId, taskId: task.id, category: analysis.category });
     return;

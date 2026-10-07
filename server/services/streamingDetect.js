@@ -278,7 +278,7 @@ export function parseEcosystemConfig(content) {
   // This regex captures app objects including nested braces
   const appBlockRegex = /\{\s*name\s*:\s*['"]([^'"]+)['"]/g;
   let match;
-  let lastIndex = 0;
+  let _lastIndex = 0;
 
   while ((match = appBlockRegex.exec(content)) !== null) {
     const processName = match[1];
@@ -487,7 +487,7 @@ export function parseEcosystemConfig(content) {
     const usesVite = /\bvite\b/i.test(appBlock) || /VITE_PORT/i.test(appBlock);
 
     processes.push({ name: processName, port, ports, cwd, usesVite });
-    lastIndex = endPos;
+    _lastIndex = endPos;
   }
 
   // Post-process: when an app has both an API process and Vite dev processes,

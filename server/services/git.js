@@ -399,13 +399,14 @@ async function execForgeCli(cli, args, dir, env) {
  * @param {string} options.head - Head branch (source, must be pushed to remote)
  * @returns {Promise<{success: boolean, url?: string, error?: string, cli?: string, account?: string|null, owner?: string|null, host?: string|null}>}
  */
-export async function createPR(dir, { title, body, base, head }) {
+export async function createPR(dir, { title, body, base, head, draft = false }) {
   const { cli, env, host, owner, account } = await resolveForgeForRepo(dir);
 
   const args = cli === 'glab'
     ? ['mr', 'create', '--title', title, '--description', body || '', '--target-branch', base, '--source-branch', head]
     : ['pr', 'create', '--title', title, '--body', body || '', '--base', base, '--head', head];
 
+  if (draft) args.push('--draft');
   const meta = { cli, account, owner, host };
 
   try {
@@ -564,12 +565,19 @@ export async function generatePRDescription(dir, baseBranch, headBranch, agentOu
  * @returns {Promise<string>} PR title (<= 100 chars)
  */
 export async function suggestPRTitle(dir, baseBranch, headBranch, fallbackText) {
-  const comparison = await getBranchComparison(dir, baseBranch, headBranch).catch(() => null);
-  if (comparison?.commits?.length) {
-    const oldest = comparison.commits[comparison.commits.length - 1];
-    const subject = oldest?.message?.trim();
-    if (subject) return subject.substring(0, 100);
-  }
+  assertSafeRef(baseBranch);
+  assertSafeRef(headBranch);
+  // A worktree's local main may lag the PR target by many merged commits.
+  // Compare against the fetched remote target, matching what the forge reviews.
+  const remoteBase = `refs/remotes/origin/${baseBranch}`;
+  const remote = await execGitSafe(['rev-parse', '--verify', remoteBase], dir);
+  const baseRef = remote.exitCode === 0 ? remoteBase : baseBranch;
+  const log = await execGitSafe(
+    ['log', '--reverse', '--no-merges', '--format=%s', `${baseRef}..${headBranch}`], dir,
+  );
+  // Subjects are plain text: JSON interpolation drops titles containing quotes.
+  const subject = log.stdout?.split(/\r?\n/).find(line => line.trim())?.trim();
+  if (subject) return subject.substring(0, 100);
   const firstLine = (fallbackText || '').split(/[\r\n]/).find(l => l.trim()) || '';
   return firstLine.trim().substring(0, 100) || 'CoS automated task';
 }

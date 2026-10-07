@@ -620,7 +620,7 @@ describe('computeGoalUrgency', () => {
 // === Integration tests (mock fs + genome service) ===
 
 describe('Integration: deriveChronotype', () => {
-  let deriveChronotype, getChronotype, updateChronotypeBehavioral, getIdentityStatus;
+  let deriveChronotype, getChronotype, updateChronotypeBehavioral, _getIdentityStatus;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -660,7 +660,7 @@ describe('Integration: deriveChronotype', () => {
     deriveChronotype = mod.deriveChronotype;
     getChronotype = mod.getChronotype;
     updateChronotypeBehavioral = mod.updateChronotypeBehavioral;
-    getIdentityStatus = mod.getIdentityStatus;
+    _getIdentityStatus = mod.getIdentityStatus;
   });
 
   it('should derive chronotype from genome markers', async () => {
@@ -1196,7 +1196,7 @@ describe('Integration: Progress Log', () => {
 });
 
 describe('Integration: Calendar Linking', () => {
-  let createGoal, linkCalendarToGoal, unlinkCalendarFromGoal, getGoals;
+  let createGoal, linkCalendarToGoal, unlinkCalendarFromGoal, _getGoals;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -1219,7 +1219,7 @@ describe('Integration: Calendar Linking', () => {
     createGoal = mod.createGoal;
     linkCalendarToGoal = mod.linkCalendarToGoal;
     unlinkCalendarFromGoal = mod.unlinkCalendarFromGoal;
-    getGoals = mod.getGoals;
+    _getGoals = mod.getGoals;
   });
 
   it('should link a calendar to a goal', async () => {

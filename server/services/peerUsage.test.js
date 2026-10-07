@@ -25,7 +25,7 @@ vi.mock('./usage.js', async () => {
   return { ...actual, getUsage: () => localUsage };
 });
 
-const { buildUsageDigest, getUsage } = await import('./usage.js');
+const { buildUsageDigest } = await import('./usage.js');
 const {
   getUsageSnapshot,
   getUsageManifest,

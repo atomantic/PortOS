@@ -53,7 +53,7 @@ import { isOllamaBackedProvider } from './providers.js';
 import { isPublicReviewRestrictedProfile } from '../lib/agentExecutionProfiles.js';
 import { createStreamJsonParser, summarizeToolInput, safeParse } from '../lib/streamJsonParser.js';
 
-const AGENTS_DIR = PATHS.cosAgents;
+const _AGENTS_DIR = PATHS.cosAgents;
 
 /**
  * Build spawn command and arguments for a CLI provider.

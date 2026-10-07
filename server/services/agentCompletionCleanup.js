@@ -41,7 +41,7 @@ import * as git from './git.js';
 import { isTruthyMeta } from './agentState.js';
 import { resolveReviewLoopOptions } from './codeReview.js';
 import { cleanupAgentWorktree, spawnMergeRecoveryTask, releaseRetryHold } from './agentWorktreeCleanup.js';
-import { PR_CREATION, resolvePrCompletion, resolvePrCreation } from '../lib/prDisposition.js';
+import { PR_COMPLETIONS, PR_CREATION, resolvePrCompletion, resolvePrCreation } from '../lib/prDisposition.js';
 import { resolvePrOpenedBy, PR_OPENED_BY } from '../lib/slashdoInvocation.js';
 import { isPublicReviewRestrictedProfile, publicReviewPostureForProfile } from '../lib/agentExecutionProfiles.js';
 import { ensureTaskThread } from './brainTaskThreads.js';
@@ -201,7 +201,11 @@ export async function handlePipelineProgression(task, agentId, success) {
   const stageReadOnly = nextStage.readOnly ?? false;
   const taskDefaults = pipeline.taskDefaults || {};
   for (const flag of PIPELINE_STAGE_BEHAVIOR_FLAGS) {
-    if (flag in nextStage) {
+    // A stage may choose its work posture, but cannot relax a run's draft-only
+    // publication policy. Keep it even while the stage performs no code work.
+    if (flag === 'prCompletion' && taskDefaults.prCompletion === PR_COMPLETIONS.DRAFT) {
+      nextTask.metadata.prCompletion = PR_COMPLETIONS.DRAFT;
+    } else if (flag in nextStage) {
       nextTask.metadata[flag] = nextStage[flag];
     } else if (stageReadOnly) {
       nextTask.metadata[flag] = false;

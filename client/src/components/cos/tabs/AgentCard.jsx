@@ -40,6 +40,7 @@ import { useSocketResource } from '../../../hooks/useSocketResource';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { AgentProgress, AgentRuntimeStatus } from './AgentRuntimeStatus';
+import AgentMemoriesUsed from './AgentMemoriesUsed';
 import { agentIssueLinkifier } from '../../../lib/issueRefs';
 import { harnessLabel, providerHarnessId } from '../../../utils/providerHarnesses';
 
@@ -924,6 +925,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
           pid={agent.pid}
         />
         <TaskDescription agent={agent} remote={remote} />
+        <AgentMemoriesUsed injectedMemories={agent.metadata?.injectedMemories} />
 
         {/* JIRA ticket info */}
         {agent.metadata?.jiraTicketId && (

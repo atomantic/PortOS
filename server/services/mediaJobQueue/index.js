@@ -492,7 +492,7 @@ async function persistTerminalTransition(job) {
     try {
       await persist();
       return;
-    } catch (error) {
+    } catch (_error) {
       job.persistenceError = true;
       mediaJobEvents.emit('changed', {});
       if (attempt === 2) {
@@ -1234,7 +1234,7 @@ async function runJobLifecycle(job, markDispatched, permit) {
     if (disposable && isRemoteMediaJob(job) && job.params?.remotePeerReservation === true) {
       job.params = { ...job.params, remotePeerReservation: false };
       try { await persist(); }
-      catch (error) {
+      catch (_error) {
         job.params = { ...job.params, remotePeerReservation: true };
         maintenance.markResourceUnsettled('media', job.id);
         return { ok: false };

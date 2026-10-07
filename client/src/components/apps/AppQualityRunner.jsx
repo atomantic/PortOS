@@ -16,8 +16,8 @@ const isApplicable = category => category.applicable !== false;
 const BELOW_COMPOSITE = 'below-composite';
 const needsCheck = category => {
   if (!isApplicable(category)) return false;
-  // A stale not-applicable ruling has expired (the repo may have gained a UI), so it is re-offered.
-  if ((category.coverage === 'not-applicable' && !category.stale) || (category.coverage === 'unavailable' && category.assessedAt)) return false;
+  // Expired assessments can be retried; current applicability still gates the batch above.
+  if (!category.stale && (category.coverage === 'not-applicable' || (category.coverage === 'unavailable' && category.assessedAt))) return false;
   return category.score == null || category.stale || category.coverage !== 'broad' || category.confidence === 'low';
 };
 
@@ -33,6 +33,7 @@ export default function AppQualityRunner({ app, children }) {
     return next;
   });
   const [mode, setMode] = useState('file-issues');
+  const [prCompletion, setPrCompletion] = useState('draft');
   const [effort, setEffort] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -60,7 +61,7 @@ export default function AppQualityRunner({ app, children }) {
       : `No applicable checks currently score below the overall composite score of ${compositeScore}/100.`
     : selection === 'all'
       ? 'No applicable checks are available.'
-      : 'No checks need evidence. Unavailable assessments and categories that do not apply to this repository are excluded.';
+      : 'No checks need evidence. Recent unavailable assessments and categories that do not apply to this repository are excluded.';
   const { data, loading, error: loadError, refetch: loadRuns, updateData: setRuns } = useSocketResource(
     () => getMaintenanceRuns({ silent: true }).then(response => response.runs.filter(entry => entry.appId === app.id)),
     { namespace: 'cos', events: RUN_EVENTS, resourceKey: app.id, matchesEvent: run => run?.appId === app.id },
@@ -71,6 +72,7 @@ export default function AppQualityRunner({ app, children }) {
     setError('');
     const response = await startMaintenanceRun({ appId: app.id, providerId: picker.selectedProviderId, model: picker.selectedModel,
       effort: effort || null, mode, claimBetweenAudits: false, taskTypes,
+      ...(mode === 'fix' && prCompletion ? { prCompletion } : {}),
       // A category picked by name is the user's explicit choice and runs even if
       // the repository scan says it cannot apply; batch selections stay gated.
       ...(!batchSelection ? { explicitCheck: true } : {}) }, { silent: true }).catch(err => { if (appIdRef.current === app.id) setError(err.message); return null; });
@@ -100,11 +102,17 @@ export default function AppQualityRunner({ app, children }) {
         </select>
       </label>
     </div>
+    {mode === 'fix' && <label htmlFor="quality-publication" className="block text-sm">Pull requests
+      <select id="quality-publication" className="block w-full bg-port-bg border border-port-border rounded p-2" value={prCompletion} disabled={busy} onChange={event => setPrCompletion(event.target.value)}>
+        <option value="draft">Drafts for review — never merge</option>
+        <option value="inherit">Use saved completion policy</option>
+      </select>
+    </label>}
     <ProviderModelSelector providers={picker.providers} selectedProviderId={picker.selectedProviderId} selectedModel={picker.selectedModel}
       availableModels={picker.availableModels} onProviderChange={value => { picker.setSelectedProviderId(value); setEffort(''); }}
       onModelChange={picker.setSelectedModel} effort={effort} onEffortChange={setEffort} loading={picker.loading} disabled={busy}
       emptyProviderOption="Select a subscription provider" emptyModelOption="Select a model" includeDefaultModel highlightToolUse />
-    <p className="text-xs text-gray-400">Runs sequentially; launch another batch to run in parallel. {mode === 'fix' ? 'Each audit can change code and open a PR.' : 'Findings become issues; no fixes.'}</p>
+    <p className="text-xs text-gray-400">Runs sequentially; launch another batch to run in parallel. {mode === 'fix' ? (prCompletion !== 'inherit' ? 'Fixes stay in pull requests for your review; automatic quality snapshot publication is skipped.' : 'Fixes and quality snapshots may merge automatically under the saved policy.') : 'Findings become issues; no fixes.'}</p>
     <details className="text-xs"><summary className="cursor-pointer text-port-accent">Selected checks ({taskTypes.length})</summary><p className="mt-1">{selectedCategories.map(category => category.label).join(', ') || emptySelectionMessage}</p></details>
     <button type="button" onClick={start} disabled={busy || picker.loading || !picker.selectedProviderId || !picker.selectedModel || !taskTypes.length || app.quality?.unavailable}
       className="px-3 py-2 rounded bg-port-accent text-port-bg text-sm font-medium disabled:opacity-50">{taskTypes.length === 1 ? 'Run now' : `Run ${taskTypes.length} checks now`}</button>

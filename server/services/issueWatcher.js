@@ -1151,7 +1151,7 @@ async function analyzePendingIssueComments({ app, interval, input, pending }) {
 async function runScheduledIssueIntake({ app, interval } = {}) {
   const input = await gatherIssueWatcherInput({ app });
   if (input.skip) return input;
-  const { jevBatchGate, runUntrustedContentAnalysis } = await import('./untrustedContent.js');
+  const { jevBatchGate } = await import('./untrustedContent.js');
   const gate = await jevIssueReplyGate(input, jevBatchGate);
   // Every comment settled locally: the chat model is never woken, which is the
   // whole point of the gate on the highest-volume decision PortOS makes. The

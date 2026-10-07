@@ -1474,3 +1474,9 @@ describe('API_ACCESS_ERROR_CATEGORIES ⊆ ENVIRONMENTAL_ERROR_CATEGORIES (issue 
     }
   });
 });
+
+it.each(['draft', 'leave-open'])('keeps failed %s tasks from spawning an unrestricted investigation', async prCompletion => {
+  addTask.mockClear();
+  await maybeCreateInvestigationTask('a1', { id: 't1', metadata: { prCompletion } }, { category: 'test-failure', actionable: true });
+  expect(addTask).not.toHaveBeenCalled();
+});

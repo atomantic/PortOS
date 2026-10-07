@@ -40,6 +40,15 @@ func emit(_ result: Result, exit: Int32 = 0) -> Never {
   Foundation.exit(exit)
 }
 
+// Sending AXPress does not prove that the requested state was reached.
+// Preserve a confirmation timeout instead of inventing a successful state.
+func completeAction(command: String, confirmedState: State?, action: String, message: String) -> Never {
+  guard let state = confirmedState else {
+    emit(Result(ok: false, command: command, state: .unknown, authorized: true, action: action, message: "FaceTime action was sent, but its resulting state could not be confirmed", errorCode: "state-unconfirmed"), exit: 1)
+  }
+  emit(Result(ok: true, command: command, state: state, authorized: true, action: action, message: message, errorCode: nil))
+}
+
 // AX trees are process-owned and can change between any two reads. Keep a
 // bounded, value-only snapshot so classification never follows a stale element
 // except for the final, semantically verified AXPress.
@@ -298,8 +307,8 @@ if command == "answer" {
   guard AXUIElementPerformAction(incoming.controls[0].element, kAXPressAction as CFString) == .success else {
     emit(Result(ok: false, command: command, state: .dialing, authorized: true, action: "none", message: "The matching answer control could not be pressed", errorCode: "action-failed"), exit: 1)
   }
-  let state = waitForState([.connected], matcher: matcher, timeout: 5) ?? .connected
-  emit(Result(ok: true, command: command, state: state, authorized: true, action: "press-notification-action", message: "Answered the incoming call", errorCode: nil))
+  let state = waitForState([.connected], matcher: matcher, timeout: 5)
+  completeAction(command: command, confirmedState: state, action: "press-notification-action", message: "Answered the incoming call")
 }
 
 let applications = faceTimeApplications()
@@ -311,5 +320,5 @@ guard controls.count == 1 else { ambiguous(command, state: faceTimeState(matcher
 guard AXUIElementPerformAction(controls[0].element, kAXPressAction as CFString) == .success else {
   emit(Result(ok: false, command: command, state: .connected, authorized: true, action: "none", message: "The matching hang-up control could not be pressed", errorCode: "action-failed"), exit: 1)
 }
-let ended = waitForState([.ended, .idle], matcher: matcher, timeout: 5) ?? .ended
-emit(Result(ok: true, command: command, state: ended, authorized: true, action: "press-call-action", message: "FaceTime call ended", errorCode: nil))
+let ended = waitForState([.ended, .idle], matcher: matcher, timeout: 5)
+completeAction(command: command, confirmedState: ended, action: "press-call-action", message: "FaceTime call ended")

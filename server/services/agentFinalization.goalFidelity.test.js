@@ -561,6 +561,13 @@ describe('finalizeAgent — goal-fidelity gate', () => {
       runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({ verdict: 'rethink', missing: ['the retry'] }));
     });
 
+    it.each(['draft', 'leave-open'])('retains findings without filing issues or queuing unrestricted followups for %s', async prCompletion => {
+      await finalize({ task: { id: 'task-1', taskType: 'internal', description: 'Add a retry', metadata: { prCompletion } } });
+      expect(runGoalFidelityFollowUpMock).not.toHaveBeenCalled();
+      expect(completion().goalFidelity.verdict).toBe('rethink');
+      expect(cosEvents.emit).toHaveBeenCalledWith(GOAL_FIDELITY_HOLD_EVENT, expect.anything());
+    });
+
     it('hands the follow-up the review, and records what it did on the run', async () => {
       runGoalFidelityFollowUpMock.mockResolvedValue({
         ran: true,

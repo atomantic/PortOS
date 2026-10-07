@@ -71,6 +71,43 @@ beforeEach(async () => {
 });
 afterAll(cleanup);
 
+// Exercise the actual browser adapter's serialization before the route and
+// persisted run. Form tests replace this adapter, which hid a dropped policy.
+// Read it as source rather than importing client code into the server graph.
+it.each(['draft', 'inherit', undefined])('carries the browser delivery choice %s through HTTP into persisted dispatch', async prCompletion => {
+  const [{ readFile }, { parse }, { runInNewContext }, { default: express }, { request }, { default: routes }] = await Promise.all([
+    import('fs/promises'), import('@babel/parser'), import('node:vm'), import('express'),
+    import('../lib/testHelper.js'), import('../routes/cosScheduleRoutes.js'),
+  ]);
+  const source = await readFile(new URL('../../client/src/services/apiAgents.js', import.meta.url), 'utf8');
+  const ast = parse(source, { sourceType: 'module' });
+  const adapter = ast.program.body.flatMap(node => node.declaration?.declarations || [])
+    .find(node => node.id.name === 'startMaintenanceRun')?.init;
+  expect(adapter).toBeDefined();
+  const app = express();
+  app.use(express.json());
+  app.use('/cos', routes);
+  let wireBody;
+  const sendFromBrowser = runInNewContext(`(${source.slice(adapter.start, adapter.end)})`, {
+    request: (url, options) => {
+      expect(options.method).toBe('POST');
+      wireBody = JSON.parse(options.body);
+      return request(app).post(url).send(wireBody);
+    },
+  });
+  const response = await sendFromBrowser({
+    appId: 'app-1', providerId: 'codex', model: 'gpt-6-astra', effort: 'medium', mode: 'fix',
+    taskTypes: ['security'], ...(prCompletion ? { prCompletion } : {}),
+  });
+  expect(wireBody.prCompletion).toBe(prCompletion);
+  expect(response.status).toBe(201);
+  const run = await getMaintenanceRun(response.body.run.id);
+  const expectedPolicy = prCompletion === 'inherit' ? null : 'draft';
+  expect(run.prCompletion).toBe(expectedPolicy);
+  expect(run.steps[0].overrides.params.prCompletion).toBe(expectedPolicy || undefined);
+  expect(state.invoked[0].step.overrides.params.prCompletion).toBe(expectedPolicy || undefined);
+});
+
 describe('manual maintenance run', () => {
   it('runs a check the user chose by name even where it does not apply', async () => {
     state.inapplicable = { 'mobile-responsive': 'no user interface found in this repository' };
@@ -405,4 +442,15 @@ it('dispatches independent quality runs while another run is pending and resumes
   expect((await getMaintenanceRun(performance.id)).status).toBe('completed');
   expect((await getMaintenanceRun(security.id)).status).toBe('running');
   expect((await getMaintenanceRun(ladder.id)).completed).toEqual({});
+});
+
+it('preserves draft delivery across persisted resume, provider edits and step completion', async () => {
+  const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-6-astra', effort: 'medium', mode: 'fix', prCompletion: 'draft', taskTypes: ['security', 'documentation'] });
+  expect((await getMaintenanceRun(run.id)).prCompletion).toBe('draft');
+  await stopMaintenanceRun(run.id);
+  await resumeMaintenanceRun(run.id);
+  await updateMaintenanceStep(run.id, run.steps[1].id, { providerId: 'codex', model: 'gpt-6-astra', effort: 'medium' });
+  await __onMaintenanceAgentCompleted(agentFor(run, 0));
+  expect(state.invoked.at(-1).step.overrides).toMatchObject({ model: 'gpt-6-astra', effort: 'medium', params: { fileIssues: false, useWorktree: true, openPR: true, prCompletion: 'draft' } });
+  expect((await getMaintenanceRun(run.id)).steps.map(s => s.taskRef.taskType)).toEqual(['security', 'documentation']);
 });

@@ -1,4 +1,5 @@
 import { musicVideoAllowsMedia } from './musicVideoMediaPolicy.js';
+import { performanceCapability } from './musicVideoShotTiming.js';
 /**
  * Planning-only medium policy. Final-edit seconds are an interval union, not
  * provider clip lengths or a sum that double-counts overlapping footage.
@@ -123,6 +124,8 @@ export function codeFirstProductionAssets(project) {
   if (plan.strategy !== 'code-first') return null;
   const directions = new Map((project?.treatment?.shotDirections || []).map((d) => [d.sceneId, d]));
   const steps = [];
+  // Without a lip-sync lane a performance direction is planned as a non-sync shot, so the shot mode cannot (and need not) become Performance.
+  const lipSync = !!performanceCapability(project?.videoSettings?.backend || null);
   const conflicts = plan.unresolved.filter((item) => item.blocking || item.message.startsWith('Visible performance')).map((item) => item.message);
   if (!Number.isInteger(project.treatment?.revision) || project.treatment.appliedRevision !== project.treatment.revision) {
     conflicts.push('Apply the current medium plan to approve it before production.');
@@ -132,7 +135,7 @@ export function codeFirstProductionAssets(project) {
     const medium = direction?.medium;
     if (!MUSIC_VIDEO_MEDIA.includes(medium)) continue;
     if (scene.shotMode === 'performance' && !['existing-footage', 'generated-footage'].includes(medium)) conflicts.push(`Performance shot ${scene.label || scene.sceneId} requires selected footage; revise its shot mode or medium explicitly.`);
-    if ((direction?.mode === 'performance' || scene.shotMode === 'performance')
+    if (((direction?.mode === 'performance' && lipSync) || scene.shotMode === 'performance')
       && ['existing-footage', 'generated-footage'].includes(medium)
       && (scene.shotMode !== 'performance' || (scene.visualLayer != null && scene.visualLayer !== 'footage'))) {
       conflicts.push(`Set ${scene.label || scene.sceneId} to a Performance footage shot before production; its approved performance must retain source-audio timing.`);
@@ -162,6 +165,8 @@ export function codeFirstProductionAssets(project) {
 export function planMusicVideoMedia(project, directions) {
   const policy = normalizeMusicVideoProductionPolicy(project.productionPolicy);
   const codeFirst = policy.strategy === 'code-first';
+  // A brief that explicitly selected a video tool expects footage; the allowance below trims it.
+  const footageSeeded = codeFirst && policy.maxGeneratedVideoPercent > 0 && musicVideoBriefTools(project).some((t) => t.startsWith('video:'));
   const scenes = new Map((project.scenes || []).map((s) => [s.sceneId, s]));
   const previous = new Map((project.treatment?.shotDirections || []).map((d) => [d.sceneId, d]));
   const planned = directions.map((d) => {
@@ -185,6 +190,10 @@ export function planMusicVideoMedia(project, directions) {
           : d.route === 'supplied-asset' ? 'existing-footage' : 'generated-footage';
       rationale = codeFirst ? 'Carry the section motif and transitions with code or available images.'
         : 'Retain the legacy treatment route.';
+    }
+    if (codeFirst && footageSeeded && !manualLayer && medium === 'procedural' && !scene?.referenceImageId && !scene?.videoHistoryId && d.route !== 'code-2d') {
+      medium = 'generated-footage';
+      rationale = 'The brief selected video tools; plan generated footage for this shot, within the generated-video allowance.';
     }
     if (!manualLayer && !scene?.referenceImageId && !scene?.videoHistoryId && (medium === 'still' && !musicVideoAllowsMedia(project, 'image') || ['existing-footage', 'generated-footage'].includes(medium) && !musicVideoAllowsMedia(project, 'video'))) {
       medium = 'procedural'; rationale = 'Author the full scene in code within the selected media mode.';

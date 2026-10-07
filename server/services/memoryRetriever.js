@@ -13,6 +13,9 @@ import { DEFAULT_MEMORY_CONFIG } from './memoryBackend.js';
 // Search mode preference: 'hybrid' (FTS + vector) or 'vector' (embedding-only)
 const SEARCH_MODE = 'hybrid';
 
+// The memory types formatForPrompt renders; any other type is left out of the prompt.
+const FORMATTED_TYPES = new Set(['preference', 'fact', 'learning', 'observation', 'decision', 'context']);
+
 /**
  * Get relevant memories for a task
  * Returns formatted text ready for injection into agent prompt
@@ -228,11 +231,32 @@ export function formatForPrompt(memories, maxTokens = DEFAULT_MEMORY_CONFIG.maxC
  * Main entry point for subAgentSpawner integration
  */
 export async function getMemorySection(task, options = {}) {
+  const { section, injected } = await getMemoryInjection(task, options);
+  // Lets a caller that builds a run record (agentPromptBuilder) capture the
+  // lineage without changing this function's string-or-null return contract.
+  if (typeof options.onInjected === 'function') options.onInjected(injected);
+  return section;
+}
+
+/**
+ * Same retrieval as getMemorySection, but also reports WHICH memories made it
+ * into the prompt text: `injected: [{ id, version, relevance }]`. `version` is
+ * null until memory versioning lands. Only memories the formatter actually
+ * renders are listed (an unrecognised type is dropped from the prompt, so it is
+ * dropped here too); `section` is null when nothing relevant was found.
+ */
+async function getMemoryInjection(task, options = {}) {
   const memories = await getRelevantMemories(task, options);
 
   if (memories.length === 0) {
-    return null;
+    return { section: null, injected: [] };
   }
 
-  return formatForPrompt(memories, options.maxTokens);
+  const section = formatForPrompt(memories, options.maxTokens);
+  const injected = section
+    ? memories
+      .filter(m => FORMATTED_TYPES.has(m.type || 'context'))
+      .map(m => ({ id: m.id, version: m.version ?? null, relevance: m.relevance ?? null }))
+    : [];
+  return { section: section || null, injected };
 }

@@ -382,6 +382,19 @@ describe('mode is honored identically from schedule, manual run, and quota burn'
     expect(prompt).not.toContain('PortOS will merge it back after completion');
   });
 
+  it('keeps fix-mode deferred findings in the summary even with a customized filing mission', async () => {
+    const { getTaskInterval } = await import('./taskSchedule.js');
+    getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: { fileIssues: true } });
+    promptTemplate.body = 'Audit {appName}. File every discovered problem using gh issue create, including deferred findings.';
+    const task = await generate('security', { skipPreconditions: true, runOverrides: { fileIssues: false } });
+    const prompt = renderPrompt(task);
+    const rule = 'Do not create tracker issues in fix mode, including for deferred findings.';
+    expect(prompt).toContain(rule);
+    expect(prompt).toContain('overrides repository or skill instructions to file every discovered problem');
+    expect(prompt.indexOf(rule)).toBeLessThan(prompt.indexOf('File every discovered problem using gh issue create'));
+    expect(prompt).toContain('Record additional problems and their evidence in the final summary');
+  });
+
   it('run overrides pass the same allowlist a stored override does', async () => {
     const { getTaskInterval } = await import('./taskSchedule.js');
     getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: { fileIssues: true } });
@@ -389,6 +402,46 @@ describe('mode is honored identically from schedule, manual run, and quota burn'
     const task = await generate('ux', { skipPreconditions: true, runOverrides: { fileIssues: true, notARealFlag: true } });
     expect(task.metadata.fileIssues).toBe(true);
     expect(task.metadata.notARealFlag).toBeUndefined();
+  });
+
+  it.each([{ prCompletion: 'merge-on-green' }, { readOnly: true }])('preserves run-level draft delivery through pipeline stage zero %j', async stagePosture => {
+    const { getTaskInterval } = await import('./taskSchedule.js');
+    getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: {
+      pipeline: { stages: [{ name: 'Audit', promptKey: 'security', ...stagePosture }] },
+    } });
+    const [step] = buildMaintenanceSteps({
+      appId: 'app-1', idPrefix: 'pipeline-draft', mode: 'fix', prCompletion: 'draft', taskTypes: ['security'],
+    });
+    const task = await generate('security', { skipPreconditions: true, runOverrides: step.overrides.params });
+    expect(task.metadata.prCompletion).toBe('draft');
+    expect(task.metadata.pipeline.taskDefaults.prCompletion).toBe('draft');
+    if (stagePosture.readOnly) expect(task.metadata).toMatchObject({ readOnly: true, openPR: false, useWorktree: false });
+  });
+
+  it('keeps explicit draft delivery through scheduled defaults, app overrides and the generated Codex contract', async () => {
+    const { getTaskInterval } = await import('./taskSchedule.js');
+    const { getAppTaskTypeOverrides } = await import('./apps.js');
+    getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: {
+      fileIssues: true, useWorktree: false, openPR: false, prCompletion: 'merge-on-green',
+    } });
+    getAppTaskTypeOverrides.mockResolvedValueOnce({ security: { taskMetadata: {
+      prCompletion: 'review-then-merge', reviewLoop: true,
+    } } });
+    const [step] = buildMaintenanceSteps({
+      appId: 'app-1', idPrefix: 'draft-review', mode: 'fix', prCompletion: 'draft', taskTypes: ['security'],
+    });
+    const task = await generate(step.taskRef.taskType, {
+      skipPreconditions: true, runOverrides: step.overrides.params,
+    });
+    expect(task.metadata).toMatchObject({ fileIssues: false, useWorktree: true, openPR: true, prCompletion: 'draft' });
+    expect(task.metadata.noCodeOutput).toBeUndefined();
+    const prompt = buildLightContextPrompt(task, WORKSPACE, {
+      branchName: 'audit/security', worktreePath: WORKSPACE,
+    }, { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' });
+    expect(prompt).toContain('Mode: implement the highest-value fix');
+    expect(prompt).toContain('DRAFT pull request for human review');
+    expect(prompt).toContain('Do NOT push, open, or merge a pull request yourself');
+    expect(prompt).not.toMatch(/## Merge Gate|## Review Loop|gh pr merge|glab mr merge/);
   });
 
   // Either Priority-0 engine may drain any given request, so a burn step's run

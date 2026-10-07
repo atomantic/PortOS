@@ -235,6 +235,27 @@ describe('prepareVideoGenParams', () => {
       ]);
     });
 
+    it('keeps the scene canvas and prefers uploaded audio over the project song', async () => {
+      listVideoModels.mockReturnValue([{
+        id: 'ltx25_mlx_q8', name: 'LTX-2.5', runtime: 'ltx25',
+        supportedModes: ['a2v'], audioDurationDriven: true,
+        frameStride: 8, maxNumFrames: 1017,
+      }]);
+      const prepared = await prepare({
+        modelId: 'ltx25_mlx_q8', mode: 'a2v', numFrames: 121,
+        sourceImageFile: 'reference.png',
+        musicVideo: { projectId: 'project-example', sceneId: 'scene-example' },
+      }, { audioFile: upload('audioFile', 'override.wav') });
+
+      expect(prepared.effectiveNumFrames).toBe(121);
+      expect(prepared.uploadedTempPaths).toEqual([prepared.audioFilePath]);
+      expect(copyFileMock).toHaveBeenCalledWith('/tmp/multipart-audioFile-override.wav', prepared.audioFilePath);
+      expect(getMusicVideoProject).not.toHaveBeenCalled();
+      expect(probeVideoDuration).not.toHaveBeenCalled();
+      await prepared.cleanupStaged();
+      expect(unlinkedDurablePaths()).toEqual([posix(prepared.audioFilePath)]);
+    });
+
     it('short-circuits for grok without staging local-only inputs', async () => {
       const prepared = await prepare({ backend: 'grok', sourceImageFile: 'still.png' });
       expect(prepared.backend).toBe('grok');

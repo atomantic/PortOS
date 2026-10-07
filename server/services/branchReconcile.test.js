@@ -2551,3 +2551,10 @@ describe('shutdown interruption (#6992)', () => {
     expect(error).toHaveBeenCalledWith(expect.stringContaining('signal SIGSEGV'));
   });
 });
+
+it.each(['MERGEABLE', 'CONFLICTING'])('protects an open draft (%s) from reconcile and cleanup', mergeable => {
+  const openPr = { isDraft: true, mergeable };
+  expect(classifyBranch({ openPr, isMerged: false, hasUpstream: true })).toBe('WIP');
+  expect(classifyBranch({ openPr, isMerged: true, worktreeDirty: true, abandonedAgentWorktree: true })).toBe('WIP');
+  expect(filterActionable([{ branch: 'topic', state: 'IN_REVIEW', openPr }], {})).toEqual([]);
+});

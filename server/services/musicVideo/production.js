@@ -62,6 +62,8 @@ const PRODUCTION_STATUSES = Object.freeze([
   'running', 'stopped', 'limit-reached', 'blocked', 'needs-replan', 'completed', 'needs-human', 'failed', 'canceled',
 ]);
 const RESUMABLE = new Set(['running', 'stopped', 'limit-reached', 'blocked', 'needs-replan']);
+/** Statuses Resume accepts. */
+export const PRODUCTION_RESUMABLE_STATUSES = RESUMABLE;
 const LIVE_STEP = new Set(['reserved', 'queued']);
 const LIVE_JOB = new Set(['queued', 'running']);
 // A reserved step whose job never showed up in the queue after this long did
@@ -182,6 +184,16 @@ export function normalizeProductionPool(pool, { allowEmpty = false } = {}) {
   return out;
 }
 
+/** The pool's per-route prices (null when unknown); a dollar cap needs every route priced. */
+function boundPoolPricing(pool, pricing, spendCapUsd) {
+  const unpriced = spendCapUsd === null ? [] : pool.filter((r) => typeof pricing[routeKey(r)] !== 'number');
+  if (unpriced.length) {
+    throw productionError(409, 'PRODUCTION_COST_UNKNOWN',
+      `A dollar cap needs a known price for every route; ${unpriced.map((r) => `${r.kind} ${r.mode}${r.model ? ` (${r.model})` : ''}`).join(', ')} has none. Remove the cap (the generation limit still applies) or remove those routes.`);
+  }
+  return Object.fromEntries(pool.map((r) => [routeKey(r), typeof pricing[routeKey(r)] === 'number' ? pricing[routeKey(r)] : null]));
+}
+
 /** Is `route` literally a member of the run's allowlist? */
 export const poolHasRoute = (run, route) => !!route && run.pool.some((r) => routeKey(r) === routeKey(route));
 
@@ -217,18 +229,13 @@ export function startProductionOnProject(project, {
   const normalizedLimits = normalizeProductionLimits(limits);
   if (normalizedLimits.spendCapUsd !== null) {
     if (codeFirst && authoring.costUsd == null) throw productionError(409, 'PRODUCTION_COST_UNKNOWN', 'Code-authoring has no bounded dollar price. Choose a free/local authoring provider or remove the dollar cap; every authoring call still consumes the generation limit.');
-    const unpriced = normalizedPool.filter((r) => typeof pricing[routeKey(r)] !== 'number');
-    if (unpriced.length) {
-      throw productionError(409, 'PRODUCTION_COST_UNKNOWN',
-        `A dollar cap needs a known price for every route; ${unpriced.map((r) => `${r.kind} ${r.mode}${r.model ? ` (${r.model})` : ''}`).join(', ')} has none. Remove the cap (the generation limit still applies) or remove those routes.`);
-    }
   }
   const run = {
     id: `mvpr-${randomUUID()}`,
     status: 'running',
     directive: trimTo(typeof directive === 'string' ? directive : '', PRODUCTION_DIRECTIVE_MAX) || '',
     pool: normalizedPool,
-    pricing: Object.fromEntries(normalizedPool.map((r) => [routeKey(r), typeof pricing[routeKey(r)] === 'number' ? pricing[routeKey(r)] : null])),
+    pricing: boundPoolPricing(normalizedPool, pricing, normalizedLimits.spendCapUsd),
     limits: normalizedLimits,
     ...(codeFirst ? { authoring: { ...authoring }, documentCheckpoint: null, finalRender: null } : {}),
     reviewer: {
@@ -339,10 +346,12 @@ const productionRetryBasis = (project, sceneId, kind) => {
   });
 };
 
+// With no route given, only a refusal by a route still in the pool counts: a
+// resume that swapped that route out (#10473) lets the slot go to the new one.
 const terminalRefusal = (project, run, sceneId, kind, route = null) =>
   run.steps.find((step) => step.sceneId === sceneId && step.kind === kind && step.retryBlocked
     && step.retryBasis === productionRetryBasis(project, sceneId, kind)
-    && (!route || routeKey(step.route) === routeKey(route)));
+    && (route ? routeKey(step.route) === routeKey(route) : poolHasRoute(run, step.route)));
 
 /** All code-first work stays tied to the process and approved plan that reserved it. */
 export function assertProductionActive(project, runId, processId) {
@@ -468,7 +477,7 @@ export function nextProductionStep(project, run, { jobs = [], processId = null }
       const steps = slotSteps(run, scene.sceneId, stepKind);
       if (steps.some((s) => LIVE_STEP.has(s.status)) || liveSlotJob(jobs, project.id, scene.sceneId, stepKind)) { waiting = true; continue; }
       const refused = terminalRefusal(project, run, scene.sceneId, stepKind);
-      if (refused) return { type: 'halt', status: 'blocked', reason: `"${scene.label || scene.sceneId}" has a terminal ${stepKind} refusal (${refused.errorCode}). Change its inputs or start a new run with another supported route; Resume will not repeat it.` };
+      if (refused) return { type: 'halt', status: 'blocked', reason: `"${scene.label || scene.sceneId}" has a terminal ${stepKind} refusal (${refused.errorCode}). Change its inputs or resume with another supported route; Resume will not repeat it.` };
       // A paid failure is not evidence that the same operation will work next
       // time. Pause before another charge; explicit Resume permits a transient retry.
       const failed = steps.find((s) => s.status === 'failed' && !(run.retryAcknowledged || []).includes(s.key));
@@ -752,7 +761,7 @@ export function stopProductionOnProject(project, runId, now = new Date().toISOSt
  * budget. A run halted on a changed creative setup continues only when the
  * director accepts the new basis (`acceptBasis`), which re-snapshots it.
  */
-export function resumeProductionOnProject(project, runId, { limits, acceptBasis = false, processId } = {}, now = new Date().toISOString()) {
+export function resumeProductionOnProject(project, runId, { limits, acceptBasis = false, processId, pool = null, pricing = {} } = {}, now = new Date().toISOString()) {
   return mutateRun(project, runId, (run) => {
     if (!RESUMABLE.has(run.status)) throw productionError(409, 'PRODUCTION_CLOSED', `This production run is ${run.status} — start a new run instead`);
     if (normalizeMusicVideoProductionPolicy(project?.productionPolicy).strategy === 'code-first' && !run.authoring) throw productionError(409, 'PRODUCTION_AUTHORING_REQUIRED', 'Cancel this legacy run and start a code-first run with an authoring model');
@@ -770,9 +779,13 @@ export function resumeProductionOnProject(project, runId, { limits, acceptBasis 
     if (run.limits.spendCapUsd === null && nextLimits.spendCapUsd !== null) {
       throw productionError(422, 'VALIDATION_ERROR', 'A dollar cap can only be set at Start');
     }
+    // A replacement pool (a swapped model, #10473) is checked like Start; the
+    // caller has already proven every route eligible on this install.
+    const nextPool = pool ? normalizeProductionPool(pool, { allowEmpty: !!run.authoring }) : null;
     return {
       status: 'running',
       limits: nextLimits,
+      ...(nextPool ? { pool: nextPool, pricing: boundPoolPricing(nextPool, pricing, nextLimits.spendCapUsd) } : {}),
       processId,
       resumedAt: now,
       retryAcknowledged: run.steps.filter((step) => step.status === 'failed').map((step) => step.key),

@@ -1992,7 +1992,7 @@ describe('restorePostgres', () => {
 });
 
 describe('runBackup pg status propagation', () => {
-  let backup;
+  let _backup;
   beforeEach(async () => {
     vi.clearAllMocks();
     vi.resetModules();

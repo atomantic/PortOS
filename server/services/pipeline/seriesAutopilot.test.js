@@ -249,7 +249,7 @@ const { resolveNextStep, requiredScriptStages, scriptStructurallyReady, visualRe
 const VALID_SCRIPT = 'PAGE 1\nPANEL 1\nA scene.';
 
 const ready = (output = 'x') => ({ status: 'ready', output });
-const empty = () => ({ status: 'empty', output: '' });
+const _empty = () => ({ status: 'empty', output: '' });
 
 const waitFor = async (predicate, { timeoutMs = 2000, intervalMs = 5 } = {}) => {
   const start = Date.now();

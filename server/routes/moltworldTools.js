@@ -79,7 +79,7 @@ router.post('/build', asyncHandler(async (req, res) => {
 
   console.log(`🧱 POST /api/agents/tools/moltworld/build account=${data.accountId}`);
 
-  const { client, agent } = await getClientAndAgent(data.accountId, data.agentId);
+  const { client } = await getClientAndAgent(data.accountId, data.agentId);
   const result = await client.build({
     x: data.x,
     y: data.y,
@@ -110,7 +110,7 @@ router.post('/explore', asyncHandler(async (req, res) => {
 
   console.log(`🌍 POST /api/agents/tools/moltworld/explore agent=${data.agentId}`);
 
-  const { client, agent, account } = await getClientAndAgent(data.accountId, data.agentId);
+  const { client, account } = await getClientAndAgent(data.accountId, data.agentId);
 
   // Use provided coordinates or random position
   const x = data.x ?? Math.floor(Math.random() * 480) - 240;
