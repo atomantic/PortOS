@@ -33,6 +33,7 @@ export default function BackendChipStrip({
             onClick={() => onChange?.(id)}
             disabled={disabled}
             aria-busy={isLoading || undefined}
+            aria-pressed={isSelected}
             className={`inline-flex items-center gap-1 rounded-full transition-colors disabled:opacity-50 ${sizeCls} ${isSelected ? 'bg-port-accent text-white' : 'text-gray-400 hover:text-white hover:bg-port-border/40'}`}
             title={isLoading ? `Checking ${label}…` : `${titlePrefix} ${label}`}
           >
