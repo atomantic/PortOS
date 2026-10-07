@@ -229,16 +229,21 @@ function batchSectionIds(ids, promptFor, budget) {
   return batches;
 }
 
-function acceptedSections(text, ids) {
-  const parsed = extractCodeSections(text);
+// The requested section functions a response carries (possibly fewer than asked for).
+function returnedSections(text, ids) {
   const wanted = new Set(ids);
   const accepted = new Map();
-  for (const entry of parsed) {
+  for (const entry of extractCodeSections(text)) {
     if (!wanted.has(entry.id) || accepted.has(entry.id)) continue;
     accepted.set(entry.id, checkedFunction(entry.source));
   }
-  if (accepted.size !== wanted.size) {
-    throw fail(`The authoring model returned ${accepted.size} of ${wanted.size} required section functions`, 'MISSING_SECTION_SOURCE');
+  return accepted;
+}
+
+function acceptedSections(text, ids) {
+  const accepted = returnedSections(text, ids);
+  if (accepted.size !== new Set(ids).size) {
+    throw fail(`The authoring model returned ${accepted.size} of ${new Set(ids).size} required section functions`, 'MISSING_SECTION_SOURCE');
   }
   return accepted;
 }
@@ -329,7 +334,15 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
     console.log(`🎬 Music-video document prompt is ${fullPrompt.length} chars; authoring ${ids.length} sections in ${batches.length} batches on a local model`);
     for (const batch of batches) {
       run = await runBatch(withFeedback(promptFor(batch)));
-      for (const [id, source] of acceptedSections(run.text, batch)) updated.set(id, source);
+      const returned = returnedSections(run.text, batch);
+      for (const [id, source] of returned) updated.set(id, source);
+      // A local model often drops a section or breaks the JSON of a multi-section answer:
+      // ask once more for each missing section on its own before giving up.
+      for (const id of batch.filter((sectionId) => !returned.has(sectionId))) {
+        console.log(`🎬 Music-video document: re-authoring section ${id} on its own (missing from its batch)`);
+        run = await runBatch(withFeedback(promptFor([id])));
+        for (const [sectionId, source] of acceptedSections(run.text, [id])) updated.set(sectionId, source);
+      }
     }
   } else {
     run = await runBatch(fullPrompt);
