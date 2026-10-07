@@ -229,7 +229,7 @@ async function publishNow(app, deps) {
     lastPublishedBody.set(app.repoPath, next);
     return skipped(app, 'no-changes');
   }
-  return landOrReuse(app, git, base.defaultBranch, deps, next, snapshot.measurements.length);
+  return landOrReuse(app, git, base.defaultBranch, deps, next, snapshot.measurements.length, { snapshot });
 }
 
 async function migrateNow(app, deps) {
@@ -264,6 +264,21 @@ async function migrateNow(app, deps) {
   });
 }
 
+// Remote rows can be newer than our initial default-branch read: another
+// install may have queued a PR, or landed it while our push lost its lease.
+// Keep those contributions while retaining full timestamps for local evidence
+// (the compact file has already reduced timestamps to UTC days).
+function mergeRemoteRows(next, stored, deps, options) {
+  const candidate = classifyQualitySnapshot(next);
+  if (options.snapshot) {
+    return mergeWithPublished(options.snapshot, {
+      records: [...candidate.records, ...(stored.records || [])],
+    }, deps.now ?? Date.now());
+  }
+  // Explicit format migration does not expire historical rows.
+  return serializeQualitySnapshot(candidate.repository, [...candidate.records, ...(stored.records || [])]);
+}
+
 async function landOrReuse(app, git, defaultBranch, deps, next, count, options = {}) {
   const onBranch = await readGitSnapshot(
     git, app.repoPath, `origin/${QUALITY_SNAPSHOT_BRANCH}:${APP_QUALITY_SNAPSHOT_FILENAME}`,
@@ -276,6 +291,8 @@ async function landOrReuse(app, git, defaultBranch, deps, next, count, options =
   if (REWRITE_BLOCKED.has(onBranch.status) || REWRITE_BLOCKED.has(legacyOnBranch.status)) {
     return untouched(app, REWRITE_BLOCKED.has(onBranch.status) ? onBranch.status : legacyOnBranch.status);
   }
+  next = mergeRemoteRows(next, onBranch, deps, options);
+  if (!next) return skipped(app, 'invalid-evidence');
   if (sameSnapshot(onBranch, next) && legacyOnBranch.status === 'absent') {
     const reused = await reuseOpenSnapshotPr(app, git, defaultBranch, deps);
     if (reused.published) lastPublishedBody.set(app.repoPath, next);
@@ -298,6 +315,8 @@ async function landOrReuse(app, git, defaultBranch, deps, next, count, options =
       git, app.repoPath, `origin/${freshDefaultBranch}:${APP_QUALITY_SNAPSHOT_FILENAME}`,
     );
     if (REWRITE_BLOCKED.has(onDefault.status)) return untouched(app, onDefault.status);
+    next = mergeRemoteRows(next, onDefault, deps, options);
+    if (!next) return skipped(app, 'invalid-evidence');
     if (sameSnapshot(onDefault, next)) {
       lastPublishedBody.set(app.repoPath, next);
       return skipped(app, 'no-changes');
