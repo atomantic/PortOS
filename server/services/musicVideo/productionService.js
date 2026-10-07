@@ -370,6 +370,12 @@ async function authorDocument(projectId, runId, action) {
       beforeSubmit: async ({ provider, model }) => {
         if (provider.id !== run.authoring.providerId || model !== run.authoring.model) throw new ServerError('The authoring provider/model changed; no fallback is allowed', { status: 409, code: 'PRODUCTION_AUTHORING_UNAVAILABLE' });
         if (!isAuthoringOneShotProvider(provider)) throw new ServerError('This code authoring provider cannot run without tools', { status: 422, code: 'PRODUCTION_AUTHORING_UNAVAILABLE' });
+        // Local authoring submits once per section batch (#10515); one reserved step covers the
+        // whole document, so a later batch only rechecks that the step is still open.
+        if (key) {
+          verifyCurrent(await requireProject(projectId));
+          return;
+        }
         const costUsd = isFreeProvider(provider) ? 0 : null;
         const reserved = await mutateProjectRecord(projectId, (current) => {
           verifyCurrent(current);

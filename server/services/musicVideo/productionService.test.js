@@ -709,6 +709,20 @@ function failOwnedReview(atSec = 6) {
 }
 
 describe('code-first production execution (#9301)', () => {
+  it('reserves one author step for a document authored in several local batches', async () => {
+    seedCodeFirst(); const { author } = documentDoubles();
+    const single = author.getMockImplementation();
+    // Batched local authoring calls beforeSubmit once per batch before returning the document.
+    author.mockImplementation(async (id, input) => {
+      await input.beforeSubmit({ provider: authorProvider, model: AUTHORING.model });
+      return single(id, input);
+    });
+    await start({ pool: [], authoring: AUTHORING });
+    expect(author).toHaveBeenCalledOnce();
+    expect(theRun()).toMatchObject({ status: 'running', usage: { generations: 1 }, documentCheckpoint: { directory: current().composition.document.directory } });
+    expect(theRun().steps.filter((step) => step.kind === 'author')).toEqual([expect.objectContaining({ status: 'completed' })]);
+  });
+
   it('authors a code-only plan with no media routes/jobs and completes only after its reviewed final render', async () => {
     seedCodeFirst(); const { author, render } = documentDoubles();
     await start({ pool: [], authoring: AUTHORING });
