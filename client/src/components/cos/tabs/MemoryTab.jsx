@@ -83,12 +83,15 @@ export default function MemoryTab({ apps = [] }) {
   }, { namespace: 'cos', events: MEMORY_EVENTS, resourceKey: queryKey, enabled: view !== 'graph' });
 
   const queue = useSocketResource(async ({ signal }) => {
-    const [pending, stats] = await Promise.all([
-      api.getMemories({ status: 'pending_approval', limit: 50, appId }, { signal, silent: true }),
-      api.getMemoryStats({ signal, silent: true })
-    ]);
-    return { pending: pending.memories || [], stats };
+    const pending = await api.getMemories({ status: 'pending_approval', limit: 50, appId }, { signal, silent: true });
+    return pending.memories || [];
   }, { namespace: 'cos', events: QUEUE_EVENTS, resourceKey: sourceFilter });
+  // Counts and pending approvals fail independently: a stats outage must never
+  // discard a usable approval queue (or vice versa).
+  const counts = useSocketResource(
+    ({ signal }) => api.getMemoryStats({ signal, silent: true }),
+    { namespace: 'cos', events: QUEUE_EVENTS }
+  );
 
   const status = useSocketResource(async () => {
     const [embeddingStatus, backendStatus] = await Promise.all([
@@ -98,15 +101,16 @@ export default function MemoryTab({ apps = [] }) {
   }, { events: STATUS_EVENTS });
 
   const memories = list.data || [];
-  const pendingMemories = queue.data?.pending || [];
-  const stats = queue.data?.stats;
+  const pendingMemories = queue.data || [];
+  const stats = counts.data;
   const embeddingStatus = status.data?.embeddingStatus;
   const backendStatus = status.data?.backendStatus;
   const fetchData = useCallback(() => {
     list.refetch();
     queue.refetch();
+    counts.refetch();
     status.refetch();
-  }, [list.refetch, queue.refetch, status.refetch]);
+  }, [list.refetch, queue.refetch, counts.refetch, status.refetch]);
 
   const [actionInFlight, setActionInFlight] = useState(null);
   const actionRef = useRef(false);
@@ -123,23 +127,25 @@ export default function MemoryTab({ apps = [] }) {
     setActionInFlight(null);
     if (!result) return;
     toast.success(`Memory ${label}`);
-    queue.updateData(prev => prev ? {
+    queue.updateData(prev => prev?.filter(m => m.id !== id));
+    counts.updateData(prev => prev ? {
       ...prev,
-      pending: prev.pending.filter(m => m.id !== id),
-      stats: prev.stats ? {
-        ...prev.stats,
-        pendingApproval: Math.max(0, (prev.stats.pendingApproval || 0) - 1),
-        ...(updateStats ? updateStats(prev.stats) : {})
-      } : prev.stats
+      pendingApproval: Math.max(0, (prev.pendingApproval || 0) - 1),
+      ...(updateStats ? updateStats(prev) : {})
     } : prev);
     list.refetch();
     queue.refetch();
+    counts.refetch();
   };
 
   const handleApprove = (id) => handleMemoryAction(id, api.approveMemory, 'approved', (prev) => ({ active: (prev.active || 0) + 1 }));
   const handleReject = (id) => handleMemoryAction(id, api.rejectMemory, 'rejected', () => ({}));
 
-  const handleSearch = () => setSubmittedSearch(searchQuery.trim());
+  const handleSearch = () => {
+    const query = searchQuery.trim();
+    if (query === submittedSearch) list.refetch();
+    else setSubmittedSearch(query);
+  };
 
   const handleDelete = async (id) => {
     await api.deleteMemory(id);
@@ -147,6 +153,7 @@ export default function MemoryTab({ apps = [] }) {
     list.updateData(prev => prev?.filter(memory => memory.id !== id));
     list.refetch();
     queue.refetch();
+    counts.refetch();
   };
 
   const displayMemories = memories;
@@ -349,7 +356,7 @@ export default function MemoryTab({ apps = [] }) {
         </div>
       )}
 
-      {(list.error || queue.error || status.error) && (
+      {(list.error || queue.error || counts.error || status.error) && (
         <Banner tone="warning" title="Unable to refresh memories" actions={<button onClick={fetchData}>Retry</button>}>
           Existing rows are retained. Retry to reconcile the latest changes.
         </Banner>
@@ -513,7 +520,9 @@ export default function MemoryTab({ apps = [] }) {
           key={openMemory.id}
           memory={openMemory}
           apps={apps}
-          onSave={() => {
+          onSave={updated => {
+            list.updateData(prev => prev?.map(memory => memory.id === updated.id ? updated : memory));
+            queue.updateData(prev => prev?.map(memory => memory.id === updated.id ? updated : memory));
             closeMemory();
             fetchData();
           }}

@@ -215,3 +215,23 @@ describe('MemoryTab lifecycle reconciliation', () => {
     expect(screen.getByText('Unable to refresh memories')).toBeInTheDocument();
   });
 });
+
+describe('independent approval/count availability', () => {
+  it('keeps a usable approval queue when counts fail and retains counts when the queue fails', async () => {
+    api.getMemories.mockImplementation(async params => ({ memories: params.status ? [pending] : [activeMemory] }));
+    api.getMemoryStats.mockRejectedValue(new Error('Synthetic stats failure'));
+    renderTab();
+    expect(await screen.findByText('A synthetic pending memory')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve memory' })).toBeEnabled();
+    api.getMemoryStats.mockResolvedValue({ active: 1, pendingApproval: 1 });
+    await dispatch('connect');
+    expect(screen.getByText(/1 active memories/)).toBeInTheDocument();
+    api.getMemories.mockImplementation(params => params.status
+      ? Promise.reject(new Error('Synthetic pending failure'))
+      : Promise.resolve({ memories: [activeMemory] }));
+    api.getMemoryStats.mockResolvedValue({ active: 2, pendingApproval: 1 });
+    await dispatch('cos:memory:updated', { id: activeMemory.id });
+    expect(screen.getByText(/2 active memories/)).toBeInTheDocument();
+    expect(screen.getByText('A synthetic pending memory')).toBeInTheDocument();
+  });
+});
