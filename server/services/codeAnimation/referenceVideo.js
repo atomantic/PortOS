@@ -25,7 +25,7 @@ const MAX_CUTS = 120;
 const thumbUrl = (name) => `/data/video-thumbnails/${encodeURIComponent(name)}`;
 
 /** Parse `pts_time:` stamps from ffmpeg's showinfo log into rounded seconds. */
-export function parseCutTimes(stderr) {
+function parseCutTimes(stderr) {
   const times = [];
   for (const match of String(stderr || '').matchAll(/pts_time:([0-9.]+)/g)) {
     const t = Math.round(Number(match[1]) * 100) / 100;
