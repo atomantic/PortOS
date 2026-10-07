@@ -1277,7 +1277,8 @@ describe('resumeAgent — requeues the paused agent\'s own task', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
-  it('falls back to a fresh task when the task was deleted outright', async () => {
+  it.each([false, 'false'])('keeps the missing-task fallback for generic posture %s', async configClaimFlow => {
+    getAgentRecord.mockResolvedValue({ ...PAUSED_AGENT, metadata: { ...PAUSED_AGENT.metadata, configClaimFlow } });
     getTaskById.mockResolvedValue(null);
     await expect(resumeAgent('agent-paused-1')).resolves.toMatchObject({ mode: 'new-task' });
   });

@@ -1,3 +1,5 @@
+import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
+import { isFalsyMeta, isTruthyMeta } from '../lib/metadataFlags.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
  * Agent Management
@@ -390,10 +392,24 @@ export async function resumeAgent(agentId, overrides = {}) {
   }
 
   const taskId = agent.taskId || agent.metadata?.taskId || null;
-  const task = taskId ? await getTaskById(taskId).catch(() => null) : null;
+  let task = taskId ? await getTaskById(taskId).catch(() => null) : null;
   const taskType = task?.taskType || agent.metadata?.taskType || 'user';
 
   const mode = classifyResume(task, agentId);
+  if (mode === 'requeued' || mode === 'new-task') {
+    const priorClaim = isTruthyMeta(agent.metadata?.configClaimFlow) || hasClaimFlowContract({ ...agent, taskType: agent.metadata?.taskType });
+    // Missing task metadata cannot be reconstructed from caller prose. Only a
+    // positively generic registration may use the historical description fallback.
+    if ((!task && (priorClaim || !isFalsyMeta(agent.metadata?.configClaimFlow)))
+      || (task && priorClaim && !hasClaimFlowContract(task))) {
+      throw new ServerError('Resume blocked: the original task configuration is unavailable, so claim authority cannot be verified. Restore the original task or start a new task from its configured workflow.', {
+        status: 409, code: 'AGENT_RESUME_CONTRACT_MISSING'
+      });
+    }
+    if (hasClaimFlowContract(task)) {
+      task = { ...task, metadata: { ...task.metadata, claimFlow: true } };
+    }
+  }
   let resumed;
   switch (mode) {
     case 'requeued':
@@ -620,7 +636,10 @@ async function requeuePausedTask({ task, taskType, overrides }) {
   // `pending` is non-terminal, so the pointer that write lands survives it
   // (updateTask only strips a resume pointer on a terminal status).
   const result = await reviveBlockedTask(task.id, {
-    metadata: resumeOverrideMetadata(overrides, task.metadata)
+    metadata: {
+      ...resumeOverrideMetadata(overrides, task.metadata),
+      ...(hasClaimFlowContract(task) ? { claimFlow: true } : {})
+    }
   }, taskType);
   if (result?.error) {
     throw new ServerError(`Failed to requeue task ${task.id}: ${result.error}`, {
