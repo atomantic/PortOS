@@ -105,14 +105,14 @@ export default function AppQualityRunner({ app, children }) {
     {mode === 'fix' && <label htmlFor="quality-publication" className="block text-sm">Pull requests
       <select id="quality-publication" className="block w-full bg-port-bg border border-port-border rounded p-2" value={prCompletion} disabled={busy} onChange={event => setPrCompletion(event.target.value)}>
         <option value="draft">Drafts for review — never merge</option>
-        <option value="">Use saved completion policy</option>
+        <option value="inherit">Use saved completion policy</option>
       </select>
     </label>}
     <ProviderModelSelector providers={picker.providers} selectedProviderId={picker.selectedProviderId} selectedModel={picker.selectedModel}
       availableModels={picker.availableModels} onProviderChange={value => { picker.setSelectedProviderId(value); setEffort(''); }}
       onModelChange={picker.setSelectedModel} effort={effort} onEffortChange={setEffort} loading={picker.loading} disabled={busy}
       emptyProviderOption="Select a subscription provider" emptyModelOption="Select a model" includeDefaultModel highlightToolUse />
-    <p className="text-xs text-gray-400">Runs sequentially; launch another batch to run in parallel. {mode === 'fix' ? (prCompletion ? 'Fixes stay in pull requests for your review; automatic quality snapshot publication is skipped.' : 'Fixes and quality snapshots may merge automatically under the saved policy.') : 'Findings become issues; no fixes.'}</p>
+    <p className="text-xs text-gray-400">Runs sequentially; launch another batch to run in parallel. {mode === 'fix' ? (prCompletion !== 'inherit' ? 'Fixes stay in pull requests for your review; automatic quality snapshot publication is skipped.' : 'Fixes and quality snapshots may merge automatically under the saved policy.') : 'Findings become issues; no fixes.'}</p>
     <details className="text-xs"><summary className="cursor-pointer text-port-accent">Selected checks ({taskTypes.length})</summary><p className="mt-1">{selectedCategories.map(category => category.label).join(', ') || emptySelectionMessage}</p></details>
     <button type="button" onClick={start} disabled={busy || picker.loading || !picker.selectedProviderId || !picker.selectedModel || !taskTypes.length || app.quality?.unavailable}
       className="px-3 py-2 rounded bg-port-accent text-port-bg text-sm font-medium disabled:opacity-50">{taskTypes.length === 1 ? 'Run now' : `Run ${taskTypes.length} checks now`}</button>

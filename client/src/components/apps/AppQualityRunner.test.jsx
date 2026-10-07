@@ -256,8 +256,8 @@ it('defaults audit fixes to draft review and lets the user explicitly inherit sa
   expect(screen.getByLabelText('Pull requests')).toHaveValue('draft');
   fireEvent.click(await findEnabledByRole('button', { name: 'Run 2 checks now' }));
   await waitFor(() => expect(startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 'fix', prCompletion: 'draft', claimBetweenAudits: false }), { silent: true }));
-  fireEvent.change(await findEnabledByLabelText('Pull requests'), { target: { value: '' } });
+  fireEvent.change(await findEnabledByLabelText('Pull requests'), { target: { value: 'inherit' } });
   fireEvent.click(await findEnabledByRole('button', { name: 'Run 2 checks now' }));
   await waitFor(() => expect(startMaintenanceRun).toHaveBeenCalledTimes(2));
-  expect(startMaintenanceRun.mock.lastCall[0]).not.toHaveProperty('prCompletion');
+  expect(startMaintenanceRun.mock.lastCall[0].prCompletion).toBe('inherit');
 });

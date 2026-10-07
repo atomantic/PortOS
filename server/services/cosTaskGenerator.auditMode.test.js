@@ -391,6 +391,20 @@ describe('mode is honored identically from schedule, manual run, and quota burn'
     expect(task.metadata.notARealFlag).toBeUndefined();
   });
 
+  it.each([{ prCompletion: 'merge-on-green' }, { readOnly: true }])('preserves run-level draft delivery through pipeline stage zero %j', async stagePosture => {
+    const { getTaskInterval } = await import('./taskSchedule.js');
+    getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: {
+      pipeline: { stages: [{ name: 'Audit', promptKey: 'security', ...stagePosture }] },
+    } });
+    const [step] = buildMaintenanceSteps({
+      appId: 'app-1', idPrefix: 'pipeline-draft', mode: 'fix', prCompletion: 'draft', taskTypes: ['security'],
+    });
+    const task = await generate('security', { skipPreconditions: true, runOverrides: step.overrides.params });
+    expect(task.metadata.prCompletion).toBe('draft');
+    expect(task.metadata.pipeline.taskDefaults.prCompletion).toBe('draft');
+    if (stagePosture.readOnly) expect(task.metadata).toMatchObject({ readOnly: true, openPR: false, useWorktree: false });
+  });
+
   it('keeps explicit draft delivery through scheduled defaults, app overrides and the generated Codex contract', async () => {
     const { getTaskInterval } = await import('./taskSchedule.js');
     const { getAppTaskTypeOverrides } = await import('./apps.js');

@@ -45,7 +45,7 @@ const maintenanceRunStartSchema = z.object({
   // so each runs even where the repository scan says it cannot apply.
   explicitCheck: z.boolean().optional(),
   mode: z.enum(['file-issues', 'fix']).optional(),
-  prCompletion: z.enum(PR_COMPLETION_VALUES).optional(),
+  prCompletion: z.enum([...PR_COMPLETION_VALUES, 'inherit']).optional(),
   claimBetweenAudits: z.boolean().optional(),
   claimHandler: z.object({
     providerId: z.string().trim().min(1),

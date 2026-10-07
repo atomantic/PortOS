@@ -197,6 +197,10 @@ export async function startMaintenanceRun({ appId, providerId, model = null, eff
   }
   if (!taskTypes) await assertNoRunningRun(appId);
 
+  // Older clients may omit this field. An explicit quality fix must fail safe
+  // to drafts; inheriting a potentially merging policy requires a named choice.
+  prCompletion = prCompletion === 'inherit' ? null : prCompletion ?? (taskTypes && mode === 'fix' ? 'draft' : null);
+
   const id = `maint-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const now = new Date().toISOString();
   const pins = { providerId, model: model || null, effort: effort || null };
