@@ -55537,7 +55537,7 @@
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "Anthropic published list price for Claude Sonnet 5.5 ($2/MTok base input, $10/MTok output). Cache writes ($2.50/MTok 5m, $4/MTok 1h) and cache reads ($0.10/MTok, 0.05x base, halved from $0.20 on 2026-10-07) are separate token classes not represented by this schema. Reasoning tokens are not separately priced by Anthropic; reasoningPerMillion stays null rather than assuming output-rate billing. No quality, latency, throughput or benchmark task cost is published on this page."
+      "notes": "Anthropic published list price for Claude Sonnet 5.5 ($2/MTok base input, $10/MTok output). Cache writes ($2.50/MTok 5m, $4/MTok 1h) and cache reads ($0.20/MTok, 0.1x base) are separate token classes not represented by this schema. Reasoning tokens are not separately priced by Anthropic; reasoningPerMillion stays null rather than assuming output-rate billing. No quality, latency, throughput or benchmark task cost is published on this page."
     },
     {
       "id": "anthropic-claude-sonnet-5.5-pricing-2026-09-28-batch",
@@ -55570,6 +55570,38 @@
       "tokensPerSecond": null,
       "quota": null,
       "notes": "Anthropic published Message Batches pricing for Claude Sonnet 5.5 ($1/MTok base input, $5/MTok output). 24h turnaround window."
+    },
+    {
+      "id": "anthropic-claude-sonnet-5.5-pricing-2026-10-07-standard",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "unspecified",
+      "configuration": "Claude API (first-party) standard endpoint; base input / output tokens",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-10-07)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894052041490537",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Publisher list price, USD per million uncached input tokens, read from the pricing table in Anthropic's Haiku 5.5 launch thread."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://x.com/claudeai/status/2107894052041490537",
+          "retrievedAt": "2026-10-07T18:01:00Z",
+          "methodology": "Publisher list price, USD per million output tokens, read from the pricing table in Anthropic's Haiku 5.5 launch thread."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Anthropic halved Claude Sonnet 5.5 cache reads to $0.10/MTok (0.05x base) on 2026-10-07 (https://x.com/claudeai/status/2107894060229034197); the launch pricing table lists $2/MTok input, $10/MTok output, $2.50/MTok cache writes and $0.10/MTok cache reads. Base input and output are unchanged from the 2026-09-28 snapshot. Cache tiers are separate token classes not represented by this schema."
     },
     {
       "id": "anthropic-claude-haiku-5.5-pricing-2026-10-07-standard",

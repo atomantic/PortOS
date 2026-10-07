@@ -232,7 +232,8 @@ const CACHE_MULTIPLIER_RULES = [
   { test: /^claude-fable-5-1/, read: 0.025, write: 1.25 },
   // Opus 5.5 cache reads are $0.20/MTok against a $4 input rate.
   { test: /^claude-opus-5-5/, read: 0.05, write: 1.25 },
-  // Sonnet 5.5 cache reads were halved to $0.10/MTok (2026-10-07) against a $2 input rate.
+  // Sonnet 5.5 cache reads were halved to $0.10/MTok (2026-10-07) against a $2 input rate:
+  // https://x.com/claudeai/status/2107894060229034197
   { test: /^claude-sonnet-5-5/, read: 0.05, write: 1.25 },
 ];
 
