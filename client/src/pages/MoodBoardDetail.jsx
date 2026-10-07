@@ -147,15 +147,21 @@ function MoodBoardEditor({ id }) {
   // A note render was queued, finished or failed — possibly started by
   // autopilot or another tab — so swap in the board's current items.
   useEffect(() => {
+    // A refetch still in flight when this effect is disposed must not write
+    // its board's items into whatever board the page shows next.
+    let active = true;
     const onRender = async (evt) => {
       if (evt?.boardId !== id) return;
       const fresh = await getMoodBoard(id, { silent: true }).catch(() => null);
-      if (!mountedRef.current || !fresh) return;
+      if (!active || !mountedRef.current || !fresh) return;
       setBoard((prev) => (prev ? { ...prev, items: fresh.items, updatedAt: fresh.updatedAt } : fresh));
       if (evt.status === 'failed' && evt.error && renderRequestRef.current !== evt.itemId) toast.error(`Render failed: ${evt.error}`);
     };
     socket.on('mood-board:item-render', onRender);
-    return () => socket.off('mood-board:item-render', onRender);
+    return () => {
+      active = false;
+      socket.off('mood-board:item-render', onRender);
+    };
   }, [id, mountedRef]);
 
   const metaDirty = board && (name.trim() !== (board.name || '') || description !== (board.description || ''));
