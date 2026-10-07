@@ -267,6 +267,10 @@ describe('extractCodeSections', () => {
     const unclosed = `{"sections":[{"id":"beat-3","source":${JSON.stringify(fn)}]}`;
     expect(extractCodeSections(`\`\`\`json\n${unclosed}\n\`\`\``)).toEqual([{ id: 'beat-3', source: fn }]);
   });
+  it('recovers an unclosed last section followed by stray characters', () => {
+    const both = `{"sections":[{"id":"beat-3","source":${JSON.stringify(fn)}]}"}`;
+    expect(extractCodeSections(`\`\`\`json\n${both}\n\`\`\``)).toEqual([{ id: 'beat-3', source: fn }]);
+  });
   it('returns nothing for text with no usable JSON', () => {
     expect(extractCodeSections('no json here')).toEqual([]);
     expect(extractCodeSections('```json\n{"sections": [ {"id": \n```')).toEqual([]);
