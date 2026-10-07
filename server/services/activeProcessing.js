@@ -4,7 +4,7 @@ import { runningAgentsByTaskId, unclaimedTaskIds } from '../lib/cosSpawnWindow.j
 import { listJobs, getRunningJob } from './mediaJobQueue/index.js';
 import { sanitizeJob } from './mediaJobQueue/sanitizeJob.js';
 import { listGeneratingModelSummaries } from './imageTo3d/models.js';
-import { getLoadedModels } from './ollamaManager.js';
+import { getLoadedModels, getLastLoadedModelsError } from './ollamaManager.js';
 import { listActiveAppOperations } from './appOperations.js';
 import { readPersistentMindStateForSafetyCheck } from './cosState.js';
 import { isUpdateInProgress } from './updateChecker.js';
@@ -18,6 +18,26 @@ import * as cos from './cos.js';
 // same way for the same reason — see "Import scoping" in server/AGENTS.md.
 const importRunner = () => import('./runner.js');
 const importBackup = () => import('./backup.js');
+
+// Ollama has no lifecycle callback for external loads/evictions. Shared cache
+// also coalesces simultaneous telemetry and initial inspector reads.
+let ollamaSample = null;
+let ollamaSampleAt = 0;
+let ollamaRead = null;
+async function getOllamaTelemetry() {
+  if (ollamaSample && Date.now() - ollamaSampleAt < 3000) return ollamaSample;
+  if (!ollamaRead) {
+    ollamaRead = getLoadedModels({ timeout: 1500 }).then((models) => ({
+      trusted: !getLastLoadedModelsError(),
+      models: models.slice(0, 50),
+    })).catch(() => ({ trusted: false, models: [] })).then((sample) => {
+      ollamaSample = sample;
+      ollamaSampleAt = Date.now();
+      return sample;
+    }).finally(() => { ollamaRead = null; });
+  }
+  return ollamaRead;
+}
 
 const LIVE_STATUSES = new Set(['queued', 'running']);
 
@@ -103,11 +123,11 @@ function agentCounts(agents, cosStatus, pendingTaskIds) {
  *
  * Split out because two callers — `GET /api/update/auto` and the auto-update
  * tick — want only `activity`, and the full snapshot also shells out to
- * nvidia-smi and makes an HTTP request to Ollama, whose latency is unbounded
- * when the daemon is wedged. Neither feeds the verdict.
+ * nvidia-smi and reads Ollama residency. Neither feeds the verdict.
+ * The HTTP inspector opts into cached residency; safety checks omit it.
  */
-export async function getSystemActivity() {
-  const [jobs, models, pendingTaskIds, agents, mindState, activeRunCount, backupInProgress] = await Promise.all([
+export async function getSystemActivity({ includeOllama = false } = {}) {
+  const [jobs, models, pendingTaskIds, agents, mindState, llmState, backupInProgress, ollama] = await Promise.all([
     Promise.resolve(listJobs()).then((items) => items.filter((job) => LIVE_STATUSES.has(job.status))),
     // `null` = the read FAILED, distinct from `[]` = read fine, nothing
     // building. Both of these degrade to the value that unlocks a restart, so
@@ -121,12 +141,16 @@ export async function getSystemActivity() {
     // than an empty mind, so an unreadable state cannot read as an idle one.
     readPersistentMindStateForSafetyCheck().catch(() => ({ trusted: false, persistentMind: null })),
     // Same contract again: a failed read degrades to `null`, not 0.
-    importRunner().then((m) => m.getActiveRunCount()).catch(() => null),
+    importRunner().then(async (m) => {
+      const [count, runs] = await Promise.all([m.getActiveRunCount(), m.getActiveRunSummaries().catch(() => null)]);
+      return { ...llmRunState(count), runs };
+    }).catch(() => ({ trusted: false, active: 0, runs: null })),
     // The only way this rejects is the lazy import itself failing (the module
     // is otherwise a synchronous, no-I/O flag read) — an anomaly rare enough
     // that it is itself reason to refuse rather than read as "no backup
     // running", the same fail-closed direction every other slice here takes.
     importBackup().then((m) => m.isBackupInProgress()).catch(() => true),
+    includeOllama ? getOllamaTelemetry() : null,
   ]);
   const cosStatus = agents === null ? await cos.getStatus().catch(() => null) : null;
   const slices = {
@@ -140,7 +164,7 @@ export async function getSystemActivity() {
     // process — activity in exactly the sense the updater must not restart
     // through, and distinct from a CoS agent (its own slice above, spawned
     // through a different path entirely).
-    llm: llmRunState(activeRunCount),
+    llm: llmState,
     // An App Management update/standardize holds a checkout and restarts PM2
     // processes — activity in exactly the sense that matters to a caller
     // deciding whether it may restart the install.
@@ -149,7 +173,7 @@ export async function getSystemActivity() {
     // No trusted contract needed: an in-process flag with no I/O once loaded.
     backup: { inProgress: backupInProgress },
   };
-  return { ...slices, activity: summarizeSystemActivity(slices) };
+  return { ...slices, ...(includeOllama ? { ollama } : {}), activity: summarizeSystemActivity(slices) };
 }
 
 /**
@@ -163,6 +187,7 @@ export async function getGpuTelemetry() {
   const running = getRunningJob();
   return {
     updatedAt: new Date().toISOString(),
+    ollama: await getOllamaTelemetry(),
     gpu: {
       status: capability.status,
       laneBusy: Boolean(running),
@@ -178,15 +203,14 @@ export async function getGpuTelemetry() {
 }
 
 export async function getActiveProcessing() {
-  const [telemetry, activity, loadedModels] = await Promise.all([
+  const [telemetry, activity] = await Promise.all([
     getGpuTelemetry(),
     getSystemActivity(),
-    getLoadedModels().catch(() => []),
   ]);
   return {
     ...activity,
     updatedAt: telemetry.updatedAt,
     gpu: telemetry.gpu,
-    extras: { ...activity.extras, ollama: loadedModels },
+    extras: { ...activity.extras, ollama: telemetry.ollama.models },
   };
 }
