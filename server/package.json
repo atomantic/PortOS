@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "node --watch start.js",
     "start": "node start.js",
+    "lint": "node ../client/node_modules/@biomejs/biome/bin/biome lint --max-diagnostics=20 .",
     "test": "vitest run",
     "test:fast": "vitest run",
     "test:watch": "vitest",

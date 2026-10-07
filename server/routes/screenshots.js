@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { asyncHandler } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, screenshotUploadBodySchema } from '../lib/validation.js';
 import { PATHS, sanitizeFilename, isPathInsideDir, saveImageUpload } from '../lib/fileUtils.js';
 import { MAX_SCREENSHOT_BYTES } from '../lib/uploadLimits.js';

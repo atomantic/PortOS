@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { BIOME_BIN, LINT_MODES, buildLintArgs, selectClientFiles } from './run-ci-lint.js';
+import { BIOME_BIN, LINT_MODES, SERVER_LINT_ARGS, buildLintArgs, selectClientFiles, touchesServer } from './run-ci-lint.js';
 
 describe('CI client lint runner', () => {
   it('lints the whole client src tree in full mode', () => {
@@ -52,5 +52,14 @@ describe('CI client lint runner', () => {
       expect(args).not.toContain('--ext');
       expect(args[0]).toBe('lint');
     }
+  });
+
+  // The server has no other static check: a removed declaration (the `d is not
+  // defined` storyboard crash) only fails when a test happens to run that line.
+  it('lints the server tree and only selects the job for server code or its config', () => {
+    expect(SERVER_LINT_ARGS).not.toContain('--error-on-warnings');
+    expect(touchesServer(['server/services/a.js', 'docs/x.md'])).toBe(true);
+    expect(touchesServer(['server/biome.jsonc'])).toBe(true);
+    expect(touchesServer(['server/node_modules/x/index.js', 'client/src/a.js', 'server/README.md'])).toBe(false);
   });
 });
