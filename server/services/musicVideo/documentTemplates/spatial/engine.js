@@ -8,13 +8,16 @@ const text = overlay.getContext('2d');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(1);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// three r186 removed PCFSoftShadowMap; PCF plus light.shadow.radius is the soft path.
+renderer.shadowMap.type = THREE.PCFShadowMap;
 let width = mv.render.width;
 let height = mv.render.height;
 const ready = document.fonts.load('40px "MV Mono"');
+const post = createPost(THREE, renderer);
 function layout(size) {
   width = size.width; height = size.height;
   renderer.setSize(width, height, false);
+  post.resize(width, height);
   overlay.width = width; overlay.height = height;
 }
 layout({ width, height });
@@ -59,15 +62,16 @@ globalThis.portosComposition = {
     const scene = new THREE.Scene(); scene.background = new THREE.Color('#080b12');
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 200);
     camera.position.set(0, 2, 9); camera.lookAt(0, 1, 0);
+    const lens = { ...LENS_DEFAULTS };
     text.reset();
     try {
       text.save();
-      fn({ THREE, scene, camera, text }, { t, localT: t - section.startSec, frame: Math.floor(t * mv.render.fps),
+      fn({ THREE, scene, camera, text, lens }, { t, localT: t - section.startSec, frame: Math.floor(t * mv.render.fps),
         width, height, song: authored.song, section, palette: authored.palette,
         safe: { x: width * 0.1, y: height * 0.1, w: width * 0.8, h: height * 0.8 },
         events: state.activeEvents || [], reactiveGain: state.reactiveGain ?? 1 });
       text.restore();
-      renderer.render(scene, camera);
+      post.render(scene, camera, lens, Math.floor(t * mv.render.fps));
       drawEvents(state);
       drawWords(t);
     } finally {
@@ -86,4 +90,118 @@ globalThis.portosComposition = {
   },
 };
 
+}
+
+// A section may set any of these on ctx.lens for its frame. Defaults keep a
+// world sharp with a light finish; only HDR values above the threshold bloom.
+// focus is a camera distance or a THREE.Vector3; aperture/maxBlur are pixels
+// at 1080p, so a 0 aperture disables depth of field.
+const LENS_DEFAULTS = Object.freeze({ focus: 10, aperture: 0, maxBlur: 16, bloom: 0.3, bloomThreshold: 1, exposure: 1, vignette: 0.3, grain: 0.02 });
+
+// Persistent cinematic post stack: the scene renders once into an HDR target
+// with depth, then a depth-aware gather DOF, a thresholded quarter-res bloom
+// and a composite that tone maps (Khronos PBR Neutral), encodes sRGB and adds
+// a vignette and frame-keyed grain. Every pass runs every frame so GPU
+// resources are allocated once and seeks stay deterministic.
+function createPost(THREE, renderer) {
+  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
+  const stage = new THREE.Scene(); stage.add(quad);
+  const vertexShader = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0., 1.); }';
+  const pass = (fragmentShader, uniforms) => new THREE.ShaderMaterial({ vertexShader, fragmentShader, uniforms, depthTest: false, depthWrite: false, toneMapped: false });
+  const dof = pass(/* glsl */`
+    #include <packing>
+    varying vec2 vUv; uniform sampler2D tColor, tDepth; uniform vec2 uRes;
+    uniform float uNear, uFar, uFocus, uAperture, uMaxBlur;
+    float linZ(vec2 uv){ return -perspectiveDepthToViewZ(texture2D(tDepth, uv).x, uNear, uFar); }
+    float coc(float z){ return min(uAperture * abs(z - uFocus) / max(z, 1e-3), uMaxBlur); }
+    void main(){
+      vec3 acc = texture2D(tColor, vUv).rgb;
+      if (uAperture <= 0. || uMaxBlur < .5) { gl_FragColor = vec4(acc, 1.); return; }
+      float cz = linZ(vUv), cc = coc(cz), wsum = 1.;
+      for (int i = 0; i < 56; i++) {
+        float fi = float(i) + .5, r = sqrt(fi / 56.) * uMaxBlur, a = fi * 2.39996323;
+        vec2 uv = vUv + vec2(cos(a), sin(a)) * r / uRes;
+        float sz = linZ(uv), sc = coc(sz);
+        if (sz > cz) sc = min(sc, cc * 1.5 + .5); // a sharp foreground never smears onto blurred background
+        float w = smoothstep(r - 1.5, r + .5, sc);
+        acc += texture2D(tColor, uv).rgb * w; wsum += w;
+      }
+      gl_FragColor = vec4(acc / wsum, 1.);
+    }`, { tColor: { value: null }, tDepth: { value: null }, uRes: { value: new THREE.Vector2() }, uNear: { value: 0.1 }, uFar: { value: 200 }, uFocus: { value: 10 }, uAperture: { value: 0 }, uMaxBlur: { value: 0 } });
+  const bright = pass(/* glsl */`
+    varying vec2 vUv; uniform sampler2D tColor; uniform vec2 uTexel; uniform float uThreshold;
+    void main(){
+      vec3 c = vec3(0.);
+      for (int x = -1; x <= 1; x++) for (int y = -1; y <= 1; y++) c += texture2D(tColor, vUv + vec2(x, y) * uTexel).rgb;
+      c /= 9.;
+      float l = max(c.r, max(c.g, c.b));
+      gl_FragColor = vec4(c * smoothstep(uThreshold, uThreshold * 1.25 + .05, l), 1.);
+    }`, { tColor: { value: null }, uTexel: { value: new THREE.Vector2() }, uThreshold: { value: 1 } });
+  const blur = pass(/* glsl */`
+    varying vec2 vUv; uniform sampler2D tColor; uniform vec2 uStep;
+    void main(){
+      vec3 c = texture2D(tColor, vUv).rgb * .2270270270;
+      c += (texture2D(tColor, vUv + uStep * 1.3846153846).rgb + texture2D(tColor, vUv - uStep * 1.3846153846).rgb) * .3162162162;
+      c += (texture2D(tColor, vUv + uStep * 3.2307692308).rgb + texture2D(tColor, vUv - uStep * 3.2307692308).rgb) * .0702702703;
+      gl_FragColor = vec4(c, 1.);
+    }`, { tColor: { value: null }, uStep: { value: new THREE.Vector2() } });
+  const composite = pass(/* glsl */`
+    varying vec2 vUv; uniform sampler2D tColor, tBloom; uniform vec2 uRes;
+    uniform float uBloom, uExposure, uVignette, uGrain, uFrame;
+    vec3 neutral(vec3 c){
+      float x = min(c.r, min(c.g, c.b)), off = x < .08 ? x - 6.25 * x * x : .04; c -= off;
+      float p = max(c.r, max(c.g, c.b)); if (p < .76) return c;
+      float np = 1. - .0576 / (p - .52); c *= np / p;
+      return mix(c, vec3(np), 1. - 1. / (.15 * (p - np) + 1.));
+    }
+    vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1. / 2.4)) - .055, step(.0031308, c)); }
+    float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+    void main(){
+      vec3 c = (texture2D(tColor, vUv).rgb + texture2D(tBloom, vUv).rgb * uBloom) * uExposure;
+      c = srgb(clamp(neutral(max(c, 0.)), 0., 1.));
+      vec2 q = vUv - .5; c *= 1. - dot(q, q) * uVignette * 1.8;
+      c += (hash(vUv * uRes + uFrame * 7.13) - .5) * uGrain;
+      gl_FragColor = vec4(clamp(c, 0., 1.), 1.);
+    }`, { tColor: { value: null }, tBloom: { value: null }, uRes: { value: new THREE.Vector2() }, uBloom: { value: 0 }, uExposure: { value: 1 }, uVignette: { value: 0 }, uGrain: { value: 0 }, uFrame: { value: 0 } });
+  let targets = [];
+  let hdr, colour, small, smallB, w = 1, h = 1;
+  const draw = (material, target) => { quad.material = material; renderer.setRenderTarget(target); renderer.render(stage, camera); };
+  return {
+    resize(width, height) {
+      for (const target of targets) { target.depthTexture?.dispose(); target.dispose(); }
+      w = width; h = height;
+      const linear = { type: THREE.HalfFloatType, depthBuffer: false };
+      hdr = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, samples: 4, depthTexture: new THREE.DepthTexture(w, h, THREE.FloatType) });
+      colour = new THREE.WebGLRenderTarget(w, h, linear);
+      small = new THREE.WebGLRenderTarget(Math.ceil(w / 4), Math.ceil(h / 4), linear);
+      smallB = new THREE.WebGLRenderTarget(Math.ceil(w / 4), Math.ceil(h / 4), linear);
+      targets = [hdr, colour, small, smallB];
+    },
+    render(world, view, lens, frame) {
+      const px = h / 1080;
+      const num = (value, fallback, lo, hi) => Number.isFinite(value) ? Math.min(hi, Math.max(lo, value)) : fallback;
+      const focus = lens.focus?.isVector3 ? lens.focus.distanceTo(view.position) : num(lens.focus, LENS_DEFAULTS.focus, 0.01, 1e5);
+      renderer.setRenderTarget(hdr); renderer.clear(); renderer.render(world, view);
+      dof.uniforms.tColor.value = hdr.texture; dof.uniforms.tDepth.value = hdr.depthTexture;
+      dof.uniforms.uRes.value.set(w, h);
+      dof.uniforms.uNear.value = view.near; dof.uniforms.uFar.value = view.far; dof.uniforms.uFocus.value = focus;
+      dof.uniforms.uAperture.value = num(lens.aperture, 0, 0, 64) * px;
+      dof.uniforms.uMaxBlur.value = num(lens.maxBlur, LENS_DEFAULTS.maxBlur, 0, 48) * px;
+      draw(dof, colour);
+      bright.uniforms.tColor.value = colour.texture; bright.uniforms.uTexel.value.set(2 / w, 2 / h);
+      bright.uniforms.uThreshold.value = num(lens.bloomThreshold, LENS_DEFAULTS.bloomThreshold, 0, 16);
+      draw(bright, small);
+      for (let i = 0; i < 2; i++) {
+        blur.uniforms.tColor.value = small.texture; blur.uniforms.uStep.value.set((i + 1) / small.width, 0); draw(blur, smallB);
+        blur.uniforms.tColor.value = smallB.texture; blur.uniforms.uStep.value.set(0, (i + 1) / small.height); draw(blur, small);
+      }
+      const u = composite.uniforms;
+      u.tColor.value = colour.texture; u.tBloom.value = small.texture; u.uRes.value.set(w, h);
+      u.uBloom.value = num(lens.bloom, LENS_DEFAULTS.bloom, 0, 4); u.uExposure.value = num(lens.exposure, 1, 0, 8);
+      u.uVignette.value = num(lens.vignette, LENS_DEFAULTS.vignette, 0, 1); u.uGrain.value = num(lens.grain, LENS_DEFAULTS.grain, 0, 0.2);
+      u.uFrame.value = frame;
+      draw(composite, null);
+    },
+  };
 }

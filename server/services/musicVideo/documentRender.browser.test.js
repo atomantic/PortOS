@@ -148,6 +148,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     expect(preview.html).toContain("img-src 'none'");
     const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
     const errors = []; page.on('pageerror', (error) => errors.push(error.message));
+    const warnings = []; page.on('console', (message) => { if (message.type() === 'warning') warnings.push(message.text()); });
     await page.evaluate(() => {
       const live = new Set();
       const create = WebGL2RenderingContext.prototype.createTexture;
@@ -177,6 +178,27 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     const pixels = await sharp(Buffer.from(first.world.split(',')[1], 'base64')).resize(64,36).removeAlpha().raw().toBuffer();
     const orange = [...Array(pixels.length / 3).keys()].filter((i) => pixels[i*3] > pixels[i*3+2] * 1.5 && pixels[i*3] > 100).length;
     expect(orange).toBeGreaterThan(15); // authored character, not a blank backdrop/overlay-only fallback
+    expect(errors).toEqual([]);
+    // ctx.lens drives the host post stack: a wide aperture focused in front of
+    // the character softens every edge without allocating new GPU textures.
+    const edgeEnergy = () => page.evaluate(async () => {
+      await window.portosComposition.seek(0);
+      const probe = document.createElement('canvas'); probe.width = 480; probe.height = 270;
+      const g = probe.getContext('2d'); g.drawImage(document.getElementById('world'), 0, 0, 480, 270);
+      const { data } = g.getImageData(0, 0, 480, 270);
+      let sum = 0; for (let i = 4; i < data.length; i += 4) sum += Math.abs(data[i] - data[i - 4]);
+      return sum;
+    });
+    const withLens = (lens) => page.evaluate((lens) => {
+      window.authoredWorld ??= window.PORTOS_MV_GENERATED.sections.world;
+      window.PORTOS_MV_GENERATED.sections.world = (ctx, env) => { window.authoredWorld(ctx, env); Object.assign(ctx.lens, lens); };
+    }, lens);
+    await withLens({ grain: 0 });
+    const focused = await edgeEnergy();
+    await withLens({ grain: 0, focus: 1, aperture: 24, maxBlur: 24 });
+    expect(await edgeEnergy()).toBeLessThan(focused * 0.8);
+    expect(await page.evaluate(() => window.liveTextureCount())).toBe(textures);
+    expect(warnings.filter((text) => text.includes('PCFSoftShadowMap'))).toEqual([]);
     expect(errors).toEqual([]);
     await page.close();
     await mkdir(PATHS.music, { recursive: true }); await mkdir(PATHS.videos, { recursive: true });

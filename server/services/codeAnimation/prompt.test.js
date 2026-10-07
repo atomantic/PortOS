@@ -207,6 +207,13 @@ describe('music-video craft and measured choreography', () => {
     expect(song.features.envelopes.low).toEqual(samples); // runtime retains original sampling grid
   });
 
+  it('teaches the Three.js author the host lens contract', () => {
+    const prompt = buildMixedMediaDocumentPrompt({ title: 'Lens', song: buildSongDocument(project), palette: {}, scenes: [], renderer: 'three' });
+    expect(prompt).toContain('ctx = { THREE, scene, camera, text, lens }');
+    expect(prompt).toContain('ctx.lens.focus');
+    expect(prompt).toContain('ctx.lens.bloomThreshold');
+  });
+
   it('does not manufacture features for a legacy or malformed analysis', () => {
     for (const features of [null, { ...project.audioAnalysis.features, envelopes: { ...project.audioAnalysis.features.envelopes, low: [1.5] } }]) {
       const song = buildSongDocument({ ...project, audioAnalysis: { ...project.audioAnalysis, features } });
