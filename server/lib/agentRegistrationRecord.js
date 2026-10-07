@@ -46,6 +46,7 @@ export function buildAgentRegistration({
   sourceWorkspace,
   repoIssueUrl,
   primaryCheckoutBaseline,
+  auditSourceEvidence = null,
   worktreeInfo,
   explicitWorktree,
   jiraBranchName,
@@ -75,6 +76,8 @@ export function buildAgentRegistration({
     // worktree. Non-throwing: an unreadable checkout yields null, which the
     // detector reads as "nothing to check".
     primaryCheckoutBaseline,
+    // Trusted launch capture only; never project a task/model-supplied claim.
+    auditSourceEvidence,
     // The issue-tracker base URL of the repository this run worked in, already
     // shaped for its forge (`repoIssueUrlBase`) so the browser appends a number
     // and knows nothing about forges. It is what a bare `#7640` in the agent's

@@ -6,6 +6,9 @@ import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 import { PROVIDER_CONFIG_BLOCKED_CATEGORY } from '../lib/taskBlockCategories.js';
 import { ensureDir, PATHS, writeFileGuarded } from '../lib/fileUtils.js';
 import { repoIssueUrlBase, resolveAppForgeTarget, resolveRepoForgeTarget } from '../lib/workTracker.js';
+import { captureAuditSourceEvidence } from '../lib/auditSourceEvidence.js';
+import { isAuditTaskType } from '../lib/auditCatalog.js';
+import { resolveTaskHookType } from './taskTypeHooks.js';
 import { capturePrimaryCheckoutState } from '../lib/primaryCheckoutGuard.js';
 import { buildAgentPrompt, getAppWorkspace, isClaimFlowTask, promptOpensOwnPr } from './agentPromptBuilder.js';
 import { isOllamaClaudeProvider, isClaudeCommand } from '../lib/providerModels.js';
@@ -172,11 +175,12 @@ export async function dispatchAgentRun(context, { spawnViaRunner } = {}) {
     worktreeInfo,
   });
   const claimFlowTask = isClaimFlowTask(task);
-  const [forgeTarget, primaryCheckoutBaseline] = await Promise.all([
+  const [forgeTarget, primaryCheckoutBaseline, auditSourceEvidence] = await Promise.all([
     resolvedApp
       ? resolveAppForgeTarget(resolvedApp, { repoPath: workspacePath }).then(r => r.target)
       : resolveRepoForgeTarget(workspacePath),
     sourceWorkspace ? capturePrimaryCheckoutState(sourceWorkspace) : null,
+    isAuditTaskType(resolveTaskHookType(task)) ? captureAuditSourceEvidence(workspacePath) : null,
   ]);
   let systemPromptFile = null;
   const agentDir = join(AGENTS_DIR, agentId);
@@ -205,6 +209,7 @@ export async function dispatchAgentRun(context, { spawnViaRunner } = {}) {
       sourceWorkspace,
       repoIssueUrl: repoIssueUrlBase(forgeTarget),
       primaryCheckoutBaseline,
+      auditSourceEvidence,
       worktreeInfo,
       explicitWorktree,
       jiraBranchName,
