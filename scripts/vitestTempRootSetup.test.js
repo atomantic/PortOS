@@ -28,7 +28,7 @@ describe('vitestTempRootSetup teardown', () => {
 
   it('ignores browser-owned Chrome scratch directories but still fails on a leaked fixture beside them', () => {
     const browserOnly = runTeardown((root) => {
-      for (const name of ['com.google.Chrome.aB3dE9', '.com.google.Chrome.xY7zQ2', '.org.chromium.Chromium.k9L2mN', 'com.google.Chrome.chrome_chrome_Unpacker_BeginUnzipping.AbC123']) {
+      for (const name of ['com.google.Chrome.aB3dE9', '.com.google.Chrome.xY7zQ2', '.org.chromium.Chromium.k9L2mN', 'com.google.Chrome.chrome_chrome_Unpacker_BeginUnzipping.AbC123', 'com.google.Chrome.chrome_chrome_url_fetcher_.AbC123']) {
         mkdirSync(join(root, name));
         writeFileSync(join(root, name, 'sock'), 'x');
       }
@@ -40,10 +40,17 @@ describe('vitestTempRootSetup teardown', () => {
     const withFixture = runTeardown((root) => {
       mkdirSync(join(root, 'com.google.Chrome.aB3dE9'));
       writeFileSync(join(root, 'com.google.Chrome.aB3dE9', 'sock'), 'x');
+      mkdirSync(join(root, 'com.google.Chrome.chrome_chrome_url_fetcher_.AbC123'));
+      writeFileSync(join(root, 'com.google.Chrome.chrome_chrome_url_fetcher_.AbC123', 'download.crx'), 'x');
+      mkdirSync(join(root, 'com.google.Chrome.chrome_chrome_url_fetcher_fixture.AbC123'));
+      writeFileSync(join(root, 'com.google.Chrome.chrome_chrome_url_fetcher_fixture.AbC123', 'data.json'), '{}');
       mkdirSync(join(root, 'mv-review-browser-Abc123'));
       writeFileSync(join(root, 'mv-review-browser-Abc123', 'data.json'), '{}');
     });
-    expect(withFixture.warnings).toEqual(['⚠️ test temp leak: mv-review-browser- ×1']);
+    expect(withFixture.warnings.sort()).toEqual([
+      '⚠️ test temp leak: com.google.Chrome.chrome_chrome_url_fetcher_fixture. ×1',
+      '⚠️ test temp leak: mv-review-browser- ×1',
+    ]);
     expect(withFixture.exitCode).toBe(1);
   });
 
