@@ -204,6 +204,12 @@ async function authoringContext(project) {
 // provider authors sections in bounded batches instead of one whole-song request.
 export const LOCAL_PROMPT_BUDGET_CHARS = 100_000;
 
+// The scenes overlapping any of `sections` (all of them when every section is listed).
+function batchScenes(scenes, sections) {
+  return (scenes || []).filter((scene) => !Number.isFinite(scene.startSec) || !Number.isFinite(scene.endSec)
+    || sections.some((section) => scene.startSec < section.endSec && scene.endSec > section.startSec));
+}
+
 const isLocalProvider = (provider) => isOllamaBackedProvider(provider) || isLocalInstanceEndpoint(provider?.endpoint);
 
 // Greedily pack consecutive section ids into batches whose prompt stays within budget.
@@ -283,12 +289,19 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
     styleLines: [...await styleLinesFor(project), ...styleGrammarLines(project)],
     ...(project.composition?.styleGrammarId ? { styleGrammarId: project.composition.styleGrammarId } : {}),
   };
-  const promptFor = (batchIds) => buildMixedMediaDocumentPrompt({
-    renderer: musicVideoDocumentRenderer(project), mediaMode: musicVideoMediaMode(project),
-    title: project.name, song: { ...context.song, sections: context.song.sections.filter((section) => batchIds.includes(section.id)) }, palette: context.palette, treatment: project.treatment,
-    visualSpec: project.visualSpec, scenes: context.scenes, styleLines: sharedStyle.styleLines,
-    onlySectionId: sectionId, sharedStyle, directionContext: castAndSetsCodeContext(project),
-  });
+  const promptFor = (batchIds) => {
+    const sections = context.song.sections.filter((section) => batchIds.includes(section.id));
+    // Only the scenes (and storyboard shots) a batch's sections cover: a long storyboard would
+    // otherwise put every shot in each batch and push it past a local model's budget.
+    const scoped = batchIds.length < ids.length;
+    const scenes = scoped ? batchScenes(context.scenes, sections) : context.scenes;
+    return buildMixedMediaDocumentPrompt({
+      renderer: musicVideoDocumentRenderer(project), mediaMode: musicVideoMediaMode(project),
+      title: project.name, song: { ...context.song, sections }, palette: context.palette, treatment: project.treatment,
+      visualSpec: project.visualSpec, scenes, styleLines: sharedStyle.styleLines,
+      onlySectionId: sectionId, sharedStyle, directionContext: castAndSetsCodeContext(project, scoped ? { sceneIds: scenes.map((scene) => scene.sceneId), sections } : {}),
+    });
+  };
   const withFeedback = (prompt) => (feedback ? `${prompt}\n\nReview findings for this section (retain the approved medium and selected assets; never invent a footage fallback):\n${feedback.slice(0, 8000)}` : prompt);
   const guardedBeforeSubmit = async (submission) => {
     const current = await getProject(projectId);

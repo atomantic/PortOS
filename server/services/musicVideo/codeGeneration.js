@@ -34,12 +34,29 @@ export async function styleLinesFor(project) {
   }
 }
 
-/** The approved procedural direction's definitions and rules, for a code-authoring request. */
-export const castAndSetsCodeContext = (project) => [
-  productionFeedbackContext(project),
-  musicVideoCodeDirectionContext(approvedCastAndSetsDirection(project)),
-  project.productionReview?.draft && `HUMAN-REVIEWED VISUAL/MOTION GUIDE AND SHOT CHOREOGRAPHY:\n${JSON.stringify(project.productionReview.draft)}`,
-].filter(Boolean).join('\n\n');
+// A shot with no time window counts as overlapping every section.
+const overlapsAny = (shot, sections) => !Number.isFinite(shot.startSec) || !Number.isFinite(shot.endSec)
+  || sections.some((section) => shot.startSec < section.endSec && shot.endSec > section.startSec);
+
+/**
+ * The approved procedural direction's definitions and rules, for a code-authoring request.
+ * `sceneIds` (with the batch's `sections`) scopes the guide's shot choreography to what a
+ * batch authors: every shot of a long storyboard otherwise rides in each section's prompt.
+ * A shot bound to a scene is kept when its scene is; a document shot (no `sceneId`) when its
+ * own time window overlaps a section, or when it has none.
+ */
+export const castAndSetsCodeContext = (project, { sceneIds = null, sections = [] } = {}) => {
+  const draft = project.productionReview?.draft;
+  const wanted = sceneIds ? new Set(sceneIds) : null;
+  const guide = draft && wanted && Array.isArray(draft.storyboard)
+    ? { ...draft, storyboard: draft.storyboard.filter((shot) => (shot.sceneId ? wanted.has(shot.sceneId) : overlapsAny(shot, sections))) }
+    : draft;
+  return [
+    productionFeedbackContext(project),
+    musicVideoCodeDirectionContext(approvedCastAndSetsDirection(project)),
+    guide && `HUMAN-REVIEWED VISUAL/MOTION GUIDE AND SHOT CHOREOGRAPHY:\n${JSON.stringify(guide)}`,
+  ].filter(Boolean).join('\n\n');
+};
 
 function acceptSources(parsed, ids) {
   const wanted = new Set(ids);
