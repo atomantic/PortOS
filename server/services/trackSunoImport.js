@@ -68,19 +68,67 @@ async function extractAudio(videoPath, outPath, signal) {
   throw new Error('Could not take the audio out of the video Suno offers for this song');
 }
 
+// The browser export's budget here. The autopilot allows 10 minutes, but a
+// signed-out browser shows no usable Download menu (no sign-in redirect), so
+// only a timeout ends that wait; an import should fall back long before then.
+const BROWSER_EXPORT_TIMEOUT_MS = 90_000;
+// The whole browser leg, including its wait in the shared browser queue
+// (behind an autopilot song or a publish draft), which the export's own
+// budget doesn't count. Mutable for tests.
+const limits = { browserWaitMs: 2 * 60 * 1000 };
+
 // Export the song through the signed-in PortOS Browser, the same export the
 // autopilot uses, so a private or unpublished song in the user's own Suno
 // library imports too. Resolves the page HTML it saw (for title and lyrics).
 async function exportThroughBrowser(songId, outPath, signal) {
   const { generateSunoSong } = await import('./musicVideo/autonomousSuno.js');
+  // Its own signal: a cancel or the wait budget running out stops it, and a
+  // queued export sees the aborted signal when its turn comes and exits.
+  const exportAbort = new AbortController();
+  const stop = () => exportAbort.abort();
+  if (signal.aborted) stop();
+  signal.addEventListener('abort', stop, { once: true });
+  let timer;
   let html = '';
-  await generateSunoSong({}, {
-    songIds: [songId], signal,
+  const exported = generateSunoSong({}, {
+    songIds: [songId], signal: exportAbort.signal, timeoutMs: BROWSER_EXPORT_TIMEOUT_MS,
     onSongPage: (pageHtml) => { html = pageHtml; },
-    // Keep the export out of the library until it passes this import's checks.
-    importAudio: async (path) => { await copyFile(path, outPath); return { filename: null, sizeBytes: 0 }; },
+    // Keep the export out of the library until it passes this import's checks,
+    // and never let an export that finishes after its leg gave up overwrite
+    // what the next route wrote.
+    importAudio: async (path) => {
+      if (!exportAbort.signal.aborted) await copyFile(path, outPath);
+      return { filename: null, sizeBytes: 0 };
+    },
   });
+  exported.catch(() => {});
+  try {
+    await Promise.race([exported, new Promise((_, reject) => {
+      exportAbort.signal.addEventListener('abort', () => reject(new Error(signal.aborted
+        ? 'cancelled'
+        : `the PortOS Browser did not finish the export within ${Math.round(limits.browserWaitMs / 1000)}s`)), { once: true });
+      if (exportAbort.signal.aborted) reject(new Error('cancelled'));
+      timer = setTimeout(stop, limits.browserWaitMs);
+    })]);
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener('abort', stop);
+  }
   return html;
+}
+
+// Take the audio from the song's public video, which stays downloadable
+// without signing in even when Suno withholds the audio file.
+async function audioFromPublicVideo(songId, dir, outPath, signal, onExtracting) {
+  const video = await fetchPublicBinary(sunoCdnVideoUrl(songId), {
+    timeoutMs: AUDIO_TIMEOUT_MS, headers: HEADERS, maxBytes: VIDEO_MAX_BYTES, throwOnUnsafe: false,
+  });
+  if (signal.aborted) return;
+  if (!video?.buffer?.byteLength || !isVideoResponse(video.contentType)) throw new Error('its public video was refused too');
+  onExtracting();
+  const videoPath = join(dir, 'song.mp4');
+  await writeFile(videoPath, video.buffer);
+  await extractAudio(videoPath, outPath, signal);
 }
 
 // jobId -> { clients, lastPayload, status, canceled }
@@ -88,7 +136,7 @@ const importJobs = new Map();
 
 export const attachSunoImportSseClient = (jobId, res) => attachSse(importJobs, jobId, res);
 
-export const __testing = { importJobs };
+export const __testing = { importJobs, limits };
 
 /** Cancel an in-flight import; false when the job is unknown or already over. */
 export function cancelSunoImport(jobId) {
@@ -150,32 +198,35 @@ export async function startSunoImport(url) {
         tempPath = join(dir, `song.${/mp4|m4a|aac/i.test(audio.contentType) ? 'm4a' : 'mp3'}`);
         await writeFile(tempPath, audio.buffer);
       } else {
-        // Suno withholds the audio file from anonymous requests (always for a
-        // private or unpublished song). The signed-in browser can export it.
-        broadcastSse(job, { type: 'progress', percent: 30, stage: 'exporting' });
+        // Suno withholds the audio file from anonymous requests. A public song
+        // (its anonymous page names it) takes the fast public-video route first;
+        // a private or unpublished one shows nothing anonymously, so the
+        // signed-in browser export comes first.
         tempPath = join(dir, 'song.m4a');
-        const browserError = await exportThroughBrowser(songId, tempPath, job.abort.signal).then((pageHtml) => {
-          // Fill only what the anonymous page lacked: a private song shows nothing there.
-          const signedIn = parseSunoSongPage(pageHtml, songId);
+        // Progress only moves forward, even when the browser leg follows a failed extraction.
+        let percent = 20;
+        const viaVideo = () => audioFromPublicVideo(songId, dir, tempPath, job.abort.signal, () => {
+          percent = 70;
+          broadcastSse(job, { type: 'progress', percent, stage: 'extracting' });
+        });
+        const viaBrowser = async () => {
+          percent = Math.max(percent, 30);
+          broadcastSse(job, { type: 'progress', percent, stage: 'exporting' });
+          const signedIn = parseSunoSongPage(await exportThroughBrowser(songId, tempPath, job.abort.signal), songId);
+          // Fill only what the anonymous page lacked.
           song = { ...song, title: song.title || signedIn.title, lyrics: song.lyrics || signedIn.lyrics, style: song.style || signedIn.style };
-          return null;
-        }, (err) => err);
-        if (abortIfCanceled()) return;
-        if (browserError) {
-          console.warn(`⚠️ Suno import ${shortId(jobId)}: browser export failed (${browserError.message}); trying the public video`);
-          // A public song's video stays downloadable without signing in, and carries the same audio.
-          const video = await fetchPublicBinary(sunoCdnVideoUrl(songId), {
-            timeoutMs: AUDIO_TIMEOUT_MS, headers: HEADERS, maxBytes: VIDEO_MAX_BYTES, throwOnUnsafe: false,
-          });
+        };
+        const routes = song.title ? [viaVideo, viaBrowser] : [viaBrowser, viaVideo];
+        const failures = [];
+        for (const route of routes) {
+          const failure = await route().then(() => null, (err) => err);
           if (abortIfCanceled()) return;
-          if (!video?.buffer?.byteLength || !isVideoResponse(video.contentType)) {
-            throw new Error(`Suno would not hand over this song's audio. For a private or unpublished song, sign in to Suno in the PortOS Browser and try again (${browserError.message})`);
-          }
-          broadcastSse(job, { type: 'progress', percent: 70, stage: 'extracting' });
-          const videoPath = join(dir, 'song.mp4');
-          await writeFile(videoPath, video.buffer);
-          await extractAudio(videoPath, tempPath, job.abort.signal);
-          if (abortIfCanceled()) return;
+          if (!failure) break;
+          console.warn(`⚠️ Suno import ${shortId(jobId)}: ${failure.message}`);
+          failures.push(failure.message);
+        }
+        if (failures.length === routes.length) {
+          throw new Error(`Suno would not hand over this song's audio. For a private or unpublished song, sign in to Suno in the PortOS Browser and try again (${failures.join('; ')})`);
         }
       }
 
