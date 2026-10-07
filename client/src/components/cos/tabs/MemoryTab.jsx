@@ -6,7 +6,7 @@ import Banner from '../../ui/Banner';
 import * as api from '../../../services/api';
 import { useSocketResource } from '../../../hooks/useSocketResource';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
-import { getAppName, formatDateNumeric, formatPercent } from '../../../utils/formatters';
+import { getAppName, formatCount, formatDateNumeric, formatPercent } from '../../../utils/formatters';
 import MemoryTimeline from './MemoryTimeline';
 // Lazy: MemoryGraph pulls the three.js stack; load it only when rendered.
 const MemoryGraph = lazy(() => import('./MemoryGraph'));
@@ -79,17 +79,23 @@ export default function MemoryTab({ apps = [] }) {
     const result = submittedSearch
       ? await api.searchMemories(submittedSearch, { limit: 20, appId }, { signal, silent: true })
       : await api.getMemories({ limit: 100, ...filters, appId }, { signal, silent: true });
-    return result.memories || [];
+    if (!Array.isArray(result?.memories)) throw new Error('Invalid memory list response');
+    return result.memories;
   }, { namespace: 'cos', events: MEMORY_EVENTS, resourceKey: queryKey, enabled: view !== 'graph' });
 
   const queue = useSocketResource(async ({ signal }) => {
     const pending = await api.getMemories({ status: 'pending_approval', limit: 50, appId }, { signal, silent: true });
-    return pending.memories || [];
+    if (!Array.isArray(pending?.memories)) throw new Error('Invalid pending memory response');
+    return pending.memories;
   }, { namespace: 'cos', events: QUEUE_EVENTS, resourceKey: sourceFilter });
   // Counts and pending approvals fail independently: a stats outage must never
   // discard a usable approval queue (or vice versa).
   const counts = useSocketResource(
-    ({ signal }) => api.getMemoryStats({ signal, silent: true }),
+    async ({ signal }) => {
+      const result = await api.getMemoryStats({ signal, silent: true });
+      if (!Number.isFinite(result?.active)) throw new Error('Invalid memory counts response');
+      return result;
+    },
     { namespace: 'cos', events: QUEUE_EVENTS }
   );
 
@@ -187,7 +193,7 @@ export default function MemoryTab({ apps = [] }) {
         <div>
           <h3 className="text-lg font-semibold text-white">Memory System</h3>
           <p className="text-sm text-gray-500">
-            {stats?.active || 0} active memories
+            {formatCount(stats?.active)} active memories
             {stats?.pendingApproval > 0 && <span className="text-yellow-400"> * {stats.pendingApproval} pending</span>}
             {embeddingStatus?.available ? ' * Embeddings online' : ' * Embeddings offline'}
           </p>
@@ -367,6 +373,8 @@ export default function MemoryTab({ apps = [] }) {
         <div className="flex items-center justify-center py-12">
           <BrailleSpinner text="Loading" />
         </div>
+      ) : view !== 'graph' && list.error && list.data == null ? (
+        <p role="alert" className="text-port-text-muted">Memory list unavailable.</p>
       ) : view === 'list' ? (
         <div className="space-y-3">
           {displayMemories.length === 0 ? (

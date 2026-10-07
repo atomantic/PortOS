@@ -49,7 +49,11 @@ const MEMORY_EVENTS = ['cos:memory:created', 'cos:memory:updated', 'cos:memory:d
 
 export default function MemoryGraph() {
   const { data: graphData, loading, error, refetch } = useSocketResource(
-    ({ signal }) => api.getMemoryGraph({ signal, silent: true }),
+    async ({ signal }) => {
+      const result = await api.getMemoryGraph({ signal, silent: true });
+      if (!Array.isArray(result?.nodes) || !Array.isArray(result?.edges)) throw new Error('Invalid memory graph response');
+      return result;
+    },
     { namespace: 'cos', events: MEMORY_EVENTS }
   );
   const [selection, setSelectedNode] = useState(null);

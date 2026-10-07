@@ -189,3 +189,11 @@ it('does not let a completed save from a closed editor dismiss the next memory',
   expect(onSave).not.toHaveBeenCalled();
   expect(screen.getByRole('textbox', { name: /Content/ })).toHaveValue('Next body');
 });
+
+it('keeps saving disabled when the editor cannot load a valid expectedVersion', async () => {
+  api.getMemory.mockResolvedValue({ id: 'example-memory', content: 'Unversioned response' });
+  render(<MemoryRouter><MemoryEditModal memory={{ id: 'example-memory' }} apps={[]} onSave={() => {}} onClose={() => {}} /></MemoryRouter>);
+  expect(await screen.findByText(/Invalid memory revision response/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Save Changes' })).toBeDisabled();
+  expect(api.updateMemory).not.toHaveBeenCalled();
+});

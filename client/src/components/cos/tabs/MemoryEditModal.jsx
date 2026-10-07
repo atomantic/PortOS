@@ -27,10 +27,14 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
   });
   const [newTag, setNewTag] = useState('');
   const [saving, setSaving] = useState(false);
-  const [fullMemory, setFullMemory] = useState(memory.content ? memory : null);
+  const [fullMemory, setFullMemory] = useState(memory.content && Number.isInteger(memory.version) && memory.version > 0 ? memory : null);
   const [changeReason, setChangeReason] = useState('');
   const latest = useSocketResource(
-    ({ signal }) => api.getMemory(memory.id, { signal, silent: true }),
+    async ({ signal }) => {
+      const result = await api.getMemory(memory.id, { signal, silent: true });
+      if (result?.id !== memory.id || !Number.isInteger(result.version) || result.version < 1) throw new Error('Invalid memory revision response');
+      return result;
+    },
     {
       namespace: 'cos', events: MEMORY_EVENTS, resourceKey: memory.id,
       matchesEvent: payload => payload?.id === memory.id
@@ -135,7 +139,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {latest.error && <p role="alert" className="text-port-error">{latest.error.message || 'Unable to refresh memory'}</p>}
+          {latest.error && <p role="alert" className="text-port-error">{latest.error.message || 'Unable to refresh memory'} <button type="button" onClick={latest.refetch}>Retry memory</button></p>}
           {!loaded && !latest.error && <p role="status">Loading memory…</p>}
           {(newerRevision || retired) && <p role="status" className="text-port-warning">
             {retired ? 'This memory has been retired.' : 'A newer revision exists.'} Your draft and loaded version are preserved. Close and reopen to load the latest revision.

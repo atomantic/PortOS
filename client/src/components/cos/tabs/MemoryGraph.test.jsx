@@ -277,6 +277,10 @@ describe('live graph reconciliation', () => {
     expect(screen.getByText(/1 nodes/)).toBeInTheDocument();
     expect(screen.queryByText('Remote detail')).not.toBeInTheDocument();
     expect(screen.getByTestId('graph-canvas')).toBe(canvas);
+    api.getMemoryGraph.mockResolvedValue({});
+    await dispatch('cos:memory:updated', { id: 'n2' });
+    expect(screen.getByText(/Unable to refresh memory graph/)).toBeInTheDocument();
+    expect(screen.getByTestId('graph-canvas')).toBe(canvas);
   });
 
   it('reconciles on reconnect and tab-show and disposes a pending graph read', async () => {

@@ -218,7 +218,7 @@ describe('MemoryTab lifecycle reconciliation', () => {
     api.getMemories.mockImplementation(async params => ({ memories: params.status ? [] : [activeMemory] }));
     fireEvent.click(screen.getByRole('button', { name: 'List' }));
     await screen.findByText('Original summary');
-    api.getMemories.mockRejectedValue(new Error('Synthetic read failure'));
+    api.getMemories.mockResolvedValue({});
     await dispatch('cos:memory:updated', { id: activeMemory.id });
     expect(screen.getByText('Original summary')).toBeInTheDocument();
     expect(screen.getByText('Unable to refresh memories')).toBeInTheDocument();
@@ -232,6 +232,7 @@ describe('independent approval/count availability', () => {
     renderTab();
     expect(await screen.findByText('A synthetic pending memory')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Approve memory' })).toBeEnabled();
+    expect(screen.getByText(/— active memories/)).toBeInTheDocument();
     api.getMemoryStats.mockResolvedValue({ active: 1, pendingApproval: 1 });
     await dispatch('connect');
     expect(screen.getByText(/1 active memories/)).toBeInTheDocument();
@@ -243,4 +244,14 @@ describe('independent approval/count availability', () => {
     expect(screen.getByText(/2 active memories/)).toBeInTheDocument();
     expect(screen.getByText('A synthetic pending memory')).toBeInTheDocument();
   });
+});
+
+it('reports an unavailable initial list instead of claiming it is empty, then recovers through Retry', async () => {
+  api.getMemories.mockImplementation(async params => params.status ? { memories: [] } : {});
+  renderTab();
+  expect(await screen.findByText('Memory list unavailable.')).toBeInTheDocument();
+  expect(screen.queryByText('No memories yet.')).not.toBeInTheDocument();
+  api.getMemories.mockImplementation(async params => ({ memories: params.status ? [] : [activeMemory] }));
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByText('Original summary')).toBeInTheDocument();
 });
