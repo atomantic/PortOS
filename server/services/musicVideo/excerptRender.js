@@ -44,6 +44,7 @@ import { musicVideoAspect, musicVideoAtAspect } from '../../lib/musicVideoAspect
 import { musicVideoEvents } from './events.js';
 import { pilotDependencies, productionPilotRenderProject } from './productionPilot.js';
 import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
+import { excerptRangeFits } from '../../lib/musicVideoExcerptRange.js';
 
 const jobs = new Map();
 const projectExcerptRenders = new Map();
@@ -148,7 +149,7 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
     await assertCurrentPerformanceTakes(project, audioPath);
   }
   const soundBed = renderer.soundBed ? await resolveSoundBedPath(project) : null;
-  if (!(startSec >= 0) || !(endSec > startSec) || endSec > prepared.totalSec + 1e-6) {
+  if (!excerptRangeFits(startSec, endSec, prepared.totalSec, prepared.plan?.fps ?? prepared.full?.fps)) {
     throw new ServerError(
       `The excerpt range must fall within the project's ${prepared.totalSec.toFixed(2)}s song`,
       { status: 422, code: 'INVALID_EXCERPT_RANGE', context: { totalDuration: prepared.totalSec } },
