@@ -14,6 +14,8 @@
 
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
+import { isVisionCapableCliProvider } from '../../lib/localModelHeuristics.js';
+import { isVisionCapableCodexTuiProvider } from '../../lib/codex.js';
 import { emitCodeAnimationChanged } from '../socket.js';
 import { PATHS } from '../../lib/paths.js';
 import { makePathResolver } from '../../lib/pathSafety.js';
@@ -216,22 +218,31 @@ async function resolveAudio(audio) {
  */
 export async function buildCodeAnimationRequest(input, { delivery = 'copy' } = {}) {
   const uploads = resolveUploadedImages(input.referenceImages || []);
+  const videoSlots = CODE_ANIMATION_LIMITS.referenceVideoImageSlots;
+  if (input.referenceVideo && uploads.length + videoSlots > CODE_ANIMATION_LIMITS.referenceImagesMax) {
+    throw new ServerError(`A reference video uses ${videoSlots} of the ${CODE_ANIMATION_LIMITS.referenceImagesMax} reference slots; remove some reference images`, { status: 400, code: 'REFERENCE_LIMIT' });
+  }
+  // ffmpeg sampling is imported only when a brief actually carries a video.
+  const referenceVideo = input.referenceVideo
+    ? await (await import('./referenceVideo.js')).resolveReferenceVideo(input.referenceVideo)
+    : null;
+  const videoImages = referenceVideo?.images || [];
   const audio = await resolveAudio(input.audio);
   const universe = await resolveUniverse(input.universeId, {
-    imageSlots: Math.max(0, CODE_ANIMATION_LIMITS.referenceImagesMax - uploads.length),
+    imageSlots: Math.max(0, CODE_ANIMATION_LIMITS.referenceImagesMax - videoImages.length - uploads.length),
   });
   // The universe is the art direction, so its linked mood board is the default:
   // an ABSENT moodBoardId follows the universe, an explicit null means none.
   const moodBoardId = input.moodBoardId === undefined ? universe?.moodBoardId : input.moodBoardId;
-  // Reference-image slots go to the user's own uploads first, then the
-  // universe's style images, then the board's pins.
+  // Reference-image slots go to the reference video's stills first, then the
+  // user's own uploads, then the universe's style images, then the board's pins.
   const universeImages = universe?.images || [];
   const { board, images: boardImages } = await resolveMoodBoard(moodBoardId, {
     imageSlots: input.includeMoodBoardImages === false
       ? 0
-      : Math.max(0, CODE_ANIMATION_LIMITS.referenceImagesMax - uploads.length - universeImages.length),
+      : Math.max(0, CODE_ANIMATION_LIMITS.referenceImagesMax - videoImages.length - uploads.length - universeImages.length),
   });
-  const referenceImages = [...uploads, ...universeImages, ...boardImages];
+  const referenceImages = [...videoImages, ...uploads, ...universeImages, ...boardImages];
   const promptInput = {
     title: input.title,
     concept: input.concept,
@@ -247,6 +258,7 @@ export async function buildCodeAnimationRequest(input, { delivery = 'copy' } = {
     universe,
     moodBoard: board,
     referenceImages,
+    referenceVideo,
   };
   const prompt = buildCodeAnimationPrompt({ ...promptInput, delivery });
   return {
@@ -396,8 +408,12 @@ export async function pageCodeAnimationJobs({ limit = JOB_PAGE_SIZE, cursor } = 
   };
 }
 
+const canAttachImages = (provider) => provider.type === 'api'
+  || isVisionCapableCliProvider(provider) || isVisionCapableCodexTuiProvider(provider);
+
 async function runGeneration({ provider, model, effort, prompt, referencePaths }) {
-  const { runPromptThroughProvider } = await import('../promptRunner.js');
+  const promptRunner = await import('../promptRunner.js');
+  const { runPromptThroughProvider } = promptRunner;
   const result = await runPromptThroughProvider({
     provider,
     model: model || undefined,
@@ -407,9 +423,13 @@ async function runGeneration({ provider, model, effort, prompt, referencePaths }
     // Start authoring in runtime data. This does not restrict CLI/TUI host tools;
     // operator authorization is separate from the later render containment.
     cwd: PATHS.data,
-    screenshots: provider.type === 'api' ? referencePaths : [],
+    // Every provider that can read images gets them as attachments; a
+    // non-vision CLI keeps only the on-disk paths written into the prompt.
+    screenshots: canAttachImages(provider) ? referencePaths : [],
     timeout: Math.max(provider.timeout || 0, 15 * 60 * 1000),
   });
+  // A fallback to a non-vision provider must not silently drop the references.
+  if (referencePaths.length && canAttachImages(provider)) promptRunner.assertVisionRunUsedImages(result, provider);
   const html = extractAnimationHtml(result.text);
   if (!html) throw new Error('The model response did not contain an HTML document');
   return { html, provider: result.provider?.id || provider.id, model: result.model || null, runId: result.runId || null };

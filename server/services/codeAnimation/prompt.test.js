@@ -161,6 +161,16 @@ describe('extractAnimationHtml', () => {
   });
 });
 
+describe('reference video rhythm', () => {
+  // A failed scene-detection pass must not read as a measured "no cuts".
+  it('says an unmeasured rhythm is unmeasured instead of reporting one continuous shot', () => {
+    const video = (cuts) => buildCodeAnimationPrompt({ concept: 'x', format, referenceVideo: { label: 'Reference', durationSec: 12, cuts, note: '' } });
+    expect(video(null)).toContain('its cut rhythm could not be measured');
+    expect(video(null)).not.toContain('Measured rhythm');
+    expect(video([])).toContain('Measured rhythm: One continuous 12.0s shot with no detected cuts.');
+  });
+});
+
 // Exercise the production song adapter, not a prompt-only field nobody supplies.
 describe('music-video craft and measured choreography', () => {
   const builders = [

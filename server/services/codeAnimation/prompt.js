@@ -73,6 +73,8 @@ export const CODE_ANIMATION_LIMITS = Object.freeze({
   textMax: 4_000,
   styleNotesMax: 2_000,
   referenceImagesMax: 8,
+  // A reference video becomes a contact sheet plus two keyframes.
+  referenceVideoImageSlots: 3,
   referenceNoteMax: 300,
   audioNotesMax: 1_500,
 });
@@ -137,10 +139,26 @@ function referenceImagesSection(images, delivery) {
   const rows = images.map((image, index) => {
     const where = delivery === 'cli' && image.path ? ` (${image.path})` : '';
     const note = isNonBlankStr(image.note) ? ` — ${trimTo(image.note, CODE_ANIMATION_LIMITS.referenceNoteMax)}` : '';
-    const origin = { 'mood-board': ' [from the mood board]', universe: ' [universe style image]' }[image.origin] || '';
+    const origin = { 'mood-board': ' [from the mood board]', universe: ' [universe style image]', 'reference-video': ' [from the reference video]' }[image.origin] || '';
     return `${index + 1}. ${image.label}${origin}${where}${note}`;
   });
   return `${intro}\n${rows.join('\n')}\nUse them for palette, composition, silhouettes, texture, and lighting. Do NOT embed, fetch, or base64 them — recreate what matters procedurally in code.`;
+}
+
+// A model cannot watch the video: it gets the sampled stills (listed with the
+// reference images) plus the measured cut rhythm, and is told what to take.
+function referenceVideoSection(video) {
+  if (!video) return '';
+  const { durationSec, cuts } = video;
+  const shots = (cuts?.length ?? 0) + 1;
+  const rhythm = !cuts
+    ? `${durationSec.toFixed(1)}s long; its cut rhythm could not be measured, so read it from the contact sheet.`
+    : cuts.length
+    ? `${shots} shots in ${durationSec.toFixed(1)}s (average ${(durationSec / shots).toFixed(1)}s per shot); cuts at ${cuts.map((t) => `${t.toFixed(1)}s`).join(', ')}.`
+    : `One continuous ${durationSec.toFixed(1)}s shot with no detected cuts.`;
+  const note = isNonBlankStr(video.note) ? `\nWhat to take from it: ${trimTo(video.note, CODE_ANIMATION_LIMITS.referenceNoteMax)}` : '';
+  return `REFERENCE VIDEO — "${video.label}": the quality bar to match. Its contact sheet and two keyframes are among the reference images below. ${cuts ? 'Measured rhythm: ' : ''}${rhythm}${note}
+Study and match its craft, not its content: shot rhythm and coverage (wides, close-ups, inserts), camera moves and focus pulls, lighting and time of day, how it renders surfaces, and its finish (depth of field, bloom on light sources, colour grade, grain). Scale its cut rhythm to this piece's duration. Reproduce that fidelity with your own original subject, characters and story — never copy its characters, logos, text or shots.`;
 }
 
 function audioSection({ audio, soundtrack, durationSeconds }) {
@@ -267,6 +285,7 @@ export function buildCodeAnimationPrompt({
   universe = null,
   moodBoard = null,
   referenceImages = [],
+  referenceVideo = null,
   delivery = 'copy',
 }) {
   const { width, height } = resolveFrameSize(format.aspectRatio, format.resolution);
@@ -282,6 +301,8 @@ export function buildCodeAnimationPrompt({
   sections.push(`ART DIRECTION:\n${artDirectionSection({ universe, styleNotes, styleGrammarId, hasMoodBoard: !!moodBoard })}`);
   const boardText = moodBoardSection(moodBoard);
   if (boardText) sections.push(boardText);
+  const videoText = referenceVideoSection(referenceVideo);
+  if (videoText) sections.push(videoText);
   const imagesText = referenceImagesSection(referenceImages, delivery);
   if (imagesText) sections.push(imagesText);
   sections.push(`SOUND:\n${audioSection({ audio, soundtrack, durationSeconds })}`);
