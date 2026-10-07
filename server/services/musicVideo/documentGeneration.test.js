@@ -195,6 +195,87 @@ describe('treatment-driven mixed-media document authoring', () => {
     expect(h.prompt).toContain('contained no usable section functions');
   });
 
+  it('resumes a failed later local batch from durable sections after a module restart (#10528)', async () => {
+    const id = await fixture();
+    await generateMixedMediaDocument(id, { providerId: 'stub-provider' });
+    const budget = h.prompt.length - 200;
+    h.provider = { id: 'ollama', type: 'api' };
+    const asked = [];
+    h.onSubmit = async () => {
+      asked.push(['intro', 'still', 'clip'].filter((section) => h.prompt.includes(`"id":"${section}"`)));
+      if (asked.length === 2) throw new Error('Later batch failed');
+      h.response = response(Object.fromEntries(asked.at(-1).map((section) => [section, '#010203'])));
+    };
+    await expect(generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget })).rejects.toThrow('Later batch failed');
+    const finished = asked[0];
+    const checkpoint = JSON.parse(await readFile(join(PATHS.data, 'cache', 'music-video-authoring', `${id}.json`), 'utf8'));
+    expect(checkpoint.sections.map((section) => section.id)).toEqual(finished);
+    // Matching metadata never bypasses the normal deterministic-source admission.
+    await writeFile(join(PATHS.data, 'cache', 'music-video-authoring', `${id}.json`), JSON.stringify({ ...checkpoint,
+      sections: [{ ...checkpoint.sections[0], source: 'function render(ctx, env) { ctx.fillRect(Math.random(), 0, 1, 1); }' }],
+    }));
+    const callsBeforeCorruption = h.calls;
+    await expect(generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget })).rejects.toMatchObject({ code: 'NONDETERMINISTIC_SECTION' });
+    expect(h.calls).toBe(callsBeforeCorruption);
+    await writeFile(join(PATHS.data, 'cache', 'music-video-authoring', `${id}.json`), JSON.stringify(checkpoint));
+    vi.resetModules();
+    const resumedAuthor = (await import('./documentGeneration.js')).generateMixedMediaDocument;
+    asked.length = 0;
+    h.onSubmit = async () => {
+      asked.push(['intro', 'still', 'clip'].filter((section) => h.prompt.includes(`"id":"${section}"`)));
+      h.response = response(Object.fromEntries(asked.at(-1).map((section) => [section, '#aabbcc'])));
+    };
+    const { document } = await resumedAuthor(id, { providerId: 'ollama', promptBudgetChars: budget });
+    expect(asked.flat()).toEqual(['intro', 'still', 'clip'].filter((section) => !finished.includes(section)));
+    const manifest = await manifestAt(document);
+    expect(manifest.sections.filter((section) => finished.includes(section.id)).map((section) => section.source))
+      .toEqual(finished.map(() => source('#010203')));
+    await expect(readFile(join(PATHS.data, 'cache', 'music-video-authoring', `${id}.json`))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each(['treatment', 'media', 'storyboard'])('discards staged local sections after a %s basis edit (#10528)', async (change) => {
+    const id = await fixture();
+    await generateMixedMediaDocument(id, { providerId: 'stub-provider' });
+    const budget = h.prompt.length - 200;
+    h.provider = { id: 'ollama', type: 'api' };
+    let calls = 0;
+    h.onSubmit = async () => {
+      if (++calls === 2) throw new Error('Later batch failed');
+      h.response = response({ intro: '#010203', still: '#010203', clip: '#010203' });
+    };
+    await expect(generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget })).rejects.toThrow('Later batch failed');
+    await projects.mutateProjectRecord(id, (current) => ({ project: {
+      ...current,
+      ...(change === 'treatment' ? { treatment: { ...current.treatment, revision: 2 } } : {}),
+      ...(change === 'media' ? { scenes: current.scenes.map((scene) => scene.sceneId === 's-clip' ? { ...scene, takes: [{ ...scene.takes[0], shotInstruction: { shotMode: 'performance', edit: { inSec: 2, outSec: 8 } } }] } : scene) } : {}),
+      ...(change === 'storyboard' ? { productionReview: { draft: { storyboard: [{ sceneId: 's-intro', action: 'Revised movement' }] } } } : {}),
+    } }));
+    const asked = [];
+    h.onSubmit = async () => {
+      asked.push(...['intro', 'still', 'clip'].filter((section) => h.prompt.includes(`"id":"${section}"`)));
+      h.response = response({ intro: '#aabbcc', still: '#aabbcc', clip: '#aabbcc' });
+    };
+    const { document } = await generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget });
+    expect(asked).toEqual(['intro', 'still', 'clip']);
+    expect((await manifestAt(document)).sections.map((section) => section.source)).toEqual(['intro', 'still', 'clip'].map(() => source('#aabbcc')));
+  });
+
+  it('rechecks the production reservation when all local sections were staged before publication failed', async () => {
+    const id = await fixture();
+    await generateMixedMediaDocument(id, { providerId: 'stub-provider' });
+    const budget = h.prompt.length - 200;
+    h.provider = { id: 'ollama', type: 'api' };
+    let active = true;
+    h.onSubmit = async () => { if (h.prompt.includes('"id":"clip"')) active = false; };
+    const verifyCurrent = () => { if (!active) throw Object.assign(new Error('Production closed'), { code: 'PRODUCTION_STEP_CLOSED' }); };
+    await expect(generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget, verifyCurrent })).rejects.toMatchObject({ code: 'PRODUCTION_STEP_CLOSED' });
+    active = true; h.onSubmit = null; h.calls = 0;
+    const beforeSubmit = vi.fn();
+    await generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget, verifyCurrent, beforeSubmit });
+    expect(h.calls).toBe(0);
+    expect(beforeSubmit).toHaveBeenCalledWith(expect.objectContaining({ provider: { id: 'ollama', type: 'api' }, model: 'fixture-model' }));
+  });
+
   it('names the prompt size when authoring times out with no output (#10515)', async () => {
     const id = await fixture();
     h.onSubmit = async () => { throw new Error('API execution timed out after 600000ms with no stream progress'); };

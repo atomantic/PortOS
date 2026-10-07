@@ -918,3 +918,15 @@ journal; do not delete unresolved evidence. Status reconciliation re-reads exact
 terminal proof before settling the current claim. A crash after ledger completion
 but before journal settlement or hold release is recoverable without relaunch.
 See [peer administration](features/peer-administration.md) for supported actions.
+
+### Music Video authoring checkpoint
+
+`data/cache/music-video-authoring/<project-id>.json` is `ephemeral-file`: one
+versioned, atomic checkpoint per project holds validated section functions while
+a local document authoring attempt is unfinished. Same-project authoring requests
+serialize; retries read the checkpoint from disk. Its key includes the authoring
+basis, exact prompt, resolved provider/model/effort, and active/candidate document
+pointers, so edits replace staged work. Successful document publication removes
+the checkpoint. It is regenerable runtime state rather than searchable project
+metadata, never federates, and the existing anchored `/cache/` backup exclusion
+covers it. An absent checkpoint starts empty; no seed or migration is required.
