@@ -46,6 +46,7 @@ const PSQL_STUB = `#!/bin/sh
 echo "psql $*" >> "$STUB_LOG"
 echo "endpoint-env \${PGHOSTADDR-unset}|\${PGSERVICE-unset}|\${PGSERVICEFILE-unset}|\${PGOPTIONS-unset}" >> "$STUB_LOG"
 case "$*" in *--single-transaction*) cat >> "$IMPORT_LOG"; exit "\${IMPORT_EXIT:-0}" ;; esac
+if [ -n "\${PORTOS_BOOTSTRAP_ROLE:-}" ]; then cat > "$ROLE_INPUT_LOG"; fi
 case "$*" in *count*) echo 3 ;; esac
 exit 0
 `;
@@ -124,6 +125,7 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
       HOME: root,
       STUB_LOG: stubLog,
       IMPORT_LOG: importLog,
+      ROLE_INPUT_LOG: join(root, 'role.sql'),
       DUMP_MODE: dumpMode,
       FULL_DUMP,
       PGPASSWORD: 'test-only',
@@ -389,6 +391,7 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     expect(result.status).toBe(0);
     expect(psqlCalls().length).toBeGreaterThanOrEqual(6);
     expect(psqlCalls().every(call => call.includes('-p 5433 '))).toBe(true);
+    expect(readFileSync(join(root, 'role.sql'), 'utf8')).toContain('CREATE ROLE :"role"');
   });
 
   it('fails without issuing SQL to another cluster when the selected endpoint is down', () => {
