@@ -108,7 +108,7 @@ describe('startSunoImport', () => {
     });
     await startSunoImport(`https://suno.com/song/${ID}`);
     expect(await terminal()).toMatchObject({ type: 'complete' });
-    expect(generateSunoSong).toHaveBeenCalledWith({}, expect.objectContaining({ songIds: [ID], signal: expect.any(AbortSignal) }));
+    expect(generateSunoSong).toHaveBeenCalledWith({}, expect.objectContaining({ songIds: [ID], signal: expect.any(AbortSignal), timeoutMs: 90_000 }));
     expect(fetchPublicBinary.mock.calls.map(([url]) => url)).not.toContain(`https://cdn1.suno.ai/${ID}.mp4`);
     expect(importUploadedTrack).toHaveBeenCalledWith(expect.stringMatching(/song\.m4a$/), 'Unreleased.m4a');
     expect(createTrack).toHaveBeenCalledWith(expect.objectContaining({ title: 'Unreleased', lyrics: 'draft words', prompt: 'lo-fi' }));
@@ -131,6 +131,19 @@ describe('startSunoImport', () => {
     expect(runFfmpegProcess).toHaveBeenCalledWith({ bin: '/usr/local/bin/ffmpeg', signal: expect.any(AbortSignal), args: expect.arrayContaining(['-vn', '-c:a', 'copy']) });
     expect(importUploadedTrack).toHaveBeenCalledWith(expect.stringMatching(/song\.m4a$/), 'Airplane Mode.m4a');
     expect(createTrack).toHaveBeenCalledWith(expect.objectContaining({ title: 'Airplane Mode', lyrics: '[Verse]\nno signal' }));
+    // A public song takes the fast public-video route, never the browser queue.
+    expect(generateSunoSong).not.toHaveBeenCalled();
+  });
+
+  it('cancels at once while the browser export waits its turn in the shared browser queue', async () => {
+    fetchPublicText.mockResolvedValue(null); // private song: the browser export goes first
+    fetchPublicBinary.mockResolvedValue(null);
+    generateSunoSong.mockImplementation(() => new Promise(() => {})); // queued behind another browser job
+    const { jobId } = await startSunoImport(`https://suno.com/song/${ID}`);
+    await vi.waitFor(() => expect(generateSunoSong).toHaveBeenCalled());
+    expect(cancelSunoImport(jobId)).toBe(true);
+    expect(await terminal()).toEqual({ type: 'canceled' });
+    expect(fetchPublicBinary.mock.calls.map(([url]) => url)).not.toContain(`https://cdn1.suno.ai/${ID}.mp4`);
   });
 
   it('transcodes when the video\'s audio track will not copy, and fails when nothing will', async () => {
