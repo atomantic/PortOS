@@ -18,7 +18,7 @@
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'child_process';
 import { createHash } from 'crypto';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readFileSync, copyFileSync, utimesSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readFileSync, copyFileSync, utimesSync, renameSync, symlinkSync, lstatSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join, relative } from 'path';
 import { fileURLToPath } from 'url';
@@ -129,11 +129,45 @@ describe('startup dependency reconciliation', () => {
     }
     return {
       root,
-      run: () => execFileSync(process.execPath, [join(root, 'scripts', 'ensure-deps.js')], { cwd: root, encoding: 'utf8' }),
+      run: () => execFileSync(process.execPath, [join(root, 'scripts', 'ensure-deps.js')], { cwd: root, encoding: 'utf8', stdio: 'pipe' }),
       client: join(root, 'client'),
       receipt: join(root, 'data', 'deps-hashes.json'),
     };
   }
+
+  // A worktree must never repair or patch dependencies owned by its source
+  // checkout. Check all workspaces before touching even an earlier local tree.
+  it.each(['warm', 'changed', 'missing-package', 'dangling'])('refuses %s shared dependencies before any startup mutation', (state) => {
+    const f = fixture();
+    try {
+      f.run();
+      const modules = join(f.root, 'server', 'node_modules');
+      const shared = join(f.root, 'shared-server-deps');
+      renameSync(modules, shared);
+      if (state === 'changed') writeFileSync(join(f.root, 'server', 'package-lock.json'), '{"version":"new"}');
+      if (state === 'missing-package') rmSync(join(shared, 'pg'), { recursive: true });
+      rmSync(join(shared, 'patch-applied'));
+      const target = state === 'dangling' ? join(f.root, 'absent-deps') : shared;
+      symlinkSync(target, modules, process.platform === 'win32' ? 'junction' : 'dir');
+
+      // root is visited before server: a per-workspace check inside the repair
+      // loop would already destroy this tree and start npm before refusing.
+      writeFileSync(join(f.root, 'package-lock.json'), '{"version":"new"}');
+      writeFileSync(join(f.root, 'node_modules', 'keep'), 'original');
+      const receipt = readFileSync(f.receipt, 'utf8');
+
+      expect(f.run).toThrow(/Refusing dependency repair.*server.*node_modules.*linked/);
+      expect(lstatSync(modules).isSymbolicLink()).toBe(true);
+      expect(readFileSync(join(f.root, 'node_modules', 'keep'), 'utf8')).toBe('original');
+      expect(readFileSync(f.receipt, 'utf8')).toBe(receipt);
+      expect(readFileSync(join(shared, 'installed-lock.json'), 'utf8')).toBe('{"version":"old"}');
+      expect(existsSync(join(shared, 'patch-applied'))).toBe(false);
+      if (state === 'missing-package') expect(existsSync(join(shared, 'pg'))).toBe(false);
+      if (state === 'dangling') expect(existsSync(target)).toBe(false);
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
 
   it('installs a lockfile-only update once and preserves the committed inputs', () => {
     const f = fixture();

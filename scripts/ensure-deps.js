@@ -1,9 +1,9 @@
 /**
  * Ensures all workspace dependencies are installed before starting.
- * Runs npm install only for workspaces with missing node_modules.
+ * Repairs missing or stale dependencies only in workspaces that own their tree.
  * Handles ENOTEMPTY npm bug by retrying with clean node_modules.
  */
-import { existsSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'fs';
+import { existsSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync, lstatSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { createHash } from 'crypto';
 import { join, dirname } from 'path';
@@ -138,6 +138,18 @@ function install(dir, label) {
 // Import-safe driver: the module exposes its helpers to scripts/ensure-deps.test.js,
 // and only performs installs when run as `node scripts/ensure-deps.js`.
 function main() {
+  // Ordinary CoS worktrees borrow the source checkout's dependencies. Refuse
+  // the entire repair before any install, cleanup, patch or receipt write;
+  // checking inside the repair loop could already mutate an earlier workspace.
+  // lstat also catches dangling links and Windows directory junctions.
+  for (const { dir, label } of WORKSPACES) {
+    if (lstatSync(join(dir, 'node_modules'), { throwIfNoEntry: false })?.isSymbolicLink()) {
+      console.error(`⛔ Refusing dependency repair: ${label}/node_modules is linked. Run startup in the source checkout; use its workspace binaries for worktree tests.`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
   const storedHashes = loadHashes();
   let hashesDirty = false;
   let needed = false;
