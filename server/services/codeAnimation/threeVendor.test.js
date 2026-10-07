@@ -1,20 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'crypto';
-import { THREE_ADDON_ALLOWLIST, THREE_IMPORT_MAP, importsThree, injectThreeImportMap, readThreeVendor, relativeImportsOf, threeStagedFiles } from './threeVendor.js';
+import { THREE_ADDON_ALLOWLIST, THREE_IMPORT_MAP, importsThree, injectThreeImportMap, readThreeVendor, threeStagedFiles } from './threeVendor.js';
 
 describe('three.js vendor set', () => {
   it('ships only the allowlisted addons, and every relative import inside them stays inside the set', async () => {
     const { files } = await readThreeVendor();
     const paths = files.map((file) => file.path);
     expect(paths.filter((path) => path.startsWith('addons/'))).toEqual(THREE_ADDON_ALLOWLIST.map((name) => `addons/${name}`));
-    // The loader already fails closed on a stray import; assert the property directly.
-    const known = new Set(paths);
-    for (const file of files.filter((entry) => entry.path.endsWith('.js'))) {
-      for (const target of relativeImportsOf(file.path, file.data.toString('utf8'))) expect(known.has(target)).toBe(true);
-    }
-    // The graph is not vacuous: EffectComposer pulls CopyShader in from a sibling directory.
-    const composer = files.find((file) => file.path === 'addons/postprocessing/EffectComposer.js');
-    expect(relativeImportsOf(composer.path, composer.data.toString('utf8'))).toContain('addons/shaders/CopyShader.js');
+    // The loader fails closed on any relative import outside the set (readThreeVendor
+    // would have rejected above); also pin that the graph is not vacuous: EffectComposer
+    // imports CopyShader from a sibling directory, so that file must be vendored.
+    expect(paths).toContain('addons/shaders/CopyShader.js');
+    expect(files.find((file) => file.path === 'addons/postprocessing/EffectComposer.js').data.toString('utf8')).toContain("'../shaders/CopyShader.js'");
   });
 
   it('stages every file under vendor/ with a dependencies.json whose hashes match the bytes', async () => {

@@ -48,7 +48,7 @@ const RELATIVE_IMPORT = /(?:^|\n)\s*(?:import|export)\b[^'"\n;]*?from\s*['"](\.{
 const sha256 = (data) => createHash('sha256').update(data).digest('hex');
 
 /** The relative specifiers a vendored module imports, resolved against its own path. */
-export function relativeImportsOf(path, text) {
+function relativeImportsOf(path, text) {
   const found = [];
   for (const match of text.matchAll(RELATIVE_IMPORT)) {
     found.push(posix.normalize(posix.join(posix.dirname(path), match[1] || match[2])));
