@@ -851,6 +851,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `sheetPointers.js` | Browser-safe persisted character-sheet layout: `LEGACY_SHEET_VARIANT_ID`, `readSheetPointer`, `listSheetPointers`, identity-preserving `applySheetPointerToCharacter`, and default-variant browser adapter `applySheetPointer`. |
 | `musicVideoGrade.js` | Opt-in Music Video grade presets, bounded normalization, and shared song-timed RGB curves with deterministic grain for composed and document encodes. |
 | `musicVideoDependencies.js` | Versioned take/evidence provenance, dependency comparisons and bounded selective-repair previews. |
+| `musicVideoExcerptRange.js` | `excerptRangeFits(startSec, endSec, totalSec, fps)`: whether a code/document excerpt window fits a frame-quantized render, allowing the end up to one frame past it (scene ends follow the analysed song length; the caller clamps). The start must fall inside the render; an unknown fps allows no slack. |
 
 | `musicVideoPlateEvidence.js` | Asset-bound authored-shot plate requirements, current evidence and selected-image admission. |
 | `codeAnimationProjects.js` | Machine-local Production project, patch and independent budget schemas; package imports grant no execution authority. |
