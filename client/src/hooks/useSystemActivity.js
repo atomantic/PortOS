@@ -34,6 +34,8 @@ export const sameProcessingSnapshot = (a, b) => {
     && a.mind?.trusted === b.mind?.trusted
     && a.llm?.active === b.llm?.active
     && a.llm?.trusted === b.llm?.trusted
+    && JSON.stringify(a.llm?.runs) === JSON.stringify(b.llm?.runs)
+    && JSON.stringify(a.ollama) === JSON.stringify(b.ollama)
     && a.backup?.inProgress === b.backup?.inProgress
     && a.update?.inProgress === b.update?.inProgress
     && a.activity?.idle === b.activity?.idle

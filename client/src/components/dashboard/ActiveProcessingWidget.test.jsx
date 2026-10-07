@@ -106,6 +106,28 @@ describe('ActiveProcessingWidget', () => {
     expect(await screen.findByRole('link', { name: /Example App · update/ })).toHaveAttribute('href', '/apps');
   });
 
+  it('shows LLM model/source, elapsed time, a run deep link and Ollama residency', async () => {
+    mockGetSystemActivity.mockResolvedValue({
+      ...idle,
+      llm: { trusted: true, active: 1, runs: [{ runId: 'run-1', providerId: 'ollama', model: 'example:7b', source: 'music-video-document', startedAt: new Date(Date.now() - 125000).toISOString() }] },
+      ollama: { trusted: true, models: [{ id: 'example:7b', name: 'example:7b', size: 1073741824, sizeVram: 1073741824 }] },
+      activity: { idle: false, activeCount: 1, queuedCount: 0, blockers: [] },
+    });
+    renderWidget();
+    expect(await screen.findByRole('link', { name: /ollama · example:7b · music-video-document/ })).toHaveAttribute('href', '/cos/runs?run=run-1');
+    expect(screen.getByText('2:05')).toBeInTheDocument();
+    expect(screen.getByText('LLM')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Ollama loaded · example:7b/ })).toHaveTextContent('1 GB · GPU');
+    // Replacing one active run with another must repaint even when count stays 1.
+    expect(sameProcessingSnapshot({ llm: { active: 1, runs: [{ runId: 'a' }] } }, { llm: { active: 1, runs: [{ runId: 'b' }] } })).toBe(false);
+  });
+
+  it('shows external Ollama loads from telemetry even when PortOS is idle', async () => {
+    mockGetGpuTelemetry.mockResolvedValue({ ollama: { trusted: true, models: [{ id: 'external', name: 'external', size: 1073741824, sizeVram: 0 }] } });
+    renderWidget();
+    expect(await screen.findByRole('link', { name: /Ollama loaded · external/ })).toHaveTextContent('1 GB · CPU');
+  });
+
   it('cancels a live job from its row', async () => {
     mockGetSystemActivity.mockResolvedValue({
       jobs: [{ id: 'image-1', kind: 'image', status: 'running', progress: 0.5, startedAt: new Date().toISOString(), params: { prompt: 'Example image' } }],

@@ -2,19 +2,22 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { AudioLines, Bot, Brain, Cpu, ExternalLink, Film, Image as ImageIcon, Layers3, Package, X } from 'lucide-react';
 import * as api from '../../services/api';
+import { formatBytes, formatCount } from '../../utils/formatters';
+import { useTimeTick } from '../../hooks/useTimeTick';
 import { useAutoRefetch } from '../../hooks/useAutoRefetch';
 import { sameProcessingSnapshot, useSystemActivity } from '../../hooks/useSystemActivity';
 
 export { sameProcessingSnapshot };
 
-// nvidia-smi has no lifecycle event, so utilization cannot ride the activity
+// nvidia-smi and external Ollama loads have no lifecycle event, so telemetry cannot ride the activity
 // invalidation. Poll it only while this inspector intersects the viewport;
 // useAutoRefetch also pauses while the tab is hidden. The activity snapshot
 // itself is not polled.
 const GPU_SAMPLE_MS = 3000;
 const sameGpuSample = (a, b) => a?.gpu?.status === b?.gpu?.status
   && a?.gpu?.laneBusy === b?.gpu?.laneBusy
-  && a?.gpu?.gpus?.[0]?.utilizationPercent === b?.gpu?.gpus?.[0]?.utilizationPercent;
+  && a?.gpu?.gpus?.[0]?.utilizationPercent === b?.gpu?.gpus?.[0]?.utilizationPercent
+  && JSON.stringify(a?.ollama) === JSON.stringify(b?.ollama);
 
 function useElementVisible() {
   const ref = useRef(null);
@@ -76,7 +79,7 @@ function LaneRow({ to, icon: Icon, label, detail }) {
   return (
     <Link to={to} className="mt-1.5 flex items-center gap-2 rounded-lg border border-port-border bg-port-bg/60 px-2.5 py-2 text-xs text-gray-300 hover:border-port-accent/50">
       <Icon size={14} className="text-port-accent" />
-      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <span className="min-w-0 flex-1 truncate" title={label}>{label}</span>
       {detail ? <span className="shrink-0 font-mono text-gray-500">{detail}</span> : null}
       <ExternalLink size={13} className="shrink-0 text-gray-500" />
     </Link>
@@ -99,6 +102,9 @@ function ActiveProcessingWidget() {
   const gpu = telemetry?.gpu;
   const imageTo3d = data?.extras?.imageTo3d || [];
   const mind = data?.mind;
+  const llm = data?.llm;
+  const now = useTimeTick(1000);
+  const ollama = telemetry?.ollama ?? data?.ollama;
   const appOperations = data?.appOperations || [];
   const activeAgents = data?.agents?.active || 0;
   // Derived server-side (server/lib/systemIdle.js) and rendered as sent: the
@@ -120,9 +126,13 @@ function ActiveProcessingWidget() {
         <span className={`rounded-full px-2 py-1 text-[10px] font-medium uppercase tracking-wider ${idle ? 'bg-port-border/60 text-gray-500' : 'bg-port-accent/15 text-port-accent'}`}>{!confirmed ? 'unknown' : idle ? 'idle' : `${activity.activeCount} active${activity.queuedCount ? ` · ${activity.queuedCount} queued` : ''}`}</span>
       </div>
       {!confirmed && !data ? <p className="text-xs text-gray-500">Checking render lanes…</p> : !data ? <p className="text-xs text-gray-500">Activity unknown</p> : <>
-        {!idle ? <div className="mb-3 grid grid-cols-2 gap-1.5 text-center @xs:grid-cols-4"><Metric icon={Bot} value={activeAgents} label="agents" /><Metric icon={Layers3} value={runningJobs} label="rendering" /><Metric icon={Brain} value={mind?.thinking ? 'yes' : 'no'} label="thinking" /><Metric icon={Cpu} value={gpu?.laneBusy ? 'busy' : 'ready'} label="GPU" /></div> : null}
+        {!idle ? <div className="mb-3 grid grid-cols-2 gap-1.5 text-center @xs:grid-cols-5"><Metric icon={Bot} value={activeAgents} label="agents" /><Metric icon={Layers3} value={runningJobs} label="rendering" /><Metric icon={Cpu} value={llm?.trusted === false ? '?' : formatCount(llm?.active || 0)} label="LLM" /><Metric icon={Brain} value={mind?.thinking ? 'yes' : 'no'} label="thinking" /><Metric icon={Cpu} value={gpu?.laneBusy ? 'busy' : 'ready'} label="GPU" /></div> : null}
         {idle ? <Link to="/system-resources/overview" className="flex items-center justify-between rounded-lg border border-port-border bg-port-bg px-3 py-3 text-xs text-gray-400 transition-colors hover:border-port-accent/50 hover:text-gray-200"><span>Nothing is running</span><span>GPU {gpu?.status === 'available' ? 'ready' : gpu?.status || 'unknown'} →</span></Link> : null}
         <div className="space-y-1.5">{jobs.map((job) => <JobRow key={job.id} job={job} onCancel={cancel} />)}</div>
+        {(llm?.runs || []).map((run) => <LaneRow key={`llm-${run.runId}`} to={`/cos/runs?run=${encodeURIComponent(run.runId)}`} icon={Cpu} label={`${run.providerId || 'LLM'} · ${run.model || 'default model'} · ${run.source || 'run'}`} detail={elapsed(run.startedAt, now)} />)}
+        {llm?.active > (llm?.runs?.length || 0) ? <LaneRow to="/cos/runs" icon={Cpu} label="Additional LLM runs" detail={formatCount(llm.active - (llm?.runs?.length || 0))} /> : null}
+        {(ollama?.models || []).map((model) => <LaneRow key={`ollama-${model.id}`} to="/models/llms" icon={Cpu} label={`Ollama loaded · ${model.name || model.id}`} detail={[model.size == null ? 'size unknown' : formatBytes(model.size), model.sizeVram == null ? 'processor unknown' : model.sizeVram === 0 ? 'CPU' : model.size != null && model.sizeVram >= model.size ? 'GPU' : 'GPU/CPU'].join(' · ')} />)}
+        {ollama?.trusted === false ? <p className="mt-1.5 text-xs text-gray-500">Ollama residency unavailable</p> : null}
         {imageTo3d.map((item) => <LaneRow key={`3d-${item.id}`} to="/3d" icon={Layers3} label={`Image-to-3D · ${item.name}`} />)}
         {/* Counts and lifecycle only — never what the mind is thinking ABOUT. */}
         {mind?.thinking || mind?.queued ? (

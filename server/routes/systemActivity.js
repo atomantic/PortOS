@@ -8,7 +8,7 @@ const router = Router();
 // backup, and update state. No GPU shell-out. Clients read it once on subscribe
 // and again when `system:activity` invalidates, including after a reconnect.
 router.get('/activity', asyncHandler(async (_req, res) => {
-  res.json(await getSystemActivity());
+  res.json(await getSystemActivity({ includeOllama: true }));
 }));
 
 // nvidia-smi samples. No event source — the live-activity inspector polls this

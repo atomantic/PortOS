@@ -1325,8 +1325,8 @@ async function getEmbeddings(text, options = {}) {
  * manager's availability cache or error state.
  * @returns {Promise<{models:Array<{id,name,size,sizeVram,expiresAt}>,error:string|null}>}
  */
-async function getLoadedModelsAt(baseUrl) {
-  const data = await ollamaRequestAt(baseUrl, '/api/ps').catch((err) => ({ _err: err.message }))
+async function getLoadedModelsAt(baseUrl, options = {}) {
+  const data = await ollamaRequestAt(baseUrl, '/api/ps', options).catch((err) => ({ _err: err.message }))
   if (!Array.isArray(data?.models)) {
     return { models: [], error: data?._err || 'Ollama residency endpoint returned no model list' }
   }
@@ -1348,12 +1348,12 @@ async function getLoadedModelsAt(baseUrl) {
  * occupy memory until it's referenced by a request.
  * @returns {Promise<Array<{ id, name, size, sizeVram, expiresAt }>>}
  */
-async function getLoadedModels() {
+async function getLoadedModels(options = {}) {
   if (!(await checkOllamaAvailable())) {
     lastLoadedModelsError = status.lastError || 'Ollama is unavailable'
     return []
   }
-  const result = await getLoadedModelsAt(config.baseUrl)
+  const result = await getLoadedModelsAt(config.baseUrl, options)
   lastLoadedModelsError = result.error
   return result.models
 }

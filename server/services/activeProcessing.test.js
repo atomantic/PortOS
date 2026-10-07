@@ -8,15 +8,19 @@ vi.mock('../lib/cudaCapability.js', () => ({ getCudaCapability: deps.capability,
 vi.mock('./mediaJobQueue/index.js', () => ({ listJobs: deps.jobs, getRunningJob: deps.running }));
 vi.mock('./mediaJobQueue/sanitizeJob.js', () => ({ sanitizeJob: (job) => ({ id: job.id, kind: job.kind, status: job.status, params: { musicStudio: job.params.musicStudio } }) }));
 vi.mock('./imageTo3d/models.js', () => ({ listGeneratingModelSummaries: deps.models }));
-vi.mock('./ollamaManager.js', () => ({ getLoadedModels: deps.loaded }));
+vi.mock('./ollamaManager.js', () => ({ getLoadedModels: deps.loaded, getLastLoadedModelsError: () => null }));
 vi.mock('./cos.js', () => ({ getPendingTaskIds: deps.tasks, getStatus: deps.status, getAgents: deps.agents }));
 vi.mock('./cosState.js', () => ({ readPersistentMindStateForSafetyCheck: deps.mind }));
 vi.mock('./appOperations.js', () => ({ listActiveAppOperations: deps.operations }));
 vi.mock('./updateChecker.js', () => ({ isUpdateInProgress: deps.updating }));
-vi.mock('./runner.js', () => ({ getActiveRunCount: deps.runCount }));
+vi.mock('./runner.js', () => ({ getActiveRunCount: deps.runCount, getActiveRunSummaries: async () => [] }));
 vi.mock('./backup.js', () => ({ isBackupInProgress: deps.backupRunning }));
 
-const { getActiveProcessing } = await import('./activeProcessing.js');
+let getActiveProcessing;
+beforeEach(async () => {
+  vi.resetModules();
+  ({ getActiveProcessing } = await import('./activeProcessing.js'));
+});
 
 describe('active processing snapshot', () => {
   beforeEach(() => {
@@ -247,7 +251,7 @@ describe('LLM run and backup snapshot activity', () => {
     deps.runCount.mockResolvedValue(1);
     deps.backupRunning.mockReturnValue(false);
     const snapshot = await getActiveProcessing();
-    expect(snapshot.llm).toEqual({ trusted: true, active: 1 });
+    expect(snapshot.llm).toMatchObject({ trusted: true, active: 1 });
     expect(snapshot.activity.idle).toBe(false);
     expect(snapshot.activity.blockers.map(b => b.kind)).toContain('llm-running');
   });
@@ -259,7 +263,7 @@ describe('LLM run and backup snapshot activity', () => {
     deps.runCount.mockRejectedValue(new Error('toolkit unavailable'));
     deps.backupRunning.mockReturnValue(false);
     const snapshot = await getActiveProcessing();
-    expect(snapshot.llm).toEqual({ trusted: false, active: 0 });
+    expect(snapshot.llm).toMatchObject({ trusted: false, active: 0 });
     expect(snapshot.activity.idle).toBe(false);
     expect(snapshot.activity.blockers.map(b => b.kind)).toContain('llm-unreadable');
   });
@@ -268,7 +272,7 @@ describe('LLM run and backup snapshot activity', () => {
     deps.runCount.mockResolvedValue(0);
     deps.backupRunning.mockReturnValue(false);
     const snapshot = await getActiveProcessing();
-    expect(snapshot.llm).toEqual({ trusted: true, active: 0 });
+    expect(snapshot.llm).toMatchObject({ trusted: true, active: 0 });
     expect(snapshot.activity.idle).toBe(true);
   });
 
