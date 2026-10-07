@@ -378,6 +378,17 @@ describe('startAutonomousVideo', () => {
     });
   });
 
+  it('keeps the board text-only when the run names no image tool, or caps spend on a paid one', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['video:local'] });
+    await vi.waitFor(() => expect(doubles.createMoodBoard).toHaveBeenCalledOnce());
+    expect(doubles.createMoodBoard.mock.calls[0][1]).toEqual({ renderRoute: null });
+    store.clear();
+    doubles.createMoodBoard.mockClear();
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:fal'], budgetUsd: 5 });
+    await vi.waitFor(() => expect(doubles.createMoodBoard).toHaveBeenCalledOnce());
+    expect(doubles.createMoodBoard.mock.calls[0][1]).toEqual({ renderRoute: null });
+  });
+
   it('parks needs-human when production parks, and failed when it fails', async () => {
     await service.startAutonomousVideo({ prompt: 'p' });
     await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
@@ -1188,7 +1199,9 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     expect(reviews()).toEqual(['lyrics:revise', 'lyrics:approve', 'style:revise', 'style:approve', 'song:retake', 'song:approve']);
     // The revisions are what the song and mood board were made from.
     expect(runOf().output).toMatchObject({ lyrics: '[Chorus]\nrain rain on glass', sunoStyle: 'synthwave, 96 bpm, airy female vocal' });
-    expect(doubles.createMoodBoard).toHaveBeenCalledWith(expect.objectContaining({ stylePrompt: 'wet neon, teal and magenta' }));
+    // Its notes render on the run's own image tool (#10531).
+    expect(doubles.createMoodBoard).toHaveBeenCalledWith(expect.objectContaining({ stylePrompt: 'wet neon, teal and magenta' }),
+      { renderRoute: { target: 'music-video', mode: 'local', model: undefined } });
     expect(doubles.generateLocalSong).toHaveBeenCalledTimes(2);
     expect(doubles.generateLocalSong.mock.calls[0][0]).toMatchObject({ lyrics: '[Chorus]\nrain rain on glass', prompt: expect.stringContaining('96 bpm') });
     // The orchestrator also judges production's plates and drafts.

@@ -52,6 +52,9 @@ export { localizeBoardMedia } from './localize.js';
 // Collage compilation + video frame extraction (fires its own federation emits).
 export { composeBoardCollage, extractItemFrames } from './collage.js';
 
+// Render a text note into an image (#10531); the completion hook converts it.
+export { renderBoardItem } from './renderItem.js';
+
 // Announce a newly-created board to the per-record peer-sync pipeline: emit the
 // 'updated' event so any existing subscription pushes it, AND auto-subscribe
 // every moodBoards-enabled peer so brand-new boards (and their later tombstones)

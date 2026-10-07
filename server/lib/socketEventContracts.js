@@ -357,6 +357,21 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
       additionalProperties: false,
     },
   },
+  'mood-board:item-render': {
+    direction: 'server-to-client',
+    summary: 'A mood board text note render was queued, finished (the note is now an image item) or failed; reload the board.',
+    payloadSchema: {
+      type: 'object',
+      properties: {
+        boardId: { type: 'string' },
+        itemId: { type: 'string' },
+        status: { type: 'string', enum: ['queued', 'done', 'failed'] },
+        error: { type: 'string' },
+      },
+      required: ['boardId', 'itemId', 'status'],
+      additionalProperties: false,
+    },
+  },
   'brain:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate Brain summary/settings after a persisted change.',

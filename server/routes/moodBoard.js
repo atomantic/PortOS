@@ -20,6 +20,7 @@ import {
   moodBoardXPostImportSchema,
   moodBoardCollageSchema,
   moodBoardExtractFramesSchema,
+  moodBoardItemRenderSchema,
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
@@ -47,6 +48,7 @@ import {
   localizeBoardMedia,
   composeBoardCollage,
   extractItemFrames,
+  renderBoardItem,
 } from '../services/moodBoard/index.js';
 
 const router = Router();
@@ -101,6 +103,13 @@ router.patch('/:id/items/:itemId', asyncHandler(async (req, res) => {
   const data = validateRequest(moodBoardItemUpdateSchema, req.body);
   const item = await updateBoardItem(req.params.id, req.params.itemId, data);
   res.json(item);
+}));
+
+// Render a text note into an image (#10531). 202: the job is queued; the note
+// becomes an image item when it completes (mood-board:item-render follows it).
+router.post('/:id/items/:itemId/render', asyncHandler(async (req, res) => {
+  const route = validateRequest(moodBoardItemRenderSchema, req.body ?? {});
+  res.status(202).json(await renderBoardItem(req.params.id, req.params.itemId, route));
 }));
 
 router.delete('/:id/items/:itemId', asyncHandler(async (req, res) => {

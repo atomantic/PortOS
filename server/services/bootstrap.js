@@ -158,6 +158,7 @@ import { initCreativeDirectorMusicBedHook } from './creativeDirectorMusicBedHook
 import { initMusicStudioHook } from './musicStudioHook.js';
 import { initImageGenQuotaHook } from './imageGenQuota.js';
 import { initSpriteReferenceImageHook } from './spriteReferenceImageHook.js';
+import { initMoodBoardItemRenderHook } from './moodBoardItemRenderHook.js';
 import { initDeckRenderHook } from './deckRenderHook.js';
 import { initCreativeDirectorSceneImageHook } from './creativeDirectorSceneImageHook.js';
 import { initCreativeDirectorRenderFailureHook } from './creativeDirector/renderFailureHook.js';
@@ -718,6 +719,9 @@ const initMediaJobDependentHooks = () => {
   // render into the sprite record's reference/candidates/ with a generation
   // sidecar (#2896).
   initSpriteReferenceImageHook();
+  // Mood board note render hook — turns a rendered text note into its image
+  // item (#10531). It only listens.
+  initMoodBoardItemRenderHook();
   // Deck card hook — files a completed card render onto its deck card row.
   initDeckRenderHook();
   // Creative Director scene-frame hook — durably files a queued first-pass

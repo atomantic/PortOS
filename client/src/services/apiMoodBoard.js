@@ -140,3 +140,13 @@ export const extractMoodBoardItemFrames = (id, itemId, count, options) =>
     body: JSON.stringify({ count }),
     ...options,
   });
+
+// Render a text note into an image (#10531) on the install's default image
+// backend. Resolves to `{ item, jobId }` once queued; the note becomes an image
+// item when the job completes (`mood-board:item-render` follows it).
+export const renderMoodBoardItem = (id, itemId, options) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/items/${encodeURIComponent(itemId)}/render`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+    ...options,
+  });
