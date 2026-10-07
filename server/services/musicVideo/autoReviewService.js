@@ -209,7 +209,7 @@ async function reviewDraft(project, run, excerpt) {
   const temporal = !sections.length && project.scenes?.some(isPerformanceScene)
     ? { version: 1, status: 'unverified', analyzer: null, reason: 'The draft has no performance-section provenance', shots: [] }
     : await analyzeTemporalPerformance({ excerptPath, shots });
-  const evidence = { boundaryFrames: hasSheet ? 1 : 0, continuousFrames: frameTimes.length, temporal, excerptStartSec: excerpt.startSec };
+  const evidence = { boundaryFrames: hasSheet ? 1 : 0, continuousFrames: frameTimes.length, temporal, ...(excerpt.footageVisibility ? { footageVisibility: excerpt.footageVisibility } : {}), excerptStartSec: excerpt.startSec };
 
   let parsed = null;
   let reviewerError = null;

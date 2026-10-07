@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { MAX_REVIEW_IMAGES, SHEET_TILES, buildAutoReviewPrompt, planStripTimes } from './autoReviewJudge.js';
+import { MAX_REVIEW_IMAGES, SHEET_TILES, buildAutoReviewPrompt, gateAutoReview, planStripTimes } from './autoReviewJudge.js';
 
 const sections = (n, span) => Array.from({ length: n }, (_, i) => ({ startSec: (i * span) / n, endSec: ((i + 1) * span) / n }));
 
@@ -36,5 +36,16 @@ describe('planStripTimes (#9272)', () => {
     expect(prompt).toContain('concept for the whole video');
     expect(prompt).toContain('A single shot need not show every subject or motif of the concept');
     expect(prompt).toContain('"shotPrompt":"The desk dissolves into circuits"');
+  });
+});
+
+
+describe('footage visibility evidence admission', () => {
+  it('does not allow a clean model result to turn missing footage samples into a pass', () => {
+    const result = gateAutoReview({ parsed: { checks: { composition: 'pass', continuity: 'pass', motion: 'pass' }, findings: [] },
+      analysis: { ok: true, spanSec: 8, avDriftSec: 0, freezes: [] },
+      evidence: { temporal: { status: 'not-applicable', shots: [] }, footageVisibility: [{ atSec: 3, status: 'unverified' }] } });
+    expect(result.verdict).toBe('inconclusive');
+    expect(result.checks.composition).toBe('unverified');
   });
 });

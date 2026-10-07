@@ -312,7 +312,7 @@ function documentMuxArgs(videoPath, audioPath, outputPath, { startSec, durationS
  * Resolves `{ width, height, fps, durationSec, startSec, boundaryTimes }`.
  */
 export async function encodeDocumentComposition({
-  project, plan, jobId, audioPath, soundBed = null, outputPath, signal, onProgress, windowStart = null, windowEnd = null, fade = false,
+  project, plan, jobId, audioPath, soundBed = null, outputPath, signal, onProgress, windowStart = null, windowEnd = null, fade = false, collectFootageVisibility = false,
 }) {
   const { findFfmpeg, runFfmpegProcess, probeVideoGeometry, edgeFadeFilter } = await import('../../lib/ffmpeg.js');
   const { stageMusicVideoComposition } = await import('../htmlComposition/index.js');
@@ -368,6 +368,31 @@ export async function encodeDocumentComposition({
     }
     const target = documentTargetFrame(parsed.data, project);
     const window = documentRenderWindow(target, { windowStart, windowEnd });
+    // Sample three moments per footage shot against its actual transformed source.
+    // Bound cost for long edits; unsampled/missing hooks remain explicit unknowns.
+    if (target.width !== parsed.data.width || target.height !== parsed.data.height) {
+      await page.evaluate(`globalThis.portosComposition.layout({ width: ${target.width}, height: ${target.height} })`);
+    }
+    const footageVisibility = [];
+    for (const scene of data.scenes.filter(s => collectFootageVisibility && s.visualLayer === 'footage' && s.startSec < window.startSec + window.durationSec && s.endSec > window.startSec)) {
+      const start = Math.max(scene.startSec, window.startSec);
+      const end = Math.min(scene.endSec, window.startSec + window.durationSec);
+      for (const fraction of [0.2, 0.5, 0.8]) {
+        signal?.throwIfAborted();
+        const at = Math.floor((start + (end - start) * fraction) * target.fps) / target.fps;
+        let sample = null;
+        if (footageVisibility.length < 288) sample = await page.evaluate(`(async () => {
+          const c = globalThis.portosComposition;
+          await c.seek(${at}, { reviewFootage: true });
+          return c.footageVisibility || null;
+        })()`).catch(() => null);
+        const measured = sample?.sceneId === scene.sceneId
+          && ['visibleFraction', 'hiddenFraction', 'measuredFraction'].every(key => Number.isFinite(sample[key]) && sample[key] >= 0 && sample[key] <= 1)
+          && Math.abs(sample.visibleFraction + sample.hiddenFraction - sample.measuredFraction) < 0.001;
+        footageVisibility.push({ sceneId: scene.sceneId, atSec: round3(at - window.startSec),
+          ...(measured ? { status: 'measured', visibleFraction: sample.visibleFraction, hiddenFraction: sample.hiddenFraction, measuredFraction: sample.measuredFraction } : { status: 'unverified' }) });
+      }
+    }
     // Long windows split across several browsers (encodeCompositionSegments).
     await encodeCompositionSegments(page, { ...target, durationSec: window.durationSec }, silent, {
       openPage, encode: encodeComposition,
@@ -397,7 +422,7 @@ export async function encodeDocumentComposition({
     return {
       width: target.width, height: target.height, fps: target.fps,
       durationSec: window.durationSec, startSec: window.startSec,
-      boundaryTimes: documentBoundaryTimes(data, window),
+      boundaryTimes: documentBoundaryTimes(data, window), ...(collectFootageVisibility ? { footageVisibility } : {}),
     };
   } finally {
     if (page) await page.close().catch(() => {});

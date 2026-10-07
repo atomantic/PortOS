@@ -441,8 +441,8 @@
   // A view of ctx for authored code drawn over footage: a fillRect or clearRect whose
   // on-canvas area (after the current transform, clipped to the frame) covers most of it is
   // limited to a translucent wash (clears are dropped), and the 'copy' composite mode, which
-  // replaces every pixel, is refused. Other full-frame paints (a canvas-sized path fill or
-  // drawImage) are not caught here; the prompt tells the model not to make them.
+  // replaces every pixel, is refused. Path fills, drawImage and combined small shapes are checked separately by
+  // the pixel visibility evidence; this fast guard only handles rectangles.
   const FOOTAGE_WASH_ALPHA = 0.25;
   function footageOverlayContext(target) {
     const covers = (x, y, w, h) => {
@@ -452,7 +452,7 @@
       const xs = pts.map((p) => p[0]); const ys = pts.map((p) => p[1]);
       const cw = Math.max(0, Math.min(W, Math.max(...xs)) - Math.max(0, Math.min(...xs)));
       const ch = Math.max(0, Math.min(H, Math.max(...ys)) - Math.max(0, Math.min(...ys)));
-      return cw * ch >= W * H * 0.9;
+      return cw * ch >= W * H * 0.45;
     };
     return new Proxy(target, {
       get(obj, prop) {
@@ -476,7 +476,43 @@
     });
   }
 
-  function render(t, scene, source, state) {
+  // Compare the same camera-transformed footage before and after composition.
+  // Local covariance tolerates color offsets/translucent washes; an opaque panel
+  // loses the source's local variation. Flat source tiles are unknown, never hidden.
+  function compareFootagePixels(before, after, width, height) {
+    let visible = 0; let hidden = 0; let total = 0;
+    for (let y = 0; y < height; y += 8) for (let x = 0; x < width; x += 8) {
+      let count = 0; let sumA = 0; let sumB = 0; let sumAA = 0; let sumAB = 0;
+      // Separate channel means so a flat colored clip doesn't masquerade as texture.
+      let variance = 0; let covariance = 0;
+      for (let channel = 0; channel < 3; channel++) {
+        count = 0; sumA = 0; sumB = 0; sumAA = 0; sumAB = 0;
+        for (let py = y; py < Math.min(height, y + 8); py++) for (let px = x; px < Math.min(width, x + 8); px++) {
+          const offset = (py * width + px) * 4 + channel;
+          const a = before[offset]; const b = after[offset];
+          count++; sumA += a; sumB += b; sumAA += a * a; sumAB += a * b;
+        }
+        variance += sumAA - sumA * sumA / count;
+        covariance += sumAB - sumA * sumB / count;
+      }
+      const pixels = count;
+      total += pixels;
+      if (variance / (pixels * 3) < 16) continue;
+      if (covariance / variance >= 0.5) visible += pixels;
+      else hidden += pixels;
+    }
+    return { visibleFraction: visible / total, hiddenFraction: hidden / total, measuredFraction: (visible + hidden) / total };
+  }
+  const visibilityCanvas = document.createElement('canvas');
+  visibilityCanvas.width = 160; visibilityCanvas.height = 96;
+  const visibilityContext = visibilityCanvas.getContext('2d', { willReadFrequently: true });
+  const footagePixels = () => {
+    visibilityContext.drawImage(canvas, 0, 0, 160, 96);
+    return visibilityContext.getImageData(0, 0, 160, 96).data;
+  };
+  let footageVisibility = null;
+
+  function render(t, scene, source, state, reviewFootage = false) {
     ctx.fillStyle = C.ink; ctx.fillRect(0, 0, W, H);
     const authored = sectionFunction(t);
     if (scene) {
@@ -490,6 +526,7 @@
       }
       if (isHighEnergy(t)) glitch(t, pulse(t, downs, 8) * state.reactiveGain);
     }
+    const before = reviewFootage && source ? footagePixels() : null;
     if (authored?.fn) {
       const inset = 0.1;
       ctx.save();
@@ -515,6 +552,7 @@
       const line = SUBTITLES.find((l) => t >= l.startSec && t < l.endSec);
       if (line) subtitle(t, line);
     }
+    footageVisibility = before ? { sceneId: scene.sceneId, ...compareFootagePixels(before, footagePixels(), 160, 96) } : null;
   }
 
   // ---------- contract ----------
@@ -531,13 +569,14 @@
     // One timeline, every aspect: the layout hook reframes before capture.
     formats: ['1920x1080', '1080x1920', '1080x1080'],
     layout({ width, height }) { resize(width, height); },
-    async seek(t) {
+    get footageVisibility() { return footageVisibility; },
+    async seek(t, { reviewFootage = false } = {}) {
       await ready;
       const state = eventState(t);
       t = state.t;
       const scene = sceneAt(t);
       const source = scene && !cardFor(scene) ? await sourceFor(scene, t) : null;
-      render(t, scene, source, state);
+      render(t, scene, source, state, reviewFootage);
       return true;
     },
   };

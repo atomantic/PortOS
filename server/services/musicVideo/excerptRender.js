@@ -17,6 +17,7 @@
  * the SAME project while one is already in flight.
  */
 
+import { documentSceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { captureMusicVideoEvidence } from '../../lib/musicVideoDependencies.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { unlink } from 'fs/promises';
@@ -127,11 +128,11 @@ const SEEKED_EXCERPTS = Object.freeze({
       const plan = await prepareDocumentRender(project);
       const songSections = (project.scenes || [])
         .filter((s) => s?.sceneId && typeof s.startSec === 'number' && typeof s.endSec === 'number' && s.endSec > s.startSec)
-        .map((s) => ({ sceneId: s.sceneId, startSec: s.startSec, endSec: s.endSec }));
+        .map((s) => ({ sceneId: s.sceneId, layer: documentSceneVisualLayer(project, s, { generated: project.composition?.document?.source?.kind === 'generated' }), startSec: s.startSec, endSec: s.endSec }));
       return { plan, totalSec: plan.durationSec, songSections };
     },
     encode: ({ prepared, project, jobId, audioPath, soundBed, outputPath, signal, onProgress, startSec, endSec, fade }) => encodeDocumentComposition({
-      project, plan: prepared.plan, jobId, audioPath, soundBed, outputPath, signal, onProgress, windowStart: startSec, windowEnd: endSec, fade,
+      project, plan: prepared.plan, jobId, audioPath, soundBed, outputPath, signal, onProgress, windowStart: startSec, windowEnd: endSec, fade, collectFootageVisibility: true,
     }),
   },
 });
@@ -208,7 +209,7 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
       console.warn(`⚠️ Music-video ${renderer.label} excerpt contact sheet failed [${jobId.slice(4, 12)}]: ${err.message}`);
       contactSheetFilename = null;
     }
-    const persisted = await finalize({ status: 'complete', filename, contactSheetFilename, error: null, jobId: null, width: encoded.width ?? null, height: encoded.height ?? null });
+    const persisted = await finalize({ status: 'complete', filename, contactSheetFilename, error: null, jobId: null, width: encoded.width ?? null, height: encoded.height ?? null, ...(encoded.footageVisibility ? { footageVisibility: encoded.footageVisibility } : {}) });
     if (!persisted) {
       await unlink(outputPath).catch(() => {});
       broadcastSse(job, { type: 'error', error: 'The excerpt rendered, but saving the result failed — reload the project and try again' });
