@@ -227,11 +227,22 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     const id = currentId();
     if (id) markUnsettled(op => op.id === id);
   };
-  const continueSettlement = fn => currentId() ? run('settlement', 'Output publication', fn, { continuation: true }) : fn();
+  // A publication boundary may prove its callback never started. Keep the
+  // reservation while it waits, but do not mistake refused admission for an
+  // uncertain write. Callers without that proof retain the conservative default.
+  const continueSettlement = (fn, { hasStarted } = {}) => currentId()
+    ? run('settlement', 'Output publication', fn, { continuation: true, hasStarted }) : fn();
   const run = async (kind, resource, fn, options) => {
     const permit = admit(kind, resource, options);
     try { return await permit.run(fn); }
-    catch (err) { if (kind === 'settlement') permit.markUnsettled(); throw err; }
+    catch (err) {
+      if (kind === 'settlement') {
+        let started = true;
+        try { started = options?.hasStarted?.() !== false; } catch { /* Missing proof remains uncertain. */ }
+        if (started) permit.markUnsettled();
+      }
+      throw err;
+    }
     finally { await permit.finish(); }
   };
   const begin = ({ reason, owner }) => {
