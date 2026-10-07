@@ -642,6 +642,14 @@ function renderFieldPatch(scene, direction, { lipSyncAvailable, imagesAllowed = 
   return { visualLayer: 'still', ...((scene.stillMove ?? 'hold') === 'hold' ? { stillMove: 'push' } : {}) };
 }
 
+/** Code-first Apply never reinterprets layers, but a lip-sync performance footage shot must carry the Performance shot mode preflight demands. */
+function codeFirstRenderFieldPatch(scene, direction, lipSyncAvailable) {
+  const footage = ['existing-footage', 'generated-footage'].includes(direction.medium);
+  if (!lipSyncAvailable || !footage || direction.mode !== 'performance') return {};
+  if ((scene.visualLayer ?? 'footage') !== 'footage' || (scene.shotMode ?? 'cutaway') !== 'cutaway') return {};
+  return { shotMode: 'performance' };
+}
+
 const withPlannedScenes = (project, planned) => {
   const byId = new Map(planned.map((s) => [s.sceneId, s]));
   return { ...project, scenes: (project.scenes || []).map((s) => byId.get(s.sceneId) || s) };
@@ -714,7 +722,7 @@ export function buildApplyPreview(project) {
     const fields = promptFieldPlans(scene, direction);
     // This slice only plans code-first execution: never reinterpret procedural
     // direction as legacy footage/card selection or switch a render mode.
-    const renderFields = mediumPlan.strategy === 'code-first' ? {} : renderFieldPatch(scene, direction, { lipSyncAvailable, imagesAllowed });
+    const renderFields = mediumPlan.strategy === 'code-first' ? codeFirstRenderFieldPatch(scene, direction, lipSyncAvailable) : renderFieldPatch(scene, direction, { lipSyncAvailable, imagesAllowed });
     planned.push({ ...scene, ...renderFields });
     scenes.push({
       sceneId: scene.sceneId,
