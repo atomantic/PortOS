@@ -430,13 +430,28 @@ export function extractCodeSections(text) {
     const start = candidate.indexOf('{');
     const end = candidate.lastIndexOf('}');
     if (start < 0 || end <= start) continue;
-    try {
-      const parsed = JSON.parse(candidate.slice(start, end + 1));
-      if (!Array.isArray(parsed?.sections)) continue;
-      return parsed.sections.filter((section) => section && typeof section.id === 'string' && typeof section.source === 'string');
-    } catch { /* the next fence may be the document */ }
+    const parsed = parseSectionsJson(candidate.slice(start, end + 1));
+    if (!Array.isArray(parsed?.sections)) continue;
+    return parsed.sections.filter((section) => section && typeof section.id === 'string' && typeof section.source === 'string');
   }
   return [];
+}
+
+// Local models often close the JSON slightly wrong: stray characters after the final
+// `]}` (`..."}]}"}`) or a section object left unclosed (`..."]}`). Try the text as given,
+// then a few bounded repairs, and return the first that parses (or null).
+function parseSectionsJson(json) {
+  const trimmed = [json];
+  for (let end = json.length - 1, tries = 0; end > 0 && tries < 8; end = json.lastIndexOf('}', end - 1), tries += 1) {
+    if (json[end] === '}' && end < json.length - 1) trimmed.push(json.slice(0, end + 1));
+  }
+  // Each cut-back also gets the unclosed-object repair, so both slips together still parse.
+  const closeLast = (text) => (/"\s*\]\s*\}\s*$/.test(text) ? [text.replace(/"\s*\]\s*\}\s*$/, '"}]}')] : []);
+  const attempts = [...trimmed, ...trimmed.flatMap(closeLast)];
+  for (const attempt of attempts) {
+    try { return JSON.parse(attempt); } catch { /* try the next repair */ }
+  }
+  return null;
 }
 
 /** Author only bounded drawing functions; the host owns the page and media. */
