@@ -310,9 +310,9 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
   };
   const promptFor = (batchIds) => {
     const sections = context.song.sections.filter((section) => batchIds.includes(section.id));
-    // Only the scenes (and storyboard shots) a batch's sections cover: a long storyboard would
-    // otherwise put every shot in each batch and push it past a local model's budget.
-    const scoped = batchIds.length < ids.length;
+    // Section regenerates and partial batches need only their overlapping scenes and shots.
+    // A whole-song request retains all of its direction context.
+    const scoped = Boolean(sectionId) || batchIds.length < ids.length;
     const scenes = scoped ? batchScenes(context.scenes, sections) : context.scenes;
     return buildMixedMediaDocumentPrompt({
       renderer: musicVideoDocumentRenderer(project), mediaMode: musicVideoMediaMode(project),

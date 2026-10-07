@@ -39,6 +39,8 @@ node <repo-root>/scripts/portos-api.js get /api/api-docs/catalog.json
 
 `PORTOS_API_TOKEN` and `PORTOS_URL`, when set, win over the key file, so the same command works inside a PortOS-spawned agent.
 
+Requests wait up to 30 minutes for long-running AI routes, including reading the response body. Pass `--timeout <seconds>` to change that deadline, for example `portos-api post /api/music-video/autonomous @brief.json --timeout 3600`. A timeout closes the client connection and reports the elapsed limit; the server may still be working, so check the outcome before submitting the same operation again.
+
 Plain `curl` works too:
 
 ```bash

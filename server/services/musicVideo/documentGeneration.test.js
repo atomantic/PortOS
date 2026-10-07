@@ -404,15 +404,25 @@ describe('treatment-driven mixed-media document authoring', () => {
   it('revises one section, preserves the other functions, and refuses a stale acceptance', async () => {
     const id = await fixture();
     const motionLanguage = 'Energy: playful. 0–10s unfold on downbeats; 20–30s expand the chorus gesture.';
-    await projects.mutateProjectRecord(id, current => ({ project: { ...current, productionReview: { draft: { motionLanguage, implementationPlan: 'Hinged paper rig and analytic camera arc.' } } } }));
+    await projects.mutateProjectRecord(id, current => ({ project: { ...current, productionReview: { draft: {
+      motionLanguage, implementationPlan: 'Hinged paper rig and analytic camera arc.',
+      storyboard: ['s-intro', 's-still', 's-clip'].map((sceneId) => ({ sceneId, action: `choreography for ${sceneId}` })),
+    } } } }));
     const first = (await generateMixedMediaDocument(id)).document;
     expect(h.prompt).toContain(motionLanguage);
+    for (const sceneId of ['s-intro', 's-still', 's-clip']) expect(h.prompt).toContain(`choreography for ${sceneId}`);
     const before = await manifestAt(first);
     h.response = response({ still: '#00ff00' });
     const second = (await regenerateMixedMediaSection(id, 'still', { expectedDraft: first.directory })).document;
     const after = await manifestAt(second);
     expect(h.prompt).toContain(motionLanguage);
     expect(h.prompt).toContain('Hinged paper rig and analytic camera arc.');
+    expect(h.prompt).toContain('choreography for s-still');
+    expect(h.prompt).toContain('"sceneId":"s-still"');
+    for (const sceneId of ['s-intro', 's-clip']) {
+      expect(h.prompt).not.toContain(`choreography for ${sceneId}`);
+      expect(h.prompt).not.toContain(`"sceneId":"${sceneId}"`);
+    }
     expect(after.sections.map((s) => s.source)).toEqual([before.sections[0].source, source('#00ff00'), before.sections[2].source]);
     await expect(regenerateMixedMediaSection(id, 'still', { expectedDraft: first.directory })).rejects.toMatchObject({ code: 'COMPOSITION_DRAFT_STALE' });
     await projects.mutateProjectRecord(id, (current) => ({ project: {
