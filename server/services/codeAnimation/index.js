@@ -412,7 +412,8 @@ const canAttachImages = (provider) => provider.type === 'api'
   || isVisionCapableCliProvider(provider) || isVisionCapableCodexTuiProvider(provider);
 
 async function runGeneration({ provider, model, effort, prompt, referencePaths }) {
-  const { runPromptThroughProvider, assertVisionRunUsedImages } = await import('../promptRunner.js');
+  const promptRunner = await import('../promptRunner.js');
+  const { runPromptThroughProvider } = promptRunner;
   const result = await runPromptThroughProvider({
     provider,
     model: model || undefined,
@@ -427,7 +428,8 @@ async function runGeneration({ provider, model, effort, prompt, referencePaths }
     screenshots: canAttachImages(provider) ? referencePaths : [],
     timeout: Math.max(provider.timeout || 0, 15 * 60 * 1000),
   });
-  if (referencePaths.length && canAttachImages(provider)) assertVisionRunUsedImages(result, provider);
+  // A fallback to a non-vision provider must not silently drop the references.
+  if (referencePaths.length && canAttachImages(provider)) promptRunner.assertVisionRunUsedImages(result, provider);
   const html = extractAnimationHtml(result.text);
   if (!html) throw new Error('The model response did not contain an HTML document');
   return { html, provider: result.provider?.id || provider.id, model: result.model || null, runId: result.runId || null };
