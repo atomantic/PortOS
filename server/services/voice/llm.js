@@ -442,7 +442,7 @@ export const streamChat = async (messages, opts = {}) => {
     // open/close tag are held across chunks. All tag spellings handled in parallel.
     const STRIP_TAGS = [...TOOL_TAG_SPELLINGS, 'think', 'thinking', 'reasoning'];
     const OPEN_TAGS = STRIP_TAGS.map((s) => `<${s}>`);
-    const CLOSE_TAGS = STRIP_TAGS.map((s) => `</${s}>`);
+    const _CLOSE_TAGS = STRIP_TAGS.map((s) => `</${s}>`);
     let activeClose = null; // set when we entered a tool block
     let tailHold = '';
     // Find the earliest match of any candidate in `data`, starting at 0.

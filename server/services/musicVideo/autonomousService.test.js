@@ -11,6 +11,13 @@ vi.mock('./productionReview.js', async (load) => {
     },
   };
 });
+// Footage needs image-to-video: one fake model is text-only, every other id is not installed.
+vi.mock('./productionPool.js', async (load) => ({
+  ...(await load()),
+  loadPoolEnv: async () => ({
+    resolveVideoModel: async (id) => ({ modelId: id, model: id === 'example-text-only' ? { id, name: 'Example Text Model', supportedModes: ['text'] } : null }),
+  }),
+}));
 vi.mock('./productionReviewService.js', () => ({
   prepareProductionReview: vi.fn(async () => {}),
   renderProductionProof: vi.fn(async () => ({ jobId: 'proof-example' })),
@@ -308,7 +315,7 @@ describe('startAutonomousVideo', () => {
       expect(runOf()).toMatchObject({ status: 'running', output: expect.objectContaining({ productionRunId: 'mvpr-manual', productionDone: true, renderJobId: 'render-1' }) });
     });
 
-    it('resumes a parked run with raised limits, and a model swap starts a new production run with the new pool', async () => {
+    it('resumes a parked run with raised limits, and a model swap continues that run with the new pool', async () => {
       await delegated();
       store.get('mv-auto').productionRuns[0].status = 'limit-reached';
       await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'limit-reached', stopReason: 'generation limit' } });
@@ -320,6 +327,26 @@ describe('startAutonomousVideo', () => {
 
       store.get('mv-auto').productionRuns[0].status = 'blocked';
       await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'blocked', stopReason: 'no image-to-video' } });
+      // A text-only replacement is refused like Start, before the brief or production changes.
+      await expect(service.resumeAutonomousVideo('mv-auto', { models: { 'video:local': 'example-text-only' } }))
+        .rejects.toMatchObject({ status: 400, code: 'VIDEO_MODEL_TEXT_ONLY', message: expect.stringMatching(/Example Text Model.*image-to-video/) });
+      expect(runOf().brief.models).toEqual({ 'video:local': 'text-only' });
+      expect(doubles.resumeProduction).toHaveBeenCalledTimes(1);
+
+      await service.resumeAutonomousVideo('mv-auto', { models: { 'video:local': 'image-capable' } });
+      expect(doubles.resumeProduction).toHaveBeenLastCalledWith('mv-auto', 'mvpr-1', {
+        acceptBasis: true, pool: [{ kind: 'image', mode: 'local' }, { kind: 'video', mode: 'local', model: 'image-capable' }],
+      });
+      expect(doubles.cancelProduction).not.toHaveBeenCalled();
+      expect(doubles.startProduction).toHaveBeenCalledOnce();
+      expect(runOf()).toMatchObject({ status: 'running', brief: expect.objectContaining({ models: { 'video:local': 'image-capable' } }), output: expect.objectContaining({ productionRunId: 'mvpr-1' }) });
+      await expect(service.resumeAutonomousVideo('mv-auto', { models: { 'image:fal': 'x' } })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    });
+
+    it('starts a new production run with the swapped models when the old one cannot resume', async () => {
+      await delegated();
+      store.get('mv-auto').productionRuns[0].status = 'needs-human';
+      await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'needs-human', stopReason: 'review ended' } });
       doubles.startProduction.mockResolvedValueOnce({ run: { id: 'mvpr-2' } });
       // Like the real service, canceling the old run publishes its own "canceled" event.
       doubles.cancelProduction.mockImplementationOnce(async (projectId, runId) => {
@@ -330,8 +357,6 @@ describe('startAutonomousVideo', () => {
       expect(doubles.cancelProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1');
       await vi.waitFor(() => expect(runOf().output.productionRunId).toBe('mvpr-2'));
       expect(doubles.startProduction.mock.calls[1][1].pool).toEqual([{ kind: 'image', mode: 'local' }, { kind: 'video', mode: 'local', model: 'image-capable' }]);
-      await expect(service.resumeAutonomousVideo('mv-auto', { models: { 'image:fal': 'x' } })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
-      expect(runOf()).toMatchObject({ status: 'running', output: expect.objectContaining({ productionRunId: 'mvpr-2' }) });
     });
 
     it('re-pins a production run left running by a previous server process', async () => {
@@ -1204,7 +1229,7 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     expect(reviews()).toEqual(['lyrics:revise', 'lyrics:approve', 'style:revise', 'style:approve', 'song:approve']);
   });
 
-  it('clears art, lyric timing and storyboard like a director, then logs its look at the final video', async () => {
+  it('clears art, lyric timing and storyboard like a director, then re-authors the sections it flags in the final video', async () => {
     creativeReview.real = true;
     const actual = await vi.importActual('./productionReview.js');
     doubles.approveProductionReview = stub('approve', async (id, input) => {
@@ -1269,10 +1294,132 @@ describe('orchestrated mode (brief.orchestrator)', () => {
       storyboard: { approvedBy: 'orchestrator' } });
     expect(project.productionReview.alignmentReview.reviewer).toMatchObject({ kind: 'orchestrator', runId: runOf().id });
 
+    // The flagged second goes back as a change request on the film, the document is
+    // re-authored with it open, and the film is rendered and watched again.
+    doubles.renderVideo.mockResolvedValueOnce({ jobId: 'render-2' });
+    doubles.activeRenderJobId.mockResolvedValue('render-2');
     await service.__testing.onRenderEvent({ projectId: 'mv-auto', jobId: 'render-1', status: 'completed' });
+    await vi.waitFor(() => expect(runOf().output.renderJobId).toBe('render-2'));
+    expect(doubles.generateDocument).toHaveBeenCalledTimes(2);
+    expect(store.get('mv-auto').productionReview.feedback.at(-1)).toMatchObject({ stage: 'proof', target: 'final@0:18', text: 'Static hold',
+      resolution: 'Re-authored by the orchestrator.', resolvedAt: expect.any(String) });
+    await service.__testing.onRenderEvent({ projectId: 'mv-auto', jobId: 'render-2', status: 'completed' });
     await settled('completed');
-    expect(reviews()).toEqual(['lyrics:approve', 'style:approve', 'song:approve', 'art:revise', 'art:approve', 'alignment:approve', 'storyboard:revise', 'storyboard:approve', 'final:noted']);
-    expect(runOf().orchestration.reviews.at(-1)).toMatchObject({ issues: [{ atSec: 18, text: 'Static hold' }], notes: expect.stringContaining('Judged without frames') });
-    expect(doubles.finalReviewFrames).toHaveBeenCalledWith('render-1');
+    expect(reviews()).toEqual(['lyrics:approve', 'style:approve', 'song:approve', 'art:revise', 'art:approve', 'alignment:approve', 'storyboard:revise', 'storyboard:approve', 'final:revise', 'final:approve']);
+    expect(runOf().orchestration.reviews.at(-2)).toMatchObject({ issues: [{ atSec: 18, text: 'Static hold' }], notes: expect.stringContaining('Judged without frames') });
+    expect(doubles.finalReviewFrames.mock.calls.map(([jobId]) => jobId)).toEqual(['render-1', 'render-2']);
+  });
+
+  describe('final-video revision of footage', () => {
+    const PRODUCTION = { id: 'mvpr-1', limits: { maxGenerations: 40, spendCapUsd: null }, usage: { generations: 10 } };
+    // Runs a footage film to its first final review, which flags 0:04 (and later 0:12).
+    const reachFinalReview = async (production = PRODUCTION) => {
+      doubles.startAutoReview = stub('auto-review', async () => ({ run: { id: 'mvar-fix' } }));
+      for (const name of ['stopAutoReview', 'cancelAutoReview', 'resumeAutoReview']) doubles[name] = stub(name, async () => ({}));
+      service.__setAutonomousDepsForTests(doubles);
+      doubles.analyzeSong.mockImplementation(async () => {
+        Object.assign(store.get('mv-auto'), { scenes: [{ sceneId: 'a', startSec: 0, endSec: 10 }, { sceneId: 'b', startSec: 10, endSec: 20 }] });
+      });
+      answers.final = [
+        { verdict: 'revise', notes: 'The opening stutters.', issues: [{ atSec: 4, text: 'Frozen frame' }] },
+        { verdict: 'revise', notes: 'Still soft.', issues: [{ atSec: 12, text: 'Blurry' }] },
+      ];
+      await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], limits: { maxReviewAttempts: 1 }, orchestrator: ORCHESTRATOR }, { autoApproveAuthorized: true });
+      await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
+      store.get('mv-auto').productionRuns = [production];
+      await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'completed' } });
+      // A finished render is the project's latest, as the render service records it.
+      store.get('mv-auto').renderHistoryId = 'render-1';
+      await service.__testing.onRenderEvent({ projectId: 'mv-auto', jobId: 'render-1', status: 'completed' });
+    };
+    const rendersAgain = async () => {
+      doubles.renderVideo.mockResolvedValueOnce({ jobId: 'render-2' });
+      doubles.activeRenderJobId.mockResolvedValue('render-2');
+    };
+
+    it('sends flagged footage back through an auto-review it judges, within the generations production left, then stops at the limit', async () => {
+      await reachFinalReview();
+      await vi.waitFor(() => expect(runOf().output.finalAutoReviewId).toBe('mvar-fix'));
+      expect(doubles.startAutoReview).toHaveBeenCalledWith('mv-auto', { startSec: 0, endSec: 10, limits: { maxAttempts: 2, maxGenerations: 30 },
+        reviewer: { providerId: 'orch', model: 'judge' } });
+      expect(runOf()).toMatchObject({ status: 'running', stages: { produce: { step: 'final-revision' } } });
+
+      await rendersAgain();
+      musicVideoEvents.emit('auto-review', { projectId: 'mv-auto', runId: 'mvar-fix', run: { id: 'mvar-fix', status: 'passed' } });
+      await vi.waitFor(() => expect(runOf().output.renderJobId).toBe('render-2'));
+      await service.__testing.onRenderEvent({ projectId: 'mv-auto', jobId: 'render-2', status: 'completed' });
+      await settled('completed');
+      expect(doubles.startAutoReview).toHaveBeenCalledOnce();
+      expect(reviews().slice(-2)).toEqual(['final:revise', 'final:noted']);
+      expect(runOf().orchestration.reviews.at(-1).notes).toMatch(/Revision limit reached/);
+    });
+
+    it.each([
+      ['a dollar budget is set', { ...PRODUCTION, limits: { maxGenerations: 40, spendCapUsd: 5 } }, /dollar budget/],
+      ['production spent its generations', { ...PRODUCTION, usage: { generations: 40 } }, /spent its generations/],
+    ])('keeps the film without a revision when %s', async (_, production, why) => {
+      await reachFinalReview(production);
+      await settled('completed');
+      expect(doubles.startAutoReview).not.toHaveBeenCalled();
+      expect(runOf().orchestration.reviews.at(-1)).toMatchObject({ checkpoint: 'final', verdict: 'noted', notes: expect.stringMatching(why) });
+    });
+
+    it('carries Stop, Resume and Cancel through to the revision, and re-renders when Resume finds it already ended', async () => {
+      await reachFinalReview();
+      await vi.waitFor(() => expect(runOf().output.finalAutoReviewId).toBe('mvar-fix'));
+      await service.stopAutonomousVideo('mv-auto');
+      expect(doubles.stopAutoReview).toHaveBeenCalledWith('mv-auto', 'mvar-fix');
+      await service.resumeAutonomousVideo('mv-auto');
+      expect(doubles.resumeAutoReview).toHaveBeenCalledWith('mv-auto', 'mvar-fix');
+      expect(runOf()).toMatchObject({ status: 'running', stages: { produce: { step: 'final-revision' } } });
+
+      // The revision ends while the run is stopped (its event is ignored); Resume renders the revised film.
+      await service.stopAutonomousVideo('mv-auto');
+      doubles.resumeAutoReview.mockRejectedValueOnce(Object.assign(new Error('This run is already canceled'), { code: 'AUTO_REVIEW_CLOSED' }));
+      await rendersAgain();
+      await service.resumeAutonomousVideo('mv-auto');
+      expect(runOf()).toMatchObject({ status: 'running', output: { renderJobId: 'render-2', finalAutoReviewId: null } });
+
+      await service.cancelAutonomousVideo('mv-auto');
+      expect(doubles.cancelAutoReview).not.toHaveBeenCalled();
+    });
+
+    it('parks for a director when Resume cannot reach the revision for another reason', async () => {
+      await reachFinalReview();
+      await vi.waitFor(() => expect(runOf().output.finalAutoReviewId).toBe('mvar-fix'));
+      await service.stopAutonomousVideo('mv-auto');
+      doubles.resumeAutoReview.mockRejectedValueOnce(Object.assign(new Error('database unavailable'), { code: 'DB_DOWN' }));
+      await service.resumeAutonomousVideo('mv-auto');
+      expect(runOf()).toMatchObject({ status: 'needs-human', errorCode: 'DB_DOWN', error: expect.stringContaining('database unavailable'), output: { finalAutoReviewId: 'mvar-fix' } });
+      expect(doubles.renderVideo).toHaveBeenCalledOnce();
+
+      await service.cancelAutonomousVideo('mv-auto');
+      expect(doubles.cancelAutoReview).toHaveBeenCalledWith('mv-auto', 'mvar-fix');
+    });
+
+    it('parks with the reason when the revision hands off to a human, and renders again once the director resumes', async () => {
+      await reachFinalReview();
+      await vi.waitFor(() => expect(runOf().output.finalAutoReviewId).toBe('mvar-fix'));
+      await service.__testing.onAutoReviewEvent({ projectId: 'mv-auto', runId: 'mvar-fix',
+        run: { id: 'mvar-fix', status: 'needs-human', stopReason: 'The clip for scene a cannot be generated automatically' } });
+      expect(runOf()).toMatchObject({ status: 'needs-human', errorCode: 'FINAL_REVISION_NEEDS_HUMAN',
+        error: expect.stringContaining('cannot be generated automatically'), output: { finalAutoReviewId: 'mvar-fix', renderJobId: 'render-1' } });
+
+      // Resume before the director finished the revision keeps the run parked.
+      const closed = () => Object.assign(new Error('This run is needs-human'), { code: 'AUTO_REVIEW_CLOSED' });
+      Object.assign(store.get('mv-auto'), { autoReviews: [{ id: 'mvar-fix', status: 'needs-human', attempts: [{ n: 1, revisionId: 'rev-1' }] }],
+        revisions: [{ id: 'rev-1', status: 'open' }] });
+      doubles.resumeAutoReview.mockRejectedValueOnce(closed());
+      await service.resumeAutonomousVideo('mv-auto');
+      expect(runOf()).toMatchObject({ status: 'needs-human', errorCode: 'FINAL_REVISION_NEEDS_HUMAN',
+        error: expect.stringContaining('Finish or cancel the open revision'), output: { finalAutoReviewId: 'mvar-fix' } });
+      expect(doubles.renderVideo).toHaveBeenCalledOnce();
+
+      store.get('mv-auto').revisions[0].status = 'complete';
+      doubles.resumeAutoReview.mockRejectedValueOnce(closed());
+      await rendersAgain();
+      await service.resumeAutonomousVideo('mv-auto');
+      expect(runOf()).toMatchObject({ status: 'running', output: { renderJobId: 'render-2', finalAutoReviewId: null } });
+    });
   });
 });

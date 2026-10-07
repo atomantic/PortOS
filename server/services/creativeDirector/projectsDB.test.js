@@ -40,7 +40,7 @@ let skipReason = '';
     skipReason = `Postgres not reachable (${health.error || 'no connection'})`;
   } else {
     await ensureSchema().catch(() => {});
-    const recheck = await checkHealth().catch(() => ({}));
+    const _recheck = await checkHealth().catch(() => ({}));
     // hasSchema is the memory-schema flag; ensureSchema also creates our table.
     // Probe the table directly so we don't couple to the memory schema state.
     const probe = await query(

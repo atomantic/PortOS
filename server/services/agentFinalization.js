@@ -1,4 +1,4 @@
-import { PR_MISSING_CATEGORY, prClaimWasVerified } from '../lib/prDisposition.js';
+import { PR_COMPLETIONS, resolvePrCompletion, PR_MISSING_CATEGORY, prClaimWasVerified } from '../lib/prDisposition.js';
 import { isAuditTaskType } from '../lib/auditCatalog.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 /**
@@ -430,6 +430,7 @@ const PR_OBSERVATION = Object.freeze({
   WORK_LANDED_ELSEWHERE: 'work-landed-elsewhere',
   /** The change request exists but does not close the issue its branch names. */
   INVALID_TRAILER: 'invalid-trailer',
+  INVALID_DISPOSITION: 'invalid-disposition',
   /** We could not ask, or could not read the answer. Says nothing about the PR. */
   FORGE_UNAVAILABLE: 'forge-unavailable',
 });
@@ -467,6 +468,7 @@ const PR_OBSERVATION_POLICY = Object.freeze({
   // so the run stands as reported. `recordable` so the ledger carries the
   // stand-down (verified: true) rather than silently omitting the transition.
   [PR_OBSERVATION.WORK_LANDED_ELSEWHERE]: Object.freeze({ completionOk: true, observed: true, namesBranch: true, recordable: true, category: null }),
+  [PR_OBSERVATION.INVALID_DISPOSITION]: Object.freeze({ completionOk: false, observed: true, namesBranch: true, recordable: true, category: 'pr-disposition' }),
   [PR_OBSERVATION.INVALID_TRAILER]: Object.freeze({ completionOk: false, observed: true, namesBranch: true, recordable: true, category: ISSUE_TRAILER_MISSING_CATEGORY }),
   [PR_OBSERVATION.FORGE_UNAVAILABLE]: Object.freeze({ completionOk: false, observed: true, namesBranch: true, recordable: false, category: FORGE_UNREACHABLE_CATEGORY }),
 });
@@ -591,13 +593,18 @@ async function observePrClaim({ task, workspacePath, success, prExpected, agentS
   // on, which on a multi-login host may not even see the PR — reading as
   // "no PR" for a run that opened one.
   const { cli, env } = await resolveForgeForRepo(workspacePath).catch(() => ({ cli: 'gh', env: null }));
+  const draft = task?.metadata?.prCompletion === PR_COMPLETIONS.DRAFT;
   const found = cli === 'glab'
-    ? await (await import('./gitlab.js')).findMergeRequestForBranch(branch, workspacePath)
-    : await (await import('./github.js')).findPullRequestForBranch(branch, { cwd: workspacePath, env: env || null });
+    ? await (await import('./gitlab.js')).findMergeRequestForBranch(branch, workspacePath, ...(draft ? [{ includeDraft: true }] : []))
+    : await (await import('./github.js')).findPullRequestForBranch(branch, { cwd: workspacePath, env: env || null, ...(draft ? { includeDraft: true } : {}) });
 
   const noun = cli === 'glab' ? 'merge request' : 'pull request';
   const titleNoun = `${noun[0].toUpperCase()}${noun.slice(1)}`;
   if (found.status === 'found') {
+    if (draft && (found.isDraft !== true || !['OPEN', 'opened'].includes(found.detail))) {
+      return prObservation(PR_OBSERVATION.INVALID_DISPOSITION, { branch,
+        message: `This run requires an open draft ${noun}; the forge did not confirm that disposition for ${branch}` });
+    }
     const issueNumber = issueNumberFromRef(branch);
     if (issueNumber === null) return prObservation(PR_OBSERVATION.VERIFIED_CLAIM, { branch });
     if (typeof found.body !== 'string') {
@@ -1465,7 +1472,7 @@ export async function finalizeAgent({
   // of it on the closure of every suite that reaches finalization. Gated on the
   // WIDEST trigger so a clean `ship` — the overwhelmingly common verdict — does
   // not evaluate that graph just to be told there is nothing to act on.
-  if (goalFidelityFollowUpApplies(fidelity.review, 'any-finding')) {
+  if (resolvePrCompletion(task?.metadata) !== PR_COMPLETIONS.LEAVE_OPEN && goalFidelityFollowUpApplies(fidelity.review, 'any-finding')) {
     const followUp = await import('./goalFidelityFollowUp.js')
       .then(({ runGoalFidelityFollowUp }) => runGoalFidelityFollowUp({ agentId, task, review: fidelity.review, context: fidelity.context }))
       .catch(err => {
@@ -1922,7 +1929,10 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
     const recorded = await recordAuditQuality({ task, taskType, agentId, success, assessedAt,
       workspacePath: hookPayloadDir({ task, workspacePath, recovery }) })
       .catch(err => emitLog('warn', `⚠️ Audit quality was not saved for ${agentId}: ${err.message}`, { agentId }));
-    if (recorded === true) await publishAppSnapshotFileAfterAudit(task?.metadata?.app);
+    // A review-only run must not land a separate snapshot behind the user's back.
+    if (recorded === true && resolvePrCompletion(task?.metadata) !== PR_COMPLETIONS.LEAVE_OPEN) {
+      await publishAppSnapshotFileAfterAudit(task?.metadata?.app);
+    }
     // Assessment telemetry never waives commit/PR success criteria for fix mode.
     return { ran: false };
   }

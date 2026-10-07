@@ -263,7 +263,7 @@ const generateSchema = z.object({
 // allowlist below so the route never silently relabels (e.g. HEIC) bytes
 // as ".png".
 const ACCEPTED_INIT_IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/webp']);
-const MIME_TO_EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp' };
+const _MIME_TO_EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp' };
 
 // Multi-reference editing accepts up to 4 references on dedicated field names.
 // The legacy single `initImage` upload (mflux i2i) stays on its own slot so a

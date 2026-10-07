@@ -399,13 +399,14 @@ async function execForgeCli(cli, args, dir, env) {
  * @param {string} options.head - Head branch (source, must be pushed to remote)
  * @returns {Promise<{success: boolean, url?: string, error?: string, cli?: string, account?: string|null, owner?: string|null, host?: string|null}>}
  */
-export async function createPR(dir, { title, body, base, head }) {
+export async function createPR(dir, { title, body, base, head, draft = false }) {
   const { cli, env, host, owner, account } = await resolveForgeForRepo(dir);
 
   const args = cli === 'glab'
     ? ['mr', 'create', '--title', title, '--description', body || '', '--target-branch', base, '--source-branch', head]
     : ['pr', 'create', '--title', title, '--body', body || '', '--base', base, '--head', head];
 
+  if (draft) args.push('--draft');
   const meta = { cli, account, owner, host };
 
   try {

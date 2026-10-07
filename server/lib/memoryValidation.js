@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { partialWithoutDefaults } from './zodCompat.js';
+import { MEMORY_LINK_TYPES } from './memoryLinkTypes.js';
 
 // Memory ids are directory names in the file-backed store. Keep route input
 // constrained to one plain path segment before it reaches any filesystem code.
@@ -186,8 +187,15 @@ export const memoryDecaySchema = z.object({
 // Link memories request schema
 export const memoryLinkSchema = z.object({
   sourceId: z.string().guid(),
-  targetId: z.string().guid()
-});
+  targetId: z.string().guid(),
+  // Omitted means the legacy symmetric 'related' link, so older clients keep working.
+  linkType: z.enum(MEMORY_LINK_TYPES).optional(),
+  note: z.string().max(2000).optional(),
+  createdBy: z.string().trim().min(1).max(100).optional()
+}).refine(
+  (v) => v.sourceId !== v.targetId || (v.linkType ?? 'related') === 'related',
+  { message: 'A directed link needs two different memories', path: ['targetId'] }
+);
 
 // Single sync memory item schema (incoming from remote peer)
 const syncMemoryItemSchema = z.object({

@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
-import { useSearchParams } from 'react-router';
+import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
+import { useNavigate, useParams, useSearchParams } from 'react-router';
 import {Trash2, X, Check, XCircle, Pencil, AlertTriangle, Brain, Bot} from 'lucide-react';
 import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
@@ -41,6 +41,16 @@ export default function MemoryTab({ apps = [] }) {
   const [embeddingStatus, setEmbeddingStatus] = useState(null);
   const [backendStatus, setBackendStatus] = useState(null);
   const [editingMemory, setEditingMemory] = useState(null);
+  // /cos/memory/:id deep-links one memory (e.g. from an agent card's "Memories
+  // used"). The shared `cos/:tab/:agentId` route names that segment `agentId`.
+  const { agentId: linkedMemoryId } = useParams();
+  const navigate = useNavigate();
+  const linkedMemory = useMemo(() => (linkedMemoryId ? { id: linkedMemoryId } : null), [linkedMemoryId]);
+  const openMemory = editingMemory || linkedMemory;
+  const closeMemory = useCallback(() => {
+    setEditingMemory(null);
+    if (linkedMemoryId) navigate('/cos/memory', { replace: true });
+  }, [linkedMemoryId, navigate]);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   // Embedding provider/model configuration
@@ -503,15 +513,16 @@ export default function MemoryTab({ apps = [] }) {
       )}
 
       {/* Edit Modal */}
-      {editingMemory && (
+      {openMemory && (
         <MemoryEditModal
-          memory={editingMemory}
+          key={openMemory.id}
+          memory={openMemory}
           apps={apps}
           onSave={() => {
-            setEditingMemory(null);
+            closeMemory();
             fetchData();
           }}
-          onClose={() => setEditingMemory(null)}
+          onClose={closeMemory}
         />
       )}
     </div>

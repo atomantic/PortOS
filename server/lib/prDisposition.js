@@ -24,6 +24,8 @@ export const PR_COMPLETIONS = Object.freeze({
   REVIEW_THEN_MERGE: 'review-then-merge',
   MERGE_ON_GREEN: 'merge-on-green',
   LEAVE_OPEN: 'leave-open',
+  // A creation contract; lifecycle consumers resolve it to LEAVE_OPEN.
+  DRAFT: 'draft',
 });
 
 export const PR_COMPLETION_VALUES = Object.freeze(Object.values(PR_COMPLETIONS));
@@ -82,6 +84,7 @@ export const isSelfReviewMode = (mode) => mode === PR_REVIEW_MODES.SELF;
  * @returns {'review-then-merge'|'merge-on-green'|'leave-open'}
  */
 export function resolvePrCompletion(metadata = {}) {
+  if (metadata?.prCompletion === PR_COMPLETIONS.DRAFT) return PR_COMPLETIONS.LEAVE_OPEN;
   if (PR_COMPLETION_SET.has(metadata?.prCompletion)) return metadata.prCompletion;
   return isTruthyMeta(metadata?.reviewLoop)
     ? PR_COMPLETIONS.REVIEW_THEN_MERGE

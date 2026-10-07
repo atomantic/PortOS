@@ -74,7 +74,7 @@ export const storyBuilderStore = () => store();
 export const ERR_NOT_FOUND = 'STORY_BUILDER_NOT_FOUND';
 export const ERR_VALIDATION = 'STORY_BUILDER_VALIDATION';
 
-const SESSION_ID_RE = /^stb-[A-Za-z0-9-]+$/;
+const _SESSION_ID_RE = /^stb-[A-Za-z0-9-]+$/;
 export const TITLE_MAX = 200;
 export const SEED_MAX = 4000;
 export const INTAKE_MODES = Object.freeze(['seed', 'import']);

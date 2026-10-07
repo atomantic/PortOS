@@ -207,6 +207,12 @@ describe('edge appearance (graph3d extraction)', () => {
     expect(memoryEdgeColor({ type: 'similar' })).toBe('#6b7280');
   });
 
+  it('colors typed links by linkType and keeps related blue', () => {
+    expect(memoryEdgeColor({ type: 'linked', linkType: 'related' })).toBe('#3b82f6');
+    expect(memoryEdgeColor({ type: 'linked', linkType: 'contradicts' })).toBe('#ef4444');
+    expect(memoryEdgeColor({ type: 'linked', linkType: 'supersedes' })).not.toBe('#3b82f6');
+  });
+
   it('scales both edge kinds by weight, unlike BrainGraph\'s flat linked intensity', () => {
     expect(memoryEdgeIntensity({ type: 'linked', weight: 0.5 }, false)).toBeCloseTo(0.3);
     expect(memoryEdgeIntensity({ type: 'similar', weight: 0.5 }, false)).toBeCloseTo(0.15);

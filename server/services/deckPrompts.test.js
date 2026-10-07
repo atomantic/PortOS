@@ -8,7 +8,7 @@ vi.mock('./promptRunner.js', () => ({
 }));
 
 const {
-  castDeckFromUniverse, generateDeckCardPrompts, buildCardPromptsPrompt, PROMPTS_PER_CALL, salvagePromptPairs, __testing,
+  castDeckFromUniverse, generateDeckCardPrompts, buildCardPromptsPrompt, salvagePromptPairs, __testing,
 } = await import('./deckPrompts.js');
 
 const deck = { name: 'Deck', kind: 'tarot', description: 'A lighthouse deck', styleNotes: 'engraved', influences: { embrace: ['sepia'], avoid: [] }, layoutPrompt: 'Full card' };

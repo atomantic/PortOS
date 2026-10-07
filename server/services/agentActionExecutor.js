@@ -528,7 +528,7 @@ async function executeMoltworldSay(client, params) {
  * Moltworld think — send a thought
  */
 async function executeMoltworldThink(client, params) {
-  const result = await client.think(params.thought || 'Thinking...');
+  const _result = await client.think(params.thought || 'Thinking...');
   console.log(`💭 Moltworld: Thought "${(params.thought || '').substring(0, 50)}"`);
   return { type: 'mw_think', thought: params.thought };
 }

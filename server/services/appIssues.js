@@ -149,8 +149,19 @@ function buildGitlabLabelMap(labelRows) {
  * a CLI that answered with zero rows is the definitive `no-open-issues`, never
  * conflated with a read we couldn't make.
  */
-function toIssueResult(rows, normalize) {
-  return { issues: rows.map(normalize), reason: rows.length ? 'ok' : 'no-open-issues', transient: false };
+function toIssueResult(rows, normalize, pageLimit) {
+  const issues = rows.map(normalize);
+  return {
+    issues,
+    reason: rows.length ? 'ok' : 'no-open-issues',
+    transient: false,
+    // A full page is conservatively incomplete: neither CLI reports whether more
+    // rows existed, so only a page shorter than the cap proves exhaustion.
+    enumeration: {
+      capped: rows.length >= pageLimit,
+      bodiesClipped: issues.some((issue) => issue.body.length > BODY_MAX_CHARS),
+    },
+  };
 }
 
 /**
@@ -187,7 +198,7 @@ async function fetchGithubIssues(repoSpec, apiHost, { repoPath = null, forgeAcco
       remedy: 'run `gh issue list` in the repo to see what gh reports',
     };
   }
-  return toIssueResult(rows, normalizeGithubIssue);
+  return toIssueResult(rows, normalizeGithubIssue, GH_LIST_LIMIT);
 }
 
 /**
@@ -223,7 +234,7 @@ async function fetchGitlabIssues(repoPath) {
   // `color: null` and the issue list is returned untouched.
   const labelLookup = await execGlabJson(['label', 'list', '--per-page', String(GL_PER_PAGE)], repoPath);
   const labelMap = labelLookup.rows ? buildGitlabLabelMap(labelLookup.rows) : null;
-  return toIssueResult(rows, (issue) => normalizeGitlabIssue(issue, labelMap));
+  return toIssueResult(rows, (issue) => normalizeGitlabIssue(issue, labelMap), GL_PER_PAGE);
 }
 
 /**
@@ -276,6 +287,7 @@ export async function listAppIssues(app) {
     tracker,
     fullName: target.fullName,
     issues: result.issues,
+    enumeration: result.enumeration || null,
     reason: result.reason,
     transient: result.transient,
     // Headline + remedy ride WITH the reason, so the sentence and the state it

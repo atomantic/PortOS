@@ -372,13 +372,13 @@ describe('Autobiography - saveStory', () => {
 });
 
 describe('Autobiography - updateStory', () => {
-  let savedData;
+  let _savedData;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    savedData = null;
+    _savedData = null;
     writeFile.mockImplementation(async (_path, content) => {
-      savedData = JSON.parse(content);
+      _savedData = JSON.parse(content);
     });
   });
 

@@ -443,6 +443,30 @@ describe('no-code / API-action task completion (CD agents must NOT be told to /d
   });
 });
 
+describe('draft review delivery', () => {
+  it('puts the draft override in the system contract of a split provider prompt', async () => {
+    const task = makeTask({ metadata: { useWorktree: true, openPR: true, reviewLoop: true, prCompletion: 'draft' } });
+    const parts = await buildAgentPrompt(task, {}, '/repo', { worktreePath: '/worktree', branchName: 'audit/topic' }, {
+      providerType: 'cli', providerId: 'claude-code', providerCommand: 'claude', split: true,
+    });
+    expect(parts.systemPrompt).toContain('DRAFT pull request for human review');
+    expect(parts.systemPrompt).toContain('gh pr create --draft');
+    expect(parts.systemPrompt).toContain('--no-merge');
+    expect(parts.systemPrompt).not.toMatch(/gh pr merge|glab mr merge|--auto-merge/);
+    expect(parts.userPrompt).not.toContain('## Draft pull request delivery');
+  });
+
+  it.each([true, false])('overrides merge defaults on the light/full path (%s)', async light => {
+    const task = makeTask({ metadata: { useWorktree: true, openPR: true, reviewLoop: true, prCompletion: 'draft' } });
+    const prompt = light
+      ? buildLightContextPrompt(task, '/repo', { worktreePath: '/worktree', branchName: 'audit/topic' }, { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' })
+      : await buildAgentPrompt(task, {}, '/repo', { worktreePath: '/worktree', branchName: 'audit/topic' }, { providerType: 'api' });
+    expect(prompt).toContain('DRAFT pull request for human review');
+    expect(prompt).toContain('gh pr create --draft');
+    expect(prompt).not.toMatch(/gh pr merge|--auto-merge/);
+  });
+});
+
 describe('claim-flow completion handoff', () => {
   it.each([true, false])('honors leave-open on the %s light/full claim path', async (light) => {
     const task = makeTask({ metadata: { analysisType: 'claim-issue', claimFlow: true, useWorktree: false, openPR: false, prCompletion: 'leave-open' } });
@@ -3105,7 +3129,7 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
         }, '/r', null, { providerType: 'api' });
         expect(prompt).toContain('Example Global Instructions');
         expect(prompt).toMatch(/^## Instructions$/m);
-        expect(getMemorySection).toHaveBeenLastCalledWith(expect.anything(), { maxTokens: 2000 });
+        expect(getMemorySection).toHaveBeenLastCalledWith(expect.anything(), { maxTokens: 2000, onInjected: expect.any(Function) });
         expect(getDigitalTwinForPrompt).toHaveBeenLastCalledWith({ maxTokens: 1200, personaId: 'active' });
         expect(log).toHaveBeenCalledWith('⚠️ Memory retrieval failed: memory unavailable');
         expect(log).toHaveBeenCalledWith('⚠️ Digital twin context retrieval failed: twin unavailable');
@@ -3129,6 +3153,22 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
       vi.mocked(getMemorySection).mockResolvedValue(null);
       vi.mocked(getDigitalTwinForPrompt).mockResolvedValue(null);
       vi.mocked(getToolsSummaryForPrompt).mockResolvedValue('');
+    });
+
+    it('reports the memories retrieval injected through promptTrace for the run record (#10495)', async () => {
+      const injected = [{ id: 'mem-1', version: null, relevance: 0.8 }];
+      vi.mocked(getMemorySection).mockClear().mockImplementationOnce(async (_task, opts) => {
+        opts.onInjected(injected);
+        return '## Memory Context\nTRACE_MEMORY_SENTINEL';
+      });
+      const promptTrace = {};
+      const prompt = await buildAgentPrompt(makeTask(), {}, '/r', null, { providerType: 'api', promptTrace });
+      expect(prompt).toContain('TRACE_MEMORY_SENTINEL');
+      expect(promptTrace.injectedMemories).toEqual(injected);
+
+      const emptyTrace = {};
+      await buildAgentPrompt(makeTask(), {}, '/r', null, { providerType: 'api', promptTrace: emptyTrace });
+      expect(emptyTrace.injectedMemories).toEqual([]);
     });
 
     it('a CD scratch cwd does not leak repo AGENTS.md into getAgentInstructionsContext', async () => {

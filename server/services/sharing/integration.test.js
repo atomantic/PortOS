@@ -1653,7 +1653,7 @@ describe('sharing round-trip', () => {
 
   it('migrates legacy series canon arrays into the linked universe on import (pre-B.4 peer)', async () => {
     const bucket = await buckets.createBucket({ name: 'LegacyCanonBucket', path: tempBucket, mode: 'auto-merge' });
-    const fs = await import('fs');
+    const _fs = await import('fs');
 
     // Local target universe — the migration writes incoming canon here.
     const uni = await universeSvc.createUniverse({ name: 'Pre-B.4 Universe' });

@@ -790,7 +790,7 @@ describe('arcPlanner — verifyVolume', () => {
     const s = await setupSeries();
     await seriesSvc.updateSeries(s.id, { arc: { logline: 'L' } });
     const v1 = await seasonsSvc.createSeason(s.id, { title: 'V1', logline: 'one' });
-    const v2 = await seasonsSvc.createSeason(s.id, { title: 'V2', logline: 'two', endingHook: 'hook2' });
+    const _v2 = await seasonsSvc.createSeason(s.id, { title: 'V2', logline: 'two', endingHook: 'hook2' });
     const v3 = await seasonsSvc.createSeason(s.id, { title: 'V3', logline: 'three' });
     const v4 = await seasonsSvc.createSeason(s.id, { title: 'V4', logline: 'four' });
 

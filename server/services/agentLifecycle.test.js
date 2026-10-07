@@ -577,7 +577,7 @@ function trackedCompletionPreamble() {
 // body and can't be reached without mocking its 40+ imports. Anchored on
 // `runAgentSpawn` (the guarded body extracted from spawnAgentForTask, #2548).
 
-const RUN_SPAWN_START = AGENT_SPAWN_OWNER_SRC.indexOf('export async function prepareAgentSpawn');
+const _RUN_SPAWN_START = AGENT_SPAWN_OWNER_SRC.indexOf('export async function prepareAgentSpawn');
 const RUN_SPAWN_BODY = AGENT_SPAWN_OWNER_SRC;
 
 describe('runAgentSpawn source — handedOff pre-spawn vs post-handoff split', () => {

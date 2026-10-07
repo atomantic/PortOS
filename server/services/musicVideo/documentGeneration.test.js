@@ -79,6 +79,43 @@ describe('treatment-driven mixed-media document authoring', () => {
     expect(h.args).not.toHaveProperty('effort');
   });
 
+  it('splits an oversized whole-song prompt into bounded batches on a local provider only (#10515)', async () => {
+    const id = await fixture();
+    h.provider = { id: 'stub-provider', type: 'api' };
+    await generateMixedMediaDocument(id, { providerId: 'stub-provider' });
+    const whole = h.prompt.length;
+    expect(h.calls).toBe(1);
+
+    // A hosted provider keeps the single whole-song request, whatever its size.
+    h.calls = 0;
+    await generateMixedMediaDocument(id, { providerId: 'stub-provider', promptBudgetChars: whole - 1 });
+    expect(h.calls).toBe(1);
+
+    h.provider = { id: 'ollama', type: 'api' };
+    h.calls = 0;
+    const sizes = [];
+    h.onSubmit = async () => { sizes.push(h.prompt.length); };
+    const { document } = await generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: whole - 1 });
+    expect(h.calls).toBeGreaterThan(1);
+    expect(Math.max(...sizes)).toBeLessThan(whole);
+    const manifest = await manifestAt(document);
+    expect(manifest.sections.map((s) => s.id)).toEqual(['intro', 'still', 'clip']);
+    expect(manifest.sections.every((s) => s.source.includes('function render'))).toBe(true);
+
+    h.calls = 0;
+    await generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: whole });
+    expect(h.calls).toBe(1);
+
+    await expect(generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: 1 }))
+      .rejects.toMatchObject({ code: 'COMPOSITION_PROMPT_TOO_LARGE', message: expect.stringMatching(/\d+ characters/) });
+  });
+
+  it('names the prompt size when authoring times out with no output (#10515)', async () => {
+    const id = await fixture();
+    h.onSubmit = async () => { throw new Error('API execution timed out after 600000ms with no stream progress'); };
+    await expect(generateMixedMediaDocument(id)).rejects.toThrow(/prompt was \d+ characters/);
+  });
+
   it('accepts a legacy generated manifest and upgrades it through an event-only revision', async () => {
     const id = await fixture();
     const first = (await generateMixedMediaDocument(id)).document;

@@ -35,7 +35,7 @@ const WAV = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WA
 const PDF = Buffer.concat([Buffer.from('%PDF-1.4'), Buffer.alloc(8)]);
 
 let TMP;
-let extractChatgptZip, makeAssetResolver, importChatgptZip, sniffExtension, datAssetId;
+let extractChatgptZip, makeAssetResolver, _importChatgptZip, sniffExtension, datAssetId;
 
 describe('chatgptZipImport service', () => {
   beforeEach(async () => {
@@ -43,7 +43,7 @@ describe('chatgptZipImport service', () => {
     const mod = await import('./chatgptZipImport.js');
     extractChatgptZip = mod.extractChatgptZip;
     makeAssetResolver = mod.makeAssetResolver;
-    importChatgptZip = mod.importChatgptZip;
+    _importChatgptZip = mod.importChatgptZip;
     sniffExtension = mod.__test.sniffExtension;
     datAssetId = mod.__test.datAssetId;
   });

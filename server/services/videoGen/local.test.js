@@ -1011,7 +1011,7 @@ describe('extractLastFrame — anchor selection', () => {
  *
  * Returns the array of per-chunk params in call order.
  */
-async function runChainAndCaptureArgs(chainParams, totalChunks) {
+async function _runChainAndCaptureArgs(chainParams, totalChunks) {
   const captured = [];
   const innerJobIds = [];
 

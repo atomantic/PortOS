@@ -429,3 +429,14 @@ describe('remediation coverage', () => {
     }
   });
 });
+
+it.each(['draft', 'leave-open'])('reports divergence without cleanup or recovery for %s delivery', async prCompletion => {
+  existsSync.mockReturnValue(true);
+  listWorktrees.mockResolvedValue([{ path: WORKTREE, branch: BRANCH }]);
+  const result = await run({ task: task({ prCompletion }) });
+  expect(result.verified).toBe(false);
+  expect(result.issues.length).toBeGreaterThan(0);
+  expect(result.recoveryTaskId).toBeNull();
+  expect(addTask).not.toHaveBeenCalled();
+  expect(cleanupMerged).not.toHaveBeenCalled();
+});

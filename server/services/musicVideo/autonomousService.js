@@ -60,6 +60,7 @@ import { probeVideoDuration } from '../../lib/ffmpeg.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { assertFootageVideoModelsCapable, loadPoolEnv } from './productionPool.js';
+import { PRODUCTION_RESUMABLE_STATUSES } from './production.js';
 import {
   AUTONOMOUS_DEFAULT_LIMITS,
   AUTONOMOUS_LIVE_STATUSES,
@@ -133,6 +134,11 @@ const defaults = {
   reviseFromFeedback: async (...args) => (await import('./productionReviewService.js')).reviseProductionFromFeedback(...args),
   guideImagePath: async (artifact) => (await import('./devArtifactStore.js')).resolveDevArtifactFile(artifact.file),
   finalReviewFrames: async (jobId) => (await import('./orchestratorReview.js')).captureFinalReviewFrames(jobId),
+  // The final-video revision of footage: a board-owned auto-review over the flagged window.
+  startAutoReview: async (...args) => (await import('./autoReviewService.js')).startAutoReview(...args),
+  cancelAutoReview: async (...args) => (await import('./autoReviewService.js')).cancelAutoReview(...args),
+  stopAutoReview: async (...args) => (await import('./autoReviewService.js')).stopAutoReview(...args),
+  resumeAutoReview: async (...args) => (await import('./autoReviewService.js')).resumeAutoReview(...args),
   wait: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
 };
 let deps = { ...defaults };
@@ -633,19 +639,100 @@ const settleProductionStage = (project, run, stage) => (isOrchestratedRun(run)
  * this point, so a critical verdict is logged as notes (`noted`) beside the
  * render rather than holding the run. A failed look is logged, never fatal.
  */
+/**
+ * Watch the finished film and send flagged sections back, as a director would:
+ * a `revise` verdict with timecoded issues starts one revision (startFinalRevision)
+ * while revisions remain; anything else is logged and the film is kept. Returns
+ * 'rerender' (re-authored: render the film again), 'wait' (a footage revision
+ * is under way) or null (keep this film).
+ */
 async function orchestrateFinal(projectId, run) {
   const project = await getProject(projectId);
   const frames = await deps.finalReviewFrames(run.output.renderJobId).catch((err) => ({ images: [], frameTimes: [], facts: { error: err.message }, cleanup: async () => {} }));
+  let review;
   try {
     const { buildFinalReviewPrompt } = await reviewModule();
-    const review = await askReview(run, 'final', buildFinalReviewPrompt({ ...ideaOf(run), concept: project?.concept, facts: frames.facts, frameTimes: frames.frameTimes }), frames.images);
-    await recordReview(projectId, reviewEntry('final', review, { verdict: review.verdict === 'approve' ? 'approve' : 'noted',
-      issues: review.issues || [], ...(frames.images.length ? {} : { notes: `Judged without frames (${frames.facts?.error || 'none could be captured'}). ${review.notes || ''}`.trim() }) }));
+    review = await askReview(run, 'final', buildFinalReviewPrompt({ ...ideaOf(run), concept: project?.concept, facts: frames.facts, frameTimes: frames.frameTimes }), frames.images);
   } catch (err) {
     await recordReview(projectId, { checkpoint: 'final', verdict: 'noted', score: null, notes: `The final review could not run: ${trimTo(err.message, 300)}`, route: null, visual: false });
+    return null;
   } finally {
     await frames.cleanup?.().catch(() => {});
   }
+  const issues = review.issues || [];
+  const blind = frames.images.length ? '' : `Judged without frames (${frames.facts?.error || 'none could be captured'}). `;
+  const keep = (why = '') => recordReview(projectId, reviewEntry('final', review, { verdict: review.verdict === 'approve' ? 'approve' : 'noted', issues,
+    notes: `${blind}${why}${review.notes || ''}`.trim() }));
+  if (review.verdict !== 'revise' || !issues.length) return keep(review.verdict === 'revise' ? 'No timecoded issue to revise; kept this film. ' : '').then(() => null);
+  if (revisionsSpent(await latestRun(projectId), 'final') >= reviewLimit(run)) return keep('Revision limit reached; kept the latest film. ').then(() => null);
+  let next;
+  try {
+    next = await startFinalRevision(projectId, run, issues);
+  } catch (err) {
+    await keep(`The revision did not go through (${trimTo(err.message, 200)}); kept this film. `);
+    return null;
+  }
+  await recordReview(projectId, reviewEntry('final', review, { issues, notes: `${blind}${review.notes || ''}`.trim() }));
+  return next;
+}
+
+const FINAL_REVISION_STEP = 'final-revision';
+const timecode = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+
+/** The scenes the issues fall in, as one window (the auto-review's range). */
+function issueWindow(project, issues) {
+  const scenes = (project.scenes || []).filter((scene) => issues.some((issue) => issue.atSec >= scene.startSec && issue.atSec < scene.endSec));
+  if (!scenes.length) return null;
+  return { startSec: Math.min(...scenes.map((s) => s.startSec)), endSec: Math.max(...scenes.map((s) => s.endSec)) };
+}
+
+/**
+ * Send the flagged sections back. A code or document composition is
+ * re-authored with the issues as change requests on the film (the authoring
+ * prompt carries open requests), then rendered again. Footage gets a
+ * board-owned auto-review over the scenes the issues fall in, judged by the
+ * orchestrator and limited to the generations production left unspent; the
+ * film is rendered again when it ends (onAutoReviewEvent). Throws when no
+ * revision can start.
+ */
+async function startFinalRevision(projectId, run, issues) {
+  const project = await getProject(projectId);
+  const code = musicVideoMediaMode(project) === 'code-only' || autonomousMedium(run.brief.tools) === 'code';
+  await patchRun(projectId, (r) => stagePatch(r, 'produce', { status: 'running', step: FINAL_REVISION_STEP }));
+  if (code) return reauthorFinal(projectId, run, issues).then(() => 'rerender');
+  const window = issueWindow(project, issues);
+  if (!window) throw runError(409, 'NO_FLAGGED_SCENE', 'No scene covers the flagged times');
+  const production = (project.productionRuns || []).find((r) => r.id === run.output.productionRunId);
+  // A dollar cap is production's to enforce; a board revision cannot, so it is not spent past it.
+  if (production?.limits?.spendCapUsd != null) throw runError(409, 'FINAL_REVISION_BUDGET', 'a dollar budget is set, which a board revision cannot enforce');
+  const left = production ? Math.max(0, production.limits.maxGenerations - (production.usage?.generations || 0)) : 0;
+  if (!left) throw runError(409, 'FINAL_REVISION_BUDGET', 'production spent its generations');
+  const { run: review } = await deps.startAutoReview(projectId, { ...window, limits: { maxAttempts: 2, maxGenerations: Math.min(left, 100) },
+    reviewer: { providerId: run.brief.orchestrator.providerId, model: run.brief.orchestrator.model || null } });
+  await patchRun(projectId, () => ({ output: { finalAutoReviewId: review.id } }));
+  console.log(`🎬 Autonomous music video ${short(run.id)} sent ${timecode(window.startSec)}-${timecode(window.endSec)} back for revision`);
+  return 'wait';
+}
+
+async function reauthorFinal(projectId, run, issues) {
+  const project = await getProject(projectId);
+  const basis = productionReviewBasis(project).proof;
+  const before = new Set((project.productionReview?.feedback || []).map((f) => f.id));
+  for (const issue of issues.slice(0, 12)) {
+    await deps.addFeedback(projectId, { stage: 'proof', basis, target: `final@${timecode(issue.atSec)}`, text: issue.text, decision: 'request-changes' });
+  }
+  const authoring = !run.brief.llmStages?.authoring && run.brief.authoring ? run.brief.authoring : await llmOf(run, 'authoring');
+  const input = { providerId: authoring.providerId, model: authoring.model || undefined, ...(authoring.effort ? { effort: authoring.effort } : {}) };
+  const failure = await (async () => {
+    if ((await getProject(projectId)).composition?.mode === 'code') return deps.generateCode(projectId, input);
+    const candidate = await deps.generateDocument(projectId, input);
+    return deps.acceptDocument(projectId, candidate.document.directory);
+  })().then(() => null, (err) => err);
+  // Requests stay open through authoring (the prompt carries them), then close either way.
+  const created = ((await getProject(projectId)).productionReview?.feedback || []).filter((f) => !before.has(f.id) && !f.resolvedAt);
+  const resolution = failure ? `The re-authoring failed (${trimTo(failure.message, 200)}); kept the film.` : 'Re-authored by the orchestrator.';
+  for (const entry of created) await deps.closeFeedback(projectId, { feedbackId: entry.id, resolution, reviewer: orchestratorIdentity(run) });
+  if (failure) throw failure;
 }
 
 // ---- stage executors -------------------------------------------------------------
@@ -927,7 +1014,7 @@ const STAGES = {
     }
     const started = await deps.startProduction(project.id, {
       directive: trimTo([run.brief.prompt, run.brief.guidance].filter(Boolean).join('\n\n'), 4000),
-      pool: autonomousPool(run.brief.tools, run.brief.models).filter((route) => musicVideoAllowsMedia(project, route.kind)),
+      pool: briefProductionPool(run.brief, project),
       limits: { ...run.brief.limits, ...(run.brief.budgetUsd != null ? { spendCapUsd: run.brief.budgetUsd } : {}) },
       // The orchestrator also judges production's plates and drafts when the run has one.
       reviewer: isOrchestratedRun(run)
@@ -1047,14 +1134,21 @@ const emptyStages = () => Object.fromEntries(AUTONOMOUS_STAGE_IDS.map((id) => [i
  * Start a run from one prompt: creates the project (autonomous mode, no track
  * yet) and begins the pipeline in the background. Returns `{ project, run }`.
  */
+/** The production pool a brief allows on this project. */
+const briefProductionPool = (brief, project) => autonomousPool(brief.tools, brief.models)
+  .filter((route) => musicVideoAllowsMedia(project, route.kind));
+
+/** Refuse a pinned video model that cannot animate a frame (#10457) before the run records it. */
+async function assertBriefVideoModelsCapable(tools, models) {
+  const pool = autonomousPool(tools, models);
+  if (pool.some((route) => route.kind === 'video' && route.model)) await assertFootageVideoModelsCapable(pool, await loadPoolEnv());
+}
+
 export async function startAutonomousVideo(input, { autoApproveAuthorized = false } = {}) {
   const brief = { ...normalizeAutonomousBrief(input), ...autoApproveGrant(input?.autoApprove, autoApproveAuthorized) };
   if (!brief.prompt) throw runError(400, 'VALIDATION_ERROR', 'A prompt is required');
   if (brief.orchestrator) Object.assign(brief, orchestratorGrant(autoApproveAuthorized));
-  const footagePool = autonomousPool(brief.tools, brief.models);
-  if (footagePool.some((route) => route.kind === 'video' && route.model)) {
-    await assertFootageVideoModelsCapable(footagePool, await loadPoolEnv());
-  }
+  await assertBriefVideoModelsCapable(brief.tools, brief.models);
   const now = new Date().toISOString();
   const created = await deps.createProject({
     name: brief.name || trimTo(brief.prompt.replace(/\s+/g, ' '), 60) || 'Autonomous music video',
@@ -1130,9 +1224,10 @@ const SONG_OUTPUT_KEYS = ['trackId', 'sunoSongIds', 'songSource', 'songFallbackR
 
 export async function resumeAutonomousVideo(projectId, edits = {}, { autoApproveAuthorized = false } = {}) {
   const { run } = await requireRun(projectId);
-  // A model swap only takes effect in a new production run (its pool is fixed at start).
+  // A model swap is validated like Start, then replaces the parked production run's pool (#10473).
   const modelsPatch = briefModelsPatch(run.brief, edits.models);
   assertResumable(run);
+  if (modelsPatch) await assertBriefVideoModelsCapable(run.brief.tools, modelsPatch);
   // "Auto-approve the rest": replaces the brief's grant (an empty list clears it).
   const grant = edits.autoApprove !== undefined ? autoApproveGrant(edits.autoApprove, autoApproveAuthorized) : null;
   const retake = edits.retakeSong === true;
@@ -1179,6 +1274,30 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
     };
   });
   if (retakenTrackId) await unlinkRunTrack(projectId, out.run.id, retakenTrackId);
+  if (out.run.stage === 'produce' && out.run.output.finalAutoReviewId) {
+    // The orchestrator's footage revision picks up where it stopped. One that
+    // already ended (or a director finished) leaves a revised film to render
+    // and review again; any other failure is the director's to see.
+    const failure = await deps.resumeAutoReview(projectId, out.run.output.finalAutoReviewId).then(() => null, (err) => err);
+    if (!failure) {
+      const { project: next, run } = await patchRun(projectId, (r) => stagePatch(r, 'produce', { status: 'running', step: FINAL_REVISION_STEP }));
+      return { project: presentProjectAutonomousRun(next), run: presentAutonomousRun(run) };
+    }
+    if (!['AUTO_REVIEW_CLOSED', 'NOT_FOUND'].includes(failure.code)) {
+      const parked = await park(projectId, 'needs-human', { error: trimTo(`The final revision could not resume: ${failure.message}`, 500), errorCode: failure.code || null });
+      return { project: parked.project, run: presentAutonomousRun(parked.run) };
+    }
+    // A hand-off the director has not finished yet still holds its revision open.
+    const { openAttemptRevisionId } = await import('./autoReview.js');
+    if (openAttemptRevisionId(await getProject(projectId), out.run.output.finalAutoReviewId)) {
+      const parked = await park(projectId, 'needs-human', { error: 'Finish or cancel the open revision of the final video first, then Resume.', errorCode: 'FINAL_REVISION_NEEDS_HUMAN' });
+      return { project: parked.project, run: presentAutonomousRun(parked.run) };
+    }
+    const { run } = await patchRun(projectId, () => ({ output: { finalAutoReviewId: null } }));
+    await startFinalRender(projectId, run);
+    const latest = await getProject(projectId);
+    return { project: presentProjectAutonomousRun(latest), run: presentAutonomousRun(projectAutonomousRun(latest)) };
+  }
   if (out.run.stage === 'produce' && (out.run.output.renderJobId || out.run.output.productionDone)) {
     // Production (or the code render) already finished; only the final render is left.
     await reconcileFinalRender(projectId, { restart: true });
@@ -1186,7 +1305,7 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
     return { project: presentProjectAutonomousRun(latest), run: presentAutonomousRun(projectAutonomousRun(latest)) };
   }
   if (out.run.stage === 'produce' && out.run.output.productionRunId) {
-    return resumeDelegatedProduction(projectId, out.run, { restart: modelsChanged, limits: edits.limits });
+    return resumeDelegatedProduction(projectId, out.run, { swapModels: modelsChanged, limits: edits.limits });
   }
   advanceInBackground(projectId);
   return { project: out.project, run: presentAutonomousRun(out.run) };
@@ -1214,22 +1333,23 @@ const PRODUCTION_LIVE = new Set(['running', 'limit-reached', 'blocked', 'needs-r
 /**
  * Hand a resumed run back to production. It follows the newest production run started
  * since the run began (the director may have replaced its own by hand) and resumes it
- * with any raised limits, or finishes straight to the final render when that run is
- * already complete. A model swap, or no production run left to follow, starts a new
- * one from the brief by re-entering `produce`.
+ * with any raised limits and swapped models, or finishes straight to the final render
+ * when that run is already complete. No production run left to follow — or a model
+ * swap on one that cannot resume — starts a new one from the brief by re-entering `produce`.
  */
-async function resumeDelegatedProduction(projectId, run, { restart = false, limits } = {}) {
+async function resumeDelegatedProduction(projectId, run, { swapModels = false, limits } = {}) {
   const project = await getProject(projectId);
   const runs = Array.isArray(project.productionRuns) ? project.productionRuns : [];
   const current = runs.find((r) => r.id === run.output.productionRunId) || null;
-  const adopt = restart ? null : runs
+  const newest = runs
     .filter((r) => ADOPTABLE_PRODUCTION.has(r.status) && String(r.createdAt || '') >= String(run.createdAt || ''))
     .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0] || null;
+  const adopt = swapModels && newest && !PRODUCTION_RESUMABLE_STATUSES.has(newest.status) ? null : newest;
   if (!adopt) {
     // Unlink first: the old run's own "canceled" event must no longer match this run.
     const out = await patchRun(projectId, (r) => ({ output: { productionRunId: null }, ...stagePatch(r, 'produce', { status: 'pending', error: null, step: null }) }));
     if (current && PRODUCTION_LIVE.has(current.status)) await deps.cancelProduction(projectId, current.id).catch(() => {});
-    console.log(`🎬 Autonomous music video ${short(run.id)} starting a new production run${restart ? ' with the new models' : ''}`);
+    console.log(`🎬 Autonomous music video ${short(run.id)} starting a new production run${swapModels ? ' with the new models' : ''}`);
     advanceInBackground(projectId);
     return { project: out.project, run: presentAutonomousRun(out.run) };
   }
@@ -1243,7 +1363,11 @@ async function resumeDelegatedProduction(projectId, run, { restart = false, limi
   } else {
     // Resuming a "running" run is safe and re-pins one left by a previous server process.
     const productionLimits = limits ? Object.fromEntries(Object.entries(limits).filter(([, v]) => v != null)) : undefined;
-    const failure = await deps.resumeProduction(projectId, adopt.id, { acceptBasis: true, ...(productionLimits ? { limits: productionLimits } : {}) })
+    const failure = await deps.resumeProduction(projectId, adopt.id, {
+      acceptBasis: true,
+      ...(productionLimits ? { limits: productionLimits } : {}),
+      ...(swapModels ? { pool: briefProductionPool(run.brief, project) } : {}),
+    })
       .then(() => null, (err) => err);
     if (failure) {
       const parked = await park(projectId, 'needs-human', { error: trimTo(`Production could not resume: ${failure.message}`, 500), errorCode: failure.code || null });
@@ -1266,6 +1390,7 @@ export async function stopAutonomousVideo(projectId) {
   if (run.output.productionRunId) {
     await deps.stopProduction(projectId, run.output.productionRunId).catch(() => {});
   }
+  if (run.output.finalAutoReviewId) await deps.stopAutoReview(projectId, run.output.finalAutoReviewId).catch(() => {});
   sunoControllers.get(run.id)?.abort();
   await cancelLocalSongJob(out.run);
   return { project: out.project, run: presentAutonomousRun(out.run) };
@@ -1276,6 +1401,7 @@ export async function cancelAutonomousVideo(projectId) {
   if (!(AUTONOMOUS_LIVE_STATUSES.includes(run.status) || run.status === 'failed')) throw runError(409, 'NOT_CANCELABLE', `A ${run.status} run cannot be canceled`);
   const out = await patchRun(projectId, () => ({ status: 'canceled', awaiting: null }));
   if (run.output.renderJobId) await deps.cancelRender(run.output.renderJobId).catch(() => {});
+  if (run.output.finalAutoReviewId) await deps.cancelAutoReview(projectId, run.output.finalAutoReviewId).catch(() => {});
   if (run.output.productionRunId) {
     await deps.cancelProduction(projectId, run.output.productionRunId).catch(() => {});
   }
@@ -1363,13 +1489,18 @@ async function completeFinalRender(projectId, run) {
     if (finalReviews.has(projectId)) return finalReviews.get(projectId);
     const review = (async () => {
       await patchRun(projectId, (r) => stagePatch(r, 'produce', { status: 'running', step: 'final-review' }));
-      await orchestrateFinal(projectId, run);
+      const next = await orchestrateFinal(projectId, run);
       await patchRun(projectId, () => ({ output: { finalReviewedJobId: run.output.renderJobId || null } }));
+      return next;
     })();
     finalReviews.set(projectId, review);
-    try { await review; } finally { finalReviews.delete(projectId); }
+    let next;
+    try { next = await review; } finally { finalReviews.delete(projectId); }
     // Stopped or canceled while the orchestrator watched: leave that state alone.
     if ((await latestRun(projectId))?.status !== 'running') return;
+    // A revision: the re-rendered film comes back here for the next review.
+    if (next === 'rerender') return startFinalRender(projectId, run);
+    if (next === 'wait') return;
   }
   await patchRun(projectId, (r) => ({
     status: 'completed',
@@ -1403,12 +1534,43 @@ async function reconcileFinalRender(projectId, { restart = false } = {}) {
   }
   if (jobId && project.renderHistoryId === jobId) return completeFinalRender(projectId, run);
   if (!restart) return failFinalRender(projectId, project.renderError || 'The final render did not finish');
+  return startFinalRender(projectId, run);
+}
+
+/** Render the film (again) and wait for the render's own event. */
+async function startFinalRender(projectId, run) {
   const render = await deps.renderVideo(projectId).catch((err) => ({ error: err }));
   if (render.error) return failFinalRender(projectId, `The final render did not start: ${render.error.message}`, render.error.code || 'FINAL_RENDER_FAILED');
   await patchRun(projectId, (r) => ({ output: { renderJobId: render.jobId || null }, ...stagePatch(r, 'produce', { status: 'running', error: null, step: RENDER_STEP }), error: null, errorCode: null }));
   console.log(`🎬 Autonomous music video ${short(run.id)} is rendering the final video`);
   // A render that settled before its id was stored.
   await reconcileFinalRender(projectId);
+}
+
+/**
+ * The orchestrator's footage revision ended. One that handed off to a human
+ * (`needs-human`) or failed leaves its revision open, so the run parks with the
+ * reason and keeps the revision's id: Resume, once the director has finished
+ * it, renders and reviews the film again. Otherwise the film is rendered again
+ * for the next final review; a run it left resumable (stopped or
+ * limit-reached) is closed first so it does not hold the revision slot.
+ */
+async function onAutoReviewEvent({ projectId, runId, run: review }) {
+  if (!projectId || !runId || !review || review.status === 'running') return;
+  const project = await getProject(projectId).catch(() => null);
+  const run = runAwaitingRender(project);
+  if (!run || run.output.finalAutoReviewId !== runId || run.stages.produce?.step !== FINAL_REVISION_STEP) return;
+  if (['needs-human', 'failed'].includes(review.status)) {
+    const reason = [review.stopReason, review.error].find((v) => typeof v === 'string' && v.trim()) || `the revision ${review.status === 'failed' ? 'failed' : 'needs a director'}`;
+    await park(projectId, 'needs-human', { error: trimTo(`The revision of the final video was left for a director: ${reason}`, 500), errorCode: 'FINAL_REVISION_NEEDS_HUMAN' });
+    return;
+  }
+  await patchRun(projectId, () => ({ output: { finalAutoReviewId: null } }));
+  if (['stopped', 'limit-reached'].includes(review.status)) {
+    await deps.cancelAutoReview(projectId, runId).catch((err) => console.warn(`⚠️ Autonomous music video ${short(run.id)} could not close its revision: ${trimTo(err.message, 200)}`));
+  }
+  console.log(`🎬 Autonomous music video ${short(run.id)} revision ${review.status}; rendering the film again`);
+  await startFinalRender(projectId, run);
 }
 
 async function onRenderEvent({ projectId, jobId, status, error }) {
@@ -1422,6 +1584,10 @@ async function onRenderEvent({ projectId, jobId, status, error }) {
 
 musicVideoEvents.on('render', (event) => {
   onRenderEvent(event).catch((err) => console.error(`❌ Autonomous music video could not settle on its final render: ${err.message}`));
+});
+
+musicVideoEvents.on('auto-review', (event) => {
+  onAutoReviewEvent(event).catch((err) => console.error(`❌ Autonomous music video could not settle on its final revision: ${err.message}`));
 });
 
 musicVideoEvents.on('production', (event) => {
@@ -1443,4 +1609,4 @@ async function settleBackground(timeoutMs = 10_000) {
   }
 }
 
-export const __testing = { onProductionEvent, onRenderEvent, advance, settleBackground };
+export const __testing = { onProductionEvent, onRenderEvent, onAutoReviewEvent, advance, settleBackground };
