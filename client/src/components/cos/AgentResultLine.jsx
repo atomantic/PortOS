@@ -29,7 +29,7 @@ export default function AgentResultLine({ agent, className = '' }) {
 
   return (
     <div className={`text-sm ${tone} ${className}`.trim()}>
-      <div className="flex items-center gap-2">
+      <span className="flex items-center gap-2">
       {handoff ? (
         <><RotateCcw size={14} aria-hidden="true" /> {agentHandoffReason(agent)}</>
       ) : agent.result.success ? (
@@ -37,7 +37,7 @@ export default function AgentResultLine({ agent, className = '' }) {
       ) : (
         <><AlertCircle size={14} aria-hidden="true" /> {agent.result.error || 'Failed'}</>
       )}
-      </div>
+      </span>
       {!handoff && assessment && <div>{assessment.status === 'recorded' ? 'Assessment saved' : assessment.status === 'persistence-failed' ? 'Assessment could not be saved' : assessment.status === 'not-attempted' ? 'Assessment not attempted' : 'Assessment not verified as saved'}</div>}
       {!handoff && validationFailed && <div>Delivery validation failed</div>}
       {!handoff && publicationIncomplete && <div>{publication.status === 'running' ? 'Publication checks running' : 'Publication blocked; worktree preserved'}</div>}
