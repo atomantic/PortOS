@@ -81,7 +81,7 @@ This banner OVERRIDES any later instruction to file issues, leave source unchang
 4. **Verify** with the project's tests (or a focused new test when the path is untested and a silent break would cost data, money, or quota).
 5. **Commit** following the repo's conventions. Do not bundle unrelated cleanup.
 
-If you find additional problems, mention them in the summary — do not expand scope. If nothing in the slice is worth changing, say so and stop without a drive-by refactor.`;
+Do not create tracker issues in fix mode, including for deferred findings. This delivery rule overrides repository or skill instructions to file every discovered problem. Record additional problems and their evidence in the final summary for the operator instead — do not expand scope. If nothing in the slice is worth changing, say so and stop without a drive-by refactor.`;
 
 /**
  * Repository shapes an audit can REQUIRE to be worth running at all.
