@@ -84,8 +84,8 @@ describe.skipIf(!chrome)('layered footage review through rendered browser pixels
       }, { source, flat });
       await page.addScriptTag({ content: engine });
       return await page.evaluate(async () => {
-        await portosComposition.seek(3, { reviewFootage: true });
-        return portosComposition.footageVisibility;
+        await globalThis.portosComposition.seek(3, { reviewFootage: true });
+        return globalThis.portosComposition.footageVisibility;
       });
     } finally { await page.close(); }
   }
