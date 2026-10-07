@@ -60,6 +60,20 @@ async function finish(agentId, selected = task, success = true) {
 }
 
 describe('Deep coverage workflow across serialized restarts', () => {
+  it('gives the agent exact evidence types and rejects array observations without crediting coverage', async () => {
+    const prompt = await prepare('typed-report');
+    const contract = JSON.parse(prompt.match(/```json\n([^]*?)\n```/)[1]);
+    expect(contract.properties.version.const).toBe(1);
+    expect(contract.properties.units.items.properties.evidence.additionalProperties)
+      .toMatchObject({ type: 'string', minLength: 1, maxLength: 12000 });
+    report = JSON.stringify(payload('typed-report', { units: payload('typed-report').units.map(unit => ({
+      ...unit, evidence: { method: 'Read source and callers', observations: ['Inspected source'] },
+    })) }));
+    expect(await finish('typed-report')).toMatchObject({ complete: false, satisfiedPasses: 0 });
+    report = JSON.stringify(payload('typed-report'));
+    expect(await finish('typed-report')).toMatchObject({ complete: false, satisfiedPasses: 6 });
+  });
+
   it('does not equate no findings, successful exit or all files scanned with complete discovery', async () => {
     for (const [index, pass] of ['static', 'trace', 'adversarial', 'challenge'].entries()) {
       const agentId = `agent-${index}`;
@@ -183,6 +197,7 @@ it('pins an actual Git inventory and refuses tracked and untracked drift', async
     const inspect = () => prepareDeepAudit({ task, agentId: 'git-agent', workspacePath: directory }, { ...deps, inventory: undefined });
     await inspect();
     const pinned = saved().scope;
+    expect(pinned.promptVersions.contract).toBe(2);
     expect(pinned.files).toHaveLength(1);
     expect(pinned.files[0]).toMatchObject({ path: 'source.js', kind: 'blob' });
     await writeFile(join(directory, 'untracked.js'), 'new source');
