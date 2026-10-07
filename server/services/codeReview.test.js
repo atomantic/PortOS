@@ -1094,6 +1094,41 @@ describe('codeReview helpers', () => {
       expect(request.messages[0].content).toContain('test-only change')
     })
 
+    it('ships a new-model addition whose unpublished benchmark fields are null, but not one missing its pricing', async () => {
+      const objective = 'Example Model 1 has just launched; add it to our provider presets, pricing, and model comparison.'
+      const diff = [
+        'diff --git a/data.reference/model-comparison.json b/data.reference/model-comparison.json',
+        '+ "id": "example-model-1-pricing-standard",',
+        '+ "inputPricePerMTok": 0.1,',
+        '+ "outputPricePerMTok": 0.5,',
+        '+ "quality": null,',
+        '+ "latencyMs": null,',
+        '+ "throughputTps": null,',
+        '+ "notes": "No benchmark scores are published yet, so none are recorded."',
+      ].join('\n')
+      const noPricingDiff = diff.replace(/^\+ "(input|output)PricePerMTok".*\n/gm, '')
+
+      global.fetch = vi.fn(async (_url, init) => {
+        const request = JSON.parse(init.body)
+        const rubric = request.messages[0].content
+        const evidence = request.messages[1].content
+        const recognizes = rubric.includes('is NOT missing work when the diff or commit states the vendor has not published those figures')
+          && rubric.includes('a missing model id, price, preset entry, or required migration remains missing')
+        const hasPricing = evidence.includes('inputPricePerMTok')
+        return mockJsonResponse({
+          choices: [{ message: { content: JSON.stringify(recognizes && hasPricing
+            ? { verdict: 'ship', missing: [], unrequested: [], evidence: 'pricing is sourced and unpublished benchmarks are correctly left null' }
+            : { verdict: 'fix-first', missing: ['published pricing'], unrequested: [], evidence: 'pricing absent' }) } }],
+        })
+      })
+
+      const withPricing = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff })
+      const withoutPricing = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff: noPricingDiff })
+
+      expect(withPricing).toMatchObject({ ok: true, verdict: 'ship', missing: [], unrequested: [] })
+      expect(withoutPricing).toMatchObject({ ok: true, verdict: 'fix-first', missing: ['published pricing'] })
+    })
+
     it('ships a same-checksum retry scoped to a saved federated schema gap, not an unconditional retry', async () => {
       const objective = 'On our federated instances page, I see a schema version mismatch.'
       const scopedRetryDiff = [
