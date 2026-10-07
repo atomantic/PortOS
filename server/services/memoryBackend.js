@@ -140,9 +140,9 @@ export async function updateMemoryEmbedding(id, embedding) {
   return b.updateMemoryEmbedding(id, embedding);
 }
 
-export async function archiveMemory(id) {
+export async function archiveMemory(id, options) {
   const b = await getBackend();
-  return b.archiveMemory(id);
+  return b.archiveMemory(id, options);
 }
 
 export async function purgeMemory(id) {
@@ -160,9 +160,9 @@ export async function approveMemory(id) {
   return b.approveMemory(id);
 }
 
-export async function rejectMemory(id) {
+export async function rejectMemory(id, options) {
   const b = await getBackend();
-  return b.rejectMemory(id);
+  return b.rejectMemory(id, options);
 }
 
 export async function searchMemories(queryEmbedding, options) {
@@ -220,9 +220,9 @@ export async function linkMemories(sourceId, targetId, options) {
   return b.linkMemories(sourceId, targetId, options);
 }
 
-export async function consolidateMemories(threshold, dryRun) {
+export async function consolidateMemories(threshold, dryRun, options) {
   const b = await getBackend();
-  return b.consolidateMemories(threshold, dryRun);
+  return b.consolidateMemories(threshold, dryRun, options);
 }
 
 export async function applyDecay(decayRate) {
@@ -247,4 +247,14 @@ export function invalidateCaches() {
 export async function flushBM25Index() {
   const b = await getBackend();
   return b.flushBM25Index();
+}
+
+export async function getMemoryVersions(id, options) {
+  const b = await getBackend();
+  return b.getMemoryVersions ? b.getMemoryVersions(id, options) : [];
+}
+
+export async function getMemoryVersion(id, version) {
+  const b = await getBackend();
+  return b.getMemoryVersion ? b.getMemoryVersion(id, version) : null;
 }

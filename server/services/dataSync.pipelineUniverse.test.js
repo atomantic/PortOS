@@ -1182,6 +1182,9 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
     // assertion stays honest about what the snapshot map IS and ISN'T
     // responsible for.
     const OUT_OF_BAND_SYNC_KEYS = new Set([
+      // Memory current-row pull negotiates version metadata at /api/memory/sync;
+      // memorySync rejects future versions, and history never enters snapshots.
+      'memoryHistory',
       // Peer credential handshake version (#8356), advertised in health details; never a data category.
       'peerAuth',
       // Numeric PortOS quality uses its version-validated read-through endpoint, never snapshot writes.

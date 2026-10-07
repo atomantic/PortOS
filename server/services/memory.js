@@ -169,7 +169,7 @@ export async function updateMemory(id, updates) {
     if (!memory) return null;
 
     // Apply updates
-    const updatableFields = ['content', 'summary', 'category', 'tags', 'confidence', 'importance', 'relatedMemories', 'status', 'expiresAt', 'sourceAppId'];
+    const updatableFields = ['content', 'summary', 'type', 'category', 'tags', 'confidence', 'importance', 'relatedMemories', 'status', 'expiresAt', 'sourceAppId'];
     for (const field of updatableFields) {
       if (updates[field] !== undefined) {
         memory[field] = updates[field];
@@ -181,7 +181,7 @@ export async function updateMemory(id, updates) {
     // the summary, not leave the stale one behind (absent-vs-cleared, AGENTS.md).
     // The typeof check keeps null/undefined/absent out of generateSummary (which
     // would throw on .length) while still treating "" as a present-but-empty clear.
-    if (typeof updates.content === 'string' && !updates.summary) {
+    if (typeof updates.content === 'string' && updates.summary === undefined) {
       memory.summary = generateSummary(updates.content);
     }
 

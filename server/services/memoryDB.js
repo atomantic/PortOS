@@ -7,6 +7,7 @@
  * Same exported interface as memory.js so routes/consumers don't change.
  */
 
+import { ServerError } from '../lib/errorHandler.js';
 import { PERSISTENT_MIND_MEMORY_PROTECTION_TAGS } from '../lib/persistentMindMemory.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { query, withTransaction, pgvectorToArray, arrayToPgvector } from '../lib/db.js';
@@ -24,6 +25,8 @@ const protectedMindMemoryTags = Object.values(PERSISTENT_MIND_MEMORY_PROTECTION_
 function rowToMemory(row) {
   return {
     id: row.id,
+    version: row.version,
+    archiveReason: row.archive_reason,
     type: row.type,
     content: row.content,
     summary: row.summary,
@@ -177,8 +180,33 @@ export async function getMemory(id) {
     [id]
   );
   memory.relatedMemories = links.rows.map(r => r.target_id);
+  const replacements = await query(
+    "SELECT source_id AS id FROM memory_links WHERE target_id = $1 AND link_type = 'supersedes' ORDER BY created_at",
+    [id]
+  );
+  memory.supersededBy = replacements.rows.map(row => row.id);
 
   return memory;
+}
+
+// Historical rows describe the text replaced at createdAt; current lives in memories.
+export async function getMemoryVersions(id, { limit = 20, offset = 0 } = {}) {
+  const result = await query(
+    'SELECT version, changed_by AS "changedBy", change_reason AS "changeReason", created_at AS "createdAt" FROM memory_versions WHERE memory_id = $1 ORDER BY version DESC LIMIT $2 OFFSET $3',
+    [id, limit, offset]
+  );
+  return result.rows;
+}
+
+export async function getMemoryVersion(id, version) {
+  const current = await peekMemory(id);
+  if (!current) return null;
+  if (current.version === version) return current;
+  const result = await query(
+    'SELECT memory_id AS id, version, content, summary, type, category, tags, changed_by AS "changedBy", change_reason AS "changeReason", created_at AS "createdAt" FROM memory_versions WHERE memory_id = $1 AND version = $2',
+    [id, version]
+  );
+  return result.rows[0] ?? null;
 }
 
 /**
@@ -274,96 +302,52 @@ export async function getMemories(options = {}) {
  * Update a memory
  */
 export async function updateMemory(id, updates) {
-  // Check memory exists
-  const existing = await query('SELECT * FROM memories WHERE id = $1', [id]);
-  if (existing.rows.length === 0) return null;
-
-  const fields = [];
-  const params = [];
-  let paramIdx = 1;
-
-  const fieldMap = {
-    content: 'content',
-    summary: 'summary',
-    category: 'category',
-    tags: 'tags',
-    confidence: 'confidence',
-    importance: 'importance',
-    status: 'status',
-    expiresAt: 'expires_at',
-    sourceAppId: 'source_app_id'
-  };
-
-  for (const [jsField, dbField] of Object.entries(fieldMap)) {
-    if (updates[jsField] !== undefined) {
-      fields.push(`${dbField} = $${paramIdx++}`);
-      params.push(updates[jsField]);
+  const memory = await withTransaction(async (client) => {
+    const existing = await client.query('SELECT * FROM memories WHERE id = $1 FOR UPDATE', [id]);
+    if (!existing.rows.length) return null;
+    const row = existing.rows[0];
+    if (updates.expectedVersion !== undefined && updates.expectedVersion !== row.version) {
+      throw new ServerError('Memory changed since it was loaded. Reload before saving.', {
+        status: 409, code: 'MEMORY_VERSION_CONFLICT'
+      });
     }
-  }
-
-  // Update summary if content changed but no explicit summary. Gate on "is a
-  // string" not truthiness, mirroring the file backend (memory.js) and keeping
-  // null/undefined out of generateSummary (absent-vs-cleared, AGENTS.md).
-  if (typeof updates.content === 'string' && !updates.summary) {
-    fields.push(`summary = $${paramIdx++}`);
-    params.push(generateSummary(updates.content));
-  }
-
-  // Allow relatedMemories-only updates to proceed
-  if (fields.length === 0 && !updates.relatedMemories) {
-    const memory = rowToMemory(existing.rows[0]);
-    const links = await query('SELECT target_id FROM memory_links WHERE source_id = $1', [id]);
-    memory.relatedMemories = links.rows.map(r => r.target_id);
-    return memory;
-  }
-
-  let memory;
-
-  // Wrap memory UPDATE + link operations in a single transaction for atomicity
-  if (fields.length > 0 || updates.relatedMemories) {
-    await withTransaction(async (client) => {
-      if (fields.length > 0) {
-        params.push(id);
-        const result = await client.query(
-          `UPDATE memories SET ${fields.join(', ')} WHERE id = $${paramIdx} RETURNING *`,
-          params
-        );
-        memory = rowToMemory(result.rows[0]);
-      } else {
-        memory = rowToMemory(existing.rows[0]);
+    await client.query(
+      "SELECT set_config('portos.memory_changed_by', $1, true), set_config('portos.memory_change_reason', $2, true)",
+      [updates.changedBy ?? '', updates.changeReason ?? '']
+    );
+    const values = { ...updates };
+    if (values.status === 'archived' && values.changeReason !== undefined) values.archiveReason = values.changeReason;
+    if (typeof values.content === 'string' && values.summary === undefined) {
+      values.summary = generateSummary(values.content);
+    }
+    const fieldMap = {
+      content: 'content', summary: 'summary', type: 'type', category: 'category',
+      tags: 'tags', confidence: 'confidence', importance: 'importance', status: 'status',
+      expiresAt: 'expires_at', sourceAppId: 'source_app_id', archiveReason: 'archive_reason'
+    };
+    const params = [];
+    const fields = Object.entries(fieldMap).filter(([key]) => values[key] !== undefined)
+      .map(([key, column]) => { params.push(values[key]); return `${column} = $${params.length}`; });
+    // The row trigger saves OLD and increments version in this same transaction,
+    // including writes from sync. Operational-only writes do not create history.
+    const updated = fields.length ? (await client.query(
+      `UPDATE memories SET ${fields.join(', ')} WHERE id = $${params.length + 1} RETURNING *`,
+      [...params, id]
+    )).rows[0] : row;
+    if (updates.relatedMemories) {
+      // Legacy edits replace only the symmetric relation; preserve typed provenance.
+      await client.query("DELETE FROM memory_links WHERE source_id = $1 AND link_type = 'related'", [id]);
+      if (updates.relatedMemories.length) {
+        const slots = updates.relatedMemories.map((_, i) => `($1, $${i + 2})`).join(', ');
+        await client.query(`INSERT INTO memory_links (source_id, target_id) VALUES ${slots} ON CONFLICT DO NOTHING`,
+          [id, ...updates.relatedMemories]);
       }
-
-      if (updates.relatedMemories) {
-        await client.query('DELETE FROM memory_links WHERE source_id = $1', [id]);
-        if (updates.relatedMemories.length > 0) {
-          // One multi-row INSERT instead of N round-trips. $1 is source_id;
-          // each related id binds to $2, $3, … as its own VALUES row.
-          const valuesSql = updates.relatedMemories
-            .map((_, i) => `($1, $${i + 2})`)
-            .join(', ');
-          await client.query(
-            `INSERT INTO memory_links (source_id, target_id) VALUES ${valuesSql} ON CONFLICT DO NOTHING`,
-            [id, ...updates.relatedMemories]
-          );
-        }
-        // Bump updated_at so link changes appear in sync and timeline
-        if (fields.length === 0) {
-          await client.query(
-            'UPDATE memories SET updated_at = NOW() WHERE id = $1',
-            [id]
-          );
-        }
-        memory.relatedMemories = updates.relatedMemories;
-      }
-    });
-  } else {
-    memory = rowToMemory(existing.rows[0]);
-  }
-
-  if (!memory.relatedMemories) {
-    const links = await query('SELECT target_id FROM memory_links WHERE source_id = $1', [id]);
-    memory.relatedMemories = links.rows.map(r => r.target_id);
-  }
+      await client.query('UPDATE memories SET updated_at = NOW() WHERE id = $1', [id]);
+    }
+    const links = await client.query('SELECT target_id FROM memory_links WHERE source_id = $1', [id]);
+    return { ...rowToMemory(updated), relatedMemories: links.rows.map(link => link.target_id) };
+  });
+  if (!memory) return null;
 
   console.log(`🧠 Memory updated: ${id}`);
   cosEvents.emit('memory:updated', { id, updates });
@@ -393,12 +377,31 @@ export async function updateMemoryEmbedding(id, embedding) {
 /**
  * Archive a memory: mark it archived; the row and embedding stay, so it is restorable.
  */
-export async function archiveMemory(id) {
-  await query("UPDATE memories SET status = 'archived' WHERE id = $1", [id]);
+async function retireMemory(id, { reason, supersededBy }, expectedStatus) {
+  if (supersededBy === id) throw new ServerError('A memory cannot replace itself', { status: 400 });
+  return withTransaction(async client => {
+    const ids = supersededBy ? [id, supersededBy].sort() : [id];
+    const locked = await client.query('SELECT id, status, source_agent_id FROM memories WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE', [ids]);
+    const row = locked.rows.find(item => item.id === id);
+    if (!row) return { success: false, error: 'Memory not found' };
+    if (expectedStatus && row.status !== expectedStatus) return { success: false, error: 'Memory is not pending approval' };
+    if (locked.rows.length !== ids.length) throw new ServerError('Replacement memory not found', { status: 404 });
+    await client.query("UPDATE memories SET status = 'archived', archive_reason = $2 WHERE id = $1", [id, reason ?? null]);
+    if (supersededBy) {
+      await client.query(
+        "INSERT INTO memory_links (source_id, target_id, link_type, note) VALUES ($1, $2, 'supersedes', $3) ON CONFLICT DO NOTHING",
+        [supersededBy, id, reason ?? null]
+      );
+    }
+    return { success: true, sourceAgentId: row.source_agent_id };
+  });
+}
 
+export async function archiveMemory(id, options = {}) {
+  const result = await retireMemory(id, options);
+  if (!result.success) throw new ServerError(result.error, { status: 404 });
   console.log(`🧠 Memory archived: ${id}`);
   cosEvents.emit('memory:deleted', { id, hard: false });
-
   return { success: true, id };
 }
 
@@ -418,15 +421,12 @@ export async function purgeMemory(id) {
  * Approve a pending memory
  */
 export async function approveMemory(id) {
-  const existing = await query('SELECT * FROM memories WHERE id = $1', [id]);
-  if (existing.rows.length === 0) return { success: false, error: 'Memory not found' };
-
-  const row = existing.rows[0];
-  if (row.status !== 'pending_approval') {
-    return { success: false, error: 'Memory is not pending approval' };
+  const result = await query("UPDATE memories SET status = 'active' WHERE id = $1 AND status = 'pending_approval' RETURNING *", [id]);
+  if (!result.rows.length) {
+    const existing = await peekMemory(id);
+    return { success: false, error: existing ? 'Memory is not pending approval' : 'Memory not found' };
   }
-
-  await query("UPDATE memories SET status = 'active' WHERE id = $1", [id]);
+  const row = result.rows[0];
 
   console.log(`🧠 Memory approved: ${id}`);
   const memory = rowToMemory({ ...row, status: 'active' });
@@ -439,20 +439,12 @@ export async function approveMemory(id) {
 }
 
 /**
- * Reject a pending memory (hard deletes it)
+ * Reject a pending memory, retaining its text and rejection reason
  */
-export async function rejectMemory(id) {
-  const existing = await query('SELECT * FROM memories WHERE id = $1', [id]);
-  if (existing.rows.length === 0) return { success: false, error: 'Memory not found' };
-
-  const row = existing.rows[0];
-  if (row.status !== 'pending_approval') {
-    return { success: false, error: 'Memory is not pending approval' };
-  }
-
-  const sourceAgentId = row.source_agent_id;
-
-  await query('DELETE FROM memories WHERE id = $1', [id]);
+export async function rejectMemory(id, options = {}) {
+  const result = await retireMemory(id, { ...options, reason: options.reason ?? 'Rejected' }, 'pending_approval');
+  if (!result.success) return result;
+  const { sourceAgentId } = result;
 
   console.log(`🧠 Memory rejected: ${id}`);
   cosEvents.emit('memory:rejected', { id });
@@ -932,7 +924,7 @@ export async function linkMemories(sourceId, targetId, { linkType = DEFAULT_MEMO
 /**
  * Consolidate similar memories (merge duplicates)
  */
-export async function consolidateMemories(threshold = 0.9, dryRun = false) {
+export async function consolidateMemories(threshold = 0.9, dryRun = false, { reason = 'Consolidated duplicate' } = {}) {
   // Use per-row KNN via HNSW index to find near-duplicates (avoids O(n²) self-join)
   const result = await query(`
     SELECT a.id AS id_a, a.summary AS summary_a, a.importance AS importance_a,
@@ -974,11 +966,8 @@ export async function consolidateMemories(threshold = 0.9, dryRun = false) {
     allIds.add(row.id_b);
   }
 
-  const importanceMap = new Map();
   const summaryMap = new Map();
   for (const row of result.rows) {
-    importanceMap.set(row.id_a, row.importance_a);
-    importanceMap.set(row.id_b, row.importance_b);
     summaryMap.set(row.id_a, row.summary_a);
     summaryMap.set(row.id_b, row.summary_b);
   }
@@ -1003,23 +992,31 @@ export async function consolidateMemories(threshold = 0.9, dryRun = false) {
     };
   }
 
-  // Collect every duplicate to archive (all but the highest-importance member of
-  // each cluster), then archive them in a single set-based UPDATE instead of one
-  // round-trip per memory id.
-  const archiveIds = [];
-  for (const cluster of duplicateClusters) {
-    // Sort by importance, keep highest
-    cluster.sort((a, b) => (importanceMap.get(b) || 0) - (importanceMap.get(a) || 0));
-    for (let i = 1; i < cluster.length; i++) {
-      archiveIds.push(cluster[i]);
+  const archivedIds = await withTransaction(async client => {
+    // Lock the complete candidate set in a stable order before choosing keepers.
+    // Concurrent consolidation cannot retire a keeper selected from stale state.
+    const locked = await client.query(
+      "SELECT id, importance FROM memories WHERE id = ANY($1::uuid[]) AND status = 'active' AND NOT (COALESCE(tags, '{}'::text[]) && $2::text[]) ORDER BY id FOR UPDATE",
+      [[...allIds], protectedMindMemoryTags]
+    );
+    const active = new Map(locked.rows.map(row => [row.id, row.importance]));
+    const archived = [];
+    for (const cluster of duplicateClusters) {
+      const members = cluster.filter(id => active.has(id))
+        .sort((a, b) => active.get(b) - active.get(a) || a.localeCompare(b));
+      if (members.length < 2) continue;
+      const [keeper, ...duplicates] = members;
+      await client.query("UPDATE memories SET status = 'archived', archive_reason = $2 WHERE id = ANY($1::uuid[])", [duplicates, reason]);
+      await client.query(
+        "INSERT INTO memory_links (source_id, target_id, link_type, note) SELECT $1::uuid, unnest($2::uuid[]), 'supersedes', $3 ON CONFLICT DO NOTHING",
+        [keeper, duplicates, reason]
+      );
+      archived.push(...duplicates);
     }
-  }
-
-  const archived = archiveIds.length > 0 ? await query(
-    "UPDATE memories SET status = 'archived' WHERE id = ANY($1) AND NOT (COALESCE(tags, '{}'::text[]) && $2::text[])",
-    [archiveIds, protectedMindMemoryTags]
-  ) : null;
-  const merged = archived?.rowCount || 0;
+    return archived;
+  });
+  const merged = archivedIds.length;
+  for (const id of archivedIds) cosEvents.emit('memory:deleted', { id, hard: false });
 
   console.log(`🧠 Consolidated ${merged} duplicate memories into ${duplicateClusters.length} clusters`);
   return { merged, clusters: duplicateClusters.length };

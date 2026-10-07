@@ -26,6 +26,7 @@ import * as dataSync from './dataSync.js';
 import { getBackendName } from './memoryBackend.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { isManifestEnvelope, diffManifestSlots, MAX_MANIFEST_SLOTS } from '../lib/syncManifest.js';
+import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
 
 const CURSORS_FILE = dataPath('instances_sync_cursors.json');
@@ -318,10 +319,10 @@ async function syncMemoryFromPeer(peer, cursor) {
 
   let hasMore = true;
   while (hasMore) {
-    const data = await fetchPeer(peer, `/api/memory/sync?since=${memorySeq}&limit=100`);
+    const data = await fetchPeer(peer, `/api/memory/sync?since=${memorySeq}&limit=100&schemaVersion=${PORTOS_SCHEMA_VERSIONS.memoryHistory}`);
     if (!data?.memories?.length) break;
 
-    const result = await memorySync.applyRemoteChanges(data.memories);
+    const result = await memorySync.applyRemoteChanges(data.memories, data.schemaVersion ?? 0);
     totalApplied += result.inserted + result.updated;
     memorySeq = data.maxSequence;
     hasMore = data.hasMore;

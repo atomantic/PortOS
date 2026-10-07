@@ -318,10 +318,11 @@ Context tools remain read-only. Semantic reads and writes are independent, defau
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/memory` | List memories with filters |
-| GET | `/memory/:id` | Get single memory |
+| GET | `/memory/:id` | Get current memory, or local historical text with `?version=N` |
+| GET | `/memory/:id/versions` | List local history metadata; `limit` (default 20, max 100) and `offset` |
 | POST | `/memory` | Create memory |
-| PUT | `/memory/:id` | Update memory |
-| DELETE | `/memory/:id` | Delete (soft) memory |
+| PUT | `/memory/:id` | Update memory; optional `expectedVersion` rejects stale edits with 409, `changeReason` and `changedBy` annotate history |
+| DELETE | `/memory/:id` | Archive; optional `reason` and `supersededBy` query fields retain retirement context; `hard=true` purges history too |
 | POST | `/memory/search` | Semantic search |
 | GET | `/memory/categories` | List categories |
 | GET | `/memory/tags` | List tags |

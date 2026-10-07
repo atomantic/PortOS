@@ -20,6 +20,8 @@
  * is replicated. Relationship data is instance-local.
  */
 
+import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { query, withTransaction, arrayToPgvector, pgvectorToArray } from '../lib/db.js';
 import { PERSISTENT_MIND_ID } from '../lib/persistentMindTrajectory.js';
 import { PERSISTENT_MIND_CHOSEN_NAME_TAG } from '../lib/persistentMindChosenName.js';
@@ -33,10 +35,13 @@ import { dedupeByKey } from '../lib/arrayUtils.js';
  * @param {number} limit - Max records to return per batch
  * @returns {Promise<{memories: Array, maxSequence: string, hasMore: boolean}>}
  */
-export async function getChangesSince(sinceSequence = '0', limit = 100) {
+export async function getChangesSince(sinceSequence = '0', limit = 100, schemaVersion = 0) {
+  if (schemaVersion > PORTOS_SCHEMA_VERSIONS.memoryHistory) {
+    throw new ServerError('Unsupported memory schema version', { status: 409 });
+  }
   // Fetch limit+1 rows to detect whether more records exist beyond this batch
   const result = await query(
-    `SELECT m.id, m.type, m.content, m.summary, m.category, m.tags,
+    `SELECT m.id, m.version, m.type, m.content, m.summary, m.category, m.tags,
             m.embedding, m.embedding_model, m.confidence, m.importance,
             m.status, m.source_task_id, m.source_agent_id, m.source_app_id,
             m.expires_at, m.created_at, m.updated_at, m.origin_instance_id,
@@ -59,6 +64,7 @@ export async function getChangesSince(sinceSequence = '0', limit = 100) {
   // not replicated — omitted from sync payload intentionally.
   const memories = rows.map(row => ({
     id: row.id,
+    ...(schemaVersion === PORTOS_SCHEMA_VERSIONS.memoryHistory ? { version: row.version } : {}),
     type: row.type,
     content: row.content,
     summary: row.summary,
@@ -83,7 +89,7 @@ export async function getChangesSince(sinceSequence = '0', limit = 100) {
     ? memories[memories.length - 1].syncSequence
     : sinceSequence;
 
-  return { memories, maxSequence, hasMore };
+  return { memories, maxSequence, hasMore, ...(schemaVersion ? { schemaVersion } : {}) };
 }
 
 /**
@@ -97,7 +103,13 @@ export async function getChangesSince(sinceSequence = '0', limit = 100) {
  *   updated  - existing rows replaced (remote was newer)
  *   skipped  - rows rejected by last-writer-wins (local was newer)
  */
-export async function applyRemoteChanges(incomingMemories) {
+export async function applyRemoteChanges(incomingMemories, schemaVersion = 0) {
+  if (!Number.isInteger(schemaVersion) || schemaVersion < 0 || schemaVersion > PORTOS_SCHEMA_VERSIONS.memoryHistory) {
+    throw new ServerError('Unsupported memory schema version', { status: 409 });
+  }
+  // Never import a peer's revision counter into the local history PK. The
+  // trigger snapshots the local text and increments our counter on replacement.
+
   if (incomingMemories.length === 0) return { inserted: 0, updated: 0, skipped: 0 };
 
   const COLS = 18;
