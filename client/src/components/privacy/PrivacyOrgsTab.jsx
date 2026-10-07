@@ -11,6 +11,7 @@ import {
   TRUST_TONE, HOLDING_TONE, labelFor,
 } from './constants';
 import { isHttpUrl } from '../../utils/urlNormalize';
+import useLatestRequest from '../../hooks/useLatestRequest';
 
 // Filter chip row — a single-select toggle group over a list of {id,label}.
 function ChipFilter({ label, options, value, onChange }) {
@@ -46,28 +47,31 @@ export default function PrivacyOrgsTab({ subjectId }) {
   const [editing, setEditing] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
 
+  const beginRequest = useLatestRequest();
   const load = useCallback(() => {
+    const isCurrent = beginRequest();
     setLoading(true);
     // Holdings depend only on the org list, so they chain off it directly — the
     // vault read runs alongside rather than gating the fan-out.
     const orgsThenHoldings = getPrivacyOrgs({}, { subjectId })
       .then(async (orgList) => {
+        if (!isCurrent()) return;
         setOrgs(orgList);
         // One request per org (single-user scale — a handful of orgs).
         const entries = await Promise.all(orgList.map(async (org) => {
           const h = await getOrgHoldings(org.id, { silent: true }).catch(() => []);
           return [org.id, h || []];
         }));
-        setHoldingsByOrg(Object.fromEntries(entries));
+        if (isCurrent()) setHoldingsByOrg(Object.fromEntries(entries));
       })
-      .catch(() => { setOrgs([]); setHoldingsByOrg({}); });
+      .catch(() => { if (isCurrent()) { setOrgs([]); setHoldingsByOrg({}); } });
 
     const vault = getVaultRecords(undefined, { subjectId })
-      .then((v) => setVaultRecords(v || []))
-      .catch(() => setVaultRecords([]));
+      .then((v) => { if (isCurrent()) setVaultRecords(v || []); })
+      .catch(() => { if (isCurrent()) setVaultRecords([]); });
 
-    Promise.all([orgsThenHoldings, vault]).then(() => setLoading(false));
-  }, [subjectId]);
+    Promise.all([orgsThenHoldings, vault]).then(() => { if (isCurrent()) setLoading(false); });
+  }, [subjectId, beginRequest]);
 
   useEffect(() => { load(); }, [load]);
 

@@ -21,6 +21,7 @@ import {
 import { isHttpUrl } from '../../utils/urlNormalize';
 import CronSchedulePicker from '../CronSchedulePicker';
 import Banner from '../ui/Banner';
+import useLatestRequest from '../../hooks/useLatestRequest';
 
 // Digest action icon by descriptor `icon` token (positive resolution vs dismiss).
 const ACTION_ICONS = { check: CheckCircle2, x: XCircle };
@@ -51,18 +52,21 @@ export default function PrivacyBrokersTab({ subjectId, consentScopes, onManageCo
 
   // Cases, exposure counts, and the digest are per-subject — `load` is also the
   // post-action refresh, so it runs after every scan/recheck/transition.
+  const beginRequest = useLatestRequest();
   const load = useCallback(() => {
+    const isCurrent = beginRequest();
     setLoading(true);
     Promise.allSettled([
       getPrivacyScanStatus({ subjectId }), getPrivacyBrokerCases(undefined, { subjectId }),
       getPrivacyOptOutDigest({ subjectId }),
     ]).then(([s, c, d]) => {
+      if (!isCurrent()) return;
       setScanStatus(s.status === 'fulfilled' ? s.value : { enabledBrokers: 0, caseCounts: {}, dueForRecheck: 0 });
       setCases(c.status === 'fulfilled' ? c.value : []);
       setDigest(d.status === 'fulfilled' ? d.value : { total: 0, humanTasks: 0, blocked: 0, items: [] });
       setLoading(false);
     });
-  }, [subjectId]);
+  }, [subjectId, beginRequest]);
 
   useEffect(() => { load(); }, [load]);
 
