@@ -28,13 +28,14 @@ describe('vitestTempRootSetup teardown', () => {
 
   it('ignores browser-owned Chrome scratch directories but still fails on a leaked fixture beside them', () => {
     const browserOnly = runTeardown((root) => {
-      for (const name of ['com.google.Chrome.aB3dE9', '.com.google.Chrome.xY7zQ2', '.org.chromium.Chromium.k9L2mN']) {
+      for (const name of ['com.google.Chrome.aB3dE9', '.com.google.Chrome.xY7zQ2', '.org.chromium.Chromium.k9L2mN', 'com.google.Chrome.chrome_chrome_Unpacker_BeginUnzipping.AbC123']) {
         mkdirSync(join(root, name));
         writeFileSync(join(root, name, 'sock'), 'x');
       }
     });
     expect(browserOnly.warnings).toEqual([]);
     expect(browserOnly.exitCode).toBeUndefined();
+    expect(browserOnly.removed).toBe(true);
 
     const withFixture = runTeardown((root) => {
       mkdirSync(join(root, 'com.google.Chrome.aB3dE9'));
