@@ -438,6 +438,44 @@
     }
   }
 
+  // A view of ctx for authored code drawn over footage: a fillRect or clearRect whose
+  // on-canvas area (after the current transform, clipped to the frame) covers most of it is
+  // limited to a translucent wash (clears are dropped), and the 'copy' composite mode, which
+  // replaces every pixel, is refused. Other full-frame paints (a canvas-sized path fill or
+  // drawImage) are not caught here; the prompt tells the model not to make them.
+  const FOOTAGE_WASH_ALPHA = 0.25;
+  function footageOverlayContext(target) {
+    const covers = (x, y, w, h) => {
+      const m = typeof target.getTransform === 'function' ? target.getTransform() : null;
+      const map = (px, py) => (m ? [m.a * px + m.c * py + m.e, m.b * px + m.d * py + m.f] : [px, py]);
+      const pts = [map(x, y), map(x + w, y), map(x, y + h), map(x + w, y + h)];
+      const xs = pts.map((p) => p[0]); const ys = pts.map((p) => p[1]);
+      const cw = Math.max(0, Math.min(W, Math.max(...xs)) - Math.max(0, Math.min(...xs)));
+      const ch = Math.max(0, Math.min(H, Math.max(...ys)) - Math.max(0, Math.min(...ys)));
+      return cw * ch >= W * H * 0.9;
+    };
+    return new Proxy(target, {
+      get(obj, prop) {
+        if (prop === 'fillRect') {
+          return (x, y, w, h) => {
+            if (!covers(x, y, w, h)) return obj.fillRect(x, y, w, h);
+            const alpha = obj.globalAlpha;
+            obj.globalAlpha = Math.min(alpha, FOOTAGE_WASH_ALPHA);
+            obj.fillRect(x, y, w, h);
+            obj.globalAlpha = alpha;
+          };
+        }
+        if (prop === 'clearRect') return (x, y, w, h) => { if (!covers(x, y, w, h)) obj.clearRect(x, y, w, h); };
+        const value = Reflect.get(obj, prop, obj);
+        return typeof value === 'function' ? value.bind(obj) : value;
+      },
+      set(obj, prop, value) {
+        if (prop === 'globalCompositeOperation' && value === 'copy') return true;
+        return Reflect.set(obj, prop, value, obj);
+      },
+    });
+  }
+
   function render(t, scene, source, state) {
     ctx.fillStyle = C.ink; ctx.fillRect(0, 0, W, H);
     const authored = sectionFunction(t);
@@ -456,7 +494,9 @@
       const inset = 0.1;
       ctx.save();
       try {
-        authored.fn(ctx, {
+        // Over footage or a still, the authored code is an overlay: a full-canvas fill
+        // becomes a translucent wash so the selected media stays visible.
+        authored.fn(source ? footageOverlayContext(ctx) : ctx, {
           t, localT: t - authored.section.startSec, frame: frameOf(t), width: W, height: H,
           song: GENERATED.song, palette: GENERATED.palette, section: authored.section,
           safe: { x: W * inset, y: H * inset, w: W * (1 - 2 * inset), h: H * (1 - 2 * inset) },
