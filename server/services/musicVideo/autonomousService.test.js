@@ -93,6 +93,9 @@ beforeEach(() => {
     analyzeSong: stub('analyze', async () => ({})),
     designCoverArt: vi.fn(async () => ({})),
     startProduction: stub('production', async () => ({ run: { id: 'mvpr-1' } })),
+    resumeProduction: stub('resume-production', async () => ({})),
+    stopProduction: stub('stop-production', async () => ({})),
+    cancelProduction: stub('cancel-production', async () => ({})),
     generateCode: stub('code', async () => ({})),
     generateDocument: stub('document', async () => ({ document: { directory: 'music-video/mv-auto/composition/example' } })),
     acceptDocument: stub('accept-document', async (id, directory) => { store.get(id).composition.document = { directory }; return {}; }),
@@ -268,6 +271,68 @@ describe('startAutonomousVideo', () => {
     await service.resumeAutonomousVideo('mv-auto');
     expect(doubles.renderVideo).toHaveBeenCalledTimes(2);
     expect(runOf().output.renderJobId).toBe('render-3');
+  });
+
+  describe('resuming after production fails, is canceled or is replaced by hand', () => {
+    const later = () => new Date(Date.now() + 1000).toISOString();
+    const delegated = async (input = {}) => {
+      await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local', 'video:local'], models: { 'video:local': 'text-only' }, ...input });
+      await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
+      store.get('mv-auto').productionRuns = [{ id: 'mvpr-1', status: 'running', createdAt: later() }];
+    };
+
+    it('parks when its production run is canceled on its own, then adopts the run the director started instead', async () => {
+      await delegated();
+      store.get('mv-auto').productionRuns[0].status = 'canceled';
+      await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'canceled' } });
+      expect(runOf()).toMatchObject({ status: 'needs-human', errorCode: 'PRODUCTION_CANCELED' });
+
+      store.get('mv-auto').productionRuns.push({ id: 'mvpr-manual', status: 'running', createdAt: later() });
+      await service.resumeAutonomousVideo('mv-auto');
+      expect(runOf()).toMatchObject({ status: 'running', stage: 'produce', output: expect.objectContaining({ productionRunId: 'mvpr-manual' }) });
+      expect(doubles.resumeProduction).not.toHaveBeenCalled();
+      expect(doubles.startProduction).toHaveBeenCalledOnce();
+      // The adopted run's completion is now ours: it starts the final render.
+      await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-manual', run: { status: 'completed' } });
+      expect(runOf().output.renderJobId).toBe('render-1');
+    });
+
+    it('goes straight to the final render when the adopted run already completed', async () => {
+      await delegated();
+      await service.cancelAutonomousVideo('mv-auto');
+      expect(runOf().status).toBe('canceled');
+      store.get('mv-auto').productionRuns = [{ id: 'mvpr-1', status: 'canceled', createdAt: later() }, { id: 'mvpr-manual', status: 'completed', createdAt: later() }];
+      await service.resumeAutonomousVideo('mv-auto');
+      expect(doubles.renderVideo).toHaveBeenCalledOnce();
+      expect(runOf()).toMatchObject({ status: 'running', output: expect.objectContaining({ productionRunId: 'mvpr-manual', productionDone: true, renderJobId: 'render-1' }) });
+    });
+
+    it('resumes a parked run with raised limits, and a model swap starts a new production run with the new pool', async () => {
+      await delegated();
+      store.get('mv-auto').productionRuns[0].status = 'limit-reached';
+      await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'limit-reached', stopReason: 'generation limit' } });
+      await service.resumeAutonomousVideo('mv-auto', { limits: { maxGenerations: 120 } });
+      expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true, limits: { maxGenerations: 120 } });
+      expect(runOf().brief.limits.maxGenerations).toBe(120);
+
+      store.get('mv-auto').productionRuns[0].status = 'blocked';
+      await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'blocked', stopReason: 'no image-to-video' } });
+      doubles.startProduction.mockResolvedValueOnce({ run: { id: 'mvpr-2' } });
+      await service.resumeAutonomousVideo('mv-auto', { models: { 'video:local': 'image-capable' } });
+      expect(doubles.cancelProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1');
+      await vi.waitFor(() => expect(runOf().output.productionRunId).toBe('mvpr-2'));
+      expect(doubles.startProduction.mock.calls[1][1].pool).toEqual([{ kind: 'image', mode: 'local' }, { kind: 'video', mode: 'local', model: 'image-capable' }]);
+      await expect(service.resumeAutonomousVideo('mv-auto', { models: { 'image:fal': 'x' } })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    });
+
+    it('starts a new production run when there is none left to follow', async () => {
+      await delegated();
+      await service.cancelAutonomousVideo('mv-auto');
+      store.get('mv-auto').productionRuns[0].status = 'canceled';
+      doubles.startProduction.mockResolvedValueOnce({ run: { id: 'mvpr-2' } });
+      await service.resumeAutonomousVideo('mv-auto');
+      await vi.waitFor(() => expect(runOf()).toMatchObject({ status: 'running', output: expect.objectContaining({ productionRunId: 'mvpr-2' }) }));
+    });
   });
 
   it('parks needs-human when production parks, and failed when it fails', async () => {

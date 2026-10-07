@@ -78,7 +78,9 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
     : awaiting === 'style' ? { key: 'style', label: 'Suno style', value: run.output?.sunoStyle || '' } : null;
   const draft = edit && edit.for === awaiting ? edit.value : editable?.value;
   const changed = editable && draft !== editable.value;
-  const canRetry = ['needs-human', 'failed', 'stopped'].includes(run.status) || run.interrupted;
+  // A run canceled while waiting on production can resume: it adopts or restarts production.
+  const reopenable = run.status === 'canceled' && run.stage === 'produce';
+  const canRetry = ['needs-human', 'failed', 'stopped'].includes(run.status) || run.interrupted || reopenable;
   const orchestrator = isOrchestratedRun(run) ? run.brief.orchestrator : null;
   const tone = STATUS_TONES[run.status] || '';
   // #10157: what the production run has used against its limits (Suno is counted apart).
@@ -206,7 +208,7 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
         </div>
       )}
 
-      {!orchestrator && (awaiting || canRetry) && (live || run.status === 'failed') && (
+      {!orchestrator && (awaiting || canRetry) && (live || run.status === 'failed' || reopenable) && (
         <AutoApproveFields
           idPrefix="mv-run"
           value={autoApprove}
@@ -216,7 +218,7 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
         />
       )}
 
-      {live || run.status === 'failed' ? (
+      {live || run.status === 'failed' || reopenable ? (
         <div className="flex flex-wrap gap-2">
           {canRetry && !awaiting && (
             <button type="button" disabled={auto.busy} onClick={() => resume()} className={buttonClass}>
@@ -226,7 +228,7 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
           {run.status === 'running' && !run.interrupted && (
             <button type="button" disabled={auto.busy} onClick={() => auto.stop()} className={buttonClass}><Pause size={14} aria-hidden="true" /> Pause</button>
           )}
-          <button type="button" disabled={auto.busy} onClick={() => auto.cancel()} className={`${buttonClass} text-port-error`}><X size={14} aria-hidden="true" /> Cancel</button>
+          {!reopenable && <button type="button" disabled={auto.busy} onClick={() => auto.cancel()} className={`${buttonClass} text-port-error`}><X size={14} aria-hidden="true" /> Cancel</button>}
         </div>
       ) : null}
     </section>
