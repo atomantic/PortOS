@@ -201,7 +201,7 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     await traced('accepting the candidate did not select the generated document', () => page.waitForFunction(() => document.body.textContent.includes('generated ·')));
     expect((await store.getProject(p.id)).composition.document.source.kind).toBe('generated');
     await page.getByRole('button', { name: 'Render animated proof' }).click();
-    await page.locator('video').waitFor({ timeout: 120000 });
+    await traced('the animated proof never rendered', () => page.locator('video').waitFor({ timeout: 120000 }));
     await page.locator('video').evaluate(async video => { await video.play(); await new Promise(r => setTimeout(r, 400)); video.pause(); });
     expect(await page.locator('video').evaluate(v => v.videoWidth)).toBeGreaterThan(0);
     expect(await page.locator('[aria-label="Saved choreography for proof comparison"]').textContent()).toContain(choreography);
