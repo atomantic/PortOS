@@ -163,6 +163,23 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
       return true;
     });
   };
+  // Local owning-service recovery after explicit operator disposition of a
+  // legacy pre-admission refusal. The service must preserve inspected evidence
+  // in publish(), durably and replayably, before this exact owner is retired.
+  const reconcilePublicationRefusal = ({ hold, expected, publish, replay }) => transaction(state => {
+    if (!hold || state.hold?.id !== hold.id || state.hold?.revision !== hold.revision || state.exclusive)
+      throw error('MAINTENANCE_STALE', 'The maintenance hold changed.');
+    if (expected?.kind !== 'settlement' || expected.resource !== 'Output publication'
+      || expected.unsettled !== true || !expected.uncertaintyStamp)
+      throw error('MAINTENANCE_STALE', 'An exact uncertain publication reservation is required.');
+    const index = state.operations.findIndex(op => op.id === expected.id);
+    if (index < 0) return replay();
+    if (JSON.stringify(state.operations[index]) !== JSON.stringify(expected))
+      throw error('MAINTENANCE_STALE', 'The publication reservation changed.');
+    const receipt = publish();
+    state.operations.splice(index, 1);
+    return receipt;
+  });
   const permitFor = (id, recovery) => ({
     id,
     run: fn => context.run(id, fn),
@@ -281,7 +298,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     return receipt;
   });
   const { observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability } = exclusive;
-  return { directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
+  return { directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, reconcilePublicationRefusal, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
     observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability, reconcileAbandonedAgent };
 }
 

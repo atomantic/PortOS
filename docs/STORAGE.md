@@ -44,6 +44,18 @@ certify the old work finished. Do not delete this journal to claim readiness; pr
 with the related run/job records for recovery. A backup restored on another installation
 therefore starts conservatively if it contains a hold or outstanding operations.
 
+Publication admission keeps a maintenance reservation while waiting for a backup
+cut. A boundary-owned callback-start check retires a refused admission without
+claiming any output was saved; failures after callback entry remain unresolved.
+Legacy generic `Output publication` reservations lack destination/batch identity.
+They cannot be swept automatically. After explicit operator disposition of
+inspected evidence, an owning service may use `reconcilePublicationRefusal` with
+the exact original operation and hold. Its synchronous publisher must preserve a
+durable, replayable evidence receipt before retirement; the journal validates and
+retires that exact owner under one lock. Missing ownership can only replay the
+existing receipt, never create an owner. This does not certify a complete
+transcript, clear transcript warnings, or change the original task outcome.
+
 ### Explicitly abandoned duplicate agents
 
 A local operator may reconcile a user-killed duplicate that saved no output with
@@ -65,6 +77,7 @@ can be retried after normal journal recovery; the command never steals a transac
 lock. These machine-local recovery receipts are included in the data backup and
 never federated. This deliberately narrow command does not recover nonempty output
 or general failed saves; those still require the owning workflow's recovery.
+
 
 ## The Four Storage Classes
 
