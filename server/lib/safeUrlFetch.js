@@ -231,6 +231,40 @@ async function fetchGuarded(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers, bloc
 }
 
 /**
+ * Resolve a short URL without reading its body. Every hop is DNS-vetted and
+ * pinned, with a bounded redirect count and a shared request-time budget.
+ * `allowUrl(URL)` can restrict every hop to a service's own hosts. Returns the
+ * final 2xx URL, or null on an unsafe/disallowed hop or resolution failure.
+ */
+export async function resolvePublicUrl(url, {
+  timeoutMs = DEFAULT_TIMEOUT_MS, maxRedirects = 3, headers,
+  blockPrivate = false, allowUrl,
+} = {}) {
+  if (!Number.isInteger(maxRedirects) || maxRedirects < 0 || maxRedirects > 10) return null;
+  const deadline = Date.now() + timeoutMs;
+  let current = url;
+  for (let redirects = 0; redirects <= maxRedirects; redirects++) {
+    if (!URL.canParse(current)) return null;
+    const target = new URL(current);
+    if (allowUrl && !allowUrl(target)) return null;
+    const resolved = await resolvePublicHttpUrl(target.href, { blockPrivate });
+    const remainingMs = deadline - Date.now();
+    if (!resolved.safe || remainingMs <= 0) return null;
+    const res = await pinnedFetch(target.href, resolved, { redirect: 'manual', headers }, remainingMs);
+    if (!res) return null;
+    // Headers are all we need; do not download a Pinterest page (or retain a
+    // redirect response's socket) just to learn its destination.
+    await res.body?.cancel().catch(() => {});
+    if (res.ok) return target.href;
+    if (res.status < 300 || res.status >= 400 || redirects === maxRedirects) return null;
+    const location = res.headers.get('location');
+    if (!location || !URL.canParse(location, target.href)) return null;
+    current = new URL(location, target.href).href;
+  }
+  return null;
+}
+
+/**
  * Read a response body into a Buffer bounded by `maxBytes`, or null when the
  * body exceeds the cap. The cap is enforced first via Content-Length (cheap
  * early-out) and then bounds PEAK MEMORY by streaming the body and aborting the

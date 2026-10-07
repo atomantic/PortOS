@@ -16,7 +16,7 @@ const store = {
 };
 vi.mock('./db.js', () => store);
 
-const net = { fetchPublicText: vi.fn(), fetchPublicBinary: vi.fn() };
+const net = { fetchPublicText: vi.fn(), fetchPublicBinary: vi.fn(), resolvePublicUrl: vi.fn() };
 vi.mock('../../lib/safeUrlFetch.js', () => net);
 
 const emitRecordUpdated = vi.fn();
@@ -49,6 +49,38 @@ const PIN1 = { title: 'one', link: 'https://www.pinterest.com/pin/1/', img: 'htt
 const PIN2 = { title: 'two', link: 'https://www.pinterest.com/pin/2/', img: 'https://i.pinimg.com/236x/b.jpg' };
 
 describe('linkPinterestBoard', () => {
+  it('resolves a share link, stores the canonical feed and syncs its pins', async () => {
+    net.resolvePublicUrl.mockResolvedValue('https://www.pinterest.com/example/board/?invite_code=example');
+    store.setPinterestLink.mockImplementation(async (id, pinterest) => ({ id, items: [], pinterest }));
+    const linked = await linkPinterestBoard('mb-1', { url: 'https://pin.it/example' });
+    expect(linked.pinterest).toEqual({
+      feedUrl: 'https://www.pinterest.com/example/board.rss',
+      boardUrl: 'https://www.pinterest.com/example/board/',
+    });
+    const [, policy] = net.resolvePublicUrl.mock.calls[0];
+    expect(policy).toMatchObject({ blockPrivate: true, timeoutMs: 8000, maxRedirects: 3 });
+    expect(policy.allowUrl(new URL('https://api.pinterest.com/url_shortener/example/redirect/'))).toBe(true);
+    expect(policy.allowUrl(new URL('https://pinterest.com.evil.com/example/board/'))).toBe(false);
+    store.getBoard.mockResolvedValue(linked);
+    net.fetchPublicText.mockResolvedValue(feedXml(PIN1));
+    net.fetchPublicBinary.mockResolvedValue({ buffer: Buffer.from([0xff, 0xd8, 0xff, 0x00]) });
+    store.appendPinterestItems.mockImplementation(async (_id, imported) => ({ board: linked, added: imported.length }));
+    expect(await syncPinterestBoard('mb-1')).toMatchObject({ added: 1, feedCount: 1 });
+    expect(net.fetchPublicText).toHaveBeenCalledWith(linked.pinterest.feedUrl, expect.anything());
+    expect(store.appendPinterestItems.mock.calls[0][1][0]).toMatchObject({ source: PIN1.link });
+  });
+
+  it.each([
+    ['pin', 'https://www.pinterest.com/pin/123/'],
+    ['unrelated host', 'https://example.com/example/board/'],
+    ['unresolved share', null],
+  ])('rejects a share link resolving to %s without storing a link', async (_label, destination) => {
+    net.resolvePublicUrl.mockResolvedValue(destination);
+    await expect(linkPinterestBoard('mb-1', { url: 'https://pin.it/example' }))
+      .rejects.toMatchObject({ status: 400, code: 'INVALID_PINTEREST_URL' });
+    expect(store.setPinterestLink).not.toHaveBeenCalled();
+  });
+
   it('normalizes the URL and stores the link', async () => {
     store.setPinterestLink.mockResolvedValue({ id: 'mb-1', pinterest: { feedUrl: 'x' } });
     await linkPinterestBoard('mb-1', { url: 'https://www.pinterest.com/jane/board/' });
