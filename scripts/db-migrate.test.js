@@ -396,12 +396,20 @@ exit "\${PROVISION_EXIT:-0}"
 
     it('docker export and import pass the password via the docker client environment only', () => {
       writeStub(join(root, 'bin'), 'docker', DOCKER_ENV_STUB);
-      rmSync(join(root, 'bin', 'psql'));
-      rmSync(join(root, 'bin', 'pg_dump'));
-      const exported = run(['export', 'secret'], 'ok', { PGPASSWORD: SECRET, STUB_LOG_DIR: root });
+      // Isolate PATH so a host psql/pg_dump (present on CI runners) cannot be reached.
+      const isolated = join(root, 'docker-only-bin');
+      mkdirSync(isolated);
+      for (const name of ['bash', 'cat', 'dirname', 'mkdir', 'mktemp', 'rm', 'grep', 'cut', 'tr', 'sed', 'date', 'mv', 'chmod']) {
+        const binary = ['/usr/bin', '/bin'].map(dir => join(dir, name)).find(existsSync);
+        if (binary) symlinkSync(binary, join(isolated, name));
+      }
+      for (const name of ['node', 'docker', 'uname']) {
+        symlinkSync(join(root, 'bin', name), join(isolated, name));
+      }
+      const exported = run(['export', 'secret'], 'ok', { PATH: isolated, PGPASSWORD: SECRET, STUB_LOG_DIR: root });
       expect(exported.status, exported.stderr).toBe(0);
       const dump = join(dumpDir, 'portos-secret.sql');
-      const imported = run(['import', dump], 'ok', { PGPASSWORD: SECRET, STUB_LOG_DIR: root });
+      const imported = run(['import', dump], 'ok', { PATH: isolated, PGPASSWORD: SECRET, STUB_LOG_DIR: root });
       expect(imported.status, imported.stderr).toBe(0);
       expect(readFileSync(stubLog, 'utf8')).toMatch(/docker exec .*-e PGPASSWORD portos-db pg_dump/);
       expect(readFileSync(stubLog, 'utf8')).toMatch(/docker exec -i .*-e PGPASSWORD portos-db psql/);
