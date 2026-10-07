@@ -438,29 +438,41 @@
     }
   }
 
-  // A view of ctx for authored code drawn over footage: a fill or clear covering most of the
-  // canvas is limited to a translucent wash (clears are dropped), everything else passes
-  // through. Authored functions are told to leave footage visible; this keeps it so when a
-  // model paints a full-frame background anyway.
+  // A view of ctx for authored code drawn over footage: a fillRect or clearRect whose
+  // on-canvas area (after the current transform, clipped to the frame) covers most of it is
+  // limited to a translucent wash (clears are dropped), and the 'copy' composite mode, which
+  // replaces every pixel, is refused. Other full-frame paints (a canvas-sized path fill or
+  // drawImage) are not caught here; the prompt tells the model not to make them.
   const FOOTAGE_WASH_ALPHA = 0.25;
   function footageOverlayContext(target) {
-    const covers = (w, h) => Math.abs(w * h) >= W * H * 0.9;
+    const covers = (x, y, w, h) => {
+      const m = typeof target.getTransform === 'function' ? target.getTransform() : null;
+      const map = (px, py) => (m ? [m.a * px + m.c * py + m.e, m.b * px + m.d * py + m.f] : [px, py]);
+      const pts = [map(x, y), map(x + w, y), map(x, y + h), map(x + w, y + h)];
+      const xs = pts.map((p) => p[0]); const ys = pts.map((p) => p[1]);
+      const cw = Math.max(0, Math.min(W, Math.max(...xs)) - Math.max(0, Math.min(...xs)));
+      const ch = Math.max(0, Math.min(H, Math.max(...ys)) - Math.max(0, Math.min(...ys)));
+      return cw * ch >= W * H * 0.9;
+    };
     return new Proxy(target, {
       get(obj, prop) {
         if (prop === 'fillRect') {
           return (x, y, w, h) => {
-            if (!covers(w, h)) return obj.fillRect(x, y, w, h);
+            if (!covers(x, y, w, h)) return obj.fillRect(x, y, w, h);
             const alpha = obj.globalAlpha;
             obj.globalAlpha = Math.min(alpha, FOOTAGE_WASH_ALPHA);
             obj.fillRect(x, y, w, h);
             obj.globalAlpha = alpha;
           };
         }
-        if (prop === 'clearRect') return (x, y, w, h) => { if (!covers(w, h)) obj.clearRect(x, y, w, h); };
+        if (prop === 'clearRect') return (x, y, w, h) => { if (!covers(x, y, w, h)) obj.clearRect(x, y, w, h); };
         const value = Reflect.get(obj, prop, obj);
         return typeof value === 'function' ? value.bind(obj) : value;
       },
-      set(obj, prop, value) { return Reflect.set(obj, prop, value, obj); },
+      set(obj, prop, value) {
+        if (prop === 'globalCompositeOperation' && value === 'copy') return true;
+        return Reflect.set(obj, prop, value, obj);
+      },
     });
   }
 
