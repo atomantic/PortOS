@@ -200,7 +200,9 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     // A Vector3 focus is view-space depth, not straight-line distance from the
     // camera's local position: an off-axis head seen through a rig-parented
     // camera stays as sharp as with no depth of field at all.
-    const headSharpness = (aperture) => page.evaluate(async (aperture) => {
+    // focus 'card' passes the Vector3; 'local' passes the straight-line distance
+    // from the camera's local position, the depth the old code used.
+    const headSharpness = (focusOn) => page.evaluate(async (focusOn) => {
       window.PORTOS_MV_GENERATED.sections.world = (ctx, env) => {
         window.authoredWorld(ctx, env);
         const { THREE, scene, camera } = ctx;
@@ -214,7 +216,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
         card.add(new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ color: 0x000000 })));
         for (let i = -2; i <= 2; i++) { const bar = new THREE.Mesh(new THREE.PlaneGeometry(0.06, 1), new THREE.MeshBasicMaterial({ color: 0xffffff })); bar.position.set(i * 0.18, 0, 0.001); card.add(bar); }
         card.lookAt(at);
-        Object.assign(ctx.lens, { grain: 0, vignette: 0, bloom: 0, focus: head, aperture, maxBlur: 24 });
+        Object.assign(ctx.lens, { focus: focusOn === 'card' ? head : head.distanceTo(camera.position), aperture: 18, maxBlur: 24 });
         window.projectHead = () => head.clone().project(camera);
       };
       await window.portosComposition.seek(0);
@@ -227,11 +229,11 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
       const { data } = g.getImageData(0, 0, 80, 80);
       let sum = 0; for (let i = 4; i < data.length; i += 4) sum += Math.abs(data[i] - data[i - 4]);
       return { sum, offAxis: Math.abs(window.headOnScreen.x) };
-    }, aperture);
-    const sharpHead = await headSharpness(0);
-    const focusedHead = await headSharpness(18);
-    expect(sharpHead.offAxis).toBeGreaterThan(0.1);
-    expect(focusedHead.sum).toBeGreaterThan(sharpHead.sum * 0.99); // straight-line distance from the local position gives ~0.95
+    }, focusOn);
+    const focusedHead = await headSharpness('card');
+    const missedHead = await headSharpness('local');
+    expect(focusedHead.offAxis).toBeGreaterThan(0.1);
+    expect(focusedHead.sum).toBeGreaterThan(missedHead.sum * 1.03);
     expect(await page.evaluate(() => window.liveTextureCount())).toBe(textures);
     expect(warnings.filter((text) => text.includes('PCFSoftShadowMap'))).toEqual([]);
     expect(errors).toEqual([]);

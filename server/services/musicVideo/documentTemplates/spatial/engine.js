@@ -5,9 +5,8 @@ const authored = window.PORTOS_MV_GENERATED;
 const canvas = document.getElementById('world');
 const overlay = document.getElementById('type');
 const text = overlay.getContext('2d');
-// No canvas MSAA: the scene is multisampled in the HDR target, and the canvas
-// only ever receives one full-screen composite.
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, preserveDrawingBuffer: true });
+// Canvas MSAA serves the untouched-lens path, which renders straight to it.
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(1);
 renderer.shadowMap.enabled = true;
 // three r186 removed PCFSoftShadowMap; PCF plus light.shadow.radius is the soft path.
@@ -94,11 +93,12 @@ globalThis.portosComposition = {
 
 }
 
-// A section may set any of these on ctx.lens for its frame. Defaults keep a
-// world sharp with a light finish; only HDR values above the threshold bloom.
+// A section may set any of these on ctx.lens for its frame. The defaults are
+// inert, so a world that never touches the lens renders exactly as before,
+// straight to the canvas; only HDR values above the threshold bloom.
 // focus is a camera distance or a THREE.Vector3; aperture/maxBlur are pixels
 // at 1080p, so a 0 aperture disables depth of field.
-const LENS_DEFAULTS = Object.freeze({ focus: 10, aperture: 0, maxBlur: 16, bloom: 0.3, bloomThreshold: 1, exposure: 1, vignette: 0.3, grain: 0.02 });
+const LENS_DEFAULTS = Object.freeze({ focus: 10, aperture: 0, maxBlur: 16, bloom: 0, bloomThreshold: 1, exposure: 1, vignette: 0, grain: 0 });
 
 // Persistent cinematic post stack: the scene renders once into an HDR target
 // with depth, then a depth-aware gather DOF, a thresholded quarter-res bloom
@@ -205,9 +205,15 @@ function createPost(THREE, renderer) {
       else focus = num(lens.focus, LENS_DEFAULTS.focus, 0.01, 1e5);
       const aperture = num(lens.aperture, 0, 0, 64) * px, maxBlur = num(lens.maxBlur, LENS_DEFAULTS.maxBlur, 0, 48) * px;
       const bloom = num(lens.bloom, LENS_DEFAULTS.bloom, 0, 4);
+      const exposure = num(lens.exposure, 1, 0, 8), vignette = num(lens.vignette, LENS_DEFAULTS.vignette, 0, 1), grain = num(lens.grain, LENS_DEFAULTS.grain, 0, 0.2);
       // Software-rendered captures pay per full-screen pass, so a lens setting
-      // that does nothing skips its pass outright.
+      // that does nothing skips its pass outright, and an untouched lens skips
+      // the HDR path entirely.
       const focusing = aperture > 0 && maxBlur >= 0.5;
+      if (!focusing && !bloom && !vignette && !grain && exposure === 1) {
+        renderer.setRenderTarget(null); renderer.render(world, view);
+        return;
+      }
       const sceneTarget = focusing ? hdrDepth : hdr;
       renderer.setRenderTarget(sceneTarget); renderer.clear(); renderer.render(world, view);
       let sharp = sceneTarget.texture;
@@ -230,8 +236,8 @@ function createPost(THREE, renderer) {
       }
       const u = composite.uniforms;
       u.tColor.value = sharp; u.tBloom.value = small.texture; u.uRes.value.set(w, h);
-      u.uBloom.value = bloom; u.uExposure.value = num(lens.exposure, 1, 0, 8);
-      u.uVignette.value = num(lens.vignette, LENS_DEFAULTS.vignette, 0, 1); u.uGrain.value = num(lens.grain, LENS_DEFAULTS.grain, 0, 0.2);
+      u.uBloom.value = bloom; u.uExposure.value = exposure;
+      u.uVignette.value = vignette; u.uGrain.value = grain;
       u.uFrame.value = frame;
       draw(composite, null);
     },
