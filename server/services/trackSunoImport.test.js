@@ -20,10 +20,20 @@ const { fetchPublicText, fetchPublicBinary, resolvePublicUrl } = await import('.
 const { importUploadedTrack } = await import('./pipeline/musicLibrary.js');
 const { generateSunoSong } = await import('./musicVideo/autonomousSuno.js');
 const { createTrack } = await import('./tracks/index.js');
-const { startSunoImport, cancelSunoImport } = await import('./trackSunoImport.js');
+const { startSunoImport, cancelSunoImport, __testing } = await import('./trackSunoImport.js');
 
 const ID = '11111111-2222-4333-8444-555555555555';
 const songPage = (record) => `<script>self.__next_f.push([1,${JSON.stringify(`5:${JSON.stringify(record)}\n`)}])</script>`;
+
+// A browser export that lands a file through the import's importAudio.
+const exportsFile = (page) => async (_fields, deps) => {
+  if (page) deps.onSongPage(page);
+  const { mkdtemp, writeFile, rm } = await import('fs/promises');
+  const srcDir = await mkdtemp(`${(await import('os')).tmpdir()}/suno-test-`);
+  await writeFile(`${srcDir}/song.m4a`, 'm4a');
+  await deps.importAudio(`${srcDir}/song.m4a`, 'song.m4a').finally(() => rm(srcDir, { recursive: true, force: true }));
+  return { songId: ID };
+};
 
 // The terminal frame the detached job broadcast, once it lands.
 const terminal = () => vi.waitFor(() => {
@@ -98,14 +108,7 @@ describe('startSunoImport', () => {
   it('exports a private song through the signed-in browser, taking its title and lyrics from that page', async () => {
     fetchPublicText.mockResolvedValue(null); // the anonymous page shows nothing for a private song
     fetchPublicBinary.mockResolvedValue(null);
-    generateSunoSong.mockImplementation(async (_fields, deps) => {
-      deps.onSongPage(songPage({ id: ID, title: 'Unreleased', metadata: { prompt: 'draft words', tags: 'lo-fi' } }));
-      const { mkdtemp, writeFile, rm } = await import('fs/promises');
-      const srcDir = await mkdtemp(`${(await import('os')).tmpdir()}/suno-test-`);
-      await writeFile(`${srcDir}/song.m4a`, 'm4a');
-      await deps.importAudio(`${srcDir}/song.m4a`, 'song.m4a').finally(() => rm(srcDir, { recursive: true, force: true }));
-      return { songId: ID };
-    });
+    generateSunoSong.mockImplementation(exportsFile(songPage({ id: ID, title: 'Unreleased', metadata: { prompt: 'draft words', tags: 'lo-fi' } })));
     await startSunoImport(`https://suno.com/song/${ID}`);
     expect(await terminal()).toMatchObject({ type: 'complete' });
     expect(generateSunoSong).toHaveBeenCalledWith({}, expect.objectContaining({ songIds: [ID], signal: expect.any(AbortSignal), timeoutMs: 90_000 }));
@@ -133,6 +136,45 @@ describe('startSunoImport', () => {
     expect(createTrack).toHaveBeenCalledWith(expect.objectContaining({ title: 'Airplane Mode', lyrics: '[Verse]\nno signal' }));
     // A public song takes the fast public-video route, never the browser queue.
     expect(generateSunoSong).not.toHaveBeenCalled();
+  });
+
+  it('exports a public song through the browser when its public video is refused', async () => {
+    fetchPublicText.mockResolvedValue(songPage({ id: ID, title: 'Airplane Mode', metadata: { prompt: 'words', tags: 'pop' } }));
+    fetchPublicBinary.mockResolvedValue(null); // mp3 and mp4 both refused
+    generateSunoSong.mockImplementation(exportsFile(null));
+    await startSunoImport(`https://suno.com/song/${ID}`);
+    expect(await terminal()).toMatchObject({ type: 'complete' });
+    expect(generateSunoSong).toHaveBeenCalled();
+    expect(createTrack).toHaveBeenCalledWith(expect.objectContaining({ title: 'Airplane Mode', lyrics: 'words' }));
+  });
+
+  it('keeps progress moving forward when the browser export follows a failed extraction', async () => {
+    fetchPublicText.mockResolvedValue(songPage({ id: ID, title: 'Airplane Mode' }));
+    fetchPublicBinary.mockImplementation(async (url) => (url.endsWith('.mp4') ? { buffer: Buffer.from('v'), contentType: 'video/mp4' } : null));
+    runFfmpegProcess.mockResolvedValue({ ok: false, reason: 'no audio stream' });
+    generateSunoSong.mockImplementation(exportsFile(null));
+    await startSunoImport(`https://suno.com/song/${ID}`);
+    expect(await terminal()).toMatchObject({ type: 'complete' });
+    const percents = broadcastSse.mock.calls.map(([, f]) => f).filter((f) => f.type === 'progress').map((f) => f.percent);
+    expect(percents).toEqual([...percents].sort((a, b) => a - b));
+  });
+
+  it('falls back to the public video when the browser export waits past its budget', async () => {
+    const { browserWaitMs } = __testing.limits;
+    __testing.limits.browserWaitMs = 20;
+    try {
+      fetchPublicText.mockResolvedValue(null); // private-looking page: the browser goes first
+      fetchPublicBinary.mockImplementation(async (url) => (url.endsWith('.mp4') ? { buffer: Buffer.from('v'), contentType: 'video/mp4' } : null));
+      let exportSignal;
+      generateSunoSong.mockImplementation((_fields, deps) => { exportSignal = deps.signal; return new Promise(() => {}); });
+      await startSunoImport(`https://suno.com/song/${ID}`);
+      expect(await terminal()).toMatchObject({ type: 'complete' });
+      expect(fetchPublicBinary.mock.calls.map(([url]) => url)).toContain(`https://cdn1.suno.ai/${ID}.mp4`);
+      // The still-queued export is told to stand down.
+      expect(exportSignal.aborted).toBe(true);
+    } finally {
+      __testing.limits.browserWaitMs = browserWaitMs;
+    }
   });
 
   it('cancels at once while the browser export waits its turn in the shared browser queue', async () => {

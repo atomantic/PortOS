@@ -72,27 +72,48 @@ async function extractAudio(videoPath, outPath, signal) {
 // signed-out browser shows no usable Download menu (no sign-in redirect), so
 // only a timeout ends that wait; an import should fall back long before then.
 const BROWSER_EXPORT_TIMEOUT_MS = 90_000;
+// The whole browser leg, including its wait in the shared browser queue
+// (behind an autopilot song or a publish draft), which the export's own
+// budget doesn't count. Mutable for tests.
+const limits = { browserWaitMs: 2 * 60 * 1000 };
 
 // Export the song through the signed-in PortOS Browser, the same export the
 // autopilot uses, so a private or unpublished song in the user's own Suno
 // library imports too. Resolves the page HTML it saw (for title and lyrics).
 async function exportThroughBrowser(songId, outPath, signal) {
   const { generateSunoSong } = await import('./musicVideo/autonomousSuno.js');
+  // Its own signal: a cancel or the wait budget running out stops it, and a
+  // queued export sees the aborted signal when its turn comes and exits.
+  const exportAbort = new AbortController();
+  const stop = () => exportAbort.abort();
+  if (signal.aborted) stop();
+  signal.addEventListener('abort', stop, { once: true });
+  let timer;
   let html = '';
   const exported = generateSunoSong({}, {
-    songIds: [songId], signal, timeoutMs: BROWSER_EXPORT_TIMEOUT_MS,
+    songIds: [songId], signal: exportAbort.signal, timeoutMs: BROWSER_EXPORT_TIMEOUT_MS,
     onSongPage: (pageHtml) => { html = pageHtml; },
-    // Keep the export out of the library until it passes this import's checks.
-    importAudio: async (path) => { await copyFile(path, outPath); return { filename: null, sizeBytes: 0 }; },
+    // Keep the export out of the library until it passes this import's checks,
+    // and never let an export that finishes after its leg gave up overwrite
+    // what the next route wrote.
+    importAudio: async (path) => {
+      if (!exportAbort.signal.aborted) await copyFile(path, outPath);
+      return { filename: null, sizeBytes: 0 };
+    },
   });
-  // The export waits its turn in the shared browser queue (behind an autopilot
-  // song or a publish draft); a cancel shouldn't wait for that turn. The queued
-  // export sees the aborted signal when it starts and exits without exporting.
   exported.catch(() => {});
-  await Promise.race([exported, new Promise((_, reject) => {
-    if (signal.aborted) reject(new Error('cancelled'));
-    signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
-  })]);
+  try {
+    await Promise.race([exported, new Promise((_, reject) => {
+      exportAbort.signal.addEventListener('abort', () => reject(new Error(signal.aborted
+        ? 'cancelled'
+        : `the PortOS Browser did not finish the export within ${Math.round(limits.browserWaitMs / 1000)}s`)), { once: true });
+      if (exportAbort.signal.aborted) reject(new Error('cancelled'));
+      timer = setTimeout(stop, limits.browserWaitMs);
+    })]);
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener('abort', stop);
+  }
   return html;
 }
 
@@ -115,7 +136,7 @@ const importJobs = new Map();
 
 export const attachSunoImportSseClient = (jobId, res) => attachSse(importJobs, jobId, res);
 
-export const __testing = { importJobs };
+export const __testing = { importJobs, limits };
 
 /** Cancel an in-flight import; false when the job is unknown or already over. */
 export function cancelSunoImport(jobId) {
@@ -182,10 +203,15 @@ export async function startSunoImport(url) {
         // a private or unpublished one shows nothing anonymously, so the
         // signed-in browser export comes first.
         tempPath = join(dir, 'song.m4a');
-        const viaVideo = () => audioFromPublicVideo(songId, dir, tempPath, job.abort.signal,
-          () => broadcastSse(job, { type: 'progress', percent: 70, stage: 'extracting' }));
+        // Progress only moves forward, even when the browser leg follows a failed extraction.
+        let percent = 20;
+        const viaVideo = () => audioFromPublicVideo(songId, dir, tempPath, job.abort.signal, () => {
+          percent = 70;
+          broadcastSse(job, { type: 'progress', percent, stage: 'extracting' });
+        });
         const viaBrowser = async () => {
-          broadcastSse(job, { type: 'progress', percent: 30, stage: 'exporting' });
+          percent = Math.max(percent, 30);
+          broadcastSse(job, { type: 'progress', percent, stage: 'exporting' });
           const signedIn = parseSunoSongPage(await exportThroughBrowser(songId, tempPath, job.abort.signal), songId);
           // Fill only what the anonymous page lacked.
           song = { ...song, title: song.title || signedIn.title, lyrics: song.lyrics || signedIn.lyrics, style: song.style || signedIn.style };
