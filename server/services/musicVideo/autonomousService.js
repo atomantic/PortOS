@@ -1245,14 +1245,22 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
   });
   if (retakenTrackId) await unlinkRunTrack(projectId, out.run.id, retakenTrackId);
   if (out.run.stage === 'produce' && out.run.output.finalAutoReviewId) {
-    // The orchestrator's footage revision picks up where it stopped; one that
-    // already ended gives way to the re-render below.
-    const resumed = await deps.resumeAutoReview(projectId, out.run.output.finalAutoReviewId).then(() => true, () => false);
-    if (resumed) {
+    // The orchestrator's footage revision picks up where it stopped. One that
+    // already ended (or a director finished) leaves a revised film to render
+    // and review again; any other failure is the director's to see.
+    const failure = await deps.resumeAutoReview(projectId, out.run.output.finalAutoReviewId).then(() => null, (err) => err);
+    if (!failure) {
       const { project: next, run } = await patchRun(projectId, (r) => stagePatch(r, 'produce', { status: 'running', step: FINAL_REVISION_STEP }));
       return { project: presentProjectAutonomousRun(next), run: presentAutonomousRun(run) };
     }
-    await patchRun(projectId, () => ({ output: { finalAutoReviewId: null } }));
+    if (!['AUTO_REVIEW_CLOSED', 'NOT_FOUND'].includes(failure.code)) {
+      const parked = await park(projectId, 'needs-human', { error: trimTo(`The final revision could not resume: ${failure.message}`, 500), errorCode: failure.code || null });
+      return { project: parked.project, run: presentAutonomousRun(parked.run) };
+    }
+    const { run } = await patchRun(projectId, () => ({ output: { finalAutoReviewId: null } }));
+    await startFinalRender(projectId, run);
+    const latest = await getProject(projectId);
+    return { project: presentProjectAutonomousRun(latest), run: presentAutonomousRun(projectAutonomousRun(latest)) };
   }
   if (out.run.stage === 'produce' && (out.run.output.renderJobId || out.run.output.productionDone)) {
     // Production (or the code render) already finished; only the final render is left.
@@ -1444,15 +1452,23 @@ async function startFinalRender(projectId, run) {
 }
 
 /**
- * The orchestrator's footage revision ended. Whatever it decided, the film is
- * rendered again for the next final review; a run it left resumable (stopped
- * or limit-reached) is closed first so it does not hold the revision slot.
+ * The orchestrator's footage revision ended. One that handed off to a human
+ * (`needs-human`) or failed leaves its revision open, so the run parks with the
+ * reason and keeps the revision's id: Resume, once the director has finished
+ * it, renders and reviews the film again. Otherwise the film is rendered again
+ * for the next final review; a run it left resumable (stopped or
+ * limit-reached) is closed first so it does not hold the revision slot.
  */
 async function onAutoReviewEvent({ projectId, runId, run: review }) {
   if (!projectId || !runId || !review || review.status === 'running') return;
   const project = await getProject(projectId).catch(() => null);
   const run = runAwaitingRender(project);
   if (!run || run.output.finalAutoReviewId !== runId || run.stages.produce?.step !== FINAL_REVISION_STEP) return;
+  if (['needs-human', 'failed'].includes(review.status)) {
+    const reason = [review.stopReason, review.error].find((v) => typeof v === 'string' && v.trim()) || `the revision ${review.status === 'failed' ? 'failed' : 'needs a director'}`;
+    await park(projectId, 'needs-human', { error: trimTo(`The revision of the final video was left for a director: ${reason}`, 500), errorCode: 'FINAL_REVISION_NEEDS_HUMAN' });
+    return;
+  }
   await patchRun(projectId, () => ({ output: { finalAutoReviewId: null } }));
   if (['stopped', 'limit-reached'].includes(review.status)) {
     await deps.cancelAutoReview(projectId, runId).catch((err) => console.warn(`⚠️ Autonomous music video ${short(run.id)} could not close its revision: ${trimTo(err.message, 200)}`));
