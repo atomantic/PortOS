@@ -145,6 +145,9 @@
   // So resolve on 'seeked' AND the presented-frame callback, which is armed
   // before the seek so a fast presentation is never missed. Where the browser
   // never presents a detached element, FRAME_GRACE_MS after 'seeked' stands in.
+  // A frame presented from BEFORE the seek (the clip's time-0 frame, painted
+  // once it loaded) fires the same callback, so a callback only counts when its
+  // mediaTime is within a frame of the target; otherwise it re-arms.
   const FRAME_GRACE_MS = 1000;
   function seekVideo(v, media, local) {
     const fps = media.fps || FPS;
@@ -156,6 +159,7 @@
       let seeked = false;
       let presented = typeof v.requestVideoFrameCallback !== 'function';
       let grace = null;
+      let settled = false;
       const timer = setTimeout(() => { cleanup(); reject(new Error(`video seek timed out: ${media.src} @ ${target.toFixed(3)}s`)); }, 15000);
       const finish = () => { if (seeked && presented) { cleanup(); resolve(v); } };
       const onSeeked = () => {
@@ -164,10 +168,14 @@
         finish();
       };
       const fail = () => { cleanup(); reject(new Error(`video seek failed: ${media.src} (${v.error?.code ?? '?'})`)); };
-      function cleanup() { clearTimeout(timer); clearTimeout(grace); v.removeEventListener('seeked', onSeeked); v.removeEventListener('error', fail); }
+      function cleanup() { settled = true; clearTimeout(timer); clearTimeout(grace); v.removeEventListener('seeked', onSeeked); v.removeEventListener('error', fail); }
       v.addEventListener('seeked', onSeeked);
       v.addEventListener('error', fail);
-      if (!presented) v.requestVideoFrameCallback(() => { presented = true; finish(); });
+      const armPresented = () => v.requestVideoFrameCallback((_now, meta) => {
+        if (Number.isFinite(meta?.mediaTime) && Math.abs(meta.mediaTime - target) > 1 / fps) { if (!settled) armPresented(); return; }
+        presented = true; finish();
+      });
+      if (!presented) armPresented();
       v.currentTime = target;
     });
   }
