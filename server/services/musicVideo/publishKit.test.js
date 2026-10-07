@@ -51,12 +51,13 @@ afterAll(() => cleanupTempDataRoots());
 const cue = (text, startSec, endSec) => ({ id: `lc-${startSec}`, text, startSec, endSec });
 const scene = (startSec, endSec, sectionLabel, shotMode = 'performance') => ({ sceneId: `mvs-${startSec}`, order: startSec, startSec, endSec, sectionLabel, shotMode, takes: [] });
 
+// 6 fps: the encodes upscale to 1080p, so frame count (the 25s teaser floor pins duration) sets the CPU cost under load (#10479).
 async function renderedProject() {
   const created = await projects.createProject({ name: 'Example Song' });
   await mkdir(PATHS.videos, { recursive: true });
   const filename = `master-${created.id.slice(3, 11)}.mp4`;
   const made = await runFfmpegProcess({ bin: ffmpeg, args: ['-hide_banner', '-loglevel', 'error',
-    '-f', 'lavfi', '-i', 'testsrc2=s=320x180:r=24:d=36', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=36',
+    '-f', 'lavfi', '-i', 'testsrc2=s=320x180:r=6:d=36', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=36',
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', '-y', join(PATHS.videos, filename)] });
   expect(made.ok).toBe(true);
   await saveHistory([{ id: 'render-1', filename, durationSec: 36 }]);

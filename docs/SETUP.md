@@ -7,11 +7,43 @@ PortOS can automate local installation, certificate provisioning, and launch URL
 ```bash
 git clone --recurse-submodules https://github.com/atomantic/PortOS.git
 cd PortOS
+```
+
+### Choose the database before setup
+
+Setup provisions only the selected backend; it does not detect and choose between
+Docker and native PostgreSQL.
+
+- **Docker (default):** install and start Docker with Compose available before
+  running setup. With no `PGMODE` configured, PortOS uses Docker on port `5561`.
+- **Fresh native install:** create or edit `.env` in the repository root and set
+  `PGMODE=native`, preserving other settings. The default endpoint is
+  `localhost:5432`; set `PGHOST` and `PGPORT` there if needed. Setup checks that
+  endpoint and, if it is not ready, invokes the native bootstrap in
+  `scripts/db.sh setup-native` (Homebrew provisioning).
+
+An exported `PGMODE` overrides `.env`; unset a conflicting shell value before
+setup. If Docker is selected but unavailable, setup fails even if native
+PostgreSQL is healthy. It leaves the selection unchanged so a missing Docker
+daemon cannot silently redirect an existing install to another database.
+
+**Existing installs:** retain the backend holding your records. Editing `PGMODE`
+or rerunning setup does not migrate them. Use the coordinated cutover in
+**Settings → Database** to move between backends; see
+[Database backend migration](./BACKUP.md#database-backend-migration).
+For endpoint overrides and readiness checks, see
+[Storage setup](./STORAGE.md#setup-path-npm-run-setupdb).
+
+### Run the installer
+
+```bash
 ./setup.sh                 # macOS / Linux guided installer
 # or: .\setup.ps1         # Windows PowerShell
 ```
 
 `npm run setup` is the non-wrapper equivalent. All three paths install dependencies, provision PostgreSQL, prepare runtime data and the managed browser, ask about a local LLM when an interactive terminal is available, safely attempt Tailscale certificate provisioning, and print the remaining setup walkthrough.
+
+## Network setup
 
 The network sequence is:
 

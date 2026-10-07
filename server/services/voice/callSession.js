@@ -49,6 +49,7 @@ const initialState = () => ({
   startedAt: null,
   lastVoiceAt: null,
   endedReason: null,
+  physicalDisconnect: null,
   transcript: [],
   // 'user' — PortOS placed this call on request. 'mind' — the Persistent Mind
   // placed it (voice.call-user). 'inbound' — the user called PortOS and the
@@ -136,6 +137,7 @@ const publicState = () => ({
   hostAttached: Boolean(host),
   startedAt: session.startedAt,
   endedReason: session.endedReason,
+  physicalDisconnect: session.physicalDisconnect,
   turns: session.transcript.length,
 });
 
@@ -261,7 +263,7 @@ export async function pollCall() {
     return publicState();
   }
 
-  if (observed?.state === 'ended' || observed?.state === 'idle') return endCall('remote-hangup');
+  if (observed?.state === 'ended' || observed?.state === 'idle') return endCall('remote-hangup', { disconnectObserved: true });
   if (observed?.state === 'connected' && session.state === 'dialing') setState('listening');
 
   const now = deps.now();
@@ -503,7 +505,7 @@ const MIND_TRANSCRIPT_MAX_CHARS = 6_000;
  * The journal append is best-effort: a failed write must not leave the session
  * stuck `connected`, because the state is what gates placing the next call.
  */
-export async function endCall(reason = 'ended') {
+export async function endCall(reason = 'ended', { disconnectObserved = false } = {}) {
   if (session.state === 'idle') return publicState();
   stopPolling();
   const transcript = session.transcript;
@@ -512,10 +514,23 @@ export async function endCall(reason = 'ended') {
   session.endedReason = reason;
   setState('ended');
 
+  // Ending PortOS's audio session is independent of confirming FaceTime's
+  // physical disconnect. Always finish cleanup, but retain that distinction.
+  let physicalDisconnect = 'confirmed';
   try {
-    await deps.hangup();
+    // A successful poll already observed idle/ended; pressing a vanished
+    // hang-up control would manufacture a failure after a real disconnect.
+    if (!disconnectObserved) await deps.hangup();
   } catch (error) {
+    physicalDisconnect = error.code === 'state-unconfirmed' ? 'unconfirmed' : 'failed';
     console.error(`❌ voice call: hangup failed: ${error.message}`);
+    await addNotification({
+      type: NOTIFICATION_TYPES.AGENT_WARNING,
+      title: 'Check FaceTime to confirm the call disconnected',
+      description: 'The PortOS audio session ended, but FaceTime disconnect could not be confirmed. Check FaceTime and end the call there if it is still active.',
+      priority: PRIORITY_LEVELS.HIGH,
+      metadata: { source: 'voice-facetime-disconnect', outcome: physicalDisconnect },
+    }).catch(notificationError => console.error(`❌ voice call: disconnect warning failed: ${notificationError.message}`));
   }
 
   if (transcript.length) {
@@ -546,8 +561,8 @@ export async function endCall(reason = 'ended') {
     const verb = origin === 'mind' ? 'placed' : 'answered';
     try {
       await deps.enqueueMindMessage(
-        `Outcome of the FaceTime Audio call you ${verb} (ended: ${reason}):\n${
-          transcript.length ? renderTranscript(transcript) : 'The call ended with nothing said.'
+        `Outcome of the FaceTime Audio call you ${verb} (PortOS session ended: ${reason}; FaceTime disconnect ${physicalDisconnect}):\n${
+          transcript.length ? renderTranscript(transcript) : 'The PortOS session ended with nothing said.'
         }`.slice(0, MIND_TRANSCRIPT_MAX_CHARS),
       );
     } catch (error) {
@@ -555,7 +570,7 @@ export async function endCall(reason = 'ended') {
     }
   }
 
-  session = { ...initialState(), endedReason: reason };
+  session = { ...initialState(), endedReason: reason, physicalDisconnect };
   return emitState();
 }
 

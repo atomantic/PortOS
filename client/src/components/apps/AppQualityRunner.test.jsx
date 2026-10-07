@@ -152,12 +152,16 @@ it('excludes known unavailable and N/A assessments from suggestions while allowi
   await waitFor(() => expect(startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ taskTypes: ['typing', 'console-errors', 'security'] }), { silent: true }));
 });
 
-it('re-offers a category whose not-applicable ruling has expired', async () => {
+it.each(['not-applicable', 'unavailable'])('re-offers stale %s evidence without forcing inapplicable checks', async coverage => {
   startMaintenanceRun.mockResolvedValue({ run: { id: 'run-5', status: 'running', steps: [] } });
-  const categories = [{ id: 'accessibility', label: 'Accessibility', score: null, coverage: 'not-applicable', stale: true, assessedAt: '2026-07-01T00:00:00Z' }];
+  const categories = [
+    { id: 'accessibility', label: 'Accessibility', score: null, coverage, stale: true, assessedAt: '2026-07-01T00:00:00Z' },
+    { id: 'mobile-responsive', label: 'Mobile', score: null, coverage, stale: true, applicable: false, assessedAt: '2026-07-01T00:00:00Z' },
+  ];
   render(<MemoryRouter><AppQualityRunner app={{ ...app, quality: { categories } }} /></MemoryRouter>);
   fireEvent.click(await findEnabledByRole('button', { name: 'Run now' }));
   await waitFor(() => expect(startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ taskTypes: ['accessibility'] }), { silent: true }));
+  expect(startMaintenanceRun.mock.lastCall[0]).not.toHaveProperty('explicitCheck');
 });
 
 it('leaves audits that cannot apply to this repository out of batch runs, but runs one on request', async () => {

@@ -324,7 +324,7 @@ describe('pullRepo', () => {
 
     child.emit('close', 0);
 
-    const result = await expect(resultPromise).resolves.toMatchObject({
+    const _result = await expect(resultPromise).resolves.toMatchObject({
       success: true
     });
     // Verify that child.kill() was NOT called by the timeout
@@ -376,7 +376,7 @@ describe('pullRepo', () => {
     await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
 
     // Get a reference to the timeout so we can verify it was called
-    const timeoutHandle = vi.useFakeTimers();
+    const _timeoutHandle = vi.useFakeTimers();
 
     // Simulate close event
     child.emit('close', 0);

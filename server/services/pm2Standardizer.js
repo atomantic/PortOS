@@ -265,7 +265,7 @@ async function gatherConfigContext(dirPath) {
     ['packages/web/vite.config.ts', join(dirPath, 'packages/web')]
   ];
 
-  for (const [relPath, fullDir] of vitePaths) {
+  for (const [relPath, _fullDir] of vitePaths) {
     const fullPath = join(dirPath, relPath);
     if (existsSync(fullPath)) {
       const content = await readFile(fullPath, 'utf-8').catch(() => '');

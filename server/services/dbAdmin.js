@@ -104,7 +104,7 @@ function runCmd(cmd, args, timeout = 120_000, env = process.env) {
 
 const runDbScript = (args) => runCmd(bashBinary, [dbScript, ...args]);
 
-function parseDbMode(stdout) {
+function _parseDbMode(stdout) {
   const match = stdout.match(/Current mode:\s*(\w+)/);
   if (!match) console.warn('🗄️ Failed to parse mode from db.sh output');
   return match?.[1] || 'docker';

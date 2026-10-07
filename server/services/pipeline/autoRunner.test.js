@@ -55,7 +55,7 @@ const issuesSvc = await import('./issues.js');
 const autoRunner = await import('./autoRunner.js');
 
 // Drain any in-flight microtasks/promises spawned by startAutoRunTextStages.
-const flush = () => new Promise((r) => setImmediate(r));
+const _flush = () => new Promise((r) => setImmediate(r));
 
 const waitFor = async (predicate, { timeoutMs = 1000, intervalMs = 5 } = {}) => {
   const start = Date.now();

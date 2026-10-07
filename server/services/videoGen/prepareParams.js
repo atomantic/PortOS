@@ -384,6 +384,96 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
   }));
 }
 
+// Local audio is queue-owned whether supplied as an upload or copied from a
+// project song. Keep source selection and durable ownership in one step.
+async function prepareLocalAudio({ body, uploads, stageUploadDurable, stagedDurablePaths, cleanupStaged }) {
+  // Music-video a2v jobs reuse an existing library track rather than uploading
+  // the same song for every cut. Copy it into the queue-owned uploads area so
+  // the worker may safely delete its input on completion without ever touching
+  // the source track under data/music.
+  const stageExistingAudioDurable = async (sourcePath) => {
+    const ext = extname(sourcePath) || '.bin';
+    const durablePath = join(PATHS.uploads, `video-audio-${randomUUID()}${ext}`);
+    await copyFileGuarded(sourcePath, durablePath).catch(async (err) => {
+      await unlinkGuarded(durablePath).catch(() => {});
+      await cleanupStaged();
+      throw new ServerError(
+        `Failed to stage project audio: ${err.message}`,
+        { status: 500, code: 'VIDEO_GEN_AUDIO_STAGE_FAILED' },
+      );
+    });
+    stagedDurablePaths.push(durablePath);
+    return durablePath;
+  };
+
+  let audioFilePath = null;
+  if (uploads.audioFile) {
+    // a2v: audio file rides through the same durable-staging path as the
+    // image uploads. Cleanup tracking via extraUploadedTempPaths so the
+    // worker drops it on terminal events the same way it drops lastImage.
+    audioFilePath = await stageUploadDurable(uploads.audioFile, 'audio');
+  } else if (body.mode === 'a2v' && body.musicVideo) {
+    const project = await getMusicVideoProject(body.musicVideo.projectId);
+    const sceneExists = project?.scenes?.some((scene) => scene.sceneId === body.musicVideo.sceneId);
+    if (!project || !sceneExists) {
+      await cleanupStaged();
+      throw new ServerError('Music-video project or scene not found', { status: 404, code: 'NOT_FOUND' });
+    }
+    const track = project.trackId ? await getTrack(project.trackId) : null;
+    const filename = track?.audioFilename || project.uploadedAudioFilename;
+    const sourceAudioPath = filename ? safeUnder(PATHS.music, filename) : null;
+    if (!sourceAudioPath || !existsSync(sourceAudioPath)) {
+      await cleanupStaged();
+      throw new ServerError('Music-video project audio is unavailable', { status: 400, code: 'VIDEO_GEN_PROJECT_AUDIO_MISSING' });
+    }
+    audioFilePath = await stageExistingAudioDurable(sourceAudioPath);
+  }
+  return audioFilePath;
+}
+
+async function resolveAudioFrameCount({ body, audioFilePath, effectiveModel, effectiveNumFrames, cleanupStaged }) {
+  // A direct-upload LTX-2.5 A2V request follows the whole audio file. The MLX
+  // pipeline still requires an explicit 8n+1 frame canvas, so derive that canvas
+  // from the durable upload rather than trusting browser metadata (or forcing an
+  // API caller to probe the file itself). MiniMax Ref2VA is deliberately excluded:
+  // its wrapper windows arbitrary-length audio and owns its duration internally.
+  // Music-video jobs also keep their explicit scene canvas because they select a
+  // slice of a longer song with audioStartSec.
+  if (body.mode === 'a2v' && audioFilePath
+    && effectiveModel?.audioDurationDriven === true
+    && effectiveModel?.arbitraryLengthAudio !== true
+    && !body.musicVideo) {
+    const durationSeconds = await probeVideoDuration(audioFilePath);
+    if (durationSeconds == null) {
+      await cleanupStaged();
+      throw new ServerError(
+        'Could not read the uploaded audio duration. Upload a valid WAV, MP3, M4A, AAC, FLAC, or OGG file.',
+        { status: 400, code: 'VIDEO_GEN_AUDIO_DURATION_UNREADABLE' },
+      );
+    }
+    const frameStride = Number(effectiveModel.frameStride);
+    const fps = Number(body.fps ?? 24);
+    const maxNumFrames = Number(effectiveModel.maxNumFrames);
+    if (!Number.isInteger(frameStride) || frameStride <= 0
+      || !Number.isInteger(maxNumFrames) || maxNumFrames <= 0) {
+      await cleanupStaged();
+      throw new ServerError(
+        `${effectiveModel.name} is missing its duration-driven frameStride/maxNumFrames contract.`,
+        { status: 500, code: 'VIDEO_MODEL_MISCONFIGURED' },
+      );
+    }
+    effectiveNumFrames = audioDurationToFrames(durationSeconds, fps, frameStride);
+    if (effectiveNumFrames > maxNumFrames) {
+      await cleanupStaged();
+      throw new ServerError(
+        `${effectiveModel.name} supports up to ${(maxNumFrames / fps).toFixed(1)}s in one audio-to-video render; this file is ${durationSeconds.toFixed(1)}s. Use MiniMax H3 Ref2VA for longer audio, or trim the file.`,
+        { status: 400, code: 'VIDEO_GEN_AUDIO_TOO_LONG' },
+      );
+    }
+  }
+  return effectiveNumFrames;
+}
+
 /**
  * The staging + resolution region, split out so `prepareVideoGenParams` can
  * wrap it in a single rollback guard (#3326) without indenting 400 lines.
@@ -415,25 +505,6 @@ async function resolvePreparedParams({
       );
     }
     await unlinkGuarded(file.path).catch(() => {});
-    stagedDurablePaths.push(durablePath);
-    return durablePath;
-  };
-
-  // Music-video a2v jobs reuse an existing library track rather than uploading
-  // the same song for every cut. Copy it into the queue-owned uploads area so
-  // the worker may safely delete its input on completion without ever touching
-  // the source track under data/music.
-  const stageExistingAudioDurable = async (sourcePath) => {
-    const ext = extname(sourcePath) || '.bin';
-    const durablePath = join(PATHS.uploads, `video-audio-${randomUUID()}${ext}`);
-    await copyFileGuarded(sourcePath, durablePath).catch(async (err) => {
-      await unlinkGuarded(durablePath).catch(() => {});
-      await cleanupStaged();
-      throw new ServerError(
-        `Failed to stage project audio: ${err.message}`,
-        { status: 500, code: 'VIDEO_GEN_AUDIO_STAGE_FAILED' },
-      );
-    });
     stagedDurablePaths.push(durablePath);
     return durablePath;
   };
@@ -663,7 +734,6 @@ async function resolvePreparedParams({
 
   let sourceImagePath = null;
   let lastImagePath = null;
-  let audioFilePath = null;
   let icReferenceUploadPath = null;
   let uploadedTempPath = null;
   const extraUploadedTempPaths = [];
@@ -792,68 +862,13 @@ async function resolvePreparedParams({
     // Same path-traversal guard as the start frame.
     lastImagePath = resolveGalleryImage(body.lastImageFile);
   }
-  if (uploads.audioFile) {
-    // a2v: audio file rides through the same durable-staging path as the
-    // image uploads. Cleanup tracking via extraUploadedTempPaths so the
-    // worker drops it on terminal events the same way it drops lastImage.
-    audioFilePath = await stageUploadDurable(uploads.audioFile, 'audio');
-    extraUploadedTempPaths.push(audioFilePath);
-  } else if (body.mode === 'a2v' && body.musicVideo) {
-    const project = await getMusicVideoProject(body.musicVideo.projectId);
-    const sceneExists = project?.scenes?.some((scene) => scene.sceneId === body.musicVideo.sceneId);
-    if (!project || !sceneExists) {
-      await cleanupStaged();
-      throw new ServerError('Music-video project or scene not found', { status: 404, code: 'NOT_FOUND' });
-    }
-    const track = project.trackId ? await getTrack(project.trackId) : null;
-    const filename = track?.audioFilename || project.uploadedAudioFilename;
-    const sourceAudioPath = filename ? safeUnder(PATHS.music, filename) : null;
-    if (!sourceAudioPath || !existsSync(sourceAudioPath)) {
-      await cleanupStaged();
-      throw new ServerError('Music-video project audio is unavailable', { status: 400, code: 'VIDEO_GEN_PROJECT_AUDIO_MISSING' });
-    }
-    audioFilePath = await stageExistingAudioDurable(sourceAudioPath);
-    extraUploadedTempPaths.push(audioFilePath);
-  }
-  // A direct-upload LTX-2.5 A2V request follows the whole audio file. The MLX
-  // pipeline still requires an explicit 8n+1 frame canvas, so derive that canvas
-  // from the durable upload rather than trusting browser metadata (or forcing an
-  // API caller to probe the file itself). MiniMax Ref2VA is deliberately excluded:
-  // its wrapper windows arbitrary-length audio and owns its duration internally.
-  // Music-video jobs also keep their explicit scene canvas because they select a
-  // slice of a longer song with audioStartSec.
-  if (body.mode === 'a2v' && audioFilePath
-    && effectiveModel?.audioDurationDriven === true
-    && effectiveModel?.arbitraryLengthAudio !== true
-    && !body.musicVideo) {
-    const durationSeconds = await probeVideoDuration(audioFilePath);
-    if (durationSeconds == null) {
-      await cleanupStaged();
-      throw new ServerError(
-        'Could not read the uploaded audio duration. Upload a valid WAV, MP3, M4A, AAC, FLAC, or OGG file.',
-        { status: 400, code: 'VIDEO_GEN_AUDIO_DURATION_UNREADABLE' },
-      );
-    }
-    const frameStride = Number(effectiveModel.frameStride);
-    const fps = Number(body.fps ?? 24);
-    const maxNumFrames = Number(effectiveModel.maxNumFrames);
-    if (!Number.isInteger(frameStride) || frameStride <= 0
-      || !Number.isInteger(maxNumFrames) || maxNumFrames <= 0) {
-      await cleanupStaged();
-      throw new ServerError(
-        `${effectiveModel.name} is missing its duration-driven frameStride/maxNumFrames contract.`,
-        { status: 500, code: 'VIDEO_MODEL_MISCONFIGURED' },
-      );
-    }
-    effectiveNumFrames = audioDurationToFrames(durationSeconds, fps, frameStride);
-    if (effectiveNumFrames > maxNumFrames) {
-      await cleanupStaged();
-      throw new ServerError(
-        `${effectiveModel.name} supports up to ${(maxNumFrames / fps).toFixed(1)}s in one audio-to-video render; this file is ${durationSeconds.toFixed(1)}s. Use MiniMax H3 Ref2VA for longer audio, or trim the file.`,
-        { status: 400, code: 'VIDEO_GEN_AUDIO_TOO_LONG' },
-      );
-    }
-  }
+  const audioFilePath = await prepareLocalAudio({
+    body, uploads, stageUploadDurable, stagedDurablePaths, cleanupStaged,
+  });
+  if (audioFilePath) extraUploadedTempPaths.push(audioFilePath);
+  effectiveNumFrames = await resolveAudioFrameCount({
+    body, audioFilePath, effectiveModel, effectiveNumFrames, cleanupStaged,
+  });
   if (uploads.icReference) {
     // IC-LoRA reference clip — same durable staging + cleanup tracking as the
     // audio upload above. A history-picked reference needs neither (it already

@@ -19,6 +19,9 @@ export const listCodeAnimationProjectHistory = (id, { cursor, signal, limit = 50
 
 export const getCodeAnimationOptions = (options) => request('/code-animation/options', options);
 
+// The vendored three.js modules (path + source) a three-renderer preview inlines.
+export const getCodeAnimationThreeVendor = (options) => request('/code-animation/vendor/three', options);
+
 // Ask a model to WRITE the brief from the chosen universe's bible and canon cast.
 export const generateCodeAnimationBrief = (input, options) => request('/code-animation/brief', {
   method: 'POST',

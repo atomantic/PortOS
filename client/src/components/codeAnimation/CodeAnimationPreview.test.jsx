@@ -3,21 +3,21 @@ import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../services/api', () => ({ uploadGalleryVideo: vi.fn(), exportCodeAnimation: vi.fn(), cancelCodeAnimationExport: vi.fn(), getCodeAnimationPackage: vi.fn() }));
+vi.mock('../../services/api', () => ({ uploadGalleryVideo: vi.fn(), exportCodeAnimation: vi.fn(), cancelCodeAnimationExport: vi.fn(), getCodeAnimationPackage: vi.fn(), getCodeAnimationThreeVendor: vi.fn() }));
 vi.mock('../../lib/downloadBlob', () => ({ downloadBlob: vi.fn() }));
 vi.mock('../../hooks/useSseProgress', () => ({ useSseProgress: vi.fn(() => ({ latest: null })) }));
 
 import CodeAnimationPreview, { prepareAnimationHtml } from './CodeAnimationPreview';
-import { exportCodeAnimation, getCodeAnimationPackage } from '../../services/api';
+import { exportCodeAnimation, getCodeAnimationPackage, getCodeAnimationThreeVendor } from '../../services/api';
 import { downloadBlob } from '../../lib/downloadBlob';
 import { useSseProgress } from '../../hooks/useSseProgress';
 
 const MESSAGES = { ready: 'ca:ready', record: 'ca:record', recorded: 'ca:recorded', progress: 'ca:progress', error: 'ca:error' };
 const HTML = '<!DOCTYPE html><html><head><title>x</title></head><body><canvas></canvas></body></html>';
 
-const renderPreview = ({ audioUrl = null, jobId } = {}) => render(
+const renderPreview = ({ audioUrl = null, jobId, html = HTML } = {}) => render(
   <MemoryRouter>
-    <CodeAnimationPreview html={HTML} audioUrl={audioUrl} messages={MESSAGES} audioGlobal="ANIMATION_AUDIO_URL" frame={{ width: 1920, height: 1080, durationSeconds: 5 }} title="Lantern" jobId={jobId} />
+    <CodeAnimationPreview html={html} audioUrl={audioUrl} messages={MESSAGES} audioGlobal="ANIMATION_AUDIO_URL" frame={{ width: 1920, height: 1080, durationSeconds: 5 }} title="Lantern" jobId={jobId} />
   </MemoryRouter>,
 );
 
@@ -56,6 +56,32 @@ describe('CodeAnimationPreview', () => {
   });
 
   afterEach(() => vi.unstubAllGlobals());
+
+  it('inlines the vendored three.js modules for a three film, widening the policy to data: scripts only, and downloads a standalone file (#10464)', async () => {
+    const user = userEvent.setup();
+    getCodeAnimationThreeVendor.mockResolvedValue({ files: [
+      { path: 'three.core.js', text: 'export const REVISION = "x";' },
+      { path: 'three.module.js', text: "export * from './three.core.js';" },
+    ] });
+    const three = "<!DOCTYPE html><html><head></head><body><script type=\"module\">import * as THREE from 'three';</script></body></html>";
+    renderPreview({ html: three });
+    const frame = await screen.findByTitle('Code animation preview');
+    const srcDoc = frame.getAttribute('srcdoc');
+    expect(srcDoc).toContain("script-src 'unsafe-inline' data:");
+    expect(srcDoc).toContain("connect-src 'none'");
+    expect(srcDoc.indexOf('Content-Security-Policy')).toBeLessThan(srcDoc.indexOf('type="importmap"'));
+    expect(srcDoc).toContain('"three":"data:text/javascript');
+
+    await user.click(screen.getByRole('button', { name: 'Download HTML' }));
+    expect(downloadBlob.mock.calls.at(-1)[0]).toContain('type="importmap"');
+    expect(downloadBlob.mock.calls.at(-1)[2]).toBe('text/html');
+
+    // A film that does not import three never fetches the modules or gets the wider policy.
+    getCodeAnimationThreeVendor.mockClear();
+    renderPreview();
+    expect((await screen.findAllByTitle('Code animation preview')).at(-1).getAttribute('srcdoc')).toContain("script-src 'unsafe-inline'; style-src");
+    expect(getCodeAnimationThreeVendor).not.toHaveBeenCalled();
+  });
 
   it('downloads the saved portable package through the public API', async () => {
     const user = userEvent.setup();

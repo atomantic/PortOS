@@ -30,7 +30,16 @@ const TYPE_HEX = {
 // with no distinct per-page behavior worth pinning, so it stays
 // module-private.
 const memoryNodeColor = (node) => TYPE_HEX[node.type] || '#6b7280';
-export const memoryEdgeColor = (edge) => (edge.type === 'linked' ? '#3b82f6' : '#6b7280');
+// Typed links (#10493) get their own hue; an untyped/legacy 'related' link stays blue.
+const LINK_TYPE_HEX = {
+  supersedes: '#a855f7',
+  contradicts: '#ef4444',
+  'derived-from': '#f59e0b',
+  'applies-to': '#10b981'
+};
+export const memoryEdgeColor = (edge) => (
+  edge.type === 'linked' ? (LINK_TYPE_HEX[edge.linkType] || '#3b82f6') : '#6b7280'
+);
 export const memoryEdgeIntensity = (edge, dimmed) =>
   dimmed ? 0.06 : (edge.type === 'linked' ? 0.6 * edge.weight : 0.3 * edge.weight);
 
@@ -77,7 +86,7 @@ export default function MemoryGraph() {
     ? connectedEdges.map(e => {
         const otherId = e.source === selectedNode.id ? e.target : e.source;
         const n = graph.idMap.get(otherId);
-        return n ? { ...n, edgeType: e.type, weight: e.weight } : null;
+        return n ? { ...n, edgeType: e.type, linkType: e.linkType, weight: e.weight } : null;
       }).filter(Boolean)
     : [];
 
@@ -301,7 +310,7 @@ export default function MemoryGraph() {
                     <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: TYPE_HEX[cn.type] }} />
                     <span className="text-xs text-gray-300 truncate flex-1">{cn.summary}</span>
                     <span className="text-[10px] text-gray-600 shrink-0">
-                      {cn.edgeType === 'linked' ? 'linked' : `${formatPercent(cn.weight * 100, { decimals: 0 })}`}
+                      {cn.edgeType === 'linked' ? (cn.linkType && cn.linkType !== 'related' ? cn.linkType : 'linked') : `${formatPercent(cn.weight * 100, { decimals: 0 })}`}
                     </span>
                   </button>
                 ))}

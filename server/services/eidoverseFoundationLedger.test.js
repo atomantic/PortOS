@@ -527,7 +527,7 @@ describe('building on a foundation inherited from a peer (#7631)', () => {
   });
 
   it('refuses a second peer\'s envelope claiming an origin this install already holds, rather than overwriting the genuine record', async () => {
-    const { candidate, inherited } = await inheritPeerFoundation({ sourceInstanceId: 'instance-peer-one' });
+    const { candidate } = await inheritPeerFoundation({ sourceInstanceId: 'instance-peer-one' });
 
     // The laundering the storage key made free: the origin is the field that
     // chooses the key, the sender hashes its own claims, so re-fingerprinting

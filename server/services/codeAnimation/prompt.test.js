@@ -53,6 +53,23 @@ describe('buildCodeAnimationPrompt', () => {
     expect(at('Refinements for this animation')).toBeLessThan(at('SOUND:'));
   });
 
+  it('teaches the three renderer to import through the host import map, and leaves the other renderers untouched (#10464)', () => {
+    const input = { concept: 'A lantern drifts over a sleeping city', format };
+    const three = buildCodeAnimationPrompt({ ...input, renderer: 'three' });
+    expect(three).toContain("import * as THREE from 'three'");
+    expect(three).toContain('host serves three locally and adds the import map');
+    expect(three).toContain('three/addons/postprocessing/');
+    expect(three).toContain('about 2.0 by day');
+    expect(three).toContain('PCFSoftShadowMap was removed');
+    // The no-library rule gains exactly one exception, and only for three.
+    expect(three).toContain('The ONE exception is the host-provided import map');
+    for (const renderer of ['auto', 'canvas2d', 'webgl', 'svg']) {
+      const prompt = buildCodeAnimationPrompt({ ...input, renderer });
+      expect(prompt).not.toContain('import map');
+      expect(prompt).toContain('no external scripts, stylesheets, fonts, images, or network requests of any kind; system fonts only. It must run');
+    }
+  });
+
   it('rejects an unknown style grammar id', () => {
     expect(() => buildCodeAnimationPrompt({ concept: 'x', format, styleGrammarId: 'no-such-style' })).toThrow(/Unknown film style grammar/);
   });

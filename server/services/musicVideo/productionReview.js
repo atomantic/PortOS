@@ -19,6 +19,9 @@ const source = p => {
 };
 export const productionAlignmentBasis = project => hash(source(project));
 
+/** The storyboard problem raised while the lyric timing is unverified for the current master. */
+export const ALIGNMENT_UNVERIFIED_PROBLEM = 'Lyric alignment is provisional or changed. Listen and verify the current word timings.';
+
 /** A shot manifest belongs to one immutable authored document and one master timeline. */
 export const documentStoryboardBasis = project => hash({
   document: project.composition?.document?.directory, source: source(project),
@@ -229,7 +232,7 @@ export function productionReadiness(project) {
     if (cues.length) boardProblems.push('This song has lyrics. Remove the instrumental exception or correct the song data.');
   } else {
     if (!cues.length) boardProblems.push('Import lyrics and align them to the current vocal; missing lyrics are not an instrumental.');
-    if (draft.timingStatus !== 'verified' || review.alignmentBasis !== alignmentBasis) boardProblems.push('Lyric alignment is provisional or changed. Listen and verify the current word timings.');
+    if (draft.timingStatus !== 'verified' || review.alignmentBasis !== alignmentBasis) boardProblems.push(ALIGNMENT_UNVERIFIED_PROBLEM);
     if (cues.some(c => !(Number.isFinite(c.startSec) && c.endSec > c.startSec && c.endSec <= duration)
       || !c.words?.length || c.words.some(w => !(Number.isFinite(w.startSec) && w.endSec > w.startSec)
         || w.startSec < c.startSec || w.endSec > c.endSec))) {

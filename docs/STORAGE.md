@@ -348,6 +348,7 @@ The escape hatch is **guarded from bitrot by the test suite** (tests boot with `
 3. **Docker unavailable:** if Docker or Compose is missing, or the daemon is stopped, setup exits non-zero with restoration instructions, even when native PostgreSQL is healthy. Both interactive and unattended runs preserve `.env` and never offer a backend switch.
 4. **`PGMODE=native`:** first checks whether the configured role can authenticate to the configured database and its base `memories` table exists. A healthy database exits immediately without re-provisioning. Otherwise it runs `scripts/db.sh setup-native` (Homebrew install, role, database, extensions, schema) and verifies readiness again. The endpoint defaults to `localhost:5432` (`PGHOST`/`PGPORT` override it, from the shell or `.env`). Both the provisioning script and the readiness probes use that same selected endpoint: an unavailable selected endpoint fails without sending SQL to any other cluster on the machine.
 5. **Failure is non-zero exit.** A started-but-unresponsive container or a failed native bootstrap exits non-zero with an actionable message — so the `&&`-chained `npm start` halts here instead of crash-looping under PM2 against an unready database.
+6. **The Docker image is digest-pinned.** `docker-compose.yml` (and the CI Postgres service) reference `pgvector/pgvector:pg17@sha256:<manifest-list digest>` — the readable tag plus the multi-platform (linux/amd64 + linux/arm64) index digest — so every install at one revision runs identical image contents and nothing pulls an unspecified newer image. Refresh only in a dependency-update PR: resolve the tag's index digest from the registry (`docker buildx imagetools inspect pgvector/pgvector:pg17`), confirm the index lists both architectures and its digest equals the SHA-256 of the manifest body, update both files together (`scripts/dbImageDigestPin.test.js` guards tag-only regressions), then verify a fresh start and an existing named volume both come up healthy with the base `memories` table, without replacing the volume.
 
 **Mode selection does not migrate data.** Native and Docker PostgreSQL are separate databases; setup checks schema readiness, not whether one contains your existing records. Keep an existing install pointed at the database holding its data. Back up before an intentional move between modes (see [Backup & Restore](./BACKUP.md)).
 
@@ -355,17 +356,18 @@ The escape hatch is **guarded from bitrot by the test suite** (tests boot with `
 
 ### Moving between Docker and native
 
-Automatic backend migration and switching are temporarily unavailable.
-The Settings switch/migration requests and `scripts/db.sh migrate`,
-`use-native`, and `use-docker` refuse before copying data or changing mode. The former path could accept writes after its dump snapshot
-and strand them on the source; changing `.env` also leaves the running server
-connected to its original pool.
+Use **Settings → Database** for coordinated backend migration, including
+progress and recovery of an interrupted cutover. The legacy switch/migration
+requests and `scripts/db.sh migrate`, `use-native`, and `use-docker` still refuse
+before copying data or changing mode. Those former paths could accept writes
+after the dump snapshot and strand them on the source; changing `.env` also
+leaves the running server connected to its original pool.
 
 `POST /api/database/maintenance/preflight` accepts explicit `source` and `target`
 backend names through the ordinary instance authentication gate. It checks the
 saved direction against the running pool and requires complete, trusted, idle
 work state. A successful response is `{ source, target, advisory: true, accepted: false }`: it creates no operation, reserves no maintenance window, and does
-not promise that a later request is safe. The future acceptance path must repeat
+not promise that a later request is safe. Cutover acceptance repeats
 these checks under its final admission protocol. Missing/unreadable work state,
 configuration drift, or an existing maintenance fence refuses the check.
 
@@ -379,7 +381,7 @@ saved backend. Producer shutdown alone does **not** prove child/spawn quiescence
 or authorize a dump. The internal transfer worker follows it with predecessor
 and descendant reconciliation, then exports the recorded source and imports the
 recorded dump into the recorded target (see [offline transfer](#offline-transfer)).
-The backend cutover API (`POST /api/database/maintenance/cutover`, `POST /api/database/maintenance/recover`, host-control gated) now runs the whole verified lifecycle; the Settings database tab stays disabled until #8811 surfaces its progress and recovery.
+The backend cutover API (`POST /api/database/maintenance/cutover`, `POST /api/database/maintenance/recover`, host-control gated) runs the whole verified lifecycle. The Settings database tab displays progress from the durable maintenance journal and offers Resume when the coordinator has exited; it reports success only after verifying the completed operation, not merely an accepted request or reconnect.
 
 For stage diagnostics, run `node scripts/database-maintenance.mjs status` and
 `node scripts/database-maintenance.mjs writers`. `accepted` means no transfer
@@ -390,8 +392,8 @@ for the transfer stages. A same-operation internal successor requires
 the prior detached supervisor's durable exit receipt and repeats shutdown
 readback, predecessor and writer reconciliation before any export or import.
 
-Until the Settings flow ships (#8811), keep the existing backend selected and use
-backups unless you drive the cutover API deliberately. A safe cutover requires
+Keep the existing backend selected until you deliberately start a coordinated
+cutover through Settings or the API. A safe cutover requires
 downtime for **all** PortOS writers, including the CoS runner, and verification
 that the restarted server actually uses the target. A server-only restart or
 a saved-mode change is not that verification. Do not use Sync followed by Switch

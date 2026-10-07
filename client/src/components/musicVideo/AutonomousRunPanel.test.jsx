@@ -137,6 +137,49 @@ describe('AutonomousRunPanel', () => {
     await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', { retakeSong: true }, { silent: true }));
   });
 
+  it('offers Resume, not Cancel, for a run canceled while it waited on production', async () => {
+    api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
+    render(<Harness initial={baseRun({ status: 'canceled', stage: 'produce', error: 'Production was canceled' })} />);
+    expect(screen.queryByRole('button', { name: /cancel/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /resume/i }));
+    await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', {}, { silent: true }));
+  });
+
+  it('offers nothing to resume for a run canceled before production', () => {
+    render(<Harness initial={baseRun({ status: 'canceled', stage: 'song' })} />);
+    expect(screen.queryByRole('button', { name: /resume/i })).toBeNull();
+  });
+
+  it('swaps the video model on Resume of a run parked in production, offering only image-capable models', async () => {
+    getVideoGenModelContext.mockResolvedValueOnce({
+      models: [
+        { id: 'example-ltx', name: 'Example LTX', supportedModes: ['text', 'image'] },
+        { id: 'example-text-only', name: 'Example text only', supportedModes: ['text'] },
+      ],
+      defaultModel: 'example-ltx',
+    });
+    api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
+    render(<Harness initial={baseRun({
+      status: 'needs-human', stage: 'produce', error: 'Video model refused',
+      brief: { origin: { kind: 'manual' }, tools: ['image:local', 'video:local'], models: { 'video:local': 'example-wan' } },
+      output: { productionRunId: 'prod-1' },
+    })} />);
+    const select = await screen.findByLabelText('Local video gen model');
+    await waitFor(() => expect(select.disabled).toBe(false));
+    expect(screen.queryByRole('option', { name: 'Example text only' })).toBeNull();
+    fireEvent.change(select, { target: { value: 'example-ltx' } });
+    fireEvent.click(screen.getByRole('button', { name: /resume/i }));
+    await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', { models: { 'video:local': 'example-ltx' } }, { silent: true }));
+  });
+
+  it('sends no models on Resume when the video model was not changed', async () => {
+    api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
+    render(<Harness initial={baseRun({ status: 'needs-human', stage: 'produce', brief: { origin: { kind: 'manual' }, tools: ['video:local'] } })} />);
+    await screen.findByLabelText('Local video gen model');
+    fireEvent.click(screen.getByRole('button', { name: /resume/i }));
+    await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', {}, { silent: true }));
+  });
+
   it('offers a retry for a run that needs the director, and shows why', async () => {
     api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
     render(<Harness initial={baseRun({ status: 'needs-human', stage: 'song', error: 'Sign in to Suno in the PortOS Browser' })} />);

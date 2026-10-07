@@ -22,6 +22,15 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
   stopMusicVideoProduction: vi.fn(),
   cancelMusicVideoProduction: vi.fn(),
 }));
+vi.mock('../../services/apiImageVideo.js', () => ({
+  getVideoGenModelContext: vi.fn(async () => ({
+    models: [
+      { id: 'example-ltx', name: 'Example LTX', supportedModes: ['text', 'image'] },
+      { id: 'example-text-only', name: 'Example text only', supportedModes: ['text'] },
+    ],
+    defaultModel: 'example-ltx',
+  })),
+}));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 const authorProvider = vi.hoisted(() => ({ type: 'api', toolFreeOneShot: true }));
 vi.mock('../../hooks/useProviderModels.js', () => ({
@@ -313,6 +322,30 @@ describe('AutopilotPanel production run', () => {
     expect(screen.getByText(/No new spend is reserved while blocked/)).toBeTruthy();
     expect(screen.getByRole('button', { name: /Cancel/ })).toBeTruthy();
     expect(api.resumeMusicVideoProduction).not.toHaveBeenCalled();
+  });
+
+  it('swaps the refused video model and resumes the same run with the new pool', async () => {
+    api.resumeMusicVideoProduction.mockResolvedValue({});
+    const blocked = run({
+      status: 'blocked',
+      pool: [{ kind: 'image', mode: 'local', model: null }, { kind: 'video', mode: 'local', model: 'example-text-only' }],
+      steps: [{ key: 'clip:a:1', kind: 'clip', route: { kind: 'video', mode: 'local', model: 'example-text-only' }, status: 'refused', error: 'Unsupported request', retryBlocked: true }],
+    });
+    render(<ProductionHarness initial={{ id: 'p1', productionRuns: [blocked] }} />);
+    expect(screen.getByText(/pick another video model below/)).toBeTruthy();
+    const select = screen.getByLabelText('Local video gen model');
+    await waitFor(() => expect(select.disabled).toBe(false));
+    expect(screen.queryByRole('option', { name: 'Example text only' })).toBeNull();
+    fireEvent.change(select, { target: { value: 'example-ltx' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    await waitFor(() => expect(api.resumeMusicVideoProduction).toHaveBeenCalledWith('p1', 'run-1', {
+      pool: [{ kind: 'image', mode: 'local', model: null }, { kind: 'video', mode: 'local', model: 'example-ltx' }],
+    }, { silent: true }));
+  });
+
+  it('offers no video model swap for a blocked run without a refused clip', () => {
+    render(<ProductionHarness initial={{ id: 'p1', productionRuns: [run({ status: 'blocked' })] }} />);
+    expect(screen.queryByLabelText('Local video gen model')).toBeNull();
   });
 
   it('shows an interrupted run and resumes it only on request; pushed projects update it', async () => {

@@ -807,7 +807,7 @@ export async function promoteExercise(id) {
   const text = typeof existing.appendedText === 'string' ? existing.appendedText.trim() : '';
   if (!text) throw badRequest('Exercise has no text to promote');
 
-  const { manifest, body } = await getWorkWithBody(existing.workId);
+  const { body } = await getWorkWithBody(existing.workId);
   const nextBody = body.trimEnd() === '' ? text : `${body.trimEnd()}\n\n${text}\n`;
   const { manifest: updatedManifest } = await saveDraftBody(existing.workId, nextBody);
   const promoted = {

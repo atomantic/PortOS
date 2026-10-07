@@ -264,12 +264,43 @@ describe.skipIf(!runDb)('memoryDB CRUD (#3447)', () => {
       memoryDB.createMemory({ type: 'fact', content: 'Bidirectional B.' }),
     ]);
 
-    expect(await memoryDB.linkMemories(a.id, b.id)).toEqual({ success: true, sourceId: a.id, targetId: b.id });
+    expect(await memoryDB.linkMemories(a.id, b.id)).toEqual({
+      success: true, sourceId: a.id, targetId: b.id, linkType: 'related', linkId: expect.any(String)
+    });
     expect((await memoryDB.getMemory(a.id)).relatedMemories).toEqual([b.id]);
     expect((await memoryDB.getMemory(b.id)).relatedMemories).toEqual([a.id]);
 
     const missing = await memoryDB.linkMemories(a.id, '00000000-0000-4000-8000-00000000dead');
     expect(missing).toEqual({ success: false, error: 'Memory not found' });
+  });
+
+  it('stores a directed typed link as one row, reads it back with its type from both ends, and keeps untyped links symmetric', async () => {
+    const [older, newer] = await Promise.all([
+      memoryDB.createMemory({ type: 'decision', content: 'Typed link older decision.' }),
+      memoryDB.createMemory({ type: 'decision', content: 'Typed link newer decision.' }),
+    ]);
+
+    const typed = await memoryDB.linkMemories(newer.id, older.id, { linkType: 'supersedes', note: 'replaces it', createdBy: 'task-1' });
+    expect(typed).toMatchObject({ success: true, linkType: 'supersedes', linkId: expect.any(String) });
+    // Directed: exactly one row, no reverse.
+    const rows = await query('SELECT source_id, target_id, link_type FROM memory_links WHERE source_id = ANY($1)', [[older.id, newer.id]]);
+    expect(rows.rows).toEqual([{ source_id: newer.id, target_id: older.id, link_type: 'supersedes' }]);
+
+    const fromNewer = (await memoryDB.getRelatedMemories(newer.id)).find((r) => r.id === older.id);
+    expect(fromNewer).toMatchObject({ linkType: 'supersedes', direction: 'outgoing', note: 'replaces it', createdBy: 'task-1', linkId: typed.linkId });
+    const fromOlder = (await memoryDB.getRelatedMemories(older.id)).find((r) => r.id === newer.id);
+    expect(fromOlder).toMatchObject({ linkType: 'supersedes', direction: 'incoming' });
+
+    // The same pair may carry a second, different relationship; the legacy call is still a symmetric pair.
+    await memoryDB.linkMemories(newer.id, older.id);
+    const pair = await query('SELECT source_id, link_type FROM memory_links WHERE source_id = ANY($1) ORDER BY link_type, source_id', [[older.id, newer.id]]);
+    expect(pair.rows.filter((r) => r.link_type === 'related')).toHaveLength(2);
+    expect(pair.rows.filter((r) => r.link_type === 'supersedes')).toHaveLength(1);
+
+    const graph = await memoryDB.getGraphData();
+    const edges = graph.edges.filter((e) => [e.source, e.target].includes(older.id) && [e.source, e.target].includes(newer.id) && e.type === 'linked');
+    expect(edges.map((e) => e.linkType).sort()).toEqual(['related', 'supersedes']);
+    expect(edges.find((e) => e.linkType === 'supersedes')).toMatchObject({ source: newer.id, target: older.id });
   });
 
   it('archives and purges', async () => {

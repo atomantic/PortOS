@@ -172,7 +172,17 @@ resolved work tracker is GitHub or GitLab. `issues.file` requires both
 dispatch axes (`model`, `effort`), applies the `persistent-mind` and
 `planner:<model>` attribution labels, accepts only a closed category-label
 vocabulary, and refuses to file when the tracker could not be read — an
-unreadable tracker never reads as an empty backlog. Editing, closing,
+unreadable tracker never reads as an empty backlog. `issues.list` returns open
+issues only, with a local case-insensitive substring `search` and an exact
+`label` filter, plus additive completeness fields: `fetchedCount`,
+`matchedCount`, `returnedCount`, `complete`, `truncated`, and
+`truncationReasons` (`source-limit`, `body-clipped`, `row-limit`,
+`response-budget`). `totalOpen` is the exact open count, or `null` when the
+forge page was capped (200 GitHub / 100 GitLab) and so cannot certify a total.
+Rows are fitted under ~3,500 characters (previews shrink first, then trailing
+rows drop, never below one). Only `complete: true` with zero matches is a
+conclusive negative for that scope; for a duplicate check beyond it, use the
+forge CLI in the app repository with all-state search and pagination. Editing, closing,
 commenting on, assigning, and relabeling an existing issue are out of scope.
 
 ### Saved read recipes

@@ -3129,7 +3129,7 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
         }, '/r', null, { providerType: 'api' });
         expect(prompt).toContain('Example Global Instructions');
         expect(prompt).toMatch(/^## Instructions$/m);
-        expect(getMemorySection).toHaveBeenLastCalledWith(expect.anything(), { maxTokens: 2000 });
+        expect(getMemorySection).toHaveBeenLastCalledWith(expect.anything(), { maxTokens: 2000, onInjected: expect.any(Function) });
         expect(getDigitalTwinForPrompt).toHaveBeenLastCalledWith({ maxTokens: 1200, personaId: 'active' });
         expect(log).toHaveBeenCalledWith('⚠️ Memory retrieval failed: memory unavailable');
         expect(log).toHaveBeenCalledWith('⚠️ Digital twin context retrieval failed: twin unavailable');
@@ -3153,6 +3153,22 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
       vi.mocked(getMemorySection).mockResolvedValue(null);
       vi.mocked(getDigitalTwinForPrompt).mockResolvedValue(null);
       vi.mocked(getToolsSummaryForPrompt).mockResolvedValue('');
+    });
+
+    it('reports the memories retrieval injected through promptTrace for the run record (#10495)', async () => {
+      const injected = [{ id: 'mem-1', version: null, relevance: 0.8 }];
+      vi.mocked(getMemorySection).mockClear().mockImplementationOnce(async (_task, opts) => {
+        opts.onInjected(injected);
+        return '## Memory Context\nTRACE_MEMORY_SENTINEL';
+      });
+      const promptTrace = {};
+      const prompt = await buildAgentPrompt(makeTask(), {}, '/r', null, { providerType: 'api', promptTrace });
+      expect(prompt).toContain('TRACE_MEMORY_SENTINEL');
+      expect(promptTrace.injectedMemories).toEqual(injected);
+
+      const emptyTrace = {};
+      await buildAgentPrompt(makeTask(), {}, '/r', null, { providerType: 'api', promptTrace: emptyTrace });
+      expect(emptyTrace.injectedMemories).toEqual([]);
     });
 
     it('a CD scratch cwd does not leak repo AGENTS.md into getAgentInstructionsContext', async () => {

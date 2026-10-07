@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Circle, Clapperboard, Download, FileCode2, LoaderCircle, Save } from 'lucide-react';
 import { Link } from 'react-router';
 import toast from '../ui/Toast';
-import { cancelCodeAnimationExport, exportCodeAnimation, getCodeAnimationPackage, uploadGalleryVideo } from '../../services/api';
+import { cancelCodeAnimationExport, exportCodeAnimation, getCodeAnimationPackage, getCodeAnimationThreeVendor, uploadGalleryVideo } from '../../services/api';
 import { useSseProgress } from '../../hooks/useSseProgress';
 import { downloadBlob } from '../../lib/downloadBlob';
+import { importsThree, inlineThreeVendor } from '../../lib/threeVendorImportMap';
 import { formatLoudness } from '../../utils/formatters';
 
 // Seconds past the film's own duration before a silent recording is abandoned
@@ -36,16 +37,31 @@ const ANIMATION_CSP = [
   "manifest-src 'none'",
 ].join('; ');
 
-export function prepareAnimationHtml(html, globalName, audioDataUrl) {
+// The vendored three.js modules, read once per session: they are fixed for the
+// installed three version.
+let threeVendorLoad = null;
+const loadThreeVendor = () => {
+  threeVendorLoad ??= getCodeAnimationThreeVendor({ silent: true }).then(({ files }) => files).catch((error) => {
+    threeVendorLoad = null;
+    throw error;
+  });
+  return threeVendorLoad;
+};
+
+// `vendorFiles` (a three-renderer film) inlines the vendored modules as data:
+// URLs behind an import map, so the CSP gains `data:` for scripts and nothing else.
+export function prepareAnimationHtml(html, globalName, audioDataUrl, vendorFiles = null) {
   if (!html) return html;
-  const policy = `<meta http-equiv="Content-Security-Policy" content="${ANIMATION_CSP}">`;
+  const csp = vendorFiles ? ANIMATION_CSP.replace("script-src 'unsafe-inline'", "script-src 'unsafe-inline' data:") : ANIMATION_CSP;
+  const page = vendorFiles ? inlineThreeVendor(html, vendorFiles) : html;
+  const policy = `<meta http-equiv="Content-Security-Policy" content="${csp}">`;
   const audio = audioDataUrl
     ? `<script>window[${scriptLiteral(globalName)}] = ${scriptLiteral(audioDataUrl)};</script>`
     : '';
-  const head = html.match(/<head[^>]*>/i);
-  if (!head) return `${policy}${audio}${html}`;
+  const head = page.match(/<head[^>]*>/i);
+  if (!head) return `${policy}${audio}${page}`;
   const at = head.index + head[0].length;
-  return `${html.slice(0, at)}${policy}${audio}${html.slice(at)}`;
+  return `${page.slice(0, at)}${policy}${audio}${page.slice(at)}`;
 }
 
 const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
@@ -140,12 +156,34 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
     return () => { active = false; };
   }, [audioUrl, audioChoice]);
 
-  // Hold the frame back until the audio is in hand so the page boots once,
-  // with its audio global already set.
+  // A three-renderer film needs the vendored modules inlined before it boots.
+  const needsThree = useMemo(() => importsThree(html), [html]);
+  const [threeVendor, setThreeVendor] = useState({ status: 'idle', files: null });
+  useEffect(() => {
+    let active = true;
+    if (!needsThree) {
+      setThreeVendor({ status: 'idle', files: null });
+      return () => { active = false; };
+    }
+    setThreeVendor({ status: 'loading', files: null });
+    loadThreeVendor()
+      .then((files) => { if (active) setThreeVendor({ status: 'ready', files }); })
+      .catch((error) => {
+        if (!active) return;
+        setThreeVendor({ status: 'failed', files: null });
+        toast.error(error.message || 'Failed to load the three.js modules');
+      });
+    return () => { active = false; };
+  }, [needsThree]);
+
+  // Hold the frame back until the audio (and, for three, the vendored modules)
+  // are in hand so the page boots once, with its globals already set.
+  const vendorFiles = needsThree ? threeVendor.files : null;
   const srcDoc = useMemo(() => {
     if (!html || audioChoice == null || audio.status === 'loading') return null;
-    return prepareAnimationHtml(html, audioGlobal, audio.dataUrl);
-  }, [html, audioGlobal, audioChoice, audio]);
+    if (needsThree && !vendorFiles) return null;
+    return prepareAnimationHtml(html, audioGlobal, audio.dataUrl, vendorFiles);
+  }, [html, audioGlobal, audioChoice, audio, needsThree, vendorFiles]);
 
   useEffect(() => {
     clearTimeout(recordTimerRef.current);
@@ -243,6 +281,13 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
     if (pkg) downloadBlob(JSON.stringify(pkg, null, 2), `${fileBase}.code-animation.json`, 'application/json');
   };
 
+  // A three film imports bare names the host's import map resolves, so the
+  // saved file carries the vendored modules inline and runs on its own.
+  const handleDownloadHtml = () => {
+    if (needsThree && !vendorFiles) return toast.error('The three.js modules are still loading; try again in a moment.');
+    downloadBlob(vendorFiles ? inlineThreeVendor(html, vendorFiles) : html, `${fileBase}.html`, 'text/html');
+  };
+
   if (!html) return null;
 
   const aspect = frame?.width && frame?.height ? `${frame.width} / ${frame.height}` : '16 / 9';
@@ -287,7 +332,11 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
           </div>
         ) : (
           <div className="flex h-full items-center justify-center gap-2 text-sm text-gray-400">
-            <LoaderCircle className="h-4 w-4 animate-spin" /> Loading audio track…
+            {needsThree && threeVendor.status === 'failed' ? (
+              'The three.js modules could not be loaded; reload the page to retry.'
+            ) : (
+              <><LoaderCircle className="h-4 w-4 animate-spin" /> {audio.status === 'loading' ? 'Loading audio track…' : 'Loading three.js…'}</>
+            )}
           </div>
         )}
       </div>
@@ -325,7 +374,7 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
         )}
         <button
           type="button"
-          onClick={() => downloadBlob(html, `${fileBase}.html`, 'text/html')}
+          onClick={handleDownloadHtml}
           className={BUTTON_SECONDARY}
         >
           <FileCode2 className="h-4 w-4" /> Download HTML

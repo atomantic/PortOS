@@ -344,6 +344,9 @@ function fillReconcileAgentId(task, agentId) {
  *   `{ userPrompt, systemPrompt }` (see `buildLightContextPromptParts`) instead
  *   of a single string, for providers spawned with `--append-system-prompt-file`.
  *   Ignored on the full/api path, which always returns a string.
+ * @param {object} [options.promptTrace] - Out-parameter: the full path sets
+ *   `promptTrace.injectedMemories` to the `[{ id, version, relevance }]` list
+ *   whose text went into the prompt. Untouched on the light path (no memory).
  */
 export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo = null, options = {}) {
   // Undo the queue-path description/context split so a round-tripped generated
@@ -437,9 +440,11 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // Architect doctrine for an orchestrated run (#5992). '' for every direct-mode
   // task, which is the default, so this is inert unless a profile is configured.
   const orchestrationSection = buildOrchestrationDoctrineSection(task);
-  const { memorySection, agentInstructionsSection, digitalTwinSection } = await loadDeveloperContext(
+  const { memorySection, injectedMemories, agentInstructionsSection, digitalTwinSection } = await loadDeveloperContext(
     task, config, workspaceDir, skipDevContext,
   );
+  // Hand the memory lineage to the caller that creates the run record (#10495).
+  if (options.promptTrace) options.promptTrace.injectedMemories = injectedMemories;
 
   // Build context compaction section if task is retrying after a context-limit failure
   const compactionSection = task.metadata?.compaction?.needed ? buildCompactionSection(task) : '';
@@ -649,10 +654,14 @@ function resolveTaskMetadataFlags(task, worktreeInfo) {
 /** Load independent developer context concurrently, unless this is a content-only task. */
 async function loadDeveloperContext(task, config, workspaceDir, skipDevContext) {
   if (skipDevContext) {
-    return { memorySection: null, agentInstructionsSection: null, digitalTwinSection: null };
+    return { memorySection: null, injectedMemories: [], agentInstructionsSection: null, digitalTwinSection: null };
   }
+  let injectedMemories = [];
   const [memorySection, agentInstructionsSection, digitalTwinSection] = await Promise.all([
-    getMemorySection(task, { maxTokens: config.memory?.maxContextTokens || 2000 })
+    getMemorySection(task, {
+      maxTokens: config.memory?.maxContextTokens || 2000,
+      onInjected: (injected) => { injectedMemories = injected; },
+    })
       .catch(err => { console.log(`⚠️ Memory retrieval failed: ${err.message}`); return null; }),
     getAgentInstructionsContext(workspaceDir)
       .catch(err => { console.log(`⚠️ Agent instructions retrieval failed: ${err.message}`); return null; }),
@@ -660,7 +669,7 @@ async function loadDeveloperContext(task, config, workspaceDir, skipDevContext) 
     getDigitalTwinForPrompt({ maxTokens: config.digitalTwin?.maxContextTokens || config.soul?.maxContextTokens || 2000, personaId: 'active' })
       .catch(err => { console.log(`⚠️ Digital twin context retrieval failed: ${err.message}`); return null; }),
   ]);
-  return { memorySection, agentInstructionsSection, digitalTwinSection };
+  return { memorySection, injectedMemories, agentInstructionsSection, digitalTwinSection };
 }
 
 /**

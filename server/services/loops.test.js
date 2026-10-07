@@ -498,7 +498,7 @@ describe('loops.js', () => {
       try {
         await triggerLoop(loop.id);
         await flushAsync();
-      } catch (err) {
+      } catch (_err) {
         threw = true;
       }
       expect(threw).toBe(false);
@@ -696,7 +696,7 @@ describe('loops.js', () => {
     });
 
     it('allows subsequent iterations after an early rejection when using the timer', async () => {
-      const loop = await createLoop({
+      const _loop = await createLoop({
         prompt: 'timer recovery test',
         interval: '30s',
         runImmediately: false,
