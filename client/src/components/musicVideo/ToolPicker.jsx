@@ -18,7 +18,9 @@ const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded 
  * A pin the catalog no longer lists stays selected, so a save cannot drop it.
  */
 function localModelSelectState({ catalog, failed, pinned, kind }) {
-  const models = Array.isArray(catalog?.models) ? catalog.models : [];
+  // Footage production always animates a frame, so a text-only video model can never render a clip.
+  const models = (Array.isArray(catalog?.models) ? catalog.models : [])
+    .filter((model) => kind !== 'video' || !Array.isArray(model.supportedModes) || model.supportedModes.includes('image'));
   const loading = catalog == null && !failed;
   const defaultId = typeof catalog?.defaultModel === 'string' ? catalog.defaultModel : '';
   const defaultName = models.find((model) => model.id === defaultId)?.name || defaultId;
