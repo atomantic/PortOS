@@ -142,7 +142,7 @@ import { pauseAgentViaRunner, terminateAgentViaRunner, getActiveAgentsFromRunner
 import * as shellService from './shell.js';
 import { readHostShutdownMarker, clearHostShutdownMarker } from '../lib/hostShutdown.js';
 import { committedDuringRun } from '../lib/gitCommitProbe.js';
-import { activeAgents, runnerAgents, pausedAgents, consumePausedAgentExit } from './agentState.js';
+import { activeAgents, runnerAgents, spawningTasks, pausedAgents, consumePausedAgentExit } from './agentState.js';
 
 /**
  * A direct-mode agent's spawned handle. Its prototype is ChildProcess so it
@@ -232,6 +232,28 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
 
     expect(markAgentComplete).not.toHaveBeenCalled();
     expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  // A record is written before its spawn finishes. Retiring it then completes a
+  // run that launches anyway, so its claim-ownership bind fails owner-not-running.
+  it('does not reap a pid-less record that is still mid-spawn', async () => {
+    getActiveAgentsFromRunner.mockResolvedValue([]);
+    getTaskById.mockResolvedValue({ id: 'task-1', taskType: 'user', status: 'in_progress', metadata: {} });
+    const base = { status: 'running', taskId: 'task-1', metadata: {} };
+
+    getAgents.mockResolvedValueOnce([{ ...base, id: 'agent-fresh', startedAt: new Date().toISOString() }]);
+    await cleanupOrphanedAgents();
+    expect(retireDeadAgent).not.toHaveBeenCalled();
+
+    spawningTasks.add('task-1');
+    getAgents.mockResolvedValueOnce([{ ...base, id: 'agent-spawning', startedAt: new Date(Date.now() - 120000).toISOString() }]);
+    await cleanupOrphanedAgents();
+    spawningTasks.delete('task-1');
+    expect(retireDeadAgent).not.toHaveBeenCalled();
+
+    getAgents.mockResolvedValueOnce([{ ...base, id: 'agent-old', startedAt: new Date(Date.now() - 120000).toISOString() }]);
+    await cleanupOrphanedAgents();
+    expect(retireDeadAgent).toHaveBeenCalledWith(expect.objectContaining({ agent: expect.objectContaining({ id: 'agent-old' }) }));
   });
 
   it('reaps a durable running record whose runner listing is stale', async () => {
@@ -1814,7 +1836,7 @@ describe('orphan retries resume what the dead run left behind', () => {
   it('hands retireDeadAgent the orphaned exit code, duration and category for the dead run', async () => {
     getAgents.mockResolvedValue([{
       ...deadAgent,
-      startedAt: new Date(Date.now() - 1000).toISOString(),
+      startedAt: new Date(Date.now() - 60000).toISOString(),
       metadata: { ...deadMetadata, runId: 'run-orphan' },
       output: [{ line: 'last buffered line' }],
     }]);
