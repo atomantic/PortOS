@@ -11,7 +11,7 @@
  */
 
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
-import { readFile, writeFile, rename, readdir, rm, stat } from 'fs/promises';
+import { readFile, writeFile, rename, readdir, rm, stat, cp } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { AGENTS_DIR } from './cosState.js';
@@ -166,6 +166,38 @@ export function getAgentDir(agentId, dateString) {
   if (date) return join(AGENTS_DIR, date, agentId);
   // Fallback to flat dir (running agents or pre-migration)
   return join(AGENTS_DIR, agentId);
+}
+
+/**
+ * Move an agent's run directory (output, prompt, metadata, raw.txt.gz) to `targetDir`.
+ *
+ * `rename` is atomic but can fail (EXDEV across mounts, EPERM/EBUSY on Windows
+ * while a handle is open). The fallback copies BYTES (`cp`, so the gzip
+ * recording is not re-encoded as UTF-8 text and subdirectories survive) and
+ * removes the source only after the whole copy succeeded. A failed copy rolls
+ * back the partial target that this call created — `existsSync(targetDir)` is
+ * what every later archive attempt reads as "already archived", so leaving it
+ * would strand the rest of the run's files — and rethrows with the source
+ * intact. Callers guarantee `targetDir` did not exist before the call.
+ */
+export async function moveAgentDir(flatDir, targetDir) {
+  try {
+    await rename(flatDir, targetDir);
+    return;
+  } catch {
+    // Fall through to the copy-then-remove path.
+  }
+  const targetExisted = existsSync(targetDir);
+  try {
+    await cp(flatDir, targetDir, { recursive: true, force: false, errorOnExist: true });
+  } catch (err) {
+    if (!targetExisted) {
+      await rm(targetDir, { recursive: true, force: true })
+        .catch(rmErr => console.error(`❌ Failed to roll back partial archive ${targetDir}: ${rmErr.message}`));
+    }
+    throw err;
+  }
+  await rm(flatDir, { recursive: true, force: true });
 }
 
 // Migrate flat agent-* directories into YYYY-MM-DD date buckets

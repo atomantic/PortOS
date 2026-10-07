@@ -10,13 +10,13 @@
  */
 
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
-import { writeFile, rename, readdir, rm } from 'fs/promises';
+import { rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { cosEvents } from './cosEvents.js';
 import { loadState, saveState, withStateLock, AGENTS_DIR } from './cosState.js';
-import { atomicWrite, ensureDir, tryReadFile } from '../lib/fileUtils.js';
-import { loadAgentIndex, saveAgentIndex, recordArchivedAgentOrder } from './cosAgentIndex.js';
+import { atomicWrite, ensureDir } from '../lib/fileUtils.js';
+import { loadAgentIndex, saveAgentIndex, recordArchivedAgentOrder, moveAgentDir } from './cosAgentIndex.js';
 
 // Archive stale completed agents from state.json.
 // Completed agents are already persisted to per-agent metadata files on disk
@@ -54,17 +54,11 @@ export async function archiveStaleAgents() {
         const targetDir = join(bucketDir, id);
 
         if (existsSync(flatDir) && !existsSync(targetDir)) {
-          // Write metadata then move (with cross-filesystem fallback)
+          // Write metadata then move (byte-safe fallback that never deletes the
+          // source unless the whole copy landed)
           await atomicWrite(join(flatDir, 'metadata.json'), agentWithoutOutput).catch(() => {});
-          await rename(flatDir, targetDir).catch(async () => {
-            await ensureDir(targetDir);
-            const files = await readdir(flatDir).catch(() => []);
-            for (const file of files) {
-              const content = await tryReadFile(join(flatDir, file), null);
-              if (content !== null) await writeFile(join(targetDir, file), content);
-            }
-            await rm(flatDir, { recursive: true }).catch(() => {});
-          });
+          await moveAgentDir(flatDir, targetDir)
+            .catch(err => console.error(`❌ Failed to archive agent ${id}: ${err.message}`));
           if (!existsSync(targetDir)) continue; // Skip index update if move failed
         } else if (!existsSync(targetDir)) {
           await ensureDir(targetDir);
