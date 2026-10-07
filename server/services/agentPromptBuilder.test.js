@@ -443,6 +443,30 @@ describe('no-code / API-action task completion (CD agents must NOT be told to /d
   });
 });
 
+describe('draft review delivery', () => {
+  it('puts the draft override in the system contract of a split provider prompt', async () => {
+    const task = makeTask({ metadata: { useWorktree: true, openPR: true, reviewLoop: true, prCompletion: 'draft' } });
+    const parts = await buildAgentPrompt(task, {}, '/repo', { worktreePath: '/worktree', branchName: 'audit/topic' }, {
+      providerType: 'cli', providerId: 'claude-code', providerCommand: 'claude', split: true,
+    });
+    expect(parts.systemPrompt).toContain('DRAFT pull request for human review');
+    expect(parts.systemPrompt).toContain('gh pr create --draft');
+    expect(parts.systemPrompt).toContain('--no-merge');
+    expect(parts.systemPrompt).not.toMatch(/gh pr merge|glab mr merge|--auto-merge/);
+    expect(parts.userPrompt).not.toContain('## Draft pull request delivery');
+  });
+
+  it.each([true, false])('overrides merge defaults on the light/full path (%s)', async light => {
+    const task = makeTask({ metadata: { useWorktree: true, openPR: true, reviewLoop: true, prCompletion: 'draft' } });
+    const prompt = light
+      ? buildLightContextPrompt(task, '/repo', { worktreePath: '/worktree', branchName: 'audit/topic' }, { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' })
+      : await buildAgentPrompt(task, {}, '/repo', { worktreePath: '/worktree', branchName: 'audit/topic' }, { providerType: 'api' });
+    expect(prompt).toContain('DRAFT pull request for human review');
+    expect(prompt).toContain('gh pr create --draft');
+    expect(prompt).not.toMatch(/gh pr merge|--auto-merge/);
+  });
+});
+
 describe('claim-flow completion handoff', () => {
   it.each([true, false])('honors leave-open on the %s light/full claim path', async (light) => {
     const task = makeTask({ metadata: { analysisType: 'claim-issue', claimFlow: true, useWorktree: false, openPR: false, prCompletion: 'leave-open' } });

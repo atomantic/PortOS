@@ -71,6 +71,17 @@ describe('bounded forge mutations', () => {
     );
   });
 
+  it.each(['gh', 'glab'])('creates drafts through %s without enabling merging', async cli => {
+    mocks.resolveForgeForRepo.mockResolvedValue({ cli, env: pinnedEnv, host: 'example.com', owner: 'example-owner' });
+    const child = hungChild(); mocks.spawn.mockReturnValue(child);
+    const pending = createPR('/repo', { title: 'Title', body: 'Body', base: 'main', head: 'topic', draft: true });
+    await vi.dynamicImportSettled();
+    child.stdout.emit('data', 'https://example.com/pr/7'); child.emit('close', 0);
+    await expect(pending).resolves.toMatchObject({ success: true });
+    expect(mocks.spawn).toHaveBeenCalledWith(cli, expect.arrayContaining(['--draft']), expect.anything());
+    expect(mocks.spawn.mock.calls[0][1]).not.toContain('--auto-merge');
+  });
+
   it('bounds GitLab MR creation with the resolved forge environment', async () => {
     mocks.resolveForgeForRepo.mockResolvedValue({
       cli: 'glab',

@@ -41,7 +41,7 @@ it('launches missing checks with visible mode and effort, then exposes held runn
   fireEvent.click(screen.getByText('Use high effort'));
   fireEvent.click(button);
   await screen.findByRole('link', { name: 'Open runner settings' });
-  expect(startMaintenanceRun).toHaveBeenCalledWith({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high', mode: 'fix', claimBetweenAudits: false, taskTypes: ['security', 'ux'] }, { silent: true });
+  expect(startMaintenanceRun).toHaveBeenCalledWith({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high', mode: 'fix', prCompletion: 'draft', claimBetweenAudits: false, taskTypes: ['security', 'ux'] }, { silent: true });
   expect(button).toBeEnabled();
 });
 
@@ -104,7 +104,7 @@ it('preserves run overrides when reopening the drawer for one category', async (
   expect(screen.getByLabelText('Mode')).toHaveValue('fix');
   fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
   await waitFor(() => expect(startMaintenanceRun).toHaveBeenCalledWith(
-    { appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high', mode: 'fix', claimBetweenAudits: false, taskTypes: ['security'], explicitCheck: true },
+    { appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high', mode: 'fix', prCompletion: 'draft', claimBetweenAudits: false, taskTypes: ['security'], explicitCheck: true },
     { silent: true }
   ));
 });
@@ -247,4 +247,17 @@ it('keeps a start response when an older status request resolves afterwards', as
   expect(screen.getByRole('button', { name: 'Stop remaining checks' })).toBeInTheDocument();
   await act(async () => resolveRead({ runs: [] }));
   expect(screen.getByRole('button', { name: 'Stop remaining checks' })).toBeInTheDocument();
+});
+
+it('defaults audit fixes to draft review and lets the user explicitly inherit saved policy', async () => {
+  startMaintenanceRun.mockResolvedValue({ run: { id: 'draft-run', status: 'completed', steps: [] } });
+  render(<MemoryRouter><AppQualityRunner app={app} /></MemoryRouter>);
+  fireEvent.change(await findEnabledByLabelText('Mode'), { target: { value: 'fix' } });
+  expect(screen.getByLabelText('Pull requests')).toHaveValue('draft');
+  fireEvent.click(await findEnabledByRole('button', { name: 'Run 2 checks now' }));
+  await waitFor(() => expect(startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 'fix', prCompletion: 'draft', claimBetweenAudits: false }), { silent: true }));
+  fireEvent.change(await findEnabledByLabelText('Pull requests'), { target: { value: 'inherit' } });
+  fireEvent.click(await findEnabledByRole('button', { name: 'Run 2 checks now' }));
+  await waitFor(() => expect(startMaintenanceRun).toHaveBeenCalledTimes(2));
+  expect(startMaintenanceRun.mock.lastCall[0].prCompletion).toBe('inherit');
 });
