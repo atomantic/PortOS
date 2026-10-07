@@ -104,6 +104,28 @@ class RunnerContract(unittest.TestCase):
         self.assertIn('QwenImage21Pipeline', stderr.getvalue())
         self.assertIn('FLUX2_FORCE_REINSTALL=1', stderr.getvalue())
 
+    def test_qwen21_reference_images_encode_in_the_vae_dtype(self):
+        with patch.dict(sys.modules, {'torch': SimpleNamespace()}):
+            runner = importlib.import_module('z_image_turbo')
+        seen = []
+
+        class Tensor:
+            def __init__(self, dtype):
+                self.dtype = dtype
+
+            def to(self, *, dtype):
+                return Tensor(dtype)
+
+        def encode(image, _generator):
+            seen.append(image.dtype)
+            return Tensor(image.dtype)
+
+        pipe = SimpleNamespace(vae=SimpleNamespace(dtype='fp32'), _encode_vae_image=encode)
+        runner.encode_references_in_vae_dtype(pipe)
+        latents = pipe._encode_vae_image(Tensor('bf16'), None)
+        self.assertEqual(seen, ['fp32'])
+        self.assertEqual(latents.dtype, 'bf16')
+
     def test_qwen21_decode_guard_accepts_finite_output_and_retries_once(self):
         torch = SimpleNamespace(
             float32='fp32',

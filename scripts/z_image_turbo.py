@@ -191,6 +191,18 @@ def to_i2i_pipeline(pipe):
     return AutoPipelineForImage2Image.from_pipe(pipe)
 
 
+def encode_references_in_vae_dtype(pipe):
+    """Qwen 2.1 reference images reach the VAE encoder in the transformer's bfloat16,
+    which the float32 MPS VAE rejects ("Input type (BFloat16) and bias type (float)").
+    Encode in the VAE's dtype and hand the latents back in the caller's dtype."""
+    encode_vae_image = pipe._encode_vae_image
+
+    def encode_in_vae_dtype(image, generator):
+        return encode_vae_image(image.to(dtype=pipe.vae.dtype), generator).to(dtype=image.dtype)
+
+    pipe._encode_vae_image = encode_in_vae_dtype
+
+
 def decode_qwen21_latents(pipe, latents, height: int, width: int):
     vae = pipe.vae
     unpacked = pipe._unpack_latents(latents, height, width, pipe.vae_scale_factor)
@@ -320,6 +332,7 @@ def main() -> None:
     qwen21_mps = args.pipeline_class == "QwenImage21Pipeline" and device == "mps"
     if qwen21_mps:
         pipe.vae.to(dtype=torch.float32)
+        encode_references_in_vae_dtype(pipe)
 
     seed = args.seed if args.seed is not None else int(torch.randint(0, 2**31 - 1, (1,)).item())
     generator = make_generator(device, seed)
