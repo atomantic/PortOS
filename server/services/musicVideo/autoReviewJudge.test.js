@@ -29,4 +29,12 @@ describe('planStripTimes (#9272)', () => {
     expect(prompt).toContain('1.50s, 12.00s');
     expect(prompt).toContain('contact sheets');
   });
+
+  it('frames the concept as whole-video context so a shot is judged on its own intent', () => {
+    const prompt = buildAutoReviewPrompt({ spanSec: 4, sections: sections(1, 4), frameTimes: [1], concept: { prompt: 'A paper airplane flies through neon worlds' },
+      shotIntents: [{ sceneId: 's1', sceneStartSec: 0, shotPrompt: 'The desk dissolves into circuits' }] });
+    expect(prompt).toContain('concept for the whole video');
+    expect(prompt).toContain('A single shot need not show every subject or motif of the concept');
+    expect(prompt).toContain('"shotPrompt":"The desk dissolves into circuits"');
+  });
 });

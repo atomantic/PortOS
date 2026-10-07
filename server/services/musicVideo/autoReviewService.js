@@ -29,6 +29,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { promisify } from 'util';
 import { ServerError } from '../../lib/errorHandler.js';
+import { trimTo } from '../../lib/textUtils.js';
 import { isFreeProvider } from '../../lib/modelPricing.js';
 import { isToolFreeOneShotProvider } from '../../lib/providerVendors.js';
 import { PATHS, ensureDir } from '../../lib/fileUtils.js';
@@ -215,8 +216,14 @@ async function reviewDraft(project, run, excerpt) {
   let providerErrorCode = null;
   let used = { providerId: run.reviewer.providerId, model: run.reviewer.model };
   if (screenshots.length) {
-    const shotIntents = (project.scenes || []).filter((scene) => scene.direction?.actionContract != null && scene.startSec < excerpt.endSec && scene.endSec > excerpt.startSec)
-      .map((scene) => ({ sceneId: scene.sceneId, sceneStartSec: scene.startSec - excerpt.startSec, actionContract: scene.direction.actionContract }));
+    // Every shot in the excerpt carries its own intent: the action contract when it has one,
+    // else its authored prompt. Without it the reviewer only sees the whole-video concept and
+    // fails a shot for not showing a motif the shot never asked for.
+    const shotIntents = (project.scenes || []).filter((scene) => scene.startSec < excerpt.endSec && scene.endSec > excerpt.startSec)
+      .map((scene) => ({ sceneId: scene.sceneId, sceneStartSec: scene.startSec - excerpt.startSec,
+        ...(scene.direction?.actionContract != null ? { actionContract: scene.direction.actionContract }
+          : { shotPrompt: trimTo(scene.prompt || '', 1000), ...(scene.visualIntent ? { phraseIntent: trimTo(scene.visualIntent, 300) } : {}) }) }))
+      .filter((intent) => intent.actionContract || intent.shotPrompt || intent.phraseIntent);
     const prompt = buildAutoReviewPrompt({ spanSec, sections, frameTimes, hasContactSheet: hasSheet, tiled: true, concept: project.concept, shotIntents });
     try {
       const reply = await callReviewer(run, prompt, screenshots, project.id);
