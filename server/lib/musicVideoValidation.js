@@ -874,10 +874,12 @@ export const musicVideoProductionStartSchema = z.object({
   model: z.string().min(1).max(200).nullable().optional(),
 }).strict();
 
-// Resume may RAISE a limit; `acceptBasis` continues against a changed creative setup.
+// Resume may RAISE a limit; `acceptBasis` continues against a changed creative setup;
+// `pool` replaces the allowed routes (e.g. swaps a refused video model), validated like Start.
 export const musicVideoProductionResumeSchema = z.object({
   limits: musicVideoProductionLimitsSchema.partial().optional(),
   acceptBasis: z.boolean().optional(),
+  pool: z.array(musicVideoProductionRouteSchema).max(12).optional(),
 }).strict();
 
 // ---- Fully-autonomous run: one prompt → lyrics → Suno song → video --------------

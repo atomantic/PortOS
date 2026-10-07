@@ -11,6 +11,13 @@ vi.mock('./productionReview.js', async (load) => {
     },
   };
 });
+// Footage needs image-to-video: one fake model is text-only, every other id is not installed.
+vi.mock('./productionPool.js', async (load) => ({
+  ...(await load()),
+  loadPoolEnv: async () => ({
+    resolveVideoModel: async (id) => ({ modelId: id, model: id === 'example-text-only' ? { id, name: 'Example Text Model', supportedModes: ['text'] } : null }),
+  }),
+}));
 vi.mock('./productionReviewService.js', () => ({
   prepareProductionReview: vi.fn(async () => {}),
   renderProductionProof: vi.fn(async () => ({ jobId: 'proof-example' })),
@@ -308,7 +315,7 @@ describe('startAutonomousVideo', () => {
       expect(runOf()).toMatchObject({ status: 'running', output: expect.objectContaining({ productionRunId: 'mvpr-manual', productionDone: true, renderJobId: 'render-1' }) });
     });
 
-    it('resumes a parked run with raised limits, and a model swap starts a new production run with the new pool', async () => {
+    it('resumes a parked run with raised limits, and a model swap continues that run with the new pool', async () => {
       await delegated();
       store.get('mv-auto').productionRuns[0].status = 'limit-reached';
       await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'limit-reached', stopReason: 'generation limit' } });
@@ -320,6 +327,26 @@ describe('startAutonomousVideo', () => {
 
       store.get('mv-auto').productionRuns[0].status = 'blocked';
       await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'blocked', stopReason: 'no image-to-video' } });
+      // A text-only replacement is refused like Start, before the brief or production changes.
+      await expect(service.resumeAutonomousVideo('mv-auto', { models: { 'video:local': 'example-text-only' } }))
+        .rejects.toMatchObject({ status: 400, code: 'VIDEO_MODEL_TEXT_ONLY', message: expect.stringMatching(/Example Text Model.*image-to-video/) });
+      expect(runOf().brief.models).toEqual({ 'video:local': 'text-only' });
+      expect(doubles.resumeProduction).toHaveBeenCalledTimes(1);
+
+      await service.resumeAutonomousVideo('mv-auto', { models: { 'video:local': 'image-capable' } });
+      expect(doubles.resumeProduction).toHaveBeenLastCalledWith('mv-auto', 'mvpr-1', {
+        acceptBasis: true, pool: [{ kind: 'image', mode: 'local' }, { kind: 'video', mode: 'local', model: 'image-capable' }],
+      });
+      expect(doubles.cancelProduction).not.toHaveBeenCalled();
+      expect(doubles.startProduction).toHaveBeenCalledOnce();
+      expect(runOf()).toMatchObject({ status: 'running', brief: expect.objectContaining({ models: { 'video:local': 'image-capable' } }), output: expect.objectContaining({ productionRunId: 'mvpr-1' }) });
+      await expect(service.resumeAutonomousVideo('mv-auto', { models: { 'image:fal': 'x' } })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    });
+
+    it('starts a new production run with the swapped models when the old one cannot resume', async () => {
+      await delegated();
+      store.get('mv-auto').productionRuns[0].status = 'needs-human';
+      await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'needs-human', stopReason: 'review ended' } });
       doubles.startProduction.mockResolvedValueOnce({ run: { id: 'mvpr-2' } });
       // Like the real service, canceling the old run publishes its own "canceled" event.
       doubles.cancelProduction.mockImplementationOnce(async (projectId, runId) => {
@@ -330,8 +357,6 @@ describe('startAutonomousVideo', () => {
       expect(doubles.cancelProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1');
       await vi.waitFor(() => expect(runOf().output.productionRunId).toBe('mvpr-2'));
       expect(doubles.startProduction.mock.calls[1][1].pool).toEqual([{ kind: 'image', mode: 'local' }, { kind: 'video', mode: 'local', model: 'image-capable' }]);
-      await expect(service.resumeAutonomousVideo('mv-auto', { models: { 'image:fal': 'x' } })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
-      expect(runOf()).toMatchObject({ status: 'running', output: expect.objectContaining({ productionRunId: 'mvpr-2' }) });
     });
 
     it('re-pins a production run left running by a previous server process', async () => {
