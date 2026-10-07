@@ -6,6 +6,7 @@ import { FormField } from '../../ui/FormField';
 import * as api from '../../../services/api';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
 import { getAppName, formatPercent } from '../../../utils/formatters';
+import MemoryRunsUsedBy from './MemoryRunsUsedBy';
 
 export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
   const [formData, setFormData] = useState({
@@ -247,6 +248,8 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
               </button>
             </div>
           </div>
+
+          {memory.id && <MemoryRunsUsedBy memoryId={memory.id} />}
 
           {/* Importance and Confidence */}
           <div className="flex flex-col sm:flex-row gap-4">

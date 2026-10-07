@@ -117,7 +117,9 @@ export async function dispatchAgentRun(context, { spawnViaRunner } = {}) {
   const privatePrompt = privateSecurity
     ? await import('./privateSecurityAssessment.js').then(({ preparePrivateSecurityAssessment }) => preparePrivateSecurityAssessment(task, provider, selectedModel))
     : null;
+  const promptTrace = {};
   const promptResult = privateSecurity ? privatePrompt : await buildAgentPrompt(task, config, workspacePath, worktreeInfo, {
+    promptTrace,
     providerType: provider.type,
     providerId: provider.id,
     providerCommand: provider.command,
@@ -178,6 +180,7 @@ export async function dispatchAgentRun(context, { spawnViaRunner } = {}) {
       : resolveRepoForgeTarget(workspacePath),
     sourceWorkspace ? capturePrimaryCheckoutState(sourceWorkspace) : null,
   ]);
+  const injectedMemories = promptTrace.injectedMemories || [];
   let systemPromptFile = null;
   const agentDir = join(AGENTS_DIR, agentId);
   const { runId } = await withBackupAssetPublication(async () => {
@@ -196,6 +199,7 @@ export async function dispatchAgentRun(context, { spawnViaRunner } = {}) {
       provider,
       workspacePath,
       appName: resolvedAppName,
+      injectedMemories,
     });
     await registerAgent(agentId, task.id, buildAgentRegistration({
       task,
@@ -221,6 +225,7 @@ export async function dispatchAgentRun(context, { spawnViaRunner } = {}) {
       executionMode,
       publicReviewPosture,
       resolvedAppName,
+      injectedMemories,
     }));
     return { runId };
   });

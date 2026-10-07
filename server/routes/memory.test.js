@@ -40,6 +40,10 @@ vi.mock('../services/memoryEmbeddings.js', () => ({
   checkAvailability: vi.fn()
 }));
 
+vi.mock('../services/memoryRunUsage.js', () => ({
+  findRecentRunsUsingMemory: vi.fn()
+}));
+
 // Mock the sync service
 vi.mock('../services/memorySync.js', () => ({
   getChangesSince: vi.fn(),
@@ -49,8 +53,19 @@ vi.mock('../services/memorySync.js', () => ({
 import { ensureBackend, getMemories, getTimeline, archiveMemory, purgeMemory, applyDecay, linkMemories } from '../services/memoryBackend.js';
 import { checkHealth } from '../lib/db.js';
 import * as memorySync from '../services/memorySync.js';
+import { findRecentRunsUsingMemory } from '../services/memoryRunUsage.js';
 
 describe('Memory Routes', () => {
+  it('GET /:id/runs lists recent runs that used the memory (#10495)', async () => {
+    const app = express();
+    app.use('/api/memory', memoryRoutes);
+    findRecentRunsUsingMemory.mockResolvedValue([{ runId: 'r1', agentId: 'a1' }]);
+    const res = await request(app).get('/api/memory/mem-1/runs');
+    expect(res.status).toBe(200);
+    expect(res.body.runs).toEqual([{ runId: 'r1', agentId: 'a1' }]);
+    expect(findRecentRunsUsingMemory).toHaveBeenCalledWith('mem-1');
+  });
+
   let app;
 
   beforeEach(() => {
