@@ -123,11 +123,14 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha } = {}) {
  */
 export function downgradeFullPlan(plan, trackedFiles) {
   const tracked = new Set(trackedFiles);
+  // Discover convention guards so new client scanners join the local gate
+  // without a second hand-maintained list (including guards under hooks/).
+  const clientGuards = trackedFiles.filter((path) => /^client\/src\/.*Conventions\.test\.js$/.test(path));
   return {
     ...plan,
     full: false,
     server: { mode: 'files', files: ALWAYS_RUN_TESTS.filter((path) => tracked.has(path)), sources: [] },
-    client: { mode: 'skip', files: [], sources: [] },
+    client: { mode: clientGuards.length > 0 ? 'files' : 'skip', files: clientGuards, sources: [] },
     lint: { mode: 'full', files: [] },
   };
 }
