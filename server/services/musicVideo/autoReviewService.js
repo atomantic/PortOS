@@ -222,8 +222,8 @@ async function reviewDraft(project, run, excerpt) {
     const shotIntents = (project.scenes || []).filter((scene) => scene.startSec < excerpt.endSec && scene.endSec > excerpt.startSec)
       .map((scene) => ({ sceneId: scene.sceneId, sceneStartSec: scene.startSec - excerpt.startSec,
         ...(scene.direction?.actionContract != null ? { actionContract: scene.direction.actionContract }
-          : { shotPrompt: trimTo(scene.visualIntent || scene.prompt || '', 1000) }) }))
-      .filter((intent) => intent.actionContract || intent.shotPrompt);
+          : { shotPrompt: trimTo(scene.prompt || '', 1000), ...(scene.visualIntent ? { phraseIntent: trimTo(scene.visualIntent, 300) } : {}) }) }))
+      .filter((intent) => intent.actionContract || intent.shotPrompt || intent.phraseIntent);
     const prompt = buildAutoReviewPrompt({ spanSec, sections, frameTimes, hasContactSheet: hasSheet, tiled: true, concept: project.concept, shotIntents });
     try {
       const reply = await callReviewer(run, prompt, screenshots, project.id);
