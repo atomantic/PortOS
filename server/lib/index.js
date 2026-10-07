@@ -328,6 +328,7 @@ export * from './spawnCwd.js';
 export * from './sshHostAlias.js';
 export * from './schemaVersions.js';
 export * from './secretText.js';
+export * from './securityAuditLog.js';
 export * from './piiRedactionPatterns.js';
 export * from './imageClean.js';
 export * from './imageCleanDefaults.js';

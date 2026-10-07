@@ -12,6 +12,7 @@ import {
   isPeerBasicBootstrapRequest,
 } from '../lib/apiAccessPolicy.js';
 import { sendErrorResponse, ServerError } from '../lib/errorHandler.js';
+import { logSecurityEvent } from '../lib/securityAuditLog.js';
 import {
   changedHostControlSettingsPaths, hostControlBodyKeys, hostControlSettingsPathsIn, isHostControlRoute,
 } from '../lib/hostControlRoutes.js';
@@ -149,6 +150,7 @@ export const authGate = async (req, res, next) => {
   // endpoints like /api/auth/logout still mutate state.
   const refusal = browserRequestRefusal(req);
   if (refusal) {
+    logSecurityEvent('request.refused', { refused: true, code: refusal, ip: req.ip, method: req.method, path: req.path, origin: req.headers?.origin, host: req.headers?.host });
     sendErrorResponse(res, browserRefusalError(refusal));
     return;
   }
@@ -251,6 +253,7 @@ export const socketHasCurrentHostControl = async (socket) => {
 // Mount after authGate: missing context fails closed.
 export const requireHostControl = (req, res, next) => {
   if (requestHasHostControl(req)) return next();
+  logSecurityEvent('host-control.refused', { refused: true, ip: req.ip, method: req.method, path: req.originalUrl?.split('?')[0] ?? req.path, auth: req.portosAuthContext?.method ?? 'none' });
   sendErrorResponse(res, new ServerError(HOST_CONTROL_FORBIDDEN_MESSAGE, {
     status: 403, code: 'HOST_CONTROL_FORBIDDEN',
   }));

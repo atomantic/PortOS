@@ -25,6 +25,7 @@ import {
 import { getAgentKeyStatus, rotateAgentKey, setAgentKeyEnabled } from '../services/agentKey.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
+import { logSecurityEvent } from '../lib/securityAuditLog.js';
 
 const router = Router();
 
@@ -41,6 +42,10 @@ const sessionIdParamSchema = z.object({ id: z.string().min(1).max(64).regex(/^[a
 // X-Forwarded-Proto since PortOS isn't behind a reverse proxy in its normal
 // deployment topology.
 const isSecure = (req) => !!req.secure;
+
+// Source address for the audit trail. `req.ip` is the socket peer (no reverse
+// proxy in front of PortOS), so a forged header cannot name another machine.
+const sourceOf = (req) => req.ip || req.socket?.remoteAddress || 'unknown';
 
 // The session cookie name is port-scoped from the browser-facing `Host` (see
 // sessionCookieNameFor in lib/portosAuthCore.js) — e.g. `portos_auth_15555`
@@ -102,7 +107,7 @@ router.post('/login', asyncHandler(async (req, res) => {
   // Throttle check runs BEFORE scrypt so a sidecar can't pin the CPU by
   // looping bad guesses. The IP comes from Express's `req.ip` (we don't
   // sit behind a reverse proxy in normal PortOS deployments).
-  const clientIp = req.ip || req.socket?.remoteAddress || 'unknown';
+  const clientIp = sourceOf(req);
   if (isLoginRateLimited(clientIp)) {
     throw new ServerError('Too many login attempts — try again in a minute', {
       status: 429,
@@ -111,12 +116,17 @@ router.post('/login', asyncHandler(async (req, res) => {
   }
   if (!(await verifyPassword(password))) {
     recordLoginFailure(clientIp);
+    logSecurityEvent('login.failed', { refused: true, ip: clientIp });
+    // One line when the window fills, not one per throttled request — the 429s
+    // that follow carry no new information and would flood the log under a guess loop.
+    if (isLoginRateLimited(clientIp)) logSecurityEvent('login.throttled', { refused: true, ip: clientIp });
     throw new ServerError('Invalid password', { status: 401, code: 'AUTH_BAD_PASSWORD' });
   }
   // Success clears the throttle so a user who mistyped a few times then got
   // it right isn't kept locked out.
   clearLoginFailures(clientIp);
-  const { token } = await createSession();
+  const { token, id } = await createSession();
+  logSecurityEvent('login.ok', { ip: clientIp, session: id });
   res.setHeader('Set-Cookie', sessionCookieFor(req, token));
   res.json({ authenticated: true });
 }));
@@ -128,7 +138,9 @@ router.post('/logout', asyncHandler(async (req, res) => {
   // pre-upgrade legacy cookie, Bearer) so signing out can't leave a second
   // valid cookie behind. revokeSession is a no-op for foreign tokens.
   const stale = await ownedStaleCookieNames(req);
-  for (const token of extractTokens(req)) await revokeSession(token);
+  const tokens = extractTokens(req);
+  for (const token of tokens) await revokeSession(token);
+  if (tokens.length) logSecurityEvent('logout', { ip: sourceOf(req) });
   res.setHeader('Set-Cookie', clearCookiesFor(req, stale));
   res.json({ ok: true });
 }));
@@ -148,6 +160,10 @@ router.post('/password', asyncHandler(async (req, res) => {
     newPassword: body.newPassword,
     currentPassword: alreadyEnabled ? body.currentPassword : null,
   });
+  logSecurityEvent(alreadyEnabled ? 'password.rotated' : 'password.set', {
+    ip: sourceOf(req),
+    note: 'all other sessions revoked',
+  });
   const secure = isSecure(req);
   res.setHeader('Set-Cookie', [
     sessionCookieFor(req, token),
@@ -163,6 +179,7 @@ router.delete('/password', asyncHandler(async (req, res) => {
   const { currentPassword } = validateRequest(clearPasswordSchema, req.body || {});
   const stale = await ownedStaleCookieNames(req);
   await clearPassword({ currentPassword });
+  logSecurityEvent('password.cleared', { ip: sourceOf(req), note: 'auth disabled, all sessions revoked' });
   res.setHeader('Set-Cookie', clearCookiesFor(req, stale));
   res.json({ enabled: false });
 }));
@@ -186,6 +203,7 @@ router.delete('/sessions/:id', asyncHandler(async (req, res) => {
   if (!revoked) {
     throw new ServerError('Session not found', { status: 404, code: 'AUTH_SESSION_NOT_FOUND' });
   }
+  logSecurityEvent('session.revoked', { ip: sourceOf(req), session: id });
   res.json({ ok: true });
 }));
 
@@ -201,11 +219,15 @@ router.get('/agent-key', asyncHandler(async (_req, res) => {
 
 router.put('/agent-key', asyncHandler(async (req, res) => {
   const { enabled } = validateRequest(agentKeyToggleSchema, req.body || {});
-  res.json(await setAgentKeyEnabled(enabled));
+  const status = await setAgentKeyEnabled(enabled);
+  logSecurityEvent(enabled ? 'agent-key.enabled' : 'agent-key.disabled', { ip: sourceOf(req) });
+  res.json(status);
 }));
 
-router.post('/agent-key/rotate', asyncHandler(async (_req, res) => {
-  res.json(await rotateAgentKey());
+router.post('/agent-key/rotate', asyncHandler(async (req, res) => {
+  const status = await rotateAgentKey();
+  logSecurityEvent('agent-key.rotated', { ip: sourceOf(req) });
+  res.json(status);
 }));
 
 export default router;
