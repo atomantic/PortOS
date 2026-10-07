@@ -11,9 +11,17 @@
  * survive the run even on the test DB.
  */
 
-import { describe, it, expect, afterAll, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, afterAll, beforeAll, beforeEach, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
+
+vi.mock('../../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-authors-db-') }));
+
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
+import { contentHashForRecord, flushBaseHashes, __resetBaseHashCacheForTests } from '../../lib/conflictJournal.js';
 
 let dbReady = false;
 let skipReason = '';
@@ -44,17 +52,29 @@ describe.skipIf(!runDb)('authors DB adapter round-trip', () => {
   beforeEach(async () => { await query(`DELETE FROM authors`); });
 
   afterAll(async () => {
-    // Restore the developer's real personas: clear the test rows, re-insert the
-    // snapshot. ON CONFLICT DO NOTHING so a partially-restored run is idempotent.
-    await query(`DELETE FROM authors`).catch(() => {});
-    for (const r of snap) {
-      await query(
-        `INSERT INTO authors (id, name, data, created_at, updated_at, deleted, deleted_at)
-         VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7) ON CONFLICT (id) DO NOTHING`,
-        [r.id, r.name, JSON.stringify(r.data), r.created_at, r.updated_at, r.deleted, r.deleted_at],
-      ).catch(() => {});
+    try {
+      // Restore the test DB snapshot even after a failed test. ON CONFLICT DO NOTHING
+      // makes a partially-restored run idempotent.
+      await query(`DELETE FROM authors`).catch(() => {});
+      for (const r of snap) {
+        await query(
+          `INSERT INTO authors (id, name, data, created_at, updated_at, deleted, deleted_at)
+           VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7) ON CONFLICT (id) DO NOTHING`,
+          [r.id, r.name, JSON.stringify(r.data), r.created_at, r.updated_at, r.deleted, r.deleted_at],
+        ).catch(() => {});
+      }
+    } finally {
+      try {
+        await close();
+      } finally {
+        try {
+          await flushBaseHashes();
+        } finally {
+          __resetBaseHashCacheForTests();
+          cleanupTempDataRoots();
+        }
+      }
     }
-    await close();
   });
 
   it('creates an author and mirrors name into the queryable column', async () => {
@@ -119,6 +139,11 @@ describe.skipIf(!runDb)('authors DB adapter round-trip', () => {
       const newer = { ...a, name: 'Fresh', updatedAt: '2099-01-01T00:00:00.000Z' };
       expect(await db.mergeAuthorsFromSync([newer])).toEqual({ applied: true, count: 1 });
       expect((await db.getAuthor(a.id)).name).toBe('Fresh');
+      const bases = JSON.parse(await readFile(
+        join(lazyTempDataRoot('portos-authors-db-'), 'sharing', 'sync_base_hashes.json'), 'utf8',
+      ));
+      expect(bases[`author:${a.id}`].h)
+        .toBe(contentHashForRecord('author', await db.getAuthor(a.id)));
     });
 
     it('a newer remote tombstone deletes a live local record', async () => {
