@@ -58,6 +58,11 @@ describe('parseSunoSongPage', () => {
     expect(parseSunoSongPage(html, ID)).toMatchObject({ title: 'Full', lyrics: 'words', style: 'rock' });
   });
 
+  it('ignores an audio_url that is an API placeholder rather than CDN media', () => {
+    const html = page([`6:${JSON.stringify({ song: { id: ID, title: 'T', audio_url: 'https://studio-api.prod.suno.com/api/forbidden', metadata: {} } })}\n`]);
+    expect(parseSunoSongPage(html, ID).audioUrl).toBeNull();
+  });
+
   it('falls back to og: tags and refuses media URLs off Suno', () => {
     const head = '<meta property="og:title" content="Rock &amp; Roll | Suno"><meta property="og:image" content="https://evil.example/x.jpg">'
       + `<meta property="og:audio" content="https://cdn1.suno.ai/${ID}.mp3">`;

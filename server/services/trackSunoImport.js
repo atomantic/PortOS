@@ -16,11 +16,11 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
 import { shortId } from '../lib/fileUtils.js';
-import { probeVideoDuration } from '../lib/ffmpeg.js';
+import { findFfmpeg, probeVideoDuration, runFfmpegProcess } from '../lib/ffmpeg.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
 import { fetchPublicBinary, fetchPublicText, resolvePublicUrl } from '../lib/safeUrlFetch.js';
 import {
-  isSunoSongUrl, isSunoHost, sunoSongIdFromUrl, sunoCdnAudioUrl, parseSunoSongPage, SUNO_URL_INVALID_MESSAGE,
+  isSunoSongUrl, isSunoHost, sunoSongIdFromUrl, sunoCdnAudioUrl, sunoCdnVideoUrl, parseSunoSongPage, SUNO_URL_INVALID_MESSAGE,
 } from '../lib/sunoSong.js';
 import { importUploadedTrack, MUSIC_UPLOAD_MAX_BYTES } from './pipeline/musicLibrary.js';
 import { createTrack } from './tracks/index.js';
@@ -29,6 +29,8 @@ import { RENDER_SOURCES } from './tracks/logic.js';
 const PAGE_TIMEOUT_MS = 20_000;
 const PAGE_MAX_BYTES = 5 * 1024 * 1024;
 const AUDIO_TIMEOUT_MS = 5 * 60 * 1000;
+// The song's video carries a picture track too, so it may run well past the audio cap.
+const VIDEO_MAX_BYTES = 250 * 1024 * 1024;
 // Suno serves its pages to browsers; a bare fetch user agent can get a challenge page instead.
 const HEADERS = { 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36' };
 
@@ -37,6 +39,34 @@ const isAudioResponse = (contentType) => {
   const type = String(contentType || '').split(';')[0].trim().toLowerCase();
   return !type || type.startsWith('audio/') || type === 'video/mp4' || type === 'application/octet-stream';
 };
+
+const isVideoResponse = (contentType) => {
+  const type = String(contentType || '').split(';')[0].trim().toLowerCase();
+  return !type || type === 'video/mp4' || type === 'application/octet-stream';
+};
+
+// The first source that answers with audio, or null when Suno refuses them all.
+async function fetchSongAudio(urls) {
+  for (const url of [...new Set(urls.filter(Boolean))]) {
+    const res = await fetchPublicBinary(url, {
+      timeoutMs: AUDIO_TIMEOUT_MS, headers: HEADERS, maxBytes: MUSIC_UPLOAD_MAX_BYTES, throwOnUnsafe: false,
+    });
+    if (res?.buffer?.byteLength && isAudioResponse(res.contentType)) return res;
+  }
+  return null;
+}
+
+// Copy the video's audio track out (Suno's is AAC); transcode only if a copy fails.
+async function extractAudio(videoPath, outPath) {
+  const bin = await findFfmpeg();
+  if (!bin) throw new Error('Suno only offers this song as a video, and ffmpeg is needed to take its audio out');
+  for (const codec of [['-c:a', 'copy'], ['-c:a', 'aac', '-b:a', '256k']]) {
+    const res = await runFfmpegProcess({ bin, args: ['-y', '-i', videoPath, '-vn', '-map', '0:a:0', ...codec, outPath] });
+    if (res.ok) return;
+    console.warn(`⚠️ Suno audio extract (${codec[1]}) failed: ${res.reason}`);
+  }
+  throw new Error('Could not take the audio out of the video Suno offers for this song');
+}
 
 // jobId -> { clients, lastPayload, status, canceled }
 const importJobs = new Map();
@@ -96,24 +126,34 @@ export async function startSunoImport(url) {
       if (abortIfCanceled()) return;
 
       broadcastSse(job, { type: 'progress', percent: 20, stage: 'downloading' });
-      const audio = await fetchPublicBinary(song.audioUrl || sunoCdnAudioUrl(songId), {
-        timeoutMs: AUDIO_TIMEOUT_MS, headers: HEADERS, maxBytes: MUSIC_UPLOAD_MAX_BYTES, throwOnUnsafe: false,
-      });
+      const audio = await fetchSongAudio([song.audioUrl, sunoCdnAudioUrl(songId)]);
       if (abortIfCanceled()) return;
-      if (!audio?.buffer?.byteLength) {
-        throw new Error('Could not download the song audio from Suno (is the song public or unlisted?)');
-      }
-      // An error or interstitial page can come back with a 200; only audio becomes a track.
-      if (!isAudioResponse(audio.contentType)) {
-        throw new Error('Suno sent back something other than audio for this song (has it finished generating?)');
+      dir = await mkdtemp(join(tmpdir(), 'portos-sunoimport-'));
+      let tempPath;
+      if (audio) {
+        tempPath = join(dir, `song.${/mp4|m4a|aac/i.test(audio.contentType) ? 'm4a' : 'mp3'}`);
+        await writeFile(tempPath, audio.buffer);
+      } else {
+        // Suno can withhold the audio file even for a public song while its
+        // video stays public; the video carries the same audio track.
+        const video = await fetchPublicBinary(sunoCdnVideoUrl(songId), {
+          timeoutMs: AUDIO_TIMEOUT_MS, headers: HEADERS, maxBytes: VIDEO_MAX_BYTES, throwOnUnsafe: false,
+        });
+        if (abortIfCanceled()) return;
+        if (!video?.buffer?.byteLength || !isVideoResponse(video.contentType)) {
+          throw new Error('Suno would not hand over this song\'s audio or video (is the song public or unlisted, and finished generating?)');
+        }
+        broadcastSse(job, { type: 'progress', percent: 70, stage: 'extracting' });
+        const videoPath = join(dir, 'song.mp4');
+        await writeFile(videoPath, video.buffer);
+        tempPath = join(dir, 'song.m4a');
+        await extractAudio(videoPath, tempPath);
+        if (abortIfCanceled()) return;
       }
 
       broadcastSse(job, { type: 'progress', percent: 90, stage: 'importing' });
       const title = song.title || 'Suno song';
-      const ext = /mp4|m4a|aac/i.test(audio.contentType) ? 'm4a' : 'mp3';
-      dir = await mkdtemp(join(tmpdir(), 'portos-sunoimport-'));
-      const tempPath = join(dir, `song.${ext}`);
-      await writeFile(tempPath, audio.buffer);
+      const ext = tempPath.endsWith('.m4a') ? 'm4a' : 'mp3';
       // Probe before the library import so a file ffprobe can't read never lands there.
       const durationSec = await probeVideoDuration(tempPath).catch(() => null);
       if (!durationSec) throw new Error('The file Suno sent back is not playable audio');
