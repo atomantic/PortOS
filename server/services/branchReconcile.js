@@ -162,6 +162,9 @@ const PR_LIST_LIMIT = 200;
  * @returns {'ABANDONED_WIP'|'MERGED'|'CONFLICTED'|'IN_REVIEW'|'NEEDS_PR'|'WIP'}
  */
 export function classifyBranch({ hasUpstream, ahead = null, hasOrigin = false, isMerged, worktreeDirty, abandonedAgentWorktree, abandonedClaimWorktree, liveOwnerReason = null, openPr, prStateUnavailable = false }) {
+  // A draft is an explicit human-review handoff, even after its agent exits.
+  // Protect it before dirty/merged classification can delegate or retire it.
+  if (openPr?.isDraft) return 'WIP';
   // A dead agent's worktree that still holds uncommitted work is the ONE dirty
   // case that must be driven rather than skipped — and it must be caught BEFORE
   // the `isMerged` test, because an agent that exited without committing leaves
@@ -1513,6 +1516,7 @@ export const actionOn = (actions, key) => actions?.[key] !== false;
  */
 export function filterActionable(inFlight, actions) {
   return inFlight.filter((b) => {
+    if (b.openPr?.isDraft) return false;
     if (b.state === 'ABANDONED_WIP') return actionOn(actions, 'finishAbandoned');
     if (b.state === 'NEEDS_PR') return actionOn(actions, 'openPr');
     if (b.state === 'CONFLICTED') return actionOn(actions, 'resolveConflicts');

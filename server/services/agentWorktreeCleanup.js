@@ -26,7 +26,7 @@ import { resolveTaskTargetBranch, shouldStripTaskTargetBranch } from '../lib/tas
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { detectForgeCli } from '../lib/gitForge.js';
 import { normalizeForkHead } from '../lib/forkHead.js';
-import { PR_COMPLETIONS, PR_COMPLETION_VALUES, PR_CREATION, PR_MISSING_CATEGORY, leavesPrForHuman, prClaimWasVerified } from '../lib/prDisposition.js';
+import { PR_COMPLETIONS, resolvePrCompletion, PR_COMPLETION_VALUES, PR_CREATION, PR_MISSING_CATEGORY, leavesPrForHuman, prClaimWasVerified } from '../lib/prDisposition.js';
 import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS, isProviderReviewer, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, prioritizeToolFreeReviewers } from '../lib/reviewerConfig.js';
 
 // In-flight cleanup per agentId, so two completion paths racing to clean the
@@ -175,7 +175,9 @@ async function worktreeCleanupContext(agentId, options) {
   if (!sourceWorkspace || !worktreeBranch) return { isWorktree: false };
   const normalized = cleanupOptions(options);
   return {
-    ...normalized, isWorktree: true, agentId, sourceWorkspace, worktreeBranch,
+    ...normalized,
+    ...(normalized.originalTask?.metadata?.prCompletion === PR_COMPLETIONS.DRAFT ? { prCompletion: PR_COMPLETIONS.LEAVE_OPEN, skipMerge: true } : {}),
+    isWorktree: true, agentId, sourceWorkspace, worktreeBranch,
     discardWorktree: isTruthyMeta(normalized.originalTask?.metadata?.discardWorktree),
     worktreePath: metadata.workspacePath || join(PATHS.worktrees, agentId),
     warnings: [],
@@ -193,7 +195,7 @@ async function probeWorktreePr(context, success) {
     // DUPLICATE of the change request the summary says already landed.
     const { extractFinalSummary } = await import('./agentSummaryExtraction.js');
     const agentSummary = extractFinalSummary(agentOutput);
-    return verifyPrClaim({ workspacePath: worktreePath, success: true, prExpected: true, agentSummary })
+    return verifyPrClaim({ task: context.originalTask, workspacePath: worktreePath, success: true, prExpected: true, agentSummary })
       .catch(err => ({ ok: false, category: 'forge-unreachable', message: err.message }));
   }
   const { findPullRequestForBranch } = await import('./github.js');
@@ -306,13 +308,23 @@ async function openWorktreePullRequest(context) {
     title: prTitle,
     body: prBody,
     base: targetBranch,
-    head: worktreeBranch
+    head: worktreeBranch,
+    ...(context.originalTask?.metadata?.prCompletion === PR_COMPLETIONS.DRAFT ? { draft: true } : {})
   }).catch(err => {
     emitLog('warn', `🌳 Failed to create PR for ${worktreeBranch}: ${err.message}`, { agentId });
     return null;
   });
 
   if (!prResult?.success) return handlePrCreationFailure(context, prResult, targetBranch);
+  if (context.originalTask?.metadata?.prCompletion === PR_COMPLETIONS.DRAFT) {
+    const { verifyPrClaim } = await import('./agentFinalization.js');
+    const verdict = await verifyPrClaim({ task: context.originalTask, workspacePath: worktreePath, success: true, prExpected: true })
+      .catch(() => ({ ok: false }));
+    if (!verdict?.ok || !verdict.branch) {
+      warnings.push(`Draft PR disposition could not be verified for ${worktreeBranch}; worktree preserved for review`);
+      return warnings;
+    }
+  }
   return completeOpenedPullRequest(context, prResult);
 }
 
@@ -1247,6 +1259,12 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
   }
 
   if (!staleBranch || !sourceWorkspace) return;
+
+  // Review-only runs must not delegate to a recovery agent that can land work.
+  if (resolvePrCompletion(task?.metadata) === PR_COMPLETIONS.LEAVE_OPEN) {
+    emitLog('warn', `Review-only branch ${staleBranch} needs manual recovery; automatic recovery suppressed`, { agentId, staleBranch });
+    return null;
+  }
 
   const appId = task?.metadata?.app;
 

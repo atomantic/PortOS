@@ -178,7 +178,7 @@ async function assertNoRunningRun(appId) {
  * The first evaluation runs before this returns, so the caller learns whether
  * step one actually went out (or why it is holding) in the same response.
  */
-export async function startMaintenanceRun({ appId, providerId, model = null, effort = null, mode = 'file-issues', claimBetweenAudits = true, claimHandler = null, taskTypes = null, explicitCheck = false }) {
+export async function startMaintenanceRun({ appId, providerId, model = null, effort = null, mode = 'file-issues', prCompletion = null, claimBetweenAudits = true, claimHandler = null, taskTypes = null, explicitCheck = false }) {
   const [{ getAppById }, { getProviderById }, { resolveBurnProvider }] = await Promise.all([
     import('./apps.js'), import('./providers.js'), import('./scheduledHandlers/providerPick.js'),
   ]);
@@ -201,10 +201,10 @@ export async function startMaintenanceRun({ appId, providerId, model = null, eff
   const now = new Date().toISOString();
   const pins = { providerId, model: model || null, effort: effort || null };
   const run = await insertRun({
-    id, appId, familyId, claimFamilyId, ...pins,
+    id, appId, familyId, claimFamilyId, ...pins, prCompletion,
     taskTypes,
     status: MAINTENANCE_RUN_STATUS.RUNNING,
-    steps: buildMaintenanceSteps({ appId, idPrefix: id, ...pins, mode, claimBetweenAudits, claimHandler: effectiveClaimHandler, taskTypes, explicitCheck }),
+    steps: buildMaintenanceSteps({ appId, idPrefix: id, ...pins, mode, prCompletion, claimBetweenAudits, claimHandler: effectiveClaimHandler, taskTypes, explicitCheck }),
     completed: {},
     active: null,
     reason: null,

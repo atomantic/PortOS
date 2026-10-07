@@ -44,7 +44,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { isTruthyMeta } from './agentState.js';
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
-import { leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
+import { leavesPrForHuman, resolvePrCompletion, PR_COMPLETIONS } from '../lib/prDisposition.js';
 import { probePrForBranch } from './prProbe.js';
 import { ensureTaskThread } from './brainTaskThreads.js';
 import {
@@ -311,6 +311,11 @@ export async function verifyAgentRepoState({ agentId, task, agentState, success,
     }
     emitLog('info', `🔎 Agent branch ${branchName} verified clean for ${agentId}`, { agentId, branchName });
     return { verified: true, skipReason: null, issues: [], observed, recoveryTaskId: null };
+  }
+
+  if (resolvePrCompletion(task?.metadata) === PR_COMPLETIONS.LEAVE_OPEN) {
+    emitLog('warn', `Review-only branch ${branchName} needs attention; automatic cleanup and recovery suppressed`, { agentId, branchName });
+    return { verified: false, skipReason: null, issues, observed, recoveryTaskId: null };
   }
 
   // A merged branch with no remote ref is safe for the deterministic reaper to

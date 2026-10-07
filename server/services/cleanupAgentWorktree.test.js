@@ -278,6 +278,22 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
     );
   });
 
+  it.each([true, false])('verifies a server-created draft before completing cleanup: %s', async ok => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/1' });
+    verifyPrClaimMock.mockResolvedValue({ ok, branch: 'cos/task-abc123', category: ok ? null : 'pr-disposition' });
+    const originalTask = { metadata: { prCompletion: 'draft', openPR: true } };
+    const warnings = await cleanupAgentWorktree('agent-1', true, { prCreation: 'always', originalTask });
+    expect(git.createPR).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ draft: true }));
+    expect(verifyPrClaimMock).toHaveBeenCalledWith(expect.objectContaining({ task: originalTask, prExpected: true }));
+    expect(addTask).not.toHaveBeenCalled();
+    if (ok) expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: false });
+    else {
+      expect(removeWorktree).not.toHaveBeenCalled();
+      expect(warnings.join(' ')).toContain('Draft PR disposition could not be verified');
+    }
+  });
+
   it('should run PR flow when prCreation is always and success is true', async () => {
     git.push.mockResolvedValue(undefined);
     git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/1' });

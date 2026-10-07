@@ -91,6 +91,14 @@ describe('CoS Schedule Routes', () => {
       maintenance.updateMaintenanceStep.mockResolvedValue(null);
       expect((await request(app).patch(url).send(settings)).status).toBe(404);
     });
+    it('accepts an explicit draft disposition and rejects unknown policies', async () => {
+      maintenance.startMaintenanceRun.mockResolvedValue({ run: { id: 'draft-run' } });
+      const body = { appId: 'app-1', providerId: 'codex', model: 'gpt-6-astra', effort: 'medium', mode: 'fix', prCompletion: 'draft', taskTypes: ['security'] };
+      expect((await request(app).post('/api/cos/schedule/maintenance-runs').send(body)).status).toBe(201);
+      expect(maintenance.startMaintenanceRun).toHaveBeenCalledWith(body);
+      expect((await request(app).post('/api/cos/schedule/maintenance-runs').send({ ...body, prCompletion: 'unknown' })).status).toBe(400);
+    });
+
     it('accepts fix mode and rejects unknown modes', async () => {
       maintenance.startMaintenanceRun.mockResolvedValue({ run: { id: 'maint-1' } });
       const body = { appId: 'app-1', providerId: 'codex', model: 'gpt-5', mode: 'fix', claimBetweenAudits: false, claimHandler: { providerId: 'claude', model: 'sonnet', effort: 'low' } };

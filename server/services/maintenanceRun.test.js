@@ -406,3 +406,14 @@ it('dispatches independent quality runs while another run is pending and resumes
   expect((await getMaintenanceRun(security.id)).status).toBe('running');
   expect((await getMaintenanceRun(ladder.id)).completed).toEqual({});
 });
+
+it('preserves draft delivery across persisted resume, provider edits and step completion', async () => {
+  const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-6-astra', effort: 'medium', mode: 'fix', prCompletion: 'draft', taskTypes: ['security', 'documentation'] });
+  expect((await getMaintenanceRun(run.id)).prCompletion).toBe('draft');
+  await stopMaintenanceRun(run.id);
+  await resumeMaintenanceRun(run.id);
+  await updateMaintenanceStep(run.id, run.steps[1].id, { providerId: 'codex', model: 'gpt-6-astra', effort: 'medium' });
+  await __onMaintenanceAgentCompleted(agentFor(run, 0));
+  expect(state.invoked.at(-1).step.overrides).toMatchObject({ model: 'gpt-6-astra', effort: 'medium', params: { fileIssues: false, useWorktree: true, openPR: true, prCompletion: 'draft' } });
+  expect((await getMaintenanceRun(run.id)).steps.map(s => s.taskRef.taskType)).toEqual(['security', 'documentation']);
+});

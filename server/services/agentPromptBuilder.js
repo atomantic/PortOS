@@ -819,6 +819,7 @@ return `${agentInstructionsSection || ''}
 ${memorySection || ''}
 ${digitalTwinSection ? `\n${digitalTwinSection}\n` : ''}
 
+${task.metadata?.prCompletion === PR_COMPLETIONS.DRAFT ? DRAFT_PR_RULE : ''}
 ${taskBlock.description}
 ${contextBlock ? (contextBlock.includes('\n') ? `\n### Task Context\n\n${contextBlock.trimEnd()}\n` : `\n### Task Context\n\n${contextBlock}\n`) : ''}
 ${taskBlock.targetApp}
@@ -907,6 +908,9 @@ export function buildLightContextPromptParts(task, workspaceDir, worktreeInfo, o
     systemPrompt: contractSections.length ? contractSections.join('\n\n') + '\n' : null,
   };
 }
+
+const DRAFT_PR_RULE = `## Draft pull request delivery
+This run must leave its changes in a DRAFT pull request for human review. This overrides other publication instructions, including repository skills and saved defaults. Use gh pr create --draft or glab mr create --draft when you own PR creation. If a workflow opens a ready PR, convert it to draft before completion. Verify it is still open and draft. Never mark it ready, merge, enable auto-merge, deploy, or publish quality snapshots. If PortOS owns PR creation, commit in the assigned worktree and let PortOS open the draft.`;
 
 const BEGIN_WORKING_LINE = 'Begin working on the task now.';
 
@@ -1028,6 +1032,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
   // actually stalled on an approval gate, and "no human will answer you" is not
   // something the agent can infer from AGENTS.md or its cwd.
   contractSections.push(UNATTENDED_RUN_RULE);
+  if (task.metadata?.prCompletion === PR_COMPLETIONS.DRAFT) contractSections.push(DRAFT_PR_RULE);
   if (isUiAuditTask(task)) contractSections.push(UI_AUDIT_RUNTIME_RULE);
 
   // --- Issue filing labels and planner attribution --------------------------
