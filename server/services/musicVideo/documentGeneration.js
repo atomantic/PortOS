@@ -205,7 +205,7 @@ async function authoringContext(project) {
 export const LOCAL_PROMPT_BUDGET_CHARS = 100_000;
 
 // The scenes overlapping any of `sections` (all of them when every section is listed).
-export function batchScenes(scenes, sections) {
+function batchScenes(scenes, sections) {
   return (scenes || []).filter((scene) => !Number.isFinite(scene.startSec) || !Number.isFinite(scene.endSec)
     || sections.some((section) => scene.startSec < section.endSec && scene.endSec > section.startSec));
 }
@@ -293,12 +293,13 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
     const sections = context.song.sections.filter((section) => batchIds.includes(section.id));
     // Only the scenes (and storyboard shots) a batch's sections cover: a long storyboard would
     // otherwise put every shot in each batch and push it past a local model's budget.
-    const scenes = batchScenes(context.scenes, sections);
+    const scoped = batchIds.length < ids.length;
+    const scenes = scoped ? batchScenes(context.scenes, sections) : context.scenes;
     return buildMixedMediaDocumentPrompt({
       renderer: musicVideoDocumentRenderer(project), mediaMode: musicVideoMediaMode(project),
       title: project.name, song: { ...context.song, sections }, palette: context.palette, treatment: project.treatment,
       visualSpec: project.visualSpec, scenes, styleLines: sharedStyle.styleLines,
-      onlySectionId: sectionId, sharedStyle, directionContext: castAndSetsCodeContext(project, { sceneIds: scenes.map((scene) => scene.sceneId) }),
+      onlySectionId: sectionId, sharedStyle, directionContext: castAndSetsCodeContext(project, scoped ? { sceneIds: scenes.map((scene) => scene.sceneId), sections } : {}),
     });
   };
   const withFeedback = (prompt) => (feedback ? `${prompt}\n\nReview findings for this section (retain the approved medium and selected assets; never invent a footage fallback):\n${feedback.slice(0, 8000)}` : prompt);

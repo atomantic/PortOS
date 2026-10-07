@@ -25,7 +25,7 @@ vi.mock('./projects.js', () => ({
   mutateProjectRecord: vi.fn(async (_id, transform) => transform(h.project)),
 }));
 
-const { generateMusicVideoCode, regenerateMusicVideoCodeSection } = await import('./codeGeneration.js');
+const { castAndSetsCodeContext, generateMusicVideoCode, regenerateMusicVideoCodeSection } = await import('./codeGeneration.js');
 const { buildMusicVideoCodePrompt } = await import('../codeAnimation/prompt.js');
 
 const base = () => ({
@@ -155,4 +155,26 @@ it('refuses standalone authoring when a lyric changes during provider preparatio
   };
   await expect(generateMusicVideoCode('mv-code')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_REVIEW_STALE' });
   expect(h.calls).toBe(0);
+});
+
+describe('castAndSetsCodeContext batch scope', () => {
+  const shot = (fields) => ({ lyricCueIds: [], staging: '', camera: '', transition: '', ...fields });
+  it('keeps scene shots of the batch and document shots that overlap its sections', () => {
+    const project = { productionReview: { draft: { storyboard: [
+      shot({ sceneId: 'scene-1', action: 'SCENE ONE' }),
+      shot({ sceneId: 'scene-2', action: 'SCENE TWO' }),
+      shot({ id: 'doc-a', startSec: 0, endSec: 5, action: 'DOC EARLY' }),
+      shot({ id: 'doc-b', startSec: 20, endSec: 25, action: 'DOC LATE' }),
+      shot({ id: 'doc-c', action: 'DOC UNTIMED' }),
+    ] } } };
+    const scoped = castAndSetsCodeContext(project, { sceneIds: ['scene-1'], sections: [{ startSec: 0, endSec: 10 }] });
+    expect(scoped).toContain('SCENE ONE');
+    expect(scoped).not.toContain('SCENE TWO');
+    expect(scoped).toContain('DOC EARLY');
+    expect(scoped).not.toContain('DOC LATE');
+    expect(scoped).toContain('DOC UNTIMED');
+    // Unscoped (a whole-song request) keeps every shot.
+    const whole = castAndSetsCodeContext(project);
+    for (const text of ['SCENE ONE', 'SCENE TWO', 'DOC EARLY', 'DOC LATE', 'DOC UNTIMED']) expect(whole).toContain(text);
+  });
 });
