@@ -195,7 +195,12 @@ def encode_references_in_vae_dtype(pipe):
     """Qwen 2.1 reference images reach the VAE encoder in the transformer's bfloat16,
     which the float32 MPS VAE rejects ("Input type (BFloat16) and bias type (float)").
     Encode in the VAE's dtype and hand the latents back in the caller's dtype."""
-    encode_vae_image = pipe._encode_vae_image
+    encode_vae_image = getattr(pipe, "_encode_vae_image", None)
+    if encode_vae_image is None:
+        # A diffusers release without this private hook: generations without references
+        # still work, so warn instead of failing every Qwen 2.1 load.
+        print("⚠️ qwen-image-2.1 pipeline has no _encode_vae_image; reference images may fail on MPS", file=sys.stderr)
+        return
 
     def encode_in_vae_dtype(image, generator):
         return encode_vae_image(image.to(dtype=pipe.vae.dtype), generator).to(dtype=image.dtype)

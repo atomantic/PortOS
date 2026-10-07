@@ -126,6 +126,16 @@ class RunnerContract(unittest.TestCase):
         self.assertEqual(seen, ['fp32'])
         self.assertEqual(latents.dtype, 'bf16')
 
+    def test_qwen21_reference_wrapper_skips_a_pipeline_without_the_hook(self):
+        with patch.dict(sys.modules, {'torch': SimpleNamespace()}):
+            runner = importlib.import_module('z_image_turbo')
+        pipe = SimpleNamespace(vae=SimpleNamespace(dtype='fp32'))
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            runner.encode_references_in_vae_dtype(pipe)
+        self.assertFalse(hasattr(pipe, '_encode_vae_image'))
+        self.assertIn('no _encode_vae_image', stderr.getvalue())
+
     def test_qwen21_decode_guard_accepts_finite_output_and_retries_once(self):
         torch = SimpleNamespace(
             float32='fp32',
