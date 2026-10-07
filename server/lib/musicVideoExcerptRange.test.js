@@ -10,8 +10,11 @@ describe('excerptRangeFits', () => {
     expect(excerptRangeFits(0, 120, 119.92, 24)).toBe(false);
     expect(excerptRangeFits(5, 5, 119.92, 24)).toBe(false);
     expect(excerptRangeFits(-1, 4, 119.92, 24)).toBe(false);
+    // The slack is for the end only: a window starting past the render is still refused.
+    expect(excerptRangeFits(119.93, 119.95, 119.92, 24)).toBe(false);
   });
   it('allows no slack without a usable fps', () => {
-    expect(excerptRangeFits(0, 119.93, 119.92, 0)).toBe(false);
+    for (const fps of [undefined, 0, Number.NaN]) expect(excerptRangeFits(0, 119.93, 119.92, fps)).toBe(false);
+    expect(excerptRangeFits(0, 119.92, 119.92, undefined)).toBe(true);
   });
 });
