@@ -324,6 +324,17 @@ PortOS treats **PostgreSQL as a mandatory install/runtime dependency** for every
 
 Provision either path with **`npm run setup:db`** (also run automatically by `npm run setup` and `npm start`). It follows `PGMODE` (shell environment → `.env` → `docker`), and provisions only that selected backend. An unavailable Docker installation fails setup without probing native PostgreSQL or changing the saved mode. See [Setup path](#setup-path-npm-run-setupdb) below.
 
+The standalone `scripts/db.sh` also reads the repository-root `.env` through the
+shared setup parser (Node is required), with nonempty shell settings taking
+precedence. Quoted mode and connection values are supported without evaluating
+shell syntax. Native commands use `PGPORT`; Docker commands use
+`PGPORT_DOCKER`, unless the caller explicitly exports an active `PGPORT`.
+`setup-native` uses `PORTOS_NATIVE_PGPORT` when inherited from PM2, then the
+configured native `PGPORT`, without changing the selected mode. Container-local
+dump/import tools are used only for the selected local Docker endpoint; a
+host/port override cannot silently fall back to the local container. Maintenance
+`--endpoint` transfers remain bound to their explicitly recorded endpoint.
+
 ### `MEMORY_BACKEND=file` is a development/test-only escape hatch — NOT a deployment mode
 
 The file backend (`server/services/memory.js`, JSON under `./data/`) is **unsupported for production and for federated peers.** It exists only so the test suite (and ad-hoc local development) can boot without a database. It is **not** a fallback, a "lite" mode, or a way to run PortOS without Postgres:

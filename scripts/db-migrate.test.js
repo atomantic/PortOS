@@ -86,7 +86,8 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'portos-db-sh-'));
-    mkdirSync(join(root, 'scripts'));
+    mkdirSync(join(root, 'scripts', 'lib'), { recursive: true });
+    copyFileSync(join(here, 'lib', 'envFile.cjs'), join(root, 'scripts', 'lib', 'envFile.cjs'));
     copyFileSync(join(here, 'db.sh'), join(root, 'scripts', 'db.sh'));
     copyFileSync(join(here, 'prepare-database-replay.mjs'), join(root, 'scripts', 'prepare-database-replay.mjs'));
     mkdirSync(join(root, 'server', 'services'), { recursive: true });
@@ -169,6 +170,63 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     expect(tempArtifacts()).toEqual([]);
   });
 
+  // Regression: the standalone CLI used defaults or a stale Docker database
+  // while the application used the quoted native endpoint saved in .env.
+  it('exports and imports the saved quoted native endpoint without evaluating shell text', () => {
+    const password = "example $(touch SHOULD_NOT_EXIST) ' password";
+    writeFileSync(envFile, `PGMODE = "native"\nPGHOST=db.example.invalid\nPGPORT=6543\nPGUSER=example_user\nPGDATABASE=example_db\nPGPASSWORD="${password}"\n`);
+    const overrides = { PGHOST: undefined, PGPASSWORD: undefined };
+    const exported = run(['export', 'saved'], 'ok', overrides);
+    expect(exported.status, exported.stderr).toBe(0);
+    const dump = join(dumpDir, 'portos-saved.sql');
+    expect(run(['import', dump], 'ok', overrides).status).toBe(0);
+    const log = readFileSync(stubLog, 'utf8');
+    expect(log).toContain('pg_dump -h db.example.invalid -p 6543 -U example_user -d example_db');
+    expect(log).toContain('psql -h db.example.invalid -p 6543 -U example_user -d example_db');
+    expect(log).not.toContain('docker');
+    expect(existsSync(join(root, 'SHOULD_NOT_EXIST'))).toBe(false);
+    expect(readFileSync(importLog, 'utf8')).toBe(FULL_DUMP);
+  });
+
+  it('honors shell connection overrides without exporting the unrelated local Docker database', () => {
+    writeFileSync(envFile, 'PGMODE=docker\nPGHOST=localhost\nPGPORT_DOCKER=5599\n');
+    const exported = run(['export', 'override'], 'ok', {
+      PGHOST: 'other.example.invalid', PGPORT: '6544', PGUSER: 'override_user', PGDATABASE: 'override_db',
+    });
+    expect(exported.status, exported.stderr).toBe(0);
+    const log = readFileSync(stubLog, 'utf8');
+    expect(log).toContain('pg_dump -h other.example.invalid -p 6544 -U override_user -d override_db');
+    expect(log).not.toContain('docker');
+  });
+
+  it('fails before database commands when the configuration parser is missing', () => {
+    rmSync(join(root, 'scripts', 'lib', 'envFile.cjs'));
+    const result = run(['export', 'no-config'], 'ok');
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Could not load database configuration');
+    expect(readFileSync(stubLog, 'utf8')).toBe('');
+    expect(dumps()).toEqual([]);
+  });
+
+  it('provisions the saved native endpoint even when Docker is the selected runtime', () => {
+    writeFileSync(envFile, 'PGMODE=docker\nPGHOST=db.example.invalid\nPGPORT=5433\nPGPORT_DOCKER=5599\n');
+    const result = run(['setup-native'], 'ok', { PGHOST: undefined, READY_PORTS: '5433' });
+    expect(result.status, result.stderr).toBe(0);
+    expect(psqlCalls().length).toBeGreaterThanOrEqual(6);
+    expect(psqlCalls().every(call => call.includes('-h db.example.invalid -p 5433 '))).toBe(true);
+  });
+
+  it('uses the saved Docker port for host imports while retaining container-only exports', () => {
+    writeFileSync(envFile, 'PGMODE="docker"\nPGPORT=5433\nPGPORT_DOCKER=5599\n');
+    const exported = run(['export', 'docker-saved'], 'ok');
+    expect(exported.status, exported.stderr).toBe(0);
+    const dump = join(dumpDir, 'portos-docker-saved.sql');
+    expect(run(['import', dump], 'ok').status).toBe(0);
+    const log = readFileSync(stubLog, 'utf8');
+    expect(log).toContain('portos-db pg_dump');
+    expect(log).toContain('psql -h 127.0.0.1 -p 5599');
+  });
+
   // Regression: saved Docker mode formerly overrode a caller's explicit host
   // port, so a coordinator could silently snapshot the wrong database.
   it.each(['docker', 'native'])('binds export and transactional import to explicit endpoints in saved %s mode', (mode) => {
@@ -217,6 +275,7 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     const commands = ['dirname', 'mkdir', 'mktemp', 'rm', 'sed', 'grep', 'cut', 'tr'];
     const isolated = join(root, 'isolated');
     mkdirSync(isolated);
+    symlinkSync(process.execPath, join(isolated, 'node'));
     writeStub(isolated, 'uname', '#!/bin/sh\necho Linux\n');
     for (const name of commands) {
       const binary = ['/usr/bin', '/bin'].map(dir => join(dir, name)).find(existsSync);
