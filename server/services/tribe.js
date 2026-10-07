@@ -16,7 +16,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureSchema, query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { cadenceStatus, DEFAULT_RING_CADENCE } from '../lib/tribeCadence.js';
-import { buildPersonMatchIndex, matchPeople, normalizeIdentifier, normalizePhone } from '../lib/tribeMatch.js';
+import { buildPersonMatchIndex, calendarTouchpointDedupeKey, matchPeople, normalizeIdentifier, normalizePhone } from '../lib/tribeMatch.js';
 import { toUserDayKey } from '../lib/activeDays.js';
 import { getUserTimezone } from './userTimezone.js';
 import * as calendarSync from './calendarSync.js';
@@ -450,12 +450,18 @@ export async function createTouchpoint(personId, data = {}) {
   const happenedAt = data.happenedAt || new Date().toISOString();
   const contactDate = data.localDate || happenedAt;
 
+  const dedupeKey = data.dedupeKey || null;
   return withTransaction(async (client) => {
+    // With a dedupeKey the insert is idempotent per person (partial unique index
+    // idx_tribe_touchpoints_dedupe): a retry, a double-click, or an event the
+    // calendar sync already auto-logged returns the existing row untouched.
     const result = await client.query(
       `INSERT INTO tribe_touchpoints (
         id, person_id, happened_at, channel, summary, source,
-        calendar_account_id, calendar_event_id, metadata
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        calendar_account_id, calendar_event_id, dedupe_key, metadata
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      ON CONFLICT (person_id, dedupe_key) WHERE dedupe_key IS NOT NULL
+      DO NOTHING
       RETURNING *`,
       [
         data.id || uuidv4(),
@@ -466,9 +472,17 @@ export async function createTouchpoint(personId, data = {}) {
         data.source || 'user',
         data.calendarAccountId || null,
         data.calendarEventId || null,
+        dedupeKey,
         data.metadata || {},
       ],
     );
+    if (!result.rows[0]) {
+      const existing = await client.query(
+        'SELECT * FROM tribe_touchpoints WHERE person_id = $1 AND dedupe_key = $2',
+        [personId, dedupeKey],
+      );
+      return rowToTouchpoint(existing.rows[0]);
+    }
 
     await client.query(
       `UPDATE tribe_people
@@ -499,6 +513,7 @@ export async function createCalendarTouchpoint(personId, { accountId, eventId, s
     source: 'calendar',
     calendarAccountId: accountId,
     calendarEventId: eventId,
+    dedupeKey: calendarTouchpointDedupeKey(accountId, event),
     metadata: {
       title: event.title,
       description: event.description,

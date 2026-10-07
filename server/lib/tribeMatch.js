@@ -211,3 +211,16 @@ export function classifyNetworkHandle(value) {
 export function resolveLinkedPersonId(tribePersonId, tribePersonDeleted) {
   return tribePersonId && !tribePersonDeleted ? tribePersonId : null;
 }
+
+/**
+ * The idempotency key a calendar event carries on `tribe_touchpoints.dedupe_key`.
+ * ONE builder for both producers — the sync auto-logger (`calendarSync.js`) and
+ * the manual "log this event" route (`tribe.createCalendarTouchpoint`) — so a
+ * hand-logged event and a synced one collide on the unique index instead of
+ * both inserting. Keyed on the provider id when present, matching the cache's
+ * `externalId || id` convention. Returns null when the event has no usable id.
+ */
+export function calendarTouchpointDedupeKey(accountId, event) {
+  const eventKey = event?.externalId || event?.id;
+  return eventKey ? `cal:${accountId}:${eventKey}` : null;
+}
