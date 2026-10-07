@@ -93,14 +93,16 @@ describe('composition-document render plan', () => {
     const id = await documentProject();
     await importDocumentTemplate(id);
     encodeDocumentComposition.mockClear();
+    const visibility = [{ sceneId: 'example-shot', atSec: 1, status: 'measured', visibleFraction: 0.2, hiddenFraction: 0.8, measuredFraction: 1 }];
+    encodeDocumentComposition.mockResolvedValueOnce({ width: 1080, height: 1920, fps: 24, boundaryTimes: [0], footageVisibility: visibility });
     const { excerptId } = await startExcerptRender(id, { startSec: 1, endSec: 4, aspect: '9:16', fade: true });
     await vi.waitFor(async () => expect((await projects.getProject(id)).excerpts.find((e) => e.id === excerptId).status).toBe('complete'));
     const call = encodeDocumentComposition.mock.calls.at(-1)[0];
-    expect(call).toMatchObject({ fade: true, windowStart: 1, windowEnd: 4, plan: { width: 1080, height: 1920 } });
+    expect(call).toMatchObject({ fade: true, collectFootageVisibility: true, windowStart: 1, windowEnd: 4, plan: { width: 1080, height: 1920 } });
     expect(call.project.treatment.brief.aspectRatio).toBe('9:16');
     const stored = await projects.getProject(id);
     expect(stored.treatment?.brief?.aspectRatio ?? '16:9').toBe('16:9');
-    expect(stored.excerpts.find((e) => e.id === excerptId)).toMatchObject({ aspect: '9:16', fade: true, width: 1080, height: 1920 });
+    expect(stored.excerpts.find((e) => e.id === excerptId)).toMatchObject({ aspect: '9:16', fade: true, width: 1080, height: 1920, footageVisibility: visibility });
   });
 
   it('refuses a social cut of a footage project, which has no frame of its own to re-lay-out (#9280)', async () => {

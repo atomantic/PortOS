@@ -15,7 +15,7 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../li
 vi.mock('../htmlComposition/encode.js', async (importOriginal) => ({ ...(await importOriginal()), encodeComposition: vi.fn(async () => { throw new Error('stop at encoder'); }) }));
 const { encodeComposition } = await import('../htmlComposition/encode.js');
 
-const { browser } = vi.hoisted(() => ({ browser: { seen: null, contract: null } }));
+const { browser } = vi.hoisted(() => ({ browser: { seen: null, contract: null, visibility: null, sampleTimes: [] } }));
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-mv-document-stage-'),
 }));
@@ -24,6 +24,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 vi.mock('../../lib/ffmpeg.js', async (importOriginal) => ({
   ...(await importOriginal()),
   findFfmpeg: async () => 'ffmpeg',
+  runFfmpegProcess: async () => ({ ok: true }),
 }));
 // Capture the frozen job folder the page would open, then stop the render.
 vi.mock('../htmlComposition/browser.js', () => ({
@@ -39,6 +40,7 @@ vi.mock('../htmlComposition/browser.js', () => ({
     browser.seen = { directory, data: window.PORTOS_MV, media, song: JSON.parse(await read(joinPath(dir, 'song.json'), 'utf8')) };
     return {
       async evaluate(expression) {
+        if (expression.includes('reviewFootage')) { browser.sampleTimes.push(Number(/c.seek\(([^,]+)/.exec(expression)[1])); return browser.visibility; }
         if (expression.includes('canPlayType')) return 'probably';
         if (browser.contract) return browser.contract;
         throw new Error('stop after staging');
@@ -54,7 +56,7 @@ const { PATHS } = await import('../../lib/paths.js');
 const { encodeDocumentComposition, documentRenderClock } = await import('./documentRender.js');
 
 afterAll(() => cleanupTempDataRoots());
-beforeEach(() => { browser.seen = null; browser.contract = null; });
+beforeEach(() => { browser.seen = null; browser.contract = null; browser.visibility = null; browser.sampleTimes = []; });
 
 const performanceTake = (assetId) => ({ takeId: 'mvt-p', kind: 'video', assetId, status: 'candidate', shotInstruction: { shotMode: 'performance', edit: { inSec: 0.5, outSec: 3.5 } } });
 
@@ -148,5 +150,22 @@ it('explains fractional document frames before encoding without changing the imp
     context: { durationSec: 10.01, fps: 24, frames: 240.24 },
   });
   expect(browser.contract.durationSec).toBe(10.01);
+  expect(await scratchEntries()).toEqual([]);
+});
+
+
+it('carries measured footage samples and explicit missing hooks from the staged render', async () => {
+  const { project, plan } = await fixture();
+  browser.contract = { durationSec: 30, fps: 24, width: 1920, height: 1080, layout: false };
+  browser.visibility = { sceneId: 'a', visibleFraction: 0.2, hiddenFraction: 0.8, measuredFraction: 1 };
+  encodeComposition.mockResolvedValueOnce({});
+  const result = await encodeDocumentComposition({ project, plan, jobId: 'visibility', audioPath: 'synthetic.wav',
+    outputPath: join(PATHS.videos, 'visibility.mp4'), windowStart: 1, windowEnd: 10, collectFootageVisibility: true });
+  expect(result.footageVisibility).toHaveLength(6); // still/card shots excluded
+  expect(result.footageVisibility.slice(0, 3)).toEqual(browser.sampleTimes.slice(0, 3).map(at => ({
+    sceneId: 'a', atSec: Math.round((at - 1) * 1000) / 1000, status: 'measured', visibleFraction: 0.2, hiddenFraction: 0.8, measuredFraction: 1,
+  })));
+  expect(result.footageVisibility.slice(3)).toEqual(expect.arrayContaining([expect.objectContaining({ sceneId: 'd', status: 'unverified' })]));
+  expect(browser.sampleTimes.every(at => at >= 1 && at < 10)).toBe(true);
   expect(await scratchEntries()).toEqual([]);
 });
