@@ -25,6 +25,9 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   };
 });
 
+const resolvePublicUrl = vi.hoisted(() => vi.fn());
+vi.mock('../../lib/safeUrlFetch.js', () => ({ resolvePublicUrl }));
+
 const downloadPinImage = vi.hoisted(() => vi.fn());
 vi.mock('./pinterest.js', () => ({ downloadPinImage }));
 
@@ -63,6 +66,24 @@ beforeEach(() => {
 });
 
 describe('importPrivatePinterestBoard', () => {
+  it('opens the resolved canonical board for a share link and imports its pins', async () => {
+    resolvePublicUrl.mockResolvedValue(BOARD_URL + '?invite_code=example');
+    mockReadableBoard({ boardTitle: 'Example Board', loginRequired: false, expectedCount: 1, pins: [firstPin] });
+    expect(await importPrivatePinterestBoard('mb-example', { url: 'https://pin.it/example' }))
+      .toMatchObject({ added: 1, found: 1 });
+    expect(browser.navigateToUrlPinned).toHaveBeenCalledWith(BOARD_URL, expect.anything());
+    expect(store.appendImportedItems.mock.calls[0][1][0]).toMatchObject({ source: firstPin.source });
+  });
+
+  it.each(['https://www.pinterest.com/pin/123/', 'https://example.com/example/board/'])
+    ('rejects a non-board share destination before opening the browser: %s', async (destination) => {
+      resolvePublicUrl.mockResolvedValue(destination);
+      await expect(importPrivatePinterestBoard('mb-example', { url: 'https://pin.it/example' }))
+        .rejects.toMatchObject({ status: 400, code: 'INVALID_PINTEREST_URL' });
+      expect(browser.navigateToUrlPinned).not.toHaveBeenCalled();
+      expect(store.appendImportedItems).not.toHaveBeenCalled();
+    });
+
   it('reads the requested board through pinned CDP and appends re-hosted, source-deduped images', async () => {
     store.getBoard.mockResolvedValue({
       id: 'mb-example',

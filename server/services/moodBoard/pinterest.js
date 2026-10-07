@@ -26,6 +26,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import { MAX_ITEMS_PER_BOARD } from './logic.js';
 import * as store from './db.js';
+import { resolvePinterestBoardUrl } from './pinterestUrl.js';
 
 const FEED_TIMEOUT_MS = 20000;
 const IMAGE_TIMEOUT_MS = 20000;
@@ -68,7 +69,7 @@ export async function downloadPinImage({ pinUrl, imageUrl, imageUrlOriginal }) {
  * normalizes the URL (throws 400 on a non-Pinterest host) and stores the link.
  */
 export async function linkPinterestBoard(boardId, { url }) {
-  const { feedUrl, boardUrl, isSection } = normalizePinterestFeedUrl(url);
+  const { feedUrl, boardUrl, isSection } = await resolvePinterestBoardUrl(url);
   const board = await store.setPinterestLink(boardId, { feedUrl, boardUrl });
   emitRecordUpdated('moodBoard', boardId);
   console.log(`📌 Pinterest link set: board ${boardId} → ${feedUrl}${isSection ? ' (section URL — feed covers the whole board; Pinterest has no per-section RSS)' : ''}`);

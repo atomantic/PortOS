@@ -20,7 +20,7 @@ vi.mock('./fetchWithTimeout.js', () => ({
 
 const {
   isPublicHttpUrlSafe, assertPublicHttpUrl, fetchPublicText, fetchPublicBinary, buildPinnedLookup,
-  buildPinnedDispatcher,
+  buildPinnedDispatcher, resolvePublicUrl,
 } = await import('./safeUrlFetch.js');
 
 const res = ({ ok = true, status = 200, headers = {}, text = '', body = new ArrayBuffer(0) } = {}) => ({
@@ -283,5 +283,62 @@ describe('fetchPublicBinary', () => {
     fetchMock.mockResolvedValue(r);
     expect(await fetchPublicBinary('https://evil.example.com/x', { maxBytes: 1024 })).toBeNull();
     expect(r.body._cancel).toHaveBeenCalled(); // stream was cancelled rather than fully read
+  });
+});
+
+
+describe('resolvePublicUrl', () => {
+  it('resolves a two-redirect share chain, pins each hop and cancels every body', async () => {
+    const cancel = vi.fn().mockResolvedValue();
+    fetchMock.mockResolvedValueOnce({ ...res({ status: 302, ok: false, headers: { location: 'https://api.pinterest.com/url_shortener/example/redirect/' } }), body: { cancel } })
+      .mockResolvedValueOnce({ ...res({ status: 302, ok: false, headers: { location: 'https://www.pinterest.com/example/board/?invite_code=example' } }), body: { cancel } })
+      .mockResolvedValueOnce({ ...res(), body: { cancel } });
+    expect(await resolvePublicUrl('https://pin.it/example', { timeoutMs: 8000, blockPrivate: true }))
+      .toBe('https://www.pinterest.com/example/board/?invite_code=example');
+    expect(lookupMock.mock.calls.map(([host]) => host)).toEqual(['pin.it', 'api.pinterest.com', 'www.pinterest.com']);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    for (const [, options, timeout] of fetchMock.mock.calls) {
+      expect(options).toMatchObject({ redirect: 'manual', dispatcher: expect.anything() });
+      expect(timeout).toBeLessThanOrEqual(8000);
+    }
+    expect(cancel).toHaveBeenCalledTimes(3);
+  });
+
+  it('stops before another fetch when the shared timeout budget expires', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValueOnce(100).mockReturnValue(900);
+    fetchMock.mockResolvedValue(res({ status: 302, ok: false, headers: { location: '/next' } }));
+    try {
+      expect(await resolvePublicUrl('https://pin.it/example', { timeoutMs: 800 })).toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][2]).toBe(700);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('refuses a redirect outside the caller allow-list before resolving or fetching it', async () => {
+    fetchMock.mockResolvedValue(res({ status: 302, ok: false, headers: { location: 'https://example.com/board' } }));
+    expect(await resolvePublicUrl('https://pin.it/example', { allowUrl: (url) => url.hostname === 'pin.it' })).toBeNull();
+    expect(lookupMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a redirect whose DNS resolves private under strict policy', async () => {
+    lookupMock.mockResolvedValueOnce({ address: '93.184.216.34' }).mockResolvedValueOnce({ address: '192.168.1.1' });
+    fetchMock.mockResolvedValue(res({ status: 302, ok: false, headers: { location: 'https://www.pinterest.com/example/board/' } }));
+    expect(await resolvePublicUrl('https://pin.it/example', { blockPrivate: true })).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds redirect loops and fails closed on missing/malformed locations and network errors', async () => {
+    fetchMock.mockResolvedValue(res({ status: 302, ok: false, headers: { location: '/loop' } }));
+    expect(await resolvePublicUrl('https://pin.it/example', { maxRedirects: 2 })).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    fetchMock.mockResolvedValue(res({ status: 302, ok: false }));
+    expect(await resolvePublicUrl('https://pin.it/example')).toBeNull();
+    fetchMock.mockResolvedValue(res({ status: 302, ok: false, headers: { location: 'http://[' } }));
+    expect(await resolvePublicUrl('https://pin.it/example')).toBeNull();
+    fetchMock.mockRejectedValue(new Error('network failure'));
+    expect(await resolvePublicUrl('https://pin.it/example')).toBeNull();
   });
 });
