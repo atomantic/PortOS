@@ -518,6 +518,11 @@ function setupCosEventForwarding() {
   cosEvents.on('memory:created', (data) => broadcastToCos('cos:memory:created', data));
   cosEvents.on('memory:updated', (data) => broadcastToCos('cos:memory:updated', data));
   cosEvents.on('memory:deleted', (data) => broadcastToCos('cos:memory:deleted', data));
+  // Approval/rejection also changes the active collection. Use the existing
+  // identity invalidation rather than forwarding the full approved record.
+  for (const event of ['memory:approved', 'memory:rejected']) {
+    cosEvents.on(event, ({ id }) => broadcastToCos('cos:memory:updated', { id }));
+  }
   cosEvents.on('memory:extracted', (data) => broadcastToCos('cos:memory:extracted', data));
   cosEvents.on('memory:approval-needed', (data) => broadcastToCos('cos:memory:approval-needed', data));
 

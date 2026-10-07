@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import * as api from '../../../services/api';
+import { useSocketResource } from '../../../hooks/useSocketResource';
 import { usePagedCollection } from '../../../hooks/usePagedCollection';
 import { formatCount, formatDateTime } from '../../../utils/formatters';
 import InfiniteScrollFooter from '../../ui/InfiniteScrollFooter';
+
+const HISTORY_EVENTS = ['cos:memory:updated', 'cos:memory:deleted'];
 
 export default function MemoryHistory({ memory }) {
   const fetchPage = useCallback(async ({ cursor, signal }) => {
@@ -13,6 +16,10 @@ export default function MemoryHistory({ memory }) {
       nextCursor: versions.length === 20 ? offset + versions.length : null };
   }, [memory.id]);
   const page = usePagedCollection(fetchPage);
+  useSocketResource(() => page.refreshFirst(), {
+    namespace: 'cos', events: HISTORY_EVENTS, resourceKey: memory.id,
+    immediate: false, matchesEvent: payload => payload?.id === memory.id
+  });
   const [searchParams, setSearchParams] = useSearchParams();
   const versionParam = searchParams.get('version');
   const parsedVersion = Number(versionParam);

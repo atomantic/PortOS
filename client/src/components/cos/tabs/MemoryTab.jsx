@@ -4,10 +4,9 @@ import {Trash2, X, Check, XCircle, Pencil, AlertTriangle, Brain, Bot} from 'luci
 import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
 import * as api from '../../../services/api';
-import socket from '../../../services/socket';
-import { useSocketSubscription } from '../../../hooks/useSocketSubscription';
+import { useSocketResource } from '../../../hooks/useSocketResource';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
-import { getAppName, formatDateNumeric, formatPercent } from '../../../utils/formatters';
+import { getAppName, formatCount, formatDateNumeric, formatPercent } from '../../../utils/formatters';
 import MemoryTimeline from './MemoryTimeline';
 // Lazy: MemoryGraph pulls the three.js stack; load it only when rendered.
 const MemoryGraph = lazy(() => import('./MemoryGraph'));
@@ -19,14 +18,14 @@ import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import CopyableId from '../../ui/CopyableId';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 
+const MEMORY_EVENTS = ['cos:memory:created', 'cos:memory:updated', 'cos:memory:deleted', 'cos:memory:extracted'];
+const QUEUE_EVENTS = [...MEMORY_EVENTS, 'cos:memory:approval-needed'];
+const STATUS_EVENTS = [];
+
 export default function MemoryTab({ apps = [] }) {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [memories, setMemories] = useState([]);
-  const [pendingMemories, setPendingMemories] = useState([]);
-  const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState(null);
+  const [submittedSearch, setSubmittedSearch] = useState('');
   const [filters, setFilters] = useState({ types: [] });
   const [sourceFilter, setSourceFilter] = useState('all'); // 'all' | 'cos' | 'brain'
 
@@ -38,8 +37,6 @@ export default function MemoryTab({ apps = [] }) {
       return next;
     }, { replace: true });
   }, [setSearchParams]);
-  const [embeddingStatus, setEmbeddingStatus] = useState(null);
-  const [backendStatus, setBackendStatus] = useState(null);
   // /cos/memory/:id deep-links one memory (e.g. from an agent card's "Memories
   // used"). The shared `cos/:tab/:agentId` route names that segment `agentId`.
   const { agentId: linkedMemoryId } = useParams();
@@ -60,7 +57,9 @@ export default function MemoryTab({ apps = [] }) {
   // Load current embedding config from CoS config
   useEffect(() => {
     if (embeddingConfigLoaded) return;
+    let active = true;
     api.getCosConfig().then(cfg => {
+      if (!active) return;
       if (cfg?.embeddingProviderId) {
         setEmbeddingProviderId(cfg.embeddingProviderId);
         setProviderHook(cfg.embeddingProviderId);
@@ -70,26 +69,54 @@ export default function MemoryTab({ apps = [] }) {
         setModelHook(cfg.embeddingModel);
       }
       setEmbeddingConfigLoaded(true);
-    }).catch(() => setEmbeddingConfigLoaded(true));
+    }).catch(() => { if (active) setEmbeddingConfigLoaded(true); });
+    return () => { active = false; };
   }, [embeddingConfigLoaded, setProviderHook, setModelHook]);
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    const appId = sourceFilter === 'brain' ? 'brain' : sourceFilter === 'cos' ? '__not_brain' : undefined;
-    const [memoriesRes, pendingRes, statsRes, embRes, backendRes] = await Promise.all([
-      api.getMemories({ limit: 100, ...filters, appId }).catch(() => ({ memories: [] })),
-      api.getMemories({ status: 'pending_approval', limit: 50, appId }).catch(() => ({ memories: [] })),
-      api.getMemoryStats().catch(() => null),
-      api.getEmbeddingStatus().catch(() => null),
-      api.getMemoryBackendStatus().catch(() => null)
+  const appId = sourceFilter === 'brain' ? 'brain' : sourceFilter === 'cos' ? '__not_brain' : undefined;
+  const queryKey = JSON.stringify([sourceFilter, filters, submittedSearch]);
+  const list = useSocketResource(async ({ signal }) => {
+    const result = submittedSearch
+      ? await api.searchMemories(submittedSearch, { limit: 20, appId }, { signal, silent: true })
+      : await api.getMemories({ limit: 100, ...filters, appId }, { signal, silent: true });
+    if (!Array.isArray(result?.memories)) throw new Error('Invalid memory list response');
+    return result.memories;
+  }, { namespace: 'cos', events: MEMORY_EVENTS, resourceKey: queryKey, enabled: view !== 'graph' });
+
+  const queue = useSocketResource(async ({ signal }) => {
+    const pending = await api.getMemories({ status: 'pending_approval', limit: 50, appId }, { signal, silent: true });
+    if (!Array.isArray(pending?.memories)) throw new Error('Invalid pending memory response');
+    return pending.memories;
+  }, { namespace: 'cos', events: QUEUE_EVENTS, resourceKey: sourceFilter });
+  // Counts and pending approvals fail independently: a stats outage must never
+  // discard a usable approval queue (or vice versa).
+  const counts = useSocketResource(
+    async ({ signal }) => {
+      const result = await api.getMemoryStats({ signal, silent: true });
+      if (!Number.isFinite(result?.active)) throw new Error('Invalid memory counts response');
+      return result;
+    },
+    { namespace: 'cos', events: QUEUE_EVENTS }
+  );
+
+  const status = useSocketResource(async () => {
+    const [embeddingStatus, backendStatus] = await Promise.all([
+      api.getEmbeddingStatus(), api.getMemoryBackendStatus()
     ]);
-    setMemories(memoriesRes.memories || []);
-    setPendingMemories(pendingRes.memories || []);
-    setStats(statsRes);
-    setEmbeddingStatus(embRes);
-    setBackendStatus(backendRes);
-    setLoading(false);
-  }, [filters, sourceFilter]);
+    return { embeddingStatus, backendStatus };
+  }, { events: STATUS_EVENTS });
+
+  const memories = list.data || [];
+  const pendingMemories = queue.data || [];
+  const stats = counts.data;
+  const embeddingStatus = status.data?.embeddingStatus;
+  const backendStatus = status.data?.backendStatus;
+  const fetchData = useCallback(() => {
+    list.refetch();
+    queue.refetch();
+    counts.refetch();
+    status.refetch();
+  }, [list.refetch, queue.refetch, counts.refetch, status.refetch]);
 
   const [actionInFlight, setActionInFlight] = useState(null);
   const actionRef = useRef(false);
@@ -106,59 +133,36 @@ export default function MemoryTab({ apps = [] }) {
     setActionInFlight(null);
     if (!result) return;
     toast.success(`Memory ${label}`);
-    setPendingMemories(prev => prev.filter(m => m.id !== id));
-    setStats(prev => prev ? {
+    queue.updateData(prev => prev?.filter(m => m.id !== id));
+    counts.updateData(prev => prev ? {
       ...prev,
       pendingApproval: Math.max(0, (prev.pendingApproval || 0) - 1),
       ...(updateStats ? updateStats(prev) : {})
     } : prev);
+    list.refetch();
+    queue.refetch();
+    counts.refetch();
   };
 
   const handleApprove = (id) => handleMemoryAction(id, api.approveMemory, 'approved', (prev) => ({ active: (prev.active || 0) + 1 }));
   const handleReject = (id) => handleMemoryAction(id, api.rejectMemory, 'rejected', () => ({}));
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
-  // New approvals are pushed by the server (`cos:memory:approval-needed`); refresh
-  // only the pending queue + counts so an open tab never flashes its full loading
-  // state, and reconcile after a reconnect that may have dropped an event.
-  const refreshPending = useCallback(async () => {
-    const appId = sourceFilter === 'brain' ? 'brain' : sourceFilter === 'cos' ? '__not_brain' : undefined;
-    const [pendingRes, statsRes] = await Promise.all([
-      api.getMemories({ status: 'pending_approval', limit: 50, appId }).catch(() => null),
-      api.getMemoryStats().catch(() => null)
-    ]);
-    if (pendingRes) setPendingMemories(pendingRes.memories || []);
-    if (statsRes) setStats(statsRes);
-  }, [sourceFilter]);
-
-  useSocketSubscription('cos', { onResubscribe: refreshPending });
-  useEffect(() => {
-    socket.on('cos:memory:approval-needed', refreshPending);
-    return () => socket.off('cos:memory:approval-needed', refreshPending);
-  }, [refreshPending]);
-
-  const handleSearch = async () => {
-    if (!searchQuery.trim()) {
-      setSearchResults(null);
-      return;
-    }
-    setLoading(true);
-    const appId = sourceFilter === 'brain' ? 'brain' : sourceFilter === 'cos' ? '__not_brain' : undefined;
-    const results = await api.searchMemories(searchQuery, { limit: 20, appId }).catch(() => ({ memories: [] }));
-    setSearchResults(results.memories || []);
-    setLoading(false);
+  const handleSearch = () => {
+    const query = searchQuery.trim();
+    if (query === submittedSearch) list.refetch();
+    else setSubmittedSearch(query);
   };
 
   const handleDelete = async (id) => {
     await api.deleteMemory(id);
     toast.success('Memory archived');
-    fetchData();
+    list.updateData(prev => prev?.filter(memory => memory.id !== id));
+    list.refetch();
+    queue.refetch();
+    counts.refetch();
   };
 
-  const displayMemories = searchResults || memories;
+  const displayMemories = memories;
 
   return (
     <div className="space-y-6">
@@ -189,7 +193,7 @@ export default function MemoryTab({ apps = [] }) {
         <div>
           <h3 className="text-lg font-semibold text-white">Memory System</h3>
           <p className="text-sm text-gray-500">
-            {stats?.active || 0} active memories
+            {formatCount(stats?.active)} active memories
             {stats?.pendingApproval > 0 && <span className="text-yellow-400"> * {stats.pendingApproval} pending</span>}
             {embeddingStatus?.available ? ' * Embeddings online' : ' * Embeddings offline'}
           </p>
@@ -226,9 +230,9 @@ export default function MemoryTab({ apps = [] }) {
         >
           Search
         </button>
-        {searchResults && (
+        {submittedSearch && (
           <button
-            onClick={() => { setSearchResults(null); setSearchQuery(''); }}
+            onClick={() => { setSubmittedSearch(''); setSearchQuery(''); }}
             aria-label="Close"
             className="px-2 py-1.5 flex items-center justify-center bg-port-border text-gray-400 hover:text-white rounded-lg transition-colors min-h-[44px] min-w-[44px]"
           >
@@ -358,11 +362,19 @@ export default function MemoryTab({ apps = [] }) {
         </div>
       )}
 
+      {(list.error || queue.error || counts.error || status.error) && (
+        <Banner tone="warning" title="Unable to refresh memories" actions={<button onClick={fetchData}>Retry</button>}>
+          Existing rows are retained. Retry to reconcile the latest changes.
+        </Banner>
+      )}
+
       {/* Content */}
-      {loading ? (
+      {view !== 'graph' && list.loading ? (
         <div className="flex items-center justify-center py-12">
           <BrailleSpinner text="Loading" />
         </div>
+      ) : view !== 'graph' && list.error && list.data == null ? (
+        <p role="alert" className="text-port-text-muted">Memory list unavailable.</p>
       ) : view === 'list' ? (
         <div className="space-y-3">
           {displayMemories.length === 0 ? (
@@ -516,7 +528,9 @@ export default function MemoryTab({ apps = [] }) {
           key={openMemory.id}
           memory={openMemory}
           apps={apps}
-          onSave={() => {
+          onSave={updated => {
+            list.updateData(prev => prev?.map(memory => memory.id === updated.id ? updated : memory));
+            queue.updateData(prev => prev?.map(memory => memory.id === updated.id ? updated : memory));
             closeMemory();
             fetchData();
           }}

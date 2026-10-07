@@ -4,12 +4,17 @@ import toast from '../../ui/Toast';
 import Modal from '../../ui/Modal';
 import { FormField } from '../../ui/FormField';
 import * as api from '../../../services/api';
+import useMounted from '../../../hooks/useMounted';
+import { useSocketResource } from '../../../hooks/useSocketResource';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
 import { getAppName, formatPercent } from '../../../utils/formatters';
 import MemoryHistory from './MemoryHistory';
 import MemoryRunsUsedBy from './MemoryRunsUsedBy';
 
+const MEMORY_EVENTS = ['cos:memory:updated', 'cos:memory:deleted'];
+
 export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
+  const mounted = useMounted();
   const [formData, setFormData] = useState({
     content: memory.content || '',
     summary: memory.summary || '',
@@ -22,37 +27,39 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
   });
   const [newTag, setNewTag] = useState('');
   const [saving, setSaving] = useState(false);
-  const [fullMemory, setFullMemory] = useState(memory.content ? memory : null);
+  const [fullMemory, setFullMemory] = useState(memory.content && Number.isInteger(memory.version) && memory.version > 0 ? memory : null);
   const [changeReason, setChangeReason] = useState('');
-  const [loadError, setLoadError] = useState(null);
-
-  // Fetch full memory data if we only have index data
+  const latest = useSocketResource(
+    async ({ signal }) => {
+      const result = await api.getMemory(memory.id, { signal, silent: true });
+      if (result?.id !== memory.id || !Number.isInteger(result.version) || result.version < 1) throw new Error('Invalid memory revision response');
+      return result;
+    },
+    {
+      namespace: 'cos', events: MEMORY_EVENTS, resourceKey: memory.id,
+      matchesEvent: payload => payload?.id === memory.id
+    }
+  );
+  // Hydrate only once per editor identity. Later resource reads update revision
+  // metadata/history, never the draft or its expectedVersion.
   useEffect(() => {
-    let active = true;
-    const fetchFullMemory = async () => {
-      if (!memory.content && memory.id) {
-        const full = await api.getMemory(memory.id, { silent: true }).catch(err => {
-          if (active) setLoadError(err.message || 'Unable to load memory');
-          return null;
-        });
-        if (full && active) {
-          setFullMemory(full);
-          setFormData({
-            content: full.content || '',
-            summary: full.summary || '',
-            type: full.type || 'observation',
-            category: full.category || 'other',
-            tags: full.tags || [],
-            sourceAppId: full.sourceAppId || '',
-            importance: full.importance || 0.5,
-            confidence: full.confidence || 0.8
-          });
-        }
-      }
-    };
-    fetchFullMemory();
-    return () => { active = false; };
-  }, [memory]);
+    if (fullMemory?.id === memory.id || latest.data?.id !== memory.id) return;
+    const full = latest.data;
+    setFullMemory(full);
+    setFormData({
+      content: full.content || '',
+      summary: full.summary || '',
+      type: full.type || 'observation',
+      category: full.category || 'other',
+      tags: full.tags || [],
+      sourceAppId: full.sourceAppId || '',
+      importance: full.importance ?? 0.5,
+      confidence: full.confidence ?? 0.8
+    });
+  }, [latest.data, memory.id, fullMemory]);
+  const loaded = fullMemory?.id === memory.id;
+  const newerRevision = loaded && latest.data?.version > fullMemory.version;
+  const retired = loaded && latest.data?.status === 'archived' && fullMemory.status !== 'archived';
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -78,6 +85,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
       toast.error(err.message || 'Failed to update memory');
       return null;
     });
+    if (!mounted.current) return;
     setSaving(false);
 
     if (result) {
@@ -131,6 +139,12 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {latest.error && <p role="alert" className="text-port-error">{latest.error.message || 'Unable to refresh memory'} <button type="button" onClick={latest.refetch}>Retry memory</button></p>}
+          {!loaded && !latest.error && <p role="status">Loading memory…</p>}
+          {(newerRevision || retired) && <p role="status" className="text-port-warning">
+            {retired ? 'This memory has been retired.' : 'A newer revision exists.'} Your draft and loaded version are preserved. Close and reopen to load the latest revision.
+          </p>}
+          <fieldset disabled={!loaded || saving} hidden={!loaded} className="min-w-0 space-y-4">
           {/* Type */}
           <div>
             <span className="block text-sm text-gray-400 mb-2">Type</span>
@@ -152,8 +166,6 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
             </div>
           </div>
 
-          {loadError && <p role="alert" className="text-port-error">{loadError}</p>}
-          {!fullMemory && !loadError && <p role="status">Loading memory…</p>}
 
           {/* Content */}
           <FormField
@@ -317,7 +329,8 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
             <input value={changeReason} onChange={e => setChangeReason(e.target.value)}
               maxLength={2000} className="w-full rounded-lg border border-port-border bg-port-bg px-3 py-2" />
           </FormField>
-          {fullMemory && <MemoryHistory memory={fullMemory} />}
+          {loaded && <MemoryHistory memory={latest.data || fullMemory} />}
+          </fieldset>
 
           {/* Actions */}
           <div className="flex flex-col-reverse sm:flex-row justify-end gap-2 pt-4">
