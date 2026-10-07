@@ -3,6 +3,7 @@ import { POLLUTING_KEYS } from './objects.js';
 import { canonicalSnapshotChecksum } from './snapshotChecksum.js';
 
 export const DEEP_AUDIT_VERSION = 1;
+export const DEEP_AUDIT_CONTRACT_VERSION = 2;
 export const DEEP_AUDIT_PASSES = Object.freeze(['static', 'trace', 'adversarial', 'challenge']);
 export const DEEP_AUDIT_SCENARIOS = Object.freeze(['normal', 'failure', 'concurrency-recovery']);
 const text = z.string().trim().min(1).max(12000);
@@ -185,11 +186,16 @@ export function refreshDeepAuditScope(ledger, scope) {
 }
 
 export function deepAuditInstructions({ ledger, attempt, ledgerPath, reportPath }) {
-  return `## Deep audit coverage contract v${DEEP_AUDIT_VERSION} — highest-priority audit scope
+  return `## Deep audit coverage contract v${DEEP_AUDIT_CONTRACT_VERSION} — highest-priority audit scope
 This overrides ALL bounded-slice, one-finding, five-findings, high-score and early-stop discovery instructions in saved/custom/legacy prompts and completion templates. Delivery mode stays ${ledger.delivery}. Small coherent remediation PRs remain required; do not expand a PR to contain the findings register.
 Read the entire server-generated ledger at ${JSON.stringify(ledgerPath)}. Audit every assigned unit of pass ${attempt.pass}; follow all remaining units after finding a defect. The denominator is ${ledger.units.length} category/subsystem/scenario units, each requiring static, end-to-end trace, adversarial failure/concurrency/recovery and independent challenge evidence. Static scans alone never certify review. Inventory is a minimum: enroll discovered workflows, entry points and scenarios through additionalUnits before claiming completeness. Inaccessible evidence remains blocked.
 Assignment: attemptId=${attempt.id}; scopeHash=${ledger.scopeHash}; prerequisiteHash=${attempt.prerequisiteHash}. Do not change the ledger or self-assign another pass. Independent challenge is a separate server-assigned invocation after prior passes. Discovery passes must not edit source; only the post-fix pass may implement one coherent fix, test/review/deliver it under the selected policy. Other confirmed findings stay in the register for later small PRs. File-issues mode may file findings after substantive review; filing limits never limit discovery or the register.
 During the run, atomically replace ${JSON.stringify(reportPath)} with a JSON checkpoint after each completed unit. This file is imported on exit, failure or interruption; never wait until context is exhausted. Time/context/budget exhaustion means PARTIAL with a stopReason and remaining units, not success. Resume requires another explicit launch; never create automatic retry loops or launch other audits.
 Report shape: {version:1,scopeHash,attemptId,prerequisiteHash,pass,units:[{id,status:"evidenced"|"blocked"|"inapplicable",reason,sources:[{path,blob}],evidence:{...}}],candidates:[{id,unitId,finding,disposition:"pending"|"confirmed"|"rejected"|"duplicate"|"deferred"|"resolved",resolution,resolvedRevision?}],additionalUnits?:[{subsystem,scenario,files,reason}],stopReason${attempt.pass === 'post-fix' ? ',validationRevision:"exact tested workspace HEAD"' : ''}}. Use resolved only in post-fix with resolvedRevision matching the tested HEAD and concrete fix/test evidence in resolution. Omit optional keys rather than spelling question marks in JSON. No extra keys. Include all checkpoints from this attempt in each atomic write. Copy identities and source blob hashes from the ledger. Static reports must account for EVERY file in their unit. Required evidence fields for ${attempt.pass}: ${EVIDENCE_FIELDS[attempt.pass].join(', ')}. Every field needs concrete observations, paths and outcomes, including when no findings survive. Inapplicability needs a scenario-specific reason and evidence in every pass, including independent confirmation; inaccessible evidence is BLOCKED, not inapplicable. Never invent commands, results or inspection evidence. These are agent attestations, not independent proof that tests ran.
+Every evidence value must be a non-empty JSON string, never an array, object, number or boolean. Combine multiple observations or trace steps into one string using escaped newlines. Each text value must contain 1–12000 characters after trimming. Validate the entire checkpoint against this schema before atomically publishing it; do not coerce or invent evidence to satisfy validation.
+Checkpoint JSON schema (authoritative field types and limits):
+\`\`\`json
+${JSON.stringify(z.toJSONSchema(deepAuditReportSchema))}
+\`\`\`
 Keep all candidates in the register, triage every one, including duplicates/rejections/deferred fixes. Delivery completion is distinct from discovery and does not mean all confirmed findings were remediated. Also preserve the ordinary QUALITY_AUDIT_JSON assessment and completion sentinel; neither a score nor process success can replace this checkpoint. Report missing evidence honestly.`;
 }

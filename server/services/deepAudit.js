@@ -7,7 +7,7 @@ import { tryReadFile } from '../lib/jsonIo.js';
 import { canonicalSnapshotChecksum } from '../lib/snapshotChecksum.js';
 import { normalizeAuditTaskType, isAuditTaskType } from '../lib/auditCatalog.js';
 import { createDeepAuditLedger, assignDeepAuditAttempt, deepAuditProgress, deepAuditInstructions,
-  mergeDeepAuditReport, refreshDeepAuditScope, DEEP_AUDIT_VERSION } from '../lib/deepAudit.js';
+  mergeDeepAuditReport, refreshDeepAuditScope, DEEP_AUDIT_CONTRACT_VERSION } from '../lib/deepAudit.js';
 import { PROMPT_VERSIONS } from './taskPromptDefaults/versions.js';
 import { resolveTaskHookType } from './taskTypeHooks.js';
 
@@ -54,7 +54,7 @@ async function inventoryDeepAudit(workspacePath, { promptHash, category }) {
   const capabilities = { ...detected.capabilities, git: true, trackedFiles: files.length, submodules: files.filter(file => file.kind === 'commit').map(file => file.path) };
   return { revision, inventoryHash: canonicalSnapshotChecksum(files), files, capabilities,
     exclusions: ['Git-ignored files are outside the tracked-source inventory; required runtime evidence must be reported blocked when unavailable.'],
-    promptVersions: { contract: DEEP_AUDIT_VERSION, category: PROMPT_VERSIONS[category] ?? null }, promptHash };
+    promptVersions: { contract: DEEP_AUDIT_CONTRACT_VERSION, category: PROMPT_VERSIONS[category] ?? null }, promptHash };
 }
 
 async function mutateLedger(id, initial, mutate) {
