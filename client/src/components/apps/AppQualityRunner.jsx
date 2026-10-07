@@ -16,8 +16,8 @@ const isApplicable = category => category.applicable !== false;
 const BELOW_COMPOSITE = 'below-composite';
 const needsCheck = category => {
   if (!isApplicable(category)) return false;
-  // A stale not-applicable ruling has expired (the repo may have gained a UI), so it is re-offered.
-  if ((category.coverage === 'not-applicable' && !category.stale) || (category.coverage === 'unavailable' && category.assessedAt)) return false;
+  // Expired assessments can be retried; current applicability still gates the batch above.
+  if (!category.stale && (category.coverage === 'not-applicable' || (category.coverage === 'unavailable' && category.assessedAt))) return false;
   return category.score == null || category.stale || category.coverage !== 'broad' || category.confidence === 'low';
 };
 
@@ -60,7 +60,7 @@ export default function AppQualityRunner({ app, children }) {
       : `No applicable checks currently score below the overall composite score of ${compositeScore}/100.`
     : selection === 'all'
       ? 'No applicable checks are available.'
-      : 'No checks need evidence. Unavailable assessments and categories that do not apply to this repository are excluded.';
+      : 'No checks need evidence. Recent unavailable assessments and categories that do not apply to this repository are excluded.';
   const { data, loading, error: loadError, refetch: loadRuns, updateData: setRuns } = useSocketResource(
     () => getMaintenanceRuns({ silent: true }).then(response => response.runs.filter(entry => entry.appId === app.id)),
     { namespace: 'cos', events: RUN_EVENTS, resourceKey: app.id, matchesEvent: run => run?.appId === app.id },
