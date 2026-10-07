@@ -626,3 +626,65 @@ it('keeps rows already on the default branch when fresh evidence covers less', a
   expect(written.categories).toEqual(['privacy', 'security']);
   expect(written.measurements).toHaveLength(2);
 });
+
+it.each(['open-branch', 'lease-branch', 'lease-default'])('preserves another install’s rows during %s publication', async location => {
+  const peer = snapshot();
+  peer.measurements[0].report.category = 'privacy';
+  const peerBody = qualityFileFromWireSnapshot(peer);
+  let pushes = 0;
+  let fetches = 0;
+  const git = gitDouble({
+    fetchOrigin: vi.fn(async () => { fetches++; }),
+    execGit: vi.fn(async args => {
+      if (args[0] === 'show') {
+        const branch = String(args[1]).includes(`${QUALITY_SNAPSHOT_BRANCH}:`);
+        const hasPeer = location === 'open-branch' ? branch
+          : fetches > 1 && (location === 'lease-branch' ? branch : !branch);
+        return hasPeer ? { exitCode: 0, stdout: peerBody, stderr: '' } : missingShow;
+      }
+      if (args[0] === 'rev-parse') return { exitCode: 0, stdout: (fetches > 1 ? 'bb' : 'aa').repeat(20), stderr: '' };
+      if (args[0] === 'push' && ++pushes === 1 && location !== 'open-branch') throw new Error('! [rejected] (stale info)');
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }),
+  });
+  const deps = testDeps({ git, now: Date.parse('2026-09-20T00:00:00Z') });
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ published: true });
+  const written = JSON.parse(deps.writeFile.mock.calls.at(-1)[1]);
+  expect(written.categories).toEqual(['privacy', 'security']);
+  expect(written.measurements).toHaveLength(2);
+});
+
+it('keeps the publication window and fresh same-day evidence when coalescing an open branch', async () => {
+  const peer = snapshot(3);
+  peer.measurements[0].report.score = 99;
+  peer.measurements[1].report.category = 'privacy';
+  peer.measurements[2].report.category = 'documentation';
+  peer.measurements[2].assessedAt = '2026-08-01T10:00:00Z';
+  const git = gitDouble({ execGit: vi.fn(async args => {
+    if (args[0] === 'show' && String(args[1]).includes(`${QUALITY_SNAPSHOT_BRANCH}:`)) {
+      return { exitCode: 0, stdout: qualityFileFromWireSnapshot(peer), stderr: '' };
+    }
+    return args[0] === 'show' || args[0] === 'rev-parse' ? missingShow : { exitCode: 0, stdout: '', stderr: '' };
+  }) });
+  const deps = testDeps({ git, now: Date.parse('2026-09-20T00:00:00Z') });
+  await publishAppQualitySnapshot(app, deps);
+  const written = JSON.parse(deps.writeFile.mock.calls[0][1]);
+  expect(written.categories).toEqual(['privacy', 'security']);
+  expect(written.measurements.find(row => row[1] === 1)[2]).toBe(82);
+});
+
+it('preserves open-branch history during explicit format migration without applying the publication window', async () => {
+  const peer = snapshot();
+  peer.measurements[0].report.category = 'privacy';
+  peer.measurements[0].assessedAt = '2025-01-01T10:00:00Z';
+  const git = gitDouble({ execGit: vi.fn(async args => {
+    if (args[0] === 'show') return { exitCode: 0, stderr: '', stdout: String(args[1]).includes(`${QUALITY_SNAPSHOT_BRANCH}:`)
+      ? qualityFileFromWireSnapshot(peer) : serialized(snapshot()) };
+    return args[0] === 'rev-parse' ? missingShow : { exitCode: 0, stdout: '', stderr: '' };
+  }) });
+  const deps = testDeps({ git });
+  await migrateAppQualitySnapshot(app, deps);
+  const written = JSON.parse(deps.writeFile.mock.calls[0][1]);
+  expect(written.categories).toEqual(['privacy', 'security']);
+  expect(written.measurements).toHaveLength(2);
+});

@@ -367,17 +367,18 @@ The escape hatch is **guarded from bitrot by the test suite** (tests boot with `
 
 ### Moving between Docker and native
 
-Automatic backend migration and switching are temporarily unavailable.
-The Settings switch/migration requests and `scripts/db.sh migrate`,
-`use-native`, and `use-docker` refuse before copying data or changing mode. The former path could accept writes after its dump snapshot
-and strand them on the source; changing `.env` also leaves the running server
-connected to its original pool.
+Use **Settings → Database** for coordinated backend migration, including
+progress and recovery of an interrupted cutover. The legacy switch/migration
+requests and `scripts/db.sh migrate`, `use-native`, and `use-docker` still refuse
+before copying data or changing mode. Those former paths could accept writes
+after the dump snapshot and strand them on the source; changing `.env` also
+leaves the running server connected to its original pool.
 
 `POST /api/database/maintenance/preflight` accepts explicit `source` and `target`
 backend names through the ordinary instance authentication gate. It checks the
 saved direction against the running pool and requires complete, trusted, idle
 work state. A successful response is `{ source, target, advisory: true, accepted: false }`: it creates no operation, reserves no maintenance window, and does
-not promise that a later request is safe. The future acceptance path must repeat
+not promise that a later request is safe. Cutover acceptance repeats
 these checks under its final admission protocol. Missing/unreadable work state,
 configuration drift, or an existing maintenance fence refuses the check.
 
@@ -391,7 +392,7 @@ saved backend. Producer shutdown alone does **not** prove child/spawn quiescence
 or authorize a dump. The internal transfer worker follows it with predecessor
 and descendant reconciliation, then exports the recorded source and imports the
 recorded dump into the recorded target (see [offline transfer](#offline-transfer)).
-The backend cutover API (`POST /api/database/maintenance/cutover`, `POST /api/database/maintenance/recover`, host-control gated) now runs the whole verified lifecycle; the Settings database tab stays disabled until #8811 surfaces its progress and recovery.
+The backend cutover API (`POST /api/database/maintenance/cutover`, `POST /api/database/maintenance/recover`, host-control gated) runs the whole verified lifecycle. The Settings database tab displays progress from the durable maintenance journal and offers Resume when the coordinator has exited; it reports success only after verifying the completed operation, not merely an accepted request or reconnect.
 
 For stage diagnostics, run `node scripts/database-maintenance.mjs status` and
 `node scripts/database-maintenance.mjs writers`. `accepted` means no transfer
@@ -402,8 +403,8 @@ for the transfer stages. A same-operation internal successor requires
 the prior detached supervisor's durable exit receipt and repeats shutdown
 readback, predecessor and writer reconciliation before any export or import.
 
-Until the Settings flow ships (#8811), keep the existing backend selected and use
-backups unless you drive the cutover API deliberately. A safe cutover requires
+Keep the existing backend selected until you deliberately start a coordinated
+cutover through Settings or the API. A safe cutover requires
 downtime for **all** PortOS writers, including the CoS runner, and verification
 that the restarted server actually uses the target. A server-only restart or
 a saved-mode change is not that verification. Do not use Sync followed by Switch

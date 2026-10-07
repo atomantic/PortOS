@@ -40,6 +40,10 @@ const FOCUSABLE_SELECTOR = [
 // browser) rather than offset geometry so it works in both. The container itself
 // is the open dialog and assumed visible, so the walk stops there.
 function isTabbable(el, container) {
+  // Fieldsets disable their form controls without adding a disabled attribute
+  // to each descendant. Use native semantics (including the first-legend
+  // exception), also covering disabled controls matched by [tabindex].
+  if (el.matches(':disabled')) return false;
   for (let node = el; node && node !== container; node = node.parentElement) {
     if (node.nodeType !== 1) return false;
     if (node.hasAttribute('hidden')) return false;
