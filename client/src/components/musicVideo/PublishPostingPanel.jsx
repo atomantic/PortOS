@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage.js';
-import { ExternalLink, X as XIcon, LogIn, Link as LinkIcon } from 'lucide-react';
+import { ExternalLink, X as XIcon, LogIn, Link as LinkIcon, Check, ChevronDown, ChevronRight, Undo2 } from 'lucide-react';
+import PublishCard from './PublishCard.jsx';
 import { DISTROKID_GENRES, suggestDistrokidGenres } from '../../../../server/lib/distrokidGenres.js';
 import { publishRowAnchor } from '../../lib/musicVideoStages.js';
 
@@ -23,9 +24,9 @@ export const PUBLISH_TARGETS = [
   },
   {
     // `accountPlaceholder` marks an account that is a name, not an @handle.
-    target: 'distrokid', label: 'Spotify (via DistroKid)', accountPlaceholder: 'Artist name',
-    note: 'The song as a single for Spotify and other stores, with a square cover and the AI disclosure. You tick the agreements and press Upload',
-    linkPlaceholder: 'Live on Spotify? Paste the Spotify link',
+    target: 'distrokid', label: 'DistroKid', accountPlaceholder: 'Artist name',
+    note: 'The song as a single to Spotify, Apple Music, YouTube Music and the other stores, with a square cover and the AI disclosure. You tick the agreements and press Upload',
+    linkPlaceholder: 'Release or store link (optional): Mark done works without one',
   },
 ];
 
@@ -220,8 +221,12 @@ function PostFeedback({ idFor, label, post, onSave }) {
   );
 }
 
-/** Record a post made outside PortOS, so its reception can be tracked too. */
-function ManualLink({ idFor, label, placeholder, onSave }) {
+/**
+ * Record a post made outside PortOS, so its reception can be tracked too, or
+ * mark the platform done without a link (a DistroKid upload has none until the
+ * stores go live).
+ */
+function ManualLink({ idFor, label, placeholder, onSave, hideMarkDone = false }) {
   const [url, setUrl] = useState('');
   const valid = /^https?:\/\/\S+$/.test(url.trim());
   return (
@@ -232,9 +237,38 @@ function ManualLink({ idFor, label, placeholder, onSave }) {
         className="flex items-center gap-1 border border-port-border disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
         <LinkIcon size={12} /> Record
       </button>
+      {!hideMarkDone && (
+        <button type="button" aria-label={`Mark ${label} done`} onClick={() => onSave({ posted: true })}
+          className="flex items-center gap-1 border border-port-border rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
+          <Check size={12} /> Mark done
+        </button>
+      )}
     </div>
   );
 }
+
+/** Undo a platform's done mark: drops PortOS's record (link, rating, notes), never the post. Behind a confirm. */
+function UndoDone({ label, onUndo }) {
+  const [confirm, setConfirm] = useState(false);
+  return confirm ? (
+    <ConfirmButtonPair
+      prompt={`Remove PortOS's record of the ${label} post (its link, rating and notes)? The post itself stays up.`}
+      confirmText="Not done"
+      ariaLabel={`Confirm marking ${label} not done`}
+      confirmAriaLabel={`Confirm marking ${label} not done`}
+      largeTouchTargets
+      onConfirm={() => { setConfirm(false); onUndo(); }}
+      onCancel={() => setConfirm(false)}
+    />
+  ) : (
+    <button type="button" onClick={() => setConfirm(true)}
+      className="flex items-center gap-1 border border-port-border rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
+      <Undo2 size={12} /> Not done…
+    </button>
+  );
+}
+
+const STATUS = { posted: ['Done', 'text-port-success border-port-success/40'], draft: ['Draft open', 'text-port-warning border-port-warning/40'], none: ['To do', 'text-port-text-muted border-port-border'] };
 
 function TargetRow({ project, kit, entry, publishing }) {
   const { target, label, note, linkPlaceholder } = entry;
@@ -257,11 +291,15 @@ function TargetRow({ project, kit, entry, publishing }) {
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [confirmAgain, setConfirmAgain] = useState(false);
   const draft = publishing.drafts[target];
+  // A done platform folds to its header so the ones still to do are easy to reach.
+  const [open, setOpen] = useState(() => !kit.posts?.[target]);
   const busy = publishing.busy[target];
   const error = publishing.errors[target];
   const posted = kit.posts?.[target];
   const flairs = draft?.summary?.flairs;
   const account = publishing.platforms?.[target]?.account;
+  const status = posted ? 'posted' : draft ? 'draft' : 'none';
+  const Chevron = open ? ChevronDown : ChevronRight;
   const clean = Object.fromEntries(Object.entries(options).filter(([, v]) => v !== '' && v != null));
   const fill = (extra) => {
     if (target === 'distrokid' && clean.songwriterFirst && clean.songwriterLast) {
@@ -271,19 +309,29 @@ function TargetRow({ project, kit, entry, publishing }) {
   };
 
   return (
-    <li id={publishRowAnchor(target)} className="rounded border border-port-border p-2 space-y-2 scroll-mt-4">
+    <li id={publishRowAnchor(target)} data-fold className="rounded border border-port-border p-2 space-y-2 scroll-mt-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="text-xs font-medium">{label}{account && <span className="font-normal text-port-text-muted"> as {entry.accountPlaceholder ? '' : '@'}{account}</span>}</div>
-          <div className="text-[11px] text-port-text-muted">{note}</div>
+        <div className="min-w-0 flex-1">
+          <h4 className="text-xs font-medium">
+            <button type="button" data-fold-toggle aria-expanded={open} aria-controls={open ? idFor('body') : undefined} onClick={() => setOpen(!open)}
+              className="flex items-center gap-1 min-h-[44px] sm:min-h-0">
+              <Chevron size={13} className="shrink-0" />
+              <span>{label}{account && <span className="font-normal text-port-text-muted"> as {entry.accountPlaceholder ? '' : '@'}{account}</span>}</span>
+              <span className={`ml-1 shrink-0 rounded border px-1 text-[10px] font-normal ${STATUS[status][1]}`}>{STATUS[status][0]}</span>
+            </button>
+          </h4>
+          {open && <div className="text-[11px] text-port-text-muted">{note}</div>}
           {posted?.url && (
             <a href={posted.url} target="_blank" rel="noreferrer" className="text-[11px] text-port-accent flex items-center gap-1 break-all">
               <ExternalLink size={11} /> Posted {posted.postedAt ? new Date(posted.postedAt).toLocaleDateString() : ''}: {posted.url}
             </a>
           )}
+          {posted && !posted.url && (
+            <div className="text-[11px] text-port-text-muted flex items-center gap-1"><Check size={11} /> Marked done {posted.postedAt ? new Date(posted.postedAt).toLocaleDateString() : ''}</div>
+          )}
         </div>
         {/* Already posted: a second draft would repeat the post, so it takes a confirm (and the server refuses without `again`). */}
-        {posted && !draft ? (
+        {!open ? null : posted && !draft ? (
           confirmAgain ? (
             <ConfirmButtonPair
               prompt={`Already posted to ${label}. Fill another draft?`}
@@ -308,8 +356,15 @@ function TargetRow({ project, kit, entry, publishing }) {
           </button>
         )}
       </div>
+      {open && <div id={idFor('body')} className="space-y-2">
       {posted
-        ? <PostFeedback key={posted.url || 'post'} idFor={idFor} label={label} post={posted} onSave={(body) => publishing.recordPost(target, body)} />
+        ? (
+          <>
+            <PostFeedback key={posted.url || 'post'} idFor={idFor} label={label} post={posted} onSave={(body) => publishing.recordPost(target, body)} />
+            {!posted.url && <ManualLink idFor={idFor} label={label} placeholder={linkPlaceholder} onSave={(body) => publishing.recordPost(target, body)} hideMarkDone />}
+            <UndoDone label={label} onUndo={() => publishing.removePost?.(target)} />
+          </>
+        )
         : <ManualLink idFor={idFor} label={label} placeholder={linkPlaceholder} onSave={(body) => publishing.recordPost(target, body)} />}
       <TargetOptions target={target} kit={kit} project={project} options={options} setOption={setOption} flairs={flairs} idFor={idFor} account={account} />
       {error && (
@@ -346,6 +401,7 @@ function TargetRow({ project, kit, entry, publishing }) {
           )}
         </div>
       )}
+      </div>}
     </li>
   );
 }
@@ -360,14 +416,15 @@ export default function PublishPostingPanel({ project, publishing }) {
   if (!kit.builtAt) return null;
   // Only the platforms the director turned on (#9287), in posting order.
   const targets = PUBLISH_TARGETS.filter((entry) => publishing.enabledTargets?.includes(entry.target));
+  const done = targets.filter(({ target }) => kit.posts?.[target]).length;
   return (
-    <section aria-label="Post the release" className="rounded-lg border border-port-border bg-port-card p-3 space-y-2 text-xs">
-      <h3 className="text-sm font-medium flex items-center gap-1.5"><ExternalLink size={14} /> Publish manually</h3>
+    <PublishCard projectId={project.id} cardId="posting" label="Publish manually" icon={ExternalLink}
+      summary={targets.length ? `${done} of ${targets.length} done` : ''} defaultOpen={!targets.length || done < targets.length}>
       <p className="text-port-text-muted">Sign in to each platform in the PortOS Browser first. Fill draft opens a new tab there and fills the post from the kit and copy above; review and publish yourself on the platform. PortOS cannot submit posts.</p>
       {!targets.length && <p className="text-port-text-muted">Turn on the platforms you use under Where you post to prepare drafts. Final publication happens on each platform.</p>}
       <ul className="space-y-2">
         {targets.map((entry) => <TargetRow key={`${project.id}-${entry.target}`} project={project} kit={kit} entry={entry} publishing={publishing} />)}
       </ul>
-    </section>
+    </PublishCard>
   );
 }

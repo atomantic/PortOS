@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Globe } from 'lucide-react';
 import { PUBLISH_TARGETS } from './PublishPostingPanel.jsx';
+import PublishCard from './PublishCard.jsx';
 
 function historyLine(h) {
   if (!h?.posts) return 'No posts yet';
@@ -25,13 +26,13 @@ function AccountInput({ id, label, initial, placeholder, onSave, disabled }) {
  * the platform shows who is signed in. Each row shows how your posts there
  * were received, across every project, so you can learn what is worth it.
  */
-export default function PublishPlatformsPanel({ publishing }) {
+export default function PublishPlatformsPanel({ projectId, publishing }) {
   const { platforms, history, setPlatform } = publishing;
   if (!platforms) return null;
   const enabledCount = Object.values(platforms).filter((p) => p?.enabled).length;
   return (
-    <section aria-label="Where you post" className="rounded-lg border border-port-border bg-port-card p-3 space-y-2 text-xs">
-      <h3 className="text-sm font-medium flex items-center gap-1.5"><Globe size={14} /> Where you post</h3>
+    <PublishCard projectId={projectId} cardId="platforms" label="Where you post" icon={Globe}
+      summary={enabledCount ? `${enabledCount} on` : 'None on yet'} defaultOpen={!enabledCount}>
       <p className="text-port-text-muted">
         {enabledCount ? 'Copy is drafted and posts are offered only for the platforms turned on here.' : 'No platforms yet. Turn on the ones you use; copy and posting cover only those.'}
       </p>
@@ -56,6 +57,6 @@ export default function PublishPlatformsPanel({ publishing }) {
           );
         })}
       </ul>
-    </section>
+    </PublishCard>
   );
 }

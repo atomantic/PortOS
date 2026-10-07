@@ -131,7 +131,7 @@ import { startExcerptRender, attachExcerptRenderSseClient, cancelExcerptRender }
 import { deleteExcerpt, addReviewNote, editReviewNote, deleteReviewNote } from '../services/musicVideo/excerptService.js';
 import { suggestSocialCuts } from '../services/musicVideo/socialCuts.js';
 import { getActivePublishKitBuild, startPublishKitBuild, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, selectPublishKitThumbnail } from '../services/musicVideo/publishKit.js';
-import { preparePublishDraft, discardPublishDraft, listPublishDrafts, recordPublishPost } from '../services/musicVideo/publish/index.js';
+import { preparePublishDraft, discardPublishDraft, listPublishDrafts, recordPublishPost, removePublishPost } from '../services/musicVideo/publish/index.js';
 import { getPublishPlatforms, updatePublishPlatforms, publishHistory } from '../services/musicVideo/publish/platforms.js';
 import { listArtistStyles, saveArtistStyle, removeArtistStyle } from '../services/musicVideo/publish/artistStyles.js';
 import { addCoverFont, coverFontPath, listCoverFonts, MAX_COVER_FONT_BYTES, removeCoverFont } from '../services/musicVideo/coverFonts.js';
@@ -1039,6 +1039,12 @@ router.put('/:id/publish/posts/:target', asyncHandler(async (req, res) => {
   const target = validateRequest(musicVideoPublishTargetSchema, req.params.target);
   const input = validateRequest(musicVideoPublishPostSchema, req.body || {});
   res.json(await recordPublishPost(req.params.id, target, input));
+}));
+
+// Undo a platform's "done" (the post record only; nothing on the platform changes).
+router.delete('/:id/publish/posts/:target', asyncHandler(async (req, res) => {
+  const target = validateRequest(musicVideoPublishTargetSchema, req.params.target);
+  res.json(await removePublishPost(req.params.id, target));
 }));
 
 router.post('/:id/publish/:target/prepare', asyncHandler(async (req, res) => {

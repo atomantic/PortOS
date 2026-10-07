@@ -754,9 +754,11 @@ const publishPlatformEntry = z.object({ enabled: z.boolean(), account: z.string(
 export const musicVideoPublishPlatformsPatchSchema = z.object(Object.fromEntries(MUSIC_VIDEO_PUBLISH_TARGETS.map((t) => [t, publishPlatformEntry.optional()]))).strict();
 export const musicVideoPublishPostSchema = z.object({
   url: publishUrl.nullable(),
+  // Marks the platform done without a link (a DistroKid upload has none until the stores go live).
+  posted: z.literal(true),
   reception: z.enum(['good', 'mixed', 'poor']).nullable(),
   notes: z.string().max(2000).nullable(),
-}).partial().strict().refine((b) => Object.keys(b).length > 0, { message: 'url, reception or notes is required' });
+}).partial().strict().refine((b) => Object.keys(b).length > 0, { message: 'url, posted, reception or notes is required' });
 export const musicVideoPublishPrepareSchema = z.object({
   subreddit: z.string().max(40),
   kind: z.enum(['self', 'link', 'video']),

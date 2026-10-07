@@ -222,3 +222,14 @@ export async function recordPublishPost(projectId, target, input = {}) {
   });
   return { project, post: project.publishKit.posts[target] };
 }
+
+/** Undo a platform's "done": drop its post record (a mistaken mark, or a post taken down). */
+export async function removePublishPost(projectId, target) {
+  const { project } = await mutateProjectRecord(projectId, (current) => {
+    const kit = current.publishKit && typeof current.publishKit === 'object' ? current.publishKit : {};
+    if (!kit.posts?.[target]) return { project: current };
+    const { [target]: _removed, ...posts } = kit.posts;
+    return { project: { ...current, publishKit: { ...kit, posts } } };
+  });
+  return { project };
+}

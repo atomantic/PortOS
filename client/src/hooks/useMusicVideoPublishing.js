@@ -7,6 +7,7 @@ import {
   getMusicVideoPublishPlatforms,
   updateMusicVideoPublishPlatforms,
   recordMusicVideoPublishPost,
+  removeMusicVideoPublishPost,
 } from '../services/apiMusicVideo.js';
 
 const EMPTY_POSTING = { drafts: {}, busy: {}, errors: {} };
@@ -20,7 +21,8 @@ const EMPTY_POSTING = { drafts: {}, busy: {}, errors: {} };
  * Platforms are opt-in (#9287): `platforms` is the director's saved choice of
  * where they post (with an optional account each), `history` their posts and
  * ratings per platform across projects. `recordPost` saves a post made by hand
- * or rates one.
+ * (a link, or `{ posted: true }` to mark it done without one) or rates one;
+ * `removePost` undoes the done mark.
  */
 export default function useMusicVideoPublishing({ project, replaceProject } = {}) {
   const projectId = project?.id || null;
@@ -108,7 +110,11 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
     .then((res) => { if (res?.project) replaceProject?.(res.project); loadPlatforms(); return res?.post || null; })
     .catch(() => null);
 
+  const removePost = (target) => removeMusicVideoPublishPost(projectId, target)
+    .then((res) => { if (res?.project) replaceProject?.(res.project); loadPlatforms(); return true; })
+    .catch(() => false);
+
   const enabledTargets = Object.entries(platforms || {}).filter(([, p]) => p?.enabled).map(([t]) => t);
 
-  return { drafts, busy, errors, prepare, discard, platforms, history, enabledTargets, setPlatform, recordPost };
+  return { drafts, busy, errors, prepare, discard, platforms, history, enabledTargets, setPlatform, recordPost, removePost };
 }

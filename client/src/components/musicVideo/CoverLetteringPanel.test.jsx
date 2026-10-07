@@ -21,6 +21,9 @@ vi.mock('../../hooks/useMusicVideoCoverLettering.js', () => ({ default: () => le
 
 import CoverArtPanel from './CoverArtPanel.jsx';
 
+// The cover card folds once a cover is set; open it so the lettering controls show.
+const openCard = () => { const t = screen.queryByRole('button', { name: /Cover art/, expanded: false }); if (t) fireEvent.click(t); };
+
 const project = {
   id: 'mv-example',
   name: 'Example Song',
@@ -46,6 +49,7 @@ describe('CoverLetteringPanel (inside CoverArtPanel)', () => {
   it('previews a control change at once, and saves the whole design only when asked', () => {
     const k = kit();
     render(<CoverArtPanel project={project} publishKit={k} />);
+    openCard();
     expect(preview().innerHTML).not.toContain('stroke=');
     expect(screen.getByRole('button', { name: /Set the lettering/ })).toBeDisabled();
 
@@ -67,6 +71,7 @@ describe('CoverLetteringPanel (inside CoverArtPanel)', () => {
   it("offers the artist's uploaded font as a typeface and applies a saved artist style in one click", () => {
     const k = kit();
     render(<CoverArtPanel project={project} publishKit={k} />);
+    openCard();
     const typeface = screen.getByLabelText('Typeface');
     expect(within(typeface).getByRole('option', { name: 'Example Font' })).toHaveValue('font:example-font');
     fireEvent.change(typeface, { target: { value: 'font:example-font' } });

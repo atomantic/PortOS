@@ -5,6 +5,7 @@ import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import { getMusicVideoPromotionPlan, planMusicVideoPromotion } from '../../services/apiMusicVideo.js';
 import { formatWeekdayTime } from '../../utils/formatters.js';
+import PublishCard from './PublishCard.jsx';
 
 const inputCls = 'w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
 const DAY_CHOICES = [3, 7, 14];
@@ -53,8 +54,8 @@ export default function PromotionPlanPanel({ project }) {
 
   const idFor = (name) => `mv-promo-${name}`;
   return (
-    <section aria-label="Promotion plan" className="rounded-lg border border-port-border bg-port-card p-3 space-y-2 text-xs">
-      <h3 className="text-sm font-medium flex items-center gap-1.5"><CalendarClock size={14} /> Promotion plan</h3>
+    <PublishCard projectId={projectId} cardId="promotion" label="Promotion plan" icon={CalendarClock}
+      summary={steps?.length ? `${steps.length} step${steps.length === 1 ? '' : 's'}` : ''}>
       <p className="text-port-text-muted">Schedules the steps only you can take, with the text ready to paste. Each one shows up in <Link to="/review" className="text-port-accent underline">Actions</Link> and notifies you when it&apos;s time. Planning again replaces the open steps.</p>
       <div className="grid gap-2 sm:grid-cols-2">
         <label htmlFor={idFor('goal')} className="space-y-1">
@@ -96,6 +97,6 @@ export default function PromotionPlanPanel({ project }) {
           ))}
         </ol>
       )}
-    </section>
+    </PublishCard>
   );
 }
