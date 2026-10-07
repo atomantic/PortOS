@@ -7,6 +7,9 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import PublishPlatformsPanel from './PublishPlatformsPanel.jsx';
 import PublishKitPanel from './PublishKitPanel.jsx';
 
+// Publish cards and platform rows fold when done; open everything so a test sees the whole page.
+const expandAll = () => { for (let b = screen.queryAllByRole('button', { expanded: false }); b.length; b = screen.queryAllByRole('button', { expanded: false })) b.forEach((x) => fireEvent.click(x)); };
+
 vi.mock('../../hooks/useProviderModels.js', () => ({
   default: () => ({ providers: [], selectedProviderId: '', selectedModel: '', availableModels: [], setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn() }),
 }));
@@ -22,6 +25,7 @@ describe('PublishPlatformsPanel (#9287)', () => {
   it('toggles platforms and saves an account on blur', () => {
     const p = publishing();
     render(<PublishPlatformsPanel publishing={p} />);
+    expandAll();
     const reddit = screen.getByRole('checkbox', { name: 'Reddit' });
     expect(reddit).not.toBeChecked();
     expect(screen.getByRole('checkbox', { name: 'X thread' })).toBeChecked();
@@ -37,6 +41,7 @@ describe('PublishPlatformsPanel (#9287)', () => {
 
   it('shows what earlier posts taught', () => {
     render(<PublishPlatformsPanel publishing={publishing()} />);
+    expandAll();
     expect(screen.getByText('2 posts · 2 poor')).toBeInTheDocument();
     expect(screen.getByText('Last note: poorly received')).toBeInTheDocument();
     expect(screen.getAllByText('No posts yet').length).toBeGreaterThan(0);
@@ -54,6 +59,7 @@ describe('PublishKitPanel copy per platform (#9287)', () => {
 
   it('shows copy only for enabled platforms (YouTube too when Suno is on)', () => {
     render(<PublishKitPanel project={project} publishKit={kitHook} enabledTargets={['suno', 'x']} />);
+    expandAll();
     expect(screen.getByText('YouTube', { selector: 'legend' })).toBeInTheDocument();
     expect(screen.getByText('X', { selector: 'legend' })).toBeInTheDocument();
     expect(screen.queryByText('Reddit', { selector: 'legend' })).toBeNull();
@@ -61,6 +67,7 @@ describe('PublishKitPanel copy per platform (#9287)', () => {
 
   it('holds the copy draft until a platform is on', () => {
     render(<PublishKitPanel project={project} publishKit={kitHook} enabledTargets={[]} />);
+    expandAll();
     expect(screen.getByRole('button', { name: /Redraft copy/ })).toBeDisabled();
   });
 });

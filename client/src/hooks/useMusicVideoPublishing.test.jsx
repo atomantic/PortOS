@@ -11,13 +11,16 @@ const api = vi.hoisted(() => ({
   getMusicVideoPublishPlatforms: vi.fn(async () => ({ platforms: { youtube: { enabled: true }, reddit: { enabled: true } } })),
   updateMusicVideoPublishPlatforms: vi.fn(),
   recordMusicVideoPublishPost: vi.fn(),
+  removeMusicVideoPublishPost: vi.fn(),
 }));
 vi.mock('../services/apiMusicVideo.js', () => api);
 vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 const project = (id) => ({ id, publishKit: { builtAt: '2026-01-01T00:00:00.000Z' } });
-const row = (label) => screen.getByText(label, { selector: 'div' }).closest('li');
+// a platform row: its fold toggle names it (label first, then its status)
+const rowLabel = (label) => (_, el) => el?.matches?.('h4 button > span') && el.firstChild?.textContent === label;
+const row = (label) => screen.getByText(rowLabel(label)).closest('li');
 const deferred = () => {
   let resolve;
   let reject;
@@ -39,7 +42,7 @@ describe('music-video publishing project boundary', () => {
   it('drops the previous project preview and posting options immediately on selection', async () => {
     api.prepareMusicVideoPublishDraft.mockResolvedValue({ draftId: 'draft-a', summary: { title: 'Example A' } });
     const view = render(<Posting id="project-a" />);
-    await screen.findByText('YouTube', { selector: 'div' });
+    await screen.findByText(rowLabel('YouTube'));
     fireEvent.change(within(row('Reddit')).getByLabelText('Subreddit'), { target: { value: 'example-community' } });
     await act(async () => { fireEvent.click(within(row('YouTube')).getByRole('button', { name: 'Fill draft' })); });
     expect(screen.getByText('Example A')).toBeInTheDocument();
@@ -57,7 +60,7 @@ describe('music-video publishing project boundary', () => {
     const second = deferred();
     api.prepareMusicVideoPublishDraft.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
     const view = render(<Posting id="project-a" />);
-    await screen.findByText('YouTube', { selector: 'div' });
+    await screen.findByText(rowLabel('YouTube'));
     fireEvent.click(within(row('YouTube')).getByRole('button', { name: 'Fill draft' }));
     view.rerender(<Posting id="project-b" />);
     fireEvent.click(within(row('YouTube')).getByRole('button', { name: 'Fill draft' }));
@@ -74,7 +77,7 @@ describe('music-video publishing project boundary', () => {
     const first = deferred();
     api.prepareMusicVideoPublishDraft.mockReturnValueOnce(first.promise);
     const view = render(<Posting id="project-a" />);
-    await screen.findByText('YouTube', { selector: 'div' });
+    await screen.findByText(rowLabel('YouTube'));
     fireEvent.click(within(row('YouTube')).getByRole('button', { name: 'Fill draft' }));
     view.rerender(<Posting id="project-b" />);
     view.rerender(<Posting id="project-a" />);

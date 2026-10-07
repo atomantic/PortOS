@@ -223,7 +223,7 @@ const BUILDERS = {
   // project's source audio; the cover is the kit's cover art, else its thumbnail cut square.
   distrokid: (project, kit, options = {}) => {
     const title = text(project?.name);
-    if (!title) throw missing('Name the project first: it is the song title on Spotify');
+    if (!title) throw missing('Name the project first: it is the song title in the stores');
     const artist = text(options.artistName);
     if (!artist) throw missing('Give the artist name the song is released under (or set it as the DistroKid account under Where you post)');
     const songwriter = { first: text(options.songwriterFirst), last: text(options.songwriterLast) };

@@ -295,6 +295,9 @@ export const updateMusicVideoPublishPlatforms = (patch, options = {}) =>
   request('/music-video/publish/platforms', { method: 'PUT', body: JSON.stringify(patch || {}), ...options });
 export const recordMusicVideoPublishPost = (id, target, body, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish/posts/${encodeURIComponent(target)}`, { method: 'PUT', body: JSON.stringify(body || {}), ...options });
+// Undo a platform's "done" (PortOS's record only) → { project }.
+export const removeMusicVideoPublishPost = (id, target, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish/posts/${encodeURIComponent(target)}`, { method: 'DELETE', ...options });
 export const musicVideoExcerptRenderEventsUrl = (jobId) =>
   `/api/music-video/excerpt/${encodeURIComponent(jobId)}/events`;
 export const cancelMusicVideoExcerptRender = (jobId, options = {}) =>

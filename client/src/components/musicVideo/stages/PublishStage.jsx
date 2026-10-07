@@ -14,7 +14,7 @@ export default function PublishStage({ board }) {
   const { project, locked, publishKit, publishing } = board;
   return (
     <fieldset id="mv-publish-kit" disabled={locked} className="min-w-0 space-y-3">
-      {publishing && <PublishPlatformsPanel publishing={publishing} />}
+      {publishing && <PublishPlatformsPanel projectId={project?.id} publishing={publishing} />}
       <PublishKitPanel project={project} publishKit={publishKit} enabledTargets={publishing?.enabledTargets} />
       {publishing && <PublishPostingPanel project={project} publishing={publishing} />}
       <PromotionPlanPanel project={project} />
