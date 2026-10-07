@@ -6,7 +6,7 @@
  * while the shared Toast API had no `info` member: every one threw
  * `toast.info is not a function` at runtime, and the component tests stayed
  * green because 54 of them mocked Toast WITH an `info` the real module lacked.
- * No scheduled audit owned that class — `typing` only runs on TypeScript repos,
+ * No scheduled audit owned that class — `typing` requires typed-language sources,
  * `ui-bugs` needs a live reproduction, and `api-contract` stops at HTTP.
  *
  * Three rules, each cheap and deterministic:

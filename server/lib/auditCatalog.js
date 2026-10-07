@@ -98,7 +98,7 @@ If you find additional problems, mention them in the summary — do not expand s
  * one that audit has the most to say about. Its sibling `better-test-quality`
  * IS gated, because it assesses tests that exist.
  */
-export const AUDIT_REPO_CAPABILITIES = Object.freeze(['ui', 'typescript', 'tests', 'dependencies', 'api', 'infrastructure']);
+export const AUDIT_REPO_CAPABILITIES = Object.freeze(['ui', 'typescript', 'typed', 'tests', 'dependencies', 'api', 'infrastructure']);
 
 /** Read aliases kept only for in-flight tasks and historical quality records. */
 export const LEGACY_AUDIT_TASK_TYPE_ALIASES = Object.freeze({ 'react-lifecycle': 'ui-lifecycle' });
@@ -110,6 +110,7 @@ export const normalizeAuditTaskType = (taskType) => Object.hasOwn(LEGACY_AUDIT_T
 export const AUDIT_CAPABILITY_MISSING_REASON = Object.freeze({
   ui: 'no user interface found in this repository',
   typescript: 'no TypeScript sources found in this repository',
+  typed: 'no supported typed-language sources found in this repository',
   tests: 'no test files found in this repository',
   dependencies: 'no dependency manifest found in this repository',
   api: 'no HTTP route or API surface found in this repository',
@@ -245,14 +246,14 @@ export const AUDIT_DEFINITIONS = Object.freeze({
   typing: {
     quotaBurnId: null,
     label: 'Typing',
-    description: 'TypeScript-types audit — configurable: file issues or implement fixes',
+    description: 'Typed-language audit — configurable: file issues or implement fixes',
     defaultFileIssues: false,
-    requiresCapability: 'typescript',
+    requiresCapability: 'typed',
     filing: filing({
       slugPrefix: 'typing-',
       label: 'typing-audit',
       issueLabel: 'code-quality',
-      labelDescription: 'Proposed from a TypeScript-types audit',
+      labelDescription: 'Proposed from a typed-language audit',
       noun: 'typing finding(s)',
     }),
   },
