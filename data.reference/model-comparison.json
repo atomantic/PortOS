@@ -55572,6 +55572,70 @@
       "notes": "Anthropic published Message Batches pricing for Claude Sonnet 5.5 (/MTok base input, /MTok output). 24h turnaround window."
     },
     {
+      "id": "anthropic-claude-haiku-5.5-pricing-2026-10-07-standard",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "unspecified",
+      "configuration": "Claude API (first-party) standard endpoint; base input / output tokens, prompts up to 100,000 tokens",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-10-07)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.1,
+        "source": {
+          "url": "https://platform.claude.com/docs/en/models/haiku-5-5/overview",
+          "retrievedAt": "2026-10-07T00:00:00Z",
+          "methodology": "Publisher list price, USD per million uncached input tokens (prompts up to 100,000 tokens), read from the official model page."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://platform.claude.com/docs/en/models/haiku-5-5/overview",
+          "retrievedAt": "2026-10-07T00:00:00Z",
+          "methodology": "Publisher list price, USD per million output tokens (prompts up to 100,000 tokens), read from the official model page."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Anthropic published list price for Claude Haiku 5.5 ($0.10/MTok input, $0.50/MTok output for prompts up to 100K tokens; $0.50/$2.50 above 100K). Cache reads ($0.01/MTok) and cache writes ($0.125/MTok 5m, $0.20/MTok 1h) are separate token classes not represented by this schema. Reasoning tokens are not separately priced, so reasoningPerMillion is null. No quality, latency or throughput is published on this source."
+    },
+    {
+      "id": "anthropic-claude-haiku-5.5-pricing-2026-10-07-batch",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "unspecified",
+      "configuration": "Claude API (first-party) Message Batches endpoint (50% discount); prompts up to 100,000 tokens",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-10-07)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.05,
+        "source": {
+          "url": "https://platform.claude.com/docs/en/models/haiku-5-5/overview",
+          "retrievedAt": "2026-10-07T00:00:00Z",
+          "methodology": "Publisher batch price, USD per million uncached input tokens (prompts up to 100,000 tokens), read from the official model page."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.25,
+        "source": {
+          "url": "https://platform.claude.com/docs/en/models/haiku-5-5/overview",
+          "retrievedAt": "2026-10-07T00:00:00Z",
+          "methodology": "Publisher batch price, USD per million output tokens (prompts up to 100,000 tokens), read from the official model page."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Anthropic published Message Batches pricing for Claude Haiku 5.5 (50% off base input and output)."
+    },
+    {
       "id": "aa-v4.3.2-anthropic-claude-sonnet-5.5-max",
       "provider": "Anthropic",
       "model": "claude-sonnet-5.5",
