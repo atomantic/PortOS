@@ -114,7 +114,7 @@ describe('reconcileCanonCatalog', () => {
       { id: 'u-new', characters: [{ id: 'e', ingredientId: 'cat-chr-m', name: 'Multi', v: 'new', updatedAt: '2026-03-01T00:00:00.000Z' }] },
     ];
 
-    const result = await reconcileCanonCatalog();
+    const _result = await reconcileCanonCatalog();
 
     // u-old loses to the original row (catalog stamped back onto it); u-mid and
     // u-new each beat the ORIGINAL row, but only the strictly-newer copy writes.

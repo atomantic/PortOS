@@ -337,7 +337,7 @@ describe('pipeline text stage generator', () => {
       title: 'V1', logline: 'volume logline', synopsis: 'volume synopsis',
       endingHook: 'the bridge falls', episodeCountTarget: 8,
     });
-    const i1 = await issuesSvc.createIssue({
+    const _i1 = await issuesSvc.createIssue({
       seriesId: series.id, title: 'Pilot', seasonId: sea.id, arcPosition: 1, arcRole: 'pilot',
     });
     const i2 = await issuesSvc.createIssue({

@@ -108,7 +108,7 @@ function seedProject(overrides = {}) {
 
 const current = () => clone(store.get('mv-example'));
 const theRun = () => current().productionRuns[0];
-const liveSteps = () => theRun().steps.filter((s) => s.status === 'reserved' || s.status === 'queued');
+const _liveSteps = () => theRun().steps.filter((s) => s.status === 'reserved' || s.status === 'queued');
 
 // The queue double: a dispatch lands one queued job tagged with the step.
 const enqueueing = ({ stepKind, tag }) => {

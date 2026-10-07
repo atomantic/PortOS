@@ -68,7 +68,7 @@ async function assertPathUsable(path) {
   let st;
   try {
     st = await stat(path);
-  } catch (err) {
+  } catch (_err) {
     throw codedError(`Bucket path does not exist or is unreadable: ${path}`, ERR_PATH_UNUSABLE);
   }
   if (!st.isDirectory()) {
@@ -76,7 +76,7 @@ async function assertPathUsable(path) {
   }
   try {
     await access(path, constants.R_OK | constants.W_OK);
-  } catch (err) {
+  } catch (_err) {
     throw codedError(`Bucket path is not writable: ${path}`, ERR_PATH_UNUSABLE);
   }
 }

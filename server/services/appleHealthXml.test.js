@@ -137,14 +137,14 @@ describe('importAppleHealthXml temp-file lifecycle', () => {
 describe('importAppleHealthXml upsert behavior', () => {
   let dir;
   let xmlPath;
-  let readCalls;
+  let _readCalls;
   let writeCalls;
 
   beforeEach(async () => {
     streams.length = 0;
     trace.length = 0;
     parser.impl = null;
-    readCalls = [];
+    _readCalls = [];
     writeCalls = [];
 
     // Track calls to readDayFile and writeDayFile

@@ -167,7 +167,7 @@ export async function filePersistentMindIssue(args) {
   // scrubs its own copy, so the text is scrubbed exactly once rather than
   // twice for the same request.
   const title = scrubForgeIssueText(args.title);
-  const body = scrubForgeIssueText(args.body);
+  const _body = scrubForgeIssueText(args.body);
 
   // An all-punctuation title normalizes to the empty string, which would match
   // every other such title — only a title with real content can dedupe.

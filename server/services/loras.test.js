@@ -22,7 +22,7 @@ const sha256Hex = (buf) => createHash('sha256').update(buf).digest('hex');
 let tmpRoot;
 let tmpLoras;
 let lorasService;
-let civitaiLib;
+let _civitaiLib;
 let atomicWriteHook;
 
 // Sidecar writes the service has enqueued but not yet finished (#6265).
@@ -91,7 +91,7 @@ beforeEach(async () => {
     getSettings: async () => ({}),
   }));
   lorasService = await import('./loras.js');
-  civitaiLib = await import('../lib/civitai.js');
+  _civitaiLib = await import('../lib/civitai.js');
 
   // Module identity at the read, asserted once per test. Every fixture below
   // writes through the raw `tmpLoras` path while the service resolves its own

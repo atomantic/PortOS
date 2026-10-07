@@ -43,12 +43,12 @@ vi.mock('./messageSync.js', () => ({ getMessages: vi.fn(async () => ({ messages:
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({ privacy: { recheck: {} } })) }));
 
 const {
-  DISCLOSURE_ALLOWLIST, buildDisclosurePayload, computeDisclosedFields, renderDisclosedSummary,
+  DISCLOSURE_ALLOWLIST, buildDisclosurePayload, computeDisclosedFields,
   chooseLane, chooseEmailTemplate, fillTemplate, renderOptOutEmail,
   brokerDomains, scoreVerificationEmail, planOptOutActions,
   emailLane, webFormLane, runOptOutPass, runVerificationPass, getOptOutDigest,
 } = await import('./privacyOptOut.js');
-const scan = await import('./privacyScan.js');
+const _scan = await import('./privacyScan.js');
 const settings = await import('./settings.js');
 
 beforeEach(() => {

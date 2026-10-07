@@ -46,7 +46,7 @@ describe.skipIf(!runDb)('privacy brokers DB round-trip', () => {
     'test-evidence-seal', 'test-evidence-erase', 'test-evidence-legacy', 'test-evidence-vault',
   ];
   const createdVaultIds = [];
-  const vaultTableWasEmpty = false;
+  const _vaultTableWasEmpty = false;
   const testStart = new Date().toISOString();
 
   beforeAll(async () => {

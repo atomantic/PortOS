@@ -65,9 +65,6 @@ vi.mock('../lib/processEnv.js', async (importOriginal) => ({
 }));
 vi.mock('../lib/ffmpeg.js', async (importOriginal) => {
   const real = await importOriginal();
-  const { writeFileSync: write, mkdirSync: mkdir } = await import('fs');
-  const { join: joinPath } = await import('path');
-  const { PATHS } = await import('../lib/fileUtils.js');
   return {
     ...real,
     findFfmpeg: vi.fn(async () => (h.analysisAvailable ? 'ffmpeg' : null)),

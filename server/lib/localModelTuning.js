@@ -234,7 +234,7 @@ export const TUNING_SPECS = Object.freeze(Object.fromEntries(
 /** Knob specs for one runtime, or `[]` for a runtime with none declared. */
 export const tuningSpecsFor = (runtimeId) => TUNING_SPECS[runtimeId] || [];
 
-const specById = (runtimeId, id) => tuningSpecsFor(runtimeId).find((s) => s.id === id) || null;
+const _specById = (runtimeId, id) => tuningSpecsFor(runtimeId).find((s) => s.id === id) || null;
 
 const clamp = (value, min, max) => Math.min(max ?? Infinity, Math.max(min ?? -Infinity, value));
 

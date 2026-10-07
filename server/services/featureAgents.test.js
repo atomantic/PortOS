@@ -5,7 +5,7 @@ import { calculateBackoff, generateTaskFromFeatureAgent } from './featureAgents.
  * Tests for feature agents pure logic.
  */
 
-const MIN_BACKOFF_MS = 60 * 60 * 1000;
+const _MIN_BACKOFF_MS = 60 * 60 * 1000;
 const MAX_BACKOFF_MS = 24 * 60 * 60 * 1000;
 
 describe('Feature Agent Backoff Calculation', () => {
