@@ -10,6 +10,7 @@ vi.mock('../lib/sseUtils.js', () => ({ broadcastSse: vi.fn(), attachSseClient: v
 vi.mock('../lib/safeUrlFetch.js', () => ({ fetchPublicText: vi.fn(), fetchPublicBinary: vi.fn(), resolvePublicUrl: vi.fn() }));
 
 const { broadcastSse } = await import('../lib/sseUtils.js');
+const { probeVideoDuration } = await import('../lib/ffmpeg.js');
 const { fetchPublicText, fetchPublicBinary, resolvePublicUrl } = await import('../lib/safeUrlFetch.js');
 const { importUploadedTrack } = await import('./pipeline/musicLibrary.js');
 const { createTrack } = await import('./tracks/index.js');
@@ -27,6 +28,7 @@ const terminal = () => vi.waitFor(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  probeVideoDuration.mockResolvedValue(200);
   fetchPublicBinary.mockResolvedValue({ buffer: Buffer.from('ID3audio'), contentType: 'audio/mpeg' });
 });
 
@@ -71,6 +73,18 @@ describe('startSunoImport', () => {
     await startSunoImport(`https://suno.com/song/${ID}`);
     expect(await terminal()).toMatchObject({ type: 'error', error: expect.stringMatching(/Could not download/) });
     expect(createTrack).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an HTML page', { buffer: Buffer.from('<html>Just a moment…</html>'), contentType: 'text/html; charset=utf-8' }, /other than audio/],
+    ['an unplayable file', { buffer: Buffer.from('garbage'), contentType: 'audio/mpeg' }, /not playable audio/],
+  ])('refuses %s as the song audio, creating no track', async (_label, body, message) => {
+    fetchPublicText.mockResolvedValue(null);
+    fetchPublicBinary.mockResolvedValue(body);
+    probeVideoDuration.mockResolvedValueOnce(null);
+    await startSunoImport(`https://suno.com/song/${ID}`);
+    expect(await terminal()).toMatchObject({ type: 'error', error: expect.stringMatching(message) });
+    expect(importUploadedTrack).not.toHaveBeenCalled();
   });
 
   it('ends as cancelled, creating no track, when cancelled mid-download', async () => {

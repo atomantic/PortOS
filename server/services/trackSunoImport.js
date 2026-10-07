@@ -15,7 +15,7 @@ import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
-import { shortId, PATHS } from '../lib/fileUtils.js';
+import { shortId } from '../lib/fileUtils.js';
 import { probeVideoDuration } from '../lib/ffmpeg.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
 import { fetchPublicBinary, fetchPublicText, resolvePublicUrl } from '../lib/safeUrlFetch.js';
@@ -31,6 +31,12 @@ const PAGE_MAX_BYTES = 5 * 1024 * 1024;
 const AUDIO_TIMEOUT_MS = 5 * 60 * 1000;
 // Suno serves its pages to browsers; a bare fetch user agent can get a challenge page instead.
 const HEADERS = { 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36' };
+
+// Suno's CDN serves audio/mpeg; a missing type or octet-stream is still worth probing.
+const isAudioResponse = (contentType) => {
+  const type = String(contentType || '').split(';')[0].trim().toLowerCase();
+  return !type || type.startsWith('audio/') || type === 'video/mp4' || type === 'application/octet-stream';
+};
 
 // jobId -> { clients, lastPayload, status, canceled }
 const importJobs = new Map();
@@ -97,6 +103,10 @@ export async function startSunoImport(url) {
       if (!audio?.buffer?.byteLength) {
         throw new Error('Could not download the song audio from Suno (is the song public or unlisted?)');
       }
+      // An error or interstitial page can come back with a 200; only audio becomes a track.
+      if (!isAudioResponse(audio.contentType)) {
+        throw new Error('Suno sent back something other than audio for this song (has it finished generating?)');
+      }
 
       broadcastSse(job, { type: 'progress', percent: 90, stage: 'importing' });
       const title = song.title || 'Suno song';
@@ -104,8 +114,10 @@ export async function startSunoImport(url) {
       dir = await mkdtemp(join(tmpdir(), 'portos-sunoimport-'));
       const tempPath = join(dir, `song.${ext}`);
       await writeFile(tempPath, audio.buffer);
+      // Probe before the library import so a file ffprobe can't read never lands there.
+      const durationSec = await probeVideoDuration(tempPath).catch(() => null);
+      if (!durationSec) throw new Error('The file Suno sent back is not playable audio');
       const { filename } = await importUploadedTrack(tempPath, `${title}.${ext}`);
-      const durationSec = await probeVideoDuration(join(PATHS.music, filename)).catch(() => null);
       const track = await createTrack({
         title, lyrics: song.lyrics, prompt: song.style, audioFilename: filename, durationSec,
         renders: [{
