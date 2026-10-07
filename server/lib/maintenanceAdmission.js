@@ -254,9 +254,24 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     });
     return status();
   };
+  // Owning-service recovery only. Validation and durable receipt publication
+  // run under the same journal lock as the exact reservation removal.
+  const reconcileAbandonedAgent = ({ hold, agentId, validate, publish, replay }) => transaction(state => {
+    if (state.hold?.id !== hold.id || state.hold?.revision !== hold.revision || state.exclusive)
+      throw error('MAINTENANCE_STALE', 'The recovery hold changed or is exclusively owned.');
+    const matches = state.operations.filter(op => op.resource === agentId);
+    if (matches.length === 0) return replay();
+    if (matches.length !== 1 || matches[0].kind !== 'agent' || matches[0].unsettled)
+      throw error('MAINTENANCE_STALE', 'Recovery requires exactly one settled agent reservation.');
+    const operation = { ...matches[0] };
+    validate(operation);
+    const receipt = publish(operation);
+    state.operations = state.operations.filter(op => op.id !== operation.id);
+    return receipt;
+  });
   const { observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability } = exclusive;
   return { directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
-    observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability };
+    observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability, reconcileAbandonedAgent };
 }
 
 // Resolve the configured data root on first use, after host/test setup.

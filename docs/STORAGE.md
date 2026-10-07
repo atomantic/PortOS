@@ -44,6 +44,28 @@ certify the old work finished. Do not delete this journal to claim readiness; pr
 with the related run/job records for recovery. A backup restored on another installation
 therefore starts conservatively if it contains a hold or outstanding operations.
 
+### Explicitly abandoned duplicate agents
+
+A local operator may reconcile a user-killed duplicate that saved no output with
+`node scripts/reconcile-abandoned-agent.mjs <agent-id> <run-id> --confirm-abandoned <reason>`.
+Begin a normal maintenance hold first. When using a reviewed isolated checkout,
+`PORTOS_DATA_ROOT` names the install root (the parent of `data/`). This is an
+explicit abandonment decision, never automatic expiry or a successful-run verdict.
+The command refuses present agent/runner ownership, live recorded PIDs, retained
+agent output (including archives), worktrees/branches, nonempty run output,
+untrusted evidence, other reservations for that agent, and failed settlement.
+The exact hold and reservation are checked under the journal transaction lock.
+
+Before releasing the matching reservation, the owning service durably publishes
+`data/workflow-maintenance/abandoned-<run-id>.json`, retaining the original operation,
+operator reason, and evidence fingerprints. Other operations and the hold remain.
+Run/task outcomes are unchanged. Repeating the same request reuses its receipt;
+it cannot settle a replacement reservation. Receipt-first interrupted publication
+can be retried after normal journal recovery; the command never steals a transaction
+lock. These machine-local recovery receipts are included in the data backup and
+never federated. This deliberately narrow command does not recover nonempty output
+or general failed saves; those still require the owning workflow's recovery.
+
 ## The Four Storage Classes
 
 | Class | Bytes live | Searchable metadata | Use when | PortOS examples |
