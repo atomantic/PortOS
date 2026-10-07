@@ -5,7 +5,9 @@ const authored = window.PORTOS_MV_GENERATED;
 const canvas = document.getElementById('world');
 const overlay = document.getElementById('type');
 const text = overlay.getContext('2d');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+// No canvas MSAA: the scene is multisampled in the HDR target, and the canvas
+// only ever receives one full-screen composite.
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, preserveDrawingBuffer: true });
 renderer.setPixelRatio(1);
 renderer.shadowMap.enabled = true;
 // three r186 removed PCFSoftShadowMap; PCF plus light.shadow.radius is the soft path.
@@ -179,6 +181,9 @@ function createPost(THREE, renderer) {
       small = new THREE.WebGLRenderTarget(Math.ceil(w / 4), Math.ceil(h / 4), linear);
       smallB = new THREE.WebGLRenderTarget(Math.ceil(w / 4), Math.ceil(h / 4), linear);
       targets = [hdr, colour, small, smallB];
+      // Allocate every target now: passes a lens skips must not create GPU
+      // textures on a later seek.
+      for (const target of targets) renderer.initRenderTarget(target);
     },
     render(world, view, lens, frame) {
       const px = h / 1080;
@@ -193,19 +198,28 @@ function createPost(THREE, renderer) {
       dof.uniforms.tColor.value = hdr.texture; dof.uniforms.tDepth.value = hdr.depthTexture;
       dof.uniforms.uRes.value.set(w, h);
       dof.uniforms.uNear.value = view.near; dof.uniforms.uFar.value = view.far; dof.uniforms.uFocus.value = focus;
-      dof.uniforms.uAperture.value = num(lens.aperture, 0, 0, 64) * px;
-      dof.uniforms.uMaxBlur.value = num(lens.maxBlur, LENS_DEFAULTS.maxBlur, 0, 48) * px;
-      draw(dof, colour);
-      bright.uniforms.tColor.value = colour.texture; bright.uniforms.uTexel.value.set(2 / w, 2 / h);
-      bright.uniforms.uThreshold.value = num(lens.bloomThreshold, LENS_DEFAULTS.bloomThreshold, 0, 16);
-      draw(bright, small);
-      for (let i = 0; i < 2; i++) {
-        blur.uniforms.tColor.value = small.texture; blur.uniforms.uStep.value.set((i + 1) / small.width, 0); draw(blur, smallB);
-        blur.uniforms.tColor.value = smallB.texture; blur.uniforms.uStep.value.set(0, (i + 1) / small.height); draw(blur, small);
+      const aperture = num(lens.aperture, 0, 0, 64) * px, maxBlur = num(lens.maxBlur, LENS_DEFAULTS.maxBlur, 0, 48) * px;
+      const bloom = num(lens.bloom, LENS_DEFAULTS.bloom, 0, 4);
+      // Software-rendered captures (CI, GPU-less hosts) pay per full-screen
+      // pass, so a lens setting that does nothing skips its pass outright.
+      let sharp = hdr.texture;
+      if (aperture > 0 && maxBlur >= 0.5) {
+        dof.uniforms.uAperture.value = aperture; dof.uniforms.uMaxBlur.value = maxBlur;
+        draw(dof, colour);
+        sharp = colour.texture;
+      }
+      if (bloom > 0) {
+        bright.uniforms.tColor.value = sharp; bright.uniforms.uTexel.value.set(2 / w, 2 / h);
+        bright.uniforms.uThreshold.value = num(lens.bloomThreshold, LENS_DEFAULTS.bloomThreshold, 0, 16);
+        draw(bright, small);
+        for (let i = 0; i < 2; i++) {
+          blur.uniforms.tColor.value = small.texture; blur.uniforms.uStep.value.set((i + 1) / small.width, 0); draw(blur, smallB);
+          blur.uniforms.tColor.value = smallB.texture; blur.uniforms.uStep.value.set(0, (i + 1) / small.height); draw(blur, small);
+        }
       }
       const u = composite.uniforms;
-      u.tColor.value = colour.texture; u.tBloom.value = small.texture; u.uRes.value.set(w, h);
-      u.uBloom.value = num(lens.bloom, LENS_DEFAULTS.bloom, 0, 4); u.uExposure.value = num(lens.exposure, 1, 0, 8);
+      u.tColor.value = sharp; u.tBloom.value = small.texture; u.uRes.value.set(w, h);
+      u.uBloom.value = bloom; u.uExposure.value = num(lens.exposure, 1, 0, 8);
       u.uVignette.value = num(lens.vignette, LENS_DEFAULTS.vignette, 0, 1); u.uGrain.value = num(lens.grain, LENS_DEFAULTS.grain, 0, 0.2);
       u.uFrame.value = frame;
       draw(composite, null);
