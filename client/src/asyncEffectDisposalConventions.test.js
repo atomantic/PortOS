@@ -95,8 +95,6 @@ const ALLOWED = {
     'seededRef latches on the first run, so the fetch fires at most once per mount',
   'src/components/brain/tabs/FeedsTab.jsx':
     'setLoading(false) is a load-finished latch, not a response written into state',
-  'src/components/cos/tabs/MemoryTab.jsx':
-    'embeddingConfigLoaded latches true on the first run, so the fetch fires at most once',
   'src/components/sprites/ImportPanel.jsx':
     'deps are [open] only — a drawer preload with no record identity to switch',
   'src/components/voice/VoiceWidget.jsx':
