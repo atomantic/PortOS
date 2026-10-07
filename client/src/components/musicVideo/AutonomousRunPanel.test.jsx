@@ -137,6 +137,19 @@ describe('AutonomousRunPanel', () => {
     await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', { retakeSong: true }, { silent: true }));
   });
 
+  it('offers Resume, not Cancel, for a run canceled while it waited on production', async () => {
+    api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
+    render(<Harness initial={baseRun({ status: 'canceled', stage: 'produce', error: 'Production was canceled' })} />);
+    expect(screen.queryByRole('button', { name: /cancel/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /resume/i }));
+    await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', {}, { silent: true }));
+  });
+
+  it('offers nothing to resume for a run canceled before production', () => {
+    render(<Harness initial={baseRun({ status: 'canceled', stage: 'song' })} />);
+    expect(screen.queryByRole('button', { name: /resume/i })).toBeNull();
+  });
+
   it('offers a retry for a run that needs the director, and shows why', async () => {
     api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
     render(<Harness initial={baseRun({ status: 'needs-human', stage: 'song', error: 'Sign in to Suno in the PortOS Browser' })} />);

@@ -59,6 +59,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { probeVideoDuration } from '../../lib/ffmpeg.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { trimTo } from '../../lib/textUtils.js';
+import { assertFootageVideoModelsCapable, loadPoolEnv } from './productionPool.js';
 import {
   AUTONOMOUS_DEFAULT_LIMITS,
   AUTONOMOUS_LIVE_STATUSES,
@@ -105,6 +106,9 @@ const defaults = {
   analyzeSong: async (projectId) => (await import('./projectAudio.js')).analyzeProjectSong(projectId),
   designCoverArt: async (projectId, input) => (await import('./coverArt.js')).designCoverArt(projectId, input),
   startProduction: async (...args) => (await import('./productionService.js')).startProduction(...args),
+  resumeProduction: async (...args) => (await import('./productionService.js')).resumeProduction(...args),
+  stopProduction: async (...args) => (await import('./productionService.js')).stopProduction(...args),
+  cancelProduction: async (...args) => (await import('./productionService.js')).cancelProduction(...args),
   generateDocument: async (...args) => (await import('./documentGeneration.js')).generateMixedMediaDocument(...args),
   acceptDocument: async (...args) => (await import('./documentGeneration.js')).acceptMixedMediaDocument(...args),
   generateCode: async (...args) => (await import('./codeGeneration.js')).generateMusicVideoCode(...args),
@@ -1133,6 +1137,10 @@ export async function startAutonomousVideo(input, { autoApproveAuthorized = fals
   const brief = { ...normalizeAutonomousBrief(input), ...autoApproveGrant(input?.autoApprove, autoApproveAuthorized) };
   if (!brief.prompt) throw runError(400, 'VALIDATION_ERROR', 'A prompt is required');
   if (brief.orchestrator) Object.assign(brief, orchestratorGrant(autoApproveAuthorized));
+  const footagePool = autonomousPool(brief.tools, brief.models);
+  if (footagePool.some((route) => route.kind === 'video' && route.model)) {
+    await assertFootageVideoModelsCapable(footagePool, await loadPoolEnv());
+  }
   const now = new Date().toISOString();
   const created = await deps.createProject({
     name: brief.name || trimTo(brief.prompt.replace(/\s+/g, ' '), 60) || 'Autonomous music video',
@@ -1182,7 +1190,10 @@ export async function getAutonomousRun(projectId) {
  * output the director edited). Returns `{ project, run }`.
  */
 const assertResumable = (run) => {
-  const resumable = AUTONOMOUS_LIVE_STATUSES.includes(run.status) || run.status === 'failed';
+  // A run canceled while it waited on production can pick up again: resume adopts the
+  // director's own production run, or starts a new one from the brief.
+  const resumable = AUTONOMOUS_LIVE_STATUSES.includes(run.status) || run.status === 'failed'
+    || (run.status === 'canceled' && run.stage === 'produce');
   if (!resumable) throw runError(409, 'NOT_RESUMABLE', `A ${run.status} run cannot be resumed`);
   if (run.status === 'running' && run.processId === PROCESS_ID) throw runError(409, 'ALREADY_RUNNING', 'This run is already running');
 };
@@ -1205,11 +1216,19 @@ const SONG_OUTPUT_KEYS = ['trackId', 'sunoSongIds', 'songSource', 'songFallbackR
 
 export async function resumeAutonomousVideo(projectId, edits = {}, { autoApproveAuthorized = false } = {}) {
   const { run } = await requireRun(projectId);
+  // A model swap only takes effect in a new production run (its pool is fixed at start).
+  const modelsPatch = briefModelsPatch(run.brief, edits.models);
   assertResumable(run);
   // "Auto-approve the rest": replaces the brief's grant (an empty list clears it).
   const grant = edits.autoApprove !== undefined ? autoApproveGrant(edits.autoApprove, autoApproveAuthorized) : null;
   const retake = edits.retakeSong === true;
   if (retake) assertAtSongCheckpoint(run);
+  const modelsChanged = modelsPatch !== null && JSON.stringify(modelsPatch) !== JSON.stringify(run.brief.models || {});
+  const limitsPatch = edits.limits ? { ...run.brief.limits, ...edits.limits } : null;
+  // A production run only takes raised limits; refuse a lower one before anything changes.
+  if (edits.limits && run.stage === 'produce' && Object.entries(edits.limits).some(([key, value]) => value != null && value < (run.brief.limits?.[key] ?? 0))) {
+    throw runError(400, 'VALIDATION_ERROR', 'Resuming production can only raise a limit');
+  }
   // Stop changes the record immediately, but its stage may still be settling.
   // Let that attempt release ownership before marking a new attempt running.
   await inflight.get(projectId);
@@ -1227,8 +1246,10 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
     const stage = retake ? 'song' : r.stage;
     return {
       status: 'running', awaiting: null, error: null, errorCode: null, processId: PROCESS_ID,
-      ...(edits.suno || edits.localMusic !== undefined || grant ? { brief: {
+      ...(edits.suno || edits.localMusic !== undefined || grant || modelsPatch || limitsPatch ? { brief: {
         ...r.brief,
+        ...(modelsPatch ? { models: modelsPatch } : {}),
+        ...(limitsPatch ? { limits: limitsPatch } : {}),
         ...(edits.suno ? { suno: normalizeSunoOptions({ ...r.brief.suno, ...edits.suno }) } : {}),
         ...(edits.localMusic !== undefined ? { localMusic: normalizeLocalMusicOptions(edits.localMusic ? { ...r.brief.localMusic, ...edits.localMusic } : null) } : {}),
         ...(grant || {}),
@@ -1269,17 +1290,72 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
     return { project: presentProjectAutonomousRun(latest), run: presentAutonomousRun(projectAutonomousRun(latest)) };
   }
   if (out.run.stage === 'produce' && out.run.output.productionRunId) {
-    const { resumeProduction } = await import('./productionService.js');
-    const failure = await resumeProduction(projectId, out.run.output.productionRunId, { acceptBasis: true }).then(() => null, (err) => err);
-    if (failure) {
-      // A failed or canceled production run cannot be resumed; say so rather than leave the run looking live.
-      const parked = await park(projectId, 'needs-human', { error: trimTo(`Production could not resume: ${failure.message}`, 500), errorCode: failure.code || null });
-      return { project: parked.project, run: presentAutonomousRun(parked.run) };
-    }
-    return { project: out.project, run: presentAutonomousRun(out.run) };
+    return resumeDelegatedProduction(projectId, out.run, { restart: modelsChanged, limits: edits.limits });
   }
   advanceInBackground(projectId);
   return { project: out.project, run: presentAutonomousRun(out.run) };
+}
+
+/**
+ * The brief's models with a resume's per-tool swaps applied (null clears a pin), or null
+ * when the resume names none. Only tools the brief already allows can be pinned.
+ */
+function briefModelsPatch(brief, models) {
+  if (!models || !Object.keys(models).length) return null;
+  const next = { ...(brief.models || {}) };
+  for (const [tool, model] of Object.entries(models)) {
+    if (!brief.tools.includes(tool)) throw runError(400, 'VALIDATION_ERROR', `The run does not use ${tool}`);
+    if (model) next[tool] = model;
+    else delete next[tool];
+  }
+  return next;
+}
+
+// Production runs that can still deliver the footage: live, parked or finished.
+const ADOPTABLE_PRODUCTION = new Set(['running', 'completed', 'limit-reached', 'blocked', 'needs-replan', 'needs-human', 'stopped']);
+const PRODUCTION_LIVE = new Set(['running', 'limit-reached', 'blocked', 'needs-replan', 'needs-human', 'stopped']);
+
+/**
+ * Hand a resumed run back to production. It follows the newest production run started
+ * since the run began (the director may have replaced its own by hand) and resumes it
+ * with any raised limits, or finishes straight to the final render when that run is
+ * already complete. A model swap, or no production run left to follow, starts a new
+ * one from the brief by re-entering `produce`.
+ */
+async function resumeDelegatedProduction(projectId, run, { restart = false, limits } = {}) {
+  const project = await getProject(projectId);
+  const runs = Array.isArray(project.productionRuns) ? project.productionRuns : [];
+  const current = runs.find((r) => r.id === run.output.productionRunId) || null;
+  const adopt = restart ? null : runs
+    .filter((r) => ADOPTABLE_PRODUCTION.has(r.status) && String(r.createdAt || '') >= String(run.createdAt || ''))
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0] || null;
+  if (!adopt) {
+    // Unlink first: the old run's own "canceled" event must no longer match this run.
+    const out = await patchRun(projectId, (r) => ({ output: { productionRunId: null }, ...stagePatch(r, 'produce', { status: 'pending', error: null, step: null }) }));
+    if (current && PRODUCTION_LIVE.has(current.status)) await deps.cancelProduction(projectId, current.id).catch(() => {});
+    console.log(`🎬 Autonomous music video ${short(run.id)} starting a new production run${restart ? ' with the new models' : ''}`);
+    advanceInBackground(projectId);
+    return { project: out.project, run: presentAutonomousRun(out.run) };
+  }
+  if (adopt.id !== run.output.productionRunId) {
+    await patchRun(projectId, () => ({ output: { productionRunId: adopt.id } }));
+    console.log(`🎬 Autonomous music video ${short(run.id)} adopted production run ${short(adopt.id)}`);
+  }
+  if (adopt.status === 'completed') {
+    await patchRun(projectId, () => ({ output: { productionDone: true } }));
+    await reconcileFinalRender(projectId, { restart: true });
+  } else {
+    // Resuming a "running" run is safe and re-pins one left by a previous server process.
+    const productionLimits = limits ? Object.fromEntries(Object.entries(limits).filter(([, v]) => v != null)) : undefined;
+    const failure = await deps.resumeProduction(projectId, adopt.id, { acceptBasis: true, ...(productionLimits ? { limits: productionLimits } : {}) })
+      .then(() => null, (err) => err);
+    if (failure) {
+      const parked = await park(projectId, 'needs-human', { error: trimTo(`Production could not resume: ${failure.message}`, 500), errorCode: failure.code || null });
+      return { project: parked.project, run: presentAutonomousRun(parked.run) };
+    }
+  }
+  const latest = await getProject(projectId);
+  return { project: presentProjectAutonomousRun(latest), run: presentAutonomousRun(projectAutonomousRun(latest)) };
 }
 
 // Read from the freshly patched record, so a job id stored a moment before the status flipped is seen.
@@ -1292,8 +1368,7 @@ export async function stopAutonomousVideo(projectId) {
   if (!['running', 'awaiting-approval', 'needs-human'].includes(run.status)) throw runError(409, 'NOT_RUNNING', `A ${run.status} run cannot be stopped`);
   const out = await patchRun(projectId, () => ({ status: 'stopped' }));
   if (run.output.productionRunId) {
-    const { stopProduction } = await import('./productionService.js');
-    await stopProduction(projectId, run.output.productionRunId).catch(() => {});
+    await deps.stopProduction(projectId, run.output.productionRunId).catch(() => {});
   }
   if (run.output.finalAutoReviewId) await deps.stopAutoReview(projectId, run.output.finalAutoReviewId).catch(() => {});
   sunoControllers.get(run.id)?.abort();
@@ -1308,8 +1383,7 @@ export async function cancelAutonomousVideo(projectId) {
   if (run.output.renderJobId) await deps.cancelRender(run.output.renderJobId).catch(() => {});
   if (run.output.finalAutoReviewId) await deps.cancelAutoReview(projectId, run.output.finalAutoReviewId).catch(() => {});
   if (run.output.productionRunId) {
-    const { cancelProduction } = await import('./productionService.js');
-    await cancelProduction(projectId, run.output.productionRunId).catch(() => {});
+    await deps.cancelProduction(projectId, run.output.productionRunId).catch(() => {});
   }
   sunoControllers.get(run.id)?.abort();
   await cancelLocalSongJob(out.run);
@@ -1342,7 +1416,9 @@ async function onProductionEvent({ projectId, runId, run: production }) {
   } else if (production.status === 'failed') {
     await park(projectId, 'failed', { error: reason || 'Production failed', errorCode: 'PRODUCTION_FAILED' });
   } else if (production.status === 'canceled') {
-    await park(projectId, 'canceled', { error: reason || null });
+    // Production canceled on its own (not by canceling this run): park, so Resume can adopt
+    // the director's replacement run or start a new one.
+    await park(projectId, 'needs-human', { error: reason || 'Production was canceled', errorCode: 'PRODUCTION_CANCELED' });
   } else if (PRODUCTION_PARKED.has(production.status) && run.status === 'running') {
     await park(projectId, 'needs-human', { error: reason || `Production is ${production.status}`, errorCode: 'PRODUCTION_PARKED' });
   }

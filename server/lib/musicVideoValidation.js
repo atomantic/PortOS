@@ -980,6 +980,13 @@ export const musicVideoAutonomousResumeSchema = z.object({
   localMusic: musicVideoLocalMusicOptionsSchema.nullable().optional(),
   // At the song checkpoint: discard the song and generate a new one.
   retakeSong: z.boolean().optional(),
+  // Swap a tool's model (null clears the pin) and raise or lower the run's limits. A changed
+  // model at the produce stage starts a new production run with the new pool.
+  models: z.partialRecord(z.enum(MUSIC_VIDEO_AUTOMATION_TOOL_IDS), z.string().trim().min(1).max(200).nullable()).optional(),
+  limits: z.object({
+    maxGenerations: z.number().int().min(AUTONOMOUS_LIMIT_BOUNDS.maxGenerations.min).max(AUTONOMOUS_LIMIT_BOUNDS.maxGenerations.max).optional(),
+    maxReviewAttempts: z.number().int().min(AUTONOMOUS_LIMIT_BOUNDS.maxReviewAttempts.min).max(AUTONOMOUS_LIMIT_BOUNDS.maxReviewAttempts.max).optional(),
+  }).strict().optional(),
   // Replace the brief's auto-approve grant ("auto-approve the rest").
   ...musicVideoAutoApproveFields,
 }).strict();
