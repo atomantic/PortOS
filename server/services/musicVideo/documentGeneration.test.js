@@ -132,6 +132,41 @@ describe('treatment-driven mixed-media document authoring', () => {
     expect(intro).not.toContain('"sceneId":"s-clip"');
   });
 
+  it('re-authors a section a local batch dropped on its own, and fails only when the retry misses it too', async () => {
+    const id = await fixture();
+    h.provider = { id: 'ollama', type: 'api' };
+    await generateMixedMediaDocument(id, { providerId: 'ollama' });
+    const budget = h.prompt.length - 1;
+    const all = response({ intro: '#112233', still: '#445566', clip: '#778899' });
+    const sectionsAsked = (prompt) => ['intro', 'still', 'clip'].filter((s) => prompt.includes(`"id":"${s}"`));
+    // A multi-section batch comes back without its last section; a single-section ask succeeds.
+    h.onSubmit = async () => {
+      const asked = sectionsAsked(h.prompt);
+      h.response = asked.length > 1 ? response(Object.fromEntries(asked.slice(0, -1).map((s) => [s, '#010203']))) : all;
+    };
+    h.calls = 0;
+    const { document } = await generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget });
+    const manifest = await manifestAt(document);
+    expect(manifest.sections.map((s) => s.id)).toEqual(['intro', 'still', 'clip']);
+    expect(manifest.sections.every((s) => s.source.includes('function render'))).toBe(true);
+    expect(h.calls).toBeGreaterThan(2);
+
+    // A returned section that fails its source check is retried on its own too.
+    h.onSubmit = async () => {
+      const asked = sectionsAsked(h.prompt);
+      h.response = asked.length > 1
+        ? JSON.stringify({ sections: asked.map((s, i) => ({ id: s, source: i === asked.length - 1 ? 'function render(ctx, env) { ctx.fillRect(Math.random(), 0, 1, 1); }' : source('#010203') })) })
+        : all;
+    };
+    const retried = await manifestAt((await generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget })).document);
+    expect(retried.sections.every((s) => !s.source.includes('Math.random'))).toBe(true);
+
+    // The retry missing it too is a hard failure naming the count.
+    h.onSubmit = async () => { h.response = response({ intro: '#010203' }); };
+    await expect(generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget }))
+      .rejects.toMatchObject({ code: 'MISSING_SECTION_SOURCE' });
+  });
+
   it('names the prompt size when authoring times out with no output (#10515)', async () => {
     const id = await fixture();
     h.onSubmit = async () => { throw new Error('API execution timed out after 600000ms with no stream progress'); };
