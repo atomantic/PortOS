@@ -167,6 +167,34 @@ describe('treatment-driven mixed-media document authoring', () => {
       .rejects.toMatchObject({ code: 'MISSING_SECTION_SOURCE' });
   });
 
+  it('retries a rejected section once on its own, telling the model why', async () => {
+    const id = await fixture();
+    const random = 'function render(ctx, env) { ctx.fillRect(Math.random(), 0, 1, 1); }';
+    const retries = [];
+    h.onSubmit = async () => {
+      if (h.prompt.includes('was rejected')) {
+        retries.push(h.prompt);
+        h.response = response({ intro: '#123456' });
+      } else {
+        h.response = JSON.stringify({ sections: [{ id: 'intro', source: random }, { id: 'still', source: source('#445566') }, { id: 'clip', source: source('#778899') }] });
+      }
+    };
+    const { document } = await generateMixedMediaDocument(id, { providerId: 'stub-provider' });
+    expect(retries).toHaveLength(1);
+    expect(retries[0]).toMatch(/section "intro" was rejected: .*non-deterministic/i);
+    const manifest = await manifestAt(document);
+    expect(manifest.sections.find((s) => s.id === 'intro').source).toContain('#123456');
+  });
+
+  it('retries an answer with no usable section once as a whole, then fails without a call per section', async () => {
+    const id = await fixture();
+    h.calls = 0;
+    h.onSubmit = async () => { h.response = 'I cannot help with that.'; };
+    await expect(generateMixedMediaDocument(id, { providerId: 'stub-provider' })).rejects.toMatchObject({ code: 'MISSING_SECTION_SOURCE' });
+    expect(h.calls).toBe(2);
+    expect(h.prompt).toContain('contained no usable section functions');
+  });
+
   it('names the prompt size when authoring times out with no output (#10515)', async () => {
     const id = await fixture();
     h.onSubmit = async () => { throw new Error('API execution timed out after 600000ms with no stream progress'); };
