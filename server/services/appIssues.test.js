@@ -149,6 +149,14 @@ describe('listAppIssues — GitHub', () => {
     expect(result.issues[0].body).toMatch(/truncated/);
   });
 
+  it('flags a full capped page and clipped bodies so a lookup cannot certify a negative', async () => {
+    const rows = Array.from({ length: 200 }, (_, i) => ({ number: i + 1, title: 't', body: i === 0 ? 'x'.repeat(9000) : '', labels: [], assignees: [] }));
+    execGh.mockResolvedValue(JSON.stringify(rows));
+    expect((await listAppIssues(APP)).enumeration).toEqual({ capped: true, bodiesClipped: true });
+    execGh.mockResolvedValue(JSON.stringify(rows.slice(1, 5)));
+    expect((await listAppIssues(APP)).enumeration).toEqual({ capped: false, bodiesClipped: false });
+  });
+
   it('passes the app-pinned forge account token and repo cwd to gh and reachability check', async () => {
     resolveForgeForRepoMock.mockResolvedValue({
       cli: 'gh',
