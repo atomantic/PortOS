@@ -38,7 +38,6 @@ const aiAssignmentUpdateSchema = z.object({
 
 const eidoverseRepoSchema = z.object({
   worldsRepoUrl: z.string().trim().max(500).refine(isGitHubRepoUrl, 'Must be a GitHub repository URL'),
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: reject control characters in Git branch input
   worldsBranch: z.string().trim().max(255).regex(/^[^\u0000-\u001f\u007f]*$/).optional(),
 }).strict();
 

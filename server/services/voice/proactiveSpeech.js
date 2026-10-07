@@ -132,12 +132,6 @@ export const speakProactive = async ({ io, text, priority = 'normal', source = '
     ts: Date.now(),
   });
   // Mirror the per-turn `state.recentTts` write so a proactive line bleeding
-  // from speakers back into the mic gets dropped as echo on the next turn — but
-  // ONLY on the recipient tab. Only that tab plays the audio, so only its mic
-  // can echo it; recording it on other connected devices would falsely suppress
-  // their legitimate speech (they never heard the line).
-  if (delivery.socket) rememberTtsForSocket(delivery.socket, trimmed);
-  // Mirror the per-turn `state.recentTts` write so a proactive line bleeding
   // from speakers back into the mic gets dropped as echo on the next turn.
   // Deliberately remembered on EVERY socket, not just the recipient: only the
   // recipient tab plays the audio, but a *sibling tab on the same machine* that
