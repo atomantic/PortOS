@@ -42,11 +42,14 @@ function sectionProgress(project, revision) {
  * - `finalRenderAttached` — this tab already shows the final render's progress
  * - `readiness` — the server's production readiness, for approvals given on
  *   inputs that have changed since (#10141)
+ * - `headerAction` — the header's next action (`{ id, runId }`); a parked run
+ *   it already resumes drops its own Resume so one screen never offers two
+ *   controls for the same run
  *
  * Row shape: `{ id, kind, tone, title, detail, … }` plus the ids the action
  * needs — `revisionId` + `canResume` (revision), `runId` (auto-review).
  */
-export function deriveAttentionItems(project, { generatingSceneIds = null, draftRendering = false, finalRenderAttached = false, readiness = project?.productionReadiness } = {}) {
+export function deriveAttentionItems(project, { generatingSceneIds = null, draftRendering = false, finalRenderAttached = false, readiness = project?.productionReadiness, headerAction = null } = {}) {
   if (!project) return [];
   const items = [];
   const spinning = (sceneId) => !!generatingSceneIds?.has?.(sceneId);
@@ -127,7 +130,7 @@ export function deriveAttentionItems(project, { generatingSceneIds = null, draft
     });
   }
   const stale = staleApprovalItem(project, readiness);
-  return [...items, ...parkedRunItems(project), ...(stale ? [stale] : [])];
+  return [...items, ...parkedRunItems(project, headerAction), ...(stale ? [stale] : [])];
 }
 
 // Approvals in the order they are given, with the tab (and editor) each is re-given on.
@@ -164,6 +167,8 @@ function staleApprovalItem(project, readiness) {
 // review, or a halted run. `running` is live work, not a request for the user.
 const AUTO_REVIEW_PARKED = new Set(['needs-human', 'limit-reached', 'stopped']);
 const PRODUCTION_PARKED = new Set(['limit-reached', 'needs-human', 'blocked', 'needs-replan']);
+// The header next-action ids that resume the autonomous run (see deriveNextAction).
+const RESUME_AUTONOMOUS_IDS = new Set(['resume-autonomous', 'retry-autonomous']);
 const AUTONOMOUS_PARKED = new Set(['awaiting-approval', 'needs-human', 'stopped', 'failed']);
 
 /** The newest board-driven auto-review run, when it is parked on the director. Older stopped runs are superseded. */
@@ -178,7 +183,7 @@ export const autoReviewNeedsUser = (project) => asList(project?.autoReviews).som
 // Rows for runs the server holds that nobody is watching: an autonomous run
 // parked on the director, a production run stopped on a limit, an auto-review
 // that halted. Each is derived from the saved record, so it survives a reload.
-function parkedRunItems(project) {
+function parkedRunItems(project, headerAction) {
   const items = [];
   const auto = project.autonomousRun;
   const autoParked = auto && (AUTONOMOUS_PARKED.has(auto.status) || auto.interrupted);
@@ -192,7 +197,7 @@ function parkedRunItems(project) {
       title: awaiting ? 'An autonomous run is waiting for your approval' : auto.status === 'failed' ? 'An autonomous run failed' : 'An autonomous run needs you',
       detail: interrupted ? 'A restart interrupted it. Resume to continue from where it left off.' : describeAutonomousWait(project.name || 'This video', auto),
       projectId: project.id,
-      canResume: !awaiting,
+      canResume: !awaiting && !RESUME_AUTONOMOUS_IDS.has(headerAction?.id),
       resumeLabel: auto.status === 'failed' ? 'Retry' : 'Resume',
       // The run's log and its checkpoint editor live in Project settings › Autopilot.
       openTo: `${auto.stage === 'produce' ? 'produce' : 'setup'}?mvPanel=autopilot${awaiting ? '#mv-auto-edit' : ''}`,
@@ -212,7 +217,7 @@ function parkedRunItems(project) {
       projectId: project.id,
       runId: production.id,
       // Same exits as the header's next action; the run's controls are in Project settings › Autopilot.
-      canResume: RESUMABLE_RUN_STATUSES.has(production.status),
+      canResume: RESUMABLE_RUN_STATUSES.has(production.status) && !(headerAction?.id === 'resume-production' && headerAction.runId === production.id),
       acceptBasis: production.status === 'needs-replan',
       openTo: 'produce?mvPanel=autopilot',
     });

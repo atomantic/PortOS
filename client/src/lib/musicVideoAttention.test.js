@@ -132,6 +132,19 @@ describe('parked runs (#10156)', () => {
     expect(failed[0]).toMatchObject({ canResume: true, resumeLabel: 'Retry', openTo: 'produce?mvPanel=autopilot' });
   });
 
+  it('drops the row\'s Resume when the header\'s next action already resumes that run, keeping Open', () => {
+    const interrupted = project({ autonomousRun: { id: 'a', status: 'running', interrupted: true, stage: 'song' } });
+    expect(deriveAttentionItems(interrupted)[0]).toMatchObject({ canResume: true });
+    expect(deriveAttentionItems(interrupted, { headerAction: { id: 'resume-autonomous' } })[0]).toMatchObject({ kind: 'autonomous', canResume: false, openTo: 'setup?mvPanel=autopilot' });
+    const failed = project({ autonomousRun: { id: 'a', status: 'failed', stage: 'produce' } });
+    expect(deriveAttentionItems(failed, { headerAction: { id: 'retry-autonomous' } })[0].canResume).toBe(false);
+    // A different header action (e.g. reviewing an imported draft) leaves the row's Resume in place.
+    expect(deriveAttentionItems(interrupted, { headerAction: { id: 'review-imported' } })[0].canResume).toBe(true);
+    const production = project({ productionRuns: [{ id: 'prod-1', status: 'limit-reached' }] });
+    expect(deriveAttentionItems(production, { headerAction: { id: 'resume-production', runId: 'prod-1' } })[0].canResume).toBe(false);
+    expect(deriveAttentionItems(production, { headerAction: { id: 'resume-production', runId: 'other' } })[0].canResume).toBe(true);
+  });
+
   it('lists a stopped or limit-reached auto-review but not older superseded or healthy ones', () => {
     const limit = deriveAttentionItems(project({ autoReviews: [run({ id: 'ar-1', status: 'limit-reached', stopReason: 'Reached the limit' })] }));
     expect(limit).toEqual([expect.objectContaining({ kind: 'auto-review-parked', runId: 'ar-1', canResume: false, openTo: 'review', detail: 'Reached the limit' })]);

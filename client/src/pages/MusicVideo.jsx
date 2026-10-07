@@ -1028,6 +1028,7 @@ export default function MusicVideo() {
     draftRendering: excerpts.rendering,
     finalRenderAttached: renderTargetsSelected,
     readiness: productionReview.readiness,
+    headerAction: nextAction,
   }) : [];
   const runNextAction = () => {
     if (!selected || !nextAction || nextAction.disabled || compositionSavePending > 0) return;
