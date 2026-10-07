@@ -14,6 +14,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import useMounted from '../../../hooks/useMounted';
 import { useVisibilityEvent } from '../../../hooks/useVisibilityEvent';
 import { formatDateFull, localDateKey, shiftISODate } from '../../../utils/formatters';
+import { pluralize } from '../../../lib/textUtils';
 
 // Autosave cadence. The debounce keeps us from PUTting on every keystroke;
 // the max-wait ceiling exists because a pure debounce never fires at all
@@ -564,7 +565,7 @@ export default function DailyLogTab() {
     setSyncing(true);
     const res = await api.syncDailyLogsToObsidian({ silent: true }).catch(() => null);
     setSyncing(false);
-    if (res) toast.success(`Synced ${res.synced} entries to Obsidian`);
+    if (res) toast.success(`Synced ${pluralize(res.synced, 'entry', 'entries')} to Obsidian`);
     else toast.error('Sync failed');
   };
 

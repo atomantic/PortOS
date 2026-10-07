@@ -12,6 +12,7 @@
  */
 
 import { EVOLUTION_STAGES, EVOLUTION_STAGE_LABELS } from './characterEvolution.js';
+import { pluralize } from './textUtils.js';
 
 export { EVOLUTION_STAGES, EVOLUTION_STAGE_LABELS };
 
@@ -233,7 +234,7 @@ export function computeUniverseGaps(index) {
         nodeId: a.id,
         otherId: b.id,
         title: `Define ${a.name} ↔ ${b.name}`,
-        detail: `They share ${shared} issues but have no typed relationship.`,
+        detail: `They share ${pluralize(shared, 'issue')} but have no typed relationship.`,
         action: 'Add a relationship link',
       });
     }
@@ -246,7 +247,7 @@ export function computeUniverseGaps(index) {
       color: GAP_COLORS.suggest,
       nodeId: node.id,
       title: `${node.name} has no evolution lens`,
-      detail: `Appears in ${count} issues with no five-stage arc authored.`,
+      detail: `Appears in ${pluralize(count, 'issue')} with no five-stage arc authored.`,
       action: 'Author the lens',
     });
   }

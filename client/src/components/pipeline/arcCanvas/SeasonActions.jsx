@@ -3,6 +3,7 @@ import { Plus, Loader2, Wand2, ListChecks, X, ShieldCheck } from 'lucide-react';
 import toast from '../../ui/Toast';
 import { createPipelineIssue, listPipelineIssues } from '../../../services/api';
 import VerifyScopeHint from './VerifyScopeHint.jsx';
+import { pluralize } from '../../../lib/textUtils';
 
 const VERIFY_VOLUME_SCOPE = {
   depth: 'One volume in depth — reads beat sheets (stages.idea.output) for issues that have them, falls back to synopsis depth for un-expanded issues. Boundary checks against the immediate-neighbor volumes only.',
@@ -22,7 +23,7 @@ const VERIFY_VOLUME_SCOPE = {
 // `type` field; see server/services/pipeline/volumeBeatsRunner.js for the
 // frame shapes.
 const BEATS_FRAME_LABELS = {
-  start: (f) => `Starting (${f.total} issues)…`,
+  start: (f) => `Starting (${pluralize(f.total, 'issue')})…`,
   'issue:start': (f) => `Generating ${f.ordinal}/${f.total} — ${f.issueTitle || `#${f.issueNumber}`}`,
   'issue:complete': (f) => `${f.ordinal}/${f.total} done`,
   'issue:skip': (f) => `Skipped ${f.ordinal}/${f.total}`,

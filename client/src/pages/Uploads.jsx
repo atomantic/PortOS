@@ -96,7 +96,7 @@ export default function Uploads() {
     });
 
     if (result?.success) {
-      toast.success(`Deleted ${result.deleted} files (${result.freedSpaceFormatted})`);
+      toast.success(`Deleted ${pluralize(result.deleted, 'file')} (${result.freedSpaceFormatted})`);
       fetchUploads();
     }
     setConfirmingDeleteAll(false);
