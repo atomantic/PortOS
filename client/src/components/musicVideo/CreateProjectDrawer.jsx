@@ -16,7 +16,7 @@ const MODES = [
 
 /**
  * "New music video" drawer — track-first workflow:
- * 1. Select the music track (or import from YouTube) — audio source for the video.
+ * 1. Select the music track (or import a Suno song or YouTube audio) — audio source for the video.
  * 2. Lyrics, concept, and style info are automatically read from the chosen track.
  * 3. Name, mode, universe/moodboard, and brief settings.
  */
@@ -73,7 +73,7 @@ export default function CreateProjectDrawer({ open, onClose, form, onFormChange,
           </select>
 
           <div>
-            <span className="block text-xs text-port-text-muted mb-1">…or import audio from YouTube</span>
+            <span className="block text-xs text-port-text-muted mb-1">…or import a Suno song or YouTube audio</span>
             <div className="flex gap-1">
               <YoutubeImportControls
                 id="mv-yt-create"

@@ -5,12 +5,12 @@ import useYoutubeTrackImport from './useYoutubeTrackImport.js';
 
 // Every surface that blocks a project switch during an in-flight import says the
 // same thing — the page reuses this for its own list-picker/delete guards.
-const SWITCH_BLOCKED_MESSAGE = 'Finish or cancel the in-progress YouTube import before switching projects';
+const SWITCH_BLOCKED_MESSAGE = 'Finish or cancel the in-progress audio import before switching projects';
 
 /**
- * The music-video page's two YouTube audio-import slots (#1945): paste a URL,
- * PortOS downloads + extracts the track via yt-dlp and lands it in the shared
- * library. Two INDEPENDENT job slots — one per surface that can kick off an
+ * The music-video page's two audio-import slots (#1945): paste a YouTube or
+ * Suno song link, PortOS downloads the audio (yt-dlp for YouTube) and lands it
+ * in the shared library. Two INDEPENDENT job slots — one per surface that can kick off an
  * import (the create form and the detail view's track-change row) — so starting
  * one doesn't orphan the other's in-flight job (see useYoutubeTrackImport).
  *

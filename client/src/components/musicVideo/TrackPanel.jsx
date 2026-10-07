@@ -27,8 +27,8 @@ function timedDataLabels(project) {
 }
 
 /**
- * The project's audio: pick an existing library track or import fresh audio from
- * YouTube (re-selecting either PATCHes the project's trackId), then preview and
+ * The project's audio: pick an existing library track or import a Suno song or
+ * YouTube audio (re-selecting either PATCHes the project's trackId), then preview and
  * download the resolved master file. Relinking is blocked while a render or a
  * MIDI transcription is bound to this project — both already resolved the
  * project's audio at kickoff. An optional vocal stem (#8977) conditions

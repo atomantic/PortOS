@@ -38,6 +38,12 @@ export const importTrackFromYoutube = (url, options = {}) => request('/tracks/im
   body: JSON.stringify({ url }),
   ...options,
 });
+// A Suno song link: the song's audio plus the title, lyrics and style its page carries.
+export const importTrackFromSuno = (url, options = {}) => request('/tracks/import/suno', {
+  method: 'POST',
+  body: JSON.stringify({ url }),
+  ...options,
+});
 
 export const trackImportEventsUrl = (jobId) =>
   `/api/tracks/import/${encodeURIComponent(jobId)}/events`;
