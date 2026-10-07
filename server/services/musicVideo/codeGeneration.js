@@ -34,12 +34,23 @@ export async function styleLinesFor(project) {
   }
 }
 
-/** The approved procedural direction's definitions and rules, for a code-authoring request. */
-export const castAndSetsCodeContext = (project) => [
-  productionFeedbackContext(project),
-  musicVideoCodeDirectionContext(approvedCastAndSetsDirection(project)),
-  project.productionReview?.draft && `HUMAN-REVIEWED VISUAL/MOTION GUIDE AND SHOT CHOREOGRAPHY:\n${JSON.stringify(project.productionReview.draft)}`,
-].filter(Boolean).join('\n\n');
+/**
+ * The approved procedural direction's definitions and rules, for a code-authoring request.
+ * `sceneIds` scopes the guide's shot choreography to the scenes a batch authors: every
+ * shot of a long storyboard otherwise rides in each section's prompt.
+ */
+export const castAndSetsCodeContext = (project, { sceneIds = null } = {}) => {
+  const draft = project.productionReview?.draft;
+  const wanted = sceneIds ? new Set(sceneIds) : null;
+  const guide = draft && wanted && Array.isArray(draft.storyboard)
+    ? { ...draft, storyboard: draft.storyboard.filter((shot) => wanted.has(shot.sceneId)) }
+    : draft;
+  return [
+    productionFeedbackContext(project),
+    musicVideoCodeDirectionContext(approvedCastAndSetsDirection(project)),
+    guide && `HUMAN-REVIEWED VISUAL/MOTION GUIDE AND SHOT CHOREOGRAPHY:\n${JSON.stringify(guide)}`,
+  ].filter(Boolean).join('\n\n');
+};
 
 function acceptSources(parsed, ids) {
   const wanted = new Set(ids);

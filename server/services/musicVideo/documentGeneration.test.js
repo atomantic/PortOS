@@ -110,6 +110,28 @@ describe('treatment-driven mixed-media document authoring', () => {
       .rejects.toMatchObject({ code: 'COMPOSITION_PROMPT_TOO_LARGE', message: expect.stringMatching(/\d+ characters/) });
   });
 
+  it('scopes each local batch to the scenes and storyboard shots its sections cover', async () => {
+    const id = await fixture();
+    await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, productionReview: { ...current.productionReview, draft: {
+      ...(current.productionReview?.draft || {}),
+      storyboard: ['s-intro', 's-still', 's-clip'].map((sceneId) => ({ sceneId, lyricCueIds: [], action: `choreography for ${sceneId}`, staging: '', camera: '', transition: '' })),
+    } } } }));
+    h.provider = { id: 'ollama', type: 'api' };
+    const prompts = [];
+    h.onSubmit = async () => { prompts.push(h.prompt); };
+    await generateMixedMediaDocument(id, { providerId: 'ollama' });
+    const whole = prompts[0];
+    expect(whole).toContain('choreography for s-clip');
+
+    prompts.length = 0;
+    // A budget that only fits one section per request.
+    await generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: whole.length - 200 });
+    const intro = prompts.find((prompt) => prompt.includes('"id":"intro"'));
+    expect(intro).toContain('choreography for s-intro');
+    expect(intro).not.toContain('choreography for s-clip');
+    expect(intro).not.toContain('"sceneId":"s-clip"');
+  });
+
   it('names the prompt size when authoring times out with no output (#10515)', async () => {
     const id = await fixture();
     h.onSubmit = async () => { throw new Error('API execution timed out after 600000ms with no stream progress'); };
