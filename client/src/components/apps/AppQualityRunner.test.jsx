@@ -21,9 +21,9 @@ import AppQualityRunner from './AppQualityRunner';
 import AppQuality from './AppQuality';
 import { awaitEnabled, findEnabledByLabelText, findEnabledByRole } from '../../test/enabledBarrier.js';
 vi.mock('./AppQualityHistory', () => ({ default: () => null }));
-import { getMaintenanceRuns, startMaintenanceRun, stopMaintenanceRun } from '../../services/apiAgents';
+import { getMaintenanceRuns, startMaintenanceRun, stopMaintenanceRun, resumeMaintenanceRun } from '../../services/apiAgents';
 import useProviderModels from '../../hooks/useProviderModels';
-vi.mock('../../services/apiAgents', () => ({ getMaintenanceRuns: vi.fn(), startMaintenanceRun: vi.fn(), stopMaintenanceRun: vi.fn() }));
+vi.mock('../../services/apiAgents', () => ({ getMaintenanceRuns: vi.fn(), startMaintenanceRun: vi.fn(), stopMaintenanceRun: vi.fn(), resumeMaintenanceRun: vi.fn() }));
 vi.mock('../../hooks/useProviderModels', () => ({ default: vi.fn(() => ({ providers: [], selectedProviderId: 'codex', selectedModel: 'gpt-5', availableModels: [], loading: false })) }));
 vi.mock('../ProviderModelSelector', () => ({ default: ({ onEffortChange }) => <button onClick={() => onEffortChange('high')}>Use high effort</button> }));
 const app = { id: 'app-1', quality: { categories: [
@@ -264,4 +264,17 @@ it('defaults audit fixes to draft review and lets the user explicitly inherit sa
   fireEvent.click(await findEnabledByRole('button', { name: 'Run 2 checks now' }));
   await waitFor(() => expect(startMaintenanceRun).toHaveBeenCalledTimes(2));
   expect(startMaintenanceRun.mock.lastCall[0].prCompletion).toBe('inherit');
+});
+
+
+it('offers separate Deep depth, shows pass denominator and resumes a persisted partial run explicitly', async () => {
+  const run = { id: 'deep-run', appId: app.id, status: 'stopped', auditDepth: 'deep', steps: [], reason: 'Budget exhausted',
+    deepAudits: { step: { discoveryComplete: false, reviewedUnits: 0, totalUnits: 8, satisfiedPasses: 8, requiredPasses: 32, blockedUnits: 1, pendingCandidates: 2, deliveryComplete: false } } };
+  getMaintenanceRuns.mockResolvedValue({ runs: [run] });
+  resumeMaintenanceRun.mockResolvedValue({ run: { ...run, status: 'running' } });
+  render(<MemoryRouter><AppQualityRunner app={app} /></MemoryRouter>);
+  fireEvent.change(screen.getByLabelText('Audit depth'), { target: { value: 'deep' } });
+  expect(await screen.findByText(/8\/32 pass requirements/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Resume Deep audit' }));
+  await waitFor(() => expect(resumeMaintenanceRun).toHaveBeenCalledWith('deep-run', { silent: true }));
 });

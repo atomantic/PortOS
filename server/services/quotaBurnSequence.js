@@ -103,6 +103,8 @@ export async function nextQuotaBurnSequenceJob(family, { completions, reservatio
 
 export async function completeQuotaBurnSequenceStep(agent) {
   if (!burnPlanOwnsAgent(agent)) return;
+  const deepAudit = agent?.result?.deepAudit || agent?.metadata?.deepAudit;
+  if ((agent?.metadata?.taskAuditDepth === 'deep' || deepAudit) && deepAudit?.complete !== true) return;
   const familyId = agent.metadata.taskQuotaBurnFamily;
   const jobId = agent.metadata.taskQuotaBurnStepId;
   if (!jobId) return;

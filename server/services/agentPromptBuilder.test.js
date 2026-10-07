@@ -1,3 +1,4 @@
+vi.mock('./deepAudit.js', () => ({ prepareDeepAudit: vi.fn(async () => '## SERVER DEEP CONTRACT — overrides bounded prompts') }));
 /**
  * Tests for the light-vs-full context split in buildAgentPrompt.
  *
@@ -4538,4 +4539,21 @@ describe('auto-merge posture (worktree, no PR) is commit-only on every path', ()
     expect(bullet).toMatch(/commit only — no push; PortOS merges your branch back after you exit/);
     expect(bullet).not.toMatch(/`\/do:push`/);
   });
+});
+
+
+it.each(['api', 'cli', 'tui'])('puts Deep contract ahead of customized shallow instructions on %s providers', async providerType => {
+  const task = makeTask({ description: 'Stop after one finding', metadata: { auditDepth: 'deep', app: 'example', prompt: 'Only inspect five candidates', analysisType: 'security' } });
+  const prompt = await buildAgentPrompt(task, {}, '/r', null, { providerType, agentId: 'deep-agent' });
+  expect(prompt.startsWith('## SERVER DEEP CONTRACT')).toBe(true);
+  const { prepareDeepAudit } = await import('./deepAudit.js');
+  expect(prepareDeepAudit).toHaveBeenCalledWith(expect.objectContaining({ task: expect.objectContaining({ metadata: expect.objectContaining({ auditDepth: 'deep' }) }), agentId: 'deep-agent' }));
+});
+
+it('puts the Deep contract in the split system channel and preserves depth through schedule metadata', async () => {
+  const metadata = sanitizeTaskMetadata({ auditDepth: 'deep', deepAuditId: 'checkpoint-1' });
+  expect(metadata).toMatchObject({ auditDepth: 'deep', deepAuditId: 'checkpoint-1' });
+  expect(sanitizeTaskMetadata({ auditDepth: 'unbounded' })).toBeNull();
+  const prompt = await buildAgentPrompt(makeTask({ metadata: { ...metadata, app: 'example' } }), {}, '/r', null, { providerType: 'cli', split: true, agentId: 'deep-agent' });
+  expect(prompt.systemPrompt.startsWith('## SERVER DEEP CONTRACT')).toBe(true);
 });

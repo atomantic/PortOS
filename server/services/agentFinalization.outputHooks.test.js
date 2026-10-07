@@ -1,3 +1,5 @@
+const deep = vi.hoisted(() => ({ checkpointDeepAudit: vi.fn(async () => ({ id: 'deep-1', complete: false, reason: 'Checkpoint partial' })), settleDeepAuditDelivery: vi.fn(async () => ({ id: 'deep-1', complete: false, reason: 'Checkpoint partial' })) }));
+vi.mock('./deepAudit.js', () => deep);
 vi.mock('../lib/gitCommitProbe.js', () => ({ committedDuringRun: vi.fn(async () => false) }));
 vi.mock('./appQuality.js', () => ({ recordAuditQuality: vi.fn(async () => true) }));
 import { recordAuditQuality } from './appQuality.js';
@@ -204,6 +206,16 @@ describe('recovery output-hook dispatch (#3182)', () => {
       success: true, validationPassed: false, auditAssessment: { status: 'not-recorded' },
     }));
     isProgrammaticIoTaskType.mockReturnValue(true);
+  });
+
+  it('parks a failed Deep attempt without the normal automatic retry path', async () => {
+    const task = { ...TASK, metadata: { ...TASK.metadata, analysisType: 'security', auditDepth: 'deep' } };
+    await finalizeAgent({ agentId: 'deep-failed', task, success: false, exitCode: 1, duration: 1000,
+      workspacePath: '/example/repo', startedAt: Date.now() - 1000, outputBuffer: 'Context exhausted',
+      errorAnalysis: { type: 'transient', retryable: true, error: 'context exhausted' } });
+    expect(resolveFailedTaskUpdate).not.toHaveBeenCalled();
+    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'blocked', metadata: expect.objectContaining({ blockedCategory: 'deep-audit-partial' }) }), expect.anything());
+    expect(deep.checkpointDeepAudit).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
   });
 
   it('distinguishes a clean execution with no usable assessment from a failed execution', async () => {

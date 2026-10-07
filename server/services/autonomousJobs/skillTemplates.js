@@ -187,6 +187,8 @@ async function generateTaskFromJob(job) {
     priority: job.priority,
     metadata: {
       autonomousJob: true,
+      ...(meta.auditDepth ? { auditDepth: meta.auditDepth } : {}),
+      ...(meta.deepAuditId ? { deepAuditId: meta.deepAuditId } : {}),
       jobId: job.id,
       jobName: job.name,
       jobCategory: job.category,

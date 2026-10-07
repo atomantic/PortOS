@@ -59,6 +59,9 @@ therefore starts conservatively if it contains a hold or outstanding operations.
 
 ## `db-primary` — app-native relational records
 
+- Deep audit evidence — `deep_audit_ledgers` stores each app/category coverage ledger, source/prompt pins, server-assigned attempts, candidates, receipts and invalidated history. Machine-local and covered by the PostgreSQL dump; it does not federate (no sync cursor or tombstones). JSONB holds structured evidence, not binary assets, and row locking serializes updates. No full-text index is needed for keyed checkpoint reads. Additive schema initialization creates the table for existing and fresh installs without transforming old records or seeding data. Agent-written checkpoint JSON under `data/cos/deep-audit-checkpoints/` is a retained recovery input outside source checkouts, captured by normal CoS filesystem backup; imported database receipts remain authoritative. See [Deep audits](./DEEP-AUDITS.md).
+
+
 - Beeper's `beeper_reconcile_cursors` stores a machine-local per-account rotating checkpoint and a fixed per-rotation upper bound over already mirrored message IDs. Each sweep refetches at most 20 stored messages per account, independently of forward ingestion; failed retrievals retain the archive and retry on the next rotation. Checkpoints survive restart, cascade on account deletion, and are covered by PostgreSQL backup. They never federate. `beeper_messages.observed_at` records fetch-start time to break equal source-version ties; source edit timestamps prevent stale sweep/outbox writes from replacing edits. Additive schema initialization upgrades existing installs without a data seed.
 
 

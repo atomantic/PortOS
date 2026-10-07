@@ -374,6 +374,13 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
       task = { ...task, metadata: { ...task.metadata, prompt: featurePrompt } };
     }
   }
+  const deepAuditContract = task.metadata?.auditDepth === 'deep'
+    ? await (await import('./deepAudit.js')).prepareDeepAudit({ task, agentId: options.agentId,
+      workspacePath: worktreeInfo?.worktreePath || workspaceDir }) : null;
+  const withDeepAudit = prompt => !deepAuditContract ? prompt : typeof prompt === 'string'
+    ? `${deepAuditContract}\n\n${prompt}`
+    : { ...prompt, systemPrompt: `${deepAuditContract}\n\n${prompt.systemPrompt || ''}` };
+
   const providerType = options.providerType || PROVIDER_TYPES.API;
   const providerId = options.providerId || null;
   const providerCommand = options.providerCommand || null;
@@ -419,9 +426,9 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   if (LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType)) {
     const forgeCli = await resolveManualForgeCli(workspaceDir, worktreeInfo, task);
     const lightOptions = { isTui, providerId, providerCommand, providerModel, leanMode, agentId, defaultReviewers, codeReviewDefaults, localAgentLoopBody: localAgentLoopBodyForInline, localAgentLoopBodyPath, forgeCli };
-    return options.split === true
+    return withDeepAudit(options.split === true
       ? buildLightContextPromptParts(task, workspaceDir, worktreeInfo, lightOptions)
-      : buildLightContextPrompt(task, workspaceDir, worktreeInfo, lightOptions);
+      : buildLightContextPrompt(task, workspaceDir, worktreeInfo, lightOptions));
   }
 
   // Creative Director tasks (scene evaluation, treatment/plan run via API) judge
@@ -606,14 +613,14 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     : buildIssueFilingSection({ providerId, model: providerModel, taskBody: [task.description, contextBlock] });
   const uiAuditRuntimeSection = isUiAuditTask(task) ? UI_AUDIT_RUNTIME_RULE : '';
 
-  return buildFullAgentPrompt({
+  return withDeepAudit(buildFullAgentPrompt({
     task, workspaceDir, agentInstructionsSection, memorySection, digitalTwinSection, contextBlock,
     worktreeSection, pipelineSection, jiraSection, orchestrationSection,
     issueFilingSection, simplifySection, tuiCompletionSection,
     reviewLoopSection, reviewLoopFollowUpSection, compactionSection, skillSection,
     toolsSection, planningContextSection, uiAuditRuntimeSection,
     completionBullet, completionInstructions, noChangeSuccess, completionMode,
-  });
+  }));
 }
 
 /**

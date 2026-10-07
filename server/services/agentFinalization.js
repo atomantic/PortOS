@@ -1015,6 +1015,9 @@ export function dispatchTaskOutputHookOnce({
   if (existing) return existing;
 
   const persistDispatchMarker = async (result) => {
+    if (result.deepAudit) {
+      await updateAgent(agentId, { metadata: { deepAudit: result.deepAudit } });
+    }
     if (result.auditAssessment) {
       await updateAgent(agentId, { metadata: { auditAssessment: result.auditAssessment } })
         .catch(err => emitLog('warn', `⚠️ Failed to persist audit assessment status for ${agentId}: ${err.message}`, { agentId }));
@@ -1036,11 +1039,11 @@ export function dispatchTaskOutputHookOnce({
     // retryable on recovery rather than being mistaken for a successful report.
     const savedAssessment = [agent?.metadata?.auditAssessment, agent?.result?.auditAssessment]
       .find(assessment => assessment?.status === 'recorded');
-    if (isAuditTaskType(resolveTaskHookType(task)) && savedAssessment?.status === 'recorded') {
+    if (task.metadata?.auditDepth !== 'deep' && isAuditTaskType(resolveTaskHookType(task)) && savedAssessment?.status === 'recorded') {
       return { ran: false, auditAssessment: savedAssessment };
     }
     if (agent?.metadata?.outputHookDispatchedAt) {
-      return { ran: false, alreadyDispatched: true };
+      return { ran: false, alreadyDispatched: true, ...(agent.metadata?.deepAudit ? { deepAudit: agent.metadata.deepAudit } : {}) };
     }
 
     const hookDispatch = dispatchTaskOutputHook({
@@ -1597,7 +1600,9 @@ export async function finalizeAgent({
   });
 
   const taskType = task?.taskType || 'user';
-  const taskUpdate = terminatedByUser
+  const taskUpdate = task.metadata?.auditDepth === 'deep' && !terminatedByUser
+    ? { status: 'blocked', metadata: { ...preHookTask.metadata, blockedReason: 'Deep audit checkpoint; resume explicitly', blockedCategory: 'deep-audit-partial', blockedAt: new Date().toISOString() } }
+    : terminatedByUser
     ? {
       status: 'blocked',
       metadata: {
@@ -1631,6 +1636,17 @@ export async function finalizeAgent({
       return null;
     });
 
+  if (task.metadata?.auditDepth === 'deep' && hookResult?.deepAudit) {
+    hookResult.deepAudit = await (await import('./deepAudit.js')).settleDeepAuditDelivery({
+      task, agentId, success: verdict.success && !terminatedByUser, validationPassed,
+    }).catch(err => ({ ...hookResult.deepAudit, complete: false, deliveryComplete: false, reason: `Delivery persistence failed: ${err.message}` }));
+    await updateAgent(agentId, { metadata: { deepAudit: hookResult.deepAudit } });
+    if (hookResult.deepAudit.complete && verdict.success && !terminatedByUser) {
+      taskUpdate.status = 'completed';
+      taskUpdate.metadata = { ...task.metadata };
+    }
+  }
+
   // Sequential by design: completeAgent + updateTask share the cosState
   // mutex (`withStateLock`) so parallelism gains nothing, AND ordering
   // matters — if completeAgent throws, we must not mark the task completed.
@@ -1640,6 +1656,7 @@ export async function finalizeAgent({
   await completeAgent(agentId, {
     success: verdict.success,
     validationPassed,
+    ...(hookResult?.deepAudit ? { deepAudit: hookResult.deepAudit } : {}),
     ...(isAuditTaskType(resolveTaskHookType(task)) ? {
       auditAssessment: hookResult?.auditAssessment || { status: 'unverified' },
     } : {}),
@@ -1940,10 +1957,14 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
   // Shared resolver with evaluateSuccessCriteria's gate — "runs a hook" and "gets
   // the programmatic-I/O criterion" must stay the same question (#2727).
   const taskType = resolveTaskHookType(task);
-  if (!taskType) return { ran: false };
+  const deepAudit = task.metadata?.auditDepth === 'deep'
+    ? await (await import('./deepAudit.js')).checkpointDeepAudit({ task, agentId, success: false,
+      workspacePath: hookPayloadDir({ task, workspacePath, recovery }) }) : null;
+  if (!taskType) return { ran: false, ...(deepAudit ? { deepAudit } : {}) };
   if (isAuditTaskType(taskType)) {
     const { recordAuditQuality } = await import('./appQuality.js');
     const auditAssessment = await recordAuditQuality({ task, taskType, agentId, success, assessedAt,
+      ...(task.metadata?.auditDepth === 'deep' ? { deepDiscoveryComplete: deepAudit?.discoveryComplete === true } : {}),
       workspacePath: hookPayloadDir({ task, workspacePath, recovery }) })
       .then(recorded => ({ status: recorded === true ? 'recorded' : success ? 'not-recorded' : 'not-attempted' }))
       .catch(err => {
@@ -1952,15 +1973,15 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
       });
     const recorded = auditAssessment.status === 'recorded';
     // A review-only run must not land a separate snapshot behind the user's back.
-    if (recorded === true && resolvePrCompletion(task?.metadata) !== PR_COMPLETIONS.LEAVE_OPEN) {
+    if (task.metadata?.auditDepth !== 'deep' && recorded === true && resolvePrCompletion(task?.metadata) !== PR_COMPLETIONS.LEAVE_OPEN) {
       await publishAppSnapshotFileAfterAudit(task?.metadata?.app);
     }
     // Assessment telemetry never waives commit/PR success criteria for fix mode.
-    return { ran: false, auditAssessment };
+    return { ran: false, auditAssessment, ...(deepAudit ? { deepAudit } : {}) };
   }
   const { getTaskOutputHook } = await import('./taskTypeHooks.js');
   const hook = await getTaskOutputHook(taskType);
-  if (!hook) return { ran: false };
+  if (!hook) return { ran: false, ...(deepAudit ? { deepAudit } : {}) };
 
   const cwd = hookPayloadDir({ task, workspacePath, recovery });
   const payload = cwd ? await readHookPayload({ agentId, taskType, cwd }) : null;

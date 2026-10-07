@@ -300,6 +300,13 @@ export default function AutomationTab({ appId, appName }) {
                     </button>
                   ) : null}
                   <div className="flex flex-wrap items-center gap-1">
+                    {globalConfig.fileIssuesCapable && <label className="text-xs" htmlFor={`audit-depth-${taskType}`}>Depth
+                      <select id={`audit-depth-${taskType}`} title="Deep checkpoints pause; use Run Now to resume" disabled={saving} className="ml-1 bg-port-bg border border-port-border rounded"
+                        value={override.taskMetadata?.auditDepth ?? globalConfig.taskMetadata?.auditDepth ?? 'quick'}
+                        onChange={event => saveOverride(taskType, { taskMetadata: { ...override.taskMetadata, auditDepth: event.target.value } })}>
+                        <option value="quick">Quick</option><option value="deep">Deep</option>
+                      </select>
+                    </label>}
                     {globalConfig.fileIssuesCapable && (() => {
                       const effective = override.taskMetadata?.fileIssues ?? globalConfig.taskMetadata?.fileIssues ?? globalConfig.defaultFileIssues === true;
                       const hasOverride = override.taskMetadata?.fileIssues !== undefined;

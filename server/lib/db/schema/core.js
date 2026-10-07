@@ -79,6 +79,13 @@ END$$`,
 ];
 
 export const coreDdl = [
+    `CREATE TABLE IF NOT EXISTS deep_audit_ledgers (
+      id TEXT PRIMARY KEY,
+      app_id TEXT NOT NULL,
+      category TEXT NOT NULL,
+      ledger JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
     ...memoryHistoryDdl,
     `CREATE TABLE IF NOT EXISTS app_quality_measurements (
       app_id TEXT NOT NULL,

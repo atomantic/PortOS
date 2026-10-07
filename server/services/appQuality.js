@@ -6,7 +6,7 @@ import { normalizeAuditTaskType } from '../lib/auditCatalog.js';
 import { parseAuditQualityReport, summarizeAppQuality, buildAppQualityHistory, latestQualityRecords } from '../lib/auditQuality.js';
 import { collectAppQuality, qualityRecord, readQualityRecords, readReleaseQuality } from './appQualityFederation.js';
 
-export async function recordAuditQuality({ task, taskType, agentId, workspacePath, success, assessedAt }, deps = {}) {
+export async function recordAuditQuality({ task, taskType, agentId, workspacePath, success, assessedAt, deepDiscoveryComplete = false }, deps = {}) {
   if (!success || !workspacePath || !task?.metadata?.app || !agentId) return false;
   const contents = await (deps.readFile || tryReadFile)(doneSentinelPath(workspacePath, agentId));
   const { summary } = parseSentinelPayload(contents);
@@ -16,6 +16,7 @@ export async function recordAuditQuality({ task, taskType, agentId, workspacePat
     console.warn(`⚠️ Audit quality report missing or invalid for ${agentId} (${taskType})`);
     return false;
   }
+  if (task.metadata.auditDepth === 'deep' && !deepDiscoveryComplete && report.coverage === 'broad') report.coverage = 'partial';
   // Immutable run measurements make completion replay idempotent.
   if (!Number.isFinite(Date.parse(assessedAt))) {
     console.warn(`⚠️ Audit quality skipped for ${agentId}: no valid run start time`);

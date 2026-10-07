@@ -5,7 +5,7 @@ import MaintenanceRunStatus from '../cos/tabs/schedule/MaintenanceRunStatus';
 import useProviderModels from '../../hooks/useProviderModels';
 import { useSocketResource } from '../../hooks/useSocketResource';
 import { enabledProcessProviderFilter } from '../../utils/providers';
-import { getMaintenanceRuns, startMaintenanceRun, stopMaintenanceRun } from '../../services/apiAgents';
+import { getMaintenanceRuns, startMaintenanceRun, stopMaintenanceRun, resumeMaintenanceRun } from '../../services/apiAgents';
 
 const RUN_EVENTS = ['cos:maintenance:updated'];
 
@@ -33,6 +33,7 @@ export default function AppQualityRunner({ app, children }) {
     return next;
   });
   const [mode, setMode] = useState('file-issues');
+  const [auditDepth, setAuditDepth] = useState('quick');
   const [prCompletion, setPrCompletion] = useState('draft');
   const [effort, setEffort] = useState('');
   const [busy, setBusy] = useState(false);
@@ -71,7 +72,7 @@ export default function AppQualityRunner({ app, children }) {
     setBusy(true);
     setError('');
     const response = await startMaintenanceRun({ appId: app.id, providerId: picker.selectedProviderId, model: picker.selectedModel,
-      effort: effort || null, mode, claimBetweenAudits: false, taskTypes,
+      effort: effort || null, mode, ...(auditDepth === 'deep' ? { auditDepth } : {}), claimBetweenAudits: false, taskTypes,
       ...(mode === 'fix' && prCompletion ? { prCompletion } : {}),
       // A category picked by name is the user's explicit choice and runs even if
       // the repository scan says it cannot apply; batch selections stay gated.
@@ -80,10 +81,10 @@ export default function AppQualityRunner({ app, children }) {
     if (response) setRuns(previous => [response.run, ...(previous ?? []).filter(entry => entry.id !== response.run.id)]);
     setBusy(false);
   };
-  const stop = async (id) => {
+  const stop = async (id, resume = false) => {
     setBusy(true);
     setError('');
-    const response = await stopMaintenanceRun(id, { silent: true }).catch(err => { if (appIdRef.current === app.id) setError(err.message); return null; });
+    const response = await (resume ? resumeMaintenanceRun : stopMaintenanceRun)(id, { silent: true }).catch(err => { if (appIdRef.current === app.id) setError(err.message); return null; });
     if (appIdRef.current !== app.id) return;
     if (response) setRuns(previous => (previous ?? []).map(entry => entry.id === response.run.id ? response.run : entry));
     setBusy(false);
@@ -102,6 +103,13 @@ export default function AppQualityRunner({ app, children }) {
         </select>
       </label>
     </div>
+    <label htmlFor="quality-depth" className="block text-sm">Audit depth
+      <select id="quality-depth" className="block w-full bg-port-bg border border-port-border rounded p-2" value={auditDepth} disabled={busy} onChange={event => setAuditDepth(event.target.value)}>
+        <option value="quick">Quick — broad scan, focused review</option>
+        <option value="deep">Deep — persistent coverage and independent passes</option>
+      </select>
+    </label>
+    {auditDepth === 'deep' && <p className="text-xs text-gray-400">Each launch works one review pass and saves a checkpoint. Resume explicitly for remaining evidence and independent challenge. Source changes invalidate prior coverage. No audits start until Run now.</p>}
     {mode === 'fix' && <label htmlFor="quality-publication" className="block text-sm">Pull requests
       <select id="quality-publication" className="block w-full bg-port-bg border border-port-border rounded p-2" value={prCompletion} disabled={busy} onChange={event => setPrCompletion(event.target.value)}>
         <option value="draft">Drafts for review — never merge</option>
@@ -118,9 +126,10 @@ export default function AppQualityRunner({ app, children }) {
       className="px-3 py-2 rounded bg-port-accent text-port-bg text-sm font-medium disabled:opacity-50">{taskTypes.length === 1 ? 'Run now' : `Run ${taskTypes.length} checks now`}</button>
     {(loading || loadError) && <p className="text-xs" role="status">{loadError ? 'Runner status is unavailable.' : 'Loading runner status…'} <button type="button" className="text-port-accent" onClick={loadRuns}>Retry</button></p>}
     {error && <p role="alert" className="text-sm text-port-error">{error}</p>}
-    {runs.filter((run, index) => run.status === 'running' || index === 0).map(run => <div key={run.id} className="space-y-2">
+    {runs.filter((run, index) => run.status === 'running' || run.auditDepth === 'deep' || index === 0).map(run => <div key={run.id} className="space-y-2">
       <MaintenanceRunStatus run={run} />
       {run.reason && <p className="text-xs break-words">{run.reason} <Link className="text-port-accent underline" to="/cos/schedule">Open runner settings</Link></p>}
+      {run.auditDepth === 'deep' && run.status === 'stopped' && <button type="button" className="text-xs text-port-accent" disabled={busy} onClick={() => stop(run.id, true)}>Resume Deep audit</button>}
       {run.status === 'running' && <button type="button" className="text-xs text-port-accent" disabled={busy} onClick={() => stop(run.id)}>Stop remaining checks</button>}
     </div>)}
   </section>;

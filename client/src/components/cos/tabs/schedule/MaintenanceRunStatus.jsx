@@ -1,3 +1,4 @@
+import { formatCount } from '../../../../utils/formatters';
 import MaintenanceStepChecklist from './MaintenanceStepChecklist';
 
 /**
@@ -28,6 +29,12 @@ export default function MaintenanceRunStatus({ run, showSteps = false, renderSte
   return <div className={`space-y-1 text-xs min-w-0 ${showSteps ? 'w-full' : ''}`} role="status">
     <p>{run.status} · {current}/{total} steps{run.status === 'running' && step ? ` · ${step}` : ''}</p>
     <progress aria-label="Maintenance steps completed" value={done} max={total || 1} className="w-full h-1 accent-port-accent" />
+    {run.auditDepth === 'deep' && Object.entries(run.deepAudits || {}).map(([id, audit]) => <div key={id} className="space-y-1">
+      <p>Deep discovery: {audit.discoveryComplete ? 'complete' : 'partial'} · {formatCount(audit.reviewedUnits)}/{formatCount(audit.totalUnits)} units reviewed · {formatCount(audit.satisfiedPasses)}/{formatCount(audit.requiredPasses)} pass requirements</p>
+      <p>{formatCount(audit.blockedUnits)} blocked · {formatCount(audit.pendingCandidates)} candidates awaiting triage · Delivery: {audit.deliveryComplete ? 'complete' : 'pending'} · {formatCount(audit.pendingRemediations)} remediations pending</p>
+      {audit.revision && <p>Source revision: <code>{audit.revision.slice(0, 12)}</code></p>}
+      {audit.reason && <p className="break-words">{audit.reason}</p>}
+    </div>)}
     {run.active && <p className="flex items-center gap-2">
       {run.active.status === 'running' && <span aria-hidden="true" className="w-2 h-2 rounded-full bg-port-accent motion-safe:animate-pulse" />}
       {run.active.status || 'queued'}
