@@ -12,6 +12,7 @@
  */
 
 import { existsSync } from 'fs';
+import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { join } from 'path';
 import { emitLog } from './cosEvents.js';
 import { addTask, forceSpawnTask, getAgents, updateTask } from './cos.js';
@@ -45,6 +46,10 @@ import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_SE
 // already merged). Sanctioned by the Security Model's re-entrancy-guard carve-out:
 // this is one actor's duplicate in-flight operation, not two competing humans.
 const inFlightCleanups = new Map();
+// Fail closed even when the agent store cannot persist the hold. Normally the
+// persisted metadata owns recovery across restarts; this covers sibling cleanup
+// callbacks in the process where that write failed.
+const publicationHolds = new Map();
 
 
 /**
@@ -121,6 +126,7 @@ async function auditRepoState(agentId, success, originalTask, warnings) {
   // fields and has no use for the run's whole output.txt.
   const { getAgentRecord } = await import('./cos.js');
   const agentState = await getAgentRecord(agentId).catch(() => null);
+  if (publicationHolds.has(agentId) || ['running', 'blocked'].includes(agentState?.metadata?.publicationValidation?.status)) return;
   await verifyAgentRepoState({
     agentId,
     task: originalTask,
@@ -180,6 +186,7 @@ async function worktreeCleanupContext(agentId, options) {
     isWorktree: true, agentId, sourceWorkspace, worktreeBranch,
     discardWorktree: isTruthyMeta(normalized.originalTask?.metadata?.discardWorktree),
     worktreePath: metadata.workspacePath || join(PATHS.worktrees, agentId),
+    publicationValidation: publicationHolds.get(agentId) || metadata.publicationValidation,
     warnings: [],
   };
 }
@@ -206,6 +213,9 @@ async function probeWorktreePr(context, success) {
 
 async function runCleanupAgentWorktree(agentId, success, options = {}) {
   const context = await worktreeCleanupContext(agentId, options);
+  if (['running', 'blocked'].includes(context.publicationValidation?.status)) {
+    return [`Publication validation ${context.publicationValidation.status} for ${context.worktreeBranch}; worktree preserved at ${context.worktreePath}. Resume the task after resolving the validation outcome.`];
+  }
   const verdict = await probeWorktreePr(context, success);
   const disposition = resolveWorktreeDisposition({ ...context, success, prClaimVerdict: verdict });
   reportWorktreeDisposition(context, disposition, verdict);
@@ -282,6 +292,27 @@ async function discardAgentWorktree({ agentId, sourceWorkspace, worktreeBranch }
 async function openWorktreePullRequest(context) {
   const { agentId, sourceWorkspace, worktreeBranch, worktreePath, warnings, description, agentOutput } = context;
   emitLog('info', `🌳 Opening PR for worktree agent ${agentId} branch ${worktreeBranch}`, { agentId, branchName: worktreeBranch });
+
+  if (context.originalTask?.metadata?.app === PORTOS_APP_ID) {
+    const { updateAgent } = await import('./cos.js');
+    try {
+      publicationHolds.set(agentId, { status: 'running' });
+      await updateAgent(agentId, { metadata: { publicationValidation: { status: 'running', startedAt: new Date().toISOString() } } });
+      const { validatePublication } = await import('./publicationValidation.js');
+      const validation = await validatePublication(context);
+      publicationHolds.set(agentId, validation);
+      await updateAgent(agentId, { metadata: { publicationValidation: validation } });
+      if (validation.status !== 'passed') {
+        warnings.push(`Publication validation blocked for ${worktreeBranch}: ${validation.reason}. Worktree preserved at ${worktreePath}; resolve validation before resuming the task.`);
+        return warnings;
+      }
+      publicationHolds.delete(agentId);
+    } catch (error) {
+      publicationHolds.set(agentId, { status: 'blocked', reason: 'recording-failed' });
+      warnings.push(`Publication validation could not be recorded for ${worktreeBranch}: ${error.message}. Worktree preserved at ${worktreePath}.`);
+      return warnings;
+    }
+  }
 
   const [pushResult, branchInfo] = await Promise.all([
     git.push(worktreePath, worktreeBranch).then(() => true).catch(err => {
