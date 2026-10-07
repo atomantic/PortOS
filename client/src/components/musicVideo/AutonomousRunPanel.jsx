@@ -5,6 +5,8 @@ import {
   AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LYRICS_STEP_LABELS, AUTONOMOUS_PRODUCE_STEP_LABELS, AUTONOMOUS_SONG_STEP_LABELS, AUTONOMOUS_STATUS_LABELS, AUTONOMOUS_VIEWABLE_STAGES,
   autonomousStageOutput, autonomousStageRows, isAutonomousLive, isOrchestratedRun,
 } from '../../lib/musicVideoAutonomous.js';
+import { MUSIC_VIDEO_AUTOMATION_TOOLS } from '../../lib/musicVideoAutomation.js';
+import { VideoModelField } from './ToolPicker.jsx';
 import { productionReviewStopGuidance } from '../../lib/musicVideoStages.js';
 import { formatCount, formatUsd } from '../../utils/formatters.js';
 import AutoApproveFields from './AutoApproveFields.jsx';
@@ -67,6 +69,8 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
   const [autoApproveEdit, setAutoApproveEdit] = useState(null);
   const autoApprove = autoApproveEdit && autoApproveEdit.runId === run?.id ? autoApproveEdit.value : (run?.brief?.autoApprove || []).filter(stage => stage !== 'proof');
   const [grantError, setGrantError] = useState(null);
+  // The video model swaps the director picked for a parked production stage: { runId, value: { 'video:<mode>': id } }.
+  const [videoSwapEdit, setVideoSwapEdit] = useState(null);
   if (!run) return null;
   const guidance = productionReviewStopGuidance(run, readiness);
   const rows = autonomousStageRows(run);
@@ -81,6 +85,12 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
   // A run canceled while waiting on production can resume: it adopts or restarts production.
   const reopenable = run.status === 'canceled' && run.stage === 'produce';
   const canRetry = ['needs-human', 'failed', 'stopped'].includes(run.status) || run.interrupted || reopenable;
+  // A run parked in production can swap its video model on Resume; the same production run carries on.
+  const videoTools = canRetry && !awaiting && run.stage === 'produce'
+    ? MUSIC_VIDEO_AUTOMATION_TOOLS.filter((tool) => tool.id.startsWith('video:') && (run.brief?.tools || []).includes(tool.id))
+    : [];
+  const videoSwaps = videoSwapEdit && videoSwapEdit.runId === run.id ? videoSwapEdit.value : {};
+  const modelsSwap = Object.fromEntries(Object.entries(videoSwaps).filter(([tool, id]) => id !== (run.brief?.models?.[tool] || '')).map(([tool, id]) => [tool, id || null]));
   const orchestrator = isOrchestratedRun(run) ? run.brief.orchestrator : null;
   const tone = STATUS_TONES[run.status] || '';
   // #10157: what the production run has used against its limits (Suno is counted apart).
@@ -92,7 +102,8 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
   const selectedRow = rows.find((row) => row.id === selectedStage && row.status === 'done' && AUTONOMOUS_VIEWABLE_STAGES.includes(row.id)) || null;
   const selected = selectedRow?.id || null;
   // Every resume path carries the selected grant and shows authorization failures inline.
-  const resume = (edits = {}) => {
+  const resume = (rawEdits = {}) => {
+    const edits = Object.keys(modelsSwap).length && videoTools.length ? { ...rawEdits, models: modelsSwap } : rawEdits;
     if (!autoApproveEdit || autoApproveEdit.runId !== run.id) return auto.resume(edits);
     setGrantError(null);
     return auto.resume({ ...edits, autoApprove }, { inline: true })
@@ -216,6 +227,20 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
           error={grantError}
           granted={run.brief?.autoApprove || []}
         />
+      )}
+
+      {videoTools.length > 0 && (
+        <fieldset aria-label="Swap the video model" className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))] gap-3">
+          {videoTools.map((tool) => (
+            <VideoModelField
+              key={tool.id}
+              id={`mv-run-video-model-${tool.id}`}
+              tool={tool}
+              value={tool.id in videoSwaps ? videoSwaps[tool.id] : run.brief?.models?.[tool.id] || ''}
+              onChange={(value) => setVideoSwapEdit({ runId: run.id, value: { ...videoSwaps, [tool.id]: value } })}
+            />
+          ))}
+        </fieldset>
       )}
 
       {live || run.status === 'failed' || reopenable ? (
