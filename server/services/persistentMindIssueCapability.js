@@ -68,7 +68,7 @@ Issue filing access is ON, but no authorized managed app currently resolves to a
   return `# Issue tracker capability
 Issue filing access is ON. Filing an issue is the PREFERRED way to queue concrete work: an issue is durable, a human can read and re-scope it, and a coding agent can claim it later even on a machine that has none attached right now. Prefer it over describing work only in conversation, and use it instead of a CoS task whenever you are not the one dispatching the work.
 
-Read before you write. Call issues.list for the target app first and skip anything already tracked; duplicates are refused on an exact title match, but a near-duplicate still wastes the backlog.
+Read before you write. Call issues.list for the target app first and skip anything already tracked; duplicates are refused on an exact title match, but a near-duplicate still wastes the backlog. Only a result with complete: true and zero matches shows nothing matching among OPEN issues; a truncated result (see truncationReasons) or a null totalOpen proves nothing, and closed issues are never listed.
 
 File with issues.file. Write the body so someone can pick it up cold: what is wrong or missing, where in the repo, why it matters now, and the chosen fix. Do not file speculative or future-only refactors.
 
@@ -103,7 +103,47 @@ const resolveTarget = async (appId) => {
   return { app, root };
 };
 
-/** Open issues on the app's tracker, projected down to what a prompt can use. */
+// Headroom under the adapter's 4,000-char tool-result ceiling (see
+// persistentMindAdapter.boundedToolResult), so the structured rows survive intact.
+const LIST_RESULT_BUDGET_CHARS = 3_500;
+const LIST_TITLE_CHARS = 120;
+// Progressively leaner row shapes; previews go first, then optional detail.
+const LIST_ROW_DETAIL_LEVELS = [
+  { preview: PERSISTENT_MIND_ISSUE_LIMITS.bodyPreviewChars, detail: true },
+  { preview: 200, detail: true },
+  { preview: 0, detail: true },
+  { preview: 0, detail: false },
+];
+
+const projectIssueRow = (issue, { preview, detail }) => ({
+  number: issue.number,
+  title: String(issue.title || '').slice(0, LIST_TITLE_CHARS),
+  url: issue.url,
+  ...(detail ? { labels: issue.labels.map((label) => label.name), assignees: issue.assignees, updatedAt: issue.updatedAt } : {}),
+  ...(preview ? { bodyPreview: String(issue.body || '').slice(0, preview) } : {}),
+});
+
+/** Fit rows under the budget: shrink detail first, then drop trailing rows (never to zero). */
+const fitIssueRows = (matches, envelope) => {
+  const size = (rows) => JSON.stringify({ ...envelope, issues: rows }).length;
+  for (const level of LIST_ROW_DETAIL_LEVELS) {
+    const rows = matches.map((issue) => projectIssueRow(issue, level));
+    if (size(rows) <= LIST_RESULT_BUDGET_CHARS) return rows;
+  }
+  const lean = matches.map((issue) => projectIssueRow(issue, LIST_ROW_DETAIL_LEVELS.at(-1)));
+  while (lean.length > 1 && size(lean) > LIST_RESULT_BUDGET_CHARS) lean.pop();
+  return lean;
+};
+
+/**
+ * Open issues on the app's tracker, projected down to what a prompt can use.
+ *
+ * Completeness is reported explicitly so a conclusive negative is never inferred
+ * from a partial read: `complete` is true only when the whole open backlog was
+ * enumerated, every body that was searched was whole, and no matching row was
+ * omitted. `totalOpen` is the exact open count, or null when the forge page was
+ * capped (`fetchedCount` is then only the page size).
+ */
 export async function listPersistentMindIssues(args) {
   const { app, error } = await resolveTarget(args.appId);
   if (error) return { ok: false, error };
@@ -113,29 +153,40 @@ export async function listPersistentMindIssues(args) {
   }
   const search = args.search ? args.search.toLowerCase() : null;
   const limit = args.limit || PERSISTENT_MIND_ISSUE_LIMITS.defaultListLimit;
-  const issues = result.issues
+  const matches = result.issues
     .filter((issue) => !args.label || issue.labels.some((label) => label.name === args.label))
-    .filter((issue) => !search || `${issue.title}\n${issue.body}`.toLowerCase().includes(search))
-    .slice(0, limit)
-    .map((issue) => ({
-      number: issue.number,
-      title: issue.title,
-      url: issue.url,
-      labels: issue.labels.map((label) => label.name),
-      assignees: issue.assignees,
-      updatedAt: issue.updatedAt,
-      bodyPreview: String(issue.body || '').slice(0, PERSISTENT_MIND_ISSUE_LIMITS.bodyPreviewChars),
-    }));
-  return {
+    .filter((issue) => !search || `${issue.title}\n${issue.body}`.toLowerCase().includes(search));
+  const limited = matches.slice(0, limit);
+
+  const fetchedCount = result.issues.length;
+  const sourceCapped = Boolean(result.enumeration?.capped);
+  const envelope = {
     ok: true,
     appId: args.appId,
     forge: app.forge,
     repository: result.fullName,
+    totalOpen: sourceCapped ? null : fetchedCount,
+    fetchedCount,
+    matchedCount: matches.length,
+    returnedCount: limited.length,
+    complete: true,
+    truncated: false,
+    truncationReasons: ['source-limit', 'body-clipped', 'row-limit', 'response-budget'],
+  };
+  const issues = fitIssueRows(limited, envelope);
+
+  const reasons = [];
+  if (sourceCapped) reasons.push('source-limit');
+  if (search && result.enumeration?.bodiesClipped) reasons.push('body-clipped');
+  if (matches.length > limited.length) reasons.push('row-limit');
+  if (limited.length > issues.length) reasons.push('response-budget');
+  return {
+    ...envelope,
     issues,
-    // The tracker's real open count, so a truncated page never reads as the
-    // whole backlog when the mind checks for an existing item.
-    totalOpen: result.issues.length,
-    truncated: result.issues.length > issues.length,
+    returnedCount: issues.length,
+    complete: reasons.length === 0,
+    truncated: reasons.length > 0,
+    truncationReasons: reasons,
   };
 }
 
