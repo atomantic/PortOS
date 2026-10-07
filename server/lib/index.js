@@ -457,6 +457,7 @@ export * from './xPostMedia.js';
 
 // === Search & indexing ===
 export * from './bm25.js';
+export * from './memoryLinkTypes.js';
 export * from './memoryQuery.js';
 export * from './memoryStats.js';
 export * from './rrfRanking.js';

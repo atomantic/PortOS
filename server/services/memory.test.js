@@ -1463,6 +1463,26 @@ describe('memory service', () => {
       expect(memorySaves.length).toBe(2);
     });
 
+    it('stores a directed typed link on the source only', async () => {
+      const source = { id: 'src', relatedMemories: [], updatedAt: '' };
+      const target = { id: 'tgt', relatedMemories: [], updatedAt: '' };
+      let callCount = 0;
+      readJSONFile.mockImplementation((path, def) => {
+        if (path.includes('memory.json')) {
+          callCount++;
+          return Promise.resolve(callCount <= 1 ? { ...source } : { ...target });
+        }
+        return Promise.resolve(def);
+      });
+
+      const result = await linkMemories('src', 'tgt', { linkType: 'contradicts', note: 'n' });
+
+      expect(result).toMatchObject({ success: true, linkType: 'contradicts', linkId: expect.any(String) });
+      const memorySaves = atomicWrite.mock.calls.filter(c => c[0].includes('memory.json'));
+      expect(memorySaves.length).toBe(1);
+      expect(JSON.stringify(memorySaves[0][1])).toContain('"linkType":"contradicts"');
+    });
+
     it('should return error when source not found', async () => {
       readJSONFile.mockImplementation((path, def) => Promise.resolve(def));
 

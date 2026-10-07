@@ -145,8 +145,8 @@ router.post('/consolidate', asyncHandler(async (req, res) => {
 
 // POST /api/memory/link - Link two memories
 router.post('/link', asyncHandler(async (req, res) => {
-  const { sourceId, targetId } = validateRequest(memoryLinkSchema, req.body);
-  const result = await memory.linkMemories(sourceId, targetId);
+  const { sourceId, targetId, linkType, note, createdBy } = validateRequest(memoryLinkSchema, req.body);
+  const result = await memory.linkMemories(sourceId, targetId, { linkType, note, createdBy });
   res.json(result);
 }));
 

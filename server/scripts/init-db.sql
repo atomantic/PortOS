@@ -120,13 +120,37 @@ CREATE TABLE IF NOT EXISTS post_attempts (
 CREATE INDEX IF NOT EXISTS idx_post_attempts_run ON post_attempts (run_id, position);
 CREATE INDEX IF NOT EXISTS idx_post_attempts_skill ON post_attempts (module, drill_type);
 
--- Memory relationships (bidirectional links)
+-- Memory relationships. Typed (#10493): 'related' is symmetric and stored as a
+-- reverse pair; every other link_type is directed and stored as one row.
 CREATE TABLE IF NOT EXISTS memory_links (
   source_id UUID REFERENCES memories(id) ON DELETE CASCADE,
   target_id UUID REFERENCES memories(id) ON DELETE CASCADE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  PRIMARY KEY (source_id, target_id)
+  id UUID NOT NULL DEFAULT gen_random_uuid(),
+  link_type VARCHAR(32) NOT NULL DEFAULT 'related',
+  note TEXT,
+  created_by VARCHAR(100),
+  PRIMARY KEY (source_id, target_id, link_type)
 );
+-- Upgrade path for installs whose table predates typed links: existing rows take
+-- the 'related' default (and a fresh id), so nothing is lost.
+ALTER TABLE memory_links ADD COLUMN IF NOT EXISTS id UUID NOT NULL DEFAULT gen_random_uuid();
+ALTER TABLE memory_links ADD COLUMN IF NOT EXISTS link_type VARCHAR(32) NOT NULL DEFAULT 'related';
+ALTER TABLE memory_links ADD COLUMN IF NOT EXISTS note TEXT;
+ALTER TABLE memory_links ADD COLUMN IF NOT EXISTS created_by VARCHAR(100);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint c
+      JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+     WHERE c.conrelid = 'memory_links'::regclass AND c.contype = 'p' AND a.attname = 'link_type'
+  ) THEN
+    ALTER TABLE memory_links DROP CONSTRAINT memory_links_pkey;
+    ALTER TABLE memory_links ADD PRIMARY KEY (source_id, target_id, link_type);
+  END IF;
+END$$;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_links_id ON memory_links (id);
+CREATE INDEX IF NOT EXISTS idx_memory_links_target ON memory_links (target_id);
 
 -- Relationship / Tribe graph. People live in Postgres so they can be joined to
 -- Brain memories, touchpoint history, and calendar event references.
