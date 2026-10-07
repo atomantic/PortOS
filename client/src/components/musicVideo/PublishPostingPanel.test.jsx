@@ -226,4 +226,13 @@ describe('PublishPostingPanel (#9282)', () => {
     fireEvent.click(within(done).getByRole('button', { name: 'Confirm marking DistroKid not done' }));
     expect(publishing.removePost).toHaveBeenCalledWith('distrokid');
   });
+
+  it('keeps a platform row reachable by its anchor while the card and row are folded', () => {
+    localStorage.setItem('portos.musicVideo.publishCards', JSON.stringify({ 'mv-1': { posting: false } }));
+    render(<PublishPostingPanel project={project({ posts: { youtube: { url: 'https://youtu.be/abc' } } })} publishing={hook({ enabledTargets: ['youtube', 'distrokid'] })} />);
+    expect(screen.getByRole('button', { name: /Publish manually/ })).toHaveAttribute('aria-expanded', 'false');
+    expect(document.getElementById('mv-post-distrokid')).not.toBeNull();
+    expect(document.getElementById('mv-post-youtube')).not.toBeNull();
+    localStorage.clear();
+  });
 });

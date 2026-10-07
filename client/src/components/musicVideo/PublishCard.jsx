@@ -21,7 +21,8 @@ function rememberOpen(projectId, cardId, open) {
  * get past the finished ones to the step they need. `defaultOpen` is the
  * card's own sense of whether it still needs attention; a toggle is
  * remembered on this device per project. `summary` shows beside a folded
- * title (e.g. "7 of 9 done"). `actions` (a button, say) sit beside the title,
+ * title (e.g. "7 of 9 done"). The body stays mounted while folded so a deep
+ * link into it can find its anchor and unfold the card (lib/unfoldToAnchor.js). `actions` (a button, say) sit beside the title,
  * outside the fold toggle.
  */
 export default function PublishCard({ projectId, cardId, label, icon: Icon, summary = '', defaultOpen = true, actions = null, className = '', children }) {
@@ -34,10 +35,10 @@ export default function PublishCard({ projectId, cardId, label, icon: Icon, summ
   };
   const Chevron = open ? ChevronDown : ChevronRight;
   return (
-    <section aria-label={label} className={`rounded-lg border border-port-border bg-port-card p-3 space-y-2 text-xs ${className}`.trim()}>
+    <section data-fold aria-label={label} className={`rounded-lg border border-port-border bg-port-card p-3 space-y-2 text-xs ${className}`.trim()}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-medium min-w-0 flex-1">
-          <button type="button" aria-expanded={open} aria-controls={open ? bodyId : undefined} onClick={toggle}
+          <button type="button" data-fold-toggle aria-expanded={open} aria-controls={bodyId} onClick={toggle}
             className="flex w-full items-center gap-1.5 min-h-[44px] sm:min-h-0">
             <Chevron size={14} className="shrink-0" />
             {Icon && <Icon size={14} className="shrink-0" />}
@@ -47,7 +48,8 @@ export default function PublishCard({ projectId, cardId, label, icon: Icon, summ
         </h3>
         {actions}
       </div>
-      {open && <div id={bodyId} className="space-y-2">{children}</div>}
+      {/* Kept mounted while folded: deep links (#mv-post-<target>) must find their anchor to unfold it. */}
+      <div id={bodyId} hidden={!open} className="space-y-2">{children}</div>
     </section>
   );
 }

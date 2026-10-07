@@ -247,12 +247,12 @@ function ManualLink({ idFor, label, placeholder, onSave, hideMarkDone = false })
   );
 }
 
-/** Undo a platform's done mark (PortOS's record only), behind a confirm. */
+/** Undo a platform's done mark: drops PortOS's record (link, rating, notes), never the post. Behind a confirm. */
 function UndoDone({ label, onUndo }) {
   const [confirm, setConfirm] = useState(false);
   return confirm ? (
     <ConfirmButtonPair
-      prompt={`Mark ${label} as not done? The post itself stays up.`}
+      prompt={`Remove PortOS's record of the ${label} post (its link, rating and notes)? The post itself stays up.`}
       confirmText="Not done"
       ariaLabel={`Confirm marking ${label} not done`}
       confirmAriaLabel={`Confirm marking ${label} not done`}
@@ -309,11 +309,11 @@ function TargetRow({ project, kit, entry, publishing }) {
   };
 
   return (
-    <li id={publishRowAnchor(target)} className="rounded border border-port-border p-2 space-y-2 scroll-mt-4">
+    <li id={publishRowAnchor(target)} data-fold className="rounded border border-port-border p-2 space-y-2 scroll-mt-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <h4 className="text-xs font-medium">
-            <button type="button" aria-expanded={open} aria-controls={open ? idFor('body') : undefined} onClick={() => setOpen(!open)}
+            <button type="button" data-fold-toggle aria-expanded={open} aria-controls={open ? idFor('body') : undefined} onClick={() => setOpen(!open)}
               className="flex items-center gap-1 min-h-[44px] sm:min-h-0">
               <Chevron size={13} className="shrink-0" />
               <span>{label}{account && <span className="font-normal text-port-text-muted"> as {entry.accountPlaceholder ? '' : '@'}{account}</span>}</span>

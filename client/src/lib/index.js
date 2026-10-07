@@ -164,6 +164,7 @@ export * from './providerManagement.js';
 export * from './rapidReaderPosition.js';
 export * from './registerServiceWorker.js';
 export * from './safeStorage.js';
+export * from './unfoldToAnchor.js';
 export * from './sameJsonShape.js';
 export * from './sketchCanvas.js';
 export * from './unsorted.js';
