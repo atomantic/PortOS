@@ -69,7 +69,7 @@ async function downloadClinvar(onProgress) {
   const reader = response.body.getReader();
 
   let downloaded = 0;
-  const writable = new WritableStream({
+  const _writable = new WritableStream({
     write(chunk) {
       downloaded += chunk.length;
       writer.write(chunk);

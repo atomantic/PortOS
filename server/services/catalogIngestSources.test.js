@@ -59,7 +59,7 @@ const catalogDB = await import('./catalogDB.js');
 const catalogExtraction = await import('./catalogExtraction.js');
 const browserService = await import('./browserService.js');
 const brainStorage = await import('./brainStorage.js');
-const fsp = await import('fs/promises');
+const _fsp = await import('fs/promises');
 const dnsp = await import('dns/promises');
 const fileUtils = await import('../lib/fileUtils.js');
 const {
@@ -219,7 +219,7 @@ describe('ingestFromVoice', () => {
     const transcribeFn = vi.fn().mockResolvedValue({ text: 'spoken memo text' });
     const persistFn = vi.fn().mockResolvedValue('voice-memo-abc.wav');
 
-    const { scrap, draft, mediaKey } = await ingestFromVoice(
+    const { draft, mediaKey } = await ingestFromVoice(
       { audioBase64: wavBase64, mimeType: 'audio/wav', title: 'My memo' },
       { transcribeFn, persistFn },
     );

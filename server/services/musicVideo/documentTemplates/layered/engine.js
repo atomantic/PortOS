@@ -221,7 +221,7 @@
     g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, `rgba(0,0,0,${strength})`);
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
   }
-  function flash(k, color = '#fff') { if (k <= 0.001) return; ctx.save(); ctx.globalAlpha = clamp(k); ctx.fillStyle = color; ctx.fillRect(0, 0, W, H); ctx.restore(); }
+  function _flash(k, color = '#fff') { if (k <= 0.001) return; ctx.save(); ctx.globalAlpha = clamp(k); ctx.fillStyle = color; ctx.fillRect(0, 0, W, H); ctx.restore(); }
   function glitch(t, strength) {
     if (strength <= 0.02) return;
     const f = frameOf(t);

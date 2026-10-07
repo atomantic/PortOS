@@ -10,7 +10,7 @@ import { parseModelNameAndEffort, slugify } from './artificialAnalysis.js';
 const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
 const OPENROUTER_ENDPOINTS_URL = 'https://openrouter.ai/api/v1/models';
 const OPENROUTER_REQUEST_TIMEOUT_MS = 15_000;
-const OPENROUTER_ENDPOINT_CONCURRENCY = 8;
+const _OPENROUTER_ENDPOINT_CONCURRENCY = 8;
 const ENDPOINT_WINDOW = '30m-p50';
 
 const identityHash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 24);
@@ -255,7 +255,7 @@ function endpointRequestUrl(modelId) {
   return OPENROUTER_ENDPOINTS_URL + '/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]) + '/endpoints';
 }
 
-async function fetchOpenRouterModelEndpoints(model) {
+async function _fetchOpenRouterModelEndpoints(model) {
   const url = endpointRequestUrl(model.id);
   let response;
   try {
@@ -281,7 +281,7 @@ async function fetchOpenRouterModelEndpoints(model) {
   return { model, endpoints: payload.data.endpoints };
 }
 
-async function mapWithConcurrency(items, limit, mapper) {
+async function _mapWithConcurrency(items, limit, mapper) {
   const results = new Array(items.length);
   let cursor = 0;
   let failure = null;

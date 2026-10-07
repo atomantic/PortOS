@@ -96,7 +96,7 @@ describe('publish drafts (#9282)', () => {
     const id = await readyProject();
     const { connect, pages } = fakeBrowser();
     const adapters = { stackerNews: adapter() };
-    const first = await preparePublishDraft(id, 'stackerNews', {}, { connect, adapters, platforms });
+    const _first = await preparePublishDraft(id, 'stackerNews', {}, { connect, adapters, platforms });
     const second = await preparePublishDraft(id, 'stackerNews', {}, { connect, adapters, platforms });
     expect(pages[0].closed).toBe(true);
     expect(await discardPublishDraft(id, second.draftId)).toBe(true);

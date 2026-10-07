@@ -101,7 +101,7 @@ let lastLoadedModelsError = null
 // Mirrors lmStudioManager's `getLastListError`.
 let lastInstalledModelsError = null
 let lastCheckAt = null
-let managedProcess = null
+let _managedProcess = null
 let managedProcessPid = null
 // What PortOS knows about the Ollama daemon that is up RIGHT NOW. Every field
 // describes ONE live process, so the whole record is written by `recordDaemon`
@@ -412,11 +412,11 @@ async function waitForAvailability(expected, timeoutMs, shouldAbort = () => fals
 }
 
 function rememberManagedProcess(child) {
-  managedProcess = child
+  _managedProcess = child
   managedProcessPid = child.pid
   child.on('exit', () => {
     if (managedProcessPid === child.pid) {
-      managedProcess = null
+      _managedProcess = null
       managedProcessPid = null
     }
   })

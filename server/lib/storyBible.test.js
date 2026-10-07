@@ -32,7 +32,6 @@ const {
   stripCanonControlFields,
   CANON_CONTROL_FIELDS,
   SERVER_OWNED_CHARACTER_FIELDS,
-  trimTo,
   filterCanonForIssue,
   filterCanonListForIssue,
   isCanonEntryGatedForIssue,

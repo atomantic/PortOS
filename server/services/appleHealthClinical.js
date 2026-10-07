@@ -281,7 +281,7 @@ export async function importClinicalRecords(jsonStrings, io) {
 
   // Count what changed
   const newDates = merged.tests.filter(t => !existingDates.has(t.date)).length;
-  const newValues = fhirData.totalParsed;
+  const _newValues = fhirData.totalParsed;
 
   await ensureDir(PATHS.meatspace);
   await atomicWrite(BLOOD_TESTS_FILE, merged);

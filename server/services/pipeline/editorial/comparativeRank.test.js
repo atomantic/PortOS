@@ -33,7 +33,7 @@ vi.mock('../readerPanelDigest.js', () => ({
   computeSourceContentHash: vi.fn(async () => 'HASH-v1'),
 }));
 
-const fileUtils = await import('../../../lib/fileUtils.js');
+const _fileUtils = await import('../../../lib/fileUtils.js');
 const stageRunner = await import('../../stageRunner.js');
 const issuesSvc = await import('../issues.js');
 const digest = await import('../readerPanelDigest.js');
@@ -49,7 +49,6 @@ const {
   getComparativeRank,
   eligibleIssues,
   START_RATING,
-  ELO_K,
   TOURNAMENT_STOP,
   __testing,
 } = await import('./comparativeRank.js');

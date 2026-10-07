@@ -27,7 +27,7 @@ import {
 let repo;
 let scratch;
 
-async function commit(subject) {
+async function _commit(subject) {
   await writeFile(join(repo, `${subject.replace(/\W+/g, '-')}.txt`), subject);
   await execGit(['add', '-A'], repo);
   await execGit(['commit', '-m', subject], repo);

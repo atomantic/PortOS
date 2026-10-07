@@ -958,9 +958,9 @@ describe('pipeline issues service', () => {
     });
 
     it('renumberInline skips tombstones — surviving issues stay contiguous', async () => {
-      const a = await svc.createIssue({ seriesId: 'ser-renum', title: 'A' });
+      const _a = await svc.createIssue({ seriesId: 'ser-renum', title: 'A' });
       const b = await svc.createIssue({ seriesId: 'ser-renum', title: 'B' });
-      const c = await svc.createIssue({ seriesId: 'ser-renum', title: 'C' });
+      const _c = await svc.createIssue({ seriesId: 'ser-renum', title: 'C' });
       await svc.deleteIssue(b.id);
       const live = await svc.listIssues({ seriesId: 'ser-renum' });
       expect(live.map((i) => i.title)).toEqual(['A', 'C']);
