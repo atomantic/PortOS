@@ -4,9 +4,17 @@
  * Snapshots + restores the `tracks` table. Mirrors albums/db.test.js.
  */
 
-import { describe, it, expect, afterAll, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, afterAll, beforeAll, beforeEach, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
+
+vi.mock('../../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-tracks-db-') }));
+
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
+import { contentHashForRecord, flushBaseHashes, __resetBaseHashCacheForTests } from '../../lib/conflictJournal.js';
 
 let dbReady = false;
 let skipReason = '';
@@ -35,15 +43,27 @@ describe.skipIf(!runDb)('tracks DB adapter round-trip', () => {
   });
   beforeEach(async () => { await query(`DELETE FROM tracks`); });
   afterAll(async () => {
-    await query(`DELETE FROM tracks`).catch(() => {});
-    for (const r of snap) {
-      await query(
-        `INSERT INTO tracks (id, title, data, created_at, updated_at, deleted, deleted_at)
-         VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7) ON CONFLICT (id) DO NOTHING`,
-        [r.id, r.title, JSON.stringify(r.data), r.created_at, r.updated_at, r.deleted, r.deleted_at],
-      ).catch(() => {});
+    try {
+      await query(`DELETE FROM tracks`).catch(() => {});
+      for (const r of snap) {
+        await query(
+          `INSERT INTO tracks (id, title, data, created_at, updated_at, deleted, deleted_at)
+           VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7) ON CONFLICT (id) DO NOTHING`,
+          [r.id, r.title, JSON.stringify(r.data), r.created_at, r.updated_at, r.deleted, r.deleted_at],
+        ).catch(() => {});
+      }
+    } finally {
+      try {
+        await close();
+      } finally {
+        try {
+          await flushBaseHashes();
+        } finally {
+          __resetBaseHashCacheForTests();
+          cleanupTempDataRoots();
+        }
+      }
     }
-    await close();
   });
 
   it('creates a track and mirrors title into the column', async () => {
@@ -69,5 +89,10 @@ describe.skipIf(!runDb)('tracks DB adapter round-trip', () => {
     expect(await db.mergeTracksFromSync([{ ...t, title: 'Old', updatedAt: '2000-01-01T00:00:00.000Z' }])).toEqual({ applied: false, count: 0 });
     expect(await db.mergeTracksFromSync([{ ...t, title: 'Fresh', updatedAt: '2099-01-01T00:00:00.000Z' }])).toEqual({ applied: true, count: 1 });
     expect((await db.getTrack(t.id)).title).toBe('Fresh');
+    const bases = JSON.parse(await readFile(
+      join(lazyTempDataRoot('portos-tracks-db-'), 'sharing', 'sync_base_hashes.json'), 'utf8',
+    ));
+    expect(bases[`track:${t.id}`].h)
+      .toBe(contentHashForRecord('track', await db.getTrack(t.id)));
   });
 });
