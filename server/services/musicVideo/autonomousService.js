@@ -59,6 +59,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { probeVideoDuration } from '../../lib/ffmpeg.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { trimTo } from '../../lib/textUtils.js';
+import { assertFootageVideoModelsCapable, loadPoolEnv } from './productionPool.js';
 import {
   AUTONOMOUS_DEFAULT_LIMITS,
   AUTONOMOUS_LIVE_STATUSES,
@@ -1047,6 +1048,10 @@ export async function startAutonomousVideo(input, { autoApproveAuthorized = fals
   const brief = { ...normalizeAutonomousBrief(input), ...autoApproveGrant(input?.autoApprove, autoApproveAuthorized) };
   if (!brief.prompt) throw runError(400, 'VALIDATION_ERROR', 'A prompt is required');
   if (brief.orchestrator) Object.assign(brief, orchestratorGrant(autoApproveAuthorized));
+  const footagePool = autonomousPool(brief.tools, brief.models);
+  if (footagePool.some((route) => route.kind === 'video' && route.model)) {
+    await assertFootageVideoModelsCapable(footagePool, await loadPoolEnv());
+  }
   const now = new Date().toISOString();
   const created = await deps.createProject({
     name: brief.name || trimTo(brief.prompt.replace(/\s+/g, ' '), 60) || 'Autonomous music video',
