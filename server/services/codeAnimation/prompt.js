@@ -60,7 +60,7 @@ export const CODE_ANIMATION_ASPECT_RATIOS = Object.freeze({
 // particle or oil-stroke style inside a real-time frame budget.
 export const CODE_ANIMATION_RESOLUTIONS = Object.freeze({ '720p': 720, '1080p': 1080 });
 
-export const CODE_ANIMATION_RENDERERS = Object.freeze(['auto', 'canvas2d', 'webgl', 'svg']);
+export const CODE_ANIMATION_RENDERERS = Object.freeze(['auto', 'canvas2d', 'webgl', 'svg', 'three']);
 
 export const CODE_ANIMATION_LIMITS = Object.freeze({
   durationMin: 3,
@@ -79,11 +79,16 @@ export const CODE_ANIMATION_LIMITS = Object.freeze({
   audioNotesMax: 1_500,
 });
 
+// The host vendors three.js and a fixed set of addons next to the page and
+// writes the import map itself (threeVendor.js), so the model only imports.
+const THREE_GUIDANCE = `Render with three.js (WebGL, real 3D). The host serves three locally and adds the import map: write \`<script type="module">\` and import by bare name — \`import * as THREE from 'three';\` plus only these addons: three/addons/postprocessing/{EffectComposer,RenderPass,ShaderPass,UnrealBloomPass,OutputPass,BokehPass,MaskPass,Pass}.js, three/addons/shaders/{CopyShader,LuminosityHighPassShader,OutputShader,BokehShader}.js, three/addons/geometries/RoundedBoxGeometry.js, three/addons/environments/RoomEnvironment.js (an asset-free PBR environment map) and three/addons/utils/BufferGeometryUtils.js. Do NOT write an import map or any CDN URL, and load no textures, models or fonts: build every material from colours and procedural CanvasTexture, and every shape from geometry. Create ONE renderer whose canvas is the film canvas (new THREE.WebGLRenderer({ antialias: false, preserveDrawingBuffer: true }), setPixelRatio(1), setSize(W, H, false)), ONE persistent scene and camera, and in renderFrame(t) only pose the scene analytically from t, then render once (composer.render() when you use post-processing). No simulation that accumulates between calls, no THREE.Clock, no Math.random: renderFrame(t) twice must give the same pixels. The page is a module, so it is deferred: define window.ANIMATION_META and window.renderFrame at module top level, not inside a load callback. For a cinematic finish render HDR through EffectComposer (HalfFloatType render target) and finish with OutputPass (tone mapping + sRGB): an UnrealBloomPass whose threshold sits above the sky (about 2.0 by day, 0.95 at night — a threshold of 1.0 turns every daytime frame milky), emissives driven above 1 (new THREE.Color(3, 1.6, 0.8)) so only lamps, screens and sparks glow, a depth-aware depth of field (BokehPass; focus on the subject, aperture small for wide shots and larger for close-ups, animate focus for rack focus), THREE.PCFShadowMap shadows (PCFSoftShadowMap was removed in r186) from a key light that casts shadows plus a soft fill near the camera so faces stay readable, and a vignette and light grain keyed to the frame time. Keep additive particles small and away from the lens. Software-rendered exports are slow: keep geometry modest and shadow maps at or below 2048.`;
+
 const RENDERER_GUIDANCE = {
   auto: 'Pick the renderer that best serves the style: Canvas 2D for most illustrative looks, raw WebGL (no libraries) when you need thousands of primitives or shader effects.',
   canvas2d: 'Render with the Canvas 2D API.',
   webgl: 'Render with raw WebGL / WebGL2 and hand-written shaders (no libraries).',
   svg: 'Render with inline SVG driven from script, rasterized onto the recording canvas each frame (draw the serialized SVG via an Image) so recording still captures it.',
+  three: THREE_GUIDANCE,
 };
 
 /** Even pixel dimensions for an aspect ratio at a short-side resolution. */
@@ -227,7 +232,10 @@ const DIRECTION = `DIRECTION — make it feel like a studio short, not a tech de
 // pre-answer check against the failures one-shot animation code shows most.
 const SELF_REVIEW = `SELF-REVIEW before you answer: step through renderFrame at every beat's key frame in your head and score it honestly on character on-model, emotion readable from the face and body alone, story clear without sound, composition, depth, scale, lighting, and phone-size readability. Fix anything that would score below 8/10. Hunt especially for: stiff or dead secondary motion, sliding feet or wheels, faces that look like stickers, missing weight on stops and landings, identical-looking transitions, text overlapping during swaps, centered-on-gradient shots, muddy or unreadable text, off-model proportions, empty or static stretches, and beats the brief asked for that never made it on screen.`;
 
-function runtimeContract({ width, height, fps, durationSeconds, interactive, hasAudio }) {
+function runtimeContract({ width, height, fps, durationSeconds, interactive, hasAudio, renderer }) {
+  const selfContained = renderer === 'three'
+    ? 'Self-contained: no external scripts, stylesheets, fonts, images, or network requests of any kind; system fonts only. The ONE exception is the host-provided import map for three.js and its addons (see FORMAT): import those by bare name and nothing else.'
+    : 'Self-contained: no external scripts, stylesheets, fonts, images, or network requests of any kind; system fonts only.';
   const m = CODE_ANIMATION_MESSAGES;
   const audioTrack = hasAudio
     ? ' Mix the audio in: route the audio graph into a MediaStreamAudioDestinationNode and add its track to the recorded stream.'
@@ -245,7 +253,7 @@ function runtimeContract({ width, height, fps, durationSeconds, interactive, has
 7. postMessage handshake with the embedding host (always target "*"):
    - once ready: \`parent.postMessage({ type: '${m.ready}', meta: window.ANIMATION_META }, '*')\`
    - listen for \`{ type: '${m.record}' }\` → run recordAnimation(); while recording post \`{ type: '${m.progress}', t }\` about once per second; on success post \`{ type: '${m.recorded}', blob, mimeType }\`; on failure post \`{ type: '${m.error}', message }\`.${interaction}
-${interactive ? '9' : '8'}. Self-contained: no external scripts, stylesheets, fonts, images, or network requests of any kind; system fonts only. It must run from a sandboxed iframe (scripts allowed, no same-origin) and as a local file.
+${interactive ? '9' : '8'}. ${selfContained} It must run from a sandboxed iframe (scripts allowed, no same-origin) and as a local file.
 ${interactive ? '10' : '9'}. Hold ${fps}fps: pre-render static layers and textures to offscreen canvases once, reuse typed arrays, and avoid per-frame allocation.`;
 }
 
@@ -260,7 +268,7 @@ ${interactive ? '10' : '9'}. Hold ${fps}fps: pre-render static layers and textur
  * @param {string} [input.styleNotes] - refinements on top of the universe style
  * @param {string|null} [input.styleGrammarId] - film style grammar id (#10253); unknown ids throw a 400
  * @param {{ durationSeconds: number, aspectRatio: string, resolution: string, fps: number }} input.format
- * @param {'auto'|'canvas2d'|'webgl'|'svg'} [input.renderer]
+ * @param {'auto'|'canvas2d'|'webgl'|'svg'|'three'} [input.renderer]
  * @param {boolean} [input.interactive]
  * @param {'none'|'procedural'} [input.soundtrack]
  * @param {{ name: string, durationSeconds?: number|null, notes?: string }|null} [input.audio]
@@ -308,7 +316,7 @@ export function buildCodeAnimationPrompt({
   sections.push(`SOUND:\n${audioSection({ audio, soundtrack, durationSeconds })}`);
   sections.push(`FORMAT: ${format.aspectRatio} at ${width}×${height}px, ${fps}fps, ${durationSeconds}s. ${RENDERER_GUIDANCE[renderer] || RENDERER_GUIDANCE.auto}`);
   sections.push(DIRECTION);
-  sections.push(runtimeContract({ width, height, fps, durationSeconds, interactive, hasAudio: !!audio || soundtrack === 'procedural' }));
+  sections.push(runtimeContract({ width, height, fps, durationSeconds, interactive, hasAudio: !!audio || soundtrack === 'procedural', renderer }));
   sections.push(SELF_REVIEW);
   sections.push(`OUTPUT: Return ONLY the finished HTML document in a single \`\`\`html fenced code block, starting with <!DOCTYPE html>. No explanation before or after it.${delivery === 'cli' ? ' Do not create or edit any files — print the document as your final answer.' : ''}`);
   return sections.join('\n\n');

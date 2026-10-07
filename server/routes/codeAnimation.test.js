@@ -199,6 +199,17 @@ describe('Code Animation portable packages', () => {
     expect((await validate(rehash(foreignAuthority))).status).toBe(400);
   });
 
+  it('serves the vendored three.js modules the sandboxed preview inlines (#10464)', async () => {
+    const response = await request(makeApp()).get('/api/code-animation/vendor/three');
+    expect(response.status).toBe(200);
+    const byPath = new Map(response.body.files.map((file) => [file.path, file]));
+    expect(response.body.version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(byPath.get('three.module.js').text).toContain("from './three.core.js'");
+    expect(byPath.get('addons/postprocessing/UnrealBloomPass.js').sha256).toMatch(/^[0-9a-f]{64}$/);
+    // Only allowlisted addons leave the server; nothing else under three/examples does.
+    expect(byPath.has('addons/loaders/GLTFLoader.js')).toBe(false);
+  });
+
   it('downloads exact legacy HTML with portable fields, validates it, and still reopens the job', async () => {
     codeAnimationRecords.set(id, savedJob());
     codeAnimationHtml.set(id, html);
