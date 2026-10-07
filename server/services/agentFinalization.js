@@ -153,7 +153,10 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
   // no PR exists AND the branch was proven empty; the task marker narrows this
   // exception to an explicitly opted-in autonomous job. Do not use the marker
   // as a general no-commit exemption: a real change still needs the commit probe.
-  if (success && branchProvenEmpty === true && permitsNoChangeCompletion(task)) return true;
+  if (success && branchProvenEmpty === true && permitsNoChangeCompletion(task)) {
+    // An empty audit branch is valid only when its actual report was saved.
+    return !isAuditTaskType(scheduledType) || hookResult?.auditAssessment?.status === 'recorded';
+  }
   // A marked no-change audit needs a forge answer and an unambiguous empty-branch
   // proof. If either check was inconclusive, leave learning undeclared rather than
   // scoring a correct no-op as a commit miss. A non-empty branch remains a real
@@ -1012,6 +1015,10 @@ export function dispatchTaskOutputHookOnce({
   if (existing) return existing;
 
   const persistDispatchMarker = async (result) => {
+    if (result.auditAssessment) {
+      await updateAgent(agentId, { metadata: { auditAssessment: result.auditAssessment } })
+        .catch(err => emitLog('warn', `⚠️ Failed to persist audit assessment status for ${agentId}: ${err.message}`, { agentId }));
+    }
     if (!result.ran) return;
     // Best-effort durability: completion must continue if the marker write
     // fails, while the in-flight promise still protects concurrent callers
@@ -1025,6 +1032,13 @@ export function dispatchTaskOutputHookOnce({
 
   const dispatch = (async () => {
     const agent = await getAgent(agentId).catch(() => null);
+    // A saved assessment survives sentinel/worktree cleanup. Failed writes stay
+    // retryable on recovery rather than being mistaken for a successful report.
+    const savedAssessment = [agent?.metadata?.auditAssessment, agent?.result?.auditAssessment]
+      .find(assessment => assessment?.status === 'recorded');
+    if (isAuditTaskType(resolveTaskHookType(task)) && savedAssessment?.status === 'recorded') {
+      return { ran: false, auditAssessment: savedAssessment };
+    }
     if (agent?.metadata?.outputHookDispatchedAt) {
       return { ran: false, alreadyDispatched: true };
     }
@@ -1626,6 +1640,9 @@ export async function finalizeAgent({
   await completeAgent(agentId, {
     success: verdict.success,
     validationPassed,
+    ...(isAuditTaskType(resolveTaskHookType(task)) ? {
+      auditAssessment: hookResult?.auditAssessment || { status: 'unverified' },
+    } : {}),
     exitCode,
     duration,
     outputLength: outputBuffer?.length ?? 0,
@@ -1926,15 +1943,20 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
   if (!taskType) return { ran: false };
   if (isAuditTaskType(taskType)) {
     const { recordAuditQuality } = await import('./appQuality.js');
-    const recorded = await recordAuditQuality({ task, taskType, agentId, success, assessedAt,
+    const auditAssessment = await recordAuditQuality({ task, taskType, agentId, success, assessedAt,
       workspacePath: hookPayloadDir({ task, workspacePath, recovery }) })
-      .catch(err => emitLog('warn', `⚠️ Audit quality was not saved for ${agentId}: ${err.message}`, { agentId }));
+      .then(recorded => ({ status: recorded === true ? 'recorded' : success ? 'not-recorded' : 'not-attempted' }))
+      .catch(err => {
+        emitLog('warn', `⚠️ Audit quality was not saved for ${agentId}: ${err.message}`, { agentId });
+        return { status: 'persistence-failed' };
+      });
+    const recorded = auditAssessment.status === 'recorded';
     // A review-only run must not land a separate snapshot behind the user's back.
     if (recorded === true && resolvePrCompletion(task?.metadata) !== PR_COMPLETIONS.LEAVE_OPEN) {
       await publishAppSnapshotFileAfterAudit(task?.metadata?.app);
     }
     // Assessment telemetry never waives commit/PR success criteria for fix mode.
-    return { ran: false };
+    return { ran: false, auditAssessment };
   }
   const { getTaskOutputHook } = await import('./taskTypeHooks.js');
   const hook = await getTaskOutputHook(taskType);

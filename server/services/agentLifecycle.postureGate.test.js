@@ -52,6 +52,8 @@ vi.mock('../lib/fileUtils.js', async () => {
   return makePathsProxy(actual, { dataRoot: TEMP_ROOT });
 });
 
+vi.mock('../lib/auditSourceEvidence.js', () => ({ captureAuditSourceEvidence: vi.fn() }));
+
 vi.mock('./cosRunnerClient.js', async (importOriginal) => ({
   ...(await importOriginal()),
   spawnAgentViaRunner: vi.fn(),
@@ -145,6 +147,7 @@ vi.mock('./modelAbuseGuard.js', () => ({
   validatePublicReviewModel: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
+import { captureAuditSourceEvidence } from '../lib/auditSourceEvidence.js';
 import { spawnAgentForTask } from './agentLifecycle.js';
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
 import { materializePublicReviewInput, materializePublicReviewPatches, readPublicReviewInputSnapshot } from './modelAbuseGuard.js';
@@ -659,4 +662,20 @@ describe('agent launch defaults (#7932)', () => {
       baseUrl.mockRestore();
     }
   });
+});
+
+
+it.each(['captured', 'unavailable'])('registers trusted %s audit launch evidence before execution', async (status) => {
+  reachDispatch();
+  isTuiProvider.mockReturnValue(false);
+  const evidence = { version: 1, status, capturedAt: '2026-01-01T00:00:00Z' };
+  captureAuditSourceEvidence.mockResolvedValueOnce(evidence);
+  await spawnAgentForTask({ id: `audit-evidence-${status}`, taskType: 'user', metadata: {
+    analysisType: 'accessibility', auditSourceEvidence: { revision: 'injected' },
+  } });
+  expect(captureAuditSourceEvidence).toHaveBeenCalledWith(join(TEMP_ROOT, 'workspace'));
+  expect(registerAgent).toHaveBeenCalledWith(expect.any(String), `audit-evidence-${status}`, expect.objectContaining({ auditSourceEvidence: evidence }));
+  expect(spawnDirectly).toHaveBeenCalledTimes(1);
+  expect(captureAuditSourceEvidence.mock.invocationCallOrder[0]).toBeLessThan(registerAgent.mock.invocationCallOrder[0]);
+  expect(registerAgent.mock.invocationCallOrder[0]).toBeLessThan(spawnDirectly.mock.invocationCallOrder[0]);
 });

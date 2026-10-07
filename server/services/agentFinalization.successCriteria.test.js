@@ -577,3 +577,14 @@ describe('evaluateSuccessCriteria — claim-flow exemption', () => {
     expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
   });
 });
+
+
+describe('no-change quality audit delivery', () => {
+  it('requires both verified empty branch and saved assessment, without waiving changed-branch commit checks', async () => {
+    const args = { task: { id: 'audit', taskType: 'internal', metadata: { analysisType: 'security', noChangeSuccess: true } }, workspacePath: '/worktree', startedAt: 1000, success: true };
+    expect(await evaluateSuccessCriteria({ ...args, branchProvenEmpty: true, hookResult: { auditAssessment: { status: 'recorded' } } })).toBe(true);
+    expect(await evaluateSuccessCriteria({ ...args, branchProvenEmpty: true, hookResult: { auditAssessment: { status: 'not-recorded' } } })).toBe(false);
+    committedDuringRun.mockResolvedValue(false);
+    expect(await evaluateSuccessCriteria({ ...args, branchProvenEmpty: false, hookResult: { auditAssessment: { status: 'recorded' } } })).toBe(false);
+  });
+});
