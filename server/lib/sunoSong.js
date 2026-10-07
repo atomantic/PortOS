@@ -36,6 +36,17 @@ export function isSunoHost(hostname) {
 /** Suno's CDN copy of a song's audio, used when the page names none. */
 export const sunoCdnAudioUrl = (songId) => `https://cdn1.suno.ai/${encodeURIComponent(songId)}.mp3`;
 
+/** Suno's CDN copy of a song's video, which stays public when Suno withholds the audio file. */
+export const sunoCdnVideoUrl = (songId) => `https://cdn1.suno.ai/${encodeURIComponent(songId)}.mp4`;
+
+// Media lives on Suno's CDN hosts (cdn1.suno.ai, …). A page can name an API
+// placeholder such as studio-api…/api/forbidden instead, which is no media at all.
+const isSunoCdnUrl = (value) => {
+  if (typeof value !== 'string' || !URL.canParse(value)) return false;
+  const url = new URL(value);
+  return url.protocol === 'https:' && /^cdn\d*\.suno\.(?:ai|com)$/i.test(url.hostname);
+};
+
 const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", '#39': "'", '#x27': "'" };
 const decodeEntities = (s) => s.replace(/&(amp|lt|gt|quot|apos|#39|#x27);/gi, (m, name) => ENTITIES[name.toLowerCase()] ?? m);
 
@@ -138,7 +149,7 @@ export function parseSunoSongPage(html, songId) {
     return (ref ? texts.get(ref.toLowerCase()) ?? '' : value).trim();
   };
   const title = text(song.title) || metaContent(page, 'og:title').replace(/\s*\|\s*Suno\s*$/i, '').trim();
-  const audioUrl = [song.audio_url, metaContent(page, 'og:audio')].find(isSunoUrl) || null;
+  const audioUrl = [song.audio_url, metaContent(page, 'og:audio')].find(isSunoCdnUrl) || null;
   const imageUrl = [song.image_large_url, song.image_url, metaContent(page, 'og:image')].find(isSunoUrl) || null;
   return {
     title,
