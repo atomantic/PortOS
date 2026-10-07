@@ -321,26 +321,48 @@ async function orchestrateStyle(projectId, run) {
 const cueText = (cue) => (typeof cue?.text === 'string' ? cue.text.trim() : '');
 const validSpan = (start, end) => Number.isFinite(start) && Number.isFinite(end) && end > start;
 const MIN_WORD_SEC = 0.05;
+// Below this share of recognizer-heard words the timings are mostly interpolated
+// (the aligner itself discards a line below the same share).
+const MIN_HEARD_WORD_SHARE = 0.5;
 
 /**
  * Give a lyric line with no usable word timings evenly spaced words inside its
- * own span, else the gap its neighbours leave — what a director does by hand
- * after alignment skips a line. Returns the repaired cues and the line count.
+ * own span, else a share of the gap its neighbours leave — what a director does
+ * by hand after alignment skips a line. Consecutive skipped lines split that gap
+ * by word count rather than each taking all of it. Returns the repaired cues
+ * and the line count.
  */
 function repairLyricWordTimings(cues, durationSec) {
-  let repaired = 0;
-  const out = cues.map((cue, i) => {
-    const words = cueText(cue).split(/\s+/).filter(Boolean);
-    if (!words.length) return cue;
-    const usable = Array.isArray(cue.words) && cue.words.length > 0 && cue.words.every((w) => validSpan(w.startSec, w.endSec))
-      && validSpan(cue.startSec, cue.endSec) && cue.words.every((w) => w.startSec >= cue.startSec && w.endSec <= cue.endSec);
-    if (usable) return cue;
+  const wordsOf = cues.map((cue) => cueText(cue).split(/\s+/).filter(Boolean));
+  const usable = (cue) => Array.isArray(cue.words) && cue.words.length > 0 && cue.words.every((w) => validSpan(w.startSec, w.endSec))
+    && validSpan(cue.startSec, cue.endSec) && cue.words.every((w) => w.startSec >= cue.startSec && w.endSec <= cue.endSec);
+  const ownSpan = (cue) => validSpan(cue.startSec, cue.endSec) && cue.endSec <= durationSec;
+  const needs = cues.map((cue, i) => wordsOf[i].length > 0 && !usable(cue));
+  const spans = cues.map(() => null);
+  for (let i = 0; i < cues.length; i += 1) {
+    if (!needs[i]) continue;
+    if (ownSpan(cues[i])) { spans[i] = [cues[i].startSec, cues[i].endSec]; continue; }
+    let last = i;
+    while (last + 1 < cues.length && needs[last + 1] && !ownSpan(cues[last + 1])) last += 1;
     const prevEnd = i > 0 && Number.isFinite(cues[i - 1].endSec) ? cues[i - 1].endSec : 0;
-    const nextStart = i < cues.length - 1 && Number.isFinite(cues[i + 1].startSec) ? cues[i + 1].startSec : durationSec;
-    const [start, end] = validSpan(cue.startSec, cue.endSec) && cue.endSec <= durationSec ? [cue.startSec, cue.endSec] : [prevEnd, nextStart];
+    const nextStart = last < cues.length - 1 && Number.isFinite(cues[last + 1].startSec) ? cues[last + 1].startSec : durationSec;
+    const total = wordsOf.slice(i, last + 1).reduce((sum, words) => sum + words.length, 0);
+    let at = prevEnd;
+    for (let k = i; k <= last; k += 1) {
+      const end = k === last ? nextStart : at + ((nextStart - prevEnd) * wordsOf[k].length) / total;
+      spans[k] = [at, end];
+      at = end;
+    }
+    i = last;
+  }
+  let repaired = 0;
+  const round = (n) => Math.round(n * 1000) / 1000;
+  const out = cues.map((cue, i) => {
+    if (!spans[i]) return cue;
+    const words = wordsOf[i];
+    const [start, end] = spans[i];
     if (!validSpan(start, end) || (end - start) / words.length < MIN_WORD_SEC) return cue;
     const step = (end - start) / words.length;
-    const round = (n) => Math.round(n * 1000) / 1000;
     repaired += 1;
     return { ...cue, startSec: round(start), endSec: round(end),
       words: words.map((w, k) => ({ w, startSec: round(start + k * step), endSec: round(k === words.length - 1 ? end : start + (k + 1) * step), conf: 'interpolated' })) };
@@ -350,8 +372,10 @@ function repairLyricWordTimings(cues, durationSec) {
 
 /**
  * Align the vocal to the lyric sheet and time the lines alignment skipped —
- * the timings the storyboard gate needs. Returns the alignment error, if any;
- * the repair still runs so a failed alignment leaves what it can.
+ * the timings the storyboard gate needs. Returns the alignment error, if any,
+ * and keeps it on the run (`output.alignmentError`) so the storyboard gate
+ * will not verify guessed timings; the repair still runs so a failed
+ * alignment leaves what it can.
  */
 async function alignRunLyrics(projectId, run) {
   if (run.brief.instrumental || !(await getProject(projectId))?.lyricCues?.some((c) => cueText(c))) return null;
@@ -361,6 +385,9 @@ async function alignRunLyrics(projectId, run) {
     const { cues, repaired } = repairLyricWordTimings(current.lyricCues || [], current.audioAnalysis?.durationSec);
     return { project: repaired ? { ...current, lyricCues: cues } : current };
   });
+  // Bound to the timings it left, so a later re-alignment by hand is judged on its own.
+  const basis = alignError ? productionAlignmentBasis(await getProject(projectId)) : null;
+  await patchRun(projectId, () => ({ output: { alignmentError: alignError ? { message: trimTo(alignError, 300), basis } : null } }));
   return alignError;
 }
 
@@ -415,10 +442,13 @@ async function orchestrateSong(projectId, run) {
 
 /**
  * Verify the lyric timing for the storyboard gate. Alignment already ran after
- * analysis; this records the check of it (every line has bounded word timings)
- * as the verification a director gives by listening — by the orchestrator, or
- * by an autopilot the operator granted storyboard approval. An instrumental is
- * marked as one. Problems it cannot fix stay for readiness to name.
+ * analysis; this records the check of it as the verification a director gives
+ * by listening — by the orchestrator, or by an autopilot the operator granted
+ * storyboard approval. It verifies only when every line has bounded word
+ * timings, alignment ran without error and the recognizer heard at least
+ * `MIN_HEARD_WORD_SHARE` of the words; otherwise the timings are mostly
+ * guesses, so it returns why and leaves them for a director. An instrumental
+ * is marked as one.
  */
 async function settleLyricTiming(projectId, run) {
   const orchestrated = isOrchestratedRun(run);
@@ -441,9 +471,15 @@ async function settleLyricTiming(projectId, run) {
   const timed = cues.filter((c) => c.words?.length && validSpan(c.startSec, c.endSec)).length;
   const matched = words.filter((w) => w.conf === 'matched').length;
   const notes = `Checked by the ${orchestrated ? 'orchestrator' : 'autopilot'}: ${timed} of ${cues.length} lines carry word timings; ${matched} of ${words.length} words were heard by the recognizer, the rest interpolated.`;
-  if (timed < cues.length) {
-    await record('revise', `${notes} Lines without timings need a director.`);
-    return;
+  const failedAlignment = projectAutonomousRun(project)?.output?.alignmentError;
+  const alignmentError = failedAlignment?.basis === productionAlignmentBasis(project) ? failedAlignment.message : null;
+  const held = timed < cues.length ? 'Lines without timings need a director.'
+    : alignmentError ? `Lyric alignment failed (${alignmentError}), so these timings are guesses; a director needs to listen and verify them.`
+      : matched / words.length < MIN_HEARD_WORD_SHARE ? 'Too little of the vocal was heard to trust these timings; a director needs to listen and verify them.'
+        : null;
+  if (held) {
+    await record('revise', `${notes} ${held}`);
+    return `${notes} ${held}`;
   }
   const reviewer = orchestrated ? orchestratorIdentity(run) : { kind: 'autopilot', runId: run.id, authorizedBy: run.brief.autoApproveAuthorizedBy || null };
   await deps.verifyAlignment(projectId, { basis: productionAlignmentBasis(project), notes, reviewer });
@@ -851,13 +887,16 @@ const STAGES = {
       await prepareProductionReview(project.id);
       project = await getProject(project.id);
     }
+    let timingHeld = null;
     if (isOrchestratedRun(run) || autoApproves(run, 'storyboard')) {
-      await settleLyricTiming(project.id, run);
+      timingHeld = await settleLyricTiming(project.id, run);
       // The orchestrator anchors inside its storyboard review; the autopilot does it here.
       if (!isOrchestratedRun(run)) await anchorStoryboardLyrics(project.id);
       project = await getProject(project.id);
     }
     project = await settleProductionStage(project, run, 'storyboard');
+    // Name why the timing was left unverified rather than only that it is provisional.
+    if (timingHeld && !productionReadiness(project).storyboard.approved) throw runError(409, 'MUSIC_VIDEO_APPROVAL_REQUIRED', trimTo(timingHeld, 500));
     assertProductionApproval(project, 'storyboard');
     // The authoring stage's pin, else the run's code-authoring pin taken as
     // given (production checks it exactly), else the direction LLM.

@@ -999,6 +999,25 @@ describe('autopilot clears the gates it was granted on its own', () => {
     expect(doubles.verifyAlignment).not.toHaveBeenCalled();
     expect(doubles.startProduction).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['the aligner fails', async () => { throw new Error('aligner offline'); }, 'Lyric alignment failed (aligner offline)'],
+    ['the recognizer hears none of the words', async () => {}, 'Too little of the vocal was heard'],
+  ])('does not verify guessed timings when %s', async (_, align, reason) => {
+    doubles.alignLyrics = stub('align', align);
+    service.__setAutonomousDepsForTests(doubles);
+    analyzed({
+      lyricCues: [{ id: 'c1', text: 'rain on glass', startSec: null, endSec: null }, { id: 'c2', text: 'neon home', startSec: null, endSec: null }],
+      productionReview: { draft: { ...GUIDE, lyricsMode: 'vocal', timingStatus: 'provisional', storyboard: [shot] } },
+    });
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], ...GRANT[0] }, GRANT[1]);
+    await settled('needs-human');
+    expect(runOf()).toMatchObject({ errorCode: 'MUSIC_VIDEO_APPROVAL_REQUIRED', error: expect.stringContaining(reason) });
+    // Skipped lines split the gap by word count instead of each taking the whole song.
+    expect(store.get('mv-auto').lyricCues.map((c) => [c.startSec, c.endSec])).toEqual([[0, 12], [12, 20]]);
+    expect(doubles.verifyAlignment).not.toHaveBeenCalled();
+    expect(doubles.startProduction).not.toHaveBeenCalled();
+  });
 });
 
 describe('orchestrated mode (brief.orchestrator)', () => {
