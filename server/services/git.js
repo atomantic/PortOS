@@ -517,7 +517,7 @@ export async function requestCopilotReview(dir, prUrl) {
 
 /**
  * Generate a rich PR description from the agent's output summary.
- * Extracts the implementation summary from the tail of the agent output,
+ * Prefers explicit final-response segments, then the tail of agent output,
  * stripping tool-call artifacts and keeping only the meaningful explanation
  * of what was implemented (new APIs, UI elements, behaviors, etc.).
  * Falls back to commit messages when no agent output is available.
