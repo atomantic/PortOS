@@ -37,11 +37,13 @@ export function parseCutTimes(stderr) {
 async function detectCuts(ffmpeg, videoPath) {
   const result = await runFfmpegProcess({
     bin: ffmpeg,
-    args: ['-hide_banner', '-i', videoPath, '-an', '-vf', `scale=320:-2,select='gt(scene,${CUT_THRESHOLD})',showinfo`, '-f', 'null', '-'],
+    // -nostats keeps progress lines out of the stderr tail the stamps are read from.
+    args: ['-hide_banner', '-nostats', '-loglevel', 'info', '-i', videoPath, '-an', '-vf', `scale=320:-2,select='gt(scene,${CUT_THRESHOLD})',showinfo`, '-f', 'null', '-'],
     returnStderr: true,
     stderrTailBytes: 400000,
   });
-  return result.ok ? parseCutTimes(result.stderr) : [];
+  // null, not [], so a failed pass never reads as "no cuts".
+  return result.ok ? parseCutTimes(result.stderr) : null;
 }
 
 async function extractKeyframe(ffmpeg, videoPath, atSec, outputPath) {
@@ -76,7 +78,8 @@ export async function resolveReferenceVideo(ref) {
     await extractKeyframe(ffmpeg, path, durationSec * 0.3, at(names.early));
     await extractKeyframe(ffmpeg, path, durationSec * 0.7, at(names.late));
     meta = { durationSec, cuts: await detectCuts(ffmpeg, path), sheetEverySec: times.length > 1 ? times[1] - times[0] : durationSec };
-    await writeFile(at(names.meta), JSON.stringify(meta));
+    // An unmeasured rhythm is not cached, so the next request measures again.
+    if (meta.cuts) await writeFile(at(names.meta), JSON.stringify(meta));
   }
   const label = trimTo(ref.label, 120) || ref.filename;
   const image = (name, what) => ({ label: `${label} — ${what}`, origin: 'reference-video', note: '', path: at(name), url: thumbUrl(name) });

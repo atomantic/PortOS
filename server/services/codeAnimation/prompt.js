@@ -149,13 +149,15 @@ function referenceImagesSection(images, delivery) {
 // reference images) plus the measured cut rhythm, and is told what to take.
 function referenceVideoSection(video) {
   if (!video) return '';
-  const { durationSec, cuts = [] } = video;
-  const shots = cuts.length + 1;
-  const rhythm = cuts.length
+  const { durationSec, cuts } = video;
+  const shots = (cuts?.length ?? 0) + 1;
+  const rhythm = !cuts
+    ? `${durationSec.toFixed(1)}s long; its cut rhythm could not be measured, so read it from the contact sheet.`
+    : cuts.length
     ? `${shots} shots in ${durationSec.toFixed(1)}s (average ${(durationSec / shots).toFixed(1)}s per shot); cuts at ${cuts.map((t) => `${t.toFixed(1)}s`).join(', ')}.`
     : `One continuous ${durationSec.toFixed(1)}s shot with no detected cuts.`;
   const note = isNonBlankStr(video.note) ? `\nWhat to take from it: ${trimTo(video.note, CODE_ANIMATION_LIMITS.referenceNoteMax)}` : '';
-  return `REFERENCE VIDEO — "${video.label}": the quality bar to match. Its contact sheet and two keyframes are among the reference images below. Measured rhythm: ${rhythm}${note}
+  return `REFERENCE VIDEO — "${video.label}": the quality bar to match. Its contact sheet and two keyframes are among the reference images below. ${cuts ? 'Measured rhythm: ' : ''}${rhythm}${note}
 Study and match its craft, not its content: shot rhythm and coverage (wides, close-ups, inserts), camera moves and focus pulls, lighting and time of day, how it renders surfaces, and its finish (depth of field, bloom on light sources, colour grade, grain). Scale its cut rhythm to this piece's duration. Reproduce that fidelity with your own original subject, characters and story — never copy its characters, logos, text or shots.`;
 }
 
