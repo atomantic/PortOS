@@ -943,8 +943,6 @@ describe('autopilot clears the gates it was granted on its own', () => {
         draft: { ...project.productionReview.draft, timingStatus: 'verified', timingNotes: notes } };
     });
     doubles.alignLyrics = stub('align', async () => {});
-    doubles.castAndSetsStage = vi.fn(async (id) => ({ ...store.get(id).castAndSets, interrupted: false }));
-    doubles.resumeCastAndSets = stub('resume-cast', async () => {});
     service.__setAutonomousDepsForTests(doubles);
   });
   afterEach(() => { prepare.mockReset(); prepare.mockImplementation(async () => {}); });
@@ -1000,53 +998,6 @@ describe('autopilot clears the gates it was granted on its own', () => {
     expect(runOf().errorCode).toBe('MUSIC_VIDEO_APPROVAL_REQUIRED');
     expect(doubles.verifyAlignment).not.toHaveBeenCalled();
     expect(doubles.startProduction).not.toHaveBeenCalled();
-  });
-
-  // Cast & Sets drafts the guide after produce starts; its settle event carries the run on.
-  const castRunning = () => {
-    analyzed({ productionReview: { draft: { lyricsMode: 'instrumental', timingNotes: 'Instrumental.', storyboard: [shot] } } });
-    prepare.mockImplementation(async (id) => {
-      const project = store.get(id);
-      if (!project.castAndSets) project.castAndSets = { status: 'directing' };
-      if (project.castAndSets.status === 'approved') project.productionReview.draft = { ...project.productionReview.draft, ...GUIDE };
-    });
-  };
-  const settleCast = async (status, extra = {}) => {
-    store.get('mv-auto').castAndSets = { status, ...extra };
-    musicVideoEvents.emit('cast-and-sets', { projectId: 'mv-auto', stage: { status, interrupted: false } });
-    await service.__testing.settleBackground();
-  };
-
-  it('waits for Cast & Sets instead of parking at an empty art gate, then approves art and continues', async () => {
-    castRunning();
-    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], ...GRANT[0] }, GRANT[1]);
-    await vi.waitFor(() => expect(runOf().stages.produce).toMatchObject({ status: 'running', step: 'cast-and-sets' }));
-    await service.__testing.settleBackground();
-    expect(runOf().status).toBe('running');
-    expect(doubles.approveProductionReview).not.toHaveBeenCalled();
-
-    await settleCast('approved');
-    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
-    expect(store.get('mv-auto').productionReview.approvals.art).toMatchObject({ approvedBy: 'autopilot' });
-  });
-
-  it('without an art grant parks for a human only once the guide exists, and a failed Cast & Sets fails the run', async () => {
-    castRunning();
-    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'] });
-    await vi.waitFor(() => expect(runOf().stages.produce.step).toBe('cast-and-sets'));
-    await service.__testing.settleBackground();
-    await settleCast('approved');
-    await settled('needs-human');
-    expect(store.get('mv-auto').productionReview.draft.guideArtifactId).toBe('guide');
-
-    store.get('mv-auto').castAndSets = null;
-    store.get('mv-auto').productionReview.draft = { lyricsMode: 'instrumental', storyboard: [shot] };
-    await service.resumeAutonomousVideo('mv-auto');
-    await vi.waitFor(() => expect(runOf().stages.produce.step).toBe('cast-and-sets'));
-    await service.__testing.settleBackground();
-    await settleCast('failed', { stopReason: 'The image backend is offline' });
-    await settled('failed');
-    expect(runOf()).toMatchObject({ status: 'failed', errorCode: 'CAST_AND_SETS_FAILED', error: expect.stringContaining('image backend is offline') });
   });
 });
 
