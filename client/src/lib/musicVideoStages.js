@@ -574,11 +574,16 @@ export function stageChecklist(stageId, project, readiness = project?.production
   switch (stageId) {
     case 'setup': {
       // An autonomous run that is still going writes the song itself.
-      const autoSong = !!project.autonomousRun && !['completed', 'canceled', 'failed'].includes(project.autonomousRun.status);
+      const auto = project.autonomousRun;
+      const autoSong = !!auto && !['completed', 'canceled', 'failed'].includes(auto.status);
+      // A parked run is not writing anything; say so instead of claiming it is.
+      const autoSongDetail = auto?.status === 'awaiting-approval' ? 'The autonomous run is waiting for your approval.'
+        : auto?.interrupted || auto?.status !== 'running' ? 'The autonomous run is paused. Resume it to make the song.'
+        : 'The autonomous run is making the song.';
       const hasAudio = projectHasAudio(project);
       const lyrics = lyricSetupState(project, readiness);
       return [
-        { id: 'track', label: 'Track attached', done: hasAudio, detail: !hasAudio && autoSong ? 'The autonomous run is making the song.' : null,
+        { id: 'track', label: 'Track attached', done: hasAudio, detail: !hasAudio && autoSong ? autoSongDetail : null,
           action: hasAudio || autoSong ? null : { label: 'Attach a track', anchor: 'mv-track' } },
         { id: 'analysis', label: 'Song analyzed', done: !!project.audioAnalysis,
           action: project.audioAnalysis ? null : { label: 'Analyze', anchor: 'mv-analyze' } },
