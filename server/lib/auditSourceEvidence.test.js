@@ -12,7 +12,7 @@ async function repository() {
   await execGit(['init'], path);
   await execGit(['config', 'user.name', 'Fixture'], path);
   await execGit(['config', 'user.email', 'fixture@example.test'], path);
-  await writeFile(join(path, 'private\nname.txt'), 'first');
+  await writeFile(join(path, 'private name-雪.txt'), 'first');
   await execGit(['add', '.'], path);
   await execGit(['commit', '-m', 'fixture'], path);
   return path;
@@ -21,7 +21,7 @@ it('records immutable committed inventory, distinguishes dirty workspaces and do
   const path = await repository();
   const first = await captureAuditSourceEvidence(path);
   expect(first).toMatchObject({ status: 'captured', trackedEntryCount: 1, workingTreeState: 'clean' });
-  await writeFile(join(path, 'private\nname.txt'), 'edited');
+  await writeFile(join(path, 'private name-雪.txt'), 'edited');
   await writeFile(join(path, 'untracked.txt'), 'not in commit');
   const dirty = await captureAuditSourceEvidence(path);
   expect(dirty).toMatchObject({ revision: first.revision, inventorySha256: first.inventorySha256, trackedEntryCount: 1, workingTreeState: 'modified' });
