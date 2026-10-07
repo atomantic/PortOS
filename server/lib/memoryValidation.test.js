@@ -484,6 +484,12 @@ describe('memoryValidation.js', () => {
       }).success).toBe(false);
     });
 
+    it('accepts a known link type and rejects an unknown one', () => {
+      const ids = { sourceId: '550e8400-e29b-41d4-a716-446655440000', targetId: '550e8400-e29b-41d4-a716-446655440001' };
+      expect(memoryLinkSchema.safeParse({ ...ids, linkType: 'derived-from', note: 'why' }).success).toBe(true);
+      expect(memoryLinkSchema.safeParse({ ...ids, linkType: 'nope' }).success).toBe(false);
+    });
+
     it('should require both fields', () => {
       expect(memoryLinkSchema.safeParse({
         sourceId: '550e8400-e29b-41d4-a716-446655440000'
