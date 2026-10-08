@@ -116,6 +116,27 @@ describe('Data Manager recovery archives (#10697)', () => {
     expect(await readdir(backup)).toEqual([basename(first.archivePath)]);
   });
 
+  it('publishes recoverable health bytes when the filesystem requires writable handles for flushing', async () => {
+    await seedHealth();
+    const actual = await vi.importActual('fs/promises');
+    controls.open = async (path, flags, ...args) => {
+      const handle = await actual.open(path, flags, ...args);
+      if (path.endsWith('.tar.gz')) {
+        const sync = handle.sync.bind(handle);
+        // Windows FlushFileBuffers rejects handles opened without write access.
+        handle.sync = async () => {
+          if (flags === 'r') throw Object.assign(new Error('synthetic writable-handle flush required'), { code: 'EACCES' });
+          return sync();
+        };
+      }
+      return handle;
+    };
+    const result = await archiveCategory('health');
+    expect(await archiveBytes(result, '2024-01-01.json')).toBe('{"example":"older"}');
+    expect(await readdir(health)).toEqual(['2026-10-01.json']);
+    expect(await readdir(backup)).toEqual([basename(result.archivePath)]);
+  });
+
   it('keeps health sources when syncing archive bytes fails', async () => {
     await seedHealth();
     const close = vi.fn();

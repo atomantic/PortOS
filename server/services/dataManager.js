@@ -440,7 +440,8 @@ export async function archiveCategory(categoryKey, options = {}) {
     // A hard link publishes complete bytes atomically and refuses an existing
     // destination. Sync bytes first, then the published directory entry before
     // deleting health sources. Both paths live on the same filesystem.
-    const archiveFile = await open(stagedArchive, 'r');
+    // Windows requires write access for FlushFileBuffers; r+ preserves existing bytes.
+    const archiveFile = await open(stagedArchive, 'r+');
     try { await archiveFile.sync(); } finally { await archiveFile.close(); }
     await link(stagedArchive, archivePath);
     // Node does not expose directory fsync on Windows.
