@@ -151,6 +151,7 @@ export async function alignProjectLyrics(projectId, options = {}) {
     throw new ServerError('The lyric lines changed while they were aligning. Run Align words again.', { status: 409, code: 'LYRIC_ALIGN_TEXT_CHANGED' });
   }
 
+  checkCancel();
   onProgress({ stage: 'saving', percent: 100 });
   const align = (entries) => {
     if (!forcedWords) return alignDirectorWords(entries, recognized);
@@ -175,10 +176,9 @@ export async function alignProjectLyrics(projectId, options = {}) {
   // re-aligned line leaves the other lines' timings as stale as they were.
   const patch = { lyricCues: nextCues, ...(cueId ? {} : { lyricAlignSource: source }) };
   if (source === 'vocal-stem') {
-    const silentWords = findSilentWords(nextCues, vocalPcm(wav)).length;
-    patch.lyricAlignSilentWords = silentWords;
-    const checkedCues = cueId ? nextCues.filter((entry) => entry.id === cueId) : nextCues;
-    if (findSilentWords(checkedCues, vocalPcm(wav)).length > 0) {
+    const silentWords = findSilentWords(nextCues, vocalPcm(wav));
+    patch.lyricAlignSilentWords = silentWords.length;
+    if (silentWords.some((word) => !cueId || word.cueId === cueId)) {
       throw new ServerError('Some lyric words aligned to silence. Check that the lyrics match the vocal, then re-align.',
         { status: 422, code: 'LYRIC_ALIGN_SILENT_WORDS' });
     }
