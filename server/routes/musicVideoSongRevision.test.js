@@ -33,7 +33,10 @@ async function fixture() {
   expect(draft.status).toBe(200);
   return { before, fork, revisionId: draft.body.project.songRevision.id };
 }
-afterEach(async () => { await service.__testing.settle(); service.__setSongRevisionDepsForTests(); });
+// Selecting a song starts its re-time job; these suites drive re-timing themselves.
+const startRetime = vi.fn(async () => ({ jobId: 'retime-job' }));
+const setDeps = (overrides = {}) => service.__setSongRevisionDepsForTests({ startRetime, ...overrides });
+afterEach(async () => { await service.__testing.settle(); setDeps(); startRetime.mockClear(); });
 afterAll(cleanupTempDataRoots);
 
 describe('fork song revision through HTTP', () => {
@@ -44,7 +47,7 @@ describe('fork song revision through HTTP', () => {
       const songId = opts.songIds?.[0] || 'take-b';
       return { songId, filename: `${songId}.m4a` };
     });
-    service.__setSongRevisionDepsForTests({ generate });
+    setDeps({ generate });
     expect((await post(before.id, '', fields)).status).toBe(409);
     expect((await post(fork.id, '', { ...fields, unknown: true })).status).toBe(400);
     expect(generate).not.toHaveBeenCalled();
@@ -72,7 +75,7 @@ describe('fork song revision through HTTP', () => {
   it.each(['auto', 'manual'])('rejects %s analysis completing after a new candidate is selected', async (kind) => {
     const { fork, revisionId } = await fixture();
     await store.mutateProjectRecord(fork.id, (p) => ({ project: { ...p, audioAnalysis: null } }));
-    service.__setSongRevisionDepsForTests({ generate: async (_fields, opts) => {
+    setDeps({ generate: async (_fields, opts) => {
       await opts.onSubmitted(['take-new']);
       return { songId: 'take-new', filename: 'take-new.m4a' };
     } });
@@ -94,7 +97,7 @@ describe('fork song revision through HTTP', () => {
     const { fork, revisionId } = await fixture();
     let fail = true;
     let submissions = 0;
-    service.__setSongRevisionDepsForTests({ generate: async (_fields, opts) => {
+    setDeps({ generate: async (_fields, opts) => {
       if (!opts.songIds) { submissions++; await opts.onSubmitted(['take-a', 'take-b']); }
       if (fail) throw new Error('download failed');
       return { songId: opts.songIds[0], filename: `${opts.songIds[0]}.m4a` };
@@ -116,7 +119,7 @@ describe('fork song revision through HTTP', () => {
     const { fork, revisionId } = await fixture();
     const held = Promise.withResolvers();
     const entered = Promise.withResolvers();
-    service.__setSongRevisionDepsForTests({ generate: async (_fields, opts) => {
+    setDeps({ generate: async (_fields, opts) => {
       await opts.onSubmitted(['take-a']); entered.resolve(); await held.promise;
       return { songId: 'take-a', filename: 'take-a.m4a' };
     } });
@@ -126,9 +129,81 @@ describe('fork song revision through HTTP', () => {
     expect((await store.getProject(fork.id)).songRevision).toMatchObject({ status: 'canceled', candidates: [] });
     const next = await post(fork.id, '', fields);
     const newId = next.body.project.songRevision.id;
-    service.__setSongRevisionDepsForTests({ generate: async () => { throw new Error('unknown submission'); } });
+    setDeps({ generate: async () => { throw new Error('unknown submission'); } });
     await post(fork.id, 'generate', { revisionId: newId }); await service.__testing.settle();
     const refused = await post(fork.id, 'generate', { revisionId: newId });
     expect(refused.status).toBe(409); expect(refused.body.code || refused.body.error?.code).toBe('SONG_SUBMISSION_UNKNOWN');
+  });
+});
+
+describe('revise the song from an imported track', () => {
+  const track = { id: 'track-new', title: 'Example song v2', prompt: 'Bright synth pop', audioFilename: 'new-take.m4a',
+    lyrics: '[Verse]\nLine a\nA brand new line\nLine b' };
+  const timed = (project, times) => project.lyricCues.map((cue, i) => ({ ...cue, startSec: times[i][0], endSec: times[i][1] }));
+  async function source() {
+    const project = await store.createProject({ name: 'Example video', uploadedAudioFilename: 'original.m4a' });
+    await store.mutateProjectRecord(project.id, (p) => ({ project: { ...p, status: 'complete', audioAnalysis: { durationSec: 30 },
+      lyricCues: [{ id: 'cue-a', text: 'Line a', startSec: 10, endSec: 14 }, { id: 'cue-x', text: 'Old middle line', startSec: 14, endSec: 18 },
+        { id: 'cue-b', text: 'Line b', startSec: 20, endSec: 24 }, { id: 'cue-y', text: 'Old last line', startSec: 26, endSec: 29 }],
+      scenes: [{ sceneId: 'intro', startSec: 0, endSec: 10, prompt: 'Opening', referenceImageId: 'intro.png' },
+        { sceneId: 'middle', startSec: 10, endSec: 18, prompt: 'Middle', lyricText: 'Line a / Old middle line' },
+        { sceneId: 'b', startSec: 18, endSec: 26, prompt: 'Line b shot', lyricText: 'Line b' },
+        { sceneId: 'tail', startSec: 26, endSec: 30, prompt: 'Tail', lyricText: 'Old last line' }] } }));
+    return store.getProject(project.id);
+  }
+
+  it('forks a new version on the track, re-times the board through shared lines and acts on flagged shots', async () => {
+    const before = await source();
+    const proposeShotRevisions = vi.fn(async (_project, notes) => new Map(notes.map((note) => [note.target, { prompt: `Replanned for ${note.target}` }])));
+    setDeps({ getTrack: async (id) => (id === track.id ? track : null), proposeShotRevisions });
+    expect((await post(before.id, 'track', { trackId: 'missing' })).status).toBe(404);
+    const created = await post(before.id, 'track', { trackId: track.id });
+    expect(created.status).toBe(201);
+    const fork = created.body.project;
+    expect(fork).toMatchObject({ parentProjectId: before.id, trackId: track.id, audioAnalysis: null });
+    expect(fork.lyricCues.map((c) => c.id)).toEqual(['cue-a', expect.any(String), 'cue-b']);
+    expect(created.body.retimeJobId).toBe('retime-job');
+    expect(startRetime).toHaveBeenCalledWith(fork.id);
+    expect(fork.songRevision).toMatchObject({ source: 'track', status: 'selected', lyricDiff: { kept: 2, changed: 0, added: 1, removed: 2 }, retime: { status: 'pending' } });
+    expect(await store.getProject(before.id)).toEqual(before);
+    const revisionId = fork.songRevision.id;
+
+    // Nothing to re-time on a version without a revised song.
+    const refused = await request(app).post(`/api/music-video/${before.id}/lyrics/align`).send({ retimeSong: true });
+    expect(refused.status).toBe(409);
+
+    // The new song sings everything 2 s later and drops the last line.
+    const retimed = await service.retimeRevisedSong(fork.id, {
+      analyze: (id) => store.mutateProjectRecord(id, (p) => ({ project: { ...p, audioAnalysis: { durationSec: 32 } } })),
+      align: (id) => store.mutateProjectRecord(id, (p) => ({ project: { ...p, lyricCues: timed(p, [[12, 16], [16, 20], [22, 26]]) } })),
+    });
+    // A fork mints its own scene ids; the shots are told apart by their prompts.
+    const ids = Object.fromEntries(fork.scenes.map((s) => [s.prompt, s.sceneId]));
+    const scene = (prompt) => retimed.scenes.find((s) => s.sceneId === ids[prompt]);
+    const status = (prompt) => retimed.songRevision.sceneReview[ids[prompt]].status;
+    expect(scene('Opening')).toMatchObject({ startSec: 0, endSec: 12, referenceImageId: 'intro.png' });
+    expect(scene('Line b shot')).toMatchObject({ startSec: 20, endSec: 28 });
+    expect(['Opening', 'Middle', 'Line b shot', 'Tail'].map(status)).toEqual(['kept', 'changed', 'kept', 'removed']);
+    expect(retimed.songRevision.retime.status).toBe('done');
+    expect(scene('Middle').lyricText).toBe('Line a / A brand new line');
+
+    const replanned = await post(fork.id, 'scenes', { revisionId, action: 'replan' });
+    expect(replanned.status).toBe(200);
+    expect(proposeShotRevisions.mock.calls[0][1].map((n) => n.target)).toEqual([ids.Middle]);
+    expect(proposeShotRevisions.mock.calls[0][0].productionReview.feedback.at(-1).text).toContain('Old middle line');
+    expect(replanned.body.project.scenes.find((s) => s.sceneId === ids.Middle).prompt).toBe(`Replanned for ${ids.Middle}`);
+    const removed = await post(fork.id, 'scenes', { revisionId, action: 'remove' });
+    expect(removed.body.project.scenes.map((s) => s.sceneId)).toEqual([ids.Opening, ids.Middle, ids['Line b shot']]);
+    expect((await post(fork.id, 'scenes', { revisionId, action: 'remove' })).status).toBe(409);
+    expect(stripMusicVideoLocalRenderPins(removed.body.project)).not.toHaveProperty('songRevision');
+  });
+
+  it('keeps the current lines when the new song came without a lyric sheet', async () => {
+    const before = await source();
+    setDeps({ getTrack: async () => ({ ...track, lyrics: '' }) });
+    const created = await post(before.id, 'track', { trackId: track.id });
+    expect(created.status).toBe(201);
+    expect(created.body.project.lyricCues.map((c) => c.id)).toEqual(['cue-a', 'cue-x', 'cue-b', 'cue-y']);
+    expect(created.body.project.songRevision.lyricDiff).toEqual({ kept: 4, changed: 0, added: 0, removed: 0 });
   });
 });

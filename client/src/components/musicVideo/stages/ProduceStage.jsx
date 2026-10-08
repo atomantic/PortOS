@@ -29,6 +29,7 @@ export default function ProduceStage({ board }) {
                 lipSyncBackend: videoSettings.audioReactiveSelected ? 'local' : videoSettings.settings.backend,
                 songDurationSec: project.audioAnalysis?.durationSec ?? null,
                 failed: sceneMedia.failedScenes,
+                songReview: project.songRevision?.sceneReview || null,
               }} />
             )}
             <div className="flex justify-end"><ContactSheetButton onOpen={board.openContactSheet} /></div>

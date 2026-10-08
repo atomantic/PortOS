@@ -783,6 +783,15 @@ export default function MusicVideo() {
   // Alignment is a click, never an import side effect. The panel shows the
   // whisper setup error itself, so this request stays silent.
   const handleAlignLyrics = (cueId, options) => lyricAlign.run(selected.id, cueId, options);
+  // Revise song: open the new version on its Song step and follow its re-time job there.
+  const handleSongRevised = ({ project, retimeJobId }) => {
+    openProject(project);
+    navigate(`/music-video/${project.id}/setup`);
+    if (retimeJobId) lyricAlign.attach(retimeJobId, project.id);
+    toast.success(`Created ${project.name} with the new song`);
+  };
+  const handleRetimeSong = () => lyricAlign.run(selected.id, null, { retimeSong: true })
+    .catch((err) => toast.error(err?.message || 'Could not re-time to the new song'));
   // The slot is page-wide but the job belongs to one project: only that
   // project's Setup shows "Aligning…".
   const aligningLyrics = Boolean(lyricAlign.active && selected && lyricAlign.context?.projectId === selected.id);
@@ -1134,6 +1143,10 @@ export default function MusicVideo() {
     onImportLyrics: handleImportLyrics,
     onImportTrackLyrics: handleImportTrackLyrics,
     onAlignLyrics: handleAlignLyrics,
+    onSongRevised: handleSongRevised,
+    onRetimeSong: handleRetimeSong,
+    retimeStatus: alignStatus,
+    onTrackImported: (track) => setTracks((prev) => [...prev, track]),
     onAddScene: handleAddScene,
     onDeleteScene: handleDeleteScene,
     onSplitScene: handleSplitScene,

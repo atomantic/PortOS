@@ -18,6 +18,9 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { alignProjectLyrics } from './lyricAlign.js';
 import { getProject } from './projects.js';
 
+const reviewableRevision = (project) => project.songRevision?.status === 'selected' && Boolean(project.songRevision.baseline);
+const retimeRevisedSongLazy = async (...args) => (await import('./songRevision.js')).retimeRevisedSong(...args);
+
 // jobId -> job; projectId -> running jobId
 const alignJobs = new Map();
 const activeByProject = new Map();
@@ -44,14 +47,18 @@ export function cancelLyricAlign(jobId) {
  * line while one runs also reuses it: the client reattaches rather than
  * queueing a second whisper run over the same song.
  */
-export async function startLyricAlign(projectId, { cueId = null, separateVocals = false, align = alignProjectLyrics } = {}) {
+export async function startLyricAlign(projectId, { cueId = null, separateVocals = false, retimeSong = false, align = alignProjectLyrics, retime = null } = {}) {
   const running = getActiveLyricAlignJobId(projectId);
   if (running) return { jobId: running, reused: true };
   // Fail with a real status before a job exists, as the blocking route did.
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   const cues = Array.isArray(project.lyricCues) ? project.lyricCues : [];
-  if (cues.length === 0) throw new ServerError('Add lyric lines before aligning words.', { status: 400, code: 'NO_LYRICS' });
+  // A revised song re-times as a whole: analysis, alignment and the board (songRevision.js).
+  if (retimeSong && !reviewableRevision(project)) {
+    throw new ServerError('This version has no revised song to re-time.', { status: 409, code: 'SONG_REVISION_CONFLICT' });
+  }
+  if (cues.length === 0 && !retimeSong) throw new ServerError('Add lyric lines before aligning words.', { status: 400, code: 'NO_LYRICS' });
   if (cueId && !cues.some((cue) => cue.id === cueId)) {
     throw new ServerError('That lyric line is no longer on the project.', { status: 404, code: 'NOT_FOUND' });
   }
@@ -67,7 +74,10 @@ export async function startLyricAlign(projectId, { cueId = null, separateVocals 
   (async () => {
     try {
       broadcastSse(job, { type: 'progress', stage: 'preparing' });
-      const project = await align(projectId, {
+      const run = retimeSong
+        ? (id, options) => (retime || retimeRevisedSongLazy)(id, { ...options, align })
+        : align;
+      const project = await run(projectId, {
         cueId,
         separateVocals,
         isCancelled: () => job.cancelRequested,

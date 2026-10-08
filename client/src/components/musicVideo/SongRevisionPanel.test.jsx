@@ -33,7 +33,7 @@ describe('song revision UI', () => {
     expect(select).toBeDisabled(); fireEvent.play(screen.getByLabelText('Listen to candidate 1')); fireEvent.click(select);
     expect(await screen.findByText(/New master selected/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Regenerate or reimport/ })).toHaveAttribute('href', '/music-video/fork/produce#mv-composition');
-    expect(screen.getByRole('link', { name: /align its lyrics on the Song step/ })).toHaveAttribute('href', '/music-video/fork/setup#mv-lyric-timing');
+    expect(screen.getByRole('link', { name: /Follow the re-time on the Song step/ })).toHaveAttribute('href', '/music-video/fork/setup');
     expect(screen.getByRole('link', { name: /Rebuild and review proofs/ })).toHaveAttribute('href', '/music-video/fork/produce#mv-review-proof');
     expect(api.act.mock.calls.map((call) => call[1])).toEqual(['generate', 'select']);
   });

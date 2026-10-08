@@ -19,6 +19,8 @@ export function lyricAlignStageLabel(frame) {
     case 'downloading-model': return 'Downloading the speech model (first run only)…';
     case 'transcribing': return frame.total > 1 ? `Transcribing phrase ${frame.current} of ${frame.total}…` : 'Transcribing…';
     case 'saving': return 'Saving word timings…';
+    case 'analyzing': return 'Analyzing the new song…';
+    case 'remapping': return 'Moving the shots to the new song…';
     default: return 'Starting…';
   }
 }
@@ -40,12 +42,14 @@ export default function useMusicVideoLyricAlign({ onAligned } = {}) {
     if (pending) fn(pending);
   };
   const slot = useSseJobSlot({
-    startRequest: ({ projectId, cueId, separateVocals }) => alignMusicVideoLyrics(projectId, { ...(cueId ? { cueId } : {}), ...(separateVocals ? { separateVocals: true } : {}) }, { silent: true }),
+    startRequest: ({ projectId, cueId, separateVocals, retimeSong }) => alignMusicVideoLyrics(projectId, {
+      ...(cueId ? { cueId } : {}), ...(separateVocals ? { separateVocals: true } : {}), ...(retimeSong ? { retimeSong: true } : {}),
+    }, { silent: true }),
     eventsUrl: musicVideoLyricAlignEventsUrl,
     cancelRequest: cancelMusicVideoLyricAlign,
-    onComplete: (frame, { projectId, cueId }) => {
+    onComplete: (frame, { projectId, cueId, retimeSong }) => {
       if (frame.project) onAligned?.(projectId, frame.project);
-      toast.success(cueId ? 'Re-aligned that line' : 'Aligned words to the vocal');
+      toast.success(cueId ? 'Re-aligned that line' : retimeSong ? 'Re-timed lyrics and shots to the new song' : 'Aligned words to the vocal');
       settle((pending) => pending.resolve(frame.project || null));
     },
     errorFallback: 'Could not align the words to the vocal',
@@ -71,10 +75,10 @@ export default function useMusicVideoLyricAlign({ onAligned } = {}) {
   }, [slot.active]);
   useEffect(() => () => settle((pending) => pending.resolve(null)), []);
 
-  const run = (projectId, cueId = null, { separateVocals = false } = {}) => new Promise((resolve, reject) => {
+  const run = (projectId, cueId = null, { separateVocals = false, retimeSong = false } = {}) => new Promise((resolve, reject) => {
     if (slot.active) { resolve(null); return; }
     waiter.current = { resolve, reject, started: false };
-    slot.start({ projectId, cueId, ...(separateVocals ? { separateVocals } : {}) });
+    slot.start({ projectId, cueId, ...(separateVocals ? { separateVocals } : {}), ...(retimeSong ? { retimeSong } : {}) });
   });
 
   return {

@@ -317,6 +317,19 @@ router.post('/:id/song-revision/select', asyncHandler(async (req, res) => {
   res.json(await selectSongRevision(req.params.id, revisionId, songId));
 }));
 
+router.post('/:id/song-revision/track', asyncHandler(async (req, res) => {
+  const { musicVideoSongFromTrackSchema } = await import('../lib/musicVideoValidation.js');
+  const { trackId } = validateRequest(musicVideoSongFromTrackSchema, req.body);
+  const { reviseSongFromTrack } = await import('../services/musicVideo/songRevision.js');
+  res.status(201).json(await reviseSongFromTrack(req.params.id, { trackId }));
+}));
+router.post('/:id/song-revision/scenes', asyncHandler(async (req, res) => {
+  const { musicVideoSongSceneActionSchema } = await import('../lib/musicVideoValidation.js');
+  const body = validateRequest(musicVideoSongSceneActionSchema, req.body);
+  const { resolveSongRevisionScenes } = await import('../services/musicVideo/songRevision.js');
+  res.json(await resolveSongRevisionScenes(req.params.id, body));
+}));
+
 router.post('/:id/clone', asyncHandler(async (req, res) => {
   const options = validateRequest(musicVideoProjectCloneSchema, req.body || {});
   res.status(201).json(await cloneProject(req.params.id, options));
@@ -519,8 +532,8 @@ router.post('/:id/lyrics/import-track', asyncHandler(async (req, res) => {
 // provisions MMS_FA only on demand. Explicit separateVocals consent creates
 // a missing stem with Demucs first; older master-only callers retain Whisper.
 router.post('/:id/lyrics/align', asyncHandler(async (req, res) => {
-  const { cueId, separateVocals } = validateRequest(musicVideoLyricsAlignSchema, req.body || {});
-  res.status(202).json(await startLyricAlign(req.params.id, { cueId, separateVocals }));
+  const { cueId, separateVocals, retimeSong } = validateRequest(musicVideoLyricsAlignSchema, req.body || {});
+  res.status(202).json(await startLyricAlign(req.params.id, { cueId, separateVocals, retimeSong }));
 }));
 
 router.get('/lyrics/align/:jobId/events', (req, res) => {
