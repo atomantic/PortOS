@@ -223,6 +223,35 @@ describe('startAutonomousVideo', () => {
     expect(runOf()).toMatchObject({ status: 'completed', stages: { produce: { status: 'done', step: null } } });
   });
 
+  it('adopts a code-first production run\'s own current final render instead of rendering it again (#10563)', async () => {
+    const { captureMusicVideoEvidence } = await import('../../lib/musicVideoDependencies.js');
+    const directory = 'music-video/mv-auto/composition/example';
+    // Production rendered `rendered` itself; the project now selects `selected`.
+    const seed = (selected) => {
+      const project = store.get('mv-auto');
+      project.composition = { ...project.composition, document: { directory } };
+      project.productionRuns = [{ id: 'mvpr-1', status: 'completed', documentCheckpoint: { directory }, finalRender: { status: 'completed', jobId: 'production-render', attemptId: 'attempt-1' } }];
+      project.renderHistoryId = 'production-render';
+      project.renderDependencies = captureMusicVideoEvidence(project);
+      project.composition.document = { directory: selected };
+      project.autonomousRun.output = { ...project.autonomousRun.output, renderJobId: null, productionDone: false };
+    };
+    await service.startAutonomousVideo({ prompt: 'p' });
+    await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
+
+    // A render that no longer matches the selected document is not adopted: the film renders once.
+    seed(`${directory}-newer`);
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'completed' } });
+    expect(doubles.renderVideo).toHaveBeenCalledOnce();
+    expect(runOf()).toMatchObject({ status: 'running', output: expect.objectContaining({ renderJobId: 'render-1' }) });
+
+    // The same completion with production's render still current finishes without rendering again.
+    seed(directory);
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'completed' } });
+    expect(doubles.renderVideo).toHaveBeenCalledOnce();
+    expect(runOf()).toMatchObject({ status: 'completed', output: expect.objectContaining({ renderJobId: 'production-render', productionDone: true }), stages: { produce: { status: 'done' } } });
+  });
+
   it('parks failed when the final render fails after production, and Retry re-renders without resuming production', async () => {
     await service.startAutonomousVideo({ prompt: 'p' });
     await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
