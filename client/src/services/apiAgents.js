@@ -442,3 +442,7 @@ export const triggerFeatureAgent = (id, options = {}) => request(`/feature-agent
 export const stopFeatureAgent = (id, options = {}) => request(`/feature-agents/${id}/stop`, { method: 'POST', ...options });
 export const getFeatureAgentRuns = (id, limit) => request(`/feature-agents/${id}/runs${limit ? `?limit=${limit}` : ''}`);
 export const getFeatureAgentOutput = (id) => request(`/feature-agents/${id}/output`);
+
+export const setMaintenanceRunArchived = (id, appId, archived, options = {}) => request(`/cos/schedule/maintenance-runs/${id}/archive`, {
+  method: 'PATCH', body: JSON.stringify({ appId, archived }), ...options
+});

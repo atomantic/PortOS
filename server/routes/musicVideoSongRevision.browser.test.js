@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { chromium } from 'playwright-core';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots, sweepStrayTempRoots } from '../lib/mockPathsDataRoot.js';
+import { waitForAbort } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { browserSuiteCanRun } from '../lib/browserSuiteGate.js';
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('mv-song-browser-') }));
@@ -23,9 +24,11 @@ catch (err) { if (err.code !== 'MODULE_NOT_FOUND') throw err; }
 const canRun = browserSuiteCanRun('song revision browser suite', { Chrome: chrome, 'client workspace dependencies': bundler }, { onUnavailable: cleanupTempDataRoots });
 // Prerequisite discovery may initialize mocked paths; skipped suites have no cleanup hooks.
 let browser, proc, server, io, songs, musicVideoEvents;
+const fixtureCleanup = new AbortController();
 const broadcast = event => io.emit('music-video:song-revision', event);
 afterAll(async () => {
   musicVideoEvents?.off('song-revision', broadcast);
+  fixtureCleanup.abort();
   await songs?.__testing.settle(); songs?.__setSongRevisionDepsForTests();
   try {
     await _cleanupTestBrowser({ browser, proc, cleanup: async () => {
@@ -70,7 +73,12 @@ describe.skipIf(!canRun)('song revision in Chrome (client dependencies required)
     songs.__setSongRevisionDepsForTests({ generate: async (_fields, opts) => {
       if (!opts.songIds) { creates++; await opts.onSubmitted(['candidate-a', 'candidate-b']); }
       if (generationMode === 'failed') throw new Error('Synthetic download failure');
-      if (generationMode === 'held') await new Promise((_, reject) => opts.signal.addEventListener('abort', () => reject(new Error('Canceled')), { once: true }));
+      if (generationMode === 'held') {
+        // Cancellation can win while onSubmitted persists. Never miss an abort
+        // that happened before this wait, and let failed-test cleanup drain it.
+        await waitForAbort(AbortSignal.any([opts.signal, fixtureCleanup.signal]));
+        throw new Error('Canceled');
+      }
       return { songId: opts.songIds?.[0] || 'candidate-b', filename: 'synthetic.wav' };
     } });
     const ui = join(PATHS.data, 'ui'); await mkdir(ui, { recursive: true });
