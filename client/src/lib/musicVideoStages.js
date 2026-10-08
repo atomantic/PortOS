@@ -544,12 +544,11 @@ const STORYBOARD_PROBLEM_GROUPS = [
   { id: 'art', label: 'Art direction', test: /art direction|art feedback/i, action: { label: 'Review art direction', anchor: APPROVAL_ANCHORS.art } },
   // A document storyboard needs a manifest from its current build; its message mentions timing, so it is matched first.
   { id: 'manifest', label: 'Document shot manifest', test: /shot manifest/i, action: { label: 'Import the shot manifest', anchor: 'mv-review-planning' } },
-  // The per-shot count lines mention timing too, so they are matched before lyric timing.
-  { id: 'shots', label: 'Shot details', test: /^\d+ shots? (missing|needs?) /, action: { label: 'Edit the storyboard', anchor: APPROVAL_ANCHORS.storyboard } },
   { id: 'lyrics', label: 'Lyrics', test: /lyrics|instrumental/i, action: { label: 'Import lyrics', stage: 'setup', anchor: 'mv-lyrics-import' } },
-  { id: 'timing', label: 'Lyric timing', test: /alignment|timing|vocal|master song/i, action: { label: 'Verify timing', stage: 'setup', anchor: 'mv-lyric-timing' } },
+  // The per-shot count lines ("3 shots missing timing, …") mention timing too; they belong to Shot details.
+  { id: 'timing', label: 'Lyric timing', test: /^(?!\d+ shots? ).*(alignment|timing|vocal|master song)/i, action: { label: 'Verify timing', stage: 'setup', anchor: 'mv-lyric-timing' } },
   { id: 'coverage', label: 'Shot coverage', test: /cover the master|gaps or overlaps|create a timed/i, action: { label: 'Open the treatment', anchor: 'mv-board-treatment' } },
-  { id: 'other', label: 'Storyboard', test: /./, action: { label: 'Edit the storyboard', anchor: APPROVAL_ANCHORS.storyboard } },
+  { id: 'shots', label: 'Shot details', test: /./, action: { label: 'Edit the storyboard', anchor: APPROVAL_ANCHORS.storyboard } },
 ];
 
 /** One open checklist item per group of storyboard readiness problems, per-shot problems counted rather than listed. */

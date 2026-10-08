@@ -500,7 +500,7 @@ describe('stageChecklist', () => {
       'Complete timing, action, staging, camera and transition for Shot 3.',
     ] } };
     const items = stageChecklist('board', castProject({ scenes: [scene()] }), readiness).filter((i) => i.details);
-    expect(items.map((i) => i.id)).toEqual(['board-shots', 'board-lyrics', 'board-timing', 'board-coverage']);
+    expect(items.map((i) => i.id)).toEqual(['board-lyrics', 'board-timing', 'board-coverage', 'board-shots']);
     expect(items.every((i) => i.action?.anchor)).toBe(true);
     // Per-shot problems are counted, never listed one per shot: the preview is where shots get reviewed.
     expect(items.find((i) => i.id === 'board-shots').details).toEqual([
