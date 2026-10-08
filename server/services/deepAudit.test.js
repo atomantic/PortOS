@@ -60,6 +60,89 @@ async function finish(agentId, selected = task, success = true) {
 }
 
 describe('Deep coverage workflow across serialized restarts', () => {
+  it('batches serialized resumes without crediting omitted or out-of-batch units', async () => {
+    pinned.files = Array.from({ length: 10 }, (_, i) => ({ path: `area-${i}/source.js`, blob, kind: 'blob' }));
+    const writes = new Map();
+    deps.write = async (path, value) => writes.set(path, structuredClone(value));
+    const seen = new Set();
+    for (let i = 0; i < 3; i++) {
+      const id = `batch-${i}`;
+      await prepare(id);
+      const ledger = saved();
+      const attempt = ledger.attempts[id];
+      expect(attempt.pass).toBe('static');
+      expect(attempt.unitIds.length).toBeLessThanOrEqual(12);
+      for (const unit of attempt.unitIds) { expect(seen.has(unit)).toBe(false); seen.add(unit); }
+      const projection = [...writes].find(([path]) => path.endsWith('-assignment.json') && writes.get(path).attempt.id === id)[1];
+      expect(projection.units.map(unit => unit.id)).toEqual(attempt.unitIds);
+      expect(projection).not.toHaveProperty('invalidated');
+      expect(projection).not.toHaveProperty('attempts');
+      expect(projection.progress.requiredPasses).toBe(120);
+      if (i === 0) {
+        const outside = ledger.units.find(unit => !attempt.unitIds.includes(unit.id));
+        report = JSON.stringify(payload(id, { units: [{ ...payload(id).units[0], id: outside.id }] }));
+        expect(await finish(id)).toMatchObject({ complete: false, satisfiedPasses: 0 });
+      }
+      report = JSON.stringify(payload(id));
+      expect(await finish(id)).toMatchObject({ complete: false, discoveryComplete: false });
+    }
+    expect(seen.size).toBe(30);
+    await prepare('next-pass');
+    expect(saved().attempts['next-pass'].pass).toBe('trace');
+  });
+
+  it('preserves findings outside the batch and rejects candidate identity collisions', async () => {
+    pinned.files = Array.from({ length: 5 }, (_, i) => ({ path: `area-${i}/source.js`, blob, kind: 'blob' }));
+    await prepare('first');
+    const firstUnit = saved().attempts.first.unitIds[0];
+    const candidate = { id: 'first-finding', unitId: firstUnit, finding: 'Inspect the failure path', disposition: 'pending', resolution: 'Requires later validation' };
+    report = JSON.stringify(payload('first', { candidates: [candidate] }));
+    await finish('first');
+    await prepare('second');
+    const secondUnit = saved().attempts.second.unitIds[0];
+    for (const invalid of [candidate, { ...candidate, unitId: secondUnit }]) {
+      report = JSON.stringify(payload('second', { candidates: [invalid] }));
+      expect(await finish('second')).toMatchObject({ satisfiedPasses: 12, complete: false });
+      expect(saved().candidates['first-finding'].unitId).toBe(firstUnit);
+    }
+    report = JSON.stringify(payload('second'));
+    await finish('second');
+    expect(saved().candidates['first-finding']).toMatchObject(candidate);
+  });
+
+  it('retains full-scope delivery retries after all discovery receipts exist', async () => {
+    pinned.files = Array.from({ length: 5 }, (_, i) => ({ path: `area-${i}/source.js`, blob, kind: 'blob' }));
+    for (let i = 0; i < 8; i++) {
+      const id = `discovery-${i}`;
+      await prepare(id);
+      report = JSON.stringify(payload(id));
+      await finish(id, task, false);
+    }
+    expect(deepAuditProgress(saved())).toMatchObject({ discoveryComplete: true, deliveryComplete: false });
+    await prepare('delivery-retry');
+    expect(saved().attempts['delivery-retry'].unitIds).toHaveLength(15);
+  });
+
+  it('gives untouched units priority over blockers and isolates oversized units', async () => {
+    pinned.files = [
+      ...Array.from({ length: 100 }, (_, i) => ({ path: `large/${i}.js`, blob, kind: 'blob' })),
+      { path: 'small/file.js', blob, kind: 'blob' },
+    ];
+    await prepare('oversized');
+    expect(saved().attempts.oversized.unitIds).toHaveLength(1);
+    const first = saved().attempts.oversized.unitIds[0];
+    report = JSON.stringify(payload('oversized', { units: payload('oversized').units.map(unit => ({ ...unit, status: 'blocked' })) }));
+    await finish('oversized');
+    for (const id of ['second', 'third', 'small']) {
+      await prepare(id);
+      expect(saved().attempts[id].unitIds).not.toContain(first);
+      report = JSON.stringify(payload(id));
+      await finish(id);
+    }
+    await prepare('retry-blocker');
+    expect(saved().attempts['retry-blocker'].unitIds).toEqual([first]);
+  });
+
   it('gives the agent exact evidence types and rejects array observations without crediting coverage', async () => {
     const prompt = await prepare('typed-report');
     const contract = JSON.parse(prompt.match(/```json\n([^]*?)\n```/)[1]);
@@ -220,17 +303,26 @@ it('enrolls newly discovered workflows without shrinking the mechanically invent
   expect(saved().attempts.b.unitIds).toHaveLength(1);
 });
 
-it('does not combine post-fix checks from different source revisions', async () => {
+it('does not combine post-fix batches from different source revisions and reassigns cleared units', async () => {
+  pinned.files = Array.from({ length: 5 }, (_, i) => ({ path: `area-${i}/source.js`, blob, kind: 'blob' }));
   const fix = { ...task, metadata: { ...task.metadata, fileIssues: false } };
-  for (const agent of ['a', 'b', 'c', 'd']) { await prepare(agent, fix); report = JSON.stringify(payload(agent)); await finish(agent, fix); }
-  await prepare('x', fix); await prepare('y', fix);
-  const x = payload('x', { validationRevision: 'c'.repeat(40) });
-  const y = payload('y', { validationRevision: 'd'.repeat(40) });
-  x.units = x.units.slice(0, 3); y.units = y.units.slice(3);
-  pinned.revision = 'c'.repeat(40); report = JSON.stringify(x); await finish('x', fix);
-  pinned.revision = 'd'.repeat(40); report = JSON.stringify(y);
+  for (let i = 0; i < 8; i++) {
+    const agent = `discovery-${i}`;
+    await prepare(agent, fix); report = JSON.stringify(payload(agent)); await finish(agent, fix);
+  }
+  await prepare('x', fix);
+  const firstIds = saved().attempts.x.unitIds;
+  expect(firstIds).toHaveLength(12);
+  report = JSON.stringify(payload('x', { validationRevision: pinned.revision }));
+  expect(await finish('x', fix)).toMatchObject({ complete: false });
+  await prepare('y', fix);
+  expect(saved().attempts.y.unitIds).toHaveLength(3);
+  pinned.revision = 'd'.repeat(40);
+  report = JSON.stringify(payload('y', { validationRevision: pinned.revision }));
   expect(await finish('y', fix)).toMatchObject({ discoveryComplete: true, deliveryComplete: false, complete: false });
-  expect(saved().units.filter(unit => unit.evidence['post-fix'])).toHaveLength(3);
+  const ledger = saved();
+  expect(ledger.units.filter(unit => unit.evidence['post-fix'])).toHaveLength(3);
+  expect(assignDeepAuditAttempt(ledger, 'cleared').unitIds).toEqual(firstIds);
 });
 
 it('keeps scheduled and custom resume identities stable across task ids', async () => {

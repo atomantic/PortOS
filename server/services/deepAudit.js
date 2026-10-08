@@ -6,7 +6,7 @@ import { atomicWrite, PATHS } from '../lib/fileUtils.js';
 import { tryReadFile } from '../lib/jsonIo.js';
 import { canonicalSnapshotChecksum } from '../lib/snapshotChecksum.js';
 import { normalizeAuditTaskType, isAuditTaskType } from '../lib/auditCatalog.js';
-import { createDeepAuditLedger, assignDeepAuditAttempt, deepAuditProgress, deepAuditInstructions,
+import { createDeepAuditLedger, assignDeepAuditAttempt, deepAuditProgress, deepAuditInstructions, deepAuditAssignment,
   mergeDeepAuditReport, refreshDeepAuditScope, DEEP_AUDIT_CONTRACT_VERSION } from '../lib/deepAudit.js';
 import { PROMPT_VERSIONS } from './taskPromptDefaults/versions.js';
 import { resolveTaskHookType } from './taskTypeHooks.js';
@@ -21,7 +21,7 @@ function deepAuditId(task) {
 function deepAuditPaths(_workspacePath, agentId) {
   const prefix = `.portos-deep-${canonicalSnapshotChecksum(agentId).slice(0, 24)}`;
   const directory = join(PATHS.cos, 'deep-audit-checkpoints');
-  return { ledgerPath: join(directory, `${prefix}-ledger.json`), reportPath: join(directory, `${prefix}-report.json`) };
+  return { ledgerPath: join(directory, `${prefix}-ledger.json`), assignmentPath: join(directory, `${prefix}-assignment.json`), reportPath: join(directory, `${prefix}-report.json`) };
 }
 
 async function inventoryDeepAudit(workspacePath, { promptHash, category }) {
@@ -118,6 +118,7 @@ export async function prepareDeepAudit({ task, agentId, workspacePath }, deps = 
   });
   const paths = deepAuditPaths(workspacePath, agentId);
   await (deps.write || atomicWrite)(paths.ledgerPath, ledger);
+  await (deps.write || atomicWrite)(paths.assignmentPath, deepAuditAssignment(ledger, ledger.attempts[agentId]));
   return deepAuditInstructions({ ledger, attempt: ledger.attempts[agentId], ...paths });
 }
 

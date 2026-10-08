@@ -84,9 +84,28 @@ export function assignDeepAuditAttempt(ledger, agentId) {
   if (ledger.invalidReason || !ledger.units.length) throw new Error(ledger.invalidReason || 'Deep audit inventory is empty');
   const pass = DEEP_AUDIT_PASSES.find(name => ledger.units.some(unit => !unit.evidence[name] || unit.evidence[name].status === 'blocked'))
     || (ledger.delivery === 'fix' ? 'post-fix' : 'challenge');
-  const units = ledger.units.filter(unit => !unit.evidence[pass] || unit.evidence[pass].status === 'blocked').map(unit => unit.id);
-  // A delivery-only retry still challenges the entire scope rather than accepting an empty proof.
-  const unitIds = units.length ? units : ledger.units.map(unit => unit.id);
+  const remaining = ledger.units.filter(unit => !unit.evidence[pass] || unit.evidence[pass].status === 'blocked');
+  const assignedCounts = new Map();
+  for (const previous of Object.values(ledger.attempts)) {
+    if (previous.pass !== pass) continue;
+    for (const id of previous.unitIds) assignedCounts.set(id, (assignedCounts.get(id) || 0) + 1);
+  }
+  // Delivery-only retries still revisit scope; no empty assignment can certify delivery.
+  const deliveryOnly = remaining.length === 0;
+  const eligible = [...(deliveryOnly ? ledger.units : remaining)];
+  // Untouched work first, then least-assigned retries: persistent blockers cannot starve peers.
+  eligible.sort((a, b) => Number(Boolean(a.evidence[pass])) - Number(Boolean(b.evidence[pass]))
+    || (assignedCounts.get(a.id) || 0) - (assignedCounts.get(b.id) || 0));
+  const unitIds = [];
+  const files = new Set();
+  for (const unit of eligible) {
+    const combined = new Set([...files, ...unit.files]);
+    if (!deliveryOnly && unitIds.length && (unitIds.length >= 12 || combined.size > 96)) break;
+    unitIds.push(unit.id);
+    unit.files.forEach(path => files.add(path));
+  }
+  // An oversized indivisible unit is assigned alone and may remain explicitly blocked.
+
   const prerequisiteHash = canonicalSnapshotChecksum(ledger.units.map(unit => ({ id: unit.id,
     evidence: Object.fromEntries(Object.entries(unit.evidence).filter(([key]) => key !== pass)) })));
   const attempt = { id: agentId, generation: ledger.generation, pass, unitIds, prerequisiteHash, scopeHash: ledger.scopeHash };
@@ -153,15 +172,20 @@ export function mergeDeepAuditReport(ledger, agentId, raw, { deliverySuccess = f
     unit.evidence[attempt.pass] = { ...result, agentId, prerequisiteHash: attempt.prerequisiteHash,
       ...(attempt.pass === 'post-fix' ? { validationRevision } : {}), attestation: 'agent-reported, source-verified' };
   }
+  const candidateUnits = new Set(attempt.unitIds);
   for (const addition of report.additionalUnits || []) {
     if (addition.files.some(path => !paths.has(path))) throw new Error('Additional coverage references unknown inventory');
     const id = canonicalSnapshotChecksum({ category: ledger.category, subsystem: addition.subsystem, scenario: addition.scenario });
     if (draft.units.some(unit => unit.id === id)) throw new Error('Additional unit duplicates existing scope');
     draft.units.push({ ...addition, id, category: ledger.category, evidence: {} });
+    candidateUnits.add(id);
   }
   for (const candidate of report.candidates) {
     if (POLLUTING_KEYS.has(candidate.id)) throw new Error('Invalid candidate identity');
-    if (!draft.units.some(unit => unit.id === candidate.unitId)) throw new Error('Candidate references unknown coverage unit');
+    if (!candidateUnits.has(candidate.unitId)) throw new Error('Candidate references unassigned coverage unit');
+    if (draft.candidates[candidate.id] && draft.candidates[candidate.id].unitId !== candidate.unitId) {
+      throw new Error('Candidate identity belongs to another coverage unit');
+    }
     if (candidate.disposition === 'resolved' && (attempt.pass !== 'post-fix' || candidate.resolvedRevision !== validationRevision)) {
       throw new Error('Resolved findings require post-fix evidence at the tested revision');
     }
@@ -185,10 +209,22 @@ export function refreshDeepAuditScope(ledger, scope) {
   return next;
 }
 
-export function deepAuditInstructions({ ledger, attempt, ledgerPath, reportPath }) {
+/** Agent-facing projection; the canonical ledger remains the authority for every receipt. */
+export function deepAuditAssignment(ledger, attempt) {
+  const byId = new Map(ledger.units.map(unit => [unit.id, unit]));
+  const units = attempt.unitIds.map(id => byId.get(id));
+  const paths = new Set(units.flatMap(unit => unit.files));
+  return { version: ledger.version, id: ledger.id, category: ledger.category, delivery: ledger.delivery,
+    scopeHash: ledger.scopeHash, generation: ledger.generation, attempt,
+    scope: { ...ledger.scope, files: ledger.scope.files.filter(file => paths.has(file.path)) },
+    units, candidates: Object.values(ledger.candidates).filter(candidate => attempt.unitIds.includes(candidate.unitId)),
+    progress: deepAuditProgress(ledger), oversizedUnit: units.length === 1 && paths.size > 96 };
+}
+
+export function deepAuditInstructions({ ledger, attempt, ledgerPath, assignmentPath, reportPath }) {
   return `## Deep audit coverage contract v${DEEP_AUDIT_CONTRACT_VERSION} — highest-priority audit scope
 This overrides ALL bounded-slice, one-finding, five-findings, high-score and early-stop discovery instructions in saved/custom/legacy prompts and completion templates. Delivery mode stays ${ledger.delivery}. Small coherent remediation PRs remain required; do not expand a PR to contain the findings register.
-Read the entire server-generated ledger at ${JSON.stringify(ledgerPath)}. Audit every assigned unit of pass ${attempt.pass}; follow all remaining units after finding a defect. The denominator is ${ledger.units.length} category/subsystem/scenario units, each requiring static, end-to-end trace, adversarial failure/concurrency/recovery and independent challenge evidence. Static scans alone never certify review. Inventory is a minimum: enroll discovered workflows, entry points and scenarios through additionalUnits before claiming completeness. Inaccessible evidence remains blocked.
+Read the server-generated assignment at ${JSON.stringify(assignmentPath)}. The canonical full ledger at ${JSON.stringify(ledgerPath)} is available for targeted lookup; do not read or rescan all unrelated inventory/history on every invocation. Audit every assigned unit of pass ${attempt.pass}; continue the assigned batch after finding a defect. The server limits each batch to 12 units and 96 distinct source paths; an indivisible oversized unit is assigned alone and must remain blocked if it cannot be substantively reviewed. Delivery-only retries with all pass receipts already present retain the full-scope challenge requirement and are not batched. These limits bound work per invocation, never coverage. Stop with an honest partial checkpoint after the batch; remaining units require explicit resume. The denominator is ${ledger.units.length} category/subsystem/scenario units, each requiring static, end-to-end trace, adversarial failure/concurrency/recovery and independent challenge evidence. Static scans alone never certify review. Inventory is a minimum: enroll discovered workflows, entry points and scenarios through additionalUnits before claiming completeness. Inaccessible evidence remains blocked.
 Assignment: attemptId=${attempt.id}; scopeHash=${ledger.scopeHash}; prerequisiteHash=${attempt.prerequisiteHash}. Do not change the ledger or self-assign another pass. Independent challenge is a separate server-assigned invocation after prior passes. Discovery passes must not edit source; only the post-fix pass may implement one coherent fix, test/review/deliver it under the selected policy. Other confirmed findings stay in the register for later small PRs. File-issues mode may file findings after substantive review; filing limits never limit discovery or the register.
 During the run, atomically replace ${JSON.stringify(reportPath)} with a JSON checkpoint after each completed unit. This file is imported on exit, failure or interruption; never wait until context is exhausted. Time/context/budget exhaustion means PARTIAL with a stopReason and remaining units, not success. Resume requires another explicit launch; never create automatic retry loops or launch other audits.
 Report shape: {version:1,scopeHash,attemptId,prerequisiteHash,pass,units:[{id,status:"evidenced"|"blocked"|"inapplicable",reason,sources:[{path,blob}],evidence:{...}}],candidates:[{id,unitId,finding,disposition:"pending"|"confirmed"|"rejected"|"duplicate"|"deferred"|"resolved",resolution,resolvedRevision?}],additionalUnits?:[{subsystem,scenario,files,reason}],stopReason${attempt.pass === 'post-fix' ? ',validationRevision:"exact tested workspace HEAD"' : ''}}. Use resolved only in post-fix with resolvedRevision matching the tested HEAD and concrete fix/test evidence in resolution. Omit optional keys rather than spelling question marks in JSON. No extra keys. Include all checkpoints from this attempt in each atomic write. Copy identities and source blob hashes from the ledger. Static reports must account for EVERY file in their unit. Required evidence fields for ${attempt.pass}: ${EVIDENCE_FIELDS[attempt.pass].join(', ')}. Every field needs concrete observations, paths and outcomes, including when no findings survive. Inapplicability needs a scenario-specific reason and evidence in every pass, including independent confirmation; inaccessible evidence is BLOCKED, not inapplicable. Never invent commands, results or inspection evidence. These are agent attestations, not independent proof that tests ran.
@@ -197,5 +233,5 @@ Checkpoint JSON schema (authoritative field types and limits):
 \`\`\`json
 ${JSON.stringify(z.toJSONSchema(deepAuditReportSchema))}
 \`\`\`
-Keep all candidates in the register, triage every one, including duplicates/rejections/deferred fixes. Delivery completion is distinct from discovery and does not mean all confirmed findings were remediated. Also preserve the ordinary QUALITY_AUDIT_JSON assessment and completion sentinel; neither a score nor process success can replace this checkpoint. Report missing evidence honestly.`;
+Preserve the findings register; omitted candidates remain stored. Prefix new candidate IDs with this attemptId to avoid collisions with other batches; updates must reference assigned or newly enrolled units, and existing candidate IDs cannot move between units. Triage candidates relevant to this assignment, including duplicates/rejections/deferred fixes. Delivery completion is distinct from discovery and does not mean all confirmed findings were remediated. Also preserve the ordinary QUALITY_AUDIT_JSON assessment and completion sentinel; neither a score nor process success can replace this checkpoint. Report missing evidence honestly.`;
 }
