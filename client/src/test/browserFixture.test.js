@@ -34,6 +34,23 @@ describe('startBrowserFixture', () => {
     await vi.waitFor(() => expect(late.close).toHaveBeenCalledTimes(1));
   });
 
+  it('names a stalled Vite start and never listens on a server that arrives late', async () => {
+    const { server } = fakeVite();
+    let arrive;
+    const createServer = vi.fn(() => new Promise(resolve => { arrive = () => resolve(server); }));
+    const chromium = { launch: vi.fn() };
+
+    const error = await startBrowserFixture({ name: 'example', createServer, viteConfig: () => SCOPED, chromium,
+      phaseMs: PHASE_MS }).catch(caught => caught);
+
+    expect(error.message).toMatch(/^example startup failed during Vite server start: timed out after 50ms \(completed: none; cleaned up\)$/);
+    expect(chromium.launch).not.toHaveBeenCalled();
+
+    arrive();
+    await vi.waitFor(() => expect(server.close).toHaveBeenCalledTimes(1));
+    expect(server.listen).not.toHaveBeenCalled();
+  });
+
   it('closes the launched browser and Vite when the warmup page fails', async () => {
     const { server, createServer } = fakeVite();
     const page = { close: vi.fn(async () => {}) };

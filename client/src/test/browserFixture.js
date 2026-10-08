@@ -53,7 +53,7 @@ const withDeadline = (promise, ms, onTimeout) => {
  * @param {string} options.name - fixture label used in errors and the temp-dir prefix
  * @param {Function} options.createServer - vite's `createServer`
  * @param {(temp: string) => object} options.viteConfig - inline Vite config; `temp` is the fixture's private temp dir
- * @param {object} options.chromium - playwright-core's `chromium`
+ * @param {object} options.chromium - playwright-core's `chromium`, or any `{ launch }` stand-in (e.g. one wrapping `connectOverCDP`)
  * @param {object} [options.launchOptions] - extra `chromium.launch` options (executablePath, args, …)
  * @param {(page: object, origin: string) => Promise<void>} [options.warmup] - first navigation; the page is closed afterward
  * @param {object} [options.phaseMs] - per-phase budgets; defaults to BROWSER_FIXTURE_PHASE_MS
@@ -102,7 +102,12 @@ export async function startBrowserFixture({
       }
       const vite = await createServer(config);
       own(() => vite.close());
+      // A server that arrives after the deadline was just closed by own();
+      // listening would bind a port nothing closes.
+      if (failed) return vite;
       await vite.listen();
+      // The deadline passed while listen() was binding: cleanup already ran.
+      if (failed) await vite.close();
       return vite;
     });
     const origin = server.resolvedUrls.local[0];

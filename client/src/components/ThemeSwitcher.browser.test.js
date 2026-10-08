@@ -1,13 +1,12 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
+import { BROWSER_FIXTURE_STARTUP_MS, startBrowserFixture } from '../test/browserFixture.js';
 import { THEME_IDS } from '../themes/portosThemes.js';
 
 const require = createRequire(import.meta.url);
@@ -21,16 +20,18 @@ const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
 ].find(path => path && existsSync(path));
 
 describe.skipIf(!chrome)('theme chooser in short viewports', () => {
-  let server;
   let browser;
-  let browserTemp;
+  let fixture;
   let origin;
 
   beforeAll(async () => {
-    browserTemp = await mkdtemp(join(tmpdir(), 'theme-switcher-chrome-'));
-    server = await createServer({
+    // Each startup phase is bounded and cleaned up inside the hook (#10543).
+    fixture = await startBrowserFixture({ name: 'theme-switcher-chrome', createServer, chromium,
+      launchOptions: { executablePath: chrome, args: ['--mute-audio'] }, viteConfig: temp => ({
       configFile: false,
-      cacheDir: join(browserTemp, 'vite-cache'),
+      cacheDir: join(temp, 'vite-cache'),
+      // Pre-bundle only what this fixture renders, not the whole app's graph.
+      optimizeDeps: { entries: ['src/components/ThemeContext.jsx', 'src/components/ThemeSwitcher.jsx'], include: ['react', 'react-dom/client'] },
       root: fileURLToPath(new URL('../..', import.meta.url)),
       plugins: [react(), {
         name: 'theme-switcher-browser-fixture',
@@ -61,22 +62,11 @@ describe.skipIf(!chrome)('theme chooser in short viewports', () => {
         },
       }],
       server: { host: '127.0.0.1', port: 0 },
-    });
-    await server.listen();
-    origin = server.resolvedUrls.local[0];
-    browser = await chromium.launch({ executablePath: chrome, headless: true, args: ['--mute-audio'],
-      env: { ...process.env, TMPDIR: browserTemp, TMP: browserTemp, TEMP: browserTemp },
-    });
-  }, 60000);
+    }) });
+    ({ browser, origin } = fixture);
+  }, BROWSER_FIXTURE_STARTUP_MS);
 
-  afterAll(async () => {
-    try {
-      await browser?.close();
-    } finally {
-      await server?.close();
-      if (browserTemp) await rm(browserTemp, { recursive: true, force: true });
-    }
-  });
+  afterAll(() => fixture?.close());
 
   it.each([{ width: 640, height: 400 }, { width: 360, height: 400 }, { width: 1280, height: 800 }])(
     'keeps selected and keyboard-focused themes visible at $width×$height', async ({ width, height }) => {

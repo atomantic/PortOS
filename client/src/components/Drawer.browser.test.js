@@ -1,13 +1,12 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
 import { chromium } from 'playwright-core';
+import { BROWSER_FIXTURE_STARTUP_MS, startBrowserFixture } from '../test/browserFixture.js';
 
 const auditCdp = process.env.PORTOS_AUDIT_CDP;
 const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
@@ -18,17 +17,21 @@ const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
 // Native :disabled includes inherited fieldset state and the first-legend
 // exception. Happy DOM does not model it, so exercise actual browser tab order.
 describe.skipIf(!chrome && !auditCdp)('Drawer native disabled-state focus boundaries', () => {
-  let server;
+  let fixture;
   let browser;
   let page;
-  let temporary;
   let origin;
   beforeAll(async () => {
-    temporary = await mkdtemp(join(tmpdir(), 'drawer-focus-'));
-    server = await createServer({
+    // Each startup phase is bounded and cleaned up inside the hook (#10543).
+    // Live audits attach to the existing browser instead of launching one.
+    fixture = await startBrowserFixture({ name: 'drawer-focus', createServer,
+      chromium: auditCdp ? { launch: () => chromium.connectOverCDP(auditCdp) } : chromium,
+      launchOptions: { executablePath: chrome }, viteConfig: temp => ({
       configFile: false,
       root: fileURLToPath(new URL('../..', import.meta.url)),
-      cacheDir: join(temporary, 'vite-cache'),
+      cacheDir: join(temp, 'vite-cache'),
+      // Pre-bundle only what this fixture renders, not the whole app's graph.
+      optimizeDeps: { entries: ['src/components/Drawer.jsx'], include: ['react', 'react-dom/client'] },
       plugins: [react(), {
         name: 'drawer-focus-fixture',
         resolveId(id) { if (id === '/drawer-fixture.jsx') return '\0drawer-fixture.jsx'; },
@@ -63,13 +66,11 @@ describe.skipIf(!chrome && !auditCdp)('Drawer native disabled-state focus bounda
         },
       }],
       server: { host: '127.0.0.1', port: 0 },
-    });
-    await server.listen();
-    origin = server.resolvedUrls.local[0];
+    }) });
+    ({ browser, origin } = fixture);
     if (auditCdp) {
       // Live audits reuse only the dedicated background target. No new page,
       // context, activation, or browser shutdown is permitted in this mode.
-      browser = await chromium.connectOverCDP(auditCdp);
       for (const candidate of browser.contexts().flatMap(context => context.pages())) {
         if (await candidate.evaluate(() => window.name === 'portos-ui-quality-audit')) {
           page = candidate;
@@ -78,12 +79,9 @@ describe.skipIf(!chrome && !auditCdp)('Drawer native disabled-state focus bounda
       }
       if (!page) throw new Error('Dedicated PortOS audit target is missing');
     } else {
-      browser = await chromium.launch({ executablePath: chrome, headless: true,
-        env: { ...process.env, TMPDIR: temporary, TMP: temporary, TEMP: temporary },
-      });
       page = await browser.newPage();
     }
-  }, 60000);
+  }, BROWSER_FIXTURE_STARTUP_MS);
   afterAll(async () => {
     if (auditCdp && page) {
       await page.evaluate(() => {
@@ -93,9 +91,7 @@ describe.skipIf(!chrome && !auditCdp)('Drawer native disabled-state focus bounda
     }
     // close() disconnects an attached CDP client; only a launched browser is
     // owned by this suite and terminated by Playwright.
-    await browser?.close();
-    await server?.close();
-    if (temporary) await rm(temporary, { recursive: true, force: true });
+    await fixture?.close();
   });
 
   it('wraps around a saving form, preserves its legend control, and restores enabled tab stops', async () => {

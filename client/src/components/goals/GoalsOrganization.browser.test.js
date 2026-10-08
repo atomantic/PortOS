@@ -1,13 +1,12 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
+import { BROWSER_FIXTURE_STARTUP_MS, startBrowserFixture } from '../../test/browserFixture.js';
 import { ASYNC_UTIL_TIMEOUT_MS } from '../../test/timeouts.js';
 
 const require = createRequire(import.meta.url);
@@ -18,15 +17,17 @@ const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
 ].find(path => path && existsSync(path));
 
 describe.skipIf(!chrome)('Goals organization responsive controls (#9712)', () => {
-  let server;
   let browser;
-  let browserTemp;
+  let fixture;
   let origin;
   beforeAll(async () => {
-    browserTemp = await mkdtemp(join(tmpdir(), 'goals-chrome-'));
-    server = await createServer({
+    // Each startup phase is bounded and cleaned up inside the hook (#10543).
+    fixture = await startBrowserFixture({ name: 'goals-chrome', createServer, chromium,
+      launchOptions: { executablePath: chrome }, viteConfig: temp => ({
       configFile: false,
-      cacheDir: join(browserTemp, 'vite-cache'),
+      cacheDir: join(temp, 'vite-cache'),
+      // Pre-bundle only what this fixture renders, not the whole app's graph.
+      optimizeDeps: { entries: ['src/components/goals/GoalsListView.jsx', 'src/components/goals/GoalsTreeView.jsx'], include: ['react', 'react-dom/client', 'react-router'] },
       root: fileURLToPath(new URL('../../..', import.meta.url)),
       plugins: [react(), {
         name: 'goals-browser-fixture',
@@ -73,20 +74,10 @@ describe.skipIf(!chrome)('Goals organization responsive controls (#9712)', () =>
         },
       }],
       server: { host: '127.0.0.1', port: 0 },
-    });
-    await server.listen();
-    origin = server.resolvedUrls.local[0];
-    browser = await chromium.launch({ executablePath: chrome, headless: true,
-      env: { ...process.env, TMPDIR: browserTemp, TMP: browserTemp, TEMP: browserTemp },
-    });
-  }, 60000);
-  afterAll(async () => {
-    try { await browser?.close(); }
-    finally {
-      await server?.close();
-      if (browserTemp) await rm(browserTemp, { recursive: true, force: true });
-    }
-  });
+    }) });
+    ({ browser, origin } = fixture);
+  }, BROWSER_FIXTURE_STARTUP_MS);
+  afterAll(() => fixture?.close());
 
   it.each(['list', 'tree'])('keeps %s controls usable at phone, tablet and desktop widths', async view => {
     const page = await browser.newPage();
