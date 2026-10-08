@@ -44,6 +44,7 @@
  * are accepted the moment they return and the runner charges them directly.
  */
 
+import { getOnDemandHandoffs } from './onDemandHandoff.js';
 import { quotaBurnProvenance } from '../lib/quotaBurnOrigin.js';
 import { recordQuotaBurnDispatch } from './quotaBurn.js';
 import { recordQuotaBurnJobCompletion } from './quotaBurnCompletions.js';
@@ -177,7 +178,9 @@ export async function reconcileQuotaBurnReservations({ now = Date.now() } = {}) 
   const keys = Object.keys(reservations);
   if (!keys.length) return { accepted: 0, refused: 0 };
 
-  const [queued, tasksByRequest] = await Promise.all([queuedRequestIds(), burnTasksByRequestId()]);
+  const queued = await queuedRequestIds();
+  const handoffs = await getOnDemandHandoffs();
+  const tasksByRequest = await burnTasksByRequestId();
   // Either read failing means we cannot tell "still waiting" from "accepted"
   // from "refused". Leave every reservation exactly where it is.
   if (!queued || !tasksByRequest) return { deferred: 'schedule or task queue unreadable', accepted: 0, refused: 0 };
@@ -188,8 +191,9 @@ export async function reconcileQuotaBurnReservations({ now = Date.now() } = {}) 
     const record = reservations[key];
     // Still on the schedule: the engines have not drained it yet. The cap keeps
     // counting it, and the step stays blocked from a second dispatch.
-    if (queued.has(record.requestId)) continue;
-    const task = tasksByRequest.get(record.requestId);
+    if (queued.has(record.requestId) || handoffs[record.requestId]?.status === 'preparing') continue;
+    const receipt = handoffs[record.requestId];
+    const task = tasksByRequest.get(record.requestId) || (receipt?.status === 'accepted' && receipt.taskId ? { id: receipt.taskId } : null);
     if (task) {
       if (await settleAccepted(key, record, task, now)) accepted += 1;
       continue;

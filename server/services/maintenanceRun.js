@@ -59,6 +59,7 @@ import { QUOTA_BURN_UNAVAILABLE } from '../lib/quotaBurnTaskRef.js';
 import { pluralize } from '../lib/textUtils.js';
 import { isQueuedContinuation } from '../lib/agentOutcome.js';
 import { cosEvents } from './cosEvents.js';
+import { getOnDemandHandoffs } from './onDemandHandoff.js';
 import { getQuotaBurnTaskCatalog, invokeQuotaBurnStep } from './quotaBurnInvoke.js';
 import { ACTIVE_TASK_STATUSES, probeSequenceDrain, sequenceStepShapeReason } from './quotaBurnSequence.js';
 
@@ -273,15 +274,30 @@ export function updateMaintenanceStep(id, stepId, { providerId, model, effort = 
   });
 }
 
+// Prefer the exact request recorded by this run. Timestamp order is only a
+// recovery fallback for a crash between enqueue and recording run.active.
+function latestRunHandoff(run, handoffs) {
+  if (run.active?.requestId) return handoffs[run.active.requestId] ?? null;
+  return Object.values(handoffs).filter(claim => claim.request.burn?.maintenanceRunId === run.id)
+    .sort((a, b) => b.claimedAt.localeCompare(a.claimedAt))[0] ?? null;
+}
+
 export async function resumeMaintenanceRun(id) {
   const resumed = await perRun(id, async () => {
     const run = await getMaintenanceRun(id);
-    if (!run || run.status === MAINTENANCE_RUN_STATUS.RUNNING) return run;
+    if (!run || run.status === MAINTENANCE_RUN_STATUS.RUNNING) return { run, alreadyRunning: true };
     if (!run.taskTypes) await assertNoRunningRun(run.appId);
     console.log(`🧹 Maintenance run ${id} resumed`);
-    return patchRun(id, { status: MAINTENANCE_RUN_STATUS.RUNNING, finishedAt: null, reason: null });
+    const prior = latestRunHandoff(run, await getOnDemandHandoffs());
+    const acknowledgedRequestId = prior
+      ? (['refused', 'interrupted'].includes(prior.status) ? prior.request.id : run.acknowledgedRequestId ?? null)
+      : run.active?.requestId ?? run.acknowledgedRequestId ?? null;
+    return { run: await patchRun(id, {
+      status: MAINTENANCE_RUN_STATUS.RUNNING, finishedAt: null, reason: null, acknowledgedRequestId,
+    }) };
   });
-  if (!resumed) return null;
+  if (!resumed.run) return null;
+  if (resumed.alreadyRunning) return { run: resumed.run, result: { dispatched: false, reason: 'Maintenance run is already running' } };
   const result = await evaluateOrHold(id);
   return { run: await getMaintenanceRun(id), result };
 }
@@ -312,6 +328,10 @@ async function holdRun(id, run, reason, patch = null) {
 
 async function holdForOutstandingWork(id, run, ignoreTaskId) {
   const [{ getAllTasks }, { getOnDemandRequests }] = await Promise.all([import('./cosTaskStore.js'), import('./taskSchedule.js')]);
+  // Observe queue -> handoff -> task in causal order: preparation may advance
+  // between reads, but cannot disappear between two snapshots.
+  const queued = (await getOnDemandRequests()).find((request) => request?.burn?.maintenanceRunId === id);
+  const handoffs = await getOnDemandHandoffs();
   const { user, cos } = await getAllTasks();
   const ownTask = [...(user?.tasks || []), ...(cos?.tasks || [])].find((task) => task.id !== ignoreTaskId
     && !(task.status === 'blocked' && run.deepCheckpointTaskIds?.includes(task.id))
@@ -324,8 +344,20 @@ async function holdForOutstandingWork(id, run, ignoreTaskId) {
       active: { ...run.active, taskId: ownTask.id, agentId: agent?.id || run.active?.agentId || null, status: ownTask.status },
     });
   }
-  const queued = (await getOnDemandRequests()).find((request) => request?.burn?.maintenanceRunId === id);
   if (queued) return holdRun(id, run, `waiting for the CoS daemon to accept request ${queued.id} (${queued.taskType})`);
+  const preparing = Object.values(handoffs).find(claim => claim.request.burn?.maintenanceRunId === id && claim.status === 'preparing');
+  if (preparing) return holdRun(id, run, `waiting for request preparation ${preparing.request.id}`);
+  const outcome = latestRunHandoff(run, handoffs);
+  if (outcome && ['refused', 'interrupted'].includes(outcome.status) && run.acknowledgedRequestId !== outcome.request.id) {
+    return holdRun(id, run, outcome.reason, { status: MAINTENANCE_RUN_STATUS.STOPPED, finishedAt: new Date().toISOString() });
+  }
+  // Pre-upgrade requests have no handoff receipt. Absence is uncertainty,
+  // never proof that it is safe to automatically repeat a Deep invocation.
+  if (run.auditDepth === 'deep' && run.active?.status === 'queued' && run.active.requestId && run.acknowledgedRequestId !== run.active.requestId && !outcome) {
+    return holdRun(id, run, 'Request outcome is unavailable; resume explicitly.', {
+      status: MAINTENANCE_RUN_STATUS.STOPPED, finishedAt: new Date().toISOString(),
+    });
+  }
   return null;
 }
 

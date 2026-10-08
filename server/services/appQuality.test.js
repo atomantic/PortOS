@@ -165,3 +165,20 @@ it('retains historical scores without hindsight, expires old evidence and expose
   expect(points.find(p => p.date === '2026-09-09')).toMatchObject({ score: 70, ratedCategories: 1 });
   expect(points.at(-1)).toMatchObject({ score: 80, ratedCategories: 2 });
 });
+
+
+it('records honest unscored partial Deep evidence without inventing a score or contributing to overall quality', async () => {
+  const partial = report({ category: 'observability', score: null, worstSeverity: 0, coverage: 'partial', confidence: 'low',
+    summary: '169 assigned files signal-scanned; substantive review incomplete and category score unavailable.', scannedFiles: 169, totalFiles: 10636 });
+  const query = vi.fn().mockResolvedValue({ rows: [] });
+  const run = { task: { ...task, metadata: { ...task.metadata, auditDepth: 'deep' } }, taskType: 'observability',
+    agentId: 'agent-partial', workspacePath: '/repo', success: true, assessedAt };
+  expect(await recordAuditQuality(run, { readFile: async () => sentinel(partial), query, ensureSchema: vi.fn() })).toBe(true);
+  expect(JSON.parse(query.mock.calls[0][1][4])).toEqual(partial);
+  const summary = summarizeAppQuality([{ category: 'observability', report: partial, assessedAt, agentId: 'agent-partial' }], Date.parse(assessedAt));
+  expect(summary).toMatchObject({ score: null, ratedCategories: 0 });
+  expect(summary.categories.find(category => category.id === 'observability')).toMatchObject({ score: null, coverage: 'partial' });
+  expect(parseAuditQualityReport(sentinel({ ...partial, coverage: 'broad', scannedFiles: 10636 }), 'observability')).toBeNull();
+  expect(parseAuditQualityReport(sentinel({ ...partial, scannedFiles: 0 }), 'observability')).toBeNull();
+  expect(auditQualityInstructions('observability')).toContain('For partial coverage, use score:null');
+});

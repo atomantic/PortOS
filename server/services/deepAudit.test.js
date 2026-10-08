@@ -128,12 +128,19 @@ describe('Deep coverage workflow across serialized restarts', () => {
       ...Array.from({ length: 100 }, (_, i) => ({ path: `large/${i}.js`, blob, kind: 'blob' })),
       { path: 'small/file.js', blob, kind: 'blob' },
     ];
+    await prepare('feasible');
+    const initial = saved();
+    expect(initial.attempts.feasible.unitIds).toHaveLength(3);
+    expect(initial.units.filter(unit => initial.attempts.feasible.unitIds.includes(unit.id))
+      .every(unit => unit.subsystem === 'small')).toBe(true);
+    report = JSON.stringify(payload('feasible'));
+    expect(await finish('feasible')).toMatchObject({ satisfiedPasses: 3, requiredPasses: 24, complete: false });
     await prepare('oversized');
     expect(saved().attempts.oversized.unitIds).toHaveLength(1);
     const first = saved().attempts.oversized.unitIds[0];
     report = JSON.stringify(payload('oversized', { units: payload('oversized').units.map(unit => ({ ...unit, status: 'blocked' })) }));
     await finish('oversized');
-    for (const id of ['second', 'third', 'small']) {
+    for (const id of ['second', 'third']) {
       await prepare(id);
       expect(saved().attempts[id].unitIds).not.toContain(first);
       report = JSON.stringify(payload(id));
