@@ -142,8 +142,9 @@ function buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, image
 export async function generateVideo({
   apiKey: providedApiKey, settings, modelId: requestedModelId,
   prompt = '', negativePrompt, duration, aspectRatio, width, height,
-  sourceImagePath = null, jobId: providedJobId = null,
+  sourceImagePath = null, lastImagePath = null, jobId: providedJobId = null,
   audioFilePath = null, lipSync = null, shotInstruction = null,
+  uploadedTempPath = null, uploadedTempPaths = [],
   resolution = null, generateAudio = false,
 }) {
   await ensureDir(PATHS.videos);
@@ -200,11 +201,16 @@ export async function generateVideo({
     planned = buildFalVideoRequest({
       ...requestSpec,
       imageUrl: sourceImagePath ? 'pending:image' : null,
+      endImageUrl: lastImagePath ? 'pending:end-image' : null,
       audioUrl: audioFilePath ? 'pending:audio' : null,
     });
   } catch (err) {
     if (err?.code !== 'FAL_MODEL_INPUT') throw err;
     throw new ServerError(err.message, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  if (lastImagePath && !planned) {
+    throw new ServerError('End frames require a fal.ai model with catalogued end-frame support', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
   const meta = {
@@ -242,8 +248,8 @@ export async function generateVideo({
   emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, 'Submitting to fal.ai…');
 
   runFalVideo(job, jobId, {
-    apiKey, modelId, prompt, negativePrompt, duration, aspectRatio: effectiveAspectRatio, sourceImagePath, outputPath, filename, meta,
-    audioFilePath, enableTranscription: lipSync?.enableTranscription === true,
+    apiKey, modelId, prompt, negativePrompt, duration, aspectRatio: effectiveAspectRatio, sourceImagePath, lastImagePath, outputPath, filename, meta,
+    audioFilePath, uploadedTempPath, uploadedTempPaths, enableTranscription: lipSync?.enableTranscription === true,
     requestSpec: planned ? requestSpec : null,
   })
     .catch((err) => {
@@ -272,8 +278,8 @@ function audioMimeType(path) {
 }
 
 async function runFalVideo(job, jobId, {
-  apiKey, modelId, prompt, negativePrompt, duration, aspectRatio, sourceImagePath, outputPath, filename, meta,
-  audioFilePath = null, enableTranscription = false, requestSpec = null,
+  apiKey, modelId, prompt, negativePrompt, duration, aspectRatio, sourceImagePath, lastImagePath, outputPath, filename, meta,
+  audioFilePath = null, uploadedTempPath = null, uploadedTempPaths = [], enableTranscription = false, requestSpec = null,
 }) {
   const entry = createFalRequestEntry(apiKey);
   const publication = {};
@@ -281,11 +287,12 @@ async function runFalVideo(job, jobId, {
   const deadline = Date.now() + FAL_RENDER_TIMEOUT_MS;
   try {
     const imageDataUri = sourceImagePath ? await fileToDataUri(sourceImagePath) : null;
+    const endImageDataUri = lastImagePath ? await fileToDataUri(lastImagePath) : null;
     const audioDataUri = audioFilePath
       ? `data:${audioMimeType(audioFilePath)};base64,${(await readFile(audioFilePath)).toString('base64')}`
       : null;
     const body = requestSpec
-      ? buildFalVideoRequest({ ...requestSpec, imageUrl: imageDataUri, audioUrl: audioDataUri }).body
+      ? buildFalVideoRequest({ ...requestSpec, imageUrl: imageDataUri, endImageUrl: endImageDataUri, audioUrl: audioDataUri }).body
       : audioFilePath
         ? buildLipSyncRequestBody({ imageDataUri, audioDataUri, enableTranscription })
         : buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, imageDataUri });
@@ -340,9 +347,6 @@ async function runFalVideo(job, jobId, {
     activeRequests.delete(jobId);
     activeJobs.delete(jobId);
     await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta: { ...meta, ...measured }, actualSeed: null, mutateHistory: mutateVideoHistory, publication });
-    // The staged voice clip is spent once the take is published. The queue removes it on failure,
-    // cancel and restart; on success it is ours to drop (only a clip staged under data/uploads).
-    if (audioFilePath && isStagedUpload(audioFilePath)) await unlink(audioFilePath).catch(() => {});
     closeJobAfterDelay(jobs, jobId);
   } catch (err) {
     // Best-effort: an unanticipated throw (e.g. from fetchFalResult or the
@@ -362,6 +366,13 @@ async function runFalVideo(job, jobId, {
     await cancelFalRequest(entry);
     if (entry.aborted) return finalizeCanceled(job, jobId);
     finalizeJobFailure(job, jobId, null, `fal.ai video generation failed: ${err?.message || err}`, { force: true });
+  } finally {
+    // The inline inputs are spent on every terminal outcome. Delete only
+    // queue-owned uploads; gallery frames and the original song stay intact.
+    const inputs = new Set([uploadedTempPath, audioFilePath, ...(Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [])]);
+    for (const path of inputs) {
+      if (path && isStagedUpload(path)) await unlink(path).catch(() => {});
+    }
   }
 }
 

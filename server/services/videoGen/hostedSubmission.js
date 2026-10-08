@@ -31,8 +31,10 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
     // The model, resolution and audio flag are resolved against the curated
     // catalog by videoGen/fal.js (an unsupported resolution falls back to the
     // model's default there); provider audio is off unless asked for.
-    buildParams: (body) => ({
+    buildParams: (body, prepared) => ({
       modelId: body.falModelId,
+      ...(prepared.lastImagePath ? { lastImagePath: prepared.lastImagePath } : {}),
+      ...(prepared.uploadedTempPaths?.length ? { uploadedTempPaths: prepared.uploadedTempPaths } : {}),
       aspectRatio: body.visualConditioning?.render?.parameters?.aspectRatio,
       width: body.width,
       height: body.height,
