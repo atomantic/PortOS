@@ -136,6 +136,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
 
   // Generic runs accept arbitrary prompts/workspaces, including API-to-CLI fallback.
   'POST /api/runs',
+  // Operator chat forwards prompts through configured tool-capable runtime credentials.
+  'POST /api/openclaw/sessions/:id/messages',
+  'POST /api/openclaw/sessions/:id/messages/stream',
   'POST /api/system/maintenance',
   'POST /api/system/maintenance/resume',
   'POST /api/voice/studio/setup',
