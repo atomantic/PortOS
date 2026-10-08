@@ -20,6 +20,13 @@ const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
   '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
 ].find(path => path && existsSync(path));
 
+// No live API or external service is reachable from this fixture.
+const isolateFixture = origin => route => {
+  const url = new URL(route.request().url());
+  return url.origin === new URL(origin).origin && !url.pathname.startsWith('/api/')
+    ? route.continue() : route.fulfill({ contentType: 'application/json', body: '{}' });
+};
+
 // This fixture exercises the real toolbar and Tailwind CSS with synthetic goals.
 // Only WebGL is replaced: the canvas stub retains the production sizing props.
 describe.skipIf(!chrome)('Goals Tree touch targets', () => {
@@ -76,7 +83,15 @@ describe.skipIf(!chrome)('Goals Tree touch targets', () => {
         },
       }],
       server: { host: '127.0.0.1', port: 0 },
-    }) });
+    }),
+    // Compile the cold module graph inside the bounded warmup phase, not the
+    // first test's navigation (#10638). The phase's own deadline bounds the
+    // navigation.
+    warmup: async (page, url) => {
+      await page.route('**/*', isolateFixture(url));
+      await page.goto(`${url}goals-test`);
+      await page.getByRole('button', { name: 'Organize', exact: true }).waitFor({ timeout: 5000 });
+    } });
     ({ browser, origin } = fixture);
   }, BROWSER_FIXTURE_STARTUP_MS);
   afterAll(() => fixture?.close());
@@ -84,12 +99,7 @@ describe.skipIf(!chrome)('Goals Tree touch targets', () => {
   it.each([[360, 800], [768, 1024], [1440, 900]])('keeps targets usable at %sx%s', async (width, height) => {
     const page = await browser.newPage({ viewport: { width, height } });
     try {
-      // No live API or external service is reachable from this fixture.
-      await page.route('**/*', route => {
-        const url = new URL(route.request().url());
-        return url.origin === new URL(origin).origin && !url.pathname.startsWith('/api/')
-          ? route.continue() : route.fulfill({ contentType: 'application/json', body: '{}' });
-      });
+      await page.route('**/*', isolateFixture(origin));
       await page.goto(origin + 'goals-test');
       const names = ['Creative', 'Family', 'Health', 'Financial', 'Legacy', 'Mastery', 'Labels', 'Add', 'Organize'];
       const boxes = [];
