@@ -1923,6 +1923,18 @@ describe('commitImport import sessions (#9943)', () => {
     expect((await analyze()).importSession).toEqual({ status: 'committed', createdIssueIds: retried.createdIssueIds });
   });
 
+  it('refuses to resume onto a planned position another issue took since', async () => {
+    wireDefaultLLMResponses();
+    const preview = await analyze();
+    const issues = [{ title: 'I1', arcPosition: 1, proseExcerpt: 'p1' }, { title: 'I2', arcPosition: 2, proseExcerpt: 'p2' }];
+    await interruptAfterFirstIssue(preview, issues);
+    await issuesSvc.createIssue({ seriesId: preview.series.id, title: 'Added since', arcPosition: 2 });
+
+    await expect(importerSvc.commitImport(payloadFor(preview, { issues })))
+      .rejects.toMatchObject({ code: importerSvc.ERR_VALIDATION });
+    expect(await issueCount(preview)).toBe(2);
+  });
+
   it("refuses a changed issue list while an earlier attempt's issues still exist", async () => {
     wireDefaultLLMResponses();
     const preview = await analyze();

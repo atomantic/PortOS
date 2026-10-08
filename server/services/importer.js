@@ -1329,6 +1329,21 @@ async function commitImportOnce({
       }
     }
   }
+  // A resume still owes the series unique positions: an issue added since the
+  // earlier attempt may have taken a slot the plan reserved for a missing issue.
+  if (!replaceMode && resumePlan) {
+    const takenByOthers = new Set(existingIssues
+      .filter((ex) => !resumeLive.has(ex.id) && Number.isInteger(ex.arcPosition))
+      .map((ex) => ex.arcPosition));
+    resumePlan.items.forEach((item, i) => {
+      if (!resumeLive.has(item.issueId) && takenByOthers.has(item.arcPosition)) {
+        throw codedError(
+          `Issue at position ${i + 1} was planned for arcPosition ${item.arcPosition}, which an issue added since now occupies — commit refused before any state changed. Move or delete that issue, then retry to finish this import.`,
+          ERR_VALIDATION,
+        );
+      }
+    });
+  }
   const allUsedArcPositions = new Set([...seenArcPositions, ...existingArcPositions]);
   let nextFreeArcPos = (allUsedArcPositions.size === 0) ? 1 : Math.max(...allUsedArcPositions) + 1;
   const withAutoPosition = (proposal) => {
