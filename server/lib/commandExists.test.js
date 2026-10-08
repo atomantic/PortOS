@@ -7,6 +7,7 @@ import { existsSync } from 'node:fs'
 const fakeChild = (script) => {
   const child = new EventEmitter()
   child.stdout = new EventEmitter()
+  child.stderr = new EventEmitter()
   child.exitCode = null
   child.signalCode = null
   child.kill = vi.fn()
@@ -182,9 +183,12 @@ describe('commandOutput lifecycle (#10604)', () => {
     await expect(commandOutput('tool')).resolves.toBeNull()
   })
 
-  it('fails a probe whose output exceeds maxBuffer and terminates the child', async () => {
+  it.each(['stdout', 'stderr'])('fails a probe whose %s exceeds maxBuffer and terminates the child', async (stream) => {
     let child
-    spawnMock.impl = () => (child = fakeChild((c) => c.stdout.emit('data', Buffer.alloc(32, 'x'))))
+    spawnMock.impl = () => (child = fakeChild((c) => {
+      c[stream].emit('data', Buffer.alloc(32, 'x'))
+      exitWith('')(c)
+    }))
     await expect(commandOutput('chatty', [], { maxBuffer: 16 })).resolves.toBeNull()
     expect(child.kill).toHaveBeenCalledWith('SIGTERM')
   })

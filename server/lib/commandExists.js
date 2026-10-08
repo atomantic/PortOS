@@ -39,7 +39,7 @@ const PROBE_KILL_GRACE_MS = 2_000;
  * `killProcessTree` takes the whole `cmd.exe` shim tree with `taskkill /T`;
  * on POSIX the child runs in its own process group (`detached`), which gets
  * SIGTERM and, after a short grace, SIGKILL for anything in it still alive.
- * Output past `maxBuffer` fails the probe the same way. Every event after the
+ * Output past `maxBuffer` on either stream fails the probe the same way. Every event after the
  * result is fixed — a late `error`, `close` or chunk — is ignored, and a
  * failure to signal or to clean up never replaces the result.
  *
@@ -98,14 +98,13 @@ function runProbe({ prepareCliSpawn, killProcessTree, IS_WIN32 }, cmd, args, pro
     const child = spawn(launch.command, launch.args, {
       env: probeEnv,
       ...(cwd === undefined ? {} : { cwd }),
-      stdio: ['ignore', 'pipe', 'ignore'],
+      stdio: ['ignore', 'pipe', 'pipe'],
       // A POSIX process group is what lets the deadline reach the CLI's own
       // children; on Windows `detached` would open a console, and taskkill /T
       // already covers the tree.
       detached: !IS_WIN32,
     });
     const chunks = [];
-    let bytes = 0;
     let settled = false;
     let deadline = null;
 
@@ -140,16 +139,23 @@ function runProbe({ prepareCliSpawn, killProcessTree, IS_WIN32 }, cmd, args, pro
       escalation.unref?.();
     };
 
-    child.stdout?.on('data', (chunk) => {
-      if (settled) return;
-      bytes += chunk.length;
-      if (bytes > maxBuffer) {
-        terminate();
-        settle(null);
-        return;
-      }
-      chunks.push(chunk);
-    });
+    // Each stream is held to maxBuffer separately, as execFile did; stderr is
+    // only counted, never kept.
+    const capStream = (stream, keep) => {
+      let bytes = 0;
+      stream?.on('data', (chunk) => {
+        if (settled) return;
+        bytes += chunk.length;
+        if (bytes > maxBuffer) {
+          terminate();
+          settle(null);
+          return;
+        }
+        keep?.(chunk);
+      });
+    };
+    capStream(child.stdout, (chunk) => chunks.push(chunk));
+    capStream(child.stderr);
     // Both listeners stay attached after settling so a late `error` (e.g. a
     // failed kill) never becomes an unhandled emitter error.
     child.on('error', () => settle(null));
