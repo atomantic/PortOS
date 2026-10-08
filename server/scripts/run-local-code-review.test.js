@@ -34,7 +34,7 @@ it('runs a saved provider reviewer from the standalone claim bridge without boot
       // No reviewer mode means ordinary argv, so it must run outside the caller's checkout.
       if (existsSync('context.txt') || args.includes('baked-model') || args[args.indexOf('--model') + 1] !== 'review-model') process.exit(1);
       if (args.includes('--refuse')) {
-        process.stderr.write('jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied.\\nsynthetic-private-path-or-credential');
+        process.stderr.write('jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied. synthetic-private-path-or-credential');
         process.exit(1);
       }
       process.stdout.write('NO FINDINGS');

@@ -153,7 +153,7 @@ describe('configured provider reviewers', () => {
   it('returns a bounded configuration fault for an explicit headless command refusal without a verdict', async () => {
     getProviderById.mockResolvedValue({ ...provider, type: 'cli', command: 'agy' });
     const diagnostic = 'jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied.';
-    for (const failure of [{ error: diagnostic }, { stderr: diagnostic, text: '', partial: false }, { stderr: diagnostic, text: 'incomplete', partial: true }]) {
+    for (const failure of [{ error: `${diagnostic} Synthetic vendor advice follows.` }, { stderr: diagnostic, text: '', partial: false }, { stderr: diagnostic, text: 'incomplete', partial: true }]) {
       runCliProviderPrompt.mockResolvedValue({ ...failure, stderr: `${diagnostic}\nsynthetic-private-path-or-credential` });
       const result = await runLocalCodeReview({ backend, diff: 'example diff' });
       expect(result).toEqual({ ok: false, code: 'REVIEWER_COMMAND_PERMISSION_DENIED', error: expect.stringContaining('supported tool-free vendor configuration') });

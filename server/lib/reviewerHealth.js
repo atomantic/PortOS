@@ -27,7 +27,7 @@ export function reviewerAccessFailureCode(reviewer, failure) {
 /** Match the vendor's explicit headless refusal, never generic permission prose. */
 export function reviewerCommandPermissionFailureCode(message) {
   if (typeof message !== 'string') return null;
-  return /^(?:jetski:\s*)?no output produced [—–-] a tool required the ["']command["'] permission that headless mode cannot prompt for, so it was auto-denied\.?$/im.test(message)
+  return /^(?:jetski:\s*)?no output produced [—–-] a tool required the ["']command["'] permission that headless mode cannot prompt for, so it was auto-denied(?:\.|$)/im.test(message)
     ? 'REVIEWER_COMMAND_PERMISSION_DENIED' : null;
 }
 
