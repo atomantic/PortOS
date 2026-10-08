@@ -64,7 +64,7 @@ describe('native setup inherited endpoint', () => {
 
 // Run the actual CLI body with synthetic configuration and subprocesses. No
 // imports execute, no install .env is read, and no database can be contacted.
-async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady = true, running = true, hostBinding = '127.0.0.1', hostPort = 5561, dotEnv = {} } = {}) {
+async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady = true, running = true, hostBinding = '127.0.0.1', hostPort = 5561, dotEnv = {}, exportedMode } = {}) {
   const savedEnv = { PGMODE: mode, EXAMPLE_SETTING: 'preserved', ...dotEnv };
   const initialEnv = { ...savedEnv };
   const calls = [];
@@ -89,7 +89,7 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
       createInterface: () => { throw new Error('Setup must not prompt to switch backends'); },
       resolveBashBinary: () => 'bash',
       process: {
-        env: {}, platform: 'linux', stdin: { isTTY: tty }, stdout: { isTTY: tty },
+        env: exportedMode === undefined ? {} : { PGMODE: exportedMode }, platform: 'linux', stdin: { isTTY: tty }, stdout: { isTTY: tty },
         exit: (code) => { exitCode = code; throw exitSignal; }
       },
       console: { log: (message) => logs.push(message), error: (message) => errors.push(message) },
@@ -210,5 +210,16 @@ describe('setup preserves the selected database', () => {
     }
     const setupIndex = result.calls.findIndex((call) => call.includes('setup-native'));
     expect(result.childEnvs[setupIndex]).toMatchObject({ PGHOST: 'db.example.invalid', PGPORT: '5433' });
+  });
+  // Pairs with scripts/ecosystemEnv.test.js "mode precedence matches setup" (#10758).
+  it.each([
+    ['docker', 'native', true],
+    ['native', 'docker', false],
+    ['native', '', true],
+  ])('saved %s with exported %j selects the same backend PM2 does', async (mode, exportedMode, expectNative) => {
+    const result = await runSetup({ mode, exportedMode, nativeReady: true });
+    expect(result.exitCode).toBe(0);
+    expect(result.calls.some(([command]) => command === 'psql')).toBe(expectNative);
+    expect(result.calls.some(([command]) => command === 'docker')).toBe(!expectNative);
   });
 });

@@ -54,7 +54,8 @@ const PG_CHILD_ENV = {
 };
 
 function getMode() {
-  return envVar('PGMODE', 'docker');
+  // Nonempty exported PGMODE → .env → docker; must match ecosystem.config.cjs (#10758).
+  return process.env.PGMODE || envFile.PGMODE || 'docker';
 }
 
 // Check if Docker is available

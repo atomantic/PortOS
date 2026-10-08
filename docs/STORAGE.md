@@ -367,7 +367,7 @@ PortOS treats **PostgreSQL as a mandatory install/runtime dependency** for every
 - **System (native) PostgreSQL on `:5432`** — `PGMODE=native`, or
 - **Docker PostgreSQL on `:5561`** — `PGMODE=docker` (the default).
 
-Provision either path with **`npm run setup:db`** (also run automatically by `npm run setup` and `npm start`). It follows `PGMODE` (shell environment → `.env` → `docker`), and provisions only that selected backend. An unavailable Docker installation fails setup without probing native PostgreSQL or changing the saved mode. See [Setup path](#setup-path-npm-run-setupdb) below.
+Provision either path with **`npm run setup:db`** (also run automatically by `npm run setup` and `npm start`). It follows `PGMODE` (nonempty shell export → `.env` → `docker`; an empty export is unset) — the same precedence `ecosystem.config.cjs` uses to pick the managed processes' `PGPORT`, so setup and PM2 never disagree — and provisions only that selected backend. An unavailable Docker installation fails setup without probing native PostgreSQL or changing the saved mode. See [Setup path](#setup-path-npm-run-setupdb) below.
 
 The standalone `scripts/db.sh` also reads the repository-root `.env` through the
 shared setup parser (Node is required), with nonempty shell settings taking
