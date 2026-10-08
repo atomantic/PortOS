@@ -54,7 +54,10 @@ echo "deb [signed-by=${keyring#"$ROOT"}] https://apt.postgresql.org/pub/repos/ap
 
 if ! download_by "$PRIMARY_BUDGET"; then
   echo "⚠️ Runner mirror did not deliver packages within ${PRIMARY_BUDGET}s; switching to ${OFFICIAL_ARCHIVE}"
-  mapfile -t sources < <(grep -lE "$RUNNER_MIRROR" "${ROOT}/etc/apt/sources.list" "${ROOT}/etc/apt/sources.list.d/"*.sources 2>/dev/null || true)
+  sources=()
+  while IFS= read -r source; do
+    sources+=("$source")
+  done < <(grep -lE "$RUNNER_MIRROR" "${ROOT}/etc/apt/sources.list" "${ROOT}/etc/apt/sources.list.d/"*.sources 2>/dev/null || true)
   (( ${#sources[@]} > 0 )) || fail "The runner mirror was slow and no Ubuntu source names it, so there is no mirror to replace."
   sudo sed -i -E "s#${RUNNER_MIRROR}#${OFFICIAL_ARCHIVE}#g" "${sources[@]}"
   download_by "$TOTAL_BUDGET" ||
