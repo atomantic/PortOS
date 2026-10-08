@@ -14,10 +14,11 @@
  * every stage call lands in `data/runs/<runId>/` for replay.
  */
 
+import { callerModeRejection } from '../lib/callerModePolicy.js';
 import { isProcessProvider } from '../lib/providerTypes.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { findBalancedBlocks, tryParseWithRepair } from '../lib/jsonExtract.js';
-import { resolveEffectiveModel, runPromptThroughProvider, DEFAULT_TIMEOUT_MS, isLocalEndpoint, withObservedContextWindowsLazy } from './promptRunner.js';
+import { buildRequestCapabilities, resolveEffectiveModel, runPromptThroughProvider, DEFAULT_TIMEOUT_MS, isLocalEndpoint, withObservedContextWindowsLazy } from './promptRunner.js';
 import { stripCodeFences } from '../lib/llmText.js';
 import { extractCodexAssistant } from '../lib/codexAssistantExtract.js';
 import { getActiveProvider, getProviderById } from './providers.js';
@@ -305,10 +306,17 @@ export async function resolveStageContext(stageName, options = {}) {
 // that forced one provider across every stage. Because the pin is *stripped*
 // rather than demoted, such a run also stops throwing STAGE_PROVIDER_UNAVAILABLE
 // for a stage pinned to a provider that no longer exists.
-async function resolveProviderForStage(stage, { providerOverride, providerDefault } = {}) {
+async function resolveProviderForStage(stage, { providerOverride, providerDefault, callerPolicy } = {}) {
+  const permitted = (provider) => {
+    const rejection = callerPolicy ? callerModeRejection(provider, callerPolicy) : null;
+    if (rejection) throw new ServerError(`Provider "${provider.id}" ${rejection.reason}`, {
+      status: 422, code: 'PROVIDER_MODE_NOT_PERMITTED',
+    });
+    return provider;
+  };
   if (providerOverride) {
     const pinned = await getProviderById(providerOverride).catch(() => null);
-    if (pinned?.enabled) return pinned;
+    if (pinned?.enabled) return permitted(pinned);
     throw new ServerError(
       `Requested provider "${providerOverride}" is not available`,
       { status: 503, code: 'PROVIDER_OVERRIDE_UNAVAILABLE' }
@@ -316,7 +324,7 @@ async function resolveProviderForStage(stage, { providerOverride, providerDefaul
   }
   if (stage?.provider) {
     const pinned = await getProviderById(stage.provider).catch(() => null);
-    if (pinned?.enabled) return pinned;
+    if (pinned?.enabled) return permitted(pinned);
     throw new ServerError(
       `Stage provider "${stage.provider}" is not available — re-pick a provider in Prompts or the stage settings`,
       { status: 503, code: 'STAGE_PROVIDER_UNAVAILABLE' }
@@ -324,12 +332,12 @@ async function resolveProviderForStage(stage, { providerOverride, providerDefaul
   }
   if (providerDefault) {
     const fallback = await getProviderById(providerDefault).catch(() => null);
-    if (fallback?.enabled) return fallback;
+    if (fallback?.enabled) return permitted(fallback);
     // Soft default: an unavailable run default is not a hard error — drop to the
     // active provider below instead of throwing.
   }
   const active = await getActiveProvider().catch(() => null);
-  if (active?.enabled) return active;
+  if (active?.enabled) return permitted(active);
   throw new ServerError('No AI provider available', { status: 503, code: 'NO_PROVIDER' });
 }
 
@@ -496,6 +504,7 @@ export function extractJson(text, { promptToStrip } = {}) {
  *     by the runner, so it is safe to pass unconditionally. See resolveEffortHint.
  *   - timeoutOverride: explicit ms timeout, beats stage.timeout and the provider default
  *   - maxTokens: API output cap, when the caller budgets an output reserve
+ *   - callerPolicy: server-selected execution-mode policy, enforced on pins and every fallback
  *   - returnsJson: parse `content` via `extractJson` before returning
  *   - source: free-form tag persisted on the run record (e.g. 'pipeline-text-stage',
  *     'writers-room-evaluate') so /runs is filterable
@@ -596,6 +605,8 @@ async function executeStagePrompt({ stage, label, prompt, options }) {
   // so the recorded value isn't a misleading `undefined`).
   const runResult = await createRun({
     providerId: provider.id,
+    // The staged runner pre-creates records; constrain that proactive swap too.
+    ...(options.callerPolicy ? { requestCapabilities: buildRequestCapabilities({ prompt, callerPolicy: options.callerPolicy }) } : {}),
     model: effectiveModel,
     prompt,
     source: options.source || 'staged-llm',
@@ -651,6 +662,7 @@ async function executeStagePrompt({ stage, label, prompt, options }) {
     provider: effectiveProvider, model: effectiveModel, prompt, source: options.source || 'staged-llm', runId,
     timeout: effectiveTimeout,
     maxTokens: options.maxTokens,
+    callerPolicy: options.callerPolicy,
     // Reasoning effort (#3641). Always passed: the runner clamps it to the
     // provider's ladder and omits the flag entirely for a provider with no
     // effort control, so no capability check is needed here.
