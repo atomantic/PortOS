@@ -62,7 +62,7 @@ export const MUSIC_VIDEO_CHARACTER_STYLES = deepFreeze([
     palette: ['#D97757', '#0A0B0D', '#F4F1EA'],
     // Our own turnaround, rendered through PortOS image gen. Outside images
     // only ever inspired this text; they are never used as references.
-    sheetPrompt: 'Character reference sheet, photographic studio film still with fine grain and soft cinematic key light on a seamless warm-grey backdrop. Left: a medium close-up of {identity}, deadpan curious expression. Right: three full-length views (front, three-quarter, back) of the same woman wearing {look}. Same face, same hair, same single clay-orange streak and star clip in every view. No text, no labels, no logos.',
+    sheetPrompt: 'Character reference sheet, photographic studio film still with fine grain and soft cinematic key light on a seamless warm-grey backdrop. Left: a medium close-up of {identity}, deadpan curious expression, the headset microphone visible at her cheek. Right: three full-length views (front, three-quarter, back) of the same woman in a relaxed neutral standing pose, wearing {look}, fully buttoned, every hem at or below mid-thigh. Same face, same hair, same single clay-orange streak and star clip in every view. No text, no labels, no logos.',
   },
 ]);
 

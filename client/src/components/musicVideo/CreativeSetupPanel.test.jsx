@@ -10,7 +10,7 @@ vi.mock('../../services/apiUniverseBuilder.js', () => ({
 const CLAUDIA = { id: 'claudia-slopcore', label: 'Claudia slopcore', summary: 'Deadpan AI pop singer.', credit: 'Claudia by anabology', sourceUrl: 'https://example.com/claudia', characterName: 'Claudia', sheetPrompt: 'Character reference sheet', referenceImageId: null };
 vi.mock('../../services/apiMusicVideo.js', () => ({
   listMusicVideoCharacterStyles: vi.fn(async () => [CLAUDIA]),
-  setMusicVideoCharacterStyleReference: vi.fn(async (id, imageId) => ({ ...CLAUDIA, referenceImageId: imageId })),
+  setMusicVideoCharacterStyleReference: vi.fn(async (_id, imageId) => ({ ...CLAUDIA, referenceImageId: imageId })),
 }));
 const project = { id: 'mv1', concept: {}, visualSpec: {} };
 const open = (onSave = vi.fn(async () => {})) => {
