@@ -1,3 +1,4 @@
+import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 /**
  * Agent Worktree Cleanup
  *
@@ -12,6 +13,7 @@
  */
 
 import { existsSync } from 'fs';
+import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { join } from 'path';
 import { emitLog } from './cosEvents.js';
 import { addTask, forceSpawnTask, getAgents, updateTask } from './cos.js';
@@ -26,7 +28,7 @@ import { resolveTaskTargetBranch, shouldStripTaskTargetBranch } from '../lib/tas
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { detectForgeCli } from '../lib/gitForge.js';
 import { normalizeForkHead } from '../lib/forkHead.js';
-import { PR_COMPLETIONS, PR_COMPLETION_VALUES, PR_CREATION, PR_MISSING_CATEGORY, leavesPrForHuman, prClaimWasVerified } from '../lib/prDisposition.js';
+import { PR_COMPLETIONS, resolvePrCompletion, PR_COMPLETION_VALUES, PR_CREATION, PR_MISSING_CATEGORY, leavesPrForHuman, prClaimWasVerified } from '../lib/prDisposition.js';
 import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS, isProviderReviewer, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, prioritizeToolFreeReviewers } from '../lib/reviewerConfig.js';
 
 // In-flight cleanup per agentId, so two completion paths racing to clean the
@@ -45,6 +47,10 @@ import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_SE
 // already merged). Sanctioned by the Security Model's re-entrancy-guard carve-out:
 // this is one actor's duplicate in-flight operation, not two competing humans.
 const inFlightCleanups = new Map();
+// Fail closed even when the agent store cannot persist the hold. Normally the
+// persisted metadata owns recovery across restarts; this covers sibling cleanup
+// callbacks in the process where that write failed.
+const publicationHolds = new Map();
 
 
 /**
@@ -121,6 +127,7 @@ async function auditRepoState(agentId, success, originalTask, warnings) {
   // fields and has no use for the run's whole output.txt.
   const { getAgentRecord } = await import('./cos.js');
   const agentState = await getAgentRecord(agentId).catch(() => null);
+  if (publicationHolds.has(agentId) || ['running', 'blocked'].includes(agentState?.metadata?.publicationValidation?.status)) return;
   await verifyAgentRepoState({
     agentId,
     task: originalTask,
@@ -175,9 +182,12 @@ async function worktreeCleanupContext(agentId, options) {
   if (!sourceWorkspace || !worktreeBranch) return { isWorktree: false };
   const normalized = cleanupOptions(options);
   return {
-    ...normalized, isWorktree: true, agentId, sourceWorkspace, worktreeBranch,
+    ...normalized,
+    ...(normalized.originalTask?.metadata?.prCompletion === PR_COMPLETIONS.DRAFT ? { prCompletion: PR_COMPLETIONS.LEAVE_OPEN, skipMerge: true } : {}),
+    isWorktree: true, agentId, sourceWorkspace, worktreeBranch,
     discardWorktree: isTruthyMeta(normalized.originalTask?.metadata?.discardWorktree),
     worktreePath: metadata.workspacePath || join(PATHS.worktrees, agentId),
+    publicationValidation: publicationHolds.get(agentId) || metadata.publicationValidation,
     warnings: [],
   };
 }
@@ -193,7 +203,7 @@ async function probeWorktreePr(context, success) {
     // DUPLICATE of the change request the summary says already landed.
     const { extractFinalSummary } = await import('./agentSummaryExtraction.js');
     const agentSummary = extractFinalSummary(agentOutput);
-    return verifyPrClaim({ workspacePath: worktreePath, success: true, prExpected: true, agentSummary })
+    return verifyPrClaim({ task: context.originalTask, workspacePath: worktreePath, success: true, prExpected: true, agentSummary })
       .catch(err => ({ ok: false, category: 'forge-unreachable', message: err.message }));
   }
   const { findPullRequestForBranch } = await import('./github.js');
@@ -204,6 +214,9 @@ async function probeWorktreePr(context, success) {
 
 async function runCleanupAgentWorktree(agentId, success, options = {}) {
   const context = await worktreeCleanupContext(agentId, options);
+  if (['running', 'blocked'].includes(context.publicationValidation?.status)) {
+    return [`Publication validation ${context.publicationValidation.status} for ${context.worktreeBranch}; worktree preserved at ${context.worktreePath}. Resume the task after resolving the validation outcome.`];
+  }
   const verdict = await probeWorktreePr(context, success);
   const disposition = resolveWorktreeDisposition({ ...context, success, prClaimVerdict: verdict });
   reportWorktreeDisposition(context, disposition, verdict);
@@ -281,6 +294,27 @@ async function openWorktreePullRequest(context) {
   const { agentId, sourceWorkspace, worktreeBranch, worktreePath, warnings, description, agentOutput } = context;
   emitLog('info', `🌳 Opening PR for worktree agent ${agentId} branch ${worktreeBranch}`, { agentId, branchName: worktreeBranch });
 
+  if (context.originalTask?.metadata?.app === PORTOS_APP_ID) {
+    const { updateAgent } = await import('./cos.js');
+    try {
+      publicationHolds.set(agentId, { status: 'running' });
+      await updateAgent(agentId, { metadata: { publicationValidation: { status: 'running', startedAt: new Date().toISOString() } } });
+      const { validatePublication } = await import('./publicationValidation.js');
+      const validation = await validatePublication(context);
+      publicationHolds.set(agentId, validation);
+      await updateAgent(agentId, { metadata: { publicationValidation: validation } });
+      if (validation.status !== 'passed') {
+        warnings.push(`Publication validation blocked for ${worktreeBranch}: ${validation.reason}. Worktree preserved at ${worktreePath}; resolve validation before resuming the task.`);
+        return warnings;
+      }
+      publicationHolds.delete(agentId);
+    } catch (error) {
+      publicationHolds.set(agentId, { status: 'blocked', reason: 'recording-failed' });
+      warnings.push(`Publication validation could not be recorded for ${worktreeBranch}: ${error.message}. Worktree preserved at ${worktreePath}.`);
+      return warnings;
+    }
+  }
+
   const [pushResult, branchInfo] = await Promise.all([
     git.push(worktreePath, worktreeBranch).then(() => true).catch(err => {
       emitLog('warn', `🌳 Failed to push worktree branch ${worktreeBranch}: ${err.message}`, { agentId });
@@ -306,13 +340,23 @@ async function openWorktreePullRequest(context) {
     title: prTitle,
     body: prBody,
     base: targetBranch,
-    head: worktreeBranch
+    head: worktreeBranch,
+    ...(context.originalTask?.metadata?.prCompletion === PR_COMPLETIONS.DRAFT ? { draft: true } : {})
   }).catch(err => {
     emitLog('warn', `🌳 Failed to create PR for ${worktreeBranch}: ${err.message}`, { agentId });
     return null;
   });
 
   if (!prResult?.success) return handlePrCreationFailure(context, prResult, targetBranch);
+  if (context.originalTask?.metadata?.prCompletion === PR_COMPLETIONS.DRAFT) {
+    const { verifyPrClaim } = await import('./agentFinalization.js');
+    const verdict = await verifyPrClaim({ task: context.originalTask, workspacePath: worktreePath, success: true, prExpected: true })
+      .catch(() => ({ ok: false }));
+    if (!verdict?.ok || !verdict.branch) {
+      warnings.push(`Draft PR disposition could not be verified for ${worktreeBranch}; worktree preserved for review`);
+      return warnings;
+    }
+  }
   return completeOpenedPullRequest(context, prResult);
 }
 
@@ -889,7 +933,8 @@ export async function recordTaskResumePointer({ task, agentId, agentMetadata }) 
  * @returns {Promise<object>} the metadata patch that was written (empty when nothing was)
  */
 export async function releaseRetryHold({ agentId, task, success, agentMetadata }) {
-  if (success || !agentId || !task?.id) return {};
+  if (!agentId || !task?.id) return {};
+  if (success && !isLegacyDeepAudit(task.metadata)) return {};
 
   const { getTaskById, getAgentRecord } = await import('./cos.js');
   const persisted = await getTaskById(task.id).catch(err => {
@@ -897,6 +942,20 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
     return null;
   });
   if (!persisted) return {};
+
+  if (isLegacyDeepAudit(task.metadata)) {
+    if (persisted.status !== 'in_progress' || !isRetryHoldOwner(persisted.metadata, agentId)) return {};
+    const metadata = agentMetadata === undefined
+      ? (await getAgentRecord(agentId).catch(() => null))?.metadata : agentMetadata;
+    const patch = await resolveTaskResumePatch({ task, agentId, agentMetadata: metadata });
+    const result = await updateTask(task.id, { status: 'blocked', metadata: {
+      ...patch, ...clearedRetryHoldMetadata(), blockedCategory: 'deep-audit-partial',
+      blockedReason: 'Deep audit checkpoint; resume explicitly', blockedAt: new Date().toISOString(),
+    } }, task.taskType || persisted.taskType || 'user', {
+      expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: agentId },
+    });
+    return result?.error || result?.statusChanged ? {} : patch;
+  }
 
   // Release only OUR hold, and only while the task is still held `in_progress`.
   // Both halves matter: a slow cleanup from a previous attempt must not clear the
@@ -1247,6 +1306,12 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
   }
 
   if (!staleBranch || !sourceWorkspace) return;
+
+  // Review-only runs must not delegate to a recovery agent that can land work.
+  if (resolvePrCompletion(task?.metadata) === PR_COMPLETIONS.LEAVE_OPEN) {
+    emitLog('warn', `Review-only branch ${staleBranch} needs manual recovery; automatic recovery suppressed`, { agentId, staleBranch });
+    return null;
+  }
 
   const appId = task?.metadata?.app;
 

@@ -135,7 +135,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     // follow the same import-then-row order.
     id: 'music-library-attach-after-import',
     status: 'reference-only',
-    modules: ['services/trackYoutubeImport.js'],
+    modules: ['services/trackYoutubeImport.js', 'services/trackSunoImport.js'],
   },
   {
     // Final and excerpt renders, publishing-kit builds and composition document

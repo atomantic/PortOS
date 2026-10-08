@@ -87,7 +87,8 @@ describeShim('pm2 guard shim (bin/pm2)', () => {
     // of depending on whether the host's /usr/bin happens to contain pm2.
     cleanBin = join(workDir, 'cleanbin');
     mkdirSync(cleanBin);
-    for (const tool of ['tr', 'dirname']) {
+    symlinkSync(process.execPath, join(cleanBin, 'node'));
+    for (const tool of ['dirname']) {
       const src = [`/usr/bin/${tool}`, `/bin/${tool}`].find((p) => existsSync(p));
       if (src) symlinkSync(src, join(cleanBin, tool));
     }
@@ -147,6 +148,26 @@ describeShim('pm2 guard shim (bin/pm2)', () => {
     const { code, execedArgs } = runShim(['restart', '--update-env', 'all']);
     expect(code).toBe(1);
     expect(execedArgs).toBeNull();
+  });
+
+  it.each([
+    ['--name', '--watch', 'kill'], ['--name', '--watch', 'delete', 'all'],
+    ['--silent', 'kill'], ['-s', 'delete', 'all'],
+    ['--name', 'example', '--silent', 'kill'], ['--name=example', 'restart', 'all'],
+    ['-sf', 'reload', 'all'], ['--', 'kill'],
+  ])('blocks option-prefixed disruption (%j)', (...args) => {
+    const result = runShim(args);
+    expect(result.code).toBe(1);
+    expect(result.execedArgs).toBeNull();
+  });
+
+  it.each([
+    ['--silent', 'restart', 'my-app'], ['--name', 'kill', 'start', 'app.js'],
+    ['restart', 'my-app', '--name', 'all'], ['-sf', 'start', 'app.js'],
+  ])('preserves scoped commands and option values (%j)', (...args) => {
+    const result = runShim(args);
+    expect(result.code).toBe(0);
+    expect(result.execedArgs).toBe(args.join(' '));
   });
 
   it('passes a scoped `pm2 restart <name>` through to the real pm2', () => {

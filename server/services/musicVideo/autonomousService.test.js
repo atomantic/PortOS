@@ -223,6 +223,35 @@ describe('startAutonomousVideo', () => {
     expect(runOf()).toMatchObject({ status: 'completed', stages: { produce: { status: 'done', step: null } } });
   });
 
+  it('adopts a code-first production run\'s own current final render instead of rendering it again (#10563)', async () => {
+    const { captureMusicVideoEvidence } = await import('../../lib/musicVideoDependencies.js');
+    const directory = 'music-video/mv-auto/composition/example';
+    // Production rendered `rendered` itself; the project now selects `selected`.
+    const seed = (selected) => {
+      const project = store.get('mv-auto');
+      project.composition = { ...project.composition, document: { directory } };
+      project.productionRuns = [{ id: 'mvpr-1', status: 'completed', documentCheckpoint: { directory }, finalRender: { status: 'completed', jobId: 'production-render', attemptId: 'attempt-1' } }];
+      project.renderHistoryId = 'production-render';
+      project.renderDependencies = captureMusicVideoEvidence(project);
+      project.composition.document = { directory: selected };
+      project.autonomousRun.output = { ...project.autonomousRun.output, renderJobId: null, productionDone: false };
+    };
+    await service.startAutonomousVideo({ prompt: 'p' });
+    await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
+
+    // A render that no longer matches the selected document is not adopted: the film renders once.
+    seed(`${directory}-newer`);
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'completed' } });
+    expect(doubles.renderVideo).toHaveBeenCalledOnce();
+    expect(runOf()).toMatchObject({ status: 'running', output: expect.objectContaining({ renderJobId: 'render-1' }) });
+
+    // The same completion with production's render still current finishes without rendering again.
+    seed(directory);
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'completed' } });
+    expect(doubles.renderVideo).toHaveBeenCalledOnce();
+    expect(runOf()).toMatchObject({ status: 'completed', output: expect.objectContaining({ renderJobId: 'production-render', productionDone: true }), stages: { produce: { status: 'done' } } });
+  });
+
   it('parks failed when the final render fails after production, and Retry re-renders without resuming production', async () => {
     await service.startAutonomousVideo({ prompt: 'p' });
     await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
@@ -315,6 +344,21 @@ describe('startAutonomousVideo', () => {
       expect(runOf()).toMatchObject({ status: 'running', output: expect.objectContaining({ productionRunId: 'mvpr-manual', productionDone: true, renderJobId: 'render-1' }) });
     });
 
+    it('adopts the completed run\'s own current final render on resume instead of rendering again (#10563)', async () => {
+      const { captureMusicVideoEvidence } = await import('../../lib/musicVideoDependencies.js');
+      await delegated();
+      await service.cancelAutonomousVideo('mv-auto');
+      const project = store.get('mv-auto');
+      const directory = 'music-video/mv-auto/composition/example';
+      project.composition = { ...project.composition, document: { directory } };
+      project.productionRuns = [{ id: 'mvpr-1', status: 'completed', createdAt: later(), documentCheckpoint: { directory }, finalRender: { status: 'completed', jobId: 'production-render', attemptId: 'attempt-1' } }];
+      project.renderHistoryId = 'production-render';
+      project.renderDependencies = captureMusicVideoEvidence(project);
+      await service.resumeAutonomousVideo('mv-auto');
+      expect(doubles.renderVideo).not.toHaveBeenCalled();
+      expect(runOf()).toMatchObject({ status: 'completed', output: expect.objectContaining({ productionDone: true, renderJobId: 'production-render' }) });
+    });
+
     it('resumes a parked run with raised limits, and a model swap continues that run with the new pool', async () => {
       await delegated();
       store.get('mv-auto').productionRuns[0].status = 'limit-reached';
@@ -376,6 +420,17 @@ describe('startAutonomousVideo', () => {
       await service.resumeAutonomousVideo('mv-auto');
       await vi.waitFor(() => expect(runOf()).toMatchObject({ status: 'running', output: expect.objectContaining({ productionRunId: 'mvpr-2' }) }));
     });
+  });
+
+  it('keeps the board text-only when the run names no image tool, or caps spend on a paid one', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['video:local'] });
+    await vi.waitFor(() => expect(doubles.createMoodBoard).toHaveBeenCalledOnce());
+    expect(doubles.createMoodBoard.mock.calls[0][1]).toEqual({ renderRoute: null });
+    store.clear();
+    doubles.createMoodBoard.mockClear();
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:fal'], budgetUsd: 5 });
+    await vi.waitFor(() => expect(doubles.createMoodBoard).toHaveBeenCalledOnce());
+    expect(doubles.createMoodBoard.mock.calls[0][1]).toEqual({ renderRoute: null });
   });
 
   it('parks needs-human when production parks, and failed when it fails', async () => {
@@ -1188,7 +1243,9 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     expect(reviews()).toEqual(['lyrics:revise', 'lyrics:approve', 'style:revise', 'style:approve', 'song:retake', 'song:approve']);
     // The revisions are what the song and mood board were made from.
     expect(runOf().output).toMatchObject({ lyrics: '[Chorus]\nrain rain on glass', sunoStyle: 'synthwave, 96 bpm, airy female vocal' });
-    expect(doubles.createMoodBoard).toHaveBeenCalledWith(expect.objectContaining({ stylePrompt: 'wet neon, teal and magenta' }));
+    // Its notes render on the run's own image tool (#10531).
+    expect(doubles.createMoodBoard).toHaveBeenCalledWith(expect.objectContaining({ stylePrompt: 'wet neon, teal and magenta' }),
+      { renderRoute: { target: 'music-video', mode: 'local', model: undefined } });
     expect(doubles.generateLocalSong).toHaveBeenCalledTimes(2);
     expect(doubles.generateLocalSong.mock.calls[0][0]).toMatchObject({ lyrics: '[Chorus]\nrain rain on glass', prompt: expect.stringContaining('96 bpm') });
     // The orchestrator also judges production's plates and drafts.

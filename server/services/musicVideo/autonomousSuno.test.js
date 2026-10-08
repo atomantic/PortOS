@@ -348,6 +348,18 @@ describe('generateSunoSong M4A export', () => {
     expect(out.songId).toBe(NEW_B);
   });
 
+  it('hands the signed-in song page to onSongPage, and a failing page read never fails the export', async () => {
+    const w = workflow();
+    w.page.content = vi.fn(async () => '<html>song page</html>');
+    const onSongPage = vi.fn();
+    await generateSunoSong(fields, { ...w, songIds: [NEW_B], onSongPage });
+    expect(onSongPage).toHaveBeenCalledWith('<html>song page</html>');
+
+    const broken = workflow();
+    broken.page.content = vi.fn(async () => { throw new Error('page gone'); });
+    await expect(generateSunoSong(fields, { ...broken, songIds: [NEW_B], onSongPage: vi.fn() })).resolves.toMatchObject({ songId: NEW_B });
+  });
+
   it.each(['event', 'save'])('bounds a stalled download %s and cleans up without importing or retrying the click', async (stalled) => {
     vi.useFakeTimers();
     const w = workflow({ stalled });

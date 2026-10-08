@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
 import { existsSync, readdirSync, rmSync } from 'node:fs';
-import { mkdir, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -22,6 +22,7 @@ vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({}))
 
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
+const { captureMusicVideoEvidence, musicVideoDependencyChanges } = await import('../lib/musicVideoDependencies.js');
 
 const app = express();
 app.use(express.json());
@@ -76,6 +77,51 @@ beforeEach(async () => {
 afterAll(cleanupTempDataRoots);
 
 describe('music-video composition documents', () => {
+  it('upgrades a recognized legacy engine without rewriting authored files or validating an old review', async () => {
+    // Historical shipped bytes pin recognition independently of today's engine.
+    const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngine.txt', import.meta.url));
+    const authored = { ...FILES, 'engine.js': legacy, 'generated.js': 'window.PORTOS_MV_GENERATED = { sections: {} };' };
+    const imported = await uploadZip(project.id, createZip(Object.entries(authored).map(([name, data]) => ({ name, data }))));
+    const original = imported.body.document.directory;
+    const dependencies = captureMusicVideoEvidence(imported.body.project);
+    const clone = await projects.cloneProject(project.id);
+    const upgrade = () => request(app).post(`/api/music-video/${project.id}/composition/document/engine/upgrade`).send({ directory: original });
+    const attempts = await Promise.all([upgrade(), upgrade()]);
+    expect(attempts.map(result => result.status).sort()).toEqual([200, 409]);
+    const upgraded = attempts.find(result => result.status === 200);
+    expect(upgraded.status).toBe(200);
+    expect(upgraded.body.changed).toBe(true);
+    expect(upgraded.body.document.directory).not.toBe(original);
+    const selected = await projects.getProject(project.id);
+    expect(musicVideoDependencyChanges(selected, dependencies).some(change => change.role === 'composition')).toBe(true);
+    const exported = await fetchBytes(`/api/music-video/${project.id}/composition/document/export`);
+    const files = Object.fromEntries(readZipArchive(exported.bytes).map(entry => [entry.name, entry.read()]));
+    for (const [name, data] of Object.entries(authored)) {
+      if (name !== 'engine.js') expect(files[name]).toEqual(Buffer.from(data));
+    }
+    const shipped = await readFile(new URL('../services/musicVideo/documentTemplates/layered/engine.js', import.meta.url));
+    expect(files['engine.js']).toEqual(shipped);
+    const retained = await request(app).get(`/api/music-video/${clone.id}/composition/document/file?path=engine.js`);
+    expect(retained.text).toBe(legacy.toString());
+    expect((await upgrade()).status).toBe(409);
+    const again = await request(app).post(`/api/music-video/${project.id}/composition/document/engine/upgrade`).send({ directory: selected.composition.document.directory });
+    expect(again.body).toMatchObject({ changed: false, document: selected.composition.document });
+  });
+
+  it('refuses customized engines, pending candidates and invalid upgrade pointers without changing the document', async () => {
+    const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngine.txt', import.meta.url));
+    const imported = await uploadZip(project.id, createZip([{ name: 'index.html', data: PAGE }, { name: 'engine.js', data: Buffer.concat([legacy, Buffer.from('\n// authored customization')]) }]));
+    const directory = imported.body.document.directory;
+    const path = `/api/music-video/${project.id}/composition/document/engine/upgrade`;
+    const customized = await request(app).post(path).send({ directory });
+    expect(customized.status).toBe(409);
+    expect(customized.body.code).toBe('COMPOSITION_ENGINE_CUSTOM');
+    expect((await request(app).post(path).send({ directory: '../../other' })).status).toBe(400);
+    await projects.mutateProjectRecord(project.id, current => ({ project: { ...current, composition: { ...current.composition, documentDraft: current.composition.document } } }));
+    expect((await request(app).post(path).send({ directory })).body.code).toBe('COMPOSITION_DRAFT_STALE');
+    expect((await projects.getProject(project.id)).composition.document.directory).toBe(directory);
+  });
+
   it('preserves source document bytes when a fork imports revised code, including after source removal', async () => {
     const zip = (files) => createZip(Object.entries(files).map(([name, data]) => ({ name, data })));
     const imported = await uploadZip(project.id, zip(FILES));

@@ -110,6 +110,172 @@ describe('treatment-driven mixed-media document authoring', () => {
       .rejects.toMatchObject({ code: 'COMPOSITION_PROMPT_TOO_LARGE', message: expect.stringMatching(/\d+ characters/) });
   });
 
+  it('scopes each local batch to the scenes and storyboard shots its sections cover', async () => {
+    const id = await fixture();
+    await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, productionReview: { ...current.productionReview, draft: {
+      ...(current.productionReview?.draft || {}),
+      storyboard: ['s-intro', 's-still', 's-clip'].map((sceneId) => ({ sceneId, lyricCueIds: [], action: `choreography for ${sceneId}`, staging: '', camera: '', transition: '' })),
+    } } } }));
+    h.provider = { id: 'ollama', type: 'api' };
+    const prompts = [];
+    h.onSubmit = async () => { prompts.push(h.prompt); };
+    await generateMixedMediaDocument(id, { providerId: 'ollama' });
+    const whole = prompts[0];
+    expect(whole).toContain('choreography for s-clip');
+
+    prompts.length = 0;
+    // A budget that only fits one section per request.
+    await generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: whole.length - 200 });
+    const intro = prompts.find((prompt) => prompt.includes('"id":"intro"'));
+    expect(intro).toContain('choreography for s-intro');
+    expect(intro).not.toContain('choreography for s-clip');
+    expect(intro).not.toContain('"sceneId":"s-clip"');
+  });
+
+  it('re-authors a section a local batch dropped on its own, and fails only when the retry misses it too', async () => {
+    const id = await fixture();
+    h.provider = { id: 'ollama', type: 'api' };
+    await generateMixedMediaDocument(id, { providerId: 'ollama' });
+    const budget = h.prompt.length - 1;
+    const all = response({ intro: '#112233', still: '#445566', clip: '#778899' });
+    const sectionsAsked = (prompt) => ['intro', 'still', 'clip'].filter((s) => prompt.includes(`"id":"${s}"`));
+    // A multi-section batch comes back without its last section; a single-section ask succeeds.
+    h.onSubmit = async () => {
+      const asked = sectionsAsked(h.prompt);
+      h.response = asked.length > 1 ? response(Object.fromEntries(asked.slice(0, -1).map((s) => [s, '#010203']))) : all;
+    };
+    h.calls = 0;
+    const { document } = await generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget });
+    const manifest = await manifestAt(document);
+    expect(manifest.sections.map((s) => s.id)).toEqual(['intro', 'still', 'clip']);
+    expect(manifest.sections.every((s) => s.source.includes('function render'))).toBe(true);
+    expect(h.calls).toBeGreaterThan(2);
+
+    // A returned section that fails its source check is retried on its own too.
+    h.onSubmit = async () => {
+      const asked = sectionsAsked(h.prompt);
+      h.response = asked.length > 1
+        ? JSON.stringify({ sections: asked.map((s, i) => ({ id: s, source: i === asked.length - 1 ? 'function render(ctx, env) { ctx.fillRect(Math.random(), 0, 1, 1); }' : source('#010203') })) })
+        : all;
+    };
+    const retried = await manifestAt((await generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget })).document);
+    expect(retried.sections.every((s) => !s.source.includes('Math.random'))).toBe(true);
+
+    // The retry missing it too is a hard failure naming the count.
+    h.onSubmit = async () => { h.response = response({ intro: '#010203' }); };
+    await expect(generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget }))
+      .rejects.toMatchObject({ code: 'MISSING_SECTION_SOURCE' });
+  });
+
+  it('retries a rejected section once on its own, telling the model why', async () => {
+    const id = await fixture();
+    const random = 'function render(ctx, env) { ctx.fillRect(Math.random(), 0, 1, 1); }';
+    const retries = [];
+    h.onSubmit = async () => {
+      if (h.prompt.includes('was rejected')) {
+        retries.push(h.prompt);
+        h.response = response({ intro: '#123456' });
+      } else {
+        h.response = JSON.stringify({ sections: [{ id: 'intro', source: random }, { id: 'still', source: source('#445566') }, { id: 'clip', source: source('#778899') }] });
+      }
+    };
+    const { document } = await generateMixedMediaDocument(id, { providerId: 'stub-provider' });
+    expect(retries).toHaveLength(1);
+    expect(retries[0]).toMatch(/section "intro" was rejected: .*non-deterministic/i);
+    const manifest = await manifestAt(document);
+    expect(manifest.sections.find((s) => s.id === 'intro').source).toContain('#123456');
+  });
+
+  it('retries an answer with no usable section once as a whole, then fails without a call per section', async () => {
+    const id = await fixture();
+    h.calls = 0;
+    h.onSubmit = async () => { h.response = 'I cannot help with that.'; };
+    await expect(generateMixedMediaDocument(id, { providerId: 'stub-provider' })).rejects.toMatchObject({ code: 'MISSING_SECTION_SOURCE' });
+    expect(h.calls).toBe(2);
+    expect(h.prompt).toContain('contained no usable section functions');
+  });
+
+  it('resumes a failed later local batch from durable sections after a module restart (#10528)', async () => {
+    const id = await fixture();
+    await generateMixedMediaDocument(id, { providerId: 'stub-provider' });
+    const budget = h.prompt.length - 200;
+    h.provider = { id: 'ollama', type: 'api' };
+    const asked = [];
+    h.onSubmit = async () => {
+      asked.push(['intro', 'still', 'clip'].filter((section) => h.prompt.includes(`"id":"${section}"`)));
+      if (asked.length === 2) throw new Error('Later batch failed');
+      h.response = response(Object.fromEntries(asked.at(-1).map((section) => [section, '#010203'])));
+    };
+    await expect(generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget })).rejects.toThrow('Later batch failed');
+    const finished = asked[0];
+    const checkpoint = JSON.parse(await readFile(join(PATHS.data, 'cache', 'music-video-authoring', `${id}.json`), 'utf8'));
+    expect(checkpoint.sections.map((section) => section.id)).toEqual(finished);
+    // Matching metadata never bypasses the normal deterministic-source admission.
+    await writeFile(join(PATHS.data, 'cache', 'music-video-authoring', `${id}.json`), JSON.stringify({ ...checkpoint,
+      sections: [{ ...checkpoint.sections[0], source: 'function render(ctx, env) { ctx.fillRect(Math.random(), 0, 1, 1); }' }],
+    }));
+    const callsBeforeCorruption = h.calls;
+    await expect(generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget })).rejects.toMatchObject({ code: 'NONDETERMINISTIC_SECTION' });
+    expect(h.calls).toBe(callsBeforeCorruption);
+    await writeFile(join(PATHS.data, 'cache', 'music-video-authoring', `${id}.json`), JSON.stringify(checkpoint));
+    vi.resetModules();
+    const resumedAuthor = (await import('./documentGeneration.js')).generateMixedMediaDocument;
+    asked.length = 0;
+    h.onSubmit = async () => {
+      asked.push(['intro', 'still', 'clip'].filter((section) => h.prompt.includes(`"id":"${section}"`)));
+      h.response = response(Object.fromEntries(asked.at(-1).map((section) => [section, '#aabbcc'])));
+    };
+    const { document } = await resumedAuthor(id, { providerId: 'ollama', promptBudgetChars: budget });
+    expect(asked.flat()).toEqual(['intro', 'still', 'clip'].filter((section) => !finished.includes(section)));
+    const manifest = await manifestAt(document);
+    expect(manifest.sections.filter((section) => finished.includes(section.id)).map((section) => section.source))
+      .toEqual(finished.map(() => source('#010203')));
+    await expect(readFile(join(PATHS.data, 'cache', 'music-video-authoring', `${id}.json`))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each(['treatment', 'media', 'storyboard'])('discards staged local sections after a %s basis edit (#10528)', async (change) => {
+    const id = await fixture();
+    await generateMixedMediaDocument(id, { providerId: 'stub-provider' });
+    const budget = h.prompt.length - 200;
+    h.provider = { id: 'ollama', type: 'api' };
+    let calls = 0;
+    h.onSubmit = async () => {
+      if (++calls === 2) throw new Error('Later batch failed');
+      h.response = response({ intro: '#010203', still: '#010203', clip: '#010203' });
+    };
+    await expect(generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget })).rejects.toThrow('Later batch failed');
+    await projects.mutateProjectRecord(id, (current) => ({ project: {
+      ...current,
+      ...(change === 'treatment' ? { treatment: { ...current.treatment, revision: 2 } } : {}),
+      ...(change === 'media' ? { scenes: current.scenes.map((scene) => scene.sceneId === 's-clip' ? { ...scene, takes: [{ ...scene.takes[0], shotInstruction: { shotMode: 'performance', edit: { inSec: 2, outSec: 8 } } }] } : scene) } : {}),
+      ...(change === 'storyboard' ? { productionReview: { draft: { storyboard: [{ sceneId: 's-intro', action: 'Revised movement' }] } } } : {}),
+    } }));
+    const asked = [];
+    h.onSubmit = async () => {
+      asked.push(...['intro', 'still', 'clip'].filter((section) => h.prompt.includes(`"id":"${section}"`)));
+      h.response = response({ intro: '#aabbcc', still: '#aabbcc', clip: '#aabbcc' });
+    };
+    const { document } = await generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget });
+    expect(asked).toEqual(['intro', 'still', 'clip']);
+    expect((await manifestAt(document)).sections.map((section) => section.source)).toEqual(['intro', 'still', 'clip'].map(() => source('#aabbcc')));
+  });
+
+  it('rechecks the production reservation when all local sections were staged before publication failed', async () => {
+    const id = await fixture();
+    await generateMixedMediaDocument(id, { providerId: 'stub-provider' });
+    const budget = h.prompt.length - 200;
+    h.provider = { id: 'ollama', type: 'api' };
+    let active = true;
+    h.onSubmit = async () => { if (h.prompt.includes('"id":"clip"')) active = false; };
+    const verifyCurrent = () => { if (!active) throw Object.assign(new Error('Production closed'), { code: 'PRODUCTION_STEP_CLOSED' }); };
+    await expect(generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget, verifyCurrent })).rejects.toMatchObject({ code: 'PRODUCTION_STEP_CLOSED' });
+    active = true; h.onSubmit = null; h.calls = 0;
+    const beforeSubmit = vi.fn();
+    await generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget, verifyCurrent, beforeSubmit });
+    expect(h.calls).toBe(0);
+    expect(beforeSubmit).toHaveBeenCalledWith(expect.objectContaining({ provider: { id: 'ollama', type: 'api' }, model: 'fixture-model' }));
+  });
+
   it('names the prompt size when authoring times out with no output (#10515)', async () => {
     const id = await fixture();
     h.onSubmit = async () => { throw new Error('API execution timed out after 600000ms with no stream progress'); };
@@ -238,15 +404,25 @@ describe('treatment-driven mixed-media document authoring', () => {
   it('revises one section, preserves the other functions, and refuses a stale acceptance', async () => {
     const id = await fixture();
     const motionLanguage = 'Energy: playful. 0–10s unfold on downbeats; 20–30s expand the chorus gesture.';
-    await projects.mutateProjectRecord(id, current => ({ project: { ...current, productionReview: { draft: { motionLanguage, implementationPlan: 'Hinged paper rig and analytic camera arc.' } } } }));
+    await projects.mutateProjectRecord(id, current => ({ project: { ...current, productionReview: { draft: {
+      motionLanguage, implementationPlan: 'Hinged paper rig and analytic camera arc.',
+      storyboard: ['s-intro', 's-still', 's-clip'].map((sceneId) => ({ sceneId, action: `choreography for ${sceneId}` })),
+    } } } }));
     const first = (await generateMixedMediaDocument(id)).document;
     expect(h.prompt).toContain(motionLanguage);
+    for (const sceneId of ['s-intro', 's-still', 's-clip']) expect(h.prompt).toContain(`choreography for ${sceneId}`);
     const before = await manifestAt(first);
     h.response = response({ still: '#00ff00' });
     const second = (await regenerateMixedMediaSection(id, 'still', { expectedDraft: first.directory })).document;
     const after = await manifestAt(second);
     expect(h.prompt).toContain(motionLanguage);
     expect(h.prompt).toContain('Hinged paper rig and analytic camera arc.');
+    expect(h.prompt).toContain('choreography for s-still');
+    expect(h.prompt).toContain('"sceneId":"s-still"');
+    for (const sceneId of ['s-intro', 's-clip']) {
+      expect(h.prompt).not.toContain(`choreography for ${sceneId}`);
+      expect(h.prompt).not.toContain(`"sceneId":"${sceneId}"`);
+    }
     expect(after.sections.map((s) => s.source)).toEqual([before.sections[0].source, source('#00ff00'), before.sections[2].source]);
     await expect(regenerateMixedMediaSection(id, 'still', { expectedDraft: first.directory })).rejects.toMatchObject({ code: 'COMPOSITION_DRAFT_STALE' });
     await projects.mutateProjectRecord(id, (current) => ({ project: {

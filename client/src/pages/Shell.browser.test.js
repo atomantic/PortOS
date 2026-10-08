@@ -1,12 +1,11 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
+import { BROWSER_FIXTURE_STARTUP_MS, startBrowserFixture } from '../test/browserFixture.js';
 import { chromium } from 'playwright-core';
 
 const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
@@ -14,19 +13,26 @@ const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
   '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
 ].find(path => path && existsSync(path));
 
+const isFixtureRequest = (origin, route) => {
+  const url = new URL(route.request().url());
+  return url.origin === new URL(origin).origin && !/^\/(api|socket\.io)(\/|$)/.test(url.pathname);
+};
+
 // Render the actual page, toolbars and Tailwind stylesheet inside Layout's
 // clipped full-width main. Only transport/session hooks and APIs are replaced:
 // this fixture cannot connect to a real shell or invoke a host-control action.
 describe.skipIf(!chrome)('Shell header reachability (#9710)', () => {
-  let server;
   let browser;
-  let browserTemp;
+  let fixture;
   let origin;
   beforeAll(async () => {
-    browserTemp = await mkdtemp(join(tmpdir(), 'shell-header-chrome-'));
-    server = await createServer({
+    // Each startup phase is bounded and cleaned up inside the hook (#10543).
+    fixture = await startBrowserFixture({ name: 'shell-header-chrome', createServer, chromium,
+      launchOptions: { executablePath: chrome, args: ['--mute-audio'] }, viteConfig: temp => ({
       configFile: false,
-      cacheDir: join(browserTemp, 'vite-cache'),
+      cacheDir: join(temp, 'vite-cache'),
+      // Pre-bundle only what this fixture renders, not the whole app's graph.
+      optimizeDeps: { entries: ['src/pages/Shell.jsx'], include: ['react', 'react-dom/client', 'react-router'] },
       root: fileURLToPath(new URL('../..', import.meta.url)),
       plugins: [react(), {
         name: 'shell-browser-fixture',
@@ -86,21 +92,18 @@ describe.skipIf(!chrome)('Shell header reachability (#9710)', () => {
         },
       }],
       server: { host: '127.0.0.1', port: 0 },
-    });
-    await server.listen();
-    origin = server.resolvedUrls.local[0];
-    browser = await chromium.launch({ executablePath: chrome, headless: true, args: ['--mute-audio'],
-      env: { ...process.env, TMPDIR: browserTemp, TMP: browserTemp, TEMP: browserTemp },
-    });
-  }, 60000);
-  afterAll(async () => {
-    try {
-      await browser?.close();
-    } finally {
-      await server?.close();
-      if (browserTemp) await rm(browserTemp, { recursive: true, force: true });
-    }
-  });
+    }),
+    // Compile the cold module graph inside the bounded warmup phase, not the
+    // first test's navigation (#10638). The phase's own deadline bounds the
+    // navigation. API and socket requests are refused.
+    warmup: async (page, url) => {
+      await page.route('**/*', route => (isFixtureRequest(url, route) ? route.continue() : route.abort()));
+      await page.goto(`${url}shell-test`);
+      await page.getByRole('group', { name: 'Session controls' }).waitFor({ timeout: 5000 });
+    } });
+    ({ browser, origin } = fixture);
+  }, BROWSER_FIXTURE_STARTUP_MS);
+  afterAll(() => fixture?.close());
 
   // The selected ordinary shell and the presence of OTHER live runs are
   // independent. A selected live run necessarily contributes its own badge.
@@ -119,12 +122,9 @@ describe.skipIf(!chrome)('Shell header reachability (#9710)', () => {
       const unexpectedRequests = [];
       page.on('pageerror', error => errors.push(error.message));
       await page.route('**/*', route => {
-        const url = new URL(route.request().url());
-        if (url.origin !== new URL(origin).origin || /^\/(api|socket\.io)(\/|$)/.test(url.pathname)) {
-          unexpectedRequests.push(url.pathname);
-          return route.abort();
-        }
-        return route.continue();
+        if (isFixtureRequest(origin, route)) return route.continue();
+        unexpectedRequests.push(new URL(route.request().url()).pathname);
+        return route.abort();
       });
       for (const state of states) {
         await page.goto(`${origin}shell-test?${new URLSearchParams(state)}`);

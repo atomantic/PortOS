@@ -46,6 +46,7 @@ export function buildAgentRegistration({
   sourceWorkspace,
   repoIssueUrl,
   primaryCheckoutBaseline,
+  auditSourceEvidence = null,
   worktreeInfo,
   explicitWorktree,
   jiraBranchName,
@@ -76,6 +77,8 @@ export function buildAgentRegistration({
     // worktree. Non-throwing: an unreadable checkout yields null, which the
     // detector reads as "nothing to check".
     primaryCheckoutBaseline,
+    // Trusted launch capture only; never project a task/model-supplied claim.
+    auditSourceEvidence,
     // The issue-tracker base URL of the repository this run worked in, already
     // shaped for its forge (`repoIssueUrlBase`) so the browser appends a number
     // and knows nothing about forges. It is what a bare `#7640` in the agent's
@@ -236,6 +239,7 @@ export function buildAgentRegistration({
     // Values are coerced on the way through: a COS-TASKS.md round-trip hands
     // every scalar back as a string.
     ...quotaBurnAgentMetadata(task.metadata),
+    ...(task.metadata?.auditDepth === 'deep' ? { taskAuditDepth: 'deep', ...(task.metadata.auditWorkflow ? { auditWorkflow: task.metadata.auditWorkflow } : {}) } : {}),
     // Same reason as taskLiProposal — a hand-picked projection, so this must be
     // listed explicitly. `declaresNoCommitCriterion` (taskTypeHooks.js) reads it
     // to decide whether a run declared a commit criterion at all,

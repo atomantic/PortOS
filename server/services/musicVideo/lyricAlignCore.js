@@ -823,9 +823,34 @@ export async function pickAlignmentPath(project, io = {}) {
     return resolveMasterAudioPath(record);
   });
   const stem = resolveStem(project);
-  // The stem supplies phrase onsets; the mix supplies recognized words.
-  if (stem) return { path: stem, source: 'vocal-stem', mixPath: await resolveMaster(project) };
+  // CTC aligns the known text directly to the stem, without decoding the mix.
+  if (stem) return { path: stem, source: 'vocal-stem', mixPath: null };
   return { path: await resolveMaster(project), source: 'master', mixPath: null };
+}
+
+// A word sung at -50 dBFS RMS or quieter in an isolated vocal is not being
+// sung; the vocal-phrase detector's own floor is -40 dB over 10 ms hops.
+const SILENT_WORD_RMS = 10 ** (-50 / 20);
+
+/**
+ * Words whose timed window is silent in the isolated vocal stem. Whisper word
+ * times in sung music drift early, so a word placed in stem silence is a
+ * timing that cannot be right (#10610). Returns [{ cueId, wordIndex }].
+ */
+export function findSilentWords(cues, stemPcm, sampleRate = LYRIC_ALIGN_SAMPLE_RATE) {
+  const silent = [];
+  for (const cue of cues || []) {
+    (cue.words || []).forEach((word, wordIndex) => {
+      if (typeof word.startSec !== 'number' || typeof word.endSec !== 'number' || word.endSec <= word.startSec) return;
+      const from = Math.max(0, Math.floor(word.startSec * sampleRate));
+      const to = Math.min(stemPcm.length, Math.ceil(word.endSec * sampleRate));
+      if (to <= from) return;
+      let sum = 0;
+      for (let i = from; i < to; i++) sum += stemPcm[i] * stemPcm[i];
+      if (Math.sqrt(sum / (to - from)) < SILENT_WORD_RMS) silent.push({ cueId: cue.id, wordIndex });
+    });
+  }
+  return silent;
 }
 
 export {

@@ -16,6 +16,7 @@ import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import { MAX_ITEMS_PER_BOARD } from './logic.js';
 import * as store from './db.js';
 import { downloadPinImage } from './pinterest.js';
+import { resolvePinterestBoardUrl } from './pinterestUrl.js';
 
 const PINTEREST_PAGE_SETTLE_MS = 2500;
 // The pinned DOM scan can take up to roughly 58 seconds: a 32 × 250 ms
@@ -142,7 +143,7 @@ function sameBoardPath(left, right) {
  * @returns {Promise<{ board: object, added: number, found: number, skipped: number }>}
  */
 export async function importPrivatePinterestBoard(boardId, { url }) {
-  const { boardUrl } = normalizePinterestFeedUrl(url);
+  const { boardUrl } = await resolvePinterestBoardUrl(url);
   const board = await store.getBoard(boardId);
   if (!board) throw new ServerError('Mood board not found', { status: 404, code: 'NOT_FOUND' });
 

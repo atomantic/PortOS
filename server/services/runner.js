@@ -770,3 +770,8 @@ export async function isRunActive(runId) {
 export async function getActiveRunCount() {
   return getAIToolkitInstance()?.services?.runner?.getActiveRunCount?.() ?? null;
 }
+
+/** Bounded, content-free detail for the system activity inspector. */
+export async function getActiveRunSummaries() {
+  return getAIToolkitInstance()?.services?.runner?.getActiveRunSummaries?.() ?? null;
+}

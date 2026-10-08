@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { cosEvents } from './cosEvents.js';
+vi.mock('./publicationValidation.js', () => ({ validatePublication: vi.fn() }));
+import { validatePublication } from './publicationValidation.js';
 
 // --- Mock every dependency agentWorktreeCleanup.js pulls in transitively ---
 
@@ -239,7 +241,7 @@ import { existsSync as existsSyncMock } from 'fs';
 // They used to be pulled through the `subAgentSpawner.js` barrel, which was
 // retired in #3450.
 import { cleanupAgentWorktree, resolveWorktreeDisposition, spawnMergeRecoveryTask, spawnReviewLoopFollowUp, resolveResumePointer, resolveTaskResumePatch, recordTaskResumePointer, releaseRetryHold, resumePointerMetadata } from './agentWorktreeCleanup.js';
-import { getAgent, getAgentRecord, getAgents, getTaskById, addTask, forceSpawnTask, updateTask } from './cos.js';
+import { getAgent, getAgentRecord, getAgents, getTaskById, addTask, forceSpawnTask, updateTask, updateAgent } from './cos.js';
 import { listWorktrees, removeWorktree } from './worktreeManager.js';
 import { PATHS } from '../lib/fileUtils.js';
 import * as git from './git.js';
@@ -261,6 +263,47 @@ function mockWorktreeAgent(overrides = {}) {
 }
 
 describe('cleanupAgentWorktree - PR-creation path', () => {
+  it('publishes only after PortOS validation succeeds and persists that distinct outcome', async () => {
+    validatePublication.mockResolvedValue({ status: 'passed', head: 'verified-head' });
+    git.push.mockImplementation(async () => {
+      expect(updateAgent).toHaveBeenLastCalledWith('validated-publication', { metadata: { publicationValidation: { status: 'passed', head: 'verified-head' } } });
+    });
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/1' });
+    await cleanupAgentWorktree('validated-publication', true, {
+      prCreation: 'always', prCompletion: 'leave-open', originalTask: { metadata: { app: 'portos-default' } },
+    });
+    expect(git.push).toHaveBeenCalledOnce();
+    expect(git.createPR).toHaveBeenCalledOnce();
+    git.push.mockReset();
+  });
+
+  it('preserves work in sibling cleanup when recording validation cannot start', async () => {
+    updateAgent.mockRejectedValueOnce(new Error('agent store unavailable'));
+    const task = { metadata: { app: 'portos-default' } };
+    const warnings = await cleanupAgentWorktree('unrecordable-publication', true, { prCreation: 'always', originalTask: task });
+    expect(warnings.join(' ')).toContain('could not be recorded');
+    await cleanupAgentWorktree('unrecordable-publication', true, { originalTask: { metadata: { discardWorktree: true } } });
+    expect(git.push).not.toHaveBeenCalled();
+    expect(removeWorktree).not.toHaveBeenCalled();
+  });
+
+  it('preserves a blocked publication across later cleanup attempts without pushing or removing work', async () => {
+    getAgent.mockResolvedValue(mockWorktreeAgent());
+    validatePublication.mockResolvedValue({ status: 'blocked', reason: 'pregate-nonzero', exitCode: 1 });
+    const warnings = await cleanupAgentWorktree('blocked-publication', true, {
+      prCreation: 'always', originalTask: { metadata: { app: 'portos-default' } },
+    });
+    expect(warnings.join(' ')).toContain('pregate-nonzero');
+    expect(updateAgent).toHaveBeenLastCalledWith('blocked-publication', { metadata: { publicationValidation: expect.objectContaining({ status: 'blocked' }) } });
+    expect(git.push).not.toHaveBeenCalled();
+    expect(git.createPR).not.toHaveBeenCalled();
+    expect(removeWorktree).not.toHaveBeenCalled();
+    getAgent.mockResolvedValue(mockWorktreeAgent({ publicationValidation: { status: 'blocked', reason: 'pregate-nonzero' } }));
+    await cleanupAgentWorktree('blocked-publication', true, { originalTask: { metadata: { discardWorktree: true } } });
+    expect(removeWorktree).not.toHaveBeenCalled();
+    expect(validatePublication).toHaveBeenCalledTimes(1);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     queuePendingMergeMock.mockResolvedValue(false);
@@ -276,6 +319,22 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
     git.suggestPRTitle.mockImplementation((_dir, _base, _head, fallback) =>
       Promise.resolve((fallback || 'CoS automated task').split(/[\r\n]/)[0].trim().substring(0, 100) || 'CoS automated task')
     );
+  });
+
+  it.each([true, false])('verifies a server-created draft before completing cleanup: %s', async ok => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/1' });
+    verifyPrClaimMock.mockResolvedValue({ ok, branch: 'cos/task-abc123', category: ok ? null : 'pr-disposition' });
+    const originalTask = { metadata: { prCompletion: 'draft', openPR: true } };
+    const warnings = await cleanupAgentWorktree('agent-1', true, { prCreation: 'always', originalTask });
+    expect(git.createPR).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ draft: true }));
+    expect(verifyPrClaimMock).toHaveBeenCalledWith(expect.objectContaining({ task: originalTask, prExpected: true }));
+    expect(addTask).not.toHaveBeenCalled();
+    if (ok) expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: false });
+    else {
+      expect(removeWorktree).not.toHaveBeenCalled();
+      expect(warnings.join(' ')).toContain('Draft PR disposition could not be verified');
+    }
   });
 
   it('should run PR flow when prCreation is always and success is true', async () => {
@@ -1573,6 +1632,23 @@ describe('releaseRetryHold', () => {
     existsSyncMock.mockReturnValue(false);
     getTaskById.mockResolvedValue({ id: 'task-1', status: 'pending' });
     getAgentRecord.mockResolvedValue({ metadata: agentMetadata });
+  });
+
+  it.each([true, false])('retains a Deep checkpoint pointer after cleanup even when success=%s, without auto-resuming', async success => {
+    const selected = { ...task(), metadata: { auditDepth: 'deep' } };
+    getTaskById.mockResolvedValue({ id: selected.id, status: 'in_progress', metadata: {
+      auditDepth: 'deep', retryPendingCleanup: 'agent-x',
+    } });
+    await releaseRetryHold({ agentId: 'agent-x', task: selected, success, agentMetadata });
+    expect(updateTask).toHaveBeenCalledWith('task-1', {
+      status: 'blocked', metadata: expect.objectContaining({ existingBranch: DEAD_BRANCH, resumedFromAgentId: 'agent-x', resumeWorktreePath: null, retryPendingCleanup: undefined, blockedCategory: 'deep-audit-partial' }),
+    }, 'user', { expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-x' } });
+    updateTask.mockClear();
+    getTaskById.mockResolvedValue({ id: selected.id, status: 'in_progress', metadata: {
+      retryPendingCleanup: 'agent-new',
+    } });
+    await releaseRetryHold({ agentId: 'agent-x', task: selected, success, agentMetadata });
+    expect(updateTask).not.toHaveBeenCalled();
   });
 
   // The direct-CLI / TUI shape: neither spawn path holds the agent record, so the

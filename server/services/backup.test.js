@@ -3277,7 +3277,8 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
   describe('settings restore ownership boundary', () => {
     it.each([undefined, 'settings.json'])('holds the boundary for affected live scope %s', async subdirFilter => {
       const proc = fakeProc();
-      spawn.mockReturnValue(proc);
+      const spawned = Promise.withResolvers();
+      spawn.mockImplementation(() => { spawned.resolve(); return proc; });
       const reloading = Promise.withResolvers();
       const finishReload = Promise.withResolvers();
       reloadSettings.mockImplementationOnce(async () => {
@@ -3285,17 +3286,33 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         await finishReload.promise;
       });
       const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false, subdirFilter });
-      await flush();
-      expect(withLiveSettingsRestore).toHaveBeenCalledTimes(1);
-      const later = vi.fn();
-      const waitingWrite = withLiveSettingsRestore(later);
-      proc.emit('close', 0);
-      await reloading.promise;
-      expect(later).not.toHaveBeenCalled();
-      finishReload.resolve();
-      await Promise.all([pending, waitingWrite]);
-      expect(later).toHaveBeenCalledTimes(1);
-    });
+      let childClosed = false;
+      let waitingWrite;
+      try {
+        // Real filesystem preflight can exceed waitFor's default one second on
+        // loaded Windows runners. Synchronize with this restore's fake child,
+        // while preserving an early restore failure instead of masking it.
+        await Promise.race([spawned.promise, pending.then(() => {
+          throw new Error('Restore completed before spawning its child');
+        })]);
+        expect(withLiveSettingsRestore).toHaveBeenCalledTimes(1);
+        const later = vi.fn();
+        waitingWrite = withLiveSettingsRestore(later);
+        childClosed = true;
+        proc.emit('close', 0);
+        await reloading.promise;
+        expect(later).not.toHaveBeenCalled();
+        finishReload.resolve();
+        await Promise.all([pending, waitingWrite]);
+        expect(later).toHaveBeenCalledTimes(1);
+      } finally {
+        // An assertion failure must not leave the settings queue fenced.
+        finishReload.resolve();
+        if (!childClosed) proc.emit('close', 1);
+        await pending.catch(() => {});
+        await waitingWrite?.catch(() => {});
+      }
+    }, 10_000);
 
     it.each([{ dryRun: true }, { dryRun: true, subdirFilter: 'settings.json' }, { dryRun: false, subdirFilter: 'images' }, { dryRun: false, subdirFilter: 'cos' }])('leaves unaffected scope alone: %j', async options => {
       await runRestore('/dest', 'snap-1', options);
@@ -3411,9 +3428,16 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
 
     it('reconciles settings and Brain state when rsync fails a live restore', async () => {
       const proc = fakeProc();
-      spawn.mockReturnValue(proc);
+      const spawned = Promise.withResolvers();
+      spawn.mockImplementation(() => {
+        spawned.resolve();
+        return proc;
+      });
       const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
-      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      // Admission performs real journal I/O. Wait for the actual process boundary,
+      // not vi.waitFor's one-second deadline (too short on a loaded Windows runner).
+      // A pre-spawn failure must still surface instead of leaving the barrier pending.
+      await Promise.race([spawned.promise, pending]);
       proc.stderr.emit('data', Buffer.from('boom'));
       proc.emit('close', 1);
 

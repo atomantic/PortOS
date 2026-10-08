@@ -34,7 +34,11 @@ function releasePublications() {
 
 /** Hold one admission across an entire file-plus-row workflow. Nested calls reuse it. */
 export async function withBackupAssetPublication(work, { timeoutMs = DEFAULT_DRAIN_TIMEOUT_MS } = {}) {
-  return maintenance.continueSettlement(() => withAdmittedBackupAssetPublication(work, timeoutMs));
+  let started = false;
+  return maintenance.continueSettlement(() => withAdmittedBackupAssetPublication(() => {
+    started = true;
+    return work();
+  }, timeoutMs), { hasStarted: () => started });
 }
 
 function publicationTimeoutError() {

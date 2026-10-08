@@ -25,6 +25,13 @@ vi.mock('../../../services/api', () => ({
   getMemory: vi.fn(),
 }));
 
+const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
+vi.mock('../../../services/socket', () => ({ default: socket }));
+const handlers = new Map();
+const dispatch = async (event, payload) => {
+  await act(async () => { for (const handler of handlers.get(event) || []) handler(payload); });
+};
+
 import * as api from '../../../services/api';
 import MemoryGraph, { memoryEdgeColor, memoryEdgeIntensity } from './MemoryGraph';
 
@@ -53,6 +60,12 @@ const originalMatchMedia = window.matchMedia;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  handlers.clear();
+  socket.on.mockImplementation((event, handler) => {
+    if (!handlers.has(event)) handlers.set(event, new Set());
+    handlers.get(event).add(handler);
+  });
+  socket.off.mockImplementation((event, handler) => handlers.get(event)?.delete(handler));
   sceneElement = null;
   api.getMemoryGraph.mockResolvedValue(GRAPH);
   api.getMemory.mockResolvedValue(null);
@@ -238,5 +251,64 @@ describe('selection detail identity', () => {
     await act(async () => { sceneElement.props.onSelect(null); });
     await act(async () => { resolveNext({ content: 'Late memory body' }); });
     expect(screen.queryByText('Late memory body')).not.toBeInTheDocument();
+  });
+});
+
+describe('live graph reconciliation', () => {
+  it('coalesces mutation bursts without replacing the canvas and clears retired selections', async () => {
+    api.getMemory.mockResolvedValue({ content: 'Original detail' });
+    await renderGraph();
+    await act(async () => { sceneElement.props.onSelect(GRAPH.nodes[0]); });
+    expect(screen.getByText('Original detail')).toBeInTheDocument();
+    const canvas = screen.getByTestId('graph-canvas');
+    let resolveGraph;
+    api.getMemoryGraph.mockImplementationOnce(() => new Promise(resolve => { resolveGraph = resolve; }))
+      .mockResolvedValue({ nodes: [GRAPH.nodes[1]], edges: [] });
+    api.getMemory.mockResolvedValue({ content: 'Remote detail' });
+    await dispatch('cos:memory:updated', { id: 'n1' });
+    expect(screen.getByText('Remote detail')).toBeInTheDocument();
+    await act(async () => {
+      for (let i = 0; i < 20; i++) for (const handler of handlers.get('cos:memory:deleted')) handler({ id: 'n1' });
+    });
+    expect(api.getMemoryGraph).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId('graph-canvas')).toBe(canvas);
+    await act(async () => { resolveGraph(GRAPH); });
+    expect(api.getMemoryGraph).toHaveBeenCalledTimes(3);
+    expect(screen.getByText(/1 nodes/)).toBeInTheDocument();
+    expect(screen.queryByText('Remote detail')).not.toBeInTheDocument();
+    expect(screen.getByTestId('graph-canvas')).toBe(canvas);
+    api.getMemoryGraph.mockResolvedValue({});
+    await dispatch('cos:memory:updated', { id: 'n2' });
+    expect(screen.getByText(/Unable to refresh memory graph/)).toBeInTheDocument();
+    expect(screen.getByTestId('graph-canvas')).toBe(canvas);
+  });
+
+  it('reconciles on reconnect and tab-show and disposes a pending graph read', async () => {
+    const view = render(<MemoryGraph />);
+    await act(async () => {});
+    api.getMemoryGraph.mockResolvedValue({ nodes: [GRAPH.nodes[0]], edges: [] });
+    await dispatch('connect');
+    expect(screen.getByText(/1 nodes/)).toBeInTheDocument();
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    const calls = api.getMemoryGraph.mock.calls.length;
+    await dispatch('cos:memory:created', { id: 'n3' });
+    expect(api.getMemoryGraph).toHaveBeenCalledTimes(calls);
+    visibility.mockReturnValue('visible');
+    api.getMemoryGraph.mockResolvedValue(GRAPH);
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(screen.getByText(/2 nodes/)).toBeInTheDocument();
+    visibility.mockRestore();
+    let signal;
+    let resolveLate;
+    api.getMemoryGraph.mockImplementation(options => {
+      signal = options.signal;
+      return new Promise(resolve => { resolveLate = resolve; });
+    });
+    await dispatch('cos:memory:updated', { id: 'n1' });
+    view.unmount();
+    expect(signal.aborted).toBe(true);
+    await act(async () => { resolveLate(GRAPH); });
+    expect(handlers.get('cos:memory:updated').size).toBe(0);
   });
 });

@@ -3,6 +3,11 @@ import { assertProductionApproval } from './productionReview.js';
 /** User-triggered mixed-media document authoring. No provider runs on read or boot. */
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { atomicWrite, rmGuarded } from '../../lib/fileCore.js';
+import { readJSONFileStrict } from '../../lib/jsonIo.js';
+import { PATHS } from '../../lib/paths.js';
+import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { parse } from '@babel/parser';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getFilmStyleGrammar, renderFilmStyleGrammarPrompt } from '../../lib/filmStyleGrammars.js';
@@ -20,6 +25,7 @@ import { buildDocumentData, documentAspect, documentRenderClock, documentSongDur
 import { acceptGeneratedDocument, readDocumentFiles, stageGeneratedDocument } from './compositionDocument.js';
 
 const fail = (message, code = 'COMPOSITION_AUTHORING_INVALID', status = 422) => new ServerError(message, { code, status });
+const queueAuthoring = createKeyCachedQueue();
 const jsonForScript = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
 const FORBIDDEN_GLOBALS = new Set(['window', 'document', 'globalThis', 'self', 'fetch', 'XMLHttpRequest', 'WebSocket',
   'Date', 'performance', 'crypto', 'Function', 'eval', 'setTimeout', 'setInterval', 'requestAnimationFrame']);
@@ -204,6 +210,12 @@ async function authoringContext(project) {
 // provider authors sections in bounded batches instead of one whole-song request.
 export const LOCAL_PROMPT_BUDGET_CHARS = 100_000;
 
+// The scenes overlapping any of `sections` (all of them when every section is listed).
+function batchScenes(scenes, sections) {
+  return (scenes || []).filter((scene) => !Number.isFinite(scene.startSec) || !Number.isFinite(scene.endSec)
+    || sections.some((section) => scene.startSec < section.endSec && scene.endSec > section.startSec));
+}
+
 const isLocalProvider = (provider) => isOllamaBackedProvider(provider) || isLocalInstanceEndpoint(provider?.endpoint);
 
 // Greedily pack consecutive section ids into batches whose prompt stays within budget.
@@ -223,16 +235,29 @@ function batchSectionIds(ids, promptFor, budget) {
   return batches;
 }
 
-function acceptedSections(text, ids) {
-  const parsed = extractCodeSections(text);
+// The requested section functions a response carries (possibly fewer than asked for). With
+// `lenient`, a section that fails its source check is left out (with its reason in
+// `rejected`, to be retried) instead of failing the whole answer.
+function returnedSections(text, ids, { lenient = false, rejected = null } = {}) {
   const wanted = new Set(ids);
   const accepted = new Map();
-  for (const entry of parsed) {
+  for (const entry of extractCodeSections(text)) {
     if (!wanted.has(entry.id) || accepted.has(entry.id)) continue;
-    accepted.set(entry.id, checkedFunction(entry.source));
+    try {
+      accepted.set(entry.id, checkedFunction(entry.source));
+    } catch (err) {
+      if (!lenient) throw err;
+      rejected?.set(entry.id, err.message);
+      console.warn(`⚠️ Music-video document: section ${entry.id} failed its source check (${err.message}); retrying it on its own`);
+    }
   }
-  if (accepted.size !== wanted.size) {
-    throw fail(`The authoring model returned ${accepted.size} of ${wanted.size} required section functions`, 'MISSING_SECTION_SOURCE');
+  return accepted;
+}
+
+function acceptedSections(text, ids) {
+  const accepted = returnedSections(text, ids);
+  if (accepted.size !== new Set(ids).size) {
+    throw fail(`The authoring model returned ${accepted.size} of ${new Set(ids).size} required section functions`, 'MISSING_SECTION_SOURCE');
   }
   return accepted;
 }
@@ -283,12 +308,19 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
     styleLines: [...await styleLinesFor(project), ...styleGrammarLines(project)],
     ...(project.composition?.styleGrammarId ? { styleGrammarId: project.composition.styleGrammarId } : {}),
   };
-  const promptFor = (batchIds) => buildMixedMediaDocumentPrompt({
-    renderer: musicVideoDocumentRenderer(project), mediaMode: musicVideoMediaMode(project),
-    title: project.name, song: { ...context.song, sections: context.song.sections.filter((section) => batchIds.includes(section.id)) }, palette: context.palette, treatment: project.treatment,
-    visualSpec: project.visualSpec, scenes: context.scenes, styleLines: sharedStyle.styleLines,
-    onlySectionId: sectionId, sharedStyle, directionContext: castAndSetsCodeContext(project),
-  });
+  const promptFor = (batchIds) => {
+    const sections = context.song.sections.filter((section) => batchIds.includes(section.id));
+    // Section regenerates and partial batches need only their overlapping scenes and shots.
+    // A whole-song request retains all of its direction context.
+    const scoped = Boolean(sectionId) || batchIds.length < ids.length;
+    const scenes = scoped ? batchScenes(context.scenes, sections) : context.scenes;
+    return buildMixedMediaDocumentPrompt({
+      renderer: musicVideoDocumentRenderer(project), mediaMode: musicVideoMediaMode(project),
+      title: project.name, song: { ...context.song, sections }, palette: context.palette, treatment: project.treatment,
+      visualSpec: project.visualSpec, scenes, styleLines: sharedStyle.styleLines,
+      onlySectionId: sectionId, sharedStyle, directionContext: castAndSetsCodeContext(project, scoped ? { sceneIds: scenes.map((scene) => scene.sceneId), sections } : {}),
+    });
+  };
   const withFeedback = (prompt) => (feedback ? `${prompt}\n\nReview findings for this section (retain the approved medium and selected assets; never invent a footage fallback):\n${feedback.slice(0, 8000)}` : prompt);
   const guardedBeforeSubmit = async (submission) => {
     const current = await getProject(projectId);
@@ -307,20 +339,85 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
   };
   // Resolve the provider only when there is something to split, so single-section runs are unchanged.
   const fullPrompt = withFeedback(promptFor(ids));
-  const batches = ids.length > 1 && fullPrompt.length > promptBudgetChars
-    && isLocalProvider((await resolveMusicVideoLlm({ providerId, model, effort, automation: project.automation, stage: 'authoring' })).provider)
+  const resolved = ids.length > 1 && fullPrompt.length > promptBudgetChars
+    ? await resolveMusicVideoLlm({ providerId, model, effort, automation: project.automation, stage: 'authoring' }) : null;
+  const batches = resolved && isLocalProvider(resolved.provider)
     ? batchSectionIds(ids, (batchIds) => withFeedback(promptFor(batchIds)), promptBudgetChars) : null;
+  // Regenerable, machine-local runtime checkpoint, separate from published documents.
+  // Include the exact prompt as well as the project basis: approved cast/style inputs
+  // and review feedback can change without changing the structural timeline.
+  const stagingPath = join(PATHS.data, 'cache', 'music-video-authoring', `${project.id}.json`);
+  const stagingBasis = createHash('sha256').update(JSON.stringify({
+    basis: context.basis, prompt: fullPrompt, route: resolved?.route,
+    active: project.composition?.document?.directory || null,
+    draft: project.composition?.documentDraft?.directory || null,
+  })).digest('hex');
   const updated = new Map();
   let run;
+  // Replaced with a checkpoint writer for batched local runs.
+  let persist = async () => {};
+  // Keep what an answer got right, then ask once more for each missing or rejected section
+  // on its own, telling the model why (a local model often drops a section, breaks the JSON
+  // of a multi-section answer, or reaches for Math.random despite the rules).
+  const takeAnswer = async (askedIds) => {
+    const rejected = new Map();
+    let returned = returnedSections(run.text, askedIds, { lenient: true, rejected });
+    // An answer with no usable section at all (a refusal, a truncated stream, prose) gets one
+    // retry of the same request, not one call per section.
+    if (!returned.size && !rejected.size && askedIds.length > 1) {
+      console.log(`🎬 Music-video document: no usable section in the answer for ${askedIds.join(', ')}; asking once more`);
+      run = await runBatch(`${withFeedback(promptFor(askedIds))}\n\nYour previous answer contained no usable section functions. Return every requested section as the JSON described above.`);
+      returned = returnedSections(run.text, askedIds, { lenient: true, rejected });
+      // Still nothing: fail now rather than fan out a call per section.
+      if (!returned.size) acceptedSections(run.text, askedIds);
+    }
+    for (const [id, source] of returned) updated.set(id, source);
+    // Save valid sections before retrying a missing/invalid one, so a failed
+    // single-section repair cannot discard the rest of this accepted batch.
+    await persist();
+    for (const id of askedIds.filter((sectionId) => !returned.has(sectionId))) {
+      const reason = rejected.get(id) || 'it was missing from the answer or its JSON did not parse';
+      console.log(`🎬 Music-video document: re-authoring section ${id} on its own (${reason})`);
+      run = await runBatch(`${withFeedback(promptFor([id]))}\n\nYour previous answer for section ${JSON.stringify(id)} was rejected: ${reason}. Return that one section again, corrected, keeping every determinism rule above.`);
+      for (const [sectionId, source] of acceptedSections(run.text, [id])) updated.set(sectionId, source);
+      await persist();
+    }
+  };
   if (batches) {
-    console.log(`🎬 Music-video document prompt is ${fullPrompt.length} chars; authoring ${ids.length} sections in ${batches.length} batches on a local model`);
+    const checkpoint = await readJSONFileStrict(stagingPath, null, { logError: false });
+    if (!checkpoint.ok) throw fail('The saved authoring checkpoint could not be read', 'COMPOSITION_CHECKPOINT_INVALID', 409);
+    const staged = checkpoint.value;
+    if (staged && staged.version !== 1) throw fail('The saved authoring checkpoint has an unsupported version', 'COMPOSITION_CHECKPOINT_INVALID', 409);
+    if (staged?.basis === stagingBasis) {
+      if (!Array.isArray(staged.sections) || (staged.sections.length && !staged.run?.providerId)) {
+        throw fail('The saved authoring checkpoint is invalid', 'COMPOSITION_CHECKPOINT_INVALID', 409);
+      }
+      for (const { id, source } of staged.sections) if (ids.includes(id)) updated.set(id, checkedFunction(source));
+      run = staged.run;
+    }
+    const saveProgress = () => atomicWrite(stagingPath, {
+      version: 1, basis: stagingBasis,
+      sections: [...updated].map(([id, source]) => ({ id, source })),
+      run: run ? { providerId: run.providerId, model: run.model } : null,
+    });
+    persist = saveProgress;
+    // Replace a checkpoint from another basis before any new provider work.
+    await saveProgress();
+    console.log(`🎬 Music-video document prompt is ${fullPrompt.length} chars; authoring ${ids.length} sections in ${batches.length} batches on a local model (${updated.size} staged)`);
+    if (updated.size === ids.length) {
+      // Publication still needs the production caller's reservation/current-step guard
+      // when a previous attempt finished authoring but failed before staging the document.
+      await guardedBeforeSubmit({ provider: resolved.provider, model: resolved.selectedModel });
+    }
     for (const batch of batches) {
-      run = await runBatch(withFeedback(promptFor(batch)));
-      for (const [id, source] of acceptedSections(run.text, batch)) updated.set(id, source);
+      const remaining = batch.filter((id) => !updated.has(id));
+      if (!remaining.length) continue;
+      run = await runBatch(withFeedback(promptFor(remaining)));
+      await takeAnswer(remaining);
     }
   } else {
     run = await runBatch(fullPrompt);
-    for (const [id, source] of acceptedSections(run.text, ids)) updated.set(id, source);
+    await takeAnswer(ids);
   }
   const merged = new Map((prior?.manifest.sections || []).map((section) => [section.id, section.source]));
   for (const [id, source] of updated) merged.set(id, source);
@@ -346,12 +443,15 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
       }
     },
   });
+  await rmGuarded(stagingPath, { force: true }).catch((err) => {
+    console.warn(`⚠️ Music-video authoring checkpoint cleanup failed: ${err.message}`);
+  });
   return { ...result, providerId: run.providerId, model: run.model };
 }
 
-export const generateMixedMediaDocument = (projectId, input = {}) => runAuthoring(projectId, input);
-export const regenerateMixedMediaSection = (projectId, sectionId, input = {}) => runAuthoring(projectId, { ...input, sectionId });
-export const reviseMixedMediaEvents = (projectId, input = {}) => runAuthoring(projectId, { ...input, eventRevision: true });
+export const generateMixedMediaDocument = (projectId, input = {}) => queueAuthoring(projectId, () => runAuthoring(projectId, input));
+export const regenerateMixedMediaSection = (projectId, sectionId, input = {}) => queueAuthoring(projectId, () => runAuthoring(projectId, { ...input, sectionId }));
+export const reviseMixedMediaEvents = (projectId, input = {}) => queueAuthoring(projectId, () => runAuthoring(projectId, { ...input, eventRevision: true }));
 
 export async function acceptMixedMediaDocument(projectId, directory, { verifyCurrent = () => {} } = {}) {
   const project = await getProject(projectId);

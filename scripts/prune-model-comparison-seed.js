@@ -31,7 +31,7 @@ const providersPath = join(root, 'data.reference/providers.json');
  * purpose; this is not a place to re-accumulate the full index.
  */
 export const FRONTIER_ANCHORS = [
-  'claude-fable-5.1', 'claude-fable-5', 'claude-opus-5.5', 'claude-sonnet-5.5', 'gpt-6-luna', 'gpt-6-sol',
+  'claude-fable-5.1', 'claude-fable-5', 'claude-opus-5.5', 'claude-sonnet-5.5', 'claude-haiku-5.5', 'gpt-6-luna', 'gpt-6-sol',
 ];
 
 

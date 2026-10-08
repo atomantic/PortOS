@@ -35,6 +35,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // Numeric-only peer wire payload (v1); read-through, never imported into local records.
   // Checked-in `.quality.json` is file schema v2 and must not bump this number.
   appQuality: 1,
+  // Memory pull negotiates this capability explicitly. Version numbers describe
+  // the sender's local history; receivers retain their own monotonic history.
+  memoryHistory: 1,
   // Type-level (storage layout) version for `data/universes/{id}/index.json`.
   // v5 = post-split. Migration 034 introduced it. The independent per-record
   // shape is currently v5 (stamped inside each record by `sanitizeTemplate`).
@@ -1017,7 +1020,7 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
  * leave its push transfers ungated (silent cross-install corruption). Only
  * genuinely non-push categories belong.
  */
-export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['mediaLibrary', 'cosHistory', 'cosTasks', 'appQuality', 'eidoverseFoundations', 'meatspace', 'peerAuth']));
+export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['memoryHistory', 'mediaLibrary', 'cosHistory', 'cosTasks', 'appQuality', 'eidoverseFoundations', 'meatspace', 'peerAuth']));
 
 /**
  * Lazy-read the current PortOS version from the ROOT package.json so a

@@ -38,7 +38,7 @@ const PINTEREST_DOMAINS = Object.freeze([
 // Accepts pinterest.com, www.pinterest.com, br.pinterest.com, pinterest.co.uk;
 // rejects pinterest.zip, pinterest.evil.com, pinterest.com.evil.com,
 // evilpinterest.com.
-function isPinterestHost(host) {
+export function isPinterestHost(host) {
   const h = host.toLowerCase();
   return PINTEREST_DOMAINS.some((d) => h === d || h.endsWith(`.${d}`));
 }
@@ -84,6 +84,9 @@ export function normalizePinterestFeedUrl(input) {
   // /<user>/<board>; the RSS feed always lives at the first two segments.
   const logicalPath = isRss ? path.slice(0, -'.rss'.length) : path;
   const segments = logicalPath.split('/').filter(Boolean);
+  if (segments.length < 2 || /^(?:pin|login|session|url_shortener)$/i.test(segments[0])) {
+    throw badUrl('Use a Pinterest board URL, not a pin or profile link');
+  }
   const isSection = segments.length > 2;
   const feedPath = isSection ? `/${segments.slice(0, 2).join('/')}.rss` : `${logicalPath}.rss`;
   // Keep the section path the user pasted as the displayed board URL.

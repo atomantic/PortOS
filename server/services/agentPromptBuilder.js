@@ -1,3 +1,4 @@
+import { auditWorkflow, EXTENDED_AUDIT_INSTRUCTIONS } from '../lib/auditWorkflow.js';
 /**
  * Agent Prompt Builder
  *
@@ -374,6 +375,13 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
       task = { ...task, metadata: { ...task.metadata, prompt: featurePrompt } };
     }
   }
+  const workflow = auditWorkflow(task.metadata);
+  if (workflow === 'legacy') throw new Error('Historical Deep certification runs are read-only; start a new Deep audit');
+  const deepAuditContract = workflow === 'extended-v1' ? EXTENDED_AUDIT_INSTRUCTIONS : null;
+  const withDeepAudit = prompt => !deepAuditContract ? prompt : typeof prompt === 'string'
+    ? `${deepAuditContract}\n\n${prompt}`
+    : { ...prompt, systemPrompt: `${deepAuditContract}\n\n${prompt.systemPrompt || ''}` };
+
   const providerType = options.providerType || PROVIDER_TYPES.API;
   const providerId = options.providerId || null;
   const providerCommand = options.providerCommand || null;
@@ -419,9 +427,9 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   if (LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType)) {
     const forgeCli = await resolveManualForgeCli(workspaceDir, worktreeInfo, task);
     const lightOptions = { isTui, providerId, providerCommand, providerModel, leanMode, agentId, defaultReviewers, codeReviewDefaults, localAgentLoopBody: localAgentLoopBodyForInline, localAgentLoopBodyPath, forgeCli };
-    return options.split === true
+    return withDeepAudit(options.split === true
       ? buildLightContextPromptParts(task, workspaceDir, worktreeInfo, lightOptions)
-      : buildLightContextPrompt(task, workspaceDir, worktreeInfo, lightOptions);
+      : buildLightContextPrompt(task, workspaceDir, worktreeInfo, lightOptions));
   }
 
   // Creative Director tasks (scene evaluation, treatment/plan run via API) judge
@@ -606,14 +614,14 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     : buildIssueFilingSection({ providerId, model: providerModel, taskBody: [task.description, contextBlock] });
   const uiAuditRuntimeSection = isUiAuditTask(task) ? UI_AUDIT_RUNTIME_RULE : '';
 
-  return buildFullAgentPrompt({
+  return withDeepAudit(buildFullAgentPrompt({
     task, workspaceDir, agentInstructionsSection, memorySection, digitalTwinSection, contextBlock,
     worktreeSection, pipelineSection, jiraSection, orchestrationSection,
     issueFilingSection, simplifySection, tuiCompletionSection,
     reviewLoopSection, reviewLoopFollowUpSection, compactionSection, skillSection,
     toolsSection, planningContextSection, uiAuditRuntimeSection,
     completionBullet, completionInstructions, noChangeSuccess, completionMode,
-  });
+  }));
 }
 
 /**
@@ -828,6 +836,7 @@ return `${agentInstructionsSection || ''}
 ${memorySection || ''}
 ${digitalTwinSection ? `\n${digitalTwinSection}\n` : ''}
 
+${task.metadata?.prCompletion === PR_COMPLETIONS.DRAFT ? DRAFT_PR_RULE : ''}
 ${taskBlock.description}
 ${contextBlock ? (contextBlock.includes('\n') ? `\n### Task Context\n\n${contextBlock.trimEnd()}\n` : `\n### Task Context\n\n${contextBlock}\n`) : ''}
 ${taskBlock.targetApp}
@@ -916,6 +925,9 @@ export function buildLightContextPromptParts(task, workspaceDir, worktreeInfo, o
     systemPrompt: contractSections.length ? contractSections.join('\n\n') + '\n' : null,
   };
 }
+
+const DRAFT_PR_RULE = `## Draft pull request delivery
+This run must leave its changes in a DRAFT pull request for human review. This overrides other publication instructions, including repository skills and saved defaults. Use gh pr create --draft or glab mr create --draft when you own PR creation. If a workflow opens a ready PR, convert it to draft before completion. Verify it is still open and draft. Never mark it ready, merge, enable auto-merge, deploy, or publish quality snapshots. If PortOS owns PR creation, commit in the assigned worktree and let PortOS open the draft.`;
 
 const BEGIN_WORKING_LINE = 'Begin working on the task now.';
 
@@ -1037,6 +1049,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
   // actually stalled on an approval gate, and "no human will answer you" is not
   // something the agent can infer from AGENTS.md or its cwd.
   contractSections.push(UNATTENDED_RUN_RULE);
+  if (task.metadata?.prCompletion === PR_COMPLETIONS.DRAFT) contractSections.push(DRAFT_PR_RULE);
   if (isUiAuditTask(task)) contractSections.push(UI_AUDIT_RUNTIME_RULE);
 
   // --- Issue filing labels and planner attribution --------------------------

@@ -3,6 +3,7 @@ import { Download, Image as ImageIcon, Images, Sparkles } from 'lucide-react';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import useMusicVideoCoverLettering from '../../hooks/useMusicVideoCoverLettering.js';
 import CoverLetteringPanel from './CoverLetteringPanel.jsx';
+import PublishCard from './PublishCard.jsx';
 
 const MAX_SOURCES = 24;
 
@@ -27,7 +28,7 @@ export function coverArtSources(project) {
 }
 
 /**
- * Release cover art: the square image Spotify (via DistroKid) and Suno show.
+ * Release cover art: the square image DistroKid sends to the stores and Suno shows.
  * Each song has its own design: the lettering and the photo, drafted from the
  * song and steered by what the director types. "Restyle" redrafts the
  * lettering from that direction (or adjusts it); "Make a new image" asks an
@@ -68,9 +69,9 @@ export default function CoverArtPanel({ project, publishKit }) {
   const restyle = () => publishKit.designCover(notes.trim() ? { direction: notes.trim() } : {});
 
   return (
-    <section aria-label="Cover art" className="rounded-lg border border-port-border bg-port-card p-3 space-y-2 text-xs">
-      <h3 className="text-sm font-medium flex items-center gap-1.5"><ImageIcon size={14} /> Cover art</h3>
-      <p className="text-port-text-muted">The square cover Spotify (via DistroKid) and Suno show. Pick an image, and the title and artist are set on it, or use a finished cover as it is.</p>
+    <PublishCard projectId={project?.id} cardId="cover" label="Cover art" icon={ImageIcon}
+      summary={art.filename ? 'Set' : 'Not set yet'} defaultOpen={!art.filename}>
+      <p className="text-port-text-muted">The square cover DistroKid sends to Spotify, Apple Music and the other stores, and Suno shows. Pick an image, and the title and artist are set on it, or use a finished cover as it is.</p>
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="w-full sm:w-48 shrink-0 space-y-1">
           {art.filename ? (
@@ -172,6 +173,6 @@ export default function CoverArtPanel({ project, publishKit }) {
           )}
         </div>
       </div>
-    </section>
+    </PublishCard>
   );
 }

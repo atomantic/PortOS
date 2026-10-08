@@ -1,9 +1,11 @@
 /* Layered music-video composition — the PortOS starting template.
  *
  * Every frame is a pure function of song time t: portosComposition.seek(t)
- * draws the scene under t (its selected take, with a gentle camera move and a
- * beat punch-in), film grain and a vignette, an optional HUD, and the words
- * (subtitle lyrics, or kinetic hero words for text cues flagged "hero").
+ * draws the scene under t (its selected take, moved by cameraRig.js — the
+ * scene's planned camera move or a gentle default — with a beat punch-in),
+ * film grain and a vignette, an optional HUD, and the words (kinetic lyric
+ * type from the shared lyricType.js: sung lines, and hook slams for text cues
+ * flagged "hero").
  *
  * Data: window.PORTOS_MV, written by PortOS as portos-mv.js at render time —
  * { project, render, song, lyrics, lyricMarkers, scenes, textCues, composition }.
@@ -86,20 +88,49 @@
     const scene = r >= 0 ? SCENES[r] : null;
     return scene && t < scene.endSec ? scene : null;
   }
-  // Gentle camera moves (scale, offsets in frame fractions), picked per scene.
-  const MOVES = [
-    { s0: 1.04, s1: 1.12, x0: 0, x1: 0, y0: 0, y1: 0 },
-    { s0: 1.13, s1: 1.05, x0: 0, x1: 0, y0: 0, y1: 0 },
-    { s0: 1.09, s1: 1.09, x0: 0.022, x1: -0.022, y0: 0, y1: 0 },
-    { s0: 1.09, s1: 1.09, x0: -0.022, x1: 0.022, y0: 0, y1: 0 },
-    { s0: 1.05, s1: 1.11, x0: 0, x1: 0, y0: 0.018, y1: -0.01 },
-  ];
+  // Camera moves come from cameraRig.js (globalThis.PORTOS_CAMERA_RIG, #10589):
+  // one deterministic path per shared camera-movement id, plus the gentle
+  // defaults in RIG.GENTLE. A scene's planned `camera.move` drives its still;
+  // generated footage already carries its own camera move, so it only breathes.
+  // A document whose index.html predates the rig falls back to a slow push.
+  const RIG = globalThis.PORTOS_CAMERA_RIG || null;
   function moveFor(scene) {
-    if (scene.media?.kind === 'video') return { s0: 1.02, s1: 1.06, x0: 0, x1: 0, y0: 0, y1: 0 };
-    if (scene.stillMove === 'hold') return { s0: 1.03, s1: 1.04, x0: 0, x1: 0, y0: 0, y1: 0 };
-    if (scene.stillMove === 'push') return MOVES[0];
-    if (scene.stillMove === 'pan') return MOVES[2 + (scene.index % 2)];
-    return MOVES[scene.index % MOVES.length];
+    if (scene.media?.kind === 'video') return RIG.GENTLE.footage;
+    const camera = scene.camera;
+    if (camera?.move && RIG.has(camera.move)) {
+      return { move: camera.move, amount: RIG.STILL_AMOUNT, base: 1.04, speed: camera.speed, onBeat: camera.onBeat === true };
+    }
+    if (scene.stillMove === 'hold') return RIG.GENTLE.hold;
+    if (scene.stillMove === 'push') return RIG.GENTLE.push;
+    if (scene.stillMove === 'pan') return RIG.GENTLE[scene.index % 2 ? 'drift-right' : 'drift-left'];
+    return RIG.GENTLE[RIG.GENTLE_CYCLE[scene.index % RIG.GENTLE_CYCLE.length]];
+  }
+  // The scene's first downbeat (else beat) as normalized shot time, for snap/on-beat moves.
+  function beatIn(scene) {
+    const span = scene.endSec - scene.startSec;
+    const hit = downs.find((b) => b >= scene.startSec && b < scene.endSec) ?? beats.find((b) => b >= scene.startSec && b < scene.endSec);
+    return hit == null || !(span > 0) ? null : (hit - scene.startSec) / span;
+  }
+  // The cover transform for scene time k (0..1): scale over the cover fit,
+  // offsets in frame fractions, rotation in radians. Never shows a frame edge.
+  function cameraView(scene, k) {
+    if (!RIG) return { scale: lerp(1.04, 1.1, easeInOut(k)), x: 0, y: 0, rotation: 0 };
+    const move = moveFor(scene);
+    const options = { amount: move.amount, speed: move.speed, onBeat: move.onBeat, beat: beatIn(scene), aspect: W / H };
+    const view = RIG.flatView(move.move, k, options);
+    const lowest = Math.min(1, RIG.flatView(move.move, 0, options).zoom, RIG.flatView(move.move, 1, options).zoom);
+    // The smallest scale whose rotated, offset frame still holds every canvas corner.
+    const c = Math.abs(Math.cos(view.rotation)); const s = Math.abs(Math.sin(view.rotation));
+    const sx = 1 + 2 * Math.abs(view.x); const sy = 1 + 2 * Math.abs(view.y);
+    const cover = Math.max(sx * c + sy * s * (H / W), sy * c + sx * s * (W / H));
+    return { scale: Math.max((move.base * view.zoom) / lowest, cover), x: view.x, y: view.y, rotation: view.rotation };
+  }
+  // The rig's camera state for a code-drawn shot with a planned move (authored code may follow it).
+  function cameraSample(scene, t) {
+    const id = scene?.camera?.move;
+    if (!RIG || !id || !RIG.has(id)) return null;
+    const k = seg(t, scene.startSec, scene.endSec);
+    return { move: id, ...RIG.sample(id, k, { speed: scene.camera.speed, onBeat: scene.camera.onBeat === true, beat: beatIn(scene) }) };
   }
 
   // ---------- media (lazy, a few decoders at a time) ----------
@@ -116,6 +147,7 @@
   function loadImage(src) {
     if (images.has(src)) return touch(images, src).ready;
     const im = new Image();
+    im.crossOrigin = 'anonymous';
     const entry = { el: im, ready: new Promise((resolve, reject) => {
       im.onload = () => resolve(im);
       im.onerror = () => reject(new Error(`image failed to load: ${src}`));
@@ -128,6 +160,9 @@
   function loadVideo(src) {
     if (videos.has(src)) return touch(videos, src).ready;
     const v = document.createElement('video');
+    // The sandbox has an opaque origin. CORS keeps local footage readable for
+    // pixel evidence without granting same-origin or network authority.
+    v.crossOrigin = 'anonymous';
     v.muted = true; v.playsInline = true; v.preload = 'auto';
     const entry = { el: v, ready: new Promise((resolve, reject) => {
       v.addEventListener('loadeddata', () => resolve(v), { once: true });
@@ -193,16 +228,17 @@
   }
 
   // ---------- drawing helpers ----------
-  function drawCover(src, k, move, extraScale = 1) {
+  function drawCover(src, view, extraScale = 1) {
     const sw = src.videoWidth || src.naturalWidth || src.width;
     const sh = src.videoHeight || src.naturalHeight || src.height;
     if (!sw || !sh) return;
-    const s = lerp(move.s0, move.s1, easeInOut(k)) * extraScale;
-    const base = Math.max(W / sw, H / sh) * s;
+    const base = Math.max(W / sw, H / sh) * view.scale * extraScale;
     const dw = sw * base; const dh = sh * base;
-    const ox = lerp(move.x0, move.x1, easeInOut(k)) * W;
-    const oy = lerp(move.y0, move.y1, easeInOut(k)) * H;
-    ctx.drawImage(src, (W - dw) / 2 + ox, (H - dh) / 2 + oy, dw, dh);
+    if (!view.rotation) { ctx.drawImage(src, (W - dw) / 2 + view.x * W, (H - dh) / 2 + view.y * H, dw, dh); return; }
+    ctx.save();
+    ctx.translate(W / 2 + view.x * W, H / 2 + view.y * H); ctx.rotate(view.rotation);
+    ctx.drawImage(src, -dw / 2, -dh / 2, dw, dh);
+    ctx.restore();
   }
   const grainTiles = [];
   function buildGrain() {
@@ -243,94 +279,46 @@
   function text(str, x, y, font, color, align = 'left') {
     ctx.font = font; ctx.fillStyle = color; ctx.textAlign = align; ctx.textBaseline = 'alphabetic'; ctx.fillText(str, x, y);
   }
-  function wrap(words, maxW, measure) {
-    const lines = [[]]; let width = 0;
-    for (const w of words) {
-      const ww = measure(w);
-      if (width + ww > maxW && lines[lines.length - 1].length) { lines.push([]); width = 0; }
-      lines[lines.length - 1].push(w); width += ww;
-    }
-    return lines;
-  }
 
   // ---------- words ----------
-  const norm = (s) => String(s).toLowerCase().replace(/[’]/g, "'").replace(/[^a-z0-9']/g, '');
-  const songWords = (MV.song?.words || []).filter((w) => Number.isFinite(w?.startSec));
-  // Kinetic hero words for a text cue: each word lands on its sung time when
-  // the aligned lyric words match, else spread across the cue.
-  function heroWordsFor(cue) {
-    const tokens = String(cue.text).split(/\s+/).filter(Boolean);
-    const pool = songWords.filter((w) => w.startSec >= cue.startSec - 0.35 && w.startSec <= cue.endSec + 0.2);
-    const out = []; let j = 0;
-    for (const token of tokens) {
-      const key = norm(token);
-      let hit = null;
-      for (let k = j; k < pool.length; k++) {
-        const p = norm(pool[k].w);
-        if (p === key || (key.length > 3 && p.startsWith(key.slice(0, 4)))) { hit = pool[k]; j = k + 1; break; }
-      }
-      out.push({ w: token.toUpperCase(), t0: hit ? hit.startSec : null });
-    }
-    if (out.some((w) => w.t0 == null)) {
-      const span = Math.max(0.2, (cue.endSec - cue.startSec) * 0.8);
-      out.forEach((w, i) => { w.t0 = cue.startSec + (i * span) / Math.max(1, out.length); });
-    }
-    return out;
-  }
+  // The words are drawn by the shared PortOS lyric-type module (lyricType.js, loaded
+  // beside this page): hero text cues are `hook` lines, the director's subtitle cues
+  // (else the lyrics, with their sheet's roles) are sung `line`s. Each shot's
+  // textZone keeps the type off the subject.
   const CUES = (MV.textCues || []).filter((c) => Number.isFinite(c.startSec) && Number.isFinite(c.endSec) && c.endSec > c.startSec);
-  const HERO = CUES.filter((c) => c.emphasis === 'hero').map((c) => ({ ...c, words: heroWordsFor(c) }));
-  const SUBTITLE_CUES = CUES.filter((c) => c.emphasis !== 'hero');
-  // Subtitles: the director's subtitle cues when there are any, else the lyrics.
-  const SUBTITLES = (SUBTITLE_CUES.length ? SUBTITLE_CUES : (MV.lyrics || []))
-    .filter((l) => l?.text && Number.isFinite(l.startSec))
-    .map((l) => ({ text: l.text, startSec: l.startSec, endSec: Number.isFinite(l.endSec) ? l.endSec : l.startSec + 2.5 }));
-
-  function heroWords(t, cue) {
-    const shown = cue.words.filter((w) => t >= w.t0 - 0.02);
-    if (!shown.length) return;
-    const maxW = W - 180 * U;
-    let px = Math.round((W > H ? 150 : 120) * U);
-    ctx.font = F.stencil(px);
-    const measure = (w) => ctx.measureText(`${w.w} `).width;
-    let lines = wrap(cue.words, maxW, measure);
-    while (lines.length > 3 && px > 40) { px = Math.round(px * 0.88); ctx.font = F.stencil(px); lines = wrap(cue.words, maxW, measure); }
-    const lineH = px * 0.92;
-    const baseY = cue.placement === 'upper' ? 220 * U + lineH : cue.placement === 'center' ? H / 2 + lineH / 2 : H - 150 * U;
-    const topY = baseY - (lines.length - 1) * lineH;
-    const out = seg(t, cue.endSec - 0.12, cue.endSec);
-    lines.forEach((line, li) => {
-      let x = W > H ? 96 * U : (W - line.reduce((s, w) => s + measure(w), 0)) / 2;
-      for (const w of line) {
-        const ww = measure(w);
-        if (t >= w.t0 - 0.02) {
-          const k = seg(t, w.t0 - 0.02, w.t0 + 0.09);
-          const sc = lerp(1.35, 1, easeOut(k));
-          ctx.save(); ctx.globalAlpha = 1 - out;
-          ctx.translate(x, topY + li * lineH); ctx.scale(sc, sc);
-          ctx.font = F.stencil(px); ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-          if (k < 1) { ctx.fillStyle = C.accent; ctx.fillText(w.w, 6 * U, 0); }
-          ctx.fillStyle = C.paper; ctx.fillText(w.w, 0, 0);
-          ctx.restore();
-        }
-        x += ww;
-      }
-    });
+  const ZONE_OF_PLACEMENT = { upper: 'upper', center: 'center', lower: 'lower' };
+  const HERO_LINES = CUES.filter((c) => c.emphasis === 'hero')
+    .map((c) => ({ text: c.text, startSec: c.startSec, endSec: c.endSec, role: 'hook', zone: ZONE_OF_PLACEMENT[c.placement] || null }));
+  const SUBTITLE_CUES = CUES.filter((c) => c.emphasis !== 'hero')
+    .map((c) => ({ text: c.text, startSec: c.startSec, endSec: c.endSec, role: 'line' }));
+  let lyricType = null;
+  // lyricType.js is a module, so it runs after this classic script; it publishes
+  // itself on globalThis before DOMContentLoaded.
+  const lyricTypeModule = () => new Promise((resolve, reject) => {
+    const check = () => (globalThis.PORTOS_LYRIC_TYPE ? resolve(globalThis.PORTOS_LYRIC_TYPE)
+      : reject(new Error('lyricType.js did not load — the layered template needs it beside index.html')));
+    if (globalThis.PORTOS_LYRIC_TYPE || document.readyState !== 'loading') check();
+    else document.addEventListener('DOMContentLoaded', check, { once: true });
+  });
+  async function buildLyricType() {
+    const { createLyricType } = await lyricTypeModule();
+    const words = { palette: { fill: C.paper, ink: C.ink, accent: C.accent, strike: C.alert } };
+    // Subtitles: the director's subtitle cues when there are any, else the lyrics.
+    const lines = SUBTITLE_CUES.length ? [...HERO_LINES, ...SUBTITLE_CUES] : null;
+    lyricType = lines ? createLyricType(MV, { ...words, lines })
+      : HERO_LINES.length ? mergeLyricTypes(createLyricType(MV, { ...words, lines: HERO_LINES }), createLyricType(MV, words))
+        : createLyricType(MV, words);
+    await lyricType.ready;
   }
-  function subtitle(t, line) {
-    const a = Math.min(seg(t, line.startSec, line.startSec + 0.08), 1 - seg(t, line.endSec - 0.08, line.endSec));
-    if (a <= 0) return;
-    const px = Math.round(44 * U);
-    ctx.save(); ctx.globalAlpha = a; ctx.font = F.cond(px, 500);
-    const lines = wrap(line.text.split(/\s+/), W - 240 * U, (w) => ctx.measureText(`${w} `).width).map((l) => l.join(' '));
-    const lineH = px * 1.3;
-    const bottom = H - (W > H ? 150 : 260) * U;
-    lines.forEach((str, i) => {
-      const y = bottom - (lines.length - 1 - i) * lineH;
-      const w = ctx.measureText(str).width;
-      ctx.fillStyle = 'rgba(7,9,10,.55)'; ctx.fillRect(W / 2 - w / 2 - 18 * U, y - px, w + 36 * U, px * 1.35);
-      text(str, W / 2, y, F.cond(px, 500), C.paper, 'center');
-    });
-    ctx.restore();
+  // Hero cues over the sung lyrics: a visible hook takes the frame.
+  function mergeLyricTypes(hooks, sung) {
+    return {
+      ready: Promise.all([hooks.ready, sung.ready]),
+      draw(target, t, size) {
+        if (hooks.linesAt(t).length) hooks.draw(target, t, size);
+        else sung.draw(target, t, size);
+      },
+    };
   }
 
   // ---------- HUD (composition.overlay) ----------
@@ -438,7 +426,81 @@
     }
   }
 
-  function render(t, scene, source, state) {
+  // A view of ctx for authored code drawn over footage: a fillRect or clearRect whose
+  // on-canvas area (after the current transform, clipped to the frame) covers most of it is
+  // limited to a translucent wash (clears are dropped), and the 'copy' composite mode, which
+  // replaces every pixel, is refused. Path fills, drawImage and combined small shapes are checked separately by
+  // the pixel visibility evidence; this fast guard only handles rectangles.
+  const FOOTAGE_WASH_ALPHA = 0.25;
+  function footageOverlayContext(target) {
+    const covers = (x, y, w, h) => {
+      const m = typeof target.getTransform === 'function' ? target.getTransform() : null;
+      const map = (px, py) => (m ? [m.a * px + m.c * py + m.e, m.b * px + m.d * py + m.f] : [px, py]);
+      const pts = [map(x, y), map(x + w, y), map(x, y + h), map(x + w, y + h)];
+      const xs = pts.map((p) => p[0]); const ys = pts.map((p) => p[1]);
+      const cw = Math.max(0, Math.min(W, Math.max(...xs)) - Math.max(0, Math.min(...xs)));
+      const ch = Math.max(0, Math.min(H, Math.max(...ys)) - Math.max(0, Math.min(...ys)));
+      return cw * ch >= W * H * 0.45;
+    };
+    return new Proxy(target, {
+      get(obj, prop) {
+        if (prop === 'fillRect') {
+          return (x, y, w, h) => {
+            if (!covers(x, y, w, h)) return obj.fillRect(x, y, w, h);
+            const alpha = obj.globalAlpha;
+            obj.globalAlpha = Math.min(alpha, FOOTAGE_WASH_ALPHA);
+            obj.fillRect(x, y, w, h);
+            obj.globalAlpha = alpha;
+          };
+        }
+        if (prop === 'clearRect') return (x, y, w, h) => { if (!covers(x, y, w, h)) obj.clearRect(x, y, w, h); };
+        const value = Reflect.get(obj, prop, obj);
+        return typeof value === 'function' ? value.bind(obj) : value;
+      },
+      set(obj, prop, value) {
+        if (prop === 'globalCompositeOperation' && value === 'copy') return true;
+        return Reflect.set(obj, prop, value, obj);
+      },
+    });
+  }
+
+  // Compare the same camera-transformed footage before and after composition.
+  // Local covariance tolerates color offsets/translucent washes; an opaque panel
+  // loses the source's local variation. Flat source tiles are unknown, never hidden.
+  function compareFootagePixels(before, after, width, height) {
+    let visible = 0; let hidden = 0; let total = 0;
+    for (let y = 0; y < height; y += 8) for (let x = 0; x < width; x += 8) {
+      let count = 0; let sumA = 0; let sumB = 0; let sumAA = 0; let sumAB = 0;
+      // Separate channel means so a flat colored clip doesn't masquerade as texture.
+      let variance = 0; let covariance = 0;
+      for (let channel = 0; channel < 3; channel++) {
+        count = 0; sumA = 0; sumB = 0; sumAA = 0; sumAB = 0;
+        for (let py = y; py < Math.min(height, y + 8); py++) for (let px = x; px < Math.min(width, x + 8); px++) {
+          const offset = (py * width + px) * 4 + channel;
+          const a = before[offset]; const b = after[offset];
+          count++; sumA += a; sumB += b; sumAA += a * a; sumAB += a * b;
+        }
+        variance += sumAA - sumA * sumA / count;
+        covariance += sumAB - sumA * sumB / count;
+      }
+      const pixels = count;
+      total += pixels;
+      if (variance / (pixels * 3) < 16) continue;
+      if (covariance / variance >= 0.5) visible += pixels;
+      else hidden += pixels;
+    }
+    return { visibleFraction: visible / total, hiddenFraction: hidden / total, measuredFraction: (visible + hidden) / total };
+  }
+  const visibilityCanvas = document.createElement('canvas');
+  visibilityCanvas.width = 160; visibilityCanvas.height = 96;
+  const visibilityContext = visibilityCanvas.getContext('2d', { willReadFrequently: true });
+  const footagePixels = () => {
+    visibilityContext.drawImage(canvas, 0, 0, 160, 96);
+    return visibilityContext.getImageData(0, 0, 160, 96).data;
+  };
+  let footageVisibility = null;
+
+  function render(t, scene, source, state, reviewFootage = false) {
     ctx.fillStyle = C.ink; ctx.fillRect(0, 0, W, H);
     const authored = sectionFunction(t);
     if (scene) {
@@ -448,19 +510,22 @@
       else if (source) {
         const energetic = isHighEnergy(t) || scene.shotMode === 'performance';
         const punch = 1 + 0.018 * pulse(t, energetic ? beats : downs, 8) * state.reactiveGain;
-        drawCover(source, seg(t, scene.startSec, scene.endSec), moveFor(scene), punch);
+        drawCover(source, cameraView(scene, seg(t, scene.startSec, scene.endSec)), punch);
       }
       if (isHighEnergy(t)) glitch(t, pulse(t, downs, 8) * state.reactiveGain);
     }
+    const before = reviewFootage && source ? footagePixels() : null;
     if (authored?.fn) {
       const inset = 0.1;
       ctx.save();
       try {
-        authored.fn(ctx, {
+        // Over footage or a still, the authored code is an overlay: a full-canvas fill
+        // becomes a translucent wash so the selected media stays visible.
+        authored.fn(source ? footageOverlayContext(ctx) : ctx, {
           t, localT: t - authored.section.startSec, frame: frameOf(t), width: W, height: H,
           song: GENERATED.song, palette: GENERATED.palette, section: authored.section,
           safe: { x: W * inset, y: H * inset, w: W * (1 - 2 * inset), h: H * (1 - 2 * inset) },
-          karaoke: [], mediaKind: scene?.media?.kind || null, visualLayer: scene?.visualLayer || null,
+          karaoke: [], mediaKind: scene?.media?.kind || null, visualLayer: scene?.visualLayer || null, camera: cameraSample(scene, t),
           events: state.activeEvents, reactiveGain: state.reactiveGain, hold: state.hold,
         });
       } finally { ctx.restore(); }
@@ -469,18 +534,15 @@
     grain(t, 0.09);
     drawHud(t);
     drawNarrativeEvents(state);
-    const hero = HERO.find((c) => t >= c.startSec && t < c.endSec);
-    if (hero) heroWords(t, hero);
-    else {
-      const line = SUBTITLES.find((l) => t >= l.startSec && t < l.endSec);
-      if (line) subtitle(t, line);
-    }
+    if (lyricType) lyricType.draw(ctx, t, { width: W, height: H });
+    footageVisibility = before ? { sceneId: scene.sceneId, ...compareFootagePixels(before, footagePixels(), 160, 96) } : null;
   }
 
   // ---------- contract ----------
   const ready = (async () => {
     if (window.PORTOS_MV_ASSETS) assetUrls = await window.PORTOS_MV_ASSETS;
     await Promise.all([F.stencil(40), F.mono(20), F.mono(20, 600), F.cond(20), F.cond(20, 700)].map((font) => document.fonts.load(font)));
+    await buildLyricType();
     buildGrain();
   })();
   globalThis.portosComposition = {
@@ -491,13 +553,14 @@
     // One timeline, every aspect: the layout hook reframes before capture.
     formats: ['1920x1080', '1080x1920', '1080x1080'],
     layout({ width, height }) { resize(width, height); },
-    async seek(t) {
+    get footageVisibility() { return footageVisibility; },
+    async seek(t, { reviewFootage = false } = {}) {
       await ready;
       const state = eventState(t);
       t = state.t;
       const scene = sceneAt(t);
       const source = scene && !cardFor(scene) ? await sourceFor(scene, t) : null;
-      render(t, scene, source, state);
+      render(t, scene, source, state, reviewFootage);
       return true;
     },
   };

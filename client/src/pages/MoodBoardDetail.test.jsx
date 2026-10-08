@@ -13,6 +13,15 @@ const mockSyncMoodBoardPinterest = vi.fn();
 const mockImportMoodBoardPinterest = vi.fn();
 const mockImportMoodBoardXPost = vi.fn();
 const mockLocalizeMoodBoardMedia = vi.fn();
+const mockRenderMoodBoardItem = vi.fn();
+const socketHandlers = new Map();
+
+vi.mock('../services/socket', () => ({
+  default: {
+    on: (evt, fn) => socketHandlers.set(evt, fn),
+    off: (evt) => socketHandlers.delete(evt),
+  },
+}));
 
 vi.mock('../services/api', () => ({
   getMoodBoard: (...args) => mockGetMoodBoard(...args),
@@ -26,6 +35,7 @@ vi.mock('../services/api', () => ({
   importMoodBoardPinterest: (...args) => mockImportMoodBoardPinterest(...args),
   importMoodBoardXPost: (...args) => mockImportMoodBoardXPost(...args),
   localizeMoodBoardMedia: (...args) => mockLocalizeMoodBoardMedia(...args),
+  renderMoodBoardItem: (...args) => mockRenderMoodBoardItem(...args),
 }));
 
 const mockToastError = vi.fn();
@@ -649,5 +659,38 @@ describe('MoodBoardDetail desktop layout', () => {
     expect(addAside).toContainElement(screen.getByRole('button', { name: 'Pin to board' }));
     expect(addAside).toContainElement(screen.getByRole('button', { name: 'Import pins' }));
     expect(addAside).toContainElement(screen.getByRole('button', { name: 'Import' }));
+  });
+});
+
+describe('MoodBoardDetail note render', () => {
+  it('renders a text note and swaps in the image when the render event lands', async () => {
+    const note = { id: 'n1', type: 'text', text: 'Palette: violet and cyan' };
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [note] });
+    mockRenderMoodBoardItem.mockResolvedValueOnce({
+      jobId: 'job-1', item: { ...note, render: { status: 'queued', jobId: 'job-1', error: null } },
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Render' }));
+    expect(mockRenderMoodBoardItem).toHaveBeenCalledWith('a', 'n1', { silent: true });
+    expect(await screen.findByRole('button', { name: 'Rendering…' })).toBeDisabled();
+    expect(screen.getByTestId('item-rendering')).toBeInTheDocument();
+
+    mockGetMoodBoard.mockResolvedValueOnce({
+      id: 'a', name: 'Board A',
+      items: [{ id: 'n1', type: 'image', mediaKey: 'image:job-1.png', caption: note.text }],
+    });
+    await act(async () => { await socketHandlers.get('mood-board:item-render')({ boardId: 'a', itemId: 'n1', status: 'done' }); });
+    expect(await screen.findByRole('button', { name: 'Preview image' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Render/ })).toBeNull();
+  });
+
+  it('shows why a render failed and offers it again', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({
+      id: 'a', name: 'Board A',
+      items: [{ id: 'n1', type: 'text', text: 'Motif', render: { status: 'failed', jobId: 'j', error: 'out of memory' } }],
+    });
+    renderPage();
+    expect(await screen.findByText('Render failed: out of memory')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Render' })).toBeEnabled();
   });
 });

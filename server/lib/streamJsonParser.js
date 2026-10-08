@@ -187,5 +187,8 @@ export function createStreamJsonParser() {
     return finalResult;
   };
 
-  return { processChunk, flush, getFinalResult };
+  // Only the explicit terminal result is a completion summary. Intermediate
+  // assistant sections can contain planning or tool narration.
+  const getCompletionResult = () => typeof finalResult === 'string' ? finalResult : null;
+  return { processChunk, flush, getFinalResult, getCompletionResult };
 }

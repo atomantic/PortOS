@@ -10,6 +10,7 @@ a new one.
 | --- | --- |
 | `actWarnings.js` | React act(...) warning diagnostics — records the test active when a warning was observed, without claiming to identify where asynchronous work began. |
 | `ariaRefAssertions.js` | Asserts a rendered tree's `aria-controls`/`aria-labelledby` IDREFs all resolve to a real element. |
+| `browserFixture.js` | `startBrowserFixture` — phase-bounded Vite + Chromium + warmup startup for `*.browser.test.js` (a stalled Chromium launch is retried once with a fresh process), naming the stalled phase and closing everything it started. |
 | `classNameScan.js` | Shared string-literal scanner (comment-stripping + literal walk) for the class-string convention guards. |
 | `dndKeyboardDrag.js` | Drives a real `@dnd-kit` keyboard drag under happy-dom, stubbing the layout happy-dom can't provide. |
 | `downloadPreflightConfirm.js` | `clickStartDownload` — waits for the confirm button to be enabled (built on `enabledBarrier.js`) before clicking, then settles. |

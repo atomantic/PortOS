@@ -142,7 +142,7 @@ import { pauseAgentViaRunner, terminateAgentViaRunner, getActiveAgentsFromRunner
 import * as shellService from './shell.js';
 import { readHostShutdownMarker, clearHostShutdownMarker } from '../lib/hostShutdown.js';
 import { committedDuringRun } from '../lib/gitCommitProbe.js';
-import { activeAgents, runnerAgents, pausedAgents, consumePausedAgentExit } from './agentState.js';
+import { activeAgents, runnerAgents, spawningTasks, pausedAgents, consumePausedAgentExit } from './agentState.js';
 
 /**
  * A direct-mode agent's spawned handle. Its prototype is ChildProcess so it
@@ -232,6 +232,28 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
 
     expect(markAgentComplete).not.toHaveBeenCalled();
     expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  // A record is written before its spawn finishes. Retiring it then completes a
+  // run that launches anyway, so its claim-ownership bind fails owner-not-running.
+  it('does not reap a pid-less record that is still mid-spawn', async () => {
+    getActiveAgentsFromRunner.mockResolvedValue([]);
+    getTaskById.mockResolvedValue({ id: 'task-1', taskType: 'user', status: 'in_progress', metadata: {} });
+    const base = { status: 'running', taskId: 'task-1', metadata: {} };
+
+    getAgents.mockResolvedValueOnce([{ ...base, id: 'agent-fresh', startedAt: new Date().toISOString() }]);
+    await cleanupOrphanedAgents();
+    expect(retireDeadAgent).not.toHaveBeenCalled();
+
+    spawningTasks.add('task-1');
+    getAgents.mockResolvedValueOnce([{ ...base, id: 'agent-spawning', startedAt: new Date(Date.now() - 120000).toISOString() }]);
+    await cleanupOrphanedAgents();
+    spawningTasks.delete('task-1');
+    expect(retireDeadAgent).not.toHaveBeenCalled();
+
+    getAgents.mockResolvedValueOnce([{ ...base, id: 'agent-old', startedAt: new Date(Date.now() - 120000).toISOString() }]);
+    await cleanupOrphanedAgents();
+    expect(retireDeadAgent).toHaveBeenCalledWith(expect.objectContaining({ agent: expect.objectContaining({ id: 'agent-old' }) }));
   });
 
   it('reaps a durable running record whose runner listing is stale', async () => {
@@ -1255,7 +1277,8 @@ describe('resumeAgent — requeues the paused agent\'s own task', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
-  it('falls back to a fresh task when the task was deleted outright', async () => {
+  it.each([false, 'false'])('keeps the missing-task fallback for generic posture %s', async configClaimFlow => {
+    getAgentRecord.mockResolvedValue({ ...PAUSED_AGENT, metadata: { ...PAUSED_AGENT.metadata, configClaimFlow } });
     getTaskById.mockResolvedValue(null);
     await expect(resumeAgent('agent-paused-1')).resolves.toMatchObject({ mode: 'new-task' });
   });
@@ -1814,7 +1837,7 @@ describe('orphan retries resume what the dead run left behind', () => {
   it('hands retireDeadAgent the orphaned exit code, duration and category for the dead run', async () => {
     getAgents.mockResolvedValue([{
       ...deadAgent,
-      startedAt: new Date(Date.now() - 1000).toISOString(),
+      startedAt: new Date(Date.now() - 60000).toISOString(),
       metadata: { ...deadMetadata, runId: 'run-orphan' },
       output: [{ line: 'last buffered line' }],
     }]);
@@ -1908,6 +1931,31 @@ describe('the orphan sweep finishes an interrupted retry transition (#3373)', ()
   // state the suites after this one expect (no queued verdict).
   afterEach(() => {
     committedDuringRun.mockReset();
+  });
+
+  it('recovers interrupted Deep cleanup as an explicit checkpoint, preserving the branch and refusing a stale owner', async () => {
+    const selected = heldTask(); selected.metadata.auditDepth = 'deep';
+    getTaskById.mockResolvedValue(selected);
+    resolveTaskResumePatch.mockResolvedValue({ existingBranch: 'cos/deep', resumedFromAgentId: 'agent-dead' });
+    await handleOrphanedTask(selected.id, 'agent-dead', getTaskById);
+    expect(updateTask).toHaveBeenCalledWith(selected.id, expect.objectContaining({ status: 'blocked', metadata: expect.objectContaining({
+      existingBranch: 'cos/deep', blockedCategory: 'deep-audit-partial', retryPendingCleanup: undefined,
+    }) }), 'user', { expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-dead' } });
+    expect(committedDuringRun).not.toHaveBeenCalled();
+    updateTask.mockClear();
+    await handleOrphanedTask(selected.id, 'agent-old', getTaskById);
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it('binds no-hold Deep orphan recovery to its spawn stamp and refuses an older attempt', async () => {
+    const selected = { id: 'task-1', taskType: 'user', status: 'in_progress', metadata: { auditDepth: 'deep', lastSpawnedAt: '2026-01-02T00:00:00.000Z' } };
+    getTaskById.mockResolvedValue(selected);
+    await handleOrphanedTask(selected.id, 'agent-old', getTaskById, { agentStartedAt: '2026-01-01T00:00:00.000Z' });
+    expect(updateTask).not.toHaveBeenCalled();
+    await handleOrphanedTask(selected.id, 'agent-current', getTaskById, { agentStartedAt: '2026-01-02T00:00:01.000Z' });
+    expect(updateTask).toHaveBeenCalledWith(selected.id, expect.objectContaining({ status: 'blocked' }), 'user', {
+      expectedStatus: 'in_progress', expectedMetadata: { lastSpawnedAt: selected.metadata.lastSpawnedAt },
+    });
   });
 
   it('flips the held task to pending with the resume pointer and drops the marker', async () => {

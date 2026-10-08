@@ -126,7 +126,7 @@ export async function startYoutubeImport(url) {
       });
 
       console.log(`📺 YouTube import ${shortId(jobId)} complete — track=${shortId(track.id)} "${track.title}"`);
-      broadcastSse(job, { type: 'complete', trackId: track.id, track });
+      broadcastSse(job, { type: 'complete', trackId: track.id, track, source: 'youtube' });
     } catch (err) {
       console.error(`❌ YouTube import ${shortId(jobId)} failed: ${err?.message || err}`);
       broadcastSse(job, { type: 'error', error: err?.message || String(err) });

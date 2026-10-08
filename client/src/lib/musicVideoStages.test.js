@@ -495,11 +495,18 @@ describe('stageChecklist', () => {
       'Storyboard shots must cover the master without unintended gaps or overlaps.',
       'Complete timing, action, staging, camera and transition for Shot 1.',
       'Review lyric anchors for Shot 1.',
+      'Complete timing, action, staging, camera and transition for Shot 2.',
+      'Review lyric anchors for Shot 2.',
+      'Complete timing, action, staging, camera and transition for Shot 3.',
     ] } };
     const items = stageChecklist('board', castProject({ scenes: [scene()] }), readiness).filter((i) => i.details);
     expect(items.map((i) => i.id)).toEqual(['board-lyrics', 'board-timing', 'board-coverage', 'board-shots']);
-    expect(items.flatMap((i) => i.details)).toHaveLength(5);
     expect(items.every((i) => i.action?.anchor)).toBe(true);
+    // Per-shot problems are counted, never listed one per shot: the preview is where shots get reviewed.
+    expect(items.find((i) => i.id === 'board-shots').details).toEqual([
+      '3 shots missing timing, action, staging, camera or transition.',
+      '2 shots need lyric anchors reviewed.',
+    ]);
   });
 
   it('gives every open checklist item an action so none is a dead end', () => {

@@ -163,6 +163,18 @@ beforeEach(() => {
 });
 
 describe('verifyPrClaim (#3358)', () => {
+  it.each([
+    [true, 'OPEN', true], [false, 'OPEN', false], [undefined, 'OPEN', false], [true, 'MERGED', false], [true, 'CLOSED', false],
+  ])('requires a verified open draft (%s, %s)', async (isDraft, state, expected) => {
+    onBranch('audit/security');
+    findPullRequestForBranchMock.mockResolvedValue({ status: 'found', number: 7, isDraft, detail: state });
+    const task = prTask(); task.metadata.prCompletion = 'draft';
+    const result = await verifyPrClaim({ task, workspacePath: '/w', success: true, prExpected: true });
+    expect(result.ok).toBe(expected);
+    if (!expected) expect(result.category).toBe('pr-disposition');
+    expect(findPullRequestForBranchMock).toHaveBeenCalledWith('audit/security', { cwd: '/w', env: null, includeDraft: true });
+  });
+
   it('passes when the forge confirms a PR for the branch', async () => {
     onBranch('claim/issue-1');
     const verdict = await verifyPrClaim({ task: prTask(), workspacePath: '/w', success: true, prExpected: true });

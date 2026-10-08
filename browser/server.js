@@ -1,3 +1,4 @@
+import { probeCdpVersion } from './cdpProbe.js';
 import { spawn } from 'child_process';
 import { createServer } from 'http';
 import { readFile, writeFile, mkdir } from 'fs/promises';
@@ -55,22 +56,7 @@ async function loadConfig() {
   }
 }
 
-async function checkCdp() {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2000);
-  const res = await fetch(`http://${CDP_HOST}:${CDP_PORT}/json/version`, { signal: controller.signal }).catch(() => null);
-  clearTimeout(timeout);
-  if (!res?.ok) return null;
-  // A 200 here doesn't guarantee it's Chrome's CDP endpoint — something else
-  // (a stray dev server, a captive portal, a Chrome HTML error page) can answer
-  // on this port with `<!DOCTYPE html>…`. `res.json()` would then reject with
-  // "Unexpected token '<'", and that rejection escapes through every caller —
-  // most visibly spamming scheduleDownloadReconnect()'s catch every 2s. Treat
-  // any non-JSON or non-CDP body as "not reachable" by returning null.
-  const version = await res.json().catch(() => null);
-  if (!version?.webSocketDebuggerUrl) return null;
-  return version;
-}
+const checkCdp = () => probeCdpVersion(`http://${CDP_HOST}:${CDP_PORT}/json/version`);
 
 // Chrome's download directory is set through the profile's own `Preferences`
 // file, NOT through CDP's `Browser.setDownloadBehavior`.

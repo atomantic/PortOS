@@ -1,3 +1,4 @@
+vi.mock('./deepAudit.js', () => ({ prepareDeepAudit: vi.fn(async () => '## SERVER DEEP CONTRACT — overrides bounded prompts') }));
 /**
  * Tests for the light-vs-full context split in buildAgentPrompt.
  *
@@ -440,6 +441,30 @@ describe('no-code / API-action task completion (CD agents must NOT be told to /d
     expect(prompt).toMatch(/## Completion Workflow/);
     expect(prompt).toMatch(/\/do:push/);
     expect(prompt).not.toMatch(/## Completion \(No Code Output\)/);
+  });
+});
+
+describe('draft review delivery', () => {
+  it('puts the draft override in the system contract of a split provider prompt', async () => {
+    const task = makeTask({ metadata: { useWorktree: true, openPR: true, reviewLoop: true, prCompletion: 'draft' } });
+    const parts = await buildAgentPrompt(task, {}, '/repo', { worktreePath: '/worktree', branchName: 'audit/topic' }, {
+      providerType: 'cli', providerId: 'claude-code', providerCommand: 'claude', split: true,
+    });
+    expect(parts.systemPrompt).toContain('DRAFT pull request for human review');
+    expect(parts.systemPrompt).toContain('gh pr create --draft');
+    expect(parts.systemPrompt).toContain('--no-merge');
+    expect(parts.systemPrompt).not.toMatch(/gh pr merge|glab mr merge|--auto-merge/);
+    expect(parts.userPrompt).not.toContain('## Draft pull request delivery');
+  });
+
+  it.each([true, false])('overrides merge defaults on the light/full path (%s)', async light => {
+    const task = makeTask({ metadata: { useWorktree: true, openPR: true, reviewLoop: true, prCompletion: 'draft' } });
+    const prompt = light
+      ? buildLightContextPrompt(task, '/repo', { worktreePath: '/worktree', branchName: 'audit/topic' }, { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' })
+      : await buildAgentPrompt(task, {}, '/repo', { worktreePath: '/worktree', branchName: 'audit/topic' }, { providerType: 'api' });
+    expect(prompt).toContain('DRAFT pull request for human review');
+    expect(prompt).toContain('gh pr create --draft');
+    expect(prompt).not.toMatch(/gh pr merge|--auto-merge/);
   });
 });
 
@@ -4514,4 +4539,25 @@ describe('auto-merge posture (worktree, no PR) is commit-only on every path', ()
     expect(bullet).toMatch(/commit only — no push; PortOS merges your branch back after you exit/);
     expect(bullet).not.toMatch(/`\/do:push`/);
   });
+});
+
+
+it.each(['api', 'cli', 'tui'])('gives extended Deep precedence over customized quick limits on %s providers', async providerType => {
+  const task = makeTask({ description: 'Stop after one finding', metadata: { auditDepth: 'deep', auditWorkflow: 'extended-v1', app: 'example', prompt: 'Only inspect five candidates', analysisType: 'security' } });
+  const prompt = await buildAgentPrompt(task, {}, '/r', null, { providerType, agentId: 'deep-agent' });
+  expect(prompt.startsWith('## Deep audit — extended regular audit')).toBe(true);
+  expect(prompt).toContain('fix multiple worthwhile issues');
+  expect(prompt).toContain('partial coverage is valid');
+  const { prepareDeepAudit } = await import('./deepAudit.js');
+  expect(prepareDeepAudit).not.toHaveBeenCalled();
+});
+
+it('preserves the extended marker in split prompts, refuses unknown versions and legacy launches', async () => {
+  const metadata = sanitizeTaskMetadata({ auditDepth: 'deep', auditWorkflow: 'extended-v1' });
+  expect(metadata).toMatchObject({ auditDepth: 'deep', auditWorkflow: 'extended-v1' });
+  const prompt = await buildAgentPrompt(makeTask({ metadata: { ...metadata, app: 'example' } }), {}, '/r', null, { providerType: 'cli', split: true, agentId: 'deep-agent' });
+  expect(prompt.systemPrompt.startsWith('## Deep audit — extended regular audit')).toBe(true);
+  await expect(buildAgentPrompt(makeTask({ metadata: { auditDepth: 'deep', deepAuditId: 'old' } }), {}, '/r')).rejects.toThrow('read-only');
+  expect(() => sanitizeTaskMetadata({ auditDepth: 'deep', auditWorkflow: 'future-v9' })).toThrow('Unsupported');
+  expect(() => sanitizeTaskMetadata({ auditDepth: 'deep', auditWorkflow: 'extended-v1', deepAuditId: 'old' })).toThrow('cannot reuse');
 });

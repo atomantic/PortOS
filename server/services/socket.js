@@ -37,6 +37,7 @@ import { importerEvents, getImporterProgressFrames } from './importerEvents.js';
 import { catalogEvents } from './catalogEvents.js';
 import { writersRoomEvents } from './writersRoomEvents.js';
 import { musicVideoEvents } from './musicVideo/events.js';
+import { fineTuningEvents } from './voice/fineTuningEvents.js';
 import { videoGenEvents } from './videoGen/events.js';
 import { audioGenEvents } from './audioGen/events.js';
 import { aiStatusEvents } from './aiStatusEvents.js';
@@ -142,8 +143,9 @@ const PEER_RELAY_ALLOWED_EVENTS = new Set(['cos:subscribe', 'cos:unsubscribe']);
 // LAN/tailnet socket is refused (#8708). Every `shell:*` and `iterm:*` event
 // is included by prefix; read-only subscriptions stay open to remote sockets.
 // `error:recover` queues a recovery agent that runs shell commands (#8716).
+// Detection can bootstrap a PM2 daemon while inspecting an app-specific home.
 // The HTTP twin of this set is HOST_CONTROL_ROUTES in lib/hostControlRoutes.js.
-const HOST_CONTROL_SOCKET_EVENTS = new Set(['app:update', 'app:standardize', 'app:deploy', 'standardize:start', 'error:recover']);
+const HOST_CONTROL_SOCKET_EVENTS = new Set(['app:update', 'app:standardize', 'app:deploy', 'standardize:start', 'detect:start', 'error:recover']);
 const HOST_CONTROL_SOCKET_PREFIXES = ['shell:', 'iterm:'];
 const isHostControlSocketEvent = (event) => typeof event === 'string'
   && (HOST_CONTROL_SOCKET_EVENTS.has(event) || HOST_CONTROL_SOCKET_PREFIXES.some((prefix) => event.startsWith(prefix)));
@@ -155,6 +157,7 @@ const hostControlRefusal = (event, payload) => {
   if (event.startsWith('shell:')) return ['shell:error', { ...refusal, sessionId: payload?.sessionId }];
   if (event.startsWith('iterm:')) return ['iterm:error', { ...refusal, id: payload?.id }];
   if (event === 'standardize:start') return ['standardize:complete', { success: false, ...refusal }];
+  if (event === 'detect:start') return ['detect:complete', { success: false, ...refusal }];
   return [`${event}:error`, { ...refusal, appId: payload?.appId }];
 };
 
@@ -304,6 +307,9 @@ const SIMPLE_BRIDGES = [
   // The call-host tab already gets `voice:call:state` from its own socket
   // handler (server/sockets/voice.js); this fans it out to every OTHER tab.
   { emitter: callStateEvents, event: 'state', channel: 'voice:call:state' },
+  // A Voice Lab fine-tuning run changed status, sealed a checkpoint, or
+  // advanced (throttled) — the Fine-Tuning tab applies the job frame (#10400).
+  { emitter: fineTuningEvents, event: 'updated', channel: 'voice:fine-tune:updated' },
   // A storyboard render filed durably by writersRoomSceneImageHook (#1363).
   { emitter: writersRoomEvents, event: 'scene-image', channel: 'writers-room:scene-image' },
   // Scene reference frame / i2v clip filed durably by the music-video hooks
@@ -518,6 +524,11 @@ function setupCosEventForwarding() {
   cosEvents.on('memory:created', (data) => broadcastToCos('cos:memory:created', data));
   cosEvents.on('memory:updated', (data) => broadcastToCos('cos:memory:updated', data));
   cosEvents.on('memory:deleted', (data) => broadcastToCos('cos:memory:deleted', data));
+  // Approval/rejection also changes the active collection. Use the existing
+  // identity invalidation rather than forwarding the full approved record.
+  for (const event of ['memory:approved', 'memory:rejected']) {
+    cosEvents.on(event, ({ id }) => broadcastToCos('cos:memory:updated', { id }));
+  }
   cosEvents.on('memory:extracted', (data) => broadcastToCos('cos:memory:extracted', data));
   cosEvents.on('memory:approval-needed', (data) => broadcastToCos('cos:memory:approval-needed', data));
 

@@ -167,7 +167,7 @@ const canceledRun = () => Object.assign(new Error('cancelled'), { canceled: true
  * `reused: true` when a separation for this project is already running).
  * Throws before a job exists when the project or its audio is missing.
  */
-export async function startVocalSeparation(projectId, { deps = {} } = {}) {
+export async function startVocalSeparation(projectId, { deps = {}, onProgress = null, isCancelled = () => false } = {}) {
   const d = {
     getProject,
     attachVocalStem,
@@ -184,16 +184,24 @@ export async function startVocalSeparation(projectId, { deps = {} } = {}) {
     return { jobId: running, reused: true };
   }
   const audioPath = await d.resolveMaster(project);
+  // Source resolution yields; an alignment and a standalone click may race.
+  const raced = getActiveVocalSeparationJobId(projectId);
+  if (raced) return { jobId: raced, reused: true };
   const jobId = randomUUID();
-  const job = { id: jobId, clients: [], settled: false, cancelRequested: false };
+  const job = { id: jobId, clients: [], settled: false, cancelRequested: false, observers: new Set(onProgress ? [onProgress] : []) };
   separationJobs.set(jobId, job);
   activeByProject.set(projectId, jobId);
   console.log(`🎙️ Vocal separation ${shortId(jobId)} started for ${projectId}`);
 
-  (async () => {
+  job.completion = (async () => {
     let outDir = null;
-    const progress = (frame) => broadcastSse(job, { type: 'progress', ...frame });
-    const checkCancel = () => { if (job.cancelRequested) throw canceledRun(); };
+    const progress = (frame) => {
+      broadcastSse(job, { type: 'progress', ...frame });
+      for (const observer of job.observers) {
+        try { observer(frame); } catch (err) { console.error(`❌ Vocal separation progress observer failed: ${err.message}`); }
+      }
+    };
+    const checkCancel = () => { if (job.cancelRequested || isCancelled()) throw canceledRun(); };
     try {
       progress({ stage: 'preparing' });
       const python = await ensureDemucsRuntime({ onProgress: progress, run: d.run, resolveBasePython: d.resolveBasePython });
@@ -212,7 +220,7 @@ export async function startVocalSeparation(projectId, { deps = {} } = {}) {
           timeoutMs: SEPARATE_TIMEOUT_MS,
           splitRe: /[\r\n]+/,
           env: { ...process.env, PYTORCH_ENABLE_MPS_FALLBACK: '1' },
-          isCancelled: () => job.cancelRequested,
+          isCancelled: () => job.cancelRequested || isCancelled(),
         });
       };
       const device = pickDemucsDevice({ cudaAvailable: await d.cudaAvailable() });
@@ -236,6 +244,7 @@ export async function startVocalSeparation(projectId, { deps = {} } = {}) {
       const updated = await d.attachVocalStem(projectId, { tempPath: vocals, originalName: stemName(project) });
       console.log(`✅ Vocal separation ${shortId(jobId)} attached ${updated?.vocalStemFilename} to ${projectId}`);
       broadcastSse(job, { type: 'complete', project: updated });
+      return { project: updated };
     } catch (err) {
       if (err?.canceled || job.cancelRequested) {
         console.log(`🛑 Vocal separation ${shortId(jobId)} cancelled`);
@@ -244,6 +253,7 @@ export async function startVocalSeparation(projectId, { deps = {} } = {}) {
         console.error(`❌ Vocal separation ${shortId(jobId)} failed: ${err?.message || err}`);
         broadcastSse(job, { type: 'error', error: err?.message || String(err), ...(err?.code ? { code: err.code } : {}) });
       }
+      return { error: err };
     } finally {
       job.settled = true;
       if (activeByProject.get(projectId) === jobId) activeByProject.delete(projectId);
@@ -253,4 +263,29 @@ export async function startVocalSeparation(projectId, { deps = {} } = {}) {
   })();
 
   return { jobId };
+}
+
+/** Await the existing separation job; consent is checked by the alignment caller. */
+export async function separateProjectVocals(projectId, { onProgress = () => {}, isCancelled = () => false, deps } = {}) {
+  const { jobId, reused } = await startVocalSeparation(projectId, { onProgress, isCancelled, deps });
+  const job = separationJobs.get(jobId);
+  if (reused) job.observers.add(onProgress);
+  let cancelTimer;
+  try {
+    const result = await Promise.race([
+      job.completion,
+      new Promise((resolve) => {
+        cancelTimer = setInterval(() => {
+          try {
+            if (isCancelled()) resolve({ error: canceledRun() });
+          } catch (error) { resolve({ error }); }
+        }, 1000);
+      }),
+    ]);
+    if (result.error) throw result.error;
+    return result.project;
+  } finally {
+    clearInterval(cancelTimer);
+    job.observers.delete(onProgress);
+  }
 }

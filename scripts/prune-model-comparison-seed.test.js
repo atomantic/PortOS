@@ -81,7 +81,7 @@ describe('model comparison seed scope', () => {
     expect(maxRow.outputPerMillion.value).toBe(10);
     expect(maxRow.tokensPerSecond.value).toBe(141.9);
 
-    const codingRow = rows.find(row => row.benchmark.includes('Terminal-Bench 4.0'));
+    const codingRow = rows.find(row => row.benchmark === 'Terminal-Bench 4.0 (agentic coding, pass@1)');
     expect(codingRow).toBeDefined();
     expect(codingRow.quality.value).toBe(63.6);
 

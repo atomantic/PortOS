@@ -2,6 +2,7 @@
 // access — these turn the text git prints into structured data. The
 // orchestration that actually runs git lives in server/services/git.js.
 
+import { safeJSONParse } from './jsonIo.js';
 import { SENTINEL_COMPLETION_MARKER, stripLifecycleLines } from './agentOutputMarkers.js';
 
 /**
@@ -80,6 +81,36 @@ export function parseSubmoduleStatusLine(line) {
   return { statusChar: match[1], commit: match[2], path: match[3] };
 }
 
+// Only completed, explicitly final assistant records are authoritative. Tool
+// payloads and intermediate assistant messages can contain report-like text.
+function structuredFinalResponse(output) {
+  let final = null;
+  for (const line of output.split('\n')) {
+    if (!line.trimStart().startsWith('{')) continue;
+    const record = safeJSONParse(line);
+    if (!record) continue;
+    const message = record.type === 'response_item' ? record.payload : record;
+    if (message?.type === 'message' && message.role === 'assistant' && message.phase === 'final_answer'
+      && Array.isArray(message.content)) {
+      final = message.content.filter(part => part.type === 'output_text' && typeof part.text === 'string')
+        .map(part => part.text).join('\n');
+    } else if (record.type === 'result' && record.subtype === 'success' && record.is_error !== true
+      && typeof record.result === 'string') {
+      final = record.result;
+    }
+  }
+  return final;
+}
+
+// Strip terminal accounting without treating a number in a Markdown report as
+// telemetry. Counts belong to the immediately preceding standalone footer.
+const TRANSCRIPT_ACCOUNTING_RE = /^\s*(?:Chunk ID:|Wall time:|Process exited with code|Original token count:|Total output lines:|Output:|Final output:)/i;
+
+function stripTokenAccounting(lines) {
+  return lines.filter((line, index) => !TRANSCRIPT_ACCOUNTING_RE.test(line) && !/^\s*tokens used(?:\s*:\s*[\d,.]+)?\s*$/i.test(line)
+    && !(index > 0 && /^\s*tokens used\s*$/i.test(lines[index - 1]) && /^\s*[\d,.]+\s*$/.test(line)));
+}
+
 /**
  * Extract a meaningful implementation summary from raw agent output.
  *
@@ -89,8 +120,8 @@ export function parseSubmoduleStatusLine(line) {
  *     `SENTINEL_COMPLETION_MARKER`. When that marker is present, the agent's
  *     summary is what follows it — nothing before it was ever the agent
  *     talking, so the tool-line walk must not be allowed to reach back into it.
- *   - A CLI agent's streamed output, which ends with a summary after the last
- *     tool-call artifact. That's the fallback walk.
+ *   - A CLI agent's explicit final-response record or Codex assistant segment.
+ *     Unstructured output falls back to the summary after the last tool artifact.
  *
  * Either way, PortOS-authored lifecycle status lines are dropped: they are
  * telemetry for the agent card, and a PR body that opens with
@@ -100,24 +131,30 @@ export function parseSubmoduleStatusLine(line) {
  * @returns {string|null} Cleaned summary text, or null if nothing usable
  */
 export function extractAgentSummary(output) {
-  if (!output || output.length < 50) return null;
+  if (typeof output !== 'string' || !output) return null;
 
   // Anchor on the completion marker when the agent wrote a sentinel; otherwise
   // fall back to the last ~4000 chars, where a streamed summary typically lives.
   // The marker is searched in the FULL output, not the tail — a long sentinel
   // summary can itself run past 4000 chars and push the marker out of the window.
   const markerIdx = output.lastIndexOf(SENTINEL_COMPLETION_MARKER);
+  const structured = markerIdx < 0 ? structuredFinalResponse(output) : null;
+  // Codex's plain transcript labels each assistant segment with `codex` and
+  // puts the final reply on either side of its token footer, depending on CLI
+  // version. Anchor on the last segment before considering generic tool output.
+  const codexIdx = markerIdx < 0 && structured === null ? output.lastIndexOf('\ncodex\n') : -1;
+  const anchored = markerIdx >= 0 || structured !== null || codexIdx >= 0;
   const region = markerIdx >= 0
     ? output.slice(markerIdx + SENTINEL_COMPLETION_MARKER.length)
-    : output.slice(-4000);
+    : structured ?? (codexIdx >= 0 ? output.slice(codexIdx + '\ncodex\n'.length) : output.slice(-4000));
   const lines = region.split('\n');
   // A tail cut mid-line leaves a fragment no lifecycle shape can recognize.
-  if (markerIdx < 0 && output.length > 4000 && lines.length > 1) lines.shift();
+  if (!anchored && output.length > 4000 && lines.length > 1) lines.shift();
 
   let summaryLines;
-  if (markerIdx >= 0) {
-    // Past the marker is the sentinel summary — but not only that: a Merge Gate
-    // re-prompt (#5876) appends its own line after it and reopens the run, so a
+  if (anchored) {
+    // Anchored assistant text preserves Markdown, even a quoted diff or command.
+    // Past a sentinel marker, a Merge Gate re-prompt (#5876) appends its own line after it and reopens the run, so a
     // run that never writes a second sentinel ends with that line and any
     // nudges after it. The strip matches PortOS's own message shapes only, so
     // an agent's "✅ Tests passed" survives it.
@@ -126,11 +163,46 @@ export function extractAgentSummary(output) {
     // Find the last tool-call artifact line index.
     // Everything after it is the agent's final summary.
     let lastToolLine = -1;
-    for (let i = lines.length - 1; i >= 0; i--) {
+    let inDiff = false;
+    let fence = null;
+    let toolBlock = false;
+    for (let i = 0; i < lines.length; i++) {
       const trimmed = lines[i].trimStart();
-      if (trimmed.startsWith('→') || trimmed.startsWith('🔧') || /^\s*\$ /.test(lines[i])) {
+      if (toolBlock && !/^tokens used(?:\s*:\s*[\d,.]+)?\s*$/i.test(trimmed)) {
+        if (trimmed) { lastToolLine = i; continue; }
+        toolBlock = false;
+      }
+      if (/^tokens used\b/i.test(trimmed)) toolBlock = false;
+      const fenceMarker = trimmed.match(/^(`{3,}|~{3,})/);
+      if (fenceMarker) {
+        if (!fence) fence = fenceMarker[1];
+        else if (fenceMarker[1][0] === fence[0] && fenceMarker[1].length >= fence.length) fence = null;
+        inDiff = false;
+        continue;
+      }
+      if (fence) continue;
+      if (/^tokens used(?:\s*:\s*[\d,.]+)?\s*$/i.test(trimmed)) {
+        const countLine = /^\s*[\d,.]+\s*$/.test(lines[i + 1] ?? '') ? i + 1 : i;
+        if (stripTokenAccounting(lines.slice(countLine + 1)).join('\n').trim().length >= 30) lastToolLine = countLine;
+        continue;
+      }
+      const record = trimmed.startsWith('{') ? safeJSONParse(trimmed) : null;
+      const diffHeader = /^(diff --git |index [0-9a-f]+\.\.|--- |\+\+\+ |@@ |\\ No newline)/.test(lines[i]);
+      // Raw added/removed source has no space after its prefix. Markdown lists
+      // (`+ item`, `- item`) are retained outside an identified unified diff.
+      const diffLine = /^[+-]\S/.test(lines[i]) || (inDiff && /^[ +\-]/.test(lines[i]));
+      if (diffHeader || diffLine) {
+        inDiff = true;
         lastToolLine = i;
-        break;
+      } else {
+        inDiff = false;
+        if (/^\s*\$ /.test(lines[i]) || /^(exec|Output:|Final output:)\s*$/i.test(trimmed)) toolBlock = true;
+        if (TRANSCRIPT_ACCOUNTING_RE.test(trimmed) || trimmed.startsWith('→') || trimmed.startsWith('🔧') || /^\s*\$ /.test(lines[i])
+          || /^(exec|apply patch|patch: completed|codex)\s*$/i.test(trimmed)
+          || /^(response_item|item\.|turn\.|result$|assistant$|system$)/.test(record?.type ?? '')
+          || /^.*(?:succeeded|exited \d+) in .*:$/.test(trimmed)) {
+          lastToolLine = i;
+        }
       }
     }
     summaryLines = lastToolLine >= 0 ? lines.slice(lastToolLine + 1) : lines;
@@ -139,6 +211,9 @@ export function extractAgentSummary(output) {
     // the whole PR body. Drop the lines PortOS is known to emit.
     summaryLines = stripLifecycleLines(summaryLines);
   }
+
+  // A structured final response contains assistant text, not terminal footers.
+  if (structured === null) summaryLines = stripTokenAccounting(summaryLines);
 
   // Trim leading/trailing blank lines
   while (summaryLines.length && !summaryLines[0].trim()) summaryLines.shift();

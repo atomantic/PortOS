@@ -65,6 +65,8 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   };
 });
 
+vi.mock('./deepAudit.js', () => ({ getDeepAuditSourceRevision: vi.fn().mockResolvedValue('a'.repeat(40)) }));
+
 import { prepareAgentWorkspace, resolveTaskExistingBranch } from './agentWorkspacePrep.js';
 import { claimContinuationWorkspace } from '../lib/claimContinuation.js';
 import { updateTask, addTask, getAgents } from './cos.js';
@@ -116,6 +118,24 @@ describe('prepareAgentWorkspace — Creative Director scratch cwd (#4650)', () =
 });
 
 describe('prepareAgentWorkspace', () => {
+  it('provisions a Deep replacement from its server-owned source pin', async () => {
+    createWorktree.mockResolvedValue({ worktreePath: '/mock/worktrees/agent-deep', branchName: 'cos/deep', baseBranch: 'main' });
+    const task = { id: 'deep', taskType: 'internal', metadata: { useWorktree: true, auditDepth: 'deep' } };
+    expect(await prepareAgentWorkspace({ agentId: 'agent-deep', task })).toMatchObject({ outcome: 'ready' });
+    expect(createWorktree).toHaveBeenCalledWith('agent-deep', expect.any(String), 'deep', expect.objectContaining({ baseCommit: 'a'.repeat(40) }));
+  });
+
+  it('provisions extended Deep from the ordinary source without reading old coverage pins', async () => {
+    const { getDeepAuditSourceRevision } = await import('./deepAudit.js');
+    getDeepAuditSourceRevision.mockClear();
+    createWorktree.mockResolvedValue({ worktreePath: '/mock/worktrees/extended', branchName: 'cos/extended', baseBranch: 'main' });
+    const task = { id: 'extended', taskType: 'internal', metadata: { useWorktree: true, auditDepth: 'deep', auditWorkflow: 'extended-v1' } };
+    expect(await prepareAgentWorkspace({ agentId: 'agent-extended', task })).toMatchObject({ outcome: 'ready' });
+    expect(getDeepAuditSourceRevision).not.toHaveBeenCalled();
+    expect(createWorktree.mock.calls[0][3]).not.toHaveProperty('baseCommit');
+    expect(createWorktree).toHaveBeenCalledWith('agent-extended', expect.any(String), 'extended', expect.objectContaining({ baseBranch: 'main' }));
+  });
+
   it('normalizes legacy investigations into isolated PR delivery', async () => {
     ensureLatest.mockResolvedValue({ success: true, upToDate: true });
     createWorktree.mockResolvedValue({
@@ -633,6 +653,16 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
   // branch. When a tree PortOS owns already has it — the finished run's own,
   // preserved because it was dirty — that tree IS the workspace being asked for,
   // and no cooldown was ever going to free it.
+  it('keeps a changed Deep submodule workspace blocked for explicit recovery instead of retrying or creating a fresh branch', async () => {
+    findAdoptableWorktreeForBranch.mockResolvedValue({ path: '/mock/worktrees/agent-y', agentId: 'agent-y' });
+    adoptWorktree.mockRejectedValueOnce(Object.assign(new Error('Preserve retained submodule changes'), { code: 'DEEP_RESUME_PRESERVED' }));
+    const task = followUpTask({ auditDepth: 'deep' });
+    const result = await prepareAgentWorkspace({ agentId: 'agent-new', task });
+    expect(result.outcome).toBe('blocked');
+    expect(createWorktree).not.toHaveBeenCalled();
+    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ metadata: expect.objectContaining({ blockedCategory: 'deep-audit-partial' }) }), expect.anything());
+  });
+
   it('adopts the worktree that already holds the branch instead of pausing', async () => {
     findAdoptableWorktreeForBranch.mockResolvedValue({ path: '/mock/worktrees/agent-y', agentId: 'agent-y' });
     adoptWorktree.mockResolvedValue({

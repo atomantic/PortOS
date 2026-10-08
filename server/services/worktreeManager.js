@@ -583,6 +583,7 @@ async function ensureForkRemote(sourceWorkspace, forkHead, branchName) {
  * @param {string} taskId - Task identifier (included in branch name for traceability)
  * @param {object} options - Optional configuration
  * @param {string} options.baseBranch - Branch to base the worktree on (auto-detected if omitted)
+ * @param {string} options.baseCommit - Exact server-owned source commit for a fresh Deep resume
  * @param {string} options.existingBranch - Pre-existing branch to attach (creates from origin/<branch> if no local copy)
  * @param {{remoteUrl: string, ownerLogin: string}} options.forkHead - Where `existingBranch` lives when it is a FORK PR's head, which has no `origin/<branch>`. Consulted only after the local and origin lookups both miss; omitting it preserves today's exact behavior, error message included.
  * @param {string} options.planId - PLAN.md item slug ID — when provided, spliced into the branch name as `cos/<taskId>/<planId>/<agentId>` so other agents can detect this item is in flight by scanning branches/PRs
@@ -688,9 +689,16 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
   }
 
   // Prefer the remote ref (freshest state) if available
-  const baseRef = await execGit(['rev-parse', `origin/${baseBranch}`], sourceWorkspace)
-    .then(() => `origin/${baseBranch}`)
-    .catch(() => baseBranch);
+  let baseRef;
+  if (options.baseCommit) {
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(options.baseCommit)) throw new Error('Invalid pinned source commit');
+    // Missing pins fail closed; falling back to moving main would erase coverage.
+    baseRef = (await execGit(['rev-parse', '--verify', `${options.baseCommit}^{commit}`], sourceWorkspace)).stdout.trim();
+  } else {
+    baseRef = await execGit(['rev-parse', `origin/${baseBranch}`], sourceWorkspace)
+      .then(() => `origin/${baseBranch}`)
+      .catch(() => baseBranch);
+  }
 
   // Create worktree with a new branch based on the latest default branch.
   // `--no-track` is load-bearing, not tidiness (#4172): `baseRef` is normally the
@@ -905,11 +913,11 @@ export async function releaseIdleSiblingNextHolder(sourceWorkspace, branchName, 
  * @param {string} branchName - the branch that worktree has checked out
  * @returns {Promise<{worktreePath: string, branchName: string, baseBranch: null, existingBranch: true, adopted: true, instanceId: string}|null>}
  */
-export async function adoptWorktree(agentId, sourceWorkspace, existingWorktreePath, branchName) {
-  return queueWorktreeCreate(sourceWorkspace, () => adoptWorktreeUnlocked(agentId, sourceWorkspace, existingWorktreePath, branchName));
+export async function adoptWorktree(agentId, sourceWorkspace, existingWorktreePath, branchName, options = {}) {
+  return queueWorktreeCreate(sourceWorkspace, () => adoptWorktreeUnlocked(agentId, sourceWorkspace, existingWorktreePath, branchName, options));
 }
 
-async function adoptWorktreeUnlocked(agentId, sourceWorkspace, existingWorktreePath, branchName) {
+async function adoptWorktreeUnlocked(agentId, sourceWorkspace, existingWorktreePath, branchName, options) {
   if (!agentId || !sourceWorkspace || !existingWorktreePath || !branchName) return null;
   if (!existsSync(existingWorktreePath)) {
     console.log(`🌳 Cannot adopt worktree for ${agentId} — ${existingWorktreePath} no longer exists`);
@@ -932,6 +940,43 @@ async function adoptWorktreeUnlocked(agentId, sourceWorkspace, existingWorktreeP
   }
 
   await ensureDir(WORKTREES_DIR);
+
+  if (options.deepResume) {
+    try {
+      const entries = (await execGit(['ls-files', '--stage'], existingWorktreePath)).stdout;
+      if (/^160000 /m.test(entries)) {
+        // Git cannot move linked worktrees containing submodules, even after
+        // deinit. Preserve the admitted inactive tree intact and transfer only
+        // its clean branch attachment, all under the same repository queue.
+        const currentBranch = (await execGit(['symbolic-ref', '--short', 'HEAD'], existingWorktreePath)).stdout.trim();
+        const head = (await execGit(['rev-parse', 'HEAD'], existingWorktreePath)).stdout.trim();
+        const status = (await execGit(['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none'], existingWorktreePath)).stdout.trim();
+        const listed = await listWorktrees(sourceWorkspace);
+        // Git and Node can spell the same Windows directory differently. Fall
+        // back to filesystem identity, never case-fold or guess at ownership.
+        const identity = await stat(existingWorktreePath, { bigint: true }).catch(() => null);
+        const matches = [];
+        for (const entry of listed) {
+          if (pathsEqual(entry.path, existingWorktreePath)) { matches.push(entry); continue; }
+          const other = await stat(entry.path, { bigint: true }).catch(() => null);
+          if (identity?.isDirectory() && other?.isDirectory() && typeof identity.ino === 'bigint' && identity.ino > 0n &&
+            identity.dev === other.dev && identity.ino === other.ino) matches.push(entry);
+        }
+        const holder = matches.length === 1 ? matches[0] : null;
+        const refusal = currentBranch !== branchName ? 'branch identity changed'
+          : !holder ? 'worktree registration could not be matched'
+            : holder.locked ? 'worktree is locked' : status ? 'workspace has uncommitted or nested changes' : null;
+        if (refusal) throw new Error(`Retained Deep submodule ${refusal}; preserve it for explicit recovery`);
+        await execGit(['checkout', '--detach', head], existingWorktreePath);
+        const branchHead = (await execGit(['rev-parse', `refs/heads/${branchName}`], sourceWorkspace)).stdout.trim();
+        if (branchHead !== head) throw new Error('Deep resume branch changed during handoff; preserved old workspace');
+        const replacement = await createWorktreeUnlocked(agentId, sourceWorkspace, null, { existingBranch: branchName });
+        return { ...replacement, adopted: true };
+      }
+    } catch (error) {
+      throw Object.assign(new Error(`Deep submodule handoff stopped; retained work is preserved: ${error.message}`, { cause: error }), { code: 'DEEP_RESUME_PRESERVED' });
+    }
+  }
 
   // Through the retry wrapper, not raw execGit: `worktree move` mutates the same
   // `.git/worktrees` bookkeeping whose per-repo lock motivated the retry (#2193).

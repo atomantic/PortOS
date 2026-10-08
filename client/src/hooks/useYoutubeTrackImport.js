@@ -1,8 +1,10 @@
-import { importTrackFromYoutube, cancelTrackImport, trackImportEventsUrl } from '../services/apiTracks.js';
+import { importTrackFromYoutube, importTrackFromSuno, cancelTrackImport, trackImportEventsUrl } from '../services/apiTracks.js';
+import { isSunoSongUrl } from '../../../server/lib/sunoSong.js';
 import useSseJobSlot from './useSseJobSlot.js';
 
 /**
- * One YouTube-audio-import job slot (#1945) — start/cancel + SSE progress +
+ * One audio-import job slot (#1945) for a pasted YouTube or Suno song link —
+ * a Suno link imports the song with its title, lyrics and style — start/cancel + SSE progress +
  * terminal-frame handling. A thin wrapper over the generic `useSseJobSlot`
  * (#2368); call it once per UI surface that can independently kick off an import
  * (e.g. the create form and an existing project's track picker) so two surfaces
@@ -17,16 +19,16 @@ import useSseJobSlot from './useSseJobSlot.js';
  */
 export default function useYoutubeTrackImport({ onComplete } = {}) {
   const { active, percent, start, cancel } = useSseJobSlot({
-    startRequest: (url) => importTrackFromYoutube(url, { silent: true }),
+    startRequest: (url) => (isSunoSongUrl(url) ? importTrackFromSuno : importTrackFromYoutube)(url, { silent: true }),
     eventsUrl: trackImportEventsUrl,
     cancelRequest: cancelTrackImport,
     trimStartArg: true,
     onComplete: (frame, context) => onComplete?.(frame.track, context),
-    successToast: (frame) => `Imported "${frame.track.title}" from YouTube`,
-    errorFallback: 'YouTube import failed',
-    canceledMessage: 'YouTube import cancelled',
-    lostConnectionMessage: 'Lost connection to the YouTube import — check the music library',
-    startErrorFallback: 'Failed to start YouTube import',
+    successToast: (frame) => `Imported "${frame.track.title}" from ${frame.source === 'suno' ? 'Suno' : 'YouTube'}`,
+    errorFallback: 'Audio import failed',
+    canceledMessage: 'Audio import cancelled',
+    lostConnectionMessage: 'Lost connection to the audio import — check the music library',
+    startErrorFallback: 'Failed to start the audio import',
   });
   return { active, percent, start, cancel };
 }

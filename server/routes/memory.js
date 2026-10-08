@@ -21,7 +21,12 @@ import {
   memoryDecaySchema,
   memoryLinkSchema,
   memorySyncSchema,
-  memoryIdParamSchema
+  memoryIdParamSchema,
+  memoryVersionQuerySchema,
+  memoryVersionsQuerySchema,
+  memoryRetireSchema,
+  memoryDeleteQuerySchema,
+  memorySyncQuerySchema
 } from '../lib/memoryValidation.js';
 
 const router = Router();
@@ -79,9 +84,10 @@ router.get('/sync', asyncHandler(async (req, res) => {
   if (name !== 'postgres') {
     throw new ServerError('Sync requires PostgreSQL backend', { status: 400 });
   }
-  const since = /^\d+$/.test(req.query.since) ? req.query.since : '0';
-  const { limit } = parsePagination(req.query, { defaultLimit: 100, maxLimit: 1000 });
-  const result = await memorySync.getChangesSince(since, limit);
+  const { since, limit, schemaVersion } = validateRequest(memorySyncQuerySchema, req.query);
+  const result = schemaVersion === undefined
+    ? await memorySync.getChangesSince(since, limit)
+    : await memorySync.getChangesSince(since, limit, schemaVersion);
   res.json(result);
 }));
 
@@ -91,8 +97,10 @@ router.post('/sync', asyncHandler(async (req, res) => {
   if (name !== 'postgres') {
     throw new ServerError('Sync requires PostgreSQL backend', { status: 400 });
   }
-  const { memories } = validateRequest(memorySyncSchema, req.body);
-  const result = await memorySync.applyRemoteChanges(memories);
+  const { memories, schemaVersion } = validateRequest(memorySyncSchema, req.body);
+  const result = schemaVersion === undefined
+    ? await memorySync.applyRemoteChanges(memories)
+    : await memorySync.applyRemoteChanges(memories, schemaVersion);
   res.json(result);
 }));
 
@@ -139,8 +147,8 @@ router.post('/', asyncHandler(async (req, res) => {
 
 // POST /api/memory/consolidate - Consolidate similar memories
 router.post('/consolidate', asyncHandler(async (req, res) => {
-  const { similarityThreshold, dryRun } = validateRequest(memoryConsolidateSchema, req.body);
-  const result = await memory.consolidateMemories(similarityThreshold, dryRun);
+  const { similarityThreshold, dryRun, reason } = validateRequest(memoryConsolidateSchema, req.body);
+  const result = await memory.consolidateMemories(similarityThreshold, dryRun, { reason });
   res.json(result);
 }));
 
@@ -166,11 +174,20 @@ router.delete('/expired', asyncHandler(async (req, res) => {
 
 // GET /api/memory/:id - Get a single memory
 router.get('/:id', asyncHandler(async (req, res) => {
-  const mem = await memory.getMemory(req.params.id);
+  const { id } = validateRequest(memoryIdParamSchema, req.params);
+  const { version } = validateRequest(memoryVersionQuerySchema, req.query);
+  const mem = version === undefined ? await memory.getMemory(id) : await memory.getMemoryVersion(id, version);
   if (!mem) {
     throw new ServerError('Memory not found', { status: 404 });
   }
   res.json(mem);
+}));
+
+// GET /api/memory/:id/versions - Bounded history metadata, newest first
+router.get('/:id/versions', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(memoryIdParamSchema, req.params);
+  const options = validateRequest(memoryVersionsQuerySchema, req.query);
+  res.json({ versions: await memory.getMemoryVersions(id, options) });
 }));
 
 // GET /api/memory/:id/related - Get related memories
@@ -216,7 +233,8 @@ router.post('/:id/approve', asyncHandler(async (req, res) => {
 
 // POST /api/memory/:id/reject - Reject a pending memory
 router.post('/:id/reject', asyncHandler(async (req, res) => {
-  const result = await memory.rejectMemory(req.params.id);
+  const options = validateRequest(memoryRetireSchema, req.body ?? {});
+  const result = await memory.rejectMemory(req.params.id, options);
   if (!result.success) {
     throw new ServerError(result.error, { status: result.error === 'Memory not found' ? 404 : 400 });
   }
@@ -226,8 +244,8 @@ router.post('/:id/reject', asyncHandler(async (req, res) => {
 // DELETE /api/memory/:id - Delete a memory
 router.delete('/:id', asyncHandler(async (req, res) => {
   const { id } = validateRequest(memoryIdParamSchema, req.params);
-  const hard = req.query.hard === 'true';
-  const result = await (hard ? memory.purgeMemory(id) : memory.archiveMemory(id));
+  const { hard, ...options } = validateRequest(memoryDeleteQuerySchema, req.query);
+  const result = await (hard === 'true' ? memory.purgeMemory(id) : memory.archiveMemory(id, options));
   res.json(result);
 }));
 

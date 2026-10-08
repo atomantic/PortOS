@@ -47,6 +47,12 @@ const mocks = vi.hoisted(() => ({
   finishPreflightDispatch: vi.fn(async () => null),
 }));
 
+vi.mock('./onDemandHandoff.js', () => ({
+  reconcileOnDemandHandoffs: vi.fn(async () => {}),
+  claimOnDemandRequest: vi.fn(async (id) => { const request = await mocks.clearOnDemandRequest(id); return request ? { request, token: id } : null; }),
+  settleOnDemandRequest: vi.fn(async () => true),
+}));
+
 vi.mock('./apps.js', () => ({ getActiveApps: (...a) => mocks.getActiveApps(...a) }));
 vi.mock('./cosState.js', () => ({
   isImprovementEnabled: (...a) => mocks.isImprovementEnabled(...a),
@@ -308,6 +314,26 @@ describe.each(ENGINES)('%s — per-project capacity defers before preparation', 
 });
 
 describe.each(ENGINES)('%s — blocked-duplicate revive (#2614)', (_name, makeAdapter) => {
+  it('dispatches a Deep resume with the persisted audit text and retained-worktree pointer', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
+    mocks.prepareManagedAppImprovementTask.mockResolvedValue({ task: { id: 'fresh', description: 'New volatile preload', metadata: { app: APP.id, auditDepth: 'deep' } } });
+    mocks.addTask.mockResolvedValue({ id: 'blocked-deep', duplicate: true, status: 'blocked' });
+    const stored = { id: 'blocked-deep', status: 'pending', description: 'Original audit instructions', metadata: { auditDepth: 'deep', existingBranch: 'cos/retained', resumeWorktreePath: '/fixture/tree' } };
+    mocks.reviveBlockedTask.mockResolvedValueOnce(stored);
+    const { spawned, adapter } = makeAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(spawned).toEqual([stored]);
+  });
+
+  it('does not emit a spawn when revival was refused', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
+    mocks.addTask.mockResolvedValue({ id: 'blocked-7', duplicate: true, status: 'blocked' });
+    mocks.reviveBlockedTask.mockResolvedValueOnce({ error: 'Cleanup remains active' });
+    const { spawned, adapter } = makeAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(spawned).toEqual([]);
+  });
+
   it('revives the blocked twin and emits it under the existing task id', async () => {
     mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
     mocks.addTask.mockResolvedValue({ id: 'blocked-7', duplicate: true, status: 'blocked' });
@@ -702,5 +728,52 @@ describe('atomic on-demand preparation ownership', () => {
     expect(mocks.startPreflightCard).toHaveBeenCalledWith(expect.objectContaining({
       targetPullRequest: claimed.targetPullRequest,
     }));
+  });
+});
+
+it('settles burn preparation failures and successful task persistence without leaving a live claim', async () => {
+  const { settleOnDemandRequest } = await import('./onDemandHandoff.js');
+  mocks.getOnDemandRequests.mockResolvedValue([appRequest({ origin: 'quota-burn', burn: { family: 'codex', stepId: 'step' } })]);
+  mocks.prepareManagedAppImprovementTask.mockRejectedValueOnce(new Error('preparation failed'));
+  const { adapter } = generatorAdapter({});
+  await expect(drainOnDemandRequests({ state: STATE }, adapter)).rejects.toThrow('preparation failed');
+  expect(settleOnDemandRequest).toHaveBeenLastCalledWith(expect.objectContaining({ request: expect.objectContaining({ id: 'req-1' }) }), { taskId: null, reason: 'Request preparation failed; resume explicitly.' });
+  await drainOnDemandRequests({ state: STATE }, adapter);
+  expect(settleOnDemandRequest).toHaveBeenLastCalledWith(expect.anything(), { taskId: 'persisted-1', reason: null });
+});
+
+
+it('refuses an unrelated active duplicate instead of claiming its delivery', async () => {
+  const { settleOnDemandRequest } = await import('./onDemandHandoff.js');
+  mocks.getOnDemandRequests.mockResolvedValue([appRequest({ origin: 'quota-burn', burn: { family: 'codex', stepId: 'step' } })]);
+  mocks.addTask.mockResolvedValue({ id: 'other-task', duplicate: true, status: 'in_progress', metadata: { quotaBurnRequestId: 'other-request' } });
+  const { adapter, spawned } = generatorAdapter({});
+  await drainOnDemandRequests({ state: STATE }, adapter);
+  expect(spawned).toEqual([]);
+  expect(settleOnDemandRequest).toHaveBeenLastCalledWith(expect.anything(), { taskId: null, reason: 'Request produced no task; resume explicitly.' });
+});
+
+
+describe.each(ENGINES)('%s — historical queued Deep compatibility', (_name, makeAdapter) => {
+  it('durably refuses a saved legacy invocation before preparation without changing its evidence', async () => {
+    const request = appRequest({ origin: 'quota-burn', burn: { family: 'codex', stepId: 'old-step', overrides: { params: { auditDepth: 'deep', deepAuditId: 'retained-ledger' } } } });
+    const saved = JSON.stringify(request);
+    mocks.getOnDemandRequests.mockResolvedValue([request]);
+    const { adapter, spawned } = makeAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(mocks.prepareManagedAppImprovementTask).not.toHaveBeenCalled();
+    expect(mocks.generateSelfImprovementTaskForType).not.toHaveBeenCalled();
+    expect(mocks.addTask).not.toHaveBeenCalled();
+    expect(mocks.applyOnDemandRunResets).not.toHaveBeenCalled();
+    expect(spawned).toEqual([]);
+    expect((await import('./onDemandHandoff.js')).settleOnDemandRequest).toHaveBeenCalledWith(expect.objectContaining({ request }), { taskId: null, reason: 'Historical Deep requests are read-only; start a new Deep audit.' });
+    expect(JSON.stringify(request)).toBe(saved);
+  });
+  it('dispatches an explicitly marked new extended request', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest({ origin: 'quota-burn', burn: { family: 'codex', stepId: 'new-step', overrides: { params: { auditDepth: 'deep', auditWorkflow: 'extended-v1' } } } })]);
+    const { adapter, spawned } = makeAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(mocks.prepareManagedAppImprovementTask).toHaveBeenCalledOnce();
+    expect(spawned).toHaveLength(1);
   });
 });

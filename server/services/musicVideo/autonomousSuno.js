@@ -303,7 +303,7 @@ async function watchDownloadsDir(listDownloads, baseline, signal, pollMs) {
 /** One bounded export, including waiting for the browser to finish saving. */
 async function downloadSunoAudio(page, songId, path, {
   timeoutMs = SUNO_AUDIO_TIMEOUT_MS, signal, validateAudio = validateSunoAudio,
-  listDownloads = defaultListDownloads, downloadPollMs = DOWNLOAD_POLL_MS, onProgress,
+  listDownloads = defaultListDownloads, downloadPollMs = DOWNLOAD_POLL_MS, onProgress, onSongPage,
 } = {}) {
   const controller = new AbortController();
   const deadline = Date.now() + timeoutMs;
@@ -340,6 +340,12 @@ async function downloadSunoAudio(page, songId, path, {
   try {
     await bounded('open-song', () => page.goto(sunoSongUrl(songId), { waitUntil: 'domcontentloaded', timeout: remaining() }));
     if (/sign-?in|login|accounts\./i.test(page.url())) throw loginRequired(LABEL, SUNO_CREATE_URL);
+    // The signed-in page also carries a private song's title and lyrics; a
+    // caller that wants them gets the HTML. Advisory: it never fails the export.
+    if (onSongPage) {
+      const html = await bounded('read-page', () => page.content()).catch(() => null);
+      if (html) { try { onSongPage(html); } catch { /* advisory */ } }
+    }
     await bounded('open-options', () => page.getByRole('button', { name: 'More options', exact: true }).first().click({ timeout: remaining() }));
     await bounded('open-download', () => page.getByRole('menuitem', { name: 'Download', exact: true }).click({ timeout: remaining() }));
     for (const name of ['M4A', 'MP3', 'WAV', 'MP4 video asset']) {

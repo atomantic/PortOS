@@ -1,3 +1,4 @@
+import { auditWorkflow } from './auditWorkflow.js';
 /**
  * Chief-of-Staff (CoS) Zod schemas (split out of validation.js, issue #1831).
  *
@@ -553,6 +554,9 @@ export const createCosJobSchema = z.object({
     // useWorktree/openPR/simplify keys above. Zod strips unknown keys, so
     // without this row the flag never survives a job create/update.
     fileIssues: z.boolean().optional(),
+    auditDepth: z.enum(['quick', 'deep']).optional(),
+    auditWorkflow: z.literal('extended-v1').optional(),
+    deepAuditId: z.string().regex(/^[a-zA-Z0-9_-]{1,160}$/).optional(),
     // The two "lands no code" postures, which are NOT the same. `noCodeOutput`
     // = the deliverable is something the agent DOES during the run (files an
     // issue, calls an endpoint), so there is no branch and every commit/push/PR
@@ -1202,6 +1206,9 @@ export function sanitizeTaskMetadata(raw) {
     clean.prCompletion = raw.prCompletion;
     hasKeys = true;
   }
+  if (raw.auditWorkflow != null) { auditWorkflow(raw); clean.auditWorkflow = raw.auditWorkflow; hasKeys = true; }
+  if (['quick', 'deep'].includes(raw.auditDepth)) { clean.auditDepth = raw.auditDepth; hasKeys = true; }
+  if (typeof raw.deepAuditId === 'string' && /^[a-zA-Z0-9_-]{1,160}$/.test(raw.deepAuditId)) { clean.deepAuditId = raw.deepAuditId; hasKeys = true; }
   // Schedule dispatch must preserve the workflow and its reviewer pin. Reuse
   // the task-input schemas so command paths and argument bounds stay identical.
   for (const key of ['slashdoCommand', 'slashdoArgs']) {

@@ -76,7 +76,7 @@ export function normalizePost(existing = {}, input = {}) {
   if ('url' in input) post.url = typeof input.url === 'string' && input.url.trim() ? input.url.trim() : null;
   if ('reception' in input) post.reception = RECEPTIONS.includes(input.reception) ? input.reception : null;
   if ('notes' in input) post.notes = typeof input.notes === 'string' && input.notes.trim() ? input.notes.trim().slice(0, 2000) : null;
-  if (!post.postedAt && post.url) post.postedAt = new Date().toISOString();
+  if (!post.postedAt && (post.url || input.posted === true)) post.postedAt = new Date().toISOString();
   if ('reception' in input || 'notes' in input) post.ratedAt = new Date().toISOString();
   return post;
 }

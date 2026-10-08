@@ -224,6 +224,28 @@ describe('cosTaskStore.firstLine', () => {
 });
 
 describe('cosTaskStore.updateTask expectedStatus', () => {
+  it('keeps extended Deep retry cleanup owned and preserves its retained branch', async () => {
+    await addTask({ id: 'sys-deep-cleanup', description: 'Deep audit' }, 'internal');
+    await updateTask('sys-deep-cleanup', { status: 'in_progress', metadata: {
+      auditDepth: 'deep', auditWorkflow: 'extended-v1', retryPendingCleanup: 'agent-current',
+      existingBranch: 'cos/retained', resumedFromAgentId: 'agent-current', resumeWorktreePath: '/fixture/retained',
+    } }, 'internal');
+    expect(isReapableBlockedFailure(await getTaskById('sys-deep-cleanup'))).toBe(false);
+    expect(await reviveBlockedTask('sys-deep-cleanup', {}, 'internal')).toMatchObject({ error: expect.stringContaining('cleanup') });
+    const patch = { status: 'blocked', metadata: { retryPendingCleanup: undefined, blockedCategory: 'deep-audit-partial', existingBranch: 'cos/retained' } };
+    expect(await updateTask('sys-deep-cleanup', patch, 'internal', {
+      expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-old' },
+    })).toMatchObject({ statusChanged: true });
+    expect((await getTaskById('sys-deep-cleanup')).metadata.retryPendingCleanup).toBe('agent-current');
+    await updateTask('sys-deep-cleanup', patch, 'internal', {
+      expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-current' },
+    });
+    const resumed = await reviveBlockedTask('sys-deep-cleanup', {}, 'internal');
+    expect(resumed).toMatchObject({ status: 'pending', metadata: {
+      existingBranch: 'cos/retained', resumedFromAgentId: 'agent-current', resumeWorktreePath: '/fixture/retained',
+    } });
+  });
+
   it('does not apply a stale terminal update after a task has been claimed', async () => {
     const task = await addTask({ id: 'sys-rl-cas', description: 'Resolve a PR' }, 'internal');
     await updateTask(task.id, { status: 'in_progress' }, 'internal');
@@ -2597,4 +2619,27 @@ describe('shared development work admission', () => {
       .toMatchObject({ id: claim.id, duplicate: true });
     expect((await addTask({ description: 'Claim 42', app: 'different', claimFlow: true, claimTarget: '42' }, 'user')).duplicate).not.toBe(true);
   });
+});
+
+
+it('creates a fresh extended task rather than reviving a parked historical checkpoint', async () => {
+  const legacy = await addTask({ id: 'sys-legacy-audit', description: 'Audit example', status: 'blocked', metadata: { app: 'example', auditDepth: 'deep', deepAuditId: 'historic', blockedCategory: 'deep-audit-partial', existingBranch: 'cos/preserved' } }, 'internal', { raw: true });
+  const fresh = await addTask({ id: 'sys-extended-audit', description: 'Audit example', metadata: { app: 'example', auditDepth: 'deep', auditWorkflow: 'extended-v1' } }, 'internal', { raw: true });
+  expect(fresh.duplicate).not.toBe(true);
+  expect(fresh.id).not.toBe(legacy.id);
+  expect((await getTaskById(legacy.id)).metadata).toMatchObject({ deepAuditId: 'historic', existingBranch: 'cos/preserved' });
+  expect(await reviveBlockedTask(legacy.id, {}, 'internal')).toMatchObject({ error: expect.stringContaining('read-only') });
+  expect((await getTaskById(legacy.id)).status).toBe('blocked');
+});
+
+
+it('preserves custom Deep workflow through projection and non-raw persistence', async () => {
+  const { generatedJobTaskFields } = await import('../lib/autonomousJobTask.js');
+  const legacy = await addTask({ id: 'sys-old-custom', description: 'Custom deep audit', status: 'blocked', metadata: { app: 'example', auditDepth: 'deep', deepAuditId: 'historic', existingBranch: 'cos/preserved' } }, 'internal', { raw: true });
+  const fields = generatedJobTaskFields({ description: 'Custom deep audit', metadata: { app: 'example', auditDepth: 'deep', auditWorkflow: 'extended-v1', provider: 'codex', model: 'gpt-6-astra', effort: 'medium', openPR: true, useWorktree: true } });
+  const fresh = await addTask(fields, 'internal');
+  expect(fresh.duplicate).not.toBe(true);
+  expect((await getTaskById(fresh.id)).metadata).toMatchObject({ auditDepth: 'deep', auditWorkflow: 'extended-v1', provider: 'codex', model: 'gpt-6-astra', effort: 'medium', openPR: 'true', useWorktree: 'true' });
+  expect((await getTaskById(legacy.id)).metadata).toMatchObject({ deepAuditId: 'historic', existingBranch: 'cos/preserved' });
+  await expect(addTask(generatedJobTaskFields({ metadata: { auditDepth: 'deep', deepAuditId: 'historic' } }), 'internal')).rejects.toThrow('read-only');
 });

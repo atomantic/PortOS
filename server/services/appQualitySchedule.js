@@ -51,6 +51,9 @@ const VENDOR_SEGMENTS = /(^|\/)(node_modules|vendor|dist|build|out|coverage|\.ve
 const CAPABILITY_PATTERNS = {
   ui: [/\.(jsx|tsx|vue|svelte|astro)$/i, /\.(html|htm)$/i, /\.(css|scss|sass|less)$/i, /\.storyboard$/i, /\.xib$/i],
   typescript: [/\.(ts|tsx|mts|cts)$/i, /(^|\/)tsconfig(\.\w+)?\.json$/i],
+  // Preserve the TypeScript capability for API consumers, while typing audits
+  // also cover native and other statically typed source in mixed repositories.
+  typed: [/\.(ts|tsx|mts|cts|swift|rs|go|java|kt|kts|cs|scala|dart|c|h|cc|cpp|cxx|hpp|fs|fsx)$/i, /(^|\/)tsconfig(\.\w+)?\.json$/i],
   tests: [/\.(test|spec)\.[cm]?[jt]sx?$/i, /(^|\/)tests?\//i, /(^|\/)__tests__\//i, /(^|\/)test_[^/]+\.py$/i, /[^/]+_test\.(py|go|rb)$/i, /Tests\.swift$/i],
   dependencies: [/(^|\/)package\.json$/i, /(^|\/)requirements[^/]*\.txt$/i, /(^|\/)pyproject\.toml$/i, /(^|\/)Cargo\.toml$/i, /(^|\/)go\.mod$/i, /(^|\/)Gemfile$/i, /(^|\/)composer\.json$/i, /(^|\/)Package\.swift$/i, /(^|\/)pubspec\.yaml$/i],
   api: [/(^|\/)(routes?|api|controllers|handlers|endpoints)\//i, /\.proto$/i, /(^|\/)openapi[^/]*\.(ya?ml|json)$/i, /(^|\/)swagger[^/]*\.(ya?ml|json)$/i, /(^|\/)urls\.py$/i],
@@ -120,12 +123,12 @@ async function listRepoFiles(repoPath) {
  * @param {object} app - The managed app record (needs `repoPath`, optionally `uiPort`)
  * @returns {Promise<{ capabilities: Record<string, boolean>, scanned: number }>}
  */
-export async function detectRepoCapabilities(app) {
+export async function detectRepoCapabilities(app, { refresh = false } = {}) {
   const empty = Object.fromEntries(AUDIT_REPO_CAPABILITIES.map(key => [key, false]));
   if (!app?.repoPath) return { capabilities: empty, scanned: 0, complete: false };
 
   const cached = capabilityCache.get(app.repoPath);
-  const scan = cached && Date.now() - cached.at < CAPABILITY_TTL_MS
+  const scan = !refresh && cached && Date.now() - cached.at < CAPABILITY_TTL_MS
     ? cached.value
     : await scanRepoCapabilities(app.repoPath);
   if (scan !== cached?.value) capabilityCache.set(app.repoPath, { at: Date.now(), value: scan });

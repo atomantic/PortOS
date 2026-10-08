@@ -117,6 +117,7 @@ export * from './creativeLatitude.js';
 export * as editorial from './editorial/index.js';
 export * from './familySettingsMap.js';
 export * from './fableLoomGraph.js';
+export * from './cameraMovements.js';
 export * from './fableLoomCameraMovements.js';
 export * from './fableLoomPlayback.js';
 export * from './fableLoomParticipation.js';
@@ -258,6 +259,7 @@ export * from './quotaBurnLegacyConversion.js';
 export * from './quotaBurnOrigin.js';
 export * from './quotaBurnPresets.js';
 export * from './auditCatalog.js';
+export * from './auditSourceEvidence.js';
 export * from './quotaBurnTaskRef.js';
 export * from './quotaBurnValidation.js';
 export * from './quotaReset.js';
@@ -652,6 +654,7 @@ export * from './dispatchLabels.js';
 export * from './distrokidForm.js';
 export * from './distrokidGenres.js';
 export * from './sunoPage.js';
+export * from './sunoSong.js';
 export * from './sunoSongPicker.js';
 export * from './domainAutonomy.js';
 export * from './domainBudgets.js';
@@ -801,6 +804,7 @@ export * from './databaseRestoreRecovery.js';
 export * from './databaseWriterRegistry.js';
 
 export * from './musicVideoCreativeContext.js';
+export * from './musicVideoCharacterStyles.js';
 export * from './moodBoardStyleContext.js';
 export * from './musicVideoAutomation.js';
 export * from './musicVideoAutonomous.js';
@@ -828,6 +832,7 @@ export * from './imageLimits.js';
 export * from './musicVideoActionContract.js';
 export * from './musicVideoGrade.js';
 export * from './musicVideoDependencies.js';
+export * from './musicVideoExcerptRange.js';
 
 export * from './musicVideoPlateEvidence.js';
 export * from './codeAnimationProjects.js';
@@ -854,3 +859,8 @@ export * from './speechMatch.js';
 export * from './musicVideoReviewDraft.js';
 export * from './backupSharedAdmission.js';
 export * from './runtimeFilePublication.js';
+
+export * from './deepAudit.js';
+export * from './deepAuditCoverage.js';
+
+export * from './auditWorkflow.js';

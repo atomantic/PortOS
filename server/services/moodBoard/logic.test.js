@@ -23,6 +23,9 @@ import {
   appendImportedItems,
   externalImageItems,
   applyLocalizedImageUrls,
+  claimItemRender,
+  settleItemRender,
+  applyRenderedItem,
 } from './logic.js';
 
 describe('buildBoardRecord', () => {
@@ -537,5 +540,46 @@ describe('re-hosting external media', () => {
   it('returns the same board when nothing matches', () => {
     const b = mk();
     expect(applyLocalizedImageUrls(b, [{ id: 'zzz', from: 'x', to: 'y' }])).toEqual({ board: b, changed: 0 });
+  });
+});
+
+describe('text note render lifecycle (#10531)', () => {
+  const note = { id: 'n1', type: 'text', text: 'Palette: violet and cyan', caption: null, source: 'autonomous music video', createdAt: '2026-01-01T00:00:00.000Z' };
+  const board = () => ({ id: 'mb-1', items: [{ id: 'i0', type: 'image', mediaKey: 'image:a.png' }, note, { id: 'n2', type: 'text', text: 'Motif' }] });
+
+  it('turns the claimed note into an image in place, keeping its words as the caption', () => {
+    const claimed = claimItemRender(board(), 'n1').board;
+    const queued = settleItemRender(claimed, 'n1', { jobId: 'job-1', status: 'queued' }).board;
+    const { board: done, item, changed } = applyRenderedItem(queued, 'n1', { jobId: 'job-1', filename: 'job-1.png', prompt: ' the prompt ' });
+    expect(changed).toBe(true);
+    expect(done.items.map((it) => it.id)).toEqual(['i0', 'n1', 'n2']);
+    expect(item).toMatchObject({
+      id: 'n1', type: 'image', mediaKey: 'image:job-1.png', text: null, prompt: 'the prompt',
+      caption: note.text, source: note.source, createdAt: note.createdAt,
+    });
+    expect(item.render).toBeUndefined();
+  });
+
+  it('drops a stale job once a newer render owns the note', () => {
+    const queued = settleItemRender(claimItemRender(board(), 'n1').board, 'n1', { jobId: 'job-2', status: 'queued' }).board;
+    expect(applyRenderedItem(queued, 'n1', { jobId: 'job-1', filename: 'job-1.png' }).changed).toBe(false);
+    expect(settleItemRender(queued, 'n1', { jobId: 'job-1', status: 'failed', error: 'x' }).changed).toBe(false);
+  });
+
+  it('refuses a duplicate render while the job lives, and replaces a dead one', () => {
+    const queued = settleItemRender(claimItemRender(board(), 'n1').board, 'n1', { jobId: 'job-1', status: 'queued' }).board;
+    expect(() => claimItemRender(queued, 'n1', { isLive: () => true })).toThrow(expect.objectContaining({ code: 'MOOD_BOARD_RENDER_BUSY' }));
+    expect(claimItemRender(queued, 'n1', { isLive: () => false }).item.render).toMatchObject({ status: 'queued', jobId: null });
+  });
+
+  it('expires a claim that never got its job id', () => {
+    const claimed = claimItemRender(board(), 'n1', { now: '2026-01-01T00:00:00.000Z' }).board;
+    expect(() => claimItemRender(claimed, 'n1', { now: '2026-01-01T00:05:00.000Z' })).toThrow(expect.objectContaining({ code: 'MOOD_BOARD_RENDER_BUSY' }));
+    expect(claimItemRender(claimed, 'n1', { now: '2026-01-01T00:11:00.000Z' }).item.render.queuedAt).toBe('2026-01-01T00:11:00.000Z');
+  });
+
+  it('only renders text notes', () => {
+    expect(() => claimItemRender(board(), 'i0')).toThrow(expect.objectContaining({ code: 'MOOD_BOARD_ITEM_NOT_TEXT' }));
+    expect(() => claimItemRender(board(), 'missing')).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }));
   });
 });

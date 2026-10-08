@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import ProductionReviewContext from './ProductionReviewContext.jsx';
 import { formatTimecode } from '../../utils/formatters.js';
+import { summarizeStoryboardProblems } from '../../lib/musicVideoStages.js';
 
 const EMPTY = { cast: '', environments: '', visualLanguage: '', motionLanguage: '', guideArtifactId: null,
   lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [] };
@@ -89,13 +90,15 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
       excerptId: excerpt.id, filename: excerpt.filename } : undefined);
   };
 
+  // Per-shot storyboard problems arrive one sentence per shot; the card counts them instead (the preview is the review).
+  const shownProblems = stage => stage === 'storyboard' ? summarizeStoryboardProblems(ready[stage].problems) : ready[stage].problems || [];
   // One line under the action buttons saying what approval still needs, or nothing when it can be given.
   const approvalHelp = stage => {
     if (!ready) return 'Loading…';
     if (ready[stage].approved) return null;
     if (dirty) return 'Save your planning edits first.';
     if (review.busy) return 'Working…';
-    const problems = ready[stage].problems;
+    const problems = shownProblems(stage);
     // With no current proof, the Render button already says what to do; repeating it as a warning reads as required.
     if (stage === 'proof' && proofNeedsRender) return null;
     if (problems.length) return problems.length > 1 ? `${problems[0]} (+${problems.length - 1} more below)` : problems[0];
@@ -110,7 +113,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   // (it isn't while edits are unsaved or an action is running). A proof with nothing rendered lists none.
   const listedProblems = stage => {
     if (!ready || ready[stage].approved || (stage === 'proof' && proofNeedsRender)) return [];
-    const problems = ready[stage].problems || [];
+    const problems = shownProblems(stage);
     return dirty || review.busy ? problems : problems.slice(1);
   };
   // A link to another step's section crosses steps through the page; within this step it just unfolds the target.
@@ -239,6 +242,11 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         </div>
         {approvalHelp(key) && <p id={fieldId(`${key}-approval-help`)} role="status" className="mt-1 text-sm text-port-warning">{approvalHelp(key)}</p>}
         {listedProblems(key).length > 0 && <ul className="mt-1 list-disc pl-5 text-xs text-port-text-muted">{listedProblems(key).map(problem => <li key={problem}>{problem}</li>)}</ul>}
+        {/* Camera variety (#10589) is advice, never a blocker on approval. */}
+        {key === 'storyboard' && ready?.storyboard.camera?.notes?.length > 0 && <div role="note" aria-label="Camera variety notes" className="mt-2 text-xs text-port-text-muted">
+          <p>Camera notes (they don&apos;t block approval):</p>
+          <ul className="list-disc pl-5">{ready.storyboard.camera.notes.map(note => <li key={note}>{note}</li>)}</ul>
+        </div>}
         {key === 'proof' ? proofContent : <ProductionReviewContext stage={key} project={project} onOpenArtifact={onOpenArtifact} onArtReady={available => setVisibleArt(available ? artIdentity : null)} onSeek={onSeek} />}
         {openRequests(key).length > 0 && <div role="group" aria-label={`${label} change requests`} className="mt-2 space-y-2 rounded border border-port-warning p-2">
           <p className="text-sm">Resolve these change requests to approve.</p>

@@ -72,3 +72,9 @@ describe('maintenance sequence workflow', () => {
     expect(recordQuotaBurnJobCompletion).not.toHaveBeenCalled();
   });
 });
+
+
+it.each([undefined, { complete: false }])('never advances Deep quota sequences with absent or partial proof: %j', async deepAudit => {
+  await completeQuotaBurnSequenceStep({ result: { success: true, deepAudit }, metadata: { taskAuditDepth: 'deep', taskQuotaBurnFamily: 'codex', taskQuotaBurnStepId: 'audit' } });
+  expect(recordQuotaBurnJobCompletion).not.toHaveBeenCalled();
+});

@@ -1,3 +1,4 @@
+import { newAuditMetadata } from '../lib/auditWorkflow.js';
 import { auditQualityInstructions } from '../lib/auditQuality.js';
 import { isPrivateSecurityTask, PRIVATE_SECURITY_DELIVERY } from '../lib/privateSecurityPolicy.js';
 /**
@@ -59,7 +60,7 @@ import { isRecoveryTask } from './recoveryTasks.js';
 import { getCodeReviewDefaults } from './codeReview.js';
 import { getSkipReason } from './cosTaskClaim.js';
 import { ensureInstanceId } from './instanceIdentity.js';
-import { PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
+import { PR_COMPLETIONS, PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
 import { resolveTrackerFilingBlock } from '../lib/workTracker.js';
 import {
   isAuditTaskType,
@@ -1497,6 +1498,7 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
   const sanitizedMeta = sanitizeTaskMetadata(interval.taskMetadata);
   if (sanitizedMeta) {
     Object.assign(metadata, sanitizedMeta);
+    Object.assign(metadata, newAuditMetadata(metadata));
   }
 
   // Use configured model/provider if specified, otherwise use default
@@ -1666,6 +1668,9 @@ function initializePipelineMetadata(metadata) {
   const stageReadOnly = stage0.readOnly ?? false;
   for (const flag of PIPELINE_STAGE_BEHAVIOR_FLAGS) {
     if (metadata[flag] !== undefined) metadata.pipeline.taskDefaults[flag] = metadata[flag];
+    // Draft delivery constrains the whole run, including read-only stages whose
+    // audit output could otherwise publish an automatically merged snapshot.
+    if (flag === 'prCompletion' && metadata.pipeline.taskDefaults.prCompletion === PR_COMPLETIONS.DRAFT) continue;
     if (flag in stage0) {
       metadata[flag] = stage0[flag];
     } else if (stageReadOnly) {
@@ -2534,6 +2539,7 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // pass, so an invocation can carry nothing a stored override could not.
   const sanitizedRunMeta = sanitizeTaskMetadata(runOverrides);
   if (sanitizedRunMeta) Object.assign(metadata, sanitizedRunMeta);
+  Object.assign(metadata, newAuditMetadata(metadata));
 
   // Audit applicability bail-out — before preflights or a spawn slot. On the
   // SCHEDULED lane, a quality audit this repository cannot have findings for (a
@@ -2638,6 +2644,7 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // Tracker-filing types (reference-watch, or an audit type with fileIssues):
   // the {trackerInstructions} block for the app's resolved work tracker.
   const fileIssues = isFileIssuesMode(taskType, metadata);
+  if (isAuditTaskType(taskType)) metadata.noChangeSuccess = !fileIssues;
   const trackerFiling = await resolveTrackerFilingBlock(app, taskType, { fileIssues });
   if (trackerFiling.workTracker) {
     // Traceability + deliverable posture, derived from the SAME resolved tracker

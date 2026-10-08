@@ -13,6 +13,9 @@ vi.mock('../../lib/clipboard.js', () => ({ copyToClipboard: vi.fn() }));
 
 import PublishKitPanel from './PublishKitPanel.jsx';
 
+// Publish cards and platform rows fold when done; open everything so a test sees the whole page.
+const expandAll = () => { for (let b = screen.queryAllByRole('button', { expanded: false }); b.length; b = screen.queryAllByRole('button', { expanded: false })) b.forEach((x) => fireEvent.click(x)); };
+
 const hook = (over = {}) => ({
   building: false, progress: 0, build: vi.fn(), drafting: false, saving: false,
   draftCopy: vi.fn(async () => null), saveCopy: vi.fn(async () => null), selectThumbnail: vi.fn(async () => null),
@@ -30,6 +33,7 @@ describe('PublishKitPanel (#9281)', () => {
   it('builds only once there is a final render', () => {
     const k = hook();
     const { rerender } = render(<PublishKitPanel project={{ id: 'mv-1' }} publishKit={k} />);
+    expandAll();
     expect(screen.getByRole('button', { name: /Build publishing kit/ })).toBeDisabled();
     rerender(<PublishKitPanel project={{ id: 'mv-1', renderHistoryId: 'rh-1' }} publishKit={k} />);
     fireEvent.click(screen.getByRole('button', { name: /Build publishing kit/ }));
@@ -40,6 +44,7 @@ describe('PublishKitPanel (#9281)', () => {
     const k = hook();
     const project = { id: 'mv-1', name: 'Example Song', renderHistoryId: 'rh-1', lyricCues: [{ text: 'a line', startSec: 1 }, { text: 'untimed' }], productionRuns: [{ usage: { spentUsd: 4.5 } }] };
     render(<PublishKitPanel project={project} publishKit={k} />);
+    expandAll();
     fireEvent.change(screen.getByLabelText(/Making-of notes/), { target: { value: 'hummed it in the car' } });
     fireEvent.change(screen.getByLabelText(/Full video URL/), { target: { value: 'https://example.com/v' } });
     fireEvent.change(screen.getByLabelText(/Song URL/), { target: { value: 'not a url' } });
@@ -65,6 +70,7 @@ describe('PublishKitPanel (#9281)', () => {
     const k = hook();
     const publishKit = { copy: { x: { hook: 'Mine.' } }, copyDraftedAt: '2026-01-01T00:00:00.000Z', copyEditedAt: '2026-01-02T00:00:00.000Z' };
     render(<PublishKitPanel project={{ id: 'mv-1', name: 'Example Song', publishKit }} publishKit={k} enabledTargets={['x']} />);
+    expandAll();
     fireEvent.click(screen.getByRole('button', { name: /Redraft copy/ }));
     expect(k.draftCopy).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Keep mine' }));
@@ -77,6 +83,7 @@ describe('PublishKitPanel (#9281)', () => {
   it('cannot tick lyrics or spend the project does not have, and lets you write a post without drafting', () => {
     const k = hook();
     render(<PublishKitPanel project={{ id: 'mv-1', name: 'Example Song', renderHistoryId: 'rh-1', lyricCues: [{ text: 'untimed' }] }} publishKit={k} enabledTargets={['x']} />);
+    expandAll();
     expect(screen.getByLabelText(/Lyrics/)).toBeDisabled();
     expect(screen.getByLabelText(/Generation spend/)).toBeDisabled();
     const hook_ = screen.getByLabelText('Hook post (no links)');
@@ -88,6 +95,7 @@ describe('PublishKitPanel (#9281)', () => {
   it('shows the built kit, saves an edited field on blur and picks a thumbnail', () => {
     const k = hook();
     render(<PublishKitPanel project={{ id: 'mv-1', renderHistoryId: 'rh-1', publishKit: built }} publishKit={k} />);
+    expandAll();
     expect(screen.getByText('X / social 1080p (12 Mbps)')).toBeTruthy();
     expect(screen.getByText(/0:00 Opening line/)).toBeTruthy();
     const tags = screen.getByLabelText('Tags (comma-separated)');
@@ -102,6 +110,7 @@ describe('PublishKitPanel (#9281)', () => {
     const k = hook();
     const project = { id: 'mv-1', name: 'Example Song', publishKit: built, castAndSets: { images: { character: { imageId: 'sheet.png' } } } };
     const { rerender } = render(<PublishKitPanel project={project} publishKit={k} />);
+    expandAll();
     expect(screen.getByText('No cover yet')).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Title on the cover'), { target: { value: 'Example Retitle' } });
     fireEvent.click(screen.getByRole('button', { name: 'Make the cover from Cast & Sets: character' }));

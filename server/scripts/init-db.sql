@@ -32,6 +32,46 @@ CREATE TABLE IF NOT EXISTS memories (
 -- Schema upgrades: add columns that may not exist on older installs
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS sync_sequence BIGSERIAL;
 
+-- Machine-local memory history (#10494)
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS version INT NOT NULL DEFAULT 1;
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS archive_reason TEXT;
+CREATE TABLE IF NOT EXISTS memory_versions (
+  memory_id UUID NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+  version INT NOT NULL,
+  content TEXT NOT NULL,
+  summary TEXT,
+  type VARCHAR(20) NOT NULL,
+  category VARCHAR(100),
+  tags TEXT[],
+  changed_by VARCHAR(100),
+  change_reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (memory_id, version)
+);
+CREATE OR REPLACE FUNCTION record_memory_version() RETURNS TRIGGER AS $$
+BEGIN
+  IF ROW(OLD.content, OLD.summary, OLD.type, OLD.category, OLD.tags)
+     IS DISTINCT FROM ROW(NEW.content, NEW.summary, NEW.type, NEW.category, NEW.tags) THEN
+    INSERT INTO memory_versions
+      (memory_id, version, content, summary, type, category, tags, changed_by, change_reason)
+    VALUES (OLD.id, OLD.version, OLD.content, OLD.summary, OLD.type, OLD.category, OLD.tags,
+      NULLIF(current_setting('portos.memory_changed_by', true), ''),
+      NULLIF(current_setting('portos.memory_change_reason', true), ''));
+    NEW.version := OLD.version + 1;
+  ELSE
+    NEW.version := OLD.version;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'memories'::regclass AND tgname = 'memory_version_history') THEN
+    CREATE TRIGGER memory_version_history BEFORE UPDATE ON memories
+    FOR EACH ROW EXECUTE FUNCTION record_memory_version();
+  END IF;
+END$$;
+
 -- Origin instance tracking for federation
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS origin_instance_id VARCHAR(36);
 CREATE INDEX IF NOT EXISTS idx_memories_origin_instance ON memories (origin_instance_id);
@@ -2392,3 +2432,12 @@ CREATE TABLE IF NOT EXISTS peer_execution_generation_floors (
     PRIMARY KEY (host_instance_id, peer_instance_id, action),
     CHECK (host_instance_id <> peer_instance_id)
   );
+
+-- Machine-local Deep audit checkpoints and immutable evidence history.
+CREATE TABLE IF NOT EXISTS deep_audit_ledgers (
+      id TEXT PRIMARY KEY,
+      app_id TEXT NOT NULL,
+      category TEXT NOT NULL,
+      ledger JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );

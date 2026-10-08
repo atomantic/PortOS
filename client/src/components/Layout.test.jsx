@@ -516,7 +516,7 @@ describe('Layout — nav footer', () => {
 describe('Layout — Game workspace scroll mode', () => {
   it('makes only the Game detail route full-bleed', async () => {
     const detail = await renderLayout('/game/example-game');
-    expect(detail.container.querySelector('#main-content')?.className).toContain('overflow-hidden');
+    expect(detail.container.querySelector('#main-content')?.className).toContain('overflow-clip-safe');
     detail.unmount();
 
     const index = await renderLayout('/game');
@@ -540,7 +540,7 @@ describe('Layout — Data Manager scroll mode', () => {
   it('gives /data the bare full-width main, and leaves /devtools/datadog padded', async () => {
     const dataManager = await renderLayout('/data');
     const dataMain = dataManager.container.querySelector('#main-content');
-    expect(dataMain?.className).toContain('overflow-hidden');
+    expect(dataMain?.className).toContain('overflow-clip-safe');
     expect(dataMain?.className).not.toContain('overflow-auto');
     expect(dataMain?.className).not.toContain('p-4');
     dataManager.unmount();

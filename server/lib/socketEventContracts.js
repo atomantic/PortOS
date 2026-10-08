@@ -57,6 +57,32 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     direction: 'server-to-client', summary: 'Voice library or runtime setup changed; refetch authenticated state.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  'voice:fine-tune:updated': {
+    direction: 'server-to-client',
+    summary: 'One voice fine-tuning job after a status change, a sealed checkpoint, or throttled training progress.',
+    payloadSchema: {
+      type: 'object',
+      required: ['profileId', 'job'],
+      properties: {
+        profileId: { type: 'string' },
+        job: {
+          type: 'object',
+          required: ['id', 'profileId', 'status', 'checkpoints'],
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            profileId: { type: 'string' },
+            status: { type: 'string', enum: ['running', 'completed', 'failed', 'cancelled', 'interrupted'] },
+            progress: { type: ['number', 'null'] },
+            step: { type: ['integer', 'null'] },
+            totalSteps: { type: ['integer', 'null'] },
+            error: { type: ['string', 'null'] },
+            processActive: { type: 'boolean' },
+            checkpoints: { type: 'array', items: { type: 'object' } },
+          },
+        },
+      },
+    },
+  },
   'fleet-host:subscribe': {
     direction: 'client-to-server', summary: 'Observe local fleet host readiness while this operator socket is subscribed.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
@@ -354,6 +380,21 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
         finishedAt: { type: ['string', 'null'] },
       },
       required: ['boardId', 'status'],
+      additionalProperties: false,
+    },
+  },
+  'mood-board:item-render': {
+    direction: 'server-to-client',
+    summary: 'A mood board text note render was queued, finished (the note is now an image item) or failed; reload the board.',
+    payloadSchema: {
+      type: 'object',
+      properties: {
+        boardId: { type: 'string' },
+        itemId: { type: 'string' },
+        status: { type: 'string', enum: ['queued', 'done', 'failed'] },
+        error: { type: 'string' },
+      },
+      required: ['boardId', 'itemId', 'status'],
       additionalProperties: false,
     },
   },

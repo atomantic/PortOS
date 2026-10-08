@@ -1,5 +1,6 @@
 import PlateComparison from './PlateComparison.jsx';
 import ShotActionInspector from './ShotActionInspector.jsx';
+import SceneCameraControls from './SceneCameraControls.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { useEffect, useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, Scissors } from 'lucide-react';
@@ -8,11 +9,14 @@ import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import PerformanceEvidence from './PerformanceEvidence.jsx';
 import { planPerformanceRepair } from '../../lib/musicVideoShotTiming.js';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
-import { MUSIC_VIDEO_VISUAL_LAYERS, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
+import { MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
 
 // #8985: what a composed render shows for this scene's span.
 const LAYER_LABELS = { footage: 'Footage', still: 'Still image', card: 'Title card', code: 'Code-drawn' };
 const STILL_MOVE_LABELS = [['hold', 'Hold'], ['push', 'Push in'], ['pan', 'Pan']];
+// #10583: the shared lyric type's zone and style for this shot (composition documents).
+const TEXT_ZONE_LABELS = { 'lower-left': 'Lower left', 'upper-right': 'Upper right', upper: 'Upper centre', lower: 'Lower centre', center: 'Centre', none: 'No lyrics' };
+const LYRIC_ROLE_LABELS = { line: 'Sung line', hook: 'Hook slam', stamp: 'Stamp', data: 'Data caption' };
 import {
   falSceneTake, grokCoverage, isPerformanceScene, performanceBlockedReason, performanceCapability, planPerformanceWindow, shotSplitLimit,
 } from '../../lib/musicVideoShotTiming.js';
@@ -287,7 +291,8 @@ export default function SceneCard({
             <>
               <label htmlFor={fieldId('move')}>Move</label>
               <select id={fieldId('move')} value={scene.stillMove || 'hold'} onChange={(e) => applyPatch({ stillMove: e.target.value })}
-                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0">
+                disabled={!!scene.camera?.move} title={scene.camera?.move ? 'The planned camera move drives this still.' : undefined}
+                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0 disabled:opacity-50">
                 {STILL_MOVE_LABELS.map(([value, text]) => <option key={value} value={value}>{text}</option>)}
               </select>
             </>
@@ -307,7 +312,26 @@ export default function SceneCard({
                 className="h-8 w-10 min-h-[44px] sm:min-h-0 bg-port-bg border border-port-border rounded" />
             </>
           )}
+          {documentComposition && (
+            <>
+              <label htmlFor={fieldId('text-zone')}>Lyrics</label>
+              <select id={fieldId('text-zone')} value={scene.textZone || ''} onChange={(e) => applyPatch({ textZone: e.target.value || null })}
+                title="Where the lyric type may sit in this shot, so it stays off the subject"
+                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0">
+                <option value="">Default zone</option>
+                {MUSIC_VIDEO_TEXT_ZONES.map((value) => <option key={value} value={value}>{TEXT_ZONE_LABELS[value]}</option>)}
+              </select>
+              <label htmlFor={fieldId('lyric-role')} className="sr-only">Lyric style</label>
+              <select id={fieldId('lyric-role')} value={scene.lyricRole || ''} onChange={(e) => applyPatch({ lyricRole: e.target.value || null })}
+                title="The lyric style of the lines sung over this shot"
+                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0">
+                <option value="">Style from the lyric sheet</option>
+                {MUSIC_VIDEO_LYRIC_ROLES.map((value) => <option key={value} value={value}>{LYRIC_ROLE_LABELS[value]}</option>)}
+              </select>
+            </>
+          )}
         </div>
+        {layer !== 'card' && <SceneCameraControls scene={scene} fieldId={fieldId} onEditLocal={onEditLocal} onSave={onSave} />}
         {layer !== 'footage' && !layered && (
           <p className="text-[11px] text-port-text-muted">
             {LAYER_LABELS[layer]} sections render in composed or document mode — a plain render plays this scene&apos;s footage.

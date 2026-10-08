@@ -37,8 +37,8 @@ describe('useMusicVideoLyricAlign', () => {
   it('rejects run() with the server message so the panel can show it', async () => {
     const { result } = renderHook(() => useMusicVideoLyricAlign());
     let outcome;
-    await act(async () => { outcome = result.current.run('p-1', 'lc-1'); });
-    expect(alignMusicVideoLyrics).toHaveBeenCalledWith('p-1', { cueId: 'lc-1' }, { silent: true });
+    await act(async () => { outcome = result.current.run('p-1', 'lc-1', { separateVocals: true }); });
+    expect(alignMusicVideoLyrics).toHaveBeenCalledWith('p-1', { cueId: 'lc-1', separateVocals: true }, { silent: true });
     const failed = expect(outcome).rejects.toThrow('whisper missing');
     act(() => { lastEventSource().emit({ type: 'error', error: 'whisper missing' }); });
     await failed;

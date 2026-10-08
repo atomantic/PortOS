@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({ tasks: [], requests: [], invoked: [], dispatch
 // verdict so these cases pin only the run's reaction to it.
 vi.mock('./cosState.js', () => ({ loadState: vi.fn(async () => ({ agents: {} })) }));
 vi.mock('./cosTaskStore.js', () => ({ getAllTasks: vi.fn(async () => ({ cos: { tasks: state.tasks }, user: { tasks: [] } })) }));
+vi.mock('./onDemandHandoff.js', () => ({ getOnDemandHandoffs: vi.fn(async () => ({})) }));
 vi.mock('./taskSchedule.js', () => ({ getOnDemandRequests: vi.fn(async () => state.requests) }));
 vi.mock('./apps.js', () => ({ getAppById: vi.fn(async (id) => (id === 'app-1' ? { id, name: 'Example App' } : null)) }));
 // The registry a run's provider gate resolves against. `opencode-tui` belongs to
@@ -57,6 +58,7 @@ const {
 
 const start = () => startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high' });
 const agentFor = (run, index, success = true) => ({
+  id: `agent-${index}`,
   taskId: `task-${index}`,
   result: { success },
   metadata: { taskQuotaBurnFamily: run.familyId, taskQuotaBurnStepId: run.steps[index].id, taskQuotaBurnMaintenanceRunId: run.id },
@@ -70,6 +72,45 @@ beforeEach(async () => {
   Object.assign(state, { tasks: [], requests: [], invoked: [], dispatch: null, probe: null, inapplicable: {} });
 });
 afterAll(cleanup);
+
+// Exercise the actual browser adapter's serialization before the route and
+// persisted run. Form tests replace this adapter, which hid a dropped policy.
+// Read it as source rather than importing client code into the server graph.
+it.each(['draft', 'inherit', undefined])('carries the browser delivery choice %s through HTTP into persisted dispatch', async prCompletion => {
+  const [{ readFile }, { parse }, { runInNewContext }, { default: express }, { request }, { default: routes }] = await Promise.all([
+    import('fs/promises'), import('@babel/parser'), import('node:vm'), import('express'),
+    import('../lib/testHelper.js'), import('../routes/cosScheduleRoutes.js'),
+  ]);
+  const source = await readFile(new URL('../../client/src/services/apiAgents.js', import.meta.url), 'utf8');
+  const ast = parse(source, { sourceType: 'module' });
+  const adapter = ast.program.body.flatMap(node => node.declaration?.declarations || [])
+    .find(node => node.id.name === 'startMaintenanceRun')?.init;
+  expect(adapter).toBeDefined();
+  const app = express();
+  app.use(express.json());
+  app.use('/cos', routes);
+  let wireBody;
+  const sendFromBrowser = runInNewContext(`(${source.slice(adapter.start, adapter.end)})`, {
+    request: (url, options) => {
+      expect(options.method).toBe('POST');
+      wireBody = JSON.parse(options.body);
+      return request(app).post(url).send(wireBody);
+    },
+  });
+  const response = await sendFromBrowser({
+    appId: 'app-1', providerId: 'codex', model: 'gpt-6-astra', effort: 'medium', mode: 'fix',
+    taskTypes: ['security'], auditDepth: 'deep', ...(prCompletion ? { prCompletion } : {}),
+  });
+  expect(wireBody.prCompletion).toBe(prCompletion);
+  expect(response.status).toBe(201);
+  const run = await getMaintenanceRun(response.body.run.id);
+  const expectedPolicy = prCompletion === 'inherit' ? null : 'draft';
+  expect(run).toMatchObject({ auditDepth: 'deep', auditWorkflow: 'extended-v1' });
+  expect(state.invoked[0].step.overrides.params.auditWorkflow).toBe('extended-v1');
+  expect(run.prCompletion).toBe(expectedPolicy);
+  expect(run.steps[0].overrides.params.prCompletion).toBe(expectedPolicy || undefined);
+  expect(state.invoked[0].step.overrides.params.prCompletion).toBe(expectedPolicy || undefined);
+});
 
 describe('manual maintenance run', () => {
   it('runs a check the user chose by name even where it does not apply', async () => {
@@ -405,4 +446,95 @@ it('dispatches independent quality runs while another run is pending and resumes
   expect((await getMaintenanceRun(performance.id)).status).toBe('completed');
   expect((await getMaintenanceRun(security.id)).status).toBe('running');
   expect((await getMaintenanceRun(ladder.id)).completed).toEqual({});
+});
+
+it('preserves draft delivery across persisted resume, provider edits and step completion', async () => {
+  const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-6-astra', effort: 'medium', mode: 'fix', prCompletion: 'draft', taskTypes: ['security', 'documentation'] });
+  expect((await getMaintenanceRun(run.id)).prCompletion).toBe('draft');
+  await stopMaintenanceRun(run.id);
+  await resumeMaintenanceRun(run.id);
+  await updateMaintenanceStep(run.id, run.steps[1].id, { providerId: 'codex', model: 'gpt-6-astra', effort: 'medium' });
+  await __onMaintenanceAgentCompleted(agentFor(run, 0));
+  expect(state.invoked.at(-1).step.overrides).toMatchObject({ model: 'gpt-6-astra', effort: 'medium', params: { fileIssues: false, useWorktree: true, openPR: true, prCompletion: 'draft' } });
+  expect((await getMaintenanceRun(run.id)).steps.map(s => s.taskRef.taskType)).toEqual(['security', 'documentation']);
+});
+
+
+it('extended Deep completes a useful run without exhaustive receipts and preserves provider and delivery pins', async () => {
+  const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-6-astra', effort: 'medium', mode: 'fix', prCompletion: 'draft', taskTypes: ['security'], auditDepth: 'deep' });
+  expect(run).toMatchObject({ auditDepth: 'deep', auditWorkflow: 'extended-v1' });
+  expect(run.deepAudits).toBeUndefined();
+  expect(state.invoked[0].step.overrides).toMatchObject({ model: 'gpt-6-astra', effort: 'medium', params: { auditWorkflow: 'extended-v1', fileIssues: false, useWorktree: true, prCompletion: 'draft' } });
+  await __onMaintenanceAgentCompleted(agentFor(run, 0, true));
+  expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'completed' });
+  expect(state.invoked).toHaveLength(1);
+});
+
+it('retains historical incomplete evidence and refuses every legacy resume or scheduler dispatch', async () => {
+  const { writeFile, mkdir } = await import('fs/promises');
+  const legacy = { id: 'legacy', appId: 'app-1', status: 'stopped', auditDepth: 'deep', steps: [], completed: {}, deepAudits: { old: { complete: false, satisfiedPasses: 3, requiredPasses: 12 } } };
+  await mkdir(join(tempRoot, 'cos'), { recursive: true });
+  await writeFile(join(tempRoot, 'cos', 'maintenance-runs.json'), JSON.stringify({ runs: [legacy] }));
+  await expect(resumeMaintenanceRun('legacy')).rejects.toMatchObject({ code: 'DEEP_AUDIT_HISTORICAL' });
+  await evaluateMaintenanceRun('legacy');
+  expect(state.invoked).toHaveLength(0);
+  expect(await getMaintenanceRun('legacy')).toMatchObject({ status: 'stopped', deepAudits: legacy.deepAudits, completed: {} });
+});
+
+it('Deep successful delivery alone never certifies discovery and deep proof alone never certifies failed delivery', async () => {
+  const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['security'], auditDepth: 'deep' });
+  const agent = agentFor(run, 0, false);
+  agent.result.deepAudit = { complete: true, discoveryComplete: true, deliveryComplete: true };
+  await __onMaintenanceAgentCompleted(agent);
+  expect((await getMaintenanceRun(run.id)).completed).toEqual({});
+});
+
+
+it('makes concurrent and repeated resume calls idempotent while a request is preparing', async () => {
+  const { run } = await start();
+  await stopMaintenanceRun(run.id);
+  const before = state.invoked.length;
+  const results = await Promise.all([resumeMaintenanceRun(run.id), resumeMaintenanceRun(run.id)]);
+  expect(results.filter(result => result.result.dispatched)).toHaveLength(1);
+  expect(state.invoked).toHaveLength(before + 1);
+  expect((await resumeMaintenanceRun(run.id)).result.dispatched).toBe(false);
+  expect(state.invoked).toHaveLength(before + 1);
+});
+
+it('holds the scheduler during durable preparation, then stops on refusal until explicit resume', async () => {
+  const { getOnDemandHandoffs } = await import('./onDemandHandoff.js');
+  const { run } = await start();
+  const claim = { request: { id: run.active.requestId, burn: { maintenanceRunId: run.id } }, claimedAt: new Date().toISOString(), status: 'preparing' };
+  getOnDemandHandoffs.mockResolvedValue({ [claim.request.id]: claim });
+  const before = state.invoked.length;
+  expect((await evaluateMaintenanceRun(run.id)).dispatched).toBe(false);
+  expect(state.invoked).toHaveLength(before);
+  await stopMaintenanceRun(run.id);
+  expect((await resumeMaintenanceRun(run.id)).result.dispatched).toBe(false);
+  claim.status = 'interrupted'; claim.reason = 'Server restarted during preparation; resume explicitly.';
+  await evaluateMaintenanceRun(run.id);
+  expect((await getMaintenanceRun(run.id)).status).toBe('stopped');
+  await __retryMaintenanceRuns();
+  expect(state.invoked).toHaveLength(before);
+  expect((await resumeMaintenanceRun(run.id)).result.dispatched).toBe(true);
+  expect(state.invoked).toHaveLength(before + 1);
+  getOnDemandHandoffs.mockResolvedValue({});
+});
+
+
+it('acknowledges the exact active request when refusal timestamps tie', async () => {
+  const { getOnDemandHandoffs } = await import('./onDemandHandoff.js');
+  const { run } = await start();
+  const claimedAt = new Date().toISOString();
+  const makeReceipt = (id, reason) => ({ request: { id, burn: { maintenanceRunId: run.id } }, claimedAt, status: 'refused', reason });
+  getOnDemandHandoffs.mockResolvedValue({
+    'older-request': makeReceipt('older-request', 'Older refusal'),
+    [run.active.requestId]: makeReceipt(run.active.requestId, 'Active refusal'),
+  });
+  await evaluateMaintenanceRun(run.id);
+  expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'stopped', reason: 'Active refusal' });
+  const resumed = await resumeMaintenanceRun(run.id);
+  expect(resumed.run.acknowledgedRequestId).toBe(run.active.requestId);
+  expect(resumed.result.dispatched).toBe(true);
+  getOnDemandHandoffs.mockResolvedValue({});
 });

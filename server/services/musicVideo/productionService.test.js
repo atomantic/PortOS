@@ -1,3 +1,16 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+vi.mock('../../lib/paths.js', async (load) => makePathsProxy(await load(), { dataRoot: () => lazyTempDataRoot('portos-production-authoring-') }));
+const localAuthor = vi.hoisted(() => ({ submit: null }));
+vi.mock('../promptRunner.js', () => ({
+  assertProvider: () => {},
+  resolveProviderAndModel: async () => ({ provider: { id: 'local-fixture', type: 'api', endpoint: 'http://localhost:11434' }, selectedModel: 'fixture-model' }),
+  runPromptThroughProvider: async ({ prompt, beforeExecute }) => {
+    await beforeExecute?.({ provider: { id: 'local-fixture', type: 'api', endpoint: 'http://localhost:11434' }, model: 'fixture-model' });
+    return localAuthor.submit(prompt);
+  },
+}));
 // Existing engine cases isolate the creative review boundary; explicit approval-flow
 // cases below switch to the real model and verify pause/resume without providers.
 const creativeReview = vi.hoisted(() => ({ real: false }));
@@ -29,7 +42,7 @@ import { captureMusicVideoEvidence } from '../../lib/musicVideoDependencies.js';
  * rules (productionPool.js) are real.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { EventEmitter } from 'events';
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
 
@@ -39,6 +52,7 @@ let writeTail = Promise.resolve();
 const clone = (v) => JSON.parse(JSON.stringify(v));
 vi.mock('./projects.js', () => ({
   getProject: async (id) => (store.has(id) ? clone(store.get(id)) : null),
+  listProjects: async () => [...store.values()].map(clone),
   mutateProjectRecord: (id, transform) => {
     const run = writeTail.then(() => {
       if (!store.has(id)) throw Object.assign(new Error('Project not found'), { status: 404 });
@@ -130,11 +144,22 @@ function completeJob(jobId) {
 }
 
 const settle = async () => {
-  // Let fire-and-forget listeners reach their advance, then wait for it.
-  for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 0));
+  // Wait for every fire-and-forget continuation (not a guessed number of timer
+  // ticks, which a contended worker can outrun, #10629), take one more pass,
+  // and wait for whatever that pass set off.
+  await service.__settleProductionForTests();
   const run = store.get('mv-example')?.productionRuns?.[0];
   if (run) await service.__advanceProductionForTests('mv-example', run.id);
+  await service.__settleProductionForTests();
 };
+
+/** A gate a double waits at: `reached` resolves once the work under test is parked there. */
+function holdAt() {
+  let arrive; let release;
+  const reached = new Promise((resolve) => { arrive = resolve; });
+  const opened = new Promise((resolve) => { release = resolve; });
+  return { reached, release, held: () => { arrive(); return opened; } };
+}
 
 async function start(input = {}) {
   const out = await service.startProduction('mv-example', { directive: 'moody, slow', pool: POOL, limits: LIMITS, reviewer: {}, ...input });
@@ -182,6 +207,7 @@ beforeEach(() => {
 
 // A test's background advances finish before the next test resets the doubles.
 afterEach(settle);
+afterAll(cleanupTempDataRoots);
 
 describe('music video production run (#9066)', () => {
   it('refuses mutable peer placement before starting an immutable production budget', async () => {
@@ -486,11 +512,10 @@ describe('music video production run (#9066)', () => {
 
   it('Stop during a dispatch cancels the job that raced it and dispatches nothing more', async () => {
     seedProject();
-    let release;
-    const gate = new Promise((r) => { release = r; });
-    dispatch.mockImplementationOnce(async (args) => { await gate; return enqueueing(args); });
+    const { held, reached, release } = holdAt();
+    dispatch.mockImplementationOnce(async (args) => { await held(); return enqueueing(args); });
     const { run } = await service.startProduction('mv-example', { pool: POOL, limits: LIMITS });
-    await new Promise((r) => setTimeout(r, 0));
+    await reached;
     await service.stopProduction('mv-example', run.id);
     release();
     await settle();
@@ -606,16 +631,15 @@ describe('music video production run (#9066)', () => {
 
   it('refuses a generation if the director changes to zero code-first allowance during provider preparation', async () => {
     seedProject();
-    let release;
-    const prepared = new Promise((resolve) => { release = resolve; });
+    const { held, reached, release } = holdAt();
     dispatch.mockImplementationOnce(async (args) => {
-      await prepared;
+      await held();
       await service.assertProductionSubmission('mv-example', args.tag.productionRunId, args.tag.productionStepKey,
         { sceneId: args.tag.sceneId, kind: 'image' });
       return enqueueing(args);
     });
     await service.startProduction('mv-example', { pool: POOL, limits: LIMITS });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await reached;
     expect(theRun().steps[0].status).toBe('reserved');
     store.get('mv-example').productionPolicy = { strategy: 'code-first', maxGeneratedVideoPercent: 0 };
     release();
@@ -661,7 +685,7 @@ function seedCodeFirst({ scenes, directions, percent = 0, ...patch } = {}) {
     treatment: { revision: 1, appliedRevision: 1, shotDirections: directions || [{ sceneId: 'mvs-code', medium: 'procedural', mediumRationale: 'Typography' }] }, ...patch,
   });
 }
-function documentDoubles() {
+function documentDoubles(realDocuments = null) {
   let version = 0;
   const author = vi.fn(async (_id, input) => {
     await input.beforeSubmit({ provider: authorProvider, model: AUTHORING.model });
@@ -686,7 +710,7 @@ function documentDoubles() {
   const render = vi.fn(async (_id, options) => { options.verifyCurrent(current()); return { jobId: 'final-render' }; });
   const cancelRender = vi.fn();
   service.__setProductionDepsForTests({ loadEnv: async () => env, dispatch, queue: async () => queue,
-    autoReview: async () => autoReview, documents: async () => documents,
+    autoReview: async () => autoReview, documents: async () => realDocuments || documents,
     render: async () => ({ renderMusicVideo: render, cancelRender }),
     resolveAuthoring: async (input) => {
       if (!input?.providerId) throw Object.assign(new Error('Select an authoring model'), { code: 'PRODUCTION_AUTHORING_REQUIRED' });
@@ -709,6 +733,57 @@ function failOwnedReview(atSec = 6) {
 }
 
 describe('code-first production execution (#9301)', () => {
+  it('resumes production after a later local author batch fails without repeating completed sections (#10528)', async () => {
+    const ids = ['intro', 'verse', 'hook'];
+    const scenes = ids.map((id, i) => ({ sceneId: `mvs-${id}`, label: id, startSec: i * 10, endSec: (i + 1) * 10 }));
+    seedCodeFirst({ scenes, directions: scenes.map((scene) => ({ sceneId: scene.sceneId, medium: 'procedural', mediumRationale: 'Draw the approved geometry' })),
+      audioAnalysis: { durationSec: 30, sections: ids.map((id, i) => ({ id, label: id, startSec: i * 10, endSec: (i + 1) * 10 })) },
+      productionReview: { draft: { storyboard: scenes.map((scene) => ({ sceneId: scene.sceneId, action: 'Planned choreography. '.repeat(2000) })) } },
+    });
+    const documents = await import('./documentGeneration.js');
+    documentDoubles(documents);
+    const asked = [];
+    localAuthor.submit = async (prompt) => {
+      const sections = ids.filter((id) => prompt.includes(`"id":"${id}"`));
+      asked.push(sections);
+      if (asked.length === 2) throw new Error('Later local batch timed out');
+      return { text: JSON.stringify({ sections: sections.map((id) => ({ id, source: 'function render(ctx, env) { ctx.fillStyle = "#112233"; }' })) }) };
+    };
+    await start({ pool: [], authoring: AUTHORING });
+    expect(theRun().steps.filter((step) => step.kind === 'author')).toEqual([expect.objectContaining({ status: 'failed' })]);
+    const finished = asked[0];
+    expect(finished.length).toBeGreaterThan(0);
+    expect(finished.length).toBeLessThan(ids.length);
+    asked.length = 0;
+    localAuthor.submit = async (prompt) => {
+      const sections = ids.filter((id) => prompt.includes(`"id":"${id}"`));
+      asked.push(sections);
+      return { text: JSON.stringify({ sections: sections.map((id) => ({ id, source: 'function render(ctx, env) { ctx.fillStyle = "#aabbcc"; }' })) }) };
+    };
+    await service.resumeProduction('mv-example', theRun().id);
+    await settle();
+    expect(asked.flat()).toEqual(ids.filter((id) => !finished.includes(id)));
+    const { PATHS } = await import('../../lib/paths.js');
+    const manifest = JSON.parse(await readFile(join(PATHS.data, current().composition.document.directory, 'manifest.json'), 'utf8'));
+    expect(manifest.sections.filter((section) => finished.includes(section.id)).every((section) => section.source.includes('#112233'))).toBe(true);
+    expect(theRun().documentCheckpoint.directory).toBe(current().composition.document.directory);
+    expect(theRun().steps.filter((step) => step.kind === 'author').map((step) => step.status)).toEqual(['failed', 'completed']);
+  });
+
+  it('reserves one author step for a document authored in several local batches', async () => {
+    seedCodeFirst(); const { author } = documentDoubles();
+    const single = author.getMockImplementation();
+    // Batched local authoring calls beforeSubmit once per batch before returning the document.
+    author.mockImplementation(async (id, input) => {
+      await input.beforeSubmit({ provider: authorProvider, model: AUTHORING.model });
+      return single(id, input);
+    });
+    await start({ pool: [], authoring: AUTHORING });
+    expect(author).toHaveBeenCalledOnce();
+    expect(theRun()).toMatchObject({ status: 'running', usage: { generations: 1 }, documentCheckpoint: { directory: current().composition.document.directory } });
+    expect(theRun().steps.filter((step) => step.kind === 'author')).toEqual([expect.objectContaining({ status: 'completed' })]);
+  });
+
   it('authors a code-only plan with no media routes/jobs and completes only after its reviewed final render', async () => {
     seedCodeFirst(); const { author, render } = documentDoubles();
     await start({ pool: [], authoring: AUTHORING });
@@ -815,11 +890,11 @@ describe('code-first production execution (#9301)', () => {
 
   it('does not submit late authoring after cancellation during preparation', async () => {
     seedCodeFirst(); const { author } = documentDoubles();
-    let release; const waiting = new Promise((resolve) => { release = resolve; });
+    const { held, reached, release } = holdAt();
     const normal = author.getMockImplementation();
-    author.mockImplementationOnce(async (id, input) => { await waiting; return normal(id, input); });
+    author.mockImplementationOnce(async (id, input) => { await held(); return normal(id, input); });
     await service.startProduction('mv-example', { pool: [], authoring: AUTHORING, limits: LIMITS });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await reached;
     await service.cancelProduction('mv-example', theRun().id);
     release(); await settle();
     expect(theRun().status).toBe('canceled'); expect(theRun().usage.generations).toBe(0);
@@ -828,13 +903,13 @@ describe('code-first production execution (#9301)', () => {
 
   it('drops a paid authoring result when the policy changes before publication', async () => {
     seedCodeFirst(); const { author } = documentDoubles();
-    let release; const waiting = new Promise((resolve) => { release = resolve; });
+    const { held, reached, release } = holdAt();
     author.mockImplementationOnce(async (_id, input) => {
-      await input.beforeSubmit({ provider: authorProvider, model: AUTHORING.model }); await waiting;
+      await input.beforeSubmit({ provider: authorProvider, model: AUTHORING.model }); await held();
       await storeMutation((project) => { input.verifyCurrent(project); return { project }; });
     });
     await service.startProduction('mv-example', { pool: [], authoring: AUTHORING, limits: LIMITS });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await reached;
     store.get('mv-example').productionPolicy.maxGeneratedVideoPercent = 5;
     release(); await settle();
     expect(current().composition.document).toBeUndefined(); expect(theRun().usage.generations).toBe(1);
@@ -861,11 +936,11 @@ describe('code-first production execution (#9301)', () => {
 
   it('stops a pending final-render preparation before encoding', async () => {
     seedCodeFirst(); const { render } = documentDoubles();
-    let release; const waiting = new Promise((resolve) => { release = resolve; });
+    const { held, reached, release } = holdAt();
     let encoded = 0;
-    render.mockImplementationOnce(async (_id, options) => { await waiting; options.verifyCurrent(current()); encoded += 1; return { jobId: 'late-render' }; });
+    render.mockImplementationOnce(async (_id, options) => { await held(); options.verifyCurrent(current()); encoded += 1; return { jobId: 'late-render' }; });
     await start({ pool: [], authoring: AUTHORING }); passOwnedReview();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await reached;
     await service.stopProduction('mv-example', theRun().id); release(); await settle();
     expect(encoded).toBe(0); expect(theRun().status).toBe('stopped');
   });
@@ -877,14 +952,14 @@ it('rechecks a generated shot and zero allowance after asynchronous provider pre
     directions: [{ sceneId: 'mvs-a', medium: 'generated-footage', mediumRationale: 'Selected exception' }],
   });
   documentDoubles();
-  let release; const waiting = new Promise((resolve) => { release = resolve; });
+  const { held, reached, release } = holdAt();
   dispatch.mockImplementationOnce(async (args) => {
-    await waiting;
+    await held();
     await service.assertProductionSubmission('mv-example', args.tag.productionRunId, args.tag.productionStepKey, { sceneId: 'mvs-a', kind: 'video' });
     return enqueueing(args);
   });
   await service.startProduction('mv-example', { pool: [POOL[2]], authoring: AUTHORING, limits: LIMITS });
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await reached;
   store.get('mv-example').productionPolicy.maxGeneratedVideoPercent = 0;
   release(); await settle();
   expect(jobs).toHaveLength(0); expect(theRun().usage.generations).toBe(0);
@@ -918,13 +993,13 @@ it('charges a selected performance retry by its actual padded provider duration 
 
 it.each([1_000, 120_000])('keeps interrupted authoring charged at %i ms without a queue job and requires explicit resume', async (reservationAge) => {
   seedCodeFirst(); const { author } = documentDoubles();
-  let release; const waiting = new Promise((resolve) => { release = resolve; });
+  const { held, reached, release } = holdAt();
   author.mockImplementationOnce(async (_id, input) => {
-    await input.beforeSubmit({ provider: authorProvider, model: AUTHORING.model }); await waiting;
+    await input.beforeSubmit({ provider: authorProvider, model: AUTHORING.model }); await held();
     input.verifyCurrent(current());
   });
   await service.startProduction('mv-example', { pool: [], authoring: AUTHORING, limits: LIMITS });
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await reached;
   store.get('mv-example').productionRuns[0].processId = 'previous-process';
   release(); await settle();
   expect(author).toHaveBeenCalledOnce(); expect(current().composition.document).toBeUndefined();
@@ -1076,12 +1151,12 @@ describe('authored plate preflight', () => {
 
   it('honors cancellation while plate analysis is running, retaining its spend and no video job', async () => {
     seedProject({ scenes: [plateScene()] });
-    let finish;
-    reviewPlate.mockImplementation((args) => new Promise((resolve) => { finish = () => resolve(verdict(args, 'pass')); }));
+    const { held, reached, release } = holdAt();
+    reviewPlate.mockImplementation(async (args) => { await held(); return verdict(args, 'pass'); });
     const { run } = await service.startProduction('mv-example', { pool: POOL, limits: LIMITS, reviewer: {} });
-    while (!finish) await new Promise((resolve) => setTimeout(resolve, 0));
+    await reached;
     await service.cancelProduction('mv-example', run.id);
-    finish();
+    release();
     await settle();
     expect(theRun()).toMatchObject({ status: 'canceled', usage: { generations: 1 } });
     expect(dispatch).not.toHaveBeenCalled();

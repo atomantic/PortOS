@@ -58,6 +58,7 @@ export const TIMED_COOLDOWN_BLOCKED_CATEGORIES = new Set([
  */
 export const PAUSED_BLOCKED_CATEGORIES = new Set([
   ...TIMED_COOLDOWN_BLOCKED_CATEGORIES,
+  'deep-audit-partial', // Explicit resume only; keep retained remediation and never auto-expire.
   'app-unresolved',    // the task's app has no usable Repository Path
   'workspace-invalid', // the resolved workspace isn't a usable directory
   // A CONFIG pause, NOT a timed one: nothing stamps a `cooldownUntil` for it and
@@ -85,6 +86,7 @@ export const USER_DECISION_BLOCKED_CATEGORIES = new Set([
   'user-terminated',      // user explicitly stopped the agent
   AGENT_PAUSED_CATEGORY,  // user paused; resumable on demand
   'challenge-escalation', // parked awaiting the user's arbitration
+  'deep-audit-partial', // Explicit resume only; keep retained remediation and never auto-expire.
   'app-unresolved',
   'workspace-invalid',
   // A task the markdown store could not represent, parked here by

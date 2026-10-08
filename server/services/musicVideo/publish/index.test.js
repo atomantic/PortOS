@@ -14,7 +14,7 @@ vi.mock('../../../lib/paths.js', async (importOriginal) => makePathsProxy(await 
 
 const { PATHS } = await import('../../../lib/paths.js');
 const projects = await import('../projects.js');
-const { preparePublishDraft, discardPublishDraft, listPublishDrafts, recordPublishPost } = await import('./index.js');
+const { preparePublishDraft, discardPublishDraft, listPublishDrafts, recordPublishPost, removePublishPost } = await import('./index.js');
 const { musicVideoEvents } = await import('../events.js');
 
 const platforms = { stackerNews: { enabled: true, account: null }, youtube: { enabled: true, account: null }, x: { enabled: true, account: 'antic' } };
@@ -183,6 +183,19 @@ describe('publish drafts (#9282)', () => {
     const rated = await recordPublishPost(id, 'reddit', { reception: 'poor', notes: 'poorly received' });
     expect(rated.post).toMatchObject({ url: 'https://www.reddit.com/r/x/comments/1', reception: 'poor', notes: 'poorly received', postedAt: first.post.postedAt });
     expect(rated.project.publishKit.posts.reddit.reception).toBe('poor');
+  });
+
+  it('marks a platform done without a link, keeps a link added later, and undoes the mark', async () => {
+    const id = await readyProject();
+    const marked = await recordPublishPost(id, 'distrokid', { posted: true });
+    expect(marked.post.url).toBeUndefined();
+    expect(marked.post.postedAt).toBeTruthy();
+    const linked = await recordPublishPost(id, 'distrokid', { url: 'https://open.spotify.com/track/example' });
+    expect(linked.post).toMatchObject({ url: 'https://open.spotify.com/track/example', postedAt: marked.post.postedAt });
+    const { project } = await removePublishPost(id, 'distrokid');
+    expect(project.publishKit.posts.distrokid).toBeUndefined();
+    // undoing a platform with no record is a no-op
+    await expect(removePublishPost(id, 'distrokid')).resolves.toMatchObject({ project: { id } });
   });
 
   it('resolves release files to paths, and 422s before opening a tab when one is missing', async () => {

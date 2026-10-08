@@ -263,11 +263,25 @@ describe('pregateWorkerEnv', () => {
 
 describe('downgradeFullPlan', () => {
   it('replaces the full suite with the tracked always-run guards', () => {
-    const tracked = ALWAYS_RUN_TESTS.slice(0, 3);
+    const serverGuards = ALWAYS_RUN_TESTS.slice(0, 3);
+    const clientGuards = [
+      'client/src/asyncEffectDisposalConventions.test.js',
+      'client/src/fooConventions.test.js',
+      'client/src/hooks/mountedRefConventions.test.js',
+    ];
+    const tracked = [...serverGuards, ...clientGuards,
+      'client/src/App.test.jsx', 'client/src/fooConventions.js',
+      'server/fooConventions.test.js',
+    ];
     const downgraded = downgradeFullPlan(planWith({ full: true }), tracked);
     expect(downgraded.full).toBe(false);
-    expect(downgraded.server).toEqual({ mode: 'files', files: tracked, sources: [] });
-    expect(downgraded.client.mode).toBe('skip');
+    expect(downgraded.server).toEqual({ mode: 'files', files: serverGuards, sources: [] });
+    expect(downgraded.client).toEqual({ mode: 'files', files: clientGuards, sources: [] });
+    const stages = resolvePlanStages(downgraded);
+    expect(stages.map((stage) => stage.name)).toContain('client tests');
+    expect(stages.find((stage) => stage.name === 'client tests').env).toMatchObject({
+      CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify(clientGuards), CI_TEST_SOURCES: '[]',
+    });
   });
 
   it('drops a guard this checkout does not track, so Vitest is never given a missing path', () => {

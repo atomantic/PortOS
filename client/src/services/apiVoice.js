@@ -39,6 +39,15 @@ export const completeVoiceProfileInteractiveBenchmark = (profileId, payload, opt
 export const startFineTuningJob = (profileId, payload = {}, options) => api.post(
   `/voice/profiles/${encodeURIComponent(profileId)}/fine-tune/start`, payload, options,
 );
+const fineTunePath = (profileId, jobId = '') => `/voice/profiles/${encodeURIComponent(profileId)}/fine-tune${
+  jobId ? `/${encodeURIComponent(jobId)}` : ''}`;
+export const listFineTuningJobs = (profileId, options) => api.get(fineTunePath(profileId), options);
+export const cancelFineTuningJob = (profileId, jobId, options) => api.post(
+  `${fineTunePath(profileId, jobId)}/cancel`, {}, options,
+);
+export const promoteFineTunedCheckpoint = (profileId, jobId, checkpointId, options) => api.post(
+  `${fineTunePath(profileId, jobId)}/promote`, { checkpointId }, options,
+);
 
 // Returns the raw WAV bytes of the test utterance.
 export const testTts = (text, voice, engine) => {

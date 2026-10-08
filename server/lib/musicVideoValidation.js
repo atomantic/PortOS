@@ -44,7 +44,8 @@ import { EFFORT_LEVELS } from './providerModels.js';
 import { shotActionContractProblem } from './musicVideoActionContract.js';
 import { NARRATIVE_EVENT_KINDS } from './musicVideoNarrativeEvents.js';
 import { MUSIC_VIDEO_MEDIA } from './musicVideoMediumPlan.js';
-import { MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
+import { MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
+import { CAMERA_FRAMINGS, CAMERA_MOVEMENT_VALUES, CAMERA_SPEEDS } from './cameraMovements.js';
 import { MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
 import {
   MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD,
@@ -69,6 +70,7 @@ import {
   normalizeAutoApprove,
 } from './musicVideoAutonomous.js';
 import { MUSCRIPTOR_MODELS } from './muscriptorModels.js';
+import { MUSIC_VIDEO_CHARACTER_STYLE_IDS } from './musicVideoCharacterStyles.js';
 import { IMAGE_GEN_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 
 // A project is authored hands-on (director) or seeded by the AI planner
@@ -87,6 +89,10 @@ export const musicVideoConceptSchema = z.object({
   // Authored snapshots keep the production stable when source canon changes.
   universeStyle: z.string().max(4000).optional(),
   moodBoardStyle: z.string().max(4000).optional(),
+  // A built-in character style (musicVideoCharacterStyles.js); the server
+  // snapshots its text into `characterStyle` and casts its character.
+  characterStyleId: z.enum(MUSIC_VIDEO_CHARACTER_STYLE_IDS).nullable().optional(),
+  characterStyle: z.string().max(4000).optional(),
   subjects: z.array(z.object({
     id: z.string().min(1).max(64),
     kind: z.enum(['character', 'place', 'object']),
@@ -208,6 +214,11 @@ const galleryImageName = z.string().min(1).max(256)
 // A video-history id (the scene clip vocabulary `videoHistoryId` already uses).
 const videoHistoryIdSchema = z.string().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/, 'must be a video history id');
 
+// Built-in character style routes (routes/musicVideoCharacterStyles.js).
+export const musicVideoCharacterStyleParamsSchema = z.object({ id: z.enum(MUSIC_VIDEO_CHARACTER_STYLE_IDS) }).strict();
+// null clears this install's character sheet for the style.
+export const musicVideoCharacterStyleReferenceSchema = z.object({ imageId: galleryImageName.nullable() }).strict();
+
 export const MUSIC_VIDEO_REFERENCE_ROLES = ['mood', 'character', 'wardrobe', 'set', 'prop', 'style'];
 // How a reference is meant to be used (#8980): `reference` guides the look
 // (style/character conditioning), `final-visible` is supplied media meant to
@@ -321,6 +332,7 @@ export const musicVideoLyricsImportTrackSchema = z.object({
 // that line; omitted, every line is aligned.
 export const musicVideoLyricsAlignSchema = z.object({
   cueId: z.string().min(1).max(64).optional(),
+  separateVocals: z.boolean().optional(),
 }).strict();
 
 // ---- Composition manifest (#8984, part of #8966) ---------------------------
@@ -504,15 +516,31 @@ export const musicVideoDocumentTemplateSchema = z.object({
   template: z.enum(MUSIC_VIDEO_DOCUMENT_TEMPLATES).optional(),
 }).strict();
 
+// #10589: a shot's structured camera move — a shared camera-movement id
+// (lib/cameraMovements.js) with optional speed, end framing, downbeat landing
+// and, for a still camera, the reason it holds. Feeds the i2v camera block and
+// the layered template's camera rig. `null` clears it.
+export const musicVideoSceneCameraSchema = z.object({
+  move: z.enum(CAMERA_MOVEMENT_VALUES),
+  speed: z.enum(CAMERA_SPEEDS).optional(),
+  endFraming: z.enum(CAMERA_FRAMINGS).optional(),
+  onBeat: z.boolean().optional(),
+  reason: z.string().trim().max(300).optional(),
+}).strict();
+
 // Per-scene visual layer (#8985) — footage, a moved still, or a title card;
 // see musicVideoLayers.js. Only a composed render honors a non-footage layer.
 const sceneLayerFields = {
+  camera: musicVideoSceneCameraSchema.nullable().optional(),
   visualLayer: z.enum(MUSIC_VIDEO_VISUAL_LAYERS).optional(),
   stillMove: z.enum(MUSIC_VIDEO_STILL_MOVES).optional(),
   cardText: z.string().max(500).nullable().optional(),
   // #10302: footage that the composition also draws code over; still counts as footage.
   codeOverlay: z.boolean().optional(),
   cardColor: z.string().regex(/^#[0-9a-f]{6}$/i, 'card color is #rrggbb').nullable().optional(),
+  // #10583: where a composition document's lyric type may sit in this shot, and the role of its lines.
+  textZone: z.enum(MUSIC_VIDEO_TEXT_ZONES).nullable().optional(),
+  lyricRole: z.enum(MUSIC_VIDEO_LYRIC_ROLES).nullable().optional(),
 };
 
 // ---- Pre-production treatment (#8980) --------------------------------------
@@ -754,9 +782,11 @@ const publishPlatformEntry = z.object({ enabled: z.boolean(), account: z.string(
 export const musicVideoPublishPlatformsPatchSchema = z.object(Object.fromEntries(MUSIC_VIDEO_PUBLISH_TARGETS.map((t) => [t, publishPlatformEntry.optional()]))).strict();
 export const musicVideoPublishPostSchema = z.object({
   url: publishUrl.nullable(),
+  // Marks the platform done without a link (a DistroKid upload has none until the stores go live).
+  posted: z.literal(true),
   reception: z.enum(['good', 'mixed', 'poor']).nullable(),
   notes: z.string().max(2000).nullable(),
-}).partial().strict().refine((b) => Object.keys(b).length > 0, { message: 'url, reception or notes is required' });
+}).partial().strict().refine((b) => Object.keys(b).length > 0, { message: 'url, posted, reception or notes is required' });
 export const musicVideoPublishPrepareSchema = z.object({
   subreddit: z.string().max(40),
   kind: z.enum(['self', 'link', 'video']),

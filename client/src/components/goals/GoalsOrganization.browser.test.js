@@ -1,13 +1,12 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
+import { BROWSER_FIXTURE_STARTUP_MS, startBrowserFixture } from '../../test/browserFixture.js';
 import { ASYNC_UTIL_TIMEOUT_MS } from '../../test/timeouts.js';
 
 const require = createRequire(import.meta.url);
@@ -18,15 +17,17 @@ const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
 ].find(path => path && existsSync(path));
 
 describe.skipIf(!chrome)('Goals organization responsive controls (#9712)', () => {
-  let server;
   let browser;
-  let browserTemp;
+  let fixture;
   let origin;
   beforeAll(async () => {
-    browserTemp = await mkdtemp(join(tmpdir(), 'goals-chrome-'));
-    server = await createServer({
+    // Each startup phase is bounded and cleaned up inside the hook (#10543).
+    fixture = await startBrowserFixture({ name: 'goals-chrome', createServer, chromium,
+      launchOptions: { executablePath: chrome }, viteConfig: temp => ({
       configFile: false,
-      cacheDir: join(browserTemp, 'vite-cache'),
+      cacheDir: join(temp, 'vite-cache'),
+      // Pre-bundle only what this fixture renders, not the whole app's graph.
+      optimizeDeps: { entries: ['src/components/goals/GoalsListView.jsx', 'src/components/goals/GoalsTreeView.jsx'], include: ['react', 'react-dom/client', 'react-router'] },
       root: fileURLToPath(new URL('../../..', import.meta.url)),
       plugins: [react(), {
         name: 'goals-browser-fixture',
@@ -57,6 +58,9 @@ describe.skipIf(!chrome)('Goals organization responsive controls (#9712)', () =>
               { id: 'g2', title: 'Example project', category: 'creative', children: [] },
             ];
             const View = location.search.includes('tree') ? GoalsTreeView : GoalsListView;
+            // Pin the bundled Inter webfont (#10628): the default --port-font-ui is the
+            // host's system stack, so content-sized widths otherwise vary by machine.
+            document.documentElement.style.setProperty('--port-font-ui', "'Inter', sans-serif");
             createRoot(document.getElementById('root')).render(
               React.createElement(MemoryRouter, null,
                 React.createElement('div', { className: 'h-screen p-4 md:p-6' },
@@ -73,20 +77,10 @@ describe.skipIf(!chrome)('Goals organization responsive controls (#9712)', () =>
         },
       }],
       server: { host: '127.0.0.1', port: 0 },
-    });
-    await server.listen();
-    origin = server.resolvedUrls.local[0];
-    browser = await chromium.launch({ executablePath: chrome, headless: true,
-      env: { ...process.env, TMPDIR: browserTemp, TMP: browserTemp, TEMP: browserTemp },
-    });
-  }, 60000);
-  afterAll(async () => {
-    try { await browser?.close(); }
-    finally {
-      await server?.close();
-      if (browserTemp) await rm(browserTemp, { recursive: true, force: true });
-    }
-  });
+    }) });
+    ({ browser, origin } = fixture);
+  }, BROWSER_FIXTURE_STARTUP_MS);
+  afterAll(() => fixture?.close());
 
   it.each(['list', 'tree'])('keeps %s controls usable at phone, tablet and desktop widths', async view => {
     const page = await browser.newPage();
@@ -104,6 +98,13 @@ describe.skipIf(!chrome)('Goals organization responsive controls (#9712)', () =>
       const provider = page.getByRole('combobox', { name: 'AI Provider' });
       const model = page.getByRole('combobox', { name: 'Model', exact: true });
       await model.waitFor({ timeout: ASYNC_UTIL_TIMEOUT_MS });
+      // Measure only once the pinned face has loaded (the Organize label is 500 12px),
+      // so a missing or late webfont fails here rather than skewing widths.
+      expect(await page.evaluate(async () => {
+        const faces = await document.fonts.load('500 12px Inter');
+        await document.fonts.ready;
+        return faces.length > 0 && getComputedStyle(document.querySelector('button')).fontFamily.startsWith('Inter');
+      })).toBe(true);
       for (const [width, height] of [[360, 800], [390, 844], [768, 1024], [1440, 900]]) {
         await page.setViewportSize({ width, height });
         for (const control of [provider, model, page.getByRole('button', { name: 'Organize', exact: true })]) {

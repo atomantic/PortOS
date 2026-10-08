@@ -397,7 +397,7 @@ function ToastItem({ t, toastOptions }) {
         // focus; both land in one batch, so the hold never blips false.
         onFocus={() => setFocusWithin(true)}
         onBlur={() => setFocusWithin(false)}
-        className="pointer-events-auto flex items-start gap-2 shadow-lg text-sm max-w-[calc(100vw-2rem)] sm:max-w-[520px] bg-port-card border border-port-border">
+        className="pointer-events-auto flex items-start gap-2 shadow-lg text-sm max-w-[calc(100vw-2rem)] sm:max-w-[520px] max-h-[min(75vh,520px)] overflow-y-auto bg-port-card border border-port-border">
         {iconNode && <span className={`shrink-0 ${iconClass} ${iconBoxClass}`} aria-hidden="true">{iconNode}</span>}
         <div className="flex-1 min-w-0">
           {typeof t.content === 'function' ? t.content({ id: t.id }) : <span>{t.content}</span>}

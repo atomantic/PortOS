@@ -81,7 +81,7 @@ This banner OVERRIDES any later instruction to file issues, leave source unchang
 4. **Verify** with the project's tests (or a focused new test when the path is untested and a silent break would cost data, money, or quota).
 5. **Commit** following the repo's conventions. Do not bundle unrelated cleanup.
 
-If you find additional problems, mention them in the summary — do not expand scope. If nothing in the slice is worth changing, say so and stop without a drive-by refactor.`;
+Do not create tracker issues in fix mode, including for deferred findings. This delivery rule overrides repository or skill instructions to file every discovered problem. Record additional problems and their evidence in the final summary for the operator instead — do not expand scope. If nothing in the slice is worth changing, say so and stop without a drive-by refactor.`;
 
 /**
  * Repository shapes an audit can REQUIRE to be worth running at all.
@@ -98,7 +98,7 @@ If you find additional problems, mention them in the summary — do not expand s
  * one that audit has the most to say about. Its sibling `better-test-quality`
  * IS gated, because it assesses tests that exist.
  */
-export const AUDIT_REPO_CAPABILITIES = Object.freeze(['ui', 'typescript', 'tests', 'dependencies', 'api', 'infrastructure']);
+export const AUDIT_REPO_CAPABILITIES = Object.freeze(['ui', 'typescript', 'typed', 'tests', 'dependencies', 'api', 'infrastructure']);
 
 /** Read aliases kept only for in-flight tasks and historical quality records. */
 export const LEGACY_AUDIT_TASK_TYPE_ALIASES = Object.freeze({ 'react-lifecycle': 'ui-lifecycle' });
@@ -110,6 +110,7 @@ export const normalizeAuditTaskType = (taskType) => Object.hasOwn(LEGACY_AUDIT_T
 export const AUDIT_CAPABILITY_MISSING_REASON = Object.freeze({
   ui: 'no user interface found in this repository',
   typescript: 'no TypeScript sources found in this repository',
+  typed: 'no supported typed-language sources found in this repository',
   tests: 'no test files found in this repository',
   dependencies: 'no dependency manifest found in this repository',
   api: 'no HTTP route or API surface found in this repository',
@@ -245,14 +246,14 @@ export const AUDIT_DEFINITIONS = Object.freeze({
   typing: {
     quotaBurnId: null,
     label: 'Typing',
-    description: 'TypeScript-types audit — configurable: file issues or implement fixes',
+    description: 'Typed-language audit — configurable: file issues or implement fixes',
     defaultFileIssues: false,
-    requiresCapability: 'typescript',
+    requiresCapability: 'typed',
     filing: filing({
       slugPrefix: 'typing-',
       label: 'typing-audit',
       issueLabel: 'code-quality',
-      labelDescription: 'Proposed from a TypeScript-types audit',
+      labelDescription: 'Proposed from a typed-language audit',
       noun: 'typing finding(s)',
     }),
   },

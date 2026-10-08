@@ -5,6 +5,16 @@ import { spawn } from '../../lib/childProcess.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { browserExecutablePath } from '../../lib/browserConfig.js';
+import { isVitestRunner } from '../../lib/runtimeEnv.js';
+
+// Chrome refuses to run as root with its sandbox on. Only a Vitest worker
+// running as root (a root dev/CI container) drops it, matching the test-owned
+// Chrome launches in testBrowserCleanup.js; production keeps the sandbox.
+const sandboxArgs = () => (isVitestRunner() && process.getuid?.() === 0 ? ['--no-sandbox'] : []);
+
+// Raw browser output can hold private paths, so a startup failure names a
+// recognized cause instead of copying stderr.
+const ROOT_SANDBOX_REFUSAL = /Running as root without --no-sandbox is not supported/;
 
 // Chrome helpers (crashpad, GPU) can still be writing into the profile for a
 // moment after the browser's close event, so a recursive rm may lose the race
@@ -34,6 +44,11 @@ export async function launchCompositionBrowser({ signal, startupMs = 20000, shut
   let closed = false;
   let spawned = false;
   let closing;
+  let profileCleanup;
+  let terminationStarted;
+  const termination = { term: 'not-attempted', kill: 'not-attempted', error: 'none' };
+  const safeSignalError = error => ['EPERM', 'ESRCH', 'EINVAL', 'ENOSYS'].includes(error?.code) ? error.code : 'other';
+  const cleanupProfile = () => profileCleanup ??= removeProfile(profile);
   let closeResolve;
   const childClosed = new Promise(resolve => { closeResolve = resolve; });
   const onExit = () => {
@@ -42,21 +57,48 @@ export async function launchCompositionBrowser({ signal, startupMs = 20000, shut
     // Release our pipe without signaling unrelated or discovered processes.
     proc?.stderr?.destroy();
   };
-  const onClose = () => { closed = true; closeResolve(); };
+  const onClose = () => {
+    closed = true;
+    // A deadline can reject close() before the OS reports exit. Retain ownership
+    // until the eventual close event and remove only this child's profile then.
+    cleanupProfile().catch(error => console.error(`❌ Composition browser profile cleanup failed (${safeSignalError(error)})`));
+    closeResolve();
+  };
   // Child 'error' may also be emitted by kill(). Keep a listener until close.
-  const onError = () => { if (!spawned && !proc?.pid) { onExit(); onClose(); } };
+  const onError = error => {
+    termination.error = safeSignalError(error);
+    if (!spawned && !proc?.pid) { onExit(); onClose(); }
+  };
   const close = () => closing ??= (async () => {
     signal?.removeEventListener('abort', abort);
     let escalation;
     let deadline;
     try {
       if (proc && !closed) {
-        if (!exited) escalation = killWithEscalation(proc, {
+        terminationStarted = performance.now();
+        const tracked = {
+          get exitCode() { return proc.exitCode; },
+          get signalCode() { return proc.signalCode; },
+          kill(signal) {
+            const key = signal === 'SIGTERM' ? 'term' : 'kill';
+            termination[key] = 'attempted';
+            try {
+              const accepted = proc.kill(signal);
+              termination[key] = accepted ? 'accepted' : 'refused';
+              return accepted;
+            } catch (error) {
+              termination.error = safeSignalError(error);
+              termination[key] = 'threw';
+              throw error;
+            }
+          },
+        };
+        if (!exited) escalation = killWithEscalation(tracked, {
           label: 'Composition browser', delayMs: Math.min(1000, shutdownMs / 2),
           stillRunning: () => !exited,
         });
         await Promise.race([childClosed, new Promise((_, reject) => {
-          deadline = setTimeout(() => reject(new Error(`Composition browser cleanup exceeded its deadline (exit=${exited}, stdioClosed=${Boolean(proc.stderr?.destroyed)})`)), shutdownMs);
+          deadline = setTimeout(() => reject(new Error(`Composition browser cleanup exceeded its deadline (exit=${exited}, stdioClosed=${Boolean(proc.stderr?.destroyed)}, term=${termination.term}, kill=${termination.kill}, signalError=${termination.error}, elapsedMs=${Math.round(performance.now() - terminationStarted)})`)), shutdownMs);
         })]);
       }
     } finally {
@@ -65,7 +107,7 @@ export async function launchCompositionBrowser({ signal, startupMs = 20000, shut
       // Wait for the process and our pipe to close before removing its profile.
       if (!proc || closed) {
         proc?.removeListener('error', onError);
-        await removeProfile(profile);
+        await cleanupProfile();
       }
     }
   })();
@@ -73,7 +115,7 @@ export async function launchCompositionBrowser({ signal, startupMs = 20000, shut
   try {
     signal?.throwIfAborted();
     proc = spawn(executable, [
-      '--headless=new', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0',
+      '--headless=new', ...sandboxArgs(), '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0',
       `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check',
       '--mute-audio', '--disable-background-networking', '--disable-background-timer-throttling',
       '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', 'about:blank',
@@ -94,11 +136,15 @@ export async function launchCompositionBrowser({ signal, startupMs = 20000, shut
         error ? reject(error) : resolve(endpoint);
       };
       const fail = error => finish(new Error(`Composition browser failed to start (${error.code || 'spawn error'})`));
-      const stopped = () => finish(new Error('Composition browser exited during startup'));
+      const stopped = () => {
+        const status = proc.signalCode ? `signal ${proc.signalCode}` : `code ${proc.exitCode ?? 'unknown'}`;
+        const cause = ROOT_SANDBOX_REFUSAL.test(tail) ? ': Chrome refuses to run as root with its sandbox enabled' : '';
+        finish(new Error(`Composition browser exited during startup (${status})${cause}`));
+      };
       const canceled = () => finish(signal.reason ?? new Error('Render canceled'));
       const onData = bytes => {
         tail = (tail + bytes.toString()).slice(-8192);
-        // No paths or browser output are copied into errors. An endpoint must
+        // No paths or raw browser output are copied into errors. An endpoint must
         // be loopback and come from this child's complete DevTools line.
         const match = tail.match(/(?:^|\n)DevTools listening on (ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\/[a-zA-Z0-9-]+)\r?\n/);
         if (match) finish(null, match[1]);

@@ -27,11 +27,48 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-PGUSER="${PGUSER:-portos}"
-PGDATABASE="${PGDATABASE:-portos}"
-PGPASSWORD="${PGPASSWORD:-portos}"
-SELECTED_PGHOST="${PGHOST:-}"
-PGHOST="${PGHOST:-localhost}"
+# Read the same .env grammar as setup/PM2, without sourcing or evaluating it.
+# NUL-delimited values preserve password whitespace and shell metacharacters.
+# The completion marker makes a missing Node/parser or truncated pipe fail closed
+# before any database command, instead of silently targeting the defaults.
+read_db_config() {
+  node --input-type=commonjs - "$ROOT_DIR" "$1" <<'NODE'
+const { join } = require('node:path');
+const { parseEnvFile } = require(join(process.argv[2], 'scripts/lib/envFile.cjs'));
+const saved = parseEnvFile(join(process.argv[2], '.env'));
+const value = (key, fallback = '') => process.env[key] || saved[key] || fallback;
+const mode = value('PGMODE', 'docker');
+const nativeSetup = process.argv[3] === 'setup-native';
+const selectedHost = value('PGHOST');
+const dockerPort = value('PGPORT_DOCKER', '5561');
+const selectedPort = nativeSetup
+  ? process.env.PORTOS_NATIVE_PGPORT || value('PGPORT')
+  : process.env.PGPORT || (mode === 'native' ? saved.PGPORT || '' : dockerPort);
+const settings = {
+  PGMODE: mode, PGUSER: value('PGUSER', 'portos'),
+  PGDATABASE: value('PGDATABASE', 'portos'), PGPASSWORD: value('PGPASSWORD', 'portos'),
+  PGHOST: selectedHost || 'localhost', SELECTED_PGHOST: selectedHost,
+  PGPORT: selectedPort || (mode === 'native' || nativeSetup ? '5432' : dockerPort),
+  SELECTED_PGPORT: selectedPort, PGPORT_DOCKER: dockerPort,
+};
+process.stdout.write(Object.entries({ ...settings, complete: '1' })
+  .flat().join('\0') + '\0');
+NODE
+}
+_DB_CONFIG_COMPLETE=false
+while IFS= read -r -d '' key && IFS= read -r -d '' value; do
+  case "$key" in
+    PGMODE|PGUSER|PGDATABASE|PGPASSWORD|PGHOST|PGPORT|PGPORT_DOCKER|SELECTED_PGHOST|SELECTED_PGPORT)
+      printf -v "$key" '%s' "$value" ;;
+    complete) _DB_CONFIG_COMPLETE=true ;;
+  esac
+done < <(read_db_config "${1:-}")
+
+if [ "$_DB_CONFIG_COMPLETE" != true ]; then
+  echo "❌ Could not load database configuration; no database command was run" >&2
+  exit 1
+fi
+unset key value _DB_CONFIG_COMPLETE
 # The maintenance coordinator names its install's dump directory explicitly
 # (its data root can differ from this checkout); otherwise use this checkout.
 DUMP_DIR="${PORTOS_DUMP_DIR:-$ROOT_DIR/data/db-dumps}"
@@ -49,33 +86,17 @@ warn() { echo -e "${YELLOW}⚠️  $1${NC}"; }
 err()  { echo -e "${RED}❌ $1${NC}"; }
 info() { echo -e "${BLUE}🗄️  $1${NC}"; }
 
-# Detect current mode from .env or default to docker
 get_mode() {
-  if [ -f "$ENV_FILE" ]; then
-    local mode
-    mode=$(grep -E '^PGMODE=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || true)
-    echo "${mode:-docker}"
-  else
-    echo "docker"
-  fi
+  printf '%s\n' "$PGMODE"
 }
 
-# Derive port from mode: native=5432 (system pg), docker=5561 (container)
-get_port() {
-  if [ -n "${PGPORT:-}" ]; then
-    echo "$PGPORT"
-  elif [ "$(get_mode)" = "native" ]; then
-    echo "5432"
-  else
-    echo "5561"
-  fi
+# Container-local tools are equivalent only for the configured local Docker
+# endpoint. A shell host/port override must not silently export another DB.
+uses_local_docker_endpoint() {
+  [ "$PGMODE" = docker ] && [ "$PGPORT" = "$PGPORT_DOCKER" ] || return 1
+  case "$PGHOST" in localhost|127.0.0.1|::1) return 0 ;; *) return 1 ;; esac
 }
 
-# Whether the caller named a host or port. setup-native provisions exactly that
-# endpoint (an unnamed half keeps its default); only a fully unnamed endpoint
-# falls back to local service discovery.
-SELECTED_PGPORT="${PGPORT:-}"
-PGPORT=$(get_port)
 EXPLICIT_ENDPOINT=false
 
 # A coordinator must bind each transfer to its recorded endpoint, not saved
@@ -584,11 +605,9 @@ run_psql() {
     run_explicit_pg psql "$@"
     return $?
   fi
-  local mode
-  mode=$(get_mode)
   if command -v psql >/dev/null 2>&1; then
     PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
-  elif [ "$mode" = "docker" ] && docker_running; then
+  elif uses_local_docker_endpoint && docker_running; then
     PGPASSWORD="$PGPASSWORD" docker exec -i -e PGPASSWORD portos-db psql -U "$PGUSER" -d "$PGDATABASE" "$@"
   else
     err "psql not found on host and Docker DB is not running"
@@ -602,9 +621,7 @@ run_pg_dump() {
     run_explicit_pg pg_dump "$@"
     return $?
   fi
-  local mode
-  mode=$(get_mode)
-  if [ "$mode" = "docker" ] && docker_running; then
+  if uses_local_docker_endpoint && docker_running; then
     PGPASSWORD="$PGPASSWORD" docker exec -e PGPASSWORD portos-db pg_dump -U "$PGUSER" -d "$PGDATABASE" "$@"
   elif command -v pg_dump >/dev/null 2>&1; then
     PGPASSWORD="$PGPASSWORD" pg_dump -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"

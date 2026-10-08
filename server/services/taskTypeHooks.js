@@ -51,7 +51,7 @@
 import { isFalsyMeta, isTruthyMeta } from './agentState.js';
 import { TRACKER_FILING_TASK_TYPES, CONCRETE_WORK_TRACKERS } from '../lib/workTracker.js';
 import { isAuditTaskType } from '../lib/auditCatalog.js';
-import { CLAIM_FLOW_TASK_TYPES } from '../lib/claimFlowTaskTypes.js';
+import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
 
 // taskType → { load }. `load` is the module import thunk; a module may export
 // either or both hooks, and a missing export means "no hook of that kind for this
@@ -235,8 +235,7 @@ export function isNonCommittingCoordinatorTask(task) {
  * type set is the backstop for records carrying only the scheduled type.
  */
 export function isClaimFlowDispatch(task) {
-  if (isTruthyMeta(task?.metadata?.claimFlow)) return true;
-  return CLAIM_FLOW_TASK_TYPES.has(resolveTaskHookType(task));
+  return hasClaimFlowContract(task);
 }
 
 /**

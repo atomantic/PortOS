@@ -305,7 +305,8 @@ export function cloneProjectRecord(source, {
     productionPolicy: normalizeMusicVideoProductionPolicy({ strategy: 'legacy' }),
     castAndSets: null,
     visualSpec: clone.visualSpec ? { ...clone.visualSpec, references: [], moodBoardId: null } : null,
-    concept: clone.concept ? { ...clone.concept, subjects: [], moodBoardStyle: '' } : null,
+    // The cast resets, so a loaded character style (which casts the protagonist) does too.
+    concept: clone.concept ? { ...clone.concept, subjects: [], moodBoardStyle: '', characterStyleId: null, characterStyle: '' } : null,
     styleReferences: [],
     ...(clone.automation ? { automation: { ...clone.automation, tools: [], moodBoardId: null } } : {}),
     scenes: clone.scenes.map((scene) => ({ ...scene, visualLayer: 'footage',
@@ -479,6 +480,8 @@ function buildScene(input, { order }) {
     // #8985: what a composed render shows for this span (render.js#sceneLayer).
     visualLayer: input.visualLayer ?? 'footage',
     stillMove: input.stillMove ?? 'hold',
+    // #10589: the planned camera move (absent on hand-added and pre-#10589 shots).
+    ...(input.camera ? { camera: input.camera } : {}),
     cardText: input.cardText ?? null,
     ...(input.codeOverlay ? { codeOverlay: true } : {}),
     cardColor: input.cardColor ?? null,
@@ -698,6 +701,7 @@ export function splitScene(project, sceneId, { backend = null } = {}) {
         visualLayer: scene.visualLayer ?? 'footage',
         shotMode: scene.shotMode ?? 'cutaway',
         performanceSpeaker: scene.performanceSpeaker ?? null,
+        ...(scene.camera ? { camera: scene.camera } : {}),
         ...timing,
       }),
     }, { order: 0 });

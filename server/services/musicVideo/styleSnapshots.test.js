@@ -4,6 +4,8 @@ const getUniverse = vi.fn();
 const getBoard = vi.fn();
 vi.mock('../universeBuilder/crud.js', () => ({ getUniverse: (...a) => getUniverse(...a) }));
 vi.mock('../moodBoard/index.js', () => ({ getBoard: (...a) => getBoard(...a) }));
+const getCharacterStyleReferenceImage = vi.fn();
+vi.mock('./characterStyles.js', () => ({ getCharacterStyleReferenceImage: (...a) => getCharacterStyleReferenceImage(...a) }));
 
 const { withStyleSnapshots } = await import('./styleSnapshots.js');
 
@@ -14,6 +16,7 @@ describe('withStyleSnapshots (#9105)', () => {
   beforeEach(() => {
     getUniverse.mockReset().mockResolvedValue(UNIVERSE);
     getBoard.mockReset().mockResolvedValue(BOARD);
+    getCharacterStyleReferenceImage.mockReset().mockResolvedValue(null);
   });
 
   it('derives both snapshots on create from ids alone', async () => {
@@ -55,5 +58,47 @@ describe('withStyleSnapshots (#9105)', () => {
     getUniverse.mockRejectedValue(new Error('Universe not found'));
     const out = await withStyleSnapshots({ concept: { universeId: 'gone' } });
     expect(out.concept.universeStyle).toBe('');
+  });
+
+  it('casts a character style: snapshot, protagonist and this install\'s sheet as a conditioning reference', async () => {
+    getCharacterStyleReferenceImage.mockResolvedValue('sheet.png');
+    const director = { id: 'mvc-1', kind: 'character', name: 'Example lead', role: 'protagonist' };
+    const conditioned = [1, 2, 3, 4].map((n) => ({ id: `r${n}`, imageId: `r${n}.png`, condition: true }));
+    const out = await withStyleSnapshots({ concept: { characterStyleId: 'claudia-slopcore', subjects: [director] } },
+      { concept: {}, visualSpec: { references: conditioned } });
+    expect(out.concept.characterStyle).toContain('one clay-orange streak through the bangs');
+    expect(out.concept.subjects.map((s) => [s.id, s.role])).toEqual([['mvc-style-claudia-slopcore', 'protagonist'], ['mvc-1', 'supporting']]);
+    // Four references already condition frames, so the sheet joins as a described reference only.
+    expect(out.visualSpec.references.at(-1)).toMatchObject({ id: 'mvr-style-claudia-slopcore', imageId: 'sheet.png', role: 'character', condition: false });
+
+    const picked = { concept: { characterStyleId: 'claudia-slopcore', characterStyle: out.concept.characterStyle, subjects: out.concept.subjects }, visualSpec: out.visualSpec };
+    const cleared = await withStyleSnapshots({ concept: { characterStyleId: null } }, picked);
+    expect(cleared.concept.characterStyle).toBe('');
+    // The director's lead gets the protagonist role back.
+    expect(cleared.concept.subjects).toEqual([director]);
+    expect(cleared.visualSpec.references).toEqual(conditioned);
+  });
+
+  it('adds a sheet chosen after the style was first saved, and marks a sheet already referenced instead of duplicating it', async () => {
+    const first = await withStyleSnapshots({ concept: { characterStyleId: 'claudia-slopcore' } });
+    expect(first.visualSpec).toBeUndefined();
+    const saved = { concept: first.concept, visualSpec: { references: [{ id: 'mine', imageId: 'sheet.png', role: 'mood' }] } };
+    const patch = { concept: { characterStyleId: 'claudia-slopcore', subjects: first.concept.subjects } };
+    expect(await withStyleSnapshots(patch, saved)).toBe(patch);
+
+    getCharacterStyleReferenceImage.mockResolvedValue('sheet.png');
+    const resaved = await withStyleSnapshots(patch, saved);
+    expect(resaved.concept.subjects).toEqual(first.concept.subjects);
+    expect(resaved.visualSpec.references).toEqual([{ id: 'mine', imageId: 'sheet.png', role: 'character', condition: true }]);
+
+    getCharacterStyleReferenceImage.mockResolvedValue('new-sheet.png');
+    const replaced = await withStyleSnapshots(patch, { ...saved, visualSpec: resaved.visualSpec });
+    expect(replaced.visualSpec.references.map((r) => [r.id, r.imageId])).toEqual([['mine', 'sheet.png'], ['mvr-style-claudia-slopcore', 'new-sheet.png']]);
+  });
+
+  it('casts without a reference when this install has no sheet for the style', async () => {
+    const out = await withStyleSnapshots({ concept: { characterStyleId: 'claudia-slopcore' } });
+    expect(out.concept.subjects).toHaveLength(1);
+    expect(out.visualSpec).toBeUndefined();
   });
 });

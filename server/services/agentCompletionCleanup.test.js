@@ -65,6 +65,33 @@ const runningPipeline = (overrides = {}) => ({
 beforeEach(() => { vi.clearAllMocks(); });
 
 describe('handlePipelineProgression', () => {
+  it('preserves a run-level draft restriction across a read-only stage and a later merge-configured stage', async () => {
+    const task = { id: 'draft-pipeline', taskType: 'internal', metadata: {
+      prCompletion: 'draft', openPR: true, useWorktree: true,
+      pipeline: runningPipeline({
+        taskDefaults: { prCompletion: 'draft', openPR: true, useWorktree: true },
+        stages: [{ name: 'Audit' }, { name: 'Inspect', readOnly: true }, { name: 'Fix', prCompletion: 'merge-on-green' }],
+      }),
+    } };
+    await handlePipelineProgression(task, 'audit-agent', true);
+    const readOnlyStage = addTask.mock.calls.at(-1)[0];
+    expect(readOnlyStage.metadata).toMatchObject({ prCompletion: 'draft', readOnly: true, openPR: false, useWorktree: false });
+    await handlePipelineProgression(readOnlyStage, 'inspect-agent', true);
+    expect(addTask.mock.calls.at(-1)[0].metadata).toMatchObject({ prCompletion: 'draft', readOnly: false, openPR: true, useWorktree: true });
+  });
+
+  it('still permits stage-specific delivery when the pipeline has no run-level draft restriction', async () => {
+    const task = { id: 'ordinary-pipeline', taskType: 'internal', metadata: {
+      prCompletion: 'draft',
+      pipeline: runningPipeline({
+        taskDefaults: { prCompletion: 'review-then-merge' },
+        stages: [{ name: 'Draft stage', prCompletion: 'draft' }, { name: 'Land', prCompletion: 'merge-on-green' }],
+      }),
+    } };
+    await handlePipelineProgression(task, 'draft-stage-agent', true);
+    expect(addTask.mock.calls.at(-1)[0].metadata.prCompletion).toBe('merge-on-green');
+  });
+
   it('is a no-op when the pipeline is not running', async () => {
     const task = { id: 't', taskType: 'user', metadata: { pipeline: runningPipeline({ status: 'completed' }) } };
     await handlePipelineProgression(task, 'agent-1', true);
@@ -805,7 +832,7 @@ describe.each(['runner', 'spawner'])('%s completion side effects', (path) => {
   });
 });
 
-// `finalizeAgent` runs persistSimplifySummaries and resolveFailedTaskUpdate
+// `finalizeAgent` runs persistCompletionSummary and resolveFailedTaskUpdate
 // BEFORE it dispatches the output hook and calls completeAgent, and both
 // spawners run cleanup from a `finally` — so a throw in either lands here with
 // the record still `running`. The orphan sweep's recovery hook is what salvages

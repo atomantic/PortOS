@@ -9,7 +9,9 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 Graceful maintenance uses `data/workflow-maintenance/state.json` as a **file-primary,
 machine-local runtime journal**. It must fence both the API and standalone CoS runner
 before either can use PostgreSQL or start work. Its bounded live-operation set and
-operator hold are not app records, never federate, and are included in the data backup.
+operator hold are not app records and never federate. Data snapshots copy the
+`workflow-maintenance/` subtree as evidence, but no restore ever installs it (see
+[Explicitly abandoned duplicate agents](#explicitly-abandoned-duplicate-agents)).
 The schema is versioned; an absent file starts Normal, while corrupt/future state or
 an interrupted transaction fails closed. Replacement uses exclusive directory locking,
 file/directory fsync and atomic rename. No seed or DB migration is required.
@@ -44,6 +46,46 @@ certify the old work finished. Do not delete this journal to claim readiness; pr
 with the related run/job records for recovery. A backup restored on another installation
 therefore starts conservatively if it contains a hold or outstanding operations.
 
+Publication admission keeps a maintenance reservation while waiting for a backup
+cut. A boundary-owned callback-start check retires a refused admission without
+claiming any output was saved; failures after callback entry remain unresolved.
+Legacy generic `Output publication` reservations lack destination/batch identity.
+They cannot be swept automatically. After explicit operator disposition of
+inspected evidence, an owning service may use `reconcilePublicationRefusal` with
+the exact original operation and hold. Its synchronous publisher must preserve a
+durable, replayable evidence receipt before retirement; the journal validates and
+retires that exact owner under one lock. Missing ownership can only replay the
+existing receipt, never create an owner. This does not certify a complete
+transcript, clear transcript warnings, or change the original task outcome.
+
+### Explicitly abandoned duplicate agents
+
+A local operator may reconcile a user-killed duplicate that saved no output with
+`node scripts/reconcile-abandoned-agent.mjs <agent-id> <run-id> --confirm-abandoned <reason>`.
+Begin a normal maintenance hold first. When using a reviewed isolated checkout,
+`PORTOS_DATA_ROOT` names the install root (the parent of `data/`). This is an
+explicit abandonment decision, never automatic expiry or a successful-run verdict.
+The command refuses present agent/runner ownership, live recorded PIDs, retained
+agent output (including archives), worktrees/branches, nonempty run output,
+untrusted evidence, other reservations for that agent, and failed settlement.
+The exact hold and reservation are checked under the journal transaction lock.
+
+Before releasing the matching reservation, the owning service durably publishes
+`data/workflow-maintenance/abandoned-<run-id>.json`, retaining the original operation,
+operator reason, and evidence fingerprints. Other operations and the hold remain.
+Run/task outcomes are unchanged. Repeating the same request reuses its receipt;
+it cannot settle a replacement reservation. Receipt-first interrupted publication
+can be retried after normal journal recovery; the command never steals a transaction
+lock. These machine-local recovery receipts are never federated and never restored:
+a data snapshot copies them, but every file restore (full or scoped, preview and
+execution) preserves this machine's `workflow-maintenance/` subtree byte-for-byte
+and refuses an explicit selection with `BACKUP_RESTORE_MACHINE_LOCAL`, because
+installing another snapshot's journal or receipts would replace local authority.
+To use a receipt as an investigation artifact elsewhere, copy it out of the
+snapshot or the live data directory separately. This deliberately narrow command
+does not recover nonempty output or general failed saves; those still require the owning workflow's recovery.
+
+
 ## The Four Storage Classes
 
 | Class | Bytes live | Searchable metadata | Use when | PortOS examples |
@@ -58,6 +100,9 @@ therefore starts conservatively if it contains a hold or outstanding operations.
 ---
 
 ## `db-primary` — app-native relational records
+
+- Deep audit evidence — `deep_audit_ledgers` stores each app/category coverage ledger, source/prompt pins, server-assigned attempts, candidates, receipts and invalidated history. Machine-local and covered by the PostgreSQL dump; it does not federate (no sync cursor or tombstones). JSONB holds structured evidence, not binary assets, and row locking serializes updates. No full-text index is needed for keyed checkpoint reads. Additive schema initialization creates the table for existing and fresh installs without transforming old records or seeding data. Agent-written checkpoint JSON under `data/cos/deep-audit-checkpoints/` is a retained recovery input outside source checkouts, captured by normal CoS filesystem backup; imported database receipts remain authoritative. See [Deep audits](./DEEP-AUDITS.md).
+
 
 - Beeper's `beeper_reconcile_cursors` stores a machine-local per-account rotating checkpoint and a fixed per-rotation upper bound over already mirrored message IDs. Each sweep refetches at most 20 stored messages per account, independently of forward ingestion; failed retrievals retain the archive and retry on the next rotation. Checkpoints survive restart, cascade on account deletion, and are covered by PostgreSQL backup. They never federate. `beeper_messages.observed_at` records fetch-start time to break equal source-version ties; source edit timestamps prevent stale sweep/outbox writes from replacing edits. Additive schema initialization upgrades existing installs without a data seed.
 
@@ -245,7 +290,7 @@ goal data together; interrupted intents remain retryable after restore.
 - Music Video dependency provenance — versioned plate/clip references, optional crop/mask input revisions, composition-window checksums, and review snapshots live on existing db-primary `musicVideoProject` rows. Repairs keep historical takes and files and reuse serialized revision checkpoints; no new store, seed, or install migration. Legacy evidence without a snapshot remains unverified. The `musicVideoProjects` schema gate prevents older peers from reusing stale evidence; existing asset channels retain byte ownership.
 - Music Video development artifacts ("ingredients": a Cast & Sets check-in sheet, animatic, treatment, storyboard) — each version is an immutable file under `data/music-video/{projectId}/dev/{artifactId}/v{N}.{html,md,mp4,png,jpg}`; the `musicVideoProject` record owns the metadata (`devArtifacts[]`: kind, title, review status, notes, version history with each version's data-relative path). Versions are never overwritten and deletes are soft, so a clone that carried the metadata keeps valid pointers. The metadata is **wire-local** (stripped by `stripMusicVideoLocalRenderPins`, restored over a newer remote by `mergeProjectRecord`) because the bytes are not in the project's peer-sync asset manifest; both halves are backed up (PostgreSQL dump + rsync snapshot). Adapter: `server/services/musicVideo/devArtifactStore.js`.
 - Music Video narrative events (`composition.narrativeEvents`) and section reactive gain caps (`composition.reactiveSections`) persist in the existing db-primary `music_video_projects` JSONB record. Anchors are song seconds, measured band-onset indices, or aligned cue/word indices; absent fields preserve legacy behavior. Audio replacement clears anchors while retaining narrative intent. Schema v14 gates peers whose composition normalizer would drop these fields. Resolved absolute frames live in immutable, wire-local document manifests; an event revision retains selected takes and replaces only affected section functions.
-- Music Video composition documents (render style `document`) — each import (zip, a folder inside `data/`, or the shipped `layered` template) is one immutable version folder `data/music-video/{projectId}/composition/{versionId}/` (index.html + scripts, fonts, media); the `musicVideoProject` record's `composition.document` holds the data-relative pointer plus source/size metadata. A clone shares the pointer; a version no project (live or tombstoned) points at is pruned on the next import or detach. The pointer is **wire-local** like the development artifacts (stripped by `stripMusicVideoLocalRenderPins`, restored by `mergeProjectRecord`) — a peer keeps its own and refuses to render without one. Renders stage a job-private copy under `data/music-video-song-renders/{jobId}/` (swept at boot, excluded from backups). Adapter: `server/services/musicVideo/compositionDocument.js`.
+- Music Video composition documents (render style `document`) — each import (zip, a folder inside `data/`, or the shipped `layered` template) is one immutable version folder `data/music-video/{projectId}/composition/{versionId}/` (index.html + scripts, fonts, media); the `musicVideoProject` record's `composition.document` holds the data-relative pointer plus source/size metadata. A clone shares the pointer; a version no project (live or tombstoned) points at is pruned on the next import or detach. The pointer is **wire-local** like the development artifacts (stripped by `stripMusicVideoLocalRenderPins`, restored by `mergeProjectRecord`) — a peer keeps its own and refuses to render without one. Renders stage a job-private copy under `data/music-video-song-renders/{jobId}/` (swept at boot, excluded from backups). Adapter: `server/services/musicVideo/compositionDocument.js`. An explicit `POST /api/music-video/:id/composition/document/engine/upgrade` with the selected `directory` adopts a recognized shipped layered engine in a new immutable version, preserving every authored file. Customized engines and pending candidates are refused; prior render/review evidence becomes stale when the document pointer changes.
 - Beeper attachment mirror (#37) — message media stays on disk under `data/beeper/attachments/<sha256 prefix>/<sha256>.<ext>` (content-addressed, so one forwarded photo is one file); `beeper_attachments` in PostgreSQL holds the metadata plus `local_path` / `sha256` / `byte_length` / `keep`. Machine-local and **never federated** (message content is PII — see the message-bodies ADR); a lazy CACHE rather than an archive, so it is excluded from backup by default (overridable) while the rows that describe it ride the Postgres dump. The bytes are re-fetchable from Beeper Desktop for as long as the source network still holds the media, and the surface renders a labelled reference when it does not.
 - Media collections — many-to-many links over assets/universes/series/catalog media pointers (`db-primary` link tables) pointing at `asset-file-db-indexed` bytes. **Still `data/media-collections/*` JSON today** — a follow-up slice of #1000.
 
@@ -324,6 +369,17 @@ PortOS treats **PostgreSQL as a mandatory install/runtime dependency** for every
 
 Provision either path with **`npm run setup:db`** (also run automatically by `npm run setup` and `npm start`). It follows `PGMODE` (shell environment → `.env` → `docker`), and provisions only that selected backend. An unavailable Docker installation fails setup without probing native PostgreSQL or changing the saved mode. See [Setup path](#setup-path-npm-run-setupdb) below.
 
+The standalone `scripts/db.sh` also reads the repository-root `.env` through the
+shared setup parser (Node is required), with nonempty shell settings taking
+precedence. Quoted mode and connection values are supported without evaluating
+shell syntax. Native commands use `PGPORT`; Docker commands use
+`PGPORT_DOCKER`, unless the caller explicitly exports an active `PGPORT`.
+`setup-native` uses `PORTOS_NATIVE_PGPORT` when inherited from PM2, then the
+configured native `PGPORT`, without changing the selected mode. Container-local
+dump/import tools are used only for the selected local Docker endpoint; a
+host/port override cannot silently fall back to the local container. Maintenance
+`--endpoint` transfers remain bound to their explicitly recorded endpoint.
+
 ### `MEMORY_BACKEND=file` is a development/test-only escape hatch — NOT a deployment mode
 
 The file backend (`server/services/memory.js`, JSON under `./data/`) is **unsupported for production and for federated peers.** It exists only so the test suite (and ad-hoc local development) can boot without a database. It is **not** a fallback, a "lite" mode, or a way to run PortOS without Postgres:
@@ -356,17 +412,18 @@ The escape hatch is **guarded from bitrot by the test suite** (tests boot with `
 
 ### Moving between Docker and native
 
-Automatic backend migration and switching are temporarily unavailable.
-The Settings switch/migration requests and `scripts/db.sh migrate`,
-`use-native`, and `use-docker` refuse before copying data or changing mode. The former path could accept writes after its dump snapshot
-and strand them on the source; changing `.env` also leaves the running server
-connected to its original pool.
+Use **Settings → Database** for coordinated backend migration, including
+progress and recovery of an interrupted cutover. The legacy switch/migration
+requests and `scripts/db.sh migrate`, `use-native`, and `use-docker` still refuse
+before copying data or changing mode. Those former paths could accept writes
+after the dump snapshot and strand them on the source; changing `.env` also
+leaves the running server connected to its original pool.
 
 `POST /api/database/maintenance/preflight` accepts explicit `source` and `target`
 backend names through the ordinary instance authentication gate. It checks the
 saved direction against the running pool and requires complete, trusted, idle
 work state. A successful response is `{ source, target, advisory: true, accepted: false }`: it creates no operation, reserves no maintenance window, and does
-not promise that a later request is safe. The future acceptance path must repeat
+not promise that a later request is safe. Cutover acceptance repeats
 these checks under its final admission protocol. Missing/unreadable work state,
 configuration drift, or an existing maintenance fence refuses the check.
 
@@ -380,7 +437,7 @@ saved backend. Producer shutdown alone does **not** prove child/spawn quiescence
 or authorize a dump. The internal transfer worker follows it with predecessor
 and descendant reconciliation, then exports the recorded source and imports the
 recorded dump into the recorded target (see [offline transfer](#offline-transfer)).
-The backend cutover API (`POST /api/database/maintenance/cutover`, `POST /api/database/maintenance/recover`, host-control gated) now runs the whole verified lifecycle; the Settings database tab stays disabled until #8811 surfaces its progress and recovery.
+The backend cutover API (`POST /api/database/maintenance/cutover`, `POST /api/database/maintenance/recover`, host-control gated) runs the whole verified lifecycle. The Settings database tab displays progress from the durable maintenance journal and offers Resume when the coordinator has exited; it reports success only after verifying the completed operation, not merely an accepted request or reconnect.
 
 For stage diagnostics, run `node scripts/database-maintenance.mjs status` and
 `node scripts/database-maintenance.mjs writers`. `accepted` means no transfer
@@ -391,8 +448,8 @@ for the transfer stages. A same-operation internal successor requires
 the prior detached supervisor's durable exit receipt and repeats shutdown
 readback, predecessor and writer reconciliation before any export or import.
 
-Until the Settings flow ships (#8811), keep the existing backend selected and use
-backups unless you drive the cutover API deliberately. A safe cutover requires
+Keep the existing backend selected until you deliberately start a coordinated
+cutover through Settings or the API. A safe cutover requires
 downtime for **all** PortOS writers, including the CoS runner, and verification
 that the restarted server actually uses the target. A server-only restart or
 a saved-mode change is not that verification. Do not use Sync followed by Switch
@@ -431,6 +488,23 @@ For an install with an unusually large pre-v2 catalog, treat the update as plann
 4. Wait for the `Database schema upgrades applied` startup log before resuming use. If startup is interrupted, rerun the normal startup; the expression gate and `IF NOT EXISTS` statements safely converge on the v2 shape.
 
 ---
+
+### CoS memory history
+
+`memory_versions` is `db-primary`, linked to `memories` by a cascading foreign key
+and included in database backups. Additive boot DDL and DB migration 014 initialize
+existing memories at version 1 without changing text. A row trigger snapshots the
+previous semantic fields and increments the local counter atomically; access,
+embedding, importance and status changes do not create versions. Guarded edits
+lock the row before checking `expectedVersion`.
+
+History, retirement reasons and relationship links remain machine-local. Memory
+sync keeps its existing current-row, last-writer-wins behavior. A receiver requesting
+`schemaVersion=PORTOS_SCHEMA_VERSIONS.memoryHistory` also receives the sender's
+version; legacy pulls omit it, and unsupported future wire versions are rejected.
+Received counters never replace local counters: a peer replacement snapshots this
+machine's prior text and advances its own revision. Rejection now archives with a
+reason; explicit purge deletes the memory and its history.
 
 ## Adding a new data store? Answer these
 
@@ -851,3 +925,34 @@ journal; do not delete unresolved evidence. Status reconciliation re-reads exact
 terminal proof before settling the current claim. A crash after ledger completion
 but before journal settlement or hold release is recoverable without relaunch.
 See [peer administration](features/peer-administration.md) for supported actions.
+
+### Music Video authoring checkpoint
+
+`data/cache/music-video-authoring/<project-id>.json` is `ephemeral-file`: one
+versioned, atomic checkpoint per project holds validated section functions while
+a local document authoring attempt is unfinished. Same-project authoring requests
+serialize; retries read the checkpoint from disk. Its key includes the authoring
+basis, exact prompt, resolved provider/model/effort, and active/candidate document
+pointers, so edits replace staged work. Successful document publication removes
+the checkpoint. It is regenerable runtime state rather than searchable project
+metadata, never federates, and the existing anchored `/cache/` backup exclusion
+covers it. An absent checkpoint starts empty; no seed or migration is required.
+
+### On-demand preparation handoffs
+
+`data/cos/task-schedule.json` also holds `onDemandHandoffs`, keyed by request ID,
+for asynchronous quota-burn and maintenance task preparation. Moving a request
+out of `onDemandRequests` and recording its `preparing` owner/token happen in the
+same schedule write queue. The exact owner records accepted task ID or refusal;
+these receipts are durable control state, not disposable preflight UI telemetry.
+Existing schedules need no migration; an absent map means no recorded handoffs.
+
+An owner nonce fences settlement; a recorded owner PID must be proven absent
+(`ESRCH`) before drain and maintenance/quota reconciliation settle a claim
+against persisted request-stamped tasks; missing tasks become `interrupted`,
+never automatically requeued. Unreadable task storage leaves the claim untouched.
+Live/reused PIDs, missing identities and ambiguous probe errors remain held.
+No age-based expiration is used. Refused/interrupted maintenance work stops until
+explicit resume acknowledges the outcome. A legacy Deep queued request with no
+queue, task, or receipt likewise stops for explicit resume. Repeating resume on
+an already-running maintenance run does not dispatch or re-evaluate it.

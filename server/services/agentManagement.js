@@ -1,3 +1,6 @@
+import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
+import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
+import { isFalsyMeta, isTruthyMeta } from '../lib/metadataFlags.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
  * Agent Management
@@ -23,7 +26,7 @@ import { terminateAgentViaRunner, killAgentViaRunner, pauseAgentViaRunner, getAg
 import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
-import { activeAgents, runnerAgents, userTerminatedAgents, pausedAgents, whenPausedAgentExits, useRunner, unregisterSpawnedAgent } from './agentState.js';
+import { activeAgents, runnerAgents, spawningTasks, userTerminatedAgents, pausedAgents, whenPausedAgentExits, useRunner, unregisterSpawnedAgent } from './agentState.js';
 // Both were extracted out of agentLifecycle.js (issue #2837) so this module no
 // longer depends on the lifecycle orchestrator — which depends on THIS module
 // for handleOrphanedTask. Importing them from their own leaf modules is what
@@ -390,10 +393,24 @@ export async function resumeAgent(agentId, overrides = {}) {
   }
 
   const taskId = agent.taskId || agent.metadata?.taskId || null;
-  const task = taskId ? await getTaskById(taskId).catch(() => null) : null;
+  let task = taskId ? await getTaskById(taskId).catch(() => null) : null;
   const taskType = task?.taskType || agent.metadata?.taskType || 'user';
 
   const mode = classifyResume(task, agentId);
+  if (mode === 'requeued' || mode === 'new-task') {
+    const priorClaim = isTruthyMeta(agent.metadata?.configClaimFlow) || hasClaimFlowContract({ ...agent, taskType: agent.metadata?.taskType });
+    // Missing task metadata cannot be reconstructed from caller prose. Only a
+    // positively generic registration may use the historical description fallback.
+    if ((!task && (priorClaim || !isFalsyMeta(agent.metadata?.configClaimFlow)))
+      || (task && priorClaim && !hasClaimFlowContract(task))) {
+      throw new ServerError('Resume blocked: the original task configuration is unavailable, so claim authority cannot be verified. Restore the original task or start a new task from its configured workflow.', {
+        status: 409, code: 'AGENT_RESUME_CONTRACT_MISSING'
+      });
+    }
+    if (hasClaimFlowContract(task)) {
+      task = { ...task, metadata: { ...task.metadata, claimFlow: true } };
+    }
+  }
   let resumed;
   switch (mode) {
     case 'requeued':
@@ -620,7 +637,10 @@ async function requeuePausedTask({ task, taskType, overrides }) {
   // `pending` is non-terminal, so the pointer that write lands survives it
   // (updateTask only strips a resume pointer on a terminal status).
   const result = await reviveBlockedTask(task.id, {
-    metadata: resumeOverrideMetadata(overrides, task.metadata)
+    metadata: {
+      ...resumeOverrideMetadata(overrides, task.metadata),
+      ...(hasClaimFlowContract(task) ? { claimFlow: true } : {})
+    }
   }, taskType);
   if (result?.error) {
     throw new ServerError(`Failed to requeue task ${task.id}: ${result.error}`, {
@@ -1124,6 +1144,9 @@ async function retireStrandedPausedAgents(agents) {
   }
 }
 
+// A running record with no pid this young may still be mid-spawn.
+const SPAWN_GRACE_MS = 30000;
+
 export function cleanupOrphanedAgents() {
   if (!orphanCleanupPromise) {
     orphanCleanupPromise = runCleanupOrphanedAgents().finally(() => {
@@ -1231,6 +1254,15 @@ async function runCleanupOrphanedAgents() {
       // the durable record running forever.
       if (activeAgents.has(agent.id)) continue;
       if (inRemoteRunner) continue;
+      // The record is written before the spawn finishes (prompt build, task claim,
+      // PTY open), so a fresh one has no pid and no handle yet. Retiring it here
+      // completes a run that goes on to launch — its claim ownership bind then
+      // fails with owner-not-running. Mirrors the zombie sweep's guards.
+      if (agent.taskId && spawningTasks.has(agent.taskId)) continue;
+      if (!agent.pid) {
+        const startedAtMs = agent.startedAt ? Date.parse(agent.startedAt) : 0;
+        if (Date.now() - startedAtMs < SPAWN_GRACE_MS) continue;
+      }
       if (runnerAgents.has(agent.id)) runnerAgents.delete(agent.id);
 
       // Before marking as orphaned, check if the process is actually still running
@@ -1471,6 +1503,31 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
   // Skip tasks already completed
   if (task.status === 'completed') {
     emitLog('debug', `⏭️ Skipping orphaned task ${taskId} — already completed`, { taskId, agentId });
+    return;
+  }
+
+  // Recovery of a dead Deep invocation is a checkpoint, never permission to
+  // auto-launch another provider call or to treat commits as completed coverage.
+  if (isLegacyDeepAudit(task.metadata)) {
+    if (task.status !== 'in_progress') return;
+    const held = isRetryHeld(task.metadata);
+    if (held && task.metadata[RETRY_HOLD_KEY] !== agentId) return;
+    if (!held) {
+      const spawnedAt = toEpochMs(task.metadata?.[LAST_SPAWNED_AT_KEY]);
+      const startedAt = toEpochMs(agentStartedAt);
+      // A legacy/unknown owner cannot authorize parking a newer invocation.
+      if (!spawnedAt || !startedAt || spawnedAt > startedAt) return;
+      const agents = await getAgents();
+      if (!Array.isArray(agents) || agents.some(entry => entry.taskId === taskId && entry.id !== agentId
+        && (entry.status === 'running' || toEpochMs(entry.startedAt) > startedAt))) return;
+    }
+    const resumePatch = await resolveTaskResumePatch({ task, agentId, agentMetadata });
+    await updateTask(taskId, { status: 'blocked', metadata: {
+      ...resumePatch, ...clearedRetryHoldMetadata(), blockedCategory: 'deep-audit-partial',
+      blockedReason: 'Interrupted Deep audit; inspect checkpoint and resume explicitly', blockedAt: new Date().toISOString(),
+    } }, task.taskType || 'user', { expectedStatus: 'in_progress',
+      expectedMetadata: held ? { [RETRY_HOLD_KEY]: agentId } : { [LAST_SPAWNED_AT_KEY]: task.metadata[LAST_SPAWNED_AT_KEY] },
+    });
     return;
   }
 

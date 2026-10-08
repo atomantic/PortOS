@@ -71,3 +71,60 @@ describe('persisted render failure chip (#10154)', () => {
     expect(onGenerateVideo).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('planned camera move (#10589)', () => {
+  function Harness({ initial, onSave }) {
+    const [scene, setScene] = useState(initial);
+    return <SceneCard scene={scene} index={0} layered onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+  }
+
+  it('picks a catalog move, its speed and beat, and clears it', () => {
+    const onSave = vi.fn();
+    render(<Harness initial={{ sceneId: 's1', visualLayer: 'still', startSec: 0, endSec: 5, takes: [] }} onSave={onSave} />);
+    const select = screen.getByLabelText('Camera');
+    expect(select.value).toBe('');
+    expect(screen.getByLabelText('Move').disabled).toBe(false);
+    fireEvent.change(select, { target: { value: 'whip-pan' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { camera: { move: 'whip-pan' } });
+    expect(screen.getByLabelText('Move').disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText('Speed'), { target: { value: 'fast' } });
+    fireEvent.click(screen.getByLabelText('On beat'));
+    expect(onSave).toHaveBeenLastCalledWith('s1', { camera: { move: 'whip-pan', speed: 'fast', onBeat: true } });
+    fireEvent.change(select, { target: { value: '' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { camera: null });
+  });
+
+  it('asks why a static camera holds, and offers no camera on a title card', () => {
+    const onSave = vi.fn();
+    const { unmount } = render(<Harness initial={{ sceneId: 's1', startSec: 0, endSec: 5, takes: [], camera: { move: 'slow-dolly-in' } }} onSave={onSave} />);
+    expect(screen.queryByLabelText('Why it holds')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Camera'), { target: { value: 'locked-off' } });
+    const reason = screen.getByLabelText('Why it holds');
+    fireEvent.change(reason, { target: { value: ' the dancer fills the frame ' } });
+    fireEvent.blur(reason);
+    expect(onSave).toHaveBeenLastCalledWith('s1', { camera: { move: 'locked-off', reason: 'the dancer fills the frame' } });
+    unmount();
+    render(<SceneCard scene={{ sceneId: 's2', visualLayer: 'card', startSec: 0, endSec: 5, takes: [] }} index={0} layered onEditLocal={() => {}} onSave={() => {}} />);
+    expect(screen.queryByLabelText('Camera')).toBeNull();
+  });
+});
+
+describe('lyric type per shot (#10583)', () => {
+  it('lets a composition-document shot pick its lyric zone and style, and clears back to the defaults', () => {
+    const onSave = vi.fn();
+    const scene = { sceneId: 's1', startSec: 0, endSec: 5, takes: [], textZone: 'upper-right' };
+    const { rerender } = render(<SceneCard scene={scene} index={0} layered onEditLocal={() => {}} onSave={onSave} />);
+    // Only a composition document draws the shared lyric type.
+    expect(screen.queryByLabelText('Lyrics')).toBeNull();
+    rerender(<SceneCard scene={scene} index={0} layered documentComposition onEditLocal={() => {}} onSave={onSave} />);
+    expect(screen.getByLabelText('Lyrics').value).toBe('upper-right');
+    for (const [label, value] of [['Upper centre', 'upper'], ['Lower centre', 'lower']]) {
+      expect(screen.getByRole('option', { name: label }).value).toBe(value);
+      fireEvent.change(screen.getByLabelText('Lyrics'), { target: { value } });
+    }
+    fireEvent.change(screen.getByLabelText('Lyrics'), { target: { value: 'none' } });
+    fireEvent.change(screen.getByLabelText('Lyric style'), { target: { value: 'stamp' } });
+    fireEvent.change(screen.getByLabelText('Lyrics'), { target: { value: '' } });
+    expect(onSave.mock.calls).toEqual([['s1', { textZone: 'upper' }], ['s1', { textZone: 'lower' }], ['s1', { textZone: 'none' }], ['s1', { lyricRole: 'stamp' }], ['s1', { textZone: null }]]);
+  });
+});

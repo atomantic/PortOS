@@ -24,18 +24,22 @@
  */
 
 import { readFile } from 'node:fs/promises';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { resolveAgentKeyFile } from '../lib/agentKeyFile.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const DEFAULT_URL = 'http://127.0.0.1:5555';
+export const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const METHODS = new Set(['get', 'post', 'put', 'patch', 'delete']);
 const PRIORITIES = new Set(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']);
 
 export const USAGE = `Usage:
-  portos-api whoami
-  portos-api <get|post|put|patch|delete> <path> [json | @file | -]
-  portos-api task "<description>" [--app <id>] [--priority LOW|MEDIUM|HIGH|CRITICAL] [--context "<note>"]
+  portos-api whoami [--timeout <seconds>]
+  portos-api <get|post|put|patch|delete> <path> [json | @file | -] [--timeout <seconds>]
+  portos-api task "<description>" [--app <id>] [--priority LOW|MEDIUM|HIGH|CRITICAL] [--context "<note>"] [--timeout <seconds>]
 
+Requests wait up to 30 minutes by default, including the response body.
 Discover endpoints: portos-api get /api/api-docs/catalog.json`;
 
 /** `/cos/tasks` → `/api/cos/tasks`; `/api/...` and `/data/...` pass through. */
@@ -67,12 +71,18 @@ const splitFlags = (args) => {
  * read.
  */
 export const parseArgs = (argv) => {
-  const [command, ...rest] = argv;
+  const [command, ...args] = argv;
   if (!command || command === '--help' || command === '-h' || command === 'help') return { help: true };
-  if (command === 'whoami') return { method: 'GET', path: '/api/auth/whoami', body: null };
+  const { flags, positional: rest } = splitFlags(args);
+  const timeout = {};
+  if (flags.timeout !== undefined) {
+    const seconds = Number(flags.timeout);
+    if (!Number.isFinite(seconds) || seconds <= 0 || seconds * 1000 > 2 ** 31 - 1) throw new Error('--timeout must be positive seconds within the timer limit');
+    timeout.timeoutMs = seconds * 1000;
+  }
+  if (command === 'whoami') return { method: 'GET', path: '/api/auth/whoami', body: null, ...timeout };
   if (command === 'task') {
-    const { flags, positional } = splitFlags(rest);
-    const description = positional.join(' ').trim();
+    const description = rest.join(' ').trim();
     if (!description) throw new Error('task needs a description');
     const task = { description };
     if (flags.app) task.app = flags.app;
@@ -82,7 +92,7 @@ export const parseArgs = (argv) => {
       if (!PRIORITIES.has(priority)) throw new Error(`--priority must be one of ${[...PRIORITIES].join(', ')}`);
       task.priority = priority;
     }
-    return { method: 'POST', path: '/api/cos/tasks', body: JSON.stringify(task) };
+    return { method: 'POST', path: '/api/cos/tasks', body: JSON.stringify(task), ...timeout };
   }
   if (!METHODS.has(command.toLowerCase())) throw new Error(`Unknown command: ${command}`);
   const [path, payload] = rest;
@@ -91,7 +101,7 @@ export const parseArgs = (argv) => {
   if (payload === '-') body = { stdin: true };
   else if (payload?.startsWith('@')) body = { file: payload.slice(1) };
   else if (payload !== undefined) body = payload;
-  return { method: command.toUpperCase(), path: normalizePath(path), body };
+  return { method: command.toUpperCase(), path: normalizePath(path), body, ...timeout };
 };
 
 /** `{ url, token }` from the environment and the key file (see header). */
@@ -119,28 +129,46 @@ const resolveBody = async (body) => {
   return text;
 };
 
-const main = async () => {
-  const parsed = parseArgs(process.argv.slice(2));
+// Builtin HTTP has no hidden five-minute headers limit. One deadline covers
+// connection, headers and body, and destroying the request also closes its socket.
+const requestApi = (url, { method, headers, body, timeoutMs }) => {
+  const target = new URL(url);
+  if (!['http:', 'https:'].includes(target.protocol)) throw new Error('PORTOS_URL must use HTTP or HTTPS');
+  let timer;
+  return new Promise((resolve, reject) => {
+    const request = (target.protocol === 'https:' ? httpsRequest : httpRequest)(target, { method, headers }, (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.on('error', reject);
+      response.on('end', () => resolve({ status: response.statusCode, text: Buffer.concat(chunks).toString('utf8') }));
+    });
+    request.on('error', reject);
+    timer = setTimeout(() => request.destroy(new Error(`Request timed out after ${timeoutMs / 1000} seconds; server work may still be running.`)), timeoutMs);
+    request.end(body);
+  }).finally(() => clearTimeout(timer));
+};
+
+export const main = async (argv = process.argv.slice(2), env = process.env) => {
+  const parsed = parseArgs(argv);
   if (parsed.help) {
     console.log(USAGE);
     return 0;
   }
-  const { url, token } = await resolveCredentials();
+  const { url, token } = await resolveCredentials(env);
   const body = await resolveBody(parsed.body);
   const headers = { Accept: 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
   if (body !== null) headers['Content-Type'] = 'application/json';
-  const res = await fetch(`${url}${parsed.path}`, { method: parsed.method, headers, body });
-  const text = await res.text();
+  const { status, text } = await requestApi(`${url}${parsed.path}`, { method: parsed.method, headers, body, timeoutMs: parsed.timeoutMs ?? DEFAULT_TIMEOUT_MS });
   let out = text;
   try { out = JSON.stringify(JSON.parse(text), null, 2); } catch { /* not JSON: print as-is */ }
-  if (res.ok) {
+  if (status >= 200 && status < 300) {
     if (out) console.log(out);
     return 0;
   }
-  console.error(`❌ ${parsed.method} ${parsed.path} → ${res.status}`);
+  console.error(`❌ ${parsed.method} ${parsed.path} → ${status}`);
   if (out) console.error(out);
-  if (res.status === 401 && !token) {
+  if (status === 401 && !token) {
     console.error('No credential found. Turn on Settings > Security > Agent API key in PortOS, or set PORTOS_API_TOKEN.');
   }
   return 1;

@@ -744,6 +744,25 @@ describe('stream error containment', () => {
     expect(appendRunEvent.mock.calls.map(([e]) => e.kind)).not.toContain('run.output');
   });
 
+  it.each([
+    ['final result', { type: 'result', result: 'Saved a partial checkpoint.' }, 'Saved a partial checkpoint.'],
+    ['missing result', null, ''],
+    ['malformed result', { type: 'result', result: { text: 'invalid' } }, null],
+  ])('passes only an explicit completion through finalization: %s', async (_label, result, expected) => {
+    const { finalizeAgent } = await import('./agentFinalization.js');
+    finalizeAgent.mockClear();
+    await spawnDirectly(minimalArgs);
+    const events = [
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'Thinking about files.' }] } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'Running another command.' }] } },
+      ...(result ? [result] : []),
+    ];
+    fakeProcess.stdout.emit('data', Buffer.from(events.map(event => JSON.stringify(event)).join('\n') + '\n'));
+    fakeProcess.stderr.emit('data', Buffer.from('trailing runner diagnostics\n'));
+    fakeProcess.emit('close', 0);
+    await vi.waitFor(() => expect(finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({ finalSummary: expected })));
+  });
+
   it('drains stdout output on close and a failed batch flush is logged, not leaked as an unhandled rejection', async () => {
     // stdout output is now batched: the data handler pushes lines to the output
     // batcher and the close handler drains it. Make the drain's state write fail

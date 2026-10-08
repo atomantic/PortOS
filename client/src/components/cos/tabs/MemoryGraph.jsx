@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useMemo, useRef, useCallback } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { Info } from 'lucide-react';
 import * as api from '../../../services/api';
@@ -8,7 +8,7 @@ import GraphScene, { graphMotionSettings } from '../../graph3d/GraphScene';
 import useGraphCanvasInteraction from '../../graph3d/useGraphCanvasInteraction';
 import TouchDragHint from '../../graph3d/TouchDragHint';
 import BrailleSpinner from '../../BrailleSpinner';
-import useGraphNodeDetail from '../../../hooks/useGraphNodeDetail';
+import { useSocketResource } from '../../../hooks/useSocketResource';
 import usePrefersReducedMotion from '../../../hooks/usePrefersReducedMotion';
 import { formatDateNumeric, formatPercent } from '../../../utils/formatters';
 
@@ -43,13 +43,29 @@ export const memoryEdgeColor = (edge) => (
 export const memoryEdgeIntensity = (edge, dimmed) =>
   dimmed ? 0.06 : (edge.type === 'linked' ? 0.6 * edge.weight : 0.3 * edge.weight);
 
+const MEMORY_EVENTS = ['cos:memory:created', 'cos:memory:updated', 'cos:memory:deleted', 'cos:memory:extracted'];
+
 // --- Outer component ---
 
 export default function MemoryGraph() {
-  const [graphData, setGraphData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [selectedNode, setSelectedNode] = useState(null);
-  const fullMemory = useGraphNodeDetail(selectedNode?.id ?? null, api.getMemory, selectedNode?.id);
+  const { data: graphData, loading, error, refetch } = useSocketResource(
+    async ({ signal }) => {
+      const result = await api.getMemoryGraph({ signal, silent: true });
+      if (!Array.isArray(result?.nodes) || !Array.isArray(result?.edges)) throw new Error('Invalid memory graph response');
+      return result;
+    },
+    { namespace: 'cos', events: MEMORY_EVENTS }
+  );
+  const [selection, setSelectedNode] = useState(null);
+  const selectedNode = graphData?.nodes?.find(node => node.id === selection?.id) || null;
+  const detail = useSocketResource(
+    ({ signal }) => api.getMemory(selectedNode.id, { signal, silent: true }),
+    {
+      namespace: 'cos', events: MEMORY_EVENTS, resourceKey: selectedNode?.id,
+      enabled: !!selectedNode, matchesEvent: payload => payload?.id === selectedNode?.id
+    }
+  );
+  const fullMemory = detail.data;
   const [layoutKey, setLayoutKey] = useState(0);
   // Mobile-only: the legend auto-shows on a roomy viewport (CSS, not this flag).
   const [legendOpen, setLegendOpen] = useState(false);
@@ -58,12 +74,8 @@ export default function MemoryGraph() {
 
   const graphRef = useRef(null);
 
-  useEffect(() => {
-    api.getMemoryGraph().then(setGraphData).catch(() => setGraphData(null)).finally(() => setLoading(false));
-  }, []);
-
   const graph = useMemo(() => {
-    if (!graphData?.nodes?.length) return null;
+    if (!graphData?.nodes?.length) { graphRef.current = null; return null; }
     const g = buildGraph(graphData.nodes, graphData.edges);
     graphRef.current = g;
     return g;
@@ -121,6 +133,10 @@ export default function MemoryGraph() {
     );
   }
 
+  if (error && !graphData) {
+    return <div role="alert">Unable to load memory graph. <button onClick={refetch}>Retry</button></div>;
+  }
+
   if (!graphData || !graphData.nodes?.length) {
     return (
       <div className="text-center py-12 text-gray-500">
@@ -131,6 +147,7 @@ export default function MemoryGraph() {
 
   return (
     <div className="space-y-3">
+      {error && <div role="alert">Unable to refresh memory graph. <button onClick={refetch}>Retry</button></div>}
       {/* Stats bar */}
       <div className="flex items-center justify-between bg-port-card border border-port-border rounded-lg px-4 py-2">
         <span className="text-sm text-gray-400">

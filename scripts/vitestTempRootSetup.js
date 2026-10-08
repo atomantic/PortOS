@@ -25,6 +25,11 @@ const TOOLCHAIN_CACHE_PREFIXES = new Set([
   // are browser-owned, not fixture data, and surface once a real-Chrome suite runs
   // under this guard on Linux (#10312). Exact browser prefixes only.
   'com.google.Chrome.',
+  // Chrome's component updater stages unpacked downloads in this exact prefix.
+  'com.google.Chrome.chrome_chrome_Unpacker_BeginUnzipping.',
+  // Component download scratch uses this exact prefix (the underscore precedes
+  // the random-name separator; keep it when comparing grouped leak prefixes).
+  'com.google.Chrome.chrome_chrome_url_fetcher_.',
   '.com.google.Chrome.',
   'org.chromium.Chromium.',
   '.org.chromium.Chromium.',

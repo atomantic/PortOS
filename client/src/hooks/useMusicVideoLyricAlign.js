@@ -10,6 +10,10 @@ import {
 /** Human label for the alignment job's current progress frame. */
 export function lyricAlignStageLabel(frame) {
   switch (frame?.stage) {
+    case 'installing': return frame.detail || 'Installing the alignment runtime…';
+    case 'separating': return 'Separating vocals with Demucs…';
+    case 'emissions': return 'Reading the vocal with MMS_FA…';
+    case 'aligning': return 'Aligning the lyric text with CTC…';
     case 'decoding': return 'Decoding the song…';
     case 'loading-model': return 'Loading the speech model…';
     case 'downloading-model': return 'Downloading the speech model (first run only)…';
@@ -36,7 +40,7 @@ export default function useMusicVideoLyricAlign({ onAligned } = {}) {
     if (pending) fn(pending);
   };
   const slot = useSseJobSlot({
-    startRequest: ({ projectId, cueId }) => alignMusicVideoLyrics(projectId, cueId ? { cueId } : {}, { silent: true }),
+    startRequest: ({ projectId, cueId, separateVocals }) => alignMusicVideoLyrics(projectId, { ...(cueId ? { cueId } : {}), ...(separateVocals ? { separateVocals: true } : {}) }, { silent: true }),
     eventsUrl: musicVideoLyricAlignEventsUrl,
     cancelRequest: cancelMusicVideoLyricAlign,
     onComplete: (frame, { projectId, cueId }) => {
@@ -67,10 +71,10 @@ export default function useMusicVideoLyricAlign({ onAligned } = {}) {
   }, [slot.active]);
   useEffect(() => () => settle((pending) => pending.resolve(null)), []);
 
-  const run = (projectId, cueId = null) => new Promise((resolve, reject) => {
+  const run = (projectId, cueId = null, { separateVocals = false } = {}) => new Promise((resolve, reject) => {
     if (slot.active) { resolve(null); return; }
     waiter.current = { resolve, reject, started: false };
-    slot.start({ projectId, cueId });
+    slot.start({ projectId, cueId, ...(separateVocals ? { separateVocals } : {}) });
   });
 
   return {

@@ -66,6 +66,9 @@ describe('normalizePinterestFeedUrl', () => {
     ['embedded brand name', 'https://evilpinterest.com/jane/board'],
     ['ftp scheme', 'ftp://pinterest.com/jane/board'],
     ['root path only', 'https://www.pinterest.com/'],
+    ['profile link', 'https://www.pinterest.com/jane/'],
+    ['single pin', 'https://www.pinterest.com/pin/123/'],
+    ['API shortener instead of board', 'https://api.pinterest.com/url_shortener/code/redirect/'],
   ])('rejects %s with a 400', (_label, input) => {
     expect(() => normalizePinterestFeedUrl(input)).toThrow();
     try { normalizePinterestFeedUrl(input); } catch (e) {

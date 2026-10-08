@@ -131,7 +131,7 @@ import { startExcerptRender, attachExcerptRenderSseClient, cancelExcerptRender }
 import { deleteExcerpt, addReviewNote, editReviewNote, deleteReviewNote } from '../services/musicVideo/excerptService.js';
 import { suggestSocialCuts } from '../services/musicVideo/socialCuts.js';
 import { getActivePublishKitBuild, startPublishKitBuild, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, selectPublishKitThumbnail } from '../services/musicVideo/publishKit.js';
-import { preparePublishDraft, discardPublishDraft, listPublishDrafts, recordPublishPost } from '../services/musicVideo/publish/index.js';
+import { preparePublishDraft, discardPublishDraft, listPublishDrafts, recordPublishPost, removePublishPost } from '../services/musicVideo/publish/index.js';
 import { getPublishPlatforms, updatePublishPlatforms, publishHistory } from '../services/musicVideo/publish/platforms.js';
 import { listArtistStyles, saveArtistStyle, removeArtistStyle } from '../services/musicVideo/publish/artistStyles.js';
 import { addCoverFont, coverFontPath, listCoverFonts, MAX_COVER_FONT_BYTES, removeCoverFont } from '../services/musicVideo/coverFonts.js';
@@ -159,6 +159,7 @@ import {
   importDocumentDirectory,
   importDocumentTemplate,
   importDocumentZip,
+  upgradeDocumentEngine,
   readDocumentManifest,
   resolveDocumentFile,
 } from '../services/musicVideo/compositionDocument.js';
@@ -515,11 +516,11 @@ router.post('/:id/lyrics/import-track', asyncHandler(async (req, res) => {
 // transcribing window n/m) stream over SSE with cancel, and the terminal
 // `complete` frame carries the updated project. One job per project: a second
 // request returns the running job (`reused: true`). The first alignment
-// downloads the music-grade whisper model; no whisper.cpp at all is an error
-// frame with install steps, not an empty timing list.
+// provisions MMS_FA only on demand. Explicit separateVocals consent creates
+// a missing stem with Demucs first; older master-only callers retain Whisper.
 router.post('/:id/lyrics/align', asyncHandler(async (req, res) => {
-  const { cueId } = validateRequest(musicVideoLyricsAlignSchema, req.body || {});
-  res.status(202).json(await startLyricAlign(req.params.id, { cueId }));
+  const { cueId, separateVocals } = validateRequest(musicVideoLyricsAlignSchema, req.body || {});
+  res.status(202).json(await startLyricAlign(req.params.id, { cueId, separateVocals }));
 }));
 
 router.get('/lyrics/align/:jobId/events', (req, res) => {
@@ -798,6 +799,12 @@ router.post('/:id/composition/document/template', asyncHandler(async (req, res) 
   res.status(201).json(await importDocumentTemplate(req.params.id, template));
 }));
 
+// An explicit engine-only revision: no provider call or authored-code rewrite.
+router.post('/:id/composition/document/engine/upgrade', asyncHandler(async (req, res) => {
+  const { directory } = validateRequest(musicVideoDocumentCandidateSchema, req.body || {});
+  res.json(await upgradeDocumentEngine(req.params.id, directory));
+}));
+
 router.post('/:id/composition/document/generate', asyncHandler(async (req, res) => {
   const body = validateRequest(musicVideoCodeGenerateSchema, req.body || {});
   res.status(201).json(await generateMixedMediaDocument(req.params.id, body));
@@ -1039,6 +1046,12 @@ router.put('/:id/publish/posts/:target', asyncHandler(async (req, res) => {
   const target = validateRequest(musicVideoPublishTargetSchema, req.params.target);
   const input = validateRequest(musicVideoPublishPostSchema, req.body || {});
   res.json(await recordPublishPost(req.params.id, target, input));
+}));
+
+// Undo a platform's "done" (the post record only; nothing on the platform changes).
+router.delete('/:id/publish/posts/:target', asyncHandler(async (req, res) => {
+  const target = validateRequest(musicVideoPublishTargetSchema, req.params.target);
+  res.json(await removePublishPost(req.params.id, target));
 }));
 
 router.post('/:id/publish/:target/prepare', asyncHandler(async (req, res) => {

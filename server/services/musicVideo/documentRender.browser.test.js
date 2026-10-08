@@ -9,7 +9,8 @@ import { richSceneSource } from './__richSceneFixture.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it as vitestIt, vi } from 'vitest';
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { createRequire } from 'node:module';
 import { execFileSync, spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
 import sharp from 'sharp';
@@ -79,7 +80,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
   let proc;
   let browser;
   let PATHS, encodeDocumentComposition, prepareDocumentRender, documentRenderClock, importDocumentTemplate;
-  let generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument, buildDocumentPreview, projects;
+  let generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument, buildDocumentPreview, PREVIEW_MEDIA_BUDGET_BYTES, projects;
   beforeAll(async () => {
     // Keep collection read-only when Chrome/ffmpeg prerequisites skip the suite.
     ({ PATHS } = await import('../../lib/paths.js'));
@@ -92,7 +93,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     });
     ({ importDocumentTemplate } = await import('./compositionDocument.js'));
     ({ generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument } = await import('./documentGeneration.js'));
-    ({ buildDocumentPreview } = await import('./documentPreview.js'));
+    ({ buildDocumentPreview, PREVIEW_MEDIA_BUDGET_BYTES } = await import('./documentPreview.js'));
     projects = await import('./projects.js');
     const profile = join(PATHS.data, 'chrome-test-profile');
     proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'] });
@@ -126,6 +127,64 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     const untouched = await browser.newPage();
     expect(await untouched.evaluate(() => 6 * 7)).toBe(42);
     await untouched.close();
+  }, 30000);
+
+  it('fails the capture with a clear error when a document still uploads tainted pixels to WebGL (#10594)', async () => {
+    const { openComposition } = await import('../htmlComposition/browser.js');
+    const directory = 'compositions/synthetic-tainted-texture';
+    await mkdir(join(PATHS.data, directory), { recursive: true });
+    await sharp({ create: { width: 8, height: 8, channels: 3, background: { r: 255, g: 0, b: 0 } } }).jpeg().toFile(join(PATHS.data, directory, 'still.jpg'));
+    await writeFile(join(PATHS.data, directory, 'index.html'), '<!doctype html><title>Synthetic tainted texture</title>');
+    const page = await openComposition(directory, { ownedBrowser: true, signal: testSignal });
+    try {
+      // Opting the image back out of CORS taints the canvas; the upload error
+      // is swallowed here exactly as three.js swallows it.
+      await expect((async () => {
+        await page.evaluate(`(async () => {
+          const image = new Image();
+          image.src = 'still.jpg';
+          image.removeAttribute('crossorigin');
+          await image.decode();
+          const source = document.createElement('canvas');
+          source.getContext('2d').drawImage(image, 0, 0);
+          const gl = document.createElement('canvas').getContext('webgl2');
+          gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+          try { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source); } catch {}
+        })()`);
+        page.check();
+      })()).rejects.toThrow(/cross-origin pixels into a WebGL texture.*Tainted canvases/);
+    } finally { await page.close(); }
+  }, 30000);
+
+  it('lets a composition upload its own images to WebGL through a 2D canvas', async () => {
+    const { openComposition } = await import('../htmlComposition/browser.js');
+    const directory = 'compositions/synthetic-canvas-texture';
+    await mkdir(join(PATHS.data, directory, 'media'), { recursive: true });
+    await writeFile(join(PATHS.data, directory, 'media/still.jpg'),
+      await sharp({ create: { width: 8, height: 8, channels: 3, background: '#ff0000' } }).jpeg().toBuffer());
+    await writeFile(join(PATHS.data, directory, 'index.html'), '<!doctype html><title>Canvas texture</title>');
+    const page = await openComposition(directory, { ownedBrowser: true, signal: testSignal });
+    try {
+      // The sandboxed page has an opaque origin; an image loaded without CORS
+      // would taint the canvas and texImage2D would throw a SecurityError.
+      const outcome = await page.evaluate(`new Promise(resolve => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = canvas.height = 8;
+          canvas.getContext('2d').drawImage(img, 0, 0);
+          const gl = document.createElement('canvas').getContext('webgl');
+          try {
+            gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+            resolve(gl.getError() === gl.NO_ERROR ? 'uploaded' : 'gl-error');
+          } catch (error) { resolve(error.name); }
+        };
+        img.onerror = () => resolve('image-failed');
+        img.src = 'media/still.jpg';
+      })`);
+      expect(outcome).toBe('uploaded');
+    } finally { await page.close(); }
   }, 30000);
 
   // Server-only CI does not install client dependencies; the full local install
@@ -248,6 +307,51 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     expect(rendered.reduce((sum, v, i) => sum + Math.abs(v-pixels[i]), 0) / pixels.length).toBeLessThan(15);
   }, 120000);
 
+  it('revokes idle preview media past the budget, keeps what a media element still plays, and asks again on reuse', async () => {
+    const created = await projects.createProject({ name: 'Synthetic bridge budget' });
+    await projects.mutateProjectRecord(created.id, (current) => ({ project: { ...current,
+      audioAnalysis: { durationSec: 1, beats: [0], downbeats: [0], sections: [{ id: 'song', label: 'Verse', startSec: 0, endSec: 1 }] },
+      composition: { mode: 'document' },
+      scenes: [{ sceneId: 'card', startSec: 0, endSec: 1, visualLayer: 'card', cardText: '' }],
+    } }));
+    await importDocumentTemplate(created.id);
+    const page = await browser.newPage();
+    await page.setContent((await buildDocumentPreview(await projects.getProject(created.id))).html);
+    const result = await page.evaluate(async (size) => {
+      const requested = [];
+      const revoked = [];
+      const revoke = URL.revokeObjectURL;
+      URL.revokeObjectURL = (url) => { revoked.push(url); revoke(url); };
+      // Idle time is read from performance.now, so the test moves the clock instead of sleeping.
+      const now = performance.now.bind(performance);
+      let offset = 0;
+      performance.now = () => now() + offset;
+      addEventListener('message', ({ data }) => {
+        if (data?.type !== 'portos-mv:request') return;
+        requested.push(data.key);
+        postMessage({ type: 'portos-mv:asset', key: data.key, blob: new Blob([new Uint8Array(size)]) }, '*');
+      });
+      postMessage({ type: 'portos-mv:manifest', keys: ['media/clip.webm', 'media/a.jpg', 'media/b.jpg'] }, '*');
+      const video = document.createElement('video');
+      video.src = 'media/clip.webm';
+      while (!video.getAttribute('src')?.startsWith('blob:')) await new Promise((resolve) => setTimeout(resolve, 10));
+      const first = await window.PORTOS_MV_ASSET('media/a.jpg');
+      const again = await window.PORTOS_MV_ASSET('media/a.jpg');
+      offset += 60000;
+      await window.PORTOS_MV_ASSET('media/b.jpg'); // three files now exceed the budget
+      const reused = await window.PORTOS_MV_ASSET('media/a.jpg');
+      return { requested, revoked, first, again, reused, video: video.getAttribute('src') };
+    }, Math.ceil(PREVIEW_MEDIA_BUDGET_BYTES * 0.6));
+    await page.close();
+    expect(result.again).toBe(result.first);
+    // The idle file goes; the clip a <video> still points at stays though it is older.
+    expect(result.revoked).toEqual([result.first]);
+    expect(result.revoked).not.toContain(result.video);
+    expect(result.requested).toEqual(['media/clip.webm', 'media/a.jpg', 'media/b.jpg', 'media/a.jpg']);
+    expect(result.reused).toMatch(/^blob:/);
+    expect(result.reused).not.toBe(result.first);
+  }, 30000);
+
   it('keeps event frames identical across shuffled seeks, an excerpt and a full render, and freezes silence', async () => {
     const created = await projects.createProject({ name: 'Synthetic event proof' });
     const base = { durationSec: 0.2, narrativeFunction: 'Mark the story turn', mediumRationale: 'Exact code graphics' };
@@ -270,7 +374,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     const preview = await buildDocumentPreview(project);
     const page = await browser.newPage();
     await page.setContent(preview.html);
-    await page.evaluate(() => window.postMessage({ type: 'portos-mv:assets', files: {} }, '*'));
+    await page.evaluate(() => window.postMessage({ type: 'portos-mv:manifest', keys: [] }, '*'));
     const at = (frame) => page.evaluate(async (frame) => {
       await window.portosComposition.seek(frame / 24);
       return { pixels: document.getElementById('stage').toDataURL(), state: window.PORTOS_MV_EVENT_STATE(window.PORTOS_MV.song, frame / 24, 24) };
@@ -337,10 +441,14 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
 
     const render = async (name) => {
       const outputPath = join(PATHS.videos, name);
-      const result = await encodeDocumentComposition({ project, plan, jobId: `job-${name.replace(/\W/g, '')}`, audioPath: master, outputPath, windowStart: 1.02, windowEnd: 1.75 });
+      const result = await encodeDocumentComposition({ project, plan, jobId: `job-${name.replace(/\W/g, '')}`, audioPath: master, outputPath, windowStart: 1.02, windowEnd: 1.75, collectFootageVisibility: true });
       return { result, outputPath };
     };
     const first = await render('first.mp4');
+    // A virtual-origin clip must remain canvas-readable inside the opaque
+    // browser sandbox; tainted pixels formerly collapsed every sample to null.
+    expect(first.result.footageVisibility).toHaveLength(3);
+    expect(first.result.footageVisibility.every(sample => sample.status === 'measured')).toBe(true);
     // Snapped down to the frame grid: song 1.0s → 1.75s is 18 frames.
     expect(first.result).toMatchObject({ startSec: 1, durationSec: 0.75, width: 1920, height: 1080, fps: 24 });
     const pixels = execFileSync(ffmpeg, ['-v', 'error', '-i', first.outputPath, '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 1 << 26 });
@@ -509,6 +617,64 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     expect(browser.isConnected()).toBe(true);
   }, 30000);
 
+  threeIt('uploads document images and footage drawn to a 2D canvas as a WebGL texture in an excerpt (#10594)', async () => {
+    // A hand-authored document, not the shipped template: plain new Image(),
+    // markup <img> and <video> sources with no crossorigin attribute, drawn to
+    // a 2D canvas that three.js uploads as a CanvasTexture on a full-frame quad.
+    const directory = 'music-video/mv-canvas-texture/composition/doc-canvas-texture';
+    const dir = join(PATHS.data, directory);
+    await mkdir(join(dir, 'media'), { recursive: true });
+    await mkdir(join(dir, 'vendor'), { recursive: true });
+    await mkdir(PATHS.music, { recursive: true });
+    await mkdir(PATHS.videos, { recursive: true });
+    const tile = (r, g, b) => sharp({ create: { width: 64, height: 64, channels: 3, background: { r, g, b } } }).jpeg();
+    await tile(255, 128, 0).toFile(join(dir, 'media', 'scripted.jpg'));
+    await tile(0, 200, 0).toFile(join(dir, 'media', 'markup.jpg'));
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=64x64:r=12:d=1', '-c:v', 'libvpx', '-b:v', '200k', join(dir, 'media', 'clip.webm')]);
+    const three = dirname(createRequire(new URL('../../../client/package.json', import.meta.url)).resolve('three'));
+    for (const name of ['three.module.js', 'three.core.js']) await copyFile(join(three, name), join(dir, 'vendor', name));
+    await writeFile(join(dir, 'index.html'), `<!doctype html><style>html,body{margin:0;background:#000}canvas{display:block}</style>
+      <img id="markup" src="media/markup.jpg" style="display:none">
+      <script type="module">
+        import * as THREE from './vendor/three.module.js';
+        const scripted = new Image();
+        scripted.src = 'media/scripted.jpg';
+        const clip = document.createElement('video');
+        clip.muted = true; clip.preload = 'auto'; clip.src = 'media/clip.webm';
+        const clipReady = new Promise((resolve, reject) => { clip.onloadeddata = resolve; clip.onerror = () => reject(new Error('clip failed')); });
+        const source = document.createElement('canvas'); source.width = 192; source.height = 64;
+        const renderer = new THREE.WebGLRenderer({ preserveDrawingBuffer: true });
+        renderer.setSize(1280, 720, false);
+        document.body.append(renderer.domElement);
+        const texture = new THREE.CanvasTexture(source);
+        const scene = new THREE.Scene();
+        scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ map: texture })));
+        const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        window.portosComposition = { durationSec: 1, fps: 12, width: 1280, height: 720, seek: async () => {
+          await Promise.all([scripted.decode(), document.getElementById('markup').decode(), clipReady]);
+          const ctx = source.getContext('2d');
+          ctx.drawImage(scripted, 0, 0, 64, 64);
+          ctx.drawImage(document.getElementById('markup'), 64, 0, 64, 64);
+          ctx.drawImage(clip, 128, 0, 64, 64);
+          texture.needsUpdate = true;
+          renderer.render(scene, camera);
+        } };
+      </script>`);
+    const master = join(PATHS.music, 'canvas-texture.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=1', master]);
+    const project = { id: 'mv-canvas-texture', name: 'Synthetic canvas texture', scenes: [], audioAnalysis: { durationSec: 1, sections: [] }, composition: { mode: 'document', document: { directory } } };
+    const outputPath = join(PATHS.videos, 'canvas-texture.mp4');
+    await encodeDocumentComposition({ project, plan: await prepareDocumentRender(project), jobId: 'canvas-texture', audioPath: master, outputPath, windowStart: 0.25, windowEnd: 0.5 });
+    const frame = execFileSync(ffmpeg, ['-v', 'error', '-i', outputPath, '-frames:v', '1', '-vf', 'scale=96:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+    const at = (x) => [...frame.subarray((18 * 96 + x) * 3, (18 * 96 + x) * 3 + 3)];
+    const [orange, green, blue] = [at(16), at(48), at(80)];
+    expect(orange[0], `scripted image ${orange}`).toBeGreaterThan(200);
+    expect(orange[0], `scripted image ${orange}`).toBeGreaterThan(orange[2] + 120);
+    expect(green[1], `markup image ${green}`).toBeGreaterThan(green[0] + 100);
+    expect(blue[2], `video frame ${blue}`).toBeGreaterThan(blue[0] + 100);
+    await rm(outputPath, { force: true });
+  }, 60000);
+
   it('renders a generated 3-second card/still/clip document with the selected performance in-point', async () => {
     await mkdir(PATHS.videos, { recursive: true });
     await mkdir(PATHS.images, { recursive: true });
@@ -550,28 +716,47 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     const preview = await buildDocumentPreview(project);
     expect(preview.html).toContain('PORTOS_MV_GENERATED');
     expect(preview.html).toContain('"inSec":1');
-    const previewFrames = async (current, times) => {
+    // Plays the PortOS page's side of the lazy bridge: the manifest first, then each file only when asked.
+    const previewFrames = async (current, times, requested = []) => {
       const page = await browser.newPage();
       const prepared = await buildDocumentPreview(current);
       await page.setContent(prepared.html);
       const files = Object.fromEntries(await Promise.all(prepared.assets.map(async (asset) => [asset.key,
         (await readFile(asset.key.endsWith('.webm') ? clip : join(PATHS.images, 'generated-still.png'))).toString('base64')])));
       await page.evaluate(async (encoded) => {
-        const blobs = Object.fromEntries(Object.entries(encoded).map(([key, value]) => [key,
-          new Blob([Uint8Array.from(atob(value), (c) => c.charCodeAt(0))], { type: key.endsWith('.webm') ? 'video/webm' : 'image/png' })]));
-        window.postMessage({ type: 'portos-mv:assets', files: blobs }, '*');
+        window.requested = [];
+        addEventListener('message', ({ data }) => {
+          if (data?.type !== 'portos-mv:request') return;
+          window.requested.push(data.key);
+          const value = encoded[data.key];
+          const blob = value && new Blob([Uint8Array.from(atob(value), (c) => c.charCodeAt(0))], { type: data.key.endsWith('.webm') ? 'video/webm' : 'image/png' });
+          window.postMessage({ type: 'portos-mv:asset', key: data.key, blob: blob || null }, '*');
+        });
+        window.postMessage({ type: 'portos-mv:manifest', keys: Object.keys(encoded) }, '*');
         await window.PORTOS_MV_ASSETS;
       }, files);
       const pixels = [];
-      for (const time of times) pixels.push(await page.evaluate(async (t) => {
-        await window.portosComposition.seek(t);
-        const canvas = document.getElementById('stage');
-        return [...canvas.getContext('2d').getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1).data].slice(0, 3);
-      }, time));
+      for (const time of times) {
+        pixels.push(await page.evaluate(async (t) => {
+          await window.portosComposition.seek(t);
+          const canvas = document.getElementById('stage');
+          return [...canvas.getContext('2d').getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1).data].slice(0, 3);
+        }, time));
+        requested.push(await page.evaluate(() => window.requested.splice(0)));
+      }
       await page.close();
       return pixels;
     };
-    const beforeProof = await previewFrames(project, [0, 1, 2]);
+    const requested = [];
+    const beforeProof = await previewFrames(project, [0, 1, 2], requested);
+    const [stillKey, clipKey] = [preview.assets.find((asset) => asset.key.endsWith('.png')).key, preview.assets.find((asset) => asset.key.endsWith('.webm')).key];
+    // Nothing is fetched up front: the card frame needs no media, and each file is fetched once, when first named.
+    expect(requested[0]).toEqual([]);
+    expect(requested.flat().sort()).toEqual([clipKey, stillKey].sort());
+    // A far scrub on a fresh preview fetches only that time's clip and still paints the complete frame.
+    const farRequested = [];
+    expect(await previewFrames(project, [2], farRequested)).toEqual([beforeProof[2]]);
+    expect(farRequested).toEqual([[clipKey]]);
     // The full-duration proof samples static section boundaries. A 3s song at
     // the supported 12fps minimum keeps one section per second at 36 frames of
     // real Chrome capture (a 30s song was 360 frames, ~100s, and timed out on a

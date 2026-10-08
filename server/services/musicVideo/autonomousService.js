@@ -32,11 +32,14 @@ import { CAST_SETS_WORKING } from './castAndSets.js';
  *
  * Production is delegated: `produce` starts the server-owned production run (or
  * the code render) and finishes when that reports back over the `production`
- * event. Either way `produce` stays running ("Rendering final video") until the
- * final render job settles over the `render` event: success completes the run,
- * failure parks it `failed` and Retry re-renders only. A run interrupted while
- * rendering re-checks `renderHistoryId` on resume (reattach, finish, or render
- * again). Only explicit start/resume requests begin work.
+ * event. A code-first production run renders the film itself; when that render
+ * is still the project's current final video the run adopts it instead of
+ * rendering the same document again (#10563). Either way `produce` stays
+ * running ("Rendering final video") until the final render job settles over
+ * the `render` event: success completes the run, failure parks it `failed` and
+ * Retry re-renders only. A run interrupted while rendering re-checks
+ * `renderHistoryId` on resume (reattach, finish, or render again). Only
+ * explicit start/resume requests begin work.
  *
  * Production review (art → storyboard → proof) parks `produce` until approved.
  * An authenticated start/resume can grant `brief.autoApprove` for planning;
@@ -59,6 +62,8 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { probeVideoDuration } from '../../lib/ffmpeg.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { trimTo } from '../../lib/textUtils.js';
+import { RENDER_TARGET } from '../../lib/renderTargets.js';
+import { IMAGE_GEN_MODE } from '../../lib/generationModes.js';
 import { assertFootageVideoModelsCapable, loadPoolEnv } from './productionPool.js';
 import { PRODUCTION_RESUMABLE_STATUSES } from './production.js';
 import {
@@ -80,6 +85,7 @@ import {
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
+import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 
 const PROCESS_ID = `proc-${randomUUID()}`;
 const inflight = new Map();
@@ -97,7 +103,7 @@ const defaults = {
   draftCreativeBrief: async (args) => (await import('./autonomousBrief.js')).draftCreativeBrief(args),
   writeLyrics: async (args) => (await import('../musicDesigner.js')).writeLyrics(args),
   reviewLyrics: async (args) => (await import('../musicDesigner.js')).reviewLyrics(args),
-  createMoodBoard: async (spec) => (await import('./autonomousBoard.js')).createAutonomousMoodBoard(spec),
+  createMoodBoard: async (spec, opts) => (await import('./autonomousBoard.js')).createAutonomousMoodBoard(spec, opts),
   generateSunoSong: async (fields, opts) => (await import('./autonomousSuno.js')).generateSunoSong(fields, opts),
   generateLocalSong: async (args) => (await import('./autonomousLocalSong.js')).generateLocalSong(args),
   cancelLocalSong: async (jobId) => (await import('../mediaJobQueue/index.js')).cancelJob(jobId),
@@ -837,13 +843,28 @@ async function writeRunLyrics({ project, run, save }) {
   } };
 }
 
+// The board's notes render on the run's first image tool with its pinned model.
+// Null keeps the board text-only: the brief names no image tool (its tool list
+// is what autopilot may use), or the run has a dollar cap and the tool is not
+// the free local backend — these pre-production renders are not counted
+// against production's spend cap, so a capped run never spends on them.
+// Only reached in a mode that allows images (code-only builds no board).
+function boardRenderRoute(run) {
+  const tool = (run.brief.tools || []).find((id) => id.startsWith('image:'));
+  if (!tool) return null;
+  const mode = tool.slice('image:'.length);
+  if (run.brief.budgetUsd != null && mode !== IMAGE_GEN_MODE.LOCAL) return null;
+  return { target: RENDER_TARGET.MUSIC_VIDEO, mode, model: run.brief.models?.[tool] || undefined };
+}
+
 async function createRunStyle({ project, run }) {
   if (musicVideoMediaMode(project) === 'code-only') {
     await deps.updateProject(project.id, { concept: { prompt: run.output.concept.prompt, style: run.output.concept.style || run.output.moodBoard?.stylePrompt || '' } });
     return { output: { moodBoardId: null } };
   }
   const board = run.output.moodBoard;
-  const moodBoardId = run.brief.moodBoardId || run.output.moodBoardId || (await deps.createMoodBoard(board)).id;
+  const moodBoardId = run.brief.moodBoardId || run.output.moodBoardId
+    || (await deps.createMoodBoard(board, { renderRoute: boardRenderRoute(run) })).id;
   // The board is also the project's linked mood board; the server derives the
   // authored style snapshot from it (styleSnapshots.js).
   await deps.updateProject(project.id, {
@@ -1358,8 +1379,7 @@ async function resumeDelegatedProduction(projectId, run, { swapModels = false, l
     console.log(`🎬 Autonomous music video ${short(run.id)} adopted production run ${short(adopt.id)}`);
   }
   if (adopt.status === 'completed') {
-    await patchRun(projectId, () => ({ output: { productionDone: true } }));
-    await reconcileFinalRender(projectId, { restart: true });
+    await finishFromProduction(projectId, adopt.id);
   } else {
     // Resuming a "running" run is safe and re-pins one left by a previous server process.
     const productionLimits = limits ? Object.fromEntries(Object.entries(limits).filter(([, v]) => v != null)) : undefined;
@@ -1431,8 +1451,7 @@ async function onProductionEvent({ projectId, runId, run: production }) {
   if (production.status === 'completed') {
     // A repeated completion event must not start a second render.
     if (run.output.renderJobId) return;
-    await patchRun(projectId, () => ({ status: 'running', processId: PROCESS_ID, output: { productionDone: true } }));
-    await reconcileFinalRender(projectId, { restart: true });
+    await finishFromProduction(projectId, runId, { status: 'running', processId: PROCESS_ID });
   } else if (production.status === 'failed') {
     await park(projectId, 'failed', { error: reason || 'Production failed', errorCode: 'PRODUCTION_FAILED' });
   } else if (production.status === 'canceled') {
@@ -1442,6 +1461,32 @@ async function onProductionEvent({ projectId, runId, run: production }) {
   } else if (PRODUCTION_PARKED.has(production.status) && run.status === 'running') {
     await park(projectId, 'needs-human', { error: reason || `Production is ${production.status}`, errorCode: 'PRODUCTION_PARKED' });
   }
+}
+
+/**
+ * The job id of a completed production run's own final render (code-first runs
+ * render the accepted document themselves), or null when there is none or it is
+ * no longer the project's current final video: a later render replaced it, the
+ * selected document changed, or the film's dependencies moved since it rendered.
+ */
+function currentProductionRenderJobId(project, productionRunId) {
+  const production = (project.productionRuns || []).find((r) => r.id === productionRunId);
+  const render = production?.finalRender;
+  if (render?.status !== 'completed' || !render.jobId || project.renderHistoryId !== render.jobId) return null;
+  if (production.documentCheckpoint?.directory !== project.composition?.document?.directory) return null;
+  return project.renderDependencies && !musicVideoDependencyChanges(project, project.renderDependencies).length ? render.jobId : null;
+}
+
+/**
+ * Production completed: adopt its own final render when it is still current
+ * (the reconcile then finishes on it, final review included), otherwise render
+ * the film — legacy and footage-only runs leave no render behind.
+ */
+async function finishFromProduction(projectId, productionRunId, patch = {}) {
+  const adopted = currentProductionRenderJobId(await getProject(projectId), productionRunId);
+  await patchRun(projectId, () => ({ ...patch, output: { productionDone: true, ...(adopted ? { renderJobId: adopted } : {}) } }));
+  if (adopted) console.log(`🎬 Autonomous music video adopted production's final render [${short(adopted)}]`);
+  await reconcileFinalRender(projectId, { restart: true });
 }
 
 // ---- Cast & Sets completion ------------------------------------------------------

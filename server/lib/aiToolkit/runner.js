@@ -1106,6 +1106,24 @@ export function createRunnerService(config = {}) {
       return externalRuns.has(runId) || activeRuns.has(runId);
     },
 
+    // Activity projection only: never return the persisted prompt, output,
+    // workspace, or error fields. Bound I/O to the live registry, not history.
+    async getActiveRunSummaries(limit = 50) {
+      const ids = [...new Set([...activeRuns.keys(), ...externalRuns.keys()])].slice(0, limit);
+      const runs = await Promise.all(ids.map(async (runId) => {
+        const metadata = safeJsonParse(await readFile(join(RUNS_PATH, runId, 'metadata.json'), 'utf8').catch(() => '{}'));
+        const text = (value) => typeof value === 'string' ? value.slice(0, 200) : null;
+        return {
+          runId,
+          providerId: text(metadata.providerId),
+          model: text(metadata.model),
+          source: text(metadata.source),
+          startedAt: text(metadata.startTime),
+        };
+      }));
+      return runs.filter(({ runId }) => activeRuns.has(runId) || externalRuns.has(runId));
+    },
+
     /**
      * How many runs this instance is tracking right now — API-based
      * (`activeRuns`) and host-spawned CLI/TUI (`externalRuns`) alike. A count

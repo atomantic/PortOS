@@ -303,16 +303,17 @@ Track your biological self alongside your digital one.
 - Node.js `^22.22.2 || ^24.15.0 || >=26.0.0` (24 is the preferred LTS used by CI and `.nvmrc`; the supported Node 22 line starts at 22.22.2). `npm run setup`, `npm start` and `npm run dev` check this first and stop immediately on an unsupported release line or patch — a bare `npm install` only warns, so use the commands below.
 - npm 11.11.0 or later for dependency authoring (`npm install -g npm@11.11.0` provides the verified minimum and supports the PortOS Node floor). Its Arborist 9.4.0 lockfile writer preserves `libc` metadata; npm 11.10.1 and earlier omit it. See the [npm 11.11.0 writer](https://github.com/npm/cli/blob/v11.11.0/workspaces/arborist/lib/shrinkwrap.js). npm 12 is not required. PortOS-managed setup, update, and dependency-repair installs preserve committed lockfiles with `--no-save`; do not commit metadata-only churn from older npm. Every workspace declares `engines.npm`, and setup/start/dev print an advisory below that floor. These are warnings, never runtime failures. Check `node -v`, `npm -v`, and executable resolution in the environment running PortOS as well as your shell: a Node version manager can select a different toolchain for agent shells. Avoid blindly upgrading to `npm@latest`, whose own Node requirement may exceed PortOS's.
 - Git
-- PostgreSQL, either installed locally or available through Docker. PortOS requires a healthy database; the setup command provisions the supported local or Docker-backed instance.
+- PostgreSQL, either installed locally or available through Docker. Setup defaults to Docker and requires a running Docker daemon and Docker Compose; it does not automatically select an existing native database. For a **fresh native install**, set `PGMODE=native` in the repository-root `.env` before setup, preserving any other settings. See [database selection](./docs/SETUP.md#choose-the-database-before-setup).
 
 ```bash
 git clone --recurse-submodules https://github.com/atomantic/PortOS.git
 cd PortOS
+# For native PostgreSQL, first set PGMODE=native in .env (see above).
 npm run setup
 npm start
 ```
 
-`npm run setup` (aliased as `npm run install:all`) initializes bundled submodules; installs the root, client, server, and Autofixer dependencies; runs the trusted native rebuilds; prepares runtime data; provisions PostgreSQL, local LLM tooling, and the headless browser; safely attempts a trusted Tailscale certificate; and prints an ordered setup walkthrough. `npm start` builds the client and starts the managed processes with PM2. Before HTTPS is ready, access PortOS locally at `http://localhost:5555`.
+`npm run setup` (aliased as `npm run install:all`) initializes bundled submodules; installs the root, client, server, and Autofixer dependencies; runs the trusted native rebuilds; prepares runtime data; provisions PostgreSQL, local LLM tooling, and the managed browser; safely attempts a trusted Tailscale certificate; and prints an ordered setup walkthrough. `npm start` builds the client and starts the managed processes with PM2. Before HTTPS is ready, access PortOS locally at `http://localhost:5555`.
 
 For a guided setup that also checks optional local media and command-line tooling, run `./setup.sh` instead. It prompts before starting PortOS; choose that option or run `npm start` afterward, not both.
 

@@ -31,6 +31,7 @@ import { renderProfileBenchmark, benchmarkProfileInteractive, completeProfileInt
 import { getQwen3RuntimeStatus, downloadQwen3Model, DEFAULT_DESIGN_MODEL } from '../services/voice/qwen3TtsRuntime.js';
 import {
   startFineTuningJob,
+  listFineTuningJobs,
   getFineTuningJobStatus,
   cancelFineTuningJob,
   promoteCheckpoint,
@@ -438,6 +439,14 @@ router.post('/profiles/:id/fine-tune/start', asyncHandler(async (req, res) => {
   res.status(202).json(result);
 }));
 
+// Newest-first runs from their job.json sidecars, so the Voice Lab recovers a
+// run (and its checkpoints) after a reload; live changes arrive on
+// `voice:fine-tune:updated`.
+router.get('/profiles/:id/fine-tune', asyncHandler(async (req, res) => {
+  const { id: profileId } = validateRequest(profileIdParamsSchema, req.params);
+  res.json({ jobs: await listFineTuningJobs(profileId) });
+}));
+
 router.get('/profiles/:id/fine-tune/:jobId', asyncHandler(async (req, res) => {
   const { id: profileId, jobId } = validateRequest(fineTuneJobParamsSchema, req.params);
   const result = await getFineTuningJobStatus(jobId, profileId);
@@ -445,8 +454,8 @@ router.get('/profiles/:id/fine-tune/:jobId', asyncHandler(async (req, res) => {
 }));
 
 router.post('/profiles/:id/fine-tune/:jobId/cancel', asyncHandler(async (req, res) => {
-  const { jobId } = validateRequest(fineTuneJobParamsSchema, req.params);
-  const result = cancelFineTuningJob(jobId);
+  const { id: profileId, jobId } = validateRequest(fineTuneJobParamsSchema, req.params);
+  const result = cancelFineTuningJob(jobId, profileId);
   res.json(result);
 }));
 

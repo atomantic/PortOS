@@ -1876,6 +1876,28 @@ describe('AI Toolkit runner — declared extension points', () => {
   // getActiveRunCount is the surface the host's system-idle gate reads — it
   // must count BOTH tracking maps (API runs and host-spawned CLI/TUI runs),
   // since a host runner never populates the other one for the same run.
+  it('projects bounded live metadata without prompts, output or workspace content', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'runner-activity-'));
+    try {
+      const runner = createRunnerService({ dataDir: dir });
+      await mkdir(join(dir, 'runs', 'external-1'), { recursive: true });
+      await writeFile(join(dir, 'runs', 'external-1', 'metadata.json'), JSON.stringify({
+        providerId: 'ollama', model: 'example:7b', source: 'music-video-document', startTime: '2026-01-01T00:00:00Z',
+        prompt: 'private prompt', output: 'private output', workspacePath: '/private', error: 'private error',
+      }));
+      runner.registerExternalRun('external-1', externalChild());
+      runner.registerExternalRun('missing-record', externalChild());
+      expect(await runner.getActiveRunSummaries(1)).toEqual([{
+        runId: 'external-1', providerId: 'ollama', model: 'example:7b', source: 'music-video-document', startedAt: '2026-01-01T00:00:00Z',
+      }]);
+      expect((await runner.getActiveRunSummaries())[1]).toEqual({ runId: 'missing-record', providerId: null, model: null, source: null, startedAt: null });
+      runner.unregisterExternalRun('external-1');
+      expect(await runner.getActiveRunSummaries()).toHaveLength(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('getActiveRunCount sums external and internally-tracked runs', async () => {
     const runner = createRunnerService({ dataDir: './data' });
     expect(await runner.getActiveRunCount()).toBe(0);

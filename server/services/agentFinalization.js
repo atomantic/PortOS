@@ -1,4 +1,6 @@
-import { PR_MISSING_CATEGORY, prClaimWasVerified } from '../lib/prDisposition.js';
+import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
+import { retryHoldMetadata } from '../lib/taskRetryHold.js';
+import { PR_COMPLETIONS, resolvePrCompletion, PR_MISSING_CATEGORY, prClaimWasVerified } from '../lib/prDisposition.js';
 import { isAuditTaskType } from '../lib/auditCatalog.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 /**
@@ -58,7 +60,7 @@ import { SKIP_LEARNING_VERDICT } from '../lib/learningVerdict.js';
 import { detectPrimaryCheckoutDrift } from '../lib/primaryCheckoutGuard.js';
 import { canRunTaskOutputHookWithoutPayload, getTaskOutputPayloadPredicate, isProgrammaticIoTaskType, resolveTaskHookType, declaresNoCommitCriterion, isClaimFlowDispatch } from './taskTypeHooks.js';
 import { processAgentCompletion } from './agentCompletion.js';
-import { extractFinalSummary, extractSimplifySummaries } from './agentSummaryExtraction.js';
+import { extractFinalSummary } from './agentSummaryExtraction.js';
 import { usesCreativeDirectorScratchCwd, removeCreativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 import { issueNumberFromRef } from './issueReconcile.js';
 
@@ -153,7 +155,10 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
   // no PR exists AND the branch was proven empty; the task marker narrows this
   // exception to an explicitly opted-in autonomous job. Do not use the marker
   // as a general no-commit exemption: a real change still needs the commit probe.
-  if (success && branchProvenEmpty === true && permitsNoChangeCompletion(task)) return true;
+  if (success && branchProvenEmpty === true && permitsNoChangeCompletion(task)) {
+    // An empty audit branch is valid only when its actual report was saved.
+    return !isAuditTaskType(scheduledType) || hookResult?.auditAssessment?.status === 'recorded';
+  }
   // A marked no-change audit needs a forge answer and an unambiguous empty-branch
   // proof. If either check was inconclusive, leave learning undeclared rather than
   // scoring a correct no-op as a commit miss. A non-empty branch remains a real
@@ -430,6 +435,7 @@ const PR_OBSERVATION = Object.freeze({
   WORK_LANDED_ELSEWHERE: 'work-landed-elsewhere',
   /** The change request exists but does not close the issue its branch names. */
   INVALID_TRAILER: 'invalid-trailer',
+  INVALID_DISPOSITION: 'invalid-disposition',
   /** We could not ask, or could not read the answer. Says nothing about the PR. */
   FORGE_UNAVAILABLE: 'forge-unavailable',
 });
@@ -467,6 +473,7 @@ const PR_OBSERVATION_POLICY = Object.freeze({
   // so the run stands as reported. `recordable` so the ledger carries the
   // stand-down (verified: true) rather than silently omitting the transition.
   [PR_OBSERVATION.WORK_LANDED_ELSEWHERE]: Object.freeze({ completionOk: true, observed: true, namesBranch: true, recordable: true, category: null }),
+  [PR_OBSERVATION.INVALID_DISPOSITION]: Object.freeze({ completionOk: false, observed: true, namesBranch: true, recordable: true, category: 'pr-disposition' }),
   [PR_OBSERVATION.INVALID_TRAILER]: Object.freeze({ completionOk: false, observed: true, namesBranch: true, recordable: true, category: ISSUE_TRAILER_MISSING_CATEGORY }),
   [PR_OBSERVATION.FORGE_UNAVAILABLE]: Object.freeze({ completionOk: false, observed: true, namesBranch: true, recordable: false, category: FORGE_UNREACHABLE_CATEGORY }),
 });
@@ -591,13 +598,18 @@ async function observePrClaim({ task, workspacePath, success, prExpected, agentS
   // on, which on a multi-login host may not even see the PR — reading as
   // "no PR" for a run that opened one.
   const { cli, env } = await resolveForgeForRepo(workspacePath).catch(() => ({ cli: 'gh', env: null }));
+  const draft = task?.metadata?.prCompletion === PR_COMPLETIONS.DRAFT;
   const found = cli === 'glab'
-    ? await (await import('./gitlab.js')).findMergeRequestForBranch(branch, workspacePath)
-    : await (await import('./github.js')).findPullRequestForBranch(branch, { cwd: workspacePath, env: env || null });
+    ? await (await import('./gitlab.js')).findMergeRequestForBranch(branch, workspacePath, ...(draft ? [{ includeDraft: true }] : []))
+    : await (await import('./github.js')).findPullRequestForBranch(branch, { cwd: workspacePath, env: env || null, ...(draft ? { includeDraft: true } : {}) });
 
   const noun = cli === 'glab' ? 'merge request' : 'pull request';
   const titleNoun = `${noun[0].toUpperCase()}${noun.slice(1)}`;
   if (found.status === 'found') {
+    if (draft && (found.isDraft !== true || !['OPEN', 'opened'].includes(found.detail))) {
+      return prObservation(PR_OBSERVATION.INVALID_DISPOSITION, { branch,
+        message: `This run requires an open draft ${noun}; the forge did not confirm that disposition for ${branch}` });
+    }
     const issueNumber = issueNumberFromRef(branch);
     if (issueNumber === null) return prObservation(PR_OBSERVATION.VERIFIED_CLAIM, { branch });
     if (typeof found.body !== 'string') {
@@ -1005,6 +1017,13 @@ export function dispatchTaskOutputHookOnce({
   if (existing) return existing;
 
   const persistDispatchMarker = async (result) => {
+    if (result.deepAudit) {
+      await updateAgent(agentId, { metadata: { deepAudit: result.deepAudit } });
+    }
+    if (result.auditAssessment) {
+      await updateAgent(agentId, { metadata: { auditAssessment: result.auditAssessment } })
+        .catch(err => emitLog('warn', `⚠️ Failed to persist audit assessment status for ${agentId}: ${err.message}`, { agentId }));
+    }
     if (!result.ran) return;
     // Best-effort durability: completion must continue if the marker write
     // fails, while the in-flight promise still protects concurrent callers
@@ -1018,8 +1037,15 @@ export function dispatchTaskOutputHookOnce({
 
   const dispatch = (async () => {
     const agent = await getAgent(agentId).catch(() => null);
+    // A saved assessment survives sentinel/worktree cleanup. Failed writes stay
+    // retryable on recovery rather than being mistaken for a successful report.
+    const savedAssessment = [agent?.metadata?.auditAssessment, agent?.result?.auditAssessment]
+      .find(assessment => assessment?.status === 'recorded');
+    if (!isLegacyDeepAudit(task.metadata) && isAuditTaskType(resolveTaskHookType(task)) && savedAssessment?.status === 'recorded') {
+      return { ran: false, auditAssessment: savedAssessment };
+    }
     if (agent?.metadata?.outputHookDispatchedAt) {
-      return { ran: false, alreadyDispatched: true };
+      return { ran: false, alreadyDispatched: true, ...(agent.metadata?.deepAudit ? { deepAudit: agent.metadata.deepAudit } : {}) };
     }
 
     const hookDispatch = dispatchTaskOutputHook({
@@ -1286,6 +1312,7 @@ export async function finalizeAgent({
   exitCode,
   duration,
   outputBuffer,
+  finalSummary = null,
   errorAnalysis: reportedErrorAnalysis,
   terminatedByUser = false,
   error,
@@ -1465,7 +1492,7 @@ export async function finalizeAgent({
   // of it on the closure of every suite that reaches finalization. Gated on the
   // WIDEST trigger so a clean `ship` — the overwhelmingly common verdict — does
   // not evaluate that graph just to be told there is nothing to act on.
-  if (goalFidelityFollowUpApplies(fidelity.review, 'any-finding')) {
+  if (resolvePrCompletion(task?.metadata) !== PR_COMPLETIONS.LEAVE_OPEN && goalFidelityFollowUpApplies(fidelity.review, 'any-finding')) {
     const followUp = await import('./goalFidelityFollowUp.js')
       .then(({ runGoalFidelityFollowUp }) => runGoalFidelityFollowUp({ agentId, task, review: fidelity.review, context: fidelity.context }))
       .catch(err => {
@@ -1500,8 +1527,8 @@ export async function finalizeAgent({
     cosEvents.emit(GOAL_FIDELITY_HOLD_EVENT, { agentId, taskId: task?.id, review: fidelity.review });
   }
 
-  if (judgedVerdict.success) {
-    await persistSimplifySummaries(agentId, task, outputBuffer);
+  if (!terminatedByUser && !isPrivateSecurityTask(task)) {
+    await persistCompletionSummary(agentId, { workspacePath, finalSummary });
   }
 
   // Programmatic-I/O task types (e.g. layered-intelligence) run a deterministic
@@ -1576,7 +1603,9 @@ export async function finalizeAgent({
   });
 
   const taskType = task?.taskType || 'user';
-  const taskUpdate = terminatedByUser
+  const taskUpdate = isLegacyDeepAudit(task.metadata) && !terminatedByUser
+    ? { status: 'in_progress', metadata: { ...preHookTask.metadata, ...retryHoldMetadata(agentId) } }
+    : terminatedByUser
     ? {
       status: 'blocked',
       metadata: {
@@ -1610,6 +1639,17 @@ export async function finalizeAgent({
       return null;
     });
 
+  if (isLegacyDeepAudit(task.metadata) && hookResult?.deepAudit) {
+    hookResult.deepAudit = await (await import('./deepAudit.js')).settleDeepAuditDelivery({
+      task, agentId, success: verdict.success && !terminatedByUser, validationPassed,
+    }).catch(err => ({ ...hookResult.deepAudit, complete: false, deliveryComplete: false, reason: `Delivery persistence failed: ${err.message}` }));
+    await updateAgent(agentId, { metadata: { deepAudit: hookResult.deepAudit } });
+    if (hookResult.deepAudit.complete && verdict.success && !terminatedByUser) {
+      taskUpdate.status = 'completed';
+      taskUpdate.metadata = { ...task.metadata };
+    }
+  }
+
   // Sequential by design: completeAgent + updateTask share the cosState
   // mutex (`withStateLock`) so parallelism gains nothing, AND ordering
   // matters — if completeAgent throws, we must not mark the task completed.
@@ -1619,6 +1659,10 @@ export async function finalizeAgent({
   await completeAgent(agentId, {
     success: verdict.success,
     validationPassed,
+    ...(hookResult?.deepAudit ? { deepAudit: hookResult.deepAudit } : {}),
+    ...(isAuditTaskType(resolveTaskHookType(task)) ? {
+      auditAssessment: hookResult?.auditAssessment || { status: 'unverified' },
+    } : {}),
     exitCode,
     duration,
     outputLength: outputBuffer?.length ?? 0,
@@ -1916,19 +1960,31 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
   // Shared resolver with evaluateSuccessCriteria's gate — "runs a hook" and "gets
   // the programmatic-I/O criterion" must stay the same question (#2727).
   const taskType = resolveTaskHookType(task);
-  if (!taskType) return { ran: false };
+  const deepAudit = isLegacyDeepAudit(task.metadata)
+    ? await (await import('./deepAudit.js')).checkpointDeepAudit({ task, agentId, success: false,
+      workspacePath: hookPayloadDir({ task, workspacePath, recovery }) }) : null;
+  if (!taskType) return { ran: false, ...(deepAudit ? { deepAudit } : {}) };
   if (isAuditTaskType(taskType)) {
     const { recordAuditQuality } = await import('./appQuality.js');
-    const recorded = await recordAuditQuality({ task, taskType, agentId, success, assessedAt,
+    const auditAssessment = await recordAuditQuality({ task, taskType, agentId, success, assessedAt,
+      ...(isLegacyDeepAudit(task.metadata) ? { deepDiscoveryComplete: deepAudit?.discoveryComplete === true } : {}),
       workspacePath: hookPayloadDir({ task, workspacePath, recovery }) })
-      .catch(err => emitLog('warn', `⚠️ Audit quality was not saved for ${agentId}: ${err.message}`, { agentId }));
-    if (recorded === true) await publishAppSnapshotFileAfterAudit(task?.metadata?.app);
+      .then(recorded => ({ status: recorded === true ? 'recorded' : success ? 'not-recorded' : 'not-attempted' }))
+      .catch(err => {
+        emitLog('warn', `⚠️ Audit quality was not saved for ${agentId}: ${err.message}`, { agentId });
+        return { status: 'persistence-failed' };
+      });
+    const recorded = auditAssessment.status === 'recorded';
+    // A review-only run must not land a separate snapshot behind the user's back.
+    if (!isLegacyDeepAudit(task.metadata) && recorded === true && resolvePrCompletion(task?.metadata) !== PR_COMPLETIONS.LEAVE_OPEN) {
+      await publishAppSnapshotFileAfterAudit(task?.metadata?.app);
+    }
     // Assessment telemetry never waives commit/PR success criteria for fix mode.
-    return { ran: false };
+    return { ran: false, auditAssessment, ...(deepAudit ? { deepAudit } : {}) };
   }
   const { getTaskOutputHook } = await import('./taskTypeHooks.js');
   const hook = await getTaskOutputHook(taskType);
-  if (!hook) return { ran: false };
+  if (!hook) return { ran: false, ...(deepAudit ? { deepAudit } : {}) };
 
   const cwd = hookPayloadDir({ task, workspacePath, recovery });
   const payload = cwd ? await readHookPayload({ agentId, taskType, cwd }) : null;
@@ -1950,21 +2006,45 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
   return { ran: true, outcome };
 }
 
-/**
- * Persist task/simplify summaries for agents that ran with /simplify.
- * Shared by handleAgentCompletion (runner mode) and spawnDirectly (direct mode).
+/** Persist an explicitly delivered completion, independently of delivery success.
+ * The transcript remains available separately; it is never a substitute for a
+ * missing final response, including on a partial Deep checkpoint.
  */
-export async function persistSimplifySummaries(agentId, task, outputBuffer) {
-  if (!isTruthyMeta(task.metadata?.simplify)) return;
-  const summaries = extractSimplifySummaries(outputBuffer);
-  if (!summaries) return;
-  // Persist whenever *either* summary is present — e.g. if the /simplify
-  // marker appears at the very top of the output, taskSummary will be null
-  // but simplifySummary is still worth keeping.
-  if (summaries.taskSummary || summaries.simplifySummary) {
-    await updateAgent(agentId, { metadata: {
-      taskSummary: summaries.taskSummary || null,
-      simplifySummary: summaries.simplifySummary || null
-    } });
+async function persistCompletionSummary(agentId, { workspacePath, finalSummary = null }) {
+  const { doneSentinelPath, parseSentinelPayload } = await import('../lib/agentSentinel.js');
+  const sentinelPath = doneSentinelPath(workspacePath, agentId);
+  const contents = sentinelPath ? await tryReadFile(sentinelPath) : null;
+  let summary = null;
+  let source = null;
+  if (typeof contents === 'string' && contents.trim()) {
+    const trimmed = contents.trim();
+    const envelope = trimmed.match(/^```json\s*\n([\s\S]*?)\n```$/)?.[1]?.trim() ?? trimmed;
+    // A malformed structured envelope must not be rendered as a human answer.
+    // Legacy markdown sentinels remain supported.
+    const structured = trimmed.startsWith('{') || trimmed.startsWith('[') || trimmed.startsWith('```json');
+    const parsed = structured ? safeJSONParse(envelope, null) : null;
+    if (!structured || (parsed && !Array.isArray(parsed) && typeof parsed.summary === 'string')) {
+      summary = parseSentinelPayload(envelope).summary.trim() || null;
+      if (summary) source = 'sentinel';
+    }
   }
+  if (!summary && typeof finalSummary === 'string') {
+    summary = finalSummary.trim() || null;
+    if (summary) source = 'terminal-result';
+  }
+  if (!summary) {
+    // Cleanup may already have removed the sentinel on a finalization replay.
+    // Only retain a completion whose source was recorded for this same agent;
+    // older heuristic transcript summaries are not evidence of a final reply.
+    const existing = await getAgentRecord(agentId);
+    if (existing?.id === agentId
+      && ['sentinel', 'terminal-result'].includes(existing.metadata?.taskSummarySource)
+      && typeof existing.metadata?.taskSummary === 'string'
+      && existing.metadata.taskSummary.trim()) return;
+  }
+  await updateAgent(agentId, { metadata: {
+    taskSummary: summary,
+    taskSummarySource: source,
+    simplifySummary: null,
+  } });
 }

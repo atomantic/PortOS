@@ -742,7 +742,7 @@ describe('POST /api/database/sync endpoint safety', () => {
     async (mode, port, targetPort) => {
       POOL_CONFIG.port = port;
       const mkdir = vi.spyOn(await import('fs'), 'mkdirSync').mockImplementation(() => undefined);
-      createReadStream.mockImplementationOnce(() => Readable.from(['SELECT 1;\n']));
+      createReadStream.mockImplementationOnce(() => Readable.from([Buffer.from('SELECT 1;\n')]));
       execFile.mockImplementation((_cmd, args, _opts, callback) => {
         callback(null, args.includes('status') ? `Current mode: ${mode}` : '1', '');
       });

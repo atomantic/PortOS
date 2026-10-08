@@ -4,6 +4,7 @@ import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import { copyToClipboard } from '../../lib/clipboard.js';
 import CoverArtPanel from './CoverArtPanel.jsx';
+import PublishCard from './PublishCard.jsx';
 import { formatCount, formatUsd } from '../../utils/formatters.js';
 
 const fmtTime = (sec) => {
@@ -74,6 +75,7 @@ function CopyField({ id, field, initial, onSave, disabled }) {
  */
 export default function PublishKitPanel({ project, publishKit, enabledTargets }) {
   const kit = project?.publishKit || {};
+  const hasCopy = Object.values(kit.copy || {}).some((fields) => fields && Object.values(fields).some((v) => (Array.isArray(v) ? v.length : !!v)));
   // Copy only for where the director posts (#9287); Suno's caption reuses the YouTube description.
   const copyFields = enabledTargets
     ? PUBLISH_FIELDS.filter(({ platform }) => enabledTargets.includes(platform) || (platform === 'youtube' && enabledTargets.includes('suno')))
@@ -122,14 +124,14 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
 
   return (
     <div className="space-y-3">
-      <section aria-label="Release assets" className="rounded-lg border border-port-border bg-port-card p-3 space-y-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-sm font-medium flex items-center gap-1.5"><Package size={14} /> Release assets</h3>
+      <PublishCard projectId={project?.id} cardId="assets" label="Release assets" icon={Package}
+        summary={kit.builtAt ? `Built ${new Date(kit.builtAt).toLocaleDateString()}` : 'Not built yet'} defaultOpen={!kit.builtAt}
+        actions={(
           <button type="button" disabled={!canBuild || publishKit.building} onClick={publishKit.build}
             className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
             <Package size={13} /> {kit.builtAt ? 'Rebuild kit' : 'Build publishing kit'}
           </button>
-        </div>
+        )}>
         {!canBuild && <p className="text-xs text-port-text-muted">Render the final video first. The kit is made from it.</p>}
         {kitStale && (
           <p role="status" className="text-xs text-port-warning">Kit built from an earlier render. Fill draft is refused until you rebuild it. Use Rebuild kit.</p>
@@ -191,12 +193,12 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
             )}
           </div>
         )}
-      </section>
+      </PublishCard>
 
       <CoverArtPanel key={project?.id} project={project} publishKit={publishKit} />
 
-      <section aria-label="Release copy" className="rounded-lg border border-port-border bg-port-card p-3 space-y-2 text-xs">
-        <h3 className="text-sm font-medium flex items-center gap-1.5"><Sparkles size={14} /> Release copy</h3>
+      <PublishCard projectId={project?.id} cardId="copy" label="Release copy" icon={Sparkles}
+        summary={hasCopy ? 'Drafted' : 'Not drafted yet'} defaultOpen={!hasCopy}>
         <p className="text-port-text-muted">Each post below is exactly what goes out. Write it yourself, or have the writer draft it from your notes, the links and only what you tick under Draft from. Nothing runs until you press Draft.</p>
         <div className="space-y-0.5">
           <label htmlFor={idFor('notes')} className="text-[11px] text-port-text-muted">Making-of notes (your story, in your words)</label>
@@ -271,7 +273,7 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
             ))}
           </div>
         )}
-      </section>
+      </PublishCard>
     </div>
   );
 }

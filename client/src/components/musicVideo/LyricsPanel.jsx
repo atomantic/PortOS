@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { ListMusic, Plus, Trash2, Upload } from 'lucide-react';
+import Modal from '../ui/Modal.jsx';
 import { lyricSetupState } from '../../lib/musicVideoStages.js';
 
 // Client-minted ids keep a freshly added row addressable across saves without
@@ -163,6 +164,7 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
   const [importFormat, setImportFormat] = useState('auto');
   const [importMode, setImportMode] = useState('replace');
   const [alignError, setAlignError] = useState('');
+  const [separationConsent, setSeparationConsent] = useState(null);
   const timedCount = cues.filter((c) => typeof c.startSec === 'number').length;
   const hasAudio = Boolean(project.trackId || project.uploadedAudioFilename);
 
@@ -186,10 +188,15 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
     onImport({ text: importText, format: importFormat, mode: importMode }, () => setImportText(''));
   };
 
-  const runAlign = (cueId) => {
+  const runAlign = (cueId, separateVocals = false) => {
     if (!onAlign || aligning) return;
+    if (!project.vocalStemFilename && !separateVocals) {
+      setSeparationConsent({ cueId });
+      return;
+    }
+    setSeparationConsent(null);
     setAlignError('');
-    Promise.resolve(onAlign(cueId)).catch((err) => {
+    Promise.resolve(separateVocals ? onAlign(cueId, { separateVocals: true }) : onAlign(cueId)).catch((err) => {
       setAlignError(err?.message || 'Could not align the words to the vocal. Try Align words again.');
     });
   };
@@ -200,6 +207,19 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
   };
 
   return (
+    <>
+    {separationConsent && (
+      <Modal open onClose={() => setSeparationConsent(null)} size="sm" ariaLabel="Separate vocals before alignment">
+        <div className="p-4 space-y-3">
+          <h3 className="font-medium text-port-text">Separate vocals before alignment</h3>
+          <p className="text-sm text-port-text-muted">Use local Demucs htdemucs_ft to create a vocal stem, then align your lyrics with MMS_FA. The first run installs their private Python environments and downloads model weights. Your audio stays on this machine.</p>
+          <div className="flex flex-wrap justify-end gap-2">
+            <button type="button" className="min-h-[44px] px-3 text-port-text-muted" onClick={() => setSeparationConsent(null)}>Cancel</button>
+            <button type="button" className="min-h-[44px] px-3 rounded bg-port-accent text-white" onClick={() => runAlign(separationConsent.cueId, true)}>Separate and align</button>
+          </div>
+        </div>
+      </Modal>
+    )}
     <Shell className="mt-2 bg-port-bg border border-port-border rounded-lg p-2 text-xs">
       <Heading className={`${inline ? '' : 'cursor-pointer select-none '}text-port-text-muted min-h-[44px] sm:min-h-0 flex flex-wrap items-center gap-x-1`}>
         Lyrics &amp; phrases — {cues.length} line{cues.length === 1 ? '' : 's'} ({timedCount} timed)
@@ -264,7 +284,7 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
             <span className="flex items-center gap-2">
               {onAlign && (
                 <button type="button" onClick={() => runAlign()} disabled={aligning || cues.length === 0 || !hasAudio}
-                  title={hasAudio ? 'Align each word to the vocal with local whisper.cpp (the first run downloads a 1.6 GB model)' : 'Attach a song before aligning words'}
+                  title={hasAudio ? 'Align the known lyrics to the vocal with local MMS_FA (model weights download on first use)' : 'Attach a song before aligning words'}
                   className="min-h-[44px] sm:min-h-0 text-port-accent disabled:opacity-50">
                   {aligning ? 'Aligning…' : 'Align words'}
                 </button>
@@ -344,5 +364,6 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
         </section>
       </div>
     </Shell>
+    </>
   );
 }

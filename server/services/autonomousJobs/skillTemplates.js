@@ -1,3 +1,4 @@
+import { newAuditMetadata } from '../../lib/auditWorkflow.js';
 /**
  * Autonomous Jobs — skill templates and effective-prompt assembly.
  *
@@ -180,13 +181,16 @@ async function generateTaskFromJob(job) {
     : []
   const taskPrompt = appendTaskDataInputs(prompt, inputs)
   const description = taskPrompt.split('\n').map(line => line.trim()).find(Boolean) || job.name
-  const meta = job.taskMetadata || {}
+  const meta = newAuditMetadata(job.taskMetadata || {})
   return {
     id: `${job.id}-${Date.now().toString(36)}`,
     description,
     priority: job.priority,
     metadata: {
       autonomousJob: true,
+      ...(meta.auditDepth ? { auditDepth: meta.auditDepth } : {}),
+      ...(meta.auditWorkflow ? { auditWorkflow: meta.auditWorkflow } : {}),
+      ...(meta.deepAuditId ? { deepAuditId: meta.deepAuditId } : {}),
       jobId: job.id,
       jobName: job.name,
       jobCategory: job.category,

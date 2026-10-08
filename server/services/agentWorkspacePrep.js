@@ -1,3 +1,4 @@
+import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 /**
  * Agent Workspace Preparation
@@ -109,7 +110,7 @@ export { resolveTaskTargetBranch as resolveTaskExistingBranch } from '../lib/tas
  *
  * @returns {Promise<{ worktreeInfo: object, adoptedFrom: string }|{ refused: string }|null>}
  */
-async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, preferredPath = null, taskId, allowLiveClaim = false }) {
+async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, preferredPath = null, taskId, allowLiveClaim = false, deepResume = false }) {
   // Fail CLOSED on an unreadable agent list: an empty protected set would read as
   // "nothing is running", which is the one wrong answer here — it would move a
   // live run's directory. The caller's timed pause is the safe outcome instead.
@@ -145,10 +146,12 @@ async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, 
     return null;
   }
 
-  const worktreeInfo = await adoptWorktree(agentId, workspacePath, holder.path, branchName).catch(err => {
+  const worktreeInfo = await adoptWorktree(agentId, workspacePath, holder.path, branchName, ...(deepResume ? [{ deepResume: true }] : [])).catch(err => {
+    if (err.code === 'DEEP_RESUME_PRESERVED') return { refused: err.message };
     emitLog('warn', `🌳 Could not adopt ${holder.path} holding ${branchName} for task ${taskId}: ${err.message}`, { taskId });
     return null;
   });
+  if (worktreeInfo?.refused) return { refused: worktreeInfo.refused, deepPreserved: true };
   return worktreeInfo ? { worktreeInfo, adoptedFrom: holder.agentId } : null;
 }
 
@@ -168,6 +171,9 @@ async function prepareRequestedWorktree({
   allowSharedWorkspaceFallback,
 }) {
   const isolateDependencies = resolveTaskHookType(task) === 'dependency-updates';
+  const baseCommit = isLegacyDeepAudit(task.metadata)
+    ? await (await import('./deepAudit.js')).getDeepAuditSourceRevision(task)
+    : null;
   // Detecting the base branch and resolving the branch holder are independent
   // reads (a git-branches lookup vs. an agent-liveness + worktree-list check) —
   // kick both off before awaiting either so their I/O overlaps instead of
@@ -189,6 +195,7 @@ async function prepareRequestedWorktree({
       preferredPath: resumeWorktreePath,
       taskId: task.id,
       allowLiveClaim: isNonCommittingCoordinatorTask(task),
+      deepResume: isLegacyDeepAudit(task.metadata),
     })
     : Promise.resolve(null);
 
@@ -206,6 +213,10 @@ async function prepareRequestedWorktree({
   const takeover = await takeoverPromise;
   const attempt = (Number(task.metadata?.worktreeBusyAttempts) || 0) + 1;
   if (takeover?.refused) {
+    if (takeover.deepPreserved) {
+      await blockTask(task, takeover.refused, 'deep-audit-partial');
+      return { outcome: 'blocked', reason: takeover.refused };
+    }
     const reason = `Branch ownership prevents worktree takeover (${takeover.refused}); retrying after a short cooldown`;
     await blockTask(task, reason, attempt <= WORKTREE_BUSY_MAX_ATTEMPTS ? 'worktree-busy' : 'worktree-failed',
       attempt <= WORKTREE_BUSY_MAX_ATTEMPTS ? {
@@ -219,6 +230,7 @@ async function prepareRequestedWorktree({
   let worktreeError = null;
   const worktreeInfo = takeover?.worktreeInfo || await createWorktree(agentId, workspacePath, task.id, {
     baseBranch: detectedBase || undefined,
+    ...(baseCommit ? { baseCommit } : {}),
     existingBranch: existingBranch || undefined,
     // Only consulted when `existingBranch` names a FORK PR's head, which has no
     // `origin/<branch>` to attach to (#6064). Null for every other task, which

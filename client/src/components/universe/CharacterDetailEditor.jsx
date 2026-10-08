@@ -47,10 +47,10 @@ import {
   createVoiceDesignCandidate,
   createClonedVoiceCandidate,
   promoteVoiceProfile,
-  startFineTuningJob,
 } from '../../services/apiVoice';
 import { prepareProfilePlayback } from '../../services/voiceProfileBenchmark';
 import VoicePicker from '../voice/VoicePicker';
+import VoiceFineTuningPanel from '../voice/VoiceFineTuningPanel';
 import TabPills from '../ui/TabPills';
 import useDrawerTab from '../../hooks/useDrawerTab';
 
@@ -763,13 +763,21 @@ function VoiceCanonSection({ entry, onPatch, disabled }) {
   );
 }
 
+const VOICE_LAB_TABS = [
+  { id: 'overview', label: 'Overview', icon: BadgeCheck },
+  { id: 'design', label: 'Design', icon: WandSparkles },
+  { id: 'clone', label: 'Clone', icon: Mic },
+  { id: 'finetune', label: 'Fine-Tuning', icon: Activity },
+];
+const VOICE_LAB_TAB_IDS = VOICE_LAB_TABS.map((tab) => tab.id);
+
 function VoiceProfileSection({ universeId, entry, disabled }) {
   const [profile, setProfile] = useState(null);
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(Boolean(universeId));
   const [loadError, setLoadError] = useState(null);
   const [_engineCapability, setEngineCapability] = useState(null);
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useDrawerTab(`voiceLab-${entry?.id}`, 'overview', VOICE_LAB_TAB_IDS);
 
   // Voice Design form state
   const [designInstructions, setDesignInstructions] = useState('');
@@ -782,10 +790,6 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
   const [cloneTranscript, setCloneTranscript] = useState('');
   const [cloneConsentConfirmed, setCloneConsentConfirmed] = useState(false);
   const [cloneLicensePosture, _setCloneLicensePosture] = useState('consented-performance');
-
-  // Fine-tuning state
-  const [fineTuneEpochs, setFineTuneEpochs] = useState(5);
-  const [fineTuneJob, setFineTuneJob] = useState(null);
 
   const loadGeneration = useRef(0);
 
@@ -922,13 +926,6 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
     return result;
   }, { errorMessage: 'Could not promote candidate profile' });
 
-  const [startFineTune, startingFineTune] = useAsyncAction(async () => {
-    if (!profile?.id) return null;
-    const result = await startFineTuningJob(profile.id, { epochs: fineTuneEpochs }, { silent: true });
-    setFineTuneJob(result);
-    return result;
-  }, { errorMessage: 'Failed to start fine-tuning' });
-
   if (!universeId) return null;
   const approved = profile?.approval?.status === 'approved';
   const _benchmarkCount = profile?.benchmark?.lines?.length || 0;
@@ -942,19 +939,8 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
       </p>
       {loadError ? <p className="text-[10px] text-port-error">{loadError}</p> : null}
 
-      {/* Sub-tab navigation */}
-      <div className="flex gap-1 border-b border-port-border/40 pb-1 text-[11px]">
-        {['overview', 'design', 'clone', 'finetune'].map((tab) => (
-          <button
-            key={tab}
-            type="button"
-            onClick={() => setActiveTab(tab)}
-            className={`px-2 py-0.5 rounded capitalize ${activeTab === tab ? 'bg-port-accent text-white font-medium' : 'text-gray-400 hover:text-white'}`}
-          >
-            {tab === 'finetune' ? 'Fine-Tuning' : tab}
-          </button>
-        ))}
-      </div>
+      <TabPills tabs={VOICE_LAB_TABS} activeTab={activeTab} onChange={setActiveTab}
+        variant="pills" size="sm" mobileCompact ariaLabel="Voice Lab" />
 
       {activeTab === 'overview' && (
         <div className="space-y-2">
@@ -1145,36 +1131,12 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
       )}
 
       {activeTab === 'finetune' && (
-        <div className="space-y-2">
-          <p className="text-[10px] text-gray-400">Optional character voice fine-tuning. Requires a supported Qwen training adapter; without one the request is refused and no checkpoint is created.</p>
-          <div className="flex gap-2">
-            <label className="block text-[10px] text-gray-400 flex-1">
-              Epochs
-              <input
-                type="number"
-                value={fineTuneEpochs}
-                onChange={(e) => setFineTuneEpochs(parseInt(e.target.value, 10) || 5)}
-                min="1"
-                max="20"
-                className="w-full mt-0.5 px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white"
-              />
-            </label>
-          </div>
-          <button
-            type="button"
-            onClick={startFineTune}
-            disabled={disabled || startingFineTune || !profile?.id}
-            className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-40"
-          >
-            {startingFineTune ? <Loader2 size={12} className="animate-spin" /> : <Activity size={12} />}
-            Start Fine-Tuning Job
-          </button>
-          {fineTuneJob ? (
-            <div className="p-2 border border-port-border/40 rounded bg-port-bg/40 text-[10px] space-y-1">
-              <p>Job ID: {fineTuneJob.jobId} · Status: {fineTuneJob.status}</p>
-            </div>
-          ) : null}
-        </div>
+        <VoiceFineTuningPanel
+          profileId={profile?.id || null}
+          disabled={disabled}
+          activeModelRevision={approved && profile.kind === 'fine-tuned' ? profile.modelRevision : null}
+          onPromoted={refreshProfiles}
+        />
       )}
     </BoxedSection>
   );

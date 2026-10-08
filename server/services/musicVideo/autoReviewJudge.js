@@ -193,6 +193,17 @@ export function gateAutoReview({ parsed, analysis, evidence = {} }) {
     checks.composition = parsed.checks.composition;
     checks.continuity = parsed.checks.continuity;
   }
+  if (Array.isArray(evidence.footageVisibility)) {
+    for (const sample of evidence.footageVisibility) {
+      if (sample.status === 'measured' && sample.hiddenFraction >= 0.5 && sample.hiddenFraction <= 1 && Number.isFinite(sample.atSec)) {
+        checks.composition = 'fail';
+        findings.push({ atSec: sample.atSec, check: 'composition', severity: 'blocking', source: 'analysis', failureCategory: 'composition',
+          note: `Footage hidden: opaque composition covers at least ${Math.round(sample.hiddenFraction * 100)}% of the sampled frame — reduce authored overlays` });
+      } else if (checks.composition !== 'fail' && (sample.status !== 'measured' || !(sample.visibleFraction >= 0.5 && sample.visibleFraction <= 1))) {
+        checks.composition = 'unverified';
+      }
+    }
+  }
   if (continuous) {
     const freezes = analysis.freezes || [];
     for (const f of freezes) {

@@ -34,7 +34,8 @@ export const PRICING_AS_OF = '2026-09-01';
 // Newer model launch rates are tracked separately so the baseline date above
 // does not imply that every vendor's pricing was re-verified on that date.
 const MODEL_RATE_AS_OF = Object.freeze({
-  'claude-sonnet-5-5': '2026-09-28',
+  'claude-haiku-5-5': '2026-10-07',
+  'claude-sonnet-5-5': '2026-10-07',
   'claude-opus-5-5': '2026-09-23',
   'gpt-6.1-sol': '2026-09-29',
   'gpt-6-sol': '2026-09-22',
@@ -92,6 +93,8 @@ const EXACT_RATES = {
   'claude-sonnet-5': [2.0, 10.0],
   'claude-sonnet-4-6': [3.0, 15.0],
   'claude-sonnet-4-5': [3.0, 15.0],
+  // Haiku 5.5 base tier (prompts <=100k tokens); >100k is $0.50/$2.50 and not modeled.
+  'claude-haiku-5-5': [0.1, 0.5],
   'claude-haiku-4-5': [1.0, 5.0],
   // OpenAI (Codex CLI). GPT-6 Sol/Luna and updated GPT-5.6 Sol/Luna rates were
   // verified against the 2026-09-22 model launch:
@@ -159,6 +162,7 @@ const FAMILY_RULES = [
   { test: /opus/i, rateModel: OPUS_MODEL_IDS[0] },
   { test: /sonnet[-.]?5/i, rateModel: 'claude-sonnet-5' },
   { test: /sonnet/i, rateModel: 'claude-sonnet-4-5' },
+  { test: /haiku-5/i, rateModel: 'claude-haiku-5-5' },
   { test: /haiku/i, rateModel: 'claude-haiku-4-5' },
   { test: /codex/i, rateModel: 'gpt-5.3-codex' },
   // `gpt-oss-*` is open-weights and hosted cheaply everywhere — it must win over
@@ -228,6 +232,9 @@ const CACHE_MULTIPLIER_RULES = [
   { test: /^claude-fable-5-1/, read: 0.025, write: 1.25 },
   // Opus 5.5 cache reads are $0.20/MTok against a $4 input rate.
   { test: /^claude-opus-5-5/, read: 0.05, write: 1.25 },
+  // Sonnet 5.5 cache reads were halved to $0.10/MTok (2026-10-07) against a $2 input rate:
+  // https://x.com/claudeai/status/2107894060229034197
+  { test: /^claude-sonnet-5-5/, read: 0.05, write: 1.25 },
 ];
 
 const cacheMultipliers = (rateModel) => {

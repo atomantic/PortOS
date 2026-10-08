@@ -61,6 +61,9 @@ vi.mock('./appActivity.js', async (importActual) => ({
   bindAppReviewAgent: async (appId, id) => { mocks.activity[appId] = { ...mocks.activity[appId], activeAgentId: id }; },
   updateAppActivity: async () => {},
 }));
+// This suite exercises ordinary manual/idle admission; durable quota and
+// maintenance handoffs are exercised by onDemandDrain.test.js.
+vi.mock('./onDemandHandoff.js', () => ({ reconcileOnDemandHandoffs: async () => {} }));
 vi.mock('./taskSchedule.js', async (importActual) => ({
   ...(await importActual()),
   loadSchedule: async () => ({ tasks: { 'code-quality': { enabled: true } } }),

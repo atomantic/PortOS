@@ -47,6 +47,8 @@ describe('real workspace runner temp lifecycle', () => {
          const root = process.env.PORTOS_TEST_TEMP_ROOT;
          await import(${JSON.stringify(new URL('../server/vitest.config.js?reimport', import.meta.url).href)});
          if (process.env.PORTOS_TEST_TEMP_ROOT !== root) throw Error('reimport created another root');
+         // Keep IPC referenced until the parent deliberately interrupts this owner.
+         process.on('message', () => {});
          process.send(root);`],
         { env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
       const closed = new Promise((resolve, reject) => {

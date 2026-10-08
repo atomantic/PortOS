@@ -211,7 +211,8 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
   const boardNegative = trimTo(board?.style?.negativePrompt, 600);
   const moodLines = moodImages.map((img, i) => `${i}. ${[img.caption, img.analysis].filter(Boolean).join(' — ') || '(no caption or analysis)'}`);
   const sectionLines = sections.map((s) => `${s.index}. ${s.label} ${fmtTime(s.startSec)}–${fmtTime(s.endSec)}`);
-  const bible = musicVideoCreativeContext(concept);
+  // The character style is given in full below, so the bible leaves it out.
+  const bible = musicVideoCreativeContext({ ...concept, characterStyle: undefined });
 
   const header = procedural ? [
     `You are the creative director preparing the CAST & SETS check-in for a PROCEDURAL music video of "${project?.name || 'Untitled'}": its characters and environments are authored in code (SVG, Three.js or canvas), not filmed or photographed.`,
@@ -231,6 +232,14 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     guidance && `Director guidance: ${guidance}`,
     bible && bible,
   ].filter(Boolean).join('\n');
+
+  // A loaded character style fixes who the protagonist is; the song still
+  // decides the world, the sets and which looks she wears.
+  const characterStyle = concept.characterStyle ? [
+    'CHARACTER STYLE (fixed): the protagonist is the character below. Use her name, write face, hair and signature from her identity text, and keep every rule and never-list item.',
+    'Choose looks from the wardrobe options or design new ones in the same spirit for this song\'s world.',
+    concept.characterStyle,
+  ].join('\n') : '';
 
   const board_ = [
     boardStyle && `Mood board composed style: ${boardStyle}`,
@@ -269,6 +278,7 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
   return [
     header,
     facts,
+    characterStyle,
     `Lyrics (section headers and delivery directions in brackets):\n${lyrics || '(instrumental — no lyrics)'}`,
     sectionLines.length ? `Song sections (index. label start–end):\n${sectionLines.join('\n')}` : 'The song has not been sectioned.',
     board_,

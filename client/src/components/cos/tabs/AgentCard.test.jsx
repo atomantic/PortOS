@@ -647,6 +647,7 @@ describe('AgentCard transcript truncation (#3498)', () => {
 
     await user.click(screen.getByRole('button', { name: 'Show' }));
 
+    await user.click(screen.getByRole('button', { name: 'Show full transcript' }));
     expect(await screen.findByText(/Showing the last 1 line —/)).toBeInTheDocument();
     expect(screen.getByText(/12 MB/)).toBeInTheDocument();
   });
@@ -668,6 +669,7 @@ describe('AgentCard transcript truncation (#3498)', () => {
 
     await user.click(screen.getByRole('button', { name: 'Show' }));
 
+    await user.click(screen.getByRole('button', { name: 'Show full transcript' }));
     // "No output captured" would call a multi-MB log empty.
     expect(await screen.findByText(/no readable lines/)).toBeInTheDocument();
     expect(screen.queryByText('No output captured')).not.toBeInTheDocument();
@@ -1329,4 +1331,16 @@ it('loads prior pipeline stage output through the full transcript disclosure', a
   expect(await screen.findByText('Implementation transcript')).toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: /Plan/ }));
   expect(await screen.findByText('Prior planning transcript')).toBeInTheDocument();
+});
+
+
+it('keeps the runner transcript separate when no completion summary was saved', async () => {
+  const completedAgent = { ...agent, metadata: {}, output: [{ line: 'exec: example tool output' }] };
+  api.getCosAgent.mockResolvedValue(completedAgent);
+  render(<MemoryRouter><AgentCard agent={completedAgent} completed /></MemoryRouter>);
+  await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
+  expect(await screen.findByText('No completion summary was saved. The runner transcript is available separately.')).toBeInTheDocument();
+  expect(screen.queryByText('exec: example tool output')).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: 'Show full transcript' }));
+  expect(screen.getByText('exec: example tool output')).toBeInTheDocument();
 });

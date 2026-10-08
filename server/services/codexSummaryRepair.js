@@ -24,6 +24,9 @@ export function isWonkyTaskSummary(summary) {
 // Also clears any wonky `simplifySummary` — Codex CLI cannot execute the
 // `/simplify` slash command, so any pre-fix split was a false positive.
 export async function repairCodexTaskSummary(agentDir, agent) {
+  // Explicit completions can legitimately be long. Never replace one with a
+  // guessed transcript tail or undermine its persisted source provenance.
+  if (['sentinel', 'terminal-result'].includes(agent?.metadata?.taskSummarySource)) return null;
   const storedTask = agent?.metadata?.taskSummary;
   const storedSimplify = agent?.metadata?.simplifySummary;
   const taskWonky = isWonkyTaskSummary(storedTask);

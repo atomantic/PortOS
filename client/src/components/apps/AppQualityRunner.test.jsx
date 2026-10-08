@@ -41,7 +41,7 @@ it('launches missing checks with visible mode and effort, then exposes held runn
   fireEvent.click(screen.getByText('Use high effort'));
   fireEvent.click(button);
   await screen.findByRole('link', { name: 'Open runner settings' });
-  expect(startMaintenanceRun).toHaveBeenCalledWith({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high', mode: 'fix', claimBetweenAudits: false, taskTypes: ['security', 'ux'] }, { silent: true });
+  expect(startMaintenanceRun).toHaveBeenCalledWith({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high', mode: 'fix', prCompletion: 'draft', claimBetweenAudits: false, taskTypes: ['security', 'ux'] }, { silent: true });
   expect(button).toBeEnabled();
 });
 
@@ -104,7 +104,7 @@ it('preserves run overrides when reopening the drawer for one category', async (
   expect(screen.getByLabelText('Mode')).toHaveValue('fix');
   fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
   await waitFor(() => expect(startMaintenanceRun).toHaveBeenCalledWith(
-    { appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high', mode: 'fix', claimBetweenAudits: false, taskTypes: ['security'], explicitCheck: true },
+    { appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high', mode: 'fix', prCompletion: 'draft', claimBetweenAudits: false, taskTypes: ['security'], explicitCheck: true },
     { silent: true }
   ));
 });
@@ -152,12 +152,16 @@ it('excludes known unavailable and N/A assessments from suggestions while allowi
   await waitFor(() => expect(startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ taskTypes: ['typing', 'console-errors', 'security'] }), { silent: true }));
 });
 
-it('re-offers a category whose not-applicable ruling has expired', async () => {
+it.each(['not-applicable', 'unavailable'])('re-offers stale %s evidence without forcing inapplicable checks', async coverage => {
   startMaintenanceRun.mockResolvedValue({ run: { id: 'run-5', status: 'running', steps: [] } });
-  const categories = [{ id: 'accessibility', label: 'Accessibility', score: null, coverage: 'not-applicable', stale: true, assessedAt: '2026-07-01T00:00:00Z' }];
+  const categories = [
+    { id: 'accessibility', label: 'Accessibility', score: null, coverage, stale: true, assessedAt: '2026-07-01T00:00:00Z' },
+    { id: 'mobile-responsive', label: 'Mobile', score: null, coverage, stale: true, applicable: false, assessedAt: '2026-07-01T00:00:00Z' },
+  ];
   render(<MemoryRouter><AppQualityRunner app={{ ...app, quality: { categories } }} /></MemoryRouter>);
   fireEvent.click(await findEnabledByRole('button', { name: 'Run now' }));
   await waitFor(() => expect(startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ taskTypes: ['accessibility'] }), { silent: true }));
+  expect(startMaintenanceRun.mock.lastCall[0]).not.toHaveProperty('explicitCheck');
 });
 
 it('leaves audits that cannot apply to this repository out of batch runs, but runs one on request', async () => {
@@ -247,4 +251,31 @@ it('keeps a start response when an older status request resolves afterwards', as
   expect(screen.getByRole('button', { name: 'Stop remaining checks' })).toBeInTheDocument();
   await act(async () => resolveRead({ runs: [] }));
   expect(screen.getByRole('button', { name: 'Stop remaining checks' })).toBeInTheDocument();
+});
+
+it('defaults audit fixes to draft review and lets the user explicitly inherit saved policy', async () => {
+  startMaintenanceRun.mockResolvedValue({ run: { id: 'draft-run', status: 'completed', steps: [] } });
+  render(<MemoryRouter><AppQualityRunner app={app} /></MemoryRouter>);
+  fireEvent.change(await findEnabledByLabelText('Mode'), { target: { value: 'fix' } });
+  expect(screen.getByLabelText('Pull requests')).toHaveValue('draft');
+  fireEvent.click(await findEnabledByRole('button', { name: 'Run 2 checks now' }));
+  await waitFor(() => expect(startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 'fix', prCompletion: 'draft', claimBetweenAudits: false }), { silent: true }));
+  fireEvent.change(await findEnabledByLabelText('Pull requests'), { target: { value: 'inherit' } });
+  fireEvent.click(await findEnabledByRole('button', { name: 'Run 2 checks now' }));
+  await waitFor(() => expect(startMaintenanceRun).toHaveBeenCalledTimes(2));
+  expect(startMaintenanceRun.mock.lastCall[0].prCompletion).toBe('inherit');
+});
+
+
+it('explains extended Deep and preserves old evidence without offering legacy resume', async () => {
+  const run = { id: 'deep-run', appId: app.id, status: 'stopped', auditDepth: 'deep', steps: [], reason: 'Budget exhausted',
+    deepAudits: { step: { discoveryComplete: false, reviewedUnits: 0, totalUnits: 8, satisfiedPasses: 8, requiredPasses: 32, blockedUnits: 1, pendingCandidates: 2, deliveryComplete: false } } };
+  getMaintenanceRuns.mockResolvedValue({ runs: [run] });
+  render(<MemoryRouter><AppQualityRunner app={app} /></MemoryRouter>);
+  fireEvent.change(screen.getByLabelText('Audit depth'), { target: { value: 'deep' } });
+  expect(await screen.findByText(/8\/32 pass requirements/)).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Resume Deep audit' })).not.toBeInTheDocument();
+  expect(screen.getByText(/Historical exhaustive audit/)).toBeInTheDocument();
+  expect(screen.getByText(/multiple worthwhile issues in one run/)).toBeInTheDocument();
+  expect(screen.getByRole('option', { name: 'Deep — extended investigation and multiple fixes' })).toBeInTheDocument();
 });

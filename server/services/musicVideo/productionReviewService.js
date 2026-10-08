@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
+import { shotCameraLabel } from '../../lib/cameraMovements.js';
 import { productionReadiness, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput } from './productionReview.js';
 
 const reviewProcessId = randomUUID();
@@ -232,7 +233,7 @@ export async function prepareProductionReview(id, options = {}) {
       sceneId: scene.sceneId,
       lyricCueIds: (current.lyricCues || []).filter(c => c.startSec < scene.endSec && c.endSec > scene.startSec).map(c => c.id),
       action: scene.visualIntent || scene.prompt || '', staging: scene.framePrompt || '',
-      camera: scene.direction?.camera || world.camera || '', transition: world.transitions || '',
+      camera: shotCameraLabel(scene.camera) || scene.direction?.camera || world.camera || '', transition: world.transitions || '',
     }))];
     return { project: { ...current, productionReview: { ...current.productionReview, draft: { ...latest, storyboard } } } };
   });
@@ -329,7 +330,8 @@ export async function reviseProductionFromFeedback(id, { stage, ...route }) {
       const draft = current.productionReview?.draft;
       const storyboard = draft?.storyboard?.map(shot => {
         const fields = updates.get(shot.sceneId);
-        return fields ? { ...shot, ...(fields.prompt ? { action: fields.prompt } : {}), ...(fields.framePrompt ? { staging: fields.framePrompt } : {}) } : shot;
+        return fields ? { ...shot, ...(fields.prompt ? { action: fields.prompt } : {}), ...(fields.framePrompt ? { staging: fields.framePrompt } : {}),
+          ...(fields.camera ? { camera: shotCameraLabel(fields.camera) } : {}) } : shot;
       });
       return { project: { ...current, scenes, updatedAt: new Date().toISOString(),
         ...(storyboard ? { productionReview: { ...current.productionReview, draft: { ...draft, storyboard } } } : {}) } };

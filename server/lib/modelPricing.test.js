@@ -7,6 +7,8 @@ describe('resolveModelRates', () => {
     expect(r).toMatchObject({ rateModel: 'claude-opus-4-8', inputPer1M: 5, outputPer1M: 25, matched: 'exact' });
     const r5 = resolveModelRates('claude-code', 'claude-opus-5');
     expect(r5).toMatchObject({ rateModel: 'claude-opus-5', inputPer1M: 5, outputPer1M: 25, matched: 'exact' });
+    const rh55 = resolveModelRates('claude-code', 'claude-haiku-5-5');
+    expect(rh55).toMatchObject({ rateModel: 'claude-haiku-5-5', inputPer1M: 0.1, outputPer1M: 0.5, matched: 'exact' });
     const rs55 = resolveModelRates('claude-code', 'claude-sonnet-5-5');
     expect(rs55).toMatchObject({ rateModel: 'claude-sonnet-5-5', inputPer1M: 2, outputPer1M: 10, matched: 'exact' });
   });
@@ -93,6 +95,13 @@ describe('resolveModelRates', () => {
       matched: 'exact', inputPer1M: 4, outputPer1M: 20, cacheReadPer1M: 0.2, cacheWritePer1M: 5,
     });
     expect(resolveModelRates('claude-code', 'claude-opus-5')).toMatchObject({ inputPer1M: 5, outputPer1M: 25 });
+  });
+
+  it('prices Sonnet 5.5 cache reads at the rate halved on 2026-10-07', () => {
+    expect(resolveModelRates('claude-code', 'claude-sonnet-5-5')).toMatchObject({
+      matched: 'exact', inputPer1M: 2, outputPer1M: 10, cacheReadPer1M: 0.1, cacheWritePer1M: 2.5,
+    });
+    expect(resolveModelRates('claude-code', 'claude-sonnet-5')).toMatchObject({ cacheReadPer1M: 0.2 });
   });
 
   it('resolves Bedrock-prefixed ids through family rules', () => {

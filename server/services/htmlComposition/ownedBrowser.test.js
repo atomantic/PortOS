@@ -37,10 +37,20 @@ beforeEach(() => {
   });
   vi.mocked(rm).mockClear();
 });
-afterEach(() => { child.stderr.destroy(); });
+// process.getuid does not exist on Windows, where vi.spyOn would throw; define it for the test and put back whatever was there.
+const originalGetuid = Object.getOwnPropertyDescriptor(process, 'getuid');
+const setUid = uid => Object.defineProperty(process, 'getuid', { value: () => uid, configurable: true, writable: true });
+afterEach(() => {
+  child.stderr.destroy();
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  if (originalGetuid) Object.defineProperty(process, 'getuid', originalGetuid);
+  else delete process.getuid;
+});
 
 describe('owned composition capture browser lifecycle', () => {
   it('uses the configured executable with a fresh sandboxed profile and disposes only its child', async () => {
+    setUid(1000);
     const owner = await launchCompositionBrowser();
     expect(owner.webSocketDebuggerUrl).toBe(endpoint);
     const [executable, args, options] = launch.spawn.mock.calls[0];
@@ -52,6 +62,27 @@ describe('owned composition capture browser lifecycle', () => {
     await expect(access(profile)).resolves.toBeUndefined();
     await Promise.all([owner.close(), owner.close()]);
     expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+    await expect(access(profile)).rejects.toThrow();
+  });
+
+  it.each([
+    ['a root Vitest worker drops', {}, true],
+    ['a root production launch keeps', { VITEST: undefined, NODE_ENV: 'production' }, false],
+  ])('%s the sandbox Chrome refuses to start as root', async (_, env, unsandboxed) => {
+    setUid(0);
+    for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value);
+    await (await launchCompositionBrowser()).close();
+    expect(launch.spawn.mock.calls[0][1].includes('--no-sandbox')).toBe(unsandboxed);
+  });
+
+  it('names a recognized startup exit cause without copying browser output', async () => {
+    startup = () => {
+      child.emit('spawn');
+      child.stderr.write('[0101/000000:ERROR:zygote_host_impl_linux.cc(101)] Running as root without --no-sandbox is not supported. /private/profile/path\n');
+      setImmediate(() => { child.exitCode = 1; child.emit('exit', 1, null); child.emit('close', 1, null); });
+    };
+    const error = await launchCompositionBrowser().catch(caught => caught);
+    expect(error.message).toBe('Composition browser exited during startup (code 1): Chrome refuses to run as root with its sandbox enabled');
     await expect(access(profile)).rejects.toThrow();
   });
 
@@ -134,4 +165,20 @@ describe('owned composition capture browser lifecycle', () => {
     expect(rm).toHaveBeenCalledTimes(2);
     await expect(access(profile)).rejects.toThrow();
   });
+});
+
+
+it('retains the cleanup deadline failure but removes its owned profile after a late close', async () => {
+  child.kill = vi.fn(() => true);
+  const owner = await launchCompositionBrowser({ shutdownMs: 30 });
+  await expect(owner.close()).rejects.toThrow(/cleanup exceeded its deadline.*term=accepted, kill=accepted, signalError=none/);
+  expect(child.kill.mock.calls.map(([signal]) => signal)).toEqual(['SIGTERM', 'SIGKILL']);
+  await expect(access(profile)).resolves.toBeUndefined();
+  child.signalCode = 'SIGKILL';
+  child.emit('exit', null, 'SIGKILL');
+  // Exit alone is insufficient: the child must release inherited stdio first.
+  await expect(access(profile)).resolves.toBeUndefined();
+  child.emit('close', null, 'SIGKILL');
+  await vi.waitFor(async () => { await expect(access(profile)).rejects.toThrow(); });
+  await expect(owner.close()).rejects.toThrow('cleanup exceeded its deadline');
 });

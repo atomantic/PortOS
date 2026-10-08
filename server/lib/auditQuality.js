@@ -55,7 +55,7 @@ This contract overrides narrower slice-selection or ranking advice in the missio
 6. Score the worst finding's severity separately on 1–10: 1–3 minor localized impact, 4–6 material recurring cost, 7–8 major workflow/reliability impact, 9–10 critical data/security/availability failure. Use 0 only when no material finding was verified. List this severity for every finding in the narrative.
 7. Include exactly one single-line QUALITY_AUDIT_JSON: {...} in your completion sentinel summary AND final response, with no secrets or personal data. Replace the example values with observed evidence. The category is fixed to this task; do not rate other categories. Keep ordinary completion/PR instructions and summaries too.
 QUALITY_AUDIT_JSON: {"version":1,"category":"${category}","score":null,"worstSeverity":0,"coverage":"unavailable","confidence":"low","summary":"Explain the assessment and strongest evidence","scannedFiles":0,"totalFiles":0}
-Allowed coverage: broad, partial, unavailable, not-applicable. Allowed confidence: low, medium, high. scannedFiles counts files actually included in the category signal scan; totalFiles is the eligible inventory. Broad requires the whole inventory to be scanned (deep review remains bounded). Partial scores are provisional and excluded from the overall score. If unavailable or not-applicable, score must be null and explain why. Even a zero-finding audit returns this assessment.`;
+Allowed coverage: broad, partial, unavailable, not-applicable. Allowed confidence: low, medium, high. scannedFiles counts files actually included in the category signal scan; totalFiles is the eligible inventory. Broad requires the whole inventory to be scanned (deep review remains bounded). Partial assessments are excluded from the overall score. For partial coverage, use score:null when the inspected evidence cannot support a category score; explain why rather than inventing one. A numeric partial score is provisional. If unavailable or not-applicable, score must be null and explain why. Even a zero-finding audit returns this assessment.`;
 }
 
 export const appQualityQuerySchema = z.object({ includeQuality: z.enum(['true', 'false']).optional() });
@@ -80,7 +80,7 @@ export const auditQualityReportSchema = z.object({
   scannedFiles: z.number().int().nonnegative(),
   totalFiles: z.number().int().nonnegative(),
 }).strict().refine(r => r.scannedFiles <= r.totalFiles)
-  .refine(r => ['unavailable', 'not-applicable'].includes(r.coverage) ? r.score === null : r.score !== null && r.scannedFiles > 0)
+  .refine(r => ['unavailable', 'not-applicable'].includes(r.coverage) ? r.score === null : r.scannedFiles > 0 && (r.coverage === 'partial' || r.score !== null))
   .refine(r => r.coverage !== 'broad' || (r.totalFiles > 0 && r.scannedFiles === r.totalFiles));
 
 export function parseAuditQualityReport(summary, category) {

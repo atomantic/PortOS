@@ -81,6 +81,15 @@ const MAX_STEPS_PER_ADVANCE = 16;
 const REVIEW_TIMEOUT_MS = 240_000;
 
 const advancing = new Map();
+// Every fire-and-forget continuation (a background advance, an event's
+// follow-up, a pause after a failed job), so a caller can wait for the
+// service to go quiet instead of guessing with a timer.
+const background = new Set();
+function track(promise) {
+  background.add(promise);
+  promise.finally(() => background.delete(promise)).catch(() => {});
+  return promise;
+}
 
 const short = (id) => String(id || '').slice(5, 13);
 
@@ -209,7 +218,7 @@ async function reviewDraft(project, run, excerpt) {
   const temporal = !sections.length && project.scenes?.some(isPerformanceScene)
     ? { version: 1, status: 'unverified', analyzer: null, reason: 'The draft has no performance-section provenance', shots: [] }
     : await analyzeTemporalPerformance({ excerptPath, shots });
-  const evidence = { boundaryFrames: hasSheet ? 1 : 0, continuousFrames: frameTimes.length, temporal, excerptStartSec: excerpt.startSec };
+  const evidence = { boundaryFrames: hasSheet ? 1 : 0, continuousFrames: frameTimes.length, temporal, ...(excerpt.footageVisibility ? { footageVisibility: excerpt.footageVisibility } : {}), excerptStartSec: excerpt.startSec };
 
   let parsed = null;
   let reviewerError = null;
@@ -414,12 +423,12 @@ function advanceAutoReview(projectId, runId) {
 // checkpoint is written; the advance continues in the background and reports
 // over the `auto-review` event.
 function advanceInBackground(projectId, runId) {
-  advanceAutoReview(projectId, runId).catch(async (err) => {
+  track(advanceAutoReview(projectId, runId).catch(async (err) => {
     console.error(`❌ Music Video auto-review ${short(runId)} step failed: ${err.message}`);
     await halt(projectId, runId, { status: 'stopped', reason: `A step failed: ${err.message}`, error: err.message })
       .then((out) => publish(projectId, out.project, out.run, { type: 'idle' }))
       .catch(() => {});
-  });
+  }));
 }
 
 /** Start a run (explicit director request with limits). Returns `{ project, run }`. */
@@ -491,9 +500,9 @@ function armJobEndListener() {
     const onJobEnded = (job) => {
       const tag = job?.params?.musicVideo;
       if (!tag?.projectId || !tag.revisionId || !tag.sceneId) return;
-      pauseOnEndedGeneration(tag, job).catch((err) => {
+      track(pauseOnEndedGeneration(tag, job).catch((err) => {
         console.error(`❌ Music Video auto-review could not pause after a ${job.status} generation: ${err.message}`);
-      });
+      }));
     };
     mediaJobEvents.on('failed', onJobEnded);
     mediaJobEvents.on('canceled', onJobEnded);
@@ -519,12 +528,12 @@ async function pauseOnEndedGeneration(tag, job) {
 }
 
 function continueFromEvent(projectId, pickRun, label) {
-  getProject(projectId)
+  track(getProject(projectId)
     .then((project) => {
       const run = project ? pickRun(project) : null;
       return run ? advanceAutoReview(projectId, run.id) : null;
     })
-    .catch((err) => console.error(`❌ Music Video auto-review could not continue after ${label}: ${err.message}`));
+    .catch((err) => console.error(`❌ Music Video auto-review could not continue after ${label}: ${err.message}`)));
 }
 
 musicVideoEvents.on('excerpt-render', ({ projectId, excerptId } = {}) => {
@@ -545,3 +554,13 @@ const onSceneTake = ({ projectId, sceneId } = {}) => {
 };
 musicVideoEvents.on('scene-image', onSceneTake);
 musicVideoEvents.on('scene-video', onSceneTake);
+
+/**
+ * Resolves once no background work is in flight — including work an earlier
+ * piece started while it ran (an advance that schedules another).
+ */
+async function settleBackground() {
+  while (background.size) await Promise.allSettled([...background]);
+}
+
+export const __testing = { settleBackground };

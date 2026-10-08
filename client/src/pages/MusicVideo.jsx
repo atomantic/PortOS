@@ -1,4 +1,5 @@
 import ProductionReviewPanel from '../components/musicVideo/ProductionReviewPanel.jsx';
+import { unfoldToAnchor } from '../lib/unfoldToAnchor.js';
 import useMusicVideoProductionReview from '../hooks/useMusicVideoProductionReview.js';
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router';
@@ -469,12 +470,12 @@ export default function MusicVideo() {
   const handleCreate = (e) => {
     e.preventDefault();
     if (!form.name.trim()) return;
-    // A YouTube import in flight hasn't set form.trackId yet — creating now
+    // An audio import in flight hasn't set form.trackId yet — creating now
     // would make a track-less project, and the import's later completion
     // would only fill in the (already-reset) form's trackId instead of
     // attaching to the project the user just created.
     if (youtube.createJob.active) {
-      toast.error('Finish or cancel the in-progress YouTube import before creating the project');
+      toast.error('Finish or cancel the in-progress audio import before creating the project');
       return;
     }
     if (creating) return;
@@ -504,7 +505,7 @@ export default function MusicVideo() {
 
   const handleDeleteRequest = (id) => {
     if (youtube.editJob.active && id === selectedId) {
-      toast.error('Finish or cancel the in-progress YouTube import before deleting this project');
+      toast.error('Finish or cancel the in-progress audio import before deleting this project');
       return;
     }
     requestDelete(id);
@@ -515,7 +516,7 @@ export default function MusicVideo() {
     // in-flight edit-surface import targets would still finish server-side
     // and try to PATCH a now-deleted project.
     if (youtube.editJob.active && id === selectedId) {
-      toast.error('Finish or cancel the in-progress YouTube import before deleting this project');
+      toast.error('Finish or cancel the in-progress audio import before deleting this project');
       return;
     }
     deleteMusicVideoProject(id, { silent: true })
@@ -781,7 +782,7 @@ export default function MusicVideo() {
   };
   // Alignment is a click, never an import side effect. The panel shows the
   // whisper setup error itself, so this request stays silent.
-  const handleAlignLyrics = (cueId) => lyricAlign.run(selected.id, cueId);
+  const handleAlignLyrics = (cueId, options) => lyricAlign.run(selected.id, cueId, options);
   // The slot is page-wide but the job belongs to one project: only that
   // project's Setup shows "Aligning…".
   const aligningLyrics = Boolean(lyricAlign.active && selected && lyricAlign.context?.projectId === selected.id);
@@ -956,11 +957,15 @@ export default function MusicVideo() {
     if (!anchor || !selected) return;
     const el = document.getElementById(anchor);
     if (!el) return;
-    // An anchor inside a folded section (Production review) unfolds it first.
-    for (let fold = el.closest('details'); fold; fold = fold.parentElement?.closest('details')) fold.open = true;
-    el.scrollIntoView?.({ block: 'start', behavior: 'instant' });
-    const focusable = el.matches('[tabindex], button, input, select, textarea, a') ? el : el.querySelector('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a');
-    focusable?.focus?.({ preventScroll: true });
+    // An anchor inside a folded section (Production review, a Publish card or
+    // platform row) unfolds it first; a React-state fold renders a frame later.
+    const land = () => {
+      el.scrollIntoView?.({ block: 'start', behavior: 'instant' });
+      const focusable = el.matches('[tabindex], button, input, select, textarea, a') ? el : el.querySelector('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a');
+      focusable?.focus?.({ preventScroll: true });
+    };
+    if (unfoldToAnchor(el)) requestAnimationFrame(land);
+    else land();
   }, [activeStage, location.key, selectedId, !!selected]);
   const goToStage = (stage, anchor = null, params = null) => {
     // Preserve search params (e.g. ?play=, ?new=, ?sheet=) across tabs; `params` sets more (e.g. ?scenes=missing).

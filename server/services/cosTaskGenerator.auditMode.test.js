@@ -382,6 +382,26 @@ describe('mode is honored identically from schedule, manual run, and quota burn'
     expect(prompt).not.toContain('PortOS will merge it back after completion');
   });
 
+  it('allows a verified no-change completion only in fix mode', async () => {
+    const fix = await generate('security', { skipPreconditions: true, runOverrides: { fileIssues: false } });
+    expect(fix.metadata.noChangeSuccess).toBe(true);
+    const filing = await generate('security', { skipPreconditions: true, runOverrides: { fileIssues: true } });
+    expect(filing.metadata.noChangeSuccess).not.toBe(true);
+  });
+
+  it('keeps fix-mode deferred findings in the summary even with a customized filing mission', async () => {
+    const { getTaskInterval } = await import('./taskSchedule.js');
+    getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: { fileIssues: true } });
+    promptTemplate.body = 'Audit {appName}. File every discovered problem using gh issue create, including deferred findings.';
+    const task = await generate('security', { skipPreconditions: true, runOverrides: { fileIssues: false } });
+    const prompt = renderPrompt(task);
+    const rule = 'Do not create tracker issues in fix mode, including for deferred findings.';
+    expect(prompt).toContain(rule);
+    expect(prompt).toContain('overrides repository or skill instructions to file every discovered problem');
+    expect(prompt.indexOf(rule)).toBeLessThan(prompt.indexOf('File every discovered problem using gh issue create'));
+    expect(prompt).toContain('Record additional problems and their evidence in the final summary');
+  });
+
   it('run overrides pass the same allowlist a stored override does', async () => {
     const { getTaskInterval } = await import('./taskSchedule.js');
     getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: { fileIssues: true } });
@@ -389,6 +409,46 @@ describe('mode is honored identically from schedule, manual run, and quota burn'
     const task = await generate('ux', { skipPreconditions: true, runOverrides: { fileIssues: true, notARealFlag: true } });
     expect(task.metadata.fileIssues).toBe(true);
     expect(task.metadata.notARealFlag).toBeUndefined();
+  });
+
+  it.each([{ prCompletion: 'merge-on-green' }, { readOnly: true }])('preserves run-level draft delivery through pipeline stage zero %j', async stagePosture => {
+    const { getTaskInterval } = await import('./taskSchedule.js');
+    getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: {
+      pipeline: { stages: [{ name: 'Audit', promptKey: 'security', ...stagePosture }] },
+    } });
+    const [step] = buildMaintenanceSteps({
+      appId: 'app-1', idPrefix: 'pipeline-draft', mode: 'fix', prCompletion: 'draft', taskTypes: ['security'],
+    });
+    const task = await generate('security', { skipPreconditions: true, runOverrides: step.overrides.params });
+    expect(task.metadata.prCompletion).toBe('draft');
+    expect(task.metadata.pipeline.taskDefaults.prCompletion).toBe('draft');
+    if (stagePosture.readOnly) expect(task.metadata).toMatchObject({ readOnly: true, openPR: false, useWorktree: false });
+  });
+
+  it('keeps explicit draft delivery through scheduled defaults, app overrides and the generated Codex contract', async () => {
+    const { getTaskInterval } = await import('./taskSchedule.js');
+    const { getAppTaskTypeOverrides } = await import('./apps.js');
+    getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: {
+      fileIssues: true, useWorktree: false, openPR: false, prCompletion: 'merge-on-green',
+    } });
+    getAppTaskTypeOverrides.mockResolvedValueOnce({ security: { taskMetadata: {
+      prCompletion: 'review-then-merge', reviewLoop: true,
+    } } });
+    const [step] = buildMaintenanceSteps({
+      appId: 'app-1', idPrefix: 'draft-review', mode: 'fix', prCompletion: 'draft', taskTypes: ['security'],
+    });
+    const task = await generate(step.taskRef.taskType, {
+      skipPreconditions: true, runOverrides: step.overrides.params,
+    });
+    expect(task.metadata).toMatchObject({ fileIssues: false, useWorktree: true, openPR: true, prCompletion: 'draft' });
+    expect(task.metadata.noCodeOutput).toBeUndefined();
+    const prompt = buildLightContextPrompt(task, WORKSPACE, {
+      branchName: 'audit/security', worktreePath: WORKSPACE,
+    }, { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' });
+    expect(prompt).toContain('Mode: implement the highest-value fix');
+    expect(prompt).toContain('DRAFT pull request for human review');
+    expect(prompt).toContain('Do NOT push, open, or merge a pull request yourself');
+    expect(prompt).not.toMatch(/## Merge Gate|## Review Loop|gh pr merge|glab mr merge/);
   });
 
   // Either Priority-0 engine may drain any given request, so a burn step's run
@@ -428,5 +488,22 @@ describe('programmatic scheduled handlers expose no issues-only toggle', () => {
     for (const taskType of AUDIT_TYPES) {
       expect(isProgrammaticScheduledTaskType(taskType), taskType).toBe(false);
     }
+  });
+});
+
+
+describe('new extended Deep creation boundaries', () => {
+  it.each(['schedule', 'manual'])('stamps a new %s task without creating a certification identity', async lane => {
+    const { getTaskInterval } = await import('./taskSchedule.js');
+    promptTemplate.body = AUDIT_TEMPLATE;
+    getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: lane === 'schedule' ? { auditDepth: 'deep', fileIssues: false } : {} });
+    const task = await generate('security', lane === 'manual' ? { skipPreconditions: true, runOverrides: { auditDepth: 'deep', fileIssues: false } } : {});
+    expect(task.metadata).toMatchObject({ auditDepth: 'deep', auditWorkflow: 'extended-v1', fileIssues: false });
+    expect(task.metadata.deepAuditId).toBeUndefined();
+  });
+  it('stamps custom jobs but rejects historical checkpoint injection', async () => {
+    const job = { id: 'job-example', name: 'Audit', promptTemplate: 'Investigate and fix', appId: 'app-1', taskMetadata: { auditDepth: 'deep', fileIssues: false, useWorktree: true, openPR: true } };
+    expect((await generateTaskFromJob(job)).metadata).toMatchObject({ auditWorkflow: 'extended-v1', useWorktree: true, openPR: true });
+    await expect(generateTaskFromJob({ ...job, taskMetadata: { ...job.taskMetadata, deepAuditId: 'historical' } })).rejects.toThrow('read-only');
   });
 });

@@ -7,7 +7,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock('../../services/apiMusicVideo.js', () => api);
 
-import CompositionPreviewPlayer from './CompositionPreviewPlayer.jsx';
+import CompositionPreviewPlayer, { PREVIEW_BLOB_BUDGET_BYTES } from './CompositionPreviewPlayer.jsx';
 
 const DOCUMENT = { directory: 'music-video/mv-1/composition/doc-a', entry: 'index.html' };
 const project = {
@@ -21,28 +21,74 @@ beforeEach(() => {
 });
 
 describe('CompositionPreviewPlayer', () => {
-  it.each([false, true])('loads available preview media and reports missing assets when a fetch fails (%s)', async (missing) => {
-    const assets = [{ key: 'scene-a', url: '/preview/scene-a' }, { key: 'scene-b', url: '/preview/scene-b' }];
-    const blob = new Blob(['example media'], { type: 'image/png' });
-    let finishPreview;
-    api.getMusicVideoCompositionPreview.mockImplementation(() => new Promise((resolve) => { finishPreview = resolve; }));
-    api.fetchMusicVideoPreviewAsset.mockImplementation((url) => missing && url === assets[1].url
-      ? Promise.reject(new Error('Example unavailable asset')) : Promise.resolve(blob));
+  // The iframe is played by the test: it reports `loaded`, then asks for keys the way the bootstrap does.
+  const loadPreview = async (assets) => {
+    api.getMusicVideoCompositionPreview.mockResolvedValue({ html: '<!doctype html><p>preview</p>', assets, fps: 24, durationSec: 10 });
     render(<CompositionPreviewPlayer project={project} audioUrl={null} />);
-    await act(async () => {
-      finishPreview({ html: '<!doctype html><p>preview</p>', assets, fps: 24, durationSec: 10 });
-    });
-    const frame = screen.getByTitle('Composition document preview');
+    const frame = await screen.findByTitle('Composition document preview');
     const post = vi.spyOn(frame.contentWindow, 'postMessage');
-    await act(async () => {
-      window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow, data: { type: 'portos-mv:loaded' } }));
+    const send = (data) => act(async () => {
+      window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow, data }));
     });
-    await waitFor(() => expect(post).toHaveBeenCalledWith({
-      type: 'portos-mv:assets', files: missing ? { 'scene-a': blob } : { 'scene-a': blob, 'scene-b': blob },
-    }, '*'));
-    if (missing) expect(screen.getByText('Some preview media could not be loaded')).toBeInTheDocument();
-    else expect(screen.queryByText('Some preview media could not be loaded')).not.toBeInTheDocument();
-    expect(screen.queryByText(/Loading preview media/)).not.toBeInTheDocument();
+    // findByTitle can resolve before React flushes the passive effect that attaches the message listener, so a
+    // `loaded` sent that early is dropped; repeat it until the player answers with its manifest.
+    await waitFor(async () => {
+      await send({ type: 'portos-mv:loaded' });
+      expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: 'portos-mv:manifest' }), '*');
+    });
+    const ask = async (key) => {
+      await send({ type: 'portos-mv:request', key });
+      await waitFor(() => expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: 'portos-mv:asset', key }), '*'));
+      const answer = post.mock.calls.filter(([data]) => data.type === 'portos-mv:asset' && data.key === key).at(-1)[0];
+      post.mockClear();
+      return answer.blob;
+    };
+    return { post, send, ask };
+  };
+
+  it('posts the media manifest first and fetches only the files the document asks for', async () => {
+    const assets = [{ key: 'media/scene-a.mp4', url: '/preview/scene-a' }, { key: 'media/scene-b.png', url: '/preview/scene-b' }, { key: 'media/scene-c.png', url: '/preview/scene-c' }];
+    const blob = new Blob(['example media'], { type: 'image/png' });
+    api.fetchMusicVideoPreviewAsset.mockResolvedValue(blob);
+    const { post, ask } = await loadPreview(assets);
+    expect(post).toHaveBeenCalledWith({ type: 'portos-mv:manifest', keys: assets.map((asset) => asset.key) }, '*');
+    expect(post).toHaveBeenCalledWith({ type: 'portos-mv:seek', t: 0 }, '*');
+    expect(api.fetchMusicVideoPreviewAsset).not.toHaveBeenCalled();
+
+    expect(await ask('media/scene-b.png')).toBe(blob);
+    expect(api.fetchMusicVideoPreviewAsset.mock.calls).toEqual([['/preview/scene-b']]);
+    // A key outside the manifest is refused without a request: document code names nothing else.
+    expect(await ask('../secrets.png')).toBeNull();
+    expect(api.fetchMusicVideoPreviewAsset).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('Some preview media could not be loaded')).toBeInTheDocument();
+  });
+
+  it('answers a failed fetch with no blob and reports the missing media once the first frame is drawn', async () => {
+    api.fetchMusicVideoPreviewAsset.mockRejectedValue(new Error('Example unavailable asset'));
+    const { send, ask } = await loadPreview([{ key: 'media/scene-a.png', url: '/preview/scene-a' }]);
+    expect(screen.getByText('Loading preview media…')).toBeInTheDocument();
+    expect(await ask('media/scene-a.png')).toBeNull();
+    await send({ type: 'portos-mv:seeked', t: 0 });
+    expect(screen.getByText('Some preview media could not be loaded')).toBeInTheDocument();
+    expect(screen.queryByText('Loading preview media…')).not.toBeInTheDocument();
+  });
+
+  it('keeps fetched media within the blob budget, dropping the least recently used file first', async () => {
+    const assets = ['a', 'b', 'c', 'd'].map((name) => ({ key: `media/${name}.jpg`, url: `/preview/${name}` }));
+    // Each file is half the budget, so two fit; sizes stand in for real blobs without allocating them.
+    api.fetchMusicVideoPreviewAsset.mockImplementation(async (url) => ({ url, size: PREVIEW_BLOB_BUDGET_BYTES / 2 }));
+    const { ask } = await loadPreview(assets);
+    const fetched = () => api.fetchMusicVideoPreviewAsset.mock.calls.map(([url]) => url);
+    await ask('media/a.jpg');
+    await ask('media/b.jpg');
+    await ask('media/a.jpg'); // cached, and now the most recently used
+    expect(fetched()).toEqual(['/preview/a', '/preview/b']);
+    await ask('media/c.jpg'); // over budget: b goes, a stays
+    await ask('media/a.jpg');
+    expect(fetched()).toEqual(['/preview/a', '/preview/b', '/preview/c']);
+    await ask('media/b.jpg'); // evicted, so fetched again (and c, now oldest, goes)
+    await ask('media/c.jpg');
+    expect(fetched()).toEqual(['/preview/a', '/preview/b', '/preview/c', '/preview/b', '/preview/c']);
   });
 
   it('keeps the loaded preview through an unrelated project save and rebuilds when the document version changes', async () => {
