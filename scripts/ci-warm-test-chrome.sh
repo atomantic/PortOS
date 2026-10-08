@@ -5,14 +5,15 @@
 # Why (#9641): the recurring "Test Chrome did not start within 20000ms" failures
 # captured the owned child in uninterruptible sleep with its lead thread waiting
 # on a page-cache folio (leadWait=page) while the runner's I/O pressure
-# (ioAvg10) was above 50, and no DevToolsActivePort yet. That is the first,
-# cold read of a ~300MB browser tree on a fresh runner that has just written
+# (ioAvg10) was above 50, and no DevToolsActivePort yet. These samples suggest
+# a cold read of the browser tree on a fresh runner that has just written
 # ~95 ffmpeg packages and PostgreSQL data. Reading the tree here moves that cost
 # out of the 20s startup deadline, which stays unchanged. This is not a retry
 # and not a skip; the tests still launch, and must start, the real browser.
 #
-# The reported duration is also the evidence: a long warm read confirms the
-# cold page-in mechanism, a short one on a failing run refutes it.
+# Duration is supporting evidence for the cold-read hypothesis, not proof of
+# the startup cause. A failed or partial read must never be reported as warmed;
+# a passing launch after a completed read is still a non-reproduction.
 #
 # Never fails the job: a missing browser is reported by the suites themselves
 # (PORTOS_REQUIRE_BROWSER_SUITES), and the warm read is only an optimisation.
@@ -23,10 +24,16 @@ set -uo pipefail
 BUDGET="${CHROME_WARM_BUDGET_SECONDS:-90}"
 read -r -a CANDIDATES <<< "${CHROME_WARM_CANDIDATES:-${CHROME_PATH:-} /usr/bin/google-chrome /usr/bin/chromium /usr/bin/chromium-browser}"
 
-# GNU timeout exists on the Ubuntu runner; elsewhere (a developer's macOS) the
-# read simply runs unbounded, which is still a bounded local directory.
-TIMEOUT=()
-if command -v timeout >/dev/null 2>&1; then TIMEOUT=(timeout --kill-after=5 "$BUDGET"); fi
+# Never replace the wall-clock budget with an unbounded read. GNU coreutils
+# installs timeout as gtimeout on some developer machines.
+if command -v timeout >/dev/null 2>&1; then
+  TIMEOUT=(timeout --kill-after=5 "$BUDGET")
+elif command -v gtimeout >/dev/null 2>&1; then
+  TIMEOUT=(gtimeout --kill-after=5 "$BUDGET")
+else
+  echo "::notice title=Chrome warm-up skipped::No deadline tool is available; the suites will launch the browser cold."
+  exit 0
+fi
 
 # Milliseconds since the epoch. BSD date prints a literal N for %N, so fall back
 # to whole seconds there rather than failing the arithmetic.
@@ -41,14 +48,21 @@ now_ms() {
 
 for candidate in "${CANDIDATES[@]}"; do
   [ -n "$candidate" ] && [ -e "$candidate" ] || continue
-  executable="$(readlink -f "$candidate")"
+  executable="$(readlink -f "$candidate" 2>/dev/null)" || {
+    echo "::warning title=Chrome warm-up incomplete::Cannot resolve the browser install; the suites will launch the browser cold."
+    exit 0
+  }
   # The install directory holds the binary, its resources and its libraries.
   tree="$(dirname "$executable")"
   start="$(now_ms)"
-  # cat's exit code is lost behind the pipe, so the byte count is the signal
-  # that the read finished and the timeout's 124 is the signal that it did not.
-  total="$(mktemp)"
-  ${TIMEOUT[@]+"${TIMEOUT[@]}"} bash -c 'find "$1" -type f -print0 | xargs -0 cat 2>/dev/null | wc -c > "$2"' _ "$tree" "$total" 2>/dev/null
+  total="$(mktemp 2>/dev/null)" || {
+    echo "::warning title=Chrome warm-up incomplete::Cannot allocate a byte-count file; the suites will launch the browser cold."
+    exit 0
+  }
+  # pipefail must be enabled in the child shell too: wc can count partial
+  # output successfully even when find or cat failed. Keep all raw errors
+  # private, and report only byte count, duration and pipeline/deadline status.
+  "${TIMEOUT[@]}" bash -o pipefail -c 'find "$1" -type f -print0 | xargs -0 cat 2>/dev/null | wc -c > "$2"' _ "$tree" "$total" 2>/dev/null
   status=$?
   bytes="$(tr -d '[:space:]' < "$total")"
   rm -f "$total"

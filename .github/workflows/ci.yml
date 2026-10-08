@@ -666,9 +666,11 @@ jobs:
       # Read the runner's Chrome tree into the page cache before any suite
       # launches it (#9641). The recurring startup hang was captured with the
       # browser's lead thread waiting on a page-cache read and I/O pressure
-      # above 50 right after the installs above, i.e. a cold first launch. The
+      # above 50 right after the installs above, suggesting a cold read. The
       # launcher's 20s startup deadline is unchanged; the printed duration shows
-      # whether the cold read is as slow as the failures suggest.
+      # whether the cold read is as slow as the failures suggest. Completion
+      # requires every read to succeed within the warm-up budget; a passing
+      # browser run remains a non-reproduction, not proof of a causal repair.
       - name: Warm the Chrome install
         run: bash scripts/ci-warm-test-chrome.sh
 
