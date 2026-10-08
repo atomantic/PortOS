@@ -211,7 +211,9 @@ async function remapSongRevisionBoard(projectId) {
   const out = await mutate(projectId, (project) => {
     const revision = project.songRevision;
     if (!reviewable(revision)) fail('This song revision is no longer current');
-    if (!(project.lyricCues || []).some((c) => typeof c.startSec === 'number')) fail('Align the new lyrics before re-timing the shots', 'SONG_REVISION_NOT_ALIGNED');
+    // An instrumental song has no lines to align; its board moves through the song's length alone.
+    const cues = project.lyricCues || [];
+    if (cues.length && !cues.some((c) => typeof c.startSec === 'number')) fail('Align the new lyrics before re-timing the shots', 'SONG_REVISION_NOT_ALIGNED');
     const remap = remapSongTimeline(project, revision);
     const added = addScenes({ ...project, scenes: remap.scenes }, remap.newScenes);
     const sceneReview = { ...remap.sceneReview };

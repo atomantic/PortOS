@@ -206,4 +206,24 @@ describe('revise the song from an imported track', () => {
     expect(created.body.project.lyricCues.map((c) => c.id)).toEqual(['cue-a', 'cue-x', 'cue-b', 'cue-y']);
     expect(created.body.project.songRevision.lyricDiff).toEqual({ kept: 4, changed: 0, added: 0, removed: 0 });
   });
+
+  it('re-times an instrumental revision through the song length alone', async () => {
+    const { fork } = await fixture();
+    const draft = await post(fork.id, '', { ...fields, lyrics: '', instrumental: true });
+    const revisionId = draft.body.project.songRevision.id;
+    setDeps({ generate: async (_fields, opts) => {
+      if (!opts.songIds) await opts.onSubmitted(['take-i']);
+      return { songId: 'take-i', filename: 'take-i.m4a' };
+    } });
+    await post(fork.id, 'generate', { revisionId }); await service.__testing.settle();
+    expect((await post(fork.id, 'select', { revisionId, songId: 'take-i' })).status).toBe(200);
+    expect(startRetime).toHaveBeenCalledWith(fork.id);
+    const align = vi.fn();
+    const retimed = await service.retimeRevisedSong(fork.id, { align,
+      analyze: (id) => store.mutateProjectRecord(id, (p) => ({ project: { ...p, audioAnalysis: { durationSec: 40 } } })) });
+    expect(align).not.toHaveBeenCalled();
+    expect(retimed.songRevision.retime.status).toBe('done');
+    expect(retimed.scenes[0]).toMatchObject({ startSec: 0, endSec: 40 });
+    expect(Object.values(retimed.songRevision.sceneReview).map((e) => e.status)).toEqual(['removed']);
+  });
 });
