@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, writeFile, rm } from 'fs/promises';
+import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execGit } from '../lib/execGit.js';
+import { canonicalSnapshotChecksum } from '../lib/snapshotChecksum.js';
 import { assignDeepAuditAttempt, deepAuditProgress, mergeDeepAuditReport } from '../lib/deepAudit.js';
 import { prepareDeepAudit, checkpointDeepAudit } from './deepAudit.js';
 
@@ -14,7 +15,7 @@ const scope = { revision: 'b'.repeat(40), inventoryHash: 'inventory-1', files: [
   { path: 'server/routes/other.js', blob, kind: 'blob' },
   { path: 'README.md', blob, kind: 'blob' },
 ], capabilities: { api: true }, exclusions: [], promptVersions: { contract: 1, category: 1 }, promptHash: 'prompt-1' };
-const evidence = { method: 'Read each listed file and search all registered callers', observations: 'No concrete defects in this scenario',
+const evidence = { inbound: 'routes/example.js caller', outbound: 'store/example.js dependency', boundaryObservations: 'Failure returns through route and store boundary', unresolvedBoundaries: 'None after tracing the pinned callers', boundaryFailures: 'Store rejection reaches the route error handler', boundaryChallenge: 'Independently traced rejection across route/store boundary', method: 'Read each listed file and search all registered callers', observations: 'No concrete defects in this scenario',
   entryPoint: 'GET /example', exitPoint: 'JSON response', trace: 'route → service → store → response, including listed callers',
   scenario: 'Two writes overlap and the first write fails', expected: 'Serialize and preserve the second write', observed: 'The failure path releases the queue; regression test passes',
   challengedAssumption: 'Rechecked whether rejection strands the shared queue', conclusion: 'Queue tail catches rejection before next operation',
@@ -52,7 +53,7 @@ function payload(agentId, overrides = {}) {
   return { version: 1, scopeHash: ledger.scopeHash, attemptId: agentId, prerequisiteHash: attempt.prerequisiteHash,
     pass: attempt.pass, units: ledger.units.filter(unit => attempt.unitIds.includes(unit.id)).map(unit => ({
       id: unit.id, status: 'evidenced', reason: 'Reviewed the full scenario with no surviving findings',
-      sources: unit.files.map(path => ({ path, blob })), evidence,
+      sources: unit.files.map(path => ({ path, blob })), evidence: structuredClone(evidence),
     })), candidates: [], stopReason: 'Checkpoint; continue remaining passes', ...overrides };
 }
 async function finish(agentId, selected = task, success = true) {
@@ -65,14 +66,13 @@ describe('Deep coverage workflow across serialized restarts', () => {
     const writes = new Map();
     deps.write = async (path, value) => writes.set(path, structuredClone(value));
     const seen = new Set();
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 12 && seen.size < 30; i++) {
       const id = `batch-${i}`;
       await prepare(id);
       const ledger = saved();
       const attempt = ledger.attempts[id];
-      expect(attempt.pass).toBe('static');
       expect(attempt.unitIds.length).toBeLessThanOrEqual(12);
-      for (const unit of attempt.unitIds) { expect(seen.has(unit)).toBe(false); seen.add(unit); }
+      if (attempt.pass === 'static') for (const unit of attempt.unitIds) { expect(seen.has(unit)).toBe(false); seen.add(unit); }
       const projection = [...writes].find(([path]) => path.endsWith('-assignment.json') && writes.get(path).attempt.id === id)[1];
       expect(projection.units.map(unit => unit.id)).toEqual(attempt.unitIds);
       expect(projection).not.toHaveProperty('invalidated');
@@ -87,8 +87,7 @@ describe('Deep coverage workflow across serialized restarts', () => {
       expect(await finish(id)).toMatchObject({ complete: false, discoveryComplete: false });
     }
     expect(seen.size).toBe(30);
-    await prepare('next-pass');
-    expect(saved().attempts['next-pass'].pass).toBe('trace');
+    expect(Object.values(saved().attempts).some(attempt => attempt.pass === 'trace')).toBe(true);
   });
 
   it('preserves findings outside the batch and rejects candidate identity collisions', async () => {
@@ -98,11 +97,15 @@ describe('Deep coverage workflow across serialized restarts', () => {
     const candidate = { id: 'first-finding', unitId: firstUnit, finding: 'Inspect the failure path', disposition: 'pending', resolution: 'Requires later validation' };
     report = JSON.stringify(payload('first', { candidates: [candidate] }));
     await finish('first');
+    for (let i = 0; i < 3; i++) {
+      const id = `advance-${i}`; await prepare(id); report = JSON.stringify(payload(id)); await finish(id);
+    }
     await prepare('second');
+    const before = deepAuditProgress(saved()).satisfiedPasses;
     const secondUnit = saved().attempts.second.unitIds[0];
     for (const invalid of [candidate, { ...candidate, unitId: secondUnit }]) {
       report = JSON.stringify(payload('second', { candidates: [invalid] }));
-      expect(await finish('second')).toMatchObject({ satisfiedPasses: 12, complete: false });
+      expect(await finish('second')).toMatchObject({ satisfiedPasses: before, complete: false });
       expect(saved().candidates['first-finding'].unitId).toBe(firstUnit);
     }
     report = JSON.stringify(payload('second'));
@@ -110,7 +113,7 @@ describe('Deep coverage workflow across serialized restarts', () => {
     expect(saved().candidates['first-finding']).toMatchObject(candidate);
   });
 
-  it('retains full-scope delivery retries after all discovery receipts exist', async () => {
+  it('bounds publication retries while retaining all previously completed coverage', async () => {
     pinned.files = Array.from({ length: 5 }, (_, i) => ({ path: `area-${i}/source.js`, blob, kind: 'blob' }));
     for (let i = 0; i < 8; i++) {
       const id = `discovery-${i}`;
@@ -120,34 +123,40 @@ describe('Deep coverage workflow across serialized restarts', () => {
     }
     expect(deepAuditProgress(saved())).toMatchObject({ discoveryComplete: true, deliveryComplete: false });
     await prepare('delivery-retry');
-    expect(saved().attempts['delivery-retry'].unitIds).toHaveLength(15);
+    expect(saved().attempts['delivery-retry']).toMatchObject({ deliveryOnly: true, pass: 'challenge' });
+    expect(saved().attempts['delivery-retry'].unitIds).toHaveLength(12);
+    report = JSON.stringify(payload('delivery-retry'));
+    expect(await finish('delivery-retry', task, false)).toMatchObject({ satisfiedPasses: 60, deliveryComplete: false });
+    await prepare('published'); report = JSON.stringify(payload('published'));
+    expect(await finish('published')).toMatchObject({ satisfiedPasses: 60, complete: true });
   });
 
-  it('gives untouched units priority over blockers and isolates oversized units', async () => {
-    pinned.files = [
-      ...Array.from({ length: 100 }, (_, i) => ({ path: `large/${i}.js`, blob, kind: 'blob' })),
-      { path: 'small/file.js', blob, kind: 'blob' },
-    ];
-    await prepare('feasible');
+  it('partitions 1626 files without omissions and advances other partitions past a persistent blocker', async () => {
+    pinned.files = Array.from({ length: 1626 }, (_, i) => ({ path: `large/${String(i).padStart(4, '0')}.js`, blob, kind: 'blob' }));
+    await prepare('first');
     const initial = saved();
-    expect(initial.attempts.feasible.unitIds).toHaveLength(3);
-    expect(initial.units.filter(unit => initial.attempts.feasible.unitIds.includes(unit.id))
-      .every(unit => unit.subsystem === 'small')).toBe(true);
-    report = JSON.stringify(payload('feasible'));
-    expect(await finish('feasible')).toMatchObject({ satisfiedPasses: 3, requiredPasses: 24, complete: false });
-    await prepare('oversized');
-    expect(saved().attempts.oversized.unitIds).toHaveLength(1);
-    const first = saved().attempts.oversized.unitIds[0];
-    report = JSON.stringify(payload('oversized', { units: payload('oversized').units.map(unit => ({ ...unit, status: 'blocked' })) }));
-    await finish('oversized');
-    for (const id of ['second', 'third']) {
-      await prepare(id);
-      expect(saved().attempts[id].unitIds).not.toContain(first);
-      report = JSON.stringify(payload(id));
-      await finish(id);
+    expect(initial.groups).toHaveLength(3);
+    for (const group of initial.groups) {
+      const owned = initial.units.filter(unit => unit.groupId === group.id).flatMap(unit => unit.files);
+      expect(owned).toEqual(pinned.files.map(file => file.path));
+      expect(new Set(owned).size).toBe(1626);
     }
-    await prepare('retry-blocker');
-    expect(saved().attempts['retry-blocker'].unitIds).toEqual([first]);
+    expect(initial.units.every(unit => unit.files.length <= 24)).toBe(true);
+    const p = payload('first'); p.units[0].status = 'blocked';
+    const blocked = p.units[0].id;
+    report = JSON.stringify(p); await finish('first', task, false);
+    const passes = new Set();
+    for (let i = 0; i < 3; i++) {
+      const id = `resume-${i}`; await prepare(id);
+      const ledger = saved(), attempt = ledger.attempts[id];
+      passes.add(attempt.pass);
+      expect(attempt.unitIds).not.toContain(blocked);
+      expect(new Set(ledger.units.filter(unit => attempt.unitIds.includes(unit.id)).flatMap(unit => unit.files)).size).toBeLessThanOrEqual(96);
+      report = JSON.stringify(payload(id)); await finish(id);
+    }
+    expect([...passes]).toEqual(['trace', 'adversarial', 'challenge']);
+    expect(deepAuditProgress(saved())).toMatchObject({ blockedUnits: 1, complete: false, reviewedUnits: 11 });
+    expect(saved().units.find(unit => unit.id === blocked).evidence.trace).toBeUndefined();
   });
 
   it('gives the agent exact evidence types and rejects array observations without crediting coverage', async () => {
@@ -188,9 +197,10 @@ describe('Deep coverage workflow across serialized restarts', () => {
     report = null;
     expect(await finish('first', task, false)).toEqual(interrupted);
     await prepare('resumed');
-    expect(saved().attempts.resumed.unitIds).toHaveLength(5);
+    expect(saved().attempts.resumed).toMatchObject({ pass: 'trace', unitIds: [first.units[0].id] });
     report = JSON.stringify(payload('resumed'));
-    expect(await finish('resumed')).toMatchObject({ satisfiedPasses: 6, complete: false });
+    expect(await finish('resumed')).toMatchObject({ satisfiedPasses: 2, complete: false });
+    expect(saved().units.filter(unit => !unit.evidence.static)).toHaveLength(5);
   });
 
   it.each(['absent', 'malformed', 'forged unit', 'wrong blob', 'missing evidence', 'wrong pass', 'forged scope', 'incomplete inventory', 'invented complete flag'])('%s never credits discovery', async failure => {
@@ -213,8 +223,9 @@ describe('Deep coverage workflow across serialized restarts', () => {
     p.candidates = [{ id: 'finding-1', unitId: p.units[1].id, finding: 'An error can lose the queued write', disposition: 'pending', resolution: 'Needs a reproduction' }];
     report = JSON.stringify(p);
     expect(await finish('a')).toMatchObject({ blockedUnits: 1, pendingCandidates: 1, complete: false });
-    await prepare('b'); expect(saved().attempts.b.pass).toBe('static');
-    expect(saved().attempts.b.unitIds).toEqual([p.units[0].id]);
+    await prepare('b'); expect(saved().attempts.b.pass).toBe('trace');
+    expect(saved().attempts.b.unitIds).not.toContain(p.units[0].id);
+    expect(saved().candidates['finding-1'].disposition).toBe('pending');
   });
 
   it.each(['revision', 'files', 'capabilities', 'promptVersions', 'exclusions'])('invalidates changed %s while retaining stale history', async field => {
@@ -287,7 +298,7 @@ it('pins an actual Git inventory and refuses tracked and untracked drift', async
     const inspect = () => prepareDeepAudit({ task, agentId: 'git-agent', workspacePath: directory }, { ...deps, inventory: undefined });
     await inspect();
     const pinned = saved().scope;
-    expect(pinned.promptVersions.contract).toBe(2);
+    expect(pinned.promptVersions.contract).toBe(3);
     expect(pinned.files).toHaveLength(1);
     expect(pinned.files[0]).toMatchObject({ path: 'source.js', kind: 'blob' });
     await writeFile(join(directory, 'untracked.js'), 'new source');
@@ -306,8 +317,9 @@ it('enrolls newly discovered workflows without shrinking the mechanically invent
   report = JSON.stringify(p);
   expect(await finish('a')).toMatchObject({ totalUnits: 7, requiredPasses: 28, complete: false });
   await prepare('b');
-  expect(saved().attempts.b.pass).toBe('static');
-  expect(saved().attempts.b.unitIds).toHaveLength(1);
+  expect(saved().attempts.b.pass).toBe('trace');
+  expect(saved().units.find(unit => unit.scenario === 'restart during response streaming').evidence).toEqual({});
+  expect(deepAuditProgress(saved()).requiredPasses).toBe(28);
 });
 
 it('does not combine post-fix batches from different source revisions and reassigns cleared units', async () => {
@@ -351,4 +363,95 @@ it('reopens remediation when a resolved candidate belongs to an older tested rev
   expect(deepAuditProgress(ledger)).toMatchObject({ discoveryComplete: true, deliveryComplete: true, remediationComplete: false, pendingRemediations: 1, complete: false });
   ledger.candidates.example.resolvedRevision = ledger.validationRevision;
   expect(deepAuditProgress(ledger)).toMatchObject({ remediationComplete: true, complete: true });
+});
+
+
+it('migrates a serialized v2 generation transactionally without crediting old receipts or losing enrolled findings', async () => {
+  pinned.promptVersions.contract = 2;
+  pinned.files = Array.from({ length: 50 }, (_, i) => ({ path: `large/${String(i).padStart(3, '0')}.js`, blob, kind: 'blob' }));
+  const groups = ['normal', 'failure', 'concurrency-recovery', 'enrolled workflow'].map(scenario => ({
+    id: canonicalSnapshotChecksum({ category: 'code-quality', subsystem: 'large', scenario }),
+    category: 'code-quality', subsystem: 'large', scenario, files: pinned.files.map(file => file.path),
+    evidence: { static: { status: 'evidenced', agentId: 'old-agent', evidence, sources: pinned.files.map(({ path, blob }) => ({ path, blob })) } },
+  }));
+  const old = { version: 1, id: 'audit-1', appId: 'example-app', category: 'code-quality', delivery: 'file-issues',
+    scope: structuredClone(pinned), scopeHash: canonicalSnapshotChecksum(pinned), generation: 1,
+    units: groups, invalidated: [], attempts: { 'old-agent': { generation: 1, pass: 'static', unitIds: groups.map(group => group.id) } },
+    candidates: { legacy: { id: 'legacy', unitId: groups[0].id, finding: 'Verified broken source link', disposition: 'confirmed', resolution: 'Pinned target is absent' } } };
+  database.set('audit-1', JSON.stringify(old));
+  pinned.promptVersions.contract = 3;
+  await prepare('migrated');
+  const ledger = saved();
+  expect(ledger).toMatchObject({ generation: 2, coverageMigration: { priorRequiredPasses: 16, requiredPasses: 48 } });
+  expect(ledger.groups).toHaveLength(4);
+  expect(ledger.units).toHaveLength(12);
+  expect(deepAuditProgress(ledger).satisfiedPasses).toBe(0);
+  expect(ledger.invalidated).toHaveLength(1);
+  expect(ledger.invalidated[0].units[0].evidence.static.agentId).toBe('old-agent');
+  expect(ledger.candidates.legacy).toMatchObject({ unitId: groups[0].id, groupScoped: true, disposition: 'confirmed' });
+  await prepare('migrated');
+  expect(saved().invalidated).toHaveLength(1);
+  const legacy = saved().candidates.legacy;
+  report = JSON.stringify(payload('migrated', { candidates: [{ id: legacy.id, unitId: legacy.unitId,
+    finding: legacy.finding, disposition: 'confirmed', resolution: 'Rechecked the pinned broken link' }] }));
+  expect(await finish('migrated')).toMatchObject({ satisfiedPasses: 12, complete: false, pendingRemediations: 1 });
+  expect(saved().candidates.legacy.groupScoped).toBe(true);
+  expect(await finish('old-agent')).toMatchObject({ satisfiedPasses: 12, complete: false });
+});
+
+it('requires cross-boundary evidence before accepting a trace', async () => {
+  await prepare('static'); report = JSON.stringify(payload('static')); await finish('static');
+  await prepare('trace');
+  const p = payload('trace');
+  for (const unit of p.units) delete unit.evidence.boundaryObservations;
+  report = JSON.stringify(p);
+  expect(await finish('trace')).toMatchObject({ satisfiedPasses: 6, complete: false });
+  expect(saved().reason).toContain('Missing trace evidence');
+});
+
+it('resumes an interrupted real Git inventory of 1626 files without repeating or losing owned file coverage', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'deep-audit-partition-git-'));
+  try {
+    await mkdir(join(directory, 'large'));
+    await Promise.all(Array.from({ length: 1626 }, (_, i) => writeFile(join(directory, 'large', `${String(i).padStart(4, '0')}.js`), `export const value = ${i};\n`)));
+    await execGit(['init'], directory); await execGit(['add', '.'], directory);
+    await execGit(['-c', 'user.name=Example', '-c', 'user.email=example@example.com', 'commit', '-m', 'large fixture'], directory);
+    const realDeps = { ...deps, inventory: undefined };
+    await prepareDeepAudit({ task, agentId: 'large-first', workspacePath: directory }, realDeps);
+    const before = saved(), attempt = before.attempts['large-first'];
+    expect(before.scope.files).toHaveLength(1626);
+    expect(before.units).toHaveLength(204);
+    expect(before.groups.every(group => group.files.length === 1626)).toBe(true);
+    expect(before.units.every(unit => unit.files.length <= 24)).toBe(true);
+    const unit = before.units.find(unit => unit.id === attempt.unitIds[0]);
+    report = JSON.stringify({ version: 1, scopeHash: before.scopeHash, attemptId: attempt.id,
+      prerequisiteHash: attempt.prerequisiteHash, pass: 'static', units: [{ id: unit.id, status: 'evidenced',
+        reason: 'Fixture simulates one completed partition before interruption', sources: before.scope.files.filter(file => unit.files.includes(file.path)).map(({ path, blob }) => ({ path, blob })), evidence }],
+      candidates: [], stopReason: 'Interrupted after one bounded partition' });
+    const checkpoint = await checkpointDeepAudit({ task, agentId: attempt.id, workspacePath: directory, success: false }, realDeps);
+    expect(checkpoint).toMatchObject({ satisfiedPasses: 1, requiredPasses: 816, complete: false });
+    report = null;
+    expect(await checkpointDeepAudit({ task, agentId: attempt.id, workspacePath: directory, success: false }, realDeps)).toEqual(checkpoint);
+    await prepareDeepAudit({ task, agentId: 'large-resume', workspacePath: directory }, realDeps);
+    expect(saved().scopeHash).toBe(before.scopeHash);
+    expect(saved().attempts['large-resume']).toMatchObject({ pass: 'trace', unitIds: [unit.id] });
+    expect(saved().units.find(item => item.id === unit.id).evidence.static).toBeDefined();
+    expect(deepAuditProgress(saved()).complete).toBe(false);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+}, 20000);
+
+
+it('rejects a late static report after its partition has advanced through independent review', async () => {
+  await prepare('static-a'); await prepare('static-b');
+  const late = payload('static-b');
+  report = JSON.stringify(payload('static-a')); await finish('static-a');
+  for (const id of ['trace', 'adversarial', 'challenge']) {
+    await prepare(id); report = JSON.stringify(payload(id)); await finish(id);
+  }
+  expect(deepAuditProgress(saved()).satisfiedPasses).toBe(24);
+  report = JSON.stringify(late);
+  expect(await finish('static-b')).toMatchObject({ satisfiedPasses: 24 });
+  expect(saved().reason).toContain('prerequisite evidence changed');
+  expect(saved().units.every(unit => unit.evidence.static.agentId === 'static-a')).toBe(true);
+  expect(saved().attempts['static-b'].reportHash).toBeUndefined();
 });

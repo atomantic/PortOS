@@ -878,4 +878,5 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | `musicVideoReviewDraft.js` | Pure imported Animatic review candidates, newest immutable version first; exact version URLs remain separate from native production approvals. |
 
+| `deepAuditCoverage.js` | Deterministic bounded source partitions, derived coverage groups and explicit contract-upgrade compatibility. |
 | `deepAudit.js` | Strict Deep audit checkpoint schema, scope invalidation, server-assigned passes and mechanical completion rules. |
