@@ -704,7 +704,7 @@ export function createTuiSessionController({
 
   // Read the `.agent-done` sentinel (if present) and append its markdown task
   // summary line-by-line into the agent's output so downstream consumers
-  // (extractFinalSummary, persistSimplifySummaries, completion hooks, the agent
+  // (extractFinalSummary, persistCompletionSummary, completion hooks, the agent
   // card, output.txt) get the resolution. Called only from finish() (the single
   // finalize chokepoint); idempotent via `sentinelIngested` so it reads at most
   // once. Capped at 4 KB so an agent that pasted the whole diff into the

@@ -356,7 +356,7 @@ async function runCompletionCleanupSteps(context, { onStepError }) {
   // must not be able to abort the worktree cleanup and pipeline hand-off above.
   //
   // Gated on the record actually reaching an outcome. `finalizeAgent` runs
-  // `persistSimplifySummaries` and `resolveFailedTaskUpdate` BEFORE it
+  // `persistCompletionSummary` and `resolveFailedTaskUpdate` BEFORE it
   // dispatches the output hook and calls `completeAgent`; a throw in either
   // leaves the record `running`, and the orphan sweep's recovery hook is then
   // what salvages the run — for a programmatic-I/O type the sentinel IS the

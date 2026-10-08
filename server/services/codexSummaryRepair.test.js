@@ -36,6 +36,14 @@ describe('repairCodexTaskSummary', () => {
     if (outputBuffer != null) await writeFile(join(agentDir, 'output.txt'), outputBuffer);
   }
 
+  it.each(['sentinel', 'terminal-result'])('does not heuristically replace a long authoritative %s completion', async (taskSummarySource) => {
+    const metadata = { taskSummary: 'Complete documented findings.\n'.repeat(1000), taskSummarySource };
+    await seed(metadata, 'tokens used\n123\nA different transcript tail');
+    const before = await readFile(join(agentDir, 'metadata.json'), 'utf8');
+    expect(await repairCodexTaskSummary(agentDir, { id: 'agent-test', metadata })).toBeNull();
+    expect(await readFile(join(agentDir, 'metadata.json'), 'utf8')).toBe(before);
+  });
+
   it('rewrites metadata.json when stored summary is wonky and tail is recoverable', async () => {
     const fakeTranscript = 'x'.repeat(25_000);
     const output = [

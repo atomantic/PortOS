@@ -861,3 +861,4 @@ export * from './backupSharedAdmission.js';
 export * from './runtimeFilePublication.js';
 
 export * from './deepAudit.js';
+export * from './deepAuditCoverage.js';

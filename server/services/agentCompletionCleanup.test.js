@@ -832,7 +832,7 @@ describe.each(['runner', 'spawner'])('%s completion side effects', (path) => {
   });
 });
 
-// `finalizeAgent` runs persistSimplifySummaries and resolveFailedTaskUpdate
+// `finalizeAgent` runs persistCompletionSummary and resolveFailedTaskUpdate
 // BEFORE it dispatches the output hook and calls completeAgent, and both
 // spawners run cleanup from a `finally` — so a throw in either lands here with
 // the record still `running`. The orphan sweep's recovery hook is what salvages

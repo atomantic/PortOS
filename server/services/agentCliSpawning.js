@@ -813,6 +813,7 @@ export async function spawnDirectly({
         exitCode: code,
         duration,
         outputBuffer,
+        finalSummary: streamParser?.getCompletionResult() ?? null,
         errorAnalysis,
         terminatedByUser,
         error: finalError || undefined,

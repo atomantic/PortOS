@@ -59,7 +59,7 @@ import { SKIP_LEARNING_VERDICT } from '../lib/learningVerdict.js';
 import { detectPrimaryCheckoutDrift } from '../lib/primaryCheckoutGuard.js';
 import { canRunTaskOutputHookWithoutPayload, getTaskOutputPayloadPredicate, isProgrammaticIoTaskType, resolveTaskHookType, declaresNoCommitCriterion, isClaimFlowDispatch } from './taskTypeHooks.js';
 import { processAgentCompletion } from './agentCompletion.js';
-import { extractFinalSummary, extractSimplifySummaries } from './agentSummaryExtraction.js';
+import { extractFinalSummary } from './agentSummaryExtraction.js';
 import { usesCreativeDirectorScratchCwd, removeCreativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 import { issueNumberFromRef } from './issueReconcile.js';
 
@@ -1311,6 +1311,7 @@ export async function finalizeAgent({
   exitCode,
   duration,
   outputBuffer,
+  finalSummary = null,
   errorAnalysis: reportedErrorAnalysis,
   terminatedByUser = false,
   error,
@@ -1525,8 +1526,8 @@ export async function finalizeAgent({
     cosEvents.emit(GOAL_FIDELITY_HOLD_EVENT, { agentId, taskId: task?.id, review: fidelity.review });
   }
 
-  if (judgedVerdict.success) {
-    await persistSimplifySummaries(agentId, task, outputBuffer);
+  if (!terminatedByUser && !isPrivateSecurityTask(task)) {
+    await persistCompletionSummary(agentId, { workspacePath, finalSummary });
   }
 
   // Programmatic-I/O task types (e.g. layered-intelligence) run a deterministic
@@ -2004,21 +2005,45 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
   return { ran: true, outcome };
 }
 
-/**
- * Persist task/simplify summaries for agents that ran with /simplify.
- * Shared by handleAgentCompletion (runner mode) and spawnDirectly (direct mode).
+/** Persist an explicitly delivered completion, independently of delivery success.
+ * The transcript remains available separately; it is never a substitute for a
+ * missing final response, including on a partial Deep checkpoint.
  */
-export async function persistSimplifySummaries(agentId, task, outputBuffer) {
-  if (!isTruthyMeta(task.metadata?.simplify)) return;
-  const summaries = extractSimplifySummaries(outputBuffer);
-  if (!summaries) return;
-  // Persist whenever *either* summary is present — e.g. if the /simplify
-  // marker appears at the very top of the output, taskSummary will be null
-  // but simplifySummary is still worth keeping.
-  if (summaries.taskSummary || summaries.simplifySummary) {
-    await updateAgent(agentId, { metadata: {
-      taskSummary: summaries.taskSummary || null,
-      simplifySummary: summaries.simplifySummary || null
-    } });
+async function persistCompletionSummary(agentId, { workspacePath, finalSummary = null }) {
+  const { doneSentinelPath, parseSentinelPayload } = await import('../lib/agentSentinel.js');
+  const sentinelPath = doneSentinelPath(workspacePath, agentId);
+  const contents = sentinelPath ? await tryReadFile(sentinelPath) : null;
+  let summary = null;
+  let source = null;
+  if (typeof contents === 'string' && contents.trim()) {
+    const trimmed = contents.trim();
+    const envelope = trimmed.match(/^```json\s*\n([\s\S]*?)\n```$/)?.[1]?.trim() ?? trimmed;
+    // A malformed structured envelope must not be rendered as a human answer.
+    // Legacy markdown sentinels remain supported.
+    const structured = trimmed.startsWith('{') || trimmed.startsWith('[') || trimmed.startsWith('```json');
+    const parsed = structured ? safeJSONParse(envelope, null) : null;
+    if (!structured || (parsed && !Array.isArray(parsed) && typeof parsed.summary === 'string')) {
+      summary = parseSentinelPayload(envelope).summary.trim() || null;
+      if (summary) source = 'sentinel';
+    }
   }
+  if (!summary && typeof finalSummary === 'string') {
+    summary = finalSummary.trim() || null;
+    if (summary) source = 'terminal-result';
+  }
+  if (!summary) {
+    // Cleanup may already have removed the sentinel on a finalization replay.
+    // Only retain a completion whose source was recorded for this same agent;
+    // older heuristic transcript summaries are not evidence of a final reply.
+    const existing = await getAgentRecord(agentId);
+    if (existing?.id === agentId
+      && ['sentinel', 'terminal-result'].includes(existing.metadata?.taskSummarySource)
+      && typeof existing.metadata?.taskSummary === 'string'
+      && existing.metadata.taskSummary.trim()) return;
+  }
+  await updateAgent(agentId, { metadata: {
+    taskSummary: summary,
+    taskSummarySource: source,
+    simplifySummary: null,
+  } });
 }

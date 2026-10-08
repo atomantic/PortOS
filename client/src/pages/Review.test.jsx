@@ -353,6 +353,9 @@ describe('Review Hub queue-card triage (#3282)', () => {
     api.submitCosAgentFeedback.mockResolvedValue({ success: true, agent: { id: 'agent-example', feedback: { rating } } });
     render(<Review />);
     expect(await screen.findByText('Full example task context')).toBeInTheDocument();
+    expect(await screen.findByText('No completion summary was saved. The runner transcript is available separately.')).toBeInTheDocument();
+    expect(screen.queryByText('Example diagnostic output')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show full transcript' }));
     expect(await screen.findByText('Example diagnostic output')).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: label }));
     await waitFor(() => expect(api.submitCosAgentFeedback).toHaveBeenCalledWith('agent-example', { rating, comment: undefined }, { silent: true }));
