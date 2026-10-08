@@ -46,11 +46,12 @@ export default function CharacterStylePicker({ project, value, onChange, idFor }
     {style && <div className="border border-port-border rounded p-2 space-y-2 min-w-0">
       <p className="text-xs">{style.summary}</p>
       <p className="text-xs text-port-text-muted">{style.credit} · <a className="text-port-accent" href={style.sourceUrl} target="_blank" rel="noreferrer">character spec</a></p>
+      {style.referenceImageId && <p className="text-xs text-port-text-muted">Saving the setup adds the sheet to this project as its character reference.</p>}
       {value !== (project.concept?.characterStyleId || '') && <p className="text-xs text-port-text-muted">{style.characterName} joins the cast as protagonist when you save.</p>}
       <div className="flex flex-wrap items-start gap-2">
         {style.referenceImageId
           ? <img src={`/data/images/${encodeURIComponent(style.referenceImageId)}`} alt={`${style.characterName} character sheet`} className="w-24 h-24 object-cover rounded bg-black shrink-0" />
-          : <p className="text-xs text-port-text-muted flex-1 min-w-0">No character sheet on this install yet. Render one, add it under Look references, then choose it here.</p>}
+          : <p className="text-xs text-port-text-muted flex-1 min-w-0">No character sheet on this install yet. Render one, add it under Look references, then choose it here and save.</p>}
         <div className="flex flex-col gap-1 min-w-0">
           <Link className="text-sm text-port-accent min-h-[44px] inline-flex items-center" to={`/media/image?${new URLSearchParams({ prompt: style.sheetPrompt })}`}>Render a character sheet</Link>
           {images.length > 0 && <>

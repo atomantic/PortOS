@@ -79,12 +79,19 @@ export async function withStyleSnapshots(input, existing = null) {
   }
 
   if (concept && has(concept, 'characterStyleId') && !has(concept, 'characterStyle')) {
-    const id = concept.characterStyleId || '';
+    const style = concept.characterStyleId ? getMusicVideoCharacterStyle(concept.characterStyleId) : null;
     const previousId = existing?.concept?.characterStyleId || '';
-    if (id !== previousId || existing?.concept?.characterStyle == null) {
-      const cast = await castCharacterStyle(concept, visualSpec, existing, previousId, id);
-      Object.assign(concept, cast.concept);
-      visualSpec = cast.visualSpec;
+    const previous = previousId ? getMusicVideoCharacterStyle(previousId) : null;
+    if ((style?.id || '') !== previousId || existing?.concept?.characterStyle == null) {
+      concept.characterStyle = musicVideoCharacterStyleSnapshot(style);
+      concept.subjects = castCharacterStyle(concept.subjects ?? existing?.concept?.subjects ?? [], previous, style);
+      touched = true;
+    }
+    // Every save re-syncs the sheet, so one chosen after the style was first
+    // saved still reaches the project.
+    const synced = await syncCharacterStyleSheet(visualSpec, existing, previous, style);
+    if (synced !== visualSpec) {
+      visualSpec = synced;
       touched = true;
     }
   }
@@ -104,42 +111,50 @@ export async function withStyleSnapshots(input, existing = null) {
 }
 
 /**
- * Picking a character style snapshots its text, casts its character as the
- * protagonist and adds this install's character sheet (if one is set) as a
- * character reference; switching away removes what the previous style added
- * and leaves every director-authored subject and reference alone.
+ * The style's character leads the cast and an existing protagonist steps back;
+ * switching away removes the previous style's character and, if that leaves no
+ * protagonist, hands the role back to the first remaining character.
  */
-async function castCharacterStyle(concept, visualSpec, existing, previousId, id) {
-  const style = id ? getMusicVideoCharacterStyle(id) : null;
-  const previous = previousId ? getMusicVideoCharacterStyle(previousId) : null;
-
-  const dropSubject = new Set([previous, style].filter(Boolean).map(musicVideoCharacterStyleSubjectId));
-  let subjects = (concept.subjects ?? existing?.concept?.subjects ?? []).filter((s) => !dropSubject.has(s.id));
+function castCharacterStyle(subjects, previous, style) {
+  const drop = new Set([previous, style].filter(Boolean).map(musicVideoCharacterStyleSubjectId));
+  const rest = subjects.filter((s) => !drop.has(s.id));
   if (style) {
-    // The style's character leads the cast; an existing protagonist steps back.
-    subjects = [musicVideoCharacterStyleSubject(style),
-      ...subjects.map((s) => (s.role === 'protagonist' ? { ...s, role: 'supporting' } : s))].slice(0, 24);
+    return [musicVideoCharacterStyleSubject(style),
+      ...rest.map((s) => (s.role === 'protagonist' ? { ...s, role: 'supporting' } : s))].slice(0, 24);
   }
+  if (!previous || rest.some((s) => s.role === 'protagonist')) return rest;
+  const lead = rest.findIndex((s) => s.kind === 'character');
+  return lead < 0 ? rest : rest.map((s, i) => (i === lead ? { ...s, role: 'protagonist' } : s));
+}
 
-  const dropRef = new Set([previous, style].filter(Boolean).map(musicVideoCharacterStyleReferenceId));
+/**
+ * Keeps the project's character-sheet reference in step with this install's
+ * sheet for the style: added (conditioning when a slot is free), replaced when
+ * the sheet changed, removed with the style. A sheet already in the project as
+ * a director's reference is marked as the character instead of added twice.
+ * Returns `visualSpec` itself when nothing changed.
+ */
+async function syncCharacterStyleSheet(visualSpec, existing, previous, style) {
+  const drop = new Set([previous, style].filter(Boolean).map(musicVideoCharacterStyleReferenceId));
   const baseRefs = visualSpec?.references ?? existing?.visualSpec?.references ?? [];
-  let references = baseRefs.filter((ref) => !dropRef.has(ref.id));
+  let references = baseRefs.filter((ref) => !drop.has(ref.id));
   const imageId = style ? await getCharacterStyleReferenceImage(style.id) : null;
-  if (imageId && references.length < 24) {
-    const conditioning = references.filter((ref) => ref.condition).length;
-    references = [...references, {
-      id: musicVideoCharacterStyleReferenceId(style),
-      imageId,
-      role: 'character',
-      label: `${style.character.name} character sheet`,
-      use: 'reference',
-      condition: conditioning < MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES,
-    }];
+  if (imageId) {
+    const freeSlot = references.filter((ref) => ref.condition).length < MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES;
+    const same = references.findIndex((ref) => ref.imageId === imageId);
+    if (same >= 0) {
+      references = references.map((ref, i) => (i === same ? { ...ref, role: 'character', condition: ref.condition || freeSlot } : ref));
+    } else if (references.length < 24) {
+      references = [...references, {
+        id: musicVideoCharacterStyleReferenceId(style),
+        imageId,
+        role: 'character',
+        label: `${style.character.name} character sheet`,
+        use: 'reference',
+        condition: freeSlot,
+      }];
+    }
   }
-  const referencesChanged = references.length !== baseRefs.length || references.some((ref, i) => ref !== baseRefs[i]);
-
-  return {
-    concept: { characterStyle: musicVideoCharacterStyleSnapshot(style), subjects },
-    visualSpec: referencesChanged ? { ...(visualSpec || {}), references } : visualSpec,
-  };
+  if (JSON.stringify(references) === JSON.stringify(baseRefs)) return visualSpec;
+  return { ...(visualSpec || {}), references };
 }

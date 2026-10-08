@@ -74,8 +74,26 @@ describe('withStyleSnapshots (#9105)', () => {
     const picked = { concept: { characterStyleId: 'claudia-slopcore', characterStyle: out.concept.characterStyle, subjects: out.concept.subjects }, visualSpec: out.visualSpec };
     const cleared = await withStyleSnapshots({ concept: { characterStyleId: null } }, picked);
     expect(cleared.concept.characterStyle).toBe('');
-    expect(cleared.concept.subjects.map((s) => s.id)).toEqual(['mvc-1']);
+    // The director's lead gets the protagonist role back.
+    expect(cleared.concept.subjects).toEqual([director]);
     expect(cleared.visualSpec.references).toEqual(conditioned);
+  });
+
+  it('adds a sheet chosen after the style was first saved, and marks a sheet already referenced instead of duplicating it', async () => {
+    const first = await withStyleSnapshots({ concept: { characterStyleId: 'claudia-slopcore' } });
+    expect(first.visualSpec).toBeUndefined();
+    const saved = { concept: first.concept, visualSpec: { references: [{ id: 'mine', imageId: 'sheet.png', role: 'mood' }] } };
+    const patch = { concept: { characterStyleId: 'claudia-slopcore', subjects: first.concept.subjects } };
+    expect(await withStyleSnapshots(patch, saved)).toBe(patch);
+
+    getCharacterStyleReferenceImage.mockResolvedValue('sheet.png');
+    const resaved = await withStyleSnapshots(patch, saved);
+    expect(resaved.concept.subjects).toEqual(first.concept.subjects);
+    expect(resaved.visualSpec.references).toEqual([{ id: 'mine', imageId: 'sheet.png', role: 'character', condition: true }]);
+
+    getCharacterStyleReferenceImage.mockResolvedValue('new-sheet.png');
+    const replaced = await withStyleSnapshots(patch, { ...saved, visualSpec: resaved.visualSpec });
+    expect(replaced.visualSpec.references.map((r) => [r.id, r.imageId])).toEqual([['mine', 'sheet.png'], ['mvr-style-claudia-slopcore', 'new-sheet.png']]);
   });
 
   it('casts without a reference when this install has no sheet for the style', async () => {
