@@ -14,24 +14,58 @@ const fakeVite = () => {
 const fakeBrowser = (page) => ({ close: vi.fn(async () => {}), newPage: vi.fn(async () => page) });
 
 describe('startBrowserFixture', () => {
-  it('names a stalled Chromium launch, closes Vite, and closes a browser that arrives late', async () => {
+  it('retries a stalled Chromium launch once, then names the phase and closes every browser that arrives late', async () => {
     const { server, createServer } = fakeVite();
-    const late = fakeBrowser();
-    let arrive;
-    const chromium = { launch: vi.fn(() => new Promise(resolve => { arrive = () => resolve(late); })) };
+    const late = [fakeBrowser(), fakeBrowser()];
+    const arrive = [];
+    const chromium = { launch: vi.fn(() => new Promise(resolve => {
+      const browser = late[arrive.length];
+      arrive.push(() => resolve(browser));
+    })) };
     let temp;
     const viteConfig = vi.fn(dir => { temp = dir; return SCOPED; });
 
     const error = await startBrowserFixture({ name: 'example', createServer, viteConfig, chromium, phaseMs: PHASE_MS })
       .catch(caught => caught);
 
-    expect(error.message).toMatch(/^example startup failed during Chromium launch: timed out after 50ms \(completed: Vite server start \d+ms; cleaned up\)$/);
+    expect(error.message).toMatch(/^example startup failed during Chromium launch: timed out after 50ms \(retried after a first attempt timed out after 25ms\) \(completed: Vite server start \d+ms; cleaned up\)$/);
     expect(server.close).toHaveBeenCalledTimes(1);
     expect(existsSync(temp)).toBe(false);
-    expect(chromium.launch.mock.calls[0][0]).toMatchObject({ timeout: 50, env: { TMPDIR: temp } });
+    // Each attempt is a fresh process whose own launch timeout kills it.
+    expect(chromium.launch.mock.calls.map(([options]) => options.timeout)).toEqual([25, 25]);
+    expect(chromium.launch.mock.calls[1][0]).toMatchObject({ env: { TMPDIR: temp } });
 
+    arrive[1]();
+    arrive[0]();
+    await vi.waitFor(() => {
+      expect(late[0].close).toHaveBeenCalledTimes(1);
+      expect(late[1].close).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('uses the retried launch and closes the first one when it arrives late', async () => {
+    const { server, createServer } = fakeVite();
+    const stalled = fakeBrowser();
+    const retried = fakeBrowser();
+    let arrive;
+    const chromium = { launch: vi.fn()
+      .mockReturnValueOnce(new Promise(resolve => { arrive = () => resolve(stalled); }))
+      .mockResolvedValueOnce(retried) };
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const fixture = await startBrowserFixture({ name: 'example', createServer, viteConfig: () => SCOPED, chromium,
+      phaseMs: PHASE_MS });
+
+    expect(fixture.browser).toBe(retried);
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/Chromium launch \d+ms \(retried after a first attempt timed out after 25ms\)/));
+    log.mockRestore();
     arrive();
-    await vi.waitFor(() => expect(late.close).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(stalled.close).toHaveBeenCalledTimes(1));
+
+    await fixture.close();
+    expect(retried.close).toHaveBeenCalledTimes(1);
+    expect(server.close).toHaveBeenCalledTimes(1);
+    expect(existsSync(fixture.temp)).toBe(false);
   });
 
   it('names a stalled Vite start and never listens on a server that arrives late', async () => {
