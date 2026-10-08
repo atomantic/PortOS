@@ -255,7 +255,7 @@
   // (else the lyrics, with their sheet's roles) are sung `line`s. Each shot's
   // textZone keeps the type off the subject.
   const CUES = (MV.textCues || []).filter((c) => Number.isFinite(c.startSec) && Number.isFinite(c.endSec) && c.endSec > c.startSec);
-  const ZONE_OF_PLACEMENT = { upper: 'upper-right', center: 'center', lower: 'lower-left' };
+  const ZONE_OF_PLACEMENT = { upper: 'upper', center: 'center', lower: 'lower' };
   const HERO_LINES = CUES.filter((c) => c.emphasis === 'hero')
     .map((c) => ({ text: c.text, startSec: c.startSec, endSec: c.endSec, role: 'hook', zone: ZONE_OF_PLACEMENT[c.placement] || null }));
   const SUBTITLE_CUES = CUES.filter((c) => c.emphasis !== 'hero')

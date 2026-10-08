@@ -98,7 +98,7 @@ const isReserved = (rel) => DOCUMENT_RESERVED_FILES.includes(rel.toLowerCase());
  * Every regular file under `root` as `[{ rel, abs, size }]`, refusing symlinks,
  * special files and a tree over the file / byte caps. `rel` uses `/`.
  */
-async function collectTree(root) {
+async function collectTree(root, { excludeTests = false } = {}) {
   const files = [];
   let bytes = 0;
   async function walk(dir, prefix) {
@@ -111,6 +111,7 @@ async function collectTree(root) {
       if (info.isDirectory()) { await walk(abs, `${rel}/`); continue; }
       if (!info.isFile()) throw refuse(`Composition documents can only contain regular files (${rel})`);
       if (unsafeZipEntryName(rel)) throw refuse(`Unsupported file name in the composition document (${rel})`);
+      if (excludeTests && rel.endsWith('.test.js')) continue;
       files.push({ rel, abs, size: info.size });
       bytes += info.size;
       if (files.length > DOCUMENT_MAX_FILES || bytes > DOCUMENT_MAX_BYTES) {
@@ -175,7 +176,7 @@ async function withSharedLyricType(files) {
     if (LYRIC_TYPE_REF.test(text)) { referenced = true; break; }
   }
   if (!referenced) return files;
-  const { files: shared } = await collectTree(SHARED_ROOT);
+  const { files: shared } = await collectTree(SHARED_ROOT, { excludeTests: true });
   const missing = shared.filter((file) => !rels.has(file.rel));
   return missing.length ? [...files, ...missing] : files;
 }
@@ -325,14 +326,14 @@ export async function importDocumentDirectory(projectId, directory) {
 /** Copy a shipped template (documentTemplates/<id>) into the project. */
 export async function importDocumentTemplate(projectId, templateId = 'layered') {
   if (!MUSIC_VIDEO_DOCUMENT_TEMPLATES.includes(templateId)) throw refuse('Unknown composition template', 'VALIDATION_ERROR', 400);
-  const { files } = await collectTree(join(TEMPLATE_ROOT, templateId));
+  const { files } = await collectTree(join(TEMPLATE_ROOT, templateId), { excludeTests: true });
   return storeVersion(projectId, files, { kind: 'template', name: templateId });
 }
 
 /** Stage a host-assembled generated document for review before selection. */
 export async function stageGeneratedDocument(projectId, generatedFiles, { verifyCurrent, renderer = 'canvas' } = {}) {
   if (renderer === 'three') {
-    const { files } = await collectTree(join(TEMPLATE_ROOT, 'spatial'));
+    const { files } = await collectTree(join(TEMPLATE_ROOT, 'spatial'), { excludeTests: true });
     const fonts = await collectTree(join(TEMPLATE_ROOT, 'layered', 'fonts'));
     const require = createRequire(import.meta.url);
     const packageRoot = dirname(dirname(require.resolve('three')));
@@ -348,7 +349,7 @@ export async function stageGeneratedDocument(projectId, generatedFiles, { verify
       { rel: 'dependencies.json', data: Buffer.from(JSON.stringify({ packages: [{ name: 'three', version: pkg.version, files: dependencies }], network: false })) });
     return storeVersion(projectId, files, { kind: 'generated', name: 'Authored Three.js world' }, { draft: true, verifyCurrent });
   }
-  const { files } = await collectTree(join(TEMPLATE_ROOT, 'layered'));
+  const { files } = await collectTree(join(TEMPLATE_ROOT, 'layered'), { excludeTests: true });
   const index = await readFile(join(TEMPLATE_ROOT, 'layered', 'index.html'), 'utf8');
   const marker = '<script src="engine.js"></script>';
   if (!index.includes(marker)) throw new Error('Layered template has no engine script');

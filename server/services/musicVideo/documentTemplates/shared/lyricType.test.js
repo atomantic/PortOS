@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium } from 'playwright-core';
-import { createLyricType } from './lyricType.js';
+import { createLyricType, TEXT_ZONES } from './lyricType.js';
 
 // zoneRect is the module's public text-zone geometry, reached through the global classic scripts use.
 const { zoneRect } = globalThis.PORTOS_LYRIC_TYPE;
@@ -100,6 +100,29 @@ describe('lyricType text zones', () => {
     }
   });
 
+  it('accepts centred upper/lower shot zones and lays hooks clear of the frame centre', () => {
+    for (const zone of ['upper', 'lower']) {
+      expect(TEXT_ZONES).toContain(zone);
+      const type = createLyricType({ ...MV, scenes: MV.scenes.map((s) => ({ ...s, textZone: zone })) });
+      const hook = type.lines[1];
+      expect(hook.zone).toBe(zone);
+      for (const [width, height] of [[1920, 1080], [1080, 1920]]) {
+        const placed = type.layout(hook, width, height, measure);
+        for (const y of new Set(placed.words.map((word) => word.y))) {
+          const row = placed.words.filter((word) => word.y === y);
+          const first = row[0];
+          const last = row[row.length - 1];
+          const right = last.x + last.w - measure(' ', `${Math.round(placed.px)}px`);
+          expect((first.x + right) / 2).toBeCloseTo(width / 2, 6);
+        }
+        for (const word of placed.words) {
+          if (zone === 'upper') expect(word.y).toBeLessThan(height / 2);
+          else expect(word.y - placed.px).toBeGreaterThan(height / 2);
+        }
+      }
+    }
+  });
+
   it('reframes zones for a portrait frame', () => {
     const rect = zoneRect('lower-left', 1080, 1920);
     expect(rect.x + rect.w).toBeCloseTo(1080 - rect.x, 6);
@@ -114,6 +137,47 @@ describe.skipIf(!chrome)('lyricType in the layered template (browser pixels)', (
   let browser;
   beforeAll(async () => { browser = await chromium.launch({ executablePath: chrome, headless: true }); }, 30000);
   afterAll(async () => { await browser?.close(); });
+
+  it('keeps the hook accent outlined in ink on cream, pale-sky and busy light frames', async () => {
+    const page = await browser.newPage();
+    try {
+      await page.setContent('<canvas id="stage" width="960" height="540"></canvas>');
+      await page.addScriptTag({ content: readFileSync(new URL('./lyricType.js', import.meta.url), 'utf8'), type: 'module' });
+      await page.waitForFunction(() => globalThis.PORTOS_LYRIC_TYPE);
+      const inkCounts = await page.evaluate(() => {
+        const canvas = document.getElementById('stage');
+        const ctx = canvas.getContext('2d');
+        const type = globalThis.PORTOS_LYRIC_TYPE.createLyricType({}, {
+          lines: [{ text: 'go signal', startSec: 0, endSec: 3, role: 'hook' }],
+        });
+        const placed = type.layout(type.lines[0], canvas.width, canvas.height, (text, font) => {
+          ctx.font = font; return ctx.measureText(text).width;
+        });
+        const accent = placed.words.find((word) => word.index === type.lines[0].accent);
+        return ['#f3ead7', '#dceefa', 'busy'].map((background) => {
+          ctx.fillStyle = background === 'busy' ? '#ffffff' : background;
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          if (background === 'busy') {
+            ctx.fillStyle = '#e9e4d8';
+            for (let x = 0; x < canvas.width; x += 20) ctx.fillRect(x, 0, 7, canvas.height);
+          }
+          type.draw(ctx, 2.5, { width: canvas.width, height: canvas.height });
+          const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+          let ink = 0;
+          // Count dark pixels only around the accent, separated from the filled word.
+          for (let y = Math.floor(accent.y - placed.px - 10); y < accent.y + 10; y++) {
+            for (let x = Math.ceil(accent.x - 5); x < accent.x + accent.w; x++) {
+              const offset = (y * canvas.width + x) * 4;
+              if (data[offset] < 60 && data[offset + 1] < 60 && data[offset + 2] < 60) ink++;
+            }
+          }
+          return ink;
+        });
+      });
+      expect(inkCounts).toHaveLength(3);
+      for (const ink of inkCounts) expect(ink).toBeGreaterThan(100);
+    } finally { await page.close(); }
+  }, 30000);
 
   it('draws nothing before the onset and draws the line inside the shot\'s zone after it', async () => {
     const page = await browser.newPage();

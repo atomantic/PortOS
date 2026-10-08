@@ -31,7 +31,7 @@
  */
 
 export const LYRIC_ROLES = Object.freeze(['line', 'hook', 'stamp', 'data']);
-export const TEXT_ZONES = Object.freeze(['lower-left', 'upper-right', 'center', 'none']);
+export const TEXT_ZONES = Object.freeze(['lower-left', 'upper-right', 'upper', 'lower', 'center', 'none']);
 
 export const DEFAULT_PALETTE = Object.freeze({ fill: '#f3ead7', ink: '#141217', accent: '#ff5a1f', strike: '#ff2a2a' });
 export const DEFAULT_FONTS = Object.freeze({ display: '"MV Archivo", "Arial Black", Impact, sans-serif', mono: '"MV Mono", Menlo, monospace' });
@@ -181,6 +181,12 @@ function zoneRect(zone, width, height) {
     case 'none': return null;
     case 'center':
       return { zone, x: insetX, y: height * 0.22, w: width - 2 * insetX, h: height * 0.56, align: 'center', anchor: 'middle' };
+    case 'upper':
+      return { zone, x: insetX, y: insetY, w: width - 2 * insetX, h: height * 0.38, align: 'center', anchor: 'top' };
+    case 'lower': {
+      const h = height * 0.38;
+      return { zone, x: insetX, y: height - insetY - h, w: width - 2 * insetX, h, align: 'center', anchor: 'bottom' };
+    }
     case 'upper-right': {
       const w = portrait ? width - 2 * insetX : width * 0.58;
       return { zone, x: width - insetX - w, y: insetY, w, h: height * 0.38, align: 'right', anchor: 'top' };
@@ -394,6 +400,9 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
         if (line.role === 'data') {
           ctx.fillStyle = palette.accent; ctx.fillText(text, x0, 0);
         } else if (line.role === 'hook' && word.index === line.accent) {
+          ctx.lineWidth = outline * 1.6;
+          ctx.strokeStyle = palette.ink; ctx.strokeText(text, x0, 0);
+          ctx.lineWidth = outline;
           ctx.strokeStyle = palette.fill; ctx.strokeText(text, x0, 0);
         } else {
           ctx.strokeStyle = palette.ink; ctx.strokeText(text, x0, 0);
