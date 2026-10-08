@@ -15,7 +15,15 @@ const journal = createDatabaseMaintenanceJournal();
 const require = createRequire(import.meta.url);
 
 function configuredEndpoints() {
-  const { DATABASE_MODE, DATABASE_ENDPOINTS } = require(join(PATHS.installRoot, 'ecosystem.config.cjs'));
+  // Maintenance direction follows the SAVED mode: a stale exported PGMODE (which
+  // the ecosystem now honors for launches, #10758) must not redefine the source.
+  const exportedMode = process.env.PGMODE;
+  delete process.env.PGMODE;
+  let loaded;
+  try { loaded = require(join(PATHS.installRoot, 'ecosystem.config.cjs')); } finally {
+    if (exportedMode !== undefined) process.env.PGMODE = exportedMode;
+  }
+  const { DATABASE_MODE, DATABASE_ENDPOINTS } = loaded;
   if (!['native', 'docker'].includes(DATABASE_MODE) || !DATABASE_ENDPOINTS) {
     throw new Error('Database configuration is not a supported backend.');
   }
