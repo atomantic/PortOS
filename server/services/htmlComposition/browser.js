@@ -264,6 +264,21 @@ async function connectComposition(assets, { signal, mediaMode, version }) {
         Object.defineProperty(globalThis, key, { configurable: false, writable: false,
           value: function(url) { report(String(url)); throw new Error(key + ' is disabled in compositions'); } });
       }
+      // The CSP sandbox gives the page an opaque origin, so its own assets are
+      // cross-origin: a no-CORS image taints any canvas it is drawn on and
+      // WebGL then refuses the canvas upload (three.js swallows the
+      // SecurityError and renders black). Assets are served with
+      // Access-Control-Allow-Origin, so default their loads to CORS mode.
+      for (const proto of [HTMLImageElement.prototype, HTMLMediaElement.prototype]) {
+        const src = Object.getOwnPropertyDescriptor(proto, 'src');
+        Object.defineProperty(proto, 'src', { configurable: true, enumerable: src.enumerable, get: src.get,
+          set(value) { if (this.crossOrigin === null) this.crossOrigin = 'anonymous'; src.set.call(this, value); } });
+        const setAttribute = proto.setAttribute;
+        proto.setAttribute = function(name, value) {
+          if (String(name).toLowerCase() === 'src' && this.crossOrigin === null) this.crossOrigin = 'anonymous';
+          return setAttribute.call(this, name, value);
+        };
+      }
     })();` });
     await send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
     const navigation = await send('Page.navigate', { url: `${ORIGIN}/index.html` });
