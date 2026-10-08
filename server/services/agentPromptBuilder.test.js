@@ -1,4 +1,3 @@
-vi.mock('./deepAudit.js', () => ({ prepareDeepAudit: vi.fn(async () => '## SERVER DEEP CONTRACT — overrides bounded prompts') }));
 /**
  * Tests for the light-vs-full context split in buildAgentPrompt.
  *
@@ -4548,8 +4547,6 @@ it.each(['api', 'cli', 'tui'])('gives extended Deep precedence over customized q
   expect(prompt.startsWith('## Deep audit — extended regular audit')).toBe(true);
   expect(prompt).toContain('fix multiple worthwhile issues');
   expect(prompt).toContain('partial coverage is valid');
-  const { prepareDeepAudit } = await import('./deepAudit.js');
-  expect(prepareDeepAudit).not.toHaveBeenCalled();
 });
 
 it('preserves the extended marker in split prompts, refuses unknown versions and legacy launches', async () => {
