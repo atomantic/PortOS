@@ -382,3 +382,42 @@ describe('Music Video agent workflow policy (#9869)', () => {
     }
   });
 });
+
+
+describe('FableLoom mutation inventory (#10668)', () => {
+  // Reviewed record mutations, deterministic checks/planning, cancellation,
+  // session bookkeeping and fixed browser automation. New routes need review.
+  const recordOrContained = [
+    'POST /api/fableloom',
+    'PATCH /api/fableloom/:id',
+    'DELETE /api/fableloom/:id',
+    'POST /api/fableloom/:id/editorial/autopilot/:runId/cancel',
+    'POST /api/fableloom/:id/episodes',
+    'PATCH /api/fableloom/:id/episodes/:episodeId',
+    'DELETE /api/fableloom/:id/episodes/:episodeId',
+    'POST /api/fableloom/:id/episodes/:episodeId/nodes',
+    'PATCH /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId',
+    'DELETE /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId',
+    'POST /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/fal-video',
+    'POST /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/transitions',
+    'PATCH /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/transitions/:transitionId',
+    'DELETE /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/transitions/:transitionId',
+    'POST /api/fableloom/:id/episodes/:episodeId/shots/apply',
+    'POST /api/fableloom/:id/episodes/:episodeId/outline/validate',
+    'POST /api/fableloom/:id/episodes/:episodeId/sessions/preflight',
+    'POST /api/fableloom/:id/episodes/:episodeId/sessions/host',
+    'PATCH /api/fableloom/sessions/:sessionId',
+    'DELETE /api/fableloom/sessions/:sessionId',
+    'POST /api/fableloom/:id/episodes/:episodeId/production/plan',
+    'POST /api/fableloom/:id/episodes/:episodeId/production/batch/:runId/cancel',
+    'POST /api/fableloom/:id/episodes/:episodeId/continuity/review',
+  ];
+
+  it('gates every agent-capable mutation and preserves reviewed contained operations', () => {
+    const mutations = getApiRouteCatalog().routes.filter(({ method, path }) =>
+      /^(POST|PUT|PATCH|DELETE)$/.test(method) && /^\/api\/fableloom(\/|$)/.test(path));
+    const open = mutations.filter(({ method, path }) => !isHostControlRoute(method, path))
+      .map(({ method, path }) => `${method} ${path}`);
+    expect([...new Set(open)].sort()).toEqual([...recordOrContained].sort());
+  });
+});

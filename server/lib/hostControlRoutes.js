@@ -44,7 +44,8 @@
  *   - pipeline and FableLoom: autopilot start is gated — with gap filing or
  *     self-improvement on it queues CoS agents — and so are the Pipeline
  *     text/visual generation operations listed under "Pipeline authoring"
- *     below (#10068): callers choose the provider, and the staged runner can
+ *     below (#10068) and FableLoom authoring/production (#10668): callers
+ *     choose the provider, and the staged runner can
  *     fall back to a CLI/TUI one, so they can launch a tool-capable agent
  *     against stored creative text. Ordinary record CRUD, reads and
  *     cancellation stay open.
@@ -495,6 +496,29 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/pipeline/series/:id/autopilot/start',
   'POST /api/fableloom/:id/editorial/autopilot/start',
   'POST /api/image-video/models/support-request',
+
+  // FableLoom authoring and production (#10668) can dispatch CLI/TUI agents,
+  // including API-first fallback and deferred batch resume. Authorize before
+  // service reads/writes, run creation or queues. Deterministic CRUD, validation,
+  // shot application, continuity/production planning, cancellation and contained
+  // fal.ai browser automation remain open under their existing contracts.
+  'POST /api/fableloom/:id/plan/generate',
+  'POST /api/fableloom/:id/plan/review',
+  'POST /api/fableloom/:id/plan/feedback',
+  'POST /api/fableloom/:id/review-teleplay',
+  'POST /api/fableloom/:id/editorial/remediate',
+  'POST /api/fableloom/:id/playtest',
+  'POST /api/fableloom/:id/episodes/:episodeId/weave',
+  'POST /api/fableloom/:id/episodes/:episodeId/shots/plan',
+  'POST /api/fableloom/:id/episodes/:episodeId/outline/generate',
+  'POST /api/fableloom/:id/episodes/:episodeId/outline/review',
+  'POST /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/branch',
+  'POST /api/fableloom/:id/episodes/:episodeId/review',
+  'POST /api/fableloom/:id/episodes/:episodeId/feedback',
+  'POST /api/fableloom/:id/episodes/:episodeId/play',
+  'POST /api/fableloom/:id/episodes/:episodeId/reformat',
+  'POST /api/fableloom/:id/episodes/:episodeId/production/batch',
+  'POST /api/fableloom/:id/episodes/:episodeId/production/batch/:runId/resume',
 
   // Eidoverse: clone and install a caller-named repo, or repoint it.
   'POST /api/settings/features/eidoverse/install',
