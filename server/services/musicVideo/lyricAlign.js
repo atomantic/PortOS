@@ -192,7 +192,9 @@ export async function alignProjectLyrics(projectId, options = {}) {
   }
   const matched = nextCues.reduce((sum, entry) => sum + (entry.words || []).filter((word) => word.conf === 'matched').length, 0);
   console.log(`🎤 Aligned lyric words from the ${source}${mixWav ? ' + mix' : ''} via ${transcriber.kind} (${matched} words matched)`);
-  const patch = { lyricCues: nextCues, lyricAlignSource: source };
+  // Provenance is project-wide, so only a whole-song pass may change it; one
+  // re-aligned line leaves the other lines' timings as stale as they were.
+  const patch = { lyricCues: nextCues, ...(cueId ? {} : { lyricAlignSource: source }) };
   if (mixWav) {
     const silentWords = findSilentWords(nextCues, vocalPcm(wav)).length;
     patch.lyricAlignSilentWords = silentWords;
