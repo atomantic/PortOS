@@ -782,7 +782,7 @@ export default function MusicVideo() {
   };
   // Alignment is a click, never an import side effect. The panel shows the
   // whisper setup error itself, so this request stays silent.
-  const handleAlignLyrics = (cueId) => lyricAlign.run(selected.id, cueId);
+  const handleAlignLyrics = (cueId, options) => lyricAlign.run(selected.id, cueId, options);
   // The slot is page-wide but the job belongs to one project: only that
   // project's Setup shows "Aligning…".
   const aligningLyrics = Boolean(lyricAlign.active && selected && lyricAlign.context?.projectId === selected.id);

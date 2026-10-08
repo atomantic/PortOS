@@ -35,6 +35,7 @@ vi.mock('../lib/cudaCapability.js', async (importOriginal) => ({
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
 const { runStreamingCommand } = await import('../lib/streamingSpawn.js');
+const { separateProjectVocals } = await import('../services/musicVideo/vocalSeparation.js');
 const { findFfmpeg } = await import('../lib/ffmpeg.js');
 
 const app = express();
@@ -204,6 +205,20 @@ describe.skipIf(!ffmpeg)('music-video vocal separation', () => {
     expect(calls.some((argv) => argv[2] === 'venv' || argv[2] === 'pip')).toBe(false);
     expect((await projects.getProject(project.id)).vocalStemFilename).toBeUndefined();
     expect(libraryFiles()).toEqual(before);
+  }, 20000);
+
+  it('shares one separation between concurrent alignment callers and propagates attachment failures', async () => {
+    const calls = demucsDouble();
+    const onProgress = vi.fn();
+    const [first, second] = await Promise.all([
+      separateProjectVocals(project.id, { onProgress }), separateProjectVocals(project.id),
+    ]);
+    expect(first.vocalStemFilename).toBe(second.vocalStemFilename);
+    expect((await projects.getProject(project.id)).vocalStemFilename).toBe(first.vocalStemFilename);
+    expect(calls.filter((argv) => argv[2] === 'demucs')).toHaveLength(1);
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ stage: 'attaching' }));
+    demucsDouble({ stemSeconds: 5 });
+    await expect(separateProjectVocals(project.id)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_VOCAL_STEM_TIMEBASE' });
   }, 20000);
 
   it('404s for a missing project and 400s for a project with no song, before any job starts', async () => {
