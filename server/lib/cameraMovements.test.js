@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   CAMERA_ENERGIES, CAMERA_FAMILIES, CAMERA_FRAMINGS, CAMERA_MOVEMENTS, CAMERA_MOVEMENT_VALUES, CAMERA_SPEEDS, SNAP_CAMERA_MOVEMENTS,
-  cameraMovementCatalogForPrompt, cameraMovementFromText, cameraMovementId, cameraMovementPrompt, getCameraMovement,
+  cameraMovementCatalogForPrompt, cameraMovementFromText, cameraMovementId, getCameraMovement,
   normalizeCameraMovement, shotCameraLabel, shotCameraPrompt, stillMoveForCamera,
 } from './cameraMovements.js';
 import { FABLELOOM_CAMERA_MOVEMENTS, normalizeFableLoomCameraMovement } from './fableLoomCameraMovements.js';
@@ -57,9 +57,9 @@ describe('lookups', () => {
   });
 });
 
-describe('cameraMovementPrompt', () => {
+describe('shotCameraPrompt', () => {
   it('composes the four-part Movement / Speed / Framing / End block', () => {
-    const lines = cameraMovementPrompt('crash-zoom', { onBeat: true }).split('\n');
+    const lines = shotCameraPrompt({ move: 'crash-zoom', onBeat: true }).split('\n');
     expect(lines).toHaveLength(4);
     expect(lines[0]).toMatch(/^Camera movement: /);
     expect(lines[1]).toMatch(/^Speed: .*land the move exactly on the downbeat\.$/);
@@ -68,15 +68,13 @@ describe('cameraMovementPrompt', () => {
   });
 
   it('applies speed, end framing and reason overrides and ignores invalid ones', () => {
-    const base = cameraMovementPrompt('locked-off');
-    expect(cameraMovementPrompt('locked-off', { reason: 'the dancer fills the frame' })).toContain('Reason: the dancer fills the frame');
-    expect(cameraMovementPrompt('locked-off', { speed: 'warp', endFraming: 'huge' })).toBe(base);
-    expect(cameraMovementPrompt('slow-dolly-in', { endFraming: 'extreme-close' })).not.toBe(cameraMovementPrompt('slow-dolly-in'));
-    expect(cameraMovementPrompt('teleport')).toBe('');
+    const base = shotCameraPrompt({ move: 'locked-off' });
+    expect(shotCameraPrompt({ move: 'locked-off', reason: 'the dancer fills the frame' })).toContain('Reason: the dancer fills the frame');
+    expect(shotCameraPrompt({ move: 'locked-off', speed: 'warp', endFraming: 'huge' })).toBe(base);
+    expect(shotCameraPrompt({ move: 'slow-dolly-in', endFraming: 'extreme-close' })).not.toBe(shotCameraPrompt({ move: 'slow-dolly-in' }));
   });
 
-  it('reads a structured shot camera', () => {
-    expect(shotCameraPrompt({ move: 'whip-pan', speed: 'snap' })).toBe(cameraMovementPrompt('whip-pan', { speed: 'snap' }));
+  it('is empty for no camera or a move outside the catalog', () => {
     expect(shotCameraPrompt(null)).toBe('');
     expect(shotCameraPrompt({ move: 'teleport' })).toBe('');
   });

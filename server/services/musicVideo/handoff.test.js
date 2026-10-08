@@ -136,12 +136,12 @@ describe('buildHandoffManifest typography (#8992)', () => {
 describe('sceneShotPrompt camera block (#10589)', () => {
   it('appends the four-part camera block for a planned shot, and nothing otherwise', async () => {
     const { sceneShotPrompt } = await import('./handoff.js');
-    const { cameraMovementPrompt } = await import('../../lib/cameraMovements.js');
+    const { shotCameraPrompt } = await import('../../lib/cameraMovements.js');
     const project = { concept: { prompt: 'Example concept', style: 'ink' } };
     const scene = { sceneId: 's1', prompt: 'a courier leaps between rooftops' };
     const plain = sceneShotPrompt(project, scene);
     const planned = sceneShotPrompt(project, { ...scene, camera: { move: 'crash-zoom', onBeat: true } });
-    const block = cameraMovementPrompt('crash-zoom', { onBeat: true });
+    const block = shotCameraPrompt({ move: 'crash-zoom', onBeat: true });
     expect(plain).not.toContain('Camera movement:');
     expect(planned).toContain(`\n${block}`);
     expect(planned.startsWith(plain.split('\n')[0])).toBe(true);

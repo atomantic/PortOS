@@ -378,9 +378,9 @@ export const cameraMovementFromText = (text) => {
  * the camera as its own instruction. `overrides` may set `speed` (a
  * CAMERA_SPEEDS value), `endFraming` (a CAMERA_FRAMINGS value), `onBeat`
  * (land the move on the downbeat) and `reason` (why a still camera is right).
- * Returns '' for an id outside the catalog.
+ * Returns '' for an id outside the catalog. Callers go through shotCameraPrompt.
  */
-export function cameraMovementPrompt(id, overrides = {}) {
+function cameraMovementPrompt(id, overrides = {}) {
   const move = getCameraMovement(id);
   if (!move) return '';
   const speed = CAMERA_SPEEDS.includes(overrides.speed) ? overrides.speed : move.speed;

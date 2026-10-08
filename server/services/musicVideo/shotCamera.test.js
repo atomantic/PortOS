@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { getCameraMovement } from '../../lib/cameraMovements.js';
-import { cameraVarietyReport, isHitShot, parseShotCamera, planShotCameras, shotCameraPromptSection, shotEnergyTier } from './shotCamera.js';
+import { cameraVarietyReport, isHitShot, parseShotCamera, planShotCameras, shotCameraPromptSection } from './shotCamera.js';
 
 const shot = (overrides = {}) => ({ sectionLabel: 'Verse', sectionIndex: 0, shotIndex: 1, shotCount: 4, sectionEnergy: 0.5, ...overrides });
 const family = (camera) => getCameraMovement(camera.move).family;
@@ -25,11 +25,13 @@ describe('parseShotCamera', () => {
 });
 
 describe('shot energy and hit points', () => {
-  it('tiers by section energy, reading an unanalyzed chorus as high', () => {
-    expect(shotEnergyTier(shot({ sectionEnergy: 0.1 }))).toBe('calm');
-    expect(shotEnergyTier(shot({ sectionEnergy: 0.5 }))).toBe('medium');
-    expect(shotEnergyTier(shot({ sectionEnergy: 0.9 }))).toBe('high');
-    expect(shotEnergyTier(shot({ sectionEnergy: undefined, sectionLabel: 'Chorus 2' }))).toBe('high');
+  it('picks from the energy tier, reading an unanalyzed chorus as high', () => {
+    const firstPick = (overrides) => planShotCameras([shot(overrides)])[0].move;
+    expect(firstPick({ sectionEnergy: 0.1 })).toBe('slow-dolly-in');
+    expect(firstPick({ sectionEnergy: 0.5 })).toBe('truck-right');
+    expect(firstPick({ sectionEnergy: 0.9 })).toBe('fast-dolly-in');
+    expect(firstPick({ sectionEnergy: undefined, sectionLabel: 'Verse' })).toBe('truck-right');
+    expect(firstPick({ sectionEnergy: undefined, sectionLabel: 'Chorus 2' })).toBe('fast-dolly-in');
   });
 
   it('treats the opening hook and a chorus/drop first shot as hits', () => {

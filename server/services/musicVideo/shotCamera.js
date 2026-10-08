@@ -40,7 +40,7 @@ const PERFORMANCE_FAMILIES = new Set(['static', 'push-pull', 'lateral', 'vertica
 const familyOf = (camera) => getCameraMovement(camera?.move)?.family || null;
 
 /** calm / medium / high for a shot's normalized section energy (a chorus with no analysis reads high). */
-export function shotEnergyTier(shot) {
+function shotEnergyTier(shot) {
   const energy = shot?.sectionEnergy;
   if (typeof energy !== 'number' || !Number.isFinite(energy)) return HIT_SECTION.test(shot?.sectionLabel || '') ? 'high' : 'medium';
   return energy >= 0.67 ? 'high' : energy >= 0.34 ? 'medium' : 'calm';
