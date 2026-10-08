@@ -402,6 +402,14 @@ jobs:
             vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json') }}-
             vitest-client-${{ runner.os }}-
 
+      # These runners have their own page cache: the DB job's warm-up cannot
+      # help client fixtures (#9641). Apply the same bounded mitigation here
+      # and retain its duration alongside the fixtures' existing phase timings.
+      # A passing launch is a non-reproduction, not proof of the startup cause.
+      - name: Warm the Chrome install for client fixtures
+        if: needs.impact.outputs.client_mode != 'skip'
+        run: bash scripts/ci-warm-test-chrome.sh
+
       - name: Run client tests
         if: needs.impact.outputs.client_mode != 'skip'
         env:
