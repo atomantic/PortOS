@@ -13,6 +13,11 @@ const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
   '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
 ].find(path => path && existsSync(path));
 
+const isFixtureRequest = (origin, route) => {
+  const url = new URL(route.request().url());
+  return url.origin === new URL(origin).origin && !/^\/(api|socket\.io)(\/|$)/.test(url.pathname);
+};
+
 // Render the actual page, toolbars and Tailwind stylesheet inside Layout's
 // clipped full-width main. Only transport/session hooks and APIs are replaced:
 // this fixture cannot connect to a real shell or invoke a host-control action.
@@ -87,7 +92,15 @@ describe.skipIf(!chrome)('Shell header reachability (#9710)', () => {
         },
       }],
       server: { host: '127.0.0.1', port: 0 },
-    }) });
+    }),
+    // Compile the cold module graph inside the bounded warmup phase, not the
+    // first test's navigation (#10638). The phase's own deadline bounds the
+    // navigation. API and socket requests are refused.
+    warmup: async (page, url) => {
+      await page.route('**/*', route => (isFixtureRequest(url, route) ? route.continue() : route.abort()));
+      await page.goto(`${url}shell-test`);
+      await page.getByRole('group', { name: 'Session controls' }).waitFor({ timeout: 5000 });
+    } });
     ({ browser, origin } = fixture);
   }, BROWSER_FIXTURE_STARTUP_MS);
   afterAll(() => fixture?.close());
@@ -109,12 +122,9 @@ describe.skipIf(!chrome)('Shell header reachability (#9710)', () => {
       const unexpectedRequests = [];
       page.on('pageerror', error => errors.push(error.message));
       await page.route('**/*', route => {
-        const url = new URL(route.request().url());
-        if (url.origin !== new URL(origin).origin || /^\/(api|socket\.io)(\/|$)/.test(url.pathname)) {
-          unexpectedRequests.push(url.pathname);
-          return route.abort();
-        }
-        return route.continue();
+        if (isFixtureRequest(origin, route)) return route.continue();
+        unexpectedRequests.push(new URL(route.request().url()).pathname);
+        return route.abort();
       });
       for (const state of states) {
         await page.goto(`${origin}shell-test?${new URLSearchParams(state)}`);
