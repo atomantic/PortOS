@@ -304,6 +304,28 @@ body {
   height: 100dvh;
 }
 
+/* The full-width route's <main> clips its page without being a scroll box.
+   `overflow: hidden` still scrolls programmatically: an absolutely positioned
+   descendant (an `sr-only` label) inside the page's own scroller takes <main>
+   as its containing block, so it widens <main>'s scroll range, and any
+   scrollIntoView() or focus() past the page scroller's end then scrolls <main>
+   itself, shifting the whole page up with no way for the user to scroll it
+   back (the Music Video "Verify lyric timing" link). `clip` can't scroll;
+   `hidden` stays as the fallback for engines without it. */
+.overflow-clip-safe {
+  overflow: hidden;
+  overflow: clip;
+}
+
+/* Both classes above are unlayered, so they beat every `@layer utilities`
+   rule whatever its specificity, including the `print:h-auto` and
+   `print:overflow-visible` beside them in Layout.jsx. Restate the print
+   values here so a printed page still grows to its content. */
+@media print {
+  .h-dvh-screen { height: auto; }
+  .overflow-clip-safe { overflow: visible; }
+}
+
 /* dvh-aware sizing utilities. iOS Safari's retractable browser chrome makes
    100vh taller than the visible viewport, so surfaces sized to 100vh spill
    *under* the chrome. These size to 100dvh — the visible dynamic viewport —

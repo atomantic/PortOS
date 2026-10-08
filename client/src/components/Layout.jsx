@@ -1095,7 +1095,7 @@ export default function Layout() {
         {(() => {
           const isFullWidth = isFullWidthRoute(location.pathname);
           return (
-            <main ref={mainRef} id="main-content" tabIndex={-1} className={`focus:outline-none flex-1 min-h-0 print:overflow-visible print:min-h-0 ${isFullWidth ? 'relative overflow-hidden' : 'overflow-auto p-4 md:p-6'}`}>
+            <main ref={mainRef} id="main-content" tabIndex={-1} className={`focus:outline-none flex-1 min-h-0 print:overflow-visible print:min-h-0 ${isFullWidth ? 'relative overflow-clip-safe' : 'overflow-auto p-4 md:p-6'}`}>
               <Outlet />
             </main>
           );
