@@ -60,7 +60,8 @@ describe.skipIf(!canRun)('toon world headless dish proof', () => {
 
   it('supports a manual/layered post stack and restores the caller target', async () => {
     const result = await page.evaluate(() => window.manualProof());
-    expect(result.changed).toBeGreaterThan(300);
+    expect(result.changed).toHaveLength(2);
+    for (const count of result.changed) expect(count).toBeGreaterThan(300);
     expect(result.restored).toBe(true);
     expect(result.feedbackRefused).toBe(true);
     expect(errors).toEqual([]);
@@ -98,14 +99,19 @@ window.manualProof=()=>{
   const input=new THREE.WebGLRenderTarget(640,360,{type:THREE.HalfFloatType,depthTexture:new THREE.DepthTexture(640,360,THREE.FloatType)});
   const output=new THREE.WebGLRenderTarget(640,360,{depthBuffer:false});
   const ink=kit.createInkPass(THREE,renderer);
-  renderer.setRenderTarget(input);renderer.render(scene,camera);
+  const ortho=new THREE.OrthographicCamera(-12,12,6.75,-6.75,.1,100);
+  ortho.position.copy(camera.position);ortho.lookAt(0,1,0);
   const read=()=>{const p=new Uint8Array(640*360*4);renderer.readRenderTargetPixels(output,0,0,640,360,p);return p;};
-  ink.render(input,camera,output,{enabled:false});const baseline=read();
-  ink.render(input,camera,output);const outlined=read();
-  const restored=renderer.getRenderTarget()===input;
+  const changes=[];let restored=true;
+  for(const view of [camera,ortho]){
+    renderer.setRenderTarget(input);renderer.render(scene,view);
+    ink.render(input,view,output,{enabled:false});const baseline=read();
+    ink.render(input,view,output);const outlined=read();
+    changes.push(changed(baseline,outlined));restored&&=renderer.getRenderTarget()===input;
+  }
   let feedbackRefused=false;try{ink.render(input,camera,input);}catch{feedbackRefused=true;}
   renderer.setRenderTarget(null);ink.dispose();input.dispose();output.dispose();
-  return {changed:changed(baseline,outlined),restored,feedbackRefused};
+  return {changed:changes,restored,feedbackRefused};
 };
 window.proof=()=>{
   const baseline=draw(), ink=draw({ink:true});
