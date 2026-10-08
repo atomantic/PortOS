@@ -174,6 +174,8 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         shotMode: scene.shotMode === 'performance' ? 'performance' : 'cutaway',
         visualLayer: documentSceneVisualLayer(project, scene, { generated }),
         stillMove: typeof scene.stillMove === 'string' ? scene.stillMove : null,
+        // #10589: the planned camera move the template's camera rig follows (only when planned).
+        ...(typeof scene.camera?.move === 'string' ? { camera: structuredClone(scene.camera) } : {}),
         cardText: typeof scene.cardText === 'string' ? scene.cardText : null,
         cardColor: typeof scene.cardColor === 'string' ? scene.cardColor : null,
         textZone: MUSIC_VIDEO_TEXT_ZONES.includes(scene.textZone) ? scene.textZone : null,

@@ -68,3 +68,36 @@ describe('reverting a Cast & Sets approval (#10241)', () => {
     expect(() => revertApprovedInput(legacy, { stage: 'castAndSets', field: 'concept' })).toThrow(/not kept/);
   });
 });
+
+describe('storyboard camera (#10589)', () => {
+  const scenes = [
+    { sceneId: 's1', label: 'Verse 1', sectionLabel: 'Verse', sectionIndex: 0, startSec: 0, endSec: 4, prompt: 'a', camera: { move: 'locked-off', reason: 'the singer holds still' } },
+    { sceneId: 's2', label: 'Verse 2', sectionLabel: 'Verse', sectionIndex: 0, startSec: 4, endSec: 8, prompt: 'b', camera: { move: 'locked-time-lapse', reason: 'clouds race' } },
+    { sceneId: 's3', label: 'Verse 3', sectionLabel: 'Verse', sectionIndex: 0, startSec: 8, endSec: 12, prompt: 'c' },
+    { sceneId: 's4', label: 'Chorus 1', sectionLabel: 'Chorus', sectionIndex: 1, startSec: 12, endSec: 16, prompt: 'd', camera: { move: 'truck-left' } },
+  ];
+  const project = { id: 'p1', scenes, productionReview: { draft: { storyboard: [{ sceneId: 's3', camera: 'Static tripod frame on the hands' }] } } };
+
+  it('flags a static run (reading free-text draft cameras) and a chorus with no snap, without blocking', () => {
+    const { storyboard } = productionReadiness(project);
+    expect(storyboard.camera.staticRuns).toEqual([['Verse 1', 'Verse 2', 'Verse 3']]);
+    expect(storyboard.camera.snaplessChoruses).toEqual([{ label: 'Chorus', startSec: 12 }]);
+    expect(storyboard.camera.notes).toHaveLength(2);
+    expect(storyboard.problems.some((problem) => /static|snap/i.test(problem))).toBe(false);
+  });
+
+  it('clears the chorus note once the chorus snaps', () => {
+    const snapped = { ...project, scenes: scenes.map((s) => (s.sceneId === 's4' ? { ...s, camera: { move: 'whip-pan', onBeat: true } } : s)) };
+    expect(productionReadiness(snapped).storyboard.camera.snaplessChoruses).toEqual([]);
+  });
+
+  it('labels a camera edit and leaves the basis of camera-less boards unchanged', () => {
+    const plain = { id: 'p1', scenes: scenes.map(({ camera, ...s }) => s), productionReview: { draft: {} } };
+    const before = productionReadiness(plain);
+    const withCamera = productionReadiness({ ...plain, scenes: plain.scenes.map((s, i) => (i === 3 ? { ...s, camera: { move: 'whip-pan' } } : s)) });
+    expect(Object.keys(withCamera.inputs.storyboard).filter((k) => withCamera.inputs.storyboard[k] !== before.inputs.storyboard[k])).toEqual(['scene 4 camera']);
+    expect(withCamera.basis.storyboard).not.toBe(before.basis.storyboard);
+    const undefinedCamera = productionReadiness({ ...plain, scenes: plain.scenes.map((s) => ({ ...s, camera: undefined })) });
+    expect(undefinedCamera.basis.storyboard).toBe(before.basis.storyboard);
+  });
+});

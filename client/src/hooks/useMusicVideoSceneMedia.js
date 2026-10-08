@@ -1,4 +1,5 @@
 import { shotActionContractProblem, shotActionPrompt } from '../../../server/lib/musicVideoActionContract.js';
+import { shotCameraPrompt } from '../../../server/lib/cameraMovements.js';
 import { musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
 import { musicVideoCreativeContext } from '../../../server/lib/musicVideoCreativeContext.js';
 import { useEffect, useRef } from 'react';
@@ -175,9 +176,10 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     [[(scene.framePrompt?.trim() || scene.prompt?.trim() || ''), style, direction, scene.direction?.frameClause?.trim()].filter(Boolean).join(', '), shotActionPrompt(project, scene, { frame: true })].filter(Boolean).join('\n');
   // The i2v prompt for a scene's clip: its shot prompt (or the frame prompt as a
   // fallback) suffixed the same way. The reference frame already fixes the
-  // look; this prompt guides the motion.
+  // look; this prompt guides the motion. A planned camera move (#10589) follows
+  // as the four-part camera block, same as handoff.js sceneShotPrompt.
   const buildShotPrompt = (scene) =>
-    [[(scene.prompt?.trim() || scene.framePrompt?.trim() || ''), style, motionDirection, scene.direction?.motionClause?.trim(), MOTION_CONTINUITY_CLAUSE].filter(Boolean).join(', '), shotActionPrompt(project, scene)].filter(Boolean).join('\n');
+    [[(scene.prompt?.trim() || scene.framePrompt?.trim() || ''), style, motionDirection, scene.direction?.motionClause?.trim(), MOTION_CONTINUITY_CLAUSE].filter(Boolean).join(', '), shotCameraPrompt(scene.camera), shotActionPrompt(project, scene)].filter(Boolean).join('\n');
 
   /**
    * Render a still reference frame for one scene from its frame prompt. The

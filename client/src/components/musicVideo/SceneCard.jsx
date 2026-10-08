@@ -1,5 +1,6 @@
 import PlateComparison from './PlateComparison.jsx';
 import ShotActionInspector from './ShotActionInspector.jsx';
+import SceneCameraControls from './SceneCameraControls.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { useEffect, useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, Scissors } from 'lucide-react';
@@ -290,7 +291,8 @@ export default function SceneCard({
             <>
               <label htmlFor={fieldId('move')}>Move</label>
               <select id={fieldId('move')} value={scene.stillMove || 'hold'} onChange={(e) => applyPatch({ stillMove: e.target.value })}
-                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0">
+                disabled={!!scene.camera?.move} title={scene.camera?.move ? 'The planned camera move drives this still.' : undefined}
+                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0 disabled:opacity-50">
                 {STILL_MOVE_LABELS.map(([value, text]) => <option key={value} value={value}>{text}</option>)}
               </select>
             </>
@@ -329,6 +331,7 @@ export default function SceneCard({
             </>
           )}
         </div>
+        {layer !== 'card' && <SceneCameraControls scene={scene} fieldId={fieldId} onEditLocal={onEditLocal} onSave={onSave} />}
         {layer !== 'footage' && !layered && (
           <p className="text-[11px] text-port-text-muted">
             {LAYER_LABELS[layer]} sections render in composed or document mode — a plain render plays this scene&apos;s footage.

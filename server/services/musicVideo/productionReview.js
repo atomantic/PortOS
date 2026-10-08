@@ -5,6 +5,8 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 
 import { isNonBlankStr as text } from '../../lib/textUtils.js';
+import { cameraMovementFromText, getCameraMovement } from '../../lib/cameraMovements.js';
+import { cameraVarietyReport } from './shotCamera.js';
 const artifact = (project, id) => (project.devArtifacts || []).find(a => a.id === id && !a.deleted);
 const artifactBasis = a => a ? { id: a.id, version: a.version, file: a.file } : null;
 const source = p => {
@@ -74,8 +76,9 @@ export function productionReviewBasis(project) {
     timingStatus: draft.timingStatus, timingNotes: draft.timingNotes, storyboard: draft.storyboard,
     storyboardSource: draft.storyboardSource || 'board', documentStoryboard: project.productionReview?.documentStoryboard,
     document: draft.storyboardSource === 'document' ? project.composition?.document : null,
-    scenes: (project.scenes || []).map(({ sceneId, startSec, endSec, lyricText, visualIntent, prompt, framePrompt }) =>
-      ({ sceneId, startSec, endSec, lyricText, visualIntent, prompt, framePrompt })), treatment: project.treatment });
+    // A planned camera (#10589) joins the hash only when set, so older approvals stay current.
+    scenes: (project.scenes || []).map(({ sceneId, startSec, endSec, lyricText, visualIntent, prompt, framePrompt, camera }) =>
+      ({ sceneId, startSec, endSec, lyricText, visualIntent, prompt, framePrompt, ...(camera ? { camera } : {}) })), treatment: project.treatment });
   const window = project.productionReview?.proof;
   const proof = hash({ storyboard, composition: project.composition,
     window: window && { startSec: window.startSec, endSec: window.endSec },
@@ -103,6 +106,7 @@ function productionApprovalInputs(project) {
     scenes[`scene ${n} timing`] = h([s.startSec, s.endSec]);
     scenes[`scene ${n} lyrics`] = h(s.lyricText);
     scenes[`scene ${n} prompt`] = h([s.visualIntent, s.prompt, s.framePrompt]);
+    if (s.camera) scenes[`scene ${n} camera`] = h(s.camera);
   }
   const storyboard = { ...art, song: h([source(project).trackId, source(project).uploadedAudioFilename, source(project).duration, source(project).beats, source(project).sections]),
     lyrics: h([source(project).lyrics, source(project).markers, source(project).phrases]), 'lyric timing': h([draft.lyricsMode, draft.timingStatus, draft.timingNotes]),
@@ -269,6 +273,7 @@ export function productionReadiness(project) {
       || shot?.lyricCueIds?.some(id => !cues.some(c => c.id === id))) boardProblems.push(`Review lyric anchors for ${scene.label || 'each shot'}.`);
   }
   const storyboardApproved = !boardProblems.length && review.approvals?.storyboard?.basis === basis.storyboard;
+  const camera = storyboardCameraReport(scenes, documentShots ? null : draft.storyboard);
   const proof = review.proof;
   const excerpt = (project.excerpts || []).find(e => e.id === proof?.excerptId);
   const proofProblems = unresolved('proof').map(f => `Resolve proof feedback for ${f.target}: ${f.text}`);
@@ -279,11 +284,26 @@ export function productionReadiness(project) {
   const proofApproved = !proofProblems.length && hasProofEvidence(review.approvals?.proof?.proofReview) && review.approvals?.proof?.basis === hash({ basis: basis.proof, excerptId: excerpt.id, filename: excerpt.filename });
   return { basis, inputs, alignment: { basis: alignmentBasis, status: draft.lyricsMode === 'instrumental' ? 'instrumental'
     : draft.timingStatus !== 'verified' ? 'provisional' : review.alignmentBasis === alignmentBasis ? 'verified' : 'stale' }, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: alignmentBasis }, art: { approved: artApproved, problems: [...new Set(artProblems)], stale: artApproved ? null : staleApproval(project, 'art', basis.art, inputs) },
-    storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)], stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs) },
+    storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)], camera, stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs) },
     proof: { approved: proofApproved, problems: proofProblems, excerptId: excerpt?.id || null, stale: proofApproved ? null : staleApproval(project, 'proof', basis.proof, inputs) },
     castAndSets: castAndSetsApproval(project),
     // The animated proof is optional review evidence: the approved storyboard is what the final render needs.
     readyForProduction: storyboardApproved };
+}
+
+/**
+ * Non-blocking camera-variety notes for the storyboard (#10589). A Board
+ * scene's planned `camera.move` wins; otherwise the draft shot's free-text
+ * camera is matched against the catalog (document shots use their own text).
+ */
+function storyboardCameraReport(scenes, draftShots) {
+  const shots = scenes.filter(s => Number.isFinite(s.startSec)).sort((a, b) => a.startSec - b.startSec).map((scene) => {
+    const shot = draftShots ? draftShots.find(s => s.sceneId === scene.sceneId) : scene;
+    const planned = getCameraMovement(scene.camera?.move)?.value;
+    return { label: scene.label || scene.sceneId, move: planned || cameraMovementFromText(typeof shot?.camera === 'string' ? shot.camera : ''),
+      sectionKey: scene.sectionIndex ?? scene.sectionLabel ?? null, sectionLabel: scene.sectionLabel || '', startSec: scene.startSec };
+  });
+  return cameraVarietyReport(shots);
 }
 
 const refuseRevert = (message, code) => new ServerError(message, { status: 409, code });

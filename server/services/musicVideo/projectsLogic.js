@@ -480,6 +480,8 @@ function buildScene(input, { order }) {
     // #8985: what a composed render shows for this span (render.js#sceneLayer).
     visualLayer: input.visualLayer ?? 'footage',
     stillMove: input.stillMove ?? 'hold',
+    // #10589: the planned camera move (absent on hand-added and pre-#10589 shots).
+    ...(input.camera ? { camera: input.camera } : {}),
     cardText: input.cardText ?? null,
     ...(input.codeOverlay ? { codeOverlay: true } : {}),
     cardColor: input.cardColor ?? null,
@@ -699,6 +701,7 @@ export function splitScene(project, sceneId, { backend = null } = {}) {
         visualLayer: scene.visualLayer ?? 'footage',
         shotMode: scene.shotMode ?? 'cutaway',
         performanceSpeaker: scene.performanceSpeaker ?? null,
+        ...(scene.camera ? { camera: scene.camera } : {}),
         ...timing,
       }),
     }, { order: 0 });
