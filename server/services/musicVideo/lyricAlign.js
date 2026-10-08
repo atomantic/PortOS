@@ -32,6 +32,7 @@ import {
   vocalPcm,
   wavDurationSec,
   pickAlignmentPath,
+  findSilentWords,
 } from './lyricAlignCore.js';
 import { relabelAnalysisSections } from './lyricMarkers.js';
 
@@ -191,7 +192,12 @@ export async function alignProjectLyrics(projectId, options = {}) {
   }
   const matched = nextCues.reduce((sum, entry) => sum + (entry.words || []).filter((word) => word.conf === 'matched').length, 0);
   console.log(`🎤 Aligned lyric words from the ${source}${mixWav ? ' + mix' : ''} via ${transcriber.kind} (${matched} words matched)`);
-  const patch = { lyricCues: nextCues };
+  const patch = { lyricCues: nextCues, lyricAlignSource: source };
+  if (mixWav) {
+    const silentWords = findSilentWords(nextCues, vocalPcm(wav)).length;
+    patch.lyricAlignSilentWords = silentWords;
+    if (silentWords > 0) console.warn(`⚠️ ${silentWords} aligned lyric words sit in silence in the vocal stem; their timing is suspect`);
+  }
   if (!cueId) {
     const analysis = relabeledAnalysis(fresh, nextCues);
     if (analysis) patch.audioAnalysis = analysis;
