@@ -438,7 +438,10 @@ it('resumes an interrupted real Git inventory of 1626 files without repeating or
     expect(saved().units.find(item => item.id === unit.id).evidence.static).toBeDefined();
     expect(deepAuditProgress(saved()).complete).toBe(false);
   } finally { await rm(directory, { recursive: true, force: true }); }
-}, 20000);
+// Windows CI includes real filesystem work and repeated Git process startup
+// for 1,626 files. Keep the fixture bounded without dropping any source files
+// or interruption/resume assertions; this is not a throughput benchmark.
+}, process.platform === 'win32' ? 90000 : 20000);
 
 
 it('rejects a late static report after its partition has advanced through independent review', async () => {
