@@ -144,11 +144,22 @@ function completeJob(jobId) {
 }
 
 const settle = async () => {
-  // Let fire-and-forget listeners reach their advance, then wait for it.
-  for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 0));
+  // Wait for every fire-and-forget continuation (not a guessed number of timer
+  // ticks, which a contended worker can outrun, #10629), take one more pass,
+  // and wait for whatever that pass set off.
+  await service.__settleProductionForTests();
   const run = store.get('mv-example')?.productionRuns?.[0];
   if (run) await service.__advanceProductionForTests('mv-example', run.id);
+  await service.__settleProductionForTests();
 };
+
+/** A gate a double waits at: `reached` resolves once the work under test is parked there. */
+function holdAt() {
+  let arrive; let release;
+  const reached = new Promise((resolve) => { arrive = resolve; });
+  const opened = new Promise((resolve) => { release = resolve; });
+  return { reached, release, held: () => { arrive(); return opened; } };
+}
 
 async function start(input = {}) {
   const out = await service.startProduction('mv-example', { directive: 'moody, slow', pool: POOL, limits: LIMITS, reviewer: {}, ...input });
@@ -501,11 +512,10 @@ describe('music video production run (#9066)', () => {
 
   it('Stop during a dispatch cancels the job that raced it and dispatches nothing more', async () => {
     seedProject();
-    let release;
-    const gate = new Promise((r) => { release = r; });
-    dispatch.mockImplementationOnce(async (args) => { await gate; return enqueueing(args); });
+    const { held, reached, release } = holdAt();
+    dispatch.mockImplementationOnce(async (args) => { await held(); return enqueueing(args); });
     const { run } = await service.startProduction('mv-example', { pool: POOL, limits: LIMITS });
-    await new Promise((r) => setTimeout(r, 0));
+    await reached;
     await service.stopProduction('mv-example', run.id);
     release();
     await settle();
@@ -621,16 +631,15 @@ describe('music video production run (#9066)', () => {
 
   it('refuses a generation if the director changes to zero code-first allowance during provider preparation', async () => {
     seedProject();
-    let release;
-    const prepared = new Promise((resolve) => { release = resolve; });
+    const { held, reached, release } = holdAt();
     dispatch.mockImplementationOnce(async (args) => {
-      await prepared;
+      await held();
       await service.assertProductionSubmission('mv-example', args.tag.productionRunId, args.tag.productionStepKey,
         { sceneId: args.tag.sceneId, kind: 'image' });
       return enqueueing(args);
     });
     await service.startProduction('mv-example', { pool: POOL, limits: LIMITS });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await reached;
     expect(theRun().steps[0].status).toBe('reserved');
     store.get('mv-example').productionPolicy = { strategy: 'code-first', maxGeneratedVideoPercent: 0 };
     release();
@@ -881,11 +890,11 @@ describe('code-first production execution (#9301)', () => {
 
   it('does not submit late authoring after cancellation during preparation', async () => {
     seedCodeFirst(); const { author } = documentDoubles();
-    let release; const waiting = new Promise((resolve) => { release = resolve; });
+    const { held, reached, release } = holdAt();
     const normal = author.getMockImplementation();
-    author.mockImplementationOnce(async (id, input) => { await waiting; return normal(id, input); });
+    author.mockImplementationOnce(async (id, input) => { await held(); return normal(id, input); });
     await service.startProduction('mv-example', { pool: [], authoring: AUTHORING, limits: LIMITS });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await reached;
     await service.cancelProduction('mv-example', theRun().id);
     release(); await settle();
     expect(theRun().status).toBe('canceled'); expect(theRun().usage.generations).toBe(0);
@@ -894,13 +903,13 @@ describe('code-first production execution (#9301)', () => {
 
   it('drops a paid authoring result when the policy changes before publication', async () => {
     seedCodeFirst(); const { author } = documentDoubles();
-    let release; const waiting = new Promise((resolve) => { release = resolve; });
+    const { held, reached, release } = holdAt();
     author.mockImplementationOnce(async (_id, input) => {
-      await input.beforeSubmit({ provider: authorProvider, model: AUTHORING.model }); await waiting;
+      await input.beforeSubmit({ provider: authorProvider, model: AUTHORING.model }); await held();
       await storeMutation((project) => { input.verifyCurrent(project); return { project }; });
     });
     await service.startProduction('mv-example', { pool: [], authoring: AUTHORING, limits: LIMITS });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await reached;
     store.get('mv-example').productionPolicy.maxGeneratedVideoPercent = 5;
     release(); await settle();
     expect(current().composition.document).toBeUndefined(); expect(theRun().usage.generations).toBe(1);
@@ -927,11 +936,11 @@ describe('code-first production execution (#9301)', () => {
 
   it('stops a pending final-render preparation before encoding', async () => {
     seedCodeFirst(); const { render } = documentDoubles();
-    let release; const waiting = new Promise((resolve) => { release = resolve; });
+    const { held, reached, release } = holdAt();
     let encoded = 0;
-    render.mockImplementationOnce(async (_id, options) => { await waiting; options.verifyCurrent(current()); encoded += 1; return { jobId: 'late-render' }; });
+    render.mockImplementationOnce(async (_id, options) => { await held(); options.verifyCurrent(current()); encoded += 1; return { jobId: 'late-render' }; });
     await start({ pool: [], authoring: AUTHORING }); passOwnedReview();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await reached;
     await service.stopProduction('mv-example', theRun().id); release(); await settle();
     expect(encoded).toBe(0); expect(theRun().status).toBe('stopped');
   });
@@ -943,14 +952,14 @@ it('rechecks a generated shot and zero allowance after asynchronous provider pre
     directions: [{ sceneId: 'mvs-a', medium: 'generated-footage', mediumRationale: 'Selected exception' }],
   });
   documentDoubles();
-  let release; const waiting = new Promise((resolve) => { release = resolve; });
+  const { held, reached, release } = holdAt();
   dispatch.mockImplementationOnce(async (args) => {
-    await waiting;
+    await held();
     await service.assertProductionSubmission('mv-example', args.tag.productionRunId, args.tag.productionStepKey, { sceneId: 'mvs-a', kind: 'video' });
     return enqueueing(args);
   });
   await service.startProduction('mv-example', { pool: [POOL[2]], authoring: AUTHORING, limits: LIMITS });
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await reached;
   store.get('mv-example').productionPolicy.maxGeneratedVideoPercent = 0;
   release(); await settle();
   expect(jobs).toHaveLength(0); expect(theRun().usage.generations).toBe(0);
@@ -984,13 +993,13 @@ it('charges a selected performance retry by its actual padded provider duration 
 
 it.each([1_000, 120_000])('keeps interrupted authoring charged at %i ms without a queue job and requires explicit resume', async (reservationAge) => {
   seedCodeFirst(); const { author } = documentDoubles();
-  let release; const waiting = new Promise((resolve) => { release = resolve; });
+  const { held, reached, release } = holdAt();
   author.mockImplementationOnce(async (_id, input) => {
-    await input.beforeSubmit({ provider: authorProvider, model: AUTHORING.model }); await waiting;
+    await input.beforeSubmit({ provider: authorProvider, model: AUTHORING.model }); await held();
     input.verifyCurrent(current());
   });
   await service.startProduction('mv-example', { pool: [], authoring: AUTHORING, limits: LIMITS });
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await reached;
   store.get('mv-example').productionRuns[0].processId = 'previous-process';
   release(); await settle();
   expect(author).toHaveBeenCalledOnce(); expect(current().composition.document).toBeUndefined();
@@ -1142,12 +1151,12 @@ describe('authored plate preflight', () => {
 
   it('honors cancellation while plate analysis is running, retaining its spend and no video job', async () => {
     seedProject({ scenes: [plateScene()] });
-    let finish;
-    reviewPlate.mockImplementation((args) => new Promise((resolve) => { finish = () => resolve(verdict(args, 'pass')); }));
+    const { held, reached, release } = holdAt();
+    reviewPlate.mockImplementation(async (args) => { await held(); return verdict(args, 'pass'); });
     const { run } = await service.startProduction('mv-example', { pool: POOL, limits: LIMITS, reviewer: {} });
-    while (!finish) await new Promise((resolve) => setTimeout(resolve, 0));
+    await reached;
     await service.cancelProduction('mv-example', run.id);
-    finish();
+    release();
     await settle();
     expect(theRun()).toMatchObject({ status: 'canceled', usage: { generations: 1 } });
     expect(dispatch).not.toHaveBeenCalled();

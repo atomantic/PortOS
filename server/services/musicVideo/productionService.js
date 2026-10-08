@@ -85,6 +85,15 @@ const AUTO_REVIEW_MAX_GENERATIONS = 100;
 const LIMIT_CODES = new Set(['PRODUCTION_SPEND_LIMIT', 'PRODUCTION_BUDGET_EXHAUSTED', 'PRODUCTION_REVIEW_LIMIT']);
 
 const advancing = new Map();
+// Every fire-and-forget continuation (a background advance, an event's
+// follow-up, arming the queue listener), so a caller can wait for the
+// service to go quiet instead of guessing with timer ticks (#10629).
+const background = new Set();
+function track(promise) {
+  background.add(promise);
+  promise.finally(() => background.delete(promise)).catch(() => {});
+  return promise;
+}
 const short = (id) => String(id || '').slice(5, 13);
 
 // Test seam: the heavy collaborators (live settings/catalogs, the queue, the
@@ -115,6 +124,10 @@ const defaults = {
 let deps = { ...defaults };
 export function __setProductionDepsForTests(overrides) { deps = { ...defaults, ...overrides }; }
 export function __advanceProductionForTests(projectId, runId) { return advanceProduction(projectId, runId); }
+/** Resolves once no background work is in flight, including work started while it ran. */
+export async function __settleProductionForTests() {
+  while (background.size) await Promise.allSettled([...background]);
+}
 
 async function requireProject(projectId) {
   const project = await getProject(projectId);
@@ -597,12 +610,12 @@ function advanceProduction(projectId, runId) {
 
 function advanceInBackground(projectId, runId) {
   armJobListeners();
-  return advanceProduction(projectId, runId).catch(async (err) => {
+  return track(advanceProduction(projectId, runId).catch(async (err) => {
     console.error(`❌ Music Video production ${short(runId)} step failed: ${err.message}`);
     await halt(projectId, runId, { status: 'stopped', reason: `A step failed: ${err.message}`, error: err.message })
       .then((out) => publish(projectId, out.project, out.run, { type: 'idle' }))
       .catch(() => {});
-  });
+  }));
 }
 
 /** Cancel this run's queued (and optionally running) jobs. Evidence (records, takes, steps) is kept. */
@@ -789,8 +802,8 @@ async function onSceneTake({ projectId } = {}) {
 }
 
 const guarded = (label, fn) => (payload) => {
-  Promise.resolve().then(() => fn(payload))
-    .catch((err) => console.error(`❌ Music Video production could not continue after ${label}: ${err.message}`));
+  track(Promise.resolve().then(() => fn(payload))
+    .catch((err) => console.error(`❌ Music Video production could not continue after ${label}: ${err.message}`)));
 };
 
 musicVideoEvents.on('scene-image', guarded('a frame landed', onSceneTake));
@@ -812,13 +825,13 @@ let jobListenersArmed = false;
 function armJobListeners() {
   if (jobListenersArmed) return;
   jobListenersArmed = true;
-  deps.queue().then(({ mediaJobEvents }) => {
+  track(deps.queue().then(({ mediaJobEvents }) => {
     const onEnded = guarded('a job ended', onProductionJobEnded);
     for (const event of ['completed', 'failed', 'canceled']) mediaJobEvents.on(event, onEnded);
   }).catch((err) => {
     jobListenersArmed = false;
     console.error(`❌ Music Video production could not watch generation jobs: ${err.message}`);
-  });
+  }));
 }
 
 // Internal final-render event: settle only this run, and never advance a run
