@@ -516,21 +516,45 @@ const PUBLISH_ANCHOR = 'mv-publish-kit';
 /** The anchor of one platform's row in the posting panel. */
 export const publishRowAnchor = (target) => `mv-post-${target}`;
 
+// The server names every unfinished shot in its own sentence; on a long song
+// that is dozens of near-identical lines. The director judges shots by
+// watching the preview, so each per-shot problem kind collapses into one count.
+const PER_SHOT_PROBLEMS = [
+  { test: /^Complete timing, action, staging, camera and transition for /, text: (n) => `${n} shot${n === 1 ? '' : 's'} missing timing, action, staging, camera or transition.` },
+  { test: /^Review lyric anchors for /, text: (n) => `${n} shot${n === 1 ? '' : 's'} need${n === 1 ? 's' : ''} lyric anchors reviewed.` },
+];
+/** Storyboard readiness problems with each per-shot kind folded into one count line, in first-seen order. */
+export function summarizeStoryboardProblems(problems = []) {
+  const kindOf = (text) => PER_SHOT_PROBLEMS.find((k) => k.test.test(text));
+  const counts = new Map();
+  for (const text of problems) { const kind = kindOf(text); if (kind) counts.set(kind, (counts.get(kind) || 0) + 1); }
+  return problems.flatMap((text) => {
+    const kind = kindOf(text);
+    if (!kind) return [text];
+    if (!counts.has(kind)) return [];
+    const line = kind.text(counts.get(kind));
+    counts.delete(kind); // only the first of its kind carries the count line
+    return [line];
+  });
+}
+
 // Storyboard readiness problems, grouped by what the user has to go fix. The
 // server returns plain sentences; the first matching rule picks the group.
 const STORYBOARD_PROBLEM_GROUPS = [
   { id: 'art', label: 'Art direction', test: /art direction|art feedback/i, action: { label: 'Review art direction', anchor: APPROVAL_ANCHORS.art } },
   // A document storyboard needs a manifest from its current build; its message mentions timing, so it is matched first.
   { id: 'manifest', label: 'Document shot manifest', test: /shot manifest/i, action: { label: 'Import the shot manifest', anchor: 'mv-review-planning' } },
+  // The per-shot count lines mention timing too, so they are matched before lyric timing.
+  { id: 'shots', label: 'Shot details', test: /^\d+ shots? (missing|needs?) /, action: { label: 'Edit the storyboard', anchor: APPROVAL_ANCHORS.storyboard } },
   { id: 'lyrics', label: 'Lyrics', test: /lyrics|instrumental/i, action: { label: 'Import lyrics', stage: 'setup', anchor: 'mv-lyrics-import' } },
   { id: 'timing', label: 'Lyric timing', test: /alignment|timing|vocal|master song/i, action: { label: 'Verify timing', stage: 'setup', anchor: 'mv-lyric-timing' } },
   { id: 'coverage', label: 'Shot coverage', test: /cover the master|gaps or overlaps|create a timed/i, action: { label: 'Open the treatment', anchor: 'mv-board-treatment' } },
-  { id: 'shots', label: 'Shot details', test: /./, action: { label: 'Edit the storyboard', anchor: APPROVAL_ANCHORS.storyboard } },
+  { id: 'other', label: 'Storyboard', test: /./, action: { label: 'Edit the storyboard', anchor: APPROVAL_ANCHORS.storyboard } },
 ];
 
-/** One open checklist item per group of storyboard readiness problems, listing every problem in it. */
+/** One open checklist item per group of storyboard readiness problems, per-shot problems counted rather than listed. */
 function storyboardProblemItems(readiness) {
-  const problems = readiness?.storyboard?.problems || [];
+  const problems = summarizeStoryboardProblems(readiness?.storyboard?.problems);
   if (readiness?.storyboard?.approved || !problems.length) return [];
   return STORYBOARD_PROBLEM_GROUPS.flatMap((group, index) => {
     const earlier = STORYBOARD_PROBLEM_GROUPS.slice(0, index);
