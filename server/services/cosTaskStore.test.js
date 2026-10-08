@@ -224,10 +224,10 @@ describe('cosTaskStore.firstLine', () => {
 });
 
 describe('cosTaskStore.updateTask expectedStatus', () => {
-  it('keeps Deep checkpoints paused through cleanup, rejects stale cleanup, and resumes the retained branch explicitly', async () => {
+  it('keeps extended Deep retry cleanup owned and preserves its retained branch', async () => {
     await addTask({ id: 'sys-deep-cleanup', description: 'Deep audit' }, 'internal');
     await updateTask('sys-deep-cleanup', { status: 'in_progress', metadata: {
-      auditDepth: 'deep', retryPendingCleanup: 'agent-current',
+      auditDepth: 'deep', auditWorkflow: 'extended-v1', retryPendingCleanup: 'agent-current',
       existingBranch: 'cos/retained', resumedFromAgentId: 'agent-current', resumeWorktreePath: '/fixture/retained',
     } }, 'internal');
     expect(isReapableBlockedFailure(await getTaskById('sys-deep-cleanup'))).toBe(false);
@@ -2619,4 +2619,15 @@ describe('shared development work admission', () => {
       .toMatchObject({ id: claim.id, duplicate: true });
     expect((await addTask({ description: 'Claim 42', app: 'different', claimFlow: true, claimTarget: '42' }, 'user')).duplicate).not.toBe(true);
   });
+});
+
+
+it('creates a fresh extended task rather than reviving a parked historical checkpoint', async () => {
+  const legacy = await addTask({ id: 'sys-legacy-audit', description: 'Audit example', status: 'blocked', metadata: { app: 'example', auditDepth: 'deep', deepAuditId: 'historic', blockedCategory: 'deep-audit-partial', existingBranch: 'cos/preserved' } }, 'internal', { raw: true });
+  const fresh = await addTask({ id: 'sys-extended-audit', description: 'Audit example', metadata: { app: 'example', auditDepth: 'deep', auditWorkflow: 'extended-v1' } }, 'internal', { raw: true });
+  expect(fresh.duplicate).not.toBe(true);
+  expect(fresh.id).not.toBe(legacy.id);
+  expect((await getTaskById(legacy.id)).metadata).toMatchObject({ deepAuditId: 'historic', existingBranch: 'cos/preserved' });
+  expect(await reviveBlockedTask(legacy.id, {}, 'internal')).toMatchObject({ error: expect.stringContaining('read-only') });
+  expect((await getTaskById(legacy.id)).status).toBe('blocked');
 });

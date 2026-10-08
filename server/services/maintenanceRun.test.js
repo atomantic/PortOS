@@ -99,12 +99,14 @@ it.each(['draft', 'inherit', undefined])('carries the browser delivery choice %s
   });
   const response = await sendFromBrowser({
     appId: 'app-1', providerId: 'codex', model: 'gpt-6-astra', effort: 'medium', mode: 'fix',
-    taskTypes: ['security'], ...(prCompletion ? { prCompletion } : {}),
+    taskTypes: ['security'], auditDepth: 'deep', ...(prCompletion ? { prCompletion } : {}),
   });
   expect(wireBody.prCompletion).toBe(prCompletion);
   expect(response.status).toBe(201);
   const run = await getMaintenanceRun(response.body.run.id);
   const expectedPolicy = prCompletion === 'inherit' ? null : 'draft';
+  expect(run).toMatchObject({ auditDepth: 'deep', auditWorkflow: 'extended-v1' });
+  expect(state.invoked[0].step.overrides.params.auditWorkflow).toBe('extended-v1');
   expect(run.prCompletion).toBe(expectedPolicy);
   expect(run.steps[0].overrides.params.prCompletion).toBe(expectedPolicy || undefined);
   expect(state.invoked[0].step.overrides.params.prCompletion).toBe(expectedPolicy || undefined);
@@ -458,33 +460,25 @@ it('preserves draft delivery across persisted resume, provider edits and step co
 });
 
 
-it('Deep checkpoints pause on successful exit without evidence, resume explicitly, and cannot bypass central completion', async () => {
-  const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['security'], auditDepth: 'deep' });
-  expect(state.invoked[0].step.overrides.params.auditDepth).toBe('deep');
-  await evaluateMaintenanceRun(run.id, { completeStepId: run.steps[0].id });
-  expect((await getMaintenanceRun(run.id)).completed).toEqual({});
-  const agent = agentFor(run, 0, true);
-  agent.result.deepAudit = { complete: false, discoveryComplete: false, satisfiedPasses: 3, requiredPasses: 12, reason: 'Budget exhausted' };
-  await __onMaintenanceAgentCompleted(agent);
-  expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'stopped', completed: {} });
-  await __retryMaintenanceRuns();
+it('extended Deep completes a useful run without exhaustive receipts and preserves provider and delivery pins', async () => {
+  const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-6-astra', effort: 'medium', mode: 'fix', prCompletion: 'draft', taskTypes: ['security'], auditDepth: 'deep' });
+  expect(run).toMatchObject({ auditDepth: 'deep', auditWorkflow: 'extended-v1' });
+  expect(run.deepAudits).toBeUndefined();
+  expect(state.invoked[0].step.overrides).toMatchObject({ model: 'gpt-6-astra', effort: 'medium', params: { auditWorkflow: 'extended-v1', fileIssues: false, useWorktree: true, prCompletion: 'draft' } });
+  await __onMaintenanceAgentCompleted(agentFor(run, 0, true));
+  expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'completed' });
   expect(state.invoked).toHaveLength(1);
-  state.tasks = [{ id: agent.taskId, status: 'in_progress', metadata: { auditDepth: 'deep', retryPendingCleanup: agent.id, quotaBurnMaintenanceRunId: run.id, quotaBurnStepId: run.steps[0].id } }];
-  await resumeMaintenanceRun(run.id);
-  expect(state.invoked).toHaveLength(1); // Explicit resume cannot outrun cleanup.
-  state.tasks[0].status = 'blocked';
-  state.tasks[0].metadata.blockedCategory = 'deep-audit-partial';
-  delete state.tasks[0].metadata.retryPendingCleanup;
-  await evaluateMaintenanceRun(run.id);
-  expect(state.invoked).toHaveLength(2);
-  // A duplicate completion from the prior attempt cannot stop the resumed run.
-  await __onMaintenanceAgentCompleted(agent);
-  expect((await getMaintenanceRun(run.id)).status).toBe('running');
-  state.tasks = [{ id: agent.taskId, status: 'in_progress', metadata: { quotaBurnMaintenanceRunId: run.id, quotaBurnStepId: run.steps[0].id } }];
-  await evaluateMaintenanceRun(run.id);
-  expect(state.invoked).toHaveLength(2);
-  await __onMaintenanceAgentCompleted({ ...agent, id: 'resumed-agent', result: { success: true, deepAudit: { ...agent.result.deepAudit, satisfiedPasses: 6 } } });
-  expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'stopped', deepAudits: { [run.steps[0].id]: { satisfiedPasses: 6 } } });
+});
+
+it('retains historical incomplete evidence and refuses every legacy resume or scheduler dispatch', async () => {
+  const { writeFile, mkdir } = await import('fs/promises');
+  const legacy = { id: 'legacy', appId: 'app-1', status: 'stopped', auditDepth: 'deep', steps: [], completed: {}, deepAudits: { old: { complete: false, satisfiedPasses: 3, requiredPasses: 12 } } };
+  await mkdir(join(tempRoot, 'cos'), { recursive: true });
+  await writeFile(join(tempRoot, 'cos', 'maintenance-runs.json'), JSON.stringify({ runs: [legacy] }));
+  await expect(resumeMaintenanceRun('legacy')).rejects.toMatchObject({ code: 'DEEP_AUDIT_HISTORICAL' });
+  await evaluateMaintenanceRun('legacy');
+  expect(state.invoked).toHaveLength(0);
+  expect(await getMaintenanceRun('legacy')).toMatchObject({ status: 'stopped', deepAudits: legacy.deepAudits, completed: {} });
 });
 
 it('Deep successful delivery alone never certifies discovery and deep proof alone never certifies failed delivery', async () => {

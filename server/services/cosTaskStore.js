@@ -1,3 +1,4 @@
+import { auditWorkflow, newAuditMetadata, isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 import { isForgeMaintenanceTask, hasCurrentForgeMaintenanceEvidence, LEGACY_FORGE_MAINTENANCE_REASON } from '../lib/forgeMaintenanceTasks.js';
 import { getSkipReason } from './cosTaskClaim.js';
 /**
@@ -467,6 +468,7 @@ export async function getTaskById(taskId) {
  * consumers, but the normal scheduler must not race that dispatch.
  */
 export async function addTask(taskData, taskType = 'user', { raw = false, ignoreTaskId = null, now = Date.now(), suppressDequeue = false } = {}) {
+  if (!raw && taskData.metadata) taskData = { ...taskData, metadata: newAuditMetadata(taskData.metadata) };
   return withStateLock(async () => {
   const state = await loadState();
   const filePath = taskType === 'user'
@@ -532,7 +534,8 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     t.id !== ignoreTaskId &&
     (t.status === 'pending' || t.status === 'in_progress' || t.status === 'blocked') &&
     firstLine(t.description).toLowerCase() === normalizedDesc &&
-    (t.metadata?.app || null) === targetApp
+    (t.metadata?.app || null) === targetApp &&
+    auditWorkflow(t.metadata) === auditWorkflow(taskData.metadata)
   );
   if (duplicate) {
     console.log(`⚠️ Duplicate task rejected: "${normalizedDesc.substring(0, 60)}" matches ${duplicate.id}${duplicate.status === 'blocked' ? ` (blocked: ${duplicate.metadata?.blockedCategory || 'unknown'})` : ''}`);
@@ -777,6 +780,7 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
     return { statusChanged: true, task: current };
   }
 
+  if (updates.status === 'pending' && isLegacyDeepAudit(current.metadata)) return { error: 'Historical Deep certification tasks are read-only; start a new Deep audit' };
   if (updates.status === 'pending' && current.metadata?.auditDepth === 'deep' && isRetryHeld(current.metadata)) {
     return { error: 'Deep checkpoint cleanup is still pending; resume after cleanup finishes' };
   }

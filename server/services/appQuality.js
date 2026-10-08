@@ -1,3 +1,4 @@
+import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 /** DB-primary audit measurements with read-through app federation. Reads never dispatch AI work. */
 import { ensureSchema, query } from '../lib/db.js';
 import { doneSentinelPath, parseSentinelPayload } from '../lib/agentSentinel.js';
@@ -16,7 +17,7 @@ export async function recordAuditQuality({ task, taskType, agentId, workspacePat
     console.warn(`⚠️ Audit quality report missing or invalid for ${agentId} (${taskType})`);
     return false;
   }
-  if (task.metadata.auditDepth === 'deep' && !deepDiscoveryComplete && report.coverage === 'broad') report.coverage = 'partial';
+  if (isLegacyDeepAudit(task.metadata) && !deepDiscoveryComplete && report.coverage === 'broad') report.coverage = 'partial';
   // Immutable run measurements make completion replay idempotent.
   if (!Number.isFinite(Date.parse(assessedAt))) {
     console.warn(`⚠️ Audit quality skipped for ${agentId}: no valid run start time`);

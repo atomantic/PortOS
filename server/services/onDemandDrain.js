@@ -1,3 +1,4 @@
+import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 /**
  * On-demand request drain — the ONE loop body both Priority 0 engines run.
  *
@@ -310,7 +311,7 @@ export async function drainOnDemandRequests(ctx, adapter) {
           await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, taskScheduleMod);
           // Deep resumes need the persisted branch pointer and original audit text,
           // not a freshly rendered snapshot of volatile issue/PR preload data.
-          const revived = task.metadata.auditDepth === 'deep' ? stored : { ...task, id: persisted.id };
+          const revived = isLegacyDeepAudit(task.metadata) ? stored : { ...task, id: persisted.id };
           emitSpawn(revived);
           emitLog('info', `🔁 On-demand ${request.taskType} revived blocked task ${persisted.id}`, { taskId: persisted.id });
         } else if (!claim || quotaBurnProvenance(persisted.metadata).requestId === request.id) {

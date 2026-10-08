@@ -125,6 +125,17 @@ describe('prepareAgentWorkspace', () => {
     expect(createWorktree).toHaveBeenCalledWith('agent-deep', expect.any(String), 'deep', expect.objectContaining({ baseCommit: 'a'.repeat(40) }));
   });
 
+  it('provisions extended Deep from the ordinary source without reading old coverage pins', async () => {
+    const { getDeepAuditSourceRevision } = await import('./deepAudit.js');
+    getDeepAuditSourceRevision.mockClear();
+    createWorktree.mockResolvedValue({ worktreePath: '/mock/worktrees/extended', branchName: 'cos/extended', baseBranch: 'main' });
+    const task = { id: 'extended', taskType: 'internal', metadata: { useWorktree: true, auditDepth: 'deep', auditWorkflow: 'extended-v1' } };
+    expect(await prepareAgentWorkspace({ agentId: 'agent-extended', task })).toMatchObject({ outcome: 'ready' });
+    expect(getDeepAuditSourceRevision).not.toHaveBeenCalled();
+    expect(createWorktree.mock.calls[0][3]).not.toHaveProperty('baseCommit');
+    expect(createWorktree).toHaveBeenCalledWith('agent-extended', expect.any(String), 'extended', expect.objectContaining({ baseBranch: 'main' }));
+  });
+
   it('normalizes legacy investigations into isolated PR delivery', async () => {
     ensureLatest.mockResolvedValue({ success: true, upToDate: true });
     createWorktree.mockResolvedValue({

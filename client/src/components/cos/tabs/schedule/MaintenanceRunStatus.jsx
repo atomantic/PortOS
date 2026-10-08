@@ -42,8 +42,9 @@ export default function MaintenanceRunStatus({ run, showSteps = false, renderSte
       )}
     </div>
     <progress aria-label="Maintenance steps completed" value={done} max={total || 1} className="w-full h-1 accent-port-accent" />
-    {run.auditDepth === 'deep' && Object.entries(run.deepAudits || {}).map(([id, audit]) => <div key={id} className="space-y-1 max-h-36 overflow-y-auto pr-1">
-      <p>Deep discovery: {audit.discoveryComplete ? 'complete' : 'partial'} · {formatCount(audit.reviewedUnits)}/{formatCount(audit.totalUnits)} units reviewed · {formatCount(audit.satisfiedPasses)}/{formatCount(audit.requiredPasses)} pass requirements</p>
+    {run.auditWorkflow === 'extended-v1' && <p>Extended Deep audit · coverage and limits are reported in the completion summary.</p>}
+    {run.auditDepth === 'deep' && !run.auditWorkflow && Object.entries(run.deepAudits || {}).map(([id, audit]) => <div key={id} className="space-y-1 max-h-36 overflow-y-auto pr-1">
+      <p>Historical Deep discovery: {audit.discoveryComplete ? 'complete' : 'partial'} · {formatCount(audit.reviewedUnits)}/{formatCount(audit.totalUnits)} units reviewed · {formatCount(audit.satisfiedPasses)}/{formatCount(audit.requiredPasses)} pass requirements</p>
       <p>{formatCount(audit.blockedUnits)} blocked · {formatCount(audit.pendingCandidates)} candidates awaiting triage · Delivery: {audit.deliveryComplete ? 'complete' : 'pending'} · {formatCount(audit.pendingRemediations)} remediations pending</p>
       {audit.revision && <p>Source revision: <code>{audit.revision.slice(0, 12)}</code></p>}
       {audit.reason && <p className="break-words">{audit.reason}</p>}

@@ -5,7 +5,7 @@ import MaintenanceRunStatus from '../cos/tabs/schedule/MaintenanceRunStatus';
 import useProviderModels from '../../hooks/useProviderModels';
 import { useSocketResource } from '../../hooks/useSocketResource';
 import { enabledProcessProviderFilter } from '../../utils/providers';
-import { getMaintenanceRuns, startMaintenanceRun, stopMaintenanceRun, resumeMaintenanceRun } from '../../services/apiAgents';
+import { getMaintenanceRuns, startMaintenanceRun, stopMaintenanceRun } from '../../services/apiAgents';
 
 const RUN_EVENTS = ['cos:maintenance:updated'];
 
@@ -81,10 +81,10 @@ export default function AppQualityRunner({ app, children }) {
     if (response) setRuns(previous => [response.run, ...(previous ?? []).filter(entry => entry.id !== response.run.id)]);
     setBusy(false);
   };
-  const stop = async (id, resume = false) => {
+  const stop = async (id) => {
     setBusy(true);
     setError('');
-    const response = await (resume ? resumeMaintenanceRun : stopMaintenanceRun)(id, { silent: true }).catch(err => { if (appIdRef.current === app.id) setError(err.message); return null; });
+    const response = await stopMaintenanceRun(id, { silent: true }).catch(err => { if (appIdRef.current === app.id) setError(err.message); return null; });
     if (appIdRef.current !== app.id) return;
     if (response) setRuns(previous => (previous ?? []).map(entry => entry.id === response.run.id ? response.run : entry));
     setBusy(false);
@@ -109,7 +109,7 @@ export default function AppQualityRunner({ app, children }) {
         <option value="deep">Deep — persistent coverage and independent passes</option>
       </select>
     </label>
-    {auditDepth === 'deep' && <p className="text-xs text-gray-400">Each launch works one review pass and saves a checkpoint. Resume explicitly for remaining evidence and independent challenge. Source changes invalidate prior coverage. No audits start until Run now.</p>}
+    {auditDepth === 'deep' && <p className="text-xs text-gray-400">Spend more time investigating high-risk paths and fixing multiple worthwhile issues in one run. The summary reports coverage and remaining limits; Deep does not certify every file.</p>}
     {mode === 'fix' && <label htmlFor="quality-publication" className="block text-sm">Pull requests
       <select id="quality-publication" className="block w-full bg-port-bg border border-port-border rounded p-2" value={prCompletion} disabled={busy} onChange={event => setPrCompletion(event.target.value)}>
         <option value="draft">Drafts for review — never merge</option>
@@ -129,7 +129,7 @@ export default function AppQualityRunner({ app, children }) {
     {runs.filter((run, index) => run.status === 'running' || run.auditDepth === 'deep' || index === 0).map(run => <div key={run.id} className="space-y-2">
       <MaintenanceRunStatus run={run} />
       {run.reason && <p className="text-xs break-words">{run.reason} <Link className="text-port-accent underline" to="/cos/schedule">Open runner settings</Link></p>}
-      {run.auditDepth === 'deep' && run.status === 'stopped' && <button type="button" className="text-xs text-port-accent" disabled={busy} onClick={() => stop(run.id, true)}>Resume Deep audit</button>}
+      {run.auditDepth === 'deep' && !run.auditWorkflow && <p className="text-xs text-gray-400">Historical exhaustive audit — evidence retained; start a new Deep run above.</p>}
       {run.status === 'running' && <button type="button" className="text-xs text-port-accent" disabled={busy} onClick={() => stop(run.id)}>Stop remaining checks</button>}
     </div>)}
   </section>;
