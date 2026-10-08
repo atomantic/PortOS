@@ -237,7 +237,7 @@ describe('music-video craft and measured choreography', () => {
 
   it('teaches the Three.js author the host lens contract', () => {
     const prompt = buildMixedMediaDocumentPrompt({ title: 'Lens', song: buildSongDocument(project), palette: {}, scenes: [], renderer: 'three' });
-    expect(prompt).toContain('ctx = { THREE, scene, camera, text, lens }');
+    expect(prompt).toContain('ctx = { THREE, scene, camera, text, lens, toonWorld }');
     expect(prompt).toContain('ctx.lens.focus');
     expect(prompt).toContain('ctx.lens.bloomThreshold');
   });

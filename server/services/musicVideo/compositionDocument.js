@@ -177,13 +177,39 @@ async function withSharedLyricType(files) {
   }
   if (!referenced) return files;
   const { files: shared } = await collectTree(SHARED_ROOT, { excludeTests: true });
-  const missing = shared.filter((file) => !rels.has(file.rel));
+  const missing = shared.filter((file) => file.rel !== 'toonWorld.js' && !rels.has(file.rel));
   return missing.length ? [...files, ...missing] : files;
+}
+
+// Shared toon kit remains a local static graph, including its vendored geometry
+// dependency. Authored copies win; unrelated documents gain no dependencies.
+async function withSharedToonWorld(files) {
+  let referenced = false;
+  for (const file of files) {
+    if (!/\.(?:html?|m?js)$/i.test(file.rel) || (file.size ?? file.data?.length ?? 0) > LYRIC_TYPE_SCAN_MAX) continue;
+    const text = file.data ? file.data.toString('utf8') : await readFile(file.abs, 'utf8');
+    if (/\btoonWorld\.js\b/.test(text)) { referenced = true; break; }
+  }
+  if (!referenced) return files;
+  const rels = new Set(files.map(file => file.rel));
+  const added = [];
+  if (!rels.has('toonWorld.js')) added.push({ rel: 'toonWorld.js', data: await readFile(join(SHARED_ROOT, 'toonWorld.js')) });
+  const require = createRequire(import.meta.url);
+  const packageRoot = dirname(dirname(require.resolve('three')));
+  for (const name of ['three.module.js', 'three.core.js', 'LICENSE']) {
+    const rel = `vendor/${name}`;
+    if (!rels.has(rel)) added.push({ rel, data: await readFile(join(packageRoot, name === 'LICENSE' ? name : `build/${name}`)) });
+  }
+  return [...files, ...added];
 }
 
 async function storeVersionNow(projectId, inputFiles, source, { draft = false, verifyCurrent = () => {} } = {}) {
   assertDocumentShape(inputFiles.map((file) => file.rel));
-  const files = await withSharedLyricType(inputFiles);
+  const files = await withSharedToonWorld(await withSharedLyricType(inputFiles));
+  const totalBytes = files.reduce((sum, file) => sum + (file.data?.length ?? file.size), 0);
+  if (files.length > DOCUMENT_MAX_FILES || totalBytes > DOCUMENT_MAX_BYTES) {
+    throw refuse('Shared document assets exceed the document file or byte limit', 'COMPOSITION_DOCUMENT_TOO_LARGE', 413);
+  }
   const initial = await getProject(projectId);
   await assertDocumentMediaPolicy(initial, files);
   if (!initial) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
