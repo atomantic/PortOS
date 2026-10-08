@@ -86,17 +86,69 @@ export const PM2_ALL_TARGET_VERBS = new Set([
   'stop', 'delete', 'del', 'restart', 'reload', 'gracefulreload', 'scale',
 ]);
 
+// Mirror the argument grammar of PM2's Commander CLI before applying policy.
+// Required values consume even a flag-shaped token; optional values do not.
+const PM2_REQUIRED_OPTIONS = new Set([
+  '--ext', '--name', '--interpreter', '--interpreter-args', '--node-args',
+  '--output', '--error', '--log-type', '--log-date-format', '--env', '--instances',
+  '--parallel', '--pid', '--kill-timeout', '--listen-timeout', '--max-memory-restart',
+  '--restart-delay', '--exp-backoff-restart-delay', '--user', '--uid', '--gid',
+  '--namespace', '--cwd', '--hp', '--service-name', '--cron', '--cron-restart',
+  '--only', '--ignore-watch', '--watch-delay', '--stop-exit-codes', '--sort',
+  '-n', '-o', '-e', '-i', '-p', '-k', '-u', '-c',
+]);
+const PM2_OPTIONAL_OPTIONS = new Set(['--log', '-l', '--filter-env', '--max-restarts', '--watch']);
+const PM2_BOOLEAN_OPTIONS = new Set([
+  '-v', '--version', '-s', '--silent', '-m', '--mini-list', '--time', '--disable-logs',
+  '-a', '--update-env', '-f', '--force', '--shutdown-with-message', '-x', '--execute-command',
+  '--wait-ip', '-w', '--write', '--no-daemon', '--source-map-support',
+  '--disable-source-map-support', '--wait-ready', '--merge-logs', '--no-color',
+  '--no-vizion', '--no-autostart', '--no-autorestart', '--no-treekill', '--no-pmx',
+  '--no-automation', '--trace', '--disable-trace', '--attach', '--v8',
+  '--event-loop-inspector', '--deep-monitoring', '-h', '--help',
+]);
+
+function pm2Positionals(args) {
+  const normalized = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--') { normalized.push(...args.slice(i)); break; }
+    if (PM2_REQUIRED_OPTIONS.has(args[i - 1])) normalized.push(arg);
+    else if (/^-[^-]/.test(arg)) normalized.push(...arg.slice(1).split('').map(c => `-${c}`));
+    else if (arg.startsWith('--') && arg.includes('=')) {
+      const split = arg.indexOf('=');
+      normalized.push(arg.slice(0, split), arg.slice(split + 1));
+    } else normalized.push(arg);
+  }
+  const positionals = [];
+  for (let i = 0; i < normalized.length; i++) {
+    const arg = normalized[i];
+    if (arg === '--') return [...positionals, ...normalized.slice(i + 1)];
+    if (PM2_REQUIRED_OPTIONS.has(arg)) i++;
+    else if (PM2_BOOLEAN_OPTIONS.has(arg)) continue;
+    else if (PM2_OPTIONAL_OPTIONS.has(arg)) {
+      const next = normalized[i + 1];
+      if (next != null && (!next.startsWith('-') || next === '-')) i++;
+    } else if (arg.length > 1 && arg.startsWith('-')) {
+      // Commander retains unknown options separately, consuming a plain value.
+      if (normalized[i + 1] != null && !normalized[i + 1].startsWith('-')) i++;
+    } else positionals.push(arg);
+  }
+  return positionals;
+}
+
 /**
  * Reject pm2 invocations that would disrupt the shared PM2 daemon or other apps.
  * `args` is everything after the `pm2` base command.
  * Returns { valid, error? }.
  */
 export function validatePm2Command(args) {
-  const sub = (args[0] || '').toLowerCase();
+  const positionals = pm2Positionals(args);
+  const sub = (positionals[0] || '').toLowerCase();
   if (PM2_BLOCKED_SUBCOMMANDS.has(sub)) {
     return { valid: false, error: `'pm2 ${sub}' is blocked — it would take down the shared PM2 daemon or every app on this machine (including PortOS). Use a scoped command like 'pm2 restart <process-name>'.` };
   }
-  if (PM2_ALL_TARGET_VERBS.has(sub) && args.slice(1).some(a => a.toLowerCase() === 'all')) {
+  if (PM2_ALL_TARGET_VERBS.has(sub) && positionals.slice(1).some(a => a.toLowerCase() === 'all')) {
     return { valid: false, error: `'pm2 ${sub} all' is blocked — it affects every app on this shared server. Target a specific process by name instead.` };
   }
   return { valid: true };
