@@ -28,12 +28,23 @@ read -r -a CANDIDATES <<< "${CHROME_WARM_CANDIDATES:-${CHROME_PATH:-} /usr/bin/g
 TIMEOUT=()
 if command -v timeout >/dev/null 2>&1; then TIMEOUT=(timeout --kill-after=5 "$BUDGET"); fi
 
+# Milliseconds since the epoch. BSD date prints a literal N for %N, so fall back
+# to whole seconds there rather than failing the arithmetic.
+now_ms() {
+  local ns
+  ns="$(date +%s%N)"
+  case "$ns" in
+    *[!0-9]*) echo $(( $(date +%s) * 1000 )) ;;
+    *) echo $(( ns / 1000000 )) ;;
+  esac
+}
+
 for candidate in "${CANDIDATES[@]}"; do
   [ -n "$candidate" ] && [ -e "$candidate" ] || continue
   executable="$(readlink -f "$candidate")"
   # The install directory holds the binary, its resources and its libraries.
   tree="$(dirname "$executable")"
-  start="$(date +%s%N)"
+  start="$(now_ms)"
   # cat's exit code is lost behind the pipe, so the byte count is the signal
   # that the read finished and the timeout's 124 is the signal that it did not.
   total="$(mktemp)"
@@ -41,7 +52,7 @@ for candidate in "${CANDIDATES[@]}"; do
   status=$?
   bytes="$(tr -d '[:space:]' < "$total")"
   rm -f "$total"
-  elapsed_ms=$(( ($(date +%s%N) - start) / 1000000 ))
+  elapsed_ms=$(( $(now_ms) - start ))
   if [ "$status" -eq 0 ] && [ "${bytes:-0}" -gt 0 ]; then
     echo "🔥 Warmed the Chrome install into the page cache: $(( bytes / 1048576 )) MiB in ${elapsed_ms}ms"
   else
