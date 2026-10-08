@@ -65,6 +65,8 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   };
 });
 
+vi.mock('./deepAudit.js', () => ({ getDeepAuditSourceRevision: vi.fn().mockResolvedValue('a'.repeat(40)) }));
+
 import { prepareAgentWorkspace, resolveTaskExistingBranch } from './agentWorkspacePrep.js';
 import { claimContinuationWorkspace } from '../lib/claimContinuation.js';
 import { updateTask, addTask, getAgents } from './cos.js';
@@ -116,6 +118,13 @@ describe('prepareAgentWorkspace — Creative Director scratch cwd (#4650)', () =
 });
 
 describe('prepareAgentWorkspace', () => {
+  it('provisions a Deep replacement from its server-owned source pin', async () => {
+    createWorktree.mockResolvedValue({ worktreePath: '/mock/worktrees/agent-deep', branchName: 'cos/deep', baseBranch: 'main' });
+    const task = { id: 'deep', taskType: 'internal', metadata: { useWorktree: true, auditDepth: 'deep' } };
+    expect(await prepareAgentWorkspace({ agentId: 'agent-deep', task })).toMatchObject({ outcome: 'ready' });
+    expect(createWorktree).toHaveBeenCalledWith('agent-deep', expect.any(String), 'deep', expect.objectContaining({ baseCommit: 'a'.repeat(40) }));
+  });
+
   it('normalizes legacy investigations into isolated PR delivery', async () => {
     ensureLatest.mockResolvedValue({ success: true, upToDate: true });
     createWorktree.mockResolvedValue({

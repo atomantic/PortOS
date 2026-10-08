@@ -583,6 +583,7 @@ async function ensureForkRemote(sourceWorkspace, forkHead, branchName) {
  * @param {string} taskId - Task identifier (included in branch name for traceability)
  * @param {object} options - Optional configuration
  * @param {string} options.baseBranch - Branch to base the worktree on (auto-detected if omitted)
+ * @param {string} options.baseCommit - Exact server-owned source commit for a fresh Deep resume
  * @param {string} options.existingBranch - Pre-existing branch to attach (creates from origin/<branch> if no local copy)
  * @param {{remoteUrl: string, ownerLogin: string}} options.forkHead - Where `existingBranch` lives when it is a FORK PR's head, which has no `origin/<branch>`. Consulted only after the local and origin lookups both miss; omitting it preserves today's exact behavior, error message included.
  * @param {string} options.planId - PLAN.md item slug ID — when provided, spliced into the branch name as `cos/<taskId>/<planId>/<agentId>` so other agents can detect this item is in flight by scanning branches/PRs
@@ -688,9 +689,16 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
   }
 
   // Prefer the remote ref (freshest state) if available
-  const baseRef = await execGit(['rev-parse', `origin/${baseBranch}`], sourceWorkspace)
-    .then(() => `origin/${baseBranch}`)
-    .catch(() => baseBranch);
+  let baseRef;
+  if (options.baseCommit) {
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(options.baseCommit)) throw new Error('Invalid pinned source commit');
+    // Missing pins fail closed; falling back to moving main would erase coverage.
+    baseRef = (await execGit(['rev-parse', '--verify', `${options.baseCommit}^{commit}`], sourceWorkspace)).stdout.trim();
+  } else {
+    baseRef = await execGit(['rev-parse', `origin/${baseBranch}`], sourceWorkspace)
+      .then(() => `origin/${baseBranch}`)
+      .catch(() => baseBranch);
+  }
 
   // Create worktree with a new branch based on the latest default branch.
   // `--no-track` is load-bearing, not tidiness (#4172): `baseRef` is normally the

@@ -168,6 +168,9 @@ async function prepareRequestedWorktree({
   allowSharedWorkspaceFallback,
 }) {
   const isolateDependencies = resolveTaskHookType(task) === 'dependency-updates';
+  const baseCommit = task.metadata?.auditDepth === 'deep'
+    ? await (await import('./deepAudit.js')).getDeepAuditSourceRevision(task)
+    : null;
   // Detecting the base branch and resolving the branch holder are independent
   // reads (a git-branches lookup vs. an agent-liveness + worktree-list check) —
   // kick both off before awaiting either so their I/O overlaps instead of
@@ -219,6 +222,7 @@ async function prepareRequestedWorktree({
   let worktreeError = null;
   const worktreeInfo = takeover?.worktreeInfo || await createWorktree(agentId, workspacePath, task.id, {
     baseBranch: detectedBase || undefined,
+    ...(baseCommit ? { baseCommit } : {}),
     existingBranch: existingBranch || undefined,
     // Only consulted when `existingBranch` names a FORK PR's head, which has no
     // `origin/<branch>` to attach to (#6064). Null for every other task, which
