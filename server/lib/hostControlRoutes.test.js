@@ -2,6 +2,38 @@ import { describe, expect, it } from 'vitest';
 import { getApiRouteCatalog } from './apiRouteGraph.js';
 import { HOST_CONTROL_ROUTES, hostControlBodyKeys, hostControlSettingsPathsIn, hostControlRouteFor, isHostControlRoute } from './hostControlRoutes.js';
 
+describe('Universe Builder mutation inventory (#10669)', () => {
+  // Explicit reviewed data-only operations: a new mutation must be classified
+  // rather than silently inheriting an execution exemption.
+  const recordOrRead = [
+    'POST /api/universe-builder',
+    'PATCH /api/universe-builder/:id',
+    'DELETE /api/universe-builder/:id',
+    'PATCH /api/universe-builder/:id/variations/lock-all',
+    'POST /api/universe-builder/:id/import/markdown',
+    'POST /api/universe-builder/:id/style-references',
+    'POST /api/universe-builder/:id/adopt-style',
+    'DELETE /api/universe-builder/:id/style-references/:referenceId',
+    'DELETE /api/universe-builder/:id/characters/:entryId/reference-sheet',
+    'POST /api/universe-builder/merge/preview',
+    'POST /api/universe-builder/merge',
+    'POST /api/universe-builder/:id/canon/:kind/:entryId/apply-image-correction',
+    'POST /api/universe-builder/:id/characters/:entryId/augment/apply',
+    'POST /api/universe-builder/:id/canon/backfill-descriptions',
+    'PATCH /api/universe-builder/:id/canon/:kind/:entryId/lock',
+    'DELETE /api/universe-builder/:id/canon/:kind/:entryId',
+    'PATCH /api/universe-builder/:id/canon/:kind/lock-all',
+  ];
+
+  it('gates every agent-capable mutation and keeps reviewed deterministic operations open', () => {
+    const mutations = getApiRouteCatalog().routes.filter(({ method, path }) =>
+      /^(POST|PUT|PATCH|DELETE)$/.test(method) && /^\/api\/universe-builder(\/|$)/.test(path));
+    const open = mutations.filter(({ method, path }) => !isHostControlRoute(method, path))
+      .map(({ method, path }) => `${method} ${path}`);
+    expect([...new Set(open)].sort()).toEqual([...recordOrRead].sort());
+  });
+});
+
 describe('HOST_CONTROL_ROUTES (#8716)', () => {
   it('names only mounted routes, so a rename cannot silently ungate one', () => {
     // A catalog path keeps its `:param` / `*wildcard` tokens, which the
