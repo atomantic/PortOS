@@ -41,7 +41,7 @@ function run(mirror, { primaryBudget = '1', totalBudget = '3' } = {}) {
   fake('sudo', 'exec "$@"');
   // Keep the production GNU sed invocation intact while adapting its in-place
   // flag only inside this synthetic command fixture on macOS.
-  fake('sed', 'if [ "$(uname -s)" = Darwin ]; then exec /usr/bin/sed -i "" -E "$@"; fi\nexec /usr/bin/sed -i -E "$@"');
+  fake('sed', 'if [ "$(uname -s)" = Darwin ]; then\n  [ "$1" = "-i" ] && [ "$2" = "-E" ] || exit 2\n  shift 2\n  exec /usr/bin/sed -i "" -E "$@"\nfi\nexec /usr/bin/sed -i -E "$@"');
   fake('curl', 'while [ $# -gt 0 ]; do [ "$1" = -o ] && echo key > "$2"; shift; done');
   const stall = { ok: 'false', slowRunner: `grep -q azure '${sourcesFile}'`, dead: 'true' }[mirror];
   fake('apt-get', `echo "apt-get $*" >> '${log}'\nif ${stall}; then exec sleep 30; fi`);
