@@ -1045,7 +1045,11 @@ const RUN_OP_LABEL = {
 
 function StoryBuilderDetail({ storyId, stepParam }) {
   const navigate = useNavigate();
-  const [steps, setSteps] = useState([]);
+  const [steps, setSteps] = useState(null);
+  const [manifestError, setManifestError] = useState(null);
+  const [sessionError, setSessionError] = useState(null);
+  const [sessionMissing, setSessionMissing] = useState(false);
+  const [readBusy, setReadBusy] = useState(false);
   const [session, setSession] = useState(null);
   const [staleSteps, setStaleSteps] = useState([]);
   const [syncDrift, setSyncDrift] = useState(false);
@@ -1061,6 +1065,7 @@ function StoryBuilderDetail({ storyId, stepParam }) {
   // SLOWER reload wins every setter it reaches last, painting the view with
   // records fetched before the newer completion landed.
   const reloadGenRef = useRef(0);
+  const manifestGenRef = useRef(0);
 
   // Runs this view did not start itself (a reload, a second tab, or the holder of
   // a refused kickoff) are discovered on the session read and adopted by the
@@ -1081,9 +1086,28 @@ function StoryBuilderDetail({ storyId, stepParam }) {
   const reload = useCallback(async () => {
     const gen = ++reloadGenRef.current;
     const isCurrent = () => reloadGenRef.current === gen;
-    const s = await getStorySession(storyId, { silent: true }).catch(() => null);
+    setReadBusy(true);
+    const result = await getStorySession(storyId, { silent: true }).then((record) => ({ record })).catch((error) => {
+      if (!isCurrent()) return;
+      if (error.status === 404 || error.code === 'NOT_FOUND') {
+        setSessionMissing(true);
+        setSession(null);
+        setSessionError(null);
+      } else {
+        setSessionError(error.message || 'The story session is unavailable.');
+      }
+      return null;
+    });
     if (!isCurrent()) return;
-    if (!s) { setSession(null); setLoading(false); return; }
+    const s = result?.record;
+    if (!s || typeof s !== 'object' || !s.id) {
+      if (result) setSessionError('The story session could not be loaded.');
+      setReadBusy(false);
+      setLoading(false);
+      return;
+    }
+    setSessionError(null);
+    setSessionMissing(false);
     // `activeSteps` is a live-run snapshot, not session state — hand it to the
     // provider (which drops it if the story changed meanwhile) and keep it out of
     // the record we hold.
@@ -1106,6 +1130,7 @@ function StoryBuilderDetail({ storyId, stepParam }) {
       if (!isCurrent()) return;
       setIssues(Array.isArray(iss) ? iss : (iss?.items || []));
     }
+    setReadBusy(false);
     setLoading(false);
   }, [storyId, adoptActive]);
   reloadRef.current = reload;
@@ -1144,22 +1169,41 @@ function StoryBuilderDetail({ storyId, stepParam }) {
     silent: true,
   });
 
-  // Load the step manifest first; gate the loading spinner on BOTH it and the
-  // session so the detail view never renders with an empty step rail.
-  useEffect(() => {
-    let active = true;
+  // A manifest failure is distinct from an empty rail. Retry bootstrap without
+  // unmounting an already loaded workspace or its draft editors.
+  const loadDetail = useCallback(async () => {
+    const gen = ++manifestGenRef.current;
     setLoading(true);
-    getStoryBuilderSteps({ silent: true })
-      .then((r) => { if (active) setSteps(r.steps || []); })
-      .catch(() => {})
-      .finally(() => { if (active) reload(); });
-    return () => { active = false; };
+    setReadBusy(true);
+    const manifest = await getStoryBuilderSteps({ silent: true }).catch((error) => {
+      if (manifestGenRef.current === gen) setManifestError(error.message || 'The step manifest is unavailable.');
+      return null;
+    });
+    if (manifestGenRef.current !== gen) return;
+    if (!Array.isArray(manifest?.steps) || manifest.steps.length === 0 ||
+      manifest.steps.some((step) => !step?.id || !step?.label)) {
+      setManifestError((error) => error || 'The step manifest could not be loaded.');
+      setReadBusy(false);
+      setLoading(false);
+      return;
+    }
+    setSteps(manifest.steps);
+    setManifestError(null);
+    await reload();
   }, [reload]);
 
-  const stepIds = steps.map((s) => s.id);
+  useEffect(() => {
+    loadDetail();
+    return () => {
+      manifestGenRef.current++;
+      reloadGenRef.current++;
+    };
+  }, [loadDetail]);
+
+  const stepIds = (steps || []).map((s) => s.id);
   const activeStepId = stepIds.includes(stepParam) ? stepParam : (session?.currentStep || 'idea');
   const activeIdx = stepIds.indexOf(activeStepId);
-  const activeStep = steps[activeIdx];
+  const activeStep = steps?.[activeIdx];
   const stepState = session?.steps?.[activeStepId] || { status: 'pending', locked: false };
   const isStale = staleSteps.includes(activeStepId);
   const nextHintId = useId();
@@ -1271,7 +1315,22 @@ function StoryBuilderDetail({ storyId, stepParam }) {
     toast.success('Re-baselined to this machine');
   };
 
-  if (loading) {
+  const readError = manifestError || sessionError;
+  const readNotice = readError && (
+    <Banner tone="warning" role="alert" size="md" icon={AlertTriangle} className="mb-4">
+      <div>
+        <p>{manifestError ? 'Couldn’t load story steps' : 'Couldn’t load the story session'}</p>
+        <p className="text-sm">{readError}</p>
+        {session && <p className="text-sm">Showing the last loaded story. Your edits and running work are preserved.</p>}
+        <button type="button" onClick={manifestError ? loadDetail : reload} disabled={readBusy}
+          className="mt-2 px-3 py-2 rounded border border-port-border text-port-accent disabled:opacity-50">
+          {readBusy ? 'Retrying…' : 'Retry'}
+        </button>
+      </div>
+    </Banner>
+  );
+
+  if (loading && !readError) {
     return (
       <div className="h-full overflow-y-auto p-4 md:p-6">
         <div className="max-w-5xl mx-auto">
@@ -1280,11 +1339,18 @@ function StoryBuilderDetail({ storyId, stepParam }) {
       </div>
     );
   }
-  if (!session) return <div className="p-6 text-gray-400">Session not found. <Link to="/story-builder" className="text-port-accent">Back to Story Builder</Link></div>;
+  if (sessionMissing) return <div className="p-6 text-gray-400">Session not found. <Link to="/story-builder" className="text-port-accent">Back to Story Builder</Link></div>;
+
+  if (!session || !steps) return (
+    <div className="h-full overflow-y-auto p-4 md:p-6">
+      <div className="max-w-5xl mx-auto">{readNotice}</div>
+    </div>
+  );
 
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6">
       <div className="max-w-5xl mx-auto">
+        {readNotice}
         <header className="mb-4 flex items-start justify-between gap-4 flex-wrap">
           <div>
             <Link to="/story-builder" className="text-xs text-gray-500 hover:text-port-accent">← All stories</Link>
@@ -1488,7 +1554,7 @@ export default function StoryBuilder() {
   // in-flight generate/refine survives step navigation AND those swaps (#3905).
   return (
     <StoryStepRunProvider sessionId={storyId}>
-      <StoryBuilderDetail storyId={storyId} stepParam={step} />
+      <StoryBuilderDetail key={storyId} storyId={storyId} stepParam={step} />
     </StoryStepRunProvider>
   );
 }
