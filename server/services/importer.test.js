@@ -1950,16 +1950,20 @@ describe('commitImport import sessions (#9943)', () => {
     expect((await analyze()).importSession).toEqual({ status: 'committed', createdIssueIds: retried.createdIssueIds });
   });
 
-  it('refuses to resume onto a planned position another issue took since', async () => {
+  it.each([
+    ['a new issue', (preview) => issuesSvc.createIssue({ seriesId: preview.series.id, title: 'Added since', arcPosition: 2 })],
+    ['the moved survivor', (_preview, survivorId) => issuesSvc.updateIssue(survivorId, { arcPosition: 2 })],
+  ])('refuses to resume onto a planned position %s took since', async (_label, takeSlot) => {
     wireDefaultLLMResponses();
     const preview = await analyze();
     const issues = [{ title: 'I1', arcPosition: 1, proseExcerpt: 'p1' }, { title: 'I2', arcPosition: 2, proseExcerpt: 'p2' }];
-    await interruptAfterFirstIssue(preview, issues);
-    await issuesSvc.createIssue({ seriesId: preview.series.id, title: 'Added since', arcPosition: 2 });
+    const { context: { survivingIssueIds } } = await interruptAfterFirstIssue(preview, issues);
+    await takeSlot(preview, survivingIssueIds[0]);
+    const before = await issueCount(preview);
 
     await expect(importerSvc.commitImport(payloadFor(preview, { issues })))
       .rejects.toMatchObject({ code: importerSvc.ERR_VALIDATION });
-    expect(await issueCount(preview)).toBe(2);
+    expect(await issueCount(preview)).toBe(before);
   });
 
   it("refuses a changed issue list while an earlier attempt's issues still exist", async () => {

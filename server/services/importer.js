@@ -1337,16 +1337,16 @@ async function commitImportOnce({
       }
     }
   }
-  // A resume still owes the series unique positions: an issue added since the
-  // earlier attempt may have taken a slot the plan reserved for a missing issue.
+  // A resume still owes the series unique positions: since the earlier attempt,
+  // a new issue — or one of this import's survivors, moved — may have taken a
+  // slot the plan reserved for a missing issue. Survivors left where the plan
+  // put them never collide: the plan's positions are distinct.
   if (!replaceMode && resumePlan) {
-    const takenByOthers = new Set(existingIssues
-      .filter((ex) => !resumeLive.has(ex.id) && Number.isInteger(ex.arcPosition))
-      .map((ex) => ex.arcPosition));
+    const taken = new Set(existingIssues.map((ex) => ex.arcPosition).filter(Number.isInteger));
     resumePlan.items.forEach((item, i) => {
-      if (!resumeLive.has(item.issueId) && takenByOthers.has(item.arcPosition)) {
+      if (!resumeLive.has(item.issueId) && taken.has(item.arcPosition)) {
         throw codedError(
-          `Issue at position ${i + 1} was planned for arcPosition ${item.arcPosition}, which an issue added since now occupies — commit refused before any state changed. Move or delete that issue, then retry to finish this import.`,
+          `Issue at position ${i + 1} was planned for arcPosition ${item.arcPosition}, which another issue now occupies — commit refused before any state changed. Move or delete that issue, then retry to finish this import.`,
           ERR_VALIDATION,
         );
       }
