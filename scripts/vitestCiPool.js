@@ -39,6 +39,7 @@ export function vitestCiPool({ maxWorkers = 4 } = {}) {
 export const EXCLUSIVE_CAPTURE_TESTS = [
   'services/htmlComposition/index.test.js',
   'services/musicVideo/documentRender.browser.test.js',
+  'services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js',
   'routes/musicVideoProductionReview.browser.test.js',
   'routes/musicVideoRichAuthoring.browser.test.js',
 ];
