@@ -81,7 +81,7 @@ vi.mock('../mediaCollections.js', async () => ({
 // media_assets index after bytes land. Mock it to a no-op spy so the sweep tests
 // don't touch Postgres and can assert the reconcile fired.
 vi.mock('../mediaAssetIndex/index.js', () => ({
-  reconcileMediaAssets: vi.fn().mockResolvedValue(undefined),
+  reconcileMediaAssets: vi.fn().mockResolvedValue({ ok: true, skippedPrune: [] }),
 }));
 
 vi.mock('../artists/index.js', async () => {
