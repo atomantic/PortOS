@@ -26,7 +26,7 @@ Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 //   ok         — every source answers promptly
 //   slowRunner — anything while the runner's Azure mirror is configured stalls
 //   dead       — every download stalls
-function run(mirror) {
+function run(mirror, { primaryBudget = '1', totalBudget = '3' } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ci-db-tools-'));
   const bin = join(dir, 'bin');
   const root = join(dir, 'root');
@@ -48,8 +48,8 @@ function run(mirror) {
     env: {
       PATH: `${bin}:${process.env.PATH}`,
       APT_ROOT: root,
-      APT_PRIMARY_BUDGET_SECONDS: '1',
-      APT_TOTAL_BUDGET_SECONDS: '3',
+      APT_PRIMARY_BUDGET_SECONDS: primaryBudget,
+      APT_TOTAL_BUDGET_SECONDS: totalBudget,
       PG_MAJOR: '17',
       GITHUB_PATH: githubPath,
     },
@@ -70,7 +70,8 @@ const INSTALL_FROM_CACHE = 'apt-get install -y --no-download postgresql-client-1
 
 describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
   it('installs the service-major client from the signed PostgreSQL repository', () => {
-    const result = run('ok');
+    // Leave room for loaded runners; only the stall cases need tiny budgets.
+    const result = run('ok', { primaryBudget: '60', totalBudget: '120' });
     expect(result.status).toBe(0);
     expect(result.pgdg).toBe('deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main\n');
     expect(result.calls).toEqual([
