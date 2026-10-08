@@ -642,6 +642,16 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
   // branch. When a tree PortOS owns already has it — the finished run's own,
   // preserved because it was dirty — that tree IS the workspace being asked for,
   // and no cooldown was ever going to free it.
+  it('keeps a changed Deep submodule workspace blocked for explicit recovery instead of retrying or creating a fresh branch', async () => {
+    findAdoptableWorktreeForBranch.mockResolvedValue({ path: '/mock/worktrees/agent-y', agentId: 'agent-y' });
+    adoptWorktree.mockRejectedValueOnce(Object.assign(new Error('Preserve retained submodule changes'), { code: 'DEEP_RESUME_PRESERVED' }));
+    const task = followUpTask({ auditDepth: 'deep' });
+    const result = await prepareAgentWorkspace({ agentId: 'agent-new', task });
+    expect(result.outcome).toBe('blocked');
+    expect(createWorktree).not.toHaveBeenCalled();
+    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ metadata: expect.objectContaining({ blockedCategory: 'deep-audit-partial' }) }), expect.anything());
+  });
+
   it('adopts the worktree that already holds the branch instead of pausing', async () => {
     findAdoptableWorktreeForBranch.mockResolvedValue({ path: '/mock/worktrees/agent-y', agentId: 'agent-y' });
     adoptWorktree.mockResolvedValue({

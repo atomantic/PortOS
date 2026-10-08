@@ -913,11 +913,11 @@ export async function releaseIdleSiblingNextHolder(sourceWorkspace, branchName, 
  * @param {string} branchName - the branch that worktree has checked out
  * @returns {Promise<{worktreePath: string, branchName: string, baseBranch: null, existingBranch: true, adopted: true, instanceId: string}|null>}
  */
-export async function adoptWorktree(agentId, sourceWorkspace, existingWorktreePath, branchName) {
-  return queueWorktreeCreate(sourceWorkspace, () => adoptWorktreeUnlocked(agentId, sourceWorkspace, existingWorktreePath, branchName));
+export async function adoptWorktree(agentId, sourceWorkspace, existingWorktreePath, branchName, options = {}) {
+  return queueWorktreeCreate(sourceWorkspace, () => adoptWorktreeUnlocked(agentId, sourceWorkspace, existingWorktreePath, branchName, options));
 }
 
-async function adoptWorktreeUnlocked(agentId, sourceWorkspace, existingWorktreePath, branchName) {
+async function adoptWorktreeUnlocked(agentId, sourceWorkspace, existingWorktreePath, branchName, options) {
   if (!agentId || !sourceWorkspace || !existingWorktreePath || !branchName) return null;
   if (!existsSync(existingWorktreePath)) {
     console.log(`🌳 Cannot adopt worktree for ${agentId} — ${existingWorktreePath} no longer exists`);
@@ -940,6 +940,32 @@ async function adoptWorktreeUnlocked(agentId, sourceWorkspace, existingWorktreeP
   }
 
   await ensureDir(WORKTREES_DIR);
+
+  if (options.deepResume) {
+    try {
+      const entries = (await execGit(['ls-files', '--stage'], existingWorktreePath)).stdout;
+      if (/^160000 /m.test(entries)) {
+        // Git cannot move linked worktrees containing submodules, even after
+        // deinit. Preserve the admitted inactive tree intact and transfer only
+        // its clean branch attachment, all under the same repository queue.
+        const currentBranch = (await execGit(['symbolic-ref', '--short', 'HEAD'], existingWorktreePath)).stdout.trim();
+        const head = (await execGit(['rev-parse', 'HEAD'], existingWorktreePath)).stdout.trim();
+        const status = (await execGit(['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none'], existingWorktreePath)).stdout.trim();
+        const listed = await listWorktrees(sourceWorkspace);
+        const holder = listed.find(entry => pathsEqual(entry.path, existingWorktreePath));
+        if (currentBranch !== branchName || !holder || holder.locked || status) {
+          throw Object.assign(new Error('Retained Deep submodule workspace is changed, locked or ambiguous; preserve it for explicit recovery'), { code: 'DEEP_RESUME_PRESERVED' });
+        }
+        await execGit(['checkout', '--detach', head], existingWorktreePath);
+        const branchHead = (await execGit(['rev-parse', `refs/heads/${branchName}`], sourceWorkspace)).stdout.trim();
+        if (branchHead !== head) throw new Error('Deep resume branch changed during handoff; preserved old workspace');
+        const replacement = await createWorktreeUnlocked(agentId, sourceWorkspace, null, { existingBranch: branchName });
+        return { ...replacement, adopted: true };
+      }
+    } catch (error) {
+      throw Object.assign(new Error(`Deep submodule handoff stopped; retained work is preserved: ${error.message}`, { cause: error }), { code: 'DEEP_RESUME_PRESERVED' });
+    }
+  }
 
   // Through the retry wrapper, not raw execGit: `worktree move` mutates the same
   // `.git/worktrees` bookkeeping whose per-repo lock motivated the retry (#2193).
