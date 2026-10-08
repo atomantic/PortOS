@@ -20,6 +20,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ChildProcess } from '../lib/childProcess.js';
+import { pinPlatform } from '../lib/testHelper.js';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -731,7 +732,7 @@ describe('pauseAgent', () => {
 // `promisify(exec)` resolves `{ stdout }`) and a temporary win32 platform.
 
 describe('getAgentProcessStats — Windows tasklist parsing', () => {
-  const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+  let restorePlatform;
   const statsFor = async (stdout, pid = 12345) => {
     execMock.mockImplementation((_cmd, cb) => cb(null, { stdout, stderr: '' }));
     activeAgents.set('agent-1', { pid });
@@ -741,11 +742,11 @@ describe('getAgentProcessStats — Windows tasklist parsing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     activeAgents.clear();
-    Object.defineProperty(process, 'platform', { value: 'win32' });
+    restorePlatform = pinPlatform('win32');
   });
 
   afterEach(() => {
-    Object.defineProperty(process, 'platform', realPlatform);
+    restorePlatform();
     activeAgents.clear();
   });
 
