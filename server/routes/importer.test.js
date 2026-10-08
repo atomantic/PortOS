@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import importerRoutes from './importer.js';
-import { ERR_VALIDATION, ERR_LOCKED, ERR_PARTIAL_COMMIT_ISSUES, IMPORTER_SOURCE_CHAR_LIMIT } from '../services/importer.js';
+import {
+  ERR_VALIDATION, ERR_LOCKED, ERR_PARTIAL_COMMIT_ISSUES, ERR_IMPORT_IN_PROGRESS, IMPORTER_SOURCE_CHAR_LIMIT,
+} from '../services/importer.js';
 import * as universeSvc from '../services/universeBuilder.js';
 import * as seriesSvc from '../services/pipeline/series.js';
 import { ARC_ROLES, ARC_SHAPE_IDS } from '../lib/storyArc.js';
@@ -206,12 +208,8 @@ describe('POST /api/importer/commit', () => {
     expect(res.body.code).toBe(ERR_VALIDATION);
   });
 
-  it('returns 409 when the service throws ERR_LOCKED', async () => {
-    const err = Object.assign(
-      new Error('Series "X" has a locked arc — commit refused.'),
-      { code: ERR_LOCKED },
-    );
-    importerSvc.commitImport.mockRejectedValue(err);
+  it.each([ERR_LOCKED, ERR_IMPORT_IN_PROGRESS])('returns 409 when the service throws %s', async (code) => {
+    importerSvc.commitImport.mockRejectedValue(Object.assign(new Error('commit refused'), { code }));
     const app = buildApp();
     const res = await request(app).post('/api/importer/commit').send({
       universeId: 'uni-1',
@@ -222,7 +220,7 @@ describe('POST /api/importer/commit', () => {
       issues: [{ title: 'I1', arcPosition: 1 }],
     });
     expect(res.status).toBe(409);
-    expect(res.body.code).toBe(ERR_LOCKED);
+    expect(res.body.code).toBe(code);
   });
 
   it('returns 404 when the service throws the universe not-found code', async () => {

@@ -46,6 +46,25 @@ describe('session store', () => {
     });
   });
 
+  it('keeps an unfinished import\'s issue plan until the commit lands, then drops it (#10762)', async () => {
+    const id = idFor(2);
+    const plan = {
+      payloadHash: 'hash-1',
+      items: [{ issueId: 'iss-a', arcPosition: 1, seasonId: 'sea-1' }, { issueId: 'iss-b', arcPosition: 2, seasonId: null }],
+      remappedIssues: [],
+    };
+    await recordImportProgress(id, { seriesId: 'ser-1', status: 'arc-persisted', plan });
+    expect((await getImportSession(id)).plan).toEqual(plan);
+
+    // A malformed item voids the plan rather than mis-pairing items with proposals.
+    await recordImportProgress(id, { plan: { ...plan, items: [plan.items[0], { arcPosition: 2 }] } });
+    expect((await getImportSession(id)).plan).toBeNull();
+
+    await recordImportProgress(id, { plan });
+    await recordImportProgress(id, { status: 'committed', createdIssueIds: ['iss-a', 'iss-b'] });
+    expect(await getImportSession(id)).toMatchObject({ status: 'committed', plan: null });
+  });
+
   it('keeps only the newest sessions, evicting the oldest first', async () => {
     const seeded = Object.fromEntries(Array.from({ length: IMPORT_SESSION_MAX }, (_, i) => [idFor(i), {
       seriesId: 'ser-1', status: 'committed', createdIssueIds: ['iss-1'],

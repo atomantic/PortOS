@@ -419,7 +419,7 @@ export default function Importer() {
     const result = await commitImport(payload, { silent: true }).catch((err) => {
       if (err?.code === 'IMPORTER_PARTIAL_COMMIT_ISSUES' && err?.context?.arcAlreadyPersisted) {
         setArcAlreadyPersisted(true);
-        toast.warning('Arc + seasons saved; issues failed and were rolled back. Retry to re-create the issues only — the arc won\'t be re-sent.');
+        toast.warning('Arc + seasons saved; the issues did not finish. Retry to create the remaining issues without duplicating any — the arc won\'t be re-sent.');
       }
       throw err;
     });
