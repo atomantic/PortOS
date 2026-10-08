@@ -112,6 +112,30 @@ import { isPlainObject } from './objects.js';
 import { escapeRegExp } from './textUtils.js';
 
 export const HOST_CONTROL_ROUTES = Object.freeze([
+  // Universe Builder authoring (#10669) can dispatch tool-capable text/vision
+  // providers or image agents, including API-first CLI/TUI fallback. Authorize
+  // the whole operation before image resolution, stores, runs or queue writes.
+  // Record CRUD, reviewed proposal application, merge preview/commit, locks,
+  // description backfill, deletions and reads remain data-only operations.
+  'POST /api/universe-builder/expand',
+  'POST /api/universe-builder/generate-variations',
+  'POST /api/universe-builder/refine-prompts',
+  'POST /api/universe-builder/:id/promote-variation',
+  'POST /api/universe-builder/:id/auto-sort',
+  'POST /api/universe-builder/:id/extract-canon',
+  'POST /api/universe-builder/:id/characters/:entryId/refine',
+  'POST /api/universe-builder/:id/characters/:entryId/expand',
+  'POST /api/universe-builder/:id/characters/integrity/review',
+  'POST /api/universe-builder/:id/characters/:entryId/augment',
+  'POST /api/universe-builder/:id/characters/differentiate-cast',
+  'POST /api/universe-builder/merge/ai-resolve',
+  'POST /api/universe-builder/describe-from-images',
+  'POST /api/universe-builder/:id/characters/:entryId/expand-from-images',
+  'POST /api/universe-builder/:id/canon/:kind/:entryId/correct-from-image',
+  'POST /api/universe-builder/analyze-style-reference',
+  'POST /api/universe-builder/:id/render',
+  'POST /api/universe-builder/:id/characters/:entryId/render-reference-sheet',
+
   // Database cutover stops/restarts PortOS under PM2 and rewrites .env (#8851).
   'POST /api/database/maintenance/cutover',
   'POST /api/database/maintenance/recover',
