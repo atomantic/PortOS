@@ -69,6 +69,7 @@ it('keeps the paste action beside a compact, scrollable raw-text editor', async 
   const submit = screen.getByRole('button', { name: 'Ingest' });
   expect(textarea).toHaveAttribute('rows', '6');
   expect(textarea.className).toContain('overflow-y-auto');
+  expect(textarea.className).toContain('sm:min-h-72');
   expect(submit.closest('div').parentElement).toContainElement(submit);
   expect(screen.getAllByRole('button', { name: 'Ingest' })).toHaveLength(1);
   expect(submit).toBeDisabled();

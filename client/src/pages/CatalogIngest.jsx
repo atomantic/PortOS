@@ -781,7 +781,7 @@ export default function CatalogIngest() {
                   </div>
                   <textarea id="ingest-text" maxLength={babble ? 30000 : undefined} rows={6} value={rawText} onChange={(e) => setRawText(e.target.value)}
                     placeholder="Paste prose, scene notes, character sketches — anything you want catalogued."
-                    className="w-full min-h-36 max-h-[55vh] sm:max-h-[70vh] resize-y overflow-y-auto px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm font-mono focus:outline-none focus:border-port-accent" />
+                    className="w-full min-h-36 max-h-[55vh] sm:min-h-72 sm:max-h-[70vh] resize-y overflow-y-auto px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm font-mono focus:outline-none focus:border-port-accent" />
                   <p className="text-xs text-gray-500 mt-1">{formatCount(rawText.length)}{babble ? ' / 30,000 chars' : ' chars'}</p>
                 </div>
                 {babble && <>
