@@ -30,7 +30,12 @@ describe('CompositionPreviewPlayer', () => {
     const send = (data) => act(async () => {
       window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow, data }));
     });
-    await send({ type: 'portos-mv:loaded' });
+    // findByTitle can resolve before React flushes the passive effect that attaches the message listener, so a
+    // `loaded` sent that early is dropped; repeat it until the player answers with its manifest.
+    await waitFor(async () => {
+      await send({ type: 'portos-mv:loaded' });
+      expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: 'portos-mv:manifest' }), '*');
+    });
     const ask = async (key) => {
       await send({ type: 'portos-mv:request', key });
       await waitFor(() => expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: 'portos-mv:asset', key }), '*'));
