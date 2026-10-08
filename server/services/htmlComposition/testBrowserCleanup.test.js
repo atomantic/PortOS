@@ -383,6 +383,44 @@ describe('owned test Chrome cleanup', () => {
     vi.restoreAllMocks();
   });
 
+  it('retains no-stderr startup evidence when both owned termination and data cleanup fail', async () => {
+    const proc = startingChild();
+    proc.stderr.destroy = vi.fn(() => { throw new Error('/private/example-secret'); });
+    proc.kill.mockImplementation(() => true); // Neither signal produces an exit.
+    const observeProcess = () => 'os=linux child=uninterruptible worker=runnable';
+    const startup = _waitForTestChrome(proc, 20000, undefined, { observeProcess }).catch(error => error);
+    await vi.advanceTimersByTimeAsync(20000);
+    const startupError = await startup;
+    expect(startupError.message).toContain('did not start within 20000ms; no stderr');
+    const cleanup = vi.fn(() => { throw Object.assign(new Error('/private/example-secret'), { code: 'EACCES' }); });
+    const result = _cleanupTestBrowser({ proc, cleanup, startupError, observeProcess }).catch(error => error);
+    await vi.advanceTimersByTimeAsync(10000);
+    const error = await result;
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error.cause).toBe(startupError);
+    expect(error.errors[0]).toBe(startupError);
+    expect(error.message).toContain('did not start within 20000ms; no stderr; process: os=linux child=uninterruptible');
+    expect(error.message).toContain('child termination exceeded 10000ms deadline');
+    expect(error.message).toContain('stderr cleanup failed (unknown); Test Chrome temporary data cleanup failed (EACCES)');
+    expect(error.message).not.toContain('example-secret');
+    expect(proc.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+    expect(cleanup).toHaveBeenCalledOnce();
+    expectStartupClean(proc);
+  });
+
+  it('rethrows the original startup failure after successful owned cleanup', async () => {
+    const proc = child();
+    const startupError = new Error('Test Chrome did not start within 20000ms; no stderr');
+    const cleanup = vi.fn();
+    const result = _cleanupTestBrowser({ proc, cleanup, startupError });
+    const rejected = expect(result).rejects.toBe(startupError);
+    await vi.advanceTimersByTimeAsync(3000);
+    await rejected;
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(proc.stderr.destroy).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('does not wait for a signal-exited child whose exit event already fired', async () => {
     const proc = child();
     proc.signalCode = 'SIGTERM';
