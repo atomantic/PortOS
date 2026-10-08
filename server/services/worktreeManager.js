@@ -953,9 +953,10 @@ async function adoptWorktreeUnlocked(agentId, sourceWorkspace, existingWorktreeP
         const status = (await execGit(['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none'], existingWorktreePath)).stdout.trim();
         const listed = await listWorktrees(sourceWorkspace);
         const holder = listed.find(entry => pathsEqual(entry.path, existingWorktreePath));
-        if (currentBranch !== branchName || !holder || holder.locked || status) {
-          throw Object.assign(new Error('Retained Deep submodule workspace is changed, locked or ambiguous; preserve it for explicit recovery'), { code: 'DEEP_RESUME_PRESERVED' });
-        }
+        const refusal = currentBranch !== branchName ? 'branch identity changed'
+          : !holder ? 'worktree registration could not be matched'
+            : holder.locked ? 'worktree is locked' : status ? 'workspace has uncommitted or nested changes' : null;
+        if (refusal) throw new Error(`Retained Deep submodule ${refusal}; preserve it for explicit recovery`);
         await execGit(['checkout', '--detach', head], existingWorktreePath);
         const branchHead = (await execGit(['rev-parse', `refs/heads/${branchName}`], sourceWorkspace)).stdout.trim();
         if (branchHead !== head) throw new Error('Deep resume branch changed during handoff; preserved old workspace');

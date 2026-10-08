@@ -82,8 +82,9 @@ it('expands a fresh submodule at its gitlink and refuses to reset retained submo
   expect(ledger.scope.capabilities.submodules).toEqual([]);
   expect(ledger.scope.files.some(f => f.path === 'lib/child/nested.js' && f.kind === 'blob')).toBe(true);
   fault.rejectAdd = true;
-  await expect(adoptWorktree('agent-failed', repo, workspacePath, worktree.branchName, { deepResume: true }))
-    .rejects.toMatchObject({ code: 'DEEP_RESUME_PRESERVED', message: expect.stringContaining('Synthetic add failure') });
+  const failedHandoff = await adoptWorktree('agent-failed', repo, workspacePath, worktree.branchName, { deepResume: true }).catch(error => error);
+  expect(failedHandoff.code).toBe('DEEP_RESUME_PRESERVED');
+  expect(failedHandoff.message).toContain('Synthetic add failure');
   expect(await readFile(join(workspacePath, 'lib/child/nested.js'), 'utf8')).toContain('nested = true');
   fault.rejectAdd = false;
   // The preserved detached tree can reattach its still-unoccupied branch for a
