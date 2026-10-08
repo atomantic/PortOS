@@ -1,5 +1,5 @@
 import { it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import CatalogIngest from './CatalogIngest';
 import { createCatalogScrap, extractFromCatalogScrap, pruneCatalogScrap, commitCatalogScrapDraft, ingestCatalogBrain } from '../services/apiCatalog';
@@ -59,6 +59,19 @@ it('carries the Brain-selected provider and model into a creative inbox handoff'
     { providerOverride: 'ollama', modelOverride: 'example-model' },
     expect.anything(),
   ));
+});
+
+it('keeps the paste action beside a compact, scrollable raw-text editor', async () => {
+  render(<MemoryRouter initialEntries={['/catalog/ingest']}><CatalogIngest /></MemoryRouter>);
+  await act(async () => {});
+
+  const textarea = screen.getByLabelText(/Raw text/);
+  const submit = screen.getByRole('button', { name: 'Ingest' });
+  expect(textarea).toHaveAttribute('rows', '6');
+  expect(textarea.className).toContain('overflow-y-auto');
+  expect(submit.closest('div').parentElement).toContainElement(submit);
+  expect(screen.getAllByRole('button', { name: 'Ingest' })).toHaveLength(1);
+  expect(submit).toBeDisabled();
 });
 
 // Regression (#7615): the brain-bridge handoff runs from the mount effect, so

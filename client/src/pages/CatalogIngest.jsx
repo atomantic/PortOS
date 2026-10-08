@@ -771,10 +771,17 @@ export default function CatalogIngest() {
                     className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm focus:outline-none focus:border-port-accent" />
                 </div>
                 <div>
-                  <label htmlFor="ingest-text" className="block text-sm font-medium mb-1 text-white">{babble ? 'Babble freely — no need to organize or judge yet' : 'Raw text'}</label>
-                  <textarea id="ingest-text" maxLength={babble ? 30000 : undefined} rows={12} value={rawText} onChange={(e) => setRawText(e.target.value)}
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                    <label htmlFor="ingest-text" className="block text-sm font-medium text-white">{babble ? 'Babble freely — no need to organize or judge yet' : 'Raw text'}</label>
+                    <button type="submit" disabled={submitting || !rawText.trim() || (babble && (picker.loading || !picker.selectedProviderId || !picker.selectedModel))}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium">
+                      {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                      {submitting ? 'Working…' : babble ? 'Prune into suggestions' : 'Ingest'}
+                    </button>
+                  </div>
+                  <textarea id="ingest-text" maxLength={babble ? 30000 : undefined} rows={6} value={rawText} onChange={(e) => setRawText(e.target.value)}
                     placeholder="Paste prose, scene notes, character sketches — anything you want catalogued."
-                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm font-mono focus:outline-none focus:border-port-accent" />
+                    className="w-full min-h-36 max-h-[55vh] sm:max-h-[70vh] resize-y overflow-y-auto px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm font-mono focus:outline-none focus:border-port-accent" />
                   <p className="text-xs text-gray-500 mt-1">{formatCount(rawText.length)}{babble ? ' / 30,000 chars' : ' chars'}</p>
                 </div>
                 {babble && <>
@@ -785,13 +792,6 @@ export default function CatalogIngest() {
                     onModelChange={(model) => { picker.setSelectedModel(model); setEffort(''); }}
                     effort={effort} onEffortChange={setEffort} loading={picker.loading} />
                 </>}
-                <div className="flex items-center justify-end">
-                  <button type="submit" disabled={submitting || !rawText.trim() || (babble && (picker.loading || !picker.selectedProviderId || !picker.selectedModel))}
-                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium">
-                    {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                    {submitting ? 'Working…' : babble ? 'Prune into suggestions' : 'Ingest'}
-                  </button>
-                </div>
               </form>
             )}
           </>
