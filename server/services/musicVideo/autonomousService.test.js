@@ -344,6 +344,21 @@ describe('startAutonomousVideo', () => {
       expect(runOf()).toMatchObject({ status: 'running', output: expect.objectContaining({ productionRunId: 'mvpr-manual', productionDone: true, renderJobId: 'render-1' }) });
     });
 
+    it('adopts the completed run\'s own current final render on resume instead of rendering again (#10563)', async () => {
+      const { captureMusicVideoEvidence } = await import('../../lib/musicVideoDependencies.js');
+      await delegated();
+      await service.cancelAutonomousVideo('mv-auto');
+      const project = store.get('mv-auto');
+      const directory = 'music-video/mv-auto/composition/example';
+      project.composition = { ...project.composition, document: { directory } };
+      project.productionRuns = [{ id: 'mvpr-1', status: 'completed', createdAt: later(), documentCheckpoint: { directory }, finalRender: { status: 'completed', jobId: 'production-render', attemptId: 'attempt-1' } }];
+      project.renderHistoryId = 'production-render';
+      project.renderDependencies = captureMusicVideoEvidence(project);
+      await service.resumeAutonomousVideo('mv-auto');
+      expect(doubles.renderVideo).not.toHaveBeenCalled();
+      expect(runOf()).toMatchObject({ status: 'completed', output: expect.objectContaining({ productionDone: true, renderJobId: 'production-render' }) });
+    });
+
     it('resumes a parked run with raised limits, and a model swap continues that run with the new pool', async () => {
       await delegated();
       store.get('mv-auto').productionRuns[0].status = 'limit-reached';
