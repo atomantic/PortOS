@@ -66,7 +66,8 @@ describe('native setup inherited endpoint', () => {
 
 // Run the actual CLI body with synthetic configuration and subprocesses. No
 // imports execute, no install .env is read, and no database can be contacted.
-async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady = true, running = true, hostBinding = '127.0.0.1', hostPort = 5561, dotEnv = {}, exportedMode, exportedEnv = {} } = {}) {
+async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady = true, running = true, hostBinding = '127.0.0.1', hostPort = 5561, dotEnv = {}, exportedMode, exportedEnv = {}, hostAuth = 'ok', pgMissing = false } = {}) {
+  const clients = [];
   const savedEnv = { PGMODE: mode, EXAMPLE_SETTING: 'preserved', ...dotEnv };
   const initialEnv = { ...savedEnv };
   const calls = [];
@@ -86,6 +87,15 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
     await runInNewContext(`(async () => {${source}\n})()`, {
       scriptUrl: new URL('./setup-db.js', import.meta.url).href, dirname, join, fileURLToPath,
       parseNativePort, parseDockerPort,
+      createRequire: () => (name) => {
+        if (name !== 'pg' || pgMissing) throw new Error("Cannot find module 'pg'");
+        return { Client: class {
+          constructor(config) { this.config = config; this.ended = false; clients.push(this); }
+          async connect() { if (hostAuth === 'unreachable') throw new Error('connect ECONNREFUSED'); if (hostAuth === 'badpass') throw new Error('password authentication failed for user "portos"'); }
+          async query() { return { rows: hostAuth === 'noschema' ? [] : [{ ok: 1 }] }; }
+          async end() { this.ended = true; }
+        } };
+      },
       parseEnvFile: () => savedEnv,
       upsertEnvKey: (_path, key, value) => { savedEnv[key] = value; },
       createInterface: () => { throw new Error('Setup must not prompt to switch backends'); },
@@ -122,7 +132,7 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
     if (error !== exitSignal) throw error;
   }
   expect(savedEnv).toEqual(initialEnv);
-  return { exitCode, calls, childEnvs, errors, logs, container, volumeRecords, recreations };
+  return { clients, exitCode, calls, childEnvs, errors, logs, container, volumeRecords, recreations };
 }
 
 describe('setup preserves the selected database', () => {
@@ -191,6 +201,34 @@ describe('setup preserves the selected database', () => {
     expect(result.recreations).toBe(0);
     expect(result.calls.some((call) => call.includes('pg_isready'))).toBe(true);
     expect(result.calls.some((call) => call.includes('psql'))).toBe(true);
+  });
+
+  it('verifies the exact configured host endpoint and closes the connection', async () => {
+    const result = await runSetup({ dotEnv: { PGHOST: 'db.example.invalid', PGPORT_DOCKER: '5599', PGUSER: 'alice', PGDATABASE: 'exampledb', PGPASSWORD: 'example-secret' } });
+    expect(result.exitCode).toBe(0);
+    expect(result.clients).toHaveLength(1);
+    expect(result.clients[0].config).toMatchObject({ host: 'db.example.invalid', port: 5599, user: 'alice', database: 'exampledb', password: 'example-secret' });
+    expect(result.clients[0].ended).toBe(true);
+  });
+
+  it.each([
+    ['badpass', 'password authentication failed'],
+    ['unreachable', 'ECONNREFUSED'],
+    ['noschema', 'base schema'],
+  ])('fails setup when container probes pass but host check is %s', async (hostAuth, message) => {
+    const result = await runSetup({ hostAuth, dotEnv: { PGPASSWORD: 'example-secret' } });
+    expect(result.exitCode).toBe(1);
+    expect(result.errors.join('\n')).toContain(message);
+    expect(result.errors.join('\n')).not.toContain('example-secret');
+    expect(result.logs.join('\n')).not.toContain('PostgreSQL ready');
+    expect(result.clients[0].ended).toBe(true);
+    expect(result.container.volumeRecords).toEqual(['example persisted record']);
+  });
+
+  it('fails with an install hint when the pg driver cannot be resolved', async () => {
+    const result = await runSetup({ pgMissing: true });
+    expect(result.exitCode).toBe(1);
+    expect(result.errors.join('\n')).toContain('npm run install:all');
   });
 
   it.each([
