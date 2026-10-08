@@ -8,7 +8,7 @@
  * sequence whose call count is the review spend).
  */
 
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import express from 'express';
 import { createHash } from 'crypto';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
@@ -131,6 +131,7 @@ const { assertRevisionOpen } = await import('../services/musicVideo/revisionServ
 const { musicVideoEvents } = await import('../services/musicVideo/events.js');
 const { runPromptThroughProvider } = await import('../services/promptRunner.js');
 const { mediaJobEvents } = await import('../services/mediaJobQueue/index.js');
+const { __testing: autoReviewBackground } = await import('../services/musicVideo/autoReviewService.js');
 
 const app = express();
 app.use(express.json());
@@ -201,6 +202,10 @@ beforeEach(() => {
   h.temporalCalls.length = 0;
   vi.clearAllMocks();
 });
+// A run advances in the background; let it go quiet before the next test
+// resets the shared doubles, so one test's late step can never land in the
+// next test's queue (#10467).
+afterEach(() => autoReviewBackground.settleBackground());
 afterAll(cleanupTempDataRoots);
 
 describe('opt-in automatic review/retries (#8988)', () => {
@@ -285,7 +290,7 @@ describe('opt-in automatic review/retries (#8988)', () => {
     // The take the board already paid for still lands — but a stopped run
     // does not advance on it: no re-render, no review.
     await landTake(p.id, 's2', 'clip-2b');
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await autoReviewBackground.settleBackground();
     expect(h.procs).toHaveLength(1);
 
     // Resume: the revision renders (its section already holds a take — no
