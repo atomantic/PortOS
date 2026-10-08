@@ -178,9 +178,11 @@ vi.mock('./providers.js', async () => {
 });
 vi.mock('./settings.js', () => mocks.settings);
 
-// child_process is mocked so the install/upgrade paths (spawn-based streaming +
-// execFile-based presence checks) are drivable. Defaults are benign for the rest
-// of the suite: spawn closes clean, execFile rejects (→ commandExists() false).
+// child_process is mocked so the install/upgrade paths (spawn-based streaming)
+// are drivable, and commandExists is driven by the `cp.execFile` callback so the
+// brew/lms presence checks stay scriptable apart from those streamed spawns.
+// Defaults are benign for the rest of the suite: spawn closes clean, execFile
+// rejects (→ commandExists() false).
 const cp = vi.hoisted(() => ({
   defaults: {
     spawn: () => {
@@ -199,6 +201,10 @@ const cp = vi.hoisted(() => ({
 vi.mock('../lib/childProcess.js', () => ({
   spawn: (...a) => cp.spawn(...a),
   execFile: (cmd, args, opts, cb) => cp.execFile(cmd, args, opts, cb),
+}));
+vi.mock('../lib/commandExists.js', () => ({
+  commandExists: (cmd, args = ['--version']) =>
+    new Promise((resolve) => cp.execFile(cmd, args, {}, (err) => resolve(!err))),
 }));
 
 // Build a fake `brew` child that streams `lines`, then closes with `code`.
