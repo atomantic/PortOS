@@ -927,8 +927,10 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
       .finally(() => isolatedCwd && rm(isolatedCwd, { recursive: true, force: true }))
     // A failed headless command request is a configuration fault, not a verdict.
     // Replace vendor prose with a bounded remedy before health or bridge output.
-    if (result.error || result.partial || !result.text?.trim()) {
-      const code = reviewerCommandPermissionFailureCode(result.error || result.stderr)
+    if (!isTimeoutFailure(result.error) && (result.error || result.partial || !result.text?.trim())) {
+      // The CLI runner truncates error to a stderr prefix; the full stderr can
+      // carry the explicit refusal after that prefix. A timeout stays transient.
+      const code = reviewerCommandPermissionFailureCode(result.error) || reviewerCommandPermissionFailureCode(result.stderr)
       if (code) return {
         ok: false,
         code,

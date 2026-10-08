@@ -153,20 +153,22 @@ describe('configured provider reviewers', () => {
   it('returns a bounded configuration fault for an explicit headless command refusal without a verdict', async () => {
     getProviderById.mockResolvedValue({ ...provider, type: 'cli', command: 'agy' });
     const diagnostic = 'jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied.';
-    for (const failure of [{ error: `${diagnostic} Synthetic vendor advice follows.` }, { stderr: diagnostic, text: '', partial: false }, { stderr: diagnostic, text: 'incomplete', partial: true }]) {
+    for (const failure of [{ error: `${diagnostic} Synthetic vendor advice follows.` }, { error: 'Synthetic log prelude'.repeat(30), stderr: diagnostic }, { stderr: diagnostic, text: '', partial: false }, { stderr: diagnostic, text: 'incomplete', partial: true }]) {
       runCliProviderPrompt.mockResolvedValue({ ...failure, stderr: `${diagnostic}\nsynthetic-private-path-or-credential` });
       const result = await runLocalCodeReview({ backend, diff: 'example diff' });
       expect(result).toEqual({ ok: false, code: 'REVIEWER_COMMAND_PERMISSION_DENIED', error: expect.stringContaining('supported tool-free vendor configuration') });
       expect(isReviewerConfigFault(result.code)).toBe(true);
       expect(JSON.stringify(result)).not.toContain('synthetic-private');
     }
-    expect(runCliProviderPrompt).toHaveBeenCalledTimes(3);
+    expect(runCliProviderPrompt).toHaveBeenCalledTimes(4);
     expect(callProviderAISimple).not.toHaveBeenCalled();
   });
 
   it.each(['permission denied', 'headless mode cannot prompt for permission', 'Reviewer returned no content.', 'Provider call timed out after 1000ms', 'connection reset'])('keeps generic CLI failure transient: %s', async error => {
     getProviderById.mockResolvedValue({ ...provider, type: 'cli', command: 'agy' });
-    runCliProviderPrompt.mockResolvedValue({ error });
+    runCliProviderPrompt.mockResolvedValue({ error, ...(error.includes('timed out') ? {
+      stderr: 'jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied.',
+    } : {}) });
     const result = await runLocalCodeReview({ backend, diff: 'example diff', timeoutMs: 1000 });
     expect(result.ok).toBe(false);
     expect(result.error).toContain(error.includes('timed out') ? 'timed out after 1000ms' : error);
