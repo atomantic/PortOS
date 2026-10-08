@@ -319,17 +319,24 @@ async function terminateOwnedChrome(proc, observeProcess) {
 
 // Test-only lifecycle boundary. Disconnect failure must not strand the owned
 // child, and neither failure may prevent removal of temporary test data.
-export async function _cleanupTestBrowser({ browser, proc, cleanup, observeProcess = _testChromeProcessFacts }) {
-  const errors = [];
+// A startup failure remains primary even if teardown also fails.
+export async function _cleanupTestBrowser({ browser, proc, cleanup, startupError, observeProcess = _testChromeProcessFacts }) {
+  const errors = startupError ? [startupError] : [];
+  const cleanupFailure = (stage, error) => {
+    const code = /^[A-Z0-9_]{1,32}$/.test(error?.code) ? error.code : 'unknown';
+    errors.push(new Error(`Test Chrome ${stage} cleanup failed (${code})`));
+  };
   try {
     await withinDeadline(() => browser?.close(), 5000, 'browser disconnect',
       () => `; process: ${describeProcess(proc, observeProcess)}`).catch(error => errors.push(error));
     await terminateOwnedChrome(proc, observeProcess).catch(error => errors.push(error));
   } finally {
-    proc?.stderr?.destroy();
-    await cleanup();
+    try { proc?.stderr?.destroy(); } catch (error) { cleanupFailure('stderr', error); }
+    try { await cleanup(); } catch (error) { cleanupFailure('temporary data', error); }
   }
-  if (errors.length) throw new AggregateError(errors, errors.map(error => error.message).join('; '));
+  if (startupError && errors.length === 1) throw startupError;
+  if (errors.length) throw new AggregateError(errors, errors.map(error => error.message).join('; '),
+    startupError ? { cause: startupError } : undefined);
 }
 
 // Wrap the REAL encoder only in browser tests. Never print paths, page source,

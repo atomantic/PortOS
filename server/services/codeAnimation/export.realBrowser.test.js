@@ -120,17 +120,14 @@ describe.skipIf(!chrome || !ffmpeg || !ffprobe)('Code Animation frame-exact expo
       endpoint = new URL(ws).origin.replace('ws:', 'http:');
       browser = await chromium.connectOverCDP(endpoint);
     } catch (error) {
-      try {
-        await _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots });
-        proc = undefined;
-      } catch (cleanupError) {
-        throw new AggregateError([error, cleanupError], `${error.message}; cleanup: ${cleanupError.message}`);
-      }
-      throw error;
+      // Retain the owned handle for afterAll if termination itself fails.
+      await _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots, startupError: error });
     }
-  }, 30000);
+    // Enclose the existing startup (20s), disconnect (5s) and owned-child
+    // termination (10s) budgets without cutting off evidence.
+  }, 40000);
 
-  afterAll(() => _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots }));
+  afterAll(() => _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots }), 20000);
 
   it('exports duration × fps unique frames from a slow renderFrame, matching direct screenshots, as BT.709 H.264 with the controls hidden', async () => {
     state.html = FIXTURE;

@@ -80,17 +80,18 @@ describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages w
       endpoint = new URL(ws).origin.replace('ws:', 'http:');
       browser = await chromium.connectOverCDP(endpoint);
     } catch (error) {
-      await _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots });
-      proc = undefined;
-      throw error;
+      // Retain the owned handle for afterAll if termination itself fails.
+      await _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots, startupError: error });
     }
-  }, 30000);
+    // Enclose the existing startup (20s), version probe (up to 3s), disconnect
+    // (5s) and owned-child termination (10s) budgets without cutting off evidence.
+  }, 40000);
 
   afterAll(async () => {
     if (projectId) await query('DELETE FROM code_animation_projects WHERE id = $1', [projectId]);
     await _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots });
     await close();
-  });
+  }, 20000);
 
   it('turns a frozen original into measured findings, a repaired revision and a real MP4, with a real style frame and pilot', async () => {
     projectId = (await createProductionProject({ manifest })).id;
