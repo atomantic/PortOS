@@ -142,8 +142,9 @@ const PEER_RELAY_ALLOWED_EVENTS = new Set(['cos:subscribe', 'cos:unsubscribe']);
 // LAN/tailnet socket is refused (#8708). Every `shell:*` and `iterm:*` event
 // is included by prefix; read-only subscriptions stay open to remote sockets.
 // `error:recover` queues a recovery agent that runs shell commands (#8716).
+// Detection can bootstrap a PM2 daemon while inspecting an app-specific home.
 // The HTTP twin of this set is HOST_CONTROL_ROUTES in lib/hostControlRoutes.js.
-const HOST_CONTROL_SOCKET_EVENTS = new Set(['app:update', 'app:standardize', 'app:deploy', 'standardize:start', 'error:recover']);
+const HOST_CONTROL_SOCKET_EVENTS = new Set(['app:update', 'app:standardize', 'app:deploy', 'standardize:start', 'detect:start', 'error:recover']);
 const HOST_CONTROL_SOCKET_PREFIXES = ['shell:', 'iterm:'];
 const isHostControlSocketEvent = (event) => typeof event === 'string'
   && (HOST_CONTROL_SOCKET_EVENTS.has(event) || HOST_CONTROL_SOCKET_PREFIXES.some((prefix) => event.startsWith(prefix)));
@@ -155,6 +156,7 @@ const hostControlRefusal = (event, payload) => {
   if (event.startsWith('shell:')) return ['shell:error', { ...refusal, sessionId: payload?.sessionId }];
   if (event.startsWith('iterm:')) return ['iterm:error', { ...refusal, id: payload?.id }];
   if (event === 'standardize:start') return ['standardize:complete', { success: false, ...refusal }];
+  if (event === 'detect:start') return ['detect:complete', { success: false, ...refusal }];
   return [`${event}:error`, { ...refusal, appId: payload?.appId }];
 };
 
