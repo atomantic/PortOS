@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { _cleanupTestBrowser, _testChromeProcessFacts, _waitForTestChrome, _withTestCaptureDiagnostics } from './testBrowserCleanup.js';
+import { _cleanupTestBrowser, _describeTestChromeStartup, _testChromeProcessFacts, _waitForTestChrome, _withTestCaptureDiagnostics } from './testBrowserCleanup.js';
 
 function child() {
   const proc = new EventEmitter();
@@ -205,6 +205,99 @@ describe('test Chrome startup', () => {
     await expect(ready).rejects.not.toThrow('example-secret');
     expectStartupClean(proc);
     rmSync(root, { recursive: true });
+  });
+
+  it('bounds a version probe that never exits so the original startup failure reaches owned cleanup', async () => {
+    const proc = startingChild();
+    proc.stderr.destroy = vi.fn();
+    proc.pid = 123;
+    const probe = startingChild();
+    probe.pid = 456;
+    probe.stdout = new EventEmitter();
+    probe.stdout.destroy = vi.fn();
+    probe.unref = vi.fn();
+    probe.kill.mockImplementation(() => true); // Even SIGKILL does not settle it.
+    const spawnVersion = vi.fn(() => probe);
+    const observeProcess = vi.fn(() => 'os=linux child=uninterruptible');
+    const ready = _waitForTestChrome(proc, 20000, {
+      source: 'system-google-chrome', executable: '/private/example-secret/google-chrome',
+    }, { spawnVersion, observeProcess });
+    let failure;
+    const settled = ready.catch(error => { failure = error; });
+    await vi.advanceTimersByTimeAsync(19999);
+    expect(spawnVersion).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(observeProcess).toHaveBeenCalledExactlyOnceWith(proc);
+    expect(spawnVersion).toHaveBeenCalledExactlyOnceWith('/private/example-secret/google-chrome', ['--version'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    // The startup verdict is already decided. Late CDP/error events cannot
+    // resurrect it or escape while the independent version probe is pending.
+    proc.emit('error', new Error('example-secret'));
+    proc.emit('error', new Error('another example-secret'));
+    proc.stderr.emit('data', Buffer.from('DevTools listening on ws://example-secret\n'));
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(failure).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(failure).toBeInstanceOf(Error);
+    await settled;
+    expect(failure.message).toContain('did not start within 20000ms; no stderr');
+    expect(failure.message).toContain('kind=google-chrome version=unavailable spawned=no pid=yes state=running');
+    expect(failure.message).toContain('process: os=linux child=uninterruptible');
+    expect(failure.message).not.toContain('example-secret');
+    expect(probe.kill).toHaveBeenCalledExactlyOnceWith('SIGKILL');
+    expect(probe.stdout.destroy).toHaveBeenCalledOnce();
+    expect(probe.unref).toHaveBeenCalledOnce();
+    expect(proc.kill).not.toHaveBeenCalled();
+    expectStartupClean(proc);
+    probe.emit('error', new Error('/private/example-secret'));
+    probe.emit('close', 0);
+    expect(probe.listenerCount('error')).toBe(0);
+    expect(probe.listenerCount('close')).toBe(0);
+    expect(probe.stdout.listenerCount('data')).toBe(0);
+
+    const cleanup = vi.fn();
+    const teardown = _cleanupTestBrowser({ proc, cleanup, startupError: failure });
+    const rejected = expect(teardown).rejects.toBe(failure);
+    await vi.advanceTimersByTimeAsync(3000);
+    await rejected;
+    expect(proc.kill.mock.calls.map(([signal]) => signal)).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(cleanup).toHaveBeenCalledOnce();
+    expectStartupClean(proc);
+  });
+
+  it('accepts only a successful bounded version prefix and retains the pre-probe startup snapshot', async () => {
+    const proc = startingChild();
+    proc.pid = 123;
+    proc.spawnedSeen = true;
+    const describe = () => {
+      const probe = startingChild();
+      probe.stdout = new EventEmitter();
+      const facts = _describeTestChromeStartup(proc, { source: 'playwright', executable: '/private/example-secret/chrome' }, { spawnVersion: () => probe });
+      return { probe, facts };
+    };
+    const success = describe();
+    success.probe.stdout.emit('data', Buffer.from('Google Chrome 154.0.'));
+    success.probe.stdout.emit('data', Buffer.from('8037.57 /private/example-secret\n'));
+    proc.exitCode = 1;
+    success.probe.emit('close', 0);
+    expect(await success.facts).toContain('version=154.0.8037.57 spawned=yes pid=yes state=running');
+
+    const excess = describe();
+    excess.probe.stdout.emit('data', Buffer.from(' '.repeat(8192) + '154.0.8037.57 example-secret'));
+    excess.probe.stdout.emit('data', Buffer.from('154.0.8037.57'));
+    excess.probe.emit('close', 0);
+    expect(await excess.facts).toContain('version=unrecognized');
+    const failed = describe();
+    failed.probe.stdout.emit('data', Buffer.from('154.0.8037.57 example-secret'));
+    failed.probe.emit('close', 1);
+    expect(await failed.facts).toContain('version=unavailable');
+    for (const sample of [success, excess, failed]) {
+      expect(await sample.facts).not.toContain('example-secret');
+      expect(sample.probe.kill).not.toHaveBeenCalled();
+      expect(sample.probe.listenerCount('error')).toBe(0);
+      expect(sample.probe.listenerCount('close')).toBe(0);
+      expect(sample.probe.stdout.listenerCount('data')).toBe(0);
+    }
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('keeps the startup deadline and clears listeners on timeout', async () => {
