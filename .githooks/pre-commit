@@ -41,7 +41,12 @@ if [ "$run_server" = true ]; then
   # of the developer's live Postgres. server/vitest.config.js now forces it, but
   # a commit fired from a PortOS-spawned shell inherits NODE_ENV=development
   # from PM2, so state it here too — the hook must be correct on its own (#4554).
-  NODE_ENV=test npm test --prefix server
+  # Match the supported local suite budget, preserving a smaller caller cap.
+  case "${PORTOS_PREGATE_MAX_WORKERS:-}" in
+    [1-4]) ;;
+    *) PORTOS_PREGATE_MAX_WORKERS=4 ;;
+  esac
+  PORTOS_PREGATE_MAX_WORKERS="$PORTOS_PREGATE_MAX_WORKERS" NODE_ENV=test npm test --prefix server
 fi
 
 if [ "$run_client" = true ]; then
