@@ -11,14 +11,18 @@ import { musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
  *   - the document's own scripts and stylesheets inlined, and every file its
  *     CSS or `<img>` tags name inlined as a data: URL;
  *   - `window.PORTOS_MV` built exactly as a render builds it (portos-mv.js);
- *   - a bootstrap that receives the large media (scene takes, shipped video
- *     and images) as Blobs the PortOS page fetched on the user's behalf and
- *     posted in (`portos-mv:assets`), exposes them as `window.PORTOS_MV_ASSETS`
- *     (a promise of `{ 'media/…': 'blob:…' }`), maps any relative media `src`
- *     a script sets onto them, and answers `portos-mv:seek` messages.
+ *   - a bootstrap that bridges the large media (scene takes, shipped video and
+ *     images) on demand: the PortOS page posts the manifest of keys
+ *     (`portos-mv:manifest`, resolving `window.PORTOS_MV_ASSETS` to
+ *     `{ 'media/…': 'media/…' }`); the first relative media `src` naming a key
+ *     asks the page for that one file (`portos-mv:request` →
+ *     `portos-mv:asset` with a Blob the page fetched on the user's behalf) and
+ *     then points at its blob: URL. Past PREVIEW_MEDIA_BUDGET_BYTES, URLs idle
+ *     for a few seconds and no longer playing in a media element are revoked.
+ *     It also answers `portos-mv:seek` messages.
  *
- * `assets` lists what the client should fetch and post: `{ key, url }` with
- * `url` a same-origin PortOS path.
+ * `assets` lists what the client may fetch when asked: `{ key, url }` with
+ * `url` a same-origin PortOS path. The page never fetches an unlisted key.
  */
 
 import { readFile } from 'fs/promises';
@@ -35,6 +39,9 @@ import {
 const INLINE_FILE_MAX = 4 * 1024 * 1024;
 const INLINE_TOTAL_MAX = 24 * 1024 * 1024;
 const BRIDGED = new Set(['.mp4', '.mov', '.webm', '.mp3', '.wav', '.png', '.jpg', '.jpeg', '.webp', '.gif']);
+// Blob bytes the preview keeps object URLs for before revoking idle ones (a phone tab's memory is the limit).
+export const PREVIEW_MEDIA_BUDGET_BYTES = 64 * 1024 * 1024;
+const PREVIEW_MEDIA_IDLE_MS = 5000;
 
 export const PREVIEW_CSP = [
   "default-src 'none'", "script-src 'unsafe-inline' data:", "style-src 'unsafe-inline'",
@@ -59,8 +66,12 @@ const BOOTSTRAP = `(() => {
     Object.defineProperty(globalThis, key, { configurable: false, writable: false,
       value: function() { throw new Error(key + ' is disabled in compositions'); } });
   }
-  const map = new Map();
-  let resolved = false;
+  // Media arrives on demand: the parent posts a manifest of bridged keys, and the first relative src
+  // naming one asks the parent for that file alone, so a phone never holds every take and atlas at once.
+  const map = new Map(); // key → { url, size, used, media: Set<WeakRef> } for files received
+  const waiting = new Map(); // key → callbacks awaiting the parent's answer
+  const assigned = new WeakMap(); // element → token of its latest src assignment (a stale answer must not win)
+  let keys = null; // the manifest; null until the parent posts it
   let resolveAssets;
   window.PORTOS_MV_PREVIEW = true;
   window.PORTOS_MV_ASSETS = new Promise((resolve) => { resolveAssets = resolve; });
@@ -72,6 +83,55 @@ const BOOTSTRAP = `(() => {
   // anything else is a relative src whose query and hash are not.
   const keyOf = (value) => { const path = local(value); return path !== value ? String(path) : String(value).replace(/^\\.\\//, '').split(/[?#]/)[0]; };
   const relative = (value) => { value = local(value); return typeof value === 'string' && value && !/^[a-z][a-z0-9+.-]*:/i.test(value) && !value.startsWith('/'); };
+  const post = (message) => parent.postMessage(message, '*');
+  // Received files past this many bytes are revoked once idle and no media element still plays them;
+  // a later src asks the parent again (its own bounded cache usually answers without a refetch).
+  const BUDGET_BYTES = ${PREVIEW_MEDIA_BUDGET_BYTES};
+  const IDLE_MS = ${PREVIEW_MEDIA_IDLE_MS};
+  const inUse = (entry) => {
+    for (const ref of entry.media) {
+      const el = ref.deref();
+      if (el && (el.getAttribute('src') === entry.url || el.currentSrc === entry.url)) return true;
+      entry.media.delete(ref);
+    }
+    return false;
+  };
+  const sweep = () => {
+    let total = 0;
+    for (const entry of map.values()) total += entry.size;
+    const now = performance.now();
+    for (const [key, entry] of [...map].sort((a, b) => a[1].used - b[1].used)) {
+      if (total <= BUDGET_BYTES) return;
+      if (now - entry.used < IDLE_MS || inUse(entry)) continue;
+      URL.revokeObjectURL(entry.url);
+      map.delete(key);
+      total -= entry.size;
+    }
+  };
+  // Calls back with the file's entry (null when the parent has none), asking the parent at most once at a time.
+  const request = (key, callback) => {
+    const entry = map.get(key);
+    if (entry) { entry.used = performance.now(); return callback(entry); }
+    if (!waiting.has(key)) { waiting.set(key, []); post({ type: 'portos-mv:request', key }); }
+    waiting.get(key).push(callback);
+  };
+  const apply = (el, desc, value, token) => {
+    const key = keyOf(value);
+    if (!keys.has(key)) return desc.set.call(el, value);
+    request(key, (entry) => {
+      if (assigned.get(el) !== token) return;
+      if (!entry) return desc.set.call(el, value);
+      if (el instanceof HTMLMediaElement || el instanceof HTMLSourceElement) entry.media.add(new WeakRef(el));
+      desc.set.call(el, entry.url);
+    });
+  };
+  // A promise of a bridged file's blob: URL (null when unavailable), for uses other than a media src.
+  // An idle URL can be revoked later, so ask again for each new use.
+  window.PORTOS_MV_ASSET = (value) => window.PORTOS_MV_ASSETS.then(() => new Promise((resolve) => {
+    const key = keyOf(value);
+    if (!keys.has(key)) return resolve(null);
+    request(key, (entry) => resolve(entry ? entry.url : null));
+  }));
   const pending = [];
   for (const Ctor of [HTMLMediaElement, HTMLImageElement, HTMLSourceElement]) {
     const desc = Object.getOwnPropertyDescriptor(Ctor.prototype, 'src');
@@ -79,15 +139,13 @@ const BOOTSTRAP = `(() => {
     Object.defineProperty(Ctor.prototype, 'src', { configurable: true, enumerable: desc.enumerable,
       get() { return desc.get.call(this); },
       set(value) {
-        if (relative(value)) {
-          const url = map.get(keyOf(value));
-          if (url) return desc.set.call(this, url);
-          if (!resolved) { pending.push([this, desc, value]); return; }
-        }
-        desc.set.call(this, value);
+        const token = {};
+        assigned.set(this, token);
+        if (!relative(value)) return desc.set.call(this, value);
+        if (!keys) { pending.push([this, desc, value, token]); return; }
+        apply(this, desc, value, token);
       } });
   }
-  const post = (message) => parent.postMessage(message, '*');
   const contract = () => {
     const c = globalThis.portosComposition;
     return c ? { durationSec: c.durationSec, fps: c.fps, width: c.width, height: c.height, formats: c.formats || null, layout: typeof c.layout === 'function' } : null;
@@ -96,13 +154,18 @@ const BOOTSTRAP = `(() => {
   addEventListener('message', (event) => {
     const message = event.data;
     if (!message || typeof message !== 'object') return;
-    if (message.type === 'portos-mv:assets' && !resolved) {
-      for (const [key, blob] of Object.entries(message.files || {})) {
-        if (blob instanceof Blob) map.set(String(key).replace(/^\\.\\//, ''), URL.createObjectURL(blob));
-      }
-      resolved = true;
-      for (const [el, desc, value] of pending.splice(0)) desc.set.call(el, map.get(keyOf(value)) || value);
-      resolveAssets(Object.fromEntries(map));
+    if (message.type === 'portos-mv:manifest' && !keys) {
+      keys = new Set((Array.isArray(message.keys) ? message.keys : []).map((key) => String(key).replace(/^\\.\\//, '')));
+      for (const [el, desc, value, token] of pending.splice(0)) if (assigned.get(el) === token) apply(el, desc, value, token);
+      resolveAssets(Object.freeze(Object.fromEntries([...keys].map((key) => [key, key]))));
+    } else if (message.type === 'portos-mv:asset' && waiting.has(String(message.key))) {
+      const key = String(message.key);
+      const callbacks = waiting.get(key);
+      waiting.delete(key);
+      if (message.blob instanceof Blob) map.set(key, { url: URL.createObjectURL(message.blob), size: message.blob.size, used: performance.now(), media: new Set() });
+      const entry = map.get(key) || null;
+      for (const callback of callbacks) callback(entry);
+      sweep();
     } else if (message.type === 'portos-mv:seek') {
       const t = Number(message.t) || 0;
       seeking = seeking.then(() => globalThis.portosComposition?.seek(t)).then(
