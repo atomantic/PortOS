@@ -1,4 +1,5 @@
 /** PostgreSQL owns projects, source revision lineage and import-run records. */
+import { randomUUID } from 'crypto';
 import { query, withTransaction } from '../../lib/db.js';
 import { ServerError } from '../../lib/errorHandler.js';
 
@@ -195,12 +196,22 @@ export async function setAcceptedOutput(projectId, accepted) {
     const { rows } = await client.query(`SELECT ${columns} FROM code_animation_projects WHERE id = $1 FOR UPDATE`, [projectId]);
     if (!rows[0]) throw missing();
     const promoteSource = rows[0].candidateRevisionId === accepted.revisionId;
-    const result = await client.query(`UPDATE code_animation_projects SET data = data || jsonb_build_object('acceptedOutput', $2::jsonb),
+    const result = await client.query(`UPDATE code_animation_projects SET data = data || jsonb_build_object('acceptedOutput', $2::jsonb, 'acceptanceProjection', $5::jsonb),
       accepted_revision_id = CASE WHEN $4 THEN $3 ELSE accepted_revision_id END,
       candidate_revision_id = CASE WHEN $4 THEN NULL ELSE candidate_revision_id END, updated_at = NOW()
-      WHERE id = $1 RETURNING ${columns}`, [projectId, JSON.stringify(accepted), accepted.revisionId, promoteSource]);
+      WHERE id = $1 RETURNING ${columns}`, [projectId, JSON.stringify(accepted), accepted.revisionId, promoteSource,
+      JSON.stringify({ decisionId: randomUUID(), status: 'pending' })]);
     return present(result.rows[0]);
   });
+}
+
+/** A history write only acknowledges the exact decision it projected. */
+export async function acknowledgeAcceptanceProjection(projectId, decisionId) {
+  const { rows } = await query(`UPDATE code_animation_projects
+    SET data = jsonb_set(data, '{acceptanceProjection,status}', '"synced"'::jsonb)
+    WHERE id = $1 AND data->'acceptanceProjection'->>'decisionId' = $2
+    RETURNING ${columns}`, [projectId, decisionId]);
+  return present(rows[0]) || getProjectRecord(projectId);
 }
 
 export async function pageAcceptedOutputs({ limit, offset }) {
