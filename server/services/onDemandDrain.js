@@ -209,11 +209,20 @@ export async function drainOnDemandRequests(ctx, adapter) {
     if (!request) continue;
     let acceptedTaskId = null;
     let preparationFailed = false;
+    let refusalReason = null;
     try {
       // Receipts are immutable while queued; resolve dispatch from the claimed
       // record as well, rather than keeping snapshot objects across ownership.
       targetApp = request.appId ? apps.find(app => app.id === request.appId) : null;
       const cardId = cardIdForRequest(request);
+      // Saved invocation parameters are not a new launch boundary. Old queued
+      // certification work must not silently become an extended audit on boot.
+      if (isLegacyDeepAudit(request.burn?.overrides?.params)) {
+        refusalReason = 'Historical Deep requests are read-only; start a new Deep audit.';
+        await openCard(request);
+        await finishPreflightCard(cardId, { outcome: 'failed', reason: 'deep-audit-historical', note: refusalReason });
+        continue;
+      }
       await openCard(request);
       // Off the queue and into preparation. A task type with its own preflight
       // (pr-reviewer) has no `prepare` step and reports its real first step
@@ -348,7 +357,7 @@ export async function drainOnDemandRequests(ctx, adapter) {
       throw error;
     } finally {
       if (claim) await settleOnDemandRequest(claim, { taskId: acceptedTaskId,
-        reason: acceptedTaskId ? null : preparationFailed ? 'Request preparation failed; resume explicitly.' : 'Request produced no task; resume explicitly.' });
+        reason: acceptedTaskId ? null : refusalReason ?? (preparationFailed ? 'Request preparation failed; resume explicitly.' : 'Request produced no task; resume explicitly.') });
     }
   }
 

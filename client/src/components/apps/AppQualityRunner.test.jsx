@@ -278,5 +278,6 @@ it('explains extended Deep and preserves old evidence without offering legacy re
   expect(screen.queryByRole('button', { name: 'Resume Deep audit' })).not.toBeInTheDocument();
   expect(screen.getByText(/Historical exhaustive audit/)).toBeInTheDocument();
   expect(screen.getByText(/multiple worthwhile issues in one run/)).toBeInTheDocument();
+  expect(screen.getByRole('option', { name: 'Deep — extended investigation and multiple fixes' })).toBeInTheDocument();
   expect(resumeMaintenanceRun).not.toHaveBeenCalled();
 });

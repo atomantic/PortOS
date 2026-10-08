@@ -752,3 +752,28 @@ it('refuses an unrelated active duplicate instead of claiming its delivery', asy
   expect(spawned).toEqual([]);
   expect(settleOnDemandRequest).toHaveBeenLastCalledWith(expect.anything(), { taskId: null, reason: 'Request produced no task; resume explicitly.' });
 });
+
+
+describe.each(ENGINES)('%s — historical queued Deep compatibility', (_name, makeAdapter) => {
+  it('durably refuses a saved legacy invocation before preparation without changing its evidence', async () => {
+    const request = appRequest({ origin: 'quota-burn', burn: { family: 'codex', stepId: 'old-step', overrides: { params: { auditDepth: 'deep', deepAuditId: 'retained-ledger' } } } });
+    const saved = JSON.stringify(request);
+    mocks.getOnDemandRequests.mockResolvedValue([request]);
+    const { adapter, spawned } = makeAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(mocks.prepareManagedAppImprovementTask).not.toHaveBeenCalled();
+    expect(mocks.generateSelfImprovementTaskForType).not.toHaveBeenCalled();
+    expect(mocks.addTask).not.toHaveBeenCalled();
+    expect(mocks.applyOnDemandRunResets).not.toHaveBeenCalled();
+    expect(spawned).toEqual([]);
+    expect((await import('./onDemandHandoff.js')).settleOnDemandRequest).toHaveBeenCalledWith(expect.objectContaining({ request }), { taskId: null, reason: 'Historical Deep requests are read-only; start a new Deep audit.' });
+    expect(JSON.stringify(request)).toBe(saved);
+  });
+  it('dispatches an explicitly marked new extended request', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest({ origin: 'quota-burn', burn: { family: 'codex', stepId: 'new-step', overrides: { params: { auditDepth: 'deep', auditWorkflow: 'extended-v1' } } } })]);
+    const { adapter, spawned } = makeAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(mocks.prepareManagedAppImprovementTask).toHaveBeenCalledOnce();
+    expect(spawned).toHaveLength(1);
+  });
+});

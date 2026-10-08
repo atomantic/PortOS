@@ -24,6 +24,11 @@ export function generatedJobTaskFields(generated) {
   const meta = generated?.metadata || {};
   return {
     description: generated?.description,
+    // Preserve workflow identity through manual/quota projection. Keep any
+    // checkpoint id so the creation boundary rejects it instead of erasing it.
+    ...(meta.auditDepth != null || meta.auditWorkflow != null || meta.deepAuditId != null ? {
+      metadata: { auditDepth: meta.auditDepth, auditWorkflow: meta.auditWorkflow, deepAuditId: meta.deepAuditId }
+    } : {}),
     priority: generated?.priority,
     prompt: meta.prompt,
     // App-scoped jobs carry the target app so `prepareAgentWorkspace` resolves

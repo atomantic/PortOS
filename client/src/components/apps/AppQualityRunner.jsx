@@ -106,7 +106,7 @@ export default function AppQualityRunner({ app, children }) {
     <label htmlFor="quality-depth" className="block text-sm">Audit depth
       <select id="quality-depth" className="block w-full bg-port-bg border border-port-border rounded p-2" value={auditDepth} disabled={busy} onChange={event => setAuditDepth(event.target.value)}>
         <option value="quick">Quick — broad scan, focused review</option>
-        <option value="deep">Deep — persistent coverage and independent passes</option>
+        <option value="deep">Deep — extended investigation and multiple fixes</option>
       </select>
     </label>
     {auditDepth === 'deep' && <p className="text-xs text-gray-400">Spend more time investigating high-risk paths and fixing multiple worthwhile issues in one run. The summary reports coverage and remaining limits; Deep does not certify every file.</p>}
