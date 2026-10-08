@@ -40,7 +40,7 @@ vi.mock('./taskTypeHooks.js', () => ({
   resolveTaskHookType: vi.fn(task => task?.metadata?.analysisType || null),
 }));
 
-import { getAgent, updateAgent, completeAgent } from './cosAgentLifecycle.js';
+import { getAgent, getAgentRecord, updateAgent, completeAgent } from './cosAgentLifecycle.js';
 import { canRunTaskOutputHookWithoutPayload, getTaskOutputHook, isProgrammaticIoTaskType } from './taskTypeHooks.js';
 import {
   finalizeAgent,
@@ -105,6 +105,7 @@ describe('recovery output-hook dispatch (#3182)', () => {
       metadata: {},
     };
     getAgent.mockImplementation(async () => persistedAgent);
+    getAgentRecord.mockImplementation(async () => persistedAgent);
     updateAgent.mockImplementation(async (_agentId, updates) => {
       persistedAgent = {
         ...persistedAgent,
@@ -206,6 +207,59 @@ describe('recovery output-hook dispatch (#3182)', () => {
       success: true, validationPassed: false, auditAssessment: { status: 'not-recorded' },
     }));
     isProgrammaticIoTaskType.mockReturnValue(true);
+  });
+
+  it.each([
+    ['markdown checkpoint', 'Reviewed this batch. Deep coverage remains incomplete.', 'Reviewed this batch. Deep coverage remains incomplete.'],
+    ['structured checkpoint', JSON.stringify({ summary: 'Saved a partial checkpoint.', payload: null }), 'Saved a partial checkpoint.'],
+    ['missing summary', null, null],
+    ['terminal result fallback', null, 'Explicit terminal result.', 'Explicit terminal result.'],
+    ['sentinel precedence', 'Saved checkpoint.', 'Saved checkpoint.', 'Provider terminal response.'],
+    ['fenced valid envelope', '```json\n{"summary":"Fenced completion."}\n```', 'Fenced completion.'],
+    ['fenced malformed envelope', '```json\n{"summary":\n```', null],
+    ['malformed envelope', '{"summary":', null],
+    ['invalid summary', JSON.stringify({ summary: { text: 'not a string' } }), null],
+  ])('persists only explicit completion text for a resumed Deep %s', async (_label, sentinel, expected, finalSummary = null) => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const workspacePath = await mkdtemp(join(tmpdir(), 'completion-summary-'));
+    try {
+      if (sentinel !== null) await writeFile(join(workspacePath, '.agent-done-summary-example'), sentinel);
+      const task = { ...TASK, metadata: { ...TASK.metadata, auditDepth: 'deep', simplify: false } };
+      await finalizeAgent({ agentId: 'summary-example', task, success: true, exitCode: 0,
+        duration: 1000, workspacePath, finalSummary, outputBuffer: 'Thinking: inspect files\nexec\npython command output' });
+      expect(persistedAgent.metadata.taskSummary).toBe(expected);
+      expect(persistedAgent.metadata.simplifySummary).toBeNull();
+      expect(deep.checkpointDeepAudit).toHaveBeenCalled();
+    } finally {
+      await rm(workspacePath, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['sentinel', 'terminal-result', 'legacy'])('retains only authoritative %s summaries on repeat finalization after cleanup', async (source) => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const workspacePath = await mkdtemp(join(tmpdir(), 'completion-replay-'));
+    const sentinelPath = join(workspacePath, '.agent-done-summary-replay');
+    persistedAgent.id = 'summary-replay';
+    const task = { ...TASK, metadata: { ...TASK.metadata, auditDepth: 'deep' } };
+    const finish = (finalSummary = null) => finalizeAgent({ agentId: 'summary-replay', task, success: true,
+      exitCode: 0, duration: 1000, workspacePath, finalSummary, outputBuffer: 'exec: tool output' });
+    try {
+      if (source === 'legacy') {
+        persistedAgent.metadata.taskSummary = 'Old heuristic tool transcript';
+      } else {
+        if (source === 'sentinel') await writeFile(sentinelPath, 'Saved partial completion.');
+        await finish(source === 'terminal-result' ? 'Saved partial completion.' : null);
+        expect(persistedAgent.metadata).toMatchObject({ taskSummary: 'Saved partial completion.', taskSummarySource: source });
+        await rm(sentinelPath, { force: true });
+      }
+      await finish();
+      expect(persistedAgent.metadata.taskSummary).toBe(source === 'legacy' ? null : 'Saved partial completion.');
+      expect(persistedAgent.metadata.taskSummarySource).toBe(source === 'legacy' ? null : source);
+    } finally {
+      await rm(workspacePath, { recursive: true, force: true });
+    }
   });
 
   it('parks a failed Deep attempt without the normal automatic retry path', async () => {

@@ -624,7 +624,8 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
       ? (fullOutput?.lines || agent.output || [])
       : (liveOutput || agent.output || [])
   ), [inactive, fullOutput, liveOutput, agent.output]);
-  const taskSummary = completed && (fullMetadata?.taskSummary ?? agent.metadata?.taskSummary);
+  const taskSummary = completed && (fullMetadata && Object.hasOwn(fullMetadata, 'taskSummary')
+    ? fullMetadata.taskSummary : agent.metadata?.taskSummary);
   const lastOutput = output.length > 0 ? output[output.length - 1]?.line : null;
 
   // Why this run has NO "Open Shell" link. Scoped to the one case where the user
@@ -1304,13 +1305,18 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
             </div>
           )}
 
-          {taskSummary && (
+          {completed && !taskSummary && (
+            <p className="text-sm text-port-text-muted">
+              {loadingOutput ? 'Loading completion summary…' : 'No completion summary was saved. The runner transcript is available separately.'}
+            </p>
+          )}
+          {(completed || taskSummary) && (
             <button type="button" className="mt-2 text-xs text-port-accent hover:underline"
               aria-expanded={transcriptExpanded} onClick={() => setTranscriptExpanded(value => !value)}>
               {transcriptExpanded ? 'Hide full transcript' : 'Show full transcript'}
             </button>
           )}
-          {(!taskSummary || transcriptExpanded) && <>
+          {((!completed && !taskSummary) || transcriptExpanded) && <>
             {/* Pipeline stage tabs */}
             {pipelineStages && (
               <div className="flex items-center gap-1 mb-2 overflow-x-auto">
