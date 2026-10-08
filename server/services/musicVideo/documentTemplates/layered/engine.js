@@ -116,6 +116,7 @@
   function loadImage(src) {
     if (images.has(src)) return touch(images, src).ready;
     const im = new Image();
+    im.crossOrigin = 'anonymous';
     const entry = { el: im, ready: new Promise((resolve, reject) => {
       im.onload = () => resolve(im);
       im.onerror = () => reject(new Error(`image failed to load: ${src}`));
@@ -128,6 +129,9 @@
   function loadVideo(src) {
     if (videos.has(src)) return touch(videos, src).ready;
     const v = document.createElement('video');
+    // The sandbox has an opaque origin. CORS keeps local footage readable for
+    // pixel evidence without granting same-origin or network authority.
+    v.crossOrigin = 'anonymous';
     v.muted = true; v.playsInline = true; v.preload = 'auto';
     const entry = { el: v, ready: new Promise((resolve, reject) => {
       v.addEventListener('loadeddata', () => resolve(v), { once: true });

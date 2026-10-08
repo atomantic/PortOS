@@ -320,9 +320,10 @@ export async function stageGeneratedDocument(projectId, generatedFiles, { verify
   return storeVersion(projectId, staged, { kind: 'generated', name: 'Mixed-media composition' }, { draft: true, verifyCurrent });
 }
 
-// Shipped layered engines before the footage-visibility fix. Recognition only;
+// Known compatible shipped layered engines. Recognition only;
 // customized engines belong to the author and are never silently replaced.
 const UPGRADABLE_LAYERED_ENGINES = new Set([
+  '2556a0905a85958b9107cfa75ab0c5bfde167a708e29b511d577065bb530ea58',
   'e2267a068c92a3c7dee49db5f3e57caff1ac11aee1312c0d82e28352850aad3b',
   '23842766a818fd9820d79ff229eab538cc0edf391992756cbfd14434d525c019',
   '5f69f39cfbdbf0531c23250d01773447529a5254271b0b77f40d029d02bb0e1f',
@@ -358,7 +359,7 @@ export function upgradeDocumentEngine(projectId, directory) {
     const loaded = await Promise.all(files.map(async file => ({
       rel: file.rel, data: file.rel === 'engine.js' ? shipped : await readFile(file.abs),
     })));
-    const result = await storeVersionNow(projectId, loaded, project.composition.document.source, { verifyCurrent });
+    const result = await storeVersionNow(projectId, loaded, project.composition.document.source || { kind: 'directory', name: null }, { verifyCurrent });
     return { ...result, changed: true };
   });
 }
