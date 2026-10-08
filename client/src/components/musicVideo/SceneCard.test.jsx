@@ -71,3 +71,19 @@ describe('persisted render failure chip (#10154)', () => {
     expect(onGenerateVideo).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('lyric type per shot (#10583)', () => {
+  it('lets a composition-document shot pick its lyric zone and style, and clears back to the defaults', () => {
+    const onSave = vi.fn();
+    const scene = { sceneId: 's1', startSec: 0, endSec: 5, takes: [], textZone: 'upper-right' };
+    const { rerender } = render(<SceneCard scene={scene} index={0} layered onEditLocal={() => {}} onSave={onSave} />);
+    // Only a composition document draws the shared lyric type.
+    expect(screen.queryByLabelText('Lyrics')).toBeNull();
+    rerender(<SceneCard scene={scene} index={0} layered documentComposition onEditLocal={() => {}} onSave={onSave} />);
+    expect(screen.getByLabelText('Lyrics').value).toBe('upper-right');
+    fireEvent.change(screen.getByLabelText('Lyrics'), { target: { value: 'none' } });
+    fireEvent.change(screen.getByLabelText('Lyric style'), { target: { value: 'stamp' } });
+    fireEvent.change(screen.getByLabelText('Lyrics'), { target: { value: '' } });
+    expect(onSave.mock.calls).toEqual([['s1', { textZone: 'none' }], ['s1', { lyricRole: 'stamp' }], ['s1', { textZone: null }]]);
+  });
+});

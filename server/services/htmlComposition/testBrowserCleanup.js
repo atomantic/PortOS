@@ -25,8 +25,8 @@ export function _selectTestChrome(candidates) {
 }
 
 // Failure-only Linux observations of this owned child and its current worker.
-// Never read cmdline, environ, links, stacks, or arbitrary process output. A
-// At most 23 prefixes of 4096 bytes (92 KiB), 17 directory entries and one
+// Never read cmdline, environ, links, stacks, or arbitrary process output.
+// At most 40 prefixes of 4096 bytes (160 KiB), 17 directory entries and one
 // statfs call. These count/byte caps do not guarantee elapsed time. Samples
 // are non-atomic: wait categories and resource pressure do not prove a cause.
 function readProcPrefix(path) {
@@ -64,6 +64,34 @@ const WAIT_CATEGORIES = new Map([
 const safeInteger = value => Number.isSafeInteger(value) && value >= 0 ? value : 'unavailable';
 const attemptObservation = fn => { try { return fn(); } catch { return 'unavailable'; } };
 
+// Native Linux x86-64 syscall numbers, from arch/x86/entry/syscalls/syscall_64.tbl.
+// This is a diagnostic for the native 64-bit CI browser, not a decoder for
+// compatibility ABIs. Report unknown numbers as other; never keep arguments,
+// stack/program counters, file descriptors or paths from /proc/*/syscall.
+const X64_SYSCALL_CATEGORIES = new Map([
+  ['read', [0, 17, 19]], ['write', [1, 18, 20]], ['open', [2, 257, 437]],
+  ['metadata', [4, 5, 6, 21, 262, 332]], ['memory', [9, 10, 11, 12, 25, 28]],
+  ['futex', [202, 449]], ['poll', [7, 23, 232, 270, 271, 281, 441]],
+  ['process', [56, 57, 58, 59, 61, 247, 322, 435]], ['entropy', [318]], ['device', [16]],
+].flatMap(([category, numbers]) => numbers.map(number => [String(number), category])));
+
+function syscallFacts(pid, ids, { read, arch }) {
+  if (arch !== 'x64') return '; syscalls: table=unsupported';
+  const category = path => attemptObservation(() => {
+    const text = read(path).slice(0, 4096).trim();
+    if (text === 'running') return 'running';
+    // Read only the first token. Everything after it is private register data.
+    const number = text.match(/^(-1|0|[1-9]\d*)(?:\s|$)/)?.[1];
+    if (!number) return 'unavailable';
+    if (number === '-1') return 'outside';
+    return X64_SYSCALL_CATEGORIES.get(number) ?? 'other';
+  });
+  const counts = Object.fromEntries(['running', 'outside', ...new Set(X64_SYSCALL_CATEGORIES.values()), 'other', 'unavailable'].map(name => [name, 0]));
+  const lead = category(`/proc/${pid}/syscall`);
+  for (const id of ids?.slice(0, 16) ?? []) counts[category(`/proc/${pid}/task/${id}/syscall`)]++;
+  return `; syscalls: table=x64-native lead=${lead} threads=${ids ? Object.entries(counts).map(([name, count]) => `${name}:${count}`).join(',') : 'unavailable'}`;
+}
+
 function resourceFacts(child, { read, cpus, usage, disk }) {
   const worker = attemptObservation(usage);
   const fs = attemptObservation(disk);
@@ -85,6 +113,7 @@ function resourceFacts(child, { read, cpus, usage, disk }) {
 
 export function _testChromeProcessFacts(proc, {
   platform = process.platform, workerPid = process.pid, read = readProcPrefix, threads = readThreadIds,
+  arch = process.arch,
   cpus = availableParallelism, usage = () => process.resourceUsage(), disk = () => statfsSync(tmpdir()),
 } = {}) {
   if (platform !== 'linux') return 'os=unsupported';
@@ -124,7 +153,8 @@ export function _testChromeProcessFacts(proc, {
     + ` parent=${same(child?.parent, String(workerPid))} group=${same(child?.group, worker?.group)} session=${same(child?.session, worker?.session)}`
     + ` leadWait=${leadWait} threads=${ids ? Math.min(ids.length, 16) : 'unavailable'} threadLimit=${ids ? ids.length > 16 : 'unavailable'}`
     + ` waits=${Object.entries(waits).map(([name, count]) => `${name}:${count}`).join(',')}`
-    + `; resources: ${resourceFacts(child, { read, cpus, usage, disk })}`;
+    + `; resources: ${resourceFacts(child, { read, cpus, usage, disk })}`
+    + syscallFacts(proc.pid, ids, { read, arch });
 }
 
 function describeProcess(proc, observeProcess) {
@@ -289,17 +319,24 @@ async function terminateOwnedChrome(proc, observeProcess) {
 
 // Test-only lifecycle boundary. Disconnect failure must not strand the owned
 // child, and neither failure may prevent removal of temporary test data.
-export async function _cleanupTestBrowser({ browser, proc, cleanup, observeProcess = _testChromeProcessFacts }) {
-  const errors = [];
+// A startup failure remains primary even if teardown also fails.
+export async function _cleanupTestBrowser({ browser, proc, cleanup, startupError, observeProcess = _testChromeProcessFacts }) {
+  const errors = startupError ? [startupError] : [];
+  const cleanupFailure = (stage, error) => {
+    const code = /^[A-Z0-9_]{1,32}$/.test(error?.code) ? error.code : 'unknown';
+    errors.push(new Error(`Test Chrome ${stage} cleanup failed (${code})`));
+  };
   try {
     await withinDeadline(() => browser?.close(), 5000, 'browser disconnect',
       () => `; process: ${describeProcess(proc, observeProcess)}`).catch(error => errors.push(error));
     await terminateOwnedChrome(proc, observeProcess).catch(error => errors.push(error));
   } finally {
-    proc?.stderr?.destroy();
-    await cleanup();
+    try { proc?.stderr?.destroy(); } catch (error) { cleanupFailure('stderr', error); }
+    try { await cleanup(); } catch (error) { cleanupFailure('temporary data', error); }
   }
-  if (errors.length) throw new AggregateError(errors, errors.map(error => error.message).join('; '));
+  if (startupError && errors.length === 1) throw startupError;
+  if (errors.length) throw new AggregateError(errors, errors.map(error => error.message).join('; '),
+    startupError ? { cause: startupError } : undefined);
 }
 
 // Wrap the REAL encoder only in browser tests. Never print paths, page source,

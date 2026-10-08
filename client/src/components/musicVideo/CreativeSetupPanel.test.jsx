@@ -7,6 +7,11 @@ vi.mock('../../services/apiUniverseBuilder.js', () => ({
   listUniverseNames: vi.fn(async () => [{ id: 'u1', name: 'Example universe' }, { id: 'u2', name: 'Other universe' }]),
   getUniverse: vi.fn(),
 }));
+const CLAUDIA = { id: 'claudia-slopcore', label: 'Claudia slopcore', summary: 'Deadpan AI pop singer.', credit: 'Claudia by anabology', sourceUrl: 'https://example.com/claudia', characterName: 'Claudia', sheetPrompt: 'Character reference sheet', referenceImageId: null };
+vi.mock('../../services/apiMusicVideo.js', () => ({
+  listMusicVideoCharacterStyles: vi.fn(async () => [CLAUDIA]),
+  setMusicVideoCharacterStyleReference: vi.fn(async (_id, imageId) => ({ ...CLAUDIA, referenceImageId: imageId })),
+}));
 const project = { id: 'mv1', concept: {}, visualSpec: {} };
 const open = (onSave = vi.fn(async () => {})) => {
   render(<MemoryRouter><CreativeSetupPanel project={project} onSave={onSave} onPendingChange={vi.fn()} /></MemoryRouter>);
@@ -113,5 +118,22 @@ describe('tools / policy conflict', () => {
   ])('shows nothing when %s', (_label, extra) => {
     render_(extra);
     expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('loads a character style into the concept and picks its character sheet from the look references', async () => {
+    const { setMusicVideoCharacterStyleReference } = await import('../../services/apiMusicVideo.js');
+    const onSave = vi.fn(async () => {});
+    render(<MemoryRouter><CreativeSetupPanel project={{ ...project, visualSpec: { references: [{ imageId: 'sheet.png' }] } }} onSave={onSave} onPendingChange={vi.fn()} /></MemoryRouter>);
+    fireEvent.click(screen.getByText('Set up creative direction'));
+    await screen.findByText('Claudia slopcore');
+    fireEvent.change(screen.getByLabelText('Character style'), { target: { value: 'claudia-slopcore' } });
+    expect(screen.getByText('Claudia joins the cast as protagonist when you save.')).toBeTruthy();
+    expect(screen.getByText('Render a character sheet').getAttribute('href')).toBe('/media/image?prompt=Character+reference+sheet');
+    fireEvent.change(screen.getByLabelText('Use a look reference as the sheet'), { target: { value: 'sheet.png' } });
+    await screen.findByAltText('Claudia character sheet');
+    expect(setMusicVideoCharacterStyleReference).toHaveBeenCalledWith('claudia-slopcore', 'sheet.png', { silent: true });
+    fireEvent.click(screen.getByText('Save creative setup'));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0][0].concept).toMatchObject({ characterStyleId: 'claudia-slopcore' });
   });
 });

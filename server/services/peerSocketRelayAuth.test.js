@@ -102,6 +102,7 @@ const startServer = async () => {
     });
     socket.on('iterm:input', () => reached.push(['iterm:input']));
     socket.on('app:update', () => reached.push(['app:update']));
+    socket.on('detect:start', () => { reached.push(['detect:start']); socket.emit('detect:complete', { success: true }); });
     // Stand-in for socket.js's error:recover, which queues a recovery agent (#8716).
     socket.on('error:recover', () => reached.push(['error:recover']));
   });
@@ -262,6 +263,10 @@ describe('host-control socket events need operator authority (#8708)', () => {
     client.emit('error:recover', { code: 'EXAMPLE_ERROR' });
     expect(await recoverRefused).toMatchObject({ code: 'HOST_CONTROL_FORBIDDEN' });
 
+    const detectionRefused = waitFor(client, 'detect:complete');
+    client.emit('detect:start', { path: '/example/project' });
+    expect(await detectionRefused).toMatchObject({ success: false, code: 'HOST_CONTROL_FORBIDDEN' });
+
     // Read-only subscriptions stay open, and the refusals did not disconnect.
     const subscribed = waitFor(client, 'cos:subscribed');
     client.emit('cos:subscribe');
@@ -292,6 +297,23 @@ describe('host-control socket events need operator authority (#8708)', () => {
     client.emit('shell:start', {});
     await started;
     expect(reached).toEqual([['shell:start', undefined]]);
+  });
+
+  it('preserves detection for local callers and authenticated remote operators', async () => {
+    await startServer();
+    const local = connectClient({});
+    await waitFor(local, 'connect');
+    let completed = waitFor(local, 'detect:complete');
+    local.emit('detect:start', { path: '/example/project' });
+    expect(await completed).toEqual({ success: true });
+    const auth = await import('./auth.js');
+    const { token } = await auth.setPassword({ newPassword: 'instance-secret' });
+    const operator = connectClient({ Authorization: `Bearer ${token}`, ...REMOTE_VIA_DEV_PROXY });
+    await waitFor(operator, 'connect');
+    completed = waitFor(operator, 'detect:complete');
+    operator.emit('detect:start', { path: '/example/project' });
+    expect(await completed).toEqual({ success: true });
+    expect(reached).toEqual([['detect:start'], ['detect:start']]);
   });
 
   it('auth on: a Basic-authenticated relay socket never reaches a host-control handler', async () => {

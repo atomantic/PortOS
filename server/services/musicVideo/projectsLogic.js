@@ -305,7 +305,8 @@ export function cloneProjectRecord(source, {
     productionPolicy: normalizeMusicVideoProductionPolicy({ strategy: 'legacy' }),
     castAndSets: null,
     visualSpec: clone.visualSpec ? { ...clone.visualSpec, references: [], moodBoardId: null } : null,
-    concept: clone.concept ? { ...clone.concept, subjects: [], moodBoardStyle: '' } : null,
+    // The cast resets, so a loaded character style (which casts the protagonist) does too.
+    concept: clone.concept ? { ...clone.concept, subjects: [], moodBoardStyle: '', characterStyleId: null, characterStyle: '' } : null,
     styleReferences: [],
     ...(clone.automation ? { automation: { ...clone.automation, tools: [], moodBoardId: null } } : {}),
     scenes: clone.scenes.map((scene) => ({ ...scene, visualLayer: 'footage',

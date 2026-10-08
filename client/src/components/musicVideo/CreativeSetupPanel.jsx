@@ -5,6 +5,7 @@ import { Link } from 'react-router';
 import { listUniverseNames, getUniverse } from '../../services/apiUniverseBuilder.js';
 import { uuidv4 } from '../../lib/uuid.js';
 import { pullUniverseCanonReferences } from '../../lib/musicVideoUniverseRefs.js';
+import CharacterStylePicker from './CharacterStylePicker.jsx';
 
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 const kinds = [['character', 'Cast'], ['place', 'Places'], ['object', 'Objects']];
@@ -59,7 +60,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
   }, [editing, universeId]);
 
   const begin = () => {
-    setDraft({ universeId: project.concept?.universeId || '', subjects: project.concept?.subjects || [] });
+    setDraft({ universeId: project.concept?.universeId || '', characterStyleId: project.concept?.characterStyleId || '', subjects: project.concept?.subjects || [] });
     setSelectedCanon([]);
     setNewName('');
     setNewDescription('');
@@ -83,7 +84,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
     if (!universeReady) { setError('Wait for the selected universe to load before saving.'); return; }
     setSaving(true);
     setError('');
-    const concept = { subjects: draft.subjects, universeId: draft.universeId || null };
+    const concept = { subjects: draft.subjects, universeId: draft.universeId || null, characterStyleId: draft.characterStyleId || null };
     const canon = { characters: [], places: [], objects: [] };
     for (const item of selectedCanon) {
       if (draft.subjects.some((s) => s.id === item.subjectId)) canon[fields[item.kind]].push(item.entry);
@@ -94,12 +95,14 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
 
   return <section className="bg-port-card border border-port-border rounded-lg p-3 space-y-3 min-w-0 break-words" aria-label="Creative setup">
     <div className="flex flex-wrap items-center justify-between gap-2">
-      <h3 className="text-sm font-medium">Universe, cast, places &amp; objects</h3>
+      <h3 className="text-sm font-medium">Character style, universe, cast, places &amp; objects</h3>
       {!editing && <button type="button" onClick={begin} className="text-sm text-port-accent min-h-[44px]">Set up creative direction</button>}
     </div>
+    {!editing && project.concept?.characterStyleId && <p className="text-xs">Character style: {project.concept.characterStyle?.split(':')[0] || project.concept.characterStyleId}</p>}
     {!editing ? <p className="text-xs text-port-text-muted">{subjects.length ? subjects.map((s) => `${s.name}${s.role === 'protagonist' ? ' (protagonist)' : s.role === 'band' ? ' (band)' : ''}`).join(' · ') : 'Create the band or protagonist, choose a universe, and select the places and objects that anchor the story.'}</p> : <fieldset disabled={saving} className="space-y-3 min-w-0">
       <p className="text-xs text-port-text-muted">Save this setup before planning or generating. Canon and style are copied into this project; source records stay independent.</p>
       <div className="grid grid-cols-1 gap-3">
+        <CharacterStylePicker project={project} idFor={idFor} value={draft.characterStyleId} onChange={(characterStyleId) => setDraft((d) => ({ ...d, characterStyleId }))} />
         <div><label htmlFor={idFor('universe')} className="text-xs">Universe</label>
           <select id={idFor('universe')} className={inputClass} value={universeId} onChange={(e) => {
             const nextId = e.target.value;

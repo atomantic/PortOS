@@ -6,6 +6,8 @@
 export {
   MUSIC_VIDEO_VISUAL_LAYERS,
   MUSIC_VIDEO_STILL_MOVES,
+  MUSIC_VIDEO_TEXT_ZONES,
+  MUSIC_VIDEO_LYRIC_ROLES,
   isSelfDrawnLayer,
   sceneVisualLayer,
   sceneHasAuthoredSpan,
