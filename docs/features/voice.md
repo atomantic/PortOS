@@ -472,3 +472,14 @@ Fixture tests prove this publication contract, not training quality. A real trai
 hardware is still pending in #8857. Operators should listen to each audition before promoting. The runtime is excluded from
 Voice Studio assignment until repaired (issue #8857). Voice Studio does not
 claim a Qwen runtime is working merely because its metadata exists.
+
+The character Voice Lab's **Fine-Tuning** tab drives the whole run (#10400). On open it reads the profile's
+runs from their `job.json` sidecars (`GET /api/voice/profiles/:id/fine-tune`, newest first), so a reload
+recovers them. After that it applies `voice:fine-tune:updated` frames, which carry the whole job, on each
+status change, each sealed checkpoint, and at most once a second during training. It does not poll. Each
+checkpoint plays its audition from `/data/voice-profiles/…`. **Promote** is disabled, with the refusal
+reason beside it, on any checkpoint the server would refuse. **Cancel** appears while a run is live. A voice
+trains one run at a time (`409 FINE_TUNE_ALREADY_RUNNING`), and a cancelled run still counts until its
+trainer process has exited (`processActive`). A
+sidecar left `running` by a server restart is reported as `interrupted`, because its process is gone. Its
+sealed checkpoints remain promotable.

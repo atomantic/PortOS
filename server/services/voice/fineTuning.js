@@ -1,8 +1,9 @@
 /**
  * Qwen3-TTS Voice Fine-Tuning Service (#5381).
  *
- * Provides dataset readiness validation, explicit start, streaming progress,
- * checkpoint generation, audition samples, cancellation, and explicit
+ * Provides dataset readiness validation, explicit start, pushed progress
+ * (`fineTuningEvents` → `voice:fine-tune:updated`), checkpoint generation,
+ * audition samples, per-profile job listing, cancellation, and explicit
  * checkpoint promotion.
  *
  * Training is machine-local, optional, and never assumes the last checkpoint is best.
@@ -16,11 +17,12 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { spawn } from '../../lib/childProcess.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { atomicWrite, readJSONFileStrict } from '../../lib/fileUtils.js';
+import { PATHS } from '../../lib/paths.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { closeJobAfterDelay } from '../../lib/sseUtils.js';
 import {
@@ -35,6 +37,7 @@ import {
   profileArtifactDirectory,
   promoteFineTunedProfile,
 } from './profiles.js';
+import { fineTuningEvents } from './fineTuningEvents.js';
 
 // In-memory active training job map. Entries are evicted once terminal (see
 // `finalizeJob`); the durable record is the `job.json` sidecar written beside
@@ -64,6 +67,18 @@ const TRAINING_SPEAKER = 'portos_voice';
 const DATASET_MANIFEST_FILE = 'dataset.json';
 const AUDIO_FILE_RE = /\.(wav|mp3|flac|m4a)$/i;
 const STDERR_TAIL_BYTES = 8192;
+// Training frames arrive every optimizer step; the UI only needs a progress
+// tick, so step progress is pushed at most this often. Status changes and
+// sealed checkpoints are always pushed immediately.
+const PROGRESS_PUSH_INTERVAL_MS = 1000;
+// The Voice Lab shows the newest runs; older sidecars stay on disk untouched.
+const MAX_LISTED_JOBS = 20;
+// A `running` sidecar with no live process is a run the server lost on
+// restart: its child is gone, so it can neither progress nor be cancelled.
+const INTERRUPTED_ERROR = 'Training stopped when the server restarted';
+// The one reason a checkpoint is refused promotion; shown beside the disabled
+// Promote control and returned as the 409 message.
+const UNVERIFIED_CHECKPOINT_REASON = 'Checkpoint was not produced by a supported training adapter';
 
 const jobRecordPath = (profileId, jobId) =>
   join(profileArtifactDirectory(profileId), 'fine-tune', jobId, JOB_RECORD_FILE);
@@ -89,6 +104,52 @@ const serializableJob = ({
   ...record
 }) => record;
 
+// Earlier runners wrote text placeholders named .safetensors. A checkpoint
+// without its producing adapter and sealed revision never becomes a voice.
+const promotionBlockedReason = (job, checkpoint) => (
+  !job.trainingAdapter || typeof checkpoint.modelRevision !== 'string' ? UNVERIFIED_CHECKPOINT_REASON : null
+);
+
+// The audition WAV is written beside its checkpoint under the voice-profiles
+// root, which is mounted at /data/voice-profiles.
+const auditionUrl = (sampleWav) => {
+  if (typeof sampleWav !== 'string') return null;
+  const rel = relative(PATHS.voiceProfiles, sampleWav);
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) return null;
+  return `/data/voice-profiles/${rel.split(sep).map(encodeURIComponent).join('/')}`;
+};
+
+/**
+ * The client view of a job: the durable record plus what the Voice Lab renders
+ * per checkpoint — a playable audition URL and whether (and why not) it can be
+ * promoted, decided by the same predicate `promoteCheckpoint` enforces.
+ * `processActive` is true while the trainer process has not exited yet — a
+ * cancelled run reads `cancelled` at once but may still hold the GPU until
+ * then. Records read from disk never have a live process.
+ */
+const publicJob = (job) => {
+  const record = serializableJob(job);
+  return {
+    ...record,
+    processActive: job.finalized === false,
+    checkpoints: record.checkpoints.map((checkpoint) => {
+      const blockedReason = promotionBlockedReason(record, checkpoint);
+      return {
+        ...checkpoint,
+        auditionUrl: auditionUrl(checkpoint.sampleWav),
+        promotable: !blockedReason,
+        promotionBlockedReason: blockedReason,
+      };
+    }),
+  };
+};
+
+// Pushes the live state at the moment of the change, so frames arrive in the
+// order the state moved and the last one is always current.
+const publishJob = (jobState) => {
+  fineTuningEvents.emit('updated', { profileId: jobState.profileId, job: publicJob(jobState) });
+};
+
 /**
  * Write the job record to disk. Writes are chained per job because `close` and
  * `error` can both fire for one child and each rewrites the same file.
@@ -104,6 +165,7 @@ const persistJob = (jobState) => {
   // write that runs after a later terminal event serializes the mutable current
   // object and can race the terminal write out of order.
   const record = structuredClone(serializableJob(jobState));
+  publishJob(jobState);
   jobState.persistChain = (jobState.persistChain || Promise.resolve())
     .then(() => withBackupAssetPublication(() => atomicWrite(jobRecordPath(jobState.profileId, jobState.id), record)))
     .catch((err) => console.error(`❌ Failed to persist fine-tune job ${jobState.id}: ${err.message}`));
@@ -127,6 +189,8 @@ async function loadJob(jobId, profileId) {
       code: 'JOB_RECORD_UNREADABLE',
     });
   }
+  // Reported, not rewritten: the sidecar stays exactly as the run left it.
+  if (value?.status === 'running') return { ...value, status: 'interrupted', error: value.error || INTERRUPTED_ERROR };
   return value;
 }
 
@@ -141,6 +205,20 @@ const finalizeJob = (jobState) => {
   jobState.finalized = true;
   persistJob(jobState);
   closeJobAfterDelay(activeJobs, jobState.id);
+};
+
+// Busy until the child has exited (`finalizeJob`), not merely until the status
+// leaves `running`: a cancel flips the status before the aborted trainer has
+// released the GPU.
+const assertNoRunningJob = (profileId) => {
+  for (const job of activeJobs.values()) {
+    if (job.profileId === profileId && job.finalized === false) {
+      throw new ServerError('A fine-tuning run is already in progress for this voice profile', {
+        status: 409,
+        code: 'FINE_TUNE_ALREADY_RUNNING',
+      });
+    }
+  }
 };
 
 /**
@@ -257,6 +335,11 @@ export async function startFineTuningJob({
   }
 
   const profile = await getVoiceProfileRequired(profileId);
+  // Two full-parameter trainings of one voice would contend for the same GPU
+  // and write competing checkpoints; refuse before any record or child exists.
+  // Checked again after the awaits below, where nothing yields until the job
+  // registers, so two overlapping starts cannot both pass.
+  assertNoRunningJob(profile.id);
   const dataset = buildTrainingDataset(profile, validation.sourceDir);
   const jobId = randomUUID();
   const profileDir = profileArtifactDirectory(profile.id);
@@ -265,6 +348,7 @@ export async function startFineTuningJob({
   const datasetManifest = join(outputDir, DATASET_MANIFEST_FILE);
   await atomicWrite(datasetManifest, dataset);
 
+  assertNoRunningJob(profile.id);
   const abortController = new AbortController();
   const jobState = {
     id: jobId,
@@ -286,6 +370,8 @@ export async function startFineTuningJob({
     error: null,
     controller: abortController,
     child: null,
+    // Flipped by `finalizeJob` once the child has closed or errored.
+    finalized: false,
   };
 
   activeJobs.set(jobId, jobState);
@@ -320,6 +406,7 @@ export async function startFineTuningJob({
   };
 
   let lineBuffer = '';
+  let lastProgressPush = 0;
   child.stdout.on('data', (chunk) => {
     lineBuffer += chunk.toString();
     const lines = lineBuffer.split('\n');
@@ -335,6 +422,10 @@ export async function startFineTuningJob({
           jobState.totalSteps = event.total_steps || jobState.totalSteps;
           jobState.loss = event.loss;
           jobState.progress = event.progress;
+          if (Date.now() - lastProgressPush >= PROGRESS_PUSH_INTERVAL_MS) {
+            lastProgressPush = Date.now();
+            publishJob(jobState);
+          }
         } else if (event.stage === 'checkpoint' && isPublishedCheckpoint(event, outputDir)) {
           jobState.checkpoints.push({
             id: event.checkpoint,
@@ -354,6 +445,7 @@ export async function startFineTuningJob({
           jobState.status = 'completed';
           jobState.progress = 100;
           jobState.completedAt = new Date().toISOString();
+          publishJob(jobState);
         }
       } catch {
         // non-JSON log line
@@ -397,7 +489,34 @@ export async function startFineTuningJob({
     totalSteps: jobState.totalSteps,
     trainingAdapter: jobState.trainingAdapter,
     startedAt: jobState.startedAt,
+    job: publicJob(jobState),
   };
+}
+
+/**
+ * List a profile's fine-tuning runs, newest first, from their `job.json`
+ * sidecars (live state for a run still in memory). This is how the Voice Lab
+ * recovers a run after a reload or a restart.
+ */
+export async function listFineTuningJobs(profileId) {
+  const profile = await getVoiceProfileRequired(profileId);
+  const root = join(profileArtifactDirectory(profile.id), 'fine-tune');
+  const entries = await readdir(root, { withFileTypes: true }).catch((err) => {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  });
+  const jobs = await Promise.all(entries
+    .filter((entry) => entry.isDirectory() && JOB_ID_RE.test(entry.name))
+    .map((entry) => loadJob(entry.name, profile.id).catch((err) => {
+      // One corrupt sidecar must not hide every other run of this voice.
+      console.warn(`⚠️ Skipping unreadable fine-tune job ${entry.name}: ${err.message}`);
+      return null;
+    })));
+  return jobs
+    .filter(Boolean)
+    .map(publicJob)
+    .sort((a, b) => String(b.startedAt || '').localeCompare(String(a.startedAt || '')))
+    .slice(0, MAX_LISTED_JOBS);
 }
 
 /**
@@ -409,22 +528,24 @@ export async function getFineTuningJobStatus(jobId, profileId) {
   if (!job) {
     throw new ServerError('Fine-tuning job not found', { status: 404, code: 'JOB_NOT_FOUND' });
   }
-  return serializableJob(job);
+  return publicJob(job);
 }
 
 /**
- * Cancel an active fine-tuning job.
+ * Cancel an active fine-tuning job. With a `profileId`, a job belonging to a
+ * different profile is reported as not found.
  */
-export function cancelFineTuningJob(jobId) {
+export function cancelFineTuningJob(jobId, profileId) {
   const job = activeJobs.get(jobId);
-  if (!job) {
+  if (!job || (profileId && job.profileId !== profileId)) {
     throw new ServerError('Fine-tuning job not found', { status: 404, code: 'JOB_NOT_FOUND' });
   }
   if (job.status === 'running') {
     job.controller.abort();
     Object.assign(job, CANCELLED_OUTCOME, { completedAt: new Date().toISOString() });
+    publishJob(job);
   }
-  return { ok: true, jobId, status: job.status };
+  return { ok: true, jobId, status: job.status, job: publicJob(job) };
 }
 
 /**
@@ -439,13 +560,9 @@ export async function promoteCheckpoint({ profileId, jobId, checkpointId }) {
   if (!ckpt) {
     throw new ServerError(`Checkpoint not found: ${checkpointId}`, { status: 404, code: 'CHECKPOINT_NOT_FOUND' });
   }
-  // Earlier runners wrote text placeholders named .safetensors. A checkpoint
-  // without its producing adapter and sealed revision never becomes a voice.
-  if (!job.trainingAdapter || typeof ckpt.modelRevision !== 'string') {
-    throw new ServerError('Checkpoint was not produced by a supported training adapter', {
-      status: 409,
-      code: 'CHECKPOINT_UNVERIFIED',
-    });
+  const blockedReason = promotionBlockedReason(job, ckpt);
+  if (blockedReason) {
+    throw new ServerError(blockedReason, { status: 409, code: 'CHECKPOINT_UNVERIFIED' });
   }
 
   return promoteFineTunedProfile({

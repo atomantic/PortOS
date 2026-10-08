@@ -16,8 +16,6 @@ vi.mock('../../services/apiVoice', () => ({
   createVoiceDesignCandidate: vi.fn(),
   createClonedVoiceCandidate: vi.fn(),
   promoteVoiceProfile: vi.fn(),
-
-  startFineTuningJob: vi.fn(),
 }));
 
 import {
@@ -243,7 +241,7 @@ describe('CharacterDetailEditor — production package (#5378)', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Voice' }));
 
     // Switch to Design tab
-    fireEvent.click(screen.getByRole('button', { name: /Design/i }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Design' }));
     fireEvent.change(screen.getByPlaceholderText(/warm low alto/i), {
       target: { value: 'calm, measured alto' },
     });
@@ -270,7 +268,7 @@ describe('CharacterDetailEditor — production package (#5378)', () => {
     expect(await screen.findByText(/Machine-local voice design/i)).toBeInTheDocument();
 
     // Switch to Clone tab
-    fireEvent.click(screen.getByRole('button', { name: /Clone/i }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Clone' }));
     const cloneBtn = screen.getByRole('button', { name: /Create Cloned Candidate/i });
     expect(cloneBtn).toBeDisabled();
 
@@ -278,6 +276,23 @@ describe('CharacterDetailEditor — production package (#5378)', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /I confirm the performer consented/i }));
     // Still disabled because no file is selected yet
     expect(cloneBtn).toBeDisabled();
+  });
+
+  it('deep-links the Voice Lab sub-tab and writes the selection back to the URL', async () => {
+    listVoiceEngines.mockResolvedValue({ engines: [] });
+    listVoiceProfiles.mockResolvedValue({ profiles: [] });
+    function LocationProbe() {
+      return <output aria-label="Location">{useLocation().search}</output>;
+    }
+    rtlRender(<><CharacterDetailEditor entry={ARIA} universeId="uni-1" characters={[ARIA]} onPatch={() => {}} /><LocationProbe /></>, {
+      wrapper: ({ children }) => <MemoryRouter initialEntries={['/?castSheet-chr-aria=voice&voiceLab-chr-aria=clone']}>{children}</MemoryRouter>,
+    });
+    expect(await screen.findByRole('button', { name: /Create Cloned Candidate/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Clone' })).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Design' }));
+    expect(screen.getByLabelText('Location').textContent).toContain('voiceLab-chr-aria=design');
+    expect(screen.getByRole('button', { name: /Design Candidate Voice/i })).toBeInTheDocument();
   });
 
   it('qualifies interactive route via host latency benchmark', async () => {
