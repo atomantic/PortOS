@@ -2,7 +2,6 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
 import { createTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 let tempRoot;
@@ -21,6 +20,7 @@ vi.mock('../mediaAssetIndex/index.js', () => ({ reconcileMediaAssets: indexAdapt
 
 // Load after the temp redirect exists; no production peers, files or DB are used.
 tempRoot = createTempDataRoot('portos-library-repair-');
+const { PORTOS_SCHEMA_VERSIONS } = await import('../../lib/schemaVersions.js');
 const { PATHS } = await import('../../lib/fileUtils.js');
 const { getPeers } = await import('../instances.js');
 const { peerFetch } = await import('../../lib/peerHttpClient.js');
@@ -123,6 +123,31 @@ describe('peer library index recovery', () => {
     expect(rows.get('repair.png')).toEqual(bytes);
     expect(indexAdapter.reconcile).toHaveBeenCalledTimes(2);
     expect(imageDownloads()).toBe(1);
+  });
+
+  it('queues a fresh repair for bytes that land after an active repair read disk', async () => {
+    const sources = [peer(), peer()];
+    advertise(sources, ['repair-before.png']);
+    const readFinished = deferred();
+    const finishFirst = deferred();
+    indexAdapter.reconcile.mockImplementationOnce(async () => {
+      const result = await repairIndex();
+      readFinished.resolve();
+      await finishFirst.promise;
+      return result;
+    });
+    const first = syncMediaLibraryFromPeer(sources[0]);
+    await readFinished.promise;
+    advertise(sources, ['repair-after.png']);
+    const second = syncMediaLibraryFromPeer(sources[1]);
+    await vi.waitFor(() => expect(vi.mocked(diffAssetManifestAgainstLocal).mock.settledResults.filter(result => result.type === 'fulfilled')).toHaveLength(4));
+    await new Promise(resolve => setImmediate(resolve));
+    expect(rows.has('repair-after.png')).toBe(false);
+    finishFirst.resolve();
+    await Promise.all([first, second]);
+    expect(rows.get('repair-after.png')).toEqual(bytes);
+    expect(indexAdapter.reconcile).toHaveBeenCalledTimes(2);
+    expect((await syncMediaLibraryFromPeer(sources[1])).skipped).toBe('unchanged');
   });
 
   it('serializes active repairs and coalesces queued peers while retaining failure-to-retry state', async () => {
