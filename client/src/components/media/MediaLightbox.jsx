@@ -296,9 +296,9 @@ export default function MediaLightbox({
 
   const cardClasses = fullScreen
     ? 'relative w-full h-full bg-black flex'
-    : 'relative bg-port-card border border-port-border rounded-xl overflow-hidden max-w-6xl w-full max-h-[92vh] flex flex-col md:flex-row';
+    : 'relative bg-port-card border border-port-border rounded-xl overflow-hidden max-w-6xl w-full max-h-dvh-cap [--dvh-cap:92vh] [--dvh-cap-dynamic:92dvh] [--dvh-inset:2rem] flex flex-col md:flex-row';
   const overlayPad = fullScreen ? 'p-0' : 'p-4';
-  const imgMax = fullScreen ? 'max-w-[100vw] max-h-dvh-cap' : 'max-w-full max-h-[92vh]';
+  const imgMax = fullScreen ? 'max-w-[100vw] max-h-dvh-cap' : 'max-w-full max-h-dvh-cap [--dvh-cap:92vh] [--dvh-cap-dynamic:92dvh] [--dvh-inset:2rem]';
   // Anchor low in fullscreen so the chevrons land in the letterbox bar of a
   // landscape image instead of covering it. Non-fullscreen keeps them centered
   // — bottom-anchoring would bury them in the SettingsPane underneath.
@@ -500,7 +500,7 @@ function SettingsPane({
   annotation, onAnnotationChange, onPromptChange, onPosterChange, getPlayhead,
   variantGroup, onSelectVariant,
 }) {
-  const asideClasses = 'md:w-80 lg:w-96 shrink-0 flex flex-col border-t md:border-t-0 md:border-l border-port-border max-h-[40vh] md:max-h-[92vh]';
+  const asideClasses = 'md:w-80 lg:w-96 shrink-0 flex flex-col border-t md:border-t-0 md:border-l border-port-border min-h-0 max-h-dvh-cap [--dvh-cap:40vh] [--dvh-cap-dynamic:40dvh] md:[--dvh-cap:92vh] md:[--dvh-cap-dynamic:92dvh] [--dvh-inset:2rem]';
   const [posterSaving, setPosterSaving] = useState(false);
   const [posterError, setPosterError] = useState(null);
   const savePoster = async atSec => {
@@ -629,7 +629,7 @@ function SettingsPane({
       onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}
     >
       {item.raw?.appId && <a className="block p-3 text-port-accent" href={`/apps/${encodeURIComponent(item.raw.appId)}/overview`}>Open source app</a>}
-      <header className="flex items-center justify-between p-3 border-b border-port-border">
+      <header className="shrink-0 flex items-center justify-between p-3 border-b border-port-border">
         <span className="text-xs uppercase tracking-wide text-gray-400">{isVideo ? 'Video' : 'Image'} settings</span>
         <div className="flex items-center gap-2">
           {onAnnotationChange && (
@@ -654,7 +654,10 @@ function SettingsPane({
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-3 text-xs">
+      {/* Compact panes scroll actions with the fields so a wrapping footer cannot
+          consume the entire editing area. Roomy viewports keep actions fixed. */}
+      <div className="min-h-0 flex-1 overflow-y-auto roomy-viewport:overflow-hidden roomy-viewport:flex roomy-viewport:flex-col">
+      <div className="p-3 space-y-3 text-xs roomy-viewport:min-h-0 roomy-viewport:flex-1 roomy-viewport:overflow-y-auto">
         {item.compact ? (
           <div>
             <span className="block mb-1 text-gray-500 uppercase tracking-wide">Prompt</span>
@@ -796,7 +799,7 @@ function SettingsPane({
         )}
       </div>
 
-      <footer className="flex flex-wrap gap-1.5 p-3 border-t border-port-border">
+      <footer className="shrink-0 flex flex-wrap gap-1.5 p-3 border-t border-port-border">
         {onRefine && item.prompt && item.prompt !== '(no prompt)' && (
           <button
             type="button"
@@ -992,6 +995,7 @@ function SettingsPane({
           <Download className="w-3.5 h-3.5" />
         </a>
       </footer>
+      </div>
     </aside>
   );
 }
