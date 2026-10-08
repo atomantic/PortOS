@@ -47,8 +47,9 @@ it('persists a playhead poster, exports only a changed first frame with identica
     const tail = ['-vf', 'select=gte(n\\,1)', '-fps_mode', 'passthrough'];
     expect(mae(await decode(copy.path, tail), await decode(source, tail))).toBeLessThan(8);
     const audio = async path => (await exec(ffmpeg, ['-v', 'error', '-i', path, '-map', '0:a:0', '-c:a', 'copy', '-f', 'adts', '-'], { encoding: 'buffer', maxBuffer: 4 * 1024 * 1024 })).stdout;
-    expect(await audio(copy.path)).toEqual(await audio(source));
-    expect(await readFile(source)).toEqual(original);
+    // Buffer#equals, not toEqual: Vitest's deep equality walks a media buffer byte by byte (#10643).
+    expect((await audio(copy.path)).equals(await audio(source))).toBe(true);
+    expect((await readFile(source)).equals(original)).toBe(true);
   } finally { await copy.cleanup(); }
   const clamped = await updateVideoPoster('example', 100);
   expect(clamped.posterSec).toBeCloseTo(14.9);
