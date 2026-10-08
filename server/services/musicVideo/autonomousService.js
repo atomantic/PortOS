@@ -35,10 +35,11 @@ import { CAST_SETS_WORKING } from './castAndSets.js';
  * event. A code-first production run renders the film itself; when that render
  * is still the project's current final video the run adopts it instead of
  * rendering the same document again (#10563). Either way `produce` stays
- * running ("Rendering final video") until the final render job settles over the `render` event: success completes the run,
- * failure parks it `failed` and Retry re-renders only. A run interrupted while
- * rendering re-checks `renderHistoryId` on resume (reattach, finish, or render
- * again). Only explicit start/resume requests begin work.
+ * running ("Rendering final video") until the final render job settles over
+ * the `render` event: success completes the run, failure parks it `failed` and
+ * Retry re-renders only. A run interrupted while rendering re-checks
+ * `renderHistoryId` on resume (reattach, finish, or render again). Only
+ * explicit start/resume requests begin work.
  *
  * Production review (art → storyboard → proof) parks `produce` until approved.
  * An authenticated start/resume can grant `brief.autoApprove` for planning;
