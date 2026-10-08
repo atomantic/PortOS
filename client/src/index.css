@@ -317,6 +317,15 @@ body {
   overflow: clip;
 }
 
+/* Both classes above are unlayered, so they beat every `@layer utilities`
+   rule whatever its specificity, including the `print:h-auto` and
+   `print:overflow-visible` beside them in Layout.jsx. Restate the print
+   values here so a printed page still grows to its content. */
+@media print {
+  .h-dvh-screen { height: auto; }
+  .overflow-clip-safe { overflow: visible; }
+}
+
 /* dvh-aware sizing utilities. iOS Safari's retractable browser chrome makes
    100vh taller than the visible viewport, so surfaces sized to 100vh spill
    *under* the chrome. These size to 100dvh — the visible dynamic viewport —
