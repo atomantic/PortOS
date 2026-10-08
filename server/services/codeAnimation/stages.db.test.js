@@ -6,15 +6,19 @@ import { createHash } from 'crypto';
 import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
 vi.mock('../../lib/paths.js', async importOriginal =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('code-animation-stages-') }));
-// Inject faults only into render-source writes/removal; revision storage stays real.
-const stagingFaults = vi.hoisted(() => ({ write: false, cleanup: false, afterReserve: null }));
+// Inject faults into the selected owned staging tree; all other storage stays real.
+const stagingFaults = vi.hoisted(() => ({ write: false, cleanup: false, afterReserve: null, target: '/render/', directory: null, publication: false }));
 vi.mock('fs/promises', async importOriginal => {
   const real = await importOriginal();
   return {
     ...real,
     open: async (path, flags, ...rest) => {
       const handle = await real.open(path, flags, ...rest);
-      if (!stagingFaults.write || !String(path).replaceAll('\\', '/').includes('/render/')) return handle;
+      const normalized = String(path).replaceAll('\\', '/');
+      if (stagingFaults.target === '/revisions/' && normalized.includes('/revisions/')) {
+        stagingFaults.directory = normalized.match(/^(.*\/revisions\/[^/]+)/)[1];
+      }
+      if (!stagingFaults.write || !normalized.includes(stagingFaults.target)) return handle;
       stagingFaults.write = false;
       return {
         writeFile: async bytes => {
@@ -25,7 +29,7 @@ vi.mock('fs/promises', async importOriginal => {
       };
     },
     rm: async (path, ...rest) => {
-      if (stagingFaults.cleanup && String(path).replaceAll('\\', '/').includes('/render/')) {
+      if (stagingFaults.cleanup && String(path).replaceAll('\\', '/').includes(stagingFaults.target)) {
         stagingFaults.cleanup = false;
         throw Object.assign(new Error('Synthetic cleanup refusal'), { code: 'EACCES' });
       }
@@ -37,6 +41,12 @@ vi.mock('./projectStore.js', async importOriginal => {
   const real = await importOriginal();
   return {
     ...real,
+    commitRepairRevision: async (...args) => {
+      if (stagingFaults.publication) {
+        throw Object.assign(new Error('Synthetic repair publication failure'), { code: 'PUBLICATION_FAILED' });
+      }
+      return real.commitRepairRevision(...args);
+    },
     reserveRunBytes: async (...args) => {
       const reserved = await real.reserveRunBytes(...args);
       stagingFaults.afterReserve?.();
@@ -70,7 +80,10 @@ const health = await checkHealth().catch(error => ({ connected: false, error: er
 const ready = requireDbOrSkip('codeAnimation/stages.db.test', health.connected, health.error);
 if (ready) await ensureSchema();
 const ids = [];
-afterEach(() => { vi.useRealTimers(); stopRun.mockReset(); runPromptThroughProvider.mockReset(); stagingFaults.afterReserve = null; });
+afterEach(() => {
+  vi.useRealTimers(); stopRun.mockReset(); runPromptThroughProvider.mockReset();
+  Object.assign(stagingFaults, { write: false, cleanup: false, afterReserve: null, target: '/render/', directory: null, publication: false });
+});
 afterAll(async () => {
   if (ready && ids.length) await query('DELETE FROM code_animation_projects WHERE id = ANY($1::text[])', [ids]);
   await close(); cleanupTempDataRoots('code-animation-stages-');
@@ -256,6 +269,54 @@ describe.skipIf(!ready)('Production stage runs', () => {
     expect(retrySample).toHaveBeenCalledTimes(refuseCleanup ? 0 : 1);
   });
 
+
+  // Pins the repair caller's reservation compensation, including its later
+  // admission effect; successful staging must stay charged if publication fails.
+  it.each(['removed', 'retained', 'publication'])('accounts for failed repaired-source staging (%s)', async outcome => {
+    const { id, revision } = await project();
+    await acceptProductionSource(id, revision.id);
+    let before;
+    const repair = async args => {
+      before = (await getProductionHistory(id, { limit: 1, offset: 0 })).items[0];
+      const out = await unfreeze(args);
+      // Include the import, repair, and retry source charges. Retaining the
+      // repair exceeds the retry budget by one byte; removing it admits retry.
+      await patchProductionProject(id, { budgets: { diskBytes: before.data.reservedBytes + revision.totalBytes * 3 - 1 } });
+      stagingFaults.target = '/revisions/';
+      stagingFaults.write = outcome !== 'publication';
+      stagingFaults.cleanup = outcome === 'retained';
+      stagingFaults.publication = outcome === 'publication';
+      return out;
+    };
+    const first = await startProductionStageRun(id, {}, { sample, repair, render });
+    expect(await first.done).toBe('failed');
+    const directory = stagingFaults.directory;
+    Object.assign(stagingFaults, { write: false, cleanup: false, publication: false, target: '/render/' });
+    const saved = (await getProductionHistory(id, { limit: 1, offset: 0 })).items[0];
+    const charge = outcome === 'removed' ? 0 : revision.totalBytes;
+    expect(saved.data).toMatchObject({
+      reservedBytes: before.data.reservedBytes + charge,
+      spent: { diskBytes: before.data.spent.diskBytes + charge },
+      error: outcome === 'publication'
+        ? { code: 'PUBLICATION_FAILED', message: 'Synthetic repair publication failure' }
+        : { code: 'ENOSPC', message: 'Synthetic staging write failure' },
+      repairs: [], currentRevisionId: revision.id, output: null,
+    });
+    expect(saved.data.stages.find(stage => stage.key === 'repair').status).toBe('failed');
+    expect(await exists(directory)).toBe(outcome !== 'removed');
+    if (outcome !== 'removed') expect(await readFile(join(directory, 'src/index.html'), 'utf8')).toContain('MOVING');
+    expect(await getProductionProject(id)).toMatchObject({ candidateRevisionId: null, acceptedRevisionId: revision.id });
+    expect((await exportProductionPackage(id, revision.id)).files[0].content).toContain('FROZEN');
+    for (const artifact of before.data.stages.find(stage => stage.key === 'style-frame').artifacts) {
+      expect(await exists(join(PATHS.data, artifact.relativePath))).toBe(true);
+    }
+    // A new run can stage its original source only after confirmed removal.
+    const retrySample = vi.fn().mockRejectedValue(Object.assign(new Error('Synthetic sample failure'), { code: 'SAMPLE_FAILED' }));
+    const retryRepair = vi.fn().mockRejectedValue(new Error('Synthetic repair failure'));
+    const retry = await startProductionStageRun(id, {}, { sample: retrySample, repair: retryRepair });
+    expect(await retry.done).toBe(outcome === 'removed' ? 'failed' : 'exhausted');
+    expect(retrySample).toHaveBeenCalledTimes(outcome === 'removed' ? 1 : 0);
+  });
 
   it('measures a real render, repairs it into a new immutable revision, and renders final only from passing evidence', async () => {
     const { id, revision } = await project();
