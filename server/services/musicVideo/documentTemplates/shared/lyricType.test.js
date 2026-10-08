@@ -76,6 +76,52 @@ describe('lyricType timing', () => {
     const quick = createLyricType({ ...MV, lyricMarkers: [], lyrics: [{ text: 'no', startSec: 2, endSec: 2.1, words: [{ text: 'no', startSec: 2, endSec: 2.1 }] }] });
     expect(quick.lines[0].exitSec).toBeCloseTo(2.8, 6);
   });
+
+  it.each([
+    { role: 'line', nextRole: 'line', gap: 0.1, cut: true },
+    { role: 'line', nextRole: 'data', gap: 1, cut: true },
+    { role: 'data', nextRole: 'line', gap: 1.2, cut: false },
+  ])('never overlaps a $role cue with the next $nextRole cue in its zone (gap $gap)', ({ role, nextRole, gap, cut }) => {
+    const onset = 2;
+    const nextOnset = onset + gap;
+    const type = createLyricType({ render: { fps: 24 } }, { lines: [
+      { text: 'Example first', role, zone: 'lower-left', words: words('Example first', onset, 0.4) },
+      { text: 'Example next', role: nextRole, zone: 'lower-left', words: words('Example next', nextOnset, 0.02) },
+    ] });
+    const [first, next] = type.lines;
+    expect(first.endSec).toBeLessThanOrEqual(nextOnset);
+    if (cut) expect(first.exitSec).toBe(nextOnset);
+    else {
+      expect(first.endSec).toBe(nextOnset);
+      expect(first.endSec - first.exitSec).toBeCloseTo(8 / 24, 6);
+    }
+    for (let frame = onset * 24; frame <= (nextOnset + 1) * 24; frame++) {
+      expect(type.linesAt(frame / 24).length).toBeLessThanOrEqual(1);
+    }
+    expect(type.linesAt(nextOnset)).toEqual([next]);
+  });
+
+  it('keeps cues in different zones independent', () => {
+    const type = createLyricType({}, { lines: [
+      { text: 'Example first', role: 'line', zone: 'upper-right', words: words('Example first', 2, 0.02) },
+      { text: 'Example next', role: 'line', zone: 'lower-left', words: words('Example next', 2.1, 0.02) },
+    ] });
+    expect(type.linesAt(2.3)).toEqual(type.lines);
+    expect(type.lines[0].exitSec).toBeCloseTo(2.8, 6);
+    expect(type.lines[0].endSec - type.lines[0].exitSec).toBeCloseTo(8 / 24, 6);
+  });
+
+  it('preserves hook beat cuts and stamp minimum holds for crowded cues', () => {
+    const type = createLyricType({ song: { beats: [3, 4] } }, { exclusive: false, lines: [
+      { text: 'Example hook', role: 'hook', words: words('Example hook', 2, 0.02) },
+      { text: 'Example hook next', role: 'hook', words: words('Example hook next', 2.1, 0.02) },
+      { text: 'Example stamp', role: 'stamp', words: words('Example stamp', 5, 0.02) },
+      { text: 'Example stamp next', role: 'stamp', words: words('Example stamp next', 5.1, 0.02) },
+    ] });
+    expect(type.lines[0]).toMatchObject({ exitSec: 3, endSec: 3 });
+    expect(type.lines[2].exitSec).toBeCloseTo(5.8, 6);
+    expect(type.lines[2].endSec).toBe(type.lines[2].exitSec);
+  });
 });
 
 describe('lyricType text zones', () => {
