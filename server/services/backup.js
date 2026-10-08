@@ -1627,17 +1627,25 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
     }
     return restoreWithMediaBoundary();
   };
-  // Fixed acquisition order: snapshot cut -> settings -> CoS config -> CoS
+  // Fixed acquisition order: snapshot cut -> schedule -> settings -> CoS config -> CoS
   // runtime -> media registry. Drain publications BEFORE holding any domain
   // queue they may need to finish, and keep admission closed through transfer
   // and all cache reconciliation, including a partially failed transfer.
   const restoreWithSettingsBoundary = () => !dryRun && (!scope || scope === 'settings.json')
     ? withLiveSettingsRestore(restoreWithCosBoundary)
     : restoreWithCosBoundary();
-  if (dryRun) return restoreWithSettingsBoundary();
+  // Schedule mutations can await CoS state, so drain them before CoS ownership.
+  const restoreWithScheduleBoundary = async () => {
+    if (!dryRun && (!scope || scope === 'cos' || scope === 'cos/task-schedule.json')) {
+      const { withLiveTaskScheduleRestore } = await import('./taskScheduleStore.js');
+      return withLiveTaskScheduleRestore(restoreWithSettingsBoundary);
+    }
+    return restoreWithSettingsBoundary();
+  };
+  if (dryRun) return restoreWithScheduleBoundary();
   const releaseSnapshotCut = await acquireBackupSnapshotCut();
   try {
-    return await restoreWithSettingsBoundary();
+    return await restoreWithScheduleBoundary();
   } finally {
     releaseSnapshotCut();
   }

@@ -2987,6 +2987,15 @@ import { withLiveCosRestore } from './cosState.js';
 vi.mock('../lib/mediaModels.js', () => ({ withLiveMediaModelsRestore: vi.fn(fn => fn()) }));
 import { withLiveMediaModelsRestore } from '../lib/mediaModels.js';
 
+const scheduleStoreBoundary = vi.hoisted(() => ({ restore: null }));
+vi.mock('./taskScheduleStore.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  scheduleStoreBoundary.restore = actual.withLiveTaskScheduleRestore;
+  return { ...actual, withLiveTaskScheduleRestore: vi.fn(fn => fn()) };
+});
+import { withLiveTaskScheduleRestore, updateSchedule } from './taskScheduleStore.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+
 describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () => {
   beforeEach(() => {
     spawn.mockReset();
@@ -2995,6 +3004,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
     withLiveCosRestore.mockClear();
     withLiveMediaModelsRestore.mockClear();
     withLiveSettingsRestore.mockClear();
+    withLiveTaskScheduleRestore.mockReset().mockImplementation(fn => fn());
   });
 
   // Drive a mocked rsync to a clean exit so restoreSnapshot resolves.
@@ -3118,6 +3128,64 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
     it('echoes the subdirFilter back in the result', async () => {
       await expect(runRestore('/dest', 'snap-1', { dryRun: true, subdirFilter: 'brain' }))
         .resolves.toMatchObject({ subdirFilter: 'brain' });
+    });
+  });
+
+  describe('schedule restore ownership boundary', () => {
+    it.each([
+      [undefined, 0], ['cos', 0], ['cos/', 0], ['cos/task-schedule.json', 0],
+      ['./cos//task-schedule.json/', 0], ['cos/task-schedule.json', 1]
+    ])('drains schedule writes before CoS and preserves restored values for scope %s, exit %s', async (subdirFilter, exitCode) => {
+      withLiveTaskScheduleRestore.mockImplementation(scheduleStoreBoundary.restore);
+      const stateQueue = createFileWriteQueue();
+      const consultedState = vi.fn();
+      if (!subdirFilter || subdirFilter.replace(/\/$/, '') === 'cos') {
+        withLiveCosRestore.mockImplementationOnce(fn => stateQueue(fn));
+      }
+      const admitted = Promise.withResolvers();
+      const finishWrite = Promise.withResolvers();
+      const writing = updateSchedule(async schedule => {
+        admitted.resolve();
+        await finishWrite.promise;
+        await stateQueue(consultedState);
+        schedule.tasks.security.enabled = true;
+        return { changed: true };
+      });
+      await admitted.promise;
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false, subdirFilter });
+      await vi.waitFor(() => expect(withLiveTaskScheduleRestore).toHaveBeenCalledTimes(1));
+      expect(withLiveCosRestore).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+      finishWrite.resolve();
+      await flush();
+      expect(consultedState).toHaveBeenCalledTimes(1);
+      const restored = {
+        version: 2, tasks: { security: { enabled: false, prompt: 'Restored custom prompt' } },
+        templates: [{ id: 'restored-template', prompt: 'Example template' }], executions: {}
+      };
+      // Synthetic rsync boundary only: replace bytes in the isolated test root.
+      writeFileSync(join(PATHS.cos, 'task-schedule.json'), JSON.stringify(restored));
+      const later = vi.fn(schedule => {
+        schedule.executions['task:security'] = { count: 7 };
+        return { changed: true };
+      });
+      const waitingWrite = updateSchedule(later);
+      expect(later).not.toHaveBeenCalled();
+      proc.emit('close', exitCode);
+      if (exitCode) await expect(pending).rejects.toThrow(/Some files may already have been overwritten/);
+      else await pending;
+      await Promise.all([writing, waitingWrite]);
+      const persisted = JSON.parse(readFileSync(join(PATHS.cos, 'task-schedule.json'), 'utf8'));
+      expect(persisted.tasks.security).toMatchObject({ enabled: false, prompt: 'Restored custom prompt' });
+      expect(persisted.templates).toEqual(restored.templates);
+      expect(persisted.executions['task:security']).toEqual({ count: 7 });
+    });
+
+    it.each([{ dryRun: true }, { dryRun: true, subdirFilter: 'cos/task-schedule.json' }, { dryRun: false, subdirFilter: 'cos/state.json' }, { dryRun: false, subdirFilter: 'images' }])('does not acquire schedule ownership for %j', async options => {
+      await runRestore('/dest', 'snap-1', options);
+      expect(withLiveTaskScheduleRestore).not.toHaveBeenCalled();
     });
   });
 

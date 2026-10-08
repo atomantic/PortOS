@@ -610,10 +610,26 @@ queue while retaining the existing restore diagnostics. Malformed restored
 settings still invalidate the cache rather than broadcasting empty defaults.
 Dry runs and unrelated selective restores do not acquire this settings boundary.
 
-A full restore acquires boundaries in this order: settings, CoS configuration, CoS
-runtime state, media model registry. The settings queue remains held through CoS reconciliation. A
+A full restore acquires boundaries in this order: shared snapshot cut, task schedule,
+settings, CoS configuration, CoS runtime state, media model registry. The settings queue remains held through CoS reconciliation. A
 restore callback must never call a queued settings write API; cache reload reads
 directly and does not re-enter the queue.
+
+### Restoring task schedules in a running server
+
+Full live file restores, `cos` restores, and exact `cos/task-schedule.json`
+restores join the schedule's existing write queue after the shared snapshot cut
+and before settings/CoS ownership. Schedule mutations can consult CoS state, so
+reversing that order could deadlock. Already admitted writes finish before
+transfer; later writes read the restored schedule and preserve untouched task
+settings, prompts, and templates.
+
+The queue stays held through compatibility normalization and the schedule-change
+notification, including after a partial transfer failure. Normalization reads
+and saves directly inside that turn without re-entering the queue. Transfer
+errors retain partial-overwrite diagnostics; reconciliation errors are surfaced
+without discarding the transfer failure. Dry runs and unrelated scopes do not
+acquire the schedule boundary.
 
 ### Restoring CoS files in a running server
 
