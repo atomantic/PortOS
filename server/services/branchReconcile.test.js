@@ -1394,6 +1394,33 @@ describe('reconcile', () => {
       expect(git.deleteBranch).not.toHaveBeenCalled();
     });
 
+    it('preserves work written after the scan even when the claim has no owner', async () => {
+      git.hasBranchMergeEvidence.mockResolvedValue(true);
+      execGit.mockResolvedValue({ stdout: '?? unfinished.js\n', exitCode: 0 });
+      const result = await cleanupMerged('/repo', 'main', [{
+        branch: 'claim/issue-101', worktreePath: '/repo/data/cos/worktrees/claim-issue-101', worktreeAgeMs: 0,
+      }], { activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: async () => [] } });
+      expect(result.skipped).toEqual([{ branch: 'claim/issue-101', reason: 'worktree-dirty' }]);
+      expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+      expect(git.deleteBranch).not.toHaveBeenCalled();
+    });
+
+    it('preserves a recent claim when a workspace owner appears after the scan', async () => {
+      dirtyClaim();
+      worktreeMtimeMs = Date.now();
+      execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+      const result = await reconcile('/repo', {
+        activeAgentIds: new Set(),
+        claimOwners: { agents: [], readAgents: async () => [{
+          id: 'agent-late', status: 'running', workspacePath: '/repo/data/cos/worktrees/claim-issue-101',
+        }] },
+      });
+      expect(result.cleaned).toEqual([]);
+      expect(result.skipped).toHaveLength(1);
+      expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+      expect(git.deleteBranch).not.toHaveBeenCalled();
+    });
+
     it('never retires a merged, clean claim checkout its live owner is still handing off', async () => {
       git.getBranches.mockResolvedValue([
         { name: 'claim/issue-101', isDefault: false, current: false, tracking: 'origin/claim/issue-101', merged: true }

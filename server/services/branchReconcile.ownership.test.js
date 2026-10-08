@@ -93,6 +93,35 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(left).not.toContain('claim/issue-5');
   });
 
+  it('retires fresh owner-free claims while preserving locked and unfinished work', async () => {
+    const root = join(repo, '.claude', 'worktrees');
+    await mkdir(root, { recursive: true });
+    const clean = await addTree(join(root, 'claim-issue-11'), 'claim/issue-11');
+    const locked = await addTree(join(root, 'claim-issue-12'), 'claim/issue-12');
+    await execGit(['worktree', 'lock', locked], repo);
+    const dirty = await addTree(join(root, 'claim-issue-13'), 'claim/issue-13');
+    await writeFile(join(dirty, 'unfinished.txt'), 'preserve this work\n');
+    const unmerged = await addTree(join(root, 'claim-issue-14'), 'claim/issue-14');
+    await writeFile(join(unmerged, 'committed.txt'), 'finish this work\n');
+    await execGit(['add', 'committed.txt'], unmerged);
+    await execGit(['commit', '-m', 'feat: unfinished work'], unmerged);
+
+    const result = await reconcile(repo, {
+      activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: async () => [] },
+    });
+    expect(result.cleaned).toEqual(['claim/issue-11']);
+    expect(existsSync(clean)).toBe(false);
+    expect(result.skipped).toContainEqual(expect.objectContaining({ branch: 'claim/issue-12', reason: 'worktree-locked' }));
+    expect(result.inFlight).toEqual(expect.arrayContaining([
+      expect.objectContaining({ branch: 'claim/issue-13', state: 'ABANDONED_WIP' }),
+    ]));
+    // This hermetic repo has no forge, so committed work is held until PR state
+    // can be established rather than being retired as merged.
+    expect(result.wip).toContainEqual(expect.objectContaining({ branch: 'claim/issue-14' }));
+    for (const path of [locked, dirty, unmerged]) expect(existsSync(path)).toBe(true);
+    expect(await branches()).toEqual(expect.arrayContaining(['claim/issue-12', 'claim/issue-13', 'claim/issue-14']));
+  });
+
   it('leaves the operator-initiated merged-branch cleanup able to remove an unmanaged tree', async () => {
     const loose = await addTree(join(external, 'loose'), 'loose-br', { ageMs: 30 * DAY });
 

@@ -117,8 +117,8 @@ export const STALE_CLAIM_IDLE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 // or whose PR was merged from a peer machine, which PortOS users routinely run —
 // sits in exactly that state for the seconds-to-minutes it spends on teardown,
 // and reaping there deletes a directory a live process is still standing in.
-// mtime is the only liveness proxy available (a claim has no durable local agent
-// id), so keep a short idle floor over it. An hour is far longer than any
+// Without a fresh claim registry read, mtime remains the liveness proxy,
+// so keep a short idle floor over it. An hour is far longer than any
 // teardown and still turns a week-long park into a single recheck.
 export const SHIPPED_CLAIM_IDLE_MS = 60 * 60 * 1000; // 1 hour
 
@@ -1060,7 +1060,12 @@ async function releaseRetiredClaim(repoPath, branch, { origin, forgeExec, forgeA
  * A failed gate skips the branch (with a reason) — never a force-delete of
  * unmerged or dirty work.
  *
- * SHIPPED_CLAIM: a `claim-*` worktree holds for STALE_CLAIM_IDLE_MS on the chance
+ * With a fresh owner-registry read under the claim binding lock, an owner-free
+ * claim can retire immediately. The age windows below are only the fallback
+ * for callers without that authoritative recheck; neither path bypasses dirty
+ * work, managed-root, lock, or active-owner guards.
+ *
+ * SHIPPED_CLAIM fallback: a `claim-*` worktree holds for STALE_CLAIM_IDLE_MS on the chance
  * a claim session is still using it. Waiting out a full week is pointless once
  * the claim has demonstrably SHIPPED, and doing it anyway is what left four
  * finished claims parked while every run reported "cleaned 0" and parked on
@@ -1078,8 +1083,7 @@ async function releaseRetiredClaim(repoPath, branch, { origin, forgeExec, forgeA
  *
  * What it does NOT prove is that the claim PROCESS has exited — so this
  * SHORTENS the idle window to SHIPPED_CLAIM_IDLE_MS rather than removing it,
- * leaving one mechanism (the age window) with two durations instead of a second
- * way past the gate. Everything the window already guarantees still holds: an
+ * for callers without a registry recheck. The fallback remains conservative: an
  * unreadable mtime fails safe to protected, and an explicit lock still wins.
  *
  * @param {string} repoPath
@@ -1246,11 +1250,19 @@ async function retireBranch(repoPath, b, opts) {
   const readAgents = opts.claimOwners?.readAgents;
   if (!readAgents) return retireBranchNow(repoPath, b, opts);
   return withClaimOwnershipLock(async () => {
+    const agents = await readAgents().catch(() => null);
     const reason = claimCheckoutOwnerReason({
-      branchName: b.branch, holderPath: b.worktreePath, sourceWorkspace: repoPath,
-      agents: await readAgents().catch(() => null),
+      branchName: b.branch, holderPath: b.worktreePath, sourceWorkspace: repoPath, agents,
     });
-    return reason ? { ok: false, reason } : retireBranchNow(repoPath, b, opts);
+    if (reason) return { ok: false, reason };
+    // A fresh registry read under the binding lock supersedes the directory-age
+    // proxy. A claim name alone is not a live owner. Keep all other retirement
+    // gates, and refresh workspace owners too (not only explicit claim bindings).
+    return retireBranchNow(repoPath, b, {
+      ...opts,
+      activeAgentIds: buildActiveOwnerIds(opts.activeAgentIds, agents),
+      allowLiveClaim: true,
+    });
   });
 }
 
