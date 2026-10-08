@@ -178,7 +178,8 @@ export async function cloneProject(id, options = {}) {
 export async function updateProject(id, patch) {
   const backend = await selectBackend();
   const seeded = await seedTrackMetadataOnUpdate(id, patch);
-  const needsSnapshot = seeded?.concept?.universeId !== undefined || seeded?.visualSpec?.moodBoardId !== undefined;
+  const needsSnapshot = seeded?.concept?.universeId !== undefined || seeded?.concept?.characterStyleId !== undefined
+    || seeded?.visualSpec?.moodBoardId !== undefined;
   const resolved = needsSnapshot ? await withStyleSnapshots(seeded, await backend.getProject(id)) : seeded;
   const next = await backend.updateProject(id, resolved);
   emitRecordUpdated('musicVideoProject', id);

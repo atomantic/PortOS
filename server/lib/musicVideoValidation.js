@@ -69,6 +69,7 @@ import {
   normalizeAutoApprove,
 } from './musicVideoAutonomous.js';
 import { MUSCRIPTOR_MODELS } from './muscriptorModels.js';
+import { MUSIC_VIDEO_CHARACTER_STYLE_IDS } from './musicVideoCharacterStyles.js';
 import { IMAGE_GEN_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 
 // A project is authored hands-on (director) or seeded by the AI planner
@@ -87,6 +88,10 @@ export const musicVideoConceptSchema = z.object({
   // Authored snapshots keep the production stable when source canon changes.
   universeStyle: z.string().max(4000).optional(),
   moodBoardStyle: z.string().max(4000).optional(),
+  // A built-in character style (musicVideoCharacterStyles.js); the server
+  // snapshots its text into `characterStyle` and casts its character.
+  characterStyleId: z.enum(MUSIC_VIDEO_CHARACTER_STYLE_IDS).nullable().optional(),
+  characterStyle: z.string().max(4000).optional(),
   subjects: z.array(z.object({
     id: z.string().min(1).max(64),
     kind: z.enum(['character', 'place', 'object']),
@@ -207,6 +212,11 @@ const galleryImageName = z.string().min(1).max(256)
   .regex(/^[^/\\]+\.(png|jpg|jpeg|webp)$/i, 'must be a gallery image basename (png/jpg/jpeg/webp)');
 // A video-history id (the scene clip vocabulary `videoHistoryId` already uses).
 const videoHistoryIdSchema = z.string().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/, 'must be a video history id');
+
+// Built-in character style routes (routes/musicVideoCharacterStyles.js).
+export const musicVideoCharacterStyleParamsSchema = z.object({ id: z.enum(MUSIC_VIDEO_CHARACTER_STYLE_IDS) }).strict();
+// null clears this install's character sheet for the style.
+export const musicVideoCharacterStyleReferenceSchema = z.object({ imageId: galleryImageName.nullable() }).strict();
 
 export const MUSIC_VIDEO_REFERENCE_ROLES = ['mood', 'character', 'wardrobe', 'set', 'prop', 'style'];
 // How a reference is meant to be used (#8980): `reference` guides the look

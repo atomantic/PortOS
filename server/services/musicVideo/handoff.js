@@ -124,7 +124,7 @@ export function buildHandoffManifest(project, { now = new Date().toISOString() }
     exportedAt: now,
     project: { id: project.id, name: project.name, version: project.version || 1 },
     instructions: 'Generate each scene in your external tool, keep the scene file tag (for example S03-1a2b3c4d) in every downloaded filename, then import the files on the Music Video board. PortOS never contacts the external service; attach the reference files yourself.',
-    concept: { prompt: project.concept?.prompt || '', style: project.concept?.style || '', universeStyle: project.concept?.universeStyle || '', moodBoardStyle: project.concept?.moodBoardStyle || '', subjects: project.concept?.subjects || [] },
+    concept: { prompt: project.concept?.prompt || '', style: project.concept?.style || '', universeStyle: project.concept?.universeStyle || '', moodBoardStyle: project.concept?.moodBoardStyle || '', characterStyle: project.concept?.characterStyle || '', subjects: project.concept?.subjects || [] },
     visualSpec: {
       palette: spec?.palette || [],
       typography: spec?.typography || '',

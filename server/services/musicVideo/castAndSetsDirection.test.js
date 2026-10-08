@@ -53,6 +53,15 @@ describe('Cast & Sets direction', () => {
     expect(prompt).not.toContain('This is a REVISION');
   });
 
+  it('fixes the protagonist to a loaded character style, stating it once with its wardrobe', () => {
+    const characterStyle = 'Claudia slopcore: Claudia.\nWardrobe options: Look 00: a white shirt\nNever: a second streak';
+    const prompt = buildCastAndSetsPrompt({ ...project, concept: { ...project.concept, characterStyle } });
+    expect(prompt).toContain('CHARACTER STYLE (fixed)');
+    expect(prompt.split('Never: a second streak')).toHaveLength(2);
+    expect(prompt).toContain('Wardrobe options: Look 00');
+    expect(buildCastAndSetsPrompt(project)).not.toContain('CHARACTER STYLE');
+  });
+
   it('parses a fenced answer after an echoed schema, normalizing ids, the song map and tests', () => {
     const echoed = buildCastAndSetsPrompt(project).split('no other text:\n')[1];
     const parsed = parseCastAndSetsResponse(`${echoed}\n\nSure:\n\`\`\`json\n${JSON.stringify(ANSWER)}\n\`\`\``);
