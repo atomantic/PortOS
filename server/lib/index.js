@@ -117,6 +117,7 @@ export * from './creativeLatitude.js';
 export * as editorial from './editorial/index.js';
 export * from './familySettingsMap.js';
 export * from './fableLoomGraph.js';
+export * from './cameraMovements.js';
 export * from './fableLoomCameraMovements.js';
 export * from './fableLoomPlayback.js';
 export * from './fableLoomParticipation.js';

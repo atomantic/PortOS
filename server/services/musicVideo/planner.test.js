@@ -773,3 +773,59 @@ describe('review feedback in shot planning', () => {
     expect(prompt).toContain('"Drop"');
   });
 });
+
+describe('shot camera planning (#10589)', () => {
+  const freshProjectResult = () => ({ project: makeProject(), scenes: [{ sceneId: 's1' }] });
+  const llm = (entries) => {
+    resolveProviderAndModel.mockResolvedValue({ provider: { id: 'p1', type: 'api' }, selectedModel: 'gpt' });
+    runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify(entries) });
+  };
+
+  it('puts the camera vocabulary and variety rules in the plan prompt and asks for a camera per shot', () => {
+    const { shots } = planShots(SECTIONS, { beats: BEATS, downbeats: DOWNBEATS });
+    const prompt = buildScenePlanPrompt(makeProject(), shots);
+    expect(prompt).toContain('CAMERA VOCABULARY');
+    expect(prompt).toContain('- whip-pan (Whip pan) [rotate, high, snap]');
+    expect(prompt).toContain('- powers-of-ten');
+    expect(prompt).toContain('At most 2 consecutive shots may use moves from the same family');
+    expect(prompt).toContain('must give its "reason"');
+    expect(prompt).toContain('"camera": { "move": "<camera move id>"');
+  });
+
+  it('keeps valid model cameras, drops unknown ids and reasonless lock-offs, and fills every shot', async () => {
+    getProject.mockResolvedValue(makeProject());
+    addProjectScenes.mockResolvedValue(freshProjectResult());
+    llm([
+      { index: 0, framePrompt: 'neon alley', prompt: 'a courier waits', camera: { move: 'pedestal-up', speed: 'slow', endFraming: 'wide', onBeat: false } },
+      { index: 1, framePrompt: 'rooftop', prompt: 'the courier leaps', camera: { move: 'teleport-cam', speed: 'fast' } },
+      { index: 2, framePrompt: 'dawn street', prompt: 'the courier walks away', camera: { move: 'locked-off' } },
+    ]);
+    await planProject('mv-1');
+    const inputs = addProjectScenes.mock.calls[0][1];
+    expect(inputs[0].camera).toEqual({ move: 'pedestal-up', speed: 'slow', endFraming: 'wide' });
+    for (const input of inputs) expect(typeof input.camera?.move).toBe('string');
+    expect(inputs.slice(1).some((input) => input.camera.move === 'teleport-cam' || input.camera.move === 'locked-off')).toBe(false);
+  });
+
+  it('plans catalog cameras without a provider, snapping the drop and never running one family three times', async () => {
+    getProject.mockResolvedValue(makeProject());
+    addProjectScenes.mockResolvedValue(freshProjectResult());
+    await planProject('mv-1', { seedPrompts: false });
+    const inputs = addProjectScenes.mock.calls[0][1];
+    const { getCameraMovement } = await import('../../lib/cameraMovements.js');
+    const families = inputs.map((input) => getCameraMovement(input.camera.move).family);
+    for (let i = 2; i < families.length; i++) expect(families[i] === families[i - 1] && families[i] === families[i - 2]).toBe(false);
+    const drop = inputs.find((input) => input.sectionLabel === 'Drop');
+    expect(getCameraMovement(drop.camera.move).snap).toBe(true);
+    expect(drop.camera.onBeat).toBe(true);
+  });
+
+  it('shows the current camera when revising and returns a valid revised camera', async () => {
+    const scenes = [{ sceneId: 'scene-drop', label: 'Drop', startSec: 10, endSec: 18, framePrompt: 'rooftop', prompt: 'figure walks', camera: { move: 'truck-left' } }];
+    const requests = [{ id: 'fb', stage: 'storyboard', target: 'Drop', text: 'Hit the drop harder', decision: 'request-changes', basis: 'b' }];
+    llm([{ index: 0, framePrompt: 'rooftop', prompt: 'figure leaps', camera: { move: 'crash zoom', speed: 'snap', onBeat: true } }]);
+    const updates = await proposeShotRevisions(makeProject({ scenes, productionReview: { feedback: requests } }), requests);
+    expect(runPromptThroughProvider.mock.calls[0][0].prompt).toContain('current camera: truck-left');
+    expect(updates.get('scene-drop').camera).toEqual({ move: 'crash-zoom', speed: 'snap', onBeat: true });
+  });
+});

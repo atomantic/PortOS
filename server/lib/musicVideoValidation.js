@@ -45,6 +45,7 @@ import { shotActionContractProblem } from './musicVideoActionContract.js';
 import { NARRATIVE_EVENT_KINDS } from './musicVideoNarrativeEvents.js';
 import { MUSIC_VIDEO_MEDIA } from './musicVideoMediumPlan.js';
 import { MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
+import { CAMERA_FRAMINGS, CAMERA_MOVEMENT_VALUES, CAMERA_SPEEDS } from './cameraMovements.js';
 import { MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
 import {
   MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD,
@@ -504,9 +505,22 @@ export const musicVideoDocumentTemplateSchema = z.object({
   template: z.enum(MUSIC_VIDEO_DOCUMENT_TEMPLATES).optional(),
 }).strict();
 
+// #10589: a shot's structured camera move — a shared camera-movement id
+// (lib/cameraMovements.js) with optional speed, end framing, downbeat landing
+// and, for a still camera, the reason it holds. Feeds the i2v camera block and
+// the layered template's camera rig. `null` clears it.
+export const musicVideoSceneCameraSchema = z.object({
+  move: z.enum(CAMERA_MOVEMENT_VALUES),
+  speed: z.enum(CAMERA_SPEEDS).optional(),
+  endFraming: z.enum(CAMERA_FRAMINGS).optional(),
+  onBeat: z.boolean().optional(),
+  reason: z.string().trim().max(300).optional(),
+}).strict();
+
 // Per-scene visual layer (#8985) — footage, a moved still, or a title card;
 // see musicVideoLayers.js. Only a composed render honors a non-footage layer.
 const sceneLayerFields = {
+  camera: musicVideoSceneCameraSchema.nullable().optional(),
   visualLayer: z.enum(MUSIC_VIDEO_VISUAL_LAYERS).optional(),
   stillMove: z.enum(MUSIC_VIDEO_STILL_MOVES).optional(),
   cardText: z.string().max(500).nullable().optional(),

@@ -327,6 +327,8 @@ const UPGRADABLE_LAYERED_ENGINES = new Set([
   'e2267a068c92a3c7dee49db5f3e57caff1ac11aee1312c0d82e28352850aad3b',
   '23842766a818fd9820d79ff229eab538cc0edf391992756cbfd14434d525c019',
   '5f69f39cfbdbf0531c23250d01773447529a5254271b0b77f40d029d02bb0e1f',
+  // #10565's engine, before cameraRig.js; an upgraded copy without the rig script keeps a slow push.
+  'dc27611ebaa429c28bd467b003495d2a1c7dc0ede73be0cfc28db4b97c964dcf',
 ]);
 const engineDigest = bytes => createHash('sha256').update(bytes.toString('utf8').replace(/\r\n?/g, '\n')).digest('hex');
 
