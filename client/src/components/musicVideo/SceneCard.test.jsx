@@ -81,9 +81,13 @@ describe('lyric type per shot (#10583)', () => {
     expect(screen.queryByLabelText('Lyrics')).toBeNull();
     rerender(<SceneCard scene={scene} index={0} layered documentComposition onEditLocal={() => {}} onSave={onSave} />);
     expect(screen.getByLabelText('Lyrics').value).toBe('upper-right');
+    for (const [label, value] of [['Upper centre', 'upper'], ['Lower centre', 'lower']]) {
+      expect(screen.getByRole('option', { name: label }).value).toBe(value);
+      fireEvent.change(screen.getByLabelText('Lyrics'), { target: { value } });
+    }
     fireEvent.change(screen.getByLabelText('Lyrics'), { target: { value: 'none' } });
     fireEvent.change(screen.getByLabelText('Lyric style'), { target: { value: 'stamp' } });
     fireEvent.change(screen.getByLabelText('Lyrics'), { target: { value: '' } });
-    expect(onSave.mock.calls).toEqual([['s1', { textZone: 'none' }], ['s1', { lyricRole: 'stamp' }], ['s1', { textZone: null }]]);
+    expect(onSave.mock.calls).toEqual([['s1', { textZone: 'upper' }], ['s1', { textZone: 'lower' }], ['s1', { textZone: 'none' }], ['s1', { lyricRole: 'stamp' }], ['s1', { textZone: null }]]);
   });
 });

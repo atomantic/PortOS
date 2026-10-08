@@ -28,7 +28,7 @@ export const MUSIC_VIDEO_STILL_MOVES = ['hold', 'push', 'pan'];
  * lines sung over it. Both are optional; a shot without them takes the sheet's roles
  * and the module's default zone.
  */
-export const MUSIC_VIDEO_TEXT_ZONES = ['lower-left', 'upper-right', 'center', 'none'];
+export const MUSIC_VIDEO_TEXT_ZONES = ['lower-left', 'upper-right', 'upper', 'lower', 'center', 'none'];
 export const MUSIC_VIDEO_LYRIC_ROLES = ['line', 'hook', 'stamp', 'data'];
 
 /**
