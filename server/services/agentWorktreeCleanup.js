@@ -1,3 +1,4 @@
+import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 /**
  * Agent Worktree Cleanup
  *
@@ -933,7 +934,7 @@ export async function recordTaskResumePointer({ task, agentId, agentMetadata }) 
  */
 export async function releaseRetryHold({ agentId, task, success, agentMetadata }) {
   if (!agentId || !task?.id) return {};
-  if (success && task.metadata?.auditDepth !== 'deep') return {};
+  if (success && !isLegacyDeepAudit(task.metadata)) return {};
 
   const { getTaskById, getAgentRecord } = await import('./cos.js');
   const persisted = await getTaskById(task.id).catch(err => {
@@ -942,7 +943,7 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
   });
   if (!persisted) return {};
 
-  if (task.metadata?.auditDepth === 'deep') {
+  if (isLegacyDeepAudit(task.metadata)) {
     if (persisted.status !== 'in_progress' || !isRetryHoldOwner(persisted.metadata, agentId)) return {};
     const metadata = agentMetadata === undefined
       ? (await getAgentRecord(agentId).catch(() => null))?.metadata : agentMetadata;

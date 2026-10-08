@@ -1,3 +1,4 @@
+import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 /** Machine-local, DB-primary coverage evidence. No timers or provider calls. */
 import { join, resolve } from 'path';
 import { ensureSchema, query, withTransaction } from '../lib/db.js';
@@ -78,7 +79,7 @@ export async function getDeepAuditLedger(id) {
 
 /** Read the server-owned pin before provisioning a replacement workspace. */
 export async function getDeepAuditSourceRevision(task, deps = {}) {
-  if (task.metadata?.auditDepth !== 'deep') return null;
+  if (!isLegacyDeepAudit(task.metadata)) return null;
   const ledger = await (deps.readLedger || getDeepAuditLedger)(deepAuditId(task));
   if (!ledger) return null;
   const category = isAuditTaskType(resolveTaskHookType(task)) ? normalizeAuditTaskType(resolveTaskHookType(task)) : 'code-quality';
@@ -100,7 +101,7 @@ async function initializeDeepAuditSubmodules(workspacePath) {
 
 /** Inject at the common spawn boundary, after all saved/custom/legacy task rendering. */
 export async function prepareDeepAudit({ task, agentId, workspacePath }, deps = {}) {
-  if (task.metadata?.auditDepth !== 'deep') return null;
+  if (!isLegacyDeepAudit(task.metadata)) return null;
   if (!agentId || !workspacePath || !task.metadata?.app || !deepAuditId(task)) throw new Error('Deep audit needs an identified agent, app and workspace');
   const category = isAuditTaskType(resolveTaskHookType(task)) ? normalizeAuditTaskType(resolveTaskHookType(task)) : 'code-quality';
   const promptHash = canonicalSnapshotChecksum({ description: task.description, prompt: task.metadata?.prompt, context: task.metadata?.context });
@@ -124,7 +125,7 @@ export async function prepareDeepAudit({ task, agentId, workspacePath }, deps = 
 
 /** Import even on failure; absent/malformed output preserves a partial, resumable ledger. */
 export async function checkpointDeepAudit({ task, agentId, workspacePath, success }, deps = {}) {
-  if (task.metadata?.auditDepth !== 'deep') return null;
+  if (!isLegacyDeepAudit(task.metadata)) return null;
   const id = deepAuditId(task);
   const ledger = await (deps.mutate || mutateLedger)(id, null, async current => {
     if (current.appId !== task.metadata.app) throw new Error('Deep audit app mismatch');

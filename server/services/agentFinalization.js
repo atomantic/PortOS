@@ -1,3 +1,4 @@
+import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 import { retryHoldMetadata } from '../lib/taskRetryHold.js';
 import { PR_COMPLETIONS, resolvePrCompletion, PR_MISSING_CATEGORY, prClaimWasVerified } from '../lib/prDisposition.js';
 import { isAuditTaskType } from '../lib/auditCatalog.js';
@@ -1040,7 +1041,7 @@ export function dispatchTaskOutputHookOnce({
     // retryable on recovery rather than being mistaken for a successful report.
     const savedAssessment = [agent?.metadata?.auditAssessment, agent?.result?.auditAssessment]
       .find(assessment => assessment?.status === 'recorded');
-    if (task.metadata?.auditDepth !== 'deep' && isAuditTaskType(resolveTaskHookType(task)) && savedAssessment?.status === 'recorded') {
+    if (!isLegacyDeepAudit(task.metadata) && isAuditTaskType(resolveTaskHookType(task)) && savedAssessment?.status === 'recorded') {
       return { ran: false, auditAssessment: savedAssessment };
     }
     if (agent?.metadata?.outputHookDispatchedAt) {
@@ -1602,7 +1603,7 @@ export async function finalizeAgent({
   });
 
   const taskType = task?.taskType || 'user';
-  const taskUpdate = task.metadata?.auditDepth === 'deep' && !terminatedByUser
+  const taskUpdate = isLegacyDeepAudit(task.metadata) && !terminatedByUser
     ? { status: 'in_progress', metadata: { ...preHookTask.metadata, ...retryHoldMetadata(agentId) } }
     : terminatedByUser
     ? {
@@ -1638,7 +1639,7 @@ export async function finalizeAgent({
       return null;
     });
 
-  if (task.metadata?.auditDepth === 'deep' && hookResult?.deepAudit) {
+  if (isLegacyDeepAudit(task.metadata) && hookResult?.deepAudit) {
     hookResult.deepAudit = await (await import('./deepAudit.js')).settleDeepAuditDelivery({
       task, agentId, success: verdict.success && !terminatedByUser, validationPassed,
     }).catch(err => ({ ...hookResult.deepAudit, complete: false, deliveryComplete: false, reason: `Delivery persistence failed: ${err.message}` }));
@@ -1959,14 +1960,14 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
   // Shared resolver with evaluateSuccessCriteria's gate — "runs a hook" and "gets
   // the programmatic-I/O criterion" must stay the same question (#2727).
   const taskType = resolveTaskHookType(task);
-  const deepAudit = task.metadata?.auditDepth === 'deep'
+  const deepAudit = isLegacyDeepAudit(task.metadata)
     ? await (await import('./deepAudit.js')).checkpointDeepAudit({ task, agentId, success: false,
       workspacePath: hookPayloadDir({ task, workspacePath, recovery }) }) : null;
   if (!taskType) return { ran: false, ...(deepAudit ? { deepAudit } : {}) };
   if (isAuditTaskType(taskType)) {
     const { recordAuditQuality } = await import('./appQuality.js');
     const auditAssessment = await recordAuditQuality({ task, taskType, agentId, success, assessedAt,
-      ...(task.metadata?.auditDepth === 'deep' ? { deepDiscoveryComplete: deepAudit?.discoveryComplete === true } : {}),
+      ...(isLegacyDeepAudit(task.metadata) ? { deepDiscoveryComplete: deepAudit?.discoveryComplete === true } : {}),
       workspacePath: hookPayloadDir({ task, workspacePath, recovery }) })
       .then(recorded => ({ status: recorded === true ? 'recorded' : success ? 'not-recorded' : 'not-attempted' }))
       .catch(err => {
@@ -1975,7 +1976,7 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
       });
     const recorded = auditAssessment.status === 'recorded';
     // A review-only run must not land a separate snapshot behind the user's back.
-    if (task.metadata?.auditDepth !== 'deep' && recorded === true && resolvePrCompletion(task?.metadata) !== PR_COMPLETIONS.LEAVE_OPEN) {
+    if (!isLegacyDeepAudit(task.metadata) && recorded === true && resolvePrCompletion(task?.metadata) !== PR_COMPLETIONS.LEAVE_OPEN) {
       await publishAppSnapshotFileAfterAudit(task?.metadata?.app);
     }
     // Assessment telemetry never waives commit/PR success criteria for fix mode.

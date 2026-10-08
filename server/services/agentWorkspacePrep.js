@@ -1,3 +1,4 @@
+import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 /**
  * Agent Workspace Preparation
@@ -170,7 +171,7 @@ async function prepareRequestedWorktree({
   allowSharedWorkspaceFallback,
 }) {
   const isolateDependencies = resolveTaskHookType(task) === 'dependency-updates';
-  const baseCommit = task.metadata?.auditDepth === 'deep'
+  const baseCommit = isLegacyDeepAudit(task.metadata)
     ? await (await import('./deepAudit.js')).getDeepAuditSourceRevision(task)
     : null;
   // Detecting the base branch and resolving the branch holder are independent
@@ -194,7 +195,7 @@ async function prepareRequestedWorktree({
       preferredPath: resumeWorktreePath,
       taskId: task.id,
       allowLiveClaim: isNonCommittingCoordinatorTask(task),
-      deepResume: task.metadata?.auditDepth === 'deep',
+      deepResume: isLegacyDeepAudit(task.metadata),
     })
     : Promise.resolve(null);
 

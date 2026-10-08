@@ -239,7 +239,7 @@ export function buildAgentRegistration({
     // Values are coerced on the way through: a COS-TASKS.md round-trip hands
     // every scalar back as a string.
     ...quotaBurnAgentMetadata(task.metadata),
-    ...(task.metadata?.auditDepth === 'deep' ? { taskAuditDepth: 'deep' } : {}),
+    ...(task.metadata?.auditDepth === 'deep' ? { taskAuditDepth: 'deep', ...(task.metadata.auditWorkflow ? { auditWorkflow: task.metadata.auditWorkflow } : {}) } : {}),
     // Same reason as taskLiProposal — a hand-picked projection, so this must be
     // listed explicitly. `declaresNoCommitCriterion` (taskTypeHooks.js) reads it
     // to decide whether a run declared a commit criterion at all,

@@ -490,3 +490,20 @@ describe('programmatic scheduled handlers expose no issues-only toggle', () => {
     }
   });
 });
+
+
+describe('new extended Deep creation boundaries', () => {
+  it.each(['schedule', 'manual'])('stamps a new %s task without creating a certification identity', async lane => {
+    const { getTaskInterval } = await import('./taskSchedule.js');
+    promptTemplate.body = AUDIT_TEMPLATE;
+    getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: lane === 'schedule' ? { auditDepth: 'deep', fileIssues: false } : {} });
+    const task = await generate('security', lane === 'manual' ? { skipPreconditions: true, runOverrides: { auditDepth: 'deep', fileIssues: false } } : {});
+    expect(task.metadata).toMatchObject({ auditDepth: 'deep', auditWorkflow: 'extended-v1', fileIssues: false });
+    expect(task.metadata.deepAuditId).toBeUndefined();
+  });
+  it('stamps custom jobs but rejects historical checkpoint injection', async () => {
+    const job = { id: 'job-example', name: 'Audit', promptTemplate: 'Investigate and fix', appId: 'app-1', taskMetadata: { auditDepth: 'deep', fileIssues: false, useWorktree: true, openPR: true } };
+    expect((await generateTaskFromJob(job)).metadata).toMatchObject({ auditWorkflow: 'extended-v1', useWorktree: true, openPR: true });
+    await expect(generateTaskFromJob({ ...job, taskMetadata: { ...job.taskMetadata, deepAuditId: 'historical' } })).rejects.toThrow('read-only');
+  });
+});

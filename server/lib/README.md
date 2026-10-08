@@ -880,3 +880,5 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | `deepAuditCoverage.js` | Deterministic bounded source partitions, derived coverage groups and explicit contract-upgrade compatibility. |
 | `deepAudit.js` | Strict Deep audit checkpoint schema, scope invalidation, server-assigned passes and mechanical completion rules. |
+
+- `auditWorkflow.js`: versioned extended Deep execution and historical certification classification.

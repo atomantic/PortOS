@@ -862,3 +862,5 @@ export * from './runtimeFilePublication.js';
 
 export * from './deepAudit.js';
 export * from './deepAuditCoverage.js';
+
+export * from './auditWorkflow.js';
