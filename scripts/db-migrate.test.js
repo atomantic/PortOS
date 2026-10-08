@@ -22,6 +22,7 @@ case "$1" in
   ps) echo "Up 5 minutes"; exit 0 ;;
   info) exit 0 ;;
   compose)
+    [ -n "$COMPOSE_ENV_LOG" ] && echo "$PGUSER|$PGDATABASE|$PGPASSWORD|$PGPORT_DOCKER" >> "$COMPOSE_ENV_LOG"
     case "$*" in *" stop "*) echo SOURCE_STOP >> "$STUB_LOG" ;; esac
     exit 0 ;;
   exec)
@@ -446,6 +447,31 @@ exit "\${PROVISION_EXIT:-0}"
       expect(stdin).toContain("PASSWORD :'pw'");
       expect(stdin).not.toContain('w;rd');
       expect(readFileSync(join(root, 'psql.env'), 'utf8')).toBe('role"x|' + SECRET);
+    });
+
+    it('forwards the resolved settings to Compose so its own .env grammar cannot change them', () => {
+      const composeLog = join(root, 'compose-env.log');
+      writeFileSync(envFile, [
+        'PGMODE=docker',
+        'PGUSER=example-user',
+        'PGDATABASE=example_db',
+        'PGPASSWORD=example-pass # local note',
+        'PGPORT_DOCKER=5599',
+        '',
+      ].join('\n'));
+      const result = run(['stop'], 'ok', { PGPASSWORD: '', COMPOSE_ENV_LOG: composeLog });
+      expect(result.status, result.stderr).toBe(0);
+      const forwarded = () => new Set(readFileSync(composeLog, 'utf8').trim().split('\n'));
+      expect(forwarded()).toEqual(new Set(['example-user|example_db|example-pass # local note|5599']));
+      expect(readFileSync(stubLog, 'utf8')).not.toContain('example-pass');
+      expect(result.stdout + result.stderr).not.toContain('example-pass');
+
+      // A literal dollar expression is forwarded verbatim, not expanded.
+      writeFileSync(envFile, 'PGMODE=docker\nPGPASSWORD="example-$PORTOS_PROBE_SUFFIX"\n');
+      writeFileSync(composeLog, '');
+      const dollar = run(['stop'], 'ok', { PGPASSWORD: '', COMPOSE_ENV_LOG: composeLog });
+      expect(dollar.status, dollar.stderr).toBe(0);
+      expect(forwarded()).toEqual(new Set(['portos|portos|example-$PORTOS_PROBE_SUFFIX|5561']));
     });
 
     it('setup-native fails when role provisioning fails', () => {
