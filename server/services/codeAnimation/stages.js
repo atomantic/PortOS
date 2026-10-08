@@ -390,7 +390,18 @@ async function repairStage(ctx, revision, findings) {
       signal.throwIfAborted();
     }
     const id = randomUUID();
-    const storage = await stageProjectFiles(ctx.projectId, id, pkg.files);
+    let storage;
+    try {
+      storage = await stageProjectFiles(ctx.projectId, id, pkg.files);
+    } catch (error) {
+      // Only confirmed removal releases repaired-source bytes. Publication
+      // failures after successful staging keep their orphan reservation.
+      if (!ownedStorageRetained(error)) {
+        ctx.state.reservedBytes -= totalBytes;
+        spent.diskBytes -= totalBytes;
+      }
+      throw error;
+    }
     signal.throwIfAborted();
     created = {
       id, packageHash: pkg.revisionHash, sourceHash, totalBytes, schemaVersion: pkg.schemaVersion, manifest: pkg.manifest,
