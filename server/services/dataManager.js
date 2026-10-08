@@ -1,6 +1,8 @@
-import { readdir, opendir, stat, lstat, statfs } from 'fs/promises';
+import { readdir, opendir, stat, lstat, statfs, mkdtemp, open, link } from 'fs/promises';
 import { join, relative, resolve, isAbsolute } from 'path';
 import { existsSync } from 'fs';
+import { randomUUID } from 'crypto';
+import { assertNotRealDataWrite } from '../lib/testDataIsolation.js';
 import { execFile } from '../lib/childProcess.js';
 import { promisify } from 'util';
 import { parseFilesystemStats } from '../lib/fileCore.js';
@@ -407,44 +409,57 @@ export async function archiveCategory(categoryKey, options = {}) {
   const backupDir = join(DATA_DIR, 'backup');
   await ensureDir(backupDir);
 
+  // Reserve scratch before selecting inputs: even a fixed clock cannot make
+  // separate requests share their file list or partially written archive.
+  assertNotRealDataWrite(backupDir, 'archiveCategory');
+  const operationDir = await mkdtemp(join(backupDir, '.archive-'));
+  const stagedArchive = join(operationDir, 'archive.tar.gz');
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const archiveName = `${categoryKey}-${timestamp}.tar.gz`;
+  const archiveName = `${categoryKey}-${timestamp}-${randomUUID()}.tar.gz`;
   const archivePath = join(backupDir, archiveName);
 
-  // Date-based archiving for daily-file categories (health)
-  if (categoryKey === 'health') {
-    const daysToKeep = options.daysToKeep ?? 365;
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - daysToKeep);
-    const cutoffStr = cutoff.toISOString().slice(0, 10);
+  try {
+    let oldFiles = [];
+    if (categoryKey === 'health') {
+      const daysToKeep = options.daysToKeep ?? 365;
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - daysToKeep);
+      const cutoffStr = cutoff.toISOString().slice(0, 10);
 
-    const files = await readdir(dirPath).catch(() => []);
-    const oldFiles = files.filter(f => f.endsWith('.json') && f.slice(0, 10) < cutoffStr);
-    if (oldFiles.length === 0) return { archived: 0, archivePath: null, message: 'No old files to archive' };
+      const files = await readdir(dirPath);
+      oldFiles = files.filter(f => f.endsWith('.json') && f.slice(0, 10) < cutoffStr);
+      if (oldFiles.length === 0) return { archived: 0, archivePath: null, message: 'No old files to archive' };
 
-    // Write file list to temp file to avoid shell argument limits
-    const listPath = join(backupDir, `.filelist-${Date.now()}.txt`);
-    await writeFileGuarded(listPath, oldFiles.join('\n'));
-    await execFileAsync('tar', ['-czf', archivePath, '-C', dirPath, '-T', listPath], { timeout: 120000 });
-    await rmGuarded(listPath).catch(() => {});
+      const listPath = join(operationDir, 'files.txt');
+      await writeFileGuarded(listPath, oldFiles.join('\n'));
+      await execFileAsync('tar', ['-czf', stagedArchive, '-C', dirPath, '-T', listPath], { timeout: 120000 });
+    } else {
+      await execFileAsync('tar', ['-czf', stagedArchive, '-C', DATA_DIR, categoryKey], { timeout: 120000 });
+    }
+
+    // A hard link publishes complete bytes atomically and refuses an existing
+    // destination. Sync bytes first, then the published directory entry before
+    // deleting health sources. Both paths live on the same filesystem.
+    // Windows requires write access for FlushFileBuffers; r+ preserves existing bytes.
+    const archiveFile = await open(stagedArchive, 'r+');
+    try { await archiveFile.sync(); } finally { await archiveFile.close(); }
+    await link(stagedArchive, archivePath);
+    // Node does not expose directory fsync on Windows.
+    if (process.platform !== 'win32') {
+      const directory = await open(backupDir, 'r');
+      try { await directory.sync(); } finally { await directory.close(); }
+    }
+    const archiveStat = await stat(archivePath);
 
     for (const f of oldFiles) {
       await rmGuarded(join(dirPath, f)).catch(() => {});
     }
-
-    const archiveStat = await stat(archivePath).catch(() => null);
-    return { archived: oldFiles.length, archivePath: relative(process.cwd(), archivePath), size: archiveStat?.size || 0 };
+    return categoryKey === 'health'
+      ? { archived: oldFiles.length, archivePath: relative(process.cwd(), archivePath), size: archiveStat.size }
+      : { archived: 0, archivePath: relative(process.cwd(), archivePath), archiveSize: archiveStat.size };
+  } finally {
+    await rmGuarded(operationDir, { recursive: true, force: true });
   }
-
-  // Generic: archive entire category contents
-  await execFileAsync('tar', ['-czf', archivePath, '-C', DATA_DIR, categoryKey], { timeout: 120000 });
-  const archiveStat = await stat(archivePath).catch(() => null);
-
-  return {
-    archived: 0,
-    archivePath: relative(process.cwd(), archivePath),
-    archiveSize: archiveStat?.size || 0
-  };
 }
 
 export async function purgeCategory(categoryKey, options = {}) {
