@@ -25,7 +25,13 @@ export const SCENE_ATTENTION_LABELS = Object.freeze({
   'plate-unverified': 'Plate unverified',
   'no-span': 'No time span',
   'last-failure': 'Last render failed',
+  'song-changed': 'Lyrics changed',
+  'song-new': 'New lyrics',
+  'song-cut': 'Lyrics cut',
 });
+
+// A revised song's verdict on a shot (server songRevision.js sceneReview) as its attention code.
+const SONG_REVIEW_CODES = Object.freeze({ changed: 'song-changed', new: 'song-new', removed: 'song-cut' });
 
 /** Codes that mean the shot still lacks material a render needs (the `missing` filter). */
 export const SCENE_MISSING_CODES = Object.freeze(['missing-frame', 'missing-clip', 'no-span']);
@@ -48,13 +54,16 @@ function performanceBlocked(scene, { lipSyncBackend, songDurationSec }) {
  * `lipSyncBackend`, `songDurationSec`, `clipSec` (the measured clip length —
  * only a mounted card knows it, so board-level counts omit `under-covered`),
  * and `failed: { frame: {sceneId: true}, video: {sceneId: true} }` for renders
- * that failed this session.
+ * that failed this session, and `songReview` (the project's revised-song
+ * verdicts by sceneId) so a shot the new lyrics changed is flagged until acted on.
  */
 export function sceneAttention(scene, ctx = {}) {
   if (!scene) return [];
-  const { layered = false, footageOptional = false, lipSyncBackend = '', songDurationSec = null, clipSec = null, failed = {} } = ctx;
+  const { layered = false, footageOptional = false, lipSyncBackend = '', songDurationSec = null, clipSec = null, failed = {}, songReview = null } = ctx;
   const layer = sceneVisualLayer(scene, { layered });
   const codes = [];
+  const songChange = songReview?.[scene.sceneId];
+  if (songChange && !songChange.resolved && SONG_REVIEW_CODES[songChange.status]) codes.push(SONG_REVIEW_CODES[songChange.status]);
   if (!isSelfDrawnLayer(layer) && !scene.referenceImageId) codes.push('missing-frame');
   if (layer === 'footage' && !footageOptional && !scene.videoHistoryId) codes.push('missing-clip');
   if (layer !== 'footage' && !sceneHasAuthoredSpan(scene)) codes.push('no-span');

@@ -77,7 +77,7 @@ export default function SceneCard({
   onGenerateFrame, onGenerateVideo, onContinueVideo,
   onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false, layered = false, documentComposition = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
-  expanded, onToggleExpand, footageOptional = false, failedScenes = null,
+  expanded, onToggleExpand, footageOptional = false, failedScenes = null, songReview = null,
 }) {
   const detailsRef = useRef(null);
 
@@ -142,7 +142,8 @@ export default function SceneCard({
     excerptStartSec: performanceReview?.excerptStartSec, backend: lipSyncBackend, videoSettings: falVideoSettings || {} });
   const shotModeId = `mv-shot-mode-${scene.sceneId}`;
   // #10152: what needs the director's attention, visible without opening the card.
-  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec, failed: failedScenes || {} });
+  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec, failed: failedScenes || {}, songReview });
+  const songChange = songReview?.[scene.sceneId];
   const generatingLane = generatingFrame && generatingVideo ? 'Frame + clip' : generatingFrame ? 'Frame' : generatingVideo ? 'Clip' : null;
   // #10154: the server-persisted failure of the last render, shown until a
   // retry is in flight (or lands a take, which clears it server-side).
@@ -221,6 +222,9 @@ export default function SceneCard({
         {(scene.lyricText || scene.visualIntent || scene.direction) && (
           <div className="text-[11px] text-port-text-muted space-y-0.5">
             {scene.lyricText && <p className="italic break-words">♪ {scene.lyricText}</p>}
+            {songChange && !songChange.resolved && songChange.status !== 'kept' && (
+              <p className="break-words text-port-warning">{songChange.status === 'new' ? 'New shot for lines the revised song added.' : `Before the song revision: ${songChange.previousLyricText ? `♪ ${songChange.previousLyricText}` : 'instrumental'}`}</p>
+            )}
             {scene.visualIntent && <p className="break-words">Intent: {scene.visualIntent}</p>}
             {/* Applied treatment direction (#8980) — appended to both generated prompts. */}
             {scene.direction && (

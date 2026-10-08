@@ -40,6 +40,8 @@ export const musicVideoSongDraftSchema = z.object({
 }).strict().refine((v) => v.instrumental || v.lyrics.trim().length > 0, 'Lyrics are required for a vocal song');
 export const musicVideoSongActionSchema = z.object({ revisionId: z.string().min(1) }).strict();
 export const musicVideoSongSelectSchema = z.object({ revisionId: z.string().min(1), songId: z.string().min(1) }).strict();
+// Revise the song from a library track (an imported Suno link): forks a new version on it.
+export const musicVideoSongFromTrackSchema = z.object({ trackId: z.string().min(1).max(128) }).strict();
 import { EFFORT_LEVELS } from './providerModels.js';
 import { shotActionContractProblem } from './musicVideoActionContract.js';
 import { NARRATIVE_EVENT_KINDS } from './musicVideoNarrativeEvents.js';
@@ -333,6 +335,8 @@ export const musicVideoLyricsImportTrackSchema = z.object({
 export const musicVideoLyricsAlignSchema = z.object({
   cueId: z.string().min(1).max(64).optional(),
   separateVocals: z.boolean().optional(),
+  // A revised song: analyze, separate, align and carry the board across in one job.
+  retimeSong: z.boolean().optional(),
 }).strict();
 
 // ---- Composition manifest (#8984, part of #8966) ---------------------------
@@ -1476,6 +1480,12 @@ export const musicVideoProductionFeedbackSchema = z.object({
   stage: z.enum(['art', 'storyboard', 'proof']), basis: z.string().min(1).max(128),
   target: z.string().trim().min(1).max(300), text: z.string().trim().min(1).max(8000),
   decision: z.enum(['comment', 'structure-accepted', 'request-changes']),
+}).strict();
+// Act on the shots a song revision flagged (songRevision.js resolveSongRevisionScenes).
+export const musicVideoSongSceneActionSchema = musicVideoCastAndSetsStartSchema.extend({
+  revisionId: z.string().min(1).max(128),
+  action: z.enum(['replan', 'remove', 'dismiss']),
+  sceneIds: z.array(z.string().min(1).max(64)).min(1).max(2000).optional(),
 }).strict();
 export const musicVideoProductionReviseSchema = musicVideoCastAndSetsStartSchema.extend({
   stage: z.enum(['art', 'storyboard', 'proof']),

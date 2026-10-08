@@ -542,6 +542,11 @@ export const actOnMusicVideoSongRevision = (id, action, data, options = {}) => {
   return Promise.reject(new Error('Unknown song revision action'));
 };
 
+// Revise the song from a library track (an imported Suno link): forks a new version on it and starts its re-time job.
+export const reviseMusicVideoSongFromTrack = (id, trackId, options = {}) => request(`/music-video/${encodeURIComponent(id)}/song-revision/track`, { method: 'POST', body: JSON.stringify({ trackId }), ...options });
+// Act on the shots a song revision flagged: `replan` (LLM), `remove` (cut shots) or `dismiss`.
+export const actOnMusicVideoSongRevisionScenes = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/song-revision/scenes`, { method: 'POST', body: JSON.stringify(body), ...options });
+
 export const importMusicVideoDocumentShots = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/document-shots`, { method: 'POST', body: JSON.stringify(body), ...options });
 
 // Source-bound private sharing export; the server rejects stale download URLs.

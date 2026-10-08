@@ -70,7 +70,8 @@ describe.skipIf(!canRun)('song revision in Chrome (client dependencies required)
     const before = await store.getProject(original.id);
     let creates = 0;
     let generationMode = 'success';
-    songs.__setSongRevisionDepsForTests({ generate: async (_fields, opts) => {
+    // Selecting a candidate starts its re-time job; this suite covers selection only.
+    songs.__setSongRevisionDepsForTests({ startRetime: async () => null, generate: async (_fields, opts) => {
       if (!opts.songIds) { creates++; await opts.onSubmitted(['candidate-a', 'candidate-b']); }
       if (generationMode === 'failed') throw new Error('Synthetic download failure');
       if (generationMode === 'held') {

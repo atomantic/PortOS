@@ -92,10 +92,9 @@ export default function SongRevisionPanel({ project, tracks = [], onUpdated, onF
           </div>)}
         </div>
         {revision.status === 'selected' && <div className="space-y-2 text-sm" role="status">
-          <p>New master selected. Art and editable composition source are retained. Beat analysis, lyric alignment, shot timing, proofs and renders need fresh review.</p>
+          <p>New master selected. Art and editable composition source are retained. The Song step re-times the lyrics on the new vocal and moves the shots to the new song.</p>
           <ol className="list-inside list-decimal space-y-1">
-            <li><Link className="text-port-accent" to={`/music-video/${project.id}/setup#mv-lyric-timing`}>Analyze the new song and align its lyrics on the Song step; verify by listening.</Link></li>
-            <li><Link className="text-port-accent" to={`/music-video/${project.id}/board`}>Review shot timing and retained or revised art on the Storyboard.</Link></li>
+            <li><Link className="text-port-accent" to={`/music-video/${project.id}/setup`}>Follow the re-time on the Song step, then replan the shots it flags.</Link></li>
             <li><Link className="text-port-accent" to={`/music-video/${project.id}/produce#mv-composition`}>Regenerate or reimport the composition against the new audio.</Link> Imported source can contain a fuller timeline than the Storyboard; revise that source too.</li>
             <li><Link className="text-port-accent" to={`/music-video/${project.id}/produce#mv-review-proof`}>Rebuild and review proofs before the full video.</Link></li>
           </ol>
