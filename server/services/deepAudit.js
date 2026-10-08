@@ -1,5 +1,5 @@
 /** Machine-local, DB-primary coverage evidence. No timers or provider calls. */
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { ensureSchema, query, withTransaction } from '../lib/db.js';
 import { execGit } from '../lib/execGit.js';
 import { atomicWrite, PATHS } from '../lib/fileUtils.js';
@@ -43,7 +43,7 @@ async function inventoryDeepAudit(workspacePath, { promptHash, category }) {
     } catch { /* An unreadable submodule stays in scope as an explicit blocker. */ }
   }
   files = [...files.filter(file => !file.expanded), ...nested].sort((a, b) => a.path.localeCompare(b.path));
-  const dirty = (await execGit(['diff', '--name-only', 'HEAD', '--'], workspacePath)).stdout.trim();
+  const dirty = (await execGit(['diff', '--ignore-submodules=none', '--name-only', 'HEAD', '--'], workspacePath)).stdout.trim();
   const untracked = (await execGit(['ls-files', '--others', '--exclude-standard', '-z'], workspacePath)).stdout
     .split('\0').filter(path => path && !/^\.agent-done(?:-[a-zA-Z0-9_-]+)?(?:\.json)?$/.test(path));
   if (dirty || untracked.length) throw new Error('Deep audit needs a clean source snapshot; tracked or untracked changes require a fresh inventory');
@@ -76,12 +76,35 @@ export async function getDeepAuditLedger(id) {
   return rows[0]?.ledger ?? null;
 }
 
+/** Read the server-owned pin before provisioning a replacement workspace. */
+export async function getDeepAuditSourceRevision(task, deps = {}) {
+  if (task.metadata?.auditDepth !== 'deep') return null;
+  const ledger = await (deps.readLedger || getDeepAuditLedger)(deepAuditId(task));
+  if (!ledger) return null;
+  const category = isAuditTaskType(resolveTaskHookType(task)) ? normalizeAuditTaskType(resolveTaskHookType(task)) : 'code-quality';
+  const delivery = task.metadata.fileIssues === true || task.metadata.fileIssues === 'true' ? 'file-issues' : 'fix';
+  if (ledger.appId !== task.metadata.app || ledger.category !== category || ledger.delivery !== delivery) {
+    throw new Error('Deep audit resume must keep the same app, category and delivery mode');
+  }
+  return ledger.scope.revision;
+}
+
+/** Expand only a clean snapshot; never reset a retained submodule's work. */
+async function initializeDeepAuditSubmodules(workspacePath) {
+  const directories = (await execGit(['rev-parse', '--git-dir', '--git-common-dir'], workspacePath)).stdout.trim().split('\n');
+  if (directories.length !== 2 || resolve(workspacePath, directories[0]) === resolve(workspacePath, directories[1])) return;
+  const dirty = (await execGit(['diff', '--ignore-submodules=none', '--name-only', 'HEAD', '--'], workspacePath)).stdout.trim();
+  if (dirty) throw new Error('Deep audit needs a clean source snapshot; retained changes must be preserved');
+  await execGit(['submodule', 'update', '--init', '--recursive'], workspacePath);
+}
+
 /** Inject at the common spawn boundary, after all saved/custom/legacy task rendering. */
 export async function prepareDeepAudit({ task, agentId, workspacePath }, deps = {}) {
   if (task.metadata?.auditDepth !== 'deep') return null;
   if (!agentId || !workspacePath || !task.metadata?.app || !deepAuditId(task)) throw new Error('Deep audit needs an identified agent, app and workspace');
   const category = isAuditTaskType(resolveTaskHookType(task)) ? normalizeAuditTaskType(resolveTaskHookType(task)) : 'code-quality';
   const promptHash = canonicalSnapshotChecksum({ description: task.description, prompt: task.metadata?.prompt, context: task.metadata?.context });
+  if (!deps.inventory) await initializeDeepAuditSubmodules(workspacePath);
   const scope = await (deps.inventory || inventoryDeepAudit)(workspacePath, { promptHash, category });
   const initial = createDeepAuditLedger({ id: deepAuditId(task), appId: task.metadata.app, category, scope,
     delivery: task.metadata.fileIssues === true || task.metadata.fileIssues === 'true' ? 'file-issues' : 'fix' });

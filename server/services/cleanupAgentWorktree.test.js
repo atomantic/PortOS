@@ -1634,6 +1634,23 @@ describe('releaseRetryHold', () => {
     getAgentRecord.mockResolvedValue({ metadata: agentMetadata });
   });
 
+  it.each([true, false])('retains a Deep checkpoint pointer after cleanup even when success=%s, without auto-resuming', async success => {
+    const selected = { ...task(), metadata: { auditDepth: 'deep' } };
+    getTaskById.mockResolvedValue({ id: selected.id, status: 'in_progress', metadata: {
+      auditDepth: 'deep', retryPendingCleanup: 'agent-x',
+    } });
+    await releaseRetryHold({ agentId: 'agent-x', task: selected, success, agentMetadata });
+    expect(updateTask).toHaveBeenCalledWith('task-1', {
+      status: 'blocked', metadata: expect.objectContaining({ existingBranch: DEAD_BRANCH, resumedFromAgentId: 'agent-x', resumeWorktreePath: null, retryPendingCleanup: undefined, blockedCategory: 'deep-audit-partial' }),
+    }, 'user', { expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-x' } });
+    updateTask.mockClear();
+    getTaskById.mockResolvedValue({ id: selected.id, status: 'in_progress', metadata: {
+      retryPendingCleanup: 'agent-new',
+    } });
+    await releaseRetryHold({ agentId: 'agent-x', task: selected, success, agentMetadata });
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
   // The direct-CLI / TUI shape: neither spawn path holds the agent record, so the
   // helper has to read it for the worktree fields — via the transcript-free
   // `getAgentRecord`, since a long TUI run's output.txt is megabytes.

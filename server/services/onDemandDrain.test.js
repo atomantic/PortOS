@@ -308,6 +308,26 @@ describe.each(ENGINES)('%s — per-project capacity defers before preparation', 
 });
 
 describe.each(ENGINES)('%s — blocked-duplicate revive (#2614)', (_name, makeAdapter) => {
+  it('dispatches a Deep resume with the persisted audit text and retained-worktree pointer', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
+    mocks.prepareManagedAppImprovementTask.mockResolvedValue({ task: { id: 'fresh', description: 'New volatile preload', metadata: { app: APP.id, auditDepth: 'deep' } } });
+    mocks.addTask.mockResolvedValue({ id: 'blocked-deep', duplicate: true, status: 'blocked' });
+    const stored = { id: 'blocked-deep', status: 'pending', description: 'Original audit instructions', metadata: { auditDepth: 'deep', existingBranch: 'cos/retained', resumeWorktreePath: '/fixture/tree' } };
+    mocks.reviveBlockedTask.mockResolvedValueOnce(stored);
+    const { spawned, adapter } = makeAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(spawned).toEqual([stored]);
+  });
+
+  it('does not emit a spawn when revival was refused', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
+    mocks.addTask.mockResolvedValue({ id: 'blocked-7', duplicate: true, status: 'blocked' });
+    mocks.reviveBlockedTask.mockResolvedValueOnce({ error: 'Cleanup remains active' });
+    const { spawned, adapter } = makeAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(spawned).toEqual([]);
+  });
+
   it('revives the blocked twin and emits it under the existing task id', async () => {
     mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
     mocks.addTask.mockResolvedValue({ id: 'blocked-7', duplicate: true, status: 'blocked' });

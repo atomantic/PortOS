@@ -1933,6 +1933,31 @@ describe('the orphan sweep finishes an interrupted retry transition (#3373)', ()
     committedDuringRun.mockReset();
   });
 
+  it('recovers interrupted Deep cleanup as an explicit checkpoint, preserving the branch and refusing a stale owner', async () => {
+    const selected = heldTask(); selected.metadata.auditDepth = 'deep';
+    getTaskById.mockResolvedValue(selected);
+    resolveTaskResumePatch.mockResolvedValue({ existingBranch: 'cos/deep', resumedFromAgentId: 'agent-dead' });
+    await handleOrphanedTask(selected.id, 'agent-dead', getTaskById);
+    expect(updateTask).toHaveBeenCalledWith(selected.id, expect.objectContaining({ status: 'blocked', metadata: expect.objectContaining({
+      existingBranch: 'cos/deep', blockedCategory: 'deep-audit-partial', retryPendingCleanup: undefined,
+    }) }), 'user', { expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-dead' } });
+    expect(committedDuringRun).not.toHaveBeenCalled();
+    updateTask.mockClear();
+    await handleOrphanedTask(selected.id, 'agent-old', getTaskById);
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it('binds no-hold Deep orphan recovery to its spawn stamp and refuses an older attempt', async () => {
+    const selected = { id: 'task-1', taskType: 'user', status: 'in_progress', metadata: { auditDepth: 'deep', lastSpawnedAt: '2026-01-02T00:00:00.000Z' } };
+    getTaskById.mockResolvedValue(selected);
+    await handleOrphanedTask(selected.id, 'agent-old', getTaskById, { agentStartedAt: '2026-01-01T00:00:00.000Z' });
+    expect(updateTask).not.toHaveBeenCalled();
+    await handleOrphanedTask(selected.id, 'agent-current', getTaskById, { agentStartedAt: '2026-01-02T00:00:01.000Z' });
+    expect(updateTask).toHaveBeenCalledWith(selected.id, expect.objectContaining({ status: 'blocked' }), 'user', {
+      expectedStatus: 'in_progress', expectedMetadata: { lastSpawnedAt: selected.metadata.lastSpawnedAt },
+    });
+  });
+
   it('flips the held task to pending with the resume pointer and drops the marker', async () => {
     getTaskById.mockResolvedValue(heldTask());
     resolveTaskResumePatch.mockResolvedValue({ existingBranch: 'cos/task-1/agent-dead', resumedFromAgentId: 'agent-dead', resumeWorktreePath: null });

@@ -932,7 +932,8 @@ export async function recordTaskResumePointer({ task, agentId, agentMetadata }) 
  * @returns {Promise<object>} the metadata patch that was written (empty when nothing was)
  */
 export async function releaseRetryHold({ agentId, task, success, agentMetadata }) {
-  if (success || !agentId || !task?.id) return {};
+  if (!agentId || !task?.id) return {};
+  if (success && task.metadata?.auditDepth !== 'deep') return {};
 
   const { getTaskById, getAgentRecord } = await import('./cos.js');
   const persisted = await getTaskById(task.id).catch(err => {
@@ -940,6 +941,20 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
     return null;
   });
   if (!persisted) return {};
+
+  if (task.metadata?.auditDepth === 'deep') {
+    if (persisted.status !== 'in_progress' || !isRetryHoldOwner(persisted.metadata, agentId)) return {};
+    const metadata = agentMetadata === undefined
+      ? (await getAgentRecord(agentId).catch(() => null))?.metadata : agentMetadata;
+    const patch = await resolveTaskResumePatch({ task, agentId, agentMetadata: metadata });
+    const result = await updateTask(task.id, { status: 'blocked', metadata: {
+      ...patch, ...clearedRetryHoldMetadata(), blockedCategory: 'deep-audit-partial',
+      blockedReason: 'Deep audit checkpoint; resume explicitly', blockedAt: new Date().toISOString(),
+    } }, task.taskType || persisted.taskType || 'user', {
+      expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: agentId },
+    });
+    return result?.error || result?.statusChanged ? {} : patch;
+  }
 
   // Release only OUR hold, and only while the task is still held `in_progress`.
   // Both halves matter: a slow cleanup from a previous attempt must not clear the

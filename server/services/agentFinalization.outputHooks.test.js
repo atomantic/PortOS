@@ -214,7 +214,7 @@ describe('recovery output-hook dispatch (#3182)', () => {
       workspacePath: '/example/repo', startedAt: Date.now() - 1000, outputBuffer: 'Context exhausted',
       errorAnalysis: { type: 'transient', retryable: true, error: 'context exhausted' } });
     expect(resolveFailedTaskUpdate).not.toHaveBeenCalled();
-    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'blocked', metadata: expect.objectContaining({ blockedCategory: 'deep-audit-partial' }) }), expect.anything());
+    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'in_progress', metadata: expect.objectContaining({ retryPendingCleanup: expect.any(String) }) }), expect.anything());
     expect(deep.checkpointDeepAudit).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
   });
 

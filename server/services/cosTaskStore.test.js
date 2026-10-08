@@ -224,6 +224,28 @@ describe('cosTaskStore.firstLine', () => {
 });
 
 describe('cosTaskStore.updateTask expectedStatus', () => {
+  it('keeps Deep checkpoints paused through cleanup, rejects stale cleanup, and resumes the retained branch explicitly', async () => {
+    await addTask({ id: 'sys-deep-cleanup', description: 'Deep audit' }, 'internal');
+    await updateTask('sys-deep-cleanup', { status: 'in_progress', metadata: {
+      auditDepth: 'deep', retryPendingCleanup: 'agent-current',
+      existingBranch: 'cos/retained', resumedFromAgentId: 'agent-current', resumeWorktreePath: '/fixture/retained',
+    } }, 'internal');
+    expect(isReapableBlockedFailure(await getTaskById('sys-deep-cleanup'))).toBe(false);
+    expect(await reviveBlockedTask('sys-deep-cleanup', {}, 'internal')).toMatchObject({ error: expect.stringContaining('cleanup') });
+    const patch = { status: 'blocked', metadata: { retryPendingCleanup: undefined, blockedCategory: 'deep-audit-partial', existingBranch: 'cos/retained' } };
+    expect(await updateTask('sys-deep-cleanup', patch, 'internal', {
+      expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-old' },
+    })).toMatchObject({ statusChanged: true });
+    expect((await getTaskById('sys-deep-cleanup')).metadata.retryPendingCleanup).toBe('agent-current');
+    await updateTask('sys-deep-cleanup', patch, 'internal', {
+      expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-current' },
+    });
+    const resumed = await reviveBlockedTask('sys-deep-cleanup', {}, 'internal');
+    expect(resumed).toMatchObject({ status: 'pending', metadata: {
+      existingBranch: 'cos/retained', resumedFromAgentId: 'agent-current', resumeWorktreePath: '/fixture/retained',
+    } });
+  });
+
   it('does not apply a stale terminal update after a task has been claimed', async () => {
     const task = await addTask({ id: 'sys-rl-cas', description: 'Resolve a PR' }, 'internal');
     await updateTask(task.id, { status: 'in_progress' }, 'internal');

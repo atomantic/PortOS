@@ -1505,6 +1505,31 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
     return;
   }
 
+  // Recovery of a dead Deep invocation is a checkpoint, never permission to
+  // auto-launch another provider call or to treat commits as completed coverage.
+  if (task.metadata?.auditDepth === 'deep') {
+    if (task.status !== 'in_progress') return;
+    const held = isRetryHeld(task.metadata);
+    if (held && task.metadata[RETRY_HOLD_KEY] !== agentId) return;
+    if (!held) {
+      const spawnedAt = toEpochMs(task.metadata?.[LAST_SPAWNED_AT_KEY]);
+      const startedAt = toEpochMs(agentStartedAt);
+      // A legacy/unknown owner cannot authorize parking a newer invocation.
+      if (!spawnedAt || !startedAt || spawnedAt > startedAt) return;
+      const agents = await getAgents();
+      if (!Array.isArray(agents) || agents.some(entry => entry.taskId === taskId && entry.id !== agentId
+        && (entry.status === 'running' || toEpochMs(entry.startedAt) > startedAt))) return;
+    }
+    const resumePatch = await resolveTaskResumePatch({ task, agentId, agentMetadata });
+    await updateTask(taskId, { status: 'blocked', metadata: {
+      ...resumePatch, ...clearedRetryHoldMetadata(), blockedCategory: 'deep-audit-partial',
+      blockedReason: 'Interrupted Deep audit; inspect checkpoint and resume explicitly', blockedAt: new Date().toISOString(),
+    } }, task.taskType || 'user', { expectedStatus: 'in_progress',
+      expectedMetadata: held ? { [RETRY_HOLD_KEY]: agentId } : { [LAST_SPAWNED_AT_KEY]: task.metadata[LAST_SPAWNED_AT_KEY] },
+    });
+    return;
+  }
+
   // A retry hold whose process died mid-transition (#3373). The run's verdict is
   // already persisted — it failed, and was budgeted a retry — so this is not a
   // fresh orphan: finish the transition the dead process started (resolve the
