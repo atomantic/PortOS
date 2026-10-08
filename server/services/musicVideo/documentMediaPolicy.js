@@ -30,8 +30,14 @@ export async function assertDocumentMediaPolicy(project, files) {
       let source = bytes.toString('utf8');
       if (ext === '.js' || ext === '.mjs') {
         // Inspect executable text and string literals, not inert JSDoc such as Array<Image>.
+        // One pass over the (source-ordered) comments: re-slicing the whole text per
+        // comment is quadratic and took ~9s on the vendored three.core.js (#10467).
         const { comments } = parse(source, { sourceType: 'unambiguous' });
-        for (const comment of comments.slice().reverse()) source = source.slice(0, comment.start) + ' ' + source.slice(comment.end);
+        const kept = [];
+        let at = 0;
+        for (const comment of comments) { kept.push(source.slice(at, comment.start)); at = comment.end; }
+        kept.push(source.slice(at));
+        source = kept.join(' ');
       }
       if (/data\s*:\s*image\/|<(?:img|image)\b|!\[[^\]]*\]\(/i.test(source)) assertMusicVideoMedia(project, 'image', 'embedded document asset');
       if (/data\s*:\s*(?:video|audio)\/|<(?:video|audio)\b/i.test(source)) assertMusicVideoMedia(project, 'video', 'embedded document asset');

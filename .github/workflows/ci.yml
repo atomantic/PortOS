@@ -651,26 +651,17 @@ jobs:
       # PostgreSQL 16 client cannot dump the PostgreSQL 17 service above.
       #
       # The pull is ~95 ffmpeg dependency packages from the runner's mirror, and
-      # a slow mirror once ate this job's whole 20-minute budget before any test
-      # ran (issue #10369): single `Get:` lines stalled for 2-4 minutes. Two
-      # guards, so a bad mirror costs minutes and names itself:
-      #   - apt's own timeout + retries drop a stalled connection and ask again,
-      #     which recovers the common case (one slow package) without a rerun;
-      #   - the step's own `timeout-minutes` fails a genuinely dead mirror here,
-      #     under this step's name, instead of cancelling the whole job later.
+      # a slow mirror has eaten this job's budget before any test ran (#10369,
+      # #10562): apt's retries and timeouts cannot bound a connection that
+      # trickles bytes. The script bounds the download, falls back from the
+      # runner mirror to the official Ubuntu archive with signing intact, and
+      # fails with an installation-failure annotation once its budget is spent.
+      # The step timeout stays as a backstop above the script's own budget.
       - name: Install PostgreSQL client and audio verification tools
-        timeout-minutes: 8
-        run: |
-          # Ubuntu's default repository only supplies its bundled major.
-          # Use PostgreSQL's signed repository for the service's major.
-          sudo install -d /usr/share/postgresql-common/pgdg
-          sudo curl --fail --silent --show-error -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
-          . /etc/os-release
-          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
-          APT_RESILIENCE=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
-          sudo apt-get "${APT_RESILIENCE[@]}" update
-          sudo apt-get "${APT_RESILIENCE[@]}" install -y postgresql-client-17 ffmpeg
-          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+        timeout-minutes: 9
+        env:
+          PG_MAJOR: '17'
+        run: bash scripts/ci-install-db-tools.sh
 
       - name: Run DB-backed tests (portos_test)
         if: needs.impact.outputs.db == 'true'
