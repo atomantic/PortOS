@@ -417,6 +417,36 @@ describe('fineTuning', () => {
     expect(JSON.parse(await readFile(jobRecordPath(newer), 'utf8')).status).toBe('running');
   });
 
+  it('refuses a second concurrent run of the same voice before spawning it', async () => {
+    queryMock.mockResolvedValue({ rows: [{ data: PROFILE }] });
+    await seedSourceAudio();
+    useScriptedRunner();
+    const spawned = [];
+    const scriptedSpawn = spawnOverride;
+    spawnOverride = (...args) => { const child = scriptedSpawn(...args); spawned.push(child); return child; };
+
+    // Two overlapping starts: exactly one becomes a run.
+    const results = await Promise.allSettled([
+      startFineTuningJob({ profileId: PROFILE.id, epochs: 2 }),
+      startFineTuningJob({ profileId: PROFILE.id, epochs: 2 }),
+    ]);
+    const started = results.filter((result) => result.status === 'fulfilled');
+    expect(started).toHaveLength(1);
+    expect(results.find((result) => result.status === 'rejected').reason)
+      .toMatchObject({ status: 409, code: 'FINE_TUNE_ALREADY_RUNNING' });
+    await expect(startFineTuningJob({ profileId: PROFILE.id, epochs: 2 }))
+      .rejects.toMatchObject({ status: 409, code: 'FINE_TUNE_ALREADY_RUNNING' });
+    expect(spawned).toHaveLength(1);
+
+    // Once the run settles the voice can train again.
+    spawned[0].exit(0);
+    await drainJobRecord(started[0].value.jobId);
+    const next = await startFineTuningJob({ profileId: PROFILE.id, epochs: 2 });
+    expect(spawned).toHaveLength(2);
+    spawned[1].exit(0);
+    await drainJobRecord(next.jobId);
+  });
+
   it('persists a job.json sidecar beside the checkpoints when the run finishes', async () => {
     queryMock.mockResolvedValue({ rows: [{ data: PROFILE }] });
     await seedSourceAudio();

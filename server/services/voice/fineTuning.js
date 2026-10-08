@@ -203,6 +203,17 @@ const finalizeJob = (jobState) => {
   closeJobAfterDelay(activeJobs, jobState.id);
 };
 
+const assertNoRunningJob = (profileId) => {
+  for (const job of activeJobs.values()) {
+    if (job.profileId === profileId && job.status === 'running') {
+      throw new ServerError('A fine-tuning run is already in progress for this voice profile', {
+        status: 409,
+        code: 'FINE_TUNE_ALREADY_RUNNING',
+      });
+    }
+  }
+};
+
 /**
  * Validate training dataset readiness for a given voice profile.
  */
@@ -317,6 +328,11 @@ export async function startFineTuningJob({
   }
 
   const profile = await getVoiceProfileRequired(profileId);
+  // Two full-parameter trainings of one voice would contend for the same GPU
+  // and write competing checkpoints; refuse before any record or child exists.
+  // Checked again after the awaits below, where nothing yields until the job
+  // registers, so two overlapping starts cannot both pass.
+  assertNoRunningJob(profile.id);
   const dataset = buildTrainingDataset(profile, validation.sourceDir);
   const jobId = randomUUID();
   const profileDir = profileArtifactDirectory(profile.id);
@@ -325,6 +341,7 @@ export async function startFineTuningJob({
   const datasetManifest = join(outputDir, DATASET_MANIFEST_FILE);
   await atomicWrite(datasetManifest, dataset);
 
+  assertNoRunningJob(profile.id);
   const abortController = new AbortController();
   const jobState = {
     id: jobId,

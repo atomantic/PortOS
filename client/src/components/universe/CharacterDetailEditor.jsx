@@ -763,13 +763,21 @@ function VoiceCanonSection({ entry, onPatch, disabled }) {
   );
 }
 
+const VOICE_LAB_TABS = [
+  { id: 'overview', label: 'Overview', icon: BadgeCheck },
+  { id: 'design', label: 'Design', icon: WandSparkles },
+  { id: 'clone', label: 'Clone', icon: Mic },
+  { id: 'finetune', label: 'Fine-Tuning', icon: Activity },
+];
+const VOICE_LAB_TAB_IDS = VOICE_LAB_TABS.map((tab) => tab.id);
+
 function VoiceProfileSection({ universeId, entry, disabled }) {
   const [profile, setProfile] = useState(null);
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(Boolean(universeId));
   const [loadError, setLoadError] = useState(null);
   const [_engineCapability, setEngineCapability] = useState(null);
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useDrawerTab(`voiceLab-${entry?.id}`, 'overview', VOICE_LAB_TAB_IDS);
 
   // Voice Design form state
   const [designInstructions, setDesignInstructions] = useState('');
@@ -931,19 +939,8 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
       </p>
       {loadError ? <p className="text-[10px] text-port-error">{loadError}</p> : null}
 
-      {/* Sub-tab navigation */}
-      <div className="flex gap-1 border-b border-port-border/40 pb-1 text-[11px]">
-        {['overview', 'design', 'clone', 'finetune'].map((tab) => (
-          <button
-            key={tab}
-            type="button"
-            onClick={() => setActiveTab(tab)}
-            className={`px-2 py-0.5 rounded capitalize ${activeTab === tab ? 'bg-port-accent text-white font-medium' : 'text-gray-400 hover:text-white'}`}
-          >
-            {tab === 'finetune' ? 'Fine-Tuning' : tab}
-          </button>
-        ))}
-      </div>
+      <TabPills tabs={VOICE_LAB_TABS} activeTab={activeTab} onChange={setActiveTab}
+        variant="pills" size="sm" mobileCompact ariaLabel="Voice Lab" />
 
       {activeTab === 'overview' && (
         <div className="space-y-2">
