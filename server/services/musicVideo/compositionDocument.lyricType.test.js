@@ -43,6 +43,7 @@ describe('shared lyric-type assets in composition documents', () => {
       'lyricType.js', 'lyricType.css', 'fonts/archivo-variable.woff2', 'fonts/ibm-plex-mono-500.woff2',
       'fonts/LICENSE-Archivo.txt', 'fonts/LICENSE-IBM-Plex.txt', 'engine.js', 'index.html',
     ]));
+    expect(files.filter((file) => file.endsWith('.test.js'))).toEqual([]);
   });
 
   it('adds the module and faces to an uploaded document that imports it, and keeps a document\'s own copy', async () => {
@@ -53,15 +54,18 @@ describe('shared lyric-type assets in composition documents', () => {
     }));
     const { root, files } = await listed(importing.document);
     expect(files).toEqual(expect.arrayContaining(['lyricType.js', 'lyricType.css', 'fonts/archivo-variable.woff2', 'fonts/LICENSE-Archivo.txt']));
+    expect(files.filter((file) => file.endsWith('.test.js'))).toEqual([]);
     expect(await readFile(join(root, 'lyricType.js'), 'utf8')).toContain('export function createLyricType');
 
     const own = await importDocumentDirectory(id, await uploaded('own-copy', {
       'index.html': '<script type="module" src="lyricType.js"></script>',
       'lyricType.js': 'export const createLyricType = () => null;\n',
+      'authored.test.js': '// An intentionally uploaded document file.\n',
     }));
     const kept = await listed(own.document);
     expect(await readFile(join(kept.root, 'lyricType.js'), 'utf8')).toBe('export const createLyricType = () => null;\n');
     expect(kept.files).toContain('fonts/archivo-variable.woff2');
+    expect(kept.files).toContain('authored.test.js');
 
     const plain = await importDocumentDirectory(id, await uploaded('no-type', { 'index.html': '<canvas></canvas>' }));
     expect((await listed(plain.document)).files).toEqual(['index.html']);

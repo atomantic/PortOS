@@ -47,6 +47,12 @@ const mocks = vi.hoisted(() => ({
   finishPreflightDispatch: vi.fn(async () => null),
 }));
 
+vi.mock('./onDemandHandoff.js', () => ({
+  reconcileOnDemandHandoffs: vi.fn(async () => {}),
+  claimOnDemandRequest: vi.fn(async (id) => { const request = await mocks.clearOnDemandRequest(id); return request ? { request, token: id } : null; }),
+  settleOnDemandRequest: vi.fn(async () => true),
+}));
+
 vi.mock('./apps.js', () => ({ getActiveApps: (...a) => mocks.getActiveApps(...a) }));
 vi.mock('./cosState.js', () => ({
   isImprovementEnabled: (...a) => mocks.isImprovementEnabled(...a),
@@ -723,4 +729,26 @@ describe('atomic on-demand preparation ownership', () => {
       targetPullRequest: claimed.targetPullRequest,
     }));
   });
+});
+
+it('settles burn preparation failures and successful task persistence without leaving a live claim', async () => {
+  const { settleOnDemandRequest } = await import('./onDemandHandoff.js');
+  mocks.getOnDemandRequests.mockResolvedValue([appRequest({ origin: 'quota-burn', burn: { family: 'codex', stepId: 'step' } })]);
+  mocks.prepareManagedAppImprovementTask.mockRejectedValueOnce(new Error('preparation failed'));
+  const { adapter } = generatorAdapter({});
+  await expect(drainOnDemandRequests({ state: STATE }, adapter)).rejects.toThrow('preparation failed');
+  expect(settleOnDemandRequest).toHaveBeenLastCalledWith(expect.objectContaining({ request: expect.objectContaining({ id: 'req-1' }) }), { taskId: null, reason: 'Request preparation failed; resume explicitly.' });
+  await drainOnDemandRequests({ state: STATE }, adapter);
+  expect(settleOnDemandRequest).toHaveBeenLastCalledWith(expect.anything(), { taskId: 'persisted-1', reason: null });
+});
+
+
+it('refuses an unrelated active duplicate instead of claiming its delivery', async () => {
+  const { settleOnDemandRequest } = await import('./onDemandHandoff.js');
+  mocks.getOnDemandRequests.mockResolvedValue([appRequest({ origin: 'quota-burn', burn: { family: 'codex', stepId: 'step' } })]);
+  mocks.addTask.mockResolvedValue({ id: 'other-task', duplicate: true, status: 'in_progress', metadata: { quotaBurnRequestId: 'other-request' } });
+  const { adapter, spawned } = generatorAdapter({});
+  await drainOnDemandRequests({ state: STATE }, adapter);
+  expect(spawned).toEqual([]);
+  expect(settleOnDemandRequest).toHaveBeenLastCalledWith(expect.anything(), { taskId: null, reason: 'Request produced no task; resume explicitly.' });
 });

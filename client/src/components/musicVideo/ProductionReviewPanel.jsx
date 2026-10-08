@@ -239,6 +239,11 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         </div>
         {approvalHelp(key) && <p id={fieldId(`${key}-approval-help`)} role="status" className="mt-1 text-sm text-port-warning">{approvalHelp(key)}</p>}
         {listedProblems(key).length > 0 && <ul className="mt-1 list-disc pl-5 text-xs text-port-text-muted">{listedProblems(key).map(problem => <li key={problem}>{problem}</li>)}</ul>}
+        {/* Camera variety (#10589) is advice, never a blocker on approval. */}
+        {key === 'storyboard' && ready?.storyboard.camera?.notes?.length > 0 && <div role="note" aria-label="Camera variety notes" className="mt-2 text-xs text-port-text-muted">
+          <p>Camera notes (they don&apos;t block approval):</p>
+          <ul className="list-disc pl-5">{ready.storyboard.camera.notes.map(note => <li key={note}>{note}</li>)}</ul>
+        </div>}
         {key === 'proof' ? proofContent : <ProductionReviewContext stage={key} project={project} onOpenArtifact={onOpenArtifact} onArtReady={available => setVisibleArt(available ? artIdentity : null)} onSeek={onSeek} />}
         {openRequests(key).length > 0 && <div role="group" aria-label={`${label} change requests`} className="mt-2 space-y-2 rounded border border-port-warning p-2">
           <p className="text-sm">Resolve these change requests to approve.</p>

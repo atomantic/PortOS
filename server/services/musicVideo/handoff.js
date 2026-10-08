@@ -1,4 +1,5 @@
 import { shotActionPrompt } from '../../lib/musicVideoActionContract.js';
+import { shotCameraPrompt } from '../../lib/cameraMovements.js';
 import { musicVideoCreativeContext } from '../../lib/musicVideoCreativeContext.js';
 import { MOTION_CONTINUITY_CLAUSE } from '../../lib/musicVideoMotion.js';
 /**
@@ -101,8 +102,12 @@ function composePrompt(primary, fallback, project, clause, { motion = false } = 
 /** A scene's composed reference-frame prompt (also the server-owned production run's, #9066). */
 export const sceneFramePrompt = (project, scene) => [composePrompt(scene.framePrompt, scene.prompt, project, scene.direction?.frameClause), shotActionPrompt(project, scene, { frame: true })].filter(Boolean).join('\n');
 
-/** A scene's composed shot (motion) prompt. */
-export const sceneShotPrompt = (project, scene, options = {}) => [composePrompt(scene.prompt, scene.framePrompt, project, scene.direction?.motionClause, { motion: true }), shotActionPrompt(project, scene, options)].filter(Boolean).join('\n');
+/**
+ * A scene's composed shot (motion) prompt. A planned shot (#10589) carries its
+ * camera as the four-part Movement / Speed / Framing / End block, kept apart
+ * from the scene description so the i2v model reads it as its own instruction.
+ */
+export const sceneShotPrompt = (project, scene, options = {}) => [composePrompt(scene.prompt, scene.framePrompt, project, scene.direction?.motionClause, { motion: true }), shotCameraPrompt(scene.camera), shotActionPrompt(project, scene, options)].filter(Boolean).join('\n');
 
 /** Build the export manifest for a project. */
 export function buildHandoffManifest(project, { now = new Date().toISOString() } = {}) {

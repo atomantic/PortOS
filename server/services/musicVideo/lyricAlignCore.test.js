@@ -103,3 +103,17 @@ describe('phrase lyric matching', () => {
     expect(snapLineStarts(aligned, [1, 3, 10], cues)).toEqual(aligned);
   });
 });
+
+describe('findSilentWords (#10610)', () => {
+  it('flags only words whose window is silent in the stem', async () => {
+    const { findSilentWords } = await import('./lyricAlignCore.js');
+    const rate = 16000;
+    const pcm = new Float32Array(rate * 4);
+    for (let i = rate; i < rate * 2; i++) pcm[i] = 0.3 * Math.sin(i / 10);
+    const cues = [{ id: 'a', words: [
+      { text: 'sung', startSec: 1.1, endSec: 1.8 },
+      { text: 'early', startSec: 2.5, endSec: 3 },
+    ] }];
+    expect(findSilentWords(cues, pcm, rate)).toEqual([{ cueId: 'a', wordIndex: 1 }]);
+  });
+});

@@ -54,6 +54,7 @@ import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
 import { musicVideoEvents } from './events.js';
 import { projectSoundBed } from './soundBed.js';
 import { intercutClips } from './intercut.js';
+import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 
 // Per-project render mutex (keyed by projectId so two projects can render in
 // parallel; same-project re-entry returns 409 with the live jobId for re-attach).
@@ -253,7 +254,8 @@ export async function resolveSceneClips(project, { layered = false } = {}) {
       }
       const imagePath = scene.referenceImageId ? safeUnder(PATHS.images, scene.referenceImageId) : null;
       if (!imagePath || !existsSync(imagePath)) { missingStills.push(scene.sceneId); continue; }
-      clips.push({ ...section, imagePath, move: scene.stillMove || 'hold' });
+      // A planned camera move (#10589) picks the nearest composed still move.
+      clips.push({ ...section, imagePath, move: stillMoveForCamera(scene.camera) || scene.stillMove || 'hold' });
       continue;
     }
     const entry = historyMap.get(scene.videoHistoryId);

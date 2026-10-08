@@ -1,10 +1,11 @@
 /* Layered music-video composition — the PortOS starting template.
  *
  * Every frame is a pure function of song time t: portosComposition.seek(t)
- * draws the scene under t (its selected take, with a gentle camera move and a
- * beat punch-in), film grain and a vignette, an optional HUD, and the words
- * (kinetic lyric type from the shared lyricType.js: sung lines, and hook
- * slams for text cues flagged "hero").
+ * draws the scene under t (its selected take, moved by cameraRig.js — the
+ * scene's planned camera move or a gentle default — with a beat punch-in),
+ * film grain and a vignette, an optional HUD, and the words (kinetic lyric
+ * type from the shared lyricType.js: sung lines, and hook slams for text cues
+ * flagged "hero").
  *
  * Data: window.PORTOS_MV, written by PortOS as portos-mv.js at render time —
  * { project, render, song, lyrics, lyricMarkers, scenes, textCues, composition }.
@@ -87,20 +88,49 @@
     const scene = r >= 0 ? SCENES[r] : null;
     return scene && t < scene.endSec ? scene : null;
   }
-  // Gentle camera moves (scale, offsets in frame fractions), picked per scene.
-  const MOVES = [
-    { s0: 1.04, s1: 1.12, x0: 0, x1: 0, y0: 0, y1: 0 },
-    { s0: 1.13, s1: 1.05, x0: 0, x1: 0, y0: 0, y1: 0 },
-    { s0: 1.09, s1: 1.09, x0: 0.022, x1: -0.022, y0: 0, y1: 0 },
-    { s0: 1.09, s1: 1.09, x0: -0.022, x1: 0.022, y0: 0, y1: 0 },
-    { s0: 1.05, s1: 1.11, x0: 0, x1: 0, y0: 0.018, y1: -0.01 },
-  ];
+  // Camera moves come from cameraRig.js (globalThis.PORTOS_CAMERA_RIG, #10589):
+  // one deterministic path per shared camera-movement id, plus the gentle
+  // defaults in RIG.GENTLE. A scene's planned `camera.move` drives its still;
+  // generated footage already carries its own camera move, so it only breathes.
+  // A document whose index.html predates the rig falls back to a slow push.
+  const RIG = globalThis.PORTOS_CAMERA_RIG || null;
   function moveFor(scene) {
-    if (scene.media?.kind === 'video') return { s0: 1.02, s1: 1.06, x0: 0, x1: 0, y0: 0, y1: 0 };
-    if (scene.stillMove === 'hold') return { s0: 1.03, s1: 1.04, x0: 0, x1: 0, y0: 0, y1: 0 };
-    if (scene.stillMove === 'push') return MOVES[0];
-    if (scene.stillMove === 'pan') return MOVES[2 + (scene.index % 2)];
-    return MOVES[scene.index % MOVES.length];
+    if (scene.media?.kind === 'video') return RIG.GENTLE.footage;
+    const camera = scene.camera;
+    if (camera?.move && RIG.has(camera.move)) {
+      return { move: camera.move, amount: RIG.STILL_AMOUNT, base: 1.04, speed: camera.speed, onBeat: camera.onBeat === true };
+    }
+    if (scene.stillMove === 'hold') return RIG.GENTLE.hold;
+    if (scene.stillMove === 'push') return RIG.GENTLE.push;
+    if (scene.stillMove === 'pan') return RIG.GENTLE[scene.index % 2 ? 'drift-right' : 'drift-left'];
+    return RIG.GENTLE[RIG.GENTLE_CYCLE[scene.index % RIG.GENTLE_CYCLE.length]];
+  }
+  // The scene's first downbeat (else beat) as normalized shot time, for snap/on-beat moves.
+  function beatIn(scene) {
+    const span = scene.endSec - scene.startSec;
+    const hit = downs.find((b) => b >= scene.startSec && b < scene.endSec) ?? beats.find((b) => b >= scene.startSec && b < scene.endSec);
+    return hit == null || !(span > 0) ? null : (hit - scene.startSec) / span;
+  }
+  // The cover transform for scene time k (0..1): scale over the cover fit,
+  // offsets in frame fractions, rotation in radians. Never shows a frame edge.
+  function cameraView(scene, k) {
+    if (!RIG) return { scale: lerp(1.04, 1.1, easeInOut(k)), x: 0, y: 0, rotation: 0 };
+    const move = moveFor(scene);
+    const options = { amount: move.amount, speed: move.speed, onBeat: move.onBeat, beat: beatIn(scene), aspect: W / H };
+    const view = RIG.flatView(move.move, k, options);
+    const lowest = Math.min(1, RIG.flatView(move.move, 0, options).zoom, RIG.flatView(move.move, 1, options).zoom);
+    // The smallest scale whose rotated, offset frame still holds every canvas corner.
+    const c = Math.abs(Math.cos(view.rotation)); const s = Math.abs(Math.sin(view.rotation));
+    const sx = 1 + 2 * Math.abs(view.x); const sy = 1 + 2 * Math.abs(view.y);
+    const cover = Math.max(sx * c + sy * s * (H / W), sy * c + sx * s * (W / H));
+    return { scale: Math.max((move.base * view.zoom) / lowest, cover), x: view.x, y: view.y, rotation: view.rotation };
+  }
+  // The rig's camera state for a code-drawn shot with a planned move (authored code may follow it).
+  function cameraSample(scene, t) {
+    const id = scene?.camera?.move;
+    if (!RIG || !id || !RIG.has(id)) return null;
+    const k = seg(t, scene.startSec, scene.endSec);
+    return { move: id, ...RIG.sample(id, k, { speed: scene.camera.speed, onBeat: scene.camera.onBeat === true, beat: beatIn(scene) }) };
   }
 
   // ---------- media (lazy, a few decoders at a time) ----------
@@ -198,16 +228,17 @@
   }
 
   // ---------- drawing helpers ----------
-  function drawCover(src, k, move, extraScale = 1) {
+  function drawCover(src, view, extraScale = 1) {
     const sw = src.videoWidth || src.naturalWidth || src.width;
     const sh = src.videoHeight || src.naturalHeight || src.height;
     if (!sw || !sh) return;
-    const s = lerp(move.s0, move.s1, easeInOut(k)) * extraScale;
-    const base = Math.max(W / sw, H / sh) * s;
+    const base = Math.max(W / sw, H / sh) * view.scale * extraScale;
     const dw = sw * base; const dh = sh * base;
-    const ox = lerp(move.x0, move.x1, easeInOut(k)) * W;
-    const oy = lerp(move.y0, move.y1, easeInOut(k)) * H;
-    ctx.drawImage(src, (W - dw) / 2 + ox, (H - dh) / 2 + oy, dw, dh);
+    if (!view.rotation) { ctx.drawImage(src, (W - dw) / 2 + view.x * W, (H - dh) / 2 + view.y * H, dw, dh); return; }
+    ctx.save();
+    ctx.translate(W / 2 + view.x * W, H / 2 + view.y * H); ctx.rotate(view.rotation);
+    ctx.drawImage(src, -dw / 2, -dh / 2, dw, dh);
+    ctx.restore();
   }
   const grainTiles = [];
   function buildGrain() {
@@ -255,7 +286,7 @@
   // (else the lyrics, with their sheet's roles) are sung `line`s. Each shot's
   // textZone keeps the type off the subject.
   const CUES = (MV.textCues || []).filter((c) => Number.isFinite(c.startSec) && Number.isFinite(c.endSec) && c.endSec > c.startSec);
-  const ZONE_OF_PLACEMENT = { upper: 'upper-right', center: 'center', lower: 'lower-left' };
+  const ZONE_OF_PLACEMENT = { upper: 'upper', center: 'center', lower: 'lower' };
   const HERO_LINES = CUES.filter((c) => c.emphasis === 'hero')
     .map((c) => ({ text: c.text, startSec: c.startSec, endSec: c.endSec, role: 'hook', zone: ZONE_OF_PLACEMENT[c.placement] || null }));
   const SUBTITLE_CUES = CUES.filter((c) => c.emphasis !== 'hero')
@@ -479,7 +510,7 @@
       else if (source) {
         const energetic = isHighEnergy(t) || scene.shotMode === 'performance';
         const punch = 1 + 0.018 * pulse(t, energetic ? beats : downs, 8) * state.reactiveGain;
-        drawCover(source, seg(t, scene.startSec, scene.endSec), moveFor(scene), punch);
+        drawCover(source, cameraView(scene, seg(t, scene.startSec, scene.endSec)), punch);
       }
       if (isHighEnergy(t)) glitch(t, pulse(t, downs, 8) * state.reactiveGain);
     }
@@ -494,7 +525,7 @@
           t, localT: t - authored.section.startSec, frame: frameOf(t), width: W, height: H,
           song: GENERATED.song, palette: GENERATED.palette, section: authored.section,
           safe: { x: W * inset, y: H * inset, w: W * (1 - 2 * inset), h: H * (1 - 2 * inset) },
-          karaoke: [], mediaKind: scene?.media?.kind || null, visualLayer: scene?.visualLayer || null,
+          karaoke: [], mediaKind: scene?.media?.kind || null, visualLayer: scene?.visualLayer || null, camera: cameraSample(scene, t),
           events: state.activeEvents, reactiveGain: state.reactiveGain, hold: state.hold,
         });
       } finally { ctx.restore(); }

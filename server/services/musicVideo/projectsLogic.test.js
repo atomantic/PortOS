@@ -563,6 +563,9 @@ describe('scene board operations', () => {
     const { project, scene } = addScene(baseProject(), { prompt: 'a' });
     const { updated } = applySceneUpdate(project, scene.sceneId, { textZone: 'none', lyricRole: 'hook' });
     expect(updated).toMatchObject({ textZone: 'none', lyricRole: 'hook' });
+    for (const zone of ['upper', 'lower']) {
+      expect(applySceneUpdate(project, scene.sceneId, { textZone: zone }).updated.textZone).toBe(zone);
+    }
     expect(applySceneUpdate(project, scene.sceneId, { textZone: null }).updated.textZone).toBeNull();
     expect(() => applySceneUpdate(project, scene.sceneId, { textZone: 'middle' })).toThrow();
     expect(() => applySceneUpdate(project, scene.sceneId, { lyricRole: 'karaoke' })).toThrow();

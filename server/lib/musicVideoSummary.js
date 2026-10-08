@@ -11,6 +11,16 @@ import { isLayeredComposition, sceneRenderReady } from './musicVideoLayers.js';
 import { latestMusicVideoReviewDraft } from './musicVideoReviewDraft.js';
 import { finishedOutsideCovers } from './musicVideoFinishedOutside.js';
 
+/**
+ * True when the project's word timings came from the full mix but a vocal
+ * stem has since been attached: they are provisional until re-aligned.
+ */
+function isLyricAlignStale(project) {
+  const hasWords = (project?.lyricCues || []).some((cue) => (cue.words || []).length > 0);
+  return Boolean(hasWords && project.vocalStemFilename && project.lyricAlignSource !== 'vocal-stem');
+}
+
+
 // The six steps (Song, Look, Storyboard, Make, Final render, Publish); Make (`produce`) absorbed Compose.
 const STAGE_IDS = ['setup', 'cast-sets', 'board', 'produce', 'review', 'publish'];
 const RESUMABLE_RUN_STATUSES = new Set(['running', 'stopped', 'limit-reached', 'blocked', 'needs-replan']);
@@ -175,6 +185,8 @@ export function summarizeMusicVideoProject(project, readiness) {
     },
     vocalStemFilename: project.vocalStemFilename || null,
     midiTranscription: Boolean(project.midiTranscription),
+    lyricAlignStale: isLyricAlignStale(project),
+    lyricAlignSilentWords: project.lyricAlignSilentWords ?? null,
     composition: { mode: project.composition?.mode },
     concept: { style: concept.style || concept.prompt || null, universeId: concept.universeId || null },
     visualSpec: { palette: Array.isArray(project.visualSpec?.palette) ? project.visualSpec.palette.slice(0, 5) : [] },

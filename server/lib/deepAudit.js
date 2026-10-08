@@ -95,6 +95,9 @@ export function assignDeepAuditAttempt(ledger, agentId) {
   const eligible = [...(deliveryOnly ? ledger.units : remaining)];
   // Untouched work first, then least-assigned retries: persistent blockers cannot starve peers.
   eligible.sort((a, b) => Number(Boolean(a.evidence[pass])) - Number(Boolean(b.evidence[pass]))
+    // Review feasible untouched units before indivisible oversized ones. Once blocked,
+    // all units rotate by attempt count rather than permanently preferring small blockers.
+    || (!a.evidence[pass] && !b.evidence[pass] ? Number(a.files.length > 96) - Number(b.files.length > 96) : 0)
     || (assignedCounts.get(a.id) || 0) - (assignedCounts.get(b.id) || 0));
   const unitIds = [];
   const files = new Set();

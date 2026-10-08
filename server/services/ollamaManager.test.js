@@ -14,6 +14,12 @@ vi.mock('../lib/childProcess.js', () => ({
   execFile: (cmd, args, opts, cb) => execMock.impl(cmd, args, opts, cb),
   spawn: vi.fn()
 }))
+// The brew/systemctl/ollama presence probes go through commandExists, which
+// spawns its own bounded child; drive them from the same exec script.
+vi.mock('../lib/commandExists.js', () => ({
+  commandExists: (cmd, args = ['--version']) =>
+    new Promise((resolve) => execMock.impl(cmd, args, {}, (err) => resolve(!err)))
+}))
 
 // The HF pull recovery attaches the user's HF token (so a gated repo Ollama could
 // pull is recoverable too). Stub the resolver rather than reading real settings.

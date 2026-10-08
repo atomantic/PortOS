@@ -393,3 +393,22 @@ describe('Per-stage approval sections (#10151)', () => {
     expect(screen.queryByText('About production approvals')).toBeNull();
   });
 });
+
+describe('storyboard camera notes (#10589)', () => {
+  it('lists camera-variety notes under the storyboard without blocking approval', () => {
+    const review = reviewFixture();
+    const note = 'Chorus at 0:45 has no snap move: land a whip-pan, crash-zoom, dutch-roll, crash-zoom-out on its first downbeat.';
+    review.readiness.storyboard = { approved: false, problems: [], camera: { staticRuns: [], snaplessChoruses: [{ label: 'Chorus', startSec: 45 }], notes: [note] } };
+    render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
+    const notes = screen.getByRole('note', { name: 'Camera variety notes' });
+    expect(within(notes).getByText(note)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Approve lyric-timed storyboard' }).disabled).toBe(false);
+  });
+
+  it('shows nothing when the camera plan is varied', () => {
+    const review = reviewFixture();
+    review.readiness.storyboard = { approved: false, problems: [], camera: { staticRuns: [], snaplessChoruses: [], notes: [] } };
+    render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
+    expect(screen.queryByRole('note', { name: 'Camera variety notes' })).toBeNull();
+  });
+});

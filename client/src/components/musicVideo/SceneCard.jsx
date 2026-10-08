@@ -1,5 +1,6 @@
 import PlateComparison from './PlateComparison.jsx';
 import ShotActionInspector from './ShotActionInspector.jsx';
+import SceneCameraControls from './SceneCameraControls.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { useEffect, useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, Scissors } from 'lucide-react';
@@ -14,7 +15,7 @@ import { MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAY
 const LAYER_LABELS = { footage: 'Footage', still: 'Still image', card: 'Title card', code: 'Code-drawn' };
 const STILL_MOVE_LABELS = [['hold', 'Hold'], ['push', 'Push in'], ['pan', 'Pan']];
 // #10583: the shared lyric type's zone and style for this shot (composition documents).
-const TEXT_ZONE_LABELS = { 'lower-left': 'Lower left', 'upper-right': 'Upper right', center: 'Centre', none: 'No lyrics' };
+const TEXT_ZONE_LABELS = { 'lower-left': 'Lower left', 'upper-right': 'Upper right', upper: 'Upper centre', lower: 'Lower centre', center: 'Centre', none: 'No lyrics' };
 const LYRIC_ROLE_LABELS = { line: 'Sung line', hook: 'Hook slam', stamp: 'Stamp', data: 'Data caption' };
 import {
   falSceneTake, grokCoverage, isPerformanceScene, performanceBlockedReason, performanceCapability, planPerformanceWindow, shotSplitLimit,
@@ -290,7 +291,8 @@ export default function SceneCard({
             <>
               <label htmlFor={fieldId('move')}>Move</label>
               <select id={fieldId('move')} value={scene.stillMove || 'hold'} onChange={(e) => applyPatch({ stillMove: e.target.value })}
-                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0">
+                disabled={!!scene.camera?.move} title={scene.camera?.move ? 'The planned camera move drives this still.' : undefined}
+                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0 disabled:opacity-50">
                 {STILL_MOVE_LABELS.map(([value, text]) => <option key={value} value={value}>{text}</option>)}
               </select>
             </>
@@ -329,6 +331,7 @@ export default function SceneCard({
             </>
           )}
         </div>
+        {layer !== 'card' && <SceneCameraControls scene={scene} fieldId={fieldId} onEditLocal={onEditLocal} onSave={onSave} />}
         {layer !== 'footage' && !layered && (
           <p className="text-[11px] text-port-text-muted">
             {LAYER_LABELS[layer]} sections render in composed or document mode — a plain render plays this scene&apos;s footage.

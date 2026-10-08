@@ -12,7 +12,9 @@ const assetRef = (scene, role, assetId = scene?.[slots[role]]) => ({
 });
 const layerRef = (scene) => ({ role: 'layer', sceneId: scene.sceneId, assetId: scene.sceneId,
   revision: checksum(Object.fromEntries(['startSec', 'endSec', 'visualLayer', 'stillMove', 'cardText', 'cardColor', 'shotMode', 'performanceSpeaker', 'loop']
-    .map((key) => [key, scene[key] ?? null]).concat([['actionContract', scene.direction?.actionContract || null]]))) });
+    .map((key) => [key, scene[key] ?? null]).concat([['actionContract', scene.direction?.actionContract || null]])
+    // #10589: only a planned camera joins the revision, so pre-camera evidence stays current.
+    .concat(scene.camera ? [['camera', scene.camera]] : []))) });
 const snapshot = (references) => ({ version: MUSIC_VIDEO_DEPENDENCY_VERSION, references });
 
 /** Capture the actual submitted plate, including optional crop/mask provenance. */

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft, Archive, BellOff, ChevronDown, Loader2, Plus, RefreshCw, Send, Trash2, UserPlus, Users,
+  ArrowLeft, Archive, BellOff, ChevronDown, Loader2, RefreshCw, Send, Trash2, UserPlus, Users,
 } from 'lucide-react';
 import NetworkLogo, { networkLabel } from './BeeperNetworkLogo';
 import BeeperAttachment from './BeeperAttachment';
@@ -933,15 +933,6 @@ export default function BeeperThread({
       )}
 
       <div className="flex shrink-0 items-center gap-2 border-t border-port-border p-2.5">
-        <button
-          type="button"
-          aria-label="Attach a file"
-          title="Attachments aren't supported yet"
-          disabled
-          className="shrink-0 rounded-full p-2 text-gray-600"
-        >
-          <Plus size={17} />
-        </button>
         <div className="flex flex-1 items-center gap-2 rounded-full border border-port-border bg-port-card px-3 py-1.5">
           <NetworkLogo network={conversation.network} size={15} />
           <label htmlFor="beeper-composer" className="sr-only">

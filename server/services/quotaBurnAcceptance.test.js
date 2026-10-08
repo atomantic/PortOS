@@ -30,6 +30,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) =>
 // what the on-demand engines actually produced.
 const world = { requests: [], tasks: [], requestsThrow: false, tasksThrow: false };
 
+vi.mock('./onDemandHandoff.js', () => ({ getOnDemandHandoffs: vi.fn(async () => ({})) }));
 vi.mock('./taskSchedule.js', () => ({
   getOnDemandRequests: vi.fn(async () => {
     if (world.requestsThrow) throw new Error('schedule unreadable');
@@ -219,4 +220,18 @@ describe('reads it cannot trust', () => {
     expect(await getQuotaBurnReservations()).toHaveProperty(quotaBurnReservationKey('grok', 'step-a'));
     expect(await getQuotaBurnDispatches()).toEqual({});
   });
+});
+
+it('retains a consumed request reservation while preparation is live and settles an accepted receipt once', async () => {
+  const { getOnDemandHandoffs } = await import('./onDemandHandoff.js');
+  await reserveQuotaBurnDispatch(reservation());
+  getOnDemandHandoffs.mockResolvedValue({ [REQUEST_ID]: { status: 'preparing' } });
+  expect(await reconcileQuotaBurnReservations()).toMatchObject({ accepted: 0, refused: 0 });
+  expect(Object.keys(await getQuotaBurnReservations())).toHaveLength(1);
+  // Task archival may remove the join target after delivery. The exact-owner
+  // persisted acceptance receipt still proves that this request was accepted.
+  getOnDemandHandoffs.mockResolvedValue({ [REQUEST_ID]: { status: 'accepted', taskId: 'existing-task' } });
+  expect(await reconcileQuotaBurnReservations()).toMatchObject({ accepted: 1, refused: 0 });
+  expect(await reconcileQuotaBurnReservations()).toMatchObject({ accepted: 0, refused: 0 });
+  getOnDemandHandoffs.mockResolvedValue({});
 });

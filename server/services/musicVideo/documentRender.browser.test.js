@@ -156,6 +156,37 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     } finally { await page.close(); }
   }, 30000);
 
+  it('lets a composition upload its own images to WebGL through a 2D canvas', async () => {
+    const { openComposition } = await import('../htmlComposition/browser.js');
+    const directory = 'compositions/synthetic-canvas-texture';
+    await mkdir(join(PATHS.data, directory, 'media'), { recursive: true });
+    await writeFile(join(PATHS.data, directory, 'media/still.jpg'),
+      await sharp({ create: { width: 8, height: 8, channels: 3, background: '#ff0000' } }).jpeg().toBuffer());
+    await writeFile(join(PATHS.data, directory, 'index.html'), '<!doctype html><title>Canvas texture</title>');
+    const page = await openComposition(directory, { ownedBrowser: true, signal: testSignal });
+    try {
+      // The sandboxed page has an opaque origin; an image loaded without CORS
+      // would taint the canvas and texImage2D would throw a SecurityError.
+      const outcome = await page.evaluate(`new Promise(resolve => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = canvas.height = 8;
+          canvas.getContext('2d').drawImage(img, 0, 0);
+          const gl = document.createElement('canvas').getContext('webgl');
+          try {
+            gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+            resolve(gl.getError() === gl.NO_ERROR ? 'uploaded' : 'gl-error');
+          } catch (error) { resolve(error.name); }
+        };
+        img.onerror = () => resolve('image-failed');
+        img.src = 'media/still.jpg';
+      })`);
+      expect(outcome).toBe('uploaded');
+    } finally { await page.close(); }
+  }, 30000);
+
   // Server-only CI does not install client dependencies; the full local install
   // exercises this cross-workspace package/render contract alongside the UI proof.
   const threeIt = existsSync(new URL('../../../client/node_modules/three/package.json', import.meta.url)) ? it : vitestIt.skip;
@@ -541,7 +572,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     expect(browser.isConnected()).toBe(true);
   }, 30000);
 
-  it('uploads document images and footage drawn to a 2D canvas as a WebGL texture in an excerpt (#10594)', async () => {
+  threeIt('uploads document images and footage drawn to a 2D canvas as a WebGL texture in an excerpt (#10594)', async () => {
     // A hand-authored document, not the shipped template: plain new Image(),
     // markup <img> and <video> sources with no crossorigin attribute, drawn to
     // a 2D canvas that three.js uploads as a CanvasTexture on a full-frame quad.
@@ -555,7 +586,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     await tile(255, 128, 0).toFile(join(dir, 'media', 'scripted.jpg'));
     await tile(0, 200, 0).toFile(join(dir, 'media', 'markup.jpg'));
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=64x64:r=12:d=1', '-c:v', 'libvpx', '-b:v', '200k', join(dir, 'media', 'clip.webm')]);
-    const three = dirname(createRequire(import.meta.url).resolve('three'));
+    const three = dirname(createRequire(new URL('../../../client/package.json', import.meta.url)).resolve('three'));
     for (const name of ['three.module.js', 'three.core.js']) await copyFile(join(three, name), join(dir, 'vendor', name));
     await writeFile(join(dir, 'index.html'), `<!doctype html><style>html,body{margin:0;background:#000}canvas{display:block}</style>
       <img id="markup" src="media/markup.jpg" style="display:none">
