@@ -421,41 +421,6 @@ export default function Review() {
         icon={ClipboardList}
         iconColor="text-white"
         title="Actions"
-        actions={(
-          <>
-            <select
-              aria-label="Filter review items by status"
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              className="bg-port-card border border-port-border rounded-lg px-3 py-2 text-sm text-gray-300"
-            >
-              <option value="pending">Pending</option>
-              <option value="completed">Completed</option>
-              <option value="dismissed">Dismissed</option>
-              <option value="all">All</option>
-            </select>
-            {pendingCount > 0 && (
-              <>
-                {genericCompletableCount > 0 && (
-                  <button
-                    onClick={handleCompleteAll}
-                    className="px-3 py-2 text-sm bg-port-success/10 hover:bg-port-success/20 border border-port-success/30 rounded-lg text-port-success transition-colors"
-                    title="Mark all general pending items as completed"
-                  >
-                    Complete All
-                  </button>
-                )}
-                <button
-                  onClick={handleMarkAllRead}
-                  className="px-3 py-2 text-sm bg-port-border/50 hover:bg-port-border rounded-lg text-gray-300 transition-colors"
-                  title="Dismiss all pending items"
-                >
-                  Dismiss All
-                </button>
-              </>
-            )}
-          </>
-        )}
       />
       <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6 space-y-3">
         <TabPills
@@ -555,6 +520,46 @@ export default function Review() {
         {/* Legacy Review list — only shown when the canonical projection is
             empty, so old stored records remain usable without duplicating the
             Actions rows. */}
+        {showLegacyReviewSurface && (
+          <section aria-labelledby="stored-review-items-heading" className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 id="stored-review-items-heading" className="text-sm font-semibold text-white">Stored review items</h2>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  aria-label="Filter review items by status"
+                  value={filter}
+                  onChange={(e) => setFilter(e.target.value)}
+                  className="bg-port-card border border-port-border rounded-lg px-3 py-2 text-sm text-gray-300"
+                >
+                  <option value="pending">Pending</option>
+                  <option value="completed">Completed</option>
+                  <option value="dismissed">Dismissed</option>
+                  <option value="all">All</option>
+                </select>
+                {pendingCount > 0 && (
+                  <>
+                    {genericCompletableCount > 0 && (
+                      <button
+                        onClick={handleCompleteAll}
+                        className="px-3 py-2 text-sm bg-port-success/10 hover:bg-port-success/20 border border-port-success/30 rounded-lg text-port-success transition-colors"
+                        title="Mark all general pending items as completed"
+                      >
+                        Complete All
+                      </button>
+                    )}
+                    <button
+                      onClick={handleMarkAllRead}
+                      className="px-3 py-2 text-sm bg-port-border/50 hover:bg-port-border rounded-lg text-gray-300 transition-colors"
+                      title="Dismiss all pending items"
+                    >
+                      Dismiss All
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
         {showLegacyReviewSurface && topActionItems.length > 0 && (
           <section className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
             <div className="flex items-center justify-between gap-3">

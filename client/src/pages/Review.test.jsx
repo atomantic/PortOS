@@ -425,6 +425,50 @@ describe('Review Hub queue-card triage (#3282)', () => {
 });
 
 describe('Actions commitments workspace (#7739)', () => {
+  it('keeps stored-item filters and bulk actions out of the canonical queue header', async () => {
+    const canonicalItem = {
+      id: 'health:required-example', source: 'health', sourceLabel: 'Health anomalies',
+      title: 'Required health action', summary: 'Review this action',
+      operations: [{ id: 'complete', label: 'Mark resolved', available: true }],
+    };
+    api.getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [canonicalItem] });
+
+    render(<Review />);
+
+    expect(await screen.findByText(canonicalItem.title)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Filter review items by status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Complete All' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Dismiss All' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Stored review items' })).not.toBeInTheDocument();
+  });
+
+  it('keeps stored-item controls inside the named legacy fallback section', async () => {
+    render(<Review />);
+
+    const heading = await screen.findByRole('heading', { name: 'Stored review items' });
+    const section = heading.closest('section');
+    expect(section).toContainElement(screen.getByLabelText('Filter review items by status'));
+    expect(section).toContainElement(screen.getByRole('button', { name: 'Complete All' }));
+    expect(section).toContainElement(screen.getByRole('button', { name: 'Dismiss All' }));
+  });
+
+  it('hides stored-item controls when the canonical queue is degraded or partial', async () => {
+    const degradedQueue = {
+      partial: true,
+      sources: { health: { label: 'Health anomalies', error: 'source unavailable' } },
+      items: [],
+    };
+    api.getReviewQueue.mockResolvedValueOnce(degradedQueue);
+
+    render(<Review />);
+
+    expect(await screen.findByText(/This bounded view may omit additional actions/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Filter review items by status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Complete All' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Dismiss All' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Stored review items' })).not.toBeInTheDocument();
+  });
+
   it('renders the canonical Actions workspace while stored review items are pending', async () => {
     let resolveLegacyItems;
     api.getReviewItems.mockReturnValueOnce(new Promise((resolve) => { resolveLegacyItems = resolve; }));
