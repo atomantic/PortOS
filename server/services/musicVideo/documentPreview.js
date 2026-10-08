@@ -158,9 +158,10 @@ const BOOTSTRAP = `(() => {
   }
   // decode() called straight after a bridged src assignment must wait for the real src, or it rejects on an empty image.
   const decode = HTMLImageElement.prototype.decode;
-  HTMLImageElement.prototype.decode = function() {
-    const hold = inflight.get(this);
-    return hold ? hold.promise.then(() => decode.call(this)) : decode.call(this);
+  HTMLImageElement.prototype.decode = async function() {
+    // A reassignment releases the earlier hold; keep waiting while a newer bridged src is still pending.
+    for (let hold = inflight.get(this); hold; hold = inflight.get(this)) await hold.promise;
+    return decode.call(this);
   };
   const complete = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'complete');
   if (complete && complete.get) Object.defineProperty(HTMLImageElement.prototype, 'complete', { configurable: true, enumerable: complete.enumerable,
