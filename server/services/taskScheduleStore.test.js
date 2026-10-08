@@ -65,7 +65,9 @@ vi.mock('../lib/fileUtils.js', async () => {
   };
 });
 
-import { loadSchedule, updateSchedule } from './taskScheduleStore.js';
+import { loadSchedule, updateSchedule, withLiveTaskScheduleRestore } from './taskScheduleStore.js';
+import { dashboardEvents } from './dashboardEvents.js';
+import { readJSONFile } from '../lib/fileUtils.js';
 import { updateTaskInterval } from './taskSchedule.js';
 import { recordTaskTypeFailure } from './taskScheduleBackoff.js';
 
@@ -157,4 +159,50 @@ describe('taskScheduleStore', () => {
     expect(stages[2]).toMatchObject({ role: 'actions', providerId: 'codex-cli', model: 'gpt-5.6', executionProfile: 'public-review-gate' });
     expect(state.writes.at(-1).tasks['pr-reviewer'].taskMetadata.pipeline.stages).toHaveLength(3);
   });
+
+  it('holds later mutations and compatibility repairs through partial restore reconciliation', async () => {
+    const transferred = Promise.withResolvers();
+    const finishTransfer = Promise.withResolvers();
+    const restored = {
+      version: 1,
+      selfImprovement: { security: { enabled: false, prompt: 'Restored custom prompt' } },
+      templates: [{ id: 'restored-template', prompt: 'Restored template' }]
+    };
+    const restore = withLiveTaskScheduleRestore(async () => {
+      state.persisted = structuredClone(restored);
+      transferred.resolve();
+      await finishTransfer.promise;
+      throw Object.assign(new Error('Partial transfer'), { code: 'RSYNC_FAILED' });
+    });
+    await transferred.promise;
+    const repair = loadSchedule();
+    const later = updateSchedule(schedule => {
+      schedule.executions['task:security'] = { count: 1 };
+      return { changed: true };
+    });
+    expect(state.writes).toHaveLength(0);
+    const notification = vi.fn(() => expect(state.persisted.version).toBe(2));
+    dashboardEvents.on('cos:schedule:changed', notification);
+    finishTransfer.resolve();
+    await expect(restore).rejects.toMatchObject({ code: 'RSYNC_FAILED' });
+    await Promise.all([repair, later]);
+    dashboardEvents.off('cos:schedule:changed', notification);
+    expect(notification).toHaveBeenCalled();
+    expect(state.persisted.tasks.security).toMatchObject({ enabled: false, prompt: 'Restored custom prompt' });
+    expect(state.persisted.templates).toEqual(restored.templates);
+    expect(state.persisted.executions['task:security'].count).toBe(1);
+  });
+
+  it('retains transfer diagnostics when reconciliation fails and releases the queue', async () => {
+    const restore = withLiveTaskScheduleRestore(async () => {
+      readJSONFile.mockRejectedValueOnce(new Error('Invalid restored JSON'));
+      throw Object.assign(new Error('Some files may already have been overwritten'), { code: 'RSYNC_FAILED' });
+    });
+    await expect(restore).rejects.toMatchObject({
+      code: 'RSYNC_FAILED',
+      message: expect.stringMatching(/Some files may already have been overwritten.*Task schedule reconciliation failed: Invalid restored JSON/)
+    });
+    await expect(updateSchedule(() => ({ result: 'released', changed: false }))).resolves.toBe('released');
+  });
+
 });

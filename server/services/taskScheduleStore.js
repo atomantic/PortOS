@@ -314,3 +314,29 @@ async function saveScheduleNow(schedule) {
 export function saveSchedule(schedule) {
   return queueScheduleWrite(() => saveScheduleNow(schedule));
 }
+
+/**
+ * Own the schedule queue through an out-of-band restore and compatibility repair.
+ * Acquire after the snapshot cut, but before settings/CoS locks: a schedule
+ * mutation may consult CoS state. Never call queued schedule APIs in `transfer`.
+ */
+export function withLiveTaskScheduleRestore(transfer) {
+  return queueScheduleWrite(async () => {
+    const [result] = await Promise.allSettled([Promise.resolve().then(transfer)]);
+    const [reload] = await Promise.allSettled([(async () => {
+      const { schedule, needsSave } = await readSchedule();
+      if (needsSave) await saveScheduleNow(schedule);
+      else dashboardEvents.emit('cos:schedule:changed');
+    })()]);
+    if (reload.status === 'rejected') {
+      const message = `Task schedule reconciliation failed: ${reload.reason.message}`;
+      const error = new Error(result.status === 'rejected'
+        ? `${result.reason.message}. ${message}` : message,
+      { cause: result.status === 'rejected' ? result.reason : reload.reason });
+      if (result.status === 'rejected' && result.reason.code) error.code = result.reason.code;
+      throw error;
+    }
+    if (result.status === 'rejected') throw result.reason;
+    return result.value;
+  });
+}
