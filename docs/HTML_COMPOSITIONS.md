@@ -23,6 +23,13 @@ globalThis.portosComposition = {
 `seek(t)` must finish all asynchronous work for that frame before resolving.
 Drive animation from `t`, not wall-clock playback, CSS animation timers or random
 state. The renderer awaits each seek, then captures frame `n` at `n / fps`.
+The in-app live preview is different: the browser paints whenever `seek`
+yields, so every `await` inside it can reach the screen. Load and decode first
+(`await img.decode()`; for video, `seeked` plus a presented frame, as
+`seekVideo` in the layered template does), then clear, draw and toggle layer visibility
+in one synchronous block. A page that fills a canvas or flips `visibility`
+before awaiting an image flashes that half-drawn state in the preview (most
+visibly in iPhone Safari, which decodes slowly) while the render stays clean.
 Duration is 1–120 seconds, fps is an integer from 12–60, and their product must
 be a whole number of frames. Dimensions are exactly 1920×1080, 1080×1920,
 1080×1080 or 1280×720. Invalid contracts name the field in the job error.
