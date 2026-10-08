@@ -9,7 +9,9 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 Graceful maintenance uses `data/workflow-maintenance/state.json` as a **file-primary,
 machine-local runtime journal**. It must fence both the API and standalone CoS runner
 before either can use PostgreSQL or start work. Its bounded live-operation set and
-operator hold are not app records, never federate, and are included in the data backup.
+operator hold are not app records and never federate. Data snapshots copy the
+`workflow-maintenance/` subtree as evidence, but no restore ever installs it (see
+[Explicitly abandoned duplicate agents](#explicitly-abandoned-duplicate-agents)).
 The schema is versioned; an absent file starts Normal, while corrupt/future state or
 an interrupted transaction fails closed. Replacement uses exclusive directory locking,
 file/directory fsync and atomic rename. No seed or DB migration is required.
@@ -74,9 +76,14 @@ operator reason, and evidence fingerprints. Other operations and the hold remain
 Run/task outcomes are unchanged. Repeating the same request reuses its receipt;
 it cannot settle a replacement reservation. Receipt-first interrupted publication
 can be retried after normal journal recovery; the command never steals a transaction
-lock. These machine-local recovery receipts are included in the data backup and
-never federated. This deliberately narrow command does not recover nonempty output
-or general failed saves; those still require the owning workflow's recovery.
+lock. These machine-local recovery receipts are never federated and never restored:
+a data snapshot copies them, but every file restore (full or scoped, preview and
+execution) preserves this machine's `workflow-maintenance/` subtree byte-for-byte
+and refuses an explicit selection with `BACKUP_RESTORE_MACHINE_LOCAL`, because
+installing another snapshot's journal or receipts would replace local authority.
+To use a receipt as an investigation artifact elsewhere, copy it out of the
+snapshot or the live data directory separately. This deliberately narrow command
+does not recover nonempty output or general failed saves; those still require the owning workflow's recovery.
 
 
 ## The Four Storage Classes
