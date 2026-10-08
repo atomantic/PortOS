@@ -37,6 +37,7 @@ import { importerEvents, getImporterProgressFrames } from './importerEvents.js';
 import { catalogEvents } from './catalogEvents.js';
 import { writersRoomEvents } from './writersRoomEvents.js';
 import { musicVideoEvents } from './musicVideo/events.js';
+import { fineTuningEvents } from './voice/fineTuningEvents.js';
 import { videoGenEvents } from './videoGen/events.js';
 import { audioGenEvents } from './audioGen/events.js';
 import { aiStatusEvents } from './aiStatusEvents.js';
@@ -306,6 +307,9 @@ const SIMPLE_BRIDGES = [
   // The call-host tab already gets `voice:call:state` from its own socket
   // handler (server/sockets/voice.js); this fans it out to every OTHER tab.
   { emitter: callStateEvents, event: 'state', channel: 'voice:call:state' },
+  // A Voice Lab fine-tuning run changed status, sealed a checkpoint, or
+  // advanced (throttled) — the Fine-Tuning tab applies the job frame (#10400).
+  { emitter: fineTuningEvents, event: 'updated', channel: 'voice:fine-tune:updated' },
   // A storyboard render filed durably by writersRoomSceneImageHook (#1363).
   { emitter: writersRoomEvents, event: 'scene-image', channel: 'writers-room:scene-image' },
   // Scene reference frame / i2v clip filed durably by the music-video hooks

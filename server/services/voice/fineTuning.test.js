@@ -36,8 +36,10 @@ vi.mock('./qwen3TtsRuntime.js', async (importOriginal) => {
   return { ...actual, getQwen3RuntimeStatus: async () => runtimeOverride ?? actual.getQwen3RuntimeStatus() };
 });
 
+const { fineTuningEvents } = await import('./fineTuningEvents.js');
 const {
   validateFineTuningDataset,
+  listFineTuningJobs,
   startFineTuningJob,
   getFineTuningJobStatus,
   cancelFineTuningJob,
@@ -337,6 +339,82 @@ describe('fineTuning', () => {
       status: 'failed',
       error: 'Process terminated by signal SIGKILL',
     });
+  });
+
+  it('pushes status changes, sealed checkpoints and throttled progress for the Voice Lab (#10400)', async () => {
+    queryMock.mockResolvedValue({ rows: [{ data: PROFILE }] });
+    await seedSourceAudio();
+    const scripted = useScriptedRunner();
+    const frames = [];
+    const onUpdated = (frame) => frames.push(frame);
+    fineTuningEvents.on('updated', onUpdated);
+    try {
+      const { jobId, job } = await startFineTuningJob({ profileId: PROFILE.id, epochs: 2, checkpointInterval: 20 });
+      // The start response carries the same projection the event does.
+      expect(job).toMatchObject({ id: jobId, status: 'running', checkpoints: [] });
+      expect(frames.at(-1)).toMatchObject({ profileId: PROFILE.id, job: { id: jobId, status: 'running' } });
+
+      // Two steps in one burst: the first is pushed, the second is throttled.
+      const before = frames.length;
+      scripted().emitFrames(
+        { stage: 'training', step: 10, total_steps: 100, loss: 1.5, progress: 10 },
+        { stage: 'training', step: 11, total_steps: 100, loss: 1.4, progress: 11 },
+      );
+      expect(frames.slice(before).map((frame) => frame.job.step)).toEqual([10]);
+
+      scripted().emitFrames(checkpointFrame(jobId, 20));
+      expect(frames.at(-1).job.checkpoints).toEqual([expect.objectContaining({
+        id: 'checkpoint-step-20',
+        auditionUrl: `/data/voice-profiles/${PROFILE.id}/fine-tune/${jobId}/checkpoint-step-20/audition.wav`,
+        promotable: true,
+        promotionBlockedReason: null,
+      })]);
+
+      // Cancel is scoped to the profile that owns the run.
+      expect(() => cancelFineTuningJob(jobId, 'other-profile')).toThrow(/not found/i);
+      expect(cancelFineTuningJob(jobId, PROFILE.id).job.status).toBe('cancelled');
+      expect(frames.at(-1).job.status).toBe('cancelled');
+
+      await drainJobRecord(jobId);
+      expect(frames.at(-1).job).toMatchObject({ status: 'cancelled', checkpoints: [expect.any(Object)] });
+    } finally {
+      fineTuningEvents.off('updated', onUpdated);
+    }
+  });
+
+  it('lists a profile\'s runs newest first from their sidecars, flagging lost and unverified ones', async () => {
+    queryMock.mockResolvedValue({ rows: [{ data: PROFILE }] });
+    expect(await listFineTuningJobs(PROFILE.id)).toEqual([]);
+
+    const seedRecord = async (jobId, record) => {
+      await mkdir(jobDir(jobId), { recursive: true });
+      if (record !== undefined) await writeFile(jobRecordPath(jobId), typeof record === 'string' ? record : JSON.stringify(record));
+    };
+    const older = '11111111-2222-4333-8444-555555555555';
+    const newer = '22222222-2222-4333-8444-555555555555';
+    await seedRecord(older, {
+      id: older, profileId: PROFILE.id, status: 'completed', startedAt: '2026-01-01T00:00:00.000Z',
+      // A legacy placeholder: no producing adapter, no sealed revision.
+      checkpoints: [{ id: 'checkpoint-20.safetensors', step: 20, checkpointPath: '/legacy/checkpoint-20.safetensors' }],
+    });
+    // The server restarted mid-run: the sidecar still says running.
+    await seedRecord(newer, {
+      id: newer, profileId: PROFILE.id, status: 'running', startedAt: '2026-02-01T00:00:00.000Z',
+      trainingAdapter: 'qwen-tts-sft-12hz', checkpoints: [],
+    });
+    await seedRecord('33333333-2222-4333-8444-555555555555', '{ truncated');
+    await seedRecord('not-a-job');
+
+    const jobs = await listFineTuningJobs(PROFILE.id);
+    expect(jobs.map((job) => [job.id, job.status])).toEqual([[newer, 'interrupted'], [older, 'completed']]);
+    expect(jobs[0].error).toMatch(/server restarted/);
+    expect(jobs[1].checkpoints[0]).toMatchObject({
+      promotable: false,
+      promotionBlockedReason: 'Checkpoint was not produced by a supported training adapter',
+      auditionUrl: null,
+    });
+    // Reported, never rewritten.
+    expect(JSON.parse(await readFile(jobRecordPath(newer), 'utf8')).status).toBe('running');
   });
 
   it('persists a job.json sidecar beside the checkpoints when the run finishes', async () => {

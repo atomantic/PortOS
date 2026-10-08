@@ -51,6 +51,7 @@ vi.mock('../services/voice/qwen3TtsRuntime.js', () => ({
 }));
 vi.mock('../services/voice/fineTuning.js', () => ({
   startFineTuningJob: vi.fn(),
+  listFineTuningJobs: vi.fn(),
   getFineTuningJobStatus: vi.fn(),
   cancelFineTuningJob: vi.fn(),
   promoteCheckpoint: vi.fn(),
@@ -244,10 +245,27 @@ describe('Voice Routes', () => {
 
       const cancelRes = await request(buildApp()).post(`/api/voice/profiles/voice-profile-1/fine-tune/${jobId}/cancel`).send({});
       expect(cancelRes.status).toBe(200);
+      // Cancel is scoped to the profile in the URL, like status and promote.
+      expect(fineTuning.cancelFineTuningJob).toHaveBeenCalledWith(jobId, 'voice-profile-1');
 
       const promoteRes = await request(buildApp()).post(`/api/voice/profiles/voice-profile-1/fine-tune/${jobId}/promote`).send({ checkpointId: 'ckpt-1' });
       expect(promoteRes.status).toBe(200);
       expect(promoteRes.body.profile.kind).toBe('fine-tuned');
+    });
+
+    it('lists a profile\'s fine-tuning jobs so the Voice Lab recovers them after a reload', async () => {
+      const jobs = [{ id: '11111111-2222-4333-8444-555555555555', status: 'interrupted', checkpoints: [] }];
+      fineTuning.listFineTuningJobs.mockResolvedValue(jobs);
+
+      const res = await request(buildApp()).get('/api/voice/profiles/voice-profile-1/fine-tune');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ jobs });
+      expect(fineTuning.listFineTuningJobs).toHaveBeenCalledWith('voice-profile-1');
+
+      fineTuning.listFineTuningJobs.mockClear();
+      const bad = await request(buildApp()).get('/api/voice/profiles/Not_A_Profile/fine-tune');
+      expect(bad.status).toBe(400);
+      expect(fineTuning.listFineTuningJobs).not.toHaveBeenCalled();
     });
 
     it('rejects a fine-tuning job id that could escape the profile directory', async () => {
