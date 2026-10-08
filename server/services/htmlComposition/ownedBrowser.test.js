@@ -135,3 +135,19 @@ describe('owned composition capture browser lifecycle', () => {
     await expect(access(profile)).rejects.toThrow();
   });
 });
+
+
+it('retains the cleanup deadline failure but removes its owned profile after a late close', async () => {
+  child.kill = vi.fn(() => true);
+  const owner = await launchCompositionBrowser({ shutdownMs: 30 });
+  await expect(owner.close()).rejects.toThrow(/cleanup exceeded its deadline.*term=accepted, kill=accepted, signalError=none/);
+  expect(child.kill.mock.calls.map(([signal]) => signal)).toEqual(['SIGTERM', 'SIGKILL']);
+  await expect(access(profile)).resolves.toBeUndefined();
+  child.signalCode = 'SIGKILL';
+  child.emit('exit', null, 'SIGKILL');
+  // Exit alone is insufficient: the child must release inherited stdio first.
+  await expect(access(profile)).resolves.toBeUndefined();
+  child.emit('close', null, 'SIGKILL');
+  await vi.waitFor(async () => { await expect(access(profile)).rejects.toThrow(); });
+  await expect(owner.close()).rejects.toThrow('cleanup exceeded its deadline');
+});
