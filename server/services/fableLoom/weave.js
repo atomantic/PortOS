@@ -15,7 +15,7 @@
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { startAIOp } from '../aiStatusEvents.js';
-import { runStagedLLM } from '../stageRunner.js';
+import { resolveStageRoute, runStagedLLM } from '../stageRunner.js';
 import { resolveLlmRoutePin } from '../../lib/llmRoutePin.js';
 import { renderStoryCanonDigest } from '../../lib/universePromptRenderers.js';
 import { renderCharacterEvolutionListForPrompt } from '../../lib/characterEvolution.js';
@@ -136,6 +136,11 @@ const runLoomAi = (stage, variables, route, {
  * in `server/lib/llmRoutePin.js`.
  */
 const playRouting = (loom, perCall) => resolveLlmRoutePin(loom.playSettings, perCall);
+
+/** Resolve narrator eligibility without a provider call, using play's exact pins. */
+export const resolvePlayRoute = (loom, { callerPolicy } = {}) => resolveStageRoute(
+  'fableloom-play-turn', { ...llmOptions(playRouting(loom), 'fableloom-play'), callerPolicy },
+);
 
 /**
  * Render the linked universe's canon as a prompt digest via the shared
@@ -1274,7 +1279,7 @@ const transcriptDigest = (transcript) =>
  * and an abort landing inside it means the provider call is never made.
  */
 export async function playTurn(loomId, episodeId, {
-  nodeId, message, transitionId, transcript = [], providerId, model, effort, signal,
+  nodeId, message, transitionId, transcript = [], providerId, model, effort, signal, callerPolicy,
 } = {}) {
   const loom = await requireLoom(loomId);
   const episode = findEpisode(loom, episodeId);
@@ -1326,7 +1331,7 @@ export async function playTurn(loomId, episodeId, {
     transcriptDigest: transcriptDigest(transcript) || '(start of the read-through)',
     readerMessage: trimTo(message, 1000),
     narrationFormatContract: narrationFormatContract(loom.format),
-  }, llmOptions(playRouting(loom, { providerId, model, effort }), 'fableloom-play'));
+  }, { ...llmOptions(playRouting(loom, { providerId, model, effort }), 'fableloom-play'), callerPolicy });
 
   const narration = trimTo(content?.narration, 4000);
   const chosen = content?.action === 'move'

@@ -16,6 +16,13 @@ import * as weave from '../services/fableLoom/weave.js';
 import * as networkExposure from '../lib/networkExposure.js';
 import * as tts from '../services/voice/tts.js';
 import * as stt from '../services/voice/stt.js';
+import * as providers from '../services/providers.js';
+import * as prompts from '../services/promptService.js';
+import * as runner from '../services/runner.js';
+import * as toolkitState from '../lib/aiToolkitState.js';
+import * as autoFixer from '../services/autoFixer.js';
+import * as tuiRunner from '../services/tuiPromptRunner.js';
+import { createProviderStatusService } from '../lib/aiToolkit/providerStatus.js';
 
 describe('fableLoomHosted Socket.IO namespace', () => {
   const mockLoom = {
@@ -36,7 +43,7 @@ describe('fableLoomHosted Socket.IO namespace', () => {
         protagonistPresence: 'offscreen',
         isEnding: false,
         playbackAssets: { holdLoopVideoHistoryIds: ['vid-1'] },
-        transitions: [{ id: 'tr-1', targetNodeId: 'node-2', intent: 'go next' }],
+        transitions: [{ id: 'tr-1', targetNodeId: 'node-2', intent: 'go next', triggers: [] }],
       }, {
         id: 'node-2',
         title: 'Next',
@@ -135,6 +142,124 @@ describe('fableLoomHosted Socket.IO namespace', () => {
     expect(getHostedNamespace()).toBe(mockNamespace);
     expect(middleware).toBeDefined();
     expect(connectionHandler).toBeDefined();
+  });
+
+  describe('audience narrator execution boundary', () => {
+    const api = { id: 'narrator-api', name: 'Narrator API', type: 'api', enabled: true, defaultModel: 'example-model' };
+    const cli = { id: 'narrator-cli', name: 'Narrator CLI', type: 'cli', enabled: true };
+    const tui = { id: 'narrator-tui', name: 'Narrator TUI', type: 'tui', enabled: true };
+    let selected;
+    let playStage;
+    let loom;
+    let status;
+
+    beforeEach(() => {
+      selected = api;
+      playStage = {};
+      loom = structuredClone(mockLoom);
+      records.getLoom.mockImplementation(async () => loom);
+      vi.spyOn(providers, 'getActiveProvider').mockImplementation(async () => selected);
+      vi.spyOn(providers, 'getProviderById').mockImplementation(async id => [api, cli, tui].find(p => p.id === id));
+      vi.spyOn(providers, 'getAllProviders').mockImplementation(async () => ({ providers: [selected, cli, tui] }));
+      vi.spyOn(prompts, 'getStage').mockImplementation(() => playStage);
+      vi.spyOn(prompts, 'buildPrompt').mockResolvedValue('Synthetic audience request');
+      vi.spyOn(runner, 'createRun').mockResolvedValue({ runId: 'guest-run' });
+      vi.spyOn(runner, 'patchRunMetadata').mockResolvedValue();
+      vi.spyOn(runner, 'executeApiRun').mockImplementation(async ({ onData, onComplete }) => {
+        onData(JSON.stringify({ action: 'stay', narration: 'API narration.' }));
+        onComplete({ success: true });
+      });
+      vi.spyOn(runner, 'executeCliRun').mockImplementation(() => { throw new Error('Forbidden CLI dispatch'); });
+      vi.spyOn(tuiRunner, 'executeTuiRun').mockImplementation(() => { throw new Error('Forbidden TUI dispatch'); });
+      // Use the production fallback selector, with persistence/health writes stubbed.
+      status = createProviderStatusService({ defaultFallbackPriority: [cli.id, tui.id] });
+      vi.spyOn(status, 'markUnavailable').mockResolvedValue();
+      vi.spyOn(status, 'getFallbackProvider');
+      vi.spyOn(toolkitState, 'getAIToolkitInstance').mockReturnValue({ services: { providerStatus: status } });
+      for (const name of ['noteFallbackStarted', 'noteFallbackHandled', 'noteFallbackFailed', 'escalateProviderFailure']) {
+        vi.spyOn(autoFixer, name).mockResolvedValue();
+      }
+    });
+
+    async function guestTurn(input) {
+      const { session, token, preflight } = await createHostedSession('loom-1', 'ep-1');
+      const audience = makeSocket({ role: 'audience', sessionId: session.id });
+      audience.handshake = { auth: { role: 'audience', sessionId: session.id, token } };
+      const next = vi.fn();
+      await middleware(audience, next);
+      expect(next).toHaveBeenCalledWith();
+      connectionHandler(audience);
+      await audience.listeners['hosted:mic:start']();
+      if (input === 'audio') await audience.listeners['hosted:mic:stop'](Buffer.from('synthetic audio'));
+      else await audience.listeners['hosted:turn:text']({ text: 'go next', callerPolicy: 'any-text', providerId: cli.id });
+      expect(runner.executeCliRun).not.toHaveBeenCalled();
+      expect(tuiRunner.executeTuiRun).not.toHaveBeenCalled();
+      return { preflight, session: getHostedSession(session.id) };
+    }
+
+    it.each([
+      ['play', 'text', cli], ['stage', 'audio', tui], ['active', 'text', tui],
+    ])('refuses %s process pins through authenticated %s turns', async (pin, input, provider) => {
+      if (pin === 'play') loom.playSettings = { providerId: provider.id };
+      if (pin === 'stage') playStage = { provider: provider.id };
+      if (pin === 'active') selected = provider;
+      const { preflight, session } = await guestTurn(input);
+      expect(preflight.checks.llm).toMatchObject({ ok: false, code: 'PROVIDER_MODE_NOT_PERMITTED' });
+      expect(session.transcript.at(-1).text).toBe('Opening prose');
+      expect(runner.createRun).not.toHaveBeenCalled();
+      expect(runner.executeApiRun).not.toHaveBeenCalled();
+      if (input === 'audio') expect(stt.transcribe).toHaveBeenCalled();
+    });
+
+    it.each(['text', 'audio'])('narrates %s with an API and carries the policy into proactive selection', async input => {
+      const { preflight, session } = await guestTurn(input);
+      expect(preflight.checks.llm.ok).toBe(true);
+      expect(session.transcript.at(-1).text).toBe('API narration.');
+      expect(runner.createRun).toHaveBeenCalledWith(expect.objectContaining({
+        requestCapabilities: expect.objectContaining({ allowedModes: ['api'] }),
+      }));
+      expect(runner.executeApiRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses proactive process substitution and retains authored narration', async () => {
+      selected = { ...api, fallbackProvider: cli.id };
+      runner.createRun.mockImplementation(async ({ requestCapabilities }) => {
+        const fallback = status.getFallbackProvider(selected.id, { [selected.id]: selected, [cli.id]: cli, [tui.id]: tui }, null, null, requestCapabilities);
+        if (!fallback) throw new Error('No eligible narrator fallback');
+        return { runId: 'fallback-run', provider: fallback.provider };
+      });
+      const { session } = await guestTurn('text');
+      expect(session.transcript.at(-1).text).toBe('Opening prose');
+      expect(runner.executeApiRun).not.toHaveBeenCalled();
+    });
+
+    it('keeps API failure recovery off configured and priority process fallbacks', async () => {
+      selected = { ...api, fallbackProvider: cli.id };
+      runner.executeApiRun.mockImplementation(async ({ onComplete }) => onComplete({ success: false, error: 'Synthetic narrator unavailable' }));
+      const { session } = await guestTurn('audio');
+      expect(session.transcript.at(-1).text).toBe('Opening prose');
+      expect(status.getFallbackProvider).toHaveBeenCalledWith(selected.id, expect.any(Object), null, null,
+        expect.objectContaining({ allowedModes: ['api'] }));
+    });
+
+    it('preserves process narration for operator play calls without the guest policy', async () => {
+      selected = cli;
+      runner.executeCliRun.mockImplementation(async ({ onData, onComplete }) => {
+        onData(JSON.stringify({ action: 'stay', narration: 'Operator narration.' }));
+        onComplete({ success: true });
+      });
+      const result = await weave.playTurn('loom-1', 'ep-1', { nodeId: 'node-1', message: 'go next' });
+      expect(result.narration).toBe('Operator narration.');
+      expect(runner.executeCliRun).toHaveBeenCalledTimes(1);
+      expect(runner.createRun.mock.calls[0][0].requestCapabilities).toBeUndefined();
+    });
+
+    it('keeps tapped transitions deterministic with a process narrator configured', async () => {
+      selected = cli;
+      const result = await weave.playTurn('loom-1', 'ep-1', { nodeId: 'node-1', transitionId: 'tr-1', callerPolicy: 'direct-api' });
+      expect(result).toMatchObject({ action: 'move', resolvedBy: 'choice', node: { id: 'node-2' } });
+      expect(runner.createRun).not.toHaveBeenCalled();
+    });
   });
 
   describe('handshake auth middleware', () => {
