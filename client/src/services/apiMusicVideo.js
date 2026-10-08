@@ -20,6 +20,12 @@ export const listMusicVideoProjectSummaries = ({ cursor, limit } = {}, options =
   if (cursor != null) query.set('cursor', String(cursor));
   return request(`/music-video?${query}`, options);
 };
+// Built-in character styles a project loads through `concept.characterStyleId`,
+// each with this install's character sheet (`referenceImageId`, or null).
+export const listMusicVideoCharacterStyles = (options = {}) => request('/music-video/character-styles', options);
+export const setMusicVideoCharacterStyleReference = (id, imageId, options = {}) => request(`/music-video/character-styles/${encodeURIComponent(id)}/reference`, {
+  method: 'PUT', body: JSON.stringify({ imageId }), ...options,
+});
 // Newest MIDI transcription per track — bounded projection for the Tracks page (#10203).
 export const listMusicVideoMidiSources = (options = {}) => request('/music-video/midi-sources', options);
 export const createMusicVideoProject = (data, options = {}) => request('/music-video', {
