@@ -15,7 +15,7 @@ import { clickStartDownload } from '../test/downloadPreflightConfirm.js';
 import Loras from './Loras';
 import {
   listLorasFull, deleteLoraFull, installLoraFromHuggingfaceStream, probeLoraEffect,
-  previewLoraInstall, getCivitaiSuggestions, installLoraFromCivitai, searchVideoLoras,
+  previewLoraInstall, getCivitaiSuggestions, installLoraFromCivitai, searchCivitaiLoras, searchVideoLoras,
 } from '../services/api';
 
 vi.mock('../services/api', () => ({
@@ -198,6 +198,104 @@ describe('Loras Installed / Discover views', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Discover \/ install/ }));
     expect(await screen.findByLabelText('Civitai model URL')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'View installed' })).not.toBeInTheDocument();
+  });
+});
+
+describe('Loras Civitai search cancellation', () => {
+  const CACHED_CARD = { modelId: 42, versionId: 7, name: 'Cached LoRA', installUrl: 'https://civitai.com/models/42' };
+  const SEARCH_CARD = (name, modelId) => ({ modelId, versionId: 1, name, installUrl: `https://civitai.com/models/${modelId}` });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listLorasFull.mockResolvedValue([]);
+    getCivitaiSuggestions.mockResolvedValue({ runners: { mflux: [CACHED_CARD] }, video: [], fetchedAt: null });
+  });
+
+  it('keeps cached recommendations when Clear cancels an in-flight search', async () => {
+    let resolveSearch;
+    searchCivitaiLoras
+      .mockResolvedValueOnce({ items: [SEARCH_CARD('First result', 51)], nextCursor: 'next' })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSearch = resolve; }));
+    await renderDiscover();
+
+    const input = screen.getByLabelText('Search Flux 1 LoRAs on Civitai');
+    const form = input.closest('form');
+    fireEvent.change(input, { target: { value: 'first' } });
+    fireEvent.submit(form);
+    expect(await screen.findByText('First result')).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: 'second' } });
+    fireEvent.submit(form);
+    await waitFor(() => expect(resolveSearch).toBeTypeOf('function'));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    await act(async () => resolveSearch({ items: [SEARCH_CARD('Canceled result', 52)], nextCursor: null }));
+
+    expect(input).toHaveValue('');
+    expect(screen.getByText('Cached LoRA')).toBeInTheDocument();
+    expect(screen.queryByText('Canceled result')).not.toBeInTheDocument();
+    expect(screen.queryByText(/results for “second”/)).not.toBeInTheDocument();
+  });
+
+  it('lets a new search proceed while stale completion cannot replace it or clear its loading state', async () => {
+    let resolveStale;
+    let resolveSecond;
+    searchCivitaiLoras
+      .mockResolvedValueOnce({ items: [SEARCH_CARD('Initial result', 60)], nextCursor: 'next' })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveStale = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve; }));
+    await renderDiscover();
+
+    const input = screen.getByLabelText('Search Flux 1 LoRAs on Civitai');
+    const form = input.closest('form');
+    fireEvent.change(input, { target: { value: 'initial' } });
+    fireEvent.submit(form);
+    expect(await screen.findByText('Initial result')).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: 'stale' } });
+    fireEvent.submit(form);
+    await waitFor(() => expect(resolveStale).toBeTypeOf('function'));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+
+    fireEvent.change(input, { target: { value: 'current' } });
+    fireEvent.submit(form);
+    await waitFor(() => expect(resolveSecond).toBeTypeOf('function'));
+    expect(screen.getByRole('button', { name: 'Searching…' })).toBeDisabled();
+
+    await act(async () => resolveStale({ items: [SEARCH_CARD('Stale result', 61)], nextCursor: null }));
+    expect(screen.getByRole('button', { name: 'Searching…' })).toBeDisabled();
+    expect(screen.queryByText('Stale result')).not.toBeInTheDocument();
+
+    await act(async () => resolveSecond({ items: [SEARCH_CARD('Current result', 62)], nextCursor: null }));
+    expect(await screen.findByText('Current result')).toBeInTheDocument();
+    expect(screen.queryByText('Stale result')).not.toBeInTheDocument();
+  });
+
+  it('invalidates an in-flight search when cached suggestions refresh', async () => {
+    let resolveSearch;
+    getCivitaiSuggestions
+      .mockResolvedValueOnce({ runners: { mflux: [CACHED_CARD] }, video: [], fetchedAt: 'first' })
+      .mockImplementationOnce(() => Promise.resolve({ runners: { mflux: [CACHED_CARD] }, video: [], fetchedAt: 'second' }));
+    searchCivitaiLoras
+      .mockResolvedValueOnce({ items: [SEARCH_CARD('Initial result', 70)], nextCursor: 'next' })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSearch = resolve; }));
+    await renderDiscover();
+
+    const input = screen.getByLabelText('Search Flux 1 LoRAs on Civitai');
+    const form = input.closest('form');
+    fireEvent.change(input, { target: { value: 'initial' } });
+    fireEvent.submit(form);
+    expect(await screen.findByText('Initial result')).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: 'pending' } });
+    fireEvent.submit(form);
+    await waitFor(() => expect(resolveSearch).toBeTypeOf('function'));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await screen.findByText('Cached LoRA');
+    await act(async () => resolveSearch({ items: [SEARCH_CARD('Canceled result', 71)], nextCursor: null }));
+
+    expect(screen.getByText('Cached LoRA')).toBeInTheDocument();
+    expect(screen.queryByText('Canceled result')).not.toBeInTheDocument();
+    expect(screen.queryByText(/results for “pending”/)).not.toBeInTheDocument();
   });
 });
 
