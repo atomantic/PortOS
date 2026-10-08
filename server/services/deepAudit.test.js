@@ -306,7 +306,7 @@ it('pins an actual Git inventory and refuses tracked and untracked drift', async
     await rm(join(directory, 'untracked.js'));
     await writeFile(join(directory, 'source.js'), 'changed source');
     await expect(inspect()).rejects.toThrow('clean source snapshot');
-  } finally { await rm(directory, { recursive: true, force: true }); }
+  } finally { await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
 });
 
 
@@ -442,7 +442,7 @@ it('resumes an interrupted real Git inventory of 1626 files without repeating or
     expect(saved().attempts['large-resume']).toMatchObject({ pass: 'trace', unitIds: [unit.id] });
     expect(saved().units.find(item => item.id === unit.id).evidence.static).toBeDefined();
     expect(deepAuditProgress(saved()).complete).toBe(false);
-  } finally { await rm(directory, { recursive: true, force: true }); }
+  } finally { await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
 // Windows CI includes real filesystem work and repeated Git process startup
 // for 1,626 files. Keep the fixture bounded without dropping any source files
 // or interruption/resume assertions; this is not a throughput benchmark.
