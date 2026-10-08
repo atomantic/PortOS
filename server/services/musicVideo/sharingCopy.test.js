@@ -304,7 +304,8 @@ describe('private sharing export workflow', () => {
   });
 });
 
-// Two seconds only: catches ffmpeg argument/container/pass-log mistakes that stubs cannot.
+// One second, just above 720p and 16:9 so the export's cap is exercised and lands exactly on
+// 1280x720: catches ffmpeg argument/container/pass-log mistakes that stubs cannot.
 const actualFfmpeg = await vi.importActual('../../lib/ffmpeg.js');
 const realBinary = await actualFfmpeg.findFfmpeg();
 it.skipIf(!realBinary)('exports a bounded real MP4 fixture through the supervised process runner', async () => {
@@ -313,7 +314,7 @@ it.skipIf(!realBinary)('exports a bounded real MP4 fixture through the supervise
   const { promisify } = await import('util');
   const { safeChildProcessOptions } = await import('../../lib/processEnv.js');
   const sourcePath = join(PATHS.videos, 'final-example.mp4');
-  await promisify(execFile)(realBinary, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=1440x810:rate=60', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-t', '2', '-c:v', 'libx264', '-threads', '2', '-preset', 'ultrafast', '-c:a', 'aac', '-y', sourcePath], safeChildProcessOptions({ timeout: 20_000 }));
+  await promisify(execFile)(realBinary, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=1312x738:rate=60', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-t', '1', '-c:v', 'libx264', '-threads', '2', '-preset', 'ultrafast', '-c:a', 'aac', '-y', sourcePath], safeChildProcessOptions({ timeout: 20_000 }));
   const original = await readFile(sourcePath);
   const { completed, failed } = await runExport('00000000-0000-4000-8000-000000000099');
   expect(failed).not.toHaveBeenCalled();
@@ -322,8 +323,9 @@ it.skipIf(!realBinary)('exports a bounded real MP4 fixture through the supervise
   await file.close();
   const path = join(PATHS.videos, copy.filename);
   expect(copy.bytes).toBeLessThan(sharing.SHARING_COPY_MAX_BYTES);
-  expect(copy.durationSec).toBeCloseTo(2, 1);
-  expect(await readFile(sourcePath)).toEqual(original);
+  expect(copy.durationSec).toBeCloseTo(1, 1);
+  // Buffer#equals, not toEqual: Vitest's deep equality walks a multi-MB buffer byte by byte (seconds).
+  expect((await readFile(sourcePath)).equals(original)).toBe(true);
   // A complete decode is cheap for this fixture and proves a playable full copy.
   await promisify(execFile)(realBinary, ['-v', 'error', '-i', path, '-f', 'null', '-'], safeChildProcessOptions({ timeout: 20_000 }));
 }, 30_000);
