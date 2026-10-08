@@ -952,7 +952,17 @@ async function adoptWorktreeUnlocked(agentId, sourceWorkspace, existingWorktreeP
         const head = (await execGit(['rev-parse', 'HEAD'], existingWorktreePath)).stdout.trim();
         const status = (await execGit(['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none'], existingWorktreePath)).stdout.trim();
         const listed = await listWorktrees(sourceWorkspace);
-        const holder = listed.find(entry => pathsEqual(entry.path, existingWorktreePath));
+        // Git and Node can spell the same Windows directory differently. Fall
+        // back to filesystem identity, never case-fold or guess at ownership.
+        const identity = await stat(existingWorktreePath, { bigint: true }).catch(() => null);
+        const matches = [];
+        for (const entry of listed) {
+          if (pathsEqual(entry.path, existingWorktreePath)) { matches.push(entry); continue; }
+          const other = await stat(entry.path, { bigint: true }).catch(() => null);
+          if (identity?.isDirectory() && other?.isDirectory() && typeof identity.ino === 'bigint' && identity.ino > 0n &&
+            identity.dev === other.dev && identity.ino === other.ino) matches.push(entry);
+        }
+        const holder = matches.length === 1 ? matches[0] : null;
         const refusal = currentBranch !== branchName ? 'branch identity changed'
           : !holder ? 'worktree registration could not be matched'
             : holder.locked ? 'worktree is locked' : status ? 'workspace has uncommitted or nested changes' : null;

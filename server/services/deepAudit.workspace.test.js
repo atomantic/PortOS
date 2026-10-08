@@ -4,7 +4,19 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { execGit } from '../lib/execGit.js';
 
-const fault = vi.hoisted(() => ({ rejectAdd: false }));
+const fault = vi.hoisted(() => ({ rejectAdd: false, rawPaths: false, identityMode: null }));
+vi.mock('fs', async original => {
+  const actual = await original();
+  return { ...actual, realpathSync: path => fault.rawPaths ? path : actual.realpathSync(path) };
+});
+vi.mock('fs/promises', async original => {
+  const actual = await original();
+  return { ...actual, stat: async (path, options) => {
+    if (options?.bigint && fault.identityMode === 'unavailable') throw new Error('Synthetic stat failure');
+    const value = await actual.stat(path, options);
+    return options?.bigint && fault.identityMode === 'zero' ? { ...value, ino: 0n, isDirectory: () => value.isDirectory() } : value;
+  } };
+});
 vi.mock('../lib/execGit.js', async original => {
   const actual = await original();
   return { execGit: (...args) => {
@@ -32,7 +44,7 @@ const deps = {
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'deep-workspace-'));
   repo = join(root, 'repo');
-  ledger = null; fault.rejectAdd = false;
+  ledger = null; fault.rejectAdd = false; fault.rawPaths = false; fault.identityMode = null;
   // Local fixture transport only; no production Git configuration is changed.
   vi.stubEnv('GIT_CONFIG_COUNT', '1');
   vi.stubEnv('GIT_CONFIG_KEY_0', 'protocol.file.allow');
@@ -82,9 +94,20 @@ it('expands a fresh submodule at its gitlink and refuses to reset retained submo
   expect(ledger.scope.capabilities.submodules).toEqual([]);
   expect(ledger.scope.files.some(f => f.path === 'lib/child/nested.js' && f.kind === 'blob')).toBe(true);
   fault.rejectAdd = true;
-  const failedHandoff = await adoptWorktree('agent-failed', repo, workspacePath, worktree.branchName, { deepResume: true }).catch(error => error);
+  // Force differing spellings through the filesystem-identity fallback, even
+  // on hosts where realpath normally normalizes both sides to the same string.
+  fault.rawPaths = true;
+  const retainedAlias = `${workspacePath}/.`;
+  for (const mode of ['unavailable', 'zero']) {
+    fault.identityMode = mode;
+    await expect(adoptWorktree('agent-unidentified', repo, retainedAlias, worktree.branchName, { deepResume: true })).rejects.toThrow('registration could not be matched');
+    expect(await git(['branch', '--show-current'], workspacePath)).toBe(worktree.branchName);
+  }
+  fault.identityMode = null;
+  const failedHandoff = await adoptWorktree('agent-failed', repo, retainedAlias, worktree.branchName, { deepResume: true }).catch(error => error);
   expect(failedHandoff.code).toBe('DEEP_RESUME_PRESERVED');
-  expect(failedHandoff.message).toContain('Synthetic add failure');
+  expect(failedHandoff.message, JSON.stringify({ workspacePath, registrations: await git(['worktree', 'list', '--porcelain']) })).toContain('Synthetic add failure');
+  fault.rawPaths = false;
   expect(await readFile(join(workspacePath, 'lib/child/nested.js'), 'utf8')).toContain('nested = true');
   fault.rejectAdd = false;
   // The preserved detached tree can reattach its still-unoccupied branch for a
