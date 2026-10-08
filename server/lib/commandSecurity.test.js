@@ -1,3 +1,5 @@
+import { createRequire } from 'node:module'
+import { readFileSync } from 'node:fs'
 import { describe, it, expect } from 'vitest'
 import {
   ALLOWED_COMMANDS,
@@ -252,6 +254,9 @@ describe('commandSecurity', () => {
     // The shared pm2 daemon runs every app on the machine. These must never reach
     // the shell — `pm2 kill` once took the whole server (incl. PortOS) down.
     it.each([
+      'pm2 --silent kill',
+      'pm2 --name example --silent delete all',
+      'pm2 -sf restart all',
       'pm2 kill',
       'pm2 startup',
       'pm2 unstartup',
@@ -270,6 +275,9 @@ describe('commandSecurity', () => {
     })
 
     it.each([
+      'pm2 --silent restart my-app',
+      'pm2 --name kill start app.js',
+      'pm2 restart my-app --name all',
       'pm2 list',
       'pm2 jlist',
       'pm2 logs my-app',
@@ -280,6 +288,38 @@ describe('commandSecurity', () => {
       'pm2 describe my-app',
     ])('allows scoped command %s', (cmd) => {
       expect(validateCommand(cmd).valid).toBe(true)
+    })
+
+    it('matches installed PM2 option parsing before applying the disruption policy', () => {
+      // Load only Commander and declarative flag strings, never PM2's CLI.
+      const require = createRequire(import.meta.url)
+      const pm2Require = createRequire(require.resolve('pm2'))
+      const { Command } = pm2Require('commander')
+      const source = readFileSync(require.resolve('pm2/lib/binaries/CLI.js'), 'utf8')
+      const flags = [...source.matchAll(/\.option\('([^']+)'/g)].map(match => match[1])
+      const globalFlags = flags.slice(0, flags.indexOf('--deep-monitoring') + 1)
+      expect(globalFlags.length).toBeGreaterThan(50)
+      const parser = new Command()
+      for (const flag of globalFlags) parser.option(flag)
+      const cases = [
+        ['--name', '--watch', 'kill'], ['--name', '--watch', 'delete', 'all'],
+        ['-snexample', 'restart', 'all'], ['--', 'kill'],
+        ['--unknown', 'start', 'kill'], ['--name=kill', 'start', 'app.js'],
+      ]
+      for (const flag of globalFlags) {
+        const name = flag.match(/--[\w-]+/)[0]
+        for (const tail of [['kill'], ['delete', 'all'], ['restart', 'my-app']]) {
+          cases.push([name, ...(flag.includes('<') || flag.includes('[') ? ['example'] : []), ...tail])
+          if (flag.includes('<')) cases.push([name, '--watch', ...tail])
+        }
+      }
+      for (const args of cases) {
+        const parsed = parser.parseOptions(parser.normalize(args)).args
+        const verb = (parsed[0] || '').toLowerCase()
+        const blocked = ['kill', 'startup', 'unstartup'].includes(verb) ||
+          (['stop', 'delete', 'del', 'restart', 'reload', 'gracefulreload', 'scale'].includes(verb) && parsed.slice(1).some(arg => arg.toLowerCase() === 'all'))
+        expect(validatePm2Command(args).valid, JSON.stringify(args)).toBe(!blocked)
+      }
     })
 
     it('validatePm2Command is callable directly with arg arrays', () => {

@@ -9,36 +9,13 @@
 # would take down the SHARED PM2 daemon — and therefore every other app on the
 # machine, including PortOS itself — then exec the real pm2 for everything else.
 #
-# This list is mirrored in server/lib/commandSecurity.js (validatePm2Command).
-# Keep the two in sync.
-#
-# Note: this is defense-in-depth against a *confused* agent, not a sandbox. An
-# agent that calls pm2 by absolute path bypasses the shim — acceptable for
-# PortOS's single-user, private-network trust model.
-
-sub="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
-
-block() {
-  printf '🛑 PortOS agent guard: `pm2 %s` is blocked — it would disrupt the shared PM2 daemon or other apps on this server (including PortOS itself). Restart only your own app with `pm2 restart <your-process-name>`.\n' "$*" >&2
-  exit 1
-}
-
-case "$sub" in
-  kill|startup|unstartup) block "$@" ;;
-esac
-
-case "$sub" in
-  stop|delete|del|restart|reload|gracefulreload|scale)
-    for arg in "${@:2}"; do
-      lower="$(printf '%s' "$arg" | tr '[:upper:]' '[:lower:]')"
-      [ "$lower" = "all" ] && block "$@"
-    done
-    ;;
-esac
+# This is a confused-agent guard, not a sandbox: absolute binary paths bypass it.
+# Share the option-aware policy with PortOS's command runner.
+self_dir="$(cd "$(dirname "$0")" && pwd)"
+node "$self_dir/../validatePm2.js" "$@" || exit $?
 
 # Resolve the real pm2. PortOS sets PORTOS_REAL_PM2 to the Node-resolved binary;
 # fall back to the first pm2 on PATH that is NOT this shim's own directory.
-self_dir="$(cd "$(dirname "$0")" && pwd)"
 real="$PORTOS_REAL_PM2"
 if [ -z "$real" ] || [ ! -x "$real" ]; then
   real=""
