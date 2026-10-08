@@ -411,16 +411,27 @@ it('requires cross-boundary evidence before accepting a trace', async () => {
 
 it('resumes an interrupted real Git inventory of 1626 files without repeating or losing owned file coverage', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'deep-audit-partition-git-'));
+  const phases = [];
+  let phase = 'file creation', phaseStarted = Date.now(), primaryError;
+  const nextPhase = name => {
+    phases.push({ phase, elapsedMs: Date.now() - phaseStarted });
+    phase = name; phaseStarted = Date.now();
+  };
+  const setupOptions = process.platform === 'win32' ? { timeout: 60_000 } : {};
   try {
     await mkdir(join(directory, 'large'));
     await Promise.all(Array.from({ length: 1626 }, (_, i) => writeFile(join(directory, 'large', `${String(i).padStart(4, '0')}.js`), `export const value = ${i};\n`)));
+    nextPhase('init/config');
     await execGit(['init'], directory);
     // A disposable fixture must not leave detached Git maintenance writing
     // objects after the awaited commit exits and teardown removes the repo.
     await execGit(['config', '--local', 'gc.auto', '0'], directory);
     await execGit(['config', '--local', 'maintenance.auto', 'false'], directory);
-    await execGit(['add', '.'], directory);
-    await execGit(['-c', 'user.name=Example', '-c', 'user.email=example@example.com', 'commit', '-m', 'large fixture'], directory);
+    nextPhase('add');
+    await execGit(['add', '.'], directory, setupOptions);
+    nextPhase('commit');
+    await execGit(['-c', 'user.name=Example', '-c', 'user.email=example@example.com', 'commit', '-m', 'large fixture'], directory, setupOptions);
+    nextPhase('initial inventory');
     const realDeps = { ...deps, inventory: undefined };
     await prepareDeepAudit({ task, agentId: 'large-first', workspacePath: directory }, realDeps);
     const before = saved(), attempt = before.attempts['large-first'];
@@ -433,19 +444,37 @@ it('resumes an interrupted real Git inventory of 1626 files without repeating or
       prerequisiteHash: attempt.prerequisiteHash, pass: 'static', units: [{ id: unit.id, status: 'evidenced',
         reason: 'Fixture simulates one completed partition before interruption', sources: before.scope.files.filter(file => unit.files.includes(file.path)).map(({ path, blob }) => ({ path, blob })), evidence }],
       candidates: [], stopReason: 'Interrupted after one bounded partition' });
+    nextPhase('checkpoint');
     const checkpoint = await checkpointDeepAudit({ task, agentId: attempt.id, workspacePath: directory, success: false }, realDeps);
     expect(checkpoint).toMatchObject({ satisfiedPasses: 1, requiredPasses: 816, complete: false });
     report = null;
     expect(await checkpointDeepAudit({ task, agentId: attempt.id, workspacePath: directory, success: false }, realDeps)).toEqual(checkpoint);
+    nextPhase('resume');
     await prepareDeepAudit({ task, agentId: 'large-resume', workspacePath: directory }, realDeps);
     expect(saved().scopeHash).toBe(before.scopeHash);
     expect(saved().attempts['large-resume']).toMatchObject({ pass: 'trace', unitIds: [unit.id] });
     expect(saved().units.find(item => item.id === unit.id).evidence.static).toBeDefined();
     expect(deepAuditProgress(saved()).complete).toBe(false);
-  } finally { await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
+  } catch (error) {
+    primaryError = error;
+    nextPhase('cleanup');
+    error.message += `; fixture phases: ${JSON.stringify(phases)}`;
+    throw error;
+  } finally {
+    if (!primaryError) nextPhase('cleanup');
+    try {
+      await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    } catch (cleanupError) {
+      const detail = `cleanup after ${Date.now() - phaseStarted}ms: ${cleanupError.message}`;
+      // Preserve the actual Git/assertion failure; cleanup must not mask it.
+      if (primaryError) primaryError.message += `; ${detail}`;
+      else { cleanupError.message += `; fixture phases: ${JSON.stringify(phases)}`; throw cleanupError; }
+    }
+  }
 // Windows CI includes real filesystem work and repeated Git process startup
 // for 1,626 files. Keep the fixture bounded without dropping any source files
-// or interruption/resume assertions; this is not a throughput benchmark.
+// or interruption/resume assertions; add/commit get a fixture-local 60s allowance
+// within this same overall budget. This is not a throughput benchmark.
 }, process.platform === 'win32' ? 90000 : 20000);
 
 
