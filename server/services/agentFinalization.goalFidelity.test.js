@@ -253,6 +253,41 @@ describe('finalizeAgent — goal-fidelity gate', () => {
     expect(completion()).toMatchObject({ success: true });
   });
 
+  describe('forge-side PR remediation whose only diff is a test CI repair', () => {
+    const task = {
+      id: 'pr-watcher-remediation', taskType: 'internal',
+      description: 'Wait for CI and merge the listed trusted pull requests: #10727, #10725, #10722.',
+      metadata: { analysisType: 'pr-watcher' },
+    };
+    const diffOf = file => `diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n@@ -1 +1 @@\n-budget(1000)\n+budget(5000)\n`;
+    beforeEach(() => {
+      runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({
+        verdict: 'rethink', missing: ['Evidence the PRs were remediated'], unrequested: [], evidence: 'Only a timing budget changed.',
+      }));
+    });
+
+    it('declines a diff-only judgement when the run window holds only a test-file CI repair', async () => {
+      runWindowDiffMock.mockResolvedValue({ diff: diffOf('server/lib/toon.test.js'), base: 'abc', truncated: false, reason: null });
+      await finalize({ task, outputBuffer: 'Merged 10 PRs.' });
+      expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
+      expect(completion()).toMatchObject({ success: true });
+      expect(completion().goalFidelity).toBeUndefined();
+    });
+
+    it('still judges a pr-watcher run that changed production code', async () => {
+      runWindowDiffMock.mockResolvedValue({ diff: diffOf('server/lib/toon.js'), base: 'abc', truncated: false, reason: null });
+      await finalize({ task, outputBuffer: 'Merged 10 PRs.' });
+      expect(runLocalGoalFidelityReviewMock).toHaveBeenCalled();
+      expect(completion()).toMatchObject({ success: false, completionReason: GOAL_FIDELITY_CATEGORY });
+    });
+
+    it('still judges a test-only diff from a non-pr-watcher task', async () => {
+      runWindowDiffMock.mockResolvedValue({ diff: diffOf('server/lib/toon.test.js'), base: 'abc', truncated: false, reason: null });
+      await finalize({ task: { ...task, metadata: {} }, outputBuffer: 'done' });
+      expect(runLocalGoalFidelityReviewMock).toHaveBeenCalled();
+    });
+  });
+
   describe('dependency audit summary with work outside the diff (#7899)', () => {
     // Synthetic reconstruction: the deliverable is a completed inventory and
     // audit, with no warranted bump. The only committed change is its note.
