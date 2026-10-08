@@ -39,6 +39,9 @@ function run(mirror, { primaryBudget = '1', totalBudget = '3' } = {}) {
   writeFileSync(sourcesFile, RUNNER_SOURCES);
   const fake = (name, body) => writeFileSync(join(bin, name), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
   fake('sudo', 'exec "$@"');
+  // Keep the production GNU sed invocation intact while adapting its in-place
+  // flag only inside this synthetic command fixture on macOS.
+  fake('sed', 'if [ "$(uname -s)" = Darwin ]; then exec /usr/bin/sed -i "" -E "$@"; fi\nexec /usr/bin/sed -i -E "$@"');
   fake('curl', 'while [ $# -gt 0 ]; do [ "$1" = -o ] && echo key > "$2"; shift; done');
   const stall = { ok: 'false', slowRunner: `grep -q azure '${sourcesFile}'`, dead: 'true' }[mirror];
   fake('apt-get', `echo "apt-get $*" >> '${log}'\nif ${stall}; then exec sleep 30; fi`);
