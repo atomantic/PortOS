@@ -60,8 +60,10 @@ export function useOnDemandTaskToast() {
       maintenanceStates.set(run.id, signature);
       if (maintenanceStates.size > 100) maintenanceStates.delete(maintenanceStates.keys().next().value);
       if (run.status !== 'running') toast.dismiss(`maintenance-${run.id}`);
-      toast(() => createElement(MaintenanceRunStatus, { run }), {
-        id: run.status === 'running' ? `maintenance-${run.id}` : `maintenance-${run.id}-${run.updatedAt}`, label, duration: run.status === 'running' ? Infinity : 8000,
+      const toastId = run.status === 'running' ? `maintenance-${run.id}` : `maintenance-${run.id}-${run.updatedAt}`;
+      const onDismiss = () => toast.dismiss(toastId);
+      toast(() => createElement(MaintenanceRunStatus, { run, onDismiss }), {
+        id: toastId, label, duration: run.status === 'running' ? Infinity : 8000,
       });
     };
     socket.on('cos:maintenance:updated', handleMaintenance);

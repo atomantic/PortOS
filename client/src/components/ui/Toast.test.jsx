@@ -46,6 +46,14 @@ describe('Toaster accessibility', () => {
     expect(status).not.toHaveAttribute('aria-live');
   });
 
+  it('bounds toast viewport height and allows scrolling so it never overloads mobile screens', () => {
+    render(<Toaster />);
+    act(() => { toast('A notification with potential long content'); });
+    const status = screen.getByRole('status');
+    expect(status.className).toContain('max-h-[min(75vh,520px)]');
+    expect(status.className).toContain('overflow-y-auto');
+  });
+
   it('announces an error toast assertively (role="alert") without a redundant aria-live', () => {
     render(<Toaster />);
     act(() => { toast.error('Boom'); });

@@ -13,7 +13,8 @@ vi.mock('../services/socket', () => ({
 }));
 
 const toastSpy = vi.fn();
-vi.mock('../components/ui/Toast', () => ({ default: Object.assign((...a) => toastSpy(...a), { dismiss: vi.fn() }) }));
+const dismissSpy = vi.fn();
+vi.mock('../components/ui/Toast', () => ({ default: Object.assign((...a) => toastSpy(...a), { dismiss: (...a) => dismissSpy(...a) }) }));
 
 const { useOnDemandTaskToast } = await import('./useOnDemandTaskToast.js');
 const fire = (payload) => handlers.get('cos:schedule:on-demand-empty')?.(payload);
@@ -276,6 +277,12 @@ it('updates one maintenance notification with an agent link and expires terminal
   expect(toastSpy).toHaveBeenCalledTimes(1);
   expect(toastSpy.mock.calls[0][1]).toMatchObject({ id: 'maintenance-maint-example', duration: Infinity });
   expect(toastSpy.mock.calls[0][0]().props.run.active.agentId).toBe('agent-example');
+  // onDismiss dismisses the toast
+  expect(typeof toastSpy.mock.calls[0][0]().props.onDismiss).toBe('function');
+  dismissSpy.mockClear();
+  toastSpy.mock.calls[0][0]().props.onDismiss();
+  expect(dismissSpy).toHaveBeenCalledWith('maintenance-maint-example');
+
   update({ ...run, status: 'completed', active: null, completed: { 'step-1': 'done' }, updatedAt: 'finished' });
   expect(toastSpy.mock.calls[1][1]).toMatchObject({ duration: 8000, label: 'Maintenance · 1/1 · completed' });
   unmount();
