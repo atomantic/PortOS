@@ -1,0 +1,4 @@
+/* Faces for lyricType.js (OFL licences in fonts/). Link from the page:
+   <link rel="stylesheet" href="lyricType.css"> */
+@font-face { font-family: "MV Archivo"; src: url(fonts/archivo-variable.woff2) format("woff2"); font-weight: 100 900; font-stretch: 62% 125%; }
+@font-face { font-family: "MV Mono"; src: url(fonts/ibm-plex-mono-500.woff2) format("woff2"); font-weight: 500; }
