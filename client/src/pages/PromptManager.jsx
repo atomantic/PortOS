@@ -92,6 +92,11 @@ export default function PromptManager() {
   // Stage editing (selection is URL-driven — see selectedStage above)
   const [stageTemplate, setStageTemplate] = useState('');
   const [stageConfig, setStageConfig] = useState({});
+  const [stageRead, setStageRead] = useState({ identity: null, status: 'idle', error: '' });
+  const [stageReadAttempt, setStageReadAttempt] = useState(0);
+  // Compare during render, before the URL-keyed effect runs: Back/Forward must
+  // revoke the outgoing editor's admission immediately.
+  const stageReady = Boolean(selectedStage) && stageRead.identity === selectedStage && stageRead.status === 'ready';
   const [preview, setPreview] = useState('');
   // The last template/config the server confirmed (loaded or saved). Kept as
   // full copies rather than a boolean flag so typing an edit and undoing it
@@ -106,7 +111,7 @@ export default function PromptManager() {
   // re-render that changed nothing. Every mutation spreads the previous object,
   // so key order is stable and a newly added key (a timeout override) reads as
   // the real change it is.
-  const isStageDirty = Boolean(selectedStage)
+  const isStageDirty = stageReady
     && (stageTemplate !== savedStageTemplate || JSON.stringify(stageConfig) !== JSON.stringify(savedStageConfig));
   // Names the open stage the way the list row does, so the discard question
   // quotes the label the user actually clicked rather than its raw key.
@@ -171,6 +176,9 @@ export default function PromptManager() {
   // Job skills (selection is URL-driven — see selectedJobSkill above)
   const [jobSkills, setJobSkills] = useState([]);
   const [jobSkillContent, setJobSkillContent] = useState('');
+  const [jobSkillRead, setJobSkillRead] = useState({ identity: null, status: 'idle', error: '' });
+  const [jobSkillReadAttempt, setJobSkillReadAttempt] = useState(0);
+  const jobSkillReady = Boolean(selectedJobSkill) && jobSkillRead.identity === selectedJobSkill && jobSkillRead.status === 'ready';
   // The last content the server confirmed (loaded or saved). Kept as a full copy
   // rather than a boolean flag so typing an edit and undoing it back to the
   // original stops counting as dirty — a stale flag would nag on a no-op edit.
@@ -181,7 +189,7 @@ export default function PromptManager() {
   const [jobSkillPreview, setJobSkillPreview] = useState('');
   const [previewLoading, setPreviewLoading] = useState(false);
   const previewSeqRef = useRef(0);
-  const isJobSkillDirty = Boolean(selectedJobSkill) && jobSkillContent !== savedJobSkillContent;
+  const isJobSkillDirty = jobSkillReady && jobSkillContent !== savedJobSkillContent;
   // `saveJobSkill` resumes after an await holding the values its closure captured
   // at click time, so it reads the live selection/text through these refs to tell
   // "still the same editor" from "the user moved on mid-flight".
@@ -234,15 +242,15 @@ export default function PromptManager() {
   // Fetch the URL-selected stage's template + config. Keyed on selectedStage so
   // a deep link / reload restores the open editor; a cleared param resets it.
   useEffect(() => {
-    if (!selectedStage) {
-      setStageTemplate(''); setStageConfig({}); setPreview('');
-      setSavedStageTemplate(''); setSavedStageConfig({});
-      return;
-    }
+    setStageTemplate(''); setStageConfig({}); setPreview('');
+    setSavedStageTemplate(''); setSavedStageConfig({});
+    setStageRead({ identity: selectedStage, status: selectedStage ? 'loading' : 'idle', error: '' });
+    if (!selectedStage) return;
     let cancelled = false;
     getPrompt(selectedStage, { silent: true })
       .then(res => {
-        if (cancelled || !res) return;
+        if (cancelled) return;
+        if (!res) throw new Error('No prompt details returned');
         setStageTemplate(res.template || '');
         // Normalize a server-returned timeout via parseTimeoutMs so the editor
         // shares the validator's accept set: integers OR digit-only strings
@@ -262,12 +270,16 @@ export default function PromptManager() {
         setSavedStageTemplate(res.template || '');
         setSavedStageConfig(cfg);
         setPreview('');
+        setStageRead({ identity: selectedStage, status: 'ready', error: '' });
       })
-      .catch(() => {});
+      .catch((err) => {
+        if (!cancelled) setStageRead({ identity: selectedStage, status: 'error', error: err.message || 'Unable to load prompt details' });
+      });
     return () => { cancelled = true; };
-  }, [selectedStage]);
+  }, [selectedStage, stageReadAttempt]);
 
   const saveStage = async () => {
+    if (!stageReady || saving) return;
     setSaving(true);
     const sentFor = selectedStage;
     const sentTemplate = stageTemplate;
@@ -324,9 +336,11 @@ export default function PromptManager() {
   };
 
   const previewStage = async () => {
+    if (!stageReady || saving) return;
+    const previewFor = selectedStage;
     const data = await previewPrompt(selectedStage, {}, { silent: true })
       .catch((err) => { toast.error('Failed to preview: ' + err.message); return null; });
-    if (!data) return;
+    if (!data || previewFor !== stageLiveRef.current.selected) return;
     setPreview(data.preview);
   };
 
@@ -498,23 +512,29 @@ export default function PromptManager() {
     setSavedJobSkillContent('');
     setPendingJobSkill(null);
     setJobSkillMeta({});
+    setJobSkillRead({ identity: selectedJobSkill, status: selectedJobSkill ? 'loading' : 'idle', error: '' });
     if (!selectedJobSkill) return;
     let cancelled = false;
     getJobSkill(selectedJobSkill, { silent: true })
       .then((res) => {
-        if (cancelled || !res) return;
+        if (cancelled) return;
+        if (!res) throw new Error('No job skill details returned');
         setJobSkillContent(res.content || '');
         setSavedJobSkillContent(res.content || '');
         setJobSkillMeta({ jobName: res.jobName, jobId: res.jobId, category: res.category, interval: res.interval });
+        setJobSkillRead({ identity: selectedJobSkill, status: 'ready', error: '' });
       })
-      .catch(() => {});
+      .catch((err) => {
+        if (!cancelled) setJobSkillRead({ identity: selectedJobSkill, status: 'error', error: err.message || 'Unable to load job skill details' });
+      });
     return () => { cancelled = true; };
-  }, [selectedJobSkill]);
+  }, [selectedJobSkill, jobSkillReadAttempt]);
 
   // A failed save must say so: the button re-enabling on its own reads as
   // "saved" and the edit is silently lost. `silent: true` + an explicit toast
   // keeps the notification to one layer (see client/src/AGENTS.md).
   const saveJobSkill = async () => {
+    if (!jobSkillReady || saving) return;
     setSaving(true);
     // Snapshot what we actually sent — the textarea may change while the PATCH
     // is in flight, and only the persisted text may become the clean baseline.
@@ -566,6 +586,7 @@ export default function PromptManager() {
   };
 
   const previewJobSkill = async () => {
+    if (!jobSkillReady || saving) return;
     const previewFor = selectedJobSkill;
     const seq = ++previewSeqRef.current;
     setPreviewLoading(true);
@@ -848,13 +869,14 @@ export default function PromptManager() {
                     <div className="flex gap-2">
                       <button
                         onClick={previewStage}
-                        className="flex items-center gap-1 px-3 py-1 text-sm bg-port-border hover:bg-port-border/80 text-white rounded"
+                        disabled={!stageReady || saving}
+                        className="flex items-center gap-1 px-3 py-1 text-sm bg-port-border hover:bg-port-border/80 text-white rounded disabled:opacity-50"
                       >
                         <Eye size={14} /> Preview
                       </button>
                       <button
                         onClick={saveStage}
-                        disabled={saving}
+                        disabled={!stageReady || saving}
                         className="flex items-center gap-1 px-3 py-1 text-sm bg-port-accent hover:bg-port-accent/80 text-white rounded disabled:opacity-50"
                       >
                         <Save size={14} /> Save
@@ -872,12 +894,22 @@ export default function PromptManager() {
                     </div>
                   </div>
 
+                  {!stageReady && (
+                    <div role={stageRead.identity === selectedStage && stageRead.status === 'error' ? 'alert' : 'status'} className="mb-4 text-sm text-gray-400">
+                      {stageRead.identity === selectedStage && stageRead.status === 'error' ? (
+                        <>Failed to load prompt: {stageRead.error}{' '}
+                          <button onClick={() => setStageReadAttempt((attempt) => attempt + 1)} className="text-port-accent hover:underline">Retry</button>
+                        </>
+                      ) : 'Loading prompt details…'}
+                    </div>
+                  )}
                   <div className="space-y-4 mb-4">
                     <div>
                       <div className="flex items-center gap-2 mb-2">
                         <span className="text-sm text-gray-400">Model</span>
                         <div className="flex gap-1">
                           <button
+                            disabled={!stageReady}
                             onClick={() => setStageConfig({ ...stageConfig, provider: null, model: 'default' })}
                             className={`px-2 py-1 text-xs rounded transition-colors ${!stageConfig.provider ? 'bg-port-accent text-white' : 'bg-port-border text-gray-400 hover:text-white'}`}
                           >
@@ -889,7 +921,7 @@ export default function PromptManager() {
                               const first = providers[0];
                               setStageConfig({ ...stageConfig, provider: first?.id || '', model: first?.defaultModel || '' });
                             }}
-                            disabled={providers.length === 0}
+                            disabled={!stageReady || providers.length === 0}
                             className={`px-2 py-1 text-xs rounded transition-colors ${stageConfig.provider ? 'bg-port-accent text-white' : 'bg-port-border text-gray-400 hover:text-white'} disabled:opacity-50`}
                           >
                             Specific
@@ -898,6 +930,7 @@ export default function PromptManager() {
                       </div>
                       {!stageConfig.provider ? (
                         <select
+                          disabled={!stageReady}
                           aria-label="Model tier"
                           value={canonicalStageModelTier(stageConfig.model) || 'default'}
                           onChange={(e) => setStageConfig({ ...stageConfig, model: e.target.value })}
@@ -909,6 +942,7 @@ export default function PromptManager() {
                         </select>
                       ) : (
                         <ProviderModelSelector
+                          disabled={!stageReady}
                           providers={providers}
                           selectedProviderId={stageConfig.provider}
                           selectedModel={stageConfig.model}
@@ -922,6 +956,8 @@ export default function PromptManager() {
                       )}
                     </div>
                     <StageTimeoutField
+                      key={selectedStage}
+                      disabled={!stageReady}
                       timeout={stageConfig.timeout}
                       providerFallback={getProviderTimeout(providers, stageConfig.provider, activeProviderId)}
                       onCommit={(ms) => setStageConfig({ ...stageConfig, timeout: ms })}
@@ -936,6 +972,7 @@ export default function PromptManager() {
 
                   <FormField label="Template">
                     <textarea
+                      disabled={!stageReady}
                       value={stageTemplate}
                       onChange={(e) => setStageTemplate(e.target.value)}
                       className="w-full h-96 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white font-mono text-sm focus:border-port-accent focus:outline-hidden"
@@ -1216,14 +1253,14 @@ export default function PromptManager() {
                     <div className="flex gap-2">
                       <button
                         onClick={previewJobSkill}
-                        disabled={previewLoading}
+                        disabled={!jobSkillReady || saving || previewLoading}
                         className="flex items-center gap-1 px-3 py-1 text-sm bg-port-border hover:bg-port-border/80 text-white rounded disabled:opacity-50"
                       >
                         <Eye size={14} /> Preview
                       </button>
                       <button
                         onClick={saveJobSkill}
-                        disabled={saving}
+                        disabled={!jobSkillReady || saving}
                         className="flex items-center gap-1 px-3 py-1 text-sm bg-port-accent hover:bg-port-accent/80 text-white rounded disabled:opacity-50"
                       >
                         <Save size={14} /> Save
@@ -1231,8 +1268,18 @@ export default function PromptManager() {
                     </div>
                   </div>
 
+                  {!jobSkillReady && (
+                    <div role={jobSkillRead.identity === selectedJobSkill && jobSkillRead.status === 'error' ? 'alert' : 'status'} className="mb-4 text-sm text-gray-400">
+                      {jobSkillRead.identity === selectedJobSkill && jobSkillRead.status === 'error' ? (
+                        <>Failed to load job skill: {jobSkillRead.error}{' '}
+                          <button onClick={() => setJobSkillReadAttempt((attempt) => attempt + 1)} className="text-port-accent hover:underline">Retry</button>
+                        </>
+                      ) : 'Loading job skill details…'}
+                    </div>
+                  )}
                   <FormField label="Skill Template (Markdown)">
                     <textarea
+                      disabled={!jobSkillReady}
                       value={jobSkillContent}
                       onChange={(e) => setJobSkillContent(e.target.value)}
                       className="w-full h-96 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white font-mono text-sm focus:border-port-accent focus:outline-hidden"
@@ -1479,7 +1526,7 @@ export default function PromptManager() {
 // floor). useFieldDraft keeps the raw string locally and only invokes
 // onCommit on blur with the validated value (or null when the user clears
 // it / leaves it invalid).
-function StageTimeoutField({ timeout, providerFallback, onCommit }) {
+function StageTimeoutField({ timeout, providerFallback, onCommit, disabled = false }) {
   const { value: draft, onChange, onBlur } = useFieldDraft(timeout, (raw) => {
     const trimmed = raw.trim();
     if (trimmed === '') { onCommit(null); return; }
@@ -1491,6 +1538,7 @@ function StageTimeoutField({ timeout, providerFallback, onCommit }) {
   return (
     <FormField label="Timeout override (ms)">
       <input
+        disabled={disabled}
         type="number"
         inputMode="numeric"
         min={TIMEOUT_INPUT_MIN_MS}

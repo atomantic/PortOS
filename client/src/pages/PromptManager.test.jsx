@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 import PromptManager from './PromptManager';
 import toast from '../components/ui/Toast';
 
@@ -11,6 +11,7 @@ const getPrompts = vi.fn();
 const getPrompt = vi.fn();
 const getPromptUsage = vi.fn();
 const savePrompt = vi.fn();
+const previewPrompt = vi.fn();
 const deletePrompt = vi.fn();
 const createPrompt = vi.fn();
 const getPromptVariables = vi.fn();
@@ -28,7 +29,7 @@ vi.mock('../services/apiPrompts', () => ({
   createPrompt: (...a) => createPrompt(...a),
   savePrompt: (...a) => savePrompt(...a),
   deletePrompt: (...a) => deletePrompt(...a),
-  previewPrompt: vi.fn(),
+  previewPrompt: (...a) => previewPrompt(...a),
   getPromptUsage: (...a) => getPromptUsage(...a),
   getPromptVariables: (...a) => getPromptVariables(...a),
   createPromptVariable: (...a) => createPromptVariable(...a),
@@ -66,7 +67,12 @@ const SYSTEM_STAGES = ['brain-classifier'];
 // Surfaces the live search string so URL-driven selection can be asserted on.
 const LocationProbe = () => {
   const { search } = useLocation();
-  return <div data-testid="location-search">{search}</div>;
+  const navigate = useNavigate();
+  return <>
+    <div data-testid="location-search">{search}</div>
+    <button onClick={() => navigate(-1)}>History Back</button>
+    <button onClick={() => navigate(1)}>History Forward</button>
+  </>;
 };
 
 const renderPage = async (entry = '/prompts') => {
@@ -1211,5 +1217,98 @@ describe('PromptManager stage unsaved-edit guard', () => {
     expect(screen.queryByText(/Discard unsaved changes/)).toBeNull();
     await waitFor(() => expect(currentSearch()).toContain('stage=pipeline-comic-script'));
     await screen.findByDisplayValue('pipeline-comic-script template');
+  });
+});
+
+
+// Each public editor boundary rejects writes before a successful detail read,
+// then restores intentional editing without changing server persistence rules.
+describe.each([
+  { kind: 'stage', entry: '/prompts?stage=pipeline-prose-draft', detail: getPrompt, save: savePrompt, preview: previewPrompt, label: 'Template', first: 'pipeline-prose-draft', second: 'pipeline-comic-script', secondLabel: 'Pipeline — Comic Book Script', param: 'stage' },
+  { kind: 'job skill', entry: '/prompts?tab=job-skills&skill=code-fixer', detail: getJobSkill, save: saveJobSkill, preview: previewJobSkill, label: 'Skill Template (Markdown)', first: 'code-fixer', second: 'doc-writer', secondLabel: 'doc-writer', param: 'skill' },
+])('PromptManager $kind detail admission', ({ kind, entry, detail, save, preview: previewApi, label, first, second, secondLabel, param }) => {
+  const response = (text) => kind === 'stage'
+    ? { name: 'Loaded stage', template: text, model: 'default', variables: [] }
+    : { jobName: 'Loaded skill', content: text };
+  const box = () => screen.getByLabelText(label);
+  const saveButton = () => screen.getByRole('button', { name: /^Save$/ });
+  const previewButton = () => screen.getByRole('button', { name: /^Preview$/ });
+
+  beforeEach(() => {
+    getPrompts.mockReset().mockResolvedValue({ stages: STAGES, systemStages: SYSTEM_STAGES });
+    getJobSkills.mockReset().mockResolvedValue({ skills: [{ name: 'code-fixer' }, { name: 'doc-writer' }] });
+    detail.mockReset();
+    save.mockReset().mockResolvedValue({ success: true });
+    previewApi.mockReset().mockResolvedValue({ preview: 'rendered' });
+  });
+
+  it('blocks pending and failed reads, exposes Retry, and permits editing only after hydration', async () => {
+    let rejectRead;
+    let resolveRetry;
+    detail.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRead = reject; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRetry = resolve; }));
+    await renderPage(entry);
+    expect(box().disabled).toBe(true);
+    expect(saveButton().disabled).toBe(true);
+    expect(previewButton().disabled).toBe(true);
+    if (kind === 'stage') {
+      expect(screen.getByLabelText('Model tier').disabled).toBe(true);
+      expect(screen.getByLabelText('Timeout override (ms)').disabled).toBe(true);
+      expect(screen.getByRole('button', { name: 'Tier' }).disabled).toBe(true);
+    }
+    fireEvent.click(saveButton());
+    fireEvent.click(previewButton());
+    expect(save).not.toHaveBeenCalled();
+    expect(previewApi).not.toHaveBeenCalled();
+
+    await act(async () => rejectRead(new Error('503 unavailable')));
+    expect(screen.getByRole('alert').textContent).toContain('503 unavailable');
+    expect(box().disabled).toBe(true);
+    fireEvent.click(saveButton());
+    expect(save).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(saveButton().disabled).toBe(true);
+    await act(async () => resolveRetry(response('Original content')));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(box().disabled).toBe(false);
+    // Clearing a loaded stage is deliberate and remains a valid write.
+    fireEvent.change(box(), { target: { value: kind === 'stage' ? '' : 'Edited skill' } });
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    if (kind === 'stage') expect(save).toHaveBeenCalledWith(first, expect.objectContaining({ template: '', provider: null }), { silent: true });
+    else expect(save).toHaveBeenCalledWith(first, 'Edited skill', { silent: true });
+  });
+
+  it('revokes admission on list and history navigation and ignores superseded detail responses', async () => {
+    let resolveSecond;
+    let resolveBack;
+    let resolveForward;
+    detail.mockResolvedValueOnce(response('First content'))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveBack = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveForward = resolve; }));
+    await renderPage(entry);
+    await screen.findByDisplayValue('First content');
+    fireEvent.click(screen.getByText(secondLabel));
+    expect(currentSearch()).toContain(`${param}=${second}`);
+    expect(box().value).toBe('');
+    expect(box().disabled).toBe(true);
+    expect(saveButton().disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'History Back' }));
+    expect(currentSearch()).toContain(`${param}=${first}`);
+    expect(box().disabled).toBe(true);
+    await act(async () => resolveSecond(response('Stale second content')));
+    expect(box().value).toBe('');
+    expect(saveButton().disabled).toBe(true);
+    await act(async () => resolveBack(response('Fresh first content')));
+    expect(box().value).toBe('Fresh first content');
+    expect(saveButton().disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'History Forward' }));
+    expect(currentSearch()).toContain(`${param}=${second}`);
+    expect(box().disabled).toBe(true);
+    expect(previewButton().disabled).toBe(true);
+    await act(async () => resolveForward(response('Fresh second content')));
+    expect(box().value).toBe('Fresh second content');
+    expect(box().disabled).toBe(false);
   });
 });
