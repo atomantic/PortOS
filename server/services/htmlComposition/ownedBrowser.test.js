@@ -37,10 +37,11 @@ beforeEach(() => {
   });
   vi.mocked(rm).mockClear();
 });
-afterEach(() => { child.stderr.destroy(); });
+afterEach(() => { child.stderr.destroy(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 describe('owned composition capture browser lifecycle', () => {
   it('uses the configured executable with a fresh sandboxed profile and disposes only its child', async () => {
+    vi.spyOn(process, 'getuid').mockReturnValue(1000);
     const owner = await launchCompositionBrowser();
     expect(owner.webSocketDebuggerUrl).toBe(endpoint);
     const [executable, args, options] = launch.spawn.mock.calls[0];
@@ -52,6 +53,27 @@ describe('owned composition capture browser lifecycle', () => {
     await expect(access(profile)).resolves.toBeUndefined();
     await Promise.all([owner.close(), owner.close()]);
     expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+    await expect(access(profile)).rejects.toThrow();
+  });
+
+  it.each([
+    ['a root Vitest worker drops', {}, true],
+    ['a root production launch keeps', { VITEST: undefined, NODE_ENV: 'production' }, false],
+  ])('%s the sandbox Chrome refuses to start as root', async (_, env, unsandboxed) => {
+    vi.spyOn(process, 'getuid').mockReturnValue(0);
+    for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value);
+    await (await launchCompositionBrowser()).close();
+    expect(launch.spawn.mock.calls[0][1].includes('--no-sandbox')).toBe(unsandboxed);
+  });
+
+  it('names a recognized startup exit cause without copying browser output', async () => {
+    startup = () => {
+      child.emit('spawn');
+      child.stderr.write('[0101/000000:ERROR:zygote_host_impl_linux.cc(101)] Running as root without --no-sandbox is not supported. /private/profile/path\n');
+      setImmediate(() => { child.exitCode = 1; child.emit('exit', 1, null); child.emit('close', 1, null); });
+    };
+    const error = await launchCompositionBrowser().catch(caught => caught);
+    expect(error.message).toBe('Composition browser exited during startup (code 1): Chrome refuses to run as root with its sandbox enabled');
     await expect(access(profile)).rejects.toThrow();
   });
 

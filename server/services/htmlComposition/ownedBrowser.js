@@ -5,6 +5,16 @@ import { spawn } from '../../lib/childProcess.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { browserExecutablePath } from '../../lib/browserConfig.js';
+import { isVitestRunner } from '../../lib/runtimeEnv.js';
+
+// Chrome refuses to run as root with its sandbox on. Only a Vitest worker
+// running as root (a root dev/CI container) drops it, matching the test-owned
+// Chrome launches in testBrowserCleanup.js; production keeps the sandbox.
+const sandboxArgs = () => (isVitestRunner() && process.getuid?.() === 0 ? ['--no-sandbox'] : []);
+
+// Raw browser output can hold private paths, so a startup failure names a
+// recognized cause instead of copying stderr.
+const ROOT_SANDBOX_REFUSAL = /Running as root without --no-sandbox is not supported/;
 
 // Chrome helpers (crashpad, GPU) can still be writing into the profile for a
 // moment after the browser's close event, so a recursive rm may lose the race
@@ -105,7 +115,7 @@ export async function launchCompositionBrowser({ signal, startupMs = 20000, shut
   try {
     signal?.throwIfAborted();
     proc = spawn(executable, [
-      '--headless=new', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0',
+      '--headless=new', ...sandboxArgs(), '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0',
       `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check',
       '--mute-audio', '--disable-background-networking', '--disable-background-timer-throttling',
       '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', 'about:blank',
@@ -126,11 +136,15 @@ export async function launchCompositionBrowser({ signal, startupMs = 20000, shut
         error ? reject(error) : resolve(endpoint);
       };
       const fail = error => finish(new Error(`Composition browser failed to start (${error.code || 'spawn error'})`));
-      const stopped = () => finish(new Error('Composition browser exited during startup'));
+      const stopped = () => {
+        const status = proc.signalCode ? `signal ${proc.signalCode}` : `code ${proc.exitCode ?? 'unknown'}`;
+        const cause = ROOT_SANDBOX_REFUSAL.test(tail) ? ': Chrome refuses to run as root with its sandbox enabled' : '';
+        finish(new Error(`Composition browser exited during startup (${status})${cause}`));
+      };
       const canceled = () => finish(signal.reason ?? new Error('Render canceled'));
       const onData = bytes => {
         tail = (tail + bytes.toString()).slice(-8192);
-        // No paths or browser output are copied into errors. An endpoint must
+        // No paths or raw browser output are copied into errors. An endpoint must
         // be loopback and come from this child's complete DevTools line.
         const match = tail.match(/(?:^|\n)DevTools listening on (ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\/[a-zA-Z0-9-]+)\r?\n/);
         if (match) finish(null, match[1]);
