@@ -447,11 +447,11 @@ const cosTasksSweepInFlight = new Set(); // peerInstanceId
  * Apply a peer's task payload into the LOCAL task files via a claim-aware merge.
  * Splits the entries by taskType and hands each file's tasks to
  * cosTaskStore.mergePeerTasks (which runs the pure merge under the state lock).
- * Returns the number of files actually changed.
+ * Returns changed-file count separately from successful application completion.
  */
 async function mergeCosTasksFromPayload(tasks) {
   const mod = await import('../cosTaskStore.js').catch(() => null);
-  if (!mod?.mergePeerTasks) return 0;
+  if (!mod?.mergePeerTasks) return { changed: 0, complete: false };
   const user = [];
   const internal = [];
   for (const t of Array.isArray(tasks) ? tasks : []) {
@@ -471,7 +471,7 @@ async function mergeCosTasksFromPayload(tasks) {
     logFailureWithStack('⚠️ peerSync: cos-tasks internal merge failed', err); return null;
   });
   if (internalRes?.changed) changed++;
-  return changed;
+  return { changed, complete: userRes !== null && internalRes !== null };
 }
 
 /**
@@ -529,8 +529,11 @@ export async function syncCosTasksFromPeer(peer) {
       }
       cosTasksUnchangedSkips.set(peer.instanceId, 0); // forced re-merge — fall through
     }
-    const changed = await mergeCosTasksFromPayload(payload.tasks);
-    lastCosTasksListHash.set(peer.instanceId, payload.listHash);
+    const { changed, complete } = await mergeCosTasksFromPayload(payload.tasks);
+    // A partial merge remains retryable on the very next sweep. Successful
+    // files are retained and safely re-applied by the idempotent store merge.
+    if (complete) lastCosTasksListHash.set(peer.instanceId, payload.listHash);
+    else lastCosTasksListHash.delete(peer.instanceId);
     if (changed > 0) {
       console.log(`📥 peerSync: cos-tasks sweep from ${peer.name || peer.instanceId} — merged ${changed} task file(s)`);
     }
