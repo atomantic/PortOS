@@ -16,12 +16,29 @@ const lyricAt = (cues, t) => {
 const DESKTOP_QUERY = '(min-width: 1024px)';
 const startsDeferred = (collapsed) => collapsed && window.matchMedia?.(DESKTOP_QUERY).matches === false;
 
+// Fetched preview media kept for the iframe to ask for again (a scrub back, a
+// rebuilt document). Least recently used blobs go first; the newest one stays
+// even when it alone exceeds the budget. A phone tab's memory is the limit.
+export const PREVIEW_BLOB_BUDGET_BYTES = 64 * 1024 * 1024;
+const remember = (cache, url, blob) => {
+  cache.set(url, blob);
+  let total = 0;
+  for (const kept of cache.values()) total += kept.size;
+  for (const [key, kept] of cache) {
+    if (total <= PREVIEW_BLOB_BUDGET_BYTES || cache.size === 1) break;
+    cache.delete(key);
+    total -= kept.size;
+  }
+};
+
 /**
  * Live preview of the project's composition document: the sandboxed iframe,
  * the song, play/scrub and the lyric line being sung. The iframe runs in an
- * opaque-origin sandbox that cannot fetch, so this component fetches the scene
- * takes and document media and posts them in as Blobs over the
- * `portos-mv:*` message bridge, then drives the document with seek messages.
+ * opaque-origin sandbox that cannot fetch, so this component posts it the
+ * manifest of bridged media, fetches each scene take or document file only
+ * when the document first asks for it (`portos-mv:request`), posts it in as a
+ * Blob over the `portos-mv:*` message bridge, and drives the document with
+ * seek messages. Only listed keys are ever fetched.
  *
  * `seekRequest` (`{ t, n }`) moves the player from outside — the board seeks it
  * to a scene's start; `n` changes on every request so seeking twice to the same
@@ -61,6 +78,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     let active = true;
     setPreview(null);
     setPreviewError('');
+    setStatus('');
     seekState.current = { inFlight: false, pending: null, ready: false };
     if (!refresh || !wanted) return () => { active = false; };
     getMusicVideoCompositionPreview(project.id, { silent: true, draft })
@@ -81,31 +99,53 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   useEffect(() => {
     if (!preview) return undefined;
     let active = true;
+    let missing = false;
+    let firstFrame = true;
+    const inFlight = new Map();
+    const byKey = new Map((preview.assets || []).map((asset) => [String(asset.key).replace(/^\.\//, ''), asset]));
+    // Only the first frame announces loading: a status line appearing on every later fetch would shift the layout mid-playback.
+    const showStatus = () => {
+      if (active) setStatus(missing ? 'Some preview media could not be loaded' : firstFrame ? 'Loading preview media…' : '');
+    };
+    const mediaFor = async (url) => {
+      const cache = blobCache.current;
+      if (cache.has(url)) {
+        const blob = cache.get(url);
+        cache.delete(url);
+        cache.set(url, blob);
+        return blob;
+      }
+      if (!inFlight.has(url)) {
+        inFlight.set(url, fetchMusicVideoPreviewAsset(url)
+          .then((blob) => { remember(cache, url, blob); return blob; }, () => null)
+          .finally(() => inFlight.delete(url)));
+      }
+      return inFlight.get(url);
+    };
     const onMessage = async (event) => {
       if (event.source !== iframeRef.current?.contentWindow) return;
       const message = event.data || {};
       const state = seekState.current;
       if (message.type === 'portos-mv:loaded') {
-        const files = {};
-        let loaded = 0;
-        let missingMedia = false;
-        for (const asset of preview.assets || []) {
-          if (!active) return;
-          setStatus(`Loading preview media ${loaded + 1}/${preview.assets.length}…`);
-          const blob = blobCache.current.get(asset.url) || await fetchMusicVideoPreviewAsset(asset.url).catch(() => null);
-          if (blob) { blobCache.current.set(asset.url, blob); files[asset.key] = blob; }
-          else missingMedia = true;
-          loaded += 1;
-        }
-        if (!active) return;
-        setStatus(missingMedia ? 'Some preview media could not be loaded' : '');
-        iframeRef.current?.contentWindow?.postMessage({ type: 'portos-mv:assets', files }, '*');
+        // The manifest only: each file is fetched when the document first asks for it, so the first
+        // frame waits on the media near the playhead rather than on every take in the project.
+        event.source.postMessage({ type: 'portos-mv:manifest', keys: [...byKey.keys()] }, '*');
+        showStatus();
         state.ready = true;
         postSeek(t);
+      } else if (message.type === 'portos-mv:request') {
+        const key = String(message.key);
+        const asset = byKey.get(key);
+        const blob = asset ? await mediaFor(asset.url) : null;
+        if (!blob) { missing = true; showStatus(); }
+        if (active) event.source.postMessage({ type: 'portos-mv:asset', key, blob }, '*');
       } else if (message.type === 'portos-mv:seeked') {
+        if (firstFrame) { firstFrame = false; showStatus(); }
         state.inFlight = false;
         if (state.pending != null) { const next = state.pending; state.pending = null; postSeek(next); }
       } else if (message.type === 'portos-mv:error') {
+        firstFrame = false;
+        showStatus();
         state.inFlight = false;
         setPreviewError(String(message.message || 'The composition document failed in the preview'));
       }

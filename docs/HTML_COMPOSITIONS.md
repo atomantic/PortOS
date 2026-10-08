@@ -392,9 +392,23 @@ front of the template's engine tag.
 
 The in-app preview is a self-contained `srcdoc` in an opaque-origin sandbox
 with no network: the server inlines the document's scripts, stylesheets and
-small assets, the PortOS page fetches the larger media on the user's behalf
-and posts it in as Blobs (`window.PORTOS_MV_ASSETS` resolves to
-`{ src: blobUrl }`), and the scrubber posts `portos-mv:seek` messages.
+small assets, and the scrubber posts `portos-mv:seek` messages. Larger media
+is bridged on demand: the PortOS page posts only the list of files
+(`window.PORTOS_MV_ASSETS` resolves to `{ src: src }`), and the first time a
+script sets a media element's `src` to one of them, the page fetches that file
+on the user's behalf and posts it in as a Blob (`window.PORTOS_MV_ASSET(src)`
+returns a promise of its blob: URL for other uses). The page keeps a bounded
+cache of fetched files, and object URLs idle for a few seconds are revoked
+once the preview holds more than 64 MB, unless a media element still plays
+them. So assign `src` when a frame needs the file, not every file at startup.
+
+Bound your own decoded-image cache the same way. A decoded 2048×1152 frame
+costs about 9 MB however small its JPEG is, so a cache of 90 atlases can hold
+most of a gigabyte, and iPhone Safari reloads the tab ("A problem repeatedly
+occurred") or purges and re-decodes images mid-playback. Keep a few seconds
+around the playhead (for example the current frame plus the next one or two
+seconds), release the rest by dropping their `Image` objects, and decode the
+next frame inside `seek` before drawing it.
 
 ## Launch-video admission (API foundation)
 

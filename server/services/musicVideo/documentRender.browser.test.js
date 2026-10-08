@@ -80,7 +80,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
   let proc;
   let browser;
   let PATHS, encodeDocumentComposition, prepareDocumentRender, documentRenderClock, importDocumentTemplate;
-  let generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument, buildDocumentPreview, projects;
+  let generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument, buildDocumentPreview, PREVIEW_MEDIA_BUDGET_BYTES, projects;
   beforeAll(async () => {
     // Keep collection read-only when Chrome/ffmpeg prerequisites skip the suite.
     ({ PATHS } = await import('../../lib/paths.js'));
@@ -93,7 +93,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     });
     ({ importDocumentTemplate } = await import('./compositionDocument.js'));
     ({ generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument } = await import('./documentGeneration.js'));
-    ({ buildDocumentPreview } = await import('./documentPreview.js'));
+    ({ buildDocumentPreview, PREVIEW_MEDIA_BUDGET_BYTES } = await import('./documentPreview.js'));
     projects = await import('./projects.js');
     const profile = join(PATHS.data, 'chrome-test-profile');
     proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'] });
@@ -307,6 +307,51 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     expect(rendered.reduce((sum, v, i) => sum + Math.abs(v-pixels[i]), 0) / pixels.length).toBeLessThan(15);
   }, 120000);
 
+  it('revokes idle preview media past the budget, keeps what a media element still plays, and asks again on reuse', async () => {
+    const created = await projects.createProject({ name: 'Synthetic bridge budget' });
+    await projects.mutateProjectRecord(created.id, (current) => ({ project: { ...current,
+      audioAnalysis: { durationSec: 1, beats: [0], downbeats: [0], sections: [{ id: 'song', label: 'Verse', startSec: 0, endSec: 1 }] },
+      composition: { mode: 'document' },
+      scenes: [{ sceneId: 'card', startSec: 0, endSec: 1, visualLayer: 'card', cardText: '' }],
+    } }));
+    await importDocumentTemplate(created.id);
+    const page = await browser.newPage();
+    await page.setContent((await buildDocumentPreview(await projects.getProject(created.id))).html);
+    const result = await page.evaluate(async (size) => {
+      const requested = [];
+      const revoked = [];
+      const revoke = URL.revokeObjectURL;
+      URL.revokeObjectURL = (url) => { revoked.push(url); revoke(url); };
+      // Idle time is read from performance.now, so the test moves the clock instead of sleeping.
+      const now = performance.now.bind(performance);
+      let offset = 0;
+      performance.now = () => now() + offset;
+      addEventListener('message', ({ data }) => {
+        if (data?.type !== 'portos-mv:request') return;
+        requested.push(data.key);
+        postMessage({ type: 'portos-mv:asset', key: data.key, blob: new Blob([new Uint8Array(size)]) }, '*');
+      });
+      postMessage({ type: 'portos-mv:manifest', keys: ['media/clip.webm', 'media/a.jpg', 'media/b.jpg'] }, '*');
+      const video = document.createElement('video');
+      video.src = 'media/clip.webm';
+      while (!video.getAttribute('src')?.startsWith('blob:')) await new Promise((resolve) => setTimeout(resolve, 10));
+      const first = await window.PORTOS_MV_ASSET('media/a.jpg');
+      const again = await window.PORTOS_MV_ASSET('media/a.jpg');
+      offset += 60000;
+      await window.PORTOS_MV_ASSET('media/b.jpg'); // three files now exceed the budget
+      const reused = await window.PORTOS_MV_ASSET('media/a.jpg');
+      return { requested, revoked, first, again, reused, video: video.getAttribute('src') };
+    }, Math.ceil(PREVIEW_MEDIA_BUDGET_BYTES * 0.6));
+    await page.close();
+    expect(result.again).toBe(result.first);
+    // The idle file goes; the clip a <video> still points at stays though it is older.
+    expect(result.revoked).toEqual([result.first]);
+    expect(result.revoked).not.toContain(result.video);
+    expect(result.requested).toEqual(['media/clip.webm', 'media/a.jpg', 'media/b.jpg', 'media/a.jpg']);
+    expect(result.reused).toMatch(/^blob:/);
+    expect(result.reused).not.toBe(result.first);
+  }, 30000);
+
   it('keeps event frames identical across shuffled seeks, an excerpt and a full render, and freezes silence', async () => {
     const created = await projects.createProject({ name: 'Synthetic event proof' });
     const base = { durationSec: 0.2, narrativeFunction: 'Mark the story turn', mediumRationale: 'Exact code graphics' };
@@ -329,7 +374,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     const preview = await buildDocumentPreview(project);
     const page = await browser.newPage();
     await page.setContent(preview.html);
-    await page.evaluate(() => window.postMessage({ type: 'portos-mv:assets', files: {} }, '*'));
+    await page.evaluate(() => window.postMessage({ type: 'portos-mv:manifest', keys: [] }, '*'));
     const at = (frame) => page.evaluate(async (frame) => {
       await window.portosComposition.seek(frame / 24);
       return { pixels: document.getElementById('stage').toDataURL(), state: window.PORTOS_MV_EVENT_STATE(window.PORTOS_MV.song, frame / 24, 24) };
@@ -671,28 +716,47 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     const preview = await buildDocumentPreview(project);
     expect(preview.html).toContain('PORTOS_MV_GENERATED');
     expect(preview.html).toContain('"inSec":1');
-    const previewFrames = async (current, times) => {
+    // Plays the PortOS page's side of the lazy bridge: the manifest first, then each file only when asked.
+    const previewFrames = async (current, times, requested = []) => {
       const page = await browser.newPage();
       const prepared = await buildDocumentPreview(current);
       await page.setContent(prepared.html);
       const files = Object.fromEntries(await Promise.all(prepared.assets.map(async (asset) => [asset.key,
         (await readFile(asset.key.endsWith('.webm') ? clip : join(PATHS.images, 'generated-still.png'))).toString('base64')])));
       await page.evaluate(async (encoded) => {
-        const blobs = Object.fromEntries(Object.entries(encoded).map(([key, value]) => [key,
-          new Blob([Uint8Array.from(atob(value), (c) => c.charCodeAt(0))], { type: key.endsWith('.webm') ? 'video/webm' : 'image/png' })]));
-        window.postMessage({ type: 'portos-mv:assets', files: blobs }, '*');
+        window.requested = [];
+        addEventListener('message', ({ data }) => {
+          if (data?.type !== 'portos-mv:request') return;
+          window.requested.push(data.key);
+          const value = encoded[data.key];
+          const blob = value && new Blob([Uint8Array.from(atob(value), (c) => c.charCodeAt(0))], { type: data.key.endsWith('.webm') ? 'video/webm' : 'image/png' });
+          window.postMessage({ type: 'portos-mv:asset', key: data.key, blob: blob || null }, '*');
+        });
+        window.postMessage({ type: 'portos-mv:manifest', keys: Object.keys(encoded) }, '*');
         await window.PORTOS_MV_ASSETS;
       }, files);
       const pixels = [];
-      for (const time of times) pixels.push(await page.evaluate(async (t) => {
-        await window.portosComposition.seek(t);
-        const canvas = document.getElementById('stage');
-        return [...canvas.getContext('2d').getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1).data].slice(0, 3);
-      }, time));
+      for (const time of times) {
+        pixels.push(await page.evaluate(async (t) => {
+          await window.portosComposition.seek(t);
+          const canvas = document.getElementById('stage');
+          return [...canvas.getContext('2d').getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1).data].slice(0, 3);
+        }, time));
+        requested.push(await page.evaluate(() => window.requested.splice(0)));
+      }
       await page.close();
       return pixels;
     };
-    const beforeProof = await previewFrames(project, [0, 1, 2]);
+    const requested = [];
+    const beforeProof = await previewFrames(project, [0, 1, 2], requested);
+    const [stillKey, clipKey] = [preview.assets.find((asset) => asset.key.endsWith('.png')).key, preview.assets.find((asset) => asset.key.endsWith('.webm')).key];
+    // Nothing is fetched up front: the card frame needs no media, and each file is fetched once, when first named.
+    expect(requested[0]).toEqual([]);
+    expect(requested.flat().sort()).toEqual([clipKey, stillKey].sort());
+    // A far scrub on a fresh preview fetches only that time's clip and still paints the complete frame.
+    const farRequested = [];
+    expect(await previewFrames(project, [2], farRequested)).toEqual([beforeProof[2]]);
+    expect(farRequested).toEqual([[clipKey]]);
     // The full-duration proof samples static section boundaries. A 3s song at
     // the supported 12fps minimum keeps one section per second at 36 frames of
     // real Chrome capture (a 30s song was 360 frames, ~100s, and timed out on a
