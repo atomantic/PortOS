@@ -27,6 +27,7 @@ function startingChild() {
 }
 
 const syntheticResources = {
+  arch: 'unsupported',
   cpus: () => 4,
   usage: () => ({ userCPUTime: 0, systemCPUTime: 12, maxRSS: 34 }),
   disk: () => ({ bavail: 2, bsize: 4096, ffree: 5 }),
@@ -38,7 +39,7 @@ const resourceText = {
   '/proc/meminfo': 'MemAvailable: 42 kB\n',
 };
 const resourceExpected = '; resources: cpus=4 workerUserMicros=0 workerSystemMicros=12 workerMaxRssKiB=34 childCpuTicks=23'
-  + ' cpuAvg10=1.25 memoryAvg10=0 ioAvg10=3.5 memAvailableKiB=42 tmpFreeBytes=8192 tmpFreeInodes=5';
+  + ' cpuAvg10=1.25 memoryAvg10=0 ioAvg10=3.5 memAvailableKiB=42 tmpFreeBytes=8192 tmpFreeInodes=5; syscalls: table=unsupported';
 
 function expectStartupClean(proc) {
   expect(proc.listenerCount('spawn')).toBe(0);
@@ -225,6 +226,54 @@ describe('test Chrome startup', () => {
     await expect(ready).rejects.toThrow('cpuAvg10=1.25 memoryAvg10=0 ioAvg10=3.5');
     await expect(ready).rejects.not.toThrow('example-secret');
     expectStartupClean(proc);
+  });
+
+  it('captures capped syscall categories only at failure, without leaking registers or inventing denied observations', async () => {
+    const proc = startingChild();
+    proc.pid = 123;
+    const registers = ' 0xexample-secret 456 777 /private/example-secret';
+    const read = vi.fn(path => {
+      if (path.endsWith('/stat')) return '123 (example-secret) D 456 777 888';
+      if (path.endsWith('/wchan')) return 'folio_wait_bit_common';
+      if (path === '/proc/123/syscall') return '9' + registers;
+      if (path.endsWith('/syscall')) {
+        const id = path.split('/').at(-2);
+        if (id === '4') throw new Error('denied example-secret');
+        return ({ 1: '202' + registers, 2: 'running', 3: '-1' + registers, 5: '257' + registers, 6: '318' + registers, 7: '999' + registers, 8: 'malformed example-secret', 9: '9'.padEnd(4096, ' ') + registers })[id] ?? '0' + registers;
+      }
+      return resourceText[path];
+    });
+    const observeProcess = owned => _testChromeProcessFacts(owned, {
+      platform: 'linux', workerPid: 456, read, threads: () => Array.from({ length: 100 }, (_, i) => String(i + 1)),
+      ...syntheticResources, arch: 'x64',
+    });
+    const ready = _waitForTestChrome(proc, 20000, undefined, { observeProcess });
+    const rejected = expect(ready).rejects.toThrow('did not start within 20000ms');
+    await vi.advanceTimersByTimeAsync(19999);
+    expect(read).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await rejected;
+    await expect(ready).rejects.toThrow('syscalls: table=x64-native lead=memory threads=running:1,outside:1,read:7,write:0,open:1,metadata:0,memory:1,futex:1,poll:0,process:0,entropy:1,device:0,other:1,unavailable:2');
+    await expect(ready).rejects.not.toThrow(/example-secret|0x|\/private\/|456|777|888/);
+    expect(read).toHaveBeenCalledTimes(40);
+    expect(read.mock.calls.filter(([path]) => path.endsWith('/syscall'))).toHaveLength(17);
+    expect(read.mock.calls.every(([path]) => /^\/proc\/(?:(123|456)\/(stat|wchan|syscall|task\/\d+\/(wchan|syscall))|pressure\/(cpu|memory|io)|meminfo)$/.test(path))).toBe(true);
+    expectStartupClean(proc);
+  });
+
+  it('keeps denied leader syscalls and unavailable thread lists distinct from empty or unsupported samples', () => {
+    const read = vi.fn(path => {
+      if (path.endsWith('/syscall')) throw new Error('denied example-secret');
+      return resourceText[path] ?? '0';
+    });
+    const options = { platform: 'linux', read, ...syntheticResources, arch: 'x64' };
+    const denied = _testChromeProcessFacts({ pid: 123 }, { ...options, threads: () => { throw new Error('denied'); } });
+    expect(denied).toContain('syscalls: table=x64-native lead=unavailable threads=unavailable');
+    const empty = _testChromeProcessFacts({ pid: 123 }, { ...options, threads: () => [] });
+    expect(empty).toContain('syscalls: table=x64-native lead=unavailable threads=running:0,outside:0');
+    read.mockClear();
+    expect(_testChromeProcessFacts({ pid: 123 }, { ...options, arch: 'arm64', threads: () => [] })).toContain('syscalls: table=unsupported');
+    expect(read.mock.calls.some(([path]) => path.endsWith('/syscall'))).toBe(false);
   });
 });
 
