@@ -198,6 +198,9 @@ export async function buildMediaLibraryManifest() {
 // post-boot sweep just re-confirms disk, cheap because the diff finds everything
 // present and pulls nothing).
 const lastLibraryManifestHash = new Map(); // peerInstanceId → manifestHash
+// Landed bytes stay durable when the derived index is unavailable. Keep repair
+// pending independently of the byte diff so an empty diff can retry it.
+const libraryIndexRepairPending = new Set(); // peerInstanceId
 // Consecutive unchanged-manifest ticks per peer; after FORCE_REVALIDATE_EVERY we
 // force a full re-diff even though the remote manifest is unchanged, so a local
 // file loss self-heals without waiting for a restart or a remote library change.
@@ -226,12 +229,14 @@ function reconcileMediaLibraryIndex() {
     // graph (it no-ops under the file/test backend). image+video rows are rebuilt
     // from disk; audio/music aren't indexed (served from disk directly).
     const mod = await import('../mediaAssetIndex/index.js').catch(() => null);
-    if (!mod?.reconcileMediaAssets) return;
+    if (!mod?.reconcileMediaAssets) return false;
     // The pull wrote bytes outside any lease; indexing them takes one, so a cut
     // that copied the media directories first never dumps a row for a file it missed.
-    await withBackupAssetPublication(() => mod.reconcileMediaAssets()).catch((err) => {
-      console.log(`⚠️ peerSync: media_assets reconcile after library sweep failed: ${err.message}`);
+    const result = await withBackupAssetPublication(() => mod.reconcileMediaAssets({ requireComplete: true })).catch((err) => {
+      console.error(`❌ peerSync: media_assets reconcile after library sweep failed: ${err.message}`);
+      return null;
     });
+    return result?.ok === true && Array.isArray(result.skippedPrune) && result.skippedPrune.length === 0;
   });
   return reconcilePending;
 }
@@ -299,7 +304,7 @@ export async function syncMediaLibraryFromPeer(peer) {
     // corruption self-heals even while the REMOTE manifest stays put. (The
     // recorded hash is in-memory, so a process restart also re-diffs; this covers
     // the mid-session window between restarts.)
-    if (lastLibraryManifestHash.get(peer.instanceId) === manifest.manifestHash) {
+    if (!libraryIndexRepairPending.has(peer.instanceId) && lastLibraryManifestHash.get(peer.instanceId) === manifest.manifestHash) {
       const skips = (libraryUnchangedSkips.get(peer.instanceId) || 0) + 1;
       if (skips < FORCE_REVALIDATE_EVERY) {
         libraryUnchangedSkips.set(peer.instanceId, skips);
@@ -308,33 +313,30 @@ export async function syncMediaLibraryFromPeer(peer) {
       libraryUnchangedSkips.set(peer.instanceId, 0); // periodic forced re-diff — fall through
     }
     const missing = await diffAssetManifestAgainstLocal(manifest.assets);
-    if (missing.length === 0) {
-      lastLibraryManifestHash.set(peer.instanceId, manifest.manifestHash);
-      return { pulled: 0 };
-    }
     const requested = missing.length;
-    // Reuse the per-record pull worker (in-flight dedup, image-sidecar fetch,
-    // video-thumbnail regen).
-    await pullMissingAssetsFromPeer(peer.instanceId, missing);
-    // `pullMissingAssetsFromPeer` swallows per-asset failures (peer drops
-    // mid-sweep, 404, size-cap reject) and always resolves — so a resolved pull
-    // does NOT mean every byte landed. Re-diff against disk to see what actually
-    // arrived; this is the authoritative signal, not the pull's resolution.
-    const stillMissing = await diffAssetManifestAgainstLocal(manifest.assets);
+    let stillMissing = missing;
+    if (requested > 0) {
+      // Reuse the per-record pull worker (in-flight dedup, image-sidecar fetch,
+      // video-thumbnail regen). It swallows per-asset failures, so re-diff disk
+      // rather than treating the pull's resolution as evidence bytes landed.
+      await pullMissingAssetsFromPeer(peer.instanceId, missing);
+      stillMissing = await diffAssetManifestAgainstLocal(manifest.assets);
+    }
     const pulled = requested - stillMissing.length;
-    // Rebuild the derived media_assets index when any image/video bytes landed so
-    // the gallery/Media tab reflects them. Idempotent; best-effort.
-    if (pulled > 0) await reconcileMediaLibraryIndex();
-    if (stillMissing.length === 0) {
-      // Full sweep — safe to short-circuit future ticks on this manifestHash.
+    if (pulled > 0) libraryIndexRepairPending.add(peer.instanceId);
+    if (libraryIndexRepairPending.has(peer.instanceId) && await reconcileMediaLibraryIndex()) {
+      libraryIndexRepairPending.delete(peer.instanceId);
+    }
+    if (stillMissing.length === 0 && !libraryIndexRepairPending.has(peer.instanceId)) {
+      // Full sweep, including index repair — safe to short-circuit future ticks on this manifestHash.
       lastLibraryManifestHash.set(peer.instanceId, manifest.manifestHash);
-      console.log(`📥 peerSync: media-library sweep from ${peer.name || peer.instanceId} — pulled ${pulled} asset(s)`);
-    } else {
+      if (pulled > 0) console.log(`📥 peerSync: media-library sweep from ${peer.name || peer.instanceId} — pulled ${pulled} asset(s)`);
+    } else if (stillMissing.length > 0) {
       // Partial pull — do NOT record the hash, so the next tick re-diffs and
       // retries the still-missing assets instead of being marked done.
       console.log(`⚠️ peerSync: media-library sweep from ${peer.name || peer.instanceId} — pulled ${pulled}/${requested}, ${stillMissing.length} still missing; retrying next tick`);
     }
-    return { pulled, missing: stillMissing.length };
+    return requested > 0 ? { pulled, missing: stillMissing.length } : { pulled };
   } finally {
     librarySweepInFlight.delete(peer.instanceId);
   }
