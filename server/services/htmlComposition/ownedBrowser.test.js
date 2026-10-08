@@ -37,11 +37,20 @@ beforeEach(() => {
   });
   vi.mocked(rm).mockClear();
 });
-afterEach(() => { child.stderr.destroy(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
+// process.getuid does not exist on Windows, where vi.spyOn would throw; define it for the test and put back whatever was there.
+const originalGetuid = Object.getOwnPropertyDescriptor(process, 'getuid');
+const setUid = uid => Object.defineProperty(process, 'getuid', { value: () => uid, configurable: true, writable: true });
+afterEach(() => {
+  child.stderr.destroy();
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  if (originalGetuid) Object.defineProperty(process, 'getuid', originalGetuid);
+  else delete process.getuid;
+});
 
 describe('owned composition capture browser lifecycle', () => {
   it('uses the configured executable with a fresh sandboxed profile and disposes only its child', async () => {
-    vi.spyOn(process, 'getuid').mockReturnValue(1000);
+    setUid(1000);
     const owner = await launchCompositionBrowser();
     expect(owner.webSocketDebuggerUrl).toBe(endpoint);
     const [executable, args, options] = launch.spawn.mock.calls[0];
@@ -60,7 +69,7 @@ describe('owned composition capture browser lifecycle', () => {
     ['a root Vitest worker drops', {}, true],
     ['a root production launch keeps', { VITEST: undefined, NODE_ENV: 'production' }, false],
   ])('%s the sandbox Chrome refuses to start as root', async (_, env, unsandboxed) => {
-    vi.spyOn(process, 'getuid').mockReturnValue(0);
+    setUid(0);
     for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value);
     await (await launchCompositionBrowser()).close();
     expect(launch.spawn.mock.calls[0][1].includes('--no-sandbox')).toBe(unsandboxed);
