@@ -144,6 +144,12 @@ async function connectComposition(assets, { signal, mediaMode, version }) {
     });
   }
   const policyCsp = CSP.replace('img-src http: https:', mediaMode === 'code-only' ? "img-src 'none'" : 'img-src http: https:').replace("media-src 'self'", mediaMode !== 'code-images-video' ? "media-src 'none'" : "media-src 'self'");
+  // The page may cancel a paused request (a source swapped or re-requested
+  // with CORS mid-load); its interception is then gone, which is not a fault.
+  const fulfill = response => send('Fetch.fulfillRequest', response).catch(error => {
+    if (!failure && /Invalid InterceptionId/i.test(error.message)) return;
+    throw error;
+  });
   async function request(params) {
     if (params.resourceType === 'Image' && mediaMode === 'code-only' || params.resourceType === 'Media' && mediaMode !== 'code-images-video') throw new Error('Composition media mode refused this asset');
     const url = new URL(params.request.url);
@@ -153,7 +159,7 @@ async function connectComposition(assets, { signal, mediaMode, version }) {
       // A foreground headless target may ask for Chrome's implicit favicon.
       // Answer the absent local icon without allowing any network request.
       if (url.origin === ORIGIN && !url.username && !url.password && params.request.method === 'GET' && key === '/favicon.ico') {
-        await send('Fetch.fulfillRequest', { requestId: params.requestId, responseCode: 204, body: '' });
+        await fulfill({ requestId: params.requestId, responseCode: 204, body: '' });
         return;
       }
       // Do not continue even a failed request. Disconnect destroys the context.
@@ -166,14 +172,14 @@ async function connectComposition(assets, { signal, mediaMode, version }) {
     // needs the whole file, and a streamed asset is read only as far as asked.
     const range = rangeHeader ? parseByteRange(rangeHeader, size) : null;
     if (rangeHeader && !range && size > 0) {
-      await send('Fetch.fulfillRequest', { requestId: params.requestId, responseCode: 416,
-        responseHeaders: [{ name: 'Content-Range', value: `bytes */${size}` }, { name: 'Content-Security-Policy', value: policyCsp }], body: '' });
+      await fulfill({ requestId: params.requestId, responseCode: 416,
+        responseHeaders: [{ name: 'Content-Range', value: `bytes */${size}` }, { name: 'Content-Security-Policy', value: policyCsp }, { name: 'Access-Control-Allow-Origin', value: '*' }], body: '' });
       return;
     }
     const start = range ? range.start : 0;
     const end = range ? range.end : size - 1;
     const body = size === 0 ? Buffer.alloc(0) : await readSlice(asset, start, end);
-    await send('Fetch.fulfillRequest', {
+    await fulfill({
       requestId: params.requestId, responseCode: range ? 206 : 200,
       responseHeaders: [
         { name: 'Content-Type', value: MIME[extname(key).toLowerCase()] ?? 'application/octet-stream' },
@@ -197,7 +203,12 @@ async function connectComposition(assets, { signal, mediaMode, version }) {
         fail(new Error('Composition browser target closed'));
       } else if (message.sessionId === sessionId) {
         if (message.method === 'Fetch.requestPaused') request(message.params).catch(fail);
-        if (message.method === 'Runtime.bindingCalled') fail(new Error(`Refused composition request: ${message.params.payload}`));
+        if (message.method === 'Runtime.bindingCalled') {
+          const payload = String(message.params.payload).slice(0, 300);
+          fail(new Error(message.params.name === '__portosFailure'
+            ? `Composition drew cross-origin pixels into a WebGL texture, which the browser refused (${payload}). Load images and video with crossOrigin = 'anonymous' before drawing them.`
+            : `Refused composition request: ${payload}`));
+        }
         if (message.method === 'Runtime.exceptionThrown') {
           const details = message.params.exceptionDetails;
           fail(new Error(`Composition script failed: ${details.exception?.description ?? details.text}`));
@@ -251,6 +262,7 @@ async function connectComposition(assets, { signal, mediaMode, version }) {
     await send('Page.enable');
     await send('Runtime.enable');
     await send('Runtime.addBinding', { name: '__portosRefused' });
+    await send('Runtime.addBinding', { name: '__portosFailure' });
     await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
       const report = globalThis.__portosRefused;
       addEventListener('securitypolicyviolation', event => report(event.blockedURI));
@@ -263,6 +275,55 @@ async function connectComposition(assets, { signal, mediaMode, version }) {
       for (const key of ['Worker', 'SharedWorker', 'WebSocket']) {
         Object.defineProperty(globalThis, key, { configurable: false, writable: false,
           value: function(url) { report(String(url)); throw new Error(key + ' is disabled in compositions'); } });
+      }
+      // The sandbox's opaque origin makes every document asset cross-origin. A
+      // no-cors image or video taints any canvas it is drawn into, and a
+      // tainted canvas cannot become a WebGL texture (three.js swallows that
+      // SecurityError and draws black, #10594). Default images and media to
+      // CORS: the fulfilled responses allow it, so pixels stay readable without
+      // granting same-origin authority. An explicit crossorigin is kept.
+      const setAttribute = Element.prototype.setAttribute;
+      const corsDefault = element => {
+        if ((element instanceof HTMLImageElement || element instanceof HTMLMediaElement) && !element.hasAttribute('crossorigin')) {
+          setAttribute.call(element, 'crossorigin', 'anonymous');
+          return true;
+        }
+        return false;
+      };
+      const owner = element => element instanceof HTMLSourceElement ? element.parentElement : element;
+      for (const [proto, names] of [[HTMLImageElement.prototype, ['src', 'srcset']], [HTMLMediaElement.prototype, ['src']], [HTMLSourceElement.prototype, ['src', 'srcset']]]) {
+        for (const name of names) {
+          const descriptor = Object.getOwnPropertyDescriptor(proto, name);
+          Object.defineProperty(proto, name, { ...descriptor, set(value) { corsDefault(owner(this)); descriptor.set.call(this, value); } });
+        }
+      }
+      Element.prototype.setAttribute = function(name, value) {
+        if (/^(src|srcset)$/i.test(String(name))) corsDefault(owner(this));
+        return setAttribute.call(this, name, value);
+      };
+      // Markup and innerHTML set attributes without the setters above. A
+      // changed crossorigin re-runs an image's fetch; media needs load().
+      new MutationObserver(records => {
+        for (const record of records) for (const node of record.addedNodes) {
+          if (node.nodeType !== 1) continue;
+          for (const element of [node, ...node.querySelectorAll('img, video, audio')]) {
+            if (corsDefault(element) && element instanceof HTMLMediaElement && element.networkState !== HTMLMediaElement.NETWORK_EMPTY) element.load();
+          }
+        }
+      }).observe(document, { childList: true, subtree: true });
+      // Anything still tainted fails the job instead of rendering black.
+      const failure = globalThis.__portosFailure;
+      for (const Context of [globalThis.WebGLRenderingContext, globalThis.WebGL2RenderingContext]) {
+        for (const name of ['texImage2D', 'texSubImage2D', 'texImage3D', 'texSubImage3D']) {
+          const upload = Context?.prototype[name];
+          if (typeof upload !== 'function') continue;
+          Context.prototype[name] = function(...args) {
+            try { return upload.apply(this, args); } catch (error) {
+              if (error?.name === 'SecurityError') failure(String(error.message));
+              throw error;
+            }
+          };
+        }
       }
     })();` });
     await send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });

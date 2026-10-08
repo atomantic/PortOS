@@ -9,7 +9,8 @@ import { richSceneSource } from './__richSceneFixture.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it as vitestIt, vi } from 'vitest';
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { createRequire } from 'node:module';
 import { execFileSync, spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
 import sharp from 'sharp';
@@ -126,6 +127,33 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     const untouched = await browser.newPage();
     expect(await untouched.evaluate(() => 6 * 7)).toBe(42);
     await untouched.close();
+  }, 30000);
+
+  it('fails the capture with a clear error when a document still uploads tainted pixels to WebGL (#10594)', async () => {
+    const { openComposition } = await import('../htmlComposition/browser.js');
+    const directory = 'compositions/synthetic-tainted-texture';
+    await mkdir(join(PATHS.data, directory), { recursive: true });
+    await sharp({ create: { width: 8, height: 8, channels: 3, background: { r: 255, g: 0, b: 0 } } }).jpeg().toFile(join(PATHS.data, directory, 'still.jpg'));
+    await writeFile(join(PATHS.data, directory, 'index.html'), '<!doctype html><title>Synthetic tainted texture</title>');
+    const page = await openComposition(directory, { ownedBrowser: true, signal: testSignal });
+    try {
+      // Opting the image back out of CORS taints the canvas; the upload error
+      // is swallowed here exactly as three.js swallows it.
+      await expect((async () => {
+        await page.evaluate(`(async () => {
+          const image = new Image();
+          image.src = 'still.jpg';
+          image.removeAttribute('crossorigin');
+          await image.decode();
+          const source = document.createElement('canvas');
+          source.getContext('2d').drawImage(image, 0, 0);
+          const gl = document.createElement('canvas').getContext('webgl2');
+          gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+          try { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source); } catch {}
+        })()`);
+        page.check();
+      })()).rejects.toThrow(/cross-origin pixels into a WebGL texture.*Tainted canvases/);
+    } finally { await page.close(); }
   }, 30000);
 
   // Server-only CI does not install client dependencies; the full local install
@@ -512,6 +540,64 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     expect(existsSync(`${outputPath}.silent.mp4`)).toBe(false);
     expect(browser.isConnected()).toBe(true);
   }, 30000);
+
+  it('uploads document images and footage drawn to a 2D canvas as a WebGL texture in an excerpt (#10594)', async () => {
+    // A hand-authored document, not the shipped template: plain new Image(),
+    // markup <img> and <video> sources with no crossorigin attribute, drawn to
+    // a 2D canvas that three.js uploads as a CanvasTexture on a full-frame quad.
+    const directory = 'music-video/mv-canvas-texture/composition/doc-canvas-texture';
+    const dir = join(PATHS.data, directory);
+    await mkdir(join(dir, 'media'), { recursive: true });
+    await mkdir(join(dir, 'vendor'), { recursive: true });
+    await mkdir(PATHS.music, { recursive: true });
+    await mkdir(PATHS.videos, { recursive: true });
+    const tile = (r, g, b) => sharp({ create: { width: 64, height: 64, channels: 3, background: { r, g, b } } }).jpeg();
+    await tile(255, 128, 0).toFile(join(dir, 'media', 'scripted.jpg'));
+    await tile(0, 200, 0).toFile(join(dir, 'media', 'markup.jpg'));
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=64x64:r=12:d=1', '-c:v', 'libvpx', '-b:v', '200k', join(dir, 'media', 'clip.webm')]);
+    const three = dirname(createRequire(import.meta.url).resolve('three'));
+    for (const name of ['three.module.js', 'three.core.js']) await copyFile(join(three, name), join(dir, 'vendor', name));
+    await writeFile(join(dir, 'index.html'), `<!doctype html><style>html,body{margin:0;background:#000}canvas{display:block}</style>
+      <img id="markup" src="media/markup.jpg" style="display:none">
+      <script type="module">
+        import * as THREE from './vendor/three.module.js';
+        const scripted = new Image();
+        scripted.src = 'media/scripted.jpg';
+        const clip = document.createElement('video');
+        clip.muted = true; clip.preload = 'auto'; clip.src = 'media/clip.webm';
+        const clipReady = new Promise((resolve, reject) => { clip.onloadeddata = resolve; clip.onerror = () => reject(new Error('clip failed')); });
+        const source = document.createElement('canvas'); source.width = 192; source.height = 64;
+        const renderer = new THREE.WebGLRenderer({ preserveDrawingBuffer: true });
+        renderer.setSize(1280, 720, false);
+        document.body.append(renderer.domElement);
+        const texture = new THREE.CanvasTexture(source);
+        const scene = new THREE.Scene();
+        scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ map: texture })));
+        const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        window.portosComposition = { durationSec: 1, fps: 12, width: 1280, height: 720, seek: async () => {
+          await Promise.all([scripted.decode(), document.getElementById('markup').decode(), clipReady]);
+          const ctx = source.getContext('2d');
+          ctx.drawImage(scripted, 0, 0, 64, 64);
+          ctx.drawImage(document.getElementById('markup'), 64, 0, 64, 64);
+          ctx.drawImage(clip, 128, 0, 64, 64);
+          texture.needsUpdate = true;
+          renderer.render(scene, camera);
+        } };
+      </script>`);
+    const master = join(PATHS.music, 'canvas-texture.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=1', master]);
+    const project = { id: 'mv-canvas-texture', name: 'Synthetic canvas texture', scenes: [], audioAnalysis: { durationSec: 1, sections: [] }, composition: { mode: 'document', document: { directory } } };
+    const outputPath = join(PATHS.videos, 'canvas-texture.mp4');
+    await encodeDocumentComposition({ project, plan: await prepareDocumentRender(project), jobId: 'canvas-texture', audioPath: master, outputPath, windowStart: 0.25, windowEnd: 0.5 });
+    const frame = execFileSync(ffmpeg, ['-v', 'error', '-i', outputPath, '-frames:v', '1', '-vf', 'scale=96:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+    const at = (x) => [...frame.subarray((18 * 96 + x) * 3, (18 * 96 + x) * 3 + 3)];
+    const [orange, green, blue] = [at(16), at(48), at(80)];
+    expect(orange[0], `scripted image ${orange}`).toBeGreaterThan(200);
+    expect(orange[0], `scripted image ${orange}`).toBeGreaterThan(orange[2] + 120);
+    expect(green[1], `markup image ${green}`).toBeGreaterThan(green[0] + 100);
+    expect(blue[2], `video frame ${blue}`).toBeGreaterThan(blue[0] + 100);
+    await rm(outputPath, { force: true });
+  }, 60000);
 
   it('renders a generated 3-second card/still/clip document with the selected performance in-point', async () => {
     await mkdir(PATHS.videos, { recursive: true });
