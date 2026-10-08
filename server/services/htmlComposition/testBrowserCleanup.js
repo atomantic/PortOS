@@ -1,4 +1,4 @@
-import { execFileSync } from '../../lib/childProcess.js';
+import { spawn } from '../../lib/childProcess.js';
 import { closeSync, existsSync, openSync, opendirSync, readSync, statfsSync } from 'node:fs';
 import { availableParallelism, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -170,34 +170,76 @@ function executableKind(executable) {
   return name === 'chrome' ? 'chrome' : 'other';
 }
 
-// Redacted facts that separate "wrapper never reached Chrome" from "Chrome ran
-// but never published CDP": enums, booleans and a dotted version only, never
-// paths or process output. --version is bounded so a hung wrapper is itself
-// reported (version=unavailable) instead of stalling the diagnostic.
-export function _describeTestChromeStartup(proc, { source = 'unknown', executable, profile } = {}) {
-  let version = 'unavailable';
-  if (executable) {
+// A synchronous execFile timeout still waits for exit after sending its signal.
+// A SIGTERM-resistant version wrapper must not block the original child's
+// diagnosis or teardown. Only this probe's handle is killed; an uninterruptible
+// probe is unref'd and its pipe closed so its exit cannot hold up the failure.
+function probeChromeVersion(executable, spawnVersion) {
+  return new Promise(resolve => {
+    let proc;
+    let timer;
+    let settled = false;
+    let output = Buffer.alloc(0);
+    const finish = (version, terminate = false) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      proc?.stdout?.removeListener('data', onData);
+      if (terminate) {
+        attemptObservation(() => {
+          if (proc?.pid && proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL');
+        });
+        attemptObservation(() => proc?.stdout?.destroy());
+        attemptObservation(() => proc?.unref());
+      }
+      resolve(version);
+    };
+    const onData = bytes => {
+      // Keep at most the first 8192 bytes, regardless of output chunk size.
+      if (output.length < 8192) output = Buffer.concat([output, bytes.subarray(0, 8192 - output.length)]);
+    };
+    const onError = () => finish('unavailable', true);
+    const onClose = code => {
+      proc.removeListener('error', onError);
+      proc.removeListener('close', onClose);
+      finish(code === 0 ? output.toString().match(/\b\d+(?:\.\d+){1,3}\b/)?.[0] ?? 'unrecognized' : 'unavailable');
+    };
     try {
-      const out = execFileSync(executable, ['--version'], { timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
-      version = out.match(/\b\d+(?:\.\d+){1,3}\b/)?.[0] ?? 'unrecognized';
-    } catch { /* hung, crashed or missing: keep 'unavailable' */ }
-  }
+      proc = spawnVersion(executable, ['--version'], { stdio: ['ignore', 'pipe', 'ignore'] });
+      // Retain the error handler until close: kill may emit an error after the
+      // deadline has already resolved. Late output/errors cannot change it.
+      proc.on('error', onError);
+      proc.once('close', onClose);
+      proc.stdout.on('data', onData);
+      timer = setTimeout(() => finish('unavailable', true), 3000);
+    } catch { finish('unavailable', true); }
+  });
+}
+
+// Redacted startup snapshot: enums, booleans and a dotted version only. Capture
+// child/profile state before the asynchronous probe can change the observation.
+export async function _describeTestChromeStartup(proc, { source = 'unknown', executable, profile } = {}, { spawnVersion = spawn } = {}) {
   const state = proc.exitCode !== null ? 'exited' : proc.signalCode !== null ? 'signaled' : 'running';
   const port = profile ? existsSync(join(profile, 'DevToolsActivePort')) : 'unknown';
+  const profileState = profile ? (existsSync(profile) ? 'created' : 'missing') : 'unknown';
+  const spawned = proc.spawnedSeen ? 'yes' : 'no';
+  const pid = proc.pid ? 'yes' : 'no';
+  const version = executable ? await probeChromeVersion(executable, spawnVersion) : 'unavailable';
   return `source=${source} kind=${executable ? executableKind(executable) : 'unknown'} version=${version}`
-    + ` spawned=${proc.spawnedSeen ? 'yes' : 'no'} pid=${proc.pid ? 'yes' : 'no'} state=${state}`
-    + ` profile=${profile ? (existsSync(profile) ? 'created' : 'missing') : 'unknown'} devToolsActivePort=${port}`;
+    + ` spawned=${spawned} pid=${pid} state=${state}`
+    + ` profile=${profileState} devToolsActivePort=${port}`;
 }
 
 // Chrome writes its CDP address to stderr. Keep only a bounded tail and report
 // known failure categories: raw stderr can contain the user's profile path.
-export function _waitForTestChrome(proc, timeoutMs = 20000, startup, { observeProcess = _testChromeProcessFacts } = {}) {
+export function _waitForTestChrome(proc, timeoutMs = 20000, startup, { observeProcess = _testChromeProcessFacts, spawnVersion = spawn } = {}) {
   return new Promise((resolve, reject) => {
     let stderr = '';
     let timer;
     let spawned = false;
+    let settled = false;
     const onSpawn = () => { spawned = true; };
-    const diagnostic = () => {
+    const diagnostic = async () => {
       const categories = [
         ['sandbox', /sandbox/i],
         ['profile in use', /profile.*(?:in use|lock)|ProcessSingleton/i],
@@ -210,19 +252,28 @@ export function _waitForTestChrome(proc, timeoutMs = 20000, startup, { observePr
       const processFacts = `; process: ${describeProcess(proc, observeProcess)}`;
       if (!startup) return base + processFacts;
       proc.spawnedSeen = spawned;
-      return `${base}; startup: ${_describeTestChromeStartup(proc, startup)}${processFacts}`;
+      return `${base}; startup: ${await _describeTestChromeStartup(proc, startup, { spawnVersion })}${processFacts}`;
     };
     const cleanup = () => {
       clearTimeout(timer);
       proc.removeListener('spawn', onSpawn);
-      proc.removeListener('error', onError);
       proc.removeListener('exit', onExit);
       proc.stderr.removeListener('data', onData);
     };
     const finish = (value, error) => {
+      if (settled) return;
+      settled = true;
       cleanup();
-      if (error) reject(error);
-      else resolve(value);
+      if (error) {
+        const rejectWithFacts = facts => {
+          proc.removeListener('error', onError);
+          reject(error(facts));
+        };
+        diagnostic().then(rejectWithFacts, () => rejectWithFacts('; diagnostic unavailable'));
+      } else {
+        proc.removeListener('error', onError);
+        resolve(value);
+      }
     };
     const onData = bytes => {
       stderr = (stderr + bytes.toString()).slice(-8192);
@@ -232,16 +283,16 @@ export function _waitForTestChrome(proc, timeoutMs = 20000, startup, { observePr
     };
     const onError = error => {
       const code = /^[A-Z0-9_]{1,32}$/.test(error.code) ? error.code : 'spawn error';
-      finish(null, new Error(`Test Chrome failed to spawn (${code}${diagnostic()})`));
+      finish(null, facts => new Error(`Test Chrome failed to spawn (${code}${facts})`));
     };
-    const onExit = (code, signal) => finish(null, new Error(
-      `Test Chrome exited before startup (code ${Number.isInteger(code) ? code : 'none'}, signal ${/^[A-Z0-9]{1,32}$/.test(signal) ? signal : 'none'}${diagnostic()})`,
+    const onExit = (code, signal) => finish(null, facts => new Error(
+      `Test Chrome exited before startup (code ${Number.isInteger(code) ? code : 'none'}, signal ${/^[A-Z0-9]{1,32}$/.test(signal) ? signal : 'none'}${facts})`,
     ));
     proc.once('spawn', onSpawn);
-    proc.once('error', onError);
+    proc.on('error', onError);
     proc.once('exit', onExit);
     proc.stderr.on('data', onData);
-    timer = setTimeout(() => finish(null, new Error(`Test Chrome did not start within ${timeoutMs}ms${diagnostic()}`)), timeoutMs);
+    timer = setTimeout(() => finish(null, facts => new Error(`Test Chrome did not start within ${timeoutMs}ms${facts}`)), timeoutMs);
     if (proc.exitCode !== null || proc.signalCode !== null) onExit(proc.exitCode, proc.signalCode);
   });
 }
