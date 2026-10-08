@@ -137,6 +137,11 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/universe-builder/:id/render',
   'POST /api/universe-builder/:id/characters/:entryId/render-reference-sheet',
 
+  // Story Builder queues agent-capable generation before returning SSE progress (#10670).
+  'POST /api/story-builder/:id/steps/:stepId/generate',
+  'POST /api/story-builder/:id/steps/:stepId/refine',
+  'POST /api/story-builder/:id/issues/generate',
+
   // Database cutover stops/restarts PortOS under PM2 and rewrites .env (#8851).
   'POST /api/database/maintenance/cutover',
   'POST /api/database/maintenance/recover',

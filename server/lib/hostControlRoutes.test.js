@@ -34,6 +34,28 @@ describe('Universe Builder mutation inventory (#10669)', () => {
   });
 });
 
+describe('Story Builder mutation inventory (#10670)', () => {
+  it('gates generation and explicitly preserves record-only operations', () => {
+    const recordOnly = [
+      'POST /api/story-builder',
+      'PATCH /api/story-builder/:id',
+      'DELETE /api/story-builder/:id',
+      'POST /api/story-builder/:id/sync',
+      'POST /api/story-builder/:id/reconcile',
+      'POST /api/story-builder/:id/current-step/:stepId',
+      'POST /api/story-builder/:id/steps/:stepId/lock',
+      'POST /api/story-builder/:id/steps/:stepId/unlock',
+      'POST /api/story-builder/:id/issues/:issueId/lock',
+    ];
+    const open = getApiRouteCatalog().routes.filter(({ method, path }) =>
+      /^(POST|PUT|PATCH|DELETE)$/.test(method)
+      && /^\/api\/story-builder(\/|$)/.test(path)
+      && !isHostControlRoute(method, path))
+      .map(({ method, path }) => `${method} ${path}`);
+    expect([...new Set(open)].sort()).toEqual(recordOnly.sort());
+  });
+});
+
 describe('HOST_CONTROL_ROUTES (#8716)', () => {
   it('names only mounted routes, so a rename cannot silently ungate one', () => {
     // A catalog path keeps its `:param` / `*wildcard` tokens, which the
