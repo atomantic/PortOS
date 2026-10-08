@@ -45,6 +45,13 @@ export const DOCUMENT_RESERVED_FILES = Object.freeze(['portos-mv.js', 'song.json
 
 const SEGMENT = /^[A-Za-z0-9_-]{1,100}$/;
 const TEMPLATE_ROOT = join(dirname(fileURLToPath(import.meta.url)), 'documentTemplates');
+// The shared kinetic lyric-type module (#10583): lyricType.js, lyricType.css and their OFL faces.
+const SHARED_ROOT = join(TEMPLATE_ROOT, 'shared');
+const LYRIC_TYPE_REF = /\blyricType\.(?:js|css)\b/;
+const LYRIC_TYPE_SCAN_MAX = 2 * 1024 * 1024;
+const LAYERED_ENGINE_TAG = '<script src="engine.js"></script>';
+const LYRIC_TYPE_TAGS = '<link rel="stylesheet" href="lyricType.css">\n'
+  + '<script type="module" src="lyricType.js"></script><!-- portos-allow-hidden-content: the shared PortOS lyric-type module -->\n';
 
 const MIME_TYPES = Object.freeze({
   '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json',
@@ -91,7 +98,7 @@ const isReserved = (rel) => DOCUMENT_RESERVED_FILES.includes(rel.toLowerCase());
  * Every regular file under `root` as `[{ rel, abs, size }]`, refusing symlinks,
  * special files and a tree over the file / byte caps. `rel` uses `/`.
  */
-async function collectTree(root) {
+async function collectTree(root, { excludeTests = false } = {}) {
   const files = [];
   let bytes = 0;
   async function walk(dir, prefix) {
@@ -104,6 +111,7 @@ async function collectTree(root) {
       if (info.isDirectory()) { await walk(abs, `${rel}/`); continue; }
       if (!info.isFile()) throw refuse(`Composition documents can only contain regular files (${rel})`);
       if (unsafeZipEntryName(rel)) throw refuse(`Unsupported file name in the composition document (${rel})`);
+      if (excludeTests && rel.endsWith('.test.js')) continue;
       files.push({ rel, abs, size: info.size });
       bytes += info.size;
       if (files.length > DOCUMENT_MAX_FILES || bytes > DOCUMENT_MAX_BYTES) {
@@ -143,8 +151,39 @@ function storeVersion(projectId, files, source, options = {}) {
   return serializeProject(projectId, () => storeVersionNow(projectId, files, source, options));
 }
 
-async function storeVersionNow(projectId, files, source, { draft = false, verifyCurrent = () => {} } = {}) {
-  assertDocumentShape(files.map((file) => file.rel));
+/**
+ * A layered page from before #10583 loads the engine through the template's own
+ * tag; it gains the lyric-type stylesheet and module in front of that tag. A page
+ * that already names lyricType, or loads its engine some other way, is unchanged.
+ */
+function withLyricTypeTags(page) {
+  if (!page.includes(LAYERED_ENGINE_TAG) || LYRIC_TYPE_REF.test(page)) return page;
+  return page.replace(LAYERED_ENGINE_TAG, () => LYRIC_TYPE_TAGS + LAYERED_ENGINE_TAG);
+}
+
+/**
+ * A document that references the shared lyric-type module (lyricType.js / .css)
+ * without shipping it gets PortOS's copy and its faces added at its root, so an
+ * uploaded document never renders without its type. Files the document ships
+ * itself (its own lyricType.js, its own fonts) are kept as they are.
+ */
+async function withSharedLyricType(files) {
+  const rels = new Set(files.map((file) => file.rel));
+  let referenced = false;
+  for (const file of files) {
+    if (!/\.(?:html?|m?js|css)$/i.test(file.rel) || (file.size ?? file.data?.length ?? 0) > LYRIC_TYPE_SCAN_MAX) continue;
+    const text = file.data ? file.data.toString('utf8') : await readFile(file.abs, 'utf8');
+    if (LYRIC_TYPE_REF.test(text)) { referenced = true; break; }
+  }
+  if (!referenced) return files;
+  const { files: shared } = await collectTree(SHARED_ROOT, { excludeTests: true });
+  const missing = shared.filter((file) => !rels.has(file.rel));
+  return missing.length ? [...files, ...missing] : files;
+}
+
+async function storeVersionNow(projectId, inputFiles, source, { draft = false, verifyCurrent = () => {} } = {}) {
+  assertDocumentShape(inputFiles.map((file) => file.rel));
+  const files = await withSharedLyricType(inputFiles);
   const initial = await getProject(projectId);
   await assertDocumentMediaPolicy(initial, files);
   if (!initial) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
@@ -287,14 +326,14 @@ export async function importDocumentDirectory(projectId, directory) {
 /** Copy a shipped template (documentTemplates/<id>) into the project. */
 export async function importDocumentTemplate(projectId, templateId = 'layered') {
   if (!MUSIC_VIDEO_DOCUMENT_TEMPLATES.includes(templateId)) throw refuse('Unknown composition template', 'VALIDATION_ERROR', 400);
-  const { files } = await collectTree(join(TEMPLATE_ROOT, templateId));
+  const { files } = await collectTree(join(TEMPLATE_ROOT, templateId), { excludeTests: true });
   return storeVersion(projectId, files, { kind: 'template', name: templateId });
 }
 
 /** Stage a host-assembled generated document for review before selection. */
 export async function stageGeneratedDocument(projectId, generatedFiles, { verifyCurrent, renderer = 'canvas' } = {}) {
   if (renderer === 'three') {
-    const { files } = await collectTree(join(TEMPLATE_ROOT, 'spatial'));
+    const { files } = await collectTree(join(TEMPLATE_ROOT, 'spatial'), { excludeTests: true });
     const fonts = await collectTree(join(TEMPLATE_ROOT, 'layered', 'fonts'));
     const require = createRequire(import.meta.url);
     const packageRoot = dirname(dirname(require.resolve('three')));
@@ -310,7 +349,7 @@ export async function stageGeneratedDocument(projectId, generatedFiles, { verify
       { rel: 'dependencies.json', data: Buffer.from(JSON.stringify({ packages: [{ name: 'three', version: pkg.version, files: dependencies }], network: false })) });
     return storeVersion(projectId, files, { kind: 'generated', name: 'Authored Three.js world' }, { draft: true, verifyCurrent });
   }
-  const { files } = await collectTree(join(TEMPLATE_ROOT, 'layered'));
+  const { files } = await collectTree(join(TEMPLATE_ROOT, 'layered'), { excludeTests: true });
   const index = await readFile(join(TEMPLATE_ROOT, 'layered', 'index.html'), 'utf8');
   const marker = '<script src="engine.js"></script>';
   if (!index.includes(marker)) throw new Error('Layered template has no engine script');
@@ -323,18 +362,22 @@ export async function stageGeneratedDocument(projectId, generatedFiles, { verify
 // Known compatible shipped layered engines. Recognition only;
 // customized engines belong to the author and are never silently replaced.
 const UPGRADABLE_LAYERED_ENGINES = new Set([
+  'dc27611ebaa429c28bd467b003495d2a1c7dc0ede73be0cfc28db4b97c964dcf',
   '2556a0905a85958b9107cfa75ab0c5bfde167a708e29b511d577065bb530ea58',
   'e2267a068c92a3c7dee49db5f3e57caff1ac11aee1312c0d82e28352850aad3b',
   '23842766a818fd9820d79ff229eab538cc0edf391992756cbfd14434d525c019',
   '5f69f39cfbdbf0531c23250d01773447529a5254271b0b77f40d029d02bb0e1f',
-  // #10565's engine, before cameraRig.js; an upgraded copy without the rig script keeps a slow push.
-  'dc27611ebaa429c28bd467b003495d2a1c7dc0ede73be0cfc28db4b97c964dcf',
+  // #10583's engine (shared lyricType.js), before cameraRig.js (#10589); an upgraded
+  // copy without the rig script keeps a slow push.
+  '02ca75c17c58eec1bb37463fdd187a133d8c10499bb2b6556c793af8d63b93e8',
 ]);
 const engineDigest = bytes => createHash('sha256').update(bytes.toString('utf8').replace(/\r\n?/g, '\n')).digest('hex');
 
 /**
  * Explicitly adopt the shipped layered engine in a new immutable document.
- * All authored scripts, HTML, fonts and assets retain their exact bytes. The
+ * All authored scripts, HTML, fonts and assets retain their exact bytes, except
+ * that a template-shaped index.html gains the shared lyric-type tags the shipped
+ * engine needs (see below). The
  * new pointer invalidates revision-bound render/review evidence naturally.
  */
 export function upgradeDocumentEngine(projectId, directory) {
@@ -361,6 +404,12 @@ export function upgradeDocumentEngine(projectId, directory) {
     const loaded = await Promise.all(files.map(async file => ({
       rel: file.rel, data: file.rel === 'engine.js' ? shipped : await readFile(file.abs),
     })));
+    // The shipped engine draws its words with the shared lyricType.js (#10583). A page that
+    // loads the engine through the template's own tag gets the module's two tags in front
+    // of it (storeVersionNow adds the module and its faces); a page that doesn't is the
+    // author's and is left alone.
+    const index = loaded.find(file => file.rel === 'index.html');
+    if (index) index.data = Buffer.from(withLyricTypeTags(index.data.toString('utf8')));
     const result = await storeVersionNow(projectId, loaded, project.composition.document.source || { kind: 'directory', name: null }, { verifyCurrent });
     return { ...result, changed: true };
   });

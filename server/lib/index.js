@@ -804,6 +804,7 @@ export * from './databaseRestoreRecovery.js';
 export * from './databaseWriterRegistry.js';
 
 export * from './musicVideoCreativeContext.js';
+export * from './musicVideoCharacterStyles.js';
 export * from './moodBoardStyleContext.js';
 export * from './musicVideoAutomation.js';
 export * from './musicVideoAutonomous.js';

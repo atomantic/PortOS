@@ -11,6 +11,7 @@ import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
  *
  *   portos-mv.js  `window.PORTOS_MV = { project, render, song, lyrics, lyricMarkers,
  *                  scenes, textCues, composition }` — read with a plain <script>,
+ *                  (scenes carry textZone/lyricRole for the shared lyricType.js),
  *                  no fetch (the sandbox refuses network).
  *   song.json     the same song block the code-rendered mode reads.
  *   media/        each scene's SELECTED take (video preferred, else its still)
@@ -33,7 +34,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { htmlCompositionContractSchemaFor } from '../../lib/validation.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
-import { documentSceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { documentSceneVisualLayer, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_TEXT_ZONES } from '../../lib/musicVideoLayers.js';
 import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 import { documentDirectoryForRender } from './compositionDocument.js';
 import { musicVideoSongDocument } from './compositionRender.js';
@@ -177,6 +178,8 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         ...(typeof scene.camera?.move === 'string' ? { camera: structuredClone(scene.camera) } : {}),
         cardText: typeof scene.cardText === 'string' ? scene.cardText : null,
         cardColor: typeof scene.cardColor === 'string' ? scene.cardColor : null,
+        textZone: MUSIC_VIDEO_TEXT_ZONES.includes(scene.textZone) ? scene.textZone : null,
+        lyricRole: MUSIC_VIDEO_LYRIC_ROLES.includes(scene.lyricRole) ? scene.lyricRole : null,
         lyricText: typeof scene.lyricText === 'string' ? scene.lyricText : null,
         visualIntent: typeof scene.visualIntent === 'string' ? scene.visualIntent : null,
         direction: sceneDirection(project, scene.sceneId),

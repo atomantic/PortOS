@@ -770,6 +770,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/creative-director` | Creative Director projects |
 | `/api/fableloom` | FableLoom interactive story generation |
 | `/api/music-video` | Music video projects; [one-prompt autonomous runs](./features/music-video-autonomous.md) at `/api/music-video/autonomous` |
+| `/api/music-video/character-styles` | Built-in character styles a project loads via `concept.characterStyleId`: list with each style's sheet prompt and this install's sheet (`GET /`), full style (`GET /:id`), set or clear the install's character sheet (`PUT /:id/reference` `{ imageId }`) |
 | `/api/mood-boards` | Mood boards |
 | `/api/decks` | Decks (playing-card / tarot designer) |
 | `/api/writers-room` | Writers Room |

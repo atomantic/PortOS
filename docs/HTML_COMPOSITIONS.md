@@ -297,7 +297,7 @@ snapshot freezes (`server/services/musicVideo/documentRender.js`):
   { width, height, fps, frames, durationSec }, song: { durationSec, bpm, beats,
   downbeats, sections, words }, lyrics, lyricMarkers, scenes: [{ sceneId,
   label, startSec, endSec, shotMode, visualLayer, stillMove, cardText,
-  cardColor, lyricText, direction, media: { kind, src, inSec, outSec, fps,
+  cardColor, textZone, lyricRole, lyricText, direction, media: { kind, src, inSec, outSec, fps,
   width, height } | null }], textCues, composition: { mode, style, posterSec,
   overlay } }`. Load it with `<script src="portos-mv.js">`; the sandbox
   refuses `fetch`.
@@ -336,14 +336,52 @@ of the source frame so a frame boundary can never round to the previous one.
 
 The shipped `layered` template (`server/services/musicVideo/documentTemplates/layered/`)
 draws each scene's take with a gentle camera move and beat punch-ins, film
-grain and a vignette, a title card for card scenes, subtitles (the subtitle
-text cues, else the timed lyrics), kinetic hero words for cues flagged
-`hero`, and an optional HUD from `composition.overlay` (title lines, a meter
-with keyframes, a ticker, timecode). It declares all three frame sizes. Its
-fonts (IBM Plex Mono, IBM Plex Sans Condensed, Big Shoulders Stencil
-Display) are SIL Open Font License; the licenses ship beside them. Once
-copied into a project the files are the project's to edit — project-specific
-cards belong there, not in the template.
+grain and a vignette, a title card for card scenes, kinetic lyric type (the
+subtitle text cues, else the timed lyrics, plus hook slams for cues flagged
+`hero`) through the shared lyric-type module below, and an optional HUD from
+`composition.overlay` (title lines, a meter with keyframes, a ticker,
+timecode). It declares all three frame sizes. Its fonts (IBM Plex Mono, IBM
+Plex Sans Condensed, Big Shoulders Stencil Display, Archivo) are SIL Open Font
+License; the licenses ship beside them. Once copied into a project the files
+are the project's to edit — project-specific cards belong there, not in the
+template.
+
+### Shared kinetic lyric type (`lyricType.js`)
+
+Any composition document can draw its sung words with one consistent look
+instead of writing its own type engine
+(`server/services/musicVideo/documentTemplates/shared/`):
+
+```js
+import { createLyricType } from './lyricType.js';
+const lyricType = createLyricType(window.PORTOS_MV);
+await lyricType.ready;
+// each frame, after the picture:
+lyricType.draw(ctx, t, { width, height });
+```
+
+Link `lyricType.css` from the page for the bundled faces (Archivo variable
+widths and IBM Plex Mono, OFL licences in `fonts/`). When a stored document
+references `lyricType.js` or `lyricType.css` without shipping them, PortOS adds
+its copies and the faces at the document root; a document's own copy is kept.
+
+Lines come from `PORTOS_MV.lyrics` with their aligned word times (or
+`options.lines`), and every timing is read from the song data. Each line gets
+one of four roles: `line` (default sung line: words rise and fade in on their
+onsets, the line drifts up and fades 0.3s after its last word), `hook` (wide
+caps centred in the zone, each word slams in on its onset, one outline-only
+accent word with ink beneath its light outline, cut on the next beat),
+`stamp` (a three-frame stamp with a small tilt, optional strike-through) and `data` (mono HUD caption whose numbers roll;
+at most one per shot). A per-line override or the line's own `role` wins,
+then the shot's `lyricRole`, then the lyric sheet: the line's `lyricMarkers`
+delivery direction (spoken/shouted lines stamp), else its section header
+(choruses, hooks, refrains and drops are hooks), else `line`. Each shot's `textZone` (`lower-left`, `upper-right`,
+centred `upper` / `lower`, `center`, or `none` to keep the shot clear) places
+the words so they never cover the subject. A line never shows before its first word onset, stays at
+least 0.8s, and sung type stays at least 56px at 1080p. Palette tokens
+(`fill`, `ink`, `accent`, `strike`), fonts and an optional ink-boil jitter are
+options. Upgrading a pre-module layered engine adds the module's two tags in
+front of the template's engine tag.
 
 The in-app preview is a self-contained `srcdoc` in an opaque-origin sandbox
 with no network: the server inlines the document's scripts, stylesheets and

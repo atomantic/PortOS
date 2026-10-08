@@ -486,9 +486,9 @@ export default function BeeperChatSurface({
   // LOCAL "seen in PortOS" watermark (#83): fire the mark-seen POST and clear
   // the row's own badge immediately (optimistic), rather than waiting on the
   // next list/networks refetch to reflect it. NEVER touches Beeper — the POST
-  // is a local `seen_at` stamp, not a read receipt (see the TODO on
-  // `markConversationSeen` server-side for the deferred toggle that would add
-  // one). The call is fire-and-forget: a failure just means the badge is
+  // is a local `seen_at` stamp, not a read receipt. A settings toggle to also
+  // send a read receipt is unbuilt and out of scope here. The call is
+  // fire-and-forget: a failure just means the badge is
   // whatever Beeper's own `unread_count` says until the next successful call,
   // which is the same "eventually correct" posture every other mirror read
   // here already has.

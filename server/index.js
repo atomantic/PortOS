@@ -146,6 +146,7 @@ import creativeCommissionRoutes from './routes/creativeCommissions.js';
 import gamesRoutes from './routes/games.js';
 import fableLoomRoutes from './routes/fableLoom.js';
 import musicVideoRoutes from './routes/musicVideo.js';
+import musicVideoCharacterStyleRoutes from './routes/musicVideoCharacterStyles.js';
 import humanActionRoutes from './routes/humanActions.js';
 import spriteRoutes from './routes/sprites.js';
 import moodBoardRoutes from './routes/moodBoard.js';
@@ -443,6 +444,8 @@ app.use('/api/creative-director', creativeDirectorRoutes);
 app.use('/api/creative-commission', creativeCommissionRoutes);
 app.use('/api/games', gamesRoutes);
 app.use('/api/fableloom', fableLoomRoutes);
+// Before the project router so `/character-styles` is not read as a project id.
+app.use('/api/music-video/character-styles', musicVideoCharacterStyleRoutes);
 app.use('/api/music-video', musicVideoRoutes);
 app.use('/api/sprites', spriteRoutes);
 app.use('/api/mood-boards', moodBoardRoutes);

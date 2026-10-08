@@ -106,8 +106,7 @@ export const beeperDdl = [
   // reach the rail aggregates or a second device. NULL means "never opened in
   // PortOS", which reads as unread whenever Beeper's own `unread_count` says
   // so. This NEVER writes to Beeper — no read receipt crosses the wire; a
-  // settings toggle to also send one is out of scope here (see the TODO on
-  // `markConversationSeen`).
+  // settings toggle to also send one is unbuilt and out of scope here.
   `ALTER TABLE beeper_conversations ADD COLUMN IF NOT EXISTS seen_at TIMESTAMPTZ`,
   // Beeper owns snooze state. NULL also covers older Desktop API versions.
   `ALTER TABLE beeper_conversations ADD COLUMN IF NOT EXISTS snooze_until TIMESTAMPTZ`,

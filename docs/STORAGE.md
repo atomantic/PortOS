@@ -930,3 +930,22 @@ pointers, so edits replace staged work. Successful document publication removes
 the checkpoint. It is regenerable runtime state rather than searchable project
 metadata, never federates, and the existing anchored `/cache/` backup exclusion
 covers it. An absent checkpoint starts empty; no seed or migration is required.
+
+### On-demand preparation handoffs
+
+`data/cos/task-schedule.json` also holds `onDemandHandoffs`, keyed by request ID,
+for asynchronous quota-burn and maintenance task preparation. Moving a request
+out of `onDemandRequests` and recording its `preparing` owner/token happen in the
+same schedule write queue. The exact owner records accepted task ID or refusal;
+these receipts are durable control state, not disposable preflight UI telemetry.
+Existing schedules need no migration; an absent map means no recorded handoffs.
+
+An owner nonce fences settlement; a recorded owner PID must be proven absent
+(`ESRCH`) before drain and maintenance/quota reconciliation settle a claim
+against persisted request-stamped tasks; missing tasks become `interrupted`,
+never automatically requeued. Unreadable task storage leaves the claim untouched.
+Live/reused PIDs, missing identities and ambiguous probe errors remain held.
+No age-based expiration is used. Refused/interrupted maintenance work stops until
+explicit resume acknowledges the outcome. A legacy Deep queued request with no
+queue, task, or receipt likewise stops for explicit resume. Repeating resume on
+an already-running maintenance run does not dispatch or re-evaluate it.

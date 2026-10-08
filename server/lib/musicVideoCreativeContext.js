@@ -8,6 +8,10 @@ const BIBLE_HEADER = 'Production bible (use the subjects relevant to this shot; 
 // street or a bathroom), so it is labelled look-only wherever it is included.
 export const MOOD_BOARD_LOOK_LABEL = 'Mood board look (palette, lighting and texture only; never its locations, objects or poses)';
 
+// A shot needs the character's identity, look, rules and never-list; the
+// wardrobe catalogue is for Cast & Sets, which reads the full snapshot.
+const characterStyleForShots = (snapshot) => snapshot.split('\n').filter((line) => !line.startsWith('Wardrobe options:')).join('\n');
+
 /**
  * Shared, bounded creative bible for planning, media generation and handoff.
  * `moodBoard: false` leaves the mood-board look out — a motion prompt is
@@ -17,6 +21,7 @@ export const MOOD_BOARD_LOOK_LABEL = 'Mood board look (palette, lighting and tex
 export function musicVideoCreativeContext(concept, { moodBoard = true } = {}) {
   if (!concept) return '';
   const styles = [
+    concept.characterStyle && `Character style (fixed identity; use the identity text verbatim): ${trimTo(characterStyleForShots(concept.characterStyle), 1900)}`,
     concept.universeStyle && `Universe style: ${trimTo(concept.universeStyle, 800)}`,
     moodBoard && concept.moodBoardStyle && `${MOOD_BOARD_LOOK_LABEL}: ${trimTo(concept.moodBoardStyle, 800)}`,
   ].filter(Boolean);

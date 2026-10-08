@@ -2,8 +2,10 @@
  *
  * Every frame is a pure function of song time t: portosComposition.seek(t)
  * draws the scene under t (its selected take, moved by cameraRig.js — the
- * scene's planned camera move or a gentle default — with a beat punch-in), film grain and a vignette, an optional HUD, and the words
- * (subtitle lyrics, or kinetic hero words for text cues flagged "hero").
+ * scene's planned camera move or a gentle default — with a beat punch-in),
+ * film grain and a vignette, an optional HUD, and the words (kinetic lyric
+ * type from the shared lyricType.js: sung lines, and hook slams for text cues
+ * flagged "hero").
  *
  * Data: window.PORTOS_MV, written by PortOS as portos-mv.js at render time —
  * { project, render, song, lyrics, lyricMarkers, scenes, textCues, composition }.
@@ -277,94 +279,46 @@
   function text(str, x, y, font, color, align = 'left') {
     ctx.font = font; ctx.fillStyle = color; ctx.textAlign = align; ctx.textBaseline = 'alphabetic'; ctx.fillText(str, x, y);
   }
-  function wrap(words, maxW, measure) {
-    const lines = [[]]; let width = 0;
-    for (const w of words) {
-      const ww = measure(w);
-      if (width + ww > maxW && lines[lines.length - 1].length) { lines.push([]); width = 0; }
-      lines[lines.length - 1].push(w); width += ww;
-    }
-    return lines;
-  }
 
   // ---------- words ----------
-  const norm = (s) => String(s).toLowerCase().replace(/[’]/g, "'").replace(/[^a-z0-9']/g, '');
-  const songWords = (MV.song?.words || []).filter((w) => Number.isFinite(w?.startSec));
-  // Kinetic hero words for a text cue: each word lands on its sung time when
-  // the aligned lyric words match, else spread across the cue.
-  function heroWordsFor(cue) {
-    const tokens = String(cue.text).split(/\s+/).filter(Boolean);
-    const pool = songWords.filter((w) => w.startSec >= cue.startSec - 0.35 && w.startSec <= cue.endSec + 0.2);
-    const out = []; let j = 0;
-    for (const token of tokens) {
-      const key = norm(token);
-      let hit = null;
-      for (let k = j; k < pool.length; k++) {
-        const p = norm(pool[k].w);
-        if (p === key || (key.length > 3 && p.startsWith(key.slice(0, 4)))) { hit = pool[k]; j = k + 1; break; }
-      }
-      out.push({ w: token.toUpperCase(), t0: hit ? hit.startSec : null });
-    }
-    if (out.some((w) => w.t0 == null)) {
-      const span = Math.max(0.2, (cue.endSec - cue.startSec) * 0.8);
-      out.forEach((w, i) => { w.t0 = cue.startSec + (i * span) / Math.max(1, out.length); });
-    }
-    return out;
-  }
+  // The words are drawn by the shared PortOS lyric-type module (lyricType.js, loaded
+  // beside this page): hero text cues are `hook` lines, the director's subtitle cues
+  // (else the lyrics, with their sheet's roles) are sung `line`s. Each shot's
+  // textZone keeps the type off the subject.
   const CUES = (MV.textCues || []).filter((c) => Number.isFinite(c.startSec) && Number.isFinite(c.endSec) && c.endSec > c.startSec);
-  const HERO = CUES.filter((c) => c.emphasis === 'hero').map((c) => ({ ...c, words: heroWordsFor(c) }));
-  const SUBTITLE_CUES = CUES.filter((c) => c.emphasis !== 'hero');
-  // Subtitles: the director's subtitle cues when there are any, else the lyrics.
-  const SUBTITLES = (SUBTITLE_CUES.length ? SUBTITLE_CUES : (MV.lyrics || []))
-    .filter((l) => l?.text && Number.isFinite(l.startSec))
-    .map((l) => ({ text: l.text, startSec: l.startSec, endSec: Number.isFinite(l.endSec) ? l.endSec : l.startSec + 2.5 }));
-
-  function heroWords(t, cue) {
-    const shown = cue.words.filter((w) => t >= w.t0 - 0.02);
-    if (!shown.length) return;
-    const maxW = W - 180 * U;
-    let px = Math.round((W > H ? 150 : 120) * U);
-    ctx.font = F.stencil(px);
-    const measure = (w) => ctx.measureText(`${w.w} `).width;
-    let lines = wrap(cue.words, maxW, measure);
-    while (lines.length > 3 && px > 40) { px = Math.round(px * 0.88); ctx.font = F.stencil(px); lines = wrap(cue.words, maxW, measure); }
-    const lineH = px * 0.92;
-    const baseY = cue.placement === 'upper' ? 220 * U + lineH : cue.placement === 'center' ? H / 2 + lineH / 2 : H - 150 * U;
-    const topY = baseY - (lines.length - 1) * lineH;
-    const out = seg(t, cue.endSec - 0.12, cue.endSec);
-    lines.forEach((line, li) => {
-      let x = W > H ? 96 * U : (W - line.reduce((s, w) => s + measure(w), 0)) / 2;
-      for (const w of line) {
-        const ww = measure(w);
-        if (t >= w.t0 - 0.02) {
-          const k = seg(t, w.t0 - 0.02, w.t0 + 0.09);
-          const sc = lerp(1.35, 1, easeOut(k));
-          ctx.save(); ctx.globalAlpha = 1 - out;
-          ctx.translate(x, topY + li * lineH); ctx.scale(sc, sc);
-          ctx.font = F.stencil(px); ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-          if (k < 1) { ctx.fillStyle = C.accent; ctx.fillText(w.w, 6 * U, 0); }
-          ctx.fillStyle = C.paper; ctx.fillText(w.w, 0, 0);
-          ctx.restore();
-        }
-        x += ww;
-      }
-    });
+  const ZONE_OF_PLACEMENT = { upper: 'upper', center: 'center', lower: 'lower' };
+  const HERO_LINES = CUES.filter((c) => c.emphasis === 'hero')
+    .map((c) => ({ text: c.text, startSec: c.startSec, endSec: c.endSec, role: 'hook', zone: ZONE_OF_PLACEMENT[c.placement] || null }));
+  const SUBTITLE_CUES = CUES.filter((c) => c.emphasis !== 'hero')
+    .map((c) => ({ text: c.text, startSec: c.startSec, endSec: c.endSec, role: 'line' }));
+  let lyricType = null;
+  // lyricType.js is a module, so it runs after this classic script; it publishes
+  // itself on globalThis before DOMContentLoaded.
+  const lyricTypeModule = () => new Promise((resolve, reject) => {
+    const check = () => (globalThis.PORTOS_LYRIC_TYPE ? resolve(globalThis.PORTOS_LYRIC_TYPE)
+      : reject(new Error('lyricType.js did not load — the layered template needs it beside index.html')));
+    if (globalThis.PORTOS_LYRIC_TYPE || document.readyState !== 'loading') check();
+    else document.addEventListener('DOMContentLoaded', check, { once: true });
+  });
+  async function buildLyricType() {
+    const { createLyricType } = await lyricTypeModule();
+    const words = { palette: { fill: C.paper, ink: C.ink, accent: C.accent, strike: C.alert } };
+    // Subtitles: the director's subtitle cues when there are any, else the lyrics.
+    const lines = SUBTITLE_CUES.length ? [...HERO_LINES, ...SUBTITLE_CUES] : null;
+    lyricType = lines ? createLyricType(MV, { ...words, lines })
+      : HERO_LINES.length ? mergeLyricTypes(createLyricType(MV, { ...words, lines: HERO_LINES }), createLyricType(MV, words))
+        : createLyricType(MV, words);
+    await lyricType.ready;
   }
-  function subtitle(t, line) {
-    const a = Math.min(seg(t, line.startSec, line.startSec + 0.08), 1 - seg(t, line.endSec - 0.08, line.endSec));
-    if (a <= 0) return;
-    const px = Math.round(44 * U);
-    ctx.save(); ctx.globalAlpha = a; ctx.font = F.cond(px, 500);
-    const lines = wrap(line.text.split(/\s+/), W - 240 * U, (w) => ctx.measureText(`${w} `).width).map((l) => l.join(' '));
-    const lineH = px * 1.3;
-    const bottom = H - (W > H ? 150 : 260) * U;
-    lines.forEach((str, i) => {
-      const y = bottom - (lines.length - 1 - i) * lineH;
-      const w = ctx.measureText(str).width;
-      ctx.fillStyle = 'rgba(7,9,10,.55)'; ctx.fillRect(W / 2 - w / 2 - 18 * U, y - px, w + 36 * U, px * 1.35);
-      text(str, W / 2, y, F.cond(px, 500), C.paper, 'center');
-    });
-    ctx.restore();
+  // Hero cues over the sung lyrics: a visible hook takes the frame.
+  function mergeLyricTypes(hooks, sung) {
+    return {
+      ready: Promise.all([hooks.ready, sung.ready]),
+      draw(target, t, size) {
+        if (hooks.linesAt(t).length) hooks.draw(target, t, size);
+        else sung.draw(target, t, size);
+      },
+    };
   }
 
   // ---------- HUD (composition.overlay) ----------
@@ -580,12 +534,7 @@
     grain(t, 0.09);
     drawHud(t);
     drawNarrativeEvents(state);
-    const hero = HERO.find((c) => t >= c.startSec && t < c.endSec);
-    if (hero) heroWords(t, hero);
-    else {
-      const line = SUBTITLES.find((l) => t >= l.startSec && t < l.endSec);
-      if (line) subtitle(t, line);
-    }
+    if (lyricType) lyricType.draw(ctx, t, { width: W, height: H });
     footageVisibility = before ? { sceneId: scene.sceneId, ...compareFootagePixels(before, footagePixels(), 160, 96) } : null;
   }
 
@@ -593,6 +542,7 @@
   const ready = (async () => {
     if (window.PORTOS_MV_ASSETS) assetUrls = await window.PORTOS_MV_ASSETS;
     await Promise.all([F.stencil(40), F.mono(20), F.mono(20, 600), F.cond(20), F.cond(20, 700)].map((font) => document.fonts.load(font)));
+    await buildLyricType();
     buildGrain();
   })();
   globalThis.portosComposition = {

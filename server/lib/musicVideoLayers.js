@@ -22,6 +22,16 @@ export const isSelfDrawnLayer = (layer) => layer === 'card' || layer === 'code';
 export const MUSIC_VIDEO_STILL_MOVES = ['hold', 'push', 'pan'];
 
 /**
+ * Kinetic lyric type per shot (#10583), read by the shared lyricType.js document
+ * module: `textZone` is where the shot's words may sit so they never cover the
+ * subject (`none` keeps the shot clear), and `lyricRole` overrides the role of the
+ * lines sung over it. Both are optional; a shot without them takes the sheet's roles
+ * and the module's default zone.
+ */
+export const MUSIC_VIDEO_TEXT_ZONES = ['lower-left', 'upper-right', 'upper', 'lower', 'center', 'none'];
+export const MUSIC_VIDEO_LYRIC_ROLES = ['line', 'hook', 'stamp', 'data'];
+
+/**
  * Whether a composition honours per-scene layers: a composed render cuts
  * stills and cards itself, and a composition document (mode `document`) is
  * handed each scene's layer in `window.PORTOS_MV` and draws still/card/code

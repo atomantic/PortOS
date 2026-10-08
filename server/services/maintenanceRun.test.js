@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({ tasks: [], requests: [], invoked: [], dispatch
 // verdict so these cases pin only the run's reaction to it.
 vi.mock('./cosState.js', () => ({ loadState: vi.fn(async () => ({ agents: {} })) }));
 vi.mock('./cosTaskStore.js', () => ({ getAllTasks: vi.fn(async () => ({ cos: { tasks: state.tasks }, user: { tasks: [] } })) }));
+vi.mock('./onDemandHandoff.js', () => ({ getOnDemandHandoffs: vi.fn(async () => ({})) }));
 vi.mock('./taskSchedule.js', () => ({ getOnDemandRequests: vi.fn(async () => state.requests) }));
 vi.mock('./apps.js', () => ({ getAppById: vi.fn(async (id) => (id === 'app-1' ? { id, name: 'Example App' } : null)) }));
 // The registry a run's provider gate resolves against. `opencode-tui` belongs to
@@ -492,4 +493,54 @@ it('Deep successful delivery alone never certifies discovery and deep proof alon
   agent.result.deepAudit = { complete: true, discoveryComplete: true, deliveryComplete: true };
   await __onMaintenanceAgentCompleted(agent);
   expect((await getMaintenanceRun(run.id)).completed).toEqual({});
+});
+
+
+it('makes concurrent and repeated resume calls idempotent while a request is preparing', async () => {
+  const { run } = await start();
+  await stopMaintenanceRun(run.id);
+  const before = state.invoked.length;
+  const results = await Promise.all([resumeMaintenanceRun(run.id), resumeMaintenanceRun(run.id)]);
+  expect(results.filter(result => result.result.dispatched)).toHaveLength(1);
+  expect(state.invoked).toHaveLength(before + 1);
+  expect((await resumeMaintenanceRun(run.id)).result.dispatched).toBe(false);
+  expect(state.invoked).toHaveLength(before + 1);
+});
+
+it('holds the scheduler during durable preparation, then stops on refusal until explicit resume', async () => {
+  const { getOnDemandHandoffs } = await import('./onDemandHandoff.js');
+  const { run } = await start();
+  const claim = { request: { id: run.active.requestId, burn: { maintenanceRunId: run.id } }, claimedAt: new Date().toISOString(), status: 'preparing' };
+  getOnDemandHandoffs.mockResolvedValue({ [claim.request.id]: claim });
+  const before = state.invoked.length;
+  expect((await evaluateMaintenanceRun(run.id)).dispatched).toBe(false);
+  expect(state.invoked).toHaveLength(before);
+  await stopMaintenanceRun(run.id);
+  expect((await resumeMaintenanceRun(run.id)).result.dispatched).toBe(false);
+  claim.status = 'interrupted'; claim.reason = 'Server restarted during preparation; resume explicitly.';
+  await evaluateMaintenanceRun(run.id);
+  expect((await getMaintenanceRun(run.id)).status).toBe('stopped');
+  await __retryMaintenanceRuns();
+  expect(state.invoked).toHaveLength(before);
+  expect((await resumeMaintenanceRun(run.id)).result.dispatched).toBe(true);
+  expect(state.invoked).toHaveLength(before + 1);
+  getOnDemandHandoffs.mockResolvedValue({});
+});
+
+
+it('acknowledges the exact active request when refusal timestamps tie', async () => {
+  const { getOnDemandHandoffs } = await import('./onDemandHandoff.js');
+  const { run } = await start();
+  const claimedAt = new Date().toISOString();
+  const makeReceipt = (id, reason) => ({ request: { id, burn: { maintenanceRunId: run.id } }, claimedAt, status: 'refused', reason });
+  getOnDemandHandoffs.mockResolvedValue({
+    'older-request': makeReceipt('older-request', 'Older refusal'),
+    [run.active.requestId]: makeReceipt(run.active.requestId, 'Active refusal'),
+  });
+  await evaluateMaintenanceRun(run.id);
+  expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'stopped', reason: 'Active refusal' });
+  const resumed = await resumeMaintenanceRun(run.id);
+  expect(resumed.run.acknowledgedRequestId).toBe(run.active.requestId);
+  expect(resumed.result.dispatched).toBe(true);
+  getOnDemandHandoffs.mockResolvedValue({});
 });
