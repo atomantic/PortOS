@@ -1000,7 +1000,7 @@ curl -X POST http://localhost:5555/api/runs \
 ### Get PM2 Process Logs
 
 ```bash
-curl http://localhost:5555/api/logs/portos-server?lines=50
+curl "http://localhost:5555/api/logs/portos-server?lines=50"
 ```
 
 ## Error Responses
