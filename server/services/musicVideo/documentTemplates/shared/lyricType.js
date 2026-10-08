@@ -66,7 +66,7 @@ function lastAtOrBefore(sorted, t) {
 }
 
 /** The role a section kind or label implies (`hook` for choruses, else null). */
-export function roleForSection(kindOrLabel) {
+function roleForSection(kindOrLabel) {
   if (!kindOrLabel) return null;
   const value = String(kindOrLabel).trim().toLowerCase();
   if (HOOK_SECTIONS.has(value)) return 'hook';
@@ -87,7 +87,7 @@ export function roleForSection(kindOrLabel) {
  * in (lyricMarkers section headers, else the timed song section's label), else
  * `line`. A role that is not one of LYRIC_ROLES is ignored.
  */
-export function resolveLineRoles(lines, { lyricMarkers = [], sections = [], overrides = {} } = {}) {
+function resolveLineRoles(lines, { lyricMarkers = [], sections = [], overrides = {} } = {}) {
   const valid = (role) => (LYRIC_ROLES.includes(role) ? role : null);
   const markers = (Array.isArray(lyricMarkers) ? lyricMarkers : []).filter((m) => m && Number.isInteger(m.line));
   const sectionMarkers = markers.filter((m) => m.type === 'section').sort((a, b) => a.line - b.line);
@@ -112,7 +112,7 @@ export function resolveLineRoles(lines, { lyricMarkers = [], sections = [], over
  * are; a line with one timing for several tokens is matched against the song's
  * aligned words in its window, else spread across the line's first 80%.
  */
-export function wordsForLine(line, songWords = []) {
+function wordsForLine(line, songWords = []) {
   const text = String(line?.text || '').trim();
   const tokens = text.split(/\s+/).filter(Boolean);
   const timed = (Array.isArray(line?.words) ? line.words : [])
@@ -151,7 +151,7 @@ export function wordsForLine(line, songWords = []) {
  * 0.3s after the last word ends (capped at the next line's onset); a `hook`
  * exits on the first beat at or after its last word, with no fade.
  */
-export function lineWindow(words, role, { beats = [], nextOnset = null, fps = 24, endSec = null } = {}) {
+function lineWindow(words, role, { beats = [], nextOnset = null, fps = 24, endSec = null } = {}) {
   const T = LYRIC_TIMING;
   const onset = words[0].startSec;
   const last = words[words.length - 1];
@@ -172,7 +172,7 @@ export function lineWindow(words, role, { beats = [], nextOnset = null, fps = 24
 }
 
 /** The pixel box a text zone allows on a width × height frame (null for `none`). */
-export function zoneRect(zone, width, height) {
+function zoneRect(zone, width, height) {
   const unit = Math.min(width, height) / 1080;
   const insetX = Math.max(72 * unit, width * 0.06);
   const insetY = Math.max(72 * unit, height * 0.07);

@@ -1,7 +1,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium } from 'playwright-core';
-import { createLyricType, resolveLineRoles, zoneRect } from './lyricType.js';
+import { createLyricType } from './lyricType.js';
+
+// zoneRect is the module's public text-zone geometry, reached through the global classic scripts use.
+const { zoneRect } = globalThis.PORTOS_LYRIC_TYPE;
+const roles = (mv, options) => createLyricType(mv, options).lines.map((l) => l.role);
 
 // A synthetic song: a verse line, a chorus line, a spoken direction, all word-timed.
 const words = (text, start, step = 0.3) => text.split(' ').map((w, i) => ({ text: w, startSec: start + i * step, endSec: start + i * step + 0.25 }));
@@ -31,10 +35,12 @@ const measure = (str, font) => str.length * Number(/(\d+)px/.exec(font)[1]) * 0.
 
 describe('lyricType roles', () => {
   it('takes roles from the lyric sheet: section headers, then a line\'s delivery direction, overrides first', () => {
-    expect(resolveLineRoles(MV.lyrics, { lyricMarkers: MV.lyricMarkers })).toEqual(['line', 'hook', 'stamp']);
-    expect(resolveLineRoles(MV.lyrics, { lyricMarkers: MV.lyricMarkers, overrides: { l1: 'data', 0: 'stamp' } })).toEqual(['stamp', 'data', 'stamp']);
+    const unzoned = { ...MV, scenes: [] };
+    expect(roles(unzoned)).toEqual(['line', 'hook', 'stamp']);
+    expect(roles(unzoned, { overrides: { l1: 'data', 0: 'stamp' } })).toEqual(['stamp', 'data', 'stamp']);
     // No sheet markers: the timed section label decides.
-    expect(resolveLineRoles(MV.lyrics, { sections: [{ label: 'Verse', startSec: 0 }, { label: 'Final Chorus', startSec: 4 }] })).toEqual(['line', 'hook', 'hook']);
+    const timed = { ...unzoned, lyricMarkers: [], song: { ...MV.song, sections: [{ label: 'Verse', startSec: 0 }, { label: 'Final Chorus', startSec: 4 }] } };
+    expect(roles(timed)).toEqual(['line', 'hook', 'hook']);
   });
 
   it('lets a shot override the role of the lines sung over it', () => {
