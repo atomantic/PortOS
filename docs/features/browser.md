@@ -75,7 +75,7 @@ Stored in `data/browser-config.json`:
 ```javascript
 import { chromium } from 'playwright';
 
-const browser = await chromium.connectOverCDP('ws://127.0.0.1:5556');
+const browser = await chromium.connectOverCDP('http://127.0.0.1:5556');
 const context = browser.contexts()[0];
 const page = await context.newPage();
 await page.goto('https://example.com');

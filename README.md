@@ -313,7 +313,7 @@ npm run setup
 npm start
 ```
 
-`npm run setup` (aliased as `npm run install:all`) initializes bundled submodules; installs the root, client, server, and Autofixer dependencies; runs the trusted native rebuilds; prepares runtime data; provisions PostgreSQL, local LLM tooling, and the headless browser; safely attempts a trusted Tailscale certificate; and prints an ordered setup walkthrough. `npm start` builds the client and starts the managed processes with PM2. Before HTTPS is ready, access PortOS locally at `http://localhost:5555`.
+`npm run setup` (aliased as `npm run install:all`) initializes bundled submodules; installs the root, client, server, and Autofixer dependencies; runs the trusted native rebuilds; prepares runtime data; provisions PostgreSQL, local LLM tooling, and the managed browser; safely attempts a trusted Tailscale certificate; and prints an ordered setup walkthrough. `npm start` builds the client and starts the managed processes with PM2. Before HTTPS is ready, access PortOS locally at `http://localhost:5555`.
 
 For a guided setup that also checks optional local media and command-line tooling, run `./setup.sh` instead. It prompts before starting PortOS; choose that option or run `npm start` afterward, not both.
 
