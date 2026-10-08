@@ -209,6 +209,15 @@ describe('commandOutput lifecycle (#10604)', () => {
     await expect(commandOutput('tool')).resolves.toBe('v1')
   })
 
+  // Real processes, POSIX only: the deadline must settle the probe on time, and
+  // escalation must reach everything in the probe's own process group.
+  const waitUntilGone = async (pid) => {
+    const alive = () => { try { process.kill(pid, 0); return true } catch { return false } }
+    const until = Date.now() + 5_000
+    while (alive() && Date.now() < until) await new Promise((r) => setTimeout(r, 50))
+    return !alive()
+  }
+
   it.skipIf(process.platform === 'win32')('a real child that ignores SIGTERM cannot hold the probe past its deadline', async () => {
     spawnMock.impl = null
     const script = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('alive')"
@@ -218,11 +227,29 @@ describe('commandOutput lifecycle (#10604)', () => {
 
     expect(Date.now() - started).toBeLessThan(2_000)
     expect(existsSync(lastSpawn().opts.env.TMPDIR)).toBe(false)
-    // The owned child is escalated to SIGKILL after the grace period.
-    const pid = lastSpawn().child?.pid
-    const alive = () => { try { process.kill(pid, 0); return true } catch { return false } }
-    const killDeadline = Date.now() + 5_000
-    while (alive() && Date.now() < killDeadline) await new Promise((r) => setTimeout(r, 50))
-    expect(alive()).toBe(false)
+    expect(await waitUntilGone(lastSpawn().child.pid)).toBe(true)
+  }, 10_000)
+
+  it.skipIf(process.platform === 'win32')('escalation reaches a descendant that ignores SIGTERM after its parent exits', async () => {
+    spawnMock.impl = null
+    const { mkdtempSync, readFileSync, rmSync } = await vi.importActual('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const dir = mkdtempSync(join(tmpdir(), 'probe-test-'))
+    const pidFile = join(dir, 'grandchild.pid')
+    const grandchild = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"
+    // The parent keeps the default SIGTERM behavior (exits); its child ignores it.
+    const parent = `const c = require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(grandchild)}], { stdio: 'ignore' });
+      require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(c.pid)); setInterval(() => {}, 1000)`
+
+    try {
+      await expect(commandOutput(process.execPath, ['-e', parent], { timeoutMs: 500 })).resolves.toBeNull()
+
+      const grandchildPid = Number(readFileSync(pidFile, 'utf8'))
+      expect(grandchildPid).toBeGreaterThan(0)
+      expect(await waitUntilGone(grandchildPid)).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   }, 10_000)
 })

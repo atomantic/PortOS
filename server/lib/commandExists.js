@@ -38,7 +38,7 @@ const PROBE_KILL_GRACE_MS = 2_000;
  * at once and terminates only the child it spawned: on Windows
  * `killProcessTree` takes the whole `cmd.exe` shim tree with `taskkill /T`;
  * on POSIX the child runs in its own process group (`detached`), which gets
- * SIGTERM and, if the child is still alive after a short grace, SIGKILL.
+ * SIGTERM and, after a short grace, SIGKILL for anything in it still alive.
  * Output past `maxBuffer` fails the probe the same way. Every event after the
  * result is fixed — a late `error`, `close` or chunk — is ignored, and a
  * failure to signal or to clean up never replaces the result.
@@ -125,8 +125,17 @@ function runProbe({ prepareCliSpawn, killProcessTree, IS_WIN32 }, cmd, args, pro
     const terminate = () => {
       signal('SIGTERM');
       if (IS_WIN32) return; // taskkill /T /F already force-killed the tree
+      if (!child.pid) return;
+      // Escalate on the GROUP, not the direct child's exit status: a CLI that
+      // exits on SIGTERM can leave a descendant that ignored it. The group id
+      // cannot be reused while any member lives, so ESRCH just means the whole
+      // group is already gone — never a different process.
       const escalation = setTimeout(() => {
-        if (child.exitCode === null && child.signalCode === null) signal('SIGKILL');
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          // ESRCH — every process in the group has exited.
+        }
       }, PROBE_KILL_GRACE_MS);
       escalation.unref?.();
     };
