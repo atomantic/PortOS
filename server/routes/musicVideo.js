@@ -159,6 +159,7 @@ import {
   importDocumentDirectory,
   importDocumentTemplate,
   importDocumentZip,
+  upgradeDocumentEngine,
   readDocumentManifest,
   resolveDocumentFile,
 } from '../services/musicVideo/compositionDocument.js';
@@ -796,6 +797,12 @@ router.post('/:id/composition/document/directory', asyncHandler(async (req, res)
 router.post('/:id/composition/document/template', asyncHandler(async (req, res) => {
   const { template } = validateRequest(musicVideoDocumentTemplateSchema, req.body || {});
   res.status(201).json(await importDocumentTemplate(req.params.id, template));
+}));
+
+// An explicit engine-only revision: no provider call or authored-code rewrite.
+router.post('/:id/composition/document/engine/upgrade', asyncHandler(async (req, res) => {
+  const { directory } = validateRequest(musicVideoDocumentCandidateSchema, req.body || {});
+  res.json(await upgradeDocumentEngine(req.params.id, directory));
 }));
 
 router.post('/:id/composition/document/generate', asyncHandler(async (req, res) => {
