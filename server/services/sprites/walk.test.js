@@ -1,3 +1,4 @@
+import { on } from 'node:events';
 import { spriteEvents } from './events.js';
 /**
  * Walk-animation workflow orchestration (#2897): generation gating on locked
@@ -524,36 +525,48 @@ describe('startWalkGeneration', () => {
     expect(executeTuiRun.mock.calls[0][0].prompt).not.toContain(`for ${duration} seconds`);
   });
 
-  it('stores the chosen frame count + fps on the run and passes them to the packer', async () => {
+  // Own completion through the persisted invalidation stream, not waitFor's
+  // one-second polling budget. Subscribe before releasing the fake TUI so a
+  // fast attachment cannot publish its terminal event before the test listens.
+  async function generateAndWaitForTerminal(id, options, signal, render) {
+    let release;
+    const released = new Promise(resolve => { release = resolve; });
+    executeTuiRun.mockImplementationOnce(async args => { await released; await render(args); });
+    const result = await startWalkGeneration(id, options);
+    const changes = on(spriteEvents, 'changed', { signal });
+    release();
+    try {
+      for await (const [{ recordId }] of changes) {
+        if (recordId !== id) continue;
+        const { runs } = await getWalkState(id);
+        const run = runs.find(entry => entry.id === result.runId);
+        if (run && ['candidate', 'error'].includes(run.status)) return { ...result, run };
+      }
+      throw new Error('Walk completion event stream ended before a terminal run');
+    } finally { await changes.return(); }
+  }
+
+  it('stores the chosen frame count + fps on the run and passes them to the packer', async ({ signal }) => {
     const id = await characterWithLockedAnchors(newId(), ['east']);
     // Frame count / fps are pinned at the SET level now (#2985) — a render must
     // agree with the target, so pin it first, then generate against it.
     await setWalkTarget(id, { frameCount: 14, fps: 8 });
-    executeTuiRun.mockImplementationOnce(async ({ workspacePath }) => {
+    const { runId, run } = await generateAndWaitForTerminal(id, { direction: 'east', frameCount: 14, fps: 8 }, signal, async ({ workspacePath }) => {
       await writeFile(join(workspacePath, 'source-video.mp4'), 'grok-clip-bytes');
     });
-    const { runId } = await startWalkGeneration(id, { direction: 'east', frameCount: 14, fps: 8 });
-    await vi.waitFor(async () => {
-      const { runs } = await getWalkState(id);
-      expect(runs[0].status).toBe('candidate');
-    });
+    expect(run.status).toBe('candidate');
     const { runs } = await getWalkState(id);
     expect(runs[0]).toMatchObject({ id: runId, frameCount: 14, fps: 8 });
     expect(runWalkPostprocess.mock.calls[0][0]).toMatchObject({ frameCount: 14, fps: 8 });
   });
 
-  it('packages the candidate once grok writes the clip (full render→attach)', async () => {
+  it('packages the candidate once grok writes the clip (full render→attach)', async ({ signal }) => {
     const id = await characterWithLockedAnchors(newId(), ['east']);
     // Simulate grok saving the MP4 to the directed path, then finishing.
-    executeTuiRun.mockImplementationOnce(async ({ workspacePath }) => {
+    const { runId, run } = await generateAndWaitForTerminal(id, { direction: 'east' }, signal, async ({ workspacePath }) => {
       await writeFile(join(workspacePath, 'source-video.mp4'), 'grok-clip-bytes');
     });
-    const { runId } = await startWalkGeneration(id, { direction: 'east' });
-    // The render + attach run fire-and-forget after generation returns.
-    await vi.waitFor(async () => {
-      const { runs } = await getWalkState(id);
-      expect(runs[0].status).toBe('candidate');
-    });
+    expect(run.status).toBe('candidate');
     expect(runWalkPostprocess).toHaveBeenCalledOnce();
     const { runs } = await getWalkState(id);
     expect(runs[0]).toMatchObject({
@@ -566,33 +579,25 @@ describe('startWalkGeneration', () => {
     expect(runs[0]).not.toHaveProperty('sourceVideoSeconds');
   });
 
-  it('stamps the DELIVERED clip length, which need not match what was requested', async () => {
+  it('stamps the DELIVERED clip length, which need not match what was requested', async ({ signal }) => {
     // grok's image_to_video renders 6s for anything shorter than 6s, so the
     // requested length is not a promise — the probe is. Here the request is 10s
     // and the file measures 6s, the exact divergence the field exists to expose.
     probeVideoDuration.mockResolvedValueOnce(6.041667);
     const id = await characterWithLockedAnchors(newId(), ['east']);
-    executeTuiRun.mockImplementationOnce(async ({ workspacePath }) => {
+    const { run } = await generateAndWaitForTerminal(id, { direction: 'east', duration: 10 }, signal, async ({ workspacePath }) => {
       await writeFile(join(workspacePath, 'source-video.mp4'), 'grok-clip-bytes');
     });
-    await startWalkGeneration(id, { direction: 'east', duration: 10 });
-    await vi.waitFor(async () => {
-      const { runs } = await getWalkState(id);
-      expect(runs[0].status).toBe('candidate');
-    }, { timeout: 10_000 });
+    expect(run.status).toBe('candidate');
     const { runs } = await getWalkState(id);
     expect(runs[0].duration).toBe(10);      // what we asked grok for
     expect(runs[0].sourceVideoSeconds).toBe(6.04); // what grok actually delivered
   });
 
-  it('marks the run errored when grok finishes without a clip', async () => {
+  it('marks the run errored when grok finishes without a clip', async ({ signal }) => {
     const id = await characterWithLockedAnchors(newId(), ['east']);
-    executeTuiRun.mockImplementationOnce(async () => {}); // resolves, writes no MP4
-    await startWalkGeneration(id, { direction: 'east' });
-    await vi.waitFor(async () => {
-      const { runs } = await getWalkState(id);
-      expect(runs[0].status).toBe('error');
-    });
+    const { run } = await generateAndWaitForTerminal(id, { direction: 'east' }, signal, async () => {});
+    expect(run.status).toBe('error');
     const { runs } = await getWalkState(id);
     expect(runs[0].postprocessError).toMatch(/without writing the walk video/);
     expect(runWalkPostprocess).not.toHaveBeenCalled();
