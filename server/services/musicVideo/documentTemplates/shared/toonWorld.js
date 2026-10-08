@@ -11,6 +11,11 @@ export function toonMaterial(THREE, { lit = '#f6ce86', mid = '#ba817b', shadow =
       toonShadow: { value: new THREE.Color(shadow) }, toonBands: { value: bands },
     });
     shader.fragmentShader = 'uniform vec3 toonLit, toonMid, toonShadow; uniform float toonBands;\n' + shader.fragmentShader;
+    // Accumulate continuous light before selecting the palette band. Three's
+    // default two-step irradiance would quantize the light a second time and
+    // can collapse the mid/shadow bands under a bright directional light.
+    shader.fragmentShader = shader.fragmentShader.replace('#include <gradientmap_pars_fragment>',
+      'vec3 getGradientIrradiance(vec3 normal, vec3 lightDirection) { return vec3(max(dot(normal, lightDirection), 0.)); }');
     shader.fragmentShader = shader.fragmentShader.replace(
       'vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + totalEmissiveRadiance;',
       `vec3 illumination = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;
