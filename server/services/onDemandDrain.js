@@ -294,9 +294,12 @@ export async function drainOnDemandRequests(ctx, adapter) {
         // Explicit user Run colliding with a failure-blocked twin (#2614):
         // revive the existing task instead of silently dropping the Run and
         // stranding the bound on-demand review marker.
-        await reviveBlockedTask(persisted.id, { priority: task.priority, metadata: task.metadata }, 'internal', { suppressDequeue: true });
+        const stored = await reviveBlockedTask(persisted.id, { priority: task.priority, metadata: task.metadata }, 'internal', { suppressDequeue: true });
+        if (stored?.error || stored?.statusChanged) continue;
         await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, taskScheduleMod);
-        const revived = { ...task, id: persisted.id };
+        // Deep resumes need the persisted branch pointer and original audit text,
+        // not a freshly rendered snapshot of volatile issue/PR preload data.
+        const revived = task.metadata.auditDepth === 'deep' ? stored : { ...task, id: persisted.id };
         emitSpawn(revived);
         emitLog('info', `🔁 On-demand ${request.taskType} revived blocked task ${persisted.id}`, { taskId: persisted.id });
       }

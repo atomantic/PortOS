@@ -1,3 +1,4 @@
+import { retryHoldMetadata } from '../lib/taskRetryHold.js';
 import { PR_COMPLETIONS, resolvePrCompletion, PR_MISSING_CATEGORY, prClaimWasVerified } from '../lib/prDisposition.js';
 import { isAuditTaskType } from '../lib/auditCatalog.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
@@ -1601,7 +1602,7 @@ export async function finalizeAgent({
 
   const taskType = task?.taskType || 'user';
   const taskUpdate = task.metadata?.auditDepth === 'deep' && !terminatedByUser
-    ? { status: 'blocked', metadata: { ...preHookTask.metadata, blockedReason: 'Deep audit checkpoint; resume explicitly', blockedCategory: 'deep-audit-partial', blockedAt: new Date().toISOString() } }
+    ? { status: 'in_progress', metadata: { ...preHookTask.metadata, ...retryHoldMetadata(agentId) } }
     : terminatedByUser
     ? {
       status: 'blocked',

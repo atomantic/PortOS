@@ -23,7 +23,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { parseTasksMarkdown, groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, generateTasksMarkdown, hasKnownPrefix, toRepresentableTask, PRIORITY_VALUES } from '../lib/taskParser.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
-import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY } from '../lib/taskRetryHold.js';
+import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY, isRetryHeld } from '../lib/taskRetryHold.js';
 import { resolveTaskTargetBranch, shouldStripTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, isAgentPausedTask, resolvePausedTaskResume, retirePausedAgent } from '../lib/taskPauseHold.js';
 import { REQUEUED_AT_KEY } from '../lib/taskRequeue.js';
@@ -634,9 +634,9 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
  * `expectedStatus`, when supplied, is checked under the task-file lock. A mismatch
  * returns `{ statusChanged: true }` without writing or retiring pause state.
  */
-export async function updateTask(taskId, updates, taskType = 'user', { now = Date.now(), suppressDequeue = false, expectedStatus = null } = {}) {
+export async function updateTask(taskId, updates, taskType = 'user', { now = Date.now(), suppressDequeue = false, expectedStatus = null, expectedMetadata = null } = {}) {
   const release = await preparePauseRelease(taskId, updates);
-  const result = await writeTaskUpdate(taskId, release ? { ...updates, metadata: release.metadata } : updates, taskType, { now, suppressDequeue, expectedStatus });
+  const result = await writeTaskUpdate(taskId, release ? { ...updates, metadata: release.metadata } : updates, taskType, { now, suppressDequeue, expectedStatus, expectedMetadata });
   if (release && !result?.error && !result?.statusChanged) {
     await retirePausedAgent(release.agentId, taskId, resolveTaskTargetBranch(result?.metadata));
   }
@@ -741,12 +741,12 @@ function mergeUpdateMetadata(existingMetadata, updates) {
   return merged;
 }
 
-async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue = false, expectedStatus = null }) {
-  return withStateLock(() => writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressDequeue, expectedStatus }));
+async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue = false, expectedStatus = null, expectedMetadata = null }) {
+  return withStateLock(() => writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressDequeue, expectedStatus, expectedMetadata }));
 }
 
 // Caller holds withStateLock, including its status and ownership decision.
-async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressDequeue = false, expectedStatus = null }) {
+async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressDequeue = false, expectedStatus = null, expectedMetadata = null }) {
   const state = await loadState();
   const filePath = taskType === 'user'
     ? join(ROOT_DIR, state.config.userTasksFile)
@@ -770,6 +770,15 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   // user action cannot be overwritten by a stale queue snapshot.
   if (expectedStatus && tasks[taskIndex].status !== expectedStatus) {
     return { statusChanged: true, task: tasks[taskIndex] };
+  }
+
+  const current = tasks[taskIndex];
+  if (expectedMetadata && Object.entries(expectedMetadata).some(([key, value]) => current.metadata?.[key] !== value)) {
+    return { statusChanged: true, task: current };
+  }
+
+  if (updates.status === 'pending' && current.metadata?.auditDepth === 'deep' && isRetryHeld(current.metadata)) {
+    return { error: 'Deep checkpoint cleanup is still pending; resume after cleanup finishes' };
   }
 
   const updatedMetadata = mergeUpdateMetadata(tasks[taskIndex].metadata, updates);

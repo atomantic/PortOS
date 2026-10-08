@@ -468,7 +468,13 @@ it('Deep checkpoints pause on successful exit without evidence, resume explicitl
   expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'stopped', completed: {} });
   await __retryMaintenanceRuns();
   expect(state.invoked).toHaveLength(1);
+  state.tasks = [{ id: agent.taskId, status: 'in_progress', metadata: { auditDepth: 'deep', retryPendingCleanup: agent.id, quotaBurnMaintenanceRunId: run.id, quotaBurnStepId: run.steps[0].id } }];
   await resumeMaintenanceRun(run.id);
+  expect(state.invoked).toHaveLength(1); // Explicit resume cannot outrun cleanup.
+  state.tasks[0].status = 'blocked';
+  state.tasks[0].metadata.blockedCategory = 'deep-audit-partial';
+  delete state.tasks[0].metadata.retryPendingCleanup;
+  await evaluateMaintenanceRun(run.id);
   expect(state.invoked).toHaveLength(2);
   // A duplicate completion from the prior attempt cannot stop the resumed run.
   await __onMaintenanceAgentCompleted(agent);
