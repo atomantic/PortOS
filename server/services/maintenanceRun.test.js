@@ -52,7 +52,7 @@ vi.mock('./quotaBurnStore.js', () => ({ getQuotaBurnConfig: vi.fn(async () => { 
 const { getQuotaBurnConfig } = await import('./quotaBurnStore.js');
 const { invokeQuotaBurnStep } = await import('./quotaBurnInvoke.js');
 const {
-  updateMaintenanceStep, startMaintenanceRun, stopMaintenanceRun, resumeMaintenanceRun, evaluateMaintenanceRun, getMaintenanceRun, listMaintenanceRuns,
+  setMaintenanceRunArchived, updateMaintenanceStep, startMaintenanceRun, stopMaintenanceRun, resumeMaintenanceRun, evaluateMaintenanceRun, getMaintenanceRun, listMaintenanceRuns,
   __onMaintenanceAgentSpawned, __onMaintenanceAgentCompleted, __retryMaintenanceRuns, __resetMaintenanceRunScheduler,
 } = await import('./maintenanceRun.js');
 
@@ -537,4 +537,35 @@ it('acknowledges the exact active request when refusal timestamps tie', async ()
   expect(resumed.run.acknowledgedRequestId).toBe(run.active.requestId);
   expect(resumed.result.dispatched).toBe(true);
   getOnDemandHandoffs.mockResolvedValue({});
+});
+
+it('scopes reversible history archiving and refuses active runs without changing evidence or dispatching', async () => {
+  const { default: express } = await import('express');
+  const { request } = await import('../lib/testHelper.js');
+  const { default: routes } = await import('../routes/cosScheduleRoutes.js');
+  const http = express(); http.use(express.json()); http.use('/cos', routes);
+  const { run } = await start();
+  const route = `/cos/schedule/maintenance-runs/${run.id}/archive`;
+  expect((await request(http).patch(route).send({ appId: 'wrong-app', archived: true })).status).toBe(404);
+  expect((await request(http).patch(route).send({ appId: run.appId, archived: true })).status).toBe(409);
+  await stopMaintenanceRun(run.id);
+  state.tasks = [{ id: 'still-working', status: 'in_progress', metadata: { quotaBurnMaintenanceRunId: run.id } }];
+  expect((await request(http).patch(route).send({ appId: run.appId, archived: true })).status).toBe(409);
+  state.tasks = [];
+  const before = await getMaintenanceRun(run.id);
+  const { readFile, writeFile } = await import('fs/promises');
+  const file = join(tempRoot, 'cos', 'maintenance-runs.json');
+  const stored = JSON.parse(await readFile(file, 'utf8'));
+  stored.runs.unshift(...Array.from({ length: 25 }, (_, i) => ({ id: `history-${i}`, appId: run.appId, status: 'completed' })));
+  await writeFile(file, JSON.stringify(stored));
+  const calls = state.invoked.length;
+  const archived = await request(http).patch(route).send({ appId: run.appId, archived: true });
+  expect(archived.status).toBe(200);
+  expect(archived.body.run.archivedAt).toBeTruthy();
+  expect(await setMaintenanceRunArchived(run.id, { appId: run.appId, archived: true })).toEqual(archived.body.run);
+  await expect(resumeMaintenanceRun(run.id)).rejects.toMatchObject({ code: 'MAINTENANCE_RUN_ARCHIVED' });
+  const restored = await request(http).patch(route).send({ appId: run.appId, archived: false });
+  expect(restored.status).toBe(200);
+  expect(restored.body.run).toMatchObject({ ...before, archivedAt: null, historyRetained: true, updatedAt: expect.any(String) });
+  expect(state.invoked).toHaveLength(calls);
 });

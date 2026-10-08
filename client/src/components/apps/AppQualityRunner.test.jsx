@@ -21,9 +21,9 @@ import AppQualityRunner from './AppQualityRunner';
 import AppQuality from './AppQuality';
 import { awaitEnabled, findEnabledByLabelText, findEnabledByRole } from '../../test/enabledBarrier.js';
 vi.mock('./AppQualityHistory', () => ({ default: () => null }));
-import { getMaintenanceRuns, startMaintenanceRun, stopMaintenanceRun } from '../../services/apiAgents';
+import { getMaintenanceRuns, startMaintenanceRun, stopMaintenanceRun, setMaintenanceRunArchived } from '../../services/apiAgents';
 import useProviderModels from '../../hooks/useProviderModels';
-vi.mock('../../services/apiAgents', () => ({ getMaintenanceRuns: vi.fn(), startMaintenanceRun: vi.fn(), stopMaintenanceRun: vi.fn() }));
+vi.mock('../../services/apiAgents', () => ({ getMaintenanceRuns: vi.fn(), startMaintenanceRun: vi.fn(), stopMaintenanceRun: vi.fn(), setMaintenanceRunArchived: vi.fn() }));
 vi.mock('../../hooks/useProviderModels', () => ({ default: vi.fn(() => ({ providers: [], selectedProviderId: 'codex', selectedModel: 'gpt-5', availableModels: [], loading: false })) }));
 vi.mock('../ProviderModelSelector', () => ({ default: ({ onEffortChange }) => <button onClick={() => onEffortChange('high')}>Use high effort</button> }));
 const app = { id: 'app-1', quality: { categories: [
@@ -278,4 +278,24 @@ it('explains extended Deep and preserves old evidence without offering legacy re
   expect(screen.getByText(/Historical exhaustive audit/)).toBeInTheDocument();
   expect(screen.getByText(/multiple worthwhile issues in one run/)).toBeInTheDocument();
   expect(screen.getByRole('option', { name: 'Deep — extended investigation and multiple fixes' })).toBeInTheDocument();
+});
+
+it('archives and restores history without dispatch, while keeping active runs visible', async () => {
+  const old = { id: 'old', appId: app.id, status: 'stopped', auditDepth: 'deep', reason: 'Resume explicitly to continue.', steps: [], completed: { step: { success: false } } };
+  const active = { id: 'active', appId: app.id, status: 'running', steps: [] };
+  getMaintenanceRuns.mockResolvedValue({ runs: [old, active] });
+  setMaintenanceRunArchived.mockImplementation(async (_id, _app, archived) => ({ run: { ...old, archivedAt: archived ? '2026-01-01' : null } }));
+  render(<MemoryRouter><AppQualityRunner app={app} /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button', { name: 'Archive run history' }));
+  await waitFor(() => expect(screen.queryByText(/Historical exhaustive/)).not.toBeInTheDocument());
+  expect(screen.getByRole('button', { name: 'Stop remaining checks' })).toBeInTheDocument();
+  expect(screen.queryByText(/Resume explicitly/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'View archived runs (1)' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Restore run history' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Restore run history' })).not.toBeInTheDocument());
+  fireEvent.click(screen.getByRole('button', { name: 'View current runs' }));
+  expect(screen.getByRole('button', { name: 'Archive run history' })).toBeInTheDocument();
+  expect(setMaintenanceRunArchived).toHaveBeenNthCalledWith(1, 'old', app.id, true, { silent: true });
+  expect(startMaintenanceRun).not.toHaveBeenCalled();
+  expect(stopMaintenanceRun).not.toHaveBeenCalled();
 });

@@ -4,8 +4,9 @@ import ProviderModelSelector from '../ProviderModelSelector';
 import MaintenanceRunStatus from '../cos/tabs/schedule/MaintenanceRunStatus';
 import useProviderModels from '../../hooks/useProviderModels';
 import { useSocketResource } from '../../hooks/useSocketResource';
+import { formatCount } from '../../utils/formatters';
 import { enabledProcessProviderFilter } from '../../utils/providers';
-import { getMaintenanceRuns, startMaintenanceRun, stopMaintenanceRun } from '../../services/apiAgents';
+import { getMaintenanceRuns, startMaintenanceRun, stopMaintenanceRun, setMaintenanceRunArchived } from '../../services/apiAgents';
 
 const RUN_EVENTS = ['cos:maintenance:updated'];
 
@@ -68,6 +69,16 @@ export default function AppQualityRunner({ app, children }) {
     { namespace: 'cos', events: RUN_EVENTS, resourceKey: app.id, matchesEvent: run => run?.appId === app.id },
   );
   const runs = data ?? [];
+  const showArchived = params.get('qualityHistory') === 'archived';
+  const visibleRuns = runs.filter(run => Boolean(run.archivedAt) === showArchived);
+  const archive = async (id, archived) => {
+    setBusy(true);
+    setError('');
+    const response = await setMaintenanceRunArchived(id, app.id, archived, { silent: true }).catch(err => { if (appIdRef.current === app.id) setError(err.message); return null; });
+    if (appIdRef.current !== app.id) return;
+    if (response) setRuns(previous => (previous ?? []).map(entry => entry.id === response.run.id ? response.run : entry));
+    setBusy(false);
+  };
   const start = async () => {
     setBusy(true);
     setError('');
@@ -110,26 +121,35 @@ export default function AppQualityRunner({ app, children }) {
       </select>
     </label>
     {auditDepth === 'deep' && <p className="text-xs text-gray-400">Spend more time investigating high-risk paths and fixing multiple worthwhile issues in one run. The summary reports coverage and remaining limits; Deep does not certify every file.</p>}
-    {mode === 'fix' && <label htmlFor="quality-publication" className="block text-sm">Pull requests
+    {mode === 'fix' && <div><label htmlFor="quality-publication" className="block text-sm">Pull requests
       <select id="quality-publication" className="block w-full bg-port-bg border border-port-border rounded p-2" value={prCompletion} disabled={busy} onChange={event => setPrCompletion(event.target.value)}>
         <option value="draft">Drafts for review — never merge</option>
-        <option value="inherit">Use saved completion policy</option>
+        <option value="inherit">Follow saved policy — may merge automatically</option>
       </select>
-    </label>}
+    </label>
+      <p className="text-xs text-gray-400 mt-1">{prCompletion === 'inherit' ? 'Each check uses its saved PR completion policy; fixes and quality snapshots may merge automatically.' : 'Fixes stay in draft pull requests for review. Automatic quality snapshot publication is skipped.'} This setting does not schedule additional checks or rescans.</p>
+    </div>}
     <ProviderModelSelector providers={picker.providers} selectedProviderId={picker.selectedProviderId} selectedModel={picker.selectedModel}
       availableModels={picker.availableModels} onProviderChange={value => { picker.setSelectedProviderId(value); setEffort(''); }}
       onModelChange={picker.setSelectedModel} effort={effort} onEffortChange={setEffort} loading={picker.loading} disabled={busy}
       emptyProviderOption="Select a subscription provider" emptyModelOption="Select a model" includeDefaultModel highlightToolUse />
-    <p className="text-xs text-gray-400">Runs sequentially; launch another batch to run in parallel. {mode === 'fix' ? (prCompletion !== 'inherit' ? 'Fixes stay in pull requests for your review; automatic quality snapshot publication is skipped.' : 'Fixes and quality snapshots may merge automatically under the saved policy.') : 'Findings become issues; no fixes.'}</p>
+    <p className="text-xs text-gray-400">Batch execution: selected checks run one after another. A separately launched batch can run in parallel. {mode === 'file-issues' && 'Findings become issues; no fixes.'}</p>
     <details className="text-xs"><summary className="cursor-pointer text-port-accent">Selected checks ({taskTypes.length})</summary><p className="mt-1">{selectedCategories.map(category => category.label).join(', ') || emptySelectionMessage}</p></details>
     <button type="button" onClick={start} disabled={busy || picker.loading || !picker.selectedProviderId || !picker.selectedModel || !taskTypes.length || app.quality?.unavailable}
       className="px-3 py-2 rounded bg-port-accent text-port-bg text-sm font-medium disabled:opacity-50">{taskTypes.length === 1 ? 'Run now' : `Run ${taskTypes.length} checks now`}</button>
     {(loading || loadError) && <p className="text-xs" role="status">{loadError ? 'Runner status is unavailable.' : 'Loading runner status…'} <button type="button" className="text-port-accent" onClick={loadRuns}>Retry</button></p>}
     {error && <p role="alert" className="text-sm text-port-error">{error}</p>}
-    {runs.filter((run, index) => run.status === 'running' || run.auditDepth === 'deep' || index === 0).map(run => <div key={run.id} className="space-y-2">
+    <button type="button" className="text-xs text-port-accent" onClick={() => setParams(previous => {
+      const next = new URLSearchParams(previous);
+      if (showArchived) next.delete('qualityHistory'); else next.set('qualityHistory', 'archived');
+      return next;
+    })}>{showArchived ? 'View current runs' : `View archived runs (${formatCount(runs.filter(run => run.archivedAt).length)})`}</button>
+    {showArchived && <p className="text-xs text-gray-400">Archived history retains evidence and findings. Restoring a card does not restart its run.</p>}
+    {visibleRuns.filter((run, index) => showArchived || run.status === 'running' || run.auditDepth === 'deep' || index === 0).map(run => <div key={run.id} className="space-y-2">
       <MaintenanceRunStatus run={run} />
-      {run.reason && <p className="text-xs break-words">{run.reason} <Link className="text-port-accent underline" to="/cos/schedule">Open runner settings</Link></p>}
+      {run.reason && !(run.auditDepth === 'deep' && !run.auditWorkflow) && <p className="text-xs break-words">{run.reason} <Link className="text-port-accent underline" to="/cos/schedule">Open runner settings</Link></p>}
       {run.auditDepth === 'deep' && !run.auditWorkflow && <p className="text-xs text-gray-400">Historical exhaustive audit — evidence retained; start a new Deep run above.</p>}
+      {run.status !== 'running' && <button type="button" className="text-xs text-port-accent" disabled={busy} onClick={() => archive(run.id, !run.archivedAt)}>{run.archivedAt ? 'Restore run history' : 'Archive run history'}</button>}
       {run.status === 'running' && <button type="button" className="text-xs text-port-accent" disabled={busy} onClick={() => stop(run.id)}>Stop remaining checks</button>}
     </div>)}
   </section>;

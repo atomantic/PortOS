@@ -53,6 +53,7 @@ export function useOnDemandTaskToast() {
     socket.on('connect', subscribe);
     const maintenanceStates = new Map();
     const handleMaintenance = run => {
+      if (run.historyOnly) return;
       const { current, total } = maintenanceRunProgress(run);
       const label = `Maintenance · ${current}/${total} · ${run.status}`;
       const signature = JSON.stringify([run.status, run.completed, run.active, run.reason]);
