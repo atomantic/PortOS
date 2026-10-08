@@ -337,10 +337,14 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
 
     const render = async (name) => {
       const outputPath = join(PATHS.videos, name);
-      const result = await encodeDocumentComposition({ project, plan, jobId: `job-${name.replace(/\W/g, '')}`, audioPath: master, outputPath, windowStart: 1.02, windowEnd: 1.75 });
+      const result = await encodeDocumentComposition({ project, plan, jobId: `job-${name.replace(/\W/g, '')}`, audioPath: master, outputPath, windowStart: 1.02, windowEnd: 1.75, collectFootageVisibility: true });
       return { result, outputPath };
     };
     const first = await render('first.mp4');
+    // A virtual-origin clip must remain canvas-readable inside the opaque
+    // browser sandbox; tainted pixels formerly collapsed every sample to null.
+    expect(first.result.footageVisibility).toHaveLength(3);
+    expect(first.result.footageVisibility.every(sample => sample.status === 'measured')).toBe(true);
     // Snapped down to the frame grid: song 1.0s → 1.75s is 18 frames.
     expect(first.result).toMatchObject({ startSec: 1, durationSec: 0.75, width: 1920, height: 1080, fps: 24 });
     const pixels = execFileSync(ffmpeg, ['-v', 'error', '-i', first.outputPath, '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 1 << 26 });

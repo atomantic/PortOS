@@ -320,6 +320,50 @@ export async function stageGeneratedDocument(projectId, generatedFiles, { verify
   return storeVersion(projectId, staged, { kind: 'generated', name: 'Mixed-media composition' }, { draft: true, verifyCurrent });
 }
 
+// Known compatible shipped layered engines. Recognition only;
+// customized engines belong to the author and are never silently replaced.
+const UPGRADABLE_LAYERED_ENGINES = new Set([
+  '2556a0905a85958b9107cfa75ab0c5bfde167a708e29b511d577065bb530ea58',
+  'e2267a068c92a3c7dee49db5f3e57caff1ac11aee1312c0d82e28352850aad3b',
+  '23842766a818fd9820d79ff229eab538cc0edf391992756cbfd14434d525c019',
+  '5f69f39cfbdbf0531c23250d01773447529a5254271b0b77f40d029d02bb0e1f',
+]);
+const engineDigest = bytes => createHash('sha256').update(bytes.toString('utf8').replace(/\r\n?/g, '\n')).digest('hex');
+
+/**
+ * Explicitly adopt the shipped layered engine in a new immutable document.
+ * All authored scripts, HTML, fonts and assets retain their exact bytes. The
+ * new pointer invalidates revision-bound render/review evidence naturally.
+ */
+export function upgradeDocumentEngine(projectId, directory) {
+  assertProjectId(projectId);
+  return serializeProject(projectId, async () => {
+    const project = await getProject(projectId);
+    const verifyCurrent = current => {
+      if (current.composition?.mode !== 'document' || current.composition?.document?.directory !== directory || current.composition?.documentDraft) {
+        throw refuse('The selected document changed or has a pending candidate — finish it before upgrading', 'COMPOSITION_DRAFT_STALE', 409);
+      }
+    };
+    if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+    verifyCurrent(project);
+    const dir = await requireDocument(project);
+    const { files } = await collectTree(dir);
+    const engine = files.find(file => file.rel === 'engine.js');
+    const shipped = await readFile(join(TEMPLATE_ROOT, 'layered', 'engine.js'));
+    const prior = engine ? await readFile(engine.abs) : null;
+    if (!prior) throw refuse('This document has no supported layered engine', 'COMPOSITION_ENGINE_CUSTOM', 409);
+    if (engineDigest(prior) === engineDigest(shipped)) return { project, document: project.composition.document, changed: false };
+    if (!UPGRADABLE_LAYERED_ENGINES.has(engineDigest(prior))) {
+      throw refuse('The engine was customized or is not a supported shipped version — preserve it and revise it explicitly', 'COMPOSITION_ENGINE_CUSTOM', 409);
+    }
+    const loaded = await Promise.all(files.map(async file => ({
+      rel: file.rel, data: file.rel === 'engine.js' ? shipped : await readFile(file.abs),
+    })));
+    const result = await storeVersionNow(projectId, loaded, project.composition.document.source || { kind: 'directory', name: null }, { verifyCurrent });
+    return { ...result, changed: true };
+  });
+}
+
 /** Select exactly the candidate the director reviewed. */
 export function acceptGeneratedDocument(projectId, directory, { verifyCurrent = () => {} } = {}) {
   return serializeProject(projectId, async () => {
