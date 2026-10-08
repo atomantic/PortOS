@@ -20,7 +20,7 @@ node scripts/portos-api.js get /api/api-docs/catalog.json   # discover endpoints
 - When the user has to do something by hand later (post, reply, upload, sign), schedule it with `POST /api/human-actions/plans` instead of only saying so in chat: each step gets a due time with a UTC offset, explicit `instructions`, and the exact text to paste in `content`. It lands in Review Hub › Actions and notifies them when due. Reuse the same `planKey` to replace a plan. Shape: [docs/API.md › Human Actions](../../../docs/API.md#human-actions).
 
 - Credential order: `PORTOS_API_TOKEN` (set inside PortOS-spawned agents), then `~/.portos/agent-key.json` (the agent API key).
-- `whoami` answering `"authenticated": false`, or a `401 AUTH_REQUIRED`, means no key is available: ask the user to turn on **Settings > Security > Agent API key**. Never ask for, store, or type the instance password.
+- `401 AUTH_REQUIRED` means authentication was rejected: check whether the selected credential is missing, expired, revoked, or invalid without printing it. A set `PORTOS_API_TOKEN` takes precedence over the agent-key file, so a stale injected token can shadow a valid key; obtain a fresh credential through the supported flow. `whoami` answering `"authenticated": false` alone does not prove a missing key, since local requests may be allowed when authentication is disabled. If an external agent needs authentication and no credential is available, ask the user to enable **Settings > Security > Agent API key**. Never ask for, store, or type the instance password.
 - Never print the token or paste it into a commit, PR, issue, or chat.
 - Public Suno publication and social posting still need the human (root `AGENTS.md`, Security Model).
 

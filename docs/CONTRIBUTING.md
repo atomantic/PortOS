@@ -14,6 +14,8 @@ PortOS is a highly opinionated, personal project — a single developer's "every
 
 ## Development Setup
 
+Choose the PostgreSQL backend before running `npm run install:all`: install and start Docker with Compose for the default Docker backend, or set `PGMODE=native` in the repository-root `.env` for a fresh native install. Preserve existing settings and check for a conflicting exported `PGMODE`. Existing installs must retain the backend holding their records; see [SETUP.md](./SETUP.md) before changing it.
+
 ```bash
 # Clone and install
 git clone https://github.com/atomantic/PortOS.git
