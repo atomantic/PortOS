@@ -663,6 +663,15 @@ jobs:
           PG_MAJOR: '17'
         run: bash scripts/ci-install-db-tools.sh
 
+      # Read the runner's Chrome tree into the page cache before any suite
+      # launches it (#9641). The recurring startup hang was captured with the
+      # browser's lead thread waiting on a page-cache read and I/O pressure
+      # above 50 right after the installs above, i.e. a cold first launch. The
+      # launcher's 20s startup deadline is unchanged; the printed duration shows
+      # whether the cold read is as slow as the failures suggest.
+      - name: Warm the Chrome install
+        run: bash scripts/ci-warm-test-chrome.sh
+
       - name: Run DB-backed tests (portos_test)
         if: needs.impact.outputs.db == 'true'
         run: |
