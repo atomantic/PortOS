@@ -516,11 +516,11 @@ router.post('/:id/lyrics/import-track', asyncHandler(async (req, res) => {
 // transcribing window n/m) stream over SSE with cancel, and the terminal
 // `complete` frame carries the updated project. One job per project: a second
 // request returns the running job (`reused: true`). The first alignment
-// downloads the music-grade whisper model; no whisper.cpp at all is an error
-// frame with install steps, not an empty timing list.
+// provisions MMS_FA only on demand. Explicit separateVocals consent creates
+// a missing stem with Demucs first; older master-only callers retain Whisper.
 router.post('/:id/lyrics/align', asyncHandler(async (req, res) => {
-  const { cueId } = validateRequest(musicVideoLyricsAlignSchema, req.body || {});
-  res.status(202).json(await startLyricAlign(req.params.id, { cueId }));
+  const { cueId, separateVocals } = validateRequest(musicVideoLyricsAlignSchema, req.body || {});
+  res.status(202).json(await startLyricAlign(req.params.id, { cueId, separateVocals }));
 }));
 
 router.get('/lyrics/align/:jobId/events', (req, res) => {

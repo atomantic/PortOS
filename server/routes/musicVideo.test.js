@@ -492,7 +492,7 @@ describe('musicVideo routes', () => {
       svc.getProject.mockResolvedValue(alignable);
       expect(alignProjectLyrics).not.toHaveBeenCalled();
       const release = holdAlignment();
-      const first = await request(app).post('/api/music-video/mv-1/lyrics/align').send({});
+      const first = await request(app).post('/api/music-video/mv-1/lyrics/align').send({ separateVocals: true });
       expect(first.status).toBe(202);
       expect(first.body.jobId).toEqual(expect.any(String));
       expect(first.body.reused).toBeUndefined();
@@ -500,7 +500,7 @@ describe('musicVideo routes', () => {
       expect(second.status).toBe(202);
       expect(second.body).toEqual({ jobId: first.body.jobId, reused: true });
       expect(alignProjectLyrics).toHaveBeenCalledTimes(1);
-      expect(alignProjectLyrics).toHaveBeenCalledWith('mv-1', expect.objectContaining({ cueId: null }));
+      expect(alignProjectLyrics).toHaveBeenCalledWith('mv-1', expect.objectContaining({ cueId: null, separateVocals: true }));
       const active = await request(app).get('/api/music-video/mv-1/active-jobs');
       expect(active.body).toEqual({ alignment: first.body.jobId, separation: null, midi: null });
       release();

@@ -823,8 +823,8 @@ export async function pickAlignmentPath(project, io = {}) {
     return resolveMasterAudioPath(record);
   });
   const stem = resolveStem(project);
-  // The stem supplies phrase onsets; the mix supplies recognized words.
-  if (stem) return { path: stem, source: 'vocal-stem', mixPath: await resolveMaster(project) };
+  // CTC aligns the known text directly to the stem, without decoding the mix.
+  if (stem) return { path: stem, source: 'vocal-stem', mixPath: null };
   return { path: await resolveMaster(project), source: 'master', mixPath: null };
 }
 

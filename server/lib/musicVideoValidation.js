@@ -332,6 +332,7 @@ export const musicVideoLyricsImportTrackSchema = z.object({
 // that line; omitted, every line is aligned.
 export const musicVideoLyricsAlignSchema = z.object({
   cueId: z.string().min(1).max(64).optional(),
+  separateVocals: z.boolean().optional(),
 }).strict();
 
 // ---- Composition manifest (#8984, part of #8966) ---------------------------

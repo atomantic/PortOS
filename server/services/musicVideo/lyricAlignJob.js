@@ -1,8 +1,8 @@
 /**
  * Lyric word alignment as a job (#10155).
  *
- * `alignProjectLyrics` can take minutes (audio decode, a ~1.6 GB first-use
- * model download, one whisper pass per phrase window), so the route starts it
+ * `alignProjectLyrics` can take minutes (audio decode, first-use model downloads
+ * and a CTC pass over the known lyric text), so the route starts it
  * here and returns a job id; stages stream over SSE with cancel. One job per
  * project at a time — a second request returns the running job, so a double
  * click or a reloaded page never starts a duplicate run.
@@ -44,7 +44,7 @@ export function cancelLyricAlign(jobId) {
  * line while one runs also reuses it: the client reattaches rather than
  * queueing a second whisper run over the same song.
  */
-export async function startLyricAlign(projectId, { cueId = null, align = alignProjectLyrics } = {}) {
+export async function startLyricAlign(projectId, { cueId = null, separateVocals = false, align = alignProjectLyrics } = {}) {
   const running = getActiveLyricAlignJobId(projectId);
   if (running) return { jobId: running, reused: true };
   // Fail with a real status before a job exists, as the blocking route did.
@@ -69,6 +69,7 @@ export async function startLyricAlign(projectId, { cueId = null, align = alignPr
       broadcastSse(job, { type: 'progress', stage: 'preparing' });
       const project = await align(projectId, {
         cueId,
+        separateVocals,
         isCancelled: () => job.cancelRequested,
         onProgress: (frame) => broadcastSse(job, { type: 'progress', ...frame }),
       });

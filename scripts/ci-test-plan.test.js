@@ -1395,7 +1395,12 @@ describe('cross-workspace browser suites (#10312)', () => {
     const cwd = fileURLToPath(new URL('../', import.meta.url));
     const source = 'client/src/components/musicVideo/ProductionReviewPanel.jsx';
     const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd });
-    const plan = buildCiTestPlan(inputs.changedFiles, inputs);
+    // Keep the real source/import walk, with a bounded test corpus. Unrelated
+    // feature-test growth must not route this scoped-browser contract through
+    // the safety-cap fallback (the full-plan contract is checked separately).
+    const trackedFiles = inputs.trackedFiles.filter((path) =>
+      !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
+    const plan = buildCiTestPlan(inputs.changedFiles, { ...inputs, trackedFiles });
 
     expect(plan.full).toBe(false);
     expect(plan.browserFiles).toEqual(expect.arrayContaining(BROWSER_SUITES));

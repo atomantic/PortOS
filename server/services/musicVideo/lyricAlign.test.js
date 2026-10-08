@@ -199,12 +199,12 @@ describe('lyric alignment audio', () => {
     expect(() => sliceWav(stereo, 0, 0.01)).toThrow(/16-bit mono/);
   });
 
-  it('uses the vocal stem with the mix beside it, and does not fall back when the stem file is missing', async () => {
+  it('uses the vocal stem without needing the mix, and does not fall back when the stem file is missing', async () => {
     const resolveMaster = vi.fn(async () => '/library/mix.wav');
     await expect(pickAlignmentPath({ vocalStemFilename: 'v.wav' }, {
       resolveStem: () => '/library/v.wav',
       resolveMaster,
-    })).resolves.toEqual({ path: '/library/v.wav', source: 'vocal-stem', mixPath: '/library/mix.wav' });
+    })).resolves.toEqual({ path: '/library/v.wav', source: 'vocal-stem', mixPath: null });
 
     await expect(pickAlignmentPath({}, {
       resolveStem: () => null,
@@ -273,6 +273,7 @@ describe('alignProjectLyrics', () => {
           resolveAudio: resolveAudio || (async () => ({ path: 'song.wav', source: 'master', mixPath: null })),
           decodeAudio,
           resolveTranscriber: async () => ({ kind: 'test', transcribe, release }),
+          ...opts.deps,
         },
       }),
     };
@@ -318,56 +319,97 @@ describe('alignProjectLyrics', () => {
     expect(stopped.release).toHaveBeenCalledOnce();
   });
 
-  it('anchors a post-silence line to the stem while transcribing only sequential mix windows', async () => {
-    const record = { ...project, lyricCues: [
+  it('uses CTC word slots for repeated lines after silence, without Whisper or mix decoding', async () => {
+    const record = { ...project, vocalStemFilename: 'stem.wav', lyricCues: [
       { id: 'a', text: 'hello morning', startSec: null, endSec: null },
-      { id: 'b', text: 'gently awaken', startSec: null, endSec: null },
-      { id: 'c', text: 'absent lyric', startSec: 8, endSec: 9 },
+      { id: 'b', text: 'hello morning', startSec: null, endSec: null },
     ] };
     const stem = encodePcm16Wav(16000 * 10);
     for (const [start, end] of [[1, 2], [4, 5]]) {
       for (let i = start * 16000; i < end * 16000; i++) stem.writeInt16LE(5000, 44 + i * 2);
     }
-    const mix = encodePcm16Wav(16000 * 10);
-    let active = false;
-    const transcribe = vi.fn(async (wav, region) => {
-      expect(wav).toBe(mix);
-      expect(active).toBe(false);
-      active = true;
-      await Promise.resolve();
-      active = false;
-      // Mimic whisper's bias: first word starts at the slice's beginning.
-      const text = region.startSec < 2 ? ['hello', 'morning'] : region.startSec < 5 ? ['gently', 'awaken'] : [];
-      return text.map((word, i) => ({ text: word, startSec: region.startSec + i * 0.4, endSec: region.startSec + (i + 1) * 0.4 }));
-    });
+    const transcribe = vi.fn();
     const h = harness(transcribe, record, {
-      resolveAudio: async () => ({ path: 'stem.wav', source: 'vocal-stem', mixPath: 'song.wav' }),
+      resolveAudio: async () => ({ path: 'stem.wav', source: 'vocal-stem', mixPath: null }),
     });
-    h.decodeAudio.mockImplementation(async (path) => path === 'stem.wav' ? stem : mix);
-    const saved = await h.run();
-    expect(h.decodeAudio.mock.calls.map(([path]) => path)).toEqual(['stem.wav', 'song.wav']);
-    expect(Math.abs(saved.lyricCues[1].startSec - 4)).toBeLessThanOrEqual(0.06);
-    expect(saved.lyricCues[1].matched).toBe(1);
-    expect(saved.lyricCues[1].words[0].startSec).toBe(saved.lyricCues[1].startSec);
-    expect(saved.lyricCues[2]).toEqual({ ...record.lyricCues[2], matched: 0 });
-    expect(transcribe.mock.calls.every(([, window]) => window.endSec - window.startSec <= 11)).toBe(true);
-    expect(h.release).toHaveBeenCalledOnce();
+    h.decodeAudio.mockResolvedValue(stem);
+    const forceAlign = vi.fn(async (_wav, cues) => {
+      expect(cues).toEqual(record.lyricCues);
+      return [1, 4].map((start) => [
+        { w: 'hello', startSec: start, endSec: start + 0.4, conf: 'matched' },
+        { w: 'morning', startSec: start + 0.4, endSec: start + 1, conf: 'matched' },
+      ]);
+    });
+    const saved = await h.run({ deps: { forceAlign } });
+    expect(h.decodeAudio.mock.calls.map(([path]) => path)).toEqual(['stem.wav']);
+    expect(forceAlign).toHaveBeenCalledOnce();
+    expect(transcribe).not.toHaveBeenCalled();
+    expect(saved.lyricCues.map((cue) => cue.startSec)).toEqual([1, 4]);
+    expect(saved.lyricAlignSilentWords).toBe(0);
+    expect(saved.lyricAlignSource).toBe('vocal-stem');
   });
 
-  it('keeps current director times on a stem re-alignment, including edits made during transcription', async () => {
-    const record = { ...project, lyricCues: [{ id: 'a', text: 'walking home', startSec: 1, endSec: 2 }] };
-    const transcribe = vi.fn(async () => {
-      record.lyricCues = [{ ...record.lyricCues[0], startSec: 1.2, endSec: 2.5 }];
-      return [{ text: 'walking', startSec: 1, endSec: 1.5 }, { text: 'home', startSec: 1.5, endSec: 2 }];
+  it('re-aligns one stem line preserving current director edits and the other occurrence', async () => {
+    const record = { ...project, vocalStemFilename: 'stem.wav', lyricCues: [
+      { id: 'a', text: 'walking home', startSec: 1, endSec: 2 },
+      { id: 'b', text: 'walking home', startSec: 4, endSec: 5 },
+    ] };
+    const h = harness(vi.fn(), record, {
+      resolveAudio: async () => ({ path: 'stem.wav', source: 'vocal-stem' }),
     });
-    const h = harness(transcribe, record, {
-      resolveAudio: async () => ({ path: 'stem.wav', source: 'vocal-stem', mixPath: 'song.wav' }),
-    });
-    const stem = encodePcm16Wav(16000 * 3);
+    const stem = encodePcm16Wav(16000 * 6);
     for (let i = 16000; i < 32000; i++) stem.writeInt16LE(5000, 44 + i * 2);
     h.decodeAudio.mockResolvedValue(stem);
-    const saved = await h.run({ cueId: 'a' });
+    const forceAlign = vi.fn(async () => {
+      record.lyricCues = [{ ...record.lyricCues[0], startSec: 1.2, endSec: 2.5 }, record.lyricCues[1]];
+      return [[{ w: 'walking', startSec: 1.2, endSec: 1.5, conf: 'matched' }, { w: 'home', startSec: 1.5, endSec: 2, conf: 'matched' }]];
+    });
+    const saved = await h.run({ cueId: 'a', deps: { forceAlign } });
+    expect(forceAlign).toHaveBeenCalledWith(stem, [expect.objectContaining({ id: 'a' })], expect.objectContaining({ startSec: 1, endSec: 2 }));
     expect(saved.lyricCues[0]).toMatchObject({ startSec: 1.2, endSec: 2.5, matched: 1 });
+    expect(saved.lyricCues[1]).toEqual(record.lyricCues[1]);
+    expect(saved.lyricAlignSource).toBeUndefined();
+  });
+
+  it('saves nothing when CTC lands in silence, the song or text changes, or alignment is cancelled', async () => {
+    for (const outcome of ['silence', 'audio', 'text', 'cancel']) {
+      const record = { ...project, vocalStemFilename: 'stem.wav', lyricCues: [{ id: 'a', text: 'walking', startSec: null, endSec: null }] };
+      const h = harness(vi.fn(), record, { resolveAudio: async () => ({ path: 'stem.wav', source: 'vocal-stem' }) });
+      const stem = encodePcm16Wav(16000 * 3);
+      if (outcome !== 'silence') for (let i = 16000; i < 32000; i++) stem.writeInt16LE(5000, 44 + i * 2);
+      h.decodeAudio.mockResolvedValue(stem);
+      let cancelled = false;
+      const forceAlign = async () => {
+        if (outcome === 'audio') record.trackId = 'changed';
+        if (outcome === 'text') record.lyricCues = [{ ...record.lyricCues[0], text: 'changed' }];
+        if (outcome === 'cancel') cancelled = true;
+        return [[{ w: 'walking', startSec: 1, endSec: 2, conf: 'matched' }]];
+      };
+      await expect(h.run({ deps: { forceAlign }, isCancelled: () => cancelled })).rejects.toMatchObject(
+        outcome === 'cancel' ? { canceled: true } : { code: { silence: 'LYRIC_ALIGN_SILENT_WORDS', audio: 'MUSIC_VIDEO_AUDIO_CHANGED', text: 'LYRIC_ALIGN_TEXT_CHANGED' }[outcome] });
+      expect(h.updateProject).not.toHaveBeenCalled();
+    }
+  });
+
+  it('separates a missing stem only with explicit consent, then aligns that stem', async () => {
+    const record = { ...project, lyricCues: [{ id: 'a', text: 'walking', startSec: null, endSec: null }] };
+    const separated = { ...record, vocalStemFilename: 'stem.wav' };
+    const updateProject = vi.fn(async (_id, patch) => ({ ...separated, ...patch }));
+    const separateVocals = vi.fn(async () => separated);
+    const forceAlign = vi.fn(async () => [[{ w: 'walking', startSec: 1, endSec: 2, conf: 'matched' }]]);
+    const stem = encodePcm16Wav(16000 * 3);
+    for (let i = 16000; i < 32000; i++) stem.writeInt16LE(5000, 44 + i * 2);
+    const saved = await alignProjectLyrics('mv-1', { separateVocals: true, deps: {
+      getProject: vi.fn().mockResolvedValueOnce(record).mockResolvedValue(separated), updateProject, separateVocals, forceAlign,
+      resolveAudio: async (project) => { expect(project.vocalStemFilename).toBe('stem.wav'); return { path: 'stem.wav', source: 'vocal-stem' }; },
+      decodeAudio: async () => stem,
+    } });
+    expect(separateVocals).toHaveBeenCalledOnce();
+    expect(forceAlign).toHaveBeenCalledOnce();
+    expect(saved.lyricAlignSilentWords).toBe(0);
+    const legacy = harness(vi.fn(async () => [{ text: 'walking', startSec: 1, endSec: 2 }]), record);
+    await legacy.run({ deps: { separateVocals } });
+    expect(separateVocals).toHaveBeenCalledOnce();
   });
 
   it('names the analysis sections after the lyric sheet once the lines are timed', async () => {

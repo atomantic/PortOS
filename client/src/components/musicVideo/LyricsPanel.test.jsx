@@ -5,6 +5,7 @@ import LyricsPanel from './LyricsPanel.jsx';
 const PROJECT = {
   id: 'mv-1',
   trackId: 't1',
+  vocalStemFilename: 'vocal.wav',
   lyricCues: [{
     id: 'lc-1',
     text: 'walking home',
@@ -57,6 +58,18 @@ describe('LyricsPanel word alignment', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Align words' }));
     expect(onAlign).toHaveBeenCalledWith(undefined);
     expect(await screen.findByRole('alert')).toHaveTextContent(/Settings → Voice/);
+  });
+
+  it('requires named model consent before separating a missing stem, and supports declining', () => {
+    const { onAlign } = renderPanel({ project: { ...PROJECT, vocalStemFilename: null } });
+    fireEvent.click(screen.getByRole('button', { name: 'Align words' }));
+    expect(onAlign).not.toHaveBeenCalled();
+    expect(screen.getByText(/Demucs htdemucs_ft/)).toHaveTextContent('MMS_FA');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onAlign).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Re-align line 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Separate and align' }));
+    expect(onAlign).toHaveBeenCalledWith('lc-1', { separateVocals: true });
   });
 
   it('flags only measured low confidence, and clears the badge data when the lyric text changes', () => {

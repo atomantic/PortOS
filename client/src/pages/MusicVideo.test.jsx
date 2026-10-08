@@ -1617,13 +1617,13 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
         { w: 'home', startSec: 1, endSec: 1.5, conf: 'interpolated' },
       ],
     }];
-    await openProject({ ...PROJECT_ANALYZED, lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: null, endSec: null }] }, 'setup');
+    await openProject({ ...PROJECT_ANALYZED, vocalStemFilename: 'stem.wav', lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: null, endSec: null }] }, 'setup');
     expect(alignMusicVideoLyrics).not.toHaveBeenCalled();
     alignMusicVideoLyrics.mockResolvedValue({ jobId: 'align-job-1' });
     fireEvent.click(screen.getByRole('button', { name: 'Align words' }));
     await waitFor(() => expect(alignMusicVideoLyrics).toHaveBeenCalledWith('mv-3', {}, { silent: true }));
     await settle();
-    sseState.latest = { type: 'complete', project: { id: 'mv-3', lyricCues: cues, updatedAt: 't' } };
+    sseState.latest = { type: 'complete', project: { id: 'mv-3', vocalStemFilename: 'stem.wav', lyricCues: cues, updatedAt: 't' } };
     forceRerender();
     expect(await screen.findByText('walking')).toHaveClass('text-port-accent');
     expect(screen.getByText('home')).toHaveClass('text-port-warning');
