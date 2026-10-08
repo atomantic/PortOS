@@ -3,7 +3,7 @@ vi.mock('./databaseWriterRegistry.js', () => ({ reserveDatabaseWriter: () => ({
   assertLaunchAllowed() {}, launched() {}, completed() {},
 }) }));
 
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { EventEmitter } from 'events';
@@ -115,7 +115,7 @@ const killLeftoverChild = async (controlDir) => {
   await waitUntil(() => !isAliveForTest(pid), { timeoutMs: 5000 });
 };
 
-afterEach(async () => {
+const cleanupControlDirs = async () => {
   const pending = dirs.splice(0);
   await Promise.all(pending.map(async (d) => {
     await killLeftoverChild(d).catch(() => {});
@@ -125,7 +125,8 @@ afterEach(async () => {
     // it.
     await rm(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }));
-});
+};
+afterEach(cleanupControlDirs);
 
 const ppidOf = async (pid) => {
   const { stdout } = await execFileAsync('ps', ['-o', 'ppid=', '-p', String(pid)]).catch(() => ({ stdout: '' }));
@@ -155,16 +156,48 @@ const readStdoutLog = (controlDir) => readFile(join(controlDir, 'stdout.log'), '
 // exactly as long as the test needs it, and not a second longer.
 const blockUntil = (marker) => `while [ ! -f "${marker}" ]; do sleep 0.02; done`;
 
+// The first real PowerShell launcher on a fresh Windows runner pays a one-time
+// host cold start (loading PowerShell/.NET from a cold disk cache) that later
+// launches do not. The PID deadline starts as soon as the launcher is spawned,
+// so that cost was charged to whichever timed launch happened to run first —
+// in #10551 it took ~15s just to reach `starting-supervisor`. Pay it once,
+// here, with its own explicit budget and a real end-to-end assertion. One
+// launch, no retry: a warmup that fails fails the suite.
+const WINDOWS_WARMUP_PID_TIMEOUT_MS = 60_000;
+const WINDOWS_WARMUP_HOOK_TIMEOUT_MS = WINDOWS_WARMUP_PID_TIMEOUT_MS + 15_000;
+
 describe('spawnDetached', () => {
-  // Independent launches, never retries: each cold launcher must satisfy all
+  beforeAll(async () => {
+    if (IS_POSIX) return;
+    const controlDir = await tmpControlDir();
+    try {
+      const handle = await spawnDetached(process.execPath, ['-e', 'process.stdout.write("warm\\n");'], {
+        controlDir, pollMs: 25, pidTimeoutMs: WINDOWS_WARMUP_PID_TIMEOUT_MS,
+      });
+      const getOut = collect(handle.stdout);
+      const { code } = await onClose(handle);
+      expect(code).toBe(0);
+      expect(getOut()).toBe('warm\n');
+      // Same bounded projection the stream launches print; never raw files.
+      const [launcher, supervisor] = await Promise.all([
+        __detachedSpawnTesting.readBootstrapDiagnostic(controlDir, 'launcher-bootstrap.log'),
+        __detachedSpawnTesting.readBootstrapDiagnostic(controlDir, 'supervisor-bootstrap.log'),
+      ]);
+      process.stdout.write(`🪟 Windows detached warmup: launcher=${launcher}; supervisor=${supervisor}\n`);
+    } finally {
+      // afterEach never runs for a failed hook; clean up here either way.
+      await cleanupControlDirs();
+    }
+  }, WINDOWS_WARMUP_HOOK_TIMEOUT_MS);
+
+  // Independent launches, never retries: each launcher must satisfy all
   // stream and exit assertions. Windows CI exercises the handoff three times.
   it.each(IS_POSIX ? [1] : [1, 2, 3])('streams stdout and stderr, then closes with the exit code (launch %i)', async (launch) => {
     const controlDir = await tmpControlDir();
-    // Windows CI runners occasionally take longer than the 10s production
-    // default to spin up the launcher/supervisor powershell chain on a cold,
-    // loaded host — this is the first real spawn in the suite, so it eats
-    // that startup cost. Give it CI headroom without touching the
-    // production timeout.
+    // The beforeAll warmup absorbs the one-time host cold start, but a loaded
+    // Windows runner can still take longer than the 10s production default to
+    // run the launcher/supervisor PowerShell chain. Give it CI headroom
+    // without touching the production timeout.
     const handle = await spawnDetached(
       process.execPath,
       ['-e', 'process.stdout.write("out-a\\nout-b\\n"); process.stderr.write("err-1\\n");'],
