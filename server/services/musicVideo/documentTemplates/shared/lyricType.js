@@ -147,9 +147,10 @@ function wordsForLine(line, songWords = []) {
 
 /**
  * When a line leaves the screen. A line never shows before its first onset and
- * stays at least LYRIC_TIMING.minOnScreenSec. `line`/`stamp`/`data` start exiting
- * 0.3s after the last word ends (capped at the next line's onset); a `hook`
- * exits on the first beat at or after its last word, with no fade.
+ * stays at least LYRIC_TIMING.minOnScreenSec unless another cue takes its zone.
+ * `line`/`data` fade 0.3s after the last word ends, finishing by the next cue in
+ * their zone (or cutting at its onset when a full fade cannot fit). A `stamp`
+ * cuts after its hold; a `hook` cuts on the next beat, with no fade.
  */
 function lineWindow(words, role, { beats = [], nextOnset = null, fps = 24, endSec = null } = {}) {
   const T = LYRIC_TIMING;
@@ -168,6 +169,12 @@ function lineWindow(words, role, { beats = [], nextOnset = null, fps = 24, endSe
   if (finite(nextOnset) && nextOnset < exitSec) exitSec = nextOnset;
   exitSec = Math.max(exitSec, minExit);
   const fade = role === 'stamp' ? 0 : T.lineExitFrames / fps;
+  if (role !== 'stamp' && finite(nextOnset)) {
+    // Zone turnover outranks the minimum hold: never crossfade two captions.
+    if (nextOnset - fade < minExit) return { startSec: onset, exitSec: nextOnset, endSec: nextOnset };
+    exitSec = Math.min(exitSec, nextOnset - fade);
+    return { startSec: onset, exitSec, endSec: Math.min(exitSec + fade, nextOnset) };
+  }
   return { startSec: onset, exitSec, endSec: exitSec + fade };
 }
 
@@ -268,7 +275,8 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
     if (!line.role && !options.overrides?.[line.id] && !options.overrides?.[index] && LYRIC_ROLES.includes(sectionRoles[kind])) role = sectionRoles[kind];
     const shot = sceneAt(words[0].startSec);
     if (!line.role && !options.overrides?.[line.id] && !options.overrides?.[index] && LYRIC_ROLES.includes(shot?.lyricRole)) role = shot.lyricRole;
-    return { index, id: line.id ?? null, text: String(line.text).trim(), role, words, zone: line.zone || null, strike: !!line.strike, endSec: line.endSec, shot };
+    const zone = line.zone || shot?.textZone || (role === 'hook' ? 'center' : options.defaultZone || 'lower-left');
+    return { index, id: line.id ?? null, text: String(line.text).trim(), role, words, zone: TEXT_ZONES.includes(zone) ? zone : 'lower-left', strike: !!line.strike, endSec: line.endSec, shot };
   }).filter(Boolean).sort((a, b) => a.words[0].startSec - b.words[0].startSec);
 
   // At most one data caption per shot: later ones in the same shot fall back to `line`.
@@ -279,10 +287,11 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
     if (dataShots.has(key)) line.role = 'line'; else dataShots.add(key);
   }
   const lines = timed.map((line, i) => {
-    const next = timed.slice(i + 1).find((other) => other.role === line.role);
+    const next = timed.slice(i + 1).find((other) => line.role === 'line' || line.role === 'data'
+      ? other.zone === line.zone
+      : other.role === line.role);
     const window = lineWindow(line.words, line.role, { beats, nextOnset: next?.words[0].startSec ?? null, fps, endSec: line.role === 'hook' ? line.endSec : null });
-    const zone = line.zone || line.shot?.textZone || (line.role === 'hook' ? 'center' : options.defaultZone || 'lower-left');
-    return { ...line, ...window, zone: TEXT_ZONES.includes(zone) ? zone : 'lower-left', accent: line.role === 'hook' ? accentIndexOf(line.words) : -1 };
+    return { ...line, ...window, accent: line.role === 'hook' ? accentIndexOf(line.words) : -1 };
   });
 
   const exclusive = options.exclusive !== false;
