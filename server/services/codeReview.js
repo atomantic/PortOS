@@ -55,7 +55,7 @@ import {
 } from '../lib/goalFidelity.js'
 import { MAX_SCREENSHOT_BYTES } from '../lib/uploadLimits.js'
 import { normalizeGoalFidelityFollowUpTrigger } from '../lib/goalFidelityFollowUp.js'
-import { activeReviewerGroupIndex, isReviewerConfigFault, normalizeReviewFinishReason, reviewFailureDiagnostics } from '../lib/reviewerHealth.js'
+import { activeReviewerGroupIndex, isReviewerConfigFault, reviewerCommandPermissionFailureCode, normalizeReviewFinishReason, reviewFailureDiagnostics } from '../lib/reviewerHealth.js'
 import { getSettings, updateSettingsWith, settingsEvents } from './settings.js'
 
 export const REVIEWER_PAUSE_MS = 24 * 60 * 60 * 1000
@@ -925,6 +925,16 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
         safetyProfile, codeReview: true })
     }).catch(() => ({ error: 'Reviewer credential setup or execution failed.' }))
       .finally(() => isolatedCwd && rm(isolatedCwd, { recursive: true, force: true }))
+    // A failed headless command request is a configuration fault, not a verdict.
+    // Replace vendor prose with a bounded remedy before health or bridge output.
+    if (result.error || result.partial || !result.text?.trim()) {
+      const code = reviewerCommandPermissionFailureCode(result.error || result.stderr)
+      if (code) return {
+        ok: false,
+        code,
+        error: 'The headless reviewer required command permission. Use a compatible non-interactive review transport or supported tool-free vendor configuration.',
+      }
+    }
     if (result.partial) {
       const errorMsg = result.stderr?.trim() || result.text?.trim() || 'Reviewer exited before completing its response.'
       return {

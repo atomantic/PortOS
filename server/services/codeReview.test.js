@@ -373,6 +373,20 @@ describe('codeReview helpers', () => {
       expect(await getReviewerConfigHealth()).toEqual({ status: 'ok', configFaults: {} })
     })
 
+    it('records a headless command refusal as a warning without pausing or changing optional policy, then clears it', async () => {
+      const reviewer = 'provider:example-cli'
+      const config = { reviewers: [reviewer], optionalReviewers: [reviewer] }
+      mockedSettings.current = { codeReview: config }
+      await reportReviewerFailure(reviewer, { code: 'REVIEWER_COMMAND_PERMISSION_DENIED', error: 'synthetic-private-diagnostic' }, 100)
+      expect(mockedSettings.current.codeReview).toEqual({ ...config, reviewerHealth: {
+        [reviewer]: { code: 'REVIEWER_COMMAND_PERMISSION_DENIED', reason: 'configuration', failureCount: 1, lastFailureAt: 100 },
+      } })
+      expect(codeReviewSettingsSchema.parse(mockedSettings.current.codeReview)).toEqual(mockedSettings.current.codeReview)
+      expect(await getReviewerConfigHealth()).toMatchObject({ status: 'warning', configFaults: { [reviewer]: { code: 'REVIEWER_COMMAND_PERMISSION_DENIED' } } })
+      await reportReviewerSuccess(reviewer, 200)
+      expect(mockedSettings.current.codeReview).toEqual(config)
+    })
+
     it('persists and reports only safe malformed diagnostics without pausing or changing reviewer policy', async () => {
       mockedSettings.current = { codeReview: { reviewers: ['ollama'], optionalReviewers: ['ollama'] } }
       const config = structuredClone(mockedSettings.current.codeReview)
