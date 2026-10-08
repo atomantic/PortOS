@@ -414,7 +414,12 @@ it('resumes an interrupted real Git inventory of 1626 files without repeating or
   try {
     await mkdir(join(directory, 'large'));
     await Promise.all(Array.from({ length: 1626 }, (_, i) => writeFile(join(directory, 'large', `${String(i).padStart(4, '0')}.js`), `export const value = ${i};\n`)));
-    await execGit(['init'], directory); await execGit(['add', '.'], directory);
+    await execGit(['init'], directory);
+    // A disposable fixture must not leave detached Git maintenance writing
+    // objects after the awaited commit exits and teardown removes the repo.
+    await execGit(['config', '--local', 'gc.auto', '0'], directory);
+    await execGit(['config', '--local', 'maintenance.auto', 'false'], directory);
+    await execGit(['add', '.'], directory);
     await execGit(['-c', 'user.name=Example', '-c', 'user.email=example@example.com', 'commit', '-m', 'large fixture'], directory);
     const realDeps = { ...deps, inventory: undefined };
     await prepareDeepAudit({ task, agentId: 'large-first', workspacePath: directory }, realDeps);
