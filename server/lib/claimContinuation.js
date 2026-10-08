@@ -17,6 +17,7 @@
 import { resolve } from 'path';
 import { isPathInsideDir } from './pathSafety.js';
 import { isHumanClaimWorktree, worktreeAgentId } from './worktreeOwnership.js';
+import { hasClaimFlowContract } from './claimFlowTaskTypes.js';
 import { isTruthyMeta } from './metadataFlags.js';
 
 const CASE_FOLD = process.platform === 'win32';
@@ -52,7 +53,7 @@ function samePath(a, b) {
  * @returns {{ claimBranch: string|null, claimPicksOwnBranch: boolean, claimSelectionPending?: true }|null}
  */
 export function claimOwnershipBinding(task) {
-  if (!isTruthyMeta(task?.metadata?.claimFlow)) return null;
+  if (!hasClaimFlowContract(task)) return null;
   const claimBranch = claimContinuationBranch(task?.metadata?.claimTarget);
   // A pinned run may still check out a DIFFERENT branch: a pinned tracking epic
   // ships its first eligible child, and an oversized issue is split and its
@@ -269,7 +270,7 @@ function claimHolderOccupancy({ agents, holderPath, branchName, sourceWorkspace,
  * @returns {{ existingBranch: string, resumedFromAgentId: string, resumeWorktreePath: string, claimResumeInPlace: true }|null}
  */
 export function claimContinuationPointer({ task, agentId, worktrees = [], agents = [], worktreesRoot, sourceWorkspace }) {
-  if (task?.metadata?.claimFlow !== true && task?.metadata?.claimFlow !== 'true') return null;
+  if (!hasClaimFlowContract(task)) return null;
   const branchName = claimContinuationBranch(task?.metadata?.claimTarget);
   if (!branchName || !agentId || !worktreesRoot) return null;
   if (!Array.isArray(agents)) return null;

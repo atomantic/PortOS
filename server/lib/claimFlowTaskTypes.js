@@ -13,8 +13,14 @@
 // the explicit `claimFlow` marker existed, which carry their kind only in
 // `metadata.analysisType`.
 //
-// Pure leaf: this module imports NOTHING. `server/lib/` is reached by ~400
-// suites, so keep it that way.
+// Pure leaf: shared by prompt selection, registration and resume authority.
 export const CLAIM_FLOW_TASK_TYPES = new Set([
   'plan-task', 'claim-issue', 'claim-issue-gitlab', 'claim-issue-jira', 'claim-work'
 ]);
+
+/** Trusted structured task identity only; descriptions and prompts confer no authority. */
+export function hasClaimFlowContract(task) {
+  const metadata = task?.metadata;
+  return metadata?.claimFlow === true || metadata?.claimFlow === 'true'
+    || CLAIM_FLOW_TASK_TYPES.has(metadata?.analysisType || metadata?.taskAnalysisType || task?.taskType);
+}
