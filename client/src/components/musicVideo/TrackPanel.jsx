@@ -63,7 +63,7 @@ export default function TrackPanel({
   return (
     <>
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-        <span className="text-port-text-muted flex items-center gap-1"><Music size={12} /> {trackName(project.trackId)}</span>
+        <span className="text-port-text-muted flex min-w-0 max-w-full items-center gap-1 break-words"><Music size={12} className="shrink-0" /> {trackName(project.trackId)}</span>
         {sourceLabel && (
           <span className="px-1.5 py-0.5 rounded bg-port-border text-port-text-muted text-[10px]" title={`Audio imported from ${sourceLabel}`}>
             {sourceLabel}
@@ -73,7 +73,7 @@ export default function TrackPanel({
           onChange={(e) => e.target.value && requestChange({ kind: 'track', trackId: e.target.value })}
           disabled={youtube.editJob.active || renderBound || midiBound}
           title={blockedMessage || undefined}
-          className="bg-port-bg border border-port-border rounded px-1.5 py-1 disabled:opacity-50 min-h-[44px] sm:min-h-0">
+          className="bg-port-bg border border-port-border rounded px-1.5 py-1 disabled:opacity-50 min-h-[44px] sm:min-h-0 min-w-0 max-w-full">
           <option value="">Change track…</option>
           {tracks.map((t) => <option key={t.id} value={t.id}>{optionLabels.get(t.id)}</option>)}
         </select>
