@@ -1189,12 +1189,15 @@ function SuggestionsSection({ label, hint, cards, alwaysShow = false, runner = n
   const [liveCards, setLiveCards] = useState(null);
   const [cursor, setCursor] = useState(null);
   const [loading, setLoading] = useState(false);
+  const requestIdRef = useRef(0);
 
   // Drop any live search/pagination so the section falls back to the cached
   // top-N. Shared by Clear, the empty-box submit, and the Refresh effect.
   // Stable identity (setters never change) so the effect can depend on it.
   const resetToCached = useCallback(() => {
+    requestIdRef.current += 1;
     setActiveQuery(''); setLiveCards(null); setCursor(null);
+    setLoading(false);
   }, []);
 
   // A global Refresh (new fetchedAt) re-seeds the cached top-N — drop live
@@ -1203,9 +1206,12 @@ function SuggestionsSection({ label, hint, cards, alwaysShow = false, runner = n
   useEffect(() => { setQuery(''); resetToCached(); }, [resetSignal, resetToCached]);
 
   const fetchPage = useCallback(async (q, { append, useCursor }) => {
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
     setLoading(true);
     await searchCivitaiLoras({ runner, query: q, cursor: useCursor, limit: 12 })
       .then((res) => {
+        if (requestIdRef.current !== requestId) return;
         const items = res?.items || [];
         setCursor(res?.nextCursor || null);
         setActiveQuery(q);
@@ -1216,8 +1222,12 @@ function SuggestionsSection({ label, hint, cards, alwaysShow = false, runner = n
           return [...prev, ...items.filter((c) => !seen.has(cardKey(c)))];
         });
       })
-      .catch((err) => toast.error(err?.message || 'Civitai search failed'))
-      .finally(() => setLoading(false));
+      .catch((err) => {
+        if (requestIdRef.current === requestId) toast.error(err?.message || 'Civitai search failed');
+      })
+      .finally(() => {
+        if (requestIdRef.current === requestId) setLoading(false);
+      });
   }, [runner]);
 
   const handleSearch = (e) => {
