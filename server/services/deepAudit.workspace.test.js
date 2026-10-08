@@ -30,17 +30,33 @@ vi.mock('../lib/fileUtils.js', async original => ({ ...(await original()), PATHS
 vi.mock('./instanceIdentity.js', () => ({ ensureInstanceId: async () => 'fixture-instance' }));
 vi.mock('./appQualitySchedule.js', () => ({ detectRepoCapabilities: async () => ({ capabilities: {} }) }));
 import { createWorktree, adoptWorktree } from './worktreeManager.js';
-import { prepareDeepAudit, getDeepAuditSourceRevision, checkpointDeepAudit } from './deepAudit.js';
+import { assignDeepAuditAttempt, createDeepAuditLedger, refreshDeepAuditScope } from '../lib/deepAudit.js';
+import { getDeepAuditSourceRevision, checkpointDeepAudit } from './deepAudit.js';
 
 let root, repo, ledger;
 const task = { id: 'audit', description: 'Inspect all source', metadata: { auditDepth: 'deep', app: 'fixture', fileIssues: true, deepAuditId: 'fixture-audit' } };
 const git = async (args, cwd = repo) => (await execGit(args, cwd)).stdout.trim();
 const commit = async cwd => git(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', '-c', 'commit.gpgsign=false', 'commit', '-am', 'fixture'], cwd);
 const deps = {
-  write: async () => {},
+  inventory: async () => structuredClone(ledger.scope),
   mutate: async (_id, initial, mutate) => (ledger = await mutate(structuredClone(ledger || initial))),
   readLedger: async () => ledger,
 };
+// Deep launches no longer create ledgers; seed one pinned to the workspace HEAD as a retained legacy ledger would be.
+async function seedAttempt(agentId, cwd, selected = task) {
+  const revision = await git(['rev-parse', 'HEAD'], cwd);
+  const files = (await git(['ls-tree', '-r', revision], cwd)).split('\n').filter(Boolean).map(line => {
+    const [meta, path] = line.split('\t'); const [mode, kind, blob] = meta.split(' ');
+    return { path, blob, mode, kind };
+  });
+  const scope = { revision, files, capabilities: {}, exclusions: [], promptHash: 'example', promptVersions: { contract: 1 } };
+  const initial = createDeepAuditLedger({ id: selected.metadata.deepAuditId, appId: selected.metadata.app, category: 'code-quality', scope, delivery: 'file-issues' });
+  await deps.mutate(initial.id, initial, current => {
+    const refreshed = refreshDeepAuditScope(current, scope);
+    assignDeepAuditAttempt(refreshed, agentId);
+    return refreshed;
+  });
+}
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'deep-workspace-'));
   repo = join(root, 'repo');
@@ -60,7 +76,7 @@ afterEach(async () => { vi.unstubAllEnvs(); await rm(root, { recursive: true, fo
 
 it('keeps accepted coverage on a fresh resume after remote main advances; Quick still follows main', async () => {
   const first = await createWorktree('agent-first', repo, task.id, { baseBranch: 'main', linkDependencies: false });
-  await prepareDeepAudit({ task, agentId: 'agent-first', workspacePath: first.worktreePath }, deps);
+  await seedAttempt('agent-first', first.worktreePath);
   const pin = ledger.scope.revision;
   const attempt = ledger.attempts['agent-first'];
   const unit = ledger.units[0];
@@ -74,7 +90,7 @@ it('keeps accepted coverage on a fresh resume after remote main advances; Quick 
   const baseCommit = await getDeepAuditSourceRevision(task, deps);
   expect(baseCommit).toBe(pin);
   const resumed = await createWorktree('agent-resume', repo, task.id, { baseBranch: 'main', baseCommit, linkDependencies: false });
-  await prepareDeepAudit({ task: { ...task, id: 'new-resume-task', metadata: { ...task.metadata, resumedFromAgentId: 'agent-first' } }, agentId: 'agent-resume', workspacePath: resumed.worktreePath }, deps);
+  await seedAttempt('agent-resume', resumed.worktreePath);
   expect(ledger.generation).toBe(1);
   expect(ledger.units[0].evidence.static).toBeTruthy();
   expect(await git(['rev-parse', 'HEAD'], resumed.worktreePath)).toBe(pin);
@@ -90,9 +106,7 @@ it('expands a fresh submodule at its gitlink and refuses to reset retained submo
   await git(['submodule', 'add', child, 'lib/child']); await commit(repo); await git(['push', 'origin', 'main']);
   const worktree = await createWorktree('agent-submodule', repo, task.id, { baseBranch: 'main', linkDependencies: false });
   const workspacePath = worktree.worktreePath;
-  await prepareDeepAudit({ task, agentId: 'agent-submodule', workspacePath }, deps);
-  expect(ledger.scope.capabilities.submodules).toEqual([]);
-  expect(ledger.scope.files.some(f => f.path === 'lib/child/nested.js' && f.kind === 'blob')).toBe(true);
+  await git(['submodule', 'update', '--init', '--recursive'], workspacePath);
   fault.rejectAdd = true;
   // Force differing spellings through the filesystem-identity fallback, even
   // on hosts where realpath normally normalizes both sides to the same string.
@@ -119,8 +133,7 @@ it('expands a fresh submodule at its gitlink and refuses to reset retained submo
   expect(await git(['rev-parse', 'HEAD'], replacement.worktreePath)).toBe(retainedHead);
   expect(await git(['branch', '--show-current'], workspacePath)).toBe('');
   expect(await readFile(join(workspacePath, 'lib/child/nested.js'), 'utf8')).toContain('nested = true');
-  await prepareDeepAudit({ task, agentId: 'agent-next', workspacePath: replacement.worktreePath }, deps);
-  expect(ledger.scope.capabilities.submodules).toEqual([]);
+  await git(['submodule', 'update', '--init', '--recursive'], replacement.worktreePath);
   const nested = join(replacement.worktreePath, 'lib/child');
   await writeFile(join(nested, 'untracked.txt'), 'preserve me');
   await expect(adoptWorktree('agent-dirty', repo, replacement.worktreePath, worktree.branchName, { deepResume: true })).rejects.toThrow('preserve it');
@@ -128,8 +141,5 @@ it('expands a fresh submodule at its gitlink and refuses to reset retained submo
   expect(await git(['branch', '--show-current'], replacement.worktreePath)).toBe(worktree.branchName);
   await rm(join(nested, 'untracked.txt'));
   await writeFile(join(nested, 'nested.js'), 'export const nested = false;\n'); await commit(nested);
-  const retained = await git(['rev-parse', 'HEAD'], nested);
-  await expect(prepareDeepAudit({ task, agentId: 'next', workspacePath: replacement.worktreePath }, deps)).rejects.toThrow('clean source snapshot');
-  expect(await git(['rev-parse', 'HEAD'], nested)).toBe(retained);
   await expect(adoptWorktree('agent-committed-child', repo, replacement.worktreePath, worktree.branchName, { deepResume: true })).rejects.toThrow('preserve it');
 });

@@ -1,14 +1,13 @@
 import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 /** Machine-local, DB-primary coverage evidence. No timers or provider calls. */
-import { join, resolve } from 'path';
+import { join } from 'path';
 import { ensureSchema, query, withTransaction } from '../lib/db.js';
 import { execGit } from '../lib/execGit.js';
-import { atomicWrite, PATHS } from '../lib/fileUtils.js';
+import { PATHS } from '../lib/fileUtils.js';
 import { tryReadFile } from '../lib/jsonIo.js';
 import { canonicalSnapshotChecksum } from '../lib/snapshotChecksum.js';
 import { normalizeAuditTaskType, isAuditTaskType } from '../lib/auditCatalog.js';
-import { createDeepAuditLedger, assignDeepAuditAttempt, deepAuditProgress, deepAuditInstructions, deepAuditAssignment,
-  mergeDeepAuditReport, refreshDeepAuditScope, DEEP_AUDIT_CONTRACT_VERSION } from '../lib/deepAudit.js';
+import { deepAuditProgress, mergeDeepAuditReport, DEEP_AUDIT_CONTRACT_VERSION } from '../lib/deepAudit.js';
 import { PROMPT_VERSIONS } from './taskPromptDefaults/versions.js';
 import { resolveTaskHookType } from './taskTypeHooks.js';
 
@@ -19,10 +18,8 @@ function deepAuditId(task) {
     : task.id);
 }
 
-function deepAuditPaths(_workspacePath, agentId) {
-  const prefix = `.portos-deep-${canonicalSnapshotChecksum(agentId).slice(0, 24)}`;
-  const directory = join(PATHS.cos, 'deep-audit-checkpoints');
-  return { ledgerPath: join(directory, `${prefix}-ledger.json`), assignmentPath: join(directory, `${prefix}-assignment.json`), reportPath: join(directory, `${prefix}-report.json`) };
+function deepAuditReportPath(agentId) {
+  return join(PATHS.cos, 'deep-audit-checkpoints', `.portos-deep-${canonicalSnapshotChecksum(agentId).slice(0, 24)}-report.json`);
 }
 
 async function inventoryDeepAudit(workspacePath, { promptHash, category }) {
@@ -90,39 +87,6 @@ export async function getDeepAuditSourceRevision(task, deps = {}) {
   return ledger.scope.revision;
 }
 
-/** Expand only a clean snapshot; never reset a retained submodule's work. */
-async function initializeDeepAuditSubmodules(workspacePath) {
-  const directories = (await execGit(['rev-parse', '--git-dir', '--git-common-dir'], workspacePath)).stdout.trim().split('\n');
-  if (directories.length !== 2 || resolve(workspacePath, directories[0]) === resolve(workspacePath, directories[1])) return;
-  const dirty = (await execGit(['diff', '--ignore-submodules=none', '--name-only', 'HEAD', '--'], workspacePath)).stdout.trim();
-  if (dirty) throw new Error('Deep audit needs a clean source snapshot; retained changes must be preserved');
-  await execGit(['submodule', 'update', '--init', '--recursive'], workspacePath);
-}
-
-/** Inject at the common spawn boundary, after all saved/custom/legacy task rendering. */
-export async function prepareDeepAudit({ task, agentId, workspacePath }, deps = {}) {
-  if (!isLegacyDeepAudit(task.metadata)) return null;
-  if (!agentId || !workspacePath || !task.metadata?.app || !deepAuditId(task)) throw new Error('Deep audit needs an identified agent, app and workspace');
-  const category = isAuditTaskType(resolveTaskHookType(task)) ? normalizeAuditTaskType(resolveTaskHookType(task)) : 'code-quality';
-  const promptHash = canonicalSnapshotChecksum({ description: task.description, prompt: task.metadata?.prompt, context: task.metadata?.context });
-  if (!deps.inventory) await initializeDeepAuditSubmodules(workspacePath);
-  const scope = await (deps.inventory || inventoryDeepAudit)(workspacePath, { promptHash, category });
-  const initial = createDeepAuditLedger({ id: deepAuditId(task), appId: task.metadata.app, category, scope,
-    delivery: task.metadata.fileIssues === true || task.metadata.fileIssues === 'true' ? 'file-issues' : 'fix' });
-  const ledger = await (deps.mutate || mutateLedger)(initial.id, initial, current => {
-    if (current.appId !== initial.appId || current.category !== initial.category || current.delivery !== initial.delivery) {
-      throw new Error('Deep audit resume must keep the same app, category and delivery mode');
-    }
-    const refreshed = refreshDeepAuditScope(current, scope);
-    assignDeepAuditAttempt(refreshed, agentId);
-    return refreshed;
-  });
-  const paths = deepAuditPaths(workspacePath, agentId);
-  await (deps.write || atomicWrite)(paths.ledgerPath, ledger);
-  await (deps.write || atomicWrite)(paths.assignmentPath, deepAuditAssignment(ledger, ledger.attempts[agentId]));
-  return deepAuditInstructions({ ledger, attempt: ledger.attempts[agentId], ...paths });
-}
-
 /** Import even on failure; absent/malformed output preserves a partial, resumable ledger. */
 export async function checkpointDeepAudit({ task, agentId, workspacePath, success }, deps = {}) {
   if (!isLegacyDeepAudit(task.metadata)) return null;
@@ -145,7 +109,7 @@ export async function checkpointDeepAudit({ task, agentId, workspacePath, succes
         });
         if (canonicalSnapshotChecksum(scope) !== current.scopeHash) throw new Error('Source changed during review; resume to invalidate and re-inventory');
       }
-      const contents = await (deps.read || tryReadFile)(deepAuditPaths(workspacePath, agentId).reportPath);
+      const contents = await (deps.read || tryReadFile)(deepAuditReportPath(agentId));
       if (!contents) throw new Error('Deep audit checkpoint missing; no coverage credited');
       return mergeDeepAuditReport(current, agentId, JSON.parse(contents), { deliverySuccess: success === true, validationRevision });
     } catch (err) {
