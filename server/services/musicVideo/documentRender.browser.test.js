@@ -147,8 +147,9 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
           canvas.getContext('2d').drawImage(img, 0, 0);
           const gl = document.createElement('canvas').getContext('webgl');
           try {
+            gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
-            resolve('uploaded');
+            resolve(gl.getError() === gl.NO_ERROR ? 'uploaded' : 'gl-error');
           } catch (error) { resolve(error.name); }
         };
         img.onerror = () => resolve('image-failed');
