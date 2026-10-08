@@ -123,11 +123,15 @@ const auditionUrl = (sampleWav) => {
  * The client view of a job: the durable record plus what the Voice Lab renders
  * per checkpoint — a playable audition URL and whether (and why not) it can be
  * promoted, decided by the same predicate `promoteCheckpoint` enforces.
+ * `processActive` is true while the trainer process has not exited yet — a
+ * cancelled run reads `cancelled` at once but may still hold the GPU until
+ * then. Records read from disk never have a live process.
  */
 const publicJob = (job) => {
   const record = serializableJob(job);
   return {
     ...record,
+    processActive: job.finalized === false,
     checkpoints: record.checkpoints.map((checkpoint) => {
       const blockedReason = promotionBlockedReason(record, checkpoint);
       return {
@@ -203,9 +207,12 @@ const finalizeJob = (jobState) => {
   closeJobAfterDelay(activeJobs, jobState.id);
 };
 
+// Busy until the child has exited (`finalizeJob`), not merely until the status
+// leaves `running`: a cancel flips the status before the aborted trainer has
+// released the GPU.
 const assertNoRunningJob = (profileId) => {
   for (const job of activeJobs.values()) {
-    if (job.profileId === profileId && job.status === 'running') {
+    if (job.profileId === profileId && job.finalized === false) {
       throw new ServerError('A fine-tuning run is already in progress for this voice profile', {
         status: 409,
         code: 'FINE_TUNE_ALREADY_RUNNING',
@@ -363,6 +370,8 @@ export async function startFineTuningJob({
     error: null,
     controller: abortController,
     child: null,
+    // Flipped by `finalizeJob` once the child has closed or errored.
+    finalized: false,
   };
 
   activeJobs.set(jobId, jobState);

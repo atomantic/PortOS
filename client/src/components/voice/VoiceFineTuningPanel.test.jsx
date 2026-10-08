@@ -71,11 +71,17 @@ describe('VoiceFineTuningPanel', () => {
     await waitFor(() => expect(mocks.start).toHaveBeenCalledWith(PROFILE_ID, { epochs: 8 }, { silent: true }));
     expect(await screen.findByText('running')).toBeTruthy();
 
-    mocks.cancel.mockResolvedValue({ ok: true, jobId: JOB_ID, status: 'cancelled', job: job({ status: 'cancelled', error: 'Cancelled by user' }) });
+    mocks.cancel.mockResolvedValue({ ok: true, jobId: JOB_ID, status: 'cancelled',
+      job: job({ status: 'cancelled', error: 'Cancelled by user', processActive: true }) });
     fireEvent.click(screen.getByRole('button', { name: /Cancel/ }));
     expect(await screen.findByText('cancelled')).toBeTruthy();
     expect(mocks.cancel).toHaveBeenCalledWith(PROFILE_ID, JOB_ID, { silent: true });
     expect(screen.getByText('Cancelled by user')).toBeTruthy();
+    // The aborted trainer has not exited yet, so a new run must wait for it.
+    expect(screen.getByText(/stopping trainer/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Start Fine-Tuning Job/ })).toBeDisabled();
+    emit('voice:fine-tune:updated', frame({ status: 'cancelled', error: 'Cancelled by user', processActive: false }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Start Fine-Tuning Job/ })).toBeEnabled());
   });
 
   it('promotes a verified checkpoint, refreshes profiles, and keeps an unverified one blocked with its reason', async () => {

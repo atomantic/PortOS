@@ -95,6 +95,7 @@ function JobCard({ job, activeModelRevision, disabled, cancelling, onCancel, pro
           {' · '}started {timeAgo(job.startedAt, 'unknown')}
           {job.step ? <> · step {formatCount(job.step)}{job.totalSteps ? ` / ${formatCount(job.totalSteps)}` : ''}</> : null}
           {Number.isFinite(job.loss) ? <> · loss {job.loss.toFixed(3)}</> : null}
+          {!running && job.processActive ? <> · <span className="inline-flex items-center gap-1"><Loader2 size={10} className="animate-spin" /> stopping trainer</span></> : null}
         </p>
         {running ? (
           <button
@@ -208,7 +209,9 @@ export default function VoiceFineTuningPanel({ profileId, disabled, activeModelR
     await onPromoted?.(result.profile);
   };
 
-  const anyRunning = Boolean(jobs?.some((job) => job.status === 'running'));
+  // A cancelled run reads `cancelled` before its trainer has exited; the server
+  // refuses a new run until it has (`processActive`), so Start waits too.
+  const anyRunning = Boolean(jobs?.some((job) => job.status === 'running' || job.processActive));
   const epochsId = `fine-tune-epochs-${profileId || 'none'}`;
 
   return (

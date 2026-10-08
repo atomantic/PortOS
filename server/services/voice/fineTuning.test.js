@@ -423,7 +423,12 @@ describe('fineTuning', () => {
     useScriptedRunner();
     const spawned = [];
     const scriptedSpawn = spawnOverride;
-    spawnOverride = (...args) => { const child = scriptedSpawn(...args); spawned.push(child); return child; };
+    // No abort wiring: this test decides when an aborted trainer actually exits.
+    spawnOverride = (command, args, options) => {
+      const child = scriptedSpawn(command, args, { ...options, signal: undefined });
+      spawned.push(child);
+      return child;
+    };
 
     // Two overlapping starts: exactly one becomes a run.
     const results = await Promise.allSettled([
@@ -438,11 +443,21 @@ describe('fineTuning', () => {
       .rejects.toMatchObject({ status: 409, code: 'FINE_TUNE_ALREADY_RUNNING' });
     expect(spawned).toHaveLength(1);
 
-    // Once the run settles the voice can train again.
-    spawned[0].exit(0);
+    // A cancel reports `cancelled` at once, but the aborted trainer may still
+    // hold the GPU until it exits, so the voice stays busy until then.
+    const cancelled = cancelFineTuningJob(started[0].value.jobId, PROFILE.id);
+    expect(cancelled.job).toMatchObject({ status: 'cancelled', processActive: true });
+    await expect(startFineTuningJob({ profileId: PROFILE.id, epochs: 2 }))
+      .rejects.toMatchObject({ status: 409, code: 'FINE_TUNE_ALREADY_RUNNING' });
+    expect(spawned).toHaveLength(1);
+
+    // Once the child has exited the voice can train again.
+    spawned[0].exit(null, 'SIGTERM');
     await drainJobRecord(started[0].value.jobId);
     const next = await startFineTuningJob({ profileId: PROFILE.id, epochs: 2 });
     expect(spawned).toHaveLength(2);
+    expect(next.job.processActive).toBe(true);
+    expect((await getFineTuningJobStatus(started[0].value.jobId, PROFILE.id)).processActive).toBe(false);
     spawned[1].exit(0);
     await drainJobRecord(next.jobId);
   });

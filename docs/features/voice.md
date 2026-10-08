@@ -478,6 +478,8 @@ runs from their `job.json` sidecars (`GET /api/voice/profiles/:id/fine-tune`, ne
 recovers them. After that it applies `voice:fine-tune:updated` frames, which carry the whole job, on each
 status change, each sealed checkpoint, and at most once a second during training. It does not poll. Each
 checkpoint plays its audition from `/data/voice-profiles/…`. **Promote** is disabled, with the refusal
-reason beside it, on any checkpoint the server would refuse. **Cancel** appears while a run is live. A
+reason beside it, on any checkpoint the server would refuse. **Cancel** appears while a run is live. A voice
+trains one run at a time (`409 FINE_TUNE_ALREADY_RUNNING`), and a cancelled run still counts until its
+trainer process has exited (`processActive`). A
 sidecar left `running` by a server restart is reported as `interrupted`, because its process is gone. Its
 sealed checkpoints remain promotable.

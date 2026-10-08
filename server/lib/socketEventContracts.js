@@ -76,6 +76,7 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
             step: { type: ['integer', 'null'] },
             totalSteps: { type: ['integer', 'null'] },
             error: { type: ['string', 'null'] },
+            processActive: { type: 'boolean' },
             checkpoints: { type: 'array', items: { type: 'object' } },
           },
         },
