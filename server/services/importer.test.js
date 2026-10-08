@@ -1878,6 +1878,33 @@ describe('commitImport import sessions (#9943)', () => {
     });
   });
 
+  it('keeps a finished import resumable until its draft shells are promoted', async () => {
+    wireDefaultLLMResponses();
+    const preview = await analyze();
+    const issues = [{ title: 'I1', proseExcerpt: 'p1' }];
+    // The last issue lands, then the process dies before promotion and receipt.
+    mockEnsureIssue.mockImplementation(async (...args) => {
+      await realIssuesRef.current.ensureIssueWithId(...args);
+      throw new Error('simulated crash after the write');
+    });
+    mockDeleteIssue.mockRejectedValue(new Error('simulated delete failure'));
+    await expect(importerSvc.commitImport(payloadFor(preview, { issues }))).rejects.toThrow();
+    mockEnsureIssue.mockImplementation((...args) => realIssuesRef.current.ensureIssueWithId(...args));
+    mockDeleteIssue.mockImplementation((...args) => realIssuesRef.current.deleteIssue(...args));
+    expect((await seriesSvc.getSeries(preview.series.id)).importDraft).toBe(true);
+
+    // Not `committed` yet: a client that believed it would never send the
+    // commit that promotes the drafts.
+    const reanalyzed = await analyze();
+    expect(reanalyzed.importSession.status).toBe('arc-persisted');
+    const retried = await importerSvc.commitImport(payloadFor(reanalyzed, { issues }));
+
+    expect(retried.replayed).toBe(true);
+    expect((await seriesSvc.getSeries(preview.series.id)).importDraft).not.toBe(true);
+    expect(await issueCount(preview)).toBe(1);
+    expect((await analyze()).importSession).toEqual({ status: 'committed', createdIssueIds: retried.createdIssueIds });
+  });
+
   // The disk state a crash after the first issue leaves: the plan is recorded,
   // one issue exists, and nothing rolled it back.
   const interruptAfterFirstIssue = async (preview, issues) => {

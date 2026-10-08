@@ -784,9 +784,17 @@ function recordCommittedReceipt(importId, createdIssueIds, remappedIssues) {
   }).catch((err) => console.error(`❌ importer session ${importId} not marked committed (its issue plan stays resumable): ${err.message}`));
 }
 
-const summarizeImportSession = (session) => (session
-  ? { status: session.status, createdIssueIds: session.createdIssueIds }
-  : null);
+// A finished import whose receipt was lost (#10762) is reported as committed
+// only once its import-draft shells are promoted: until then the client must
+// still send the commit, which replays the issues and promotes them — a client
+// that took `committed` at its word would skip that and strand the drafts.
+const summarizeImportSession = (session, { universe, series }) => {
+  if (!session) return null;
+  if (session.receiptPending && (universe.importDraft === true || series.importDraft === true)) {
+    return { status: SESSION_STATUS.ARC_PERSISTED, createdIssueIds: [] };
+  }
+  return { status: session.status, createdIssueIds: session.createdIssueIds };
+};
 
 /**
  * Phase 1: analyze. Runs canon-extract + arc-extract in parallel (both read
@@ -1025,7 +1033,7 @@ export async function analyzeImport({
     isExistingUniverse,
     isExistingSeries,
     importId,
-    importSession: summarizeImportSession(importSession),
+    importSession: summarizeImportSession(importSession, { universe, series }),
     canonPreview: {
       characters: Array.isArray(canonRun.content?.characters) ? canonRun.content.characters : [],
       places: Array.isArray(canonRun.content?.places) ? canonRun.content.places : [],
