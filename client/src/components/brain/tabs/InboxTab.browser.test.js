@@ -1,13 +1,12 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
+import { BROWSER_FIXTURE_STARTUP_MS, startBrowserFixture } from '../../../test/browserFixture.js';
 
 // Browser startup/navigation is bounded separately from 5s interactions.
 vi.setConfig({ testTimeout: 30000 });
@@ -25,94 +24,91 @@ const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
 ].find(path => path && existsSync(path));
 
 describe.skipIf(!chrome)('Brain inbox capture geometry', () => {
-  let server;
+  let fixture;
   let browser;
-  let browserTemp;
   let origin;
   beforeAll(async () => {
-    browserTemp = await mkdtemp(join(tmpdir(), 'inbox-chrome-'));
-    server = await createServer({
-      configFile: false,
-      // Concurrent fixtures and linked worktrees must not replace each other's
-      // optimized dependencies in the shared node_modules/.vite cache.
-      cacheDir: join(browserTemp, 'vite-cache'),
-      root: fileURLToPath(new URL('../../../..', import.meta.url)),
-      plugins: [react(), {
-        name: 'inbox-browser-fixture',
-        enforce: 'pre',
-        resolveId(id, importer) {
-          if (id === '/inbox-fixture.jsx') return '\0inbox-fixture.jsx';
-          if (importer?.endsWith('/InboxTab.jsx')) {
-            if (id === '../../../services/api') return '\0inbox-api';
-            if (id === '../../../services/socket') return '\0inbox-socket';
-            if (id === '../../../hooks') return '\0inbox-hooks';
-          }
+    // Vite start, Chromium launch and the cold-module warmup are each bounded
+    // inside the hook, so a stall names its phase and cleans up (#10543).
+    fixture = await startBrowserFixture({
+      name: 'inbox-chrome',
+      createServer,
+      chromium,
+      viteConfig: temp => ({
+        configFile: false,
+        // Concurrent fixtures and linked worktrees must not replace each other's
+        // optimized dependencies in the shared node_modules/.vite cache.
+        cacheDir: join(temp, 'vite-cache'),
+        // Pre-bundle only what this fixture renders, not the whole app's graph.
+        optimizeDeps: {
+          entries: ['src/components/brain/tabs/InboxTab.jsx'],
+          include: ['react-dom/client', 'react-router'],
         },
-        load(id) {
-          if (id === '\0inbox-api') return `
-            let history;
-            export function getBrainInbox() {
-              if (!history) history = new Promise(resolve => { window.resolveInboxHistory = resolve; });
-              return history;
+        root: fileURLToPath(new URL('../../../..', import.meta.url)),
+        plugins: [react(), {
+          name: 'inbox-browser-fixture',
+          enforce: 'pre',
+          resolveId(id, importer) {
+            if (id === '/inbox-fixture.jsx') return '\0inbox-fixture.jsx';
+            if (importer?.endsWith('/InboxTab.jsx')) {
+              if (id === '../../../services/api') return '\0inbox-api';
+              if (id === '../../../services/socket') return '\0inbox-socket';
+              if (id === '../../../hooks') return '\0inbox-hooks';
             }
-            export async function captureBrainThought(...args) {
-              window.captures = [...(window.captures || []), args];
-              return { inboxLog: { id: 'example-thought', status: 'filed', capturedText: args[0] } };
-            }
-          `;
-          if (id === '\0inbox-socket') return 'export default { on() {}, off() {} };';
-          if (id === '\0inbox-hooks') return `
-            import { useState } from 'react';
-            export const useLocalStorageBool = () => useState(false);
-            export const useRepoIntake = () => ({ repo: null, options: {}, managedApps: [], providers: [],
-              providerOverride: {}, intakeFor() {}, setStudyContext() {}, targetAppId: 'example-app' });
-          `;
-          if (id !== '\0inbox-fixture.jsx') return;
-          return `
-            import React from 'react';
-            import { createRoot } from 'react-dom/client';
-            import { MemoryRouter } from 'react-router';
-            import InboxTab from '/src/components/brain/tabs/InboxTab.jsx';
-            import '/src/index.css';
-            window.SpeechRecognition = function () { throw new Error('Recording must not start'); };
-            createRoot(document.getElementById('root')).render(
-              React.createElement(MemoryRouter, null, React.createElement(InboxTab))
-            );
-          `;
-        },
-        configureServer(vite) {
-          vite.middlewares.use('/inbox-test', async (_req, res) => {
-            res.setHeader('Content-Type', 'text/html');
-            res.end(await vite.transformIndexHtml('/inbox-test',
-              '<div id="root" style="padding:16px"></div><script type="module" src="/inbox-fixture.jsx"></script>'));
-          });
-        },
-      }],
-      server: { host: '127.0.0.1', port: 0 },
+          },
+          load(id) {
+            if (id === '\0inbox-api') return `
+              let history;
+              export function getBrainInbox() {
+                if (!history) history = new Promise(resolve => { window.resolveInboxHistory = resolve; });
+                return history;
+              }
+              export async function captureBrainThought(...args) {
+                window.captures = [...(window.captures || []), args];
+                return { inboxLog: { id: 'example-thought', status: 'filed', capturedText: args[0] } };
+              }
+            `;
+            if (id === '\0inbox-socket') return 'export default { on() {}, off() {} };';
+            if (id === '\0inbox-hooks') return `
+              import { useState } from 'react';
+              export const useLocalStorageBool = () => useState(false);
+              export const useRepoIntake = () => ({ repo: null, options: {}, managedApps: [], providers: [],
+                providerOverride: {}, intakeFor() {}, setStudyContext() {}, targetAppId: 'example-app' });
+            `;
+            if (id !== '\0inbox-fixture.jsx') return;
+            return `
+              import React from 'react';
+              import { createRoot } from 'react-dom/client';
+              import { MemoryRouter } from 'react-router';
+              import InboxTab from '/src/components/brain/tabs/InboxTab.jsx';
+              import '/src/index.css';
+              window.SpeechRecognition = function () { throw new Error('Recording must not start'); };
+              createRoot(document.getElementById('root')).render(
+                React.createElement(MemoryRouter, null, React.createElement(InboxTab))
+              );
+            `;
+          },
+          configureServer(vite) {
+            vite.middlewares.use('/inbox-test', async (_req, res) => {
+              res.setHeader('Content-Type', 'text/html');
+              res.end(await vite.transformIndexHtml('/inbox-test',
+                '<div id="root" style="padding:16px"></div><script type="module" src="/inbox-fixture.jsx"></script>'));
+            });
+          },
+        }],
+        server: { host: '127.0.0.1', port: 0 },
+      }),
+      launchOptions: { executablePath: chrome, args: ['--mute-audio'] },
+      // Compile the cold Vite module graph inside fixture startup, before timed
+      // interaction cases. This does not resolve history or submit a capture.
+      warmup: async (page, url) => {
+        await page.goto(`${url}inbox-test`, { timeout: 20000 });
+        await page.getByRole('textbox', { name: 'New inbox thought' }).waitFor({ timeout: 5000 });
+      },
     });
-    await server.listen();
-    origin = server.resolvedUrls.local[0];
-    browser = await chromium.launch({ executablePath: chrome, headless: true, args: ['--mute-audio'],
-      env: { ...process.env, TMPDIR: browserTemp, TMP: browserTemp, TEMP: browserTemp },
-    });
-    // Compile the cold Vite module graph inside fixture startup, before timed
-    // interaction cases. This does not resolve history or submit a capture.
-    const warmup = await browser.newPage();
-    try {
-      await warmup.goto(`${origin}inbox-test`, { timeout: 25000 });
-      await warmup.getByRole('textbox', { name: 'New inbox thought' }).waitFor({ timeout: 5000 });
-    } finally {
-      await warmup.close();
-    }
-  }, 60000);
-  afterAll(async () => {
-    try {
-      await browser?.close();
-    } finally {
-      await server?.close();
-      if (browserTemp) await rm(browserTemp, { recursive: true, force: true });
-    }
-  }, 60000);
+    ({ browser, origin } = fixture);
+  }, BROWSER_FIXTURE_STARTUP_MS);
+  afterAll(() => fixture?.close(), 60000);
 
   it.each([[360, 800], [390, 844], [768, 1024], [1440, 900]])(
     'keeps the complete capture form usable at %ix%i', async (width, height) => {

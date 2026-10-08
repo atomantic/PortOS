@@ -1,13 +1,12 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
+import { BROWSER_FIXTURE_STARTUP_MS, startBrowserFixture } from '../../test/browserFixture.js';
 
 const require = createRequire(import.meta.url);
 // Prefer the client dev dependency; linked worktrees can also use the same
@@ -24,12 +23,15 @@ const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
 // This fixture exercises the real toolbar and Tailwind CSS with synthetic goals.
 // Only WebGL is replaced: the canvas stub retains the production sizing props.
 describe.skipIf(!chrome)('Goals Tree touch targets', () => {
-  let server, browser, browserTemp, origin;
+  let fixture, browser, origin;
   beforeAll(async () => {
-    browserTemp = await mkdtemp(join(tmpdir(), 'goals-touch-'));
-    server = await createServer({
+    // Each startup phase is bounded and cleaned up inside the hook (#10543).
+    fixture = await startBrowserFixture({ name: 'goals-touch', createServer, chromium,
+      launchOptions: { executablePath: chrome }, viteConfig: temp => ({
       configFile: false,
-      cacheDir: join(browserTemp, 'vite-cache'),
+      cacheDir: join(temp, 'vite-cache'),
+      // Pre-bundle only what this fixture renders, not the whole app's graph.
+      optimizeDeps: { entries: ['src/components/goals/GoalsTreeView.jsx'], include: ['react', 'react-dom/client'] },
       root: fileURLToPath(new URL('../../..', import.meta.url)),
       plugins: [react(), {
         name: 'goals-touch-fixture',
@@ -74,19 +76,10 @@ describe.skipIf(!chrome)('Goals Tree touch targets', () => {
         },
       }],
       server: { host: '127.0.0.1', port: 0 },
-    });
-    await server.listen();
-    origin = server.resolvedUrls.local[0];
-    browser = await chromium.launch({ executablePath: chrome, headless: true,
-      env: { ...process.env, TMPDIR: browserTemp, TMP: browserTemp, TEMP: browserTemp } });
-  }, 60000);
-  afterAll(async () => {
-    try { await browser?.close(); }
-    finally {
-      await server?.close();
-      if (browserTemp) await rm(browserTemp, { recursive: true, force: true });
-    }
-  });
+    }) });
+    ({ browser, origin } = fixture);
+  }, BROWSER_FIXTURE_STARTUP_MS);
+  afterAll(() => fixture?.close());
 
   it.each([[360, 800], [768, 1024], [1440, 900]])('keeps targets usable at %sx%s', async (width, height) => {
     const page = await browser.newPage({ viewport: { width, height } });
