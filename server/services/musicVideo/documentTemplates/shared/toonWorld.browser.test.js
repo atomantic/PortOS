@@ -47,6 +47,8 @@ describe.skipIf(!canRun)('toon world headless dish proof', () => {
     expect(results.flatChanged).toBe(0);
     expect(new Set(results.views).size).toBe(3);
     expect(results.postChanged).toBeGreaterThan(1000);
+    expect(results.darkInkCount).toBeGreaterThan(100);
+    expect(results.bloomOverInk).toBe(0);
     expect(results.repeat).toBe(true);
     expect(errors).toEqual([]);
     console.log(`🎨 Toon dish proof: baseline ${results.baselineMs.toFixed(1)}ms, ink ${results.inkMs.toFixed(1)}ms, ratio ${results.ratio.toFixed(2)}`);
@@ -106,6 +108,14 @@ window.manualProof=()=>{
 window.proof=()=>{
   const baseline=draw(), ink=draw({ink:true});
   const inkChanged=changed(baseline,ink);
+  const blackInk=draw({ink:{color:'#000000',width:2}});
+  const bloomedInk=draw({ink:{color:'#000000',width:2},bloom:4,bloomThreshold:0});
+  let darkInkCount=0,bloomOverInk=0;
+  for(let i=0;i<blackInk.length;i+=4){
+    if(blackInk.slice(i,i+3).every(v=>v<3)&&baseline.slice(i,i+3).some(v=>v>50)){
+      darkInkCount++;if(bloomedInk.slice(i,i+3).some(v=>v>3))bloomOverInk++;
+    }
+  }
   // Empty ground in the lower left has no silhouette or crease.
   const flatChanged=changed(baseline,ink,index=>{const x=index%640,y=Math.floor(index/640);return x>30&&x<100&&y>30&&y<100;});
   const views=[];
@@ -132,6 +142,6 @@ window.proof=()=>{
   }
   const median=values=>values.sort((x,y)=>x-y)[Math.floor(values.length/2)];
   const baselineMs=median(a),inkMs=median(b);
-  return {overlaps:kit.warnOverlaps(THREE,dishes),inkChanged,hiddenChanged,flatChanged,views,postChanged,repeat,baselineMs,inkMs,ratio:inkMs/baselineMs};
+  return {overlaps:kit.warnOverlaps(THREE,dishes),darkInkCount,bloomOverInk,inkChanged,hiddenChanged,flatChanged,views,postChanged,repeat,baselineMs,inkMs,ratio:inkMs/baselineMs};
 };
 `;

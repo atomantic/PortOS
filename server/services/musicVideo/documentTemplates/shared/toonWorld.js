@@ -56,19 +56,37 @@ export function shellLathe(profile, thickness, segments = 64) {
 export function solidify(geometry, thickness) {
   positive(thickness, 'Thickness');
   const source = geometry.clone();
-  if (!source.getAttribute('normal')) source.computeVertexNormals();
-  const p = source.getAttribute('position'), n = source.getAttribute('normal');
+  const p = source.getAttribute('position');
   if (!p || p.count < 3) throw new Error('Solidify needs triangle positions');
+  if (!source.getAttribute('normal')) source.computeVertexNormals();
+  const n = source.getAttribute('normal');
   const indices = source.index ? Array.from(source.index.array) : Array.from({ length: p.count }, (_, i) => i);
   if (indices.length % 3) throw new Error('Solidify needs triangles');
   const positions = [], normals = [], uvs = [], uv = source.getAttribute('uv');
-  const weld = new Map(), canonical = [];
+  const weld = new Map(), canonical = [], offsets = new Map();
   for (let i = 0; i < p.count; i++) {
     const key = [p.getX(i), p.getY(i), p.getZ(i)].map(v => Math.round(v * 1e6)).join(',');
-    if (!weld.has(key)) weld.set(key, i);
-    canonical[i] = weld.get(key);
+    if (!weld.has(key)) weld.set(key, { index: i, normals: new Map() });
+    const group = weld.get(key);
+    canonical[i] = group.index;
+    const normal = new GeometryTHREE.Vector3(n.getX(i), n.getY(i), n.getZ(i)).normalize();
+    // Duplicate face corners must not bias a seam's offset toward whichever
+    // triangle happened to repeat that corner more often.
+    group.normals.set(normal.toArray().map(v => Math.round(v * 1e6)).join(','), normal);
+  }
+  for (const group of weld.values()) {
+    const normalsAtSeam = [...group.normals.values()];
+    const direction = normalsAtSeam.reduce((sum, normal) => sum.add(normal), new GeometryTHREE.Vector3()).normalize();
+    const projection = Math.min(...normalsAtSeam.map(normal => normal.dot(direction)));
+    if (projection <= 1e-6) throw new Error('Solidify needs consistently oriented sheet normals');
+    // Miter the welded corner, retaining at least the requested thickness on
+    // each incident face. Keep original shading normals on separate vertices.
+    offsets.set(group.index, direction.multiplyScalar(thickness / (2 * projection)));
+  }
+  for (let i = 0; i < p.count; i++) {
+    const offset = offsets.get(canonical[i]), point = canonical[i];
     for (const sign of [1, -1]) {
-      positions.push(p.getX(i) + sign * n.getX(i) * thickness / 2, p.getY(i) + sign * n.getY(i) * thickness / 2, p.getZ(i) + sign * n.getZ(i) * thickness / 2);
+      positions.push(p.getX(point) + sign * offset.x, p.getY(point) + sign * offset.y, p.getZ(point) + sign * offset.z);
       normals.push(sign * n.getX(i), sign * n.getY(i), sign * n.getZ(i));
       uvs.push(uv?.getX(i) ?? 0, uv?.getY(i) ?? 0);
     }

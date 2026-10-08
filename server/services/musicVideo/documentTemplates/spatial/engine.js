@@ -166,7 +166,7 @@ export function createPost(THREE, renderer) {
     // The frame is wrapped so sin() stays in precise range late in a long song.
     float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
     void main(){
-      vec3 c = (applyInk(texture2D(tColor, vUv).rgb, vUv) + texture2D(tBloom, vUv).rgb * uBloom) * uExposure;
+      vec3 c = applyInk(texture2D(tColor, vUv).rgb + texture2D(tBloom, vUv).rgb * uBloom, vUv) * uExposure;
       c = srgb(clamp(neutral(max(c, 0.)), 0., 1.));
       vec2 q = vUv - .5; c *= 1. - dot(q, q) * uVignette * 1.8;
       c += (hash(vUv * uRes + mod(uFrame, 251.) * 7.13) - .5) * uGrain;

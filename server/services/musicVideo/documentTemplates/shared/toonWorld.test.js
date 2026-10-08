@@ -66,6 +66,33 @@ describe('toon world geometry and placement', () => {
     sheet.dispose();
   });
 
+  it('closes a folded non-indexed sheet without cracks at its hard normal seam', () => {
+    const folded = new THREE.BufferGeometry();
+    folded.setAttribute('position', new THREE.Float32BufferAttribute([
+      0, 0, 0, 1, 0, 0, 0, 1, 0,
+      1, 0, 0, 0, 0, 0, 0, 0, 1,
+    ], 3));
+    const shell = solidify(folded, .2);
+    const p = shell.getAttribute('position'), n = shell.getAttribute('normal');
+    for (const [a, b] of [[0, 8], [2, 6], [1, 9], [3, 7]]) {
+      expect([p.getX(a), p.getY(a), p.getZ(a)]).toEqual([p.getX(b), p.getY(b), p.getZ(b)]);
+    }
+    expect(n.getZ(0)).toBe(1); expect(n.getY(8)).toBe(1);
+    const edges = new Map();
+    const point = i => [p.getX(i), p.getY(i), p.getZ(i)].map(v => Math.round(v * 1e6)).join(',');
+    const indices = shell.index.array;
+    for (let i = 0; i < indices.length; i += 3) {
+      const [a, b, c] = [...indices.slice(i, i + 3)].map(point);
+      for (const pair of [[a, b], [b, c], [c, a]]) {
+        const key = pair.sort().join('|');
+        edges.set(key, (edges.get(key) || 0) + 1);
+      }
+    }
+    expect([...edges.values()].every(count => count === 2)).toBe(true);
+    expect(shell.index.count).toBe(36);
+    folded.dispose(); shell.dispose();
+  });
+
   it('warns for actual transformed bounds, while touching or spaced bounds are allowed', () => {
     const objects = layoutRow({ count: 7, footprint: 2, gap: .1 }).map(p => {
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(2, 1, 2));
