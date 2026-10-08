@@ -137,11 +137,19 @@ function launch(id, token) {
       child.on('close',code=>{process.exitCode=code;process.exit();});
       const released=setInterval(()=>{
         if(existsSync(${JSON.stringify(controlDirFor(token))})) return;
-        try{process.kill(child.pid,0);}catch{clearInterval(released);setTimeout(()=>{process.stdout.write('\\nRELEASED\\n',()=>process.exit(0));},300);}
+        try{process.kill(child.pid,0);}catch{clearInterval(released);setTimeout(()=>{process.stdout.write('\\nRELEASED\\n',()=>process.exit(0));});}
       },50);
     } catch { process.exitCode=1; }`);
 }
-const releasedResult = outcome => JSON.parse(outcome.stdout.split('\n').find(line => line.startsWith('{')));
+// Release archives the control directory before printing the final result.
+// The live tailer may not have opened its old path yet; after proven exit, the
+// exact archived log is the authoritative result, independent of forwarding.
+const releasedResult = (id, token) => {
+  const log = readFileSync(join(root, 'data', 'database-maintenance-completed', id, 'worker-' + token, 'stdout.log'), 'utf8');
+  const result = log.split('\n').find(line => line.startsWith('{'));
+  if (!result) throw new Error('Released worker archive has no JSON result');
+  return JSON.parse(result);
+};
 const isReleased = outcome => outcome.status === 0 && outcome.stdout.includes('RELEASED');
 
 // Operator status: bounded stage evidence, never endpoints, paths or tokens.
@@ -205,7 +213,7 @@ describe.skipIf(process.platform === 'win32')('owned maintenance worker', () => 
     const released = outcomes.filter(isReleased);
     expect(released, outcomes.map(value => value.stderr).join('\n')).toHaveLength(1);
     expect(outcomes.filter(value => value.status === 1)).toHaveLength(1);
-    expect(releasedResult(released[0])).toEqual({ id: operation.id, stage: 'released', source: from.mode, target: to.mode,
+    expect(releasedResult(operation.id, token)).toEqual({ id: operation.id, stage: 'released', source: from.mode, target: to.mode,
       importCommitted: true, sourceRetained: true, restartVerified: true, cosRestarted: true });
     await waitWithEvidence(() => expect(stubs.events()).toContain(`server booted ${to.port}`), 15_000);
     expect(stubs.events().slice(0, 6)).toEqual(['stop portos-cos', 'stop portos-server', 'dump writer=none',
@@ -375,5 +383,23 @@ describe('owned maintenance worker entry', () => {
     expect(journal.coordinatorStatus(operation.id)).toEqual({ state: 'awaiting-exit' });
     // The stopped reservation is never repaired or reused automatically.
     expect(readFileSync(join(controlDir, 'started.json'), 'utf8')).toContain(token);
+  });
+});
+
+
+describe('released worker result evidence', () => {
+  it('reads exact archived output when live forwarding missed the renamed directory', () => {
+    const id = randomUUID();
+    const token = randomUUID();
+    const archive = join(root, 'data', 'database-maintenance-completed', id, 'worker-' + token);
+    mkdirSync(archive, { recursive: true });
+    const result = { id, stage: 'released', restartVerified: true };
+    writeFileSync(join(archive, 'stdout.log'), JSON.stringify(result) + '\n');
+    expect(releasedResult(id, token)).toEqual(result);
+    expect(() => releasedResult(id, randomUUID())).toThrow();
+    writeFileSync(join(archive, 'stdout.log'), '');
+    expect(() => releasedResult(id, token)).toThrow('no JSON result');
+    writeFileSync(join(archive, 'stdout.log'), '{invalid}');
+    expect(() => releasedResult(id, token)).toThrow(SyntaxError);
   });
 });

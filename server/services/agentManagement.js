@@ -1,3 +1,4 @@
+import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
 import { isFalsyMeta, isTruthyMeta } from '../lib/metadataFlags.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
@@ -1507,7 +1508,7 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
 
   // Recovery of a dead Deep invocation is a checkpoint, never permission to
   // auto-launch another provider call or to treat commits as completed coverage.
-  if (task.metadata?.auditDepth === 'deep') {
+  if (isLegacyDeepAudit(task.metadata)) {
     if (task.status !== 'in_progress') return;
     const held = isRetryHeld(task.metadata);
     if (held && task.metadata[RETRY_HOLD_KEY] !== agentId) return;

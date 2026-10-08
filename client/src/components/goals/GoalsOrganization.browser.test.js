@@ -58,6 +58,9 @@ describe.skipIf(!chrome)('Goals organization responsive controls (#9712)', () =>
               { id: 'g2', title: 'Example project', category: 'creative', children: [] },
             ];
             const View = location.search.includes('tree') ? GoalsTreeView : GoalsListView;
+            // Pin the bundled Inter webfont (#10628): the default --port-font-ui is the
+            // host's system stack, so content-sized widths otherwise vary by machine.
+            document.documentElement.style.setProperty('--port-font-ui', "'Inter', sans-serif");
             createRoot(document.getElementById('root')).render(
               React.createElement(MemoryRouter, null,
                 React.createElement('div', { className: 'h-screen p-4 md:p-6' },
@@ -95,6 +98,13 @@ describe.skipIf(!chrome)('Goals organization responsive controls (#9712)', () =>
       const provider = page.getByRole('combobox', { name: 'AI Provider' });
       const model = page.getByRole('combobox', { name: 'Model', exact: true });
       await model.waitFor({ timeout: ASYNC_UTIL_TIMEOUT_MS });
+      // Measure only once the pinned face has loaded (the Organize label is 500 12px),
+      // so a missing or late webfont fails here rather than skewing widths.
+      expect(await page.evaluate(async () => {
+        const faces = await document.fonts.load('500 12px Inter');
+        await document.fonts.ready;
+        return faces.length > 0 && getComputedStyle(document.querySelector('button')).fontFamily.startsWith('Inter');
+      })).toBe(true);
       for (const [width, height] of [[360, 800], [390, 844], [768, 1024], [1440, 900]]) {
         await page.setViewportSize({ width, height });
         for (const control of [provider, model, page.getByRole('button', { name: 'Organize', exact: true })]) {

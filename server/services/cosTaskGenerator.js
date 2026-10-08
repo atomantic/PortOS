@@ -1,3 +1,4 @@
+import { newAuditMetadata } from '../lib/auditWorkflow.js';
 import { auditQualityInstructions } from '../lib/auditQuality.js';
 import { isPrivateSecurityTask, PRIVATE_SECURITY_DELIVERY } from '../lib/privateSecurityPolicy.js';
 /**
@@ -1497,6 +1498,7 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
   const sanitizedMeta = sanitizeTaskMetadata(interval.taskMetadata);
   if (sanitizedMeta) {
     Object.assign(metadata, sanitizedMeta);
+    Object.assign(metadata, newAuditMetadata(metadata));
   }
 
   // Use configured model/provider if specified, otherwise use default
@@ -2537,6 +2539,7 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // pass, so an invocation can carry nothing a stored override could not.
   const sanitizedRunMeta = sanitizeTaskMetadata(runOverrides);
   if (sanitizedRunMeta) Object.assign(metadata, sanitizedRunMeta);
+  Object.assign(metadata, newAuditMetadata(metadata));
 
   // Audit applicability bail-out — before preflights or a spawn slot. On the
   // SCHEDULED lane, a quality audit this repository cannot have findings for (a

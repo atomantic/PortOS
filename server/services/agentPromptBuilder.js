@@ -1,3 +1,4 @@
+import { auditWorkflow, EXTENDED_AUDIT_INSTRUCTIONS } from '../lib/auditWorkflow.js';
 /**
  * Agent Prompt Builder
  *
@@ -374,9 +375,9 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
       task = { ...task, metadata: { ...task.metadata, prompt: featurePrompt } };
     }
   }
-  const deepAuditContract = task.metadata?.auditDepth === 'deep'
-    ? await (await import('./deepAudit.js')).prepareDeepAudit({ task, agentId: options.agentId,
-      workspacePath: worktreeInfo?.worktreePath || workspaceDir }) : null;
+  const workflow = auditWorkflow(task.metadata);
+  if (workflow === 'legacy') throw new Error('Historical Deep certification runs are read-only; start a new Deep audit');
+  const deepAuditContract = workflow === 'extended-v1' ? EXTENDED_AUDIT_INSTRUCTIONS : null;
   const withDeepAudit = prompt => !deepAuditContract ? prompt : typeof prompt === 'string'
     ? `${deepAuditContract}\n\n${prompt}`
     : { ...prompt, systemPrompt: `${deepAuditContract}\n\n${prompt.systemPrompt || ''}` };

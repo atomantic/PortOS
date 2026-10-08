@@ -262,6 +262,19 @@ describe('recovery output-hook dispatch (#3182)', () => {
     }
   });
 
+
+it('finishes extended Deep with an honest partial summary through ordinary completion without ledger gates', async () => {
+  const task = { ...TASK, metadata: { ...TASK.metadata, analysisType: 'security', auditDepth: 'deep', auditWorkflow: 'extended-v1', simplify: false } };
+  recordAuditQuality.mockResolvedValue(true);
+  await finalizeAgent({ agentId: 'extended-summary', task, success: true, exitCode: 0, duration: 1000,
+    workspacePath: '/example/repo', finalSummary: 'Investigated high-risk paths and fixed two coherent defects. Coverage remains partial.', outputBuffer: 'tool transcript' });
+  expect(deep.checkpointDeepAudit).not.toHaveBeenCalled();
+  expect(deep.settleDeepAuditDelivery).not.toHaveBeenCalled();
+  expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'completed' }), expect.anything());
+  expect(persistedAgent.metadata.taskSummary).toContain('Coverage remains partial');
+  expect(persistedAgent.metadata.taskSummarySource).toBe('terminal-result');
+});
+
   it('parks a failed Deep attempt without the normal automatic retry path', async () => {
     const task = { ...TASK, metadata: { ...TASK.metadata, analysisType: 'security', auditDepth: 'deep' } };
     await finalizeAgent({ agentId: 'deep-failed', task, success: false, exitCode: 1, duration: 1000,

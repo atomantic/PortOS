@@ -1,3 +1,4 @@
+import { isLegacyDeepAudit, EXTENDED_AUDIT_WORKFLOW } from '../lib/auditWorkflow.js';
 /**
  * Manual maintenance runs — the Schedule tab's "Run maintenance now".
  *
@@ -209,7 +210,7 @@ export async function startMaintenanceRun({ appId, providerId, model = null, eff
   const pins = { providerId, model: model || null, effort: effort || null };
   const run = await insertRun({
     id, appId, familyId, claimFamilyId, ...pins, prCompletion,
-    taskTypes, ...(auditDepth === 'deep' ? { auditDepth, deepAudits: {}, deepCheckpointTaskIds: [], deepCheckpointAgentIds: [] } : {}),
+    taskTypes, ...(auditDepth === 'deep' ? { auditDepth, auditWorkflow: EXTENDED_AUDIT_WORKFLOW } : {}),
     status: MAINTENANCE_RUN_STATUS.RUNNING,
     steps: buildMaintenanceSteps({ appId, idPrefix: id, ...pins, mode, prCompletion, claimBetweenAudits, claimHandler: effectiveClaimHandler, taskTypes, explicitCheck, auditDepth }),
     completed: {},
@@ -285,6 +286,7 @@ function latestRunHandoff(run, handoffs) {
 export async function resumeMaintenanceRun(id) {
   const resumed = await perRun(id, async () => {
     const run = await getMaintenanceRun(id);
+    if (run && isLegacyDeepAudit(run)) throw new ServerError('Historical Deep certification runs are read-only; start a new Deep audit', { status: 409, code: 'DEEP_AUDIT_HISTORICAL' });
     if (!run || run.status === MAINTENANCE_RUN_STATUS.RUNNING) return { run, alreadyRunning: true };
     if (!run.taskTypes) await assertNoRunningRun(run.appId);
     console.log(`🧹 Maintenance run ${id} resumed`);
@@ -313,7 +315,7 @@ export async function resumeMaintenanceRun(id) {
 export const evaluateMaintenanceRun = (id, { ignoreTaskId = null, completeStepId = null } = {}) => perRun(id, async () => {
   if (completeStepId) {
     const run = await getMaintenanceRun(id);
-    if (run?.auditDepth === 'deep' && run.deepAudits?.[completeStepId]?.complete !== true) {
+    if (isLegacyDeepAudit(run) && run.deepAudits?.[completeStepId]?.complete !== true) {
       return { dispatched: false, reason: 'Deep coverage and delivery are incomplete' };
     }
     await patchRun(id, { completed: { [completeStepId]: new Date().toISOString() }, active: null });
@@ -421,9 +423,7 @@ async function finishExhaustedSequence(id, run, { completed, skipped }) {
 async function evaluate(id, { ignoreTaskId }) {
   const run = await getMaintenanceRun(id);
   if (!run) return { skipped: 'unknown run' };
-  if (run.auditDepth === 'deep' && Object.keys(run.completed || {}).some(stepId => !run.deepAudits?.[stepId]?.complete && !run.skipped?.[stepId])) {
-    return holdRun(id, run, 'Deep completion evidence is missing; no further dispatch');
-  }
+  if (isLegacyDeepAudit(run)) return holdRun(id, run, 'Historical Deep certification run; no further dispatch. Evidence remains available.');
   if (run.status !== MAINTENANCE_RUN_STATUS.RUNNING) return { skipped: run.status };
 
   const outstanding = await holdForOutstandingWork(id, run, ignoreTaskId);
@@ -470,7 +470,7 @@ function onMaintenanceAgentCompleted(agent) {
   return getMaintenanceRun(id)
     .then(async (run) => {
       if (!run) return { skipped: 'unknown run' };
-      if (run.auditDepth === 'deep') {
+      if (isLegacyDeepAudit(run)) {
         return perRun(id, async () => {
           const current = await getMaintenanceRun(id);
           const proof = agent.result?.deepAudit || agent.metadata?.deepAudit || { complete: false, reason: 'Deep checkpoint missing' };

@@ -306,7 +306,7 @@ it('pins an actual Git inventory and refuses tracked and untracked drift', async
     await rm(join(directory, 'untracked.js'));
     await writeFile(join(directory, 'source.js'), 'changed source');
     await expect(inspect()).rejects.toThrow('clean source snapshot');
-  } finally { await rm(directory, { recursive: true, force: true }); }
+  } finally { await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
 });
 
 
@@ -414,7 +414,12 @@ it('resumes an interrupted real Git inventory of 1626 files without repeating or
   try {
     await mkdir(join(directory, 'large'));
     await Promise.all(Array.from({ length: 1626 }, (_, i) => writeFile(join(directory, 'large', `${String(i).padStart(4, '0')}.js`), `export const value = ${i};\n`)));
-    await execGit(['init'], directory); await execGit(['add', '.'], directory);
+    await execGit(['init'], directory);
+    // A disposable fixture must not leave detached Git maintenance writing
+    // objects after the awaited commit exits and teardown removes the repo.
+    await execGit(['config', '--local', 'gc.auto', '0'], directory);
+    await execGit(['config', '--local', 'maintenance.auto', 'false'], directory);
+    await execGit(['add', '.'], directory);
     await execGit(['-c', 'user.name=Example', '-c', 'user.email=example@example.com', 'commit', '-m', 'large fixture'], directory);
     const realDeps = { ...deps, inventory: undefined };
     await prepareDeepAudit({ task, agentId: 'large-first', workspacePath: directory }, realDeps);
@@ -437,7 +442,7 @@ it('resumes an interrupted real Git inventory of 1626 files without repeating or
     expect(saved().attempts['large-resume']).toMatchObject({ pass: 'trace', unitIds: [unit.id] });
     expect(saved().units.find(item => item.id === unit.id).evidence.static).toBeDefined();
     expect(deepAuditProgress(saved()).complete).toBe(false);
-  } finally { await rm(directory, { recursive: true, force: true }); }
+  } finally { await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
 // Windows CI includes real filesystem work and repeated Git process startup
 // for 1,626 files. Keep the fixture bounded without dropping any source files
 // or interruption/resume assertions; this is not a throughput benchmark.

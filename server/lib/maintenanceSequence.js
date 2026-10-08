@@ -1,3 +1,4 @@
+import { EXTENDED_AUDIT_WORKFLOW } from './auditWorkflow.js';
 /**
  * The maintenance ladder: the ordered audits PortOS recommends running against a
  * managed app, with a perpetual `claim-issue` drain between every pair so each
@@ -70,6 +71,6 @@ export function buildMaintenanceSteps({ appId, idPrefix, providerId = null, mode
     jobType: null,
     runOnce: true,
     drain: taskType === MAINTENANCE_DRAIN_TASK,
-    overrides: { ...(taskType === MAINTENANCE_DRAIN_TASK && claimHandler ? claimHandler : { providerId, model, effort }), params: taskTypes ? { ...(auditDepth === 'deep' ? { auditDepth } : {}), fileIssues: mode !== 'fix', ...(mode === 'fix' ? { useWorktree: true, openPR: true, ...(prCompletion ? { prCompletion } : {}) } : {}), ...(explicitCheck || auditDepth === 'deep' ? { runInapplicableAudit: true } : {}) } : { ...(auditDepth === 'deep' ? { auditDepth } : {}), ...maintenanceStepParams(taskType, mode), ...(prCompletion ? { prCompletion } : {}) } },
+    overrides: { ...(taskType === MAINTENANCE_DRAIN_TASK && claimHandler ? claimHandler : { providerId, model, effort }), params: taskTypes ? { ...(auditDepth === 'deep' ? { auditDepth, auditWorkflow: EXTENDED_AUDIT_WORKFLOW } : {}), fileIssues: mode !== 'fix', ...(mode === 'fix' ? { useWorktree: true, openPR: true, ...(prCompletion ? { prCompletion } : {}) } : {}), ...(explicitCheck || auditDepth === 'deep' ? { runInapplicableAudit: true } : {}) } : { ...(auditDepth === 'deep' ? { auditDepth, auditWorkflow: EXTENDED_AUDIT_WORKFLOW } : {}), ...maintenanceStepParams(taskType, mode), ...(prCompletion ? { prCompletion } : {}) } },
   }));
 }
