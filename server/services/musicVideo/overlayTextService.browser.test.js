@@ -3,9 +3,10 @@
  * draws a corner readout under a big lyric, a pale caption on a pale frame, a
  * line past the right edge, a tiny tag and a DOM caption is staged like a
  * render, probed at its text moments, and each problem comes back once —
- * while a word ringed in a wide ink outline passes on the same pale frame. The
- * shipped layered template (lyricType.js) passes on a pale still, data readout
- * included.
+ * while a word ringed in a wide ink outline, and a caption on an ink plate,
+ * pass on the same pale frame: either is a legibility treatment, not a problem.
+ * The shipped layered template (lyricType.js) passes on a pale still, its
+ * plated data readout included.
  */
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
@@ -47,6 +48,9 @@ function draw() {
   ctx.strokeText('WHOLE', 300, 130); ctx.fillStyle = '#f3ead7'; ctx.fillText('WHOLE', 300, 130);
   // Ringed in ink on the pale frame: readable.
   ctx.strokeText('BLOOM', 80, 330); ctx.fillText('BLOOM', 80, 330);
+  // Pale on an ink plate: readable too.
+  ctx.fillStyle = '#141217'; ctx.fillRect(760, 380, 420, 70);
+  ctx.font = '500 40px monospace'; ctx.fillStyle = '#f3ead7'; ctx.fillText('ON A PLATE', 780, 428);
   // Pale on pale, no outline.
   ctx.font = '700 64px sans-serif'; ctx.fillStyle = '#fffaf0'; ctx.fillText('DISAPPEAR', 80, 480);
   // Past the right edge.
@@ -58,7 +62,7 @@ globalThis.portosComposition = { durationSec: 4, fps: 12, width: 1280, height: 7
 `;
 
 describe.skipIf(!chrome)('overlay text check (headless Chrome)', () => {
-  it('flags each text problem once, names the shot, and passes outlined type', async () => {
+  it('flags each text problem once, names the shot, and passes outlined or plated type', async () => {
     const source = join(PATHS.data, 'overlay-doc');
     await mkdir(source, { recursive: true });
     await writeFile(join(source, 'index.html'), PAGE);
@@ -83,6 +87,7 @@ describe.skipIf(!chrome)('overlay text check (headless Chrome)', () => {
     expect(kinds('tiny tag')).toContain('small');
     expect(kinds('DOM CAPTION')).toEqual(['contrast']);
     expect(kinds('BLOOM')).toEqual([]);
+    expect(kinds('ON A PLATE')).toEqual([]);
     // One finding per problem however many frames showed it, errors first.
     expect(new Set(check.findings.map((f) => f.id)).size).toBe(check.findings.length);
     expect(check.findings[0].severity).toBe('error');
