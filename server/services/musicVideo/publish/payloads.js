@@ -235,7 +235,8 @@ const BUILDERS = {
     const post = text(kit.copy?.facebook?.post);
     if (!post) throw missing('Write the Facebook post in the release copy first');
     if (post.length > FACEBOOK_POST_MAX) throw missing(`The Facebook post is ${post.length} characters; the limit is ${FACEBOOK_POST_MAX}`);
-    return { video: nativeVideo(project, kit, 'Facebook'), text: post, ...linksComment(kit, options, 'facebook') };
+    // Facebook's own "AI label" on the post: on unless the director turns it off (like TikTok's and Instagram's).
+    return { video: nativeVideo(project, kit, 'Facebook'), text: post, aiLabel: options.aiLabel !== false, ...linksComment(kit, options, 'facebook') };
   },
   reddit: (project, kit, options = {}) => {
     // r/aivideo is the default (#9307): a native video post, title + flair, no
@@ -414,6 +415,7 @@ export function publishPreviewParts(platform, project, payload) {
     case 'facebook':
       add('Video', 'The 1080p encode of the final render');
       add('Post', p.text);
+      if (platform === 'facebook') add('AI label', yesNo(p.aiLabel));
       add(platform === 'facebook' ? 'First comment (you press Enter)' : 'First comment (you press Comment)', p.firstComment);
       break;
     case 'reddit':
