@@ -1,33 +1,51 @@
 /**
- * LinkedIn adapter: the share box gets the video and the post text and is left
- * for the director's Post; once they open the new post, its link is recorded
- * and the first comment is typed (never sent).
+ * LinkedIn adapter: the share box (drawn in a shadow root, so reached only
+ * through locators) gets the video and the post text and is left for the
+ * director's Post; once they open the new post, its link is recorded and the
+ * first comment is typed (never sent).
  */
 import { describe, expect, it, vi } from 'vitest';
 import { linkedinAdapter } from './linkedin.js';
 
-function fakePage({ url = 'https://www.linkedin.com/feed/?shareActive=true', shows = '' } = {}) {
+const EDITOR = '[role=dialog] .ql-editor[contenteditable=true]';
+
+// A page whose elements exist only for locators. Like LinkedIn, attaching the
+// video swaps the composer for the media editor until its Next is pressed.
+function fakePage({ url = 'https://www.linkedin.com/feed/?shareActive=true', shows = '', pasteWorks = true } = {}) {
   const log = [];
+  let composer = true;
+  const typed = {};
   const page = {
     log,
     goto: async (to) => { log.push(['goto', to]); },
     url: () => url,
     waitForTimeout: async () => {},
-    waitForEvent: async () => ({ setFiles: async (path) => { log.push(['setFiles', path]); } }),
-    waitForFunction: async (_fn, arg) => { if (typeof arg === 'string' && arg !== '[role=dialog]' && !shows.includes(arg)) throw new Error('timed out'); },
-    locator: (sel) => {
+    waitForEvent: async () => ({ setFiles: async (path) => { log.push(['setFiles', path]); composer = false; } }),
+    keyboard: {
+      press: async (key) => { log.push(['press', key]); },
+      insertText: async (text) => { log.push(['insert', text]); },
+    },
+    getByText: (want) => ({ first: () => ({ waitFor: async () => { if (!shows.includes(want)) throw new Error('timeout'); } }) }),
+    locator: (sel, opts) => {
+      const name = opts?.hasText?.source?.replace(/\^\\s\*|\\s\*\$/g, '');
+      const isEditor = sel === EDITOR || sel.includes('comments-');
       const el = {
         first: () => el,
-        waitFor: async () => {},
-        isVisible: async () => true,
-        click: async () => { log.push(['click', sel]); },
+        last: () => el,
+        filter: () => ({ count: async () => 0 }),
+        count: async () => (/progressbar/.test(sel) ? 0 : 1),
+        isEnabled: async () => true,
+        waitFor: async () => { if (sel === EDITOR && !composer) throw new Error('timeout'); },
+        isVisible: async () => (sel === EDITOR ? composer : true),
+        click: async () => {
+          if (sel === EDITOR && !composer) throw new Error('not attached');
+          log.push(['click', name || sel]);
+          if (name === 'Next') composer = true;
+        },
+        evaluate: async (_fn, text) => { if (pasteWorks) typed[sel] = text; log.push(['paste', sel, text]); },
+        innerText: async () => (isEditor ? typed[sel] || '' : ''),
       };
       return el;
-    },
-    // pasteText passes [selector, text]; clickVisibleText passes [selector, label]; the length read passes the selector.
-    evaluate: async (_fn, arg) => {
-      if (Array.isArray(arg)) { log.push(['paste', arg[0], arg[1]]); return true; }
-      return 21;
     },
   };
   return page;
@@ -36,27 +54,37 @@ function fakePage({ url = 'https://www.linkedin.com/feed/?shareActive=true', sho
 const payload = { video: { path: '/videos/x.mp4' }, text: 'I made a music video.\n\nMore.', firstComment: 'Full video: https://youtu.be/abc' };
 
 describe('LinkedIn adapter', () => {
-  it('uploads the video and pastes the post into the share box, pressing nothing', async () => {
+  it('uploads the video, presses the media editor\'s Next, and pastes the post, never pressing Post', async () => {
     const page = fakePage();
     const summary = await linkedinAdapter.prepare(page, payload);
     expect(page.log[0]).toEqual(['goto', 'https://www.linkedin.com/feed/?shareActive=true']);
     expect(page.log).toContainEqual(['setFiles', '/videos/x.mp4']);
-    expect(page.log).toContainEqual(['paste', '[role=dialog] .ql-editor[contenteditable=true]', payload.text]);
-    expect(page.log.some(([kind, sel]) => kind === 'click' && /Post/.test(sel))).toBe(false);
-    expect(summary).toMatchObject({ characters: 21, firstComment: expect.stringMatching(/View post/) });
+    expect(page.log).toContainEqual(['click', 'Next']);
+    expect(page.log).toContainEqual(['paste', EDITOR, payload.text]);
+    expect(page.log.some(([kind, what]) => kind === 'click' && what === 'Post')).toBe(false);
+    expect(summary).toMatchObject({ characters: payload.text.length, firstComment: expect.stringMatching(/View post/) });
+  });
+
+  it('types the lines when Quill ignores the synthetic paste', async () => {
+    const page = fakePage({ pasteWorks: false });
+    await linkedinAdapter.prepare(page, payload);
+    expect(page.log.filter(([kind]) => kind === 'insert' || kind === 'press')).toEqual([
+      ['insert', 'I made a music video.'], ['press', 'Enter'], ['press', 'Enter'], ['insert', 'More.'],
+    ]);
   });
 
   it('asks for sign-in when LinkedIn redirects to its login wall', async () => {
     await expect(linkedinAdapter.prepare(fakePage({ url: 'https://www.linkedin.com/authwall?trk=x' }), payload)).rejects.toMatchObject({ code: 'PUBLISH_LOGIN_REQUIRED' });
   });
 
-  it('records the opened post and types the first comment without sending it', async () => {
+  it('records the opened post and types the first comment once, without sending it', async () => {
     const page = fakePage({ url: 'https://www.linkedin.com/feed/update/urn:li:activity:7123456789/?trk=x', shows: 'I made a music video.' });
-    await expect(linkedinAdapter.findPost(page, payload)).resolves.toBe('https://www.linkedin.com/feed/update/urn:li:activity:7123456789/');
+    const draft = { ...payload };
+    await expect(linkedinAdapter.findPost(page, draft)).resolves.toBe('https://www.linkedin.com/feed/update/urn:li:activity:7123456789/');
     expect(page.log.filter(([kind]) => kind === 'paste').map(([, , text]) => text)).toEqual([payload.firstComment]);
     expect(page.log.filter(([kind]) => kind === 'click').every(([, sel]) => /comment/.test(sel))).toBe(true);
     // A reload of the post page records it again but never types the comment twice.
-    await linkedinAdapter.findPost(page, payload);
+    await linkedinAdapter.findPost(page, draft);
     expect(page.log.filter(([kind]) => kind === 'paste')).toHaveLength(1);
   });
 
@@ -69,7 +97,8 @@ describe('LinkedIn adapter', () => {
 
   it('still records the post when the comment box cannot be found', async () => {
     const page = fakePage({ url: 'https://www.linkedin.com/feed/update/urn:li:activity:7/', shows: 'I made a music video.' });
-    page.locator = () => ({ first() { return this; }, click: async () => { throw new Error('no comment box'); } });
+    const base = page.locator;
+    page.locator = (sel, opts) => (sel.includes('comments-') ? { first() { return this; }, click: async () => { throw new Error('no comment box'); } } : base(sel, opts));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     await expect(linkedinAdapter.findPost(page, { ...payload })).resolves.toBe('https://www.linkedin.com/feed/update/urn:li:activity:7/');
     expect(warn).toHaveBeenCalled();

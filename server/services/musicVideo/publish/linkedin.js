@@ -12,8 +12,12 @@
  * Once the director opens it, findPost records the post's link and, when there
  * is a first comment, types it into the post's comment box: the director
  * presses Comment.
+ *
+ * LinkedIn draws the share box inside a shadow root, which `document` queries
+ * never reach, so everything here goes through Playwright locators (they pierce
+ * open shadow roots), including the paste.
  */
-import { PUBLISH_STEP_TIMEOUT_MS as T, clickVisibleText, landedOnPost, loginRequired, pasteText, step } from './browser.js';
+import { PUBLISH_STEP_TIMEOUT_MS as T, loginRequired, step } from './browser.js';
 
 const label = 'LinkedIn';
 const SHARE_URL = 'https://www.linkedin.com/feed/?shareActive=true';
@@ -23,10 +27,42 @@ const EDITOR = `${DIALOG} .ql-editor[contenteditable=true]`;
 const COMMENT_EDITOR = '.comments-comment-box .ql-editor[contenteditable=true], .comments-comment-texteditor .ql-editor[contenteditable=true]';
 // Drafts whose first comment was already typed: a reload of the post page must not type it twice.
 const commented = new WeakSet();
+const UPLOAD_WAIT_MS = 600_000;
 const POST_URL = /^https:\/\/www\.linkedin\.com\/feed\/update\/urn:li:(?:activity|share|ugcPost):\d+/;
 
 /** The post's opening words, as the post page shows them (its first line; LinkedIn folds the rest under "see more"). */
 const opening = (text) => String(text || '').split('\n').map((line) => line.trim()).find(Boolean) || '';
+
+/** The last visible button reading exactly `name` (a dialog stacks its own buttons last). */
+const button = (page, name) => page.locator('button:visible, [role=button]:visible', { hasText: new RegExp(`^\\s*${name}\\s*$`) }).last();
+
+/**
+ * Write `text` into the Quill editor `locator` matches. A synthetic paste keeps
+ * the line breaks; when Quill ignores it, the lines are typed with Enter between.
+ */
+async function pasteInto(page, locator, text) {
+  await locator.click({ timeout: T });
+  await locator.evaluate((el, txt) => {
+    el.focus();
+    const data = new DataTransfer();
+    data.setData('text/plain', txt);
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+  }, text);
+  await page.waitForTimeout(500);
+  if ((await locator.innerText()).trim()) return;
+  for (const [i, line] of String(text).split('\n').entries()) {
+    if (i > 0) await page.keyboard.press('Enter');
+    if (line) await page.keyboard.insertText(line);
+  }
+}
+
+/** Whether the share box is done uploading: Post enabled, no progress bar or Uploading/Processing note. */
+async function uploadSettled(page) {
+  const post = button(page, 'Post');
+  if (!(await post.count()) || !(await post.isEnabled())) return false;
+  if (await page.locator(`${DIALOG} [role=progressbar], ${DIALOG} progress`).count()) return false;
+  return !(await page.locator(DIALOG).filter({ hasText: /Uploading|Processing/i }).count());
+}
 
 async function openComposer(page) {
   await step(label, 'open the share box', () => page.goto(SHARE_URL, { waitUntil: 'domcontentloaded', timeout: T }));
@@ -36,7 +72,7 @@ async function openComposer(page) {
   const open = await page.locator(EDITOR).first().waitFor({ timeout: 8000 }).then(() => true, () => false);
   if (!open) {
     await step(label, 'start a post', async () => {
-      await clickVisibleText(page, 'Start a post');
+      await button(page, 'Start a post').click({ timeout: T });
       await page.locator(EDITOR).first().waitFor({ timeout: T });
     });
   }
@@ -54,7 +90,7 @@ async function attachVideo(page, video) {
     await page.waitForTimeout(1500);
     for (const name of ['Next', 'Done']) {
       if (await page.locator(EDITOR).first().isVisible().catch(() => false)) break;
-      await clickVisibleText(page, name).catch(() => {});
+      await button(page, name).click({ timeout: 5000 }).catch(() => {});
       await page.waitForTimeout(1500);
     }
     await page.locator(EDITOR).first().waitFor({ timeout: T });
@@ -66,29 +102,30 @@ export const linkedinAdapter = {
   async prepare(page, payload) {
     await openComposer(page);
     await attachVideo(page, payload.video);
-    await step(label, 'write the post', async () => {
-      await page.locator(EDITOR).first().click({ timeout: T });
-      await pasteText(page, EDITOR, payload.text);
+    await step(label, 'write the post', () => pasteInto(page, page.locator(EDITOR).first(), payload.text));
+    await step(label, 'wait for the upload', async () => {
+      const deadline = Date.now() + UPLOAD_WAIT_MS;
+      while (!(await uploadSettled(page))) {
+        if (Date.now() > deadline) throw new Error('the upload did not finish');
+        await page.waitForTimeout(2000);
+      }
     });
-    await step(label, 'wait for the upload', () => page.waitForFunction((dialog) => {
-      const box = document.querySelector(dialog);
-      const post = [...(box?.querySelectorAll('button') || [])].find((b) => (b.innerText || '').trim() === 'Post');
-      const uploading = box?.querySelector('[role=progressbar], progress') || /Uploading|Processing/i.test(box?.innerText || '');
-      return post && !post.disabled && post.getAttribute('aria-disabled') !== 'true' && !uploading;
-    }, DIALOG, { timeout: 600_000 }));
-    const length = await page.evaluate((sel) => document.querySelector(sel)?.innerText.trim().length ?? 0, EDITOR).catch(() => null);
+    const length = await page.locator(EDITOR).first().innerText().then((t) => t.trim().length, () => null);
     return {
       characters: length,
       firstComment: payload.firstComment ? 'Typed into the comment box once you press Post, then View post' : null,
     };
   },
   async findPost(page, payload) {
-    const url = await landedOnPost(page, POST_URL, opening(payload.text), ([match]) => `${match}/`);
+    const match = page.url().match(POST_URL);
+    const want = opening(payload.text).slice(0, 40);
+    if (!match || !want) return null;
+    const shown = await page.getByText(want).first().waitFor({ timeout: 15_000 }).then(() => true, () => false);
+    const url = shown ? `${match[0]}/` : null;
     if (url && payload.firstComment && !commented.has(payload)) {
       commented.add(payload);
       // Typed, never sent: the director presses Comment. A miss still records the post.
-      await page.locator(COMMENT_EDITOR).first().click({ timeout: 10_000 })
-        .then(() => pasteText(page, COMMENT_EDITOR, payload.firstComment))
+      await pasteInto(page, page.locator(COMMENT_EDITOR).first(), payload.firstComment)
         .catch((err) => console.warn(`⚠️ ${label}: could not type the first comment (${err?.message?.split('\n')[0]})`));
     }
     return url;
