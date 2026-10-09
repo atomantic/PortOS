@@ -33,7 +33,9 @@ function BackendCard({ label, icon: Icon, backend, isActive, dbStatus, runAction
   const canStart = backend === 'docker'
     ? data?.installed && data?.daemonRunning && !data?.containerRunning
     : data?.configured && !data?.running;
-  const canDestroy = !isActive && !isRunning && (backend === 'docker' ? data?.installed : data?.configured);
+  const canDestroy = backend === 'docker'
+    ? !isActive && !isRunning && data?.installed
+    : !isActive && isRunning && data?.configured;
   const statusLabel = isRunning ? 'Running'
     : (backend === 'docker' ? (data?.installed ? 'Stopped' : 'Not installed')
       : (data?.configured ? 'Stopped' : data?.installed ? 'Not configured' : 'Not installed'));
@@ -152,8 +154,10 @@ function BackendCard({ label, icon: Icon, backend, isActive, dbStatus, runAction
               <button
                 onClick={() => setConfirmAction({
                   type: 'destroy',
-                  label: `Destroy ${displayLabel} database and all its data?`,
-                  detail: 'This permanently removes the database files. You can set it up again later.',
+                  label: backend === 'native' ? 'Delete the inactive Native database?' : 'Destroy Docker database and all its data?',
+                  detail: backend === 'native'
+                    ? 'This permanently deletes its tables and records. System PostgreSQL and other databases are kept. The active Docker database is unchanged.'
+                    : 'This permanently removes the Docker database files. You can set it up again later.',
                   displayLabel,
                   action: () => runAction(`destroy-${backend}`, () => destroyDatabase(backend), `${displayLabel} database destroyed`)
                 })}
@@ -161,7 +165,7 @@ function BackendCard({ label, icon: Icon, backend, isActive, dbStatus, runAction
                 className={`${btnClass} bg-port-error/20 hover:bg-port-error/30 text-port-error`}
               >
                 <Trash2 size={12} />
-                Destroy
+                {backend === 'native' ? 'Delete Native database…' : 'Destroy'}
               </button>
             )}
           </>
