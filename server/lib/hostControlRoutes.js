@@ -276,6 +276,32 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/digital-twin/personas',
   'PUT /api/digital-twin/personas/:id',
   // /personas/:id also covers /personas/active.
+
+  // Digital Twin AI actions (#10671) reach the shared CLI/TUI-capable runner,
+  // directly or via imported-data analysis. Gate API-first requests too: their
+  // configured fallback can execute a process. Authorize before private reads,
+  // document writes or behavioral batches; reference CRUD, bounded API-only
+  // taste/vision calls and deterministic recomputation remain open.
+  'POST /api/digital-twin/enrich/question',
+  'POST /api/digital-twin/enrich/answer',
+  'POST /api/digital-twin/enrich/analyze-list',
+  'POST /api/digital-twin/validate/contradictions',
+  'POST /api/digital-twin/analyze-writing',
+  'POST /api/digital-twin/style/spoken-written',
+  'POST /api/digital-twin/traits/analyze',
+  'POST /api/digital-twin/confidence/calculate',
+  'POST /api/digital-twin/interview/analyze',
+  'POST /api/digital-twin/tests/run',
+  'POST /api/digital-twin/tests/run-multi',
+  'POST /api/digital-twin/tests/generate',
+  'POST /api/digital-twin/values-tests/run',
+  'POST /api/digital-twin/adversarial-tests/run',
+  'POST /api/digital-twin/multi-turn-tests/run',
+  'POST /api/digital-twin/avatar-bio/polish',
+  'POST /api/digital-twin/import/analyze',
+  'POST /api/digital-twin/import/spotify/browser/import',
+  'POST /api/digital-twin/twin-evidence/interpret',
+
   'POST /api/tools',
   'PUT /api/tools/:id',
 
