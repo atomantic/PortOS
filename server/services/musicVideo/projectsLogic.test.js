@@ -10,6 +10,7 @@ import {
   applySceneUpdate,
   removeScene,
   reorderScenes,
+  mergeNextScene,
   mirrorStatus,
   sanitizeProjectForSync,
   mergeProjectRecord,
@@ -604,6 +605,46 @@ describe('scene board operations', () => {
     const r = addScene(p, { prompt: 'a' }); p = r.project;
     expect(() => reorderScenes(p, [r.scene.sceneId, 'extra'])).toThrow(/each existing scene id exactly once/);
     expect(() => reorderScenes(p, [])).toThrow(/each existing scene id exactly once/);
+  });
+});
+
+describe('mergeNextScene', () => {
+  const seed = (extra = {}) => {
+    let p = baseProject();
+    const ids = [];
+    for (const [startSec, endSec, lyricText] of [[0, 4, 'line one'], [4, 9, 'line two'], [9, 12, 'line three']]) {
+      const r = addScene(p, { startSec, endSec, lyricText, sectionLabel: 'Verse' });
+      p = r.project; ids.push(r.scene.sceneId);
+    }
+    p = applySceneUpdate(p, ids[0], { videoHistoryId: 'clip-a' }).project;
+    p = applySceneUpdate(p, ids[1], { videoHistoryId: 'clip-a' }).project;
+    return { project: { ...p, ...extra }, ids };
+  };
+
+  it('joins two neighbours: span, lyric, kept take, order and the draft shot', () => {
+    const { project, ids } = seed();
+    const withDraft = { ...project, productionReview: { draft: { storyboard: [
+      { sceneId: ids[0], startSec: 0, endSec: 4, lyricCueIds: ['c1'] },
+      { sceneId: ids[1], startSec: 4, endSec: 9, lyricCueIds: ['c1', 'c2'] },
+      { sceneId: ids[2], startSec: 9, endSec: 12, lyricCueIds: ['c3'] },
+    ] } } };
+    const { project: next, scene } = mergeNextScene(withDraft, ids[0]);
+    expect(next.scenes.map((s) => [s.sceneId, s.order])).toEqual([[ids[0], 0], [ids[2], 1]]);
+    expect(scene).toMatchObject({ startSec: 0, endSec: 9, lyricText: 'line one / line two', videoHistoryId: 'clip-a' });
+    expect(scene.takes.filter((t) => t.kind === 'video' && t.assetId === 'clip-a')).toHaveLength(1);
+    expect(next.productionReview.draft.storyboard).toEqual([
+      { sceneId: ids[0], startSec: 0, endSec: 9, lyricCueIds: ['c1', 'c2'] },
+      { sceneId: ids[2], startSec: 9, endSec: 12, lyricCueIds: ['c3'] },
+    ]);
+  });
+
+  it('refuses a merge longer than the backend\'s longest clip, the last scene, and a document composition', () => {
+    const { project, ids } = seed();
+    expect(() => mergeNextScene(project, ids[0], { backend: 'grok' })).not.toThrow(); // 9s fits Grok's 10s
+    const long = applySceneUpdate(project, ids[2], { endSec: 20 }).project; // 4–20s > 10s
+    expect(() => mergeNextScene(long, ids[1], { backend: 'grok' })).toThrow(/longer than this backend/);
+    expect(() => mergeNextScene(project, ids[2])).toThrow(/no next scene/);
+    expect(() => mergeNextScene({ ...project, composition: { mode: 'document' } }, ids[0])).toThrow(/shot manifest/);
   });
 });
 

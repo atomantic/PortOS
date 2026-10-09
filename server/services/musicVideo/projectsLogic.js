@@ -757,6 +757,79 @@ export function splitScene(project, sceneId, { backend = null } = {}) {
   return { project: next, scenes: nextScenes.slice(idx, idx + count) };
 }
 
+const timedSec = (v) => typeof v === 'number' && Number.isFinite(v);
+
+/**
+ * Join a scene with the one after it — the inverse of `splitScene`. The first
+ * scene keeps its id, takes and selections and stretches to the next scene's
+ * end; the lyric lines are joined; the next scene is removed and `order`
+ * renumbered; a board-sourced storyboard draft merges the matching shots.
+ * A selected clip survives (the director's cut was one continuous clip), but a
+ * performance's lip-synced clip was generated for the old interval, so its
+ * selection is cleared as in a split. When the second scene selects the same
+ * video asset as the first, its take for that asset is kept too. Refuses when
+ * the joined span exceeds the backend's longest take (`shotSplitLimit`) and for
+ * a document composition, whose shot order lives in the shot manifest.
+ * Returns `{ project, scene }`.
+ */
+export function mergeNextScene(project, sceneId, { backend = null } = {}) {
+  const scenes = project.scenes || [];
+  const idx = scenes.findIndex((s) => s.sceneId === sceneId);
+  if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
+  const scene = scenes[idx];
+  const following = scenes[idx + 1];
+  if (!following) throw new ServerError('This is the last scene — there is no next scene to merge.', { status: 400, code: 'MUSIC_VIDEO_MERGE_NO_NEXT' });
+  if (project.composition?.mode === 'document') {
+    throw new ServerError("This video's shot order comes from its composition document — merge the shots in the shot manifest instead.", { status: 400, code: 'MUSIC_VIDEO_MERGE_DOCUMENT' });
+  }
+  const lane = backend || project.videoSettings?.backend || null;
+  const startSec = scene.startSec;
+  const endSec = timedSec(following.endSec) ? following.endSec : scene.endSec;
+  const maxSec = shotSplitLimit(scene, lane);
+  if (maxSec != null) {
+    if (!timedSec(startSec) || !timedSec(endSec)) {
+      throw new ServerError('Both scenes need a start and end time before they can be merged on this backend.', { status: 400, code: 'MUSIC_VIDEO_MERGE_UNTIMED' });
+    }
+    if (endSec - startSec > maxSec + 1e-6) {
+      throw new ServerError(`The merged shot would run ${(endSec - startSec).toFixed(2)}s, longer than this backend renders in one take (${maxSec.toFixed(2)}s).`, { status: 400, code: 'MUSIC_VIDEO_MERGE_TOO_LONG' });
+    }
+  }
+
+  const now = new Date().toISOString();
+  let takes = ensureSceneTakes(scene, now);
+  const sharedClip = scene.videoHistoryId && scene.videoHistoryId === following.videoHistoryId;
+  if (sharedClip && !takes.some((t) => t.kind === 'video' && t.assetId === scene.videoHistoryId)) {
+    const kept = ensureSceneTakes(following, now).find((t) => t.kind === 'video' && t.assetId === scene.videoHistoryId);
+    if (kept) takes = [...takes, kept];
+  }
+  const lyricText = [scene.lyricText, following.lyricText].filter((t) => typeof t === 'string' && t.trim()).join(' / ').slice(0, 2000) || null;
+  const merged = {
+    ...scene, endSec, lyricText, takes,
+    ...(isPerformanceScene(scene) ? { videoHistoryId: null } : {}),
+  };
+
+  const nextScenes = [...scenes.slice(0, idx), merged, ...scenes.slice(idx + 2)].map((s, i) => ({ ...s, order: i }));
+  const extra = { scenes: nextScenes };
+  const sceneReview = project.songRevision?.sceneReview;
+  if (sceneReview && typeof sceneReview === 'object' && following.sceneId in sceneReview) {
+    extra.songRevision = { ...project.songRevision,
+      sceneReview: Object.fromEntries(Object.entries(sceneReview).filter(([id]) => id !== following.sceneId)) };
+  }
+  const draft = project.productionReview?.draft;
+  if (Array.isArray(draft?.storyboard) && draft.storyboardSource !== 'document') {
+    const second = draft.storyboard.find((shot) => shot?.sceneId === following.sceneId);
+    const storyboard = draft.storyboard
+      .filter((shot) => shot?.sceneId !== following.sceneId)
+      .map((shot) => {
+        if (shot?.sceneId !== scene.sceneId) return shot;
+        const cueIds = [...new Set([...(shot.lyricCueIds || []), ...(second?.lyricCueIds || [])])];
+        return { ...shot, endSec: timedSec(second?.endSec) ? second.endSec : endSec ?? shot.endSec, lyricCueIds: cueIds };
+      });
+    extra.productionReview = { ...project.productionReview, draft: { ...draft, storyboard } };
+  }
+  return { project: touch(project, extra), scene: nextScenes[idx] };
+}
+
 // ---- peer-sync federation (#1770) -----------------------------------------
 // Mirrors the Creative Director store (creativeDirector/projectsLogic.js): a
 // project is a whole-record LWW kind (no item-union, no ephemeral flag), so the

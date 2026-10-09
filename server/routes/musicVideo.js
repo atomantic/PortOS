@@ -106,6 +106,7 @@ import {
   deleteScene,
   reorderProjectScenes,
   splitProjectScene,
+  mergeProjectNextScene,
   setProjectMidiTranscription,
   appendSceneTakes,
   appendTakesAcrossScenes,
@@ -1419,6 +1420,12 @@ router.post('/:id/scenes/reorder', asyncHandler(async (req, res) => {
 router.post('/:id/scenes/:sceneId/split', asyncHandler(async (req, res) => {
   const { backend } = validateRequest(musicVideoSceneSplitSchema, req.body ?? {});
   res.json(await splitProjectScene(req.params.id, req.params.sceneId, { backend }));
+}));
+
+// Merge a scene with the next one — the inverse of split.
+router.post('/:id/scenes/:sceneId/merge-next', asyncHandler(async (req, res) => {
+  const { backend } = validateRequest(musicVideoSceneSplitSchema, req.body ?? {});
+  res.json(await mergeProjectNextScene(req.params.id, req.params.sceneId, { backend }));
 }));
 
 // --- Scene takes (#8965) ---
