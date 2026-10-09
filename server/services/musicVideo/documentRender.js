@@ -436,6 +436,92 @@ export async function encodeDocumentComposition({
   }
 }
 
+const PROBE_SCREENSHOT = Object.freeze({ format: 'png', optimizeForSpeed: true, fromSurface: true, captureBeyondViewport: false });
+// Backdrop luminance is measured on a half-size frame (plenty for a contrast percentile).
+const PROBE_BACKDROP_SCALE = 0.5;
+
+/**
+ * Open a project's composition document the way a render does (same staged
+ * data and selected takes, same frame) with the overlay text probe installed
+ * (overlayTextProbe.js), and visit each song time `sampleTimes(data, frame)`
+ * returns. At each one `onSample({ atSec, records, backdrop })` gets the text
+ * the page drew and, when there was any, the frame with that text hidden as
+ * linear luminance (`{ width, height, scale, values: Float32Array }`). Resolves
+ * `{ frame, scenes, samples }` (the PORTOS_MV scenes, for naming shots).
+ */
+export async function probeDocumentText({ project, jobId, signal, sampleTimes, onSample, onProgress }) {
+  const plan = await prepareDocumentRender(project);
+  const { probeVideoGeometry } = await import('../../lib/ffmpeg.js');
+  const { stageMusicVideoComposition } = await import('../htmlComposition/index.js');
+  const { openComposition } = await import('../htmlComposition/browser.js');
+  const { loadHistory } = await import('../videoGen/history.js');
+  const { OVERLAY_TEXT_PROBE_SCRIPT } = await import('./overlayTextProbe.js');
+  const { SRGB_TO_LINEAR } = await import('./overlayText.js');
+  const { default: sharp } = await import('sharp');
+  const generated = project.composition?.document?.source?.kind === 'generated';
+  const history = (project.scenes || []).some((s) => s?.videoHistoryId) ? await loadHistory() : [];
+  const media = await resolveSceneMedia(project, { history, probe: probeVideoGeometry, strictLayers: generated });
+  const data = buildDocumentData(project, { media, frame: plan.frame, clock: plan.clock, songDurationSec: plan.songDurationSec, generated });
+  let staged;
+  let page;
+  try {
+    staged = await stageMusicVideoComposition(plan.directory, jobId, musicVideoSongDocument(project), {
+      prepare: (dir) => stageDocumentData(dir, data, media),
+    });
+    signal?.throwIfAborted();
+    page = await openComposition(staged.directory, { signal, streamMedia: true, mediaMode: musicVideoMediaMode(project), ownedBrowser: true,
+      initScripts: [OVERLAY_TEXT_PROBE_SCRIPT] });
+    const metadata = await page.evaluate(`(() => {
+      const c = globalThis.portosComposition;
+      if (!c || typeof c.seek !== 'function') throw new Error('portosComposition.seek is required');
+      if (!globalThis.__portosTextProbe) throw new Error('The overlay text probe did not load');
+      return { durationSec: c.durationSec, fps: c.fps, width: c.width, height: c.height, motionBlur: c.motionBlur, formats: c.formats, layout: typeof c.layout === 'function' };
+    })()`);
+    const parsed = htmlCompositionContractSchemaFor(Math.max(1, plan.songDurationSec)).safeParse(metadata);
+    if (!parsed.success) {
+      throw new ServerError(`The composition document's contract is invalid — ${parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ')}`, {
+        status: 422, code: 'COMPOSITION_DOCUMENT_CONTRACT',
+      });
+    }
+    const target = documentTargetFrame(parsed.data, project);
+    await page.send('Emulation.setDeviceMetricsOverride', { width: target.width, height: target.height, deviceScaleFactor: 1, mobile: false });
+    if (target.width !== parsed.data.width || target.height !== parsed.data.height) {
+      await page.evaluate(`globalThis.portosComposition.layout({ width: ${target.width}, height: ${target.height} })`);
+    }
+    const frame = { width: target.width, height: target.height };
+    const times = sampleTimes(data, { ...frame, fps: target.fps, durationSec: target.durationSec });
+    for (const [index, atSec] of times.entries()) {
+      signal?.throwIfAborted();
+      page.check();
+      await page.evaluate('globalThis.__portosTextProbe.begin()');
+      await page.evaluate(`globalThis.portosComposition.seek(${atSec})`).catch((error) => {
+        throw new Error(`Composition seek(${atSec}) failed: ${error.message}`);
+      });
+      const records = await page.evaluate('globalThis.__portosTextProbe.end()');
+      let backdrop = null;
+      if (Array.isArray(records) && records.length) {
+        const { data: png } = await page.send('Page.captureScreenshot', PROBE_SCREENSHOT);
+        const width = Math.max(1, Math.round(target.width * PROBE_BACKDROP_SCALE));
+        const { data: rgb, info } = await sharp(Buffer.from(png, 'base64')).removeAlpha().resize({ width }).raw().toBuffer({ resolveWithObject: true });
+        const values = new Float32Array(info.width * info.height);
+        for (let p = 0, o = 0; p < values.length; p++, o += info.channels) {
+          values[p] = 0.2126 * SRGB_TO_LINEAR[rgb[o]] + 0.7152 * SRGB_TO_LINEAR[rgb[o + 1]] + 0.0722 * SRGB_TO_LINEAR[rgb[o + 2]];
+        }
+        backdrop = { width: info.width, height: info.height, scale: info.width / target.width, values };
+      }
+      onSample({ atSec, frame, records: Array.isArray(records) ? records : [], backdrop });
+      onProgress?.((index + 1) / times.length);
+    }
+    page.check();
+    await page.close({ verify: true });
+    page = null;
+    return { frame, scenes: data.scenes, samples: times.length };
+  } finally {
+    if (page) await page.close().catch(() => {});
+    if (staged?.scratchRoot) await rm(staged.scratchRoot, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 /** Boot sweep: no document render survives a restart, so its scratch is stale. */
 export async function sweepDocumentScratch() {
   const { MUSIC_VIDEO_SCRATCH_DIR } = await import('../htmlComposition/index.js');

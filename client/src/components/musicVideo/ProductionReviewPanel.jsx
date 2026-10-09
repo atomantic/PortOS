@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import ProductionReviewContext from './ProductionReviewContext.jsx';
+import OverlayTextCheck from './OverlayTextCheck.jsx';
 import { formatTimecode } from '../../utils/formatters.js';
 import { summarizeStoryboardProblems } from '../../lib/musicVideoStages.js';
 
@@ -247,6 +248,9 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
           <p>Camera notes (they don&apos;t block approval):</p>
           <ul className="list-disc pl-5">{ready.storyboard.camera.notes.map(note => <li key={note}>{note}</li>)}</ul>
         </div>}
+        {/* The overlay text pass (document compositions): advice too, shown before the shot list. */}
+        {key === 'storyboard' && ready?.storyboard.text && <OverlayTextCheck report={ready.storyboard.text} busy={review.busy}
+          onCheck={() => review.checkOverlayText()} onSeek={onSeek} />}
         {key === 'proof' ? proofContent : <ProductionReviewContext stage={key} project={project} onOpenArtifact={onOpenArtifact} onArtReady={available => setVisibleArt(available ? artIdentity : null)} onSeek={onSeek} />}
         {openRequests(key).length > 0 && <div role="group" aria-label={`${label} change requests`} className="mt-2 space-y-2 rounded border border-port-warning p-2">
           <p className="text-sm">Resolve these change requests to approve.</p>

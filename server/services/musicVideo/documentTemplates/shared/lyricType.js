@@ -24,7 +24,8 @@
  *   stamp  short punches, negations, spoken lines: a three-frame stamp with a
  *          small tilt, optional strike-through.
  *   data   HUD captions, counters and tags in mono; numbers roll. At most one
- *          per shot.
+ *          per shot. Set large enough to read on a phone and ringed in ink, so a
+ *          corner readout needs no backing plate on a light picture.
  *
  * Every frame is a pure function of song time, so a draft frame matches the full
  * render at that time. The file is plain ES2020 with no imports.
@@ -340,7 +341,7 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
   const basePx = (role, unit, portrait) => {
     if (role === 'hook') return (portrait ? 140 : 160) * unit;
     if (role === 'stamp') return 110 * unit;
-    if (role === 'data') return 34 * unit;
+    if (role === 'data') return 48 * unit;
     return 68 * unit;
   };
 
@@ -349,7 +350,7 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
     const rect = zoneRect(line.zone, width, height);
     if (!rect) return null;
     const unit = Math.min(width, height) / 1080;
-    const floor = (line.role === 'data' ? 28 : T.minPx) * unit;
+    const floor = (line.role === 'data' ? 40 : T.minPx) * unit;
     let px = basePx(line.role, unit, height > width);
     const items = line.words.map((w) => (line.role === 'hook' ? String(w.text).toUpperCase() : w.text));
     const rowsAt = (size) => wrap(items.map((text, index) => ({ text, index })), rect.w, (item) => measure(`${item.text} `, fontFor(line.role, size)));
@@ -389,7 +390,7 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
       const states = wordStates(line, t);
       const exit = lineExit(line, t);
       const font = fontFor(line.role, placed.px);
-      const outline = Math.max(2, (line.role === 'data' ? 4 : 11) * unit * (placed.px / basePx(line.role, unit, height > width)));
+      const outline = Math.max(2, (line.role === 'data' ? 9 : 11) * unit * (placed.px / basePx(line.role, unit, height > width)));
       ctx.save();
       ctx.font = font; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
       ctx.lineJoin = 'round'; ctx.miterLimit = 2; ctx.lineWidth = outline;
@@ -407,6 +408,7 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
         const text = line.role === 'data' ? rollNumbers(word.text, (t - s.startSec) / T.dataRollSec) : word.text;
         const x0 = -(word.w - measure(' ', font)) / 2;
         if (line.role === 'data') {
+          ctx.strokeStyle = palette.ink; ctx.strokeText(text, x0, 0);
           ctx.fillStyle = palette.accent; ctx.fillText(text, x0, 0);
         } else if (line.role === 'hook' && word.index === line.accent) {
           ctx.lineWidth = outline * 1.6;

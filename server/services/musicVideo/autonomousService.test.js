@@ -107,6 +107,8 @@ beforeEach(() => {
     generateDocument: stub('document', async () => ({ document: { directory: 'music-video/mv-auto/composition/example' } })),
     acceptDocument: stub('accept-document', async (id, directory) => { store.get(id).composition.document = { directory }; return {}; }),
     renderVideo: stub('render', async () => ({ jobId: 'render-1' })),
+    // The overlay text pass before a final render: clean unless a test says otherwise.
+    checkOverlayText: stub('text-check', async () => ({ status: 'complete', samples: 12, textSamples: 8, findings: [] })),
     // The render job stays live until a test settles it with a `render` event.
     activeRenderJobId: vi.fn(async () => 'render-1'),
     cancelRender: vi.fn(async () => true),
@@ -593,6 +595,61 @@ describe('startAutonomousVideo', () => {
   it('rejects a blank prompt', async () => {
     await expect(service.startAutonomousVideo({ prompt: '   ' })).rejects.toMatchObject({ status: 400 });
     expect(calls).toEqual([]);
+  });
+});
+
+describe('overlay text pass before the final render', () => {
+  const finding = (atSec, message, severity = 'error') => ({ id: `f${atSec}`, kind: severity === 'error' ? 'overlap' : 'contrast', severity, atSec, texts: ['A'], message, count: 1 });
+  const textEntries = () => (runOf()?.orchestration?.reviews || []).filter((r) => r.checkpoint === 'text');
+  const start = () => service.startAutonomousVideo({ prompt: 'p', tools: ['code:render'], authoring: { providerId: 'prov', model: 'm' } });
+
+  it('sends a generated document\'s text problems back to its author, checks again, then renders', async () => {
+    doubles.acceptDocument.mockImplementation(async (id, directory) => {
+      calls.push('accept-document');
+      store.get(id).composition.document = { directory, source: { kind: 'generated' } };
+      return {};
+    });
+    doubles.addFeedback = vi.fn(async (id, entry) => {
+      const project = store.get(id);
+      project.productionReview.feedback = [...(project.productionReview.feedback || []), { id: `fb-${entry.target}`, ...entry }];
+    });
+    doubles.closeFeedback = vi.fn(async (id, { feedbackId, resolution, reviewer }) => {
+      const project = store.get(id);
+      project.productionReview.feedback = project.productionReview.feedback.map((f) => (f.id === feedbackId ? { ...f, resolution, resolvedBy: reviewer, resolvedAt: 'now' } : f));
+    });
+    service.__setAutonomousDepsForTests(doubles);
+    doubles.checkOverlayText
+      .mockResolvedValueOnce({ status: 'complete', samples: 20, textSamples: 14, findings: [finding(3.5, '“20 MILLION YEARS” collides with “WHOLE SPECIES”.')] })
+      .mockResolvedValueOnce({ status: 'complete', samples: 20, textSamples: 14, findings: [] });
+    await start();
+    await vi.waitFor(() => expect(runOf()?.output.renderJobId).toBe('render-1'));
+    expect(doubles.checkOverlayText).toHaveBeenCalledTimes(2);
+    expect(doubles.generateDocument).toHaveBeenCalledTimes(2);
+    expect(doubles.renderVideo).toHaveBeenCalledOnce();
+    expect(store.get('mv-auto').productionReview.feedback).toEqual([expect.objectContaining({ stage: 'proof', target: 'text@0:03',
+      text: '“20 MILLION YEARS” collides with “WHOLE SPECIES”.', resolution: 'Re-authored by the autopilot.', resolvedBy: expect.objectContaining({ kind: 'autopilot', runId: runOf().id }) })]);
+    expect(textEntries().map((r) => r.verdict)).toEqual(['revise', 'approve']);
+    expect(textEntries()[0]).toMatchObject({ route: null, issues: [{ atSec: 3.5, text: expect.stringContaining('collides') }] });
+    // Check, re-author, check again, then render.
+    const order = (fn, n = 0) => fn.mock.invocationCallOrder[n];
+    expect(order(doubles.generateDocument, 1)).toBeGreaterThan(order(doubles.checkOverlayText, 0));
+    expect(order(doubles.checkOverlayText, 1)).toBeGreaterThan(order(doubles.acceptDocument, 1));
+    expect(order(doubles.renderVideo)).toBeGreaterThan(order(doubles.checkOverlayText, 1));
+  });
+
+  it('logs a hand-made document\'s problems for the director and renders it untouched', async () => {
+    doubles.checkOverlayText.mockResolvedValue({ status: 'complete', samples: 20, textSamples: 14, findings: [finding(1, 'Hard to read', 'warning')] });
+    await start();
+    await vi.waitFor(() => expect(runOf()?.output.renderJobId).toBe('render-1'));
+    expect(doubles.generateDocument).toHaveBeenCalledOnce();
+    expect(textEntries()).toEqual([expect.objectContaining({ verdict: 'noted', notes: expect.stringContaining('made by hand'), issues: [{ atSec: 1, text: 'Hard to read' }] })]);
+  });
+
+  it('never holds the render on a check that cannot run', async () => {
+    doubles.checkOverlayText.mockRejectedValue(new Error('Managed browser is unavailable'));
+    await start();
+    await vi.waitFor(() => expect(runOf()?.output.renderJobId).toBe('render-1'));
+    expect(textEntries()).toEqual([expect.objectContaining({ verdict: 'noted', notes: expect.stringContaining('Managed browser is unavailable') })]);
   });
 });
 
@@ -1362,8 +1419,9 @@ describe('orchestrated mode (brief.orchestrator)', () => {
       resolution: 'Re-authored by the orchestrator.', resolvedAt: expect.any(String) });
     await service.__testing.onRenderEvent({ projectId: 'mv-auto', jobId: 'render-2', status: 'completed' });
     await settled('completed');
-    expect(reviews()).toEqual(['lyrics:approve', 'style:approve', 'song:approve', 'art:revise', 'art:approve', 'alignment:approve', 'storyboard:revise', 'storyboard:approve', 'final:revise', 'final:approve']);
-    expect(runOf().orchestration.reviews.at(-2)).toMatchObject({ issues: [{ atSec: 18, text: 'Static hold' }], notes: expect.stringContaining('Judged without frames') });
+    // The measured overlay text pass runs before each render of the film.
+    expect(reviews()).toEqual(['lyrics:approve', 'style:approve', 'song:approve', 'art:revise', 'art:approve', 'alignment:approve', 'storyboard:revise', 'storyboard:approve', 'text:approve', 'final:revise', 'text:approve', 'final:approve']);
+    expect(runOf().orchestration.reviews.at(-3)).toMatchObject({ issues: [{ atSec: 18, text: 'Static hold' }], notes: expect.stringContaining('Judged without frames') });
     expect(doubles.finalReviewFrames.mock.calls.map(([jobId]) => jobId)).toEqual(['render-1', 'render-2']);
   });
 
