@@ -1356,10 +1356,11 @@ function StoryBuilderDetail({ storyId, stepParam }) {
       <div className="max-w-5xl mx-auto w-full min-w-0 min-h-0 h-full flex flex-col">
         {readNotice}
         <header className="mb-3 shrink-0 min-w-0">
-          <div>
+          <div className="min-w-0 max-w-full">
             <Link to="/story-builder" className="text-xs text-gray-500 hover:text-port-accent">← All stories</Link>
-            <h1 className="text-2xl font-bold flex items-center gap-2 mt-1">
-              <Sparkles className="w-6 h-6 text-port-accent" /> {session.title}
+            <h1 className="text-2xl font-bold flex items-start gap-2 mt-1 min-w-0">
+              <Sparkles className="w-6 h-6 text-port-accent shrink-0 mt-1" />
+              <span className="min-w-0 [overflow-wrap:anywhere]">{session.title}</span>
             </h1>
           </div>
         </header>
