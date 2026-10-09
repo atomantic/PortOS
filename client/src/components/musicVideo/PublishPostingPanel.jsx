@@ -13,6 +13,10 @@ export const PUBLISH_TARGETS = [
   { target: 'suno', label: 'Suno', note: 'Publishes the song with the cover and a link to the video' },
   { target: 'sunoHook', label: 'Suno Hook', note: 'A 9:16 cut (the newest by default) set to its window of the song. You press Post' },
   { target: 'x', label: 'X thread', note: 'Hook with the 1080p video, then the story, prompt and links' },
+  {
+    target: 'linkedin', label: 'LinkedIn', accountPlaceholder: 'Your name',
+    note: 'Your short post with the 1080p video uploaded, and the links in a first comment. You press Post, then View post: PortOS records the link and types the comment for you to send',
+  },
   { target: 'shorts', label: 'YouTube Shorts', note: 'A 9:16 cut (the newest by default)' },
   { target: 'tiktok', label: 'TikTok', note: 'A 9:16 cut (the newest by default), labelled AI-generated' },
   { target: 'instagram', label: 'Instagram Reels', note: 'A 9:16 cut (the newest by default), with the AI label' },
@@ -188,6 +192,13 @@ function TargetOptions({ target, kit, project, options, setOption, commitOption,
           </select>)}
         <div className="sm:col-span-2">{area('firstComment', 'First comment (optional)')}</div>
       </div>
+    );
+  }
+  if (target === 'linkedin') {
+    return (
+      <label className="flex items-center gap-1.5 text-xs min-h-[44px] sm:min-h-0">
+        <input type="checkbox" checked={options.linksComment !== false} onChange={(e) => setOption('linksComment', e.target.checked)} /> Put the full video and song links in a first comment
+      </label>
     );
   }
   if (target === 'stackerNews') {

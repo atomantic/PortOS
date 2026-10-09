@@ -706,6 +706,7 @@ export const musicVideoPublishCopyPatchSchema = z.object({
   youtube: z.object({ title: kitText(100), description: kitText(5000), tags: z.array(kitText(60)).max(30) }).partial().strict().optional(),
   shorts: z.object({ title: kitText(100), description: kitText(5000) }).partial().strict().optional(),
   x: z.object({ hook: kitText(280), story: kitText(25000) }).partial().strict().optional(),
+  linkedin: z.object({ post: kitText(3000) }).partial().strict().optional(),
   tiktok: z.object({ caption: kitText(2200) }).partial().strict().optional(),
   instagram: z.object({ caption: kitText(2200) }).partial().strict().optional(),
   reddit: z.object({ title: kitText(300), body: kitText(40000) }).partial().strict().optional(),
@@ -784,7 +785,7 @@ export const musicVideoCoverArtGenerateSchema = z.object({
 
 // #9282: posting to a platform through the PortOS Browser. One strict options
 // object covers every target; each target's payload builder reads only its own.
-export const MUSIC_VIDEO_PUBLISH_TARGETS = Object.freeze(['youtube', 'shorts', 'tiktok', 'instagram', 'x', 'reddit', 'stackerNews', 'substack', 'suno', 'sunoHook', 'distrokid']);
+export const MUSIC_VIDEO_PUBLISH_TARGETS = Object.freeze(['youtube', 'shorts', 'tiktok', 'instagram', 'x', 'linkedin', 'reddit', 'stackerNews', 'substack', 'suno', 'sunoHook', 'distrokid']);
 export const musicVideoPublishTargetSchema = z.enum(MUSIC_VIDEO_PUBLISH_TARGETS);
 const publishUrl = z.string().url().max(500);
 // #9287: which platforms the director posts to (opt-in), the account for each,
@@ -811,6 +812,8 @@ export const musicVideoPublishPrepareSchema = z.object({
   flairId: z.string().max(100),
   flairText: z.string().max(64),
   firstComment: kitText(10000),
+  // LinkedIn: put the full video and song links in a first comment (default on).
+  linksComment: z.boolean(),
   territory: z.string().max(40),
   // Substack: the publication (name.substack.com or a custom domain); defaults to the account under Where you post.
   publication: z.string().trim().min(1).max(200),
