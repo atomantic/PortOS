@@ -1391,6 +1391,65 @@ describe('Windows escalation on a full plan (#7440)', () => {
   });
 });
 
+it('projects transitive browser consumers through the planner CLI without replacing related selection (#10838)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'portos-ci-related-browser-'));
+  const planner = fileURLToPath(new URL('./ci-test-plan.js', import.meta.url));
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const write = (path, source) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), source);
+  };
+  const leaf = 'server/services/example/leaf.js';
+  const unrelated = 'server/services/unrelated.js';
+  const [staticSuite, deferredSuite, independentSuite] = BROWSER_SUITES;
+  const plan = (changedFiles, forceFull = false) => JSON.parse(execFileSync(process.execPath, [planner], {
+    cwd: root,
+    encoding: 'utf8',
+    env: { ...process.env, CI_BASE_SHA: 'HEAD', CI_BASE_REF: 'main', CI_FORCE_FULL: String(forceFull),
+      CI_CHANGED_FILES: JSON.stringify(changedFiles), GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
+  }));
+  const browsers = (result) => JSON.parse(result.browser_files);
+  try {
+    git('init', '-q');
+    write(leaf, 'export const value = 1;\n');
+    write(unrelated, 'export const value = 2;\n');
+    write('server/services/bridge.js', "export { value } from './example/leaf';\n");
+    write(staticSuite, "import '../services/bridge.js';\n");
+    write(deferredSuite, "export const load = () => import('../services/bridge.js');\n");
+    write(independentSuite, 'export const value = 3;\n');
+    git('add', '--all');
+
+    // Neither browser suite shares leaf's feature or names its basename. Only
+    // transitive import discovery can report the real related-test consumers.
+    const related = plan([leaf]);
+    expect(related).toMatchObject({ full: false, server_mode: 'related', server_sources: JSON.stringify([leaf]) });
+    expect(JSON.parse(related.server_files)).not.toContain(staticSuite);
+    expect(JSON.parse(related.server_files)).not.toContain(deferredSuite);
+    expect(browsers(related)).toEqual([staticSuite, deferredSuite]);
+    expect(JSON.parse(related.suite_reasons).browser).toBe('2 cross-workspace browser suite(s) selected');
+    expect(browsers(plan([leaf, staticSuite]))).toEqual([staticSuite, deferredSuite]);
+    expect(browsers(plan([unrelated]))).toEqual([]);
+    expect(browsers(plan(['docs/README.md']))).toEqual([]);
+    expect(browsers(plan([staticSuite]))).toEqual([staticSuite]);
+    expect(browsers(plan([], true))).toEqual([staticSuite, deferredSuite, independentSuite]);
+
+    // Inconclusive discovery widens only the affected registered suite while
+    // the ordinary server run keeps its existing related sources/selectors.
+    for (const expression of ["'../services/missing.js'", 'modulePath']) {
+      write(independentSuite, `export const load = () => import(${expression});\n`);
+      const conservative = plan([unrelated]);
+      expect(conservative).toMatchObject({ full: false, server_mode: 'related', server_sources: JSON.stringify([unrelated]) });
+      expect(browsers(conservative)).toEqual([independentSuite]);
+      expect(browsers(plan([leaf]))).toEqual([staticSuite, deferredSuite, independentSuite]);
+      // No behavioral source traversal on test-only edits or documentation.
+      expect(browsers(plan([staticSuite]))).toEqual([staticSuite]);
+      expect(browsers(plan(['docs/README.md']))).toEqual([]);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 describe('cross-workspace browser suites (#10312)', () => {
 
   it('selects every music-video browser suite when a client component they mount changes', () => {
