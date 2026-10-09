@@ -711,6 +711,12 @@ const COMPILED_BODY_ROUTES = [
   ['PUT /api/settings', (body) => bodyKeys(body).filter((key) => HOST_CONTROL_SETTINGS_SLICES.includes(key)
     || (key === 'instanceFeatures' && body.instanceFeatures?.eidoverse !== undefined))],
   ['PUT /api/cos/config', (body) => bodyKeys(body).filter((key) => !HOST_CONTROL_OPEN_COS_CONFIG_KEYS.includes(key))],
+  // Review facade (#10890): the `cos:` source approves a CoS task under any
+  // operation spelling, including the omitted legacy default; Ask promotion to
+  // `task` queues a user task. Both match their gated direct routes. Other
+  // sources, triage and Brain/Goal promotion stay data-only and open.
+  ['POST /api/review/queue/resolve', (body) => /^\s*cos:/i.test(body?.id) ? ['id'] : []],
+  ['POST /api/review/queue/promote-ask', (body) => body?.target === 'task' ? ['target'] : []],
 ].map(([route, pick]) => ({ ...compileRoute(route), pick }));
 
 /** The host-control keys a request body names, for `method path` of a policy store; [] elsewhere. */
