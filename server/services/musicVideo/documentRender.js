@@ -444,9 +444,10 @@ const PROBE_BACKDROP_SCALE = 0.5;
  * Open a project's composition document the way a render does (same staged
  * data and selected takes, same frame) with the overlay text probe installed
  * (overlayTextProbe.js), and visit each song time `sampleTimes(data, frame)`
- * returns. At each one `onSample({ atSec, records, backdrop })` gets the text
- * the page drew and, when there was any, the frame with that text hidden as
- * linear luminance (`{ width, height, scale, values: Float32Array }`). Resolves
+ * returns. At each one `onSample({ index, atSec, records, backdrop })` gets the
+ * text the page drew and, when there was any, the frame with that text hidden
+ * as linear luminance (`{ width, height, scale, values: Float32Array }`). Times
+ * `onSample` returns are visited after the planned ones. Resolves
  * `{ frame, scenes, samples }` (the PORTOS_MV scenes, for naming shots).
  */
 export async function probeDocumentText({ project, jobId, signal, sampleTimes, onSample, onProgress }) {
@@ -489,8 +490,11 @@ export async function probeDocumentText({ project, jobId, signal, sampleTimes, o
       await page.evaluate(`globalThis.portosComposition.layout({ width: ${target.width}, height: ${target.height} })`);
     }
     const frame = { width: target.width, height: target.height };
-    const times = sampleTimes(data, { ...frame, fps: target.fps, durationSec: target.durationSec });
-    for (const [index, atSec] of times.entries()) {
+    // onSample may return extra times to probe (a problem traced frame by frame); they
+    // run after the planned ones, in the order returned, each with its own index.
+    const times = [...sampleTimes(data, { ...frame, fps: target.fps, durationSec: target.durationSec })];
+    for (let index = 0; index < times.length; index++) {
+      const atSec = times[index];
       signal?.throwIfAborted();
       page.check();
       await page.evaluate('globalThis.__portosTextProbe.begin()');
@@ -509,7 +513,8 @@ export async function probeDocumentText({ project, jobId, signal, sampleTimes, o
         }
         backdrop = { width: info.width, height: info.height, scale: info.width / target.width, values };
       }
-      onSample({ atSec, frame, records: Array.isArray(records) ? records : [], backdrop });
+      const extra = onSample({ index, atSec, frame, records: Array.isArray(records) ? records : [], backdrop });
+      for (const t of Array.isArray(extra) ? extra : []) times.push(t);
       onProgress?.((index + 1) / times.length);
     }
     page.check();

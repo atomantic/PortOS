@@ -41,6 +41,9 @@ const OVERLAY_TEXT_LIMITS = Object.freeze({
   minHaloContrast: 3,
   // Text more transparent than this is mid-fade: skipped for overlap and size.
   minAlpha: 0.35,
+  // Collisions and cut-off text are traced frame by frame up to this many frames
+  // each way, so a momentary one (a line swap, a slam-in swell) reports its length.
+  spanFrames: 4,
   // Contrast is judged only on settled (near-opaque) text.
   contrastAlpha: 0.85,
 });
@@ -50,7 +53,9 @@ const SEVERITY = Object.freeze({ overlap: 'error', 'off-frame': 'error', contras
 export const OVERLAY_TEXT_PROCESS_ID = randomUUID();
 
 const finite = (n) => typeof n === 'number' && Number.isFinite(n);
-const round3 = (n) => Math.round(n * 1000) / 1000;
+// Frame times are kept to the millisecond, rounded UP: a time rounded down can fall
+// in the previous frame (7/12 s → 0.583 is still frame 6), so a seek would show the wrong one.
+const frameMs = (n) => Math.ceil(n * 1000 - 1e-6) / 1000;
 const round1 = (n) => Math.round(n * 10) / 10;
 
 /** `{ r, g, b, a }` (0-255, alpha 0-1) for a CSS colour a canvas or computed style reports; null otherwise. */
@@ -126,10 +131,10 @@ export function planTextSampleTimes({ lyrics = [], textCues = [], scenes = [], d
     .map((t) => Math.min(last, Math.max(0, Math.floor(t * fps + 1e-6) / fps)))
     .sort((a, b) => a - b);
   const kept = [];
-  for (const t of snapped) if (!kept.length || t - kept[kept.length - 1] >= 0.15) kept.push(round3(t));
+  for (const t of snapped) if (!kept.length || t - kept[kept.length - 1] >= 0.15) kept.push(frameMs(t));
   // The first frame drawn at or after the entrance (a frame before it shows nothing yet).
   const firstFrames = [...new Set(entrances
-    .map((t) => round3(Math.min(last, Math.max(0, Math.ceil(t * fps - 1e-6) / fps)))))].sort((a, b) => a - b);
+    .map((t) => frameMs(Math.min(last, Math.max(0, Math.ceil(t * fps - 1e-6) / fps)))))].sort((a, b) => a - b);
   const merged = new Set([...thinEvenly(kept, maxSamples), ...thinEvenly(firstFrames, maxEntrances)]);
   return [...merged].sort((a, b) => a - b);
 }
@@ -297,14 +302,43 @@ export function analyzeTextFrame(items = [], frame) {
 
 const quote = (text) => `“${text}”`;
 /** One plain sentence for a finding (what is wrong, and the fix lyricType uses). */
-function describeTextFinding({ kind, texts, detail }) {
+function describeTextFinding({ kind, texts, detail, span }) {
+  return `${describeProblem({ kind, texts, detail })}${spanNote(span)}`;
+}
+
+// A problem traced to a few frames says so: it is real but easy to miss when scrubbing.
+const spanNote = (span) => (span && !span.open && span.frames > 0
+  ? ` It is on screen for ${span.frames} frame${span.frames === 1 ? '' : 's'}.` : '');
+
+function describeProblem({ kind, texts, detail }) {
   switch (kind) {
     case 'overlap': return `${quote(texts[0])} collides with ${quote(texts[1])}. Move the smaller one to the corner opposite the sung words, or time them apart.`;
     case 'off-frame': return `${quote(texts[0])} runs off the edge of the frame. Keep it inside the safe margin or let it wrap.`;
     case 'small': return `${quote(texts[0])} is ${detail?.phoneEmPx ?? 'too few'}px tall at phone width. Set it larger (at least ${OVERLAY_TEXT_LIMITS.minPhoneEmPx}px on a phone).`;
-    case 'contrast': return `${quote(texts[0])} blends into the picture (${detail?.ratio ?? '?'}:1). Give it an ink outline wide enough to read on a phone${detail?.outlined ? ' (its outline is too thin there)' : ''}, or a plate behind it.`;
+    case 'contrast': return `${quote(texts[0])} blends into the picture (${detail?.ratio ?? '?'}:1). ${detail?.needed === OVERLAY_TEXT_LIMITS.contrastSmall
+      // Small type is a readout or caption, which may sit on a plate; lyrics never take a backing.
+      ? `Give it an ink outline wide enough to read on a phone${detail?.outlined ? ' (its outline is too thin there)' : ''}, or a plate behind it.`
+      : `Give it a wider ink outline${detail?.outlined ? ' (its outline is too thin there)' : ''}, move it to a darker or quieter part of the frame, or time it off the brightest moment; lyrics take no plate or shade behind them.`}`;
     default: return quote(texts.join(' / '));
   }
+}
+
+const sameText = (a, b) => {
+  const x = String(a).toLowerCase();
+  const y = String(b).toLowerCase();
+  return x.includes(y) || y.includes(x);
+};
+
+/**
+ * The same problem on a neighbouring frame: same kind and the same text (either
+ * may be a partial reading while a line reveals word by word), in either order
+ * for a collision.
+ */
+export function sameIssue(a, b) {
+  if (a?.kind !== b?.kind || a.texts?.length !== b.texts?.length) return false;
+  if (a.texts.length === 1) return sameText(a.texts[0], b.texts[0]);
+  return (sameText(a.texts[0], b.texts[0]) && sameText(a.texts[1], b.texts[1]))
+    || (sameText(a.texts[0], b.texts[1]) && sameText(a.texts[1], b.texts[0]));
 }
 
 // Words appear one by one, so the same line reads "whole", then "whole species
@@ -328,9 +362,15 @@ function sameProblem(finding, issue, atSec) {
 const sceneAt = (scenes, t) => (scenes || []).filter((s) => finite(s?.startSec) && s.startSec <= t + 1e-6 && (!finite(s.endSec) || t < s.endSec)).pop() || null;
 const findingKey = (issue) => `${issue.kind}|${issue.texts.map((t) => t.toLowerCase()).sort().join('|')}`;
 
+/** Kinds whose length is traced frame by frame (they are often momentary). */
+export const OVERLAY_TEXT_SPAN_KINDS = Object.freeze(['overlap', 'off-frame']);
+/** Frames traced each way before a problem counts as lasting (`span.open`). */
+export const OVERLAY_TEXT_SPAN_FRAMES = OVERLAY_TEXT_LIMITS.spanFrames;
+
 /**
  * Merge per-sample issues (`[{ atSec, issues }]`) into findings, errors first,
- * then by first time seen; each names the shot it was first seen in.
+ * then by first time seen; each names the shot it was first seen in. An issue's
+ * `span` (`{ startSec, endSec, frames, open }`, traced by the service) rides along.
  */
 export function summarizeTextFindings(samples = [], scenes = []) {
   const L = OVERLAY_TEXT_LIMITS;
@@ -340,14 +380,15 @@ export function summarizeTextFindings(samples = [], scenes = []) {
       const key = findingKey(issue);
       const found = byKey.get(key) || [...byKey.values()].find((f) => sameProblem(f, issue, sample.atSec));
       if (found) {
-        if (found.times.length < L.maxTimesPerFinding && !found.times.includes(round3(sample.atSec))) found.times.push(round3(sample.atSec));
+        if (found.times.length < L.maxTimesPerFinding && !found.times.includes(frameMs(sample.atSec))) found.times.push(frameMs(sample.atSec));
         found.count += 1;
+        if (!found.span && issue.span) found.span = issue.span;
         found.lastSec = sample.atSec;
         // Keep the fullest reading of the text (the whole line, not its first word).
         if (issue.texts.join(' ').length > found.texts.join(' ').length) {
           found.texts = issue.texts;
           found.detail = issue.detail ?? found.detail;
-          found.message = describeTextFinding(issue);
+          found.message = describeTextFinding({ ...issue, span: issue.span ?? found.span });
         }
         continue;
       }
@@ -355,7 +396,9 @@ export function summarizeTextFindings(samples = [], scenes = []) {
       byKey.set(key, {
         id: createHash('sha1').update(key).digest('hex').slice(0, 12),
         kind: issue.kind, severity: SEVERITY[issue.kind] || 'warning', texts: issue.texts, detail: issue.detail ?? null,
-        atSec: round3(sample.atSec), lastSec: sample.atSec, times: [round3(sample.atSec)], count: 1,
+        // A traced span starts the finding at the first frame the problem is on screen.
+        atSec: frameMs(issue.span?.startSec ?? sample.atSec), lastSec: sample.atSec, times: [frameMs(sample.atSec)], count: 1,
+        span: issue.span ?? null,
         sceneId: scene?.sceneId ?? null, sceneLabel: scene?.label || null,
         message: describeTextFinding(issue),
       });

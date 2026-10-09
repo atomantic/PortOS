@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  OVERLAY_TEXT_PROCESS_ID, analyzeTextFrame, mergeTextRecords, overlayTextReport, planTextSampleTimes, summarizeTextFindings,
+  OVERLAY_TEXT_PROCESS_ID, analyzeTextFrame, mergeTextRecords, overlayTextReport, planTextSampleTimes, sameIssue, summarizeTextFindings,
 } from './overlayText.js';
 
 const FRAME = { width: 1920, height: 1080 };
@@ -57,6 +57,15 @@ describe('analyzeTextFrame', () => {
     // Dark ink on the same pale frame needs no outline.
     expect(frameIssues(word('BLOOM', 100, 400, { fill: INK }), PALE)).toEqual([]);
   });
+
+  it('never suggests a backing behind lyrics; a small readout may take a plate', () => {
+    const [lyric] = summarizeTextFindings([{ atSec: 1, issues: frameIssues(word('BLOOM', 100, 400), PALE) }]);
+    expect(lyric.message).toContain('lyrics take no plate or shade');
+    expect(lyric.message).not.toContain('plate behind it');
+    const readout = word('20 MILLION YEARS', 40, 80, { font: '500 40px Plex Mono', em: 40, w: 700, h: 32 });
+    const [data] = summarizeTextFindings([{ atSec: 1, issues: frameIssues(readout, PALE) }]);
+    expect(data.message).toContain('or a plate behind it');
+  });
 });
 
 describe('summarizeTextFindings', () => {
@@ -77,6 +86,21 @@ describe('summarizeTextFindings', () => {
     ]);
     expect(findings[1].message).toContain('“whole species bloom”');
   });
+
+  it('starts a traced problem at its first frame and says when it lasts only a few frames', () => {
+    const overlap = (a, b, span) => ({ kind: 'overlap', texts: [a, b], detail: null, span });
+    const [brief, lasting] = summarizeTextFindings([
+      { atSec: 44.792, issues: [overlap('AT THE SCALE OF THE UNIVERSE', 'YOU', { startSec: 44.75, endSec: 44.792, frames: 2, open: false })] },
+      { atSec: 60, issues: [overlap('DATA', 'HOOK', { startSec: 59.833, endSec: 60.167, frames: 9, open: true })] },
+    ]);
+    expect(brief).toMatchObject({ atSec: 44.75, span: { frames: 2, open: false } });
+    expect(brief.message).toContain('on screen for 2 frames');
+    expect(lasting.atSec).toBe(59.833);
+    expect(lasting.message).not.toContain('frames');
+    // The next frame's reading of the same problem may have more of the line, or the pair the other way round.
+    expect(sameIssue(overlap('YOU', 'AT THE SCALE'), overlap('AT THE SCALE OF THE UNIVERSE', 'YOU ARE'))).toBe(true);
+    expect(sameIssue(overlap('YOU', 'AT THE SCALE'), { kind: 'off-frame', texts: ['YOU'] })).toBe(false);
+  });
 });
 
 describe('planTextSampleTimes', () => {
@@ -87,7 +111,7 @@ describe('planTextSampleTimes', () => {
       durationSec: 8, fps: 24,
     });
     // 1 and 2.042 are entrance frames (a slam-in is largest there), kept however close to a settled sample.
-    expect(times).toEqual([0.25, 1, 1.333, 2.042, 2.5, 3.792, 4]);
+    expect(times).toEqual([0.25, 1, 1.334, 2.042, 2.5, 3.792, 4]);
     expect(times.every((t) => Math.abs(t * 24 - Math.round(t * 24)) < 0.05)).toBe(true);
     const many = planTextSampleTimes({ scenes: Array.from({ length: 300 }, (_, i) => ({ startSec: i, endSec: i + 1 })), durationSec: 300, maxSamples: 50 });
     expect(many).toHaveLength(50);

@@ -1,7 +1,8 @@
 /**
  * The overlay text check end to end in a real headless Chrome: a document that
  * draws a corner readout under a big lyric, a pale caption on a pale frame, a
- * line past the right edge, a tiny tag and a DOM caption is staged like a
+ * line past the right edge, a tiny tag, a word that crosses that tag for a
+ * single frame and a DOM caption is staged like a
  * render, probed at its text moments, and each problem comes back once —
  * while a word ringed in a wide ink outline, and a caption on an ink plate,
  * pass on the same pale frame: either is a legibility treatment, not a problem.
@@ -39,7 +40,7 @@ const PAGE = `<!doctype html><html><head><style>
 
 const APP = `
 const ctx = document.getElementById('c').getContext('2d');
-function draw() {
+function draw(t) {
   ctx.fillStyle = '#f3ead7'; ctx.fillRect(0, 0, 1280, 720);
   // A corner readout on a plate too short for it, under a big outlined lyric.
   ctx.fillStyle = '#141217'; ctx.fillRect(40, 60, 380, 60);
@@ -57,8 +58,10 @@ function draw() {
   ctx.fillStyle = '#141217'; ctx.fillText('OFF THE EDGE', 1040, 640);
   // Too small for a phone.
   ctx.font = '14px sans-serif'; ctx.fillText('tiny tag', 80, 600);
+  // Over the tag for exactly one frame (fps 12), as a line swap can be.
+  if (t >= 0.5 - 1e-6 && t < 0.5 + 1 / 12 - 1e-6) { ctx.font = '900 64px sans-serif'; ctx.fillText('FLASH', 70, 620); }
 }
-globalThis.portosComposition = { durationSec: 4, fps: 12, width: 1280, height: 720, async seek() { draw(); } };
+globalThis.portosComposition = { durationSec: 4, fps: 12, width: 1280, height: 720, async seek(t) { draw(t); } };
 `;
 
 describe.skipIf(!chrome)('overlay text check (headless Chrome)', () => {
@@ -81,7 +84,10 @@ describe.skipIf(!chrome)('overlay text check (headless Chrome)', () => {
 
     const kinds = (text) => check.findings.filter((f) => f.texts.some((t) => t.includes(text))).map((f) => f.kind).sort();
     expect(kinds('20 MILLION YEARS')).toContain('overlap');
-    expect(check.findings.find((f) => f.kind === 'overlap').texts).toEqual(expect.arrayContaining(['20 MILLION YEARS', 'WHOLE']));
+    expect(check.findings.find((f) => f.kind === 'overlap' && f.texts.includes('WHOLE')).texts).toEqual(expect.arrayContaining(['20 MILLION YEARS', 'WHOLE']));
+    // Traced frame by frame: the one-frame collision reports its exact frame and length; a lasting one stays open.
+    expect(check.findings.find((f) => f.texts.includes('FLASH'))).toMatchObject({ kind: 'overlap', atSec: 0.5, span: { frames: 1, open: false } });
+    expect(check.findings.find((f) => f.texts.includes('WHOLE')).span).toMatchObject({ open: true });
     expect(kinds('DISAPPEAR')).toEqual(['contrast']);
     expect(kinds('OFF THE EDGE')).toEqual(['off-frame']);
     expect(kinds('tiny tag')).toContain('small');
@@ -94,7 +100,7 @@ describe.skipIf(!chrome)('overlay text check (headless Chrome)', () => {
 
     const report = productionReadiness(await projects.getProject(created.id)).storyboard.text;
     expect(report).toMatchObject({ status: 'complete', current: true });
-    expect(report.counts.errors).toBe(2);
+    expect(report.counts.errors).toBe(3);
   }, 120000);
 
   it('passes the shipped layered template: lyricType lines and a data readout on a pale still', async () => {
