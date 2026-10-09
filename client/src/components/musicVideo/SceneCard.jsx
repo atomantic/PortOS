@@ -3,7 +3,7 @@ import ShotActionInspector from './ShotActionInspector.jsx';
 import SceneCameraControls from './SceneCameraControls.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { useEffect, useRef, useState } from 'react';
-import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, Scissors } from 'lucide-react';
+import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, Merge, Scissors } from 'lucide-react';
 import { formatDurationSec, formatUsd } from '../../utils/formatters.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import PerformanceEvidence from './PerformanceEvidence.jsx';
@@ -64,20 +64,24 @@ const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
  * A shot longer than that lane renders in one take (the lip-sync audio window,
  * or Grok's longest clip) offers `onSplit(sceneId, backend)`, which cuts it
  * into contiguous scenes at lyric pauses / phrase boundaries server-side.
+ * Any scene but the last offers `onMergeNext(sceneId, backend)` (with `nextEndSec`, the next scene's end), the inverse;
+ * it is hidden when the joined span would exceed that lane's longest take.
  *
  * The card is a disclosure: collapsed it is one row — frame thumbnail, title,
  * timing, lyric line and status — and it opens on tap to the full editor.
  * Opening or closing it also calls `onSeek(scene)`, so the docked preview
  * jumps to the scene's start.
  */
+const MOVE_DOCUMENT_TITLE = "This video's shot order comes from its composition document";
+
 export default function SceneCard({
   scene, index, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null,
   settingsSaving, videoBlockedReason, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
   onGenerateFrame, onGenerateVideo, onContinueVideo,
   onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false, layered = false, documentComposition = false,
-  lipSyncBackend = '', songDurationSec = null, onSplit, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
-  expanded, onToggleExpand, footageOptional = false, failedScenes = null,
+  lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
+  expanded, onToggleExpand, footageOptional = false, failedScenes = null, songReview = null,
 }) {
   const detailsRef = useRef(null);
 
@@ -137,12 +141,16 @@ export default function SceneCard({
   const performanceCost = falTake?.performance ? (falCost || capability?.costLabel) : capability?.costLabel;
   const splitLimit = layer === 'footage' ? shotSplitLimit(scene, lipSyncBackend) : null;
   const canSplit = splitLimit != null && timedSpan != null && timedSpan > splitLimit + 1e-6;
+  const mergedSpan = typeof scene.startSec === 'number' && typeof nextEndSec === 'number' ? nextEndSec - scene.startSec : null;
+  const canMerge = !!onMergeNext && !isLast && !documentComposition
+    && (splitLimit == null || (mergedSpan != null && mergedSpan <= splitLimit + 1e-6));
   const instruction = scene.takes?.find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId)?.shotInstruction;
   const repairPlan = planPerformanceRepair({ scene, temporal: performanceReview?.shot,
     excerptStartSec: performanceReview?.excerptStartSec, backend: lipSyncBackend, videoSettings: falVideoSettings || {} });
   const shotModeId = `mv-shot-mode-${scene.sceneId}`;
   // #10152: what needs the director's attention, visible without opening the card.
-  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec, failed: failedScenes || {} });
+  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec, failed: failedScenes || {}, songReview });
+  const songChange = songReview?.[scene.sceneId];
   const generatingLane = generatingFrame && generatingVideo ? 'Frame + clip' : generatingFrame ? 'Frame' : generatingVideo ? 'Clip' : null;
   // #10154: the server-persisted failure of the last render, shown until a
   // retry is in flight (or lands a take, which clears it server-side).
@@ -205,9 +213,19 @@ export default function SceneCard({
         <SceneRenderProgress kind="Video" generating={generatingVideo} progress={videoProgress} />
       </summary>
       <div className="space-y-2 p-3 pt-0">
+        {/* A move swaps this shot with its neighbor; the song timing and lyric stay with the slot. */}
         <div className="flex items-center justify-end gap-2">
-          <button onClick={() => onMove(index, -1)} disabled={index === 0} aria-label="Move up" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 disabled:opacity-30" title="Move up"><ArrowUp size={14} /></button>
-          <button onClick={() => onMove(index, 1)} disabled={isLast} aria-label="Move down" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 disabled:opacity-30" title="Move down"><ArrowDown size={14} /></button>
+          {documentComposition && (
+            <span className="mr-auto text-[11px] text-gray-400">Shot order comes from the composition document, so it can't be reordered here.</span>
+          )}
+          <button type="button" onClick={() => onMove(index, -1)} disabled={index === 0 || documentComposition} title={documentComposition ? MOVE_DOCUMENT_TITLE : "Swap with the previous shot; the song timing stays put"}
+            className="min-h-[44px] inline-flex items-center justify-center gap-1 rounded border border-port-border px-2 text-xs disabled:opacity-30 sm:min-h-0 sm:py-1">
+            <ArrowUp size={14} aria-hidden="true" /> Move earlier
+          </button>
+          <button type="button" onClick={() => onMove(index, 1)} disabled={isLast || documentComposition} title={documentComposition ? MOVE_DOCUMENT_TITLE : "Swap with the next shot; the song timing stays put"}
+            className="min-h-[44px] inline-flex items-center justify-center gap-1 rounded border border-port-border px-2 text-xs disabled:opacity-30 sm:min-h-0 sm:py-1">
+            <ArrowDown size={14} aria-hidden="true" /> Move later
+          </button>
           <button onClick={() => onDelete(scene.sceneId)} aria-label="Delete scene" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-error" title="Delete scene"><Trash2 size={14} /></button>
         </div>
         <textarea
@@ -221,6 +239,9 @@ export default function SceneCard({
         {(scene.lyricText || scene.visualIntent || scene.direction) && (
           <div className="text-[11px] text-port-text-muted space-y-0.5">
             {scene.lyricText && <p className="italic break-words">♪ {scene.lyricText}</p>}
+            {songChange && !songChange.resolved && songChange.status !== 'kept' && (
+              <p className="break-words text-port-warning">{songChange.status === 'new' ? 'New shot for lines the revised song added.' : `Before the song revision: ${songChange.previousLyricText ? `♪ ${songChange.previousLyricText}` : 'instrumental'}`}</p>
+            )}
             {scene.visualIntent && <p className="break-words">Intent: {scene.visualIntent}</p>}
             {/* Applied treatment direction (#8980) — appended to both generated prompts. */}
             {scene.direction && (
@@ -371,6 +392,13 @@ export default function SceneCard({
             className="inline-flex items-center gap-1 rounded bg-port-bg border border-port-border hover:bg-port-border/40 px-2 py-1 text-xs min-h-[44px] sm:min-h-0"
             title={`Cut this ${timedSpan.toFixed(1)}s shot into scenes of at most ${splitLimit.toFixed(2)}s at lyric pauses or phrase boundaries — nothing is looped or stretched`}>
             <Scissors size={13} /> Split on lyric boundaries
+          </button>
+        )}
+        {canMerge && (
+          <button type="button" onClick={() => onMergeNext(scene.sceneId, lipSyncBackend || null)}
+            className="inline-flex items-center gap-1 rounded bg-port-bg border border-port-border hover:bg-port-border/40 px-2 py-1 text-xs min-h-[44px] sm:min-h-0"
+            title="Join this shot with the next one into a single shot — the inverse of split">
+            <Merge size={13} /> Merge with next
           </button>
         )}
         {underCovered && (

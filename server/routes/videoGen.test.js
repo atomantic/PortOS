@@ -878,6 +878,87 @@ describe('videoGen routes', () => {
         tagged: { continueFromClipId: 'example-clip', seconds: 6, seed: 0, aspect: '9:16' } },
     ];
 
+    it.each([
+      { input: 'gallery', falModelId: 'fal-ai/kling-video/v3/pro/image-to-video' },
+      { input: 'upload', falModelId: 'fal-ai/kling-video/v3/pro/image-to-video' },
+      { input: 'gallery', falModelId: undefined },
+    ])('queues fal start/end frames from $input with model $falModelId and upload ownership intact', async ({ input, falModelId }) => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce(settings);
+      if (input === 'upload') {
+        setPendingUpload(
+          { fieldname: 'sourceImage', path: '/tmp/fal-start.png', originalname: 'start.png' },
+          { fieldname: 'lastImage', path: '/tmp/fal-end.jpg', originalname: 'end.jpg' },
+        );
+      }
+      const musicVideo = { projectId: 'mv-example', sceneId: 'scene-example' };
+      const r = await request(app).post('/api/video-gen/').send({
+        backend: 'fal', falModelId, prompt: 'a fox',
+        sourceImageFile: 'start.png', lastImageFile: 'end.jpg', musicVideo,
+      });
+      expect(r.status).toBe(200);
+      const { params } = mediaJobQueue.enqueueJob.mock.calls[0][0];
+      expect(params).toMatchObject({ mode: 'fal', videoMode: 'image', musicVideo });
+      if (input === 'gallery') {
+        expect(params).toMatchObject({ sourceImagePath: '/mock/images/start.png', lastImagePath: '/mock/images/end.jpg', uploadedTempPath: null });
+        expect(params).not.toHaveProperty('uploadedTempPaths');
+      } else {
+        expect(params.sourceImagePath.split('\\').join('/')).toMatch(/^\/mock\/uploads\/video-source-.*\.png$/);
+        expect(params.lastImagePath.split('\\').join('/')).toMatch(/^\/mock\/uploads\/video-last-.*\.jpg$/);
+        expect(params.uploadedTempPath).toBe(params.sourceImagePath);
+        expect(params.uploadedTempPaths).toEqual([params.lastImagePath]);
+        expect(unlink).toHaveBeenCalledWith('/tmp/fal-start.png');
+        expect(unlink).toHaveBeenCalledWith('/tmp/fal-end.jpg');
+      }
+      expect(unlink).not.toHaveBeenCalledWith('/mock/images/start.png');
+      expect(unlink).not.toHaveBeenCalledWith('/mock/images/end.jpg');
+    });
+
+    it.each(['fal-ai/veo3.1/fast/image-to-video', 'fal-ai/uncatalogued-model'])('rejects an unsupported fal end frame for model %s before enqueueing', async (falModelId) => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce(settings);
+      setPendingUpload({ fieldname: 'lastImage', path: '/tmp/fal-end.jpg', originalname: 'end.jpg' });
+      const r = await request(app).post('/api/video-gen/').send({
+        backend: 'fal', falModelId, prompt: 'a fox', sourceImageFile: 'start.png',
+      });
+      expect(r.status).toBe(400);
+      expect(r.body).toMatchObject({ code: 'VALIDATION_ERROR', error: expect.stringMatching(/end.frame/i) });
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      expect(copyFile).not.toHaveBeenCalled();
+      expect(unlink).toHaveBeenCalledWith('/tmp/fal-end.jpg');
+    });
+
+    it('rejects a missing fal gallery end frame instead of silently rendering without it', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      const { resolveGalleryImage } = await import('../lib/fileUtils.js');
+      getSettings.mockResolvedValueOnce(settings);
+      resolveGalleryImage.mockReturnValueOnce('/mock/images/start.png').mockReturnValueOnce(null);
+      const r = await request(app).post('/api/video-gen/').send({
+        backend: 'fal', falModelId: 'fal-ai/kling-video/v3/pro/image-to-video', prompt: 'a fox',
+        sourceImageFile: 'start.png', lastImageFile: 'missing.jpg',
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe('VALIDATION_ERROR');
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('rolls back both fal frame uploads when enqueueing fails', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce(settings);
+      mediaJobQueue.enqueueJob.mockImplementationOnce(() => { throw new Error('queue full'); });
+      setPendingUpload(
+        { fieldname: 'sourceImage', path: '/tmp/fal-start.png', originalname: 'start.png' },
+        { fieldname: 'lastImage', path: '/tmp/fal-end.jpg', originalname: 'end.jpg' },
+      );
+      const r = await request(app).post('/api/video-gen/').send({
+        backend: 'fal', falModelId: 'fal-ai/kling-video/v3/pro/image-to-video', prompt: 'a fox',
+      });
+      expect(r.status).toBe(500);
+      const durablePaths = copyFile.mock.calls.map(([, path]) => path);
+      expect(durablePaths).toHaveLength(2);
+      for (const path of durablePaths) expect(unlink).toHaveBeenCalledWith(path);
+    });
+
     it.each(providers)('preserves $backend text defaults and exact optional-key presence', async ({ backend, minimal }) => {
       const { getSettings } = await import('../services/settings.js');
       getSettings.mockResolvedValueOnce(settings);

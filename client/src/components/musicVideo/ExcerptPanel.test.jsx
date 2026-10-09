@@ -21,6 +21,23 @@ function renderPanel(project, startExcerpt = vi.fn()) {
 
 beforeEach(() => vi.clearAllMocks());
 
+it('shows draft creation in browser-local time, including the local calendar day', () => {
+  const createdAt = new Date(2026, 0, 2, 23, 45).toISOString();
+  render(<ExcerptPanel project={documentProject} rendering={false} progress={0} excerpts={[
+    { id: 'local-draft', status: 'complete', filename: 'draft.mp4', startSec: 0, endSec: 12, createdAt },
+  ]} startExcerpt={vi.fn()} />);
+  const expected = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(createdAt));
+  expect(screen.getByText(`Draft · approval is separate · ${expected}`)).toBeVisible();
+  expect(screen.queryByText(/ UTC$/)).toBeNull();
+});
+
+it('keeps a draft with an invalid creation timestamp viewable', () => {
+  render(<ExcerptPanel project={documentProject} rendering={false} progress={0} excerpts={[
+    { id: 'invalid-date', status: 'complete', filename: 'draft.mp4', startSec: 0, endSec: 12, createdAt: 'invalid' },
+  ]} startExcerpt={vi.fn()} />);
+  expect(screen.getByText('Draft · approval is separate · Unknown time')).toBeVisible();
+});
+
 describe('ExcerptPanel social cuts (#9280)', () => {
   it('renders the chosen range at another frame with faded audio edges', () => {
     const start = renderPanel(documentProject);

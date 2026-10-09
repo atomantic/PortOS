@@ -597,3 +597,62 @@ describe('UsagePage custom date range inputs', () => {
     expect(from.value).toBe('2026-09-29');
   });
 });
+
+describe('UsagePage report range freshness (#10687)', () => {
+  const pricedUsage = (estimatedCost) => ({ ...usage, report: { ...usage.report, totals: { estimatedCost } } });
+
+  it('labels retained figures during a pending and failed replacement, then clears the error on retry', async () => {
+    api.getUsage.mockResolvedValueOnce(pricedUsage(123.45));
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('$123.45')).toBeInTheDocument();
+    let rejectRange;
+    api.getUsage.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectRange = reject; }));
+    fireEvent.click(screen.getByRole('button', { name: '30 days' }));
+    expect(await screen.findByText('Loading selected usage range…')).toBeInTheDocument();
+    expect(screen.getByText('Showing usage for 7 days. Retained figures may be stale.')).toBeInTheDocument();
+    expect(screen.getByText('$123.45')).toBeInTheDocument();
+    await act(async () => rejectRange(new Error('Example unavailable')));
+    expect(screen.getByRole('alert')).toHaveTextContent('Usage unavailable for the selected range.');
+    expect(screen.getByText('Showing usage for 7 days. Retained figures may be stale.')).toBeInTheDocument();
+    api.getUsage.mockResolvedValueOnce(pricedUsage(456.78));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry usage' }));
+    expect(await screen.findByText('$456.78')).toBeInTheDocument();
+    expect(screen.getByText('Showing usage for 30 days.')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(api.getUsage).toHaveBeenLastCalledWith({ period: '30d' }, { silent: true });
+  });
+
+  it('keeps controls and retry available after an initial invalid custom-range failure', async () => {
+    api.getUsage.mockRejectedValueOnce(new Error('Example invalid range'));
+    render(<MemoryRouter initialEntries={['/?from=2026-09-30&to=2026-09-01']}><UsagePage /></MemoryRouter>);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Usage unavailable');
+    expect(screen.queryByText('No usage data available')).not.toBeInTheDocument();
+    const from = screen.getByLabelText('From date');
+    expect(from).toHaveValue('2026-09-30');
+    expect(screen.getByRole('button', { name: 'Retry usage' })).toBeEnabled();
+    api.getUsage.mockResolvedValueOnce(pricedUsage(12.34));
+    fireEvent.change(from, { target: { value: '2026-08-01' } });
+    expect(await screen.findByText('$12.34')).toBeInTheDocument();
+    expect(screen.getByText('Showing usage for 2026-08-01 to 2026-09-01.')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('ignores a superseded failure without clearing the latest pending request or successful report', async () => {
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('Showing usage for 7 days.');
+    let rejectOlder;
+    let resolveLatest;
+    api.getUsage.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectOlder = reject; }));
+    fireEvent.click(screen.getByRole('button', { name: '30 days' }));
+    api.getUsage.mockReturnValueOnce(new Promise((resolve) => { resolveLatest = resolve; }));
+    fireEvent.click(screen.getByRole('button', { name: '90 days' }));
+    await act(async () => rejectOlder(new Error('Example stale failure')));
+    expect(screen.getByText('Loading selected usage range…')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    await act(async () => resolveLatest(pricedUsage(90)));
+    expect(screen.getByText('Showing usage for 90 days.')).toBeInTheDocument();
+    expect(screen.getByText('$90.00')).toBeInTheDocument();
+    expect(screen.queryByText('Loading selected usage range…')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});

@@ -22,6 +22,7 @@ case "$1" in
   ps) echo "Up 5 minutes"; exit 0 ;;
   info) exit 0 ;;
   compose)
+    [ -n "$COMPOSE_ENV_LOG" ] && echo "$PGUSER|$PGDATABASE|$PGPASSWORD|$PGPORT_DOCKER" >> "$COMPOSE_ENV_LOG"
     case "$*" in *" stop "*) echo SOURCE_STOP >> "$STUB_LOG" ;; esac
     exit 0 ;;
   exec)
@@ -44,7 +45,7 @@ exit 0
 
 const PSQL_STUB = `#!/bin/sh
 echo "psql $*" >> "$STUB_LOG"
-echo "endpoint-env \${PGHOSTADDR-unset}|\${PGSERVICE-unset}|\${PGSERVICEFILE-unset}|\${PGOPTIONS-unset}" >> "$STUB_LOG"
+echo "endpoint-env \${PGHOSTADDR-unset}|\${PGSERVICE-unset}|\${PGSERVICEFILE-unset}|\${PGOPTIONS-unset}|tls=\${PGSSLMODE-unset}" >> "$STUB_LOG"
 case "$*" in *--single-transaction*) cat >> "$IMPORT_LOG"; exit "\${IMPORT_EXIT:-0}" ;; esac
 if [ -n "\${PORTOS_BOOTSTRAP_ROLE:-}" ]; then cat > "$ROLE_INPUT_LOG"; fi
 case "$*" in *count*) echo 3 ;; esac
@@ -53,7 +54,7 @@ exit 0
 
 const PG_DUMP_STUB = `#!/bin/sh
 echo "pg_dump $*" >> "$STUB_LOG"
-echo "endpoint-env \${PGHOSTADDR-unset}|\${PGSERVICE-unset}|\${PGSERVICEFILE-unset}|\${PGOPTIONS-unset}" >> "$STUB_LOG"
+echo "endpoint-env \${PGHOSTADDR-unset}|\${PGSERVICE-unset}|\${PGSERVICEFILE-unset}|\${PGOPTIONS-unset}|tls=\${PGSSLMODE-unset}" >> "$STUB_LOG"
 case "$DUMP_MODE" in
   partial) printf 'DROP TABLE example_record;\\n'; exit 1 ;;
   empty) exit 1 ;;
@@ -65,6 +66,7 @@ esac
 // test can stand up "another cluster on the default port" without a real server.
 const PG_ISREADY_STUB = `#!/bin/sh
 echo "pg_isready $*" >> "$STUB_LOG"
+echo "endpoint-env \${PGHOSTADDR-unset}|\${PGSERVICE-unset}|\${PGSERVICEFILE-unset}|\${PGOPTIONS-unset}|tls=\${PGSSLMODE-unset}" >> "$STUB_LOG"
 port=""; prev=""
 for arg in "$@"; do [ "$prev" = "-p" ] && port="$arg"; prev="$arg"; done
 [ -z "\${READY_PORTS:-}" ] && exit 0
@@ -373,6 +375,55 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     expect(result.stdout).toContain('selected mode is unchanged');
   });
 
+  // #10757: every host libpq client the script starts — readiness, bootstrap
+  // probes and writes, schema, ordinary and explicit transfers — must run with
+  // the routing variables removed, while supported TLS settings survive for the
+  // ordinary paths. Pairing each client line with an environment line proves no
+  // call site was missed.
+  describe('inherited libpq routing variables (#10757)', () => {
+    const poisoned = { PGHOSTADDR: '192.0.2.10', PGSERVICE: 'other', PGSERVICEFILE: '/example/service.conf', PGOPTIONS: '-c search_path=other', PGSSLMODE: 'require' };
+    const clientLines = (log) => log.split('\n').filter(line => /^(psql|pg_dump|pg_isready) /.test(line));
+    const envLines = (log) => log.split('\n').filter(line => line.startsWith('endpoint-env '));
+
+    const expectRoutingRemoved = (log, { tls }) => {
+      expect(envLines(log).length).toBe(clientLines(log).length);
+      expect(envLines(log).length).toBeGreaterThan(0);
+      for (const line of envLines(log)) expect(line).toBe(`endpoint-env unset|unset|unset|unset|tls=${tls}`);
+      expect(log).not.toContain('192.0.2.10');
+    };
+
+    it('removes them from native readiness, role provisioning, database creation and schema application', () => {
+      const result = run(['setup-native'], 'ok', { ...poisoned, PGPORT: '5433', PGHOST: 'db.example.invalid', READY_PORTS: '5433' });
+      expect(result.status, result.stderr).toBe(0);
+      const log = readFileSync(stubLog, 'utf8');
+      expect(log).toContain('pg_isready');
+      expect(psqlCalls().length).toBeGreaterThanOrEqual(6);
+      expectRoutingRemoved(log, { tls: 'require' });
+      expect(readFileSync(join(root, 'role.sql'), 'utf8')).toContain('CREATE ROLE :"role"');
+      expect(log).not.toContain('test-only');
+    });
+
+    it.each(['docker', 'native'])('removes them from ordinary host export and import in saved %s mode', (mode) => {
+      writeFileSync(envFile, `PGMODE=${mode}\nPGHOST=db.example.invalid\nPGPORT=6543\nPGPORT_DOCKER=6543\n`);
+      const overrides = { ...poisoned, PGHOST: undefined };
+      const exported = run(['export', 'ordinary'], 'ok', overrides);
+      expect(exported.status, exported.stderr).toBe(0);
+      const dump = join(dumpDir, 'portos-ordinary.sql');
+      expect(run(['import', dump], 'ok', overrides).status).toBe(0);
+      const log = readFileSync(stubLog, 'utf8');
+      expect(log).toMatch(/pg_dump -h db\.example\.invalid -p 6543 /);
+      expect(log).toMatch(/psql -h db\.example\.invalid -p 6543 .*--single-transaction/);
+      expect(clientLines(log)).toHaveLength(2);
+      expectRoutingRemoved(log, { tls: 'require' });
+    });
+
+    it('keeps explicit endpoint transfers on the stricter scrub that also drops TLS settings', () => {
+      const endpoint = ['--endpoint', 'example.invalid', '6543', 'example', 'example_db'];
+      expect(run(['export', ...endpoint, 'strict'], 'ok', poisoned).status).toBe(0);
+      expectRoutingRemoved(readFileSync(stubLog, 'utf8'), { tls: 'unset' });
+    });
+  });
+
   const psqlCalls = () => readFileSync(stubLog, 'utf8').split('\n').filter(line => line.startsWith('psql '));
 
   it('provisions only the selected non-default endpoint while another cluster listens on the default port', () => {
@@ -446,6 +497,31 @@ exit "\${PROVISION_EXIT:-0}"
       expect(stdin).toContain("PASSWORD :'pw'");
       expect(stdin).not.toContain('w;rd');
       expect(readFileSync(join(root, 'psql.env'), 'utf8')).toBe('role"x|' + SECRET);
+    });
+
+    it('forwards the resolved settings to Compose so its own .env grammar cannot change them', () => {
+      const composeLog = join(root, 'compose-env.log');
+      writeFileSync(envFile, [
+        'PGMODE=docker',
+        'PGUSER=example-user',
+        'PGDATABASE=example_db',
+        'PGPASSWORD=example-pass # local note',
+        'PGPORT_DOCKER=5599',
+        '',
+      ].join('\n'));
+      const result = run(['stop'], 'ok', { PGPASSWORD: '', COMPOSE_ENV_LOG: composeLog });
+      expect(result.status, result.stderr).toBe(0);
+      const forwarded = () => new Set(readFileSync(composeLog, 'utf8').trim().split('\n'));
+      expect(forwarded()).toEqual(new Set(['example-user|example_db|example-pass # local note|5599']));
+      expect(readFileSync(stubLog, 'utf8')).not.toContain('example-pass');
+      expect(result.stdout + result.stderr).not.toContain('example-pass');
+
+      // A literal dollar expression is forwarded verbatim, not expanded.
+      writeFileSync(envFile, 'PGMODE=docker\nPGPASSWORD="example-$PORTOS_PROBE_SUFFIX"\n');
+      writeFileSync(composeLog, '');
+      const dollar = run(['stop'], 'ok', { PGPASSWORD: '', COMPOSE_ENV_LOG: composeLog });
+      expect(dollar.status, dollar.stderr).toBe(0);
+      expect(forwarded()).toEqual(new Set(['portos|portos|example-$PORTOS_PROBE_SUFFIX|5561']));
     });
 
     it('setup-native fails when role provisioning fails', () => {

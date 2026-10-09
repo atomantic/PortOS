@@ -4,6 +4,7 @@ These apply to React/Vite client code. Universal constraints (functional program
 
 ## UI conventions
 
+- **Display timestamps in browser-local time** — use the shared date/time formatters in `utils/formatters.js`; never render an ISO/UTC serialization as a display timestamp. Keep ISO timestamps for transport and persistence. Explicit schedule timezones and date-keyed reporting boundaries retain their domain semantics.
 - **Admin workspace design** — for new or redesigned admin pages, follow [the workspace design guide](../../docs/UX_DESIGN_GUIDE.md): choose a page family, put useful work first, use desktop width for related work/evidence, and preserve icon-prefixed desktop navigation plus CoS-style compact mobile icon rows. Apply incrementally; the guide does not authorize unrelated behavior changes or a global CSS rewrite.
 - **No window.alert/confirm** - use inline confirmations or toast notifications
 - **Form labels need `htmlFor`/`id` pairing** - when adding a settings/config form field, wire `<label htmlFor="...">` to an `id="..."` on the input — screen readers and click-to-focus both depend on the association. The visual `block`/`mb-1` styling alone doesn't establish it.

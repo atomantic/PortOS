@@ -3,7 +3,7 @@
  * configuration: health readers must not load a runner or probe a provider.
  */
 export const REVIEWER_CONFIG_FAULT_CODES = Object.freeze([
-  'NO_MODEL', 'REVIEWER_UNAVAILABLE', 'REVIEWER_UNSUPPORTED', 'REVIEWER_ACCESS_DENIED',
+  'NO_MODEL', 'REVIEWER_UNAVAILABLE', 'REVIEWER_UNSUPPORTED', 'REVIEWER_ACCESS_DENIED', 'REVIEWER_COMMAND_PERMISSION_DENIED',
 ]);
 
 export const isReviewerConfigFault = code => REVIEWER_CONFIG_FAULT_CODES.includes(code);
@@ -22,6 +22,13 @@ export function reviewerAccessFailureCode(reviewer, failure) {
     && (failure.providerErrorType === 'FreeTierError'
       || failure.message === "OpenCode's free tier can only be used from within OpenCode");
   return freeTierError || accessDenied ? 'REVIEWER_ACCESS_DENIED' : null;
+}
+
+/** Match the vendor's explicit headless refusal, never generic permission prose. */
+export function reviewerCommandPermissionFailureCode(message) {
+  if (typeof message !== 'string') return null;
+  return /^(?:jetski:\s*)?no output produced [—–-] a tool required the ["']command["'] permission that headless mode cannot prompt for, so it was auto-denied(?:\.|$)/im.test(message)
+    ? 'REVIEWER_COMMAND_PERMISSION_DENIED' : null;
 }
 
 /** First nonempty tier with ALL members unpaused, or the first configured tier.

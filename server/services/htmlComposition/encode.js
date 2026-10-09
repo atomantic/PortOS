@@ -43,7 +43,18 @@ const SCREENSHOT = Object.freeze({ format: 'png', optimizeForSpeed: true, fromSu
 // that a later window continues (parallel segments): the auto-shutter
 // comparison at each seam sees the real neighbouring frame instead of treating
 // the window edge as an edge of the song.
-export async function encodeComposition(page, contract, outputPath, { musicPath, audio, signal, onProgress, offsetSec = 0, continuous = false, followed = false, videoFilter = null, master = false, runFfmpeg = runFfmpegProcess, spawnProcess = spawn, locateFfmpeg = findFfmpeg, tagFilter = bt709TagFilter } = {}) {
+// A stalled or lost browser (a CDP command past its deadline on an overloaded
+// host, a crashed target) is not the document's fault, and seeks are
+// deterministic, so a fresh browser can redraw the same frame (#10839).
+// Anything else (a script error, a refused asset) fails as before.
+const RECOVERABLE_PAGE_FAILURE = /Browser command timed out|Composition browser target crashed|Composition browser target closed|Managed browser disconnected/;
+const MAX_FRAME_RETRIES = 2;
+
+// `reopenPage(failedPage)` resolves a fresh page when a capture hits a
+// recoverable browser failure; the frame is redrawn there and the encoder
+// keeps running, so frames already piped are kept. `onRetry({ frame, attempt,
+// error })` reports each restart, `frame` counted on song time.
+export async function encodeComposition(page, contract, outputPath, { musicPath, audio, signal, onProgress, offsetSec = 0, continuous = false, followed = false, videoFilter = null, master = false, reopenPage = null, onRetry = null, runFfmpeg = runFfmpegProcess, spawnProcess = spawn, locateFfmpeg = findFfmpeg, tagFilter = bt709TagFilter } = {}) {
   const ffmpeg = await locateFfmpeg();
   if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
   const tag = await tagFilter();
@@ -118,7 +129,7 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   const abort = () => stop('abort requested');
   signal?.addEventListener('abort', abort, { once: true });
   if (!Number.isFinite(offsetSec) || offsetSec < 0) throw new Error('offsetSec must be a non-negative number');
-  const capture = async t => {
+  const captureOnce = async t => {
     page.check();
     // awaitPromise in evaluate is essential: each seek owns its paint.
     const at = offsetSec ? Math.round((offsetSec + t) * 1e6) / 1e6 : t;
@@ -130,6 +141,25 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
     });
     page.check();
     return Buffer.from(data, 'base64');
+  };
+  const capture = async t => {
+    let stalled = false;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        if (stalled) {
+          page = await reopenPage(page);
+          stalled = false;
+          await frameFormat(page, contract);
+        }
+        return await captureOnce(t);
+      } catch (error) {
+        if (!reopenPage || signal?.aborted || !RECOVERABLE_PAGE_FAILURE.test(error?.message ?? '')) throw error;
+        const frame = Math.round((offsetSec + t) * fps);
+        if (attempt > MAX_FRAME_RETRIES) throw new Error(`${error.message} (song frame ${frame} still failing after ${MAX_FRAME_RETRIES} browser restarts)`, { cause: error });
+        onRetry?.({ frame, attempt, error });
+        stalled = true;
+      }
+    }
   };
   const write = bytes => Promise.race([
     new Promise((resolve, reject) => proc.stdin.write(bytes, error => error ? reject(error) : resolve())),
@@ -218,12 +248,36 @@ function planSegments(numFrames, workers) {
 // `page` draws the first segment; `openPage(signal)` opens each further one
 // and the segment closes it. `videoFilterAt(offsetSec)` builds a segment's
 // filter on song time. One segment is exactly `encodeComposition`.
-export async function encodeCompositionSegments(page, contract, outputPath, { openPage, workers = compositionRenderWorkers(), offsetSec = 0, videoFilterAt = () => null, signal, onProgress, encode = encodeComposition, runFfmpeg = runFfmpegProcess, locateFfmpeg = findFfmpeg } = {}) {
+// A worker whose browser stalls closes it and continues on a fresh one from
+// the frame it was on (#10839). When that replaces `page` itself, `page` is
+// closed and the result carries `pageReplaced: true`.
+export async function encodeCompositionSegments(page, contract, outputPath, { openPage, workers = compositionRenderWorkers(), offsetSec = 0, videoFilterAt = () => null, signal, onProgress, onRetry = null, encode = encodeComposition, runFfmpeg = runFfmpegProcess, locateFfmpeg = findFfmpeg } = {}) {
   const { fps, durationSec } = contract;
   const numFrames = Math.round(durationSec * fps);
   const segments = planSegments(numFrames, workers);
+  let pageReplaced = false;
+  // `slot.page` is the segment's current page; `reopen` closes the stalled one
+  // first so the two browsers never compete for the same overloaded host.
+  const replaceable = (first, pageSignal) => {
+    const slot = { page: first, reopen: null };
+    if (openPage) slot.reopen = async failed => {
+      await failed.close().catch(() => {});
+      if (failed === page) pageReplaced = true;
+      slot.page = null;
+      slot.page = await openPage(pageSignal);
+      return slot.page;
+    };
+    return slot;
+  };
+  const released = slot => slot.page && slot.page !== page ? slot.page.close().catch(() => {}) : null;
   if (segments.length === 1) {
-    return encode(page, contract, outputPath, { signal, onProgress, offsetSec, videoFilter: videoFilterAt(offsetSec) });
+    const slot = replaceable(page, signal);
+    try {
+      const result = await encode(page, contract, outputPath, { signal, onProgress, offsetSec, videoFilter: videoFilterAt(offsetSec), reopenPage: slot.reopen, onRetry });
+      return pageReplaced ? { ...result, pageReplaced } : result;
+    } finally {
+      await released(slot);
+    }
   }
   const ffmpeg = await locateFfmpeg();
   if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
@@ -238,12 +292,13 @@ export async function encodeCompositionSegments(page, contract, outputPath, { op
   try {
     signal?.throwIfAborted();
     const results = await Promise.allSettled(segments.map(async ({ start, frames }, i) => {
-      let segmentPage = i === 0 ? page : null;
+      const slot = replaceable(i === 0 ? page : null, controller.signal);
       try {
-        segmentPage ??= await openPage(controller.signal);
+        slot.page ??= await openPage(controller.signal);
         const at = Math.round((offsetSec + start / fps) * 1e6) / 1e6;
-        const result = await encode(segmentPage, { ...contract, durationSec: frames / fps }, parts[i], {
+        const result = await encode(slot.page, { ...contract, durationSec: frames / fps }, parts[i], {
           signal: controller.signal, offsetSec: at, continuous: start > 0, followed: i < segments.length - 1, videoFilter: videoFilterAt(at),
+          reopenPage: slot.reopen, onRetry: onRetry && (detail => onRetry({ ...detail, segment: i })),
           onProgress: (_fraction, detail) => {
             done[i] = detail?.frame ?? 0;
             const frame = done.reduce((sum, value) => sum + value, 0);
@@ -255,7 +310,7 @@ export async function encodeCompositionSegments(page, contract, outputPath, { op
         controller.abort(error);
         throw error;
       } finally {
-        if (i > 0 && segmentPage) await segmentPage.close().catch(() => {});
+        await released(slot);
       }
     }));
     signal?.throwIfAborted();
@@ -267,7 +322,7 @@ export async function encodeCompositionSegments(page, contract, outputPath, { op
     const joined = await runFfmpeg({ bin: ffmpeg, signal, args: ['-hide_banner', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', listPath,
       '-c', 'copy', '-movflags', '+faststart', '-y', outputPath] });
     if (!joined.ok) throw new Error(`Joining render segments failed: ${joined.reason}`);
-    return Object.keys(histogram).length ? { sampleHistogram: histogram } : {};
+    return { ...(Object.keys(histogram).length ? { sampleHistogram: histogram } : {}), ...(pageReplaced ? { pageReplaced } : {}) };
   } finally {
     signal?.removeEventListener('abort', relay);
     for (const path of [...parts, listPath]) await rm(path, { force: true }).catch(() => {});

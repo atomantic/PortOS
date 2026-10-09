@@ -2,6 +2,7 @@ import Banner from '../ui/Banner.jsx';
 import { useRef } from 'react';
 import { Film, Download, Maximize2, AlertTriangle } from 'lucide-react';
 import { STALE_RENDER_MESSAGE } from '../../lib/musicVideoStages.js';
+import { assetDownloadUrl } from '../../lib/standaloneDownload.js';
 
 // The final-render surface: a progress bar while the assemble job runs, and the
 // finished MP4 (inline player + download + Media History deep link) once the
@@ -40,9 +41,9 @@ export default function RenderStatusPanel({
         <div className="flex items-center gap-2 text-xs">
           {finalVideo?.src && (
             <a
-              href={finalVideo.src}
+              href={assetDownloadUrl(finalVideo.src)}
               download
-              className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 hover:bg-port-border/40"
+              className="min-h-[44px] sm:min-h-0 flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 hover:bg-port-border/40"
             >
               <Download size={13} /> Download MP4
             </a>

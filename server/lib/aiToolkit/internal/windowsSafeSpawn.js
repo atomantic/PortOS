@@ -1,15 +1,14 @@
 /**
- * Windows-safe spawn helpers shared by every CLI probe that resolves a bare
- * command name into an executable path before handing it to `spawn`/`execFile`.
+ * Windows command resolution and batch argument escaping shared by host CLI
+ * launches, the toolkit runner, and provider catalog probes.
  *
- * Lives here (its own leaf) rather than inline in `providerCatalogService.js`
- * because `internal/codexAppServer.js` needs the same resolution and this
- * directory stays self-contained — no imports out, so a second copy of these
- * rules is the alternative to importing this file.
+ * This toolkit leaf stays self-contained so host callers can depend inward
+ * without requiring toolkit code to import PortOS modules.
  */
 import { existsSync } from 'fs';
 import { join, isAbsolute, delimiter } from 'path';
 
+// Prefer native executables to batch shims; ignore npm's POSIX extensionless stubs.
 const WIN_EXECUTABLE_EXTS = ['.exe', '.cmd', '.bat', '.com'];
 
 /**
@@ -44,7 +43,10 @@ function escapeCmdMetacharsIfUnquoted(value) {
 /**
  * A `.cmd`/`.bat` target must run through `cmd.exe /c`, or `spawn` under
  * `shell: false` cannot execute it at all. Every other command/argv pair
- * passes through unchanged.
+ * passes through unchanged. No shell:true workaround is needed: spawning
+ * cmd.exe directly lets Node quote whitespace/quotes in each argument.
+ * Caret escaping protects metacharacters only in values Node leaves unquoted;
+ * escaping already-quoted values would introduce literal carets.
  */
 export function prepareWindowsSafeSpawn(command, args, isWin32 = process.platform === 'win32') {
   if (isWin32 && WIN_BATCH_EXT_RE.test(command)) {

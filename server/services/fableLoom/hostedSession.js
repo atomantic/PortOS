@@ -37,6 +37,7 @@ import {
 import {
   publicNode,
   playTurn,
+  resolvePlayRoute,
 } from './weave.js';
 import { getUniverse } from '../universeBuilder.js';
 import { parseVoiceId } from '../pipeline/audio.js';
@@ -184,11 +185,18 @@ export async function checkHostedSessionReadiness({ loomId, episodeId, loom: cus
     }
   }
 
+  // An audience token authorizes story participation, never a host harness.
+  // Keep authored narration available even if the configured narrator is unsafe.
+  const llm = await resolvePlayRoute(loom, { callerPolicy: 'direct-api' })
+    .then(() => ({ ok: true }))
+    .catch(err => ({ ok: false, error: err.message, code: err.code || 'NO_PROVIDER' }));
+  if (!llm.ok) warnings.push(`AI narrator unavailable; using authored narration: ${llm.error}`);
+
   const checks = {
     https: { ok: isHttps, ...(isHttps ? {} : { error: 'HTTPS required' }) },
     host: { ok: !!startNode, ...(startNode ? {} : { error: 'Missing start scene' }) },
     stt: { ok: sttReady },
-    llm: { ok: true },
+    llm,
     tts: { ok: ttsReady, voice: resolvedVoice?.voiceId || 'default' },
     playback: { ok: playbackReady },
   };
@@ -747,6 +755,7 @@ export async function processHostedUtterance(sessionId, {
         nodeId: session.currentNodeId,
         message,
         signal: turn.abortController.signal,
+        callerPolicy: 'direct-api',
         transcript: session.transcript.map((t) => ({
           role: t.role === 'audience' ? 'reader' : 'narrator',
           text: t.text,

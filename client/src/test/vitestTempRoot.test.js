@@ -1,10 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createVitestTempFixture } from '../../../scripts/lib/vitestTempRootFixture.js';
+import { createVitestTempFixture, runWatchConfigRestart } from '../../../scripts/lib/vitestTempRootFixture.js';
+import { STALE_ROOT_AGE_MS, sweepStaleRunRoots } from '../../../scripts/lib/vitestStaleRunRoots.js';
 
 describe('real client runner temp lifecycle', () => {
   const workspace = 'client';
@@ -50,5 +51,23 @@ describe('real client runner temp lifecycle', () => {
       rmSync(host, { recursive: true, force: true });
     }
   }, 25000);
-
+  it('client watch-config restart re-stamps the live owner so a later sweep keeps the root', async () => {
+    const host = mkdtempSync(join(tmpdir(), 'vrt-'));
+    try {
+      await runWatchConfigRestart(host, 'client', ({ first, restarted, pid }) => {
+        // The restart reused the pathname and the main process re-stamped it.
+        expect(restarted.root).toBe(first.root);
+        expect(restarted.owner.split(' ')[0]).toBe(String(pid));
+        expect(existsSync(join(first.root, '.owner.pid'))).toBe(true);
+        // Six idle hours later, the next launch's sweep must not reclaim a live watcher.
+        const aged = new Date(Date.now() - STALE_ROOT_AGE_MS - 60000);
+        utimesSync(first.root, aged, aged);
+        sweepStaleRunRoots(host);
+        expect(existsSync(first.root)).toBe(true);
+        rmSync(mkdtempSync(join(first.root, 'after-sweep-')), { recursive: true });
+      });
+    } finally {
+      rmSync(host, { recursive: true, force: true });
+    }
+  }, 90000);
 });

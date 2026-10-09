@@ -10,6 +10,7 @@
  */
 
 import { execFileSync } from 'child_process';
+import { createRequire } from 'module';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { parseEnvFile } from './lib/envFile.js';
@@ -44,8 +45,19 @@ const PG_PORT_DOCKER = parseDockerPort(envVar('PGPORT_DOCKER', 5561));
 // child process. Without this, db.sh setup-native would provision the
 // default `portos`/`portos` while isPortOSDbReady() probes with the
 // customized creds — leaving setup looping forever.
+//
+// Inherited libpq routing variables are dropped: PGHOSTADDR overrides the
+// network destination of the explicit PGHOST, PGSERVICE/PGSERVICEFILE can name
+// another endpoint, and PGOPTIONS alters session settings. A shell left over
+// from another PostgreSQL workflow must not redirect the readiness probe or
+// role provisioning to a different cluster. TLS/auth variables stay. Keep in
+// step with PG_ROUTING_VARS in db.sh.
+const ROUTING_ENV = ['PGHOSTADDR', 'PGSERVICE', 'PGSERVICEFILE', 'PGOPTIONS'];
+const inheritedEnv = Object.fromEntries(
+  Object.entries(process.env).filter(([name]) => !ROUTING_ENV.includes(name))
+);
 const PG_CHILD_ENV = {
-  ...process.env,
+  ...inheritedEnv,
   PGUSER: PG_USER,
   PGDATABASE: PG_DATABASE,
   PGPASSWORD: PG_PASSWORD,
@@ -53,8 +65,23 @@ const PG_CHILD_ENV = {
   PGPORT: String(PG_PORT_NATIVE)
 };
 
+// Environment for every `docker compose` subprocess. Compose interpolates
+// docker-compose.yml from its own .env grammar (inline comments, `$` expansion),
+// which differs from the literal parser PortOS and PM2 share. Process
+// environment outranks Compose's .env, so forwarding the values resolved above
+// makes the container provision exactly what PortOS connects with. Child
+// environment only — the password never reaches argv or logs.
+const COMPOSE_ENV = {
+  ...process.env,
+  PGUSER: PG_USER,
+  PGDATABASE: PG_DATABASE,
+  PGPASSWORD: PG_PASSWORD,
+  PGPORT_DOCKER: String(PG_PORT_DOCKER)
+};
+
 function getMode() {
-  return envVar('PGMODE', 'docker');
+  // Nonempty exported PGMODE → .env → docker; must match ecosystem.config.cjs (#10758).
+  return process.env.PGMODE || envFile.PGMODE || 'docker';
 }
 
 // Check if Docker is available
@@ -139,7 +166,7 @@ function isDockerSchemaReady() {
       'docker',
       ['compose', 'exec', '-T', 'db', 'psql', '-X', '-U', PG_USER, '-d', PG_DATABASE, '-tAc',
         "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'memories' LIMIT 1"],
-      { stdio: 'pipe', cwd: rootDir }
+      { stdio: 'pipe', cwd: rootDir, env: COMPOSE_ENV }
     ).toString();
     return output.trim() === '1';
   } catch {
@@ -162,7 +189,8 @@ function waitForHealth(maxAttempts = 30) {
     try {
       execFileSync('docker', ['compose', 'exec', '-T', 'db', 'pg_isready', '-h', '127.0.0.1', '-U', PG_USER], {
         stdio: 'pipe',
-        cwd: rootDir
+        cwd: rootDir,
+        env: COMPOSE_ENV
       });
       if (isDockerSchemaReady()) return true;
     } catch {
@@ -173,6 +201,42 @@ function waitForHealth(maxAttempts = 30) {
     }
   }
   return false;
+}
+
+// Authenticated query through the exact host endpoint the server and PM2 use
+// (PGHOST + PGPORT_DOCKER + PGUSER/PGDATABASE/PGPASSWORD). Container-local
+// probes (pg_isready ignores credentials; the in-container psql uses the local
+// socket) cannot catch a persisted role whose password no longer matches the
+// configured one, or a host endpoint the application cannot reach. `pg` is
+// resolved from the server workspace so no host psql is required. Returns null
+// on success or a failure message (never containing the password).
+async function verifyDockerHostConnection() {
+  let Client;
+  try {
+    ({ Client } = createRequire(join(rootDir, 'server', 'package.json'))('pg'));
+  } catch (err) {
+    return `the pg driver is unavailable (${err.message.split('\n')[0]}) — run: npm run install:all`;
+  }
+  const client = new Client({
+    host: PG_HOST,
+    port: PG_PORT_DOCKER,
+    user: PG_USER,
+    database: PG_DATABASE,
+    password: PG_PASSWORD,
+    connectionTimeoutMillis: 5000,
+    query_timeout: 5000
+  });
+  try {
+    await client.connect();
+    const { rows } = await client.query(
+      "SELECT 1 AS ok FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'memories' LIMIT 1"
+    );
+    return rows.length === 1 ? null : 'the base schema (memories table) is missing on that endpoint';
+  } catch (err) {
+    return err.message;
+  } finally {
+    await client.end().catch(() => {});
+  }
 }
 
 // Platform-specific Docker install/start hints
@@ -299,7 +363,8 @@ console.log('🐳 Reconciling PostgreSQL container configuration...');
 try {
   execFileSync('docker', ['compose', 'up', '-d', 'db'], {
     stdio: 'inherit',
-    cwd: rootDir
+    cwd: rootDir,
+    env: COMPOSE_ENV
   });
 } catch (err) {
   console.error(`❌ Failed to reconcile PostgreSQL container: ${err.message}`);
@@ -310,6 +375,14 @@ try {
 // Wait for health
 console.log('⏳ Waiting for PostgreSQL to be ready...');
 if (waitForHealth()) {
+  const hostFailure = await verifyDockerHostConnection();
+  if (hostFailure) {
+    console.error(`❌ PostgreSQL container is up but ${PG_USER}@${PG_HOST}:${PG_PORT_DOCKER}/${PG_DATABASE} is not usable: ${hostFailure}`);
+    console.error('   The container-local checks passed, so the configured PGPASSWORD/PGHOST/PGPORT_DOCKER');
+    console.error('   likely differ from the persisted role or host publication. Setup leaves the volume and role untouched.');
+    console.error('   Align .env with the existing role (see .env.example) and re-run: npm run setup:db');
+    process.exit(1);
+  }
   console.log(`✅ PostgreSQL ready on port ${PG_PORT_DOCKER}`);
 } else {
   // PG is mandatory and boot fail-fasts — a started-but-unresponsive container

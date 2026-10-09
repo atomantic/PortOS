@@ -52,7 +52,7 @@ import { getSettings } from '../settings.js';
 import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
 import { getTrack } from '../tracks/index.js';
 import { VIDEO_GEN_MODE, resolveVideoMode } from './modes.js';
-import { getFalVideoModel } from '../../lib/falVideoModels.js';
+import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL, getFalVideoModel } from '../../lib/falVideoModels.js';
 import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
 import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
 import {
@@ -808,8 +808,8 @@ async function resolvePreparedParams({
     }
     if (uploads.sourceImage?.path) await unlinkGuarded(uploads.sourceImage.path).catch(() => {});
   };
-  // Hosted workers consume the already-staged source frame, but none of the
-  // local last-frame/audio/IC machinery below. Keep availability checking here
+  // Hosted workers consume staged frames and supported source audio, but none
+  // of the local runtime/IC machinery below. Keep availability checking here
   // so failures retain source validation precedence and staged-file ownership.
   const hosted = HOSTED_VIDEO_SUBMISSIONS[backend];
   if (hosted) {
@@ -817,6 +817,23 @@ async function resolvePreparedParams({
     if (!usable) {
       await cleanupStaged();
       throw new ServerError(hosted.errorMessage, { status: 400, code: hosted.errorCode });
+    }
+    if (backend === VIDEO_GEN_MODE.FAL && (uploads.lastImage || body.lastImageFile)) {
+      const modelId = body.falModelId || (sourceImagePath ? FAL_DEFAULT_IMAGE_VIDEO_MODEL : FAL_DEFAULT_TEXT_VIDEO_MODEL);
+      const model = getFalVideoModel(modelId);
+      if (!model?.endImage) {
+        throw new ServerError(model ? `${model.label} takes no end frame` : 'End frames require a fal.ai model with catalogued end-frame support',
+          { status: 400, code: 'VALIDATION_ERROR' });
+      }
+      if (uploads.lastImage) {
+        lastImagePath = await stageUploadDurable(uploads.lastImage, 'last');
+        extraUploadedTempPaths.push(lastImagePath);
+      } else {
+        lastImagePath = resolveGalleryImage(body.lastImageFile);
+        if (!lastImagePath) {
+          throw new ServerError('The end frame is missing or could not be resolved.', { status: 400, code: 'VALIDATION_ERROR' });
+        }
+      }
     }
     // A standalone fal lip-sync take: stage the voice clip durably like the frame. The queue removes
     // it if the job fails, is cancelled or is lost to a restart (uploadedTempPaths); the fal worker
@@ -849,7 +866,10 @@ async function resolvePreparedParams({
       effectiveModel: { id: backend, supportedModes: ['text', 'image'] },
       sourceImagePath,
       uploadedTempPath,
-      ...(hostedAudioPath ? { audioFilePath: hostedAudioPath, uploadedTempPaths: [hostedAudioPath] } : {}),
+      ...(lastImagePath ? { lastImagePath } : {}),
+      ...(hostedAudioPath ? { audioFilePath: hostedAudioPath } : {}),
+      ...((extraUploadedTempPaths.length || hostedAudioPath)
+        ? { uploadedTempPaths: [...extraUploadedTempPaths, ...(hostedAudioPath ? [hostedAudioPath] : [])] } : {}),
       discardSourceImage,
       cleanupStaged,
     };

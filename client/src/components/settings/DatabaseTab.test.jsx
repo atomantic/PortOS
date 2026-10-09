@@ -44,6 +44,7 @@ vi.mock('../../lib/safeStorage', () => ({
 
 import {
   getDatabaseStatus, getDatabaseMaintenanceStatus, cutoverDatabase, recoverDatabaseCutover,
+  destroyDatabase,
 } from '../../services/api';
 import toast from '../ui/Toast';
 import { safeReadJsonSession } from '../../lib/safeStorage';
@@ -152,6 +153,48 @@ describe('DatabaseTab sync and replacement', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Destroy$/i }));
 
     expect(screen.getByRole('button', { name: /Delete Docker database/i })).toBeTruthy();
+  });
+
+  it('offers Native deletion only while configured Native is running and explains its scope', async () => {
+    const nativeRunningStatus = {
+      ...dbStatus,
+      docker: { containerRunning: true, installed: true, daemonRunning: true },
+      native: { configured: true, installed: true, running: true },
+      mode: 'docker',
+    };
+    getDatabaseStatus.mockResolvedValue(nativeRunningStatus);
+    destroyDatabase.mockResolvedValue({ success: true });
+    render(<DatabaseTab />);
+    await waitFor(() => expect(getDatabaseStatus).toHaveBeenCalled());
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete Native database…' }));
+    expect(screen.getByText('Delete the inactive Native database?')).toBeTruthy();
+    expect(screen.getByText(/permanently deletes its tables and records/i)).toBeTruthy();
+    expect(screen.getByText(/System PostgreSQL and other databases are kept/i)).toBeTruthy();
+    expect(screen.getByText(/active Docker database is unchanged/i)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
+    expect(destroyDatabase).not.toHaveBeenCalled();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete Native database…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Native database' }));
+    await waitFor(() => expect(destroyDatabase).toHaveBeenCalledWith('native'));
+  });
+
+  it('does not offer Native deletion when it is active, stopped, or unconfigured', async () => {
+    const statuses = [
+      { ...dbStatus, mode: 'native', native: { configured: true, installed: true, running: true } },
+      { ...dbStatus, mode: 'docker', native: { configured: true, installed: true, running: false } },
+      { ...dbStatus, mode: 'docker', native: { configured: false, installed: false, running: false } },
+    ];
+
+    for (const status of statuses) {
+      getDatabaseStatus.mockResolvedValueOnce(status);
+      const { unmount } = render(<DatabaseTab />);
+      await waitFor(() => expect(getDatabaseStatus).toHaveBeenCalled());
+      expect(screen.queryByRole('button', { name: /Delete Native database/i })).toBeNull();
+      unmount();
+    }
   });
 
   it('cancel button does not make any request and closes dialog', async () => {

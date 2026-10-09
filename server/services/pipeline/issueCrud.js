@@ -18,10 +18,10 @@ import {
   store, queueSeriesIssuesWrite, readState, readStateForSeries,
   saveIssueNow, saveIssuesNow, renumberInline, sanitizeIssue,
   snapshotRunHistory, ISSUE_ID_RE,
-  ERR_NOT_FOUND, ERR_VALIDATION, ERR_DUPLICATE, ERR_SEASON_LOCKED,
+  ERR_NOT_FOUND, ERR_VALIDATION, ERR_DUPLICATE, ERR_SEASON_LOCKED, ERR_ARC_POSITION_CONFLICT,
   TITLE_MAX, SERIES_ID_MAX, ISSUES_PER_RESPONSE_MAX,
 } from './issuesShared.js';
-import { isStr, trimTo } from '../../lib/textUtils.js';
+import { isNonBlankStr, isStr, trimTo } from '../../lib/textUtils.js';
 import { codedError } from '../../lib/codedError.js';
 
 export async function listIssues({
@@ -148,14 +148,53 @@ export async function getIssue(id, { includeDeleted = false } = {}) {
 }
 
 export function createIssue(input = {}, { preloadedSeries = null } = {}) {
+  return queueNewIssue(`iss-${randomUUID()}`, input, { preloadedSeries }).then(({ issue }) => issue);
+}
+
+/**
+ * Create an issue under an id the caller planned in advance — or, when that id
+ * already exists live in the same series, return it untouched. This is the
+ * idempotent boundary a resumable batch (the manuscript importer, #10762) needs:
+ * replaying a planned create after a crash or a lost receipt recognizes the
+ * record it already wrote instead of minting a second identity, and never
+ * overwrites edits made to it since. Resolves `{ issue, created }`.
+ *
+ * A tombstoned id, or one living in another series, is refused (ERR_DUPLICATE)
+ * rather than resurrected — the caller re-plans a fresh id for that slot.
+ *
+ * A NEW issue's planned `arcPosition` is re-checked against the series' live
+ * issues inside the series write queue (#10763): the caller validated it
+ * against an earlier read, and any other writer queued in between may have
+ * taken it. A taken position is refused (ERR_ARC_POSITION_CONFLICT) rather
+ * than landed as a duplicate.
+ */
+export function ensureIssueWithId(id, input = {}) {
+  if (!isStr(id) || !ISSUE_ID_RE.test(id)) {
+    return Promise.reject(codedError(`ensureIssueWithId: invalid id "${id}" (expected iss-<uuid>)`, ERR_VALIDATION));
+  }
+  return queueNewIssue(id, input, { reuseExisting: true });
+}
+
+// Shared by createIssue (fresh random id) and ensureIssueWithId (planned id).
+function queueNewIssue(id, input, { preloadedSeries = null, reuseExisting = false } = {}) {
   const seriesId = trimTo(input.seriesId, SERIES_ID_MAX);
   if (!seriesId) return Promise.reject(codedError('seriesId is required', ERR_VALIDATION));
   const title = trimTo(input.title, TITLE_MAX);
   if (!title) return Promise.reject(codedError(`title is required (1..${TITLE_MAX} chars)`, ERR_VALIDATION));
   return queueSeriesIssuesWrite(seriesId, async () => {
     const state = await readState();
+    if (reuseExisting) {
+      const existing = state.issues.find((i) => i.id === id);
+      if (existing && !existing.deleted && existing.seriesId === seriesId) return { issue: existing, created: false };
+      if (existing) throw codedError(`Issue id already used: ${id}`, ERR_DUPLICATE);
+      const pos = input.arcPosition;
+      if (Number.isInteger(pos) && pos >= 1
+          && state.issues.some((i) => i.seriesId === seriesId && !i.deleted && i.arcPosition === pos)) {
+        throw codedError(`arcPosition ${pos} is already held by another issue in this series`, ERR_ARC_POSITION_CONFLICT);
+      }
+    }
     const next = sanitizeIssue({
-      id: `iss-${randomUUID()}`,
+      id,
       seriesId,
       // Placeholder — `renumberInline` below derives the canonical number.
       number: 0,
@@ -180,7 +219,7 @@ export function createIssue(input = {}, { preloadedSeries = null } = {}) {
     await saveIssuesNow(state.issues.filter((i) => i.seriesId === seriesId));
     // New issue = series-level change for any active share subscription.
     emitRecordUpdated('series', next.seriesId);
-    return next;
+    return { issue: next, created: true };
   });
 }
 
@@ -356,7 +395,7 @@ export function insertIssueWithId(input = {}) {
   });
 }
 
-function mergeIssuePatch(cur, patch = {}) {
+function mergeIssuePatch(cur, patch = {}, updatedAt = null) {
   // Per-stage merge: a stage patch carries only the fields the caller is
   // changing (e.g. `{ genConfig }` or `{ cover }`). Without this, the top-level
   // spread would replace the entire stage object and silently drop sibling
@@ -415,7 +454,7 @@ function mergeIssuePatch(cur, patch = {}) {
     // series push payload via sanitizeRecordForWire returning null.
     ...('ephemeral' in patch ? { ephemeral: patch.ephemeral } : {}),
     stages: mergedStages,
-    updatedAt: new Date().toISOString(),
+    updatedAt: isNonBlankStr(updatedAt) ? updatedAt : new Date().toISOString(),
   });
   if (!merged) throw codedError('Invalid issue payload', ERR_VALIDATION);
   return merged;
@@ -434,8 +473,30 @@ async function returnIssueAfterCoverRefresh({ issue, frontCoverChanged }) {
   return issue;
 }
 
-export function updateIssue(id, patch = {}, { skipRenumber = false } = {}) {
-  const needsRenumber = !skipRenumber && ('seasonId' in patch || 'arcPosition' in patch);
+// `patchOrMutator` overloads (mirrors updateSeries / updateUniverse):
+//   - Plain object: patch is applied directly inside the queue.
+//   - `async (latest) => patch | null`: runs INSIDE the series write queue
+//     against the freshest persisted issue; `null`/`undefined` skips the write
+//     (no clock bump, no emit) and resolves with the unchanged issue. A mutator
+//     always takes the full-state path, since whether it renumbers isn't known
+//     until its patch is.
+// `updatedAt` stamps that clock instead of receipt time — only the share-bucket
+// importer's remote LWW apply passes it, so the winning source revision's clock
+// survives and the next one can still win (#10761).
+export function updateIssue(id, patchOrMutator = {}, { skipRenumber = false, updatedAt = null } = {}) {
+  const isMutator = typeof patchOrMutator === 'function';
+  const resolvePatch = async (cur) => {
+    if (!isMutator) return patchOrMutator;
+    const patch = await patchOrMutator(cur);
+    if (patch === null || patch === undefined) return null;
+    if (Array.isArray(patch) || typeof patch !== 'object') {
+      throw codedError('updateIssue mutator must return a plain object or null', ERR_VALIDATION);
+    }
+    return patch;
+  };
+  const skippedResult = (cur) => ({ issue: cur, frontCoverChanged: false });
+  const needsRenumber = !skipRenumber
+    && (isMutator || 'seasonId' in patchOrMutator || 'arcPosition' in patchOrMutator);
   if (!needsRenumber) {
     // Route through the SERIES tail (see updateStageWithLatest) so a plain
     // field update can't race a concurrent series-wide renumber rewriting this
@@ -446,7 +507,9 @@ export function updateIssue(id, patch = {}, { skipRenumber = false } = {}) {
         const cur = await store().loadOne(id);
         if (!cur) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
         if (cur.deleted) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
-        const merged = mergeIssuePatch(cur, patch);
+        const patch = await resolvePatch(cur);
+        if (!patch) return skippedResult(cur);
+        const merged = mergeIssuePatch(cur, patch, updatedAt);
         await saveIssueNow(merged);
         emitRecordUpdated('series', merged.seriesId);
         return {
@@ -464,7 +527,9 @@ export function updateIssue(id, patch = {}, { skipRenumber = false } = {}) {
       if (idx < 0) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
       const cur = state.issues[idx];
       if (cur.deleted) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
-      const merged = mergeIssuePatch(cur, patch);
+      const patch = await resolvePatch(cur);
+      if (!patch) return skippedResult(cur);
+      const merged = mergeIssuePatch(cur, patch, updatedAt);
       state.issues[idx] = merged;
       // A seasonId move affects both source and destination volumes, so full
       // renumber. An arcPosition change only reorders within the current volume.

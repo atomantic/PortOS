@@ -30,7 +30,7 @@
 
 import { enqueueUnattendedMediaJob, hasConfiguredMediaRoute } from '../federatedMedia/defaultRouting.js';
 import { getSettings } from '../settings.js';
-import { resolveImageCleaners } from '../imageGen/index.js';
+import { resolveImageCleaners } from '../../lib/imageCleanDefaults.js';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
 import { resolveRenderTargetConfig } from '../imageGen/cloudProviderConfig.js';
 import { resolveLocalImageModel } from '../imageGen/prepareParams.js';

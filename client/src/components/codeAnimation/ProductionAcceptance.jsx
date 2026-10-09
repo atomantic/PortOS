@@ -21,7 +21,7 @@ export default function ProductionAcceptance({ projectId, disabled, onProject, o
   });
   const data = resource.data;
   if (!data) return resource.error ? <p role="alert" className="text-xs text-port-error">{resource.error.message}</p> : null;
-  const { accepted, runs } = data;
+  const { accepted, runs, acceptanceProjection } = data;
   const chosen = (params.get('compare') || '').split(',').filter(Boolean);
   const selected = chosen.map(id => runs.find(run => run.runId === id)).filter(Boolean);
   const toggle = runId => {
@@ -31,7 +31,14 @@ export default function ProductionAcceptance({ projectId, disabled, onProject, o
     setParams(next, { replace: true });
   };
   const promote = runId => act(async () => {
-    onProject(await acceptCodeAnimationOutput(projectId, runId, { silent: true }));
+    const project = await acceptCodeAnimationOutput(projectId, runId, { silent: true });
+    onProject(project);
+    resource.updateData(previous => ({
+      ...previous,
+      accepted: { ...project.acceptedOutput, fresh: true, stale: [] },
+      acceptanceProjection: project.acceptanceProjection,
+      runs: previous.runs.map(run => ({ ...run, accepted: run.runId === project.acceptedOutput.runId })),
+    }));
     await resource.refetch();
   });
   return <section className="space-y-3 rounded border border-port-border p-3" aria-label="Production acceptance">
@@ -43,12 +50,17 @@ export default function ProductionAcceptance({ projectId, disabled, onProject, o
         <p>Earlier passing evidence is stale. The accepted video still plays, but it is no longer verified.</p>
         {accepted.stale.map(item => <p key={item.dimension}>{item.reason}</p>)}
       </div>}
+      {acceptanceProjection?.status === 'pending' && <div role="status" className="space-y-2 rounded border border-port-warning p-2 text-xs text-port-warning">
+        <p>Acceptance saved. Media History synchronization is pending; your accepted video is still available. Repair Media History storage, then retry synchronization or reopen this view.</p>
+        <button type="button" className={buttonClass} disabled={disabled || busy || resource.loading} onClick={() => act(() => resource.refetch())}>Retry Media History sync</button>
+      </div>}
+      {resource.error && <p role="alert" className="text-xs text-port-error">{resource.error.message}</p>}
       <EvidenceGrid evidence={accepted.evidence} />
       <div className="flex flex-wrap gap-2">
         <button type="button" className={buttonClass} disabled={disabled || busy} onClick={() => onDownloadSource(accepted.revisionId)}>Download source bundle</button>
         <a className={`${buttonClass} inline-block`} href={accepted.path} download>Download accepted MP4</a>
       </div>
-      <p className="text-xs text-gray-400">This video is in Media History as <code>{accepted.videoId}</code>; Music Video Studio and Creative Director can use it without a song or episode project.</p>
+      {acceptanceProjection?.status !== 'pending' && <p className="text-xs text-gray-400">This video is in Media History as <code>{accepted.videoId}</code>; Music Video Studio and Creative Director can use it without a song or episode project.</p>}
     </div> : <p className="text-xs text-gray-400">No output has been accepted. Accept a passing run below; failed runs never replace an accepted output.</p>}
     <h3 className="text-sm font-semibold">Runs to compare</h3>
     {runs.length === 0 && <p className="text-xs text-gray-400">Run production stages to produce evidence.</p>}

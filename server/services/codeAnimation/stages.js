@@ -109,10 +109,17 @@ async function runStage(ctx, key, revision, body, { renders = false } = {}) {
   ctx.state.stages.push(entry);
   await persist(ctx);
   const { ms, dimension } = remainingMs(ctx);
-  const signal = AbortSignal.any([ctx.controller.signal, AbortSignal.timeout(ms)]);
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(exhausted(dimension)), Math.max(1, Math.ceil(ms)));
+  if (ms <= 0) deadline.abort(exhausted(dimension));
+  const signal = AbortSignal.any([ctx.controller.signal, deadline.signal]);
   const began = Date.now();
   try {
-    Object.assign(entry, await body({ signal, entry }), { status: 'completed', completedAt: iso() });
+    signal.throwIfAborted();
+    const result = await body({ signal, entry });
+    // A published final render has crossed its atomic commit point already.
+    if (!activeRuns.get(ctx.runId)?.committing) signal.throwIfAborted();
+    Object.assign(entry, result, { status: 'completed', completedAt: iso() });
   } catch (error) {
     const canceled = ctx.controller.signal.aborted;
     const outOfBudget = !canceled && signal.aborted;
@@ -121,6 +128,7 @@ async function runStage(ctx, key, revision, body, { renders = false } = {}) {
     if (outOfBudget) throw exhausted(dimension);
     throw error;
   } finally {
+    clearTimeout(timer);
     if (renders) ctx.state.spent.renderMs += Date.now() - began;
     await persist(ctx).catch(error => console.error(`❌ Code Animation stage ${key} status could not be saved: ${error.message}`));
   }
@@ -301,7 +309,9 @@ const repairPrompt = ({ manifest, files, entryPath, findings }) => [
  * settings, run one prompt, and reject a substituted route unless the user
  * allowed it. Only reached from a user-started run.
  */
-async function repairViaAuthoringRoute({ project, manifest, files, entryPath, findings }) {
+async function repairViaAuthoringRoute({ project, manifest, files, entryPath, findings, signal, timeoutMs }) {
+  signal.throwIfAborted();
+  const deadline = Date.now() + timeoutMs;
   const [{ preflightProductionProject, _recordEffectiveRoute }, { runPromptThroughProvider }, { getProviderById }, { extractAnimationHtml }] = await Promise.all([
     import('./preflight.js'), import('../promptRunner.js'), import('../providers.js'), import('./prompt.js'),
   ]);
@@ -311,10 +321,35 @@ async function repairViaAuthoringRoute({ project, manifest, files, entryPath, fi
   }
   const provider = await getProviderById(preflight.resolved.providerId);
   const prompt = repairPrompt({ manifest, files, entryPath, findings });
-  const result = await runPromptThroughProvider({
-    provider, model: preflight.resolved.model, effort: preflight.resolved.effort || undefined, prompt,
-    source: 'code-animation-repair', cwd: PATHS.data, allowFallback: preflight.allowFallback,
-  });
+  const { stopRun } = await import('../runner.js');
+  const ownedRuns = new Set();
+  const stopping = new Map();
+  const stopProvider = id => {
+    if (stopping.has(id)) return;
+    const stopped = stopRun(id).catch(error => {
+      console.error(`❌ Code Animation repair provider cancellation failed: ${error.message}`);
+    });
+    stopping.set(id, stopped);
+  };
+  const stopOwned = () => { for (const id of ownedRuns) stopProvider(id); };
+  signal.addEventListener('abort', stopOwned, { once: true });
+  let result;
+  try {
+    signal.throwIfAborted();
+    const timeout = Math.max(1, deadline - Date.now());
+    result = await runPromptThroughProvider({
+      provider, model: preflight.resolved.model, effort: preflight.resolved.effort || undefined, prompt,
+      timeout, absoluteTimeoutMs: timeout,
+      beforeExecute: () => signal.throwIfAborted(),
+      onRunCreated: id => { ownedRuns.add(id); if (signal.aborted) stopProvider(id); },
+      onRunSettled: id => ownedRuns.delete(id),
+      source: 'code-animation-repair', cwd: PATHS.data, allowFallback: preflight.allowFallback,
+    });
+    signal.throwIfAborted();
+  } finally {
+    signal.removeEventListener('abort', stopOwned);
+    await Promise.all(stopping.values());
+  }
   const route = _recordEffectiveRoute(preflight.resolved, project.localSettings, result);
   const source = manifest.renderer.kind === 'blender' ? result.text.match(/```(?:python|py)\s*\n([\s\S]*?)```/)?.[1] : extractAnimationHtml(result.text);
   if (!source) throw new ServerError('The model response did not contain the required source document', { status: 422, code: 'CODE_ANIMATION_REPAIR_INVALID' });
@@ -328,7 +363,9 @@ async function repairStage(ctx, revision, findings) {
   let created = null;
   await runStage(ctx, 'repair', revision, async ({ signal, entry }) => {
     const intent = { findingKinds: [...new Set(errors.map(finding => finding.kind))], fromRevisionId: revision.id };
-    const out = await ctx.deps.repair({ project: ctx.project, manifest: revision.manifest, files: revision.files, entryPath: revision.entryPath, findings: errors, signal });
+    signal.throwIfAborted();
+    const out = await ctx.deps.repair({ project: ctx.project, manifest: revision.manifest, files: revision.files, entryPath: revision.entryPath, findings: errors, signal, timeoutMs: remainingMs(ctx).ms });
+    signal.throwIfAborted();
     spent.tokens += out.tokens || 0;
     spent.iterations += 1;
     if (out.effective) ctx.state.effective = out.effective;
@@ -343,16 +380,39 @@ async function repairStage(ctx, revision, findings) {
     const sourceHash = sourceHashOf(pkg.files);
     if (sourceHash === revision.sourceHash) throw new ServerError('The repair did not change the source', { status: 422, code: 'CODE_ANIMATION_REPAIR_NOOP' });
     const totalBytes = pkg.files.reduce((sum, file) => sum + Buffer.byteLength(file.content, file.encoding === 'base64' ? 'base64' : 'utf8'), 0);
+    signal.throwIfAborted();
     await reserve(ctx, totalBytes);
+    if (signal.aborted) {
+      // No repair tree exists yet; the stage's final persist releases this
+      // reservation. Once staging starts, uncertain storage stays charged.
+      ctx.state.reservedBytes -= totalBytes;
+      spent.diskBytes -= totalBytes;
+      signal.throwIfAborted();
+    }
     const id = randomUUID();
-    const storage = await stageProjectFiles(ctx.projectId, id, pkg.files);
+    let storage;
+    try {
+      storage = await stageProjectFiles(ctx.projectId, id, pkg.files);
+    } catch (error) {
+      // Only confirmed removal releases repaired-source bytes. Publication
+      // failures after successful staging keep their orphan reservation.
+      if (!ownedStorageRetained(error)) {
+        ctx.state.reservedBytes -= totalBytes;
+        spent.diskBytes -= totalBytes;
+      }
+      throw error;
+    }
+    signal.throwIfAborted();
     created = {
       id, packageHash: pkg.revisionHash, sourceHash, totalBytes, schemaVersion: pkg.schemaVersion, manifest: pkg.manifest,
       files: pkg.files.map(({ content: _content, ...file }) => file), storage, createdAt: iso(),
       parentRevisionId: revision.id, repair: { runId: ctx.runId, stageRunId: entry.stageRunId, intent },
     };
     // The repaired revision row first names the tree staged above (#9982).
-    await withBackupAssetPublication(() => store.commitRepairRevision(ctx.projectId, created));
+    await withBackupAssetPublication(() => {
+      signal.throwIfAborted();
+      return store.commitRepairRevision(ctx.projectId, created);
+    });
     ctx.state.repairs.push({ revisionId: id, fromRevisionId: revision.id, sourceHash, findingKinds: intent.findingKinds, tokens: out.tokens || 0 });
     ctx.state.currentRevisionId = id;
     return { intent, toRevisionId: id, toSourceHash: sourceHash };

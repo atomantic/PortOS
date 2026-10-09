@@ -227,6 +227,8 @@ describe('buildReviewLoopFollowUpSection — load-bearing lines stay with their 
     expect(section).toContain('### Local Review Before Opening the PR/MR');
     // Local reviewers diff the worktree against the remote base, never the PR.
     expect(section).toContain('`git diff origin/main...HEAD`');
+    expect(section).toContain('a branch being behind alone does not require a rebase');
+    expect(section).not.toContain('Rebase onto the current remote base');
     expect(section).not.toContain('gh pr diff');
     // #5106, twice over: a local reviewer must not push or publish.
     expect(section).toContain('**Pre-PR rule:** keep reviewer fixes committed locally. Do NOT push or open a PR/MR here');

@@ -21,7 +21,7 @@ import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
-import { summarizeControllerInstall } from '../lib/eidoverseControllers.js';
+import { eidoverseControllerRecordSchema, summarizeControllerInstall } from '../lib/eidoverseControllers.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-eidoverse-controllers-'),
@@ -214,7 +214,7 @@ describe('the supervised tick path', () => {
 
   it('counts the step and records the failure when the world cannot be reached', async () => {
     const deliver = vi.fn(async () => { throw new Error('world host is down'); });
-    await install({ config: { label: 'plaza', pulseEveryTicks: 1 }, deliverEffects: true });
+    await install({ config: { label: 'plaza', pulseEveryTicks: 1, announce: true }, deliverEffects: true });
 
     await runSupervisorPasses(5, { deliver });
 
@@ -260,6 +260,7 @@ describe('the supervised tick path', () => {
     const summary = summarizeControllerInstall(record);
     expect(summary.lastTickOk).toBe(true);
     expect(summary.lastDelivery).toEqual({ ok: false, delivered: 0, reason: 'unknown entity id' });
+    expect(summary.lastCompletedDelivery).toEqual({ at: at(3 * MINUTE), tick: 3, ok: false, delivered: 0, reason: 'unknown entity id' });
   });
 
   it('does not disarm on a rewritten delivery — the world landed different args, not nothing', async () => {
@@ -518,5 +519,106 @@ describe('updateEidoverseControllerConfig (#7629)', () => {
 
   it('reports unknown-install for an id nothing has installed', async () => {
     expect((await updateEidoverseControllerConfig('nope', {})).outcome).toBe('unknown-install');
+  });
+});
+
+// #10818: proposals and latest-tick health cannot stand in for retained,
+// completed outbound evidence. Drive persistence and projections together.
+describe('completed outbound delivery evidence', () => {
+  it('survives multiple quiet/failed ticks and restart, preserves arming/config edits, and resets on reinstall', async () => {
+    await install({ tickIntervalMs: MINUTE, config: { label: 'plaza', pulseEveryTicks: 2, announce: true }, deliverEffects: true });
+    const deliver = vi.fn(async () => ({ delivered: 1, error: null }));
+    await runSupervisorPasses(3, { deliver });
+    const completed = { at: at(2 * MINUTE), tick: 2, ok: true, delivered: 1, reason: null };
+    expect(deliver).toHaveBeenCalledTimes(1);
+    const quiet = summarizeControllerInstall(await getEidoverseControllerInstall('plaza-beacon'));
+    expect(quiet.lastDelivery).toEqual({ ok: null, delivered: 0, reason: null });
+    expect(quiet.lastCompletedDelivery).toEqual(completed);
+    await updateEidoverseControllerConfig('plaza-beacon', { label: 'plaza', pulseEveryTicks: 100, announce: true }, { now: at(3 * MINUTE) });
+    await runSupervisorPasses(2, { fromMs: 3 * MINUTE, deliver });
+    const broken = { configSchema: z.record(z.unknown()), step: () => { throw new Error('example step failure'); } };
+    await runSupervisorPasses(1, { fromMs: 5 * MINUTE, resolveDefinition: () => broken, deliver });
+    expect((await getEidoverseControllerInstall('plaza-beacon')).lastCompletedDelivery).toEqual(completed);
+    await setEidoverseControllerArmed('plaza-beacon', false, { now: at(6 * MINUTE) });
+    await setEidoverseControllerArmed('plaza-beacon', true, { now: at(6 * MINUTE) });
+    __resetEidoverseControllerRuntimeForTests();
+    vi.resetModules();
+    const restarted = await import('./eidoverseControllerRuntime.js');
+    const record = await restarted.getEidoverseControllerInstall('plaza-beacon');
+    expect(record.lastCompletedDelivery).toEqual(completed);
+    expect(eidoverseControllerRecordSchema.safeParse(record).success).toBe(true);
+    const listed = (await restarted.listEidoverseControllers()).installs[0];
+    for (const projection of [summarizeControllerInstall(listed), summarizeControllerInstall(record, { includeState: true })]) {
+      expect(projection.lastCompletedDelivery).toEqual(completed);
+      expect(projection.lastDelivery).toEqual({ ok: null, delivered: 0, reason: null });
+    }
+    expect((await readJSONFile(storeFile(), null)).installs['plaza-beacon'].lastCompletedDelivery).toEqual(completed);
+    const reinstalled = await restarted.installEidoverseController({ id: 'plaza-beacon', controllerId: 'ambient-beacon', config: {} }, { now: at(7 * MINUTE) });
+    expect(reinstalled.install.lastCompletedDelivery).toBeNull();
+    restarted.__resetEidoverseControllerRuntimeForTests();
+  });
+
+  it('never creates completed outbound evidence from local notes or disabled delivery', async () => {
+    const deliver = vi.fn(async () => ({ delivered: 1, error: null }));
+    await install({ tickIntervalMs: MINUTE, config: { pulseEveryTicks: 1, announce: false }, deliverEffects: true });
+    await install({ id: 'disabled-beacon', tickIntervalMs: MINUTE, config: { pulseEveryTicks: 1, announce: true }, deliverEffects: false });
+    await runSupervisorPasses(2, { deliver });
+    expect(deliver).not.toHaveBeenCalled();
+    for (const record of (await listEidoverseControllers()).installs) {
+      expect(record.state.pulses).toBe(2);
+      expect(record.recentEffects).toHaveLength(2);
+      expect(record.lastCompletedDelivery).toBeNull();
+    }
+  });
+
+  it('replaces success with partial refusal and then thrown failure while retaining acknowledged counts', async () => {
+    const definition = { id: 'example-outbound', configSchema: z.object({}).strict(), createState: () => ({}), step: (state) => ({ state, effects: [
+      { kind: 'say', text: 'example acknowledgement' },
+      { kind: 'augment', operations: [{ verb: 'light', args: { id: 'example-lamp' } }] },
+    ] }) };
+    await install({ controllerId: definition.id, tickIntervalMs: MINUTE, config: {}, deliverEffects: true }, { resolveDefinition: () => definition });
+    sayInEidoverseWorldMock.mockResolvedValue(undefined);
+    augmentEidoverseWorldMock.mockResolvedValueOnce({ success: true, applied: 1, operations: [] })
+      .mockResolvedValueOnce({ success: false, applied: 1, operations: [{ outcome: 'refused', reason: 'example partial refusal' }] })
+      .mockRejectedValue(new Error('example transport failure'));
+    await runSupervisorPasses(1, { resolveDefinition: () => definition });
+    expect((await getEidoverseControllerInstall('plaza-beacon')).lastCompletedDelivery).toEqual({ at: at(MINUTE), tick: 1, ok: true, delivered: 2, reason: null });
+    await runSupervisorPasses(1, { fromMs: MINUTE, resolveDefinition: () => definition });
+    expect((await getEidoverseControllerInstall('plaza-beacon')).lastCompletedDelivery).toEqual({ at: at(2 * MINUTE), tick: 2, ok: false, delivered: 2, reason: 'example partial refusal' });
+    await runSupervisorPasses(2, { fromMs: 2 * MINUTE, resolveDefinition: () => definition });
+    const record = await getEidoverseControllerInstall('plaza-beacon');
+    expect(record.lastCompletedDelivery).toEqual({ at: at(4 * MINUTE), tick: 4, ok: false, delivered: 1, reason: 'example transport failure' });
+    expect(record.consecutiveDeliveryFailures).toBe(3);
+    expect(record.armed).toBe(false);
+    expect(isEidoverseControllerSupervisorRegistered()).toBe(false);
+  });
+
+  it('keeps in-flight history unchanged and rejects completion after reinstall or a different outcome with the same tick', async () => {
+    await install({ tickIntervalMs: MINUTE, config: { pulseEveryTicks: 1, announce: true }, deliverEffects: true });
+    await runSupervisorPasses(1, { deliver: async () => ({ delivered: 1, error: null }) });
+    const completed = (await getEidoverseControllerInstall('plaza-beacon')).lastCompletedDelivery;
+    for (const replace of ['different-outcome', 'reinstall']) {
+      let finish;
+      let started;
+      const entered = new Promise((resolve) => { started = resolve; });
+      const pending = tickEidoverseControllers({ now: at(replace === 'reinstall' ? 3 * MINUTE : 2 * MINUTE), deliver: () => {
+        started();
+        return new Promise((resolve) => { finish = resolve; });
+      } });
+      await entered;
+      expect((await getEidoverseControllerInstall('plaza-beacon')).lastCompletedDelivery).toEqual(completed);
+      if (replace === 'reinstall') {
+        await install({ tickIntervalMs: MINUTE, deliverEffects: true }, { now: at(3 * MINUTE) });
+      } else {
+        const raw = await readJSONFile(storeFile(), null);
+        raw.installs['plaza-beacon'].lastOutcome.at = at(2 * MINUTE + 1);
+        await atomicWrite(storeFile(), raw);
+      }
+      finish({ delivered: 2, error: null });
+      await pending;
+      const record = await getEidoverseControllerInstall('plaza-beacon');
+      expect(record.lastCompletedDelivery).toEqual(replace === 'reinstall' ? null : completed);
+      expect(record.lastOutcome?.delivered ?? 0).toBe(0);
+    }
   });
 });

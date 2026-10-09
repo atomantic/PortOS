@@ -171,6 +171,118 @@ describe('fableLoomProduction', () => {
     expect(videoStage.stageIndex).toBeGreaterThan(stillStage.stageIndex);
   });
 
+  describe('media asset status policy', () => {
+    const NO_APPROVAL = 'Locked canon video requires an author-approved storyboard image.';
+    const NO_VIDEO_PROMPT = 'Scene has neither videoPrompt nor prose for video.';
+    const NO_EXIT_PROMPT = 'Transition has no description or scene video prompt.';
+    const protagonistReason = 'Canonical protagonist "char-x" is not present in the linked Universe.';
+
+    // One scene with a still, an entry clip, a hold loop and a transition exit.
+    const sceneEpisode = ({ node = {}, assets = {}, transition = {} } = {}) => ({
+      id: 'ep-status',
+      startNodeId: 'scene',
+      nodes: [
+        {
+          id: 'scene',
+          title: 'Scene',
+          imagePrompt: 'A still.',
+          videoPrompt: 'A clip.',
+          image: 'still.png',
+          playbackAssets: {
+            entryVideoHistoryId: 'entry-1',
+            holdLoopVideoHistoryIds: ['hold-1'],
+            exitByTransition: { 'tr-exit': 'exit-1' },
+            ...assets,
+          },
+          transitions: [{ id: 'tr-exit', targetNodeId: 'end', description: 'Leave.', ...transition }],
+          ...node,
+        },
+        { id: 'end', title: 'End', prose: 'The end.', isEnding: true, transitions: [] },
+      ],
+    });
+    const noExisting = {
+      entryVideoHistoryId: null, holdLoopVideoHistoryIds: [], exitByTransition: {},
+    };
+    const plan = (episode, options = {}) => buildEpisodeProductionPlan({
+      loom: { id: 'loom-1' }, mode: 'current_canon', episode, ...options,
+    });
+    const sceneStatuses = (result) => Object.fromEntries(result.plannedAssets
+      .filter((asset) => asset.nodeId === 'scene')
+      .map((asset) => [asset.role, [asset.status, asset.readiness.ready, asset.readiness.reasons]]));
+
+    it('reuses every existing asset in current canon and counts them as already rendered', () => {
+      const result = plan(sceneEpisode());
+      expect(sceneStatuses(result)).toEqual({
+        image: ['already_rendered', true, []],
+        entry: ['already_rendered', true, []],
+        hold: ['already_rendered', true, []],
+        exit: ['already_rendered', true, []],
+      });
+      expect(result.plannedAssets.filter((asset) => asset.status === 'already_rendered')).toHaveLength(4);
+      expect(result.isFullyReady).toBe(true);
+    });
+
+    it('regenerates existing assets in exact_inputs mode instead of reusing them', () => {
+      const result = plan(sceneEpisode(), { mode: 'exact_inputs' });
+      expect(sceneStatuses(result)).toEqual({
+        image: ['ready', true, []],
+        entry: ['ready', true, []],
+        hold: ['ready', true, []],
+        exit: ['ready', true, []],
+      });
+      expect(result.plannedAssets.some((asset) => asset.status === 'already_rendered')).toBe(false);
+    });
+
+    it('keeps an existing still, entry and hold reusable without prompts but not an exit', () => {
+      const result = plan(sceneEpisode({
+        node: { imagePrompt: '', videoPrompt: '' },
+        transition: { description: '' },
+      }));
+      expect(sceneStatuses(result)).toEqual({
+        image: ['already_rendered', false, ['Scene has neither imagePrompt nor prose.']],
+        entry: ['already_rendered', false, [NO_VIDEO_PROMPT]],
+        hold: ['already_rendered', false, [NO_VIDEO_PROMPT]],
+        exit: ['blocked', false, [NO_EXIT_PROMPT]],
+      });
+    });
+
+    it('blocks every existing asset on a blocker common to the scene', () => {
+      const result = plan(sceneEpisode(), {
+        loom: { id: 'loom-1', protagonistCharacterId: 'char-x' },
+        universe: { id: 'universe-1', characters: [] },
+      });
+      expect(sceneStatuses(result)).toEqual({
+        image: ['blocked', false, [protagonistReason]],
+        entry: ['blocked', false, [protagonistReason]],
+        hold: ['blocked', false, [protagonistReason]],
+        exit: ['blocked', false, [protagonistReason]],
+      });
+    });
+
+    it('requires an approved storyboard for new locked-canon video but not for existing clips', () => {
+      const universe = { id: 'universe-1', characters: [] };
+      const lockedNode = { visualCanon: { mode: 'locked' } };
+
+      const unapproved = plan(sceneEpisode({ node: { ...lockedNode, image: null }, assets: noExisting }), { universe });
+      expect(sceneStatuses(unapproved)).toEqual({
+        image: ['ready', true, []],
+        entry: ['blocked', false, [NO_APPROVAL]],
+        hold: ['blocked', false, [NO_APPROVAL]],
+        exit: ['blocked', false, [NO_APPROVAL]],
+      });
+
+      const approved = plan(sceneEpisode({
+        node: { visualCanon: { mode: 'locked', storyboardImageApproved: true }, image: null },
+        assets: noExisting,
+      }), { universe });
+      expect(Object.values(sceneStatuses(approved)).map(([status]) => status)).toEqual(['ready', 'ready', 'ready', 'ready']);
+
+      const existing = plan(sceneEpisode({ node: lockedNode }), { universe });
+      expect(Object.values(sceneStatuses(existing)).map(([status]) => status))
+        .toEqual(['already_rendered', 'already_rendered', 'already_rendered', 'already_rendered']);
+    });
+  });
+
   it('blocks production when the canonical protagonist cannot resolve in the linked Universe', () => {
     const plan = buildEpisodeProductionPlan({
       episode: sampleEpisode,

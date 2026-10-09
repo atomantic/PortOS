@@ -28,7 +28,7 @@ import { spawn } from '../../lib/childProcess.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
-import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { cancelMusicVideoRenderJob, isMusicVideoRenderCanceled } from './renderCancellation.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { encodeFileContactSheetAtTimes } from '../htmlComposition/encode.js';
 import { getProject, listProjects, mutateProjectRecord } from './projects.js';
@@ -36,7 +36,7 @@ import { assertCurrentPerformanceTakes } from './performanceShot.js';
 import { assertCurrentClipDependencies, planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes, isLocalRenderMark, resolveMasterAudioPath, resolveSoundBedPath } from './render.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { encodeDocumentComposition, prepareDocumentRender } from './documentRender.js';
-import { renderableCues, sectionCardCues } from './composition.js';
+import { projectTypographyPlan } from './composition.js';
 import { renderTypographyOverlays, removeCompositionScratch } from './compositionRender.js';
 import { startExcerptOnProject, applyExcerptPatch } from './excerpt.js';
 import { markRevisionRendering, settleRevisionRender } from './revision.js';
@@ -54,21 +54,7 @@ const PENDING = Symbol('mv-excerpt-render-pending');
 export const attachExcerptRenderSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
 export function cancelExcerptRender(jobId) {
-  const job = jobs.get(jobId);
-  if (!job) return false;
-  if (!job.process) {
-    if (job.status !== 'running' || !job.overlayAbort || job.overlayAbort.signal.aborted) return false;
-    job.overlayAbort.abort(new Error('Excerpt render cancelled'));
-    return true;
-  }
-  // ffmpeg often intercepts SIGTERM and exits itself (nonzero code, `signal:
-  // null` on the child's 'close' event) rather than dying FROM the signal —
-  // `onClose` below can't tell that apart from a genuine encode failure by
-  // signal alone, so record that a cancel was actually requested.
-  job.cancelRequested = true;
-  const proc = job.process;
-  killWithEscalation(proc, { label: 'music-video excerpt render', stillRunning: () => job.process === proc });
-  return true;
+  return cancelMusicVideoRenderJob(jobs.get(jobId), { label: 'music-video excerpt render' });
 }
 
 const round3 = (n) => Math.round(n * 1000) / 1000;
@@ -332,10 +318,8 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
 
     // Only the cue/card windows overlapping the window are worth capturing —
     // typography outside it never survives the final trim.
-    const allCues = composed
-      ? [...renderableCues(project.composition, probe.totalDuration), ...sectionCardCues(clips, probe.sections, probe.totalDuration)]
-        .sort((a, b) => a.startSec - b.startSec)
-      : [];
+    const { cues: plannedCues, style } = projectTypographyPlan(project, clips, probe.sections, probe.totalDuration);
+    const allCues = composed ? plannedCues : [];
     const cues = allCues.filter((c) => c.startSec < endClamped && c.endSec > startSec);
     const composition = cues.length > 0 ? project.composition : null;
 
@@ -431,7 +415,7 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
         onClose: async (code, signal) => {
           job.process = null;
           if (code !== 0) {
-            const canceled = job.cancelRequested || signal === 'SIGTERM' || signal === 'SIGKILL';
+            const canceled = isMusicVideoRenderCanceled(job, signal);
             job.status = canceled ? 'canceled' : 'error';
             const reason = canceled ? 'Render cancelled' : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`;
             job.lastError = reason;
@@ -484,7 +468,7 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
     // anything before `startSec` anyway, so nothing visible is lost.
     const captureCues = cues.map((c) => ({ ...c, startSec: Math.max(c.startSec, startSec) }));
     renderTypographyOverlays({
-      jobId, cues: captureCues, style: composition.style, width: probe.canonW, height: probe.canonH, fps: probe.fps, durationSec: endClamped, signal,
+      jobId, cues: captureCues, style, width: probe.canonW, height: probe.canonH, fps: probe.fps, durationSec: endClamped, signal,
       onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: 0.5 * fraction }),
     }).then((overlays) => {
       signal.throwIfAborted();

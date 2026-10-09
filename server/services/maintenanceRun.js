@@ -125,7 +125,7 @@ export async function listMaintenanceRuns() {
  */
 async function writeRuns(runs) {
   let finished = 0;
-  await atomicWrite(runsFile(), { runs: runs.filter((entry) => entry.status === MAINTENANCE_RUN_STATUS.RUNNING || (entry.auditDepth === 'deep' && entry.status !== MAINTENANCE_RUN_STATUS.COMPLETED) || ++finished <= RUN_HISTORY_LIMIT) });
+  await atomicWrite(runsFile(), { runs: runs.filter((entry) => entry.archivedAt || entry.historyRetained || entry.status === MAINTENANCE_RUN_STATUS.RUNNING || (entry.auditDepth === 'deep' && entry.status !== MAINTENANCE_RUN_STATUS.COMPLETED) || ++finished <= RUN_HISTORY_LIMIT) });
 }
 
 const insertRun = (run) => writeQueue(async () => {
@@ -142,7 +142,7 @@ const insertRun = (run) => writeQueue(async () => {
  * `completed` back over a Stop or a completion that landed meanwhile. The
  * completion ledger merges key-wise for the same reason: it only ever grows.
  */
-const patchRun = (id, patch) => writeQueue(async () => {
+const patchRun = (id, patch, { historyOnly = false } = {}) => writeQueue(async () => {
   const runs = await listMaintenanceRuns();
   const current = runs.find((entry) => entry.id === id);
   if (!current) return null;
@@ -153,7 +153,7 @@ const patchRun = (id, patch) => writeQueue(async () => {
     updatedAt: new Date().toISOString(),
   };
   await writeRuns(runs.map((entry) => (entry.id === id ? updated : entry)));
-  cosEvents.emit('maintenance:updated', updated);
+  cosEvents.emit('maintenance:updated', historyOnly ? { ...updated, historyOnly: true } : updated);
   return updated;
 });
 
@@ -250,6 +250,26 @@ export function stopMaintenanceRun(id) {
   });
 }
 
+/** Archiving only hides history; restoration never resumes execution. */
+export function setMaintenanceRunArchived(id, { appId, archived }) {
+  return perRun(id, async () => {
+    const run = await getMaintenanceRun(id);
+    if (!run || run.appId !== appId) return null;
+    if (run.status === MAINTENANCE_RUN_STATUS.RUNNING) throw new ServerError('Stop the run before archiving its history', { status: 409, code: 'MAINTENANCE_RUN_ACTIVE' });
+    if (archived) {
+      const [{ getAllTasks }, { getOnDemandRequests }] = await Promise.all([import('./cosTaskStore.js'), import('./taskSchedule.js')]);
+      // Match dispatch's queue -> handoff -> task read order across preparation.
+      const queued = (await getOnDemandRequests()).some(request => request?.burn?.maintenanceRunId === id);
+      const preparing = Object.values(await getOnDemandHandoffs()).some(claim => claim.request.burn?.maintenanceRunId === id && claim.status === 'preparing');
+      const { user, cos } = await getAllTasks();
+      const outstanding = [...(user?.tasks || []), ...(cos?.tasks || [])].some(task => quotaBurnProvenance(task.metadata).maintenanceRunId === id && ACTIVE_TASK_STATUSES.has(task.status));
+      if (queued || preparing || outstanding) throw new ServerError('Wait for this run’s outstanding work to finish before archiving', { status: 409, code: 'MAINTENANCE_RUN_ACTIVE' });
+    }
+    if (Boolean(run.archivedAt) === archived) return run;
+    return patchRun(id, { archivedAt: archived ? new Date().toISOString() : null, historyRetained: true }, { historyOnly: true });
+  });
+}
+
 /** Editing shares the dispatch queue: a stale browser cannot change a started step. */
 export function updateMaintenanceStep(id, stepId, { providerId, model, effort = null }) {
   return perRun(id, async () => {
@@ -286,6 +306,7 @@ function latestRunHandoff(run, handoffs) {
 export async function resumeMaintenanceRun(id) {
   const resumed = await perRun(id, async () => {
     const run = await getMaintenanceRun(id);
+    if (run?.archivedAt) throw new ServerError('Restore archived history before resuming', { status: 409, code: 'MAINTENANCE_RUN_ARCHIVED' });
     if (run && isLegacyDeepAudit(run)) throw new ServerError('Historical Deep certification runs are read-only; start a new Deep audit', { status: 409, code: 'DEEP_AUDIT_HISTORICAL' });
     if (!run || run.status === MAINTENANCE_RUN_STATUS.RUNNING) return { run, alreadyRunning: true };
     if (!run.taskTypes) await assertNoRunningRun(run.appId);

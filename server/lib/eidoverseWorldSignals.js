@@ -40,6 +40,18 @@ const coarseStatus = (value) => {
   return 'steady';
 };
 
+// Backup failure is judged from the ORIGINAL persisted state, before it is
+// coarsened: the scheduler persists a failed pg_dump as status `degraded` with
+// `pgBackup.status === 'failed'`, and `coarseStatus` reads `degraded` as steady.
+const backupFailed = (backupState) =>
+  /failed|error|unhealthy|degraded/i.test(String(backupState?.status || ''))
+  || String(backupState?.pgBackup?.status || '').toLowerCase() === 'failed';
+
+const projectedBackup = (backupState) => backupState ? {
+  status: backupFailed(backupState) ? 'error' : coarseStatus(backupState.status),
+  filesChanged: nonNegativeOrNull(backupState.filesChanged),
+} : null;
+
 /**
  * CoS task status -> world signal, mapped EXPLICITLY rather than through
  * `coarseStatus`'s word matcher.
@@ -272,7 +284,7 @@ function projectedOperations({ cosStatus, review, backupState, notifications, ch
   const values = [cosStatus, review, backupState, notifications, character, voiceConfig, memory, diskPercent, inboxCounts];
   if (!values.some((value) => value !== null && value !== undefined)) return null;
   const reasons = [];
-  if (/failed|error|unhealthy/i.test(String(backupState?.status || ''))) reasons.push({ code: 'backup_failure', severity: 'error' });
+  if (backupFailed(backupState)) reasons.push({ code: 'backup_failure', severity: 'error' });
   if ((review?.alert || 0) > 0) reasons.push({ code: 'review_alerts', severity: 'attention', affectedCount: nonNegativeOrNull(review.alert) });
   if (cosStatus?.paused === true) reasons.push({ code: 'cos_paused', severity: 'attention' });
   const status = reasons.some((reason) => reason.severity === 'error') ? 'error'
@@ -297,10 +309,7 @@ function projectedOperations({ cosStatus, review, backupState, notifications, ch
       cos: nonNegativeOrNull(review.cos),
       alerts: nonNegativeOrNull(review.alert),
     } : null,
-    backup: backupState ? {
-      status: coarseStatus(backupState.status),
-      filesChanged: nonNegativeOrNull(backupState.filesChanged),
-    } : null,
+    backup: projectedBackup(backupState),
     notifications: notifications ? {
       total: nonNegativeOrNull(notifications.total),
       unread: nonNegativeOrNull(notifications.unread),
@@ -356,10 +365,7 @@ function healthSnapshot({ apps, cosStatus, review, backupState, notifications, c
       cos: nonNegativeOrNull(review.cos),
       alerts: nonNegativeOrNull(review.alert),
     } : null,
-    backup: backupState ? {
-      status: coarseStatus(backupState.status),
-      filesChanged: nonNegativeOrNull(backupState.filesChanged),
-    } : null,
+    backup: projectedBackup(backupState),
     memory: memory ? {
       usedPercent: memory.total > 0 ? Math.round((memory.used / memory.total) * 100) : null,
     } : null,
@@ -377,7 +383,7 @@ function healthSnapshot({ apps, cosStatus, review, backupState, notifications, c
     .some((value) => value !== null && value !== undefined);
   if (!available) return null;
   const reasons = [];
-  if (/failed|error|unhealthy/i.test(String(health.backup?.status || ''))) reasons.push({ code: 'backup_failure', severity: 'error' });
+  if (backupFailed(backupState)) reasons.push({ code: 'backup_failure', severity: 'error' });
   for (const [value, prefix] of [[health.diskPercent, 'runtime_data_disk'], [health.memory?.usedPercent, 'memory']]) {
     if ((value ?? 0) >= 95) reasons.push({ code: `${prefix}_critical`, severity: 'error' });
     else if ((value ?? 0) >= 85) reasons.push({ code: `${prefix}_pressure`, severity: 'attention' });

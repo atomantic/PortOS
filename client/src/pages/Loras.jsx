@@ -439,13 +439,13 @@ export default function Loras() {
           ariaLabel="LoRA view"
           controlsIdPrefix={VIEW_PANEL_PREFIX}
         />
-        <div className="flex items-center gap-3">
+        <div className="flex max-w-full flex-wrap items-center gap-2 sm:gap-3">
           <MediaFilter value={mediaFilter} onChange={setMediaFilter} />
           {view === VIEW_INSTALLED && (
             <button
               type="button"
               onClick={() => setView(VIEW_DISCOVER)}
-              className="bg-port-accent text-white px-3 py-1.5 rounded text-sm font-medium hover:bg-port-accent/90 flex items-center gap-2"
+              className="min-h-11 shrink-0 bg-port-accent text-white px-3 rounded text-sm font-medium hover:bg-port-accent/90 flex items-center justify-center gap-2"
             >
               <Download size={14} aria-hidden="true" />
               Install LoRA
@@ -502,20 +502,20 @@ export default function Loras() {
                 focusing it was a landing convenience. It now remounts on every
                 switch into Discover, where it would steal focus from the tab
                 the user just activated and swallow their next arrow key. */}
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2 sm:flex-nowrap">
               <input
                 type="text"
                 value={installUrl}
                 onChange={(e) => setInstallUrl(e.target.value)}
                 aria-label="Civitai model URL"
                 placeholder="https://civitai.com/models/2600698/realstagram"
-                className="flex-1 bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600"
+                className="min-h-11 min-w-0 flex-1 bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600"
                 disabled={installing}
               />
               <button
                 type="submit"
                 disabled={installing || !installUrl.trim()}
-                className="bg-port-accent text-white px-4 py-2 rounded text-sm font-medium hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                className="min-h-11 bg-port-accent text-white px-4 rounded text-sm font-medium hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 {installing ? 'Downloading…' : 'Install'}
               </button>
@@ -535,20 +535,20 @@ export default function Loras() {
               <Download size={16} />
               <span>Install LoRA from HuggingFace</span>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2 sm:flex-nowrap">
               <input
                 type="text"
                 value={hfUrl}
                 onChange={(e) => setHfUrl(e.target.value)}
                 aria-label="HuggingFace LoRA URL"
                 placeholder="https://huggingface.co/Alissonerdx/CharacterSheet"
-                className="flex-1 bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600"
+                className="min-h-11 min-w-0 flex-1 bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600"
                 disabled={hfInstalling}
               />
               <button
                 type="submit"
                 disabled={hfInstalling || !!installingVideoKey || !hfUrl.trim()}
-                className="bg-port-accent text-white px-4 py-2 rounded text-sm font-medium hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                className="min-h-11 bg-port-accent text-white px-4 rounded text-sm font-medium hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 {hfInstalling ? (hfPct != null ? `Downloading ${hfPct}%` : 'Downloading…') : 'Install'}
               </button>
@@ -581,7 +581,7 @@ export default function Loras() {
                         { family },
                       )}
                       disabled={hfInstalling}
-                      className="bg-port-accent text-white px-3 py-1 rounded text-xs font-medium hover:bg-port-accent/90 disabled:opacity-50"
+                      className="min-h-11 bg-port-accent text-white px-3 rounded text-xs font-medium hover:bg-port-accent/90 disabled:opacity-50"
                     >
                       {hfInstalling ? (hfPct != null ? `Installing ${hfPct}%` : 'Installing…') : `Install as ${label}`}
                     </button>
@@ -722,16 +722,16 @@ function HfDownloadProgress({ progress }) {
 // installed list.
 function MediaFilter({ value, onChange }) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       <span className="text-xs text-gray-500">Show</span>
-      <div className="inline-flex rounded-lg border border-port-border overflow-hidden">
+      <div className="inline-flex max-w-full rounded-lg border border-port-border overflow-hidden">
         {MEDIA_FILTERS.map((f) => (
           <button
             key={f.id}
             type="button"
             onClick={() => onChange(f.id)}
             aria-pressed={value === f.id}
-            className={`px-3 py-1 text-xs font-medium transition-colors ${
+            className={`min-h-11 px-3 text-xs font-medium transition-colors ${
               value === f.id
                 ? 'bg-port-accent text-white'
                 : 'bg-port-card text-gray-400 hover:text-gray-200'
@@ -957,15 +957,15 @@ function VideoSearchSection({ installedHfKeys, installingVideoKey, installingVid
       <p className="text-xs text-gray-500 mb-2">
         Search all of HuggingFace for LTX-Video / MiniMax H3 LoRAs by name, author, or repository.
       </p>
-      <form onSubmit={handleSearch} className="flex flex-wrap gap-2 mb-3">
-        <div className="inline-flex rounded-lg border border-port-border overflow-hidden">
+      <form onSubmit={handleSearch} className="flex flex-wrap items-start gap-2 mb-3">
+        <div className="inline-flex max-w-full rounded-lg border border-port-border overflow-hidden">
           {VIDEO_FAMILY_FILTERS.map((f) => (
             <button
               key={f.id}
               type="button"
               onClick={() => handleFamilyChange(f.id)}
               aria-pressed={family === f.id}
-              className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${
+              className={`min-h-11 px-3 text-xs font-medium transition-colors ${
                 family === f.id ? 'bg-port-accent text-white' : 'bg-port-card text-gray-400 hover:text-gray-200'
               }`}
             >
@@ -973,7 +973,7 @@ function VideoSearchSection({ installedHfKeys, installingVideoKey, installingVid
             </button>
           ))}
         </div>
-        <div className="relative flex-1 min-w-[160px] max-w-md">
+        <div className="relative min-w-0 flex-1 basis-40 max-w-md">
           <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-600 pointer-events-none" />
           <input
             type="text"
@@ -981,7 +981,7 @@ function VideoSearchSection({ installedHfKeys, installingVideoKey, installingVid
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search name or repository…"
             aria-label="Search HuggingFace video LoRAs by name or repository"
-            className="w-full bg-port-bg border border-port-border rounded pl-8 pr-3 py-1.5 text-xs text-gray-200 placeholder:text-gray-600"
+            className="min-h-11 w-full bg-port-bg border border-port-border rounded pl-8 pr-3 py-1.5 text-xs text-gray-200 placeholder:text-gray-600"
           />
         </div>
         <input
@@ -990,12 +990,12 @@ function VideoSearchSection({ installedHfKeys, installingVideoKey, installingVid
           onChange={(e) => setAuthor(e.target.value)}
           placeholder="Author (optional)"
           aria-label="Filter HuggingFace video LoRAs by author"
-          className="w-32 bg-port-bg border border-port-border rounded px-3 py-1.5 text-xs text-gray-200 placeholder:text-gray-600"
+          className="min-h-11 w-32 max-w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-xs text-gray-200 placeholder:text-gray-600"
         />
         <button
           type="submit"
           disabled={loading}
-          className="bg-port-accent/90 text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-port-accent disabled:opacity-50"
+          className="min-h-11 bg-port-accent/90 text-white px-3 rounded text-xs font-medium hover:bg-port-accent disabled:opacity-50"
         >
           {loading ? 'Searching…' : 'Search'}
         </button>
@@ -1003,7 +1003,7 @@ function VideoSearchSection({ installedHfKeys, installingVideoKey, installingVid
           <button
             type="button"
             onClick={clearSearch}
-            className="px-2 py-1.5 rounded text-xs text-gray-400 hover:text-gray-200 border border-port-border"
+            className="min-h-11 px-3 rounded text-xs text-gray-400 hover:text-gray-200 border border-port-border"
           >
             Clear
           </button>
@@ -1189,12 +1189,15 @@ function SuggestionsSection({ label, hint, cards, alwaysShow = false, runner = n
   const [liveCards, setLiveCards] = useState(null);
   const [cursor, setCursor] = useState(null);
   const [loading, setLoading] = useState(false);
+  const requestIdRef = useRef(0);
 
   // Drop any live search/pagination so the section falls back to the cached
   // top-N. Shared by Clear, the empty-box submit, and the Refresh effect.
   // Stable identity (setters never change) so the effect can depend on it.
   const resetToCached = useCallback(() => {
+    requestIdRef.current += 1;
     setActiveQuery(''); setLiveCards(null); setCursor(null);
+    setLoading(false);
   }, []);
 
   // A global Refresh (new fetchedAt) re-seeds the cached top-N — drop live
@@ -1203,9 +1206,12 @@ function SuggestionsSection({ label, hint, cards, alwaysShow = false, runner = n
   useEffect(() => { setQuery(''); resetToCached(); }, [resetSignal, resetToCached]);
 
   const fetchPage = useCallback(async (q, { append, useCursor }) => {
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
     setLoading(true);
     await searchCivitaiLoras({ runner, query: q, cursor: useCursor, limit: 12 })
       .then((res) => {
+        if (requestIdRef.current !== requestId) return;
         const items = res?.items || [];
         setCursor(res?.nextCursor || null);
         setActiveQuery(q);
@@ -1216,8 +1222,12 @@ function SuggestionsSection({ label, hint, cards, alwaysShow = false, runner = n
           return [...prev, ...items.filter((c) => !seen.has(cardKey(c)))];
         });
       })
-      .catch((err) => toast.error(err?.message || 'Civitai search failed'))
-      .finally(() => setLoading(false));
+      .catch((err) => {
+        if (requestIdRef.current === requestId) toast.error(err?.message || 'Civitai search failed');
+      })
+      .finally(() => {
+        if (requestIdRef.current === requestId) setLoading(false);
+      });
   }, [runner]);
 
   const handleSearch = (e) => {
@@ -1255,8 +1265,8 @@ function SuggestionsSection({ label, hint, cards, alwaysShow = false, runner = n
       </div>
       {hint && <p className="text-xs text-gray-500 mb-2">{hint}</p>}
       {searchable && (
-        <form onSubmit={handleSearch} className="flex gap-2 mb-3">
-          <div className="relative flex-1 max-w-md">
+        <form onSubmit={handleSearch} className="flex flex-wrap items-start gap-2 mb-3">
+          <div className="relative min-w-0 flex-1 basis-40 max-w-md">
             <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-600 pointer-events-none" />
             <input
               type="text"
@@ -1264,13 +1274,13 @@ function SuggestionsSection({ label, hint, cards, alwaysShow = false, runner = n
               onChange={(e) => setQuery(e.target.value)}
               placeholder={`Search ${RUNNER_LABEL[runner] || runner} LoRAs on Civitai…`}
               aria-label={`Search ${RUNNER_LABEL[runner] || runner} LoRAs on Civitai`}
-              className="w-full bg-port-bg border border-port-border rounded pl-8 pr-3 py-1.5 text-xs text-gray-200 placeholder:text-gray-600"
+              className="min-h-11 w-full bg-port-bg border border-port-border rounded pl-8 pr-3 py-1.5 text-xs text-gray-200 placeholder:text-gray-600"
             />
           </div>
           <button
             type="submit"
             disabled={loading}
-            className="bg-port-accent/90 text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-port-accent disabled:opacity-50"
+            className="min-h-11 bg-port-accent/90 text-white px-3 rounded text-xs font-medium hover:bg-port-accent disabled:opacity-50"
           >
             {loading ? 'Searching…' : 'Search'}
           </button>
@@ -1278,7 +1288,7 @@ function SuggestionsSection({ label, hint, cards, alwaysShow = false, runner = n
             <button
               type="button"
               onClick={clearSearch}
-              className="px-2 py-1.5 rounded text-xs text-gray-400 hover:text-gray-200 border border-port-border"
+              className="min-h-11 px-3 rounded text-xs text-gray-400 hover:text-gray-200 border border-port-border"
               title="Clear search — back to top ranking"
             >
               Clear

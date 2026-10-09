@@ -52,6 +52,9 @@ const testDeps = (overrides = {}) => ({
   rm: vi.fn(async () => {}),
   addWorktree: vi.fn(async () => true),
   queuePendingMerge: vi.fn(async () => true),
+  // Admission itself is pinned in appQualitySnapshotAdmission.test.js.
+  getOriginInfo: vi.fn(async () => ({ host: 'github.com', fullName: 'example/app' })),
+  withMergeAdmission: vi.fn(async (_origin, work) => ({ admitted: true, result: await work() })),
   probePrForBranch: vi.fn(async () => ({ prState: null, prUrl: null, prNumber: null, readable: true })),
   ...overrides,
 });

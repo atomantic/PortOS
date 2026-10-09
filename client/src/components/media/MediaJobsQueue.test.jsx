@@ -650,6 +650,69 @@ describe('MediaJobsQueue — video retry reference mode (#4874)', () => {
   });
 });
 
+describe('MediaJobsQueue — video retry memory mode (#10742)', () => {
+  const model = { id: 'memory-model', name: 'Example LTX', runtime: 'ltx25', supportedModes: ['text', 'extend'] };
+  const openEditor = async (user, streamingMode) => {
+    listQueueMediaJobs.mockResolvedValue([{
+      id: 'memory-job', kind: 'video', status: 'failed', error: 'example failure',
+      queuedAt: '2026-06-19T10:00:00Z',
+      params: { prompt: 'an invented memory retry', mode: 'extend', modelId: model.id, streamingMode },
+    }]);
+    render(<MediaJobsQueue kind="video" />);
+    await expandReel(user);
+    await user.click(await screen.findByLabelText('Edit and retry'));
+  };
+
+  it('shows Resident and sends no memory override on an untouched retry', async () => {
+    const user = userEvent.setup();
+    getVideoGenStatus.mockResolvedValue({ models: [model] });
+    await openEditor(user, 'resident');
+    expect(await screen.findByLabelText('Memory')).toHaveValue('resident');
+    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
+    expect(retryMediaJob).toHaveBeenCalledWith('memory-job', null, { silent: true });
+  });
+
+  it('submits an explicit Stream request even for Extend so the bridge can refuse it', async () => {
+    const user = userEvent.setup();
+    getVideoGenStatus.mockResolvedValue({ models: [model] });
+    await openEditor(user, 'resident');
+    await user.selectOptions(await screen.findByLabelText('Memory'), 'stream');
+    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
+    expect(retryMediaJob).toHaveBeenCalledWith('memory-job', { streamingMode: 'stream' }, { silent: true });
+  });
+
+  it('preserves a recorded Stream while the model catalog is loading', async () => {
+    const user = userEvent.setup();
+    getVideoGenStatus.mockReturnValue(new Promise(() => {}));
+    await openEditor(user, 'stream');
+    expect(screen.getByLabelText('Memory')).toHaveValue('stream');
+    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
+    expect(retryMediaJob).toHaveBeenCalledWith('memory-job', null, { silent: true });
+  });
+
+  it.each([false, true])('clears an explicit mode to Auto with catalog resolved=%s at submission', async (resolved) => {
+    const user = userEvent.setup();
+    let resolveCatalog;
+    getVideoGenStatus.mockReturnValue(new Promise((resolve) => { resolveCatalog = resolve; }));
+    await openEditor(user, 'stream');
+    await user.selectOptions(screen.getByLabelText('Memory'), 'auto');
+    expect(screen.getByLabelText('Memory')).toHaveValue('auto');
+    if (resolved) await act(async () => { resolveCatalog({ models: [model] }); });
+    expect(screen.getByLabelText('Memory')).toHaveValue('auto');
+    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
+    expect(retryMediaJob).toHaveBeenCalledWith('memory-job', { streamingMode: null }, { silent: true });
+  });
+
+  it('treats older jobs without a memory mode as Auto without submitting an override', async () => {
+    const user = userEvent.setup();
+    getVideoGenStatus.mockResolvedValue({ models: [model] });
+    await openEditor(user, undefined);
+    expect(await screen.findByLabelText('Memory')).toHaveValue('auto');
+    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
+    expect(retryMediaJob).toHaveBeenCalledWith('memory-job', null, { silent: true });
+  });
+});
+
 // Preview-fidelity decode (#5423) as an editable requeue override (#5449). The
 // shipped VIDEO_DRAFT_DECODERS table is EMPTY, so these use a fixture decoder
 // entry — the option list is server-declared and rides on the model entry as
@@ -844,5 +907,45 @@ describe('MediaJobsQueue — local video holds', () => {
     await waitFor(() => expect(screen.queryByText('0 video jobs held')).not.toBeInTheDocument());
     expect(resumeMediaVideoHold).toHaveBeenCalledWith('empty-hold', { silent: true });
     expect(retryMediaJob).not.toHaveBeenCalled();
+  });
+});
+
+// Hosted video backends (grok / fal / reactor) own their params (#10741): the
+// retry editor offers no local model, sampler or chaining controls and an
+// untouched submit re-sends nothing, so provider fields survive verbatim.
+describe('MediaJobsQueue — hosted video retry editor (#10741)', () => {
+  const hostedJob = (mode, extra) => ({
+    id: `${mode}fail000000dead`,
+    kind: 'video',
+    status: 'failed',
+    error: 'boom',
+    queuedAt: '2026-06-19T10:00:00Z',
+    params: { prompt: 'a fox', mode, videoMode: 'text', ...extra },
+  });
+  const HOSTED_JOBS = {
+    grok: hostedJob('grok', { width: 1280, height: 720, duration: 6 }),
+    fal: hostedJob('fal', { modelId: 'fal-ai/provider-model', width: 1280, height: 720, duration: 5 }),
+    reactor: hostedJob('reactor', { seconds: 4, seed: 7, aspect: '16:9' }),
+  };
+
+  it.each(Object.keys(HOSTED_JOBS))('hides local controls on a %s job and submits no override when untouched', async (mode) => {
+    const user = userEvent.setup();
+    // A healthy local catalog: the controls must stay hidden because the job is
+    // hosted, not because there is nothing to choose from.
+    getVideoGenStatus.mockResolvedValue({ models: [{ id: 'ltx25-model', name: 'LTX-2.5', runtime: 'ltx25', supportedModes: ['text', 'image'] }] });
+    listQueueMediaJobs.mockResolvedValue([HOSTED_JOBS[mode]]);
+    render(<MediaJobsQueue kind="video" />);
+    await expandReel(user);
+    await user.click(await screen.findByLabelText('Edit and retry'));
+
+    expect(await screen.findByRole('button', { name: /Retry with changes/i })).toBeInTheDocument();
+    await waitFor(() => expect(getVideoGenStatus).toHaveBeenCalled());
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Reference mode')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Steps/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Chunks/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
+    expect(retryMediaJob).toHaveBeenCalledWith(HOSTED_JOBS[mode].id, null, { silent: true });
   });
 });

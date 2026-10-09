@@ -4,7 +4,7 @@
  * saves on blur (tags as a list), and the thumbnail choice goes to the server.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 
 vi.mock('../../hooks/useProviderModels.js', () => ({
   default: () => ({ providers: [], selectedProviderId: '', selectedModel: '', availableModels: [], setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn() }),
@@ -40,7 +40,7 @@ describe('PublishKitPanel (#9281)', () => {
     expect(k.build).toHaveBeenCalled();
   });
 
-  it('drafts copy from the notes, only well-formed links and only what is ticked', () => {
+  it('drafts copy from the notes, only well-formed links and only what is ticked', async () => {
     const k = hook();
     const project = { id: 'mv-1', name: 'Example Song', renderHistoryId: 'rh-1', lyricCues: [{ text: 'a line', startSec: 1 }, { text: 'untimed' }], productionRuns: [{ usage: { spentUsd: 4.5 } }] };
     render(<PublishKitPanel project={project} publishKit={k} />);
@@ -64,6 +64,36 @@ describe('PublishKitPanel (#9281)', () => {
     fireEvent.click(screen.getByLabelText('Full making-of'));
     fireEvent.click(screen.getByRole('button', { name: /Draft copy/ }));
     expect(k.draftCopy).toHaveBeenLastCalledWith(expect.objectContaining({ include: { ...none, title: false, lyrics: true, spend: true, hashtags: true }, length: 'full' }));
+    await act(async () => {}); // let the field saves settle
+  });
+
+  it('saves notes, links and draft choices as they are edited and says when they are saved', async () => {
+    const k = hook({ saveCopy: vi.fn(async () => ({ id: 'mv-1' })) });
+    render(<PublishKitPanel project={{ id: 'mv-1', name: 'Example Song', renderHistoryId: 'rh-1', publishKit: { links: { song: 'https://example.com/old' } } }} publishKit={k} />);
+    expandAll();
+    const notes = screen.getByLabelText(/Making-of notes/);
+    fireEvent.change(notes, { target: { value: 'hummed it in the car' } });
+    fireEvent.blur(notes);
+    expect(k.saveCopy).toHaveBeenLastCalledWith({ notes: 'hummed it in the car' });
+    expect(await screen.findByText('All changes saved')).toBeInTheDocument();
+
+    const video = screen.getByLabelText(/Full video URL/);
+    fireEvent.change(video, { target: { value: 'not a url' } });
+    fireEvent.blur(video);
+    expect(k.saveCopy).toHaveBeenCalledTimes(1); // a malformed link is never sent
+    const song = screen.getByLabelText(/Song URL/);
+    fireEvent.change(song, { target: { value: '' } });
+    fireEvent.blur(song);
+    expect(k.saveCopy).toHaveBeenLastCalledWith({ links: { song: '' } });
+
+    fireEvent.click(screen.getByLabelText('Full making-of'));
+    expect(k.saveCopy).toHaveBeenLastCalledWith({ draftOptions: { length: 'full' } });
+    fireEvent.click(screen.getByLabelText(/Hashtags and YouTube tags/));
+    expect(k.saveCopy).toHaveBeenLastCalledWith({ draftOptions: { include: { hashtags: true } } });
+
+    k.saveCopy.mockResolvedValueOnce(null);
+    fireEvent.click(screen.getByLabelText('A sentence or two'));
+    await waitFor(() => expect(screen.getByText(/did not save/)).toBeInTheDocument());
   });
 
   it('asks before a draft replaces posts edited by hand', () => {
@@ -80,7 +110,7 @@ describe('PublishKitPanel (#9281)', () => {
     expect(k.draftCopy).toHaveBeenCalledWith(expect.objectContaining({ replaceEdited: true }));
   });
 
-  it('cannot tick lyrics or spend the project does not have, and lets you write a post without drafting', () => {
+  it('cannot tick lyrics or spend the project does not have, and lets you write a post without drafting', async () => {
     const k = hook();
     render(<PublishKitPanel project={{ id: 'mv-1', name: 'Example Song', renderHistoryId: 'rh-1', lyricCues: [{ text: 'untimed' }] }} publishKit={k} enabledTargets={['x']} />);
     expandAll();
@@ -90,9 +120,10 @@ describe('PublishKitPanel (#9281)', () => {
     fireEvent.change(hook_, { target: { value: 'One sentence of my own.' } });
     fireEvent.blur(hook_);
     expect(k.saveCopy).toHaveBeenCalledWith({ x: { hook: 'One sentence of my own.' } });
+    await act(async () => {}); // let the field saves settle
   });
 
-  it('shows the built kit, saves an edited field on blur and picks a thumbnail', () => {
+  it('shows the built kit, saves an edited field on blur and picks a thumbnail', async () => {
     const k = hook();
     render(<PublishKitPanel project={{ id: 'mv-1', renderHistoryId: 'rh-1', publishKit: built }} publishKit={k} />);
     expandAll();
@@ -104,6 +135,7 @@ describe('PublishKitPanel (#9281)', () => {
     expect(k.saveCopy).toHaveBeenCalledWith({ youtube: { tags: ['music', 'ai video', 'claude'] } });
     fireEvent.click(screen.getByRole('button', { name: 'Use thumbnail t2.jpg' }));
     expect(k.selectThumbnail).toHaveBeenCalledWith('t2.jpg');
+    await act(async () => {}); // let the field saves settle
   });
 
   it('makes the cover art from a project image with the title, and asks Codex for a new one', () => {

@@ -1,20 +1,24 @@
 /** Bounded production stages → PostgreSQL → managed files; synthetic renders, no provider. */
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { access, readFile } from 'fs/promises';
 import { join } from 'path';
 import { createHash } from 'crypto';
 import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
 vi.mock('../../lib/paths.js', async importOriginal =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('code-animation-stages-') }));
-// Inject faults only into render-source writes/removal; revision storage stays real.
-const stagingFaults = vi.hoisted(() => ({ write: false, cleanup: false }));
+// Inject faults into the selected owned staging tree; all other storage stays real.
+const stagingFaults = vi.hoisted(() => ({ write: false, cleanup: false, afterReserve: null, target: '/render/', directory: null, publication: false }));
 vi.mock('fs/promises', async importOriginal => {
   const real = await importOriginal();
   return {
     ...real,
     open: async (path, flags, ...rest) => {
       const handle = await real.open(path, flags, ...rest);
-      if (!stagingFaults.write || !String(path).replaceAll('\\', '/').includes('/render/')) return handle;
+      const normalized = String(path).replaceAll('\\', '/');
+      if (stagingFaults.target === '/revisions/' && normalized.includes('/revisions/')) {
+        stagingFaults.directory = normalized.match(/^(.*\/revisions\/[^/]+)/)[1];
+      }
+      if (!stagingFaults.write || !normalized.includes(stagingFaults.target)) return handle;
       stagingFaults.write = false;
       return {
         writeFile: async bytes => {
@@ -25,7 +29,7 @@ vi.mock('fs/promises', async importOriginal => {
       };
     },
     rm: async (path, ...rest) => {
-      if (stagingFaults.cleanup && String(path).replaceAll('\\', '/').includes('/render/')) {
+      if (stagingFaults.cleanup && String(path).replaceAll('\\', '/').includes(stagingFaults.target)) {
         stagingFaults.cleanup = false;
         throw Object.assign(new Error('Synthetic cleanup refusal'), { code: 'EACCES' });
       }
@@ -33,33 +37,53 @@ vi.mock('fs/promises', async importOriginal => {
     },
   };
 });
+vi.mock('./projectStore.js', async importOriginal => {
+  const real = await importOriginal();
+  return {
+    ...real,
+    commitRepairRevision: async (...args) => {
+      if (stagingFaults.publication) {
+        throw Object.assign(new Error('Synthetic repair publication failure'), { code: 'PUBLICATION_FAILED' });
+      }
+      return real.commitRepairRevision(...args);
+    },
+    reserveRunBytes: async (...args) => {
+      const reserved = await real.reserveRunBytes(...args);
+      stagingFaults.afterReserve?.();
+      return reserved;
+    },
+  };
+});
 vi.mock('../socket.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
-// Exercise the default review adapter with only its external provider boundary doubled.
-vi.mock('./preflight.js', async importOriginal => ({
-  ...await importOriginal(),
-  preflightProductionProject: vi.fn(async () => ({
-    resolved: { providerId: 'example-provider', model: 'example-model' }, problems: [],
-    capabilities: { imageInputAccepted: true }, allowFallback: false,
-  })),
+// Default adapters and real preflight, with only external provider boundaries doubled.
+vi.mock('../providers.js', () => {
+  const provider = { id: 'example-provider', type: 'api', enabled: true, models: ['example-model'], defaultModel: 'example-model' };
+  return { getProviderById: vi.fn(async () => provider), getSelectableProviders: vi.fn(async () => ({ providers: [provider] })) };
+});
+vi.mock('../promptRunner.js', () => ({
+  runPromptThroughProvider: vi.fn(), resolveEffectiveModel: (provider, model) => model || provider.defaultModel,
 }));
-vi.mock('../providers.js', () => ({ getProviderById: vi.fn(async () => ({ id: 'example-provider' })) }));
-vi.mock('../promptRunner.js', () => ({ runPromptThroughProvider: vi.fn() }));
 vi.mock('../runner.js', () => ({ stopRun: vi.fn() }));
 import { runPromptThroughProvider } from '../promptRunner.js';
+import { stopRun } from '../runner.js';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import { createCodeAnimationPackage } from '../../lib/codeAnimationPackage.js';
 import { PATHS } from '../../lib/paths.js';
 import {
-  createProductionProject, exportProductionPackage, getProductionHistory, getProductionProject, importProductionPackage,
+  acceptProductionSource, createProductionProject, exportProductionPackage, getProductionHistory, getProductionProject, importProductionPackage,
   patchProductionProject,
 } from './projects.js';
-import { cancelProductionStageRun, startProductionStageRun } from './stages.js';
+import { activeStageRunIds, cancelProductionStageRun, startProductionStageRun } from './stages.js';
 
 const health = await checkHealth().catch(error => ({ connected: false, error: error.message }));
 const ready = requireDbOrSkip('codeAnimation/stages.db.test', health.connected, health.error);
 if (ready) await ensureSchema();
 const ids = [];
+afterEach(() => {
+  vi.useRealTimers(); stopRun.mockReset(); runPromptThroughProvider.mockReset();
+  Object.assign(stagingFaults, { write: false, cleanup: false, afterReserve: null, target: '/render/', directory: null, publication: false });
+});
 afterAll(async () => {
   if (ready && ids.length) await query('DELETE FROM code_animation_projects WHERE id = ANY($1::text[])', [ids]);
   await close(); cleanupTempDataRoots('code-animation-stages-');
@@ -74,7 +98,7 @@ const manifest = (audio = { kind: 'silence' }) => ({
 });
 const pkg = (source, audio) => createCodeAnimationPackage(manifest(audio), [{ path: 'src/index.html', content: source }]);
 const project = async (budgets = {}, audio) => {
-  const created = await createProductionProject({ manifest: manifest(audio), budgets });
+  const created = await createProductionProject({ manifest: manifest(audio), budgets, localSettings: { providerId: 'example-provider', model: 'example-model' } });
   ids.push(created.id);
   const { revision } = await importProductionPackage(created.id, pkg('<html><canvas></canvas>FROZEN</html>', audio));
   return { id: created.id, revision };
@@ -100,6 +124,115 @@ const render = vi.fn(async () => ({ jobId: 'media-job', id: 'video-1', filename:
 const exists = path => access(path).then(() => true, () => false);
 
 describe.skipIf(!ready)('Production stage runs', () => {
+  // These pin the real default repair adapter at its provider boundary: a
+  // canceled/deadline response must not create a candidate or reserve bytes.
+  it.each(['cancel', 'late-ack', 'deadline', 'failed-stop'])('stops default repair without publishing a late result (%s)', async mode => {
+    const { id, revision } = await project({ timeSeconds: 60 });
+    await acceptProductionSource(id, revision.id);
+    const started = Promise.withResolvers();
+    const response = Promise.withResolvers();
+    const stopped = Promise.withResolvers();
+    let providerArgs;
+    runPromptThroughProvider.mockClear();
+    runPromptThroughProvider.mockImplementation(async args => {
+      providerArgs = args;
+      if (mode !== 'late-ack') {
+        args.onRunCreated('owned-repair');
+        await args.beforeExecute();
+      }
+      started.resolve();
+      const result = await response.promise;
+      args.onRunSettled('owned-repair');
+      return result;
+    });
+    stopRun.mockImplementation(async runId => {
+      stopped.resolve(runId);
+      if (mode === 'failed-stop') throw new Error('Synthetic stop failure');
+      response.resolve({ text: '```html\n<html>MOVING</html>\n```' });
+    });
+    if (mode === 'deadline') vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const first = await startProductionStageRun(id, {}, { sample, render });
+    await started.promise;
+    const before = (await getProductionHistory(id, { limit: 1, offset: 0 })).items[0];
+    expect(providerArgs).toMatchObject({
+      source: 'code-animation-repair', timeout: expect.any(Number), absoluteTimeoutMs: providerArgs.timeout,
+      onRunCreated: expect.any(Function), onRunSettled: expect.any(Function), beforeExecute: expect.any(Function),
+    });
+    expect(providerArgs.timeout).toBeGreaterThan(0);
+    expect(providerArgs.timeout).toBeLessThanOrEqual(60000);
+    if (mode === 'deadline') await vi.advanceTimersByTimeAsync(60000);
+    else cancelProductionStageRun(id, first.run.id);
+    if (mode === 'late-ack') {
+      expect(stopRun).not.toHaveBeenCalled();
+      providerArgs.onRunCreated('owned-repair');
+      expect(() => providerArgs.beforeExecute()).toThrow();
+    }
+    expect(await stopped.promise).toBe('owned-repair');
+    if (mode === 'failed-stop') response.resolve({ text: '```html\n<html>MOVING</html>\n```' });
+    expect(await first.done).toBe(mode === 'deadline' ? 'exhausted' : 'canceled');
+    vi.useRealTimers();
+    expect(activeStageRunIds()).not.toContain(first.run.id);
+    expect(stopRun).toHaveBeenCalledTimes(1);
+    const saved = (await getProductionHistory(id, { limit: 1, offset: 0 })).items[0];
+    expect(saved.data).toMatchObject({
+      resumable: true, stopReason: mode === 'deadline' ? 'time' : 'canceled',
+      repairs: [], output: null, currentRevisionId: revision.id, reservedBytes: before.data.reservedBytes,
+      spent: { tokens: 0, iterations: 0, diskBytes: before.data.spent.diskBytes },
+    });
+    expect(saved.data.stages.find(stage => stage.key === 'repair').status).toBe(mode === 'deadline' ? 'exhausted' : 'canceled');
+    expect(await getProductionProject(id)).toMatchObject({ candidateRevisionId: null, acceptedRevisionId: revision.id });
+    expect((await exportProductionPackage(id, revision.id)).files[0].content).toContain('FROZEN');
+    // A stopped repair releases the project's live slot for another run.
+    const retry = await startProductionStageRun(id, {}, { sample, repair: unfreeze, render });
+    expect(await retry.done).toBe('completed');
+  });
+
+  it.each([false, true])('publishes a normal default repair with route substitution allowed=%s', async allowFallback => {
+    const { id, revision } = await project();
+    if (allowFallback) await patchProductionProject(id, { localSettings: { providerId: 'example-provider', model: 'example-model', substitution: 'allowed' } });
+    runPromptThroughProvider.mockImplementation(async args => {
+      args.onRunCreated('owned-repair');
+      await args.beforeExecute();
+      args.onRunSettled('owned-repair');
+      return { text: '```html\n<html>MOVING</html>\n```', provider: { id: allowFallback ? 'fallback-provider' : 'example-provider' }, model: 'example-model', usedFallback: allowFallback };
+    });
+    const first = await startProductionStageRun(id, {}, { sample, render });
+    expect(await first.done).toBe('completed');
+    expect(stopRun).not.toHaveBeenCalled();
+    expect((await getProductionProject(id)).candidateRevisionId).not.toBe(revision.id);
+    const saved = (await getProductionHistory(id, { limit: 1, offset: 0 })).items[0];
+    expect(saved.data.effective).toMatchObject({ substituted: allowFallback, effective: { providerId: allowFallback ? 'fallback-provider' : 'example-provider' } });
+    expect(saved.data.stages.find(stage => stage.key === 'repair').status).toBe('completed');
+  });
+
+  it('releases a repair reservation when cancellation occurs before any source tree is staged', async () => {
+    const { id, revision } = await project();
+    const started = Promise.withResolvers();
+    const response = Promise.withResolvers();
+    runPromptThroughProvider.mockImplementation(async args => {
+      args.onRunCreated('owned-repair');
+      await args.beforeExecute();
+      started.resolve();
+      const result = await response.promise;
+      args.onRunSettled('owned-repair');
+      return result;
+    });
+    const first = await startProductionStageRun(id, {}, { sample, render });
+    await started.promise;
+    const before = (await getProductionHistory(id, { limit: 1, offset: 0 })).items[0];
+    stagingFaults.afterReserve = () => {
+      stagingFaults.afterReserve = null;
+      cancelProductionStageRun(id, first.run.id);
+    };
+    response.resolve({ text: '```html\n<html>MOVING</html>\n```' });
+    expect(await first.done).toBe('canceled');
+    const saved = (await getProductionHistory(id, { limit: 1, offset: 0 })).items[0];
+    expect(saved.data).toMatchObject({ reservedBytes: before.data.reservedBytes, repairs: [], currentRevisionId: revision.id });
+    expect(saved.data.spent.diskBytes).toBe(before.data.spent.diskBytes);
+    expect((await getProductionProject(id)).candidateRevisionId).toBe(revision.id);
+    expect(stopRun).not.toHaveBeenCalled(); // Provider already settled before reservation.
+  });
+
   it.each([true, false])('accounts for failed render-source staging when cleanup refusal is %s', async refuseCleanup => {
     const { id, revision } = await project();
     await patchProductionProject(id, { budgets: { diskBytes: revision.totalBytes * 2 } });
@@ -130,11 +263,60 @@ describe.skipIf(!ready)('Production stage runs', () => {
     expect((await getProductionProject(id)).candidateRevisionId).toBe(revision.id);
     // Budget admission distinguishes retained bytes from confirmed cleanup.
     const retrySample = vi.fn().mockRejectedValue(Object.assign(new Error('Synthetic sample failure'), { code: 'SAMPLE_FAILED' }));
-    const retry = await startProductionStageRun(id, {}, { sample: retrySample });
+    const retryRepair = vi.fn().mockRejectedValue(new Error('Synthetic repair failure'));
+    const retry = await startProductionStageRun(id, {}, { sample: retrySample, repair: retryRepair });
     expect(await retry.done).toBe(refuseCleanup ? 'exhausted' : 'failed');
     expect(retrySample).toHaveBeenCalledTimes(refuseCleanup ? 0 : 1);
   });
 
+
+  // Pins the repair caller's reservation compensation, including its later
+  // admission effect; successful staging must stay charged if publication fails.
+  it.each(['removed', 'retained', 'publication'])('accounts for failed repaired-source staging (%s)', async outcome => {
+    const { id, revision } = await project();
+    await acceptProductionSource(id, revision.id);
+    let before;
+    const repair = async args => {
+      before = (await getProductionHistory(id, { limit: 1, offset: 0 })).items[0];
+      const out = await unfreeze(args);
+      // Include the import, repair, and retry source charges. Retaining the
+      // repair exceeds the retry budget by one byte; removing it admits retry.
+      await patchProductionProject(id, { budgets: { diskBytes: before.data.reservedBytes + revision.totalBytes * 3 - 1 } });
+      stagingFaults.target = '/revisions/';
+      stagingFaults.write = outcome !== 'publication';
+      stagingFaults.cleanup = outcome === 'retained';
+      stagingFaults.publication = outcome === 'publication';
+      return out;
+    };
+    const first = await startProductionStageRun(id, {}, { sample, repair, render });
+    expect(await first.done).toBe('failed');
+    const directory = stagingFaults.directory;
+    Object.assign(stagingFaults, { write: false, cleanup: false, publication: false, target: '/render/' });
+    const saved = (await getProductionHistory(id, { limit: 1, offset: 0 })).items[0];
+    const charge = outcome === 'removed' ? 0 : revision.totalBytes;
+    expect(saved.data).toMatchObject({
+      reservedBytes: before.data.reservedBytes + charge,
+      spent: { diskBytes: before.data.spent.diskBytes + charge },
+      error: outcome === 'publication'
+        ? { code: 'PUBLICATION_FAILED', message: 'Synthetic repair publication failure' }
+        : { code: 'ENOSPC', message: 'Synthetic staging write failure' },
+      repairs: [], currentRevisionId: revision.id, output: null,
+    });
+    expect(saved.data.stages.find(stage => stage.key === 'repair').status).toBe('failed');
+    expect(await exists(directory)).toBe(outcome !== 'removed');
+    if (outcome !== 'removed') expect(await readFile(join(directory, 'src/index.html'), 'utf8')).toContain('MOVING');
+    expect(await getProductionProject(id)).toMatchObject({ candidateRevisionId: null, acceptedRevisionId: revision.id });
+    expect((await exportProductionPackage(id, revision.id)).files[0].content).toContain('FROZEN');
+    for (const artifact of before.data.stages.find(stage => stage.key === 'style-frame').artifacts) {
+      expect(await exists(join(PATHS.data, artifact.relativePath))).toBe(true);
+    }
+    // A new run can stage its original source only after confirmed removal.
+    const retrySample = vi.fn().mockRejectedValue(Object.assign(new Error('Synthetic sample failure'), { code: 'SAMPLE_FAILED' }));
+    const retryRepair = vi.fn().mockRejectedValue(new Error('Synthetic repair failure'));
+    const retry = await startProductionStageRun(id, {}, { sample: retrySample, repair: retryRepair });
+    expect(await retry.done).toBe(outcome === 'removed' ? 'failed' : 'exhausted');
+    expect(retrySample).toHaveBeenCalledTimes(outcome === 'removed' ? 1 : 0);
+  });
 
   it('measures a real render, repairs it into a new immutable revision, and renders final only from passing evidence', async () => {
     const { id, revision } = await project();

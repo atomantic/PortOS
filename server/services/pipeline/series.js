@@ -37,7 +37,7 @@ import {
   autoSubscribeRecordToAllPeers, unsubscribeAllForRecord,
 } from '../sharing/recordEvents.js';
 import { renameCollectionForSeries, unlinkCollectionsForSeries } from '../mediaCollections.js';
-import { isStr, trimTo } from '../../lib/textUtils.js';
+import { isNonBlankStr, isStr, trimTo } from '../../lib/textUtils.js';
 import { codedError } from '../../lib/codedError.js';
 
 // Storage backend dispatcher (#1015). Series records moved from per-record
@@ -893,7 +893,7 @@ async function reconcileDraftParentUniverse(universeId) {
     });
 }
 
-export async function updateSeries(id, patchOrMutator = {}) {
+export async function updateSeries(id, patchOrMutator = {}, { updatedAt: incomingUpdatedAt = null } = {}) {
   // `patchOrMutator` overloads (mirrors updateUniverse in
   // server/services/universeBuilder/crud.js):
   //   - Plain object: patch is applied directly inside the queue (legacy).
@@ -903,6 +903,11 @@ export async function updateSeries(id, patchOrMutator = {}) {
   //     pass) can't clobber a concurrent edit to the same series (issue
   //     #8453). Returning `null`/`undefined` short-circuits the write and
   //     resolves with the unchanged record.
+  //
+  // `options.updatedAt` stamps that clock instead of receipt time. Only a
+  // remote LWW apply (the share-bucket importer) passes it: the winning source
+  // record's clock must survive, or a receipt-time stamp would out-rank the
+  // NEXT source revision and silently drop it (#10761).
   const isMutator = typeof patchOrMutator === 'function';
   // Pre-B.4 canon (characters/settings/objects) lives on the universe, not the
   // series — but a stale browser tab can still POST a legacy series shape and
@@ -1033,7 +1038,7 @@ export async function updateSeries(id, patchOrMutator = {}) {
       ...('severityWeights' in patch ? { severityWeights: patch.severityWeights } : {}),
       ...('blockingSeverities' in patch ? { blockingSeverities: patch.blockingSeverities } : {}),
       llm: mergedLlm,
-      updatedAt: new Date().toISOString(),
+      updatedAt: isNonBlankStr(incomingUpdatedAt) ? incomingUpdatedAt : new Date().toISOString(),
     });
     if (!next) throw codedError('Invalid series payload', ERR_VALIDATION);
     await store().saveOneNow(next.id, next);

@@ -13,7 +13,7 @@ vi.mock('./mediaJobQueue/index.js', async () => ({
 }));
 vi.mock('./settings.js', () => ({ getSettings }));
 vi.mock('./decks.js', () => ({ getDeck, markCardsRenderQueued }));
-vi.mock('./imageGen/index.js', () => ({ resolveImageCleaners: () => ({ cleanC2PA: false, denoise: false }) }));
+vi.mock('../lib/imageCleanDefaults.js', () => ({ resolveImageCleaners: () => ({ cleanC2PA: false, denoise: false }) }));
 vi.mock('./imageGen/prepareParams.js', () => ({
   resolveLocalImageModel,
 }));

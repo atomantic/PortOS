@@ -33,7 +33,7 @@ import {
 // series.js does NOT import universeBuilder (one-directional), so this static
 // import is cycle-safe — unlike canonUsage.js, which back-imports this module.
 import { listSeries } from '../pipeline/series.js';
-import { isStr, trimTo } from '../../lib/textUtils.js';
+import { isNonBlankStr, isStr, trimTo } from '../../lib/textUtils.js';
 import { codedError } from '../../lib/codedError.js';
 
 // Once-per-process flag for the canon-backfill log — readState() runs in both
@@ -438,9 +438,12 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
   // provably carries no canon key (see addStyleReference / removeStyleReference); a
   // literal-object PATCH doesn't need it, its own `'characters' in patch` checks are
   // already precise.
+  // `options.updatedAt` stamps that record clock instead of receipt time — only
+  // the share-bucket importer's remote LWW apply passes it, so the winning
+  // source revision's clock survives and the next one can still win (#10761).
   const {
     silent = false, canonProjectionGuard = null, replaceCategories = false,
-    touchesCanon = true,
+    touchesCanon = true, updatedAt: incomingUpdatedAt = null,
   } = options;
   const s = store();
   const { merged, nameChanged, skipped, removedCharacterIds, prevEphemeral, nextEphemeral } = await s.queueRecordWrite(id, async () => {
@@ -627,7 +630,7 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
       influences: mergedInfluences,
       locked: mergedLocked,
       llm: mergedLlm,
-      updatedAt: new Date().toISOString(),
+      updatedAt: isNonBlankStr(incomingUpdatedAt) ? incomingUpdatedAt : new Date().toISOString(),
     });
     if (!mergedRecord) throw codedError('Invalid universe payload', ERR_VALIDATION);
     // Stamp `updatedAt = now` on every canon entry whose CONTENT changed vs the

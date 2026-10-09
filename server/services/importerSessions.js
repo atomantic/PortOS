@@ -32,7 +32,9 @@ const STORE_VERSION = 1;
 export const IMPORT_SESSION_MAX = 500;
 
 export const SESSION_STATUS = Object.freeze({
-  // Canon + arc + seasons landed; the issue set did not (it rolled back).
+  // Canon + arc + seasons landed; the issue set is not finished. With a `plan`,
+  // the issues it names are this import's and a retry resumes them (#10762);
+  // without one (older installs, or a plan never written) nothing is owned yet.
   ARC_PERSISTED: 'arc-persisted',
   // Every issue was created.
   COMMITTED: 'committed',
@@ -58,6 +60,32 @@ export function deriveImportId({ seriesId, source }) {
 
 const strArray = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x) : []);
 
+/**
+ * The issue-creation plan (#10762), written BEFORE the first issue is created:
+ * one stable issue id + resolved arc position + season per proposal, bound to
+ * the accepted issue payload by `payloadHash`. Item `i` belongs to proposal `i`.
+ * Any malformed item invalidates the whole plan rather than shifting the
+ * remaining items onto the wrong proposals.
+ */
+function sanitizePlan(raw) {
+  if (!raw || typeof raw !== 'object' || typeof raw.payloadHash !== 'string' || !raw.payloadHash) return null;
+  if (!Array.isArray(raw.items) || raw.items.length === 0) return null;
+  const items = [];
+  for (const item of raw.items) {
+    if (!item || typeof item.issueId !== 'string' || !item.issueId) return null;
+    items.push({
+      issueId: item.issueId,
+      arcPosition: Number.isInteger(item.arcPosition) ? item.arcPosition : null,
+      seasonId: typeof item.seasonId === 'string' && item.seasonId ? item.seasonId : null,
+    });
+  }
+  return {
+    payloadHash: raw.payloadHash,
+    items,
+    remappedIssues: Array.isArray(raw.remappedIssues) ? raw.remappedIssues : [],
+  };
+}
+
 function sanitizeSession(id, raw) {
   if (!raw || typeof raw !== 'object' || !STATUSES.has(raw.status)) return null;
   if (typeof raw.seriesId !== 'string' || !raw.seriesId) return null;
@@ -68,6 +96,8 @@ function sanitizeSession(id, raw) {
     status: raw.status,
     createdIssueIds: strArray(raw.createdIssueIds),
     remappedIssues: Array.isArray(raw.remappedIssues) ? raw.remappedIssues : [],
+    // Only an unfinished session carries a plan; `committed` drops it.
+    plan: raw.status === SESSION_STATUS.ARC_PERSISTED ? sanitizePlan(raw.plan) : null,
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date(0).toISOString(),
   };
 }
@@ -94,7 +124,8 @@ export async function getImportSession(importId) {
 
 /**
  * Upsert a session's progress. `patch` carries `status` and, for a committed
- * session, the ids it created. Returns the stored session.
+ * session, the ids it created; an `arc-persisted` patch may carry the issue
+ * `plan` (pass `plan: null` to drop it). Returns the stored session.
  */
 export async function recordImportProgress(importId, patch) {
   if (!IMPORT_ID_RE.test(importId || '')) throw new Error(`Invalid import id: ${importId}`);

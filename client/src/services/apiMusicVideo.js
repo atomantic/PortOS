@@ -122,6 +122,11 @@ export const splitMusicVideoScene = (id, sceneId, backend, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/split`, {
     method: 'POST', body: JSON.stringify(backend ? { backend } : {}), ...options,
   });
+// Join a scene with the next one, the inverse of split → { project, scene }.
+export const mergeMusicVideoNextScene = (id, sceneId, backend, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/merge-next`, {
+    method: 'POST', body: JSON.stringify(backend ? { backend } : {}), ...options,
+  });
 // Optional vocal stem (#8977): a full-length vocal bounce on the master's
 // timebase that performance shots are conditioned on. Both → the project.
 export const uploadMusicVideoVocalStem = (id, file, options = {}) => {
@@ -519,6 +524,7 @@ export const applyMusicVideoAudioTiming = (id, data, options = {}) => request(`/
 
 // Human-reviewed production planning and proof. These never accept approval state in a project PATCH.
 export const getMusicVideoProductionReview = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review`, options);
+export const checkMusicVideoOverlayText = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/text-check`, { method: 'POST', ...options });
 export const reverifyMusicVideoAlignment = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/alignment`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const saveMusicVideoProductionDraft = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review`, { method: 'PUT', body: JSON.stringify(body), ...options });
 export const prepareMusicVideoProductionReview = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/prepare`, { method: 'POST', body: JSON.stringify(body), ...options });
@@ -541,6 +547,11 @@ export const actOnMusicVideoSongRevision = (id, action, data, options = {}) => {
   if (action === 'select') return request(`/music-video/${encodeURIComponent(id)}/song-revision/select`, config);
   return Promise.reject(new Error('Unknown song revision action'));
 };
+
+// Revise the song from a library track (an imported Suno link): forks a new version on it and starts its re-time job.
+export const reviseMusicVideoSongFromTrack = (id, trackId, options = {}) => request(`/music-video/${encodeURIComponent(id)}/song-revision/track`, { method: 'POST', body: JSON.stringify({ trackId }), ...options });
+// Act on the shots a song revision flagged: `replan` (LLM), `remove` (cut shots) or `dismiss`.
+export const actOnMusicVideoSongRevisionScenes = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/song-revision/scenes`, { method: 'POST', body: JSON.stringify(body), ...options });
 
 export const importMusicVideoDocumentShots = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/document-shots`, { method: 'POST', body: JSON.stringify(body), ...options });
 

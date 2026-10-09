@@ -29,6 +29,7 @@ import {
   DEFAULT_SPEED_PROFILE_ID, normalizeSpeedProfileForModel, speedProfileIdFromRecord,
   isFullDecodeId, resolveDraftDecodeForModel, draftDecodeFromRecord,
 } from '../../lib/videoGenParams';
+import { isDefaultVideoStreamingMode, videoStreamingModeFromRecord } from '../../lib/videoStreamingMode';
 import { isDeliveryVideoModel } from '../../lib/videoFinish';
 import { loraFamilyOf, videoLoraFamily } from '../../lib/runnerFamilies';
 import LoraPicker from '../imageGen/LoraPicker';
@@ -818,6 +819,9 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
   // for the same reason the schedule above is: an untouched requeue must
   // re-submit what the original render asked for, not snap silently back to Full.
   const [draftDecode, setDraftDecode] = useState(draftDecodeFromRecord(p.draftDecode));
+  // Keep a recorded explicit memory request editable until the catalog loads;
+  // only the render bridge decides whether its pinned pipeline can honor it.
+  const [streamingMode, setStreamingMode] = useState(videoStreamingModeFromRecord(p.streamingMode));
   const [availableLoras, setAvailableLoras] = useState([]);
   const [selectedLoras, setSelectedLoras] = useState(Array.isArray(p.loras) ? p.loras : []);
 
@@ -846,7 +850,10 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
     if (runtimeSupportsI2vReferenceMode(currentModel.runtime, i2vReferenceMode)) return;
     setI2vReferenceMode(DEFAULT_I2V_REFERENCE_MODE);
   }, [currentModel, i2vReferenceMode]);
-  const isGrok = p.mode === 'grok';
+  // Hosted backends (grok / fal / reactor) own their params: `mode` is the
+  // dispatch discriminator and `modelId` is a provider id the local catalog
+  // doesn't know, so the local model / size / sampler / chaining controls don't apply.
+  const isHosted = isCloudVideoMode(p.mode);
   const loraFamily = videoLoraFamily(currentModel);
   const videoLoras = loraFamily ? availableLoras.filter((lora) => loraFamilyOf(lora) === loraFamily) : [];
   const encoderOptions = textEncoderOptionsForModel(currentModel);
@@ -913,6 +920,10 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
     if (!prompt.trim()) return;
     if (textChanged(prompt, p.prompt)) overrides.prompt = prompt.trim();
     if (textChanged(negativePrompt, p.negativePrompt)) overrides.negativePrompt = negativePrompt.trim();
+    // A hosted retry edits only the prompts: size, duration and model are the
+    // provider's own params, and every field below is a local-render knob that
+    // would rewrite them.
+    if (isHosted) return onSubmit(Object.keys(overrides).length ? overrides : null);
     if (textChanged(modelId, p.modelId)) overrides.modelId = modelId.trim();
     if (numberChanged(width, p.width) && width !== '') overrides.width = Number(width);
     if (numberChanged(height, p.height) && height !== '') overrides.height = Number(height);
@@ -962,6 +973,9 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
     if (textChanged(modelId, p.modelId) || draftDecode !== originalDraftDecode) {
       overrides.draftDecode = isFullDecodeId(draftDecode) ? null : draftDecode;
     }
+    if (streamingMode !== videoStreamingModeFromRecord(p.streamingMode)) {
+      overrides.streamingMode = isDefaultVideoStreamingMode(streamingMode) ? null : streamingMode;
+    }
     if (JSON.stringify(selectedLoras) !== JSON.stringify(p.loras || [])) overrides.loras = selectedLoras;
     onSubmit(Object.keys(overrides).length ? overrides : null);
   };
@@ -977,21 +991,21 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
         </FormField>
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-        {!isGrok && (
+        {!isHosted && (
           <FormField className="col-span-2 sm:col-span-3" label="Model" labelClassName="block text-xs font-medium text-gray-400 mb-1">
             {models.length > 0 ? <ModelSelect models={models} value={modelId} onChange={handleModelChange} /> : (
               <input value={modelId} onChange={(e) => setModelId(e.target.value)} className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white" />
             )}
           </FormField>
         )}
-        <ResolutionField presets={resolutionOptionsForModel(currentModel)} width={width} height={height} onChange={(w, h) => { setWidth(w); setHeight(h); }} {...videoEdgeBoundsForModel(currentModel)} snapOnBlur />
+        {!isHosted && <ResolutionField presets={resolutionOptionsForModel(currentModel)} width={width} height={height} onChange={(w, h) => { setWidth(w); setHeight(h); }} {...videoEdgeBoundsForModel(currentModel)} snapOnBlur />}
       </div>
-      {!isGrok && encoderOptions.length > 1 && (
+      {!isHosted && encoderOptions.length > 1 && (
         <FormField label="Text encoder" labelClassName="block text-xs font-medium text-gray-400 mb-1">
           <ModelSelect models={encoderOptions} value={textEncoderId} onChange={(e) => setTextEncoderId(e.target.value)} getLabel={(option) => option.label} />
         </FormField>
       )}
-      {!isGrok && loraFamily && videoLoras.length > 0 && (
+      {!isHosted && loraFamily && videoLoras.length > 0 && (
         <LoraPicker
           availableLoras={videoLoras}
           selected={selectedLoras}
@@ -1001,7 +1015,7 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
           prompt={prompt}
         />
       )}
-      {!isGrok && (
+      {!isHosted && (
         <AdvancedParamsPanel
           mode={p.mode || 'text'} currentModel={currentModel}
           numFrames={displayedNumFrames} onNumFramesChange={setNumFrames}
@@ -1011,6 +1025,8 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
           fps={displayedFps} onFpsChange={setFps} seed={seed} onSeedChange={setSeed} onRandomSeed={() => setSeed(Math.floor(Math.random() * 2147483647))}
           steps={steps} onStepsChange={setSteps} guidanceScale={guidanceScale} onGuidanceScaleChange={setGuidanceScale}
           speedProfileId={speedProfileId} onSpeedProfileChange={setSpeedProfileId}
+          streamingMode={streamingMode} onStreamingModeChange={setStreamingMode}
+          showStreamingMode={currentModel ? undefined : !isDefaultVideoStreamingMode(p.streamingMode)}
           draftDecode={draftDecode} onDraftDecodeChange={setDraftDecode} draftDecodeLocked={deliveryModel}
           imageStrength={imageStrength} onImageStrengthChange={setImageStrength} tiling={tiling} onTilingChange={setTiling}
           i2vReferenceMode={i2vReferenceMode} onI2vReferenceModeChange={setI2vReferenceMode}

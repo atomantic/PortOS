@@ -45,3 +45,41 @@ In **Compose → Document**, choose **Three.js authored worlds → Generate auth
 PortOS packages installed Three.js, license, local fonts, validated author functions and a dependency hash manifest in the immutable document version. It does not install packages, load CDNs or grant network access. Preview supports acyclic local static ES-module graphs (including inline module entrypoints); remote/bare/dynamic imports are unsupported. The same `portosComposition.seek(t)` drives preview, excerpt and final capture, normally 1080p24. Finish every `await` (image decode; video `seeked` plus a presented frame, as the layered template's `seekVideo` waits for) before clearing, drawing or showing a layer: the render waits for the whole seek, but the live preview paints at each await, so clear-then-await flashes in the preview only. Preview media loads on demand when a media `src` first names it, so a far scrub waits for that file inside `seek`; keep decoded-image caches to a few seconds around the playhead (a 2048×1152 frame decodes to about 9 MB), or iPhone Safari reloads the tab. Imported documents may declare supported motion blur; export honors that contract. A valid contract proves execution, not art quality: inspect authored characters/action and changing frames, then the existing treatment/proof workflow decides readiness.
 
 Code-only autopilot preserves text direction and defaults to this document authoring path, retaining explicitly saved legacy Code choices. It never requests image guides or an image/video provider. Code-rendered prototypes and visual planning remain required by the production review workflow; skipping raster moodboard assets is not approval to skip art direction.
+
+## Toon worlds
+
+Use the shared `toonWorld.js` kit for cel worlds. Import it at the document root
+(`import * as kit from './toonWorld.js'`); PortOS copies missing kit and local
+Three.js vendor files into the immutable document. Both spatial and layered
+manual documents can import it. Generated spatial sections receive
+`ctx.toonWorld`, with no imports or globals in the authored function.
+
+- `toonMaterial(ctx.THREE, { lit, mid, shadow, bands: 3 })` uses explicit palette
+  colors, including tinted shadow-map receiving. Lighting selects discrete bands.
+- `shellLathe(profile, thickness, segments = 64)` takes base-to-rim
+  `[radius, height]` points and closes the inner/outer contour, rim and base.
+  Keep thickness smaller than the local radius of curvature. Never use a
+  single-surface bowl, cup or shell.
+- `solidify(geometry, thickness)` closes the boundary of an orientable triangle
+  sheet; vertex normals define its front. It preserves the source geometry.
+- `layoutRow({ count, footprint, gap, curve })` and `layoutGrid({...,
+  columns})` return centered `{x,y,z}` positions. Footprint is the full,
+  axis-aligned width/depth (a number or `{x,z}`), including rim thickness,
+  rotation and animation excursions. Curve is `(x, row) => z`; grid rows
+  expand around its excursions. Call `warnOverlaps(THREE, placedMeshes)` at
+  author time to inspect actual transformed bounding boxes.
+- Set `ctx.lens.ink = true` or `{ color, width, depthThreshold,
+  normalThreshold }` in spatial sections. Width is in render pixels; depth
+  threshold is relative view depth; normal threshold is one minus absolute
+  normal alignment. Ink uses the nearest visible depth surface, after
+  DOF/bloom and before grade/grain; the optical passes can be on or off.
+  Never use inverted-hull outlines on thin or concave meshes.
+- For a manual post stack, `createInkPass(THREE, renderer, options)` exposes
+  `render(depthTexturedInputTarget, camera, outputTarget)` in linear color
+  before the caller's grade/grain. Keep input and output distinct. Call
+  `dispose()` when done. The spatial host fuses ink into its existing
+  composite pass to avoid a second geometry render.
+
+Render a seven-dish parabolic row at dusk from inside, outside and rim-level
+views. Verify visible rim thickness, clear footprints, hidden-edge occlusion,
+and ink with DOF/bloom/grade enabled and disabled before accepting a candidate.

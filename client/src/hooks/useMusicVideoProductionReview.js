@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { reverifyMusicVideoAlignment, importMusicVideoDocumentShots, getMusicVideoProductionReview, saveMusicVideoProductionDraft, prepareMusicVideoProductionReview,
+import { checkMusicVideoOverlayText, reverifyMusicVideoAlignment, importMusicVideoDocumentShots, getMusicVideoProductionReview, saveMusicVideoProductionDraft, prepareMusicVideoProductionReview,
   approveMusicVideoProductionReview, renderMusicVideoProductionProof, musicVideoExcerptRenderEventsUrl,
   cancelMusicVideoExcerptRender, importMusicVideoProductionPlanning, bindMusicVideoProductionShot, addMusicVideoProductionFeedback, resolveMusicVideoProductionFeedback, reviseMusicVideoProductionFromFeedback, revertMusicVideoProductionInput } from '../services/apiMusicVideo.js';
 import useSseJobSlot from './useSseJobSlot.js';
@@ -68,6 +68,8 @@ export default function useMusicVideoProductionReview({ project, replaceProject 
     importDocumentShots: body => call(() => importMusicVideoDocumentShots(project.id, body, { silent: true })),
     importPlanning: source => call(() => importMusicVideoProductionPlanning(project.id, source, { silent: true })),
     bindShot: shotId => call(() => bindMusicVideoProductionShot(project.id, shotId, { silent: true })),
+    // Starts the overlay text check; its result arrives on the project push when it finishes.
+    checkOverlayText: () => call(() => checkMusicVideoOverlayText(project.id, { silent: true })),
     reverifyAlignment: notes => call(() => reverifyMusicVideoAlignment(project.id, { basis: readiness?.alignment.basis, notes }, { silent: true })),
     save: draft => call(() => saveMusicVideoProductionDraft(project.id, draft, { silent: true })),
     prepare: () => call(() => prepareMusicVideoProductionReview(project.id, {}, { silent: true })),

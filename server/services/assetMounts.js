@@ -16,6 +16,7 @@
  */
 import express from 'express';
 import { join } from 'path';
+import { z } from 'zod';
 import { PATHS } from '../lib/fileUtils.js';
 import { ServerError, sendErrorResponse } from '../lib/errorHandler.js';
 import { ASSET_ROUTE_PREFIXES, SERVER_OWNED_PREFIXES } from '../lib/assetRoutePrefixes.js';
@@ -32,7 +33,8 @@ import { hostedAssetFallback } from './peerHostedMedia.js';
 // retry to restart from byte 0 on a multi-MB PNG / video.
 const ASSET_STATIC_OPTS = {
   acceptRanges: true,
-  setHeaders: (res) => {
+  setHeaders: (res, filePath) => {
+    if (res.locals.assetDownload) res.attachment(filePath);
     // A peer can supply asset bytes. Keep even a directly opened HTML/SVG file
     // from executing with the PortOS origin's host-control privileges.
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -40,6 +42,15 @@ const ASSET_STATIC_OPTS = {
   },
 };
 const IMAGE_THUMBNAIL_STATIC_OPTS = { ...ASSET_STATIC_OPTS, maxAge: 24 * 60 * 60 * 1000 };
+
+const assetDownloadQuerySchema = z.object({ download: z.literal('1').optional() }).passthrough();
+const markDownloadRequest = (req, res, next) => {
+  const query = assetDownloadQuerySchema.safeParse(req.query);
+  // Set attachment headers only when a local file or hosted stream succeeds,
+  // so a missing/invalid asset still returns the ordinary error response.
+  res.locals.assetDownload = query.success && query.data.download === '1';
+  next();
+};
 
 // Vite names every chunk, entry, stylesheet and imported asset it emits under
 // `dist/assets/` by content hash (`index-B5J1S4I5.js`), so the bytes behind one
@@ -182,7 +193,7 @@ function toRouteMatcher(pattern) {
 export function mountAssetRoutes(app, ownedPrefixes = SERVER_OWNED_PREFIXES) {
   ASSET_MOUNTS.forEach(({ route, dir, gate }) => {
     const options = route === '/data/image-thumbnails' ? IMAGE_THUMBNAIL_STATIC_OPTS : ASSET_STATIC_OPTS;
-    app.use(route, ...(gate ? [gate] : []), express.static(dir(), options));
+    app.use(route, ...(gate ? [gate] : []), markDownloadRequest, express.static(dir(), options));
     // Media a `host`-mode peer keeps: local file absent → stream from the peer.
     if (HOSTED_FALLBACK_ROUTES.has(route)) app.use(route, hostedAssetFallback(route));
   });

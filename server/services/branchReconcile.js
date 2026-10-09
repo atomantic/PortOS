@@ -117,10 +117,21 @@ export const STALE_CLAIM_IDLE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 // or whose PR was merged from a peer machine, which PortOS users routinely run —
 // sits in exactly that state for the seconds-to-minutes it spends on teardown,
 // and reaping there deletes a directory a live process is still standing in.
-// mtime is the only liveness proxy available (a claim has no durable local agent
-// id), so keep a short idle floor over it. An hour is far longer than any
+// Without a fresh claim registry read, mtime remains the liveness proxy,
+// so keep a short idle floor over it. An hour is far longer than any
 // teardown and still turns a week-long park into a single recheck.
 export const SHIPPED_CLAIM_IDLE_MS = 60 * 60 * 1000; // 1 hour
+
+// The idle floor a verified-SUPERSEDED branch's worktree must clear before the
+// reap may take it from OUTSIDE the managed roots (an agent's `/tmp` checkout —
+// see reconcileWorktreeRoots for why merged cleanup never goes there). The
+// superseded reap has what merged cleanup lacks: a verdict recorded against this
+// exact tip and dirty set, and a backup written before anything is removed. The
+// one thing neither proves is that no process is still standing in the tree, so
+// the same hour SHIPPED_CLAIM_IDLE_MS uses covers that — without it the hold was
+// permanent, and the coordinator was told "PortOS reaps it" about four branches
+// PortOS never would.
+export const SUPERSEDED_UNMANAGED_IDLE_MS = SHIPPED_CLAIM_IDLE_MS;
 
 /**
  * A claim branch without an issue number is never a valid /claim deliverable.
@@ -336,7 +347,7 @@ async function getOpenPrsByHead(repoPath, providedOrigin, { forgeExec = null, fo
  * @param {{ path:string, locked?:boolean, activeAgentIds?:Set<string>, ageMs?:number, staleClaimIdleMs?:number, roots?:Array<{path:string, requireAgentId?:boolean}> }} input
  * @returns {string|null}
  */
-export function worktreeProtectionReason({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, roots = [] }) {
+export function worktreeProtectionReason({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, roots = [], unmanagedIdleMs }) {
   if (!path) return null;
   return worktreeOwnershipReason({
     path,
@@ -347,6 +358,7 @@ export function worktreeProtectionReason({ path, locked, activeAgentIds, ageMs, 
     allowLiveClaim,
     ageMs,
     staleClaimIdleMs,
+    unmanagedIdleMs,
   });
 }
 
@@ -363,7 +375,9 @@ export function worktreeProtectionReason({ path, locked, activeAgentIds, ageMs, 
  * Reconcile once deleted a release worktree a minute after a still-running
  * release run created it (#10270). So such a tree holds, at any age, with its
  * branch; the operator's explicit merged-branch cleanup (`deleteMergedBranches`,
- * `includeUnmanagedTrees`) keeps its wider reach.
+ * `includeUnmanagedTrees`) keeps its wider reach, and the superseded reap —
+ * which carries a recorded verdict and a backup, not just "merged and clean" —
+ * takes one after SUPERSEDED_UNMANAGED_IDLE_MS.
  *
  * Arbitrary names are accepted INSIDE these roots on purpose: claim trees are
  * `claim-*`, not `agent-*`, and still need their stale/shipped retirement.
@@ -388,7 +402,7 @@ function reconcileWorktreeRoots(repoPath) {
  * @param {{ path:string|null, locked?:boolean, activeAgentIds?:Set<string>, ageMs?:number|null, staleClaimIdleMs?:number, allowLiveClaim?:boolean }} input
  * @returns {string|null} ISO timestamp
  */
-export function worktreeProtectionExpiresAt({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, roots = [] }) {
+export function worktreeProtectionExpiresAt({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, roots = [], unmanagedIdleMs }) {
   if (!path) return null;
   return worktreeHoldExpiresAt({
     path,
@@ -397,6 +411,7 @@ export function worktreeProtectionExpiresAt({ path, locked, activeAgentIds, ageM
     roots,
     allowStaleClaim: true,
     allowLiveClaim,
+    unmanagedIdleMs,
     ageMs,
     staleClaimIdleMs,
   });
@@ -1002,7 +1017,7 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
 export function describeIdleReconcilePark(skipped = [], heldLive = []) {
   // Only worktree-* skips are a HOLD; 'not-merged-on-recheck' and 'cleanup-disabled'
   // mean the branch was never eligible, so they must not read as pending work.
-  const heldBackMerged = skipped.filter((s) => s.reason?.startsWith('worktree-'));
+  const heldBackMerged = skipped.filter((s) => !s.detached && s.reason?.startsWith('worktree-'));
   const lifts = heldBackMerged.map((entry) => Date.parse(entry.retryAt)).filter(Number.isFinite);
   const reason = heldLive.length
     ? 'branches-held-by-live-owners'
@@ -1060,7 +1075,12 @@ async function releaseRetiredClaim(repoPath, branch, { origin, forgeExec, forgeA
  * A failed gate skips the branch (with a reason) — never a force-delete of
  * unmerged or dirty work.
  *
- * SHIPPED_CLAIM: a `claim-*` worktree holds for STALE_CLAIM_IDLE_MS on the chance
+ * With a fresh owner-registry read under the claim binding lock, an owner-free
+ * claim can retire immediately. The age windows below are only the fallback
+ * for callers without that authoritative recheck; neither path bypasses dirty
+ * work, managed-root, lock, or active-owner guards.
+ *
+ * SHIPPED_CLAIM fallback: a `claim-*` worktree holds for STALE_CLAIM_IDLE_MS on the chance
  * a claim session is still using it. Waiting out a full week is pointless once
  * the claim has demonstrably SHIPPED, and doing it anyway is what left four
  * finished claims parked while every run reported "cleaned 0" and parked on
@@ -1078,8 +1098,7 @@ async function releaseRetiredClaim(repoPath, branch, { origin, forgeExec, forgeA
  *
  * What it does NOT prove is that the claim PROCESS has exited — so this
  * SHORTENS the idle window to SHIPPED_CLAIM_IDLE_MS rather than removing it,
- * leaving one mechanism (the age window) with two durations instead of a second
- * way past the gate. Everything the window already guarantees still holds: an
+ * for callers without a registry recheck. The fallback remains conservative: an
  * unreadable mtime fails safe to protected, and an explicit lock still wins.
  *
  * @param {string} repoPath
@@ -1161,7 +1180,12 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
   const reaped = [];
   const held = [];
   const skipped = [];
-  const hold = (b, failure) => { held.push(b); skipped.push({ branch: b.branch, ...failure }); };
+  // A held entry names its own hold (and when it lifts, if on a clock) so the
+  // coordinator prompt and the park log can say WHY rather than "something".
+  const hold = (b, failure) => {
+    held.push({ ...b, holdReason: failure.reason, ...(failure.retryAt ? { holdRetryAt: failure.retryAt } : {}) });
+    skipped.push({ branch: b.branch, ...failure });
+  };
 
   for (const b of superseded || []) {
     const verdict = b.verdict || {};
@@ -1182,6 +1206,10 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
       // verdict was recorded against these same paths (checked above) and
       // `prepare` copies them into the backup before anything is removed.
       requireCleanWorktree: false,
+      // A worktree outside the managed roots is reachable here and nowhere else —
+      // the verdict and the backup are the proof the location gate asks for, and
+      // the idle floor covers a process still in the tree. See the constant.
+      unmanagedIdleMs: SUPERSEDED_UNMANAGED_IDLE_MS,
       prepare: async () => {
         const backup = await backupSupersededBranch(repoPath, b, { defaultBranch, ...(cosDir ? { cosDir } : {}) })
           .catch((err) => ({ error: err.message }));
@@ -1221,7 +1249,7 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
  *
  * @param {string} repoPath
  * @param {object} b - a gathered branch entry
- * @param {{ activeAgentIds?: Set<string>, staleClaimIdleMs?: number, allowLiveClaim?: boolean, label: string, requireCleanWorktree?: boolean, prepare?: () => Promise<any> }} opts
+ * @param {{ activeAgentIds?: Set<string>, staleClaimIdleMs?: number, allowLiveClaim?: boolean, label: string, requireCleanWorktree?: boolean, unmanagedIdleMs?: number, prepare?: () => Promise<any> }} opts
  *   `prepare` runs after every gate has passed and before the first irreversible
  *   step, and aborts the retirement by resolving to `{ error }`. That is the only
  *   place work like "write a recoverable backup" belongs: earlier it is paid for
@@ -1234,6 +1262,10 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
  *   tree is the branch's whole deliverable and it accounts for that tree twice
  *   over — the verdict was recorded against exactly these paths, and `prepare`
  *   copies them out before anything is removed. Never set it false without both.
+ *
+ *   `unmanagedIdleMs` (default none) admits a worktree outside the managed roots
+ *   once it has sat idle that long. Same bar: only a caller with proof beyond
+ *   "merged and clean" may name it — see SUPERSEDED_UNMANAGED_IDLE_MS.
  * @returns {Promise<{ ok: true, prepared?: any } | { ok: false, reason: string, retryAt?: string }>}
  */
 async function retireBranch(repoPath, b, opts) {
@@ -1246,15 +1278,23 @@ async function retireBranch(repoPath, b, opts) {
   const readAgents = opts.claimOwners?.readAgents;
   if (!readAgents) return retireBranchNow(repoPath, b, opts);
   return withClaimOwnershipLock(async () => {
+    const agents = await readAgents().catch(() => null);
     const reason = claimCheckoutOwnerReason({
-      branchName: b.branch, holderPath: b.worktreePath, sourceWorkspace: repoPath,
-      agents: await readAgents().catch(() => null),
+      branchName: b.branch, holderPath: b.worktreePath, sourceWorkspace: repoPath, agents,
     });
-    return reason ? { ok: false, reason } : retireBranchNow(repoPath, b, opts);
+    if (reason) return { ok: false, reason };
+    // A fresh registry read under the binding lock supersedes the directory-age
+    // proxy. A claim name alone is not a live owner. Keep all other retirement
+    // gates, and refresh workspace owners too (not only explicit claim bindings).
+    return retireBranchNow(repoPath, b, {
+      ...opts,
+      activeAgentIds: buildActiveOwnerIds(opts.activeAgentIds, agents),
+      allowLiveClaim: true,
+    });
   });
 }
 
-async function retireBranchNow(repoPath, b, { activeAgentIds = new Set(), staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, prepare }) {
+async function retireBranchNow(repoPath, b, { activeAgentIds = new Set(), staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare }) {
   if (b.worktreePath) {
     // Never tear down a worktree outside the managed roots (see
     // reconcileWorktreeRoots), one that's locked, a RECENT human /claim session,
@@ -1269,6 +1309,7 @@ async function retireBranchNow(repoPath, b, { activeAgentIds = new Set(), staleC
       staleClaimIdleMs,
       allowLiveClaim,
       roots: reconcileWorktreeRoots(repoPath),
+      unmanagedIdleMs,
     };
     const protectedReason = worktreeProtectionReason(gate);
     if (protectedReason) {
@@ -1293,6 +1334,108 @@ async function retireBranchNow(repoPath, b, { activeAgentIds = new Set(), staleC
     return { ok: false, reason: `delete-failed: ${result.error || result.results.local}` };
   }
   return { ok: true, prepared };
+}
+
+/**
+ * Gather every worktree whose HEAD is detached — a tree with no branch, which
+ * `gatherBranchState` (keyed by local branch) can never see. Only trees sitting
+ * at a commit already on the default branch are returned: that is the trash this
+ * exists for, and a detached tree at unmerged commits may be someone's work.
+ * The main checkout, bare and prunable entries are never gathered.
+ *
+ * @param {string} repoPath
+ * @param {string} defaultBranch
+ * @returns {Promise<{path:string, head:string|null, locked:boolean, worktreeAgeMs:number|null, dirtyPaths:string[]}[]>}
+ */
+async function gatherDetachedWorktrees(repoPath, defaultBranch) {
+  const worktrees = await listWorktrees(repoPath).catch(() => []);
+  const detached = [];
+  for (const [index, entry] of worktrees.entries()) {
+    // git lists the main checkout first; the path check covers a caller whose list is not ordered.
+    if (index === 0 || entry.branch || entry.bare || entry.prunable || entry.path === repoPath || !entry.head) continue;
+    if (!await isCommitOnBranch(repoPath, entry.head, defaultBranch)) continue;
+    detached.push({
+      path: entry.path,
+      head: entry.head,
+      locked: Boolean(entry.locked),
+      worktreeAgeMs: await worktreeAgeMs(entry.path),
+      dirtyPaths: await worktreeDirtyPaths(entry.path),
+    });
+  }
+  return detached;
+}
+
+const isCommitOnBranch = (repoPath, sha, branch) =>
+  execGit(['merge-base', '--is-ancestor', sha, branch], repoPath, { ignoreExitCode: true })
+    .then((r) => r?.exitCode === 0)
+    .catch(() => false);
+
+const isStillDetachedOnMerged = async (repoPath, treePath, defaultBranch) => {
+  const onBranch = await execGit(['symbolic-ref', '-q', 'HEAD'], treePath, { ignoreExitCode: true })
+    .then((r) => r?.exitCode === 0)
+    .catch(() => true);
+  if (onBranch) return false;
+  const head = await execGit(['rev-parse', 'HEAD'], treePath, { ignoreExitCode: true })
+    .then((r) => (r?.stdout || '').trim())
+    .catch(() => '');
+  return Boolean(head) && isCommitOnBranch(repoPath, head, defaultBranch);
+};
+
+/**
+ * Retire the detached worktrees `gatherDetachedWorktrees` found, with the same
+ * gate order as `retireBranchNow` (protection → still clean → remove), minus the
+ * branch deletion a detached tree does not have.
+ *
+ * A tree outside the managed roots is REPORTED, never removed (#10270): nothing
+ * about it proves its creator is finished, so the coordinator decides. A held
+ * tree inside the roots is `skipped` with its `worktree-*` reason; both are in
+ * `held` so the park log can name them.
+ *
+ * @param {string} repoPath
+ * @param {string} defaultBranch
+ * @param {object[]} detached - `gatherDetachedWorktrees`' entries
+ * @param {{ activeAgentIds?: Set<string>, claimOwners?: { agents: object[]|null } }} [opts]
+ * @returns {Promise<{cleaned:string[], skipped:object[], held:{path:string, head:string|null, reason:string, managed:boolean, retryAt?:string}[]}>}
+ */
+async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { activeAgentIds = new Set(), claimOwners } = {}) {
+  const cleaned = [];
+  const skipped = [];
+  const held = [];
+  const roots = reconcileWorktreeRoots(repoPath);
+  const hold = (tree, reason, retryAt) => {
+    const managed = reason !== 'worktree-unmanaged-location';
+    held.push({ path: tree.path, head: tree.head, reason, managed, ...(retryAt ? { retryAt } : {}) });
+    // `detached` keeps the entry out of describeIdleReconcilePark's merged-branch count.
+    if (managed) skipped.push({ branch: tree.path, path: tree.path, detached: true, reason, ...(retryAt ? { retryAt } : {}) });
+  };
+  for (const tree of detached) {
+    if (claimOwners !== undefined && !Array.isArray(claimOwners?.agents)) {
+      hold(tree, 'claim-ownership-unreadable');
+      continue;
+    }
+    const gate = {
+      path: tree.path, locked: tree.locked, activeAgentIds, ageMs: tree.worktreeAgeMs, roots,
+    };
+    const protectedReason = worktreeProtectionReason(gate);
+    if (protectedReason) {
+      hold(tree, protectedReason, worktreeProtectionExpiresAt(gate));
+      continue;
+    }
+    if (tree.dirtyPaths.length > 0 || await isWorktreeDirty(tree.path)) {
+      hold(tree, 'worktree-dirty');
+      continue;
+    }
+    // Re-verify at action time against what the tree holds NOW: its HEAD may have
+    // been switched to a branch or an unmerged commit since the gather.
+    if (!await isStillDetachedOnMerged(repoPath, tree.path, defaultBranch)) continue;
+    const removal = await forceRemoveWorktreeDir(repoPath, tree.path, { label: '🔀 branch-reconcile: remove detached worktree', log: 'all' });
+    if (!removal.removed) {
+      hold(tree, 'worktree-remove-failed');
+      continue;
+    }
+    cleaned.push(tree.path);
+  }
+  return { cleaned, skipped, held };
 }
 
 /**
@@ -1424,7 +1567,11 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
   const { cleaned: cleanedBranches, skipped } = cleanup
     ? await cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds, claimOwners, origin, forgeExec, forgeAccount })
     : { cleaned: [], skipped: merged.map((m) => ({ branch: m.branch, reason: 'cleanup-disabled' })) };
-  const cleaned = [...new Set([...cleanedWorktrees, ...cleanedBranches])];
+  // Detached worktrees have no branch, so nothing above can see them (#10825).
+  const detachedReap = cleanup
+    ? await reapDetachedWorktrees(repoPath, defaultBranch, await gatherDetachedWorktrees(repoPath, defaultBranch), { activeAgentIds, claimOwners })
+    : { cleaned: [], skipped: [], held: [] };
+  const cleaned = [...new Set([...cleanedWorktrees, ...cleanedBranches, ...detachedReap.cleaned])];
 
   // Runs AFTER cleanupMerged on purpose: that step deletes merged local branches
   // and leaves their `origin/*` counterpart behind, which is precisely the orphan
@@ -1449,7 +1596,9 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
     // the coordinator prompt.
     superseded: supersededReap.held,
     wip,
-    skipped: [...skipped, ...supersededReap.skipped],
+    skipped: [...skipped, ...supersededReap.skipped, ...detachedReap.skipped],
+    // Detached trees at merged commits that were NOT removed, managed or not.
+    detachedWorktrees: detachedReap.held,
     orphanRemotes,
     prStateUnavailable
   };
@@ -1567,12 +1716,10 @@ const supersessionGate = ({ collisionPaths = [], behind } = {}) => {
   ].join(' ');
 };
 
-// Nothing reaches a PR unverified. `/do:pr` runs its own reviewer loop, but the
-// branch has to be sound BEFORE that — a rebase onto a default branch that moved
-// can break code that passed on the old base, and CI failing on an already-open
-// PR costs a whole round trip. Rebase first (so the PR is conflict-free by
-// construction), then run the touched workspaces' suites locally.
-const verifyGate = 'Rebase onto the default branch before opening or updating a PR, so the PR is conflict-free by construction rather than needing a merge fixed up later. Then run the test suites for the workspaces the diff touches (`cd server && npm test`, `cd client && npm test`) plus lint, and read the result — the rebase can break code that passed on the old base. If anything fails, fix it on the branch and re-run; if you cannot get it green, stop and report which suite fails and why. Never push a branch whose tests you have not seen pass.';
+// Verify before publication without rewriting a branch just because the base
+// advanced. Conflicts, enforced policy and concrete integration risk still need
+// recovery followed by fresh validation on the resulting head.
+const verifyGate = 'Fetch the default branch for comparison before opening or updating a PR; inspect semantic overlap and supersession. Rebase only for actual conflicts, an enforced up-to-date branch policy, or evidenced integration risk. Base movement alone does not require a rebase or another CI run; this overrides mandatory base-sync instructions in delegated slashdo workflows. Run the test suites for the workspaces the diff touches (`cd server && npm test`, `cd client && npm test`) plus lint, and read the result. After changing the head, rerun affected validation and required reviews/checks. If anything fails, fix it on the branch and re-run; if you cannot get it green, stop and report which suite fails and why. Never push a branch whose tests you have not seen pass.';
 
 // The terminal state of an auto-mergeable branch is MERGED — not "PR opened",
 // not "PR green and waiting". Every drive-to-merge instruction ends with this
@@ -1590,6 +1737,7 @@ const verifyGate = 'Rebase onto the default branch before opening or updating a 
 // `gh pr merge` line that loses these caveats.
 export const driveToMerge = (pr) => [
   'Opening (or approving) the PR is NOT the end state — a green PR left open is still an unfinished branch that this task will simply re-drive on its next run.',
+  'A conflict-free branch with passing current-head required checks and satisfied configured reviews may merge behind the default branch. Base movement alone does not require rebasing or restarting CI.',
   `Wait for CI in-session by re-polling \`gh pr checks ${pr} --required\` every 30s so the run stays observable while CI is pending. Budget 15 minutes for the run; past that, leave the PR open and report that CI was still pending.`,
   'If a required check FAILS, fix it on the branch, push, and re-poll (max 3 rounds); if it is still red after that, leave the PR open and report exactly which check failed.',
   `Once every required check is green AND the PR is MERGEABLE, merge it — from the repo root, NOT from inside the branch's worktree (\`gh\` can't delete a branch that is checked out elsewhere): \`gh pr merge ${pr} --merge --delete-branch\`. Repos differ in which methods they allow, so on a "not allowed" error retry with \`--squash\`, then \`--rebase\`. Never \`--auto\`: a queued auto-merge outlives this run, so a check that goes red afterward has nobody left to fix it.`,
@@ -1741,7 +1889,7 @@ async function dispatchHintLineForBranch(branchName, repoPath) {
  *   `appId` adds each branch's pre-mutation ownership recheck command.
  * @returns {Promise<string>}
  */
-export async function formatInFlightForPrompt(inFlight, { defaultBranch, actions, branchesPerAgent, repoPath, appId } = {}) {
+export async function formatInFlightForPrompt(inFlight, { defaultBranch, actions, branchesPerAgent, repoPath, appId, detachedWorktrees = [] } = {}) {
   // One gh round-trip per issue-derived branch — resolved in parallel (not
   // inline in the loop below) so N branches cost one round-trip's latency,
   // not N of them in series.
@@ -1790,5 +1938,15 @@ export async function formatInFlightForPrompt(inFlight, { defaultBranch, actions
     })}`);
     lines.push('');
   });
+  // Detached trees outside the managed roots are never removed by the deterministic
+  // pass; the coordinator confirms nothing is using one, then removes it.
+  const unmanaged = detachedWorktrees.filter((d) => !d.managed);
+  if (unmanaged.length) {
+    lines.push(`Detached worktrees at commits already on \`${defaultBranch}\`, outside PortOS's managed roots (${unmanaged.length}):`, '');
+    for (const d of unmanaged) {
+      lines.push(`### Detached worktree \`${d.path}\``);
+      lines.push(`- Do: confirm nothing is using \`${d.path}\` (no running process, no uncommitted work), then run \`git worktree remove ${d.path}\` yourself.`, '');
+    }
+  }
   return lines.join('\n');
 }

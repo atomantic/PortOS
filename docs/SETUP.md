@@ -22,7 +22,7 @@ Docker and native PostgreSQL.
   endpoint and, if it is not ready, invokes the native bootstrap in
   `scripts/db.sh setup-native` (Homebrew provisioning).
 
-An exported `PGMODE` overrides `.env`; unset a conflicting shell value before
+A nonempty exported `PGMODE` overrides `.env`; an empty one counts as unset. Setup and PM2 (`ecosystem.config.cjs`) share this precedence; unset a conflicting shell value before
 setup. If Docker is selected but unavailable, setup fails even if native
 PostgreSQL is healthy. It leaves the selection unchanged so a missing Docker
 daemon cannot silently redirect an existing install to another database.

@@ -43,7 +43,7 @@ export async function renderDeckCards(deckId, { cardIds, onlyMissing = false, mo
     { enqueueJob, assertMediaQueueRoom, partialBatchAdmissionError }, { getSettings }, { resolveRenderTargetConfig }, { resolveLocalImageModel }, { resolveImageCleaners },
   ] = await Promise.all([
     import('./mediaJobQueue/index.js'), import('./settings.js'), import('./imageGen/cloudProviderConfig.js'),
-    import('./imageGen/prepareParams.js'), import('./imageGen/index.js'),
+    import('./imageGen/prepareParams.js'), import('../lib/imageCleanDefaults.js'),
   ]);
   const deck = await getDeck(deckId);
   const targets = selectCardsToRender(deck.cards, { cardIds, onlyMissing });

@@ -66,17 +66,31 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => {
 // a predictable place we can read back (mirrors codex.test.js).
 const TEST_ROOT = join(tmpdir(), `portos-grok-test-${process.pid}-${Date.now()}`);
 const FAKE_IMAGES_DIR = join(TEST_ROOT, 'data-images');
+const FAKE_DATA_DIR = join(TEST_ROOT, 'data');
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
   actual.PATHS.images = FAKE_IMAGES_DIR;
   return {
     ...actual,
     ensureDir: vi.fn(async (dir) => mkdir(dir, { recursive: true })),
+    rmGuarded: vi.fn(actual.rmGuarded),
   };
 });
+// A test-rooted maintenance journal, so cleanup-failure ownership is observable.
+const fixture = vi.hoisted(() => ({ admission: null }));
+vi.mock('../../lib/maintenanceAdmission.js', async importOriginal => ({
+  ...await importOriginal(),
+  maintenance: new Proxy({}, { get: (_target, property) => fixture.admission[property] }),
+}));
 
 const grok = await import('./grok.js');
 const { imageGenEvents } = await import('../imageGenEvents.js');
+const { spawn } = await import('../../lib/childProcess.js');
+const { spawn: realSpawn } = await vi.importActual('../../lib/childProcess.js');
+const { SSE_CLEANUP_DELAY_MS } = await import('../../lib/sseUtils.js');
+const { createMaintenanceAdmission } = await import('../../lib/maintenanceAdmission.js');
+const { rmGuarded } = await import('../../lib/fileUtils.js');
+const realFiles = await vi.importActual('../../lib/fileUtils.js');
 
 const flush = () => new Promise((r) => setImmediate(r));
 const stagingPathFor = (jobId) => join(tmpdir(), `portos-grok-${jobId}`, 'output.png');
@@ -94,7 +108,9 @@ beforeEach(async () => {
   imageGenEvents.removeAllListeners();
   grok._internals.setHarvestTimeoutForTests(10);
   await rm(TEST_ROOT, { recursive: true, force: true }).catch(() => {});
-  await mkdir(TEST_ROOT, { recursive: true });
+  await mkdir(FAKE_DATA_DIR, { recursive: true });
+  fixture.admission = createMaintenanceAdmission(FAKE_DATA_DIR);
+  rmGuarded.mockReset().mockImplementation(realFiles.rmGuarded);
 });
 
 afterEach(async () => {
@@ -529,4 +545,102 @@ it('settles admission rejection from the actual close event and clears the activ
     expect(response.write.mock.calls[0][0]).toContain('injected publication admission refusal');
     response.req.emit('close');
   } finally { admissionFault.error = null; }
+});
+
+// #10749 — a launch that throws must settle through the job's own finalizer and
+// release the job-owned scratch dir / prompt file, not leave a phantom
+// 'running' job whose SSE stream never terminates and whose temp files leak.
+describe('grok provider — launch refusal settlement', () => {
+  const scratchDirFor = (jobId) => join(tmpdir(), `portos-grok-${jobId}`);
+  const sseClient = () => ({ writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: new EventEmitter() });
+  const promptFileIn = (args = []) => {
+    const path = args[args.indexOf('--prompt-file') + 1];
+    return path && path !== '/dev/stdin' ? path : null;
+  };
+
+  it.each([
+    // Node validates argv synchronously and throws before any child exists.
+    ['a real Node argument refusal', { grokPath: 'grok\0probe' }, (seen) => spawn.mockImplementationOnce((bin, args, options) => {
+      seen.args = args;
+      return realSpawn(bin, args, options);
+    }), /Failed to spawn/],
+    ['a synthetic launch refusal', {}, (seen) => spawn.mockImplementationOnce((bin, args) => {
+      seen.args = args;
+      throw new Error('synthetic launch refusal');
+    }), /synthetic launch refusal/],
+  ])('settles %s once and removes its scratch dir and prompt file', async (_label, params, arrange, reason) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const failed = vi.fn();
+    imageGenEvents.on('failed', failed);
+    const seen = {};
+    arrange(seen);
+    const job = await grok.generateImage({ prompt: 'synthetic', ...params });
+    await vi.waitFor(() => expect(existsSync(scratchDirFor(job.jobId))).toBe(false));
+
+    expect(spawnCalls).toHaveLength(0);
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(failed.mock.calls[0][0]).toMatchObject({ mode: 'grok', generationId: job.jobId, error: expect.stringMatching(reason) });
+    // Windows stages the prompt in a temp file; it must not outlive the refusal.
+    const promptFile = promptFileIn(seen.args);
+    if (promptFile) expect(existsSync(promptFile)).toBe(false);
+    expect(grok.getActiveJob()).toBeNull();
+    expect(grok.cancel(job.jobId)).toBe(false);
+    const client = sseClient();
+    expect(grok.attachSseClient(job.jobId, client)).toBe(true);
+    expect(JSON.parse(client.write.mock.calls[0][0].replace(/^data: /, ''))).toMatchObject({ type: 'error', error: expect.stringMatching(reason) });
+    client.req.emit('close');
+
+    vi.advanceTimersByTime(SSE_CLEANUP_DELAY_MS);
+    expect(grok.attachSseClient(job.jobId, sseClient())).toBe(false);
+  });
+
+  it('retains an unsettled maintenance blocker when the refused launch cannot remove its scratch dir', async () => {
+    const jobId = 'grok-launch-refusal-cleanup';
+    rmGuarded.mockRejectedValueOnce(Object.assign(new Error('Cleanup denied'), { code: 'EACCES' }));
+    spawn.mockImplementationOnce(() => { throw new Error('synthetic launch refusal'); });
+    const failed = vi.fn();
+    imageGenEvents.on('failed', failed);
+    const permit = fixture.admission.admit('image', jobId);
+    await permit.run(() => grok.generateImage({ jobId, prompt: 'synthetic' }));
+    fixture.admission.begin({ reason: 'Drain renderer', owner: 'Operator' });
+    await vi.waitFor(() => expect(rmGuarded).toHaveBeenCalledTimes(1));
+    await flush();
+    await permit.finish();
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(fixture.admission.status()).toMatchObject({
+      state: 'draining', blockers: expect.arrayContaining([expect.objectContaining({ resource: jobId, unsettled: true })]),
+    });
+    await realFiles.rmGuarded(scratchDirFor(jobId), { recursive: true, force: true });
+  });
+
+  it('terminates a live child whose setup fails and releases resources only after it physically closes', async () => {
+    spawn.mockImplementationOnce((bin, args) => {
+      const child = makeFakeChild();
+      child.stdout.on = () => { throw new Error('synthetic stream setup failure'); };
+      spawnCalls.push({ bin, args, child, promptFromFile: null });
+      return child;
+    });
+    const failed = vi.fn();
+    imageGenEvents.on('failed', failed);
+    const job = await grok.generateImage({ prompt: 'synthetic' });
+    const { child } = spawnCalls[0];
+    child.pid = 4242;
+
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    child.emit('error', new Error('signal delivery failed'));
+    await flush();
+    expect(failed).not.toHaveBeenCalled();
+    expect(existsSync(scratchDirFor(job.jobId))).toBe(true);
+    expect(grok.getActiveJob()).toMatchObject({ generationId: job.jobId });
+
+    child.exitCode = 0;
+    child.emit('close', 0, null);
+    child.emit('close', 0, null);
+    await vi.waitFor(() => expect(existsSync(scratchDirFor(job.jobId))).toBe(false));
+    await flush();
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(failed.mock.calls[0][0].error).toMatch(/launch setup failed: synthetic stream setup failure/);
+    expect(grok.getActiveJob()).toBeNull();
+    expect(grok.cancel(job.jobId)).toBe(false);
+  });
 });

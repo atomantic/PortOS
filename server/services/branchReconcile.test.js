@@ -109,7 +109,7 @@ import {
   actionOn, filterActionable, desiredEndState, formatInFlightForPrompt, actionableSignature,
   limitBranchesForAgent,
   branchPriorityRank, prioritizeBranches, worktreeProtectionExpiresAt, describeIdleReconcilePark,
-  SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS,
+  SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS, SUPERSEDED_UNMANAGED_IDLE_MS,
   isMalformedClaimBranch,
   listRemoteHeads, upstreamBranchName, parseRemoteHeads, partitionRemoteOrphans, reapOrphanedRemotes,
   reapSupersededBranches
@@ -1394,6 +1394,33 @@ describe('reconcile', () => {
       expect(git.deleteBranch).not.toHaveBeenCalled();
     });
 
+    it('preserves work written after the scan even when the claim has no owner', async () => {
+      git.hasBranchMergeEvidence.mockResolvedValue(true);
+      execGit.mockResolvedValue({ stdout: '?? unfinished.js\n', exitCode: 0 });
+      const result = await cleanupMerged('/repo', 'main', [{
+        branch: 'claim/issue-101', worktreePath: '/repo/data/cos/worktrees/claim-issue-101', worktreeAgeMs: 0,
+      }], { activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: async () => [] } });
+      expect(result.skipped).toEqual([{ branch: 'claim/issue-101', reason: 'worktree-dirty' }]);
+      expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+      expect(git.deleteBranch).not.toHaveBeenCalled();
+    });
+
+    it('preserves a recent claim when a workspace owner appears after the scan', async () => {
+      dirtyClaim();
+      worktreeMtimeMs = Date.now();
+      execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+      const result = await reconcile('/repo', {
+        activeAgentIds: new Set(),
+        claimOwners: { agents: [], readAgents: async () => [{
+          id: 'agent-late', status: 'running', workspacePath: '/repo/data/cos/worktrees/claim-issue-101',
+        }] },
+      });
+      expect(result.cleaned).toEqual([]);
+      expect(result.skipped).toHaveLength(1);
+      expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+      expect(git.deleteBranch).not.toHaveBeenCalled();
+    });
+
     it('never retires a merged, clean claim checkout its live owner is still handing off', async () => {
       git.getBranches.mockResolvedValue([
         { name: 'claim/issue-101', isDefault: false, current: false, tracking: 'origin/claim/issue-101', merged: true }
@@ -1578,6 +1605,51 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     expect(res.skipped.find((sk) => sk.branch === CLAIM)?.reason).toBe('worktree-locked');
   });
 
+  // A verified-superseded branch whose worktree lives OUTSIDE the managed roots
+  // (an agent's `/tmp` checkout) used to be held with
+  // 'worktree-unmanaged-location' on every cycle — a hold nothing ever lifts,
+  // so the coordinator was told "PortOS reaps it" about a branch PortOS never
+  // would. The verdict and the backup are the independent proof #10270's
+  // location gate lacks; a short idle floor covers a process still in the tree.
+  it('reaps a superseded branch from an unmanaged location once its worktree has sat idle', async () => {
+    const TMP_TREE = '/private/tmp/portos-deep-oversized-order';
+    const verdict = {
+      branch: BRANCH, repoPath: '/repo', verdict: 'SUPERSEDED', tip: 'aaaaaaa',
+      dirtyPaths: [], collisionPaths: ['server/services/thing.js'], replacedBy: ['ffffff1']
+    };
+    const entry = (worktreeAgeMs) => ({ branch: BRANCH, tip: 'aaaaaaa', worktreePath: TMP_TREE, worktreeLocked: false, worktreeAgeMs, dirtyPaths: [], verdict });
+
+    const young = await reapSupersededBranches('/repo', 'main', [entry(5 * 60 * 1000)], { activeAgentIds: new Set() });
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    expect(backupSupersededBranchMock).not.toHaveBeenCalled();
+    expect(young.reaped).toEqual([]);
+    const hold = young.skipped.find((sk) => sk.branch === BRANCH);
+    expect(hold.reason).toBe('worktree-unmanaged-location');
+    // The hold lifts on a clock, so the park can wake for it instead of waiting out a recheck.
+    expect(Date.parse(hold.retryAt)).toBeGreaterThan(Date.now());
+    expect(Date.parse(hold.retryAt)).toBeLessThanOrEqual(Date.now() + SUPERSEDED_UNMANAGED_IDLE_MS);
+    // The held entry names its own hold, so the prompt and the park log can too.
+    expect(young.held[0]).toMatchObject({ branch: BRANCH, holdReason: 'worktree-unmanaged-location', holdRetryAt: hold.retryAt });
+
+    const idle = await reapSupersededBranches('/repo', 'main', [entry(SUPERSEDED_UNMANAGED_IDLE_MS)], { activeAgentIds: new Set() });
+    expect(backupSupersededBranchMock).toHaveBeenCalledTimes(1);
+    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', TMP_TREE, expect.anything());
+    expect(git.deleteBranch).toHaveBeenCalledWith('/repo', BRANCH, { local: true });
+    expect(idle.reaped).toEqual([BRANCH]);
+    expect(idle.held).toEqual([]);
+  });
+
+  it('keeps the unmanaged-location hold for merged cleanup, which has no verdict to lean on', async () => {
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+    const res = await cleanupMerged('/repo', 'main', [{
+      branch: 'next/issue-2190', worktreePath: '/private/tmp/portos-next-2190', worktreeAgeMs: 30 * 24 * 60 * 60 * 1000
+    }]);
+    expect(res.cleaned).toEqual([]);
+    expect(res.skipped).toEqual([{ branch: 'next/issue-2190', reason: 'worktree-unmanaged-location' }]);
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+  });
+
   it('holds the reap of a superseded branch when an active CoS agent is running in it', async () => {
     const superseded = [{
       branch: BRANCH,
@@ -1717,6 +1789,96 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
 // worktree holding only that read as ABANDONED_WIP forever: cleanupMerged
 // refused to delete a dirty tree, and every pass instead spent a coordinator run
 // that came back "no real work product, a human should discard it".
+describe('reconcile — detached-HEAD worktrees (#10825)', () => {
+  const MAIN = { path: '/repo', head: 'aaa111', branch: 'refs/heads/main' };
+  const detachedTree = (path, extra = {}) => ({ path, head: 'bbb222', detached: true, ...extra });
+  // Only the ancestry probe cares about argv; status reads clean unless a test says otherwise.
+  const stubGit = ({ merged = true, dirty = false } = {}) => execGit.mockImplementation(async (args) => {
+    if (args[0] === 'merge-base') return { stdout: '', exitCode: merged ? 0 : 1 };
+    if (args[0] === 'symbolic-ref') return { stdout: '', exitCode: 1 };
+    if (args[0] === 'rev-parse') return { stdout: 'bbb222\n', exitCode: 0 };
+    if (args[0] === 'status') return { stdout: dirty ? ' M src/a.js\n' : '', exitCode: 0 };
+    return { stdout: '', exitCode: 0 };
+  });
+
+  beforeEach(() => {
+    git.getBranches.mockResolvedValue([]);
+    execGh.mockResolvedValue('[]');
+  });
+
+  it('removes a clean managed detached tree at a merged commit and lists it in cleaned', async () => {
+    const path = '/repo/data/cos/worktrees/agent-1234abcd';
+    wt.listWorktrees.mockResolvedValue([MAIN, detachedTree(path)]);
+    stubGit();
+    const res = await reconcile('/repo');
+    expect(res.cleaned).toContain(path);
+    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', path, expect.any(Object));
+    expect(res.detachedWorktrees).toEqual([]);
+  });
+
+  it.each([
+    ['locked', { locked: true }, false, 'worktree-locked'],
+    ['dirty', {}, true, 'worktree-dirty'],
+  ])('holds a %s managed detached tree with its worktree-* reason', async (_name, extra, dirty, reason) => {
+    const path = '/repo/data/cos/worktrees/some-tree';
+    wt.listWorktrees.mockResolvedValue([MAIN, detachedTree(path, extra)]);
+    stubGit({ dirty });
+    const res = await reconcile('/repo');
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    expect(res.skipped).toContainEqual(expect.objectContaining({ path, reason, detached: true }));
+    expect(res.detachedWorktrees).toContainEqual(expect.objectContaining({ path, reason }));
+    // Not double-counted as a merged BRANCH held back.
+    expect(describeIdleReconcilePark(res.skipped, []).heldBackMerged).toEqual([]);
+  });
+
+  it('holds a managed tree owned by a live agent', async () => {
+    const path = '/repo/data/cos/worktrees/agent-1234abcd';
+    wt.listWorktrees.mockResolvedValue([MAIN, detachedTree(path)]);
+    stubGit();
+    const res = await reconcile('/repo', { activeAgentIds: new Set(['agent-1234abcd']) });
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    expect(res.skipped[0]).toMatchObject({ path, detached: true, reason: expect.stringMatching(/^worktree-/) });
+  });
+
+  it('reports, never removes, a detached tree outside the managed roots — and renders it for the coordinator', async () => {
+    const path = '/tmp/example-validation-tree';
+    wt.listWorktrees.mockResolvedValue([MAIN, detachedTree(path)]);
+    stubGit();
+    const res = await reconcile('/repo');
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    expect(res.cleaned).toEqual([]);
+    expect(res.skipped).toEqual([]);
+    expect(res.detachedWorktrees).toEqual([expect.objectContaining({ path, managed: false, reason: 'worktree-unmanaged-location' })]);
+    const prompt = await formatInFlightForPrompt([], { defaultBranch: 'main', detachedWorktrees: res.detachedWorktrees });
+    expect(prompt).toContain(path);
+    expect(prompt).toContain(`git worktree remove ${path}`);
+  });
+
+  it('does not remove a tree whose HEAD moved onto a branch after the gather', async () => {
+    wt.listWorktrees.mockResolvedValue([MAIN, detachedTree('/repo/data/cos/worktrees/agent-1234abcd')]);
+    stubGit();
+    const detachedStub = execGit.getMockImplementation();
+    execGit.mockImplementation(async (args, ...rest) => args[0] === 'symbolic-ref'
+      ? { stdout: 'refs/heads/feature/x\n', exitCode: 0 }
+      : detachedStub(args, ...rest));
+    const res = await reconcile('/repo');
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    expect(res.cleaned).toEqual([]);
+  });
+
+  it('never gathers the main checkout or a detached tree at unmerged commits', async () => {
+    wt.listWorktrees.mockResolvedValue([
+      { path: '/repo', head: 'aaa111', detached: true },
+      detachedTree('/repo/data/cos/worktrees/unmerged-work'),
+    ]);
+    stubGit({ merged: false });
+    const res = await reconcile('/repo');
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    expect(res.detachedWorktrees).toEqual([]);
+    expect(res.skipped).toEqual([]);
+  });
+});
+
 describe('reconcile — a worktree holding only PortOS runtime scratch', () => {
   const BRANCH = 'cos/app-improve-pr-reviewer-x/agent-985a8c77';
   const WORKTREE = '/repo/data/cos/worktrees/agent-985a8c77';
@@ -1855,11 +2017,13 @@ describe('desiredEndState', () => {
     expect(instruction).not.toContain('read the default branch\'s current version');
   });
 
-  // A rebase onto a moved default branch can break code that passed on the old
-  // base, and a red PR costs a full round trip to notice.
-  it.each(['ABANDONED_WIP', 'NEEDS_PR', 'CONFLICTED'])('makes %s rebase and run the suites before pushing', (state) => {
+  // Verification remains mandatory; unrelated base movement must not rewrite
+  // the branch and invalidate its current-head checks.
+  it.each(['ABANDONED_WIP', 'NEEDS_PR', 'CONFLICTED'])('makes %s verify before pushing without mandatory base rebasing', (state) => {
     const instruction = desiredEndState(state, {}, { worktreePath: '/wt/agent-deadbeef' });
-    expect(instruction).toContain('Rebase onto the default branch before opening or updating a PR');
+    expect(instruction).toContain('Rebase only for actual conflicts');
+    expect(instruction).toContain('Base movement alone does not require a rebase or another CI run');
+    expect(instruction).not.toContain('Rebase onto the default branch before opening or updating a PR');
     expect(instruction).toContain('Never push a branch whose tests you have not seen pass');
   });
 

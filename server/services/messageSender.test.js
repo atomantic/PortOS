@@ -7,6 +7,9 @@ const doubles = vi.hoisted(() => ({
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { messages: '/mock/messages' },
   ensureDir: async () => {},
+  readJSONFileStrict: async (path, fallback) => ({
+    ok: true, value: doubles.files.has(path) ? JSON.parse(doubles.files.get(path)) : fallback
+  }),
   tryReadFile: async path => doubles.files.get(path) ?? null,
   atomicWrite: async (path, data) => {
     if (doubles.failTerminal && data.some(d => d.status === 'sent')) throw new Error('Example disk failure');
@@ -114,18 +117,27 @@ describe('draft send workflow', () => {
     expect(doubles.sendGmail).toHaveBeenCalledTimes(2);
   });
 
-  it.each(['returned', 'thrown'])('persists a %s dispatch failure and permits explicit reapproval', async kind => {
+  it('persists a returned dispatch failure and permits explicit reapproval', async () => {
     seed({ id: 'draft-1', sendVia: 'playwright', to: ['alice@example.com'], subject: 'Example subject' });
     doubles.getAccount.mockResolvedValue({ id: 'account-1', type: 'outlook' });
     doubles.listAccounts.mockResolvedValue([{ id: 'account-1', type: 'outlook' }]);
-    if (kind === 'thrown') doubles.sendPlaywright.mockRejectedValueOnce(new Error('Example transport failure'));
-    else doubles.sendPlaywright.mockResolvedValueOnce({ success: false, status: 502, code: 'SEND_FAILED', error: 'Example transport failure' });
+    doubles.sendPlaywright.mockResolvedValueOnce({ success: false, status: 502, code: 'SEND_FAILED', error: 'Example transport failure' });
     expect(await sendDraft('draft-1')).toMatchObject({ success: false, code: 'SEND_FAILED' });
     expect((await getDraft('draft-1')).status).toBe('failed');
     expect(await sendDraft('draft-1')).toMatchObject({ status: 409 });
     await approveDraft('draft-1');
     expect(await sendDraft('draft-1')).toEqual({ success: true });
     expect((await getDraft('draft-1')).status).toBe('sent');
+  });
+
+  it('parks a thrown dispatch as delivery unknown rather than a re-approvable failure', async () => {
+    seed({ id: 'draft-1' });
+    doubles.sendGmail.mockRejectedValueOnce(new Error('Example transport failure'));
+    expect(await sendDraft('draft-1')).toMatchObject({ success: false, status: 502, code: 'DELIVERY_UNKNOWN' });
+    expect((await getDraft('draft-1')).status).toBe('delivery_unknown');
+    await expect(approveDraft('draft-1')).rejects.toMatchObject({ status: 409 });
+    expect(await sendDraft('draft-1')).toMatchObject({ status: 409 });
+    expect(doubles.sendGmail).toHaveBeenCalledTimes(1);
   });
 
   it('rechecks eligibility after account lookup and dispatches only the claimed snapshot', async () => {

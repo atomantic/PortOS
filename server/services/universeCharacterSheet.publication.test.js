@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+vi.mock('../lib/imageCleanDefaults.js', () => ({
+  resolveImageCleaners: vi.fn(() => ({ cleanC2PA: false, denoise: false })),
+}));
+
 const mocks = vi.hoisted(() => ({
   getUniverse: vi.fn(),
   getSettings: vi.fn(),
@@ -19,10 +23,6 @@ vi.mock('../lib/fileUtils.js', async importOriginal => ({
   ...(await importOriginal()), ensureDir: vi.fn(), copyFileGuarded: (...args) => mocks.copy(...args),
 }));
 vi.mock('./universeRunTag.js', () => ({ buildUniverseRunTag: (...args) => mocks.buildUniverseRunTag(...args) }));
-vi.mock('./imageGen/index.js', () => ({
-  IMAGE_GEN_MODE: { LOCAL: 'local', CODEX: 'codex', EXTERNAL: 'external' },
-  resolveImageCleaners: vi.fn(() => ({ cleanC2PA: false, denoise: false })),
-}));
 vi.mock('../lib/mediaModels.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getImageModels: (...args) => mocks.getImageModels(...args),

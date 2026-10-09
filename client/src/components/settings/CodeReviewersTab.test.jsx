@@ -216,6 +216,16 @@ describe('CodeReviewersTab', () => {
     expect(screen.getByText(/The next successful review clears this warning/)).toBeInTheDocument();
   });
 
+  it('names a headless command refusal and recommends a compatible reviewer without granting permissions', async () => {
+    api.getCodeReviewDefaults.mockResolvedValue({
+      reviewers: ['provider:example-cli'], optionalReviewers: ['provider:example-cli'],
+      reviewerConfigFaults: { 'provider:example-cli': { code: 'REVIEWER_COMMAND_PERMISSION_DENIED', lastFailureAt: 123 } },
+    });
+    renderTab(<CodeReviewersTab />);
+    expect(await screen.findByText(/provider:example-cli: the last review attempt failed/)).toHaveTextContent('Use a compatible non-interactive review transport or supported tool-free vendor configuration; keep command, network and write permissions disabled.');
+    expect(screen.getByText(/The next successful review clears this warning/)).toBeInTheDocument();
+  });
+
   it('renders error banner with Retry button and disables Save button when fetch rejects', async () => {
     api.getCodeReviewDefaults.mockRejectedValue(new Error('Network error'));
 

@@ -2,6 +2,60 @@ import { describe, expect, it } from 'vitest';
 import { getApiRouteCatalog } from './apiRouteGraph.js';
 import { HOST_CONTROL_ROUTES, hostControlBodyKeys, hostControlSettingsPathsIn, hostControlRouteFor, isHostControlRoute } from './hostControlRoutes.js';
 
+describe('Universe Builder mutation inventory (#10669)', () => {
+  // Explicit reviewed data-only operations: a new mutation must be classified
+  // rather than silently inheriting an execution exemption.
+  const recordOrRead = [
+    'POST /api/universe-builder',
+    'PATCH /api/universe-builder/:id',
+    'DELETE /api/universe-builder/:id',
+    'PATCH /api/universe-builder/:id/variations/lock-all',
+    'POST /api/universe-builder/:id/import/markdown',
+    'POST /api/universe-builder/:id/style-references',
+    'POST /api/universe-builder/:id/adopt-style',
+    'DELETE /api/universe-builder/:id/style-references/:referenceId',
+    'DELETE /api/universe-builder/:id/characters/:entryId/reference-sheet',
+    'POST /api/universe-builder/merge/preview',
+    'POST /api/universe-builder/merge',
+    'POST /api/universe-builder/:id/canon/:kind/:entryId/apply-image-correction',
+    'POST /api/universe-builder/:id/characters/:entryId/augment/apply',
+    'POST /api/universe-builder/:id/canon/backfill-descriptions',
+    'PATCH /api/universe-builder/:id/canon/:kind/:entryId/lock',
+    'DELETE /api/universe-builder/:id/canon/:kind/:entryId',
+    'PATCH /api/universe-builder/:id/canon/:kind/lock-all',
+  ];
+
+  it('gates every agent-capable mutation and keeps reviewed deterministic operations open', () => {
+    const mutations = getApiRouteCatalog().routes.filter(({ method, path }) =>
+      /^(POST|PUT|PATCH|DELETE)$/.test(method) && /^\/api\/universe-builder(\/|$)/.test(path));
+    const open = mutations.filter(({ method, path }) => !isHostControlRoute(method, path))
+      .map(({ method, path }) => `${method} ${path}`);
+    expect([...new Set(open)].sort()).toEqual([...recordOrRead].sort());
+  });
+});
+
+describe('Story Builder mutation inventory (#10670)', () => {
+  it('gates generation and explicitly preserves record-only operations', () => {
+    const recordOnly = [
+      'POST /api/story-builder',
+      'PATCH /api/story-builder/:id',
+      'DELETE /api/story-builder/:id',
+      'POST /api/story-builder/:id/sync',
+      'POST /api/story-builder/:id/reconcile',
+      'POST /api/story-builder/:id/current-step/:stepId',
+      'POST /api/story-builder/:id/steps/:stepId/lock',
+      'POST /api/story-builder/:id/steps/:stepId/unlock',
+      'POST /api/story-builder/:id/issues/:issueId/lock',
+    ];
+    const open = getApiRouteCatalog().routes.filter(({ method, path }) =>
+      /^(POST|PUT|PATCH|DELETE)$/.test(method)
+      && /^\/api\/story-builder(\/|$)/.test(path)
+      && !isHostControlRoute(method, path))
+      .map(({ method, path }) => `${method} ${path}`);
+    expect([...new Set(open)].sort()).toEqual(recordOnly.sort());
+  });
+});
+
 describe('HOST_CONTROL_ROUTES (#8716)', () => {
   it('names only mounted routes, so a rename cannot silently ungate one', () => {
     // A catalog path keeps its `:param` / `*wildcard` tokens, which the
@@ -77,7 +131,7 @@ describe('browser/runtime/database mutation inventory (#8798, #8897)', () => {
 });
 
 
-describe('prompt-feeding store mutation inventory (#9040)', () => {
+describe('prompt-feeding store and Digital Twin mutation inventory (#9040, #10671)', () => {
   // Reviewed reference-data CRUD, fixed-provider inference, previews and stops.
   // Twin settings alone are body-gated in their handler; memories and twin
   // documents/traits are fenced at prompt assembly. Keep this list explicit:
@@ -112,19 +166,12 @@ describe('prompt-feeding store mutation inventory (#9040)', () => {
     "POST /api/cos/mind/recipes/:recipeId/archive",
     "POST /api/cos/mind/recipes/validate",
     "POST /api/cos/mind/stop",
-    "POST /api/digital-twin/adversarial-tests/run",
-    "POST /api/digital-twin/analyze-writing",
     "POST /api/digital-twin/autobiography/stories",
     "POST /api/digital-twin/autobiography/stories/:id/evaluate",
     "POST /api/digital-twin/autobiography/stories/:id/follow-ups",
     "POST /api/digital-twin/autobiography/stories/:id/weave",
     "POST /api/digital-twin/autobiography/trigger",
-    "POST /api/digital-twin/avatar-bio/polish",
-    "POST /api/digital-twin/confidence/calculate",
     "POST /api/digital-twin/documents",
-    "POST /api/digital-twin/enrich/analyze-list",
-    "POST /api/digital-twin/enrich/answer",
-    "POST /api/digital-twin/enrich/question",
     "POST /api/digital-twin/enrich/save-list",
     "POST /api/digital-twin/export",
     "POST /api/digital-twin/feedback",
@@ -148,28 +195,16 @@ describe('prompt-feeding store mutation inventory (#9040)', () => {
     "POST /api/digital-twin/identity/image",
     "POST /api/digital-twin/identity/image/save",
     "POST /api/digital-twin/identity/longevity/derive",
-    "POST /api/digital-twin/import/analyze",
     "POST /api/digital-twin/import/save",
-    "POST /api/digital-twin/import/spotify/browser/import",
     "POST /api/digital-twin/import/spotify/browser/open",
-    "POST /api/digital-twin/interview/analyze",
-    "POST /api/digital-twin/multi-turn-tests/run",
     "POST /api/digital-twin/snapshots",
     "POST /api/digital-twin/snapshots/compare",
     "POST /api/digital-twin/social-accounts",
     "POST /api/digital-twin/social-accounts/bulk",
-    "POST /api/digital-twin/style/spoken-written",
     "POST /api/digital-twin/taste/:section/personalized-question",
     "POST /api/digital-twin/taste/answer",
     "POST /api/digital-twin/taste/summary",
-    "POST /api/digital-twin/tests/generate",
-    "POST /api/digital-twin/tests/run",
-    "POST /api/digital-twin/tests/run-multi",
-    "POST /api/digital-twin/traits/analyze",
-    "POST /api/digital-twin/twin-evidence/interpret",
     "POST /api/digital-twin/twin-evidence/recompute",
-    "POST /api/digital-twin/validate/contradictions",
-    "POST /api/digital-twin/values-tests/run",
     "POST /api/memory",
     "POST /api/memory/:id/approve",
     "POST /api/memory/:id/reject",
@@ -197,7 +232,7 @@ describe('prompt-feeding store mutation inventory (#9040)', () => {
     "PUT /api/memory/:id"
 ];
 
-  it('classifies every mounted mutation, including the tool writes from #9014', () => {
+  it('classifies every mounted mutation, including tool writes and process-capable Digital Twin actions', () => {
     const mutations = getApiRouteCatalog().routes.filter(({ method, path }) =>
       /^(POST|PUT|PATCH|DELETE)$/.test(method)
       && /^\/api\/(?:(tools|prompts|memory|digital-twin)(\/|$)|cos\/(mind|goal-fidelity)(\/|$))/.test(path));
@@ -348,5 +383,44 @@ describe('Music Video agent workflow policy (#9869)', () => {
       expect(mounted.has(route), route).toBe(true);
       expect(isHostControlRoute(method, path), route).toBe(false);
     }
+  });
+});
+
+
+describe('FableLoom mutation inventory (#10668)', () => {
+  // Reviewed record mutations, deterministic checks/planning, cancellation,
+  // session bookkeeping and fixed browser automation. New routes need review.
+  const recordOrContained = [
+    'POST /api/fableloom',
+    'PATCH /api/fableloom/:id',
+    'DELETE /api/fableloom/:id',
+    'POST /api/fableloom/:id/editorial/autopilot/:runId/cancel',
+    'POST /api/fableloom/:id/episodes',
+    'PATCH /api/fableloom/:id/episodes/:episodeId',
+    'DELETE /api/fableloom/:id/episodes/:episodeId',
+    'POST /api/fableloom/:id/episodes/:episodeId/nodes',
+    'PATCH /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId',
+    'DELETE /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId',
+    'POST /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/fal-video',
+    'POST /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/transitions',
+    'PATCH /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/transitions/:transitionId',
+    'DELETE /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/transitions/:transitionId',
+    'POST /api/fableloom/:id/episodes/:episodeId/shots/apply',
+    'POST /api/fableloom/:id/episodes/:episodeId/outline/validate',
+    'POST /api/fableloom/:id/episodes/:episodeId/sessions/preflight',
+    'POST /api/fableloom/:id/episodes/:episodeId/sessions/host',
+    'PATCH /api/fableloom/sessions/:sessionId',
+    'DELETE /api/fableloom/sessions/:sessionId',
+    'POST /api/fableloom/:id/episodes/:episodeId/production/plan',
+    'POST /api/fableloom/:id/episodes/:episodeId/production/batch/:runId/cancel',
+    'POST /api/fableloom/:id/episodes/:episodeId/continuity/review',
+  ];
+
+  it('gates every agent-capable mutation and preserves reviewed contained operations', () => {
+    const mutations = getApiRouteCatalog().routes.filter(({ method, path }) =>
+      /^(POST|PUT|PATCH|DELETE)$/.test(method) && /^\/api\/fableloom(\/|$)/.test(path));
+    const open = mutations.filter(({ method, path }) => !isHostControlRoute(method, path))
+      .map(({ method, path }) => `${method} ${path}`);
+    expect([...new Set(open)].sort()).toEqual([...recordOrContained].sort());
   });
 });

@@ -33,6 +33,10 @@ it('runs a saved provider reviewer from the standalone claim bridge without boot
       const args = process.argv.slice(2);
       // No reviewer mode means ordinary argv, so it must run outside the caller's checkout.
       if (existsSync('context.txt') || args.includes('baked-model') || args[args.indexOf('--model') + 1] !== 'review-model') process.exit(1);
+      if (args.includes('--refuse')) {
+        process.stderr.write('jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied. synthetic-private-path-or-credential');
+        process.exit(1);
+      }
       process.stdout.write('NO FINDINGS');
     });
   `);
@@ -41,6 +45,7 @@ it('runs a saved provider reviewer from the standalone claim bridge without boot
   await writeFile(join(data, 'providers.json'), JSON.stringify({ activeProvider: 'example-gpu', providers: {
     'example-gpu': { id: 'example-gpu', name: 'Example GPU', type: 'api', enabled: true,
       endpoint: `http://127.0.0.1:${api.address().port}/v1`, models: ['default-model', 'review-model'], defaultModel: 'default-model' },
+    'example-refusal': { id: 'example-refusal', name: 'Example Refusal', type: 'cli', enabled: true, command: process.execPath, args: [harness, '--refuse'], defaultModel: 'review-model' },
     'example-cli': { id: 'example-cli', name: 'Example CLI', type: 'cli', enabled: true, command: process.execPath, args: [harness, '--model', 'baked-model'], defaultModel: 'default-model' },
   } }));
   await writeFile(join(data, 'settings.json'), JSON.stringify({ codeReview: {
@@ -70,12 +75,17 @@ it('runs a saved provider reviewer from the standalone claim bridge without boot
     const cliRequest = { backend: 'provider:example-cli', model: 'review-model', diff: request.diff };
     return [await runReview(request), await runReview({ ...request, inheritDefaults: false }), await runReview(cliRequest),
       await runReview({ ...cliRequest, kind: 'claim-review' }),
-      await runReview({ kind: 'claim-comments', backend: 'provider:example-cli', model: 'review-model', comments: [{ login: 'example-user', type: 'User', body: 'I will work on this' }] })];
+      await runReview({ kind: 'claim-comments', backend: 'provider:example-cli', model: 'review-model', comments: [{ login: 'example-user', type: 'User', body: 'I will work on this' }] }),
+      await runReview({ ...cliRequest, backend: 'provider:example-refusal', kind: 'claim-review', inheritDefaults: false })];
   })().finally(async () => {
     await new Promise(resolve => api.close(resolve));
     await rm(root, { recursive: true, force: true });
   });
-  expect(results).toHaveLength(5);
+  expect(results).toHaveLength(6);
+  expect(results[5].code).not.toBe(0);
+  expect(JSON.parse(results[5].stdout)).toMatchObject({ ok: false, code: 'REVIEWER_COMMAND_PERMISSION_DENIED' });
+  expect(results[5].stderr).toContain('Reviewer configuration fault (REVIEWER_COMMAND_PERMISSION_DENIED) for provider:example-refusal');
+  expect(results[5].stdout + results[5].stderr).not.toContain('synthetic-private');
   // Ordinary and claim code reviews both use the scratch review procedure.
   // Public-comment screening still requires an enforced reviewer mode.
   for (const result of [results[2], results[3]]) {

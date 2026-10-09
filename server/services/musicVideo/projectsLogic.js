@@ -596,10 +596,24 @@ export function removeScene(project, sceneId) {
   return touch(project, { scenes: nextScenes });
 }
 
+// What a board position owns rather than the shot placed in it: the span of
+// the song, its section, and the lyric sung there. A reorder leaves these on
+// their positions and moves only the shot (prompts, frames, clips, takes,
+// direction, camera), so swapping two shots keeps the song timing intact.
+const SCENE_SLOT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'sectionIndex', 'sectionLabel', 'lyricText', 'lyricRole'];
+const DRAFT_SHOT_SLOT_FIELDS = ['startSec', 'endSec', 'lyricCueIds'];
+const pickSlot = (record, fields) => Object.fromEntries(fields.filter((k) => k in record).map((k) => [k, record[k]]));
+const withoutSlot = (record, fields) => Object.fromEntries(Object.entries(record).filter(([k]) => !fields.includes(k)));
+
 /**
  * Reorder the board to the given sceneId order. `orderedIds` must be exactly the
  * project's current scene ids (a permutation) — a missing/extra/unknown id is a
- * 400 so a stale client can't silently drop scenes. Returns the next record.
+ * 400 so a stale client can't silently drop scenes. Each board position keeps
+ * its song slot (SCENE_SLOT_FIELDS) and the shots move between the slots; the
+ * lyric-timed storyboard draft's shots follow their scenes into the new slots,
+ * and a revised song's per-shot lyric verdicts stay with their slots.
+ * The storyboard and proof approvals hash scene timing and content, so they go
+ * stale on their own. Returns the next record.
  */
 export function reorderScenes(project, orderedIds) {
   const scenes = project.scenes || [];
@@ -607,8 +621,32 @@ export function reorderScenes(project, orderedIds) {
   if (orderedIds.length !== scenes.length || !orderedIds.every((id) => byId.has(id)) || new Set(orderedIds).size !== orderedIds.length) {
     throw new ServerError('Reorder must list each existing scene id exactly once', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  const nextScenes = orderedIds.map((id, i) => ({ ...byId.get(id), order: i }));
-  return touch(project, { scenes: nextScenes });
+  // The scene whose slot each moved scene now fills.
+  const slotOwner = new Map(orderedIds.map((id, i) => [id, scenes[i]]));
+  const nextScenes = orderedIds.map((id, i) => ({
+    ...withoutSlot(byId.get(id), SCENE_SLOT_FIELDS), ...pickSlot(scenes[i], SCENE_SLOT_FIELDS), order: i,
+  }));
+  const extra = { scenes: nextScenes };
+  // A revised song's verdicts are about the lyric in a slot, so they stay with it.
+  const sceneReview = project.songRevision?.sceneReview;
+  if (sceneReview && typeof sceneReview === 'object') {
+    const holder = new Map(scenes.map((s, i) => [s.sceneId, orderedIds[i]]));
+    extra.songRevision = { ...project.songRevision,
+      sceneReview: Object.fromEntries(Object.entries(sceneReview).map(([id, verdict]) => [holder.get(id) ?? id, verdict])) };
+  }
+  const draft = project.productionReview?.draft;
+  if (!Array.isArray(draft?.storyboard) || draft.storyboardSource === 'document') return touch(project, extra);
+  const draftShots = new Map(draft.storyboard.filter((shot) => shot?.sceneId).map((shot) => [shot.sceneId, shot]));
+  const storyboard = draft.storyboard.map((shot) => {
+    const owner = shot?.sceneId && slotOwner.get(shot.sceneId);
+    if (!owner || owner.sceneId === shot.sceneId) return shot;
+    // The owner's own draft shot carries that slot's lyric anchors; without one,
+    // take the slot's timing and let the storyboard check ask for anchors.
+    const slot = draftShots.get(owner.sceneId);
+    return slot ? { ...shot, ...pickSlot(slot, DRAFT_SHOT_SLOT_FIELDS) }
+      : { ...shot, startSec: owner.startSec ?? shot.startSec, endSec: owner.endSec ?? shot.endSec, lyricCueIds: [] };
+  });
+  return touch(project, { ...extra, productionReview: { ...project.productionReview, draft: { ...draft, storyboard } } });
 }
 
 // Label suffix budget: the scene label schema caps at 120 characters.
@@ -717,6 +755,82 @@ export function splitScene(project, sceneId, { backend = null } = {}) {
     .map((s, i) => ({ ...s, order: i }));
   const next = touch(project, { scenes: nextScenes });
   return { project: next, scenes: nextScenes.slice(idx, idx + count) };
+}
+
+const timedSec = (v) => typeof v === 'number' && Number.isFinite(v);
+
+/**
+ * Join a scene with the one after it — the inverse of `splitScene`. The first
+ * scene keeps its id, takes and selections and stretches to the next scene's
+ * end; the lyric lines are joined; the next scene is removed and `order`
+ * renumbered; a board-sourced storyboard draft merges the matching shots.
+ * A selected clip survives (the director's cut was one continuous clip), but a
+ * performance's lip-synced clip was generated for the old interval, so its
+ * selection is cleared as in a split. When the second scene selects the same
+ * video asset as the first, its take for that asset is kept too. Refuses when
+ * the joined span exceeds the backend's longest take (`shotSplitLimit`) and for
+ * a document composition, whose shot order lives in the shot manifest.
+ * Returns `{ project, scene }`.
+ */
+export function mergeNextScene(project, sceneId, { backend = null } = {}) {
+  const scenes = project.scenes || [];
+  const idx = scenes.findIndex((s) => s.sceneId === sceneId);
+  if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
+  const scene = scenes[idx];
+  const following = scenes[idx + 1];
+  if (!following) throw new ServerError('This is the last scene — there is no next scene to merge.', { status: 400, code: 'MUSIC_VIDEO_MERGE_NO_NEXT' });
+  if (project.composition?.mode === 'document') {
+    throw new ServerError("This video's shot order comes from its composition document — merge the shots in the shot manifest instead.", { status: 400, code: 'MUSIC_VIDEO_MERGE_DOCUMENT' });
+  }
+  const lane = backend || project.videoSettings?.backend || null;
+  const startSec = scene.startSec;
+  const endSec = timedSec(following.endSec) ? following.endSec : scene.endSec;
+  if (timedSec(startSec) && timedSec(endSec) && (endSec <= startSec || (timedSec(scene.endSec) && endSec < scene.endSec))) {
+    throw new ServerError('The next scene ends before this one does — put the scenes in song order before merging them.', { status: 400, code: 'MUSIC_VIDEO_MERGE_OUT_OF_ORDER' });
+  }
+  const maxSec = shotSplitLimit(scene, lane);
+  if (maxSec != null) {
+    if (!timedSec(startSec) || !timedSec(endSec)) {
+      throw new ServerError('Both scenes need a start and end time before they can be merged on this backend.', { status: 400, code: 'MUSIC_VIDEO_MERGE_UNTIMED' });
+    }
+    if (endSec - startSec > maxSec + 1e-6) {
+      throw new ServerError(`The merged shot would run ${(endSec - startSec).toFixed(2)}s, longer than this backend renders in one take (${maxSec.toFixed(2)}s).`, { status: 400, code: 'MUSIC_VIDEO_MERGE_TOO_LONG' });
+    }
+  }
+
+  const now = new Date().toISOString();
+  let takes = ensureSceneTakes(scene, now);
+  const sharedClip = scene.videoHistoryId && scene.videoHistoryId === following.videoHistoryId;
+  if (sharedClip && !takes.some((t) => t.kind === 'video' && t.assetId === scene.videoHistoryId)) {
+    const kept = ensureSceneTakes(following, now).find((t) => t.kind === 'video' && t.assetId === scene.videoHistoryId);
+    if (kept) takes = [...takes, kept];
+  }
+  const lyricText = [scene.lyricText, following.lyricText].filter((t) => typeof t === 'string' && t.trim()).join(' / ').slice(0, 2000) || null;
+  const merged = {
+    ...scene, endSec, lyricText, takes,
+    ...(isPerformanceScene(scene) ? { videoHistoryId: null } : {}),
+  };
+
+  const nextScenes = [...scenes.slice(0, idx), merged, ...scenes.slice(idx + 2)].map((s, i) => ({ ...s, order: i }));
+  const extra = { scenes: nextScenes };
+  const sceneReview = project.songRevision?.sceneReview;
+  if (sceneReview && typeof sceneReview === 'object' && following.sceneId in sceneReview) {
+    extra.songRevision = { ...project.songRevision,
+      sceneReview: Object.fromEntries(Object.entries(sceneReview).filter(([id]) => id !== following.sceneId)) };
+  }
+  const draft = project.productionReview?.draft;
+  if (Array.isArray(draft?.storyboard) && draft.storyboardSource !== 'document') {
+    const second = draft.storyboard.find((shot) => shot?.sceneId === following.sceneId);
+    const storyboard = draft.storyboard
+      .filter((shot) => shot?.sceneId !== following.sceneId)
+      .map((shot) => {
+        if (shot?.sceneId !== scene.sceneId) return shot;
+        const cueIds = [...new Set([...(shot.lyricCueIds || []), ...(second?.lyricCueIds || [])])];
+        return { ...shot, endSec: timedSec(second?.endSec) ? second.endSec : endSec ?? shot.endSec, lyricCueIds: cueIds };
+      });
+    extra.productionReview = { ...project.productionReview, draft: { ...draft, storyboard } };
+  }
+  return { project: touch(project, extra), scene: nextScenes[idx] };
 }
 
 // ---- peer-sync federation (#1770) -----------------------------------------

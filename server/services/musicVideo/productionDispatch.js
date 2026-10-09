@@ -56,7 +56,7 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
     .map((ref) => resolveGalleryImage(ref.imageId, { mustExist: false })).filter(Boolean);
   const [{ resolveRenderTargetConfig }, { resolveImageCleaners }, { enqueueJob }] = await Promise.all([
     import('../imageGen/cloudProviderConfig.js'),
-    import('../imageGen/index.js'),
+    import('../../lib/imageCleanDefaults.js'),
     import('../mediaJobQueue/index.js'),
   ]);
   const resolved = resolveRenderTargetConfig(settings, RENDER_TARGET.MUSIC_VIDEO, { mode: route.mode, model: route.model });

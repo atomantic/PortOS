@@ -57,17 +57,29 @@ describe('claim ownership binding instructions (#10089)', () => {
 });
 
 describe('claim parent merge admission instructions', () => {
-  it('binds the parent through CI, requires resync on external base movement and releases on either outcome', () => {
+  it('acquires only after green CI, merges a CLEAN head pinned and resyncs outside the lease', () => {
     const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
     expect(prompt).toContain('"agentId":"parent-example","action":"acquire"');
     expect(prompt).toContain('"action":"check"');
     expect(prompt).toContain('"action":"release"');
     expect(prompt).toContain('Authorization: Bearer');
     expect(prompt).toContain('never a fan-out child');
-    expect(prompt).toContain('at most 30 minutes');
-    expect(prompt).toContain('if it moved, sync again, rerun pregate and require fresh CI');
+    // Ordering: CI-verified head → acquire → final PR re-read → pinned merge.
+    const order = ['WITHOUT admission', 'Once required CI is green', '"action":"acquire"', 'Inside the lease, re-read the PR', '--match-head-commit'];
+    const positions = order.map((marker) => prompt.indexOf(marker));
+    expect(positions.every((at) => at >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((x, y) => x - y));
+    expect(prompt).toContain('does NOT require a resync or fresh CI');
+    expect(prompt).toContain('release with outcome resync');
+    expect(prompt).toContain('OUTSIDE the lease');
+    expect(prompt).toContain('at most 10 minutes');
+    expect(prompt).toContain('lease-expired');
+    expect(prompt).toContain('overrides mandatory base-sync instructions in delegated slashdo workflows');
     expect(prompt).toContain('outcome leave-open');
     expect(prompt).toContain('never permission to proceed');
+    expect(prompt).not.toMatch(/BEFORE the final base sync/i);
+    expect(prompt).not.toMatch(/Keep admission through[^.]*CI/i);
+    expect(prompt).not.toContain('if it moved, sync again');
     expect(buildClaimFlowCompletionSection()).toContain('do not merge');
     expect(buildClaimFlowCompletionSection({ agentId: 'parent-example', leavePrOpen: true })).not.toContain('/merge-admission');
   });

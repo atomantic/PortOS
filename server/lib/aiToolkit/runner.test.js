@@ -4,6 +4,7 @@ import { join, basename } from 'path';
 import { tmpdir } from 'os';
 import EventEmitter from 'events';
 import { ChildProcess } from 'child_process';
+import { pinPlatform } from '../testHelper.js';
 
 const IS_WIN32 = process.platform === 'win32';
 
@@ -1975,15 +1976,8 @@ describe('AI Toolkit runner — built-in executeCliRun spawn (#1865)', () => {
   }
 
   it('never enables shell:true — resolveWindowsExecutable (not a shell) is the Windows fix', async () => {
-    // resolveWindowsExecutable is module-private here, and its IS_WIN32 default
-    // is bound once at module load like the rest of the codebase's win32-gated
-    // logic (see bufferedSpawn.test.js) — it can't be faked by mutating
-    // process.platform mid-test. The resolution ALGORITHM itself is exhaustively
-    // covered by server/lib/bufferedSpawn.test.js's injectable-isWin32 tests
-    // (this file's copy is a byte-for-byte mirror); this test only pins the
-    // wiring — that the built-in spawn never falls back to shell:true (the
-    // DEP0190-unsafe approach this directory rejected — see resolveWindowsExecutable
-    // docstring above) regardless of platform.
+    // The shared leaf's input matrix lives in bufferedSpawn.test.js; this
+    // caller contract pins shell-free spawning regardless of platform.
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-spawn-'));
     const runner = createRunnerService({ dataDir });
     const child = makeChild();
@@ -2012,6 +2006,40 @@ describe('AI Toolkit runner — built-in executeCliRun spawn (#1865)', () => {
     // — wait for completion before removing dataDir, or rm races the writes.
     await completed;
     await rm(dataDir, { recursive: true, force: true });
+  });
+
+  it('resolves a Windows shim from the child PATH and escapes only unquoted values', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-windows-'));
+    const shimDir = join(dataDir, 'tools&cli');
+    await mkdir(shimDir);
+    const shim = join(shimDir, 'example.cmd');
+    await writeFile(shim, '');
+    const restorePlatform = pinPlatform('win32');
+    let completed;
+    try {
+      const runner = createRunnerService({ dataDir });
+      const child = makeChild();
+      spawn.mockReturnValue(child);
+      let resolveComplete;
+      completed = new Promise(resolve => { resolveComplete = resolve; });
+      await runner.executeCliRun({
+        runId: 'windows-shim',
+        provider: { id: 'example', command: 'example', args: ['plain&value', 'quoted & value'], envVars: { PATH: shimDir } },
+        prompt: 'test prompt',
+        onComplete: resolveComplete,
+      });
+      const [command, args, options] = spawn.mock.calls.at(-1);
+      child.stdout.emit('data', Buffer.from('output'));
+      child.emit('close', 0);
+      await completed;
+      expect(command).toBe('cmd.exe');
+      expect(args).toEqual(['/c', shim.replace('&', '^&'), 'plain^&value', 'quoted & value']);
+      expect(options.shell).toBeFalsy();
+      expect(options.env.PATH).toBe(shimDir);
+    } finally {
+      restorePlatform();
+      await rm(dataDir, { recursive: true, force: true });
+    }
   });
 
   it('settles a failed spawn once, clears the run, and swallows stdin EPIPE (#8031)', async () => {

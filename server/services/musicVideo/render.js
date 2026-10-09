@@ -35,14 +35,14 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { findFfmpeg, safeUnder, generateThumbnail, probeVideoDuration, probeVideoGeometry } from '../../lib/ffmpeg.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
-import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { cancelMusicVideoRenderJob, isMusicVideoRenderCanceled } from './renderCancellation.js';
 import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
 import { loadHistory, mutateVideoHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
 import { applyProjectPatch } from './projectsLogic.js';
 import { isSelfDrawnLayer, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
-import { renderableCues, sectionCardCues } from './composition.js';
+import { projectTypographyPlan } from './composition.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
 import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch } from './compositionRender.js';
@@ -157,18 +157,7 @@ export function getRenderJobStatus(jobId) {
 }
 
 export function cancelRender(jobId) {
-  const job = jobs.get(jobId);
-  if (!job) return false;
-  // A composed render spends its first phase capturing the typography overlay
-  // (no ffmpeg yet); abort that capture instead.
-  if (!job.process) {
-    if (job.status !== 'running' || !job.overlayAbort || job.overlayAbort.signal.aborted) return false;
-    job.overlayAbort.abort(new Error('Render cancelled'));
-    return true;
-  }
-  const proc = job.process;
-  killWithEscalation(proc, { label: 'music-video render', stillRunning: () => job.process === proc });
-  return true;
+  return cancelMusicVideoRenderJob(jobs.get(jobId), { label: 'music-video render' });
 }
 
 // Resolve the project's source audio to a verified path under data/music/.
@@ -854,8 +843,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
     // #8984: a composed project lays its timed text cues over the cut, and a
     // title card's text (#8985) joins them over its own section. No renderable
     // cue (plain mode, or nothing timed) skips the overlay capture entirely.
-    const cues = [...renderableCues(project.composition, totalDuration), ...sectionCardCues(clips, sections, totalDuration, project.treatment?.brief?.graphicLanguage)]
-      .sort((a, b) => a.startSec - b.startSec);
+    const { cues, style } = projectTypographyPlan(project, clips, sections, totalDuration);
     const composition = cues.length > 0 ? project.composition : null;
 
     await assertCurrentRenderApproval(projectId, project, options);
@@ -948,7 +936,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
         onClose: async (code, signal) => {
           job.process = null;
           if (code !== 0) {
-            const canceled = signal === 'SIGTERM' || signal === 'SIGKILL';
+            const canceled = isMusicVideoRenderCanceled(job, signal);
             job.status = canceled ? 'canceled' : 'error';
             const reason = canceled ? 'Render cancelled' : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`;
             job.lastError = reason;
@@ -1045,7 +1033,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
     job.overlayAbort = new AbortController();
     const { signal } = job.overlayAbort;
     renderTypographyOverlays({
-      jobId, cues, style: { ...composition.style, graphicLanguage: project.treatment?.brief?.graphicLanguage }, width: canonW, height: canonH, fps, durationSec: totalDuration, signal,
+      jobId, cues, style, width: canonW, height: canonH, fps, durationSec: totalDuration, signal,
       onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: 0.5 * fraction }),
     }).then(async (overlays) => {
       await assertCurrentRenderApproval(projectId, project, options);

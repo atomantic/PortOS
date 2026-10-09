@@ -40,6 +40,7 @@ export default function BoardStage({ board }) {
   const attentionCtx = {
     layered, lipSyncBackend, songDurationSec, failed: sceneMedia.failedScenes,
     footageOptional: FOOTAGE_OPTIONAL_MODES.has(project.composition?.mode || 'concat'),
+    songReview: project.songRevision?.sceneReview || null,
   };
   const codesById = new Map(scenes.map((scene) => [scene.sceneId, sceneAttention(scene, attentionCtx)]));
   const counts = { all: scenes.length, attention: 0, missing: 0 };
@@ -174,11 +175,14 @@ export default function BoardStage({ board }) {
               songDurationSec={songDurationSec}
               footageOptional={attentionCtx.footageOptional}
               failedScenes={sceneMedia.failedScenes}
+              songReview={attentionCtx.songReview}
               falVideoSettings={videoSettings.settings}
               canContinueShot={board.canContinueShot}
               onMove={board.moveScene}
               onDelete={board.onDeleteScene}
               onSplit={board.onSplitScene}
+              onMergeNext={board.onMergeNextScene}
+              nextEndSec={scenes[idx + 1]?.endSec ?? null}
               onRepairPerformance={['code', 'document'].includes(project.composition?.mode) ? null : board.onRepairPerformance}
               repairBusy={board.repairBusy || videoSettings.saving}
               onEditLocal={board.editSceneLocal}

@@ -1,12 +1,19 @@
 /** Public acceptance routes: frozen promotion, stale detection, failed-run isolation and downstream discovery. */
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { chmod, mkdir, readFile, writeFile } from 'fs/promises';
 import { createHash, randomUUID } from 'crypto';
 import { join } from 'path';
 import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
 vi.mock('../../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('animation-acceptance-') }));
-vi.mock('../../lib/fileUtils.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('animation-acceptance-') }));
+const historyFault = vi.hoisted(() => ({ beforeSave: null }));
+vi.mock('../../lib/fileUtils.js', async original => {
+  const actual = makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('animation-acceptance-') });
+  return { ...actual, atomicWrite: async (path, ...args) => {
+    if (path.endsWith('video-history.json')) await historyFault.beforeSave?.();
+    return actual.atomicWrite(path, ...args);
+  } };
+});
 vi.mock('../socket.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
@@ -17,6 +24,10 @@ import { createCodeAnimationPackage } from '../../lib/codeAnimationPackage.js';
 import { emitCodeAnimationChanged } from '../socket.js';
 import { loadHistory, saveHistory } from '../videoGen/history.js';
 import routes from '../../routes/codeAnimation.js';
+import * as store from './projectStore.js';
+import { acceptProductionOutput } from './acceptance.js';
+
+afterEach(() => { historyFault.beforeSave = null; vi.restoreAllMocks(); });
 
 const health = await checkHealth().catch(error => ({ connected: false, error: error.message }));
 const ready = requireDbOrSkip('codeAnimation/acceptance.db.test', health.connected, health.error);
@@ -92,6 +103,85 @@ describe.skipIf(!ready)('Production acceptance', () => {
     expect((await loadHistory()).find(entry => entry.id === run.videoId).codeAnimation.acceptance).toMatchObject({ projectId: p.id, runId: run.runId });
     const assets = (await get('/accepted-assets')).body.items.find(item => item.projectId === p.id);
     expect(assets).toMatchObject({ videoId: run.videoId, sourceHash: p.revision.sourceHash, packageUrl: `/api/code-animation/projects/${p.id}/revisions/${p.revision.id}/package` });
+  });
+
+  it.each(['read', 'save'])('returns committed acceptance on history %s failure and recovers from durable intent on the next read', async failure => {
+    const p = await project();
+    const old = await finishedRun(p);
+    await post(`/projects/${p.id}/accepted-output`, { runId: old.runId });
+    const imported = await post(`/projects/${p.id}/import`, createCodeAnimationPackage(manifest, [{ path: 'index.html', content: '<html><canvas>New source</canvas></html>' }]));
+    const next = await finishedRun({ id: p.id, revision: imported.body.revision });
+    const history = await loadHistory();
+    if (failure === 'read') await writeFile(join(PATHS.data, 'video-history.json'), '{broken');
+    else historyFault.beforeSave = () => { throw new Error('Synthetic ENOSPC'); };
+    vi.mocked(emitCodeAnimationChanged).mockClear();
+
+    const result = await post(`/projects/${p.id}/accepted-output`, { runId: next.runId });
+    expect(result).toMatchObject({ status: 200, body: {
+      acceptedOutput: { runId: next.runId }, acceptanceProjection: { status: 'pending' },
+      acceptedRevisionId: imported.body.revision.id, candidateRevisionId: null,
+    } });
+    expect(emitCodeAnimationChanged).toHaveBeenCalledWith(p.id);
+    const durable = await store.getProjectRecord(p.id);
+    expect(durable.acceptanceProjection).toEqual(result.body.acceptanceProjection);
+    const unavailable = (await get(`/projects/${p.id}/acceptance`)).body;
+    expect(unavailable).toMatchObject({ acceptanceProjection: { status: 'pending' }, accepted: { runId: next.runId, fresh: true, path: `/data/videos/${next.filename}` } });
+
+    historyFault.beforeSave = null;
+    await saveHistory(history);
+    // A fresh service instance has no in-memory queue/intent from the request,
+    // as after restart. Only the persisted project tells it what to recover.
+    const restarted = await import('./acceptance.js?recovery');
+    const recovered = failure === 'read'
+      ? await restarted.getProductionAcceptance(p.id)
+      : (await restarted.listAcceptedAssets({ limit: 50, offset: 0 })).items.find(item => item.projectId === p.id);
+    expect(recovered.acceptanceProjection).toMatchObject({ status: 'synced', decisionId: durable.acceptanceProjection.decisionId });
+    const after = await store.getProjectRecord(p.id);
+    expect(after.acceptedOutput).toEqual(durable.acceptedOutput);
+    expect(after.acceptedRevisionId).toBe(durable.acceptedRevisionId);
+    expect(after.candidateRevisionId).toBe(durable.candidateRevisionId);
+    expect((await loadHistory()).filter(entry => entry.codeAnimation?.acceptance?.projectId === p.id).map(entry => entry.id)).toEqual([next.videoId]);
+    await get(`/projects/${p.id}/acceptance`);
+    expect((await store.getProjectRecord(p.id)).acceptedOutput).toEqual(durable.acceptedOutput);
+  });
+
+  it('replays a history write after acknowledgement failure without changing the frozen decision', async () => {
+    const p = await project();
+    const run = await finishedRun(p);
+    vi.spyOn(store, 'acknowledgeAcceptanceProjection').mockRejectedValueOnce(new Error('Synthetic DB interruption'));
+    const result = await post(`/projects/${p.id}/accepted-output`, { runId: run.runId });
+    expect(result.body.acceptanceProjection.status).toBe('pending');
+    const projected = await loadHistory();
+    expect(projected.find(entry => entry.id === run.videoId).codeAnimation.acceptance.runId).toBe(run.runId);
+    expect((await get(`/projects/${p.id}/acceptance`)).body.acceptanceProjection.status).toBe('synced');
+    expect(await loadHistory()).toEqual(projected);
+    expect((await store.getProjectRecord(p.id)).acceptedOutput).toEqual(result.body.acceptedOutput);
+  });
+
+  it('serializes overlapping promotions and never acknowledges a newer decision with an older receipt', async () => {
+    const p = await project();
+    const first = await finishedRun(p);
+    const second = await finishedRun(p);
+    const entered = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    historyFault.beforeSave = async () => { entered.resolve(); await release.promise; };
+    const olderRequest = acceptProductionOutput(p.id, first.runId);
+    await entered.promise;
+    const older = await store.getProjectRecord(p.id);
+    const newerRequest = acceptProductionOutput(p.id, second.runId);
+    expect((await store.getProjectRecord(p.id)).acceptedOutput.runId).toBe(first.runId);
+    historyFault.beforeSave = () => { throw new Error('Synthetic ENOSPC'); };
+    release.resolve();
+    await olderRequest;
+    const newer = await newerRequest;
+    expect(newer).toMatchObject({ acceptedOutput: { runId: second.runId }, acceptanceProjection: { status: 'pending' } });
+    expect(newer.acceptanceProjection.decisionId).not.toBe(older.acceptanceProjection.decisionId);
+    await store.acknowledgeAcceptanceProjection(p.id, older.acceptanceProjection.decisionId);
+    expect((await store.getProjectRecord(p.id)).acceptanceProjection).toEqual(newer.acceptanceProjection);
+    historyFault.beforeSave = null;
+    await get('/accepted-assets');
+    expect((await loadHistory()).filter(entry => entry.codeAnimation?.acceptance?.projectId === p.id).map(entry => entry.id)).toEqual([second.videoId]);
+    expect((await store.getProjectRecord(p.id)).acceptedOutput).toEqual(newer.acceptedOutput);
   });
 
   it('refuses a failing run and keeps the accepted playback when a later candidate fails', async () => {

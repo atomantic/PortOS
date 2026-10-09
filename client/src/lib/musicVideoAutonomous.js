@@ -198,6 +198,7 @@ export const AUTONOMOUS_SONG_STEP_LABELS = Object.freeze({
 
 /** What the Produce stage is doing once production is done (the server's `stages.produce.step`). */
 export const AUTONOMOUS_PRODUCE_STEP_LABELS = Object.freeze({
+  'text-check': 'Checking the overlay text',
   rendering: 'Rendering final video',
   'final-review': 'The orchestrator is watching the final video',
   'final-revision': 'Revising the sections the orchestrator flagged',

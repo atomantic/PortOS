@@ -51,6 +51,7 @@ import {
   goalFidelityLogMarker,
   isDependencyAuditSummaryDiff,
   mergeOutcomeObjective,
+  isForgeRemediationTestFixDiff,
   mergeOutcomeReview,
   taskObjective,
 } from '../lib/goalFidelity.js';
@@ -911,6 +912,10 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
       && isDependencyAuditSummaryDiff({ diff, truncated })
       && await hasEmptyDependencyInventories(workspacePath).catch(() => false)) {
     return noFidelityVerdict('Dependency audit summary is not judgeable from a diff: independent forge queries found no open alerts or PRs, but the diff cannot verify the audit execution or scanner coverage.');
+  }
+
+  if (!claimFlow && isForgeRemediationTestFixDiff({ analysisType: resolveTaskHookType(task), diff })) {
+    return noFidelityVerdict('PR remediation is not judgeable from a diff: its objective is forge state (CI, merges), and the run window holds only a test-file CI repair.');
   }
 
   const result = await runLocalGoalFidelityReview({

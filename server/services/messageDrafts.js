@@ -1,11 +1,22 @@
 
 import { join } from 'path';
+import { z } from 'zod';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { atomicWrite, ensureDir, PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, PATHS, readJSONFileStrict } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 
 const DRAFTS_FILE = join(PATHS.messages, 'drafts.json');
+const MISSING_STORE = Symbol('missing drafts');
+// Older drafts lack send audit fields. Keep their extra fields unchanged while
+// rejecting records that recovery or reconciliation cannot safely operate on.
+const draftStoreSchema = z.array(z.object({
+  id: z.string().min(1),
+  status: z.string().min(1),
+  sendAttemptId: z.string().min(1).nullish(),
+  sendAttempts: z.array(z.object({ id: z.string().min(1) }).passthrough()).nullish()
+}).passthrough().refine(draft => draft.status !== 'delivery_unknown'
+  || (draft.sendAttemptId && draft.sendAttempts?.some(attempt => attempt.id === draft.sendAttemptId))));
 
 // Serialize every read-modify-write of drafts.json onto a single tail so two
 // concurrent createDraft/updateDraft/delete calls can't read the same snapshot and
@@ -20,10 +31,16 @@ const MAX_SEND_ATTEMPTS = 20;
 // ambiguous even if it never reached the transport. Never retry it at boot.
 async function loadDrafts() {
   await ensureDir(PATHS.messages);
-  const content = await tryReadFile(DRAFTS_FILE);
-  if (!content) return [];
-  const parsed = safeJSONParse(content, [], { context: 'messageDrafts' });
-  const drafts = Array.isArray(parsed) ? parsed : [];
+  const { ok, value } = await readJSONFileStrict(DRAFTS_FILE, MISSING_STORE, { logError: false });
+  if (ok && value === MISSING_STORE) return [];
+  const parsed = ok && draftStoreSchema.safeParse(value);
+  if (!parsed?.success) {
+    throw new ServerError('Message drafts storage is unavailable or invalid; original data preserved', {
+      status: 503, code: 'MESSAGE_DRAFTS_UNAVAILABLE'
+    });
+  }
+  // Validate without projecting the records: future/legacy audit fields survive.
+  const drafts = value;
   let recovered = false;
   for (const draft of drafts) {
     if (draft.status !== 'sending' || activeAttempts.has(draft.id)) continue;
@@ -125,7 +142,7 @@ export async function updateDraft(id, updates) {
 
 // The eligibility check and transition share the same queue as every draft edit.
 // Provider I/O happens after this promise resolves, never while holding the queue.
-export async function claimDraftForSend(id) {
+export async function claimDraftForSend(id, validateClaim) {
   return queueWrite(async () => {
     const drafts = await loadDrafts();
     const draft = drafts.find(d => d.id === id);
@@ -133,6 +150,7 @@ export async function claimDraftForSend(id) {
     if (draft.status !== 'approved') {
       throw new ServerError('Draft must be approved and not already sending or sent', { status: 409, code: 'DRAFT_STATE_CONFLICT' });
     }
+    validateClaim?.(draft);
     // Keep uncertain delivery blocked after a crash; never silently retry it.
     draft.status = 'sending';
     draft.updatedAt = new Date().toISOString();

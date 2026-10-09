@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+vi.mock('../lib/imageCleanDefaults.js', () => ({
+  resolveImageCleaners: vi.fn(() => ({ cleanC2PA: false, denoise: false })),
+}));
+
 const mocks = vi.hoisted(() => ({
   getUniverse: vi.fn(),
   getSettings: vi.fn(),
@@ -20,10 +24,6 @@ vi.mock('./universeCharacterSheetSlot.js', () => ({
   claimPendingSheetSlot: (...args) => mocks.claimPendingSheetSlot(...args),
   getPendingSheetSlot: vi.fn(),
   releasePendingSheetSlot: vi.fn(),
-}));
-vi.mock('./imageGen/index.js', () => ({
-  IMAGE_GEN_MODE: { LOCAL: 'local', CODEX: 'codex', EXTERNAL: 'external' },
-  resolveImageCleaners: vi.fn(() => ({ cleanC2PA: false, denoise: false })),
 }));
 vi.mock('../lib/mediaModels.js', async (importOriginal) => ({
   ...(await importOriginal()),

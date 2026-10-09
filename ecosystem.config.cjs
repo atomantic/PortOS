@@ -25,7 +25,10 @@ const envFile = path.join(__dirname, '.env');
 const { parseEnvFile } = require('./scripts/lib/envFile.cjs');
 const dotenv = parseEnvFile(envFile); // {} when .env is missing
 const envValue = (key) => dotenv[key] || null;
-const pgMode = envValue('PGMODE') || 'docker';
+// Same precedence as scripts/setup-db.js getMode(): a NONEMPTY exported PGMODE →
+// saved .env → docker, so setup and PM2 always provision/dial the same backend
+// (#10758). An empty export is unset, never a third mode.
+const pgMode = process.env.PGMODE || envValue('PGMODE') || 'docker';
 const envServerMaxMemory = envValue('PORTOS_SERVER_MAX_MEMORY');
 const envPgPassword = envValue('PGPASSWORD');
 const envPgUser = envValue('PGUSER');

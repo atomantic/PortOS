@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Routes, Route } from 'react-router';
+import { MemoryRouter, Routes, Route, Link } from 'react-router';
 import { MockEventSource, lastEventSource } from '../test/mockEventSource';
 
 const STEPS = [
@@ -517,6 +517,85 @@ describe('StoryBuilder — index', () => {
 });
 
 describe('StoryBuilder — detail stepper', () => {
+  it.each([
+    ['a server failure', Object.assign(new Error('Service unavailable'), { status: 503 })],
+    ['a network failure', new Error('Network is down')],
+  ])('offers a session retry after %s without claiming the story is missing', async (_name, error) => {
+    const { fireEvent } = await import('@testing-library/react');
+    api.getStorySession.mockRejectedValueOnce(error);
+    renderAt('/story-builder/stb-1/idea');
+
+    expect((await screen.findByRole('alert')).textContent).toContain('Couldn’t load the story session');
+    expect(screen.queryByText(/Session not found/)).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Idea' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByRole('heading', { name: 'Idea' })).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('reserves the missing-session fallback for a confirmed 404', async () => {
+    api.getStorySession.mockRejectedValueOnce(Object.assign(new Error('Missing record'), { status: 404 }));
+    renderAt('/story-builder/stb-1/idea');
+    expect(await screen.findByText(/Session not found/)).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it.each([
+    ['a failed read', () => api.getStoryBuilderSteps.mockRejectedValueOnce(new Error('Manifest unavailable'))],
+    ['an empty manifest', () => api.getStoryBuilderSteps.mockResolvedValueOnce({ steps: [] })],
+  ])('gates the workspace on %s and restores navigation on retry', async (_name, setup) => {
+    const { fireEvent } = await import('@testing-library/react');
+    setup();
+    renderAt('/story-builder/stb-1/idea');
+
+    expect((await screen.findByRole('alert')).textContent).toContain('Couldn’t load story steps');
+    expect(api.getStorySession).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /Characters/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByRole('tab', { name: /Characters/ })).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('ignores a late session response after selecting another story', async () => {
+    const { fireEvent } = await import('@testing-library/react');
+    let resolveOld;
+    api.getStorySession.mockImplementation((id) => id === 'stb-old'
+      ? new Promise((resolve) => { resolveOld = resolve; })
+      : Promise.resolve({ id, title: 'Current story', currentStep: 'idea', steps: mkSteps() }));
+    render(
+      <MemoryRouter initialEntries={['/story-builder/stb-old/idea']}>
+        <Link to="/story-builder/stb-new/idea">Select another story</Link>
+        <Routes><Route path="/story-builder/:storyId/:step" element={<StoryBuilder />} /></Routes>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(resolveOld).toBeTypeOf('function'));
+    fireEvent.click(screen.getByText('Select another story'));
+    expect(await screen.findByRole('heading', { name: 'Current story' })).toBeTruthy();
+
+    await act(async () => { resolveOld({ id: 'stb-old', title: 'Old story', currentStep: 'idea', steps: mkSteps() }); });
+    expect(screen.getByRole('heading', { name: 'Current story' })).toBeTruthy();
+    expect(screen.queryByText('Old story')).toBeNull();
+  });
+
+  it('keeps one continuation control in the stage header and every destination in the shared navigator', async () => {
+    api.getStorySession.mockResolvedValue({
+      id: 'stb-1', title: 'Example story', currentStep: 'idea', seedIdea: 'Long generated work. '.repeat(1000),
+      universeId: 'u1', seriesId: 's1', steps: mkSteps(), staleSteps: [],
+    });
+    renderAt('/story-builder/stb-1/idea');
+    const action = await screen.findByRole('button', { name: 'Lock & continue' });
+    const work = screen.getByRole('region', { name: 'Stage work' });
+    expect(action.closest('header').getAttribute('aria-label')).toBe('Stage actions');
+    expect(work.contains(action)).toBe(false);
+    expect(screen.getAllByRole('button', { name: 'Lock & continue' })).toHaveLength(1);
+    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(STEPS.map(step => step.label));
+    expect(screen.getByRole('tab', { name: 'Idea' }).getAttribute('aria-selected')).toBe('true');
+    expect(api.generateStoryStep).not.toHaveBeenCalled();
+    expect(api.refineStoryStep).not.toHaveBeenCalled();
+  });
+
   it('gates the Next button until the active step is locked', async () => {
     api.getStorySession.mockResolvedValue({
       id: 'stb-1', title: 'Salt Run', currentStep: 'idea', seedIdea: 'seed',
@@ -717,7 +796,7 @@ describe('StoryBuilder — detail stepper', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Idea' })).toBeTruthy());
     const callsBefore = api.getStorySession.mock.calls.length;
 
-    fireEvent.click(screen.getByRole('button', { name: /Plot Arc/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Plot Arc/i }));
     await waitFor(() => expect(api.setStoryCurrentStep).toHaveBeenCalledWith('stb-1', 'plotArc', expect.anything()));
     // Rejection → the catch path toasts + resyncs (reload refetches the session),
     // and the URL never advances, so the heading stays on Idea instead of
@@ -899,7 +978,7 @@ describe('StoryBuilder — detail stepper', () => {
     await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
 
     // Navigate the rail to another step — the panel unmounts.
-    fireEvent.click(screen.getByRole('button', { name: /Characters/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /Characters/ }));
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Characters' })).toBeTruthy());
     expect(lastEventSource().closed).toBe(false);
 
@@ -946,6 +1025,43 @@ describe('StoryBuilder — detail stepper', () => {
       await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
       // Settled once — the post-settlement session read lists no live run, so nothing re-attaches.
       expect(MockEventSource.instances).toHaveLength(1);
+    });
+
+    it('retains drafts and a resumed run through a failed refresh and successful retry', async () => {
+      const { fireEvent } = await import('@testing-library/react');
+      const snapshot = liveSession([
+        { stepId: 'characters', runId: 'run-3', op: 'backfill', startedAt: '2026-01-01T00:00:00.000Z', phase: null },
+      ]);
+      api.getStorySession.mockResolvedValue(snapshot);
+      renderAt('/story-builder/stb-1/readerMap');
+      await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
+      const feedback = screen.getByLabelText('AI refinement feedback');
+      fireEvent.change(feedback, { target: { value: 'Keep my unsaved feedback' } });
+
+      // A rejected pointer move triggers the same reload used after completed work.
+      api.setStoryCurrentStep.mockRejectedValueOnce(new Error('Could not switch'));
+      api.getStorySession.mockRejectedValueOnce(Object.assign(new Error('Temporary read failure'), { status: 503 }));
+      fireEvent.click(screen.getByRole('tab', { name: /Idea/ }));
+
+      expect((await screen.findByRole('alert')).textContent).toContain('Showing the last loaded story');
+      expect(screen.queryByText(/Session not found/)).toBeNull();
+      expect(screen.getByLabelText('AI refinement feedback')).toBe(feedback);
+      expect(feedback.value).toBe('Keep my unsaved feedback');
+      expect(screen.getByRole('status').textContent).toMatch(/Backfilling Characters/);
+      expect(lastEventSource().closed).toBe(false);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+      expect(screen.getByLabelText('AI refinement feedback')).toBe(feedback);
+      expect(feedback.value).toBe('Keep my unsaved feedback');
+      expect(MockEventSource.instances).toHaveLength(1);
+      expect(api.generateStoryStep).not.toHaveBeenCalled();
+      expect(api.refineStoryStep).not.toHaveBeenCalled();
+
+      api.getStorySession.mockResolvedValue(liveSession([]));
+      await act(async () => { lastEventSource().emit({ runId: 'run-3', type: 'complete' }); });
+      await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('Backfill finished'));
+      expect(feedback.value).toBe('Keep my unsaved feedback');
     });
 
     it('lets the operator reach a run on another step from the banner', async () => {

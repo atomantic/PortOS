@@ -36,7 +36,7 @@
  * this install's world entities and carries its author's intent, and the
  * machine-local privacy ADR keeps records off the federation layer. There is
  * no `data.reference/` seed — an absent file IS the empty set every install
- * starts from, so no migration is owed.
+ * starts from. Migration 425 adds unknown completed-delivery history to older stores.
  */
 
 import { join } from 'node:path';
@@ -55,7 +55,7 @@ import { findControllerDefinitionById } from './eidoverseControllerRegistry.js';
 import { cancel, getEvent, schedule } from './eventScheduler.js';
 
 /** Storage-layout version stamped on `data/eidoverse/controllers.json`. */
-const STORE_SCHEMA_VERSION = 1;
+const STORE_SCHEMA_VERSION = 2;
 
 const SCHEDULER_EVENT_ID = 'eidoverse-controller-tick';
 
@@ -106,6 +106,13 @@ async function readInstalls() {
   const raw = await readJSONFile(storeFile(), null, { allowArray: false, strict: true });
   const installs = raw && typeof raw === 'object' && raw.installs && typeof raw.installs === 'object' ? { ...raw.installs } : {};
   const schemaVersion = raw && typeof raw === 'object' && Number.isInteger(raw.schemaVersion) ? raw.schemaVersion : STORE_SCHEMA_VERSION;
+  // Additive read compatibility even before the offline migration has run.
+  // Never derive acknowledgements from old outcomes or proposal summaries.
+  if (schemaVersion <= STORE_SCHEMA_VERSION) {
+    for (const [id, record] of Object.entries(installs)) {
+      installs[id] = { lastCompletedDelivery: null, ...record };
+    }
+  }
   return { schemaVersion, installs };
 }
 
@@ -208,6 +215,7 @@ export async function installEidoverseController(input, {
       nextTickAt: nextControllerTickAt(authored, nowMs),
       lastTickAt: existing?.lastTickAt ?? null,
       lastOutcome: null,
+      lastCompletedDelivery: null,
       recentEffects: [],
       consecutiveFailures: 0,
       consecutiveDeliveryFailures: 0,
@@ -361,19 +369,22 @@ async function deliverControllerEffects(effects, { signal } = {}) {
   let delivered = 0;
   let error = null;
   for (const effect of outbound) {
-    if (effect.kind === 'say') {
-      // `sayInEidoverseWorld` has no rewrite/refusal dimension of its own —
-      // it either resolves (the world acked it) or throws, which the caller
-      // in `deliverPassEffects` already treats as a delivery failure.
-      await world.sayInEidoverseWorld(effect.text, { signal });
-      delivered += 1;
-      continue;
-    }
-    const result = await world.augmentEidoverseWorld(effect.operations, { signal });
-    delivered += result.applied;
-    if (result.success === false && error === null) {
-      const refusal = result.operations.find((operation) => operation.outcome === 'refused');
-      error = refusal?.reason ?? 'Eidoverse refused part of this augment batch.';
+    try {
+      if (effect.kind === 'say') {
+        // A resolved say is acknowledged; preserve that count if a later
+        // effect throws, rather than losing already-committed world work.
+        await world.sayInEidoverseWorld(effect.text, { signal });
+        delivered += 1;
+        continue;
+      }
+      const result = await world.augmentEidoverseWorld(effect.operations, { signal });
+      delivered += result.applied;
+      if (result.success === false && error === null) {
+        const refusal = result.operations.find((operation) => operation.outcome === 'refused');
+        error = refusal?.reason ?? 'Eidoverse refused part of this augment batch.';
+      }
+    } catch (failure) {
+      return { delivered, error: String(failure?.message ?? failure) || 'World delivery failed.' };
     }
   }
   return { delivered, error };
@@ -505,14 +516,17 @@ async function stepInstall(record, { nowMs, at, resolveDefinition, storeSchemaVe
 async function deliverPassEffects(stepped, { deliver, signal }) {
   const deliveries = [];
   for (const { record, effects } of stepped) {
-    if (effects.length === 0) continue;
+    const outbound = effects.filter((effect) => effect.kind === 'say' || effect.kind === 'augment');
+    if (outbound.length === 0) continue;
+    const at = record.lastOutcome.at;
     try {
-      const { delivered, error } = await deliver(effects, { signal });
-      deliveries.push({ id: record.id, tick: record.tick, delivered, error });
+      const { delivered, error } = await deliver(outbound, { signal });
+      const reason = error == null ? null : (String(error).trim() || 'World delivery failed.').slice(0, EIDOVERSE_CONTROLLER_LIMITS.reasonMax);
+      deliveries.push({ id: record.id, at, tick: record.tick, delivered, error: reason });
     } catch (error) {
-      const message = String(error.message).slice(0, EIDOVERSE_CONTROLLER_LIMITS.reasonMax);
+      const message = (String(error?.message ?? error).trim() || 'World delivery failed.').slice(0, EIDOVERSE_CONTROLLER_LIMITS.reasonMax);
       console.error(`❌ ${LOG_PREFIX}: "${record.id}" tick ${record.tick} stepped but could not reach the world: ${message}`);
-      deliveries.push({ id: record.id, tick: record.tick, delivered: 0, error: message });
+      deliveries.push({ id: record.id, at, tick: record.tick, delivered: 0, error: message });
     }
   }
   return deliveries;
@@ -521,8 +535,8 @@ async function deliverPassEffects(stepped, { deliver, signal }) {
 /**
  * Fold delivery outcomes back onto the records they belong to.
  *
- * Each patch is applied only while the record's `lastOutcome.tick` still
- * matches the tick that produced those effects: an install or retire landing
+ * Each patch is applied only while the record's `lastOutcome.tick` and `at`
+ * still match the tick that produced those effects: an install or retire landing
  * between the two phases has replaced what the delivery was about, and
  * stamping a delivery count onto it would describe work that record never did.
  *
@@ -541,9 +555,9 @@ async function recordDeliveries(deliveries) {
     const { schemaVersion: storeSchemaVersion, installs } = await readInstalls();
     let changed = false;
     let gateMoved = false;
-    for (const { id, tick, delivered, error } of deliveries) {
+    for (const { id, at, tick, delivered, error } of deliveries) {
       const current = installs[id];
-      if (!current || current.lastOutcome?.tick !== tick) continue;
+      if (!current || current.lastOutcome?.tick !== tick || current.lastOutcome.at !== at) continue;
       const consecutiveDeliveryFailures = error ? (current.consecutiveDeliveryFailures ?? 0) + 1 : 0;
       const exhausted = error && consecutiveDeliveryFailures >= EIDOVERSE_CONTROLLER_LIMITS.maxConsecutiveFailures;
       if (exhausted) {
@@ -552,6 +566,7 @@ async function recordDeliveries(deliveries) {
       installs[id] = {
         ...current,
         lastOutcome: { ...current.lastOutcome, delivered, deliveryError: error },
+        lastCompletedDelivery: { at, tick, ok: !error, delivered, reason: error },
         consecutiveDeliveryFailures,
         ...(exhausted ? {
           armed: false,

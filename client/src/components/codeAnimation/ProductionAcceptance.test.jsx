@@ -40,7 +40,7 @@ describe('Production acceptance', () => {
     const user = userEvent.setup();
     const low = run('cccccccc-3', { settings: { requested: { providerId: 'example', model: 'example-model', effort: 'low' }, effective: { providerId: 'example', model: 'example-model', effort: 'low' }, renderer: null }, spend: { repairs: 5, tokens: 900, renderMs: 4000, elapsedMs: 9000, diskBytes: 2048 } });
     api.getCodeAnimationAcceptance.mockResolvedValue({ accepted: null, runs: [run('dddddddd-4'), low] });
-    api.acceptCodeAnimationOutput.mockResolvedValue({ id: 'p1' });
+    api.acceptCodeAnimationOutput.mockResolvedValue({ id: 'p1', acceptedOutput: { ...frozen, runId: 'cccccccc-3' } });
     renderIt();
     await user.click(await screen.findByLabelText(/Run dddddddd/));
     await user.click(screen.getByLabelText(/Run cccccccc/));
@@ -55,4 +55,25 @@ describe('Production acceptance', () => {
     await user.click(screen.getByRole('button', { name: /Accept output of run cccccccc/ }));
     expect(api.acceptCodeAnimationOutput).toHaveBeenCalledWith('p1', 'cccccccc-3', { silent: true });
   });
+  it('applies committed acceptance immediately and keeps playback plus a sync retry when the refresh fails', async () => {
+    const user = userEvent.setup();
+    const onProject = vi.fn();
+    api.getCodeAnimationAcceptance.mockResolvedValueOnce({ accepted: null, runs: [run(frozen.runId)] })
+      .mockRejectedValueOnce(new Error('Synthetic read failure'));
+    const project = { id: 'p1', acceptedOutput: frozen, acceptanceProjection: { decisionId: 'decision-1', status: 'pending' } };
+    api.acceptCodeAnimationOutput.mockResolvedValue(project);
+    renderIt({ onProject });
+    await user.click(await screen.findByRole('button', { name: /Accept output of run/ }));
+    expect(onProject).toHaveBeenCalledWith(project);
+    expect(await screen.findByLabelText('Accepted final video')).toHaveAttribute('src', frozen.path);
+    expect(screen.getByRole('status')).toHaveTextContent('Acceptance saved. Media History synchronization is pending');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Synthetic read failure');
+    expect(screen.queryByText(/This video is in Media History/)).not.toBeInTheDocument();
+    api.getCodeAnimationAcceptance.mockResolvedValue({ accepted: frozen, runs: [run(frozen.runId, { accepted: true })], acceptanceProjection: { decisionId: 'decision-1', status: 'synced' } });
+    await user.click(screen.getByRole('button', { name: 'Retry Media History sync' }));
+    expect(await screen.findByText(/This video is in Media History/)).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(api.acceptCodeAnimationOutput).toHaveBeenCalledTimes(1);
+  });
+
 });

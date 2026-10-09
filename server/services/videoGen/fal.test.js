@@ -134,9 +134,14 @@ describe('videoGen/fal — generateVideo', () => {
   // wire types per family — and the history records what was rendered and its
   // list-price estimate. One family end to end; the per-family matrix is
   // pinned in lib/falVideoModels.test.js.
-  it('builds a curated model\'s body through the catalog and records model, resolution and estimate', async () => {
-    const framePath = join(TEST_ROOT, 'frame.png');
+  it.each(['gallery', 'upload'])('builds a curated model body with both %s anchor frames and records the estimate', async (input) => {
+    const framesDir = input === 'upload' ? join(TEST_ROOT, 'uploads') : TEST_ROOT;
+    await mkdir(framesDir, { recursive: true });
+    const framePath = join(framesDir, 'frame.png');
     await writeFile(framePath, Buffer.from('89504e470d0a1a0a', 'hex'));
+    const endFramePath = join(framesDir, 'end-frame.jpg');
+    const endFrame = Buffer.from('ffd8ffe000104a464946000101', 'hex');
+    await writeFile(endFramePath, endFrame);
     const posted = [];
     vi.stubGlobal('fetch', vi.fn(async (url, opts) => {
       if (opts?.method === 'POST') {
@@ -151,18 +156,29 @@ describe('videoGen/fal — generateVideo', () => {
 
     const job = await fal.generateVideo({
       apiKey: 'test-key', modelId: 'fal-ai/kling-video/v3/pro/image-to-video',
-      prompt: 'waves roll in', negativePrompt: 'text', duration: 7.4, width: 1080, height: 1920, sourceImagePath: framePath,
+      prompt: 'waves roll in', negativePrompt: 'text', duration: 7.4, width: 1080, height: 1920, sourceImagePath: framePath, lastImagePath: endFramePath,
+      ...(input === 'upload' ? { uploadedTempPath: framePath, uploadedTempPaths: [endFramePath] } : {}),
     });
     expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'completed' });
     expect(posted).toHaveLength(1);
     expect(posted[0].url).toBe('https://queue.fal.run/fal-ai/kling-video/v3/pro/image-to-video');
     expect(posted[0].body).toEqual({
       prompt: 'waves roll in', negative_prompt: 'text', start_image_url: expect.stringMatching(/^data:image\/png;base64,/),
+      end_image_url: `data:image/jpeg;base64,${endFrame.toString('base64')}`,
       duration: '8', generate_audio: false,
     });
     const [entry] = await loadHistory();
     // 8s (the covering length) × $0.112/s audio off.
     expect(entry).toMatchObject({ modelId: 'fal:fal-ai/kling-video/v3/pro/image-to-video', duration: 8, generateAudio: false, estimatedCostUsd: 0.896 });
+    if (input === 'upload') {
+      await vi.waitFor(async () => {
+        await expect(readFile(framePath)).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(readFile(endFramePath)).rejects.toMatchObject({ code: 'ENOENT' });
+      });
+    } else {
+      expect(await readFile(endFramePath)).toEqual(endFrame);
+      expect(await readFile(framePath)).toEqual(Buffer.from('89504e470d0a1a0a', 'hex'));
+    }
   });
 
   it('refuses a start-frame-only model without a frame before submitting anything', async () => {
@@ -170,6 +186,36 @@ describe('videoGen/fal — generateVideo', () => {
     vi.stubGlobal('fetch', fetchMock);
     await expect(fal.generateVideo({ apiKey: 'test-key', modelId: 'fal-ai/veo3.1/fast/image-to-video', prompt: 'a fox' }))
       .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['fal-ai/veo3.1/fast/image-to-video', 'fal-ai/uncatalogued-model'])('refuses end frames for %s before reading media or submitting', async (modelId) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(fal.generateVideo({
+      apiKey: 'test-key', modelId, prompt: 'a fox',
+      sourceImagePath: join(TEST_ROOT, 'missing-start.png'), lastImagePath: join(TEST_ROOT, 'missing-end.png'),
+    })).rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR', message: expect.stringMatching(/end.frame/i) });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(terminalEvents.size).toBe(0);
+  });
+
+  it('cleans owned frames after an asynchronous input failure without submitting a paid request', async () => {
+    const uploads = join(TEST_ROOT, 'uploads');
+    await mkdir(uploads, { recursive: true });
+    const frame = join(uploads, 'start.png');
+    const end = join(uploads, 'missing-end.png');
+    await writeFile(frame, Buffer.from('89504e470d0a1a0a', 'hex'));
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const job = await fal.generateVideo({
+      apiKey: 'test-key', modelId: 'fal-ai/kling-video/v3/pro/image-to-video', prompt: 'a fox',
+      sourceImagePath: frame, lastImagePath: end, uploadedTempPath: frame, uploadedTempPaths: [end],
+    });
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'failed' });
+    await vi.waitFor(async () => {
+      await expect(readFile(frame)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

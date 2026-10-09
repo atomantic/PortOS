@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./modelDeduplication.js', () => ({ scanModelDuplicates: vi.fn(async () => ({ pinokioDetected: false, items: [], totalReclaimableBytes: 0 })) }));
 
@@ -133,6 +133,7 @@ const {
 } = await import('./systemResources.js');
 
 describe('system resource reporting', () => {
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     vi.clearAllMocks();
     resetSystemResourceReportCache();
@@ -313,6 +314,56 @@ describe('system resource reporting', () => {
     expect(report.queues.agents).toMatchObject({ pendingUser: 0, pendingSystem: 0, inProgress: 1 });
     // The media lane contributes a fixed 3 queued / 1 running, so the one agent
     // task crossing sides leaves the combined total at 5 either way.
+    expect(report.summary).toMatchObject({ queuedJobs: 3, runningJobs: 2 });
+  });
+
+  it('keeps failed census reconciliation unknown and restores spawn-window counts on recovery', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const logs = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const tasks = {
+      user: { grouped: { pending: [{ id: 'user/42', status: 'pending' }], in_progress: [] } },
+      cos: { grouped: { pending: [{ id: 'approval-1', approvalRequired: true }], in_progress: [] }, awaitingApproval: [{ id: 'approval-1' }] },
+    };
+    cos.getAllTasks.mockResolvedValueOnce(tasks).mockResolvedValueOnce(tasks).mockResolvedValueOnce(tasks);
+    cos.getStatus.mockResolvedValueOnce({ running: true, paused: false, activeAgents: 1, pausedAgents: 2 });
+    const failure = Object.assign(new Error('private census path'), { code: 'EIO' });
+    cos.getAgents.mockRejectedValueOnce(failure).mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce([{ id: 'agent-1', taskId: 'user/42', status: 'running', startedAt: new Date().toISOString() }]);
+
+    const failed = await buildSystemResourceReport();
+    expect(failed.sourceErrors).toEqual(['agent-census']);
+    expect(failed.queues.agents).toEqual({
+      pendingUser: null, pendingSystem: null, inProgress: null, awaitingApproval: 1,
+      activeAgents: 1, pausedAgents: 2, daemonRunning: true, daemonPaused: false,
+    });
+    expect(failed.queues.media).toMatchObject({ queued: 3, running: 1 });
+    expect(failed.summary).toMatchObject({ queuedJobs: null, runningJobs: null });
+    const prompt = buildSystemResourceTriagePrompt(failed);
+    expect(prompt).toContain('"unavailableSources": [\n    "agent-census"');
+    expect(prompt).toContain('"queuedJobs": null');
+    expect(prompt).toContain('"runningJobs": null');
+    expect(prompt).not.toContain('private census path');
+
+    await buildSystemResourceReport();
+    expect(errors).toHaveBeenCalledExactlyOnceWith('❌ Resource probe unavailable (source=agent-census, code=EIO)');
+    const recovered = await buildSystemResourceReport();
+    expect(recovered.sourceErrors).not.toContain('agent-census');
+    expect(recovered.queues.agents).toMatchObject({ pendingUser: 0, pendingSystem: 1, inProgress: 1 });
+    expect(recovered.summary).toMatchObject({ queuedJobs: 4, runningJobs: 2 });
+    expect(logs).toHaveBeenCalledExactlyOnceWith('✅ Resource probe recovered (source=agent-census)');
+    await buildSystemResourceReport();
+    expect(logs).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a successful empty census as measured persisted-task counts', async () => {
+    cos.getAllTasks.mockResolvedValueOnce({
+      user: { grouped: { pending: [], in_progress: [{ id: 'user/42' }] } },
+      cos: { grouped: { pending: [], in_progress: [] }, awaitingApproval: [] },
+    });
+    cos.getAgents.mockResolvedValueOnce([]);
+    const report = await buildSystemResourceReport();
+    expect(report.sourceErrors).not.toContain('agent-census');
+    expect(report.queues.agents).toMatchObject({ pendingUser: 0, pendingSystem: 0, inProgress: 1 });
     expect(report.summary).toMatchObject({ queuedJobs: 3, runningJobs: 2 });
   });
 

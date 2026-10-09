@@ -36,7 +36,7 @@ import { enqueueJob } from '../mediaJobQueue/index.js';
 import {
   IMAGE_GEN_MODE, resolveQueueImageMode,
 } from '../imageGen/modes.js';
-import { resolveImageCleaners } from '../imageGen/index.js';
+import { resolveImageCleaners } from '../../lib/imageCleanDefaults.js';
 import { resolveRenderTargetConfig } from '../imageGen/cloudProviderConfig.js';
 import { selectLocalImageModelFromSettings } from '../imageGen/prepareParams.js';
 import { imageModeCandidates, pickUsableMode } from '../../lib/renderModeLadder.js';

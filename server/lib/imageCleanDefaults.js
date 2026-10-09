@@ -23,3 +23,16 @@ export function resolveCleanersFromConfig(modeCfg, mode) {
     denoise: typeof cfg.denoise === 'boolean' ? cfg.denoise : false,
   };
 }
+
+// Resolve the cleaner flags from body overrides + saved per-mode settings.
+// Body fields win when explicit (per-render checkbox); otherwise inherit
+// the saved per-mode defaults via `resolveCleanersFromConfig`. Shared by
+// `/generate` and `generateImage()` (safety net for direct callers like
+// `generateAvatar`).
+export function resolveImageCleaners(body, settings, mode) {
+  const saved = resolveCleanersFromConfig(settings?.imageGen?.[mode], mode);
+  return {
+    cleanC2PA: typeof body?.cleanC2PA === 'boolean' ? body.cleanC2PA : saved.cleanC2PA,
+    denoise: typeof body?.denoise === 'boolean' ? body.denoise : saved.denoise,
+  };
+}

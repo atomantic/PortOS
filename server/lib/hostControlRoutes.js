@@ -44,7 +44,8 @@
  *   - pipeline and FableLoom: autopilot start is gated — with gap filing or
  *     self-improvement on it queues CoS agents — and so are the Pipeline
  *     text/visual generation operations listed under "Pipeline authoring"
- *     below (#10068): callers choose the provider, and the staged runner can
+ *     below (#10068) and FableLoom authoring/production (#10668): callers
+ *     choose the provider, and the staged runner can
  *     fall back to a CLI/TUI one, so they can launch a tool-capable agent
  *     against stored creative text. Ordinary record CRUD, reads and
  *     cancellation stay open.
@@ -112,6 +113,35 @@ import { isPlainObject } from './objects.js';
 import { escapeRegExp } from './textUtils.js';
 
 export const HOST_CONTROL_ROUTES = Object.freeze([
+  // Universe Builder authoring (#10669) can dispatch tool-capable text/vision
+  // providers or image agents, including API-first CLI/TUI fallback. Authorize
+  // the whole operation before image resolution, stores, runs or queue writes.
+  // Record CRUD, reviewed proposal application, merge preview/commit, locks,
+  // description backfill, deletions and reads remain data-only operations.
+  'POST /api/universe-builder/expand',
+  'POST /api/universe-builder/generate-variations',
+  'POST /api/universe-builder/refine-prompts',
+  'POST /api/universe-builder/:id/promote-variation',
+  'POST /api/universe-builder/:id/auto-sort',
+  'POST /api/universe-builder/:id/extract-canon',
+  'POST /api/universe-builder/:id/characters/:entryId/refine',
+  'POST /api/universe-builder/:id/characters/:entryId/expand',
+  'POST /api/universe-builder/:id/characters/integrity/review',
+  'POST /api/universe-builder/:id/characters/:entryId/augment',
+  'POST /api/universe-builder/:id/characters/differentiate-cast',
+  'POST /api/universe-builder/merge/ai-resolve',
+  'POST /api/universe-builder/describe-from-images',
+  'POST /api/universe-builder/:id/characters/:entryId/expand-from-images',
+  'POST /api/universe-builder/:id/canon/:kind/:entryId/correct-from-image',
+  'POST /api/universe-builder/analyze-style-reference',
+  'POST /api/universe-builder/:id/render',
+  'POST /api/universe-builder/:id/characters/:entryId/render-reference-sheet',
+
+  // Story Builder queues agent-capable generation before returning SSE progress (#10670).
+  'POST /api/story-builder/:id/steps/:stepId/generate',
+  'POST /api/story-builder/:id/steps/:stepId/refine',
+  'POST /api/story-builder/:id/issues/generate',
+
   // Database cutover stops/restarts PortOS under PM2 and rewrites .env (#8851).
   'POST /api/database/maintenance/cutover',
   'POST /api/database/maintenance/recover',
@@ -251,6 +281,32 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/digital-twin/personas',
   'PUT /api/digital-twin/personas/:id',
   // /personas/:id also covers /personas/active.
+
+  // Digital Twin AI actions (#10671) reach the shared CLI/TUI-capable runner,
+  // directly or via imported-data analysis. Gate API-first requests too: their
+  // configured fallback can execute a process. Authorize before private reads,
+  // document writes or behavioral batches; reference CRUD, bounded API-only
+  // taste/vision calls and deterministic recomputation remain open.
+  'POST /api/digital-twin/enrich/question',
+  'POST /api/digital-twin/enrich/answer',
+  'POST /api/digital-twin/enrich/analyze-list',
+  'POST /api/digital-twin/validate/contradictions',
+  'POST /api/digital-twin/analyze-writing',
+  'POST /api/digital-twin/style/spoken-written',
+  'POST /api/digital-twin/traits/analyze',
+  'POST /api/digital-twin/confidence/calculate',
+  'POST /api/digital-twin/interview/analyze',
+  'POST /api/digital-twin/tests/run',
+  'POST /api/digital-twin/tests/run-multi',
+  'POST /api/digital-twin/tests/generate',
+  'POST /api/digital-twin/values-tests/run',
+  'POST /api/digital-twin/adversarial-tests/run',
+  'POST /api/digital-twin/multi-turn-tests/run',
+  'POST /api/digital-twin/avatar-bio/polish',
+  'POST /api/digital-twin/import/analyze',
+  'POST /api/digital-twin/import/spotify/browser/import',
+  'POST /api/digital-twin/twin-evidence/interpret',
+
   'POST /api/tools',
   'PUT /api/tools/:id',
 
@@ -471,6 +527,29 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/pipeline/series/:id/autopilot/start',
   'POST /api/fableloom/:id/editorial/autopilot/start',
   'POST /api/image-video/models/support-request',
+
+  // FableLoom authoring and production (#10668) can dispatch CLI/TUI agents,
+  // including API-first fallback and deferred batch resume. Authorize before
+  // service reads/writes, run creation or queues. Deterministic CRUD, validation,
+  // shot application, continuity/production planning, cancellation and contained
+  // fal.ai browser automation remain open under their existing contracts.
+  'POST /api/fableloom/:id/plan/generate',
+  'POST /api/fableloom/:id/plan/review',
+  'POST /api/fableloom/:id/plan/feedback',
+  'POST /api/fableloom/:id/review-teleplay',
+  'POST /api/fableloom/:id/editorial/remediate',
+  'POST /api/fableloom/:id/playtest',
+  'POST /api/fableloom/:id/episodes/:episodeId/weave',
+  'POST /api/fableloom/:id/episodes/:episodeId/shots/plan',
+  'POST /api/fableloom/:id/episodes/:episodeId/outline/generate',
+  'POST /api/fableloom/:id/episodes/:episodeId/outline/review',
+  'POST /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/branch',
+  'POST /api/fableloom/:id/episodes/:episodeId/review',
+  'POST /api/fableloom/:id/episodes/:episodeId/feedback',
+  'POST /api/fableloom/:id/episodes/:episodeId/play',
+  'POST /api/fableloom/:id/episodes/:episodeId/reformat',
+  'POST /api/fableloom/:id/episodes/:episodeId/production/batch',
+  'POST /api/fableloom/:id/episodes/:episodeId/production/batch/:runId/resume',
 
   // Eidoverse: clone and install a caller-named repo, or repoint it.
   'POST /api/settings/features/eidoverse/install',

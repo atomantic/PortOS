@@ -213,7 +213,7 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
               onCancel={onCancelPurge}
             />
           ) : (
-            <div className="flex items-center gap-2 p-3 border-b border-port-border/50">
+            <div className="flex flex-wrap items-center gap-2 p-3 border-b border-port-border/50">
               {cat.archivable && (
                 <button
                   onClick={() => onArchive(cat.key)}
@@ -221,8 +221,15 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-port-accent/10 text-port-accent rounded hover:bg-port-accent/20 transition-colors disabled:opacity-50"
                 >
                   <Archive size={12} />
-                  {archiving ? 'Archiving...' : cat.key === 'cos' ? 'Export backup (keeps originals)' : 'Archive'}
+                  {cat.key === 'health'
+                    ? (archiving ? 'Archiving older days…' : 'Archive days older than 365 days')
+                    : (archiving ? 'Exporting backup…' : 'Export backup (keeps originals)')}
                 </button>
+              )}
+              {cat.archivable && cat.key === 'health' && (
+                <span className="basis-full sm:basis-auto sm:flex-1 min-w-0 text-xs text-gray-500">
+                  Moves days older than 365 days into a backup archive and removes them from active health history. Newer days stay in place. Download the archive from Backups to keep a separate copy.
+                </span>
               )}
               {categoryPurgeable && (busy ? (
                 <span className="text-xs text-port-warning">{busyReason}</span>

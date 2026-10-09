@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react';
 import {
-  ArrowRight, Bot, Check, Clapperboard, Film, History, LayoutGrid, Music, Play, Send, Settings, Users,
+  ArrowRight, Bot, Check, Clapperboard, Film, History, LayoutGrid, Music, Pencil, Play, Send, Settings, Users,
 } from 'lucide-react';
+import CancelRenderButton from './CancelRenderButton.jsx';
 import TabPills from '../ui/TabPills.jsx';
 import Pill from '../ui/Pill.jsx';
 import { formatUsd } from '../../utils/formatters.js';
@@ -100,6 +101,9 @@ const DOCK_CLASSES = 'min-w-0 max-xl:order-first max-xl:col-span-full xl:sticky 
  * `autopilotStatus(…)` (`{ label, short, tone }`) for the header's Autopilot
  * button (or null to hide it);
  * `onOpenSettings(tab)` opens Project settings. `dock` is the `PreviewDock`.
+ * `onRename` opens the title editor, which the page hands back as `renameForm`
+ * to show in place of the title. `cancelRender` (`{ onCancel, cancelling }`, or
+ * null) puts a stop control beside a running final render's progress.
  * `lead` (the step checklist) opens the step; `review` is the step's approval.
  * With `playerFirst` the player and the approval sit together at the top of the
  * step; otherwise the player docks at the side and the approval closes the step.
@@ -107,7 +111,7 @@ const DOCK_CLASSES = 'min-w-0 max-xl:order-first max-xl:col-span-full xl:sticky 
 export default function MusicVideoLayout({
   project, trackLabel, stage, onStageChange, progress, nextAction, onNextAction, spend, status = null,
   attention = null, dock = null, notes = null, autopilot = null, onOpenSettings = null,
-  playerFirst = false, lead = null, review = null, children,
+  playerFirst = false, lead = null, review = null, onRename = null, renameForm = null, cancelRender = null, children,
 }) {
   const headerRef = useRef(null);
   const rootRef = useRef(null);
@@ -164,7 +168,22 @@ export default function MusicVideoLayout({
       >
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <div className="min-w-0 flex-1 basis-full sm:basis-auto">
-            <h2 className="truncate text-lg font-semibold max-sm:whitespace-normal max-sm:break-words" title={project.name}>{project.name}</h2>
+            {renameForm || (
+              <div className="flex min-w-0 items-center gap-1">
+                <h2 className="truncate text-lg font-semibold max-sm:whitespace-normal max-sm:break-words" title={project.name}>{project.name}</h2>
+                {onRename && (
+                  <button
+                    type="button"
+                    onClick={onRename}
+                    aria-label={`Rename v${project.version || 1}`}
+                    title="Rename this version"
+                    className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded text-port-text-muted hover:text-port-text sm:min-h-[32px] sm:min-w-[32px]"
+                  >
+                    <Pencil size={14} aria-hidden="true" />
+                  </button>
+                )}
+              </div>
+            )}
             <p className="flex min-w-0 items-center gap-1 text-xs text-port-text-muted">
               <span>v{project.version || 1}</span>
               {trackLabel && (
@@ -194,6 +213,9 @@ export default function MusicVideoLayout({
               <span className="sm:hidden">{nextAction.shortLabel || nextAction.label}</span>
               <span className="hidden sm:inline">{nextAction.label}</span>
             </button>
+          )}
+          {cancelRender && nextAction?.id === 'render-progress' && (
+            <CancelRenderButton onCancel={cancelRender.onCancel} cancelling={cancelRender.cancelling} />
           )}
           {autopilot && onOpenSettings && (
             <button

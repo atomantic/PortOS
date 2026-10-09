@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs';
+import { tmpdir } from 'node:os';
 import { runInNewContext } from 'node:vm';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -64,7 +66,8 @@ describe('native setup inherited endpoint', () => {
 
 // Run the actual CLI body with synthetic configuration and subprocesses. No
 // imports execute, no install .env is read, and no database can be contacted.
-async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady = true, running = true, hostBinding = '127.0.0.1', hostPort = 5561, dotEnv = {} } = {}) {
+async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady = true, running = true, hostBinding = '127.0.0.1', hostPort = 5561, dotEnv = {}, exportedMode, exportedEnv = {}, hostAuth = 'ok', pgMissing = false } = {}) {
+  const clients = [];
   const savedEnv = { PGMODE: mode, EXAMPLE_SETTING: 'preserved', ...dotEnv };
   const initialEnv = { ...savedEnv };
   const calls = [];
@@ -84,12 +87,21 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
     await runInNewContext(`(async () => {${source}\n})()`, {
       scriptUrl: new URL('./setup-db.js', import.meta.url).href, dirname, join, fileURLToPath,
       parseNativePort, parseDockerPort,
+      createRequire: () => (name) => {
+        if (name !== 'pg' || pgMissing) throw new Error("Cannot find module 'pg'");
+        return { Client: class {
+          constructor(config) { this.config = config; this.ended = false; clients.push(this); }
+          async connect() { if (hostAuth === 'unreachable') throw new Error('connect ECONNREFUSED'); if (hostAuth === 'badpass') throw new Error('password authentication failed for user "portos"'); }
+          async query() { return { rows: hostAuth === 'noschema' ? [] : [{ ok: 1 }] }; }
+          async end() { this.ended = true; }
+        } };
+      },
       parseEnvFile: () => savedEnv,
       upsertEnvKey: (_path, key, value) => { savedEnv[key] = value; },
       createInterface: () => { throw new Error('Setup must not prompt to switch backends'); },
       resolveBashBinary: () => 'bash',
       process: {
-        env: {}, platform: 'linux', stdin: { isTTY: tty }, stdout: { isTTY: tty },
+        env: { ...(exportedMode === undefined ? {} : { PGMODE: exportedMode }), ...exportedEnv }, platform: 'linux', stdin: { isTTY: tty }, stdout: { isTTY: tty },
         exit: (code) => { exitCode = code; throw exitSignal; }
       },
       console: { log: (message) => logs.push(message), error: (message) => errors.push(message) },
@@ -111,8 +123,8 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
           return '';
         }
         if (invocation.startsWith('docker compose exec -T db psql')) return '1\n';
-        if (['docker --version', 'docker info', 'docker compose version',
-          'docker compose exec -T db pg_isready -h 127.0.0.1 -U portos'].includes(invocation)) return '';
+        if (['docker --version', 'docker info', 'docker compose version'].includes(invocation)
+          || invocation.startsWith('docker compose exec -T db pg_isready -h 127.0.0.1 -U ')) return '';
         throw new Error(`Unexpected synthetic subprocess: ${invocation}`);
       }
     });
@@ -120,7 +132,7 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
     if (error !== exitSignal) throw error;
   }
   expect(savedEnv).toEqual(initialEnv);
-  return { exitCode, calls, childEnvs, errors, logs, container, volumeRecords, recreations };
+  return { clients, exitCode, calls, childEnvs, errors, logs, container, volumeRecords, recreations };
 }
 
 describe('setup preserves the selected database', () => {
@@ -153,6 +165,32 @@ describe('setup preserves the selected database', () => {
     }
   );
 
+  it('hands Compose the resolved settings on every compose subprocess, not its own .env parse', async () => {
+    const result = await runSetup({
+      dotEnv: {
+        PGUSER: 'example-user',
+        PGDATABASE: 'example_db',
+        PGPASSWORD: 'example-pass # local note',
+        PGPORT_DOCKER: '5599'
+      }
+    });
+    expect(result.exitCode).toBe(0);
+    const composeEnvs = result.calls
+      .map((call, i) => (call[0] === 'docker' && call[1] === 'compose' && !['version'].includes(call[2]) ? result.childEnvs[i] : null))
+      .filter(Boolean);
+    expect(composeEnvs.length).toBeGreaterThanOrEqual(3); // up, pg_isready, psql
+    for (const env of composeEnvs) {
+      expect(env).toMatchObject({
+        PGUSER: 'example-user',
+        PGDATABASE: 'example_db',
+        PGPASSWORD: 'example-pass # local note',
+        PGPORT_DOCKER: '5599'
+      });
+    }
+    expect(result.calls.flat().join(' ')).not.toContain('example-pass');
+    expect(result.logs.concat(result.errors).join('\n')).not.toContain('example-pass');
+  });
+
   it.each([true, false])('succeeds with selected Docker (container running: %s)', async (running) => {
     const result = await runSetup({ running });
     expect(result.exitCode).toBe(0);
@@ -163,6 +201,34 @@ describe('setup preserves the selected database', () => {
     expect(result.recreations).toBe(0);
     expect(result.calls.some((call) => call.includes('pg_isready'))).toBe(true);
     expect(result.calls.some((call) => call.includes('psql'))).toBe(true);
+  });
+
+  it('verifies the exact configured host endpoint and closes the connection', async () => {
+    const result = await runSetup({ dotEnv: { PGHOST: 'db.example.invalid', PGPORT_DOCKER: '5599', PGUSER: 'alice', PGDATABASE: 'exampledb', PGPASSWORD: 'example-secret' } });
+    expect(result.exitCode).toBe(0);
+    expect(result.clients).toHaveLength(1);
+    expect(result.clients[0].config).toMatchObject({ host: 'db.example.invalid', port: 5599, user: 'alice', database: 'exampledb', password: 'example-secret' });
+    expect(result.clients[0].ended).toBe(true);
+  });
+
+  it.each([
+    ['badpass', 'password authentication failed'],
+    ['unreachable', 'ECONNREFUSED'],
+    ['noschema', 'base schema'],
+  ])('fails setup when container probes pass but host check is %s', async (hostAuth, message) => {
+    const result = await runSetup({ hostAuth, dotEnv: { PGPASSWORD: 'example-secret' } });
+    expect(result.exitCode).toBe(1);
+    expect(result.errors.join('\n')).toContain(message);
+    expect(result.errors.join('\n')).not.toContain('example-secret');
+    expect(result.logs.join('\n')).not.toContain('PostgreSQL ready');
+    expect(result.clients[0].ended).toBe(true);
+    expect(result.container.volumeRecords).toEqual(['example persisted record']);
+  });
+
+  it('fails with an install hint when the pg driver cannot be resolved', async () => {
+    const result = await runSetup({ pgMissing: true });
+    expect(result.exitCode).toBe(1);
+    expect(result.errors.join('\n')).toContain('npm run install:all');
   });
 
   it.each([
@@ -196,6 +262,28 @@ describe('setup preserves the selected database', () => {
     expect(result.calls.some((call) => call.includes('setup-native'))).toBe(!nativeReady);
   });
 
+  // The command-boundary contract for #10757: a shell left over from another
+  // PostgreSQL workflow must not redirect the readiness probe or the bootstrap
+  // child; TLS/auth settings keep working.
+  it('drops inherited libpq routing variables from the readiness probe and bootstrap child', async () => {
+    const result = await runSetup({
+      mode: 'native', nativeReady: false,
+      dotEnv: { PGHOST: 'db.example.invalid', PGPORT: '5433' },
+      exportedEnv: {
+        PGHOSTADDR: '192.0.2.10', PGSERVICE: 'other', PGSERVICEFILE: '/example/service.conf',
+        PGOPTIONS: '-c search_path=other', PGSSLMODE: 'verify-full', PGPASSFILE: '/example/pgpass',
+      },
+    });
+    expect(result.exitCode).toBe(0);
+    const psqlEnvs = result.childEnvs.filter((_, i) => result.calls[i][0] === 'psql');
+    const bootstrapEnv = result.childEnvs[result.calls.findIndex((call) => call.includes('setup-native'))];
+    expect(psqlEnvs).toHaveLength(2);
+    for (const env of [...psqlEnvs, bootstrapEnv]) {
+      for (const name of ['PGHOSTADDR', 'PGSERVICE', 'PGSERVICEFILE', 'PGOPTIONS']) expect(env).not.toHaveProperty(name);
+      expect(env).toMatchObject({ PGHOST: 'db.example.invalid', PGPORT: '5433', PGSSLMODE: 'verify-full', PGPASSFILE: '/example/pgpass' });
+    }
+  });
+
   it('probes and provisions the endpoint selected in .env, host and port alike', async () => {
     const result = await runSetup({
       mode: 'native', nativeReady: false,
@@ -210,5 +298,58 @@ describe('setup preserves the selected database', () => {
     }
     const setupIndex = result.calls.findIndex((call) => call.includes('setup-native'));
     expect(result.childEnvs[setupIndex]).toMatchObject({ PGHOST: 'db.example.invalid', PGPORT: '5433' });
+  });
+  // Pairs with scripts/ecosystemEnv.test.js "mode precedence matches setup" (#10758).
+  it.each([
+    ['docker', 'native', true],
+    ['native', 'docker', false],
+    ['native', '', true],
+  ])('saved %s with exported %j selects the same backend PM2 does', async (mode, exportedMode, expectNative) => {
+    const result = await runSetup({ mode, exportedMode, nativeReady: true });
+    expect(result.exitCode).toBe(0);
+    expect(result.calls.some(([command]) => command === 'psql')).toBe(expectNative);
+    expect(result.calls.some(([command]) => command === 'docker')).toBe(!expectNative);
+  });
+});
+
+// Config-only: `docker compose config` never contacts the daemon or mutates a
+// container. Skipped when the Compose plugin is not installed.
+const composeAvailable = spawnSync('docker', ['compose', 'version'], { stdio: 'ignore' }).status === 0;
+describe.skipIf(!composeAvailable)('Compose receives the resolved settings (config only)', () => {
+  it('process environment overrides the .env interpolation of comments and dollar expressions', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'portos-compose-'));
+    try {
+      writeFileSync(join(dir, 'docker-compose.yml'), dockerComposeSrc);
+      writeFileSync(join(dir, '.env'), [
+        'PGUSER=example-user',
+        'PGDATABASE=example_db',
+        'PGPASSWORD="example-$PORTOS_PROBE_SUFFIX"',
+        'PGPORT_DOCKER=5599 # note',
+        '',
+      ].join('\n'));
+      const config = (extraEnv) => {
+        const { PGUSER, PGDATABASE, PGPASSWORD, PGPORT_DOCKER, ...base } = process.env;
+        const result = spawnSync('docker', ['compose', 'config', '--format', 'json'], {
+          cwd: dir, encoding: 'utf8', env: { ...base, ...extraEnv }
+        });
+        expect(result.status, result.stderr).toBe(0);
+        return JSON.parse(result.stdout).services.db;
+      };
+      // Control: Compose alone expands the dollar expression — the divergence being fixed.
+      expect(config({}).environment.POSTGRES_PASSWORD).toBe('example-');
+      const forwarded = config({
+        PGUSER: 'example-user', PGDATABASE: 'example_db',
+        PGPASSWORD: 'example-$PORTOS_PROBE_SUFFIX', PGPORT_DOCKER: '5599'
+      });
+      expect(forwarded.environment).toMatchObject({
+        POSTGRES_USER: 'example-user',
+        POSTGRES_DB: 'example_db',
+        // `config` re-escapes a literal `$` as `$$`; the container receives one `$`.
+        POSTGRES_PASSWORD: 'example-$$PORTOS_PROBE_SUFFIX'
+      });
+      expect(forwarded.ports[0].published).toBe('5599');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

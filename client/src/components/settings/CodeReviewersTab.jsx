@@ -34,6 +34,7 @@ const FOLLOW_UP_PATH = '/models/code-reviewers/follow-up';
 
 const CONFIG_FAULT_REMEDIES = {
   NO_MODEL: 'Select a model on Review chain.',
+  REVIEWER_COMMAND_PERMISSION_DENIED: 'Use a compatible non-interactive review transport or supported tool-free vendor configuration; keep command, network and write permissions disabled.',
   REVIEWER_ACCESS_DENIED: 'Select an accessible service or model, or correct provider access.',
   REVIEWER_UNSUPPORTED: 'Set its command or switch it to API mode in AI Providers.',
 };

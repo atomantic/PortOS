@@ -53,6 +53,9 @@ export default function useMusicVideoRenderJob({ project, onRendered, onFailed, 
   });
 
   const [reattaching, setReattaching] = useState(false);
+  // The job a stop was requested for: the button reads "Stopping" until the
+  // job's terminal frame clears the slot, and re-arms if the server refuses.
+  const [cancelRequestedFor, setCancelRequestedFor] = useState(null);
   const slotRef = useRef(slot);
   slotRef.current = slot;
 
@@ -92,8 +95,26 @@ export default function useMusicVideoRenderJob({ project, onRendered, onFailed, 
     return () => { active = false; };
   }, [projectId, rendering]);
 
+  const cancel = () => {
+    const jobId = slot.jobId;
+    if (!jobId || cancelRequestedFor === jobId) return;
+    setCancelRequestedFor(jobId);
+    cancelMusicVideoRender(jobId, { silent: true })
+      .then((res) => {
+        if (res?.ok) return;
+        setCancelRequestedFor(null);
+        toast.error('This render can no longer be stopped — it may be finishing');
+      })
+      .catch((err) => {
+        setCancelRequestedFor(null);
+        toast.error(err?.message || 'Could not stop the render');
+      });
+  };
+
   return {
     ...slot,
+    cancel,
+    cancelling: !!slot.jobId && cancelRequestedFor === slot.jobId,
     failure,
     reattaching,
     reattach,

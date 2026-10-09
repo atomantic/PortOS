@@ -4,7 +4,7 @@ import { musicVideoAspect, MUSIC_VIDEO_ASPECTS } from '../../lib/musicVideoAspec
 import { getMusicVideoSocialCuts } from '../../services/apiMusicVideo.js';
 import RevisionPanel, { currentRevision } from './RevisionPanel.jsx';
 import AutoReviewPanel from './AutoReviewPanel.jsx';
-import { formatCount } from '../../utils/formatters.js';
+import { formatCount, formatDateTime } from '../../utils/formatters.js';
 import { autoReviewNeedsUser } from '../../lib/musicVideoAttention.js';
 
 const VERDICT_STYLES = {
@@ -129,7 +129,7 @@ function ExcerptCard({ excerpt, role, proofApproved, activeRenderId, connected, 
                 : <button type="button" disabled={deleting} onClick={() => setConfirmingDelete(true)} className="text-port-error flex items-center gap-1 disabled:opacity-50 min-h-[44px] sm:min-h-0"><Trash2 size={12} /> Delete</button>}
         </div>
       </div>
-      <p className="text-xs text-port-text-muted">{excerpt.dependencyState?.status === 'stale' ? 'Made before later changes · re-render this range to see them' : excerpt.dependencyState?.status === 'current' ? 'Matches current inputs · production approval is separate' : 'Draft · approval is separate'}{excerpt.createdAt ? ` · ${new Date(excerpt.createdAt).toISOString().replace('T', ' ').slice(0, 19)} UTC` : ''}</p>
+      <p className="text-xs text-port-text-muted">{excerpt.dependencyState?.status === 'stale' ? 'Made before later changes · re-render this range to see them' : excerpt.dependencyState?.status === 'current' ? 'Matches current inputs · production approval is separate' : 'Draft · approval is separate'}{excerpt.createdAt ? ` · ${formatDateTime(excerpt.createdAt)}` : ''}</p>
       {excerpt.status === 'error' && excerpt.error && <p role="alert" className="text-xs text-port-error">{excerpt.error}</p>}
       {excerpt.status === 'complete' && excerpt.filename && (
         <div className="space-y-2">

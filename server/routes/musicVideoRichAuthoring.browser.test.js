@@ -21,6 +21,8 @@ import { browserSuiteCanRun } from '../lib/browserSuiteGate.js';
 
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('mv-rich-ui-browser-') }));
 vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: async () => 'synthetic-instance' }));
+// Accepting a document starts a background overlay text check (its own browser); this suite pins the authoring UI.
+vi.mock('../services/musicVideo/overlayTextService.js', () => ({ checkOverlayTextInBackground: () => {}, startOverlayTextCheck: async () => { throw new Error('not in this suite'); } }));
 vi.mock('../services/settings.js', () => ({ getSettings: async () => ({}) }));
 vi.mock('../services/auth.js', () => ({ isAuthEnabled: async () => true, verifyRequestSessionIdentity: async () => ({ kind: 'session', sessionId: 'synthetic-browser', label: null }) }));
 let endpoint;

@@ -45,6 +45,9 @@ vi.mock('../services/messageDrafts.js', () => ({
   deleteDraftsByAccountId: vi.fn()
 }));
 
+vi.mock('../services/messageTriageRules.js', () => ({ listRules: vi.fn(), deleteRule: vi.fn() }));
+import { listRules, deleteRule } from '../services/messageTriageRules.js';
+
 vi.mock('../services/messageSender.js', () => ({
   sendDraft: vi.fn()
 }));
@@ -125,6 +128,31 @@ describe('Messages Routes', () => {
       expect(response.body.error).toBeDefined();
       expect(messageSync.getMessages).not.toHaveBeenCalled();
       expect(evaluateMessages).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('unavailable persisted Messages stores', () => {
+    it('returns the shared non-success envelope for draft reads and creates', async () => {
+      const error = new ServerError('Message drafts storage is unavailable or invalid; original data preserved', { status: 503, code: 'MESSAGE_DRAFTS_UNAVAILABLE' });
+      messageDrafts.listDrafts.mockRejectedValueOnce(error);
+      messageDrafts.createDraft.mockRejectedValueOnce(error);
+      messageAccounts.getAccount.mockResolvedValueOnce({ id: VALID_UUID, type: 'gmail' });
+      const read = await request(app).get('/api/messages/drafts');
+      const create = await request(app).post('/api/messages/drafts').send({ accountId: VALID_UUID, body: 'Example message' });
+      for (const response of [read, create]) {
+        expect(response.status).toBe(503);
+        expect(response.body).toMatchObject({ error: error.message, code: 'MESSAGE_DRAFTS_UNAVAILABLE' });
+      }
+    });
+
+    it('returns the shared non-success envelope for triage reads and deletion', async () => {
+      const error = new ServerError('Message triage rules storage is unavailable or invalid; original data preserved', { status: 503, code: 'MESSAGE_TRIAGE_RULES_UNAVAILABLE' });
+      listRules.mockRejectedValueOnce(error);
+      deleteRule.mockRejectedValueOnce(error);
+      for (const response of [await request(app).get('/api/messages/triage-rules'), await request(app).delete('/api/messages/triage-rules/0')]) {
+        expect(response.status).toBe(503);
+        expect(response.body).toMatchObject({ error: error.message, code: 'MESSAGE_TRIAGE_RULES_UNAVAILABLE' });
+      }
     });
   });
 
@@ -495,7 +523,7 @@ describe('Messages Routes', () => {
       const emit = vi.fn();
       app.set('io', { emit });
       messageAccounts.getAccount.mockResolvedValue({ id: VALID_UUID, type: 'gmail' });
-      messageSync.getMessage.mockResolvedValue({ id: 'message-example', bodyText: 'Example message.' });
+      messageSync.getMessage.mockResolvedValue({ id: 'message-example', bodyText: 'Example message.', from: { email: 'alice@example.com' } });
       generateReplyBody.mockRejectedValue(new ServerError('Configure a local API provider in Models > LLMs > Abuse Guard.', { status: 422, code: 'untrusted-content-provider-unavailable' }));
       const response = await request(app).post('/api/messages/drafts/generate').send({ accountId: VALID_UUID, replyToMessageId: 'message-example' });
       expect(response.status).toBe(422);
@@ -503,6 +531,43 @@ describe('Messages Routes', () => {
       expect(response.body.error).toContain('Abuse Guard');
       expect(messageDrafts.createDraft).not.toHaveBeenCalled();
       expect(emit).not.toHaveBeenCalledWith('messages:draft:created', expect.anything());
+    });
+
+    it('addresses a generated email reply to the original sender with a normalized subject', async () => {
+      messageAccounts.getAccount.mockResolvedValue({ id: VALID_UUID, type: 'gmail' });
+      messageSync.getMessage.mockResolvedValue({ id: 'message-example', subject: 'Lunch?', from: { email: 'alice@example.com' }, bodyText: 'Example.' });
+      generateReplyBody.mockResolvedValue({ body: 'Synthetic generated reply' });
+      messageDrafts.createDraft.mockImplementation(async (d) => ({ id: DRAFT_UUID, ...d }));
+      const response = await request(app).post('/api/messages/drafts/generate').send({ accountId: VALID_UUID, replyToMessageId: 'message-example' });
+      expect(response.status).toBe(201);
+      expect(messageDrafts.createDraft).toHaveBeenCalledWith(expect.objectContaining({ to: ['alice@example.com'], subject: 'Re: Lunch?', body: 'Synthetic generated reply' }));
+
+      messageSync.getMessage.mockResolvedValue({ id: 'message-example', subject: 'RE: Lunch?', from: { email: 'alice@example.com' } });
+      await request(app).post('/api/messages/drafts/generate').send({ accountId: VALID_UUID, replyToMessageId: 'message-example' });
+      expect(messageDrafts.createDraft).toHaveBeenLastCalledWith(expect.objectContaining({ subject: 'RE: Lunch?' }));
+    });
+
+    it('leaves delivery fields empty for Teams replies', async () => {
+      messageAccounts.getAccount.mockResolvedValue({ id: VALID_UUID, type: 'teams' });
+      messageSync.getMessage.mockResolvedValue({ id: 'message-example', subject: 'Chat', from: { email: 'alice@example.com' } });
+      generateReplyBody.mockResolvedValue({ body: 'Synthetic generated reply' });
+      messageDrafts.createDraft.mockImplementation(async (d) => ({ id: DRAFT_UUID, ...d }));
+      await request(app).post('/api/messages/drafts/generate').send({ accountId: VALID_UUID, replyToMessageId: 'message-example' });
+      expect(messageDrafts.createDraft).toHaveBeenCalledWith(expect.objectContaining({ to: [], subject: '' }));
+    });
+
+    it('returns typed errors and creates no draft when the original or its sender is unavailable', async () => {
+      messageAccounts.getAccount.mockResolvedValue({ id: VALID_UUID, type: 'gmail' });
+      messageSync.getMessage.mockResolvedValue(null);
+      let response = await request(app).post('/api/messages/drafts/generate').send({ accountId: VALID_UUID, replyToMessageId: 'missing' });
+      expect(response.status).toBe(404);
+      expect(response.body.code).toBe('REPLY_ORIGINAL_NOT_FOUND');
+
+      messageSync.getMessage.mockResolvedValue({ id: 'm', subject: 'Hi', from: {} });
+      response = await request(app).post('/api/messages/drafts/generate').send({ accountId: VALID_UUID, replyToMessageId: 'm' });
+      expect(response.status).toBe(422);
+      expect(response.body.code).toBe('REPLY_TARGET_UNAVAILABLE');
+      expect(messageDrafts.createDraft).not.toHaveBeenCalled();
     });
 
     it('should return 404 if account not found', async () => {

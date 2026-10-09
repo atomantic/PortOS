@@ -60,6 +60,11 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
             import { createRoot } from 'react-dom/client';
             import MediaLightbox from '/src/components/media/MediaLightbox.jsx';
             import '/src/index.css';
+            import { getTheme } from '/src/themes/portosThemes.js';
+            const theme = getTheme(new URLSearchParams(location.search).get('theme') || 'classic-midnight');
+            for (const [key, value] of Object.entries({ ...theme.colors, ...theme.tokens })) document.documentElement.style.setProperty(key, value);
+            document.documentElement.dataset.portTheme = theme.id;
+            document.documentElement.dataset.portThemeFamily = theme.family;
             const canvas = document.createElement('canvas');
             canvas.width = 640; canvas.height = 360;
             const ctx = canvas.getContext('2d');
@@ -87,8 +92,9 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
             function Fixture() {
               const [item, setItem] = useState(null);
               const [index, setIndex] = useState(0);
-              const video = { key: 'video:synthetic', kind: 'video', filename: 'synthetic.webm', downloadUrl: clip };
-              const images = [0, 1].map(i => ({ key: 'image:synthetic-' + i, kind: 'image', filename: 'synthetic-' + i + '.png', previewUrl: image, prompt: 'Synthetic image ' + i }));
+              const video = { id: 'synthetic', key: 'video:synthetic', kind: 'video', filename: 'synthetic.webm', downloadUrl: clip, previewUrl: image, prompt: 'Synthetic video' };
+              const images = [0, 1].map(i => ({ key: 'image:synthetic-' + i, kind: 'image', filename: 'synthetic-' + i + '.png', previewUrl: image, prompt: 'Synthetic image ' + i, width: 1600, height: 900, model: 'Synthetic model', seed: 123 }));
+              const noop = async () => {};
               const showImage = i => { setIndex(i); setItem(images[i]); };
               return React.createElement(React.Fragment, null,
                 React.createElement('button', { id: 'opener', onClick: () => setItem(video) }, 'Open video'),
@@ -96,7 +102,11 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
                 React.createElement(MediaLightbox, { item, onClose: () => setItem(null),
                   hasPrevious: item?.kind === 'image' && index > 0,
                   hasNext: item?.kind === 'image' && index < 1,
-                  onPrevious: () => showImage(index - 1), onNext: () => showImage(index + 1) })
+                  onPrevious: () => showImage(index - 1), onNext: () => showImage(index + 1),
+                  onPromptChange: noop, onAnnotationChange: noop, annotation: { note: 'Synthetic note' },
+                  onRemix: noop, onSendToImage: noop, onSendToVideo: noop, onSendTo3d: noop,
+                  onClean: noop, onRegenerate: noop, regenAvailable: true, onRemoveWatermark: noop,
+                  onRefine: noop, onPromptFrom: noop, onContinue: noop, onPosterChange: noop })
               );
             }
             createRoot(document.getElementById('root')).render(React.createElement(Fixture));
@@ -126,7 +136,7 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
       await page.waitForFunction(() => document.querySelector('video')?.readyState >= 2);
       await video.evaluate(v => { v.pause(); v.currentTime = 0; });
       if (fullScreen) await page.getByRole('button', { name: 'Full screen', exact: true }).click();
-      const close = page.getByRole('button', { name: 'Close', description: 'Close (Esc)', exact: true });
+      const close = page.locator('button[title="Close (Esc)"]');
       await close.focus();
       await page.keyboard.press('Tab');
       expect(await video.evaluate(v => v === document.activeElement)).toBe(true);
@@ -195,7 +205,7 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
       await page.getByRole('img', { name: 'Synthetic image 1', exact: true }).waitFor();
       await page.getByRole('button', { name: 'Previous media' }).click();
       await page.getByRole('img', { name: 'Synthetic image 0', exact: true }).waitFor();
-      const close = page.getByRole('button', { name: 'Close', description: 'Close (Esc)', exact: true });
+      const close = page.locator('button[title="Close (Esc)"]');
       await close.focus();
       await page.keyboard.press('Tab');
       expect(await page.getByRole('button', { name: 'Full screen', exact: true }).evaluate(el => el === document.activeElement)).toBe(true);
@@ -210,4 +220,100 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
       await page.close();
     }
   }, 60000);
+
+  it.each([[360, 568], [360, 640], [390, 667], [360, 800]])('keeps phone navigation inside media and settings Close clickable at %dx%d', async (width, height) => {
+    const page = await browser.newPage({ viewport: { width, height } });
+    try {
+      await page.route('**/api/**', route => route.fulfill({ json: { providers: [], items: [] } }));
+      await page.goto(`${origin}lightbox-test`);
+      await page.locator('#gallery').click();
+      const media = page.getByRole('dialog').locator(':scope > div > div').first();
+      const assertInsideMedia = async locator => {
+        const box = await locator.boundingBox();
+        const surface = await media.boundingBox();
+        expect(box.width).toBeGreaterThanOrEqual(44);
+        expect(box.height).toBeGreaterThanOrEqual(44);
+        expect(box.x).toBeGreaterThanOrEqual(surface.x - 1);
+        expect(box.y).toBeGreaterThanOrEqual(surface.y - 1);
+        expect(box.x + box.width).toBeLessThanOrEqual(surface.x + surface.width + 1);
+        expect(box.y + box.height).toBeLessThanOrEqual(surface.y + surface.height + 1);
+      };
+      const clickAtCenter = async locator => {
+        const box = await locator.boundingBox();
+        const x = box.x + box.width / 2;
+        const y = box.y + box.height / 2;
+        expect(await page.evaluate(({ x, y, name }) => document.elementFromPoint(x, y)?.closest('button')?.getAttribute('aria-label') === name,
+          { x, y, name: await locator.getAttribute('aria-label') })).toBe(true);
+        await page.mouse.click(x, y);
+      };
+
+      const close = page.locator('aside header button[aria-label="Close"]');
+      await clickAtCenter(close);
+      await page.getByRole('dialog').waitFor({ state: 'detached' });
+
+      await page.locator('#gallery').click();
+      const next = page.getByRole('button', { name: 'Next media' });
+      await assertInsideMedia(next);
+      await clickAtCenter(next);
+      await page.getByRole('img', { name: 'Synthetic image 1', exact: true }).waitFor();
+      const previous = page.getByRole('button', { name: 'Previous media' });
+      await assertInsideMedia(previous);
+      await clickAtCenter(previous);
+      await page.getByRole('img', { name: 'Synthetic image 0', exact: true }).waitFor();
+    } finally {
+      await page.close();
+    }
+  }, 60000);
+
+  // This catches footer-induced body collapse using real CSS rectangles, not
+  // class names. All media and callbacks are synthetic and requests intercepted.
+  it.each(['classic-midnight', 'kestrel-neon'])('keeps settings and image/video actions reachable in %s', async theme => {
+    for (const [width, height] of [[360, 640], [390, 667], [360, 800], [768, 1024], [1440, 900]]) {
+      const page = await browser.newPage({ viewport: { width, height } });
+      try {
+        await page.route('**/api/**', route => route.fulfill({ json: { providers: [], items: [] } }));
+        await page.goto(`${origin}lightbox-test?theme=${theme}`);
+        for (const opener of ['#gallery', '#opener']) {
+          await page.locator(opener).click();
+          const aside = page.locator('aside');
+          const prompt = aside.locator('#media-prompt');
+          await prompt.fill('Synthetic multiline prompt\nSecond invented line\nThird invented line');
+          const scroll = aside.locator('header + div');
+          const roomy = width >= 640 && height >= 800;
+          const body = roomy ? scroll.locator(':scope > div') : scroll;
+          const bounds = await body.boundingBox();
+          expect(bounds.height, `${width}x${height} editing region`).toBeGreaterThan(120);
+          const header = await aside.locator('header').boundingBox();
+          const assertReachable = async locator => {
+            await locator.evaluate(el => el.scrollIntoView({ block: 'center', inline: 'nearest' }));
+            const rect = await locator.boundingBox();
+            const viewport = await body.boundingBox();
+            // Roomy footers sit outside the body scroller by design.
+            if (!(roomy && await locator.evaluate(el => !!el.closest('footer')))) {
+              expect(rect.y).toBeGreaterThanOrEqual(viewport.y - 1);
+              expect(rect.y + rect.height).toBeLessThanOrEqual(viewport.y + viewport.height + 1);
+            }
+            const close = await aside.getByRole('button', { name: 'Close', exact: true }).boundingBox();
+            expect(close.y).toBeGreaterThanOrEqual(0);
+            expect(close.y + close.height).toBeLessThanOrEqual(height);
+            expect((await aside.locator('header').boundingBox()).y).toBeCloseTo(header.y);
+            const card = await aside.evaluate(el => el.parentElement.getBoundingClientRect().toJSON());
+            expect(card.y).toBeGreaterThanOrEqual(0);
+            expect(card.bottom).toBeLessThanOrEqual(height);
+          };
+          await assertReachable(prompt);
+          await assertReachable(aside.getByRole('button', { name: 'Save prompt' }));
+          await assertReachable(aside.getByRole('textbox', { name: 'Note' }));
+          for (const control of await aside.locator('footer button, footer a').all()) await assertReachable(control);
+          if (!roomy) expect(await scroll.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+          // Pointer overlap from gallery arrows is tracked independently in #10690.
+          await page.keyboard.press('Escape');
+          await page.getByRole('dialog').waitFor({ state: 'detached' });
+        }
+      } finally {
+        await page.close();
+      }
+    }
+  }, 60000);
+
 });

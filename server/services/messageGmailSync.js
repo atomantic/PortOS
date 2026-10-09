@@ -9,6 +9,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import crypto from 'crypto';
 import { getAuthenticatedClient } from './googleAuth.js';
 import { htmlToText as sharedHtmlToText } from '../lib/htmlToText.js';
+import { ServerError } from '../lib/errorHandler.js';
 
 function makeExternalId(gmailId) {
   return 'api-gmail-' + crypto.createHash('md5').update(gmailId).digest('hex').slice(0, 12);
@@ -127,7 +128,9 @@ export async function collectMessageIds(passes, listFn, { onProgress } = {}) {
 }
 
 function getHeader(headers, name) {
-  return headers?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
+  if (!Array.isArray(headers)) return '';
+  const value = headers.find(h => typeof h?.name === 'string' && h.name.toLowerCase() === name.toLowerCase())?.value;
+  return typeof value === 'string' ? value : '';
 }
 
 function decodeBase64Url(str) {
@@ -382,16 +385,110 @@ export async function syncGmail(account, cache, io, options = {}) {
   return { messages: inboxMessages, inboxComplete, sentMessages, sentTruncated: sentCoveragePartial, sendAsAliases, status: 'success', syncMethod: 'api' };
 }
 
+// `users.messages.send` carries no idempotency key, so once the request may have
+// reached Gmail only a 2xx proves delivery and only a 4xx proves refusal. A lost
+// acknowledgement (timeout, reset socket, 5xx after acceptance) cannot say
+// whether the message left — report it as unknown so the draft is parked for
+// reconciliation, never as a `failed` draft that can be re-approved and resent.
+const GMAIL_DELIVERY_UNKNOWN = {
+  success: false,
+  deliveryUnknown: true,
+  status: 502,
+  code: 'DELIVERY_UNKNOWN',
+  error: 'Gmail did not confirm delivery and it may already have been sent. Check Sent Mail, then record the outcome. PortOS will not resend it.'
+};
+
+// A 4xx is Gmail refusing the request, so nothing was sent. 408 is excluded: it
+// is a timeout, which is exactly the ambiguity this classification exists for.
+const isDefinitiveRefusal = (status) => Number.isInteger(status) && status >= 400 && status < 500 && status !== 408;
+
+const replyRefusal = (code, error, status = 422) => ({ refusal: { success: false, status, code, error } });
+const replySubject = subject => String(subject || '').replace(/^(?:\s*re:\s*)+/i, '').trim();
+const unfoldHeader = value => value.replace(/\r?\n[ \t]+/g, ' ').trim();
+
+// Resolve legacy cached messages through their Gmail API identity. Never persist
+// RFC metadata or interpret a PortOS UUID/thread hash as a provider identity.
+export async function prepareGmailReply(account, draft, original) {
+  if (!original || original.id !== draft.replyToMessageId || original.accountId !== account.id) {
+    return replyRefusal('REPLY_TARGET_NOT_FOUND', 'The original message is unavailable in this account. Sync this account and select the reply target again.', 404);
+  }
+  if (draft.threadId && draft.threadId !== original.threadId) {
+    return replyRefusal('THREAD_MISMATCH', 'The reply target does not belong to the selected conversation. Select the original message again.');
+  }
+  if (!original.apiId) {
+    return replyRefusal('GMAIL_REPLY_METADATA_UNAVAILABLE', 'The original message has no Gmail identity. Sync it through the Gmail API before replying.');
+  }
+  const auth = await getAuthenticatedClient();
+  if (!auth) return replyRefusal('GMAIL_NOT_CONFIGURED', 'Google OAuth is not configured. Connect Google before sending this reply.', 502);
+  const gmailClient = gmail({ version: 'v1', auth });
+  const metadata = await gmailClient.users.messages.get({
+    userId: 'me', id: original.apiId, format: 'metadata',
+    metadataHeaders: ['Message-ID', 'References', 'In-Reply-To', 'Subject']
+  }, { timeout: 10_000, retry: false }).then(res => res.data, () => null);
+  if (!metadata || metadata.id !== original.apiId || !metadata.threadId
+    || (original.conversationId && metadata.threadId !== original.conversationId)) {
+    return replyRefusal('GMAIL_REPLY_METADATA_UNAVAILABLE', 'Gmail could not verify the original message and conversation. Sync the account or reconnect Google, then try again.', 502);
+  }
+  const headers = metadata.payload?.headers;
+  const messageId = unfoldHeader(getHeader(headers, 'Message-ID'));
+  const subject = unfoldHeader(getHeader(headers, 'Subject'));
+  if (!/^<[^<>\s@]+@[^<>\s@]+>$/.test(messageId) || /[\r\n]/.test(subject)) {
+    return replyRefusal('GMAIL_REPLY_METADATA_INVALID', 'The original message lacks valid reply headers. Select a different message or send a new email.');
+  }
+  // RFC 2822: use the parent's References, falling back to its single
+  // In-Reply-To when References is absent, then append the parent's Message-ID.
+  const parentReferences = getHeader(headers, 'References');
+  const referenceIds = unfoldHeader(parentReferences || getHeader(headers, 'In-Reply-To')).match(/<[^<>\s@]+@[^<>\s@]+>/g) || [];
+  const references = parentReferences ? referenceIds : (referenceIds.length === 1 ? referenceIds : []);
+  const delivery = Object.freeze({
+    accountId: account.id, replyToMessageId: original.id, localThreadId: draft.threadId,
+    messageId, references: [...references, messageId].join(' '), threadId: metadata.threadId, subject
+  });
+  const refusal = gmailReplyDraftRefusal(account, draft, delivery);
+  return refusal ? { refusal } : { delivery };
+}
+
+function gmailReplyDraftRefusal(account, draft, delivery) {
+  if (!delivery || delivery.accountId !== account.id || draft.accountId !== account.id || draft.sendVia !== 'api'
+    || delivery.replyToMessageId !== draft.replyToMessageId
+    || delivery.localThreadId !== draft.threadId) {
+    return replyRefusal('GMAIL_REPLY_NOT_PREPARED', 'The Gmail reply target was not verified. Select the original message and try again.').refusal;
+  }
+  if (draft.subject && replySubject(draft.subject) !== replySubject(delivery.subject)) {
+    return replyRefusal('GMAIL_REPLY_SUBJECT_MISMATCH', 'A reply must keep the original conversation subject. Restore the original subject or send a new email.').refusal;
+  }
+  return null;
+}
+
+// Called inside the draft store's claim queue, so an edit while metadata is
+// loading cannot consume approval or send an incompatible reply subject.
+export function assertGmailReplyDraft(account, draft, delivery) {
+  const refusal = gmailReplyDraftRefusal(account, draft, delivery);
+  if (refusal) throw new ServerError(refusal.error, { status: refusal.status, code: refusal.code });
+}
+
 /**
  * Send email via Gmail API.
  * @param {object} account - Account config
  * @param {object} draft - Draft with to, cc, subject, body
- * @returns {{ success: boolean, error?: string }}
+ * @returns {{ success: boolean, deliveryUnknown?: boolean, error?: string }}
  */
-export async function sendGmail(account, draft) {
+export async function sendGmail(account, draft, delivery = null) {
+  if (draft.replyToMessageId) {
+    const refusal = gmailReplyDraftRefusal(account, draft, delivery);
+    if (refusal) return refusal;
+  }
   const auth = await getAuthenticatedClient();
   if (!auth) {
     return { success: false, error: 'Google OAuth not configured', status: 502, code: 'GMAIL_NOT_CONFIGURED' };
+  }
+
+  // Refresh the access token before dispatch, so a token failure is a definite
+  // "not sent" rather than an error from inside the send call.
+  const tokenError = await auth.getAccessToken().then(() => null, err => err);
+  if (tokenError) {
+    console.error(`📧 Gmail send failed before dispatch: draft ${draft.id}: ${messageLogError(tokenError)}`);
+    return { success: false, error: 'Google sign-in could not be refreshed — nothing was sent', status: 502, code: 'GMAIL_AUTH_FAILED' };
   }
 
   const gmailClient = gmail({ version: 'v1', auth });
@@ -400,7 +497,7 @@ export async function sendGmail(account, draft) {
   const toLine = Array.isArray(draft.to) ? draft.to.join(', ') : draft.to;
   const lines = [
     `To: ${toLine}`,
-    `Subject: ${draft.subject || ''}`,
+    `Subject: ${delivery?.subject ?? draft.subject ?? ''}`,
     'Content-Type: text/plain; charset=utf-8',
     'MIME-Version: 1.0'
   ];
@@ -408,25 +505,28 @@ export async function sendGmail(account, draft) {
     const ccLine = Array.isArray(draft.cc) ? draft.cc.join(', ') : draft.cc;
     lines.push(`Cc: ${ccLine}`);
   }
-  if (draft.replyToMessageId && draft.threadId) {
-    // For replies, set In-Reply-To and References headers
-    lines.push(`In-Reply-To: ${draft.replyToMessageId}`);
-    lines.push(`References: ${draft.replyToMessageId}`);
+  if (draft.replyToMessageId) {
+    lines.push(`In-Reply-To: ${delivery.messageId}`);
+    lines.push(`References: ${delivery.references}`);
   }
   lines.push('', draft.body || '');
 
   const raw = Buffer.from(lines.join('\r\n')).toString('base64url');
 
-  const result = await gmailClient.users.messages.send({
+  // `retry: false`: the client must never resubmit a send on its own — a retry
+  // after a lost acknowledgement is a duplicate message.
+  const sendError = await gmailClient.users.messages.send({
     userId: 'me',
-    requestBody: { raw }
-  }).catch(err => {
-    console.error(`📧 Gmail send failed: ${messageLogError(err)}`);
-    return null;
-  });
+    requestBody: { raw, ...(draft.replyToMessageId ? { threadId: delivery.threadId } : {}) }
+  }, { retry: false }).then(() => null, err => err);
 
-  if (!result) {
-    return { success: false, error: 'Gmail API send failed', status: 502, code: 'GMAIL_SEND_FAILED' };
+  if (sendError) {
+    if (isDefinitiveRefusal(sendError.response?.status)) {
+      console.error(`📧 Gmail send failed: draft ${draft.id}: ${messageLogError(sendError)}`);
+      return { success: false, error: 'Gmail refused the message — nothing was sent', status: 502, code: 'GMAIL_SEND_FAILED' };
+    }
+    console.warn(`⚠️ Gmail delivery unconfirmed: draft ${draft.id}: ${messageLogError(sendError)}`);
+    return GMAIL_DELIVERY_UNKNOWN;
   }
 
   console.log(`📧 Gmail sent: draft ${draft.id}`);

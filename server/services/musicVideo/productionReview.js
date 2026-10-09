@@ -7,6 +7,8 @@ import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 import { isNonBlankStr as text } from '../../lib/textUtils.js';
 import { cameraMovementFromText, getCameraMovement } from '../../lib/cameraMovements.js';
 import { cameraVarietyReport } from './shotCamera.js';
+import { overlayTextReport } from './overlayText.js';
+import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 const artifact = (project, id) => (project.devArtifacts || []).find(a => a.id === id && !a.deleted);
 const artifactBasis = a => a ? { id: a.id, version: a.version, file: a.file } : null;
 const source = p => {
@@ -28,6 +30,18 @@ export const ALIGNMENT_UNVERIFIED_PROBLEM = 'Lyric alignment is provisional or c
 export const documentStoryboardBasis = project => hash({
   document: project.composition?.document?.directory, source: source(project),
   shots: project.productionReview?.draft?.storyboard,
+});
+
+/**
+ * What an overlay text check saw (overlayTextService.js): the document, the
+ * frame, the song timing and lyrics, the text cues, the type style and every
+ * shot's text placement and selected take. A change to any of them makes a check stale.
+ */
+export const overlayTextBasis = project => hash({
+  document: project.composition?.document?.directory || null, aspect: musicVideoAspect(project), source: source(project),
+  textCues: project.composition?.textCues ?? null, overlay: project.composition?.overlay ?? null, style: project.composition?.style ?? null,
+  scenes: (project.scenes || []).map(({ sceneId, startSec, endSec, textZone, lyricRole, lyricText, cardText, referenceImageId, videoHistoryId, performanceEdit, visualLayer }) =>
+    ({ sceneId, startSec, endSec, textZone, lyricRole, lyricText, cardText, referenceImageId, videoHistoryId, performanceEdit, visualLayer })),
 });
 
 // Share the evidence contract between new decisions and persisted approvals:
@@ -284,7 +298,8 @@ export function productionReadiness(project) {
   const proofApproved = !proofProblems.length && hasProofEvidence(review.approvals?.proof?.proofReview) && review.approvals?.proof?.basis === hash({ basis: basis.proof, excerptId: excerpt.id, filename: excerpt.filename });
   return { basis, inputs, alignment: { basis: alignmentBasis, status: draft.lyricsMode === 'instrumental' ? 'instrumental'
     : draft.timingStatus !== 'verified' ? 'provisional' : review.alignmentBasis === alignmentBasis ? 'verified' : 'stale' }, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: alignmentBasis }, art: { approved: artApproved, problems: [...new Set(artProblems)], stale: artApproved ? null : staleApproval(project, 'art', basis.art, inputs) },
-    storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)], camera, stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs) },
+    // The overlay text check is advice on the storyboard, like camera variety; it never blocks approval.
+    storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)], camera, text: overlayTextReport(project, overlayTextBasis), stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs) },
     proof: { approved: proofApproved, problems: proofProblems, excerptId: excerpt?.id || null, stale: proofApproved ? null : staleApproval(project, 'proof', basis.proof, inputs) },
     castAndSets: castAndSetsApproval(project),
     // The animated proof is optional review evidence: the approved storyboard is what the final render needs.

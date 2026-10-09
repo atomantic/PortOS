@@ -55,7 +55,7 @@ import {
 } from '../lib/goalFidelity.js'
 import { MAX_SCREENSHOT_BYTES } from '../lib/uploadLimits.js'
 import { normalizeGoalFidelityFollowUpTrigger } from '../lib/goalFidelityFollowUp.js'
-import { activeReviewerGroupIndex, isReviewerConfigFault, normalizeReviewFinishReason, reviewFailureDiagnostics } from '../lib/reviewerHealth.js'
+import { activeReviewerGroupIndex, isReviewerConfigFault, reviewerCommandPermissionFailureCode, normalizeReviewFinishReason, reviewFailureDiagnostics } from '../lib/reviewerHealth.js'
 import { getSettings, updateSettingsWith, settingsEvents } from './settings.js'
 
 export const REVIEWER_PAUSE_MS = 24 * 60 * 60 * 1000
@@ -612,12 +612,20 @@ or
 
 A clean verdict requires an empty findings array. A findings verdict requires one to five complete findings. severity is "blocking" or "recommended"; location names the file:line when known (otherwise the affected boundary). Explain the concrete wrong outcome + suggested fix in one or two sentences, with each field at most 1000 characters. Never mix a clean verdict with findings, emit an incomplete finding, or add fields beyond this envelope.`
 
+// An agentic CLI reviewer (agy) routinely returns the requested envelope as ONE
+// markdown-fenced block despite "no markdown" — the reply is the whole envelope,
+// only dressed. Unwrap it only when the fence spans the entire reply, so prose
+// before/after a fence, an unclosed (truncated) fence, or several blocks still
+// fall through to the strict parse and stay inconclusive (#10832).
+const WHOLE_REPLY_JSON_FENCE = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/i
+
 // Transport success is not a review verdict. Accept only the exact legacy
 // clean reply or the complete bounded envelope we request; never extract a
 // clean substring from contradictory prose or salvage a truncated JSON reply.
 function normalizeCodeReviewVerdict(content) {
-  const text = typeof content === 'string' ? content.trim() : ''
-  if (/^no findings\.?$/i.test(text)) return { verdict: { verdict: 'clean', findings: text } }
+  const trimmed = typeof content === 'string' ? content.trim() : ''
+  if (/^no findings\.?$/i.test(trimmed)) return { verdict: { verdict: 'clean', findings: trimmed } }
+  const text = WHOLE_REPLY_JSON_FENCE.exec(trimmed)?.[1].trim() ?? trimmed
   if (text.length > 20000) return { reason: 'oversized_content' }
   let parsed
   try {
@@ -925,6 +933,18 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
         safetyProfile, codeReview: true })
     }).catch(() => ({ error: 'Reviewer credential setup or execution failed.' }))
       .finally(() => isolatedCwd && rm(isolatedCwd, { recursive: true, force: true }))
+    // A failed headless command request is a configuration fault, not a verdict.
+    // Replace vendor prose with a bounded remedy before health or bridge output.
+    if (!isTimeoutFailure(result.error) && (result.error || result.partial || !result.text?.trim())) {
+      // The CLI runner truncates error to a stderr prefix; the full stderr can
+      // carry the explicit refusal after that prefix. A timeout stays transient.
+      const code = reviewerCommandPermissionFailureCode(result.error) || reviewerCommandPermissionFailureCode(result.stderr)
+      if (code) return {
+        ok: false,
+        code,
+        error: 'The headless reviewer required command permission. Use a compatible non-interactive review transport or supported tool-free vendor configuration.',
+      }
+    }
     if (result.partial) {
       const errorMsg = result.stderr?.trim() || result.text?.trim() || 'Reviewer exited before completing its response.'
       return {

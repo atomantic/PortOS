@@ -36,11 +36,15 @@ vi.mock('../../lib/peerHttpClient.js', async (importOriginal) => ({
 // cosTaskStore is dynamic-imported by both the sender (getUserTasks/getCosTasks)
 // and the receiver (mergePeerTasks). Spy it so the wire build + merge are
 // observable AND can't read/write the real task files.
-vi.mock('../cosTaskStore.js', () => ({
-  getUserTasks: vi.fn().mockResolvedValue({ tasks: [] }),
-  getCosTasks: vi.fn().mockResolvedValue({ tasks: [] }),
-  mergePeerTasks: vi.fn().mockResolvedValue({ changed: false }),
-}));
+const taskStoreAvailability = vi.hoisted(() => ({ available: true }));
+vi.mock('../cosTaskStore.js', () => {
+  const merge = vi.fn().mockResolvedValue({ changed: false });
+  return {
+    getUserTasks: vi.fn().mockResolvedValue({ tasks: [] }),
+    getCosTasks: vi.fn().mockResolvedValue({ tasks: [] }),
+    get mergePeerTasks() { return taskStoreAvailability.available ? merge : undefined; },
+  };
+});
 
 import {
   buildCosTasksPayload,
@@ -70,6 +74,7 @@ function task(id, status = 'pending', overrides = {}) {
 }
 
 beforeEach(() => {
+  taskStoreAvailability.available = true;
   vi.mocked(peerFetch).mockReset();
   vi.mocked(getPeers).mockResolvedValue([PEER]);
   vi.mocked(getUserTasks).mockReset().mockResolvedValue({ tasks: [] });
@@ -182,6 +187,46 @@ describe('syncCosTasksFromPeer', () => {
     const internalCall = calls.find(([type]) => type === 'internal');
     expect(userCall[1].map((t) => t.id)).toEqual(['task-a']);
     expect(internalCall[1].map((t) => t.id)).toEqual(['sys-b']);
+  });
+
+  it.each(['user', 'internal'])('retries the identical payload immediately after the %s file merge fails', async (failedType) => {
+    const peer = { ...PEER, instanceId: `retry-${failedType}` };
+    const tasks = [
+      { id: 'user-retry', status: 'in_progress', priority: 'MEDIUM', description: 'Example user task', metadata: { claimedBy: peer.instanceId, claimId: 'user-claim' }, taskType: 'user' },
+      { id: 'internal-retry', status: 'in_progress', priority: 'MEDIUM', description: 'Example internal task', metadata: { claimedBy: peer.instanceId, claimId: 'internal-claim' }, taskType: 'internal' },
+    ];
+    const stored = { user: [], internal: [] };
+    let failing = true;
+    vi.mocked(peerFetch).mockResolvedValue(payloadRes({ schemaVersion: PORTOS_SCHEMA_VERSIONS.cosTasks, listHash: sha(peer.instanceId), tasks }));
+    vi.mocked(mergePeerTasks).mockImplementation(async (type, incoming) => {
+      if (failing && type === failedType) throw new Error('Synthetic task-file write failure');
+      const changed = JSON.stringify(stored[type]) !== JSON.stringify(incoming);
+      stored[type] = structuredClone(incoming);
+      return { changed };
+    });
+
+    expect(await syncCosTasksFromPeer(peer)).toEqual({ merged: 1 });
+    expect(stored[failedType]).toEqual([]);
+    const successfulType = failedType === 'user' ? 'internal' : 'user';
+    expect(stored[successfulType]).toEqual(tasks.filter(t => t.taskType === successfulType));
+
+    failing = false;
+    expect(await syncCosTasksFromPeer(peer)).toEqual({ merged: 1 });
+    expect(stored.user).toEqual([tasks[0]]);
+    expect(stored.internal).toEqual([tasks[1]]);
+    expect(await syncCosTasksFromPeer(peer)).toEqual({ merged: 0, skipped: 'unchanged' });
+    expect(mergePeerTasks).toHaveBeenCalledTimes(4);
+  });
+
+  it('retries the same payload when the task-store merge is unavailable', async () => {
+    const peer = { ...PEER, instanceId: 'retry-unavailable-store' };
+    vi.mocked(peerFetch).mockResolvedValue(payloadRes({ schemaVersion: 1, listHash: sha('unavailable-store'), tasks: [] }));
+    taskStoreAvailability.available = false;
+    expect(await syncCosTasksFromPeer(peer)).toEqual({ merged: 0 });
+    taskStoreAvailability.available = true;
+    expect(await syncCosTasksFromPeer(peer)).toEqual({ merged: 0 });
+    expect(mergePeerTasks).toHaveBeenCalledTimes(2);
+    expect(await syncCosTasksFromPeer(peer)).toEqual({ merged: 0, skipped: 'unchanged' });
   });
 
   it('short-circuits an unchanged backlog on the second identical sweep', async () => {

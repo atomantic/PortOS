@@ -247,7 +247,6 @@ export async function generateImage({
   // terminal path removes the whole dir.
   const scratchDir = join(tmpdir(), `portos-grok-${jobId}`);
   const stagingPath = join(scratchDir, 'output.png');
-  await mkdir(scratchDir, { recursive: true });
 
   // Caller dimensions win (mapped to the closest supported ratio); the saved
   // per-provider default applies when no dimensions were sent; otherwise the
@@ -268,7 +267,6 @@ export async function generateImage({
   // the agent model is whatever the local `grok` install defaults to (see
   // server/lib/grok.js: PortOS does not pick a grok model).
   const baseArgs = ensureGrokHeadlessArgs([], null);
-  const { args, useStdin, cleanup: cleanupPromptFile } = prepareGrokPromptFile(baseArgs, fullPrompt);
 
   const meta = {
     id: jobId, prompt: prompt.trim(), negativePrompt: negativePrompt || '',
@@ -278,6 +276,9 @@ export async function generateImage({
     ...(effectiveRatio ? { aspectRatio: effectiveRatio } : {}),
     createdAt: new Date().toISOString(),
   };
+  // The scratch dir is the last fallible step before the job exists, so a
+  // refusal above leaves nothing behind; from here on runGrok owns it.
+  await mkdir(scratchDir, { recursive: true });
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   jobs.set(jobId, job);
 
@@ -288,12 +289,11 @@ export async function generateImage({
 
   // generateImage returns a job descriptor synchronously; the actual grok
   // child runs out-of-band so the HTTP response can ship while the client
-  // attaches to the per-job SSE stream (mirrors codex.js/local.js).
-  runGrok(job, jobId, bin, args, {
-    useStdin, fullPrompt, cleanupPromptFile, scratchDir, stagingPath, outputPath, filename, meta, cleanC2PA, denoise,
+  // attaches to the per-job SSE stream (mirrors codex.js/local.js). runGrok
+  // settles every launch failure through the job's own failure finalizer.
+  runGrok(job, jobId, bin, baseArgs, {
+    fullPrompt, scratchDir, stagingPath, outputPath, filename, meta, cleanC2PA, denoise,
     toolName: grokImageTool(inputImages.paths.length > 0),
-  }).catch((err) => {
-    console.error(`❌ grok run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
   });
 
   return {
@@ -305,49 +305,59 @@ export async function generateImage({
   };
 }
 
-async function runGrok(job, jobId, bin, args, {
-  useStdin, fullPrompt, cleanupPromptFile, scratchDir, stagingPath, outputPath, filename, meta, cleanC2PA = false, denoise = false,
+// Launch is synchronous so every failure has one owner: a refusal before a
+// child exists (prompt-file preparation, shim resolution, or Node rejecting an
+// invalid argv/bin synchronously) releases the scratch dir and prompt file and
+// settles the job here; a setup failure after spawn terminates the child and
+// leaves the close handler to release resources once it has physically exited.
+function runGrok(job, jobId, bin, baseArgs, {
+  fullPrompt, scratchDir, stagingPath, outputPath, filename, meta, cleanC2PA = false, denoise = false,
   toolName = grokImageTool(false),
 }) {
-  // A path-shaped grokPath (contains a separator) must resolve against the
-  // PortOS working directory NOW — the child spawns with cwd set to the
-  // scratch dir, where a relative "./node_modules/.bin/grok" would ENOENT.
-  // Bare names stay bare for PATH lookup. prepareCliSpawn then resolves the
-  // Windows .cmd shim of an npm-installed grok and wraps it for a safe
-  // shell:false spawn — a no-op on POSIX.
-  const resolvedBin = (!isAbsolute(bin) && (bin.includes('/') || bin.includes(sep))) ? pathResolve(bin) : bin;
-  const { command: spawnBin, args: spawnArgs } = prepareCliSpawn(resolvedBin, args);
-  // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). grok reads
-  // process.cwd(), so this is defensive rather than a live fix; it keeps every
-  // scratch-dir spawn telling the child one consistent story about where it is.
-  const proc = spawn(spawnBin, spawnArgs, { cwd: scratchDir, env: withSpawnCwdEnv(process.env, scratchDir), shell: false, stdio: [useStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
-  activeProcs.set(jobId, proc);
-  const removeScratch = () => maintenance.continueSettlement(
-    () => rmGuarded(scratchDir, { recursive: true, force: true }),
-  ).catch((err) => {
+  let cleanupPromptFile = () => {};
+  // Every terminal path releases both job-owned temp resources. A failed
+  // removal keeps the maintenance settlement unsettled rather than claiming
+  // the resources were released; both removals are idempotent.
+  const removeScratch = () => maintenance.continueSettlement(async () => {
+    let promptError = null;
+    try { cleanupPromptFile({ throwOnError: true }); } catch (err) { promptError = err; }
+    await rmGuarded(scratchDir, { recursive: true, force: true });
+    if (promptError) throw promptError;
+  }).catch((err) => {
     maintenance.markCurrentUnsettled();
     console.error(`❌ grok scratch cleanup failed: ${err.message}`);
   });
 
-  if (useStdin) {
-    // POSIX: grok reads the prompt via --prompt-file /dev/stdin. EPIPE fires
-    // when the child dies before consuming stdin — the close handler reports
-    // the real failure, so just swallow the write error.
-    proc.stdin.on('error', () => {});
-    proc.stdin.write(fullPrompt);
-    proc.stdin.end();
+  let proc;
+  let useStdin;
+  try {
+    const prepared = prepareGrokPromptFile(baseArgs, fullPrompt);
+    cleanupPromptFile = prepared.cleanup;
+    useStdin = prepared.useStdin;
+    // A path-shaped grokPath (contains a separator) must resolve against the
+    // PortOS working directory NOW — the child spawns with cwd set to the
+    // scratch dir, where a relative "./node_modules/.bin/grok" would ENOENT.
+    // Bare names stay bare for PATH lookup. prepareCliSpawn then resolves the
+    // Windows .cmd shim of an npm-installed grok and wraps it for a safe
+    // shell:false spawn — a no-op on POSIX.
+    const resolvedBin = (!isAbsolute(bin) && (bin.includes('/') || bin.includes(sep))) ? pathResolve(bin) : bin;
+    const { command: spawnBin, args: spawnArgs } = prepareCliSpawn(resolvedBin, prepared.args);
+    // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). grok reads
+    // process.cwd(), so this is defensive rather than a live fix; it keeps every
+    // scratch-dir spawn telling the child one consistent story about where it is.
+    proc = spawn(spawnBin, spawnArgs, { cwd: scratchDir, env: withSpawnCwdEnv(process.env, scratchDir), shell: false, stdio: [useStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+  } catch (err) {
+    removeScratch();
+    return finalizeJobFailure(job, jobId, null, `Failed to spawn ${bin}: ${err?.message || err}`);
   }
+  activeProcs.set(jobId, proc);
 
   let stdoutTail = '';
   const STDOUT_TAIL_BYTES = 8 * 1024;
   let stderrTail = '';
   const STDERR_TAIL_BYTES = 32 * 1024;
-  const timeoutTimer = setTimeout(() => {
-    if (activeProcs.get(jobId) === proc) {
-      console.log(`⏱️ grok timed out after ${GROK_TIMEOUT_MS}ms [${jobId.slice(0, 8)}]`);
-      sigtermWithEscalation(jobId, proc);
-    }
-  }, GROK_TIMEOUT_MS);
+  let timeoutTimer = null;
+  let setupError = null;
 
   let processError;
   proc.on('error', (err) => {
@@ -355,30 +365,21 @@ async function runGrok(job, jobId, bin, args, {
     // A failed kill/send on a live child is not physical exit.
     if (proc.pid) return;
     clearTimeout(timeoutTimer);
-    cleanupPromptFile();
     removeScratch();
     finalizeJobFailure(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
-  });
-
-  proc.stdout.on('data', (chunk) => {
-    stdoutTail += chunk.toString();
-    if (stdoutTail.length > STDOUT_TAIL_BYTES) stdoutTail = stdoutTail.slice(-STDOUT_TAIL_BYTES);
-    broadcastSse(job, { type: 'status', message: 'Running…' });
-  });
-
-  proc.stderr.on('data', (chunk) => {
-    stderrTail += chunk.toString();
-    if (stderrTail.length > STDERR_TAIL_BYTES) stderrTail = stderrTail.slice(-STDERR_TAIL_BYTES);
   });
 
   proc.on('close', async (code, signal) => {
     await withBackupAssetPublication(async () => {
       clearTimeout(timeoutTimer);
-      cleanupPromptFile();
       // EventEmitter doesn't await async listeners — without this try/catch,
       // a throw from the harvest/copy would surface as an unhandled rejection
       // and the job would be stuck in 'running' forever with no SSE error.
       try {
+        if (setupError) {
+          removeScratch();
+          return finalizeJobFailure(job, jobId, proc, `Grok launch setup failed: ${setupError?.message || setupError}`);
+        }
         if (code !== 0 || processError) {
           const reason = processError?.message || (signal ? `Killed by signal ${signal}` : `Exit code ${code}`);
           const tail = stderrTail.trim().split('\n').slice(-6).join('\n');
@@ -452,11 +453,46 @@ async function runGrok(job, jobId, bin, args, {
       // Admission can reject before the publication callback is entered.
       // EventEmitter does not await this listener, so settle the job here too.
       clearTimeout(timeoutTimer);
-      cleanupPromptFile();
       removeScratch();
       finalizeJobFailure(job, jobId, proc, `Grok publication admission failed: ${err?.message || err}`);
     });
   });
+
+  // Post-spawn setup. The error/close owners above are already installed, so a
+  // throw here must not settle the job or release its resources under a live
+  // child: record it, terminate the child, and let close settle after exit.
+  try {
+    if (useStdin) {
+      // POSIX: grok reads the prompt via --prompt-file /dev/stdin. EPIPE fires
+      // when the child dies before consuming stdin — the close handler reports
+      // the real failure, so just swallow the write error.
+      proc.stdin.on('error', () => {});
+      proc.stdin.write(fullPrompt);
+      proc.stdin.end();
+    }
+
+    timeoutTimer = setTimeout(() => {
+      if (activeProcs.get(jobId) === proc) {
+        console.log(`⏱️ grok timed out after ${GROK_TIMEOUT_MS}ms [${jobId.slice(0, 8)}]`);
+        sigtermWithEscalation(jobId, proc);
+      }
+    }, GROK_TIMEOUT_MS);
+
+    proc.stdout.on('data', (chunk) => {
+      stdoutTail += chunk.toString();
+      if (stdoutTail.length > STDOUT_TAIL_BYTES) stdoutTail = stdoutTail.slice(-STDOUT_TAIL_BYTES);
+      broadcastSse(job, { type: 'status', message: 'Running…' });
+    });
+
+    proc.stderr.on('data', (chunk) => {
+      stderrTail += chunk.toString();
+      if (stderrTail.length > STDERR_TAIL_BYTES) stderrTail = stderrTail.slice(-STDERR_TAIL_BYTES);
+    });
+  } catch (err) {
+    setupError = err;
+    clearTimeout(timeoutTimer);
+    sigtermWithEscalation(jobId, proc);
+  }
 }
 
 const finalizeJobFailure = createJobFailureFinalizer({

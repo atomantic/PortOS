@@ -90,7 +90,7 @@ describe.skipIf(!chrome && !auditCdp)('Drawer native disabled-state focus bounda
       });
     }
     // close() disconnects an attached CDP client; only a launched browser is
-    // owned by this suite and terminated by Playwright.
+    // owned by this suite and reaped by the fixture.
     await fixture?.close();
   });
 

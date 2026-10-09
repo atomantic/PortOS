@@ -1,3 +1,5 @@
+import * as toonWorld from './toonWorld.js';
+
 export function mount(THREE) {
 
 const mv = window.PORTOS_MV;
@@ -67,7 +69,7 @@ globalThis.portosComposition = {
     text.reset();
     try {
       text.save();
-      fn({ THREE, scene, camera, text, lens }, { t, localT: t - section.startSec, frame: Math.floor(t * mv.render.fps),
+      fn({ THREE, scene, camera, text, lens, toonWorld }, { t, localT: t - section.startSec, frame: Math.floor(t * mv.render.fps),
         width, height, song: authored.song, section, palette: authored.palette,
         safe: { x: width * 0.1, y: height * 0.1, w: width * 0.8, h: height * 0.8 },
         events: state.activeEvents || [], reactiveGain: state.reactiveGain ?? 1 });
@@ -105,7 +107,8 @@ const LENS_DEFAULTS = Object.freeze({ focus: 10, aperture: 0, maxBlur: 16, bloom
 // and a composite that compresses highlights (PBR Neutral shoulder), encodes sRGB and adds
 // a vignette and frame-keyed grain. Every pass runs every frame so GPU
 // resources are allocated once and seeks stay deterministic.
-function createPost(THREE, renderer) {
+export function createPost(THREE, renderer) {
+  const ink = toonWorld.createInkPass(THREE, renderer);
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
   const stage = new THREE.Scene(); stage.add(quad);
@@ -149,6 +152,7 @@ function createPost(THREE, renderer) {
       gl_FragColor = vec4(c, 1.);
     }`, { tColor: { value: null }, uStep: { value: new THREE.Vector2() } });
   const composite = pass(/* glsl */`
+    ${toonWorld.inkShader}
     varying vec2 vUv; uniform sampler2D tColor, tBloom; uniform vec2 uRes;
     uniform float uBloom, uExposure, uVignette, uGrain, uFrame;
     // Khronos PBR Neutral's highlight shoulder without its toe offset, so
@@ -162,14 +166,22 @@ function createPost(THREE, renderer) {
     // The frame is wrapped so sin() stays in precise range late in a long song.
     float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
     void main(){
-      vec3 c = (texture2D(tColor, vUv).rgb + texture2D(tBloom, vUv).rgb * uBloom) * uExposure;
+      vec3 c = applyInk(texture2D(tColor, vUv).rgb + texture2D(tBloom, vUv).rgb * uBloom, vUv) * uExposure;
       c = srgb(clamp(neutral(max(c, 0.)), 0., 1.));
       vec2 q = vUv - .5; c *= 1. - dot(q, q) * uVignette * 1.8;
       c += (hash(vUv * uRes + mod(uFrame, 251.) * 7.13) - .5) * uGrain;
       gl_FragColor = vec4(clamp(c, 0., 1.), 1.);
-    }`, { tColor: { value: null }, tBloom: { value: null }, uRes: { value: new THREE.Vector2() }, uBloom: { value: 0 }, uExposure: { value: 1 }, uVignette: { value: 0 }, uGrain: { value: 0 }, uFrame: { value: 0 } });
+    }`, { tColor: { value: null }, tBloom: { value: null }, uRes: { value: new THREE.Vector2() }, uBloom: { value: 0 }, uExposure: { value: 1 }, uVignette: { value: 0 }, uGrain: { value: 0 }, uFrame: { value: 0 }, ...ink.uniforms });
+  // Ink alone must preserve the direct path's palette and avoid paying for
+  // inactive bloom, highlight grading and grain in the cinematic composite.
+  const inkOnly = pass(/* glsl */`
+    ${toonWorld.inkShader}
+    varying vec2 vUv; uniform sampler2D tColor;
+    vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1. / 2.4)) - .055, step(.0031308, c)); }
+    void main(){ gl_FragColor = vec4(srgb(clamp(applyInk(texture2D(tColor, vUv).rgb, vUv), 0., 1.)), 1.); }
+  `, { tColor: { value: null }, ...ink.uniforms });
   let targets = [];
-  let hdr, hdrDepth, colour, small, smallB, w = 1, h = 1;
+  let hdr, hdrDepth, inkTarget, colour, small, smallB, w = 1, h = 1;
   // A software rasterizer (CI, GPU-less hosts) multiplies every MSAA sample, so
   // it renders single-sampled; real GPUs keep 4x.
   const gl = renderer.getContext();
@@ -182,14 +194,15 @@ function createPost(THREE, renderer) {
       for (const target of targets) { target.depthTexture?.dispose(); target.dispose(); }
       w = width; h = height;
       const linear = { type: THREE.HalfFloatType, depthBuffer: false };
-      // Depth is only sampled for depth of field, so only that target carries a
+      // Depth is sampled for depth of field and visible-surface ink, so only that target carries a
       // depth texture (resolving one is a full extra copy every frame).
       hdr = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, samples });
       hdrDepth = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, samples, depthTexture: new THREE.DepthTexture(w, h, THREE.FloatType) });
+      inkTarget = new THREE.WebGLRenderTarget(w, h, { samples, depthTexture: new THREE.DepthTexture(w, h, THREE.FloatType) });
       colour = new THREE.WebGLRenderTarget(w, h, linear);
       small = new THREE.WebGLRenderTarget(Math.ceil(w / 4), Math.ceil(h / 4), linear);
       smallB = new THREE.WebGLRenderTarget(Math.ceil(w / 4), Math.ceil(h / 4), linear);
-      targets = [hdr, hdrDepth, colour, small, smallB];
+      targets = [hdr, hdrDepth, inkTarget, colour, small, smallB];
       // Allocate every target now: passes a lens skips must not create GPU
       // textures on a later seek.
       for (const target of targets) renderer.initRenderTarget(target);
@@ -210,11 +223,20 @@ function createPost(THREE, renderer) {
       // that does nothing skips its pass outright, and an untouched lens skips
       // the HDR path entirely.
       const focusing = aperture > 0 && maxBlur >= 0.5;
-      if (!focusing && !bloom && !vignette && !grain && exposure === 1) {
+      const inking = Boolean(lens.ink);
+      if (!inking && !focusing && !bloom && !vignette && !grain && exposure === 1) {
         renderer.setRenderTarget(null); renderer.render(world, view);
         return;
       }
-      const sceneTarget = focusing ? hdrDepth : hdr;
+      if (inking && !focusing && !bloom && !vignette && !grain && exposure === 1) {
+        ink.configure(inkTarget.depthTexture, view, w, h, typeof lens.ink === 'object' ? lens.ink : {});
+        renderer.setRenderTarget(inkTarget); renderer.clear(); renderer.render(world, view);
+        inkOnly.uniforms.tColor.value = inkTarget.texture;
+        draw(inkOnly, null);
+        return;
+      }
+      const sceneTarget = focusing || inking ? hdrDepth : hdr;
+      ink.configure(sceneTarget.depthTexture, view, w, h, { ...(typeof lens.ink === 'object' ? lens.ink : {}), enabled: inking });
       renderer.setRenderTarget(sceneTarget); renderer.clear(); renderer.render(world, view);
       let sharp = sceneTarget.texture;
       if (focusing) {

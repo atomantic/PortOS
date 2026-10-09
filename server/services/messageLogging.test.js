@@ -22,11 +22,14 @@ vi.mock('../lib/fileUtils.js', async (original) => ({
       return defaultValue;
     }
   },
+  readJSONFileStrict: async (path, fallback) => ({
+    ok: true, value: doubles.files.has(path) ? JSON.parse(doubles.files.get(path)) : fallback
+  }),
   tryReadFile: async path => doubles.files.get(path) ?? null,
   atomicWrite: async (path, value) => { doubles.files.set(path, JSON.stringify(value)); }
 }));
 vi.mock('./readinessNotify.js', () => ({ noteReadinessChanged: () => {} }));
-vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: async () => ({}) }));
+vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: async () => ({ getAccessToken: async () => ({ token: 'synthetic-token' }) }) }));
 vi.mock('@googleapis/gmail', () => ({
   gmail: () => ({ users: {
     messages: { send: doubles.send, list: doubles.list, get: doubles.get, trash: doubles.trash, modify: doubles.modify },

@@ -71,6 +71,7 @@ const BOOTSTRAP = `(() => {
   const map = new Map(); // key → { url, size, used, media: Set<WeakRef> } for files received
   const waiting = new Map(); // key → callbacks awaiting the parent's answer
   const assigned = new WeakMap(); // element → token of its latest src assignment (a stale answer must not win)
+  const inflight = new WeakMap(); // element → { promise, done } while a bridged src awaits the parent's blob
   let keys = null; // the manifest; null until the parent posts it
   let resolveAssets;
   window.PORTOS_MV_PREVIEW = true;
@@ -115,14 +116,19 @@ const BOOTSTRAP = `(() => {
     if (!waiting.has(key)) { waiting.set(key, []); post({ type: 'portos-mv:request', key }); }
     waiting.get(key).push(callback);
   };
+  // A bridged src lands after the parent answers, so decode()/complete must see the assignment as pending until then.
+  const settle = (el, token) => { const hold = inflight.get(el); if (hold && hold.token === token) { inflight.delete(el); hold.done(); } };
   const apply = (el, desc, value, token) => {
     const key = keyOf(value);
-    if (!keys.has(key)) return desc.set.call(el, value);
+    if (!keys.has(key)) { desc.set.call(el, value); return settle(el, token); }
     request(key, (entry) => {
       if (assigned.get(el) !== token) return;
-      if (!entry) return desc.set.call(el, value);
-      if (el instanceof HTMLMediaElement || el instanceof HTMLSourceElement) entry.media.add(new WeakRef(el));
-      desc.set.call(el, entry.url);
+      if (!entry) desc.set.call(el, value);
+      else {
+        if (el instanceof HTMLMediaElement || el instanceof HTMLSourceElement) entry.media.add(new WeakRef(el));
+        desc.set.call(el, entry.url);
+      }
+      settle(el, token);
     });
   };
   // A promise of a bridged file's blob: URL (null when unavailable), for uses other than a media src.
@@ -141,11 +147,25 @@ const BOOTSTRAP = `(() => {
       set(value) {
         const token = {};
         assigned.set(this, token);
+        const stale = inflight.get(this);
+        if (stale) { inflight.delete(this); stale.done(); }
         if (!relative(value)) return desc.set.call(this, value);
+        let done;
+        inflight.set(this, { token, done: () => done(), promise: new Promise((resolve) => { done = resolve; }) });
         if (!keys) { pending.push([this, desc, value, token]); return; }
         apply(this, desc, value, token);
       } });
   }
+  // decode() called straight after a bridged src assignment must wait for the real src, or it rejects on an empty image.
+  const decode = HTMLImageElement.prototype.decode;
+  HTMLImageElement.prototype.decode = async function() {
+    // A reassignment releases the earlier hold; keep waiting while a newer bridged src is still pending.
+    for (let hold = inflight.get(this); hold; hold = inflight.get(this)) await hold.promise;
+    return decode.call(this);
+  };
+  const complete = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'complete');
+  if (complete && complete.get) Object.defineProperty(HTMLImageElement.prototype, 'complete', { configurable: true, enumerable: complete.enumerable,
+    get() { return !inflight.has(this) && complete.get.call(this); } });
   const contract = () => {
     const c = globalThis.portosComposition;
     return c ? { durationSec: c.durationSec, fps: c.fps, width: c.width, height: c.height, formats: c.formats || null, layout: typeof c.layout === 'function' } : null;

@@ -19,7 +19,7 @@ import { imageGenEvents } from '../imageGenEvents.js';
 
 import { join } from 'path';
 import { getSettings } from '../settings.js';
-import { resolveCleanersFromConfig } from '../../lib/imageClean.js';
+import { resolveImageCleaners } from '../../lib/imageCleanDefaults.js';
 import * as external from './external.js';
 import * as local from './local.js';
 import * as codex from './codex.js';
@@ -94,18 +94,7 @@ async function checkLocalConnection(settings, modelIdOverride) {
   };
 }
 
-// Resolve the cleaner flags from body overrides + saved per-mode settings.
-// Body fields win when explicit (per-render checkbox); otherwise inherit
-// the saved per-mode defaults via `resolveCleanersFromConfig`. Shared by
-// `/generate` and `generateImage()` (safety net for direct callers like
-// `generateAvatar`).
-export function resolveImageCleaners(body, settings, mode) {
-  const saved = resolveCleanersFromConfig(cfg(settings)[mode], mode);
-  return {
-    cleanC2PA: typeof body?.cleanC2PA === 'boolean' ? body.cleanC2PA : saved.cleanC2PA,
-    denoise: typeof body?.denoise === 'boolean' ? body.denoise : saved.denoise,
-  };
-}
+export { resolveImageCleaners };
 
 export async function getMode() {
   const s = await getSettings();

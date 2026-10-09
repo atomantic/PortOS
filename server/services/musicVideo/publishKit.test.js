@@ -334,6 +334,21 @@ describe('publishing kit copy (#9281)', () => {
     await expect(kit.draftPublishKitCopy(id, {}, deps)).resolves.toBeTruthy();
   });
 
+  it('saves the draft inputs as they are edited without marking the posts hand-edited', async () => {
+    const { id } = await projects.createProject({ name: 'Example Song' });
+    await kit.updatePublishKitCopy(id, { notes: 'made it on a Sunday', links: { youtube: 'https://example.com/v', song: 'https://example.com/s' } });
+    await kit.updatePublishKitCopy(id, { links: { song: '' }, draftOptions: { include: { lyrics: true }, length: 'full' } });
+    const { project } = await kit.updatePublishKitCopy(id, { draftOptions: { include: { spend: true } } });
+    expect(project.publishKit).toMatchObject({
+      notes: 'made it on a Sunday',
+      links: { youtube: 'https://example.com/v' },
+      draftOptions: { include: { lyrics: true, spend: true }, length: 'full' },
+    });
+    expect(project.publishKit.links).not.toHaveProperty('song');
+    // Notes, links and options are draft inputs, not posts: a draft still runs without the replace confirmation.
+    expect(project.publishKit).not.toHaveProperty('copyEditedAt');
+  });
+
   it('clears tags an earlier draft wrote once hashtags are unticked', async () => {
     const { id } = await projects.createProject({ name: 'Example Song' });
     const reply = JSON.stringify({ youtube: { title: 'Drafted', description: 'd', tags: ['model tag'] } });

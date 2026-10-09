@@ -106,6 +106,7 @@ import {
   deleteScene,
   reorderProjectScenes,
   splitProjectScene,
+  mergeProjectNextScene,
   setProjectMidiTranscription,
   appendSceneTakes,
   appendTakesAcrossScenes,
@@ -317,6 +318,19 @@ router.post('/:id/song-revision/select', asyncHandler(async (req, res) => {
   res.json(await selectSongRevision(req.params.id, revisionId, songId));
 }));
 
+router.post('/:id/song-revision/track', asyncHandler(async (req, res) => {
+  const { musicVideoSongFromTrackSchema } = await import('../lib/musicVideoValidation.js');
+  const { trackId } = validateRequest(musicVideoSongFromTrackSchema, req.body);
+  const { reviseSongFromTrack } = await import('../services/musicVideo/songRevision.js');
+  res.status(201).json(await reviseSongFromTrack(req.params.id, { trackId }));
+}));
+router.post('/:id/song-revision/scenes', asyncHandler(async (req, res) => {
+  const { musicVideoSongSceneActionSchema } = await import('../lib/musicVideoValidation.js');
+  const body = validateRequest(musicVideoSongSceneActionSchema, req.body);
+  const { resolveSongRevisionScenes } = await import('../services/musicVideo/songRevision.js');
+  res.json(await resolveSongRevisionScenes(req.params.id, body));
+}));
+
 router.post('/:id/clone', asyncHandler(async (req, res) => {
   const options = validateRequest(musicVideoProjectCloneSchema, req.body || {});
   res.status(201).json(await cloneProject(req.params.id, options));
@@ -519,8 +533,8 @@ router.post('/:id/lyrics/import-track', asyncHandler(async (req, res) => {
 // provisions MMS_FA only on demand. Explicit separateVocals consent creates
 // a missing stem with Demucs first; older master-only callers retain Whisper.
 router.post('/:id/lyrics/align', asyncHandler(async (req, res) => {
-  const { cueId, separateVocals } = validateRequest(musicVideoLyricsAlignSchema, req.body || {});
-  res.status(202).json(await startLyricAlign(req.params.id, { cueId, separateVocals }));
+  const { cueId, separateVocals, retimeSong } = validateRequest(musicVideoLyricsAlignSchema, req.body || {});
+  res.status(202).json(await startLyricAlign(req.params.id, { cueId, separateVocals, retimeSong }));
 }));
 
 router.get('/lyrics/align/:jobId/events', (req, res) => {
@@ -684,6 +698,14 @@ router.post('/:id/production-review/revise', asyncHandler(async (req, res) => {
 router.post('/:id/production-review/revert', asyncHandler(async (req, res) => {
   res.json(await revertProductionInput(req.params.id, validateRequest(musicVideoProductionRevertSchema, req.body)));
 }));
+// The overlay text quality pass: render the composition document at its text
+// moments and flag collisions, cut-off, low contrast and phone-size text.
+router.post('/:id/production-review/text-check', asyncHandler(async (req, res) => {
+  const { startOverlayTextCheck } = await import('../services/musicVideo/overlayTextService.js');
+  const { project, readiness } = await startOverlayTextCheck(req.params.id);
+  res.status(202).json({ project, readiness });
+}));
+
 router.get('/:id/production-review', asyncHandler(async (req, res) => {
   res.json(await getProductionReview(req.params.id));
 }));
@@ -768,6 +790,14 @@ const requireProject = async (id) => {
   return project;
 };
 
+// A new document gets its overlay text checked in the background, so the
+// findings are waiting at the storyboard approval (local browser work, no provider).
+const checkOverlayTextAfterImport = (projectId) => {
+  import('../services/musicVideo/overlayTextService.js')
+    .then(({ checkOverlayTextInBackground }) => checkOverlayTextInBackground(projectId))
+    .catch((err) => console.error(`❌ Overlay text check did not start: ${err.message}`));
+};
+
 const documentZipUpload = uploadSingle('file', {
   limits: { fileSize: DOCUMENT_ZIP_MAX_BYTES },
   fileFilter: (_req, file, cb) => {
@@ -784,6 +814,7 @@ router.post('/:id/composition/document/zip', documentZipUpload, asyncHandler(asy
   if (!req.file) throw new ServerError('No file uploaded (multipart field "file")', { status: 400, code: 'VALIDATION_ERROR' });
   try {
     res.status(201).json(await importDocumentZip(req.params.id, req.file.path, req.file.originalname));
+    checkOverlayTextAfterImport(req.params.id);
   } finally {
     await unlink(req.file.path).catch(() => {});
   }
@@ -792,6 +823,7 @@ router.post('/:id/composition/document/zip', documentZipUpload, asyncHandler(asy
 router.post('/:id/composition/document/directory', asyncHandler(async (req, res) => {
   const { directory } = validateRequest(musicVideoDocumentDirectoryImportSchema, req.body || {});
   res.status(201).json(await importDocumentDirectory(req.params.id, directory));
+  checkOverlayTextAfterImport(req.params.id);
 }));
 
 router.post('/:id/composition/document/template', asyncHandler(async (req, res) => {
@@ -827,6 +859,7 @@ router.post('/:id/composition/document/sections/:sectionId/regenerate', asyncHan
 router.post('/:id/composition/document/accept', asyncHandler(async (req, res) => {
   const { directory } = validateRequest(musicVideoDocumentCandidateSchema, req.body || {});
   res.json(await acceptMixedMediaDocument(req.params.id, directory));
+  checkOverlayTextAfterImport(req.params.id);
 }));
 
 router.delete('/:id/composition/document/candidate', asyncHandler(async (req, res) => {
@@ -1387,6 +1420,12 @@ router.post('/:id/scenes/reorder', asyncHandler(async (req, res) => {
 router.post('/:id/scenes/:sceneId/split', asyncHandler(async (req, res) => {
   const { backend } = validateRequest(musicVideoSceneSplitSchema, req.body ?? {});
   res.json(await splitProjectScene(req.params.id, req.params.sceneId, { backend }));
+}));
+
+// Merge a scene with the next one — the inverse of split.
+router.post('/:id/scenes/:sceneId/merge-next', asyncHandler(async (req, res) => {
+  const { backend } = validateRequest(musicVideoSceneSplitSchema, req.body ?? {});
+  res.json(await mergeProjectNextScene(req.params.id, req.params.sceneId, { backend }));
 }));
 
 // --- Scene takes (#8965) ---

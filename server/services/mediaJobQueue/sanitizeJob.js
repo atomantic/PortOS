@@ -14,7 +14,7 @@ const PARAM_ALLOWLIST = new Set([
   // the preview-fidelity decode REQUEST the job was submitted with — projected
   // so the requeue editor can seed its picker from what the job actually asked
   // for instead of snapping every requeue back to Full.
-  'textEncoderId', 'speedProfileId', 'draftDecode',
+  'textEncoderId', 'speedProfileId', 'draftDecode', 'streamingMode',
   'chunks', 'chunkPrompts', 'contextFrames', 'loras',
   'cfgScale', 'guidance', 'quantize',
   'runId', 'runtime', 'datasetId', 'characterId', 'characterName',

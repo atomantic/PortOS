@@ -1,6 +1,6 @@
 # Outlook and Teams draft delivery
 
-Approved drafts for Outlook and Teams accounts are delivered by driving the web UI in the PortOS browser tab you are already signed into. Gmail still sends through its API. This page is the contract for the browser path; the code is `server/lib/messageBrowserCompose.js` (pure planning, scripts and judging) and `sendPlaywright` in `server/services/messagePlaywrightSync.js` (the I/O).
+Approved drafts for Outlook and Teams accounts are delivered by driving the web UI in the PortOS browser tab you are already signed into. Gmail still sends through its API, under the same certainty rule: a 2xx is sent, a Gmail 4xx refusal or a failed token refresh is a definite failure, and a timeout, dropped connection or 5xx is `delivery_unknown` — the API client never retries the send (`sendGmail` in `server/services/messageGmailSync.js`). This page is the contract for the browser path; the code is `server/lib/messageBrowserCompose.js` (pure planning, scripts and judging) and `sendPlaywright` in `server/services/messagePlaywrightSync.js` (the I/O).
 
 ## Live validation status
 

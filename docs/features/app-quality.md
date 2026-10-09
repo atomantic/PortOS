@@ -140,7 +140,10 @@ PostgreSQL keeps every measurement, and the file keeps one row per UTC day and
 category for the same 30-day window the quality panel uses, capped at 4 MiB.
 Publish opens an immediately-merged pull request on `portos/quality-snapshot` and
 does not commit the live checkout. With no local evidence, a non-empty file is
-left as it is.
+left as it is. The immediate merge takes the install's repository merge
+admission (the lease a `/claim` run holds around its final verify-and-merge); while
+another owner holds it, or ownership can't be verified, the PR stays open and is
+handed to the pending-merge queue (GitHub) or retried on the next publish (GitLab).
 
 The checked-in schema is v2. It stores an opaque origin fingerprint, sorted
 category and enum dictionaries, and fixed rows

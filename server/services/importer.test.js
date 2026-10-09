@@ -62,26 +62,39 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   runStagedLLM: (...args) => mockRunStagedLLM(...args),
 }));
 
-// Mock `./pipeline/issues.js` so a single test can force `createIssue` to
-// throw mid-loop and exercise the ERR_PARTIAL_COMMIT_ISSUES rollback path.
+// Mock `./pipeline/issues.js` so a single test can force `ensureIssueWithId`
+// (the importer's create boundary) to throw mid-loop and exercise the
+// ERR_PARTIAL_COMMIT_ISSUES rollback path.
 // `vi.hoisted` keeps the mock fn ref reachable from both the mock factory
 // (hoisted before imports) and the beforeEach reset (runs later). Default
 // behavior passes through to the real module so the dozen other tests that
-// expect real createIssue behavior keep working unchanged.
+// expect real create behavior keep working unchanged.
 // `mockDeleteIssue` follows the same pattern so the replaceMode-abort test
 // can force a delete failure mid-wipe.
-const { mockCreateIssue, mockDeleteIssue, realIssuesRef } = vi.hoisted(() => ({
-  mockCreateIssue: vi.fn(),
+const { mockEnsureIssue, mockDeleteIssue, realIssuesRef, sessionFaults } = vi.hoisted(() => ({
+  mockEnsureIssue: vi.fn(),
   mockDeleteIssue: vi.fn(),
   realIssuesRef: { current: null },
+  // Status values whose `recordImportProgress` write rejects — lets a test lose
+  // one specific session write (e.g. the final `committed` receipt, #10762).
+  sessionFaults: { failStatuses: new Set() },
 }));
 vi.mock('./pipeline/issues.js', async () => {
   const actual = await vi.importActual('./pipeline/issues.js');
   realIssuesRef.current = actual;
   return {
     ...actual,
-    createIssue: (...args) => mockCreateIssue(...args),
+    ensureIssueWithId: (...args) => mockEnsureIssue(...args),
     deleteIssue: (...args) => mockDeleteIssue(...args),
+  };
+});
+vi.mock('./importerSessions.js', async () => {
+  const actual = await vi.importActual('./importerSessions.js');
+  return {
+    ...actual,
+    recordImportProgress: (importId, patch) => (sessionFaults.failStatuses.has(patch?.status)
+      ? Promise.reject(new Error(`simulated ${patch.status} session write failure`))
+      : actual.recordImportProgress(importId, patch)),
   };
 });
 
@@ -89,6 +102,7 @@ const importerSvc = await import('./importer.js');
 const universeSvc = await import('./universeBuilder.js');
 const seriesSvc = await import('./pipeline/series.js');
 const issuesSvc = await import('./pipeline/issues.js');
+const sessionsSvc = await import('./importerSessions.js');
 
 // Per-test: wipe every file under tempRoot so each test starts with a clean
 // data dir. We can't rmSync the dir itself because the universeBuilder
@@ -105,11 +119,12 @@ function wipeTempRoot() {
 beforeEach(() => {
   wipeTempRoot();
   mockRunStagedLLM.mockReset();
-  // Default createIssue + deleteIssue to pass-through to the real module —
+  // Default ensureIssueWithId + deleteIssue to pass-through to the real module —
   // only the rollback and replace-abort tests override these to inject
   // failures.
-  mockCreateIssue.mockReset();
-  mockCreateIssue.mockImplementation((...args) => realIssuesRef.current.createIssue(...args));
+  mockEnsureIssue.mockReset();
+  mockEnsureIssue.mockImplementation((...args) => realIssuesRef.current.ensureIssueWithId(...args));
+  sessionFaults.failStatuses.clear();
   mockDeleteIssue.mockReset();
   mockDeleteIssue.mockImplementation((...args) => realIssuesRef.current.deleteIssue(...args));
 });
@@ -1477,10 +1492,10 @@ describe('commitImport', () => {
   it('rolls back created issues + throws ERR_PARTIAL_COMMIT_ISSUES when createIssue fails mid-loop', async () => {
     const { uni, ser } = await setupForCommit();
     let call = 0;
-    mockCreateIssue.mockImplementation(async (...args) => {
+    mockEnsureIssue.mockImplementation(async (...args) => {
       call++;
       if (call === 2) throw new Error('simulated mid-loop FS error');
-      return realIssuesRef.current.createIssue(...args);
+      return realIssuesRef.current.ensureIssueWithId(...args);
     });
 
     let caught;
@@ -1764,10 +1779,10 @@ describe('commitImport import sessions (#9943)', () => {
     wireDefaultLLMResponses();
     const preview = await analyze();
     let call = 0;
-    mockCreateIssue.mockImplementation(async (...args) => {
+    mockEnsureIssue.mockImplementation(async (...args) => {
       call++;
       if (call === 2) throw new Error('simulated mid-loop FS error');
-      return realIssuesRef.current.createIssue(...args);
+      return realIssuesRef.current.ensureIssueWithId(...args);
     });
     await expect(importerSvc.commitImport(payloadFor(preview))).rejects.toMatchObject({
       code: importerSvc.ERR_PARTIAL_COMMIT_ISSUES,
@@ -1836,12 +1851,307 @@ describe('commitImport import sessions (#9943)', () => {
     expect(after.map((i) => i.title)).toEqual(['Replacement']);
   });
 
+  // #10762: issue identities are planned durably before the first create, so a
+  // lost receipt or an interrupted loop resumes instead of minting a second batch.
+  it('finishes a commit whose final receipt was lost without creating a second copy', async () => {
+    wireDefaultLLMResponses();
+    const preview = await analyze();
+    // No arcPosition — a retry used to auto-assign the next free slot and land
+    // a duplicate at position 2.
+    const issues = [{ title: 'Example Chapter', proseExcerpt: 'p1' }];
+    sessionFaults.failStatuses.add('committed');
+    const first = await importerSvc.commitImport(payloadFor(preview, { issues }));
+    sessionFaults.failStatuses.clear();
+    expect(first.createdIssueIds).toHaveLength(1);
+
+    const reanalyzed = await analyze();
+    expect(reanalyzed.importSession).toEqual({ status: 'committed', createdIssueIds: first.createdIssueIds });
+    const retried = await importerSvc.commitImport(payloadFor(reanalyzed, { issues }));
+
+    expect(retried.replayed).toBe(true);
+    expect(retried.createdIssueIds).toEqual(first.createdIssueIds);
+    const after = await issuesSvc.listIssues({ seriesId: preview.series.id });
+    expect(after.map((i) => [i.id, i.arcPosition])).toEqual([[first.createdIssueIds[0], 1]]);
+    // The replay wrote the receipt the first attempt lost.
+    expect(await sessionsSvc.getImportSession(preview.importId)).toMatchObject({
+      status: 'committed', createdIssueIds: first.createdIssueIds, plan: null,
+    });
+  });
+
+  it('keeps a finished import resumable until its draft shells are promoted', async () => {
+    wireDefaultLLMResponses();
+    const preview = await analyze();
+    const issues = [{ title: 'I1', proseExcerpt: 'p1' }];
+    // The last issue lands, then the process dies before promotion and receipt.
+    mockEnsureIssue.mockImplementation(async (...args) => {
+      await realIssuesRef.current.ensureIssueWithId(...args);
+      throw new Error('simulated crash after the write');
+    });
+    mockDeleteIssue.mockRejectedValue(new Error('simulated delete failure'));
+    await expect(importerSvc.commitImport(payloadFor(preview, { issues }))).rejects.toThrow();
+    mockEnsureIssue.mockImplementation((...args) => realIssuesRef.current.ensureIssueWithId(...args));
+    mockDeleteIssue.mockImplementation((...args) => realIssuesRef.current.deleteIssue(...args));
+    expect((await seriesSvc.getSeries(preview.series.id)).importDraft).toBe(true);
+
+    // Not `committed` yet: a client that believed it would never send the
+    // commit that promotes the drafts.
+    const reanalyzed = await analyze();
+    expect(reanalyzed.importSession.status).toBe('arc-persisted');
+    const retried = await importerSvc.commitImport(payloadFor(reanalyzed, { issues }));
+
+    expect(retried.replayed).toBe(true);
+    expect((await seriesSvc.getSeries(preview.series.id)).importDraft).not.toBe(true);
+    expect(await issueCount(preview)).toBe(1);
+    expect((await analyze()).importSession).toEqual({ status: 'committed', createdIssueIds: retried.createdIssueIds });
+  });
+
+  // The disk state a crash after the first issue leaves: the plan is recorded,
+  // one issue exists, and nothing rolled it back.
+  const interruptAfterFirstIssue = async (preview, issues) => {
+    let call = 0;
+    mockEnsureIssue.mockImplementation(async (...args) => {
+      call++;
+      if (call === 2) throw new Error('simulated crash');
+      return realIssuesRef.current.ensureIssueWithId(...args);
+    });
+    mockDeleteIssue.mockRejectedValue(new Error('simulated delete failure'));
+    const err = await importerSvc.commitImport(payloadFor(preview, { issues })).catch((e) => e);
+    mockEnsureIssue.mockImplementation((...args) => realIssuesRef.current.ensureIssueWithId(...args));
+    mockDeleteIssue.mockImplementation((...args) => realIssuesRef.current.deleteIssue(...args));
+    return err;
+  };
+
+  it.each([
+    ['explicit', [{ title: 'I1', arcPosition: 1, proseExcerpt: 'p1' }, { title: 'I2', arcPosition: 2, proseExcerpt: 'p2' }]],
+    ['omitted', [{ title: 'I1', proseExcerpt: 'p1' }, { title: 'I2', proseExcerpt: 'p2' }]],
+  ])('resumes an interrupted issue set with %s positions, keeping the survivor and its edits', async (_label, issues) => {
+    wireDefaultLLMResponses();
+    const preview = await analyze();
+    const err = await interruptAfterFirstIssue(preview, issues);
+    // The rollback could not remove the survivor, and says so rather than
+    // reporting every created issue as rolled back.
+    expect(err.code).toBe(importerSvc.ERR_PARTIAL_COMMIT_ISSUES);
+    expect(err.context.survivingIssueIds).toHaveLength(1);
+    expect(err.message).toMatch(/0 issues created by this attempt were rolled back/);
+    expect(err.message).toMatch(/1 issue could not be removed .* remains part of this import/);
+    const [survivorId] = err.context.survivingIssueIds;
+    await issuesSvc.updateIssue(survivorId, { title: 'I1 (edited)' });
+
+    const reanalyzed = await analyze();
+    expect(reanalyzed.importSession.status).toBe('arc-persisted');
+    const retried = await importerSvc.commitImport(payloadFor(reanalyzed, { issues }));
+
+    expect(retried.createdIssueIds[0]).toBe(survivorId);
+    const after = await issuesSvc.listIssues({ seriesId: preview.series.id });
+    expect(after.map((i) => [i.id, i.title, i.arcPosition])).toEqual([
+      [survivorId, 'I1 (edited)', 1],
+      [retried.createdIssueIds[1], 'I2', 2],
+    ]);
+    expect((await analyze()).importSession).toEqual({ status: 'committed', createdIssueIds: retried.createdIssueIds });
+  });
+
+  it.each([
+    ['a new issue', (preview) => issuesSvc.createIssue({ seriesId: preview.series.id, title: 'Added since', arcPosition: 2 })],
+    ['the moved survivor', (_preview, survivorId) => issuesSvc.updateIssue(survivorId, { arcPosition: 2 })],
+  ])('refuses to resume onto a planned position %s took since', async (_label, takeSlot) => {
+    wireDefaultLLMResponses();
+    const preview = await analyze();
+    const issues = [{ title: 'I1', arcPosition: 1, proseExcerpt: 'p1' }, { title: 'I2', arcPosition: 2, proseExcerpt: 'p2' }];
+    const { context: { survivingIssueIds } } = await interruptAfterFirstIssue(preview, issues);
+    await takeSlot(preview, survivingIssueIds[0]);
+    const before = await issueCount(preview);
+
+    await expect(importerSvc.commitImport(payloadFor(preview, { issues })))
+      .rejects.toMatchObject({ code: importerSvc.ERR_VALIDATION });
+    expect(await issueCount(preview)).toBe(before);
+  });
+
+  it("refuses a changed issue list while an earlier attempt's issues still exist", async () => {
+    wireDefaultLLMResponses();
+    const preview = await analyze();
+    const issues = [{ title: 'I1', arcPosition: 1, proseExcerpt: 'p1' }, { title: 'I2', arcPosition: 2, proseExcerpt: 'p2' }];
+    const { context: { survivingIssueIds } } = await interruptAfterFirstIssue(preview, issues);
+
+    await expect(importerSvc.commitImport(payloadFor(preview, {
+      issues: [{ title: 'A different split', proseExcerpt: 'x' }],
+    }))).rejects.toMatchObject({ code: importerSvc.ERR_IMPORT_IN_PROGRESS });
+    expect((await issuesSvc.listIssues({ seriesId: preview.series.id })).map((i) => i.id)).toEqual(survivingIssueIds);
+
+    // Deleting the survivor releases the plan: the new list then imports normally.
+    await issuesSvc.deleteIssue(survivingIssueIds[0]);
+    const fresh = await importerSvc.commitImport(payloadFor(preview, {
+      issues: [{ title: 'A different split', proseExcerpt: 'x' }],
+    }));
+    expect(fresh.createdIssueIds).toHaveLength(1);
+  });
+
   it('commits without an importId exactly as before (older clients)', async () => {
     const { uni, ser } = await setupForCommit();
     const body = { universeId: uni.id, seriesId: ser.id, issues: [{ title: 'Solo', proseExcerpt: 'p' }] };
     await importerSvc.commitImport(body);
     await importerSvc.commitImport(body);
     expect(await issuesSvc.listIssues({ seriesId: ser.id })).toHaveLength(2);
+  });
+});
+
+// #10763: commits into one series are admitted one at a time, whatever their
+// importId, and the issue publication rechecks positions against fresh state.
+// Each interleaving test holds the FIRST commit's first issue write at a
+// barrier — the point where the issue's reproduction found both commits had
+// already passed the collision check — and lets the second commit run into it.
+describe('commitImport series admission (#10763)', () => {
+  function holdFirstPublication() {
+    let reached;
+    let release;
+    const reachedP = new Promise((resolve) => { reached = resolve; });
+    const releaseP = new Promise((resolve) => { release = resolve; });
+    mockEnsureIssue.mockImplementationOnce(async (...args) => {
+      reached();
+      await releaseP;
+      return realIssuesRef.current.ensureIssueWithId(...args);
+    });
+    return { reached: reachedP, release };
+  }
+  const importIdFor = (ser, source) => sessionsSvc.deriveImportId({ seriesId: ser.id, source });
+  const livePositions = async (ser) => (await issuesSvc.listIssues({ seriesId: ser.id }))
+    .map((i) => i.arcPosition).sort((a, b) => a - b);
+
+  it('two manuscripts claiming one explicit position: one commits, the other is refused before any write', async () => {
+    const { uni, ser } = await setupForCommit();
+    const held = holdFirstPublication();
+    const first = importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id, importId: importIdFor(ser, 'manuscript A'),
+      canonSelections: { characters: [{ name: 'Aria' }] },
+      issues: [{ title: 'A1', arcPosition: 1, proseExcerpt: 'a' }],
+    });
+    await held.reached;
+    const second = importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id, importId: importIdFor(ser, 'manuscript B'),
+      canonSelections: { characters: [{ name: 'Intruder' }] },
+      arc: { logline: 'B logline', summary: 'B summary', shape: 'rags-to-riches' },
+      issues: [{ title: 'B1', arcPosition: 1, proseExcerpt: 'b' }],
+    });
+    const secondOutcome = second.then(() => null, (err) => err);
+    held.release();
+
+    await expect(first).resolves.toMatchObject({ createdIssueIds: [expect.any(String)] });
+    const err = await secondOutcome;
+    expect(err?.code).toBe(importerSvc.ERR_VALIDATION);
+    expect(err.message).toMatch(/collides with an existing issue/);
+    expect((await issuesSvc.listIssues({ seriesId: ser.id })).map((i) => i.title)).toEqual(['A1']);
+    // The refused batch wrote nothing: no canon, no arc.
+    const universeAfter = await universeSvc.getUniverse(uni.id);
+    expect(universeAfter.characters.map((c) => c.name)).toEqual(['Aria']);
+    expect((await seriesSvc.getSeries(ser.id)).arc?.shape).not.toBe('rags-to-riches');
+  });
+
+  it('concurrent manuscripts with omitted positions get distinct sequential positions', async () => {
+    const { uni, ser } = await setupForCommit();
+    const held = holdFirstPublication();
+    const first = importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id, importId: importIdFor(ser, 'manuscript A'),
+      issues: [{ title: 'A1', proseExcerpt: 'a' }, { title: 'A2', proseExcerpt: 'a2' }],
+    });
+    await held.reached;
+    const second = importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id, importId: importIdFor(ser, 'manuscript B'),
+      issues: [{ title: 'B1', proseExcerpt: 'b' }],
+    });
+    held.release();
+    await Promise.all([first, second]);
+    expect(await livePositions(ser)).toEqual([1, 2, 3]);
+  });
+
+  it('applies the same admission to legacy commits with no importId', async () => {
+    const { uni, ser } = await setupForCommit();
+    const held = holdFirstPublication();
+    const body = (title) => ({ universeId: uni.id, seriesId: ser.id, issues: [{ title, arcPosition: 1, proseExcerpt: 'p' }] });
+    const first = importerSvc.commitImport(body('Legacy A'));
+    await held.reached;
+    const second = importerSvc.commitImport(body('Legacy B')).then(() => null, (err) => err);
+    held.release();
+    await first;
+    expect((await second)?.code).toBe(importerSvc.ERR_VALIDATION);
+    expect(await livePositions(ser)).toEqual([1]);
+  });
+
+  it('lets a commit into an unrelated series proceed while one series is held', async () => {
+    const { uni, ser } = await setupForCommit();
+    const other = await seriesSvc.createSeries({ name: 'Other S', universeId: uni.id, ephemeral: true });
+    const held = holdFirstPublication();
+    const first = importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id, issues: [{ title: 'Held', arcPosition: 1, proseExcerpt: 'h' }],
+    });
+    await held.reached;
+    // Resolves while the first series is still held — no shared admission.
+    const result = await importerSvc.commitImport({
+      universeId: uni.id, seriesId: other.id, issues: [{ title: 'Free', arcPosition: 1, proseExcerpt: 'f' }],
+    });
+    expect(result.createdIssueIds).toHaveLength(1);
+    held.release();
+    await first;
+    expect(await livePositions(ser)).toEqual([1]);
+  });
+
+  it.each([
+    ['explicit', { arcPosition: 1 }],
+    ['omitted', {}],
+  ])('a plain issue create racing the import cannot silently duplicate an %s position', async (_label, position) => {
+    const { uni, ser } = await setupForCommit();
+    // An ordinary create lands on the series after admission planned the
+    // position, before the import publishes it.
+    mockEnsureIssue.mockImplementationOnce(async (...args) => {
+      await realIssuesRef.current.createIssue({ seriesId: ser.id, title: 'Manual', arcPosition: 1 });
+      return realIssuesRef.current.ensureIssueWithId(...args);
+    });
+    await expect(importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id, issues: [{ title: 'Imported', ...position, proseExcerpt: 'i' }],
+    })).rejects.toMatchObject({
+      code: importerSvc.ERR_PARTIAL_COMMIT_ISSUES,
+      message: expect.stringMatching(/already held by another issue/),
+    });
+    expect((await issuesSvc.listIssues({ seriesId: ser.id })).map((i) => i.title)).toEqual(['Manual']);
+  });
+
+  it('releases admission after a failed commit so the next one into the series proceeds', async () => {
+    const { uni, ser } = await setupForCommit();
+    mockEnsureIssue.mockRejectedValueOnce(new Error('simulated write failure'));
+    await expect(importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id, issues: [{ title: 'Fails', arcPosition: 1, proseExcerpt: 'f' }],
+    })).rejects.toMatchObject({ code: importerSvc.ERR_PARTIAL_COMMIT_ISSUES });
+    const result = await importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id, issues: [{ title: 'Works', arcPosition: 1, proseExcerpt: 'w' }],
+    });
+    expect(result.createdIssueIds).toHaveLength(1);
+  });
+
+  it('runs cleanupFormatting outside the admission: another commit lands while the reformat is in flight', async () => {
+    const { uni, ser } = await setupForCommit();
+    let releaseReformat;
+    const reformatGate = new Promise((resolve) => { releaseReformat = resolve; });
+    let reformatStarted;
+    const started = new Promise((resolve) => { reformatStarted = resolve; });
+    mockRunStagedLLM.mockImplementation(async () => {
+      reformatStarted();
+      await reformatGate;
+      return { content: 'The vault loomed in the dark.', runId: 'r1' };
+    });
+    const slow = importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id, contentType: 'short-story', cleanupFormatting: true,
+      issues: [{ title: 'Slow', proseExcerpt: 'The vault  loomed in the\ndark.' }],
+    });
+    await started;
+    // Completes while the slow commit's LLM pass is still pending.
+    await importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id, issues: [{ title: 'Fast', proseExcerpt: 'f' }],
+    });
+    releaseReformat();
+    await slow;
+    // The slow commit allocated from the state it found AFTER formatting, and
+    // seeded the cleaned excerpt.
+    const after = await issuesSvc.listIssues({ seriesId: ser.id });
+    expect(Object.fromEntries(after.map((i) => [i.title, i.arcPosition]))).toEqual({ Fast: 1, Slow: 2 });
+    expect(after.find((i) => i.title === 'Slow').stages.prose.output).toBe('The vault loomed in the dark.');
   });
 });
 

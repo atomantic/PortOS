@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import LlmRouteNote from './LlmRouteNote.jsx';
+import CancelRenderButton from './CancelRenderButton.jsx';
 import { Film, Music, Activity, Image as ImageIcon, Video, Wand2, X } from 'lucide-react';
 import { MUSCRIPTOR_MODELS } from '../../lib/muscriptorModels.js';
 import { isLayeredComposition, isSelfDrawnLayer, sceneRenderReady, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
@@ -290,11 +291,12 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
 
   if (renderJob.active && renderJob.context === project.id) {
     return (
-      <button onClick={renderJob.cancel} disabled={renderJob.pending}
-        title={renderJob.pending ? 'Preparing render' : 'Cancel render'}
-        className="flex items-center gap-1 bg-port-warning/20 text-port-warning border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0">
-        <Activity size={15} className="animate-spin" /> {renderJob.pending ? 'Preparing render…' : `${renderJob.progress}% · Cancel`}
-      </button>
+      <div className="flex flex-wrap items-center gap-2">
+        <span role="status" className="flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-warning/20 px-2 py-1.5 text-sm text-port-warning sm:min-h-0">
+          <Activity size={15} className="animate-spin" aria-hidden="true" /> {renderJob.pending ? 'Preparing render…' : `Rendering ${Math.round(renderJob.progress)}%`}
+        </span>
+        {!renderJob.pending && <CancelRenderButton onCancel={renderJob.cancel} cancelling={renderJob.cancelling} />}
+      </div>
     );
   }
 

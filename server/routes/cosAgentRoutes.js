@@ -17,7 +17,8 @@ const mergeAdmissionSchema = z.object({
   agentId: z.string().min(1).max(200),
   action: z.enum(['acquire', 'check', 'release']),
   token: z.string().uuid().optional(),
-  outcome: z.enum(['merged', 'leave-open']).optional(),
+  // Mirrors MERGE_ADMISSION_OUTCOMES; the service stays lazily imported.
+  outcome: z.enum(['merged', 'leave-open', 'resync']).optional(),
 });
 router.post('/merge-admission', asyncHandler(async (req, res) => {
   const input = validateRequest(mergeAdmissionSchema, req.body ?? {});

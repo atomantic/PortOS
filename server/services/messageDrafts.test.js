@@ -9,6 +9,9 @@ vi.mock('../lib/uuid.js', () => {
 });
 
 vi.mock('../lib/fileUtils.js', () => ({
+  readJSONFileStrict: async (path, fallback) => ({
+    ok: true, value: fileStore.has(toPosix(path)) ? JSON.parse(fileStore.get(toPosix(path))) : fallback
+  }),
   tryReadFile: vi.fn(async (path) => fileStore.has(toPosix(path)) ? fileStore.get(toPosix(path)) : null),
   atomicWrite: vi.fn(async (path, data) => {
     fileStore.set(toPosix(path), typeof data === 'string' ? data : JSON.stringify(data, null, 2));

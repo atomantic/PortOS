@@ -54,7 +54,7 @@ export default function MaintenanceRunStatus({ run, showSteps = false, renderSte
       {run.active.status || 'queued'}
       {run.active.agentId && <a className="underline" href={`/cos/agents/${encodeURIComponent(run.active.agentId)}`} target="_blank" rel="noopener noreferrer">Open agent in new tab</a>}
     </p>}
-    {run.reason && <details><summary className="cursor-pointer">Run details</summary><p className="break-all max-h-36 overflow-y-auto">{run.reason}</p></details>}
+    {run.reason && !(run.auditDepth === 'deep' && !run.auditWorkflow) && <details><summary className="cursor-pointer">Run details</summary><p className="break-all max-h-36 overflow-y-auto">{run.reason}</p></details>}
     {showSteps && <MaintenanceStepChecklist steps={run.steps} completed={run.completed} activeStepId={run.active?.stepId} renderStepSettings={renderStepSettings} />}
   </div>;
 }

@@ -148,3 +148,10 @@ it('labels both filesystem gauges and preserves unavailable data capacity', () =
   expect(screen.getByLabelText('Runtime data disk status unavailable')).toHaveTextContent('Unavailable');
   expect(screen.queryByRole('meter', { name: /Runtime data disk/ })).not.toBeInTheDocument();
 });
+
+
+it('shows a census-only unavailable-source warning', () => {
+  const report = { ...makeReport('2026-08-16T00:00:00.000Z'), sourceErrors: ['agent-census'] };
+  render(<MemoryRouter><StoragePanel report={report} loading={false} onRunReport={vi.fn()} onReport={vi.fn()} cleanup={cleanup} /></MemoryRouter>);
+  expect(screen.getByText(/Some sources were unavailable: agent-census/)).toHaveTextContent('Other totals remain usable.');
+});

@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+// Usage-limit tests exercise routing, not the install's persisted usage ledger.
+vi.mock('./usage.js', () => ({ recordLimitBlock: vi.fn().mockResolvedValue(undefined) }));
+
 vi.mock('./runner.js', () => ({
   createRun: vi.fn(),
   executeApiRun: vi.fn(),

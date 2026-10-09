@@ -96,8 +96,18 @@ function normalizedRoots(roots) {
  *   allowLiveClaim?: boolean,
  *   ageMs?: number|null,
  *   staleClaimIdleMs?: number,
+ *   unmanagedIdleMs?: number,
  *   requireKnownLiveness?: boolean,
  * }} options
+ *   `unmanagedIdleMs` is the one way past the location gate: a tree outside every
+ *   configured root is admitted (to the remaining gates, not past them) once its
+ *   `ageMs` reaches the window. Off by default — the location hold is
+ *   unconditional for a caller whose only proof is "merged and clean", because a
+ *   checkout a live run just cut from the default branch looks exactly like that
+ *   (#10270). Name a window only with an INDEPENDENT proof the tree is unwanted;
+ *   the superseded reap has one (a verdict recorded against the tip and dirty
+ *   paths, plus a backup written before removal), and the idle floor is what
+ *   covers the one thing that proof cannot see — a process still standing in it.
  * @returns {string|null}
  */
 export function worktreeOwnershipReason({
@@ -110,13 +120,14 @@ export function worktreeOwnershipReason({
   allowLiveClaim = false,
   ageMs = null,
   staleClaimIdleMs,
+  unmanagedIdleMs,
   requireKnownLiveness = false,
 } = {}) {
   if (!path) return 'worktree-missing-path';
 
   const configuredRoots = normalizedRoots(roots);
   const root = configuredRoots.find((candidate) => isPathInsideDir(candidate.path, path));
-  if (configuredRoots.length > 0 && !root) return 'worktree-unmanaged-location';
+  if (configuredRoots.length > 0 && !root && !unmanagedTreeIdle(ageMs, unmanagedIdleMs)) return 'worktree-unmanaged-location';
 
   const agentId = worktreeAgentId(path);
   const mustBeAgentWorktree = root?.requireAgentId ?? requireAgentId;
@@ -168,11 +179,27 @@ export function worktreeOwnershipReason({
  * @returns {string|null} ISO timestamp
  */
 export function worktreeHoldExpiresAt({ nowMs = Date.now(), ...options } = {}) {
-  const { ageMs, staleClaimIdleMs, allowStaleClaim = false } = options;
+  const { ageMs, staleClaimIdleMs, unmanagedIdleMs, allowStaleClaim = false } = options;
+  const reason = worktreeOwnershipReason(options);
+  // The location hold lapses only for a caller that named an idle window (the
+  // gate above already admitted a tree past it, so this is always a future date).
+  if (reason === 'worktree-unmanaged-location') {
+    if (!Number.isFinite(ageMs) || !Number.isFinite(unmanagedIdleMs)) return null;
+    // Dated only when the window is the LAST thing holding the tree: the location
+    // gate runs first, so a lock or a live agent behind it is reported only once
+    // the tree is idle — and those lift on a decision, not a clock.
+    if (worktreeOwnershipReason({ ...options, ageMs: unmanagedIdleMs }) !== null) return null;
+    return new Date(nowMs + (unmanagedIdleMs - ageMs)).toISOString();
+  }
+  if (reason !== 'worktree-human-claim') return null;
   // Without this caller's opt-in the window never lapses, so there is no date to
   // report even though the tree does read `worktree-human-claim`.
   if (!allowStaleClaim) return null;
   if (!Number.isFinite(ageMs) || !Number.isFinite(staleClaimIdleMs)) return null;
-  if (worktreeOwnershipReason(options) !== 'worktree-human-claim') return null;
   return new Date(nowMs + (staleClaimIdleMs - ageMs)).toISOString();
+}
+
+/** True once a tree outside the managed roots has sat idle for the caller's window. */
+function unmanagedTreeIdle(ageMs, unmanagedIdleMs) {
+  return Number.isFinite(ageMs) && Number.isFinite(unmanagedIdleMs) && ageMs >= unmanagedIdleMs;
 }

@@ -323,6 +323,27 @@ export function mergeOutcomeReview({ number, prState }) {
 }
 
 /**
+ * Whether a pr-watcher run's diff is only the incidental CI repair of a
+ * forge-side remediation, which a diff cannot judge.
+ *
+ * pr-watcher's objective is forge state (wait for CI, merge N listed PRs). The
+ * work is GitHub operations that leave no repo diff; the only trace a run
+ * leaves is a stray fix that unblocked CI, and the reviewer then judges that
+ * lone commit against "remediate 10 PRs" and answers `rethink`. That held a run
+ * whose PRs all merged.
+ *
+ * Deliberately narrow: only the pr-watcher type, and only a diff whose every
+ * file is a test file. A pr-watcher customised into a feature-committing flow
+ * touches production code, so it keeps the ordinary review and its hold.
+ */
+export function isForgeRemediationTestFixDiff({ analysisType, diff }) {
+  if (analysisType !== 'pr-watcher' || typeof diff !== 'string') return false;
+  const files = [...diff.matchAll(/^diff --git a\/(\S+) b\/\S+/gm)].map(m => m[1]);
+  return files.length > 0
+    && files.every(f => /(^|\/)(__tests__|tests?)\//.test(f) || /\.(test|spec)\.[cm]?[jt]sx?$/.test(f));
+}
+
+/**
  * Production witnesses for a removal that may be incomplete. This is evidence,
  * never a verdict: compatibility paths, moves and comments can legitimately
  * retain a name. Match objective tokens exactly, and keep file/hunk provenance

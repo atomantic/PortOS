@@ -41,6 +41,7 @@ export default function AdvancedParamsPanel({
   speedProfileId = DEFAULT_SPEED_PROFILE_ID, onSpeedProfileChange,
   draftDecode = DEFAULT_DRAFT_DECODE_ID, onDraftDecodeChange, draftDecodeLocked = false,
   streamingMode = DEFAULT_VIDEO_STREAMING_MODE, onStreamingModeChange,
+  showStreamingMode = isLtx2FamilyRuntime(currentModel?.runtime),
   imageStrength, onImageStrengthChange,
   i2vReferenceMode = DEFAULT_I2V_REFERENCE_MODE, onI2vReferenceModeChange,
   effectiveImageStrength = null,
@@ -329,7 +330,7 @@ export default function AdvancedParamsPanel({
               tight-memory machine; the render bridge inspects the pinned
               pipeline and this machine's physical RAM, so the client offers no
               per-model capability table for it. */}
-          {isLtx2FamilyRuntime(currentModel?.runtime) && (
+          {showStreamingMode && (
             <FormField label="Memory" labelClassName="block text-xs font-medium text-gray-400 mb-1">
               <select
                 value={streamingMode}

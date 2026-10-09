@@ -3,6 +3,7 @@ import TrackPanel from '../TrackPanel.jsx';
 import AnalysisPanel from '../AnalysisPanel.jsx';
 import LyricsPanel from '../LyricsPanel.jsx';
 import LyricTimingCheck from '../LyricTimingCheck.jsx';
+import ReviseSongCard from '../ReviseSongCard.jsx';
 import { AnalyzeAction } from '../ProjectActionGroups.jsx';
 import { Check } from 'lucide-react';
 import { lyricSetupState, projectHasAudio } from '../../../lib/musicVideoStages.js';
@@ -53,9 +54,11 @@ function AlignWords({ disabled, aligning, status, aligned, onAlign }) {
 
 /**
  * Song: the track, its analysis, the lyrics, and their word timing — four
- * numbered parts, each marked done or to do, all open. Forking or revising the
- * song, the vocal stem, MIDI and timing revisions live in Project settings ›
- * Audio; the render style and services in Project settings › Project.
+ * numbered parts, each marked done or to do, all open. Above them, Revise song
+ * brings in a new take mid-project and carries the board across to it.
+ * Writing new lyrics for a Suno take, the vocal stem, MIDI and timing revisions
+ * live in Project settings › Audio; the render style and services in Project
+ * settings › Project.
  */
 export default function SetupStage({ board }) {
   const {
@@ -68,6 +71,18 @@ export default function SetupStage({ board }) {
   return (
     <fieldset disabled={locked} className="min-w-0">
       <div id="mv-track" className="space-y-2">
+        {projectHasAudio(project) && (
+          <ReviseSongCard
+            project={project}
+            tracks={tracks}
+            disabled={renderBound || midiBound}
+            retime={board.retimeStatus}
+            onRevised={board.onSongRevised}
+            onRetime={board.onRetimeSong}
+            onUpdated={board.replaceProject}
+            onTrackImported={board.onTrackImported}
+          />
+        )}
         <SongStep number={1} title="Track" done={projectHasAudio(project)}>
           <TrackPanel
             project={project}

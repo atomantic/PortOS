@@ -16,6 +16,7 @@ import ProviderModelSelector from '../components/ProviderModelSelector';
 import {
   Sparkles, Lock, Unlock, Check, ChevronRight, ChevronLeft, AlertTriangle,
   Plus, RefreshCw, Loader2, ExternalLink, Wand2, Cloud, CloudOff, Lightbulb, FileInput,
+  Palette, GitBranch, Map as MapIcon, Users, BookOpen, Clapperboard,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Banner from '../components/ui/Banner';
@@ -39,6 +40,7 @@ import useDrawerTab from '../hooks/useDrawerTab';
 import useStoryImportIntake from '../hooks/useStoryImportIntake';
 import TabPills from '../components/ui/TabPills';
 import { formatCount } from '../utils/formatters';
+import './StoryBuilder.css';
 
 // Bible fields the embedded arc step flushes before an ArcCanvas generate/verify.
 // The Story Builder edits these on their own steps (not inside the arc step), so
@@ -53,6 +55,8 @@ const INTAKE_TAB_ITEMS = [
   { id: 'seed', label: 'Start from an idea', icon: Lightbulb },
   { id: 'import', label: 'Import a finished work', icon: FileInput },
 ];
+
+const STEP_ICONS = { idea: Lightbulb, universeAesthetic: Palette, plotArc: GitBranch, readerMap: MapIcon, characters: Users, issues: BookOpen, production: Clapperboard };
 
 const CONTENT_TYPE_LABELS = {
   'short-story': 'Short story', novel: 'Novel', screenplay: 'Screenplay', 'comic-script': 'Comic script',
@@ -1045,7 +1049,11 @@ const RUN_OP_LABEL = {
 
 function StoryBuilderDetail({ storyId, stepParam }) {
   const navigate = useNavigate();
-  const [steps, setSteps] = useState([]);
+  const [steps, setSteps] = useState(null);
+  const [manifestError, setManifestError] = useState(null);
+  const [sessionError, setSessionError] = useState(null);
+  const [sessionMissing, setSessionMissing] = useState(false);
+  const [readBusy, setReadBusy] = useState(false);
   const [session, setSession] = useState(null);
   const [staleSteps, setStaleSteps] = useState([]);
   const [syncDrift, setSyncDrift] = useState(false);
@@ -1061,6 +1069,7 @@ function StoryBuilderDetail({ storyId, stepParam }) {
   // SLOWER reload wins every setter it reaches last, painting the view with
   // records fetched before the newer completion landed.
   const reloadGenRef = useRef(0);
+  const manifestGenRef = useRef(0);
 
   // Runs this view did not start itself (a reload, a second tab, or the holder of
   // a refused kickoff) are discovered on the session read and adopted by the
@@ -1081,9 +1090,28 @@ function StoryBuilderDetail({ storyId, stepParam }) {
   const reload = useCallback(async () => {
     const gen = ++reloadGenRef.current;
     const isCurrent = () => reloadGenRef.current === gen;
-    const s = await getStorySession(storyId, { silent: true }).catch(() => null);
+    setReadBusy(true);
+    const result = await getStorySession(storyId, { silent: true }).then((record) => ({ record })).catch((error) => {
+      if (!isCurrent()) return;
+      if (error.status === 404 || error.code === 'NOT_FOUND') {
+        setSessionMissing(true);
+        setSession(null);
+        setSessionError(null);
+      } else {
+        setSessionError(error.message || 'The story session is unavailable.');
+      }
+      return null;
+    });
     if (!isCurrent()) return;
-    if (!s) { setSession(null); setLoading(false); return; }
+    const s = result?.record;
+    if (!s || typeof s !== 'object' || !s.id) {
+      if (result) setSessionError('The story session could not be loaded.');
+      setReadBusy(false);
+      setLoading(false);
+      return;
+    }
+    setSessionError(null);
+    setSessionMissing(false);
     // `activeSteps` is a live-run snapshot, not session state — hand it to the
     // provider (which drops it if the story changed meanwhile) and keep it out of
     // the record we hold.
@@ -1106,6 +1134,7 @@ function StoryBuilderDetail({ storyId, stepParam }) {
       if (!isCurrent()) return;
       setIssues(Array.isArray(iss) ? iss : (iss?.items || []));
     }
+    setReadBusy(false);
     setLoading(false);
   }, [storyId, adoptActive]);
   reloadRef.current = reload;
@@ -1144,22 +1173,41 @@ function StoryBuilderDetail({ storyId, stepParam }) {
     silent: true,
   });
 
-  // Load the step manifest first; gate the loading spinner on BOTH it and the
-  // session so the detail view never renders with an empty step rail.
-  useEffect(() => {
-    let active = true;
+  // A manifest failure is distinct from an empty rail. Retry bootstrap without
+  // unmounting an already loaded workspace or its draft editors.
+  const loadDetail = useCallback(async () => {
+    const gen = ++manifestGenRef.current;
     setLoading(true);
-    getStoryBuilderSteps({ silent: true })
-      .then((r) => { if (active) setSteps(r.steps || []); })
-      .catch(() => {})
-      .finally(() => { if (active) reload(); });
-    return () => { active = false; };
+    setReadBusy(true);
+    const manifest = await getStoryBuilderSteps({ silent: true }).catch((error) => {
+      if (manifestGenRef.current === gen) setManifestError(error.message || 'The step manifest is unavailable.');
+      return null;
+    });
+    if (manifestGenRef.current !== gen) return;
+    if (!Array.isArray(manifest?.steps) || manifest.steps.length === 0 ||
+      manifest.steps.some((step) => !step?.id || !step?.label)) {
+      setManifestError((error) => error || 'The step manifest could not be loaded.');
+      setReadBusy(false);
+      setLoading(false);
+      return;
+    }
+    setSteps(manifest.steps);
+    setManifestError(null);
+    await reload();
   }, [reload]);
 
-  const stepIds = steps.map((s) => s.id);
+  useEffect(() => {
+    loadDetail();
+    return () => {
+      manifestGenRef.current++;
+      reloadGenRef.current++;
+    };
+  }, [loadDetail]);
+
+  const stepIds = (steps || []).map((s) => s.id);
   const activeStepId = stepIds.includes(stepParam) ? stepParam : (session?.currentStep || 'idea');
   const activeIdx = stepIds.indexOf(activeStepId);
-  const activeStep = steps[activeIdx];
+  const activeStep = steps?.[activeIdx];
   const stepState = session?.steps?.[activeStepId] || { status: 'pending', locked: false };
   const isStale = staleSteps.includes(activeStepId);
   const nextHintId = useId();
@@ -1271,7 +1319,22 @@ function StoryBuilderDetail({ storyId, stepParam }) {
     toast.success('Re-baselined to this machine');
   };
 
-  if (loading) {
+  const readError = manifestError || sessionError;
+  const readNotice = readError && (
+    <Banner tone="warning" role="alert" size="md" icon={AlertTriangle} className="mb-4">
+      <div>
+        <p>{manifestError ? 'Couldn’t load story steps' : 'Couldn’t load the story session'}</p>
+        <p className="text-sm">{readError}</p>
+        {session && <p className="text-sm">Showing the last loaded story. Your edits and running work are preserved.</p>}
+        <button type="button" onClick={manifestError ? loadDetail : reload} disabled={readBusy}
+          className="mt-2 px-3 py-2 rounded border border-port-border text-port-accent disabled:opacity-50">
+          {readBusy ? 'Retrying…' : 'Retry'}
+        </button>
+      </div>
+    </Banner>
+  );
+
+  if (loading && !readError) {
     return (
       <div className="h-full overflow-y-auto p-4 md:p-6">
         <div className="max-w-5xl mx-auto">
@@ -1280,72 +1343,27 @@ function StoryBuilderDetail({ storyId, stepParam }) {
       </div>
     );
   }
-  if (!session) return <div className="p-6 text-gray-400">Session not found. <Link to="/story-builder" className="text-port-accent">Back to Story Builder</Link></div>;
+  if (sessionMissing) return <div className="p-6 text-gray-400">Session not found. <Link to="/story-builder" className="text-port-accent">Back to Story Builder</Link></div>;
+
+  if (!session || !steps) return (
+    <div className="h-full overflow-y-auto p-4 md:p-6">
+      <div className="max-w-5xl mx-auto">{readNotice}</div>
+    </div>
+  );
 
   return (
-    <div className="h-full overflow-y-auto p-4 md:p-6">
-      <div className="max-w-5xl mx-auto">
-        <header className="mb-4 flex items-start justify-between gap-4 flex-wrap">
-          <div>
+    <div className="story-builder-workspace h-full min-h-0 p-3">
+      <div className="max-w-5xl mx-auto w-full min-w-0 min-h-0 h-full flex flex-col">
+        {readNotice}
+        <header className="mb-3 shrink-0 min-w-0">
+          <div className="min-w-0 max-w-full">
             <Link to="/story-builder" className="text-xs text-gray-500 hover:text-port-accent">← All stories</Link>
-            <h1 className="text-2xl font-bold flex items-center gap-2 mt-1">
-              <Sparkles className="w-6 h-6 text-port-accent" /> {session.title}
+            <h1 className="text-2xl font-bold flex items-start gap-2 mt-1 min-w-0">
+              <Sparkles className="w-6 h-6 text-port-accent shrink-0 mt-1" />
+              <span className="min-w-0 [overflow-wrap:anywhere]">{session.title}</span>
             </h1>
           </div>
-          {/* Applies to every operation in this story (idea expand, aesthetic,
-              arc, reader map, character refine). */}
-          <ProviderModelPicker
-            value={{ provider: session.llm?.provider || '', model: session.llm?.model || '' }}
-            onChange={saveLlm}
-          />
         </header>
-
-        {/* Cross-machine resume (#730): opt this session into peer sync so it can
-            resume on another federated machine, and re-baseline its staleness
-            against the current machine's live records. Local-only is the default. */}
-        <div className="mb-4 flex items-center flex-wrap gap-x-3 gap-y-2 text-sm bg-port-card border border-port-border rounded-lg px-3 py-2">
-          <button
-            type="button"
-            onClick={toggleSync}
-            disabled={syncBusy}
-            aria-pressed={session.sync === true}
-            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded border disabled:opacity-50 ${
-              session.sync === true
-                ? 'border-port-accent text-port-accent bg-port-bg'
-                : 'border-port-border text-gray-400 hover:text-white'
-            }`}
-            title="Toggle whether this session resumes across your federated machines"
-          >
-            {syncBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : (session.sync === true ? <Cloud className="w-4 h-4" /> : <CloudOff className="w-4 h-4" />)}
-            {session.sync === true ? 'Cross-machine resume on' : 'Cross-machine resume off'}
-          </button>
-
-          {session.sync === true && (
-            <>
-              <span className="text-xs text-gray-500">
-                {syncDrift
-                  ? 'This machine’s records have drifted from the synced baseline.'
-                  : 'Baseline matches this machine.'}
-              </span>
-              <button
-                type="button"
-                onClick={reconcile}
-                disabled={syncBusy || !syncDrift}
-                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded border disabled:opacity-40 ${
-                  syncDrift
-                    ? 'border-port-warning text-port-warning hover:bg-port-bg'
-                    : 'border-port-border text-gray-500'
-                }`}
-                title={syncDrift
-                  ? 'Adopt this machine’s current records as the new staleness baseline'
-                  : 'Nothing to reconcile — the baseline already matches this machine'}
-              >
-                {syncBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                Reconcile
-              </button>
-            </>
-          )}
-        </div>
 
         {/* Live runs — own kickoffs and ones adopted after a reload / second tab —
             stay visible whichever step is open, with a way back to the step. */}
@@ -1372,106 +1390,152 @@ function StoryBuilderDetail({ storyId, stepParam }) {
           </div>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-[220px_1fr] gap-6">
-          {/* Step rail */}
-          <nav className="space-y-1">
-            {steps.map((s, idx) => {
-              const st = session.steps?.[s.id] || { status: 'pending', locked: false };
-              const stale = staleSteps.includes(s.id);
-              const isActive = s.id === activeStepId;
-              // Navigation is never blocked (start-from-anywhere). The warning
-              // icon flags a step whose upstream is unlocked or stale so the
-              // user knows the order isn't conventional — but they may proceed.
-              const unmet = firstUnmetUpstream(idx);
-              return (
-                <button
-                  key={s.id} onClick={() => goToStep(s.id)}
-                  className={`w-full text-left px-3 py-2 rounded border flex items-center justify-between gap-2 ${
-                    isActive ? 'border-port-accent bg-port-card' : 'border-transparent hover:bg-port-card'
-                  }`}
-                >
-                  <span className="flex items-center gap-2 text-sm">
-                    {st.locked ? <Lock className="w-3.5 h-3.5 text-port-success" /> : <span className="w-3.5 h-3.5 rounded-full border border-gray-600 inline-block" />}
-                    {s.label}
-                  </span>
-                  {(stale || unmet) && (
-                    <AlertTriangle
-                      className="w-3.5 h-3.5 text-port-warning"
-                      title={stale ? 'Stale — re-review' : 'Earlier step not locked yet'}
-                    />
-                  )}
-                </button>
-              );
-            })}
+        <div className="story-stage-layout min-h-0 flex-1 gap-3">
+          <nav className="story-stage-nav min-w-0 min-h-0" aria-label="Story stages">
+            <TabPills
+              tabs={steps.map((s, idx) => {
+                const st = session.steps?.[s.id] || { status: 'pending', locked: false };
+                const stale = staleSteps.includes(s.id);
+                const unmet = firstUnmetUpstream(idx);
+                return {
+                  id: s.id, label: s.label, icon: STEP_ICONS[s.id] || Sparkles,
+                  trailing: (stale || unmet)
+                    ? <AlertTriangle aria-hidden="true" className="w-3.5 h-3.5 shrink-0 text-port-warning" title={stale ? 'Stale — re-review' : 'Earlier step not locked yet'} />
+                    : st.locked ? <Lock aria-hidden="true" className="w-3.5 h-3.5 shrink-0 text-port-success" /> : null,
+                };
+              })}
+              activeTab={activeStepId}
+              onChange={goToStep}
+              ariaLabel="Story stages"
+              mobileCompact
+              variant="pills"
+              className="story-stage-tabs"
+            />
           </nav>
 
-          {/* Active step */}
-          <section className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
-            <div className="flex items-start justify-between">
-              <div>
-                <h2 className="text-lg font-semibold">{activeStep?.label}</h2>
-                <p className="text-sm text-gray-400">{activeStep?.description}</p>
+          {/* Active step: the header stays put while generated work scrolls. */}
+          <section className="min-w-0 min-h-0 flex flex-col bg-port-card border border-port-border rounded-lg" aria-label="Current story stage">
+            <header className="shrink-0 min-w-0 story-stage-actions border-b border-port-border p-2 space-y-2" aria-label="Stage actions">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="min-w-0 break-words text-lg font-semibold">{activeStep?.label}</h2>
+                <span className={`text-xs ${STATUS_BADGE[stepState.status]?.cls}`}>
+                  {isStale ? 'Stale — re-review' : stepState.locked ? 'Locked' : STATUS_BADGE[stepState.status]?.label}
+                </span>
               </div>
-              <span className={`text-xs ${STATUS_BADGE[stepState.status]?.cls}`}>{STATUS_BADGE[stepState.status]?.label}</span>
-            </div>
+              {/* Existing lock and navigation handlers stay outside the scrolling work. */}
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => lock.toggle(stepState.locked)} disabled={lock.busy}
+                  className={`inline-flex max-w-full min-w-0 items-center gap-2 min-h-[44px] px-2 py-2 rounded text-sm disabled:opacity-50 ${
+                    stepState.locked ? 'bg-port-card border border-port-success text-port-success' : 'bg-port-success hover:bg-port-success/80 text-white'
+                  }`}
+                >
+                  {lock.busy ? <Loader2 className="w-4 h-4 shrink-0 animate-spin" /> : (stepState.locked ? <Unlock className="w-4 h-4 shrink-0" /> : <Check className="w-4 h-4 shrink-0" />)}
+                  <span className="min-w-0 [overflow-wrap:anywhere]">{stepState.locked ? 'Unlock to revise' : 'Lock & continue'}</span>
+                </button>
 
-            {isStale && (
-              <Banner tone="warning" size="md" icon={AlertTriangle} align="center">
-                An earlier step changed after you locked this — re-review and re-lock to continue.
-              </Banner>
-            )}
-
-            <StepPanel
-              key={activeStepId}
-              session={session} universe={universe} series={series} issues={issues}
-              stepId={activeStepId} locked={stepState.locked} onChanged={reload}
-              onSeriesUpdate={updateSeriesFromServer}
-              onIssuesUpdate={handleIssuesUpdate}
-              onFlushPending={flushPending}
-              onRegisterDraftFlush={registerDraftFlush}
-              onUniverseCharRef={applyUniverseCharRef}
-            />
-
-            {/* Footer: lock + navigation */}
-            <div className="flex items-center justify-between border-t border-port-border pt-3 mt-3">
-              <button
-                onClick={() => lock.toggle(stepState.locked)} disabled={lock.busy}
-                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded text-sm disabled:opacity-50 ${
-                  stepState.locked ? 'bg-port-card border border-port-success text-port-success' : 'bg-port-success hover:bg-port-success/80 text-white'
-                }`}
-              >
-                {lock.busy ? <Loader2 className="w-4 h-4 animate-spin" /> : (stepState.locked ? <Unlock className="w-4 h-4" /> : <Check className="w-4 h-4" />)}
-                {stepState.locked ? 'Unlock to revise' : 'Lock & continue'}
-              </button>
-
-              <div className="flex items-center gap-2">
-                {activeIdx > 0 && (
-                  <button onClick={() => goToStep(stepIds[activeIdx - 1])} className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-white">
-                    <ChevronLeft className="w-4 h-4" /> Back
-                  </button>
-                )}
-                {activeIdx < steps.length - 1 && (
-                  <>
-                    {/* `aria-disabled` (not `disabled`) keeps the button focusable so
-                        keyboard/screen-reader users can reach it and hear the reason via
-                        the sr-only hint; `title` covers the mouse case. Same pattern as
-                        ExtractCanonButton.jsx. */}
+                <div className="flex flex-wrap items-center gap-2">
+                  {activeIdx > 0 && (
+                    <button onClick={() => goToStep(stepIds[activeIdx - 1])} className="inline-flex min-w-[44px] min-h-[44px] justify-center items-center gap-1 text-sm text-gray-400 hover:text-white">
+                      <ChevronLeft className="w-4 h-4 shrink-0" /><span className="story-direction-label">Back</span>
+                    </button>
+                  )}
+                  {activeIdx < steps.length - 1 && (
+                    <>
+                      {/* `aria-disabled` (not `disabled`) keeps the button focusable so
+                          keyboard/screen-reader users can reach it and hear the reason via
+                          the sr-only hint; `title` covers the mouse case. Same pattern as
+                          ExtractCanonButton.jsx. */}
+                      <button
+                        type="button"
+                        onClick={nextBlocked ? undefined : () => goToStep(stepIds[activeIdx + 1])}
+                        aria-disabled={nextBlocked || undefined}
+                        aria-describedby={nextHintId}
+                        title={nextReason}
+                        className={`inline-flex min-w-[44px] min-h-[44px] justify-center items-center gap-1 text-sm bg-port-accent text-white px-2 py-2 rounded ${
+                          nextBlocked ? 'opacity-40 cursor-not-allowed' : 'hover:bg-port-accent/80'
+                        }`}
+                      >
+                        <span className="story-direction-label">Next</span><ChevronRight className="w-4 h-4 shrink-0" />
+                      </button>
+                      <span id={nextHintId} className="sr-only">{nextReason}</span>
+                    </>
+                  )}
+                </div>
+              </div>
+            </header>
+            <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-3 space-y-3" aria-label="Stage work" role="region" key={activeStepId}>
+              <p className="text-sm text-gray-400">{activeStep?.description}</p>
+              {isStale && (
+                <Banner tone="warning" size="md" icon={AlertTriangle} align="center">
+                  An earlier step changed after you locked this — re-review and re-lock to continue.
+                </Banner>
+              )}
+              <details className="min-w-0">
+                <summary className="cursor-pointer text-sm text-gray-400 min-h-[44px]">AI: {session.llm?.model || session.llm?.provider || 'stage default'} · Story settings</summary>
+                <div className="mt-2 min-w-0 space-y-3">
+                  {/* Applies to every operation in this story. */}
+                  <ProviderModelPicker
+                    value={{ provider: session.llm?.provider || '', model: session.llm?.model || '' }}
+                    onChange={saveLlm}
+                  />
+                  {/* Cross-machine resume (#730): opt this session into peer sync so it can
+                      resume on another federated machine, and re-baseline its staleness
+                      against the current machine's live records. Local-only is the default. */}
+                  <div className="mb-4 flex items-center flex-wrap gap-x-3 gap-y-2 text-sm bg-port-card border border-port-border rounded-lg px-3 py-2">
                     <button
                       type="button"
-                      onClick={nextBlocked ? undefined : () => goToStep(stepIds[activeIdx + 1])}
-                      aria-disabled={nextBlocked || undefined}
-                      aria-describedby={nextHintId}
-                      title={nextReason}
-                      className={`inline-flex items-center gap-1 text-sm bg-port-accent text-white px-3 py-1.5 rounded ${
-                        nextBlocked ? 'opacity-40 cursor-not-allowed' : 'hover:bg-port-accent/80'
+                      onClick={toggleSync}
+                      disabled={syncBusy}
+                      aria-pressed={session.sync === true}
+                      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded border disabled:opacity-50 ${
+                        session.sync === true
+                          ? 'border-port-accent text-port-accent bg-port-bg'
+                          : 'border-port-border text-gray-400 hover:text-white'
                       }`}
+                      title="Toggle whether this session resumes across your federated machines"
                     >
-                      Next <ChevronRight className="w-4 h-4" />
+                      {syncBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : (session.sync === true ? <Cloud className="w-4 h-4" /> : <CloudOff className="w-4 h-4" />)}
+                      {session.sync === true ? 'Cross-machine resume on' : 'Cross-machine resume off'}
                     </button>
-                    <span id={nextHintId} className="sr-only">{nextReason}</span>
-                  </>
-                )}
-              </div>
+
+                    {session.sync === true && (
+                      <>
+                        <span className="text-xs text-gray-500">
+                          {syncDrift
+                            ? 'This machine’s records have drifted from the synced baseline.'
+                            : 'Baseline matches this machine.'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={reconcile}
+                          disabled={syncBusy || !syncDrift}
+                          className={`inline-flex items-center gap-2 px-3 py-1.5 rounded border disabled:opacity-40 ${
+                            syncDrift
+                              ? 'border-port-warning text-port-warning hover:bg-port-bg'
+                              : 'border-port-border text-gray-500'
+                          }`}
+                          title={syncDrift
+                            ? 'Adopt this machine’s current records as the new staleness baseline'
+                            : 'Nothing to reconcile — the baseline already matches this machine'}
+                        >
+                          {syncBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                          Reconcile
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </details>
+              <StepPanel
+                session={session} universe={universe} series={series} issues={issues}
+                stepId={activeStepId} locked={stepState.locked} onChanged={reload}
+                onSeriesUpdate={updateSeriesFromServer}
+                onIssuesUpdate={handleIssuesUpdate}
+                onFlushPending={flushPending}
+                onRegisterDraftFlush={registerDraftFlush}
+                onUniverseCharRef={applyUniverseCharRef}
+              />
             </div>
           </section>
         </div>
@@ -1488,7 +1552,7 @@ export default function StoryBuilder() {
   // in-flight generate/refine survives step navigation AND those swaps (#3905).
   return (
     <StoryStepRunProvider sessionId={storyId}>
-      <StoryBuilderDetail storyId={storyId} stepParam={step} />
+      <StoryBuilderDetail key={storyId} storyId={storyId} stepParam={step} />
     </StoryStepRunProvider>
   );
 }

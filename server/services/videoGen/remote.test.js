@@ -1,11 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { cp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 let tempVideoDir;
+const videoDirs = vi.hoisted(() => ({ current: undefined }));
 const transport = vi.hoisted(() => ({ fetch: vi.fn() }));
 const federation = vi.hoisted(() => ({ resolve: vi.fn(), peers: [] }));
 const ffmpeg = vi.hoisted(() => ({ thumbnail: vi.fn(), faststart: vi.fn() }));
@@ -20,17 +22,14 @@ vi.mock('../../lib/backupSnapshotBoundary.js', async original => {
 });
 vi.mock('../../lib/databaseMaintenanceJournal.js', async original => ({ ...(await original()), assertDatabaseAdmission: () => {} }));
 
+// Every data-rooted PATHS member (including the media-models registry's
+// `PATHS.data`) lands in a disposable root; only the video dirs vary per test.
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
-  return {
-    ...actual,
-    PATHS: new Proxy(actual.PATHS, {
-      get(target, key) {
-        if (key === 'videos' || key === 'videoThumbnails') return tempVideoDir;
-        return target[key];
-      },
-    }),
-  };
+  return makePathsProxy(actual, {
+    dataRoot: () => lazyTempDataRoot('remote-video-data-'),
+    extraOverrides: () => ({ videos: videoDirs.current, videoThumbnails: videoDirs.current }),
+  });
 });
 
 vi.mock('../../lib/peerHttpClient.js', () => ({
@@ -146,8 +145,11 @@ function captureTerminal(jobId) {
   });
 }
 
+afterAll(cleanupTempDataRoots);
+
 beforeEach(() => {
   tempVideoDir = mkdtempSync(join(tmpdir(), 'remote-video-test-'));
+  videoDirs.current = tempVideoDir;
   historyState.rows = [];
   historyState.gate = null; historyState.fail = false;
   publication.bypass = false; publication.entered = null;
