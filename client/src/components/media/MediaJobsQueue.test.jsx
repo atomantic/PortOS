@@ -846,3 +846,43 @@ describe('MediaJobsQueue — local video holds', () => {
     expect(retryMediaJob).not.toHaveBeenCalled();
   });
 });
+
+// Hosted video backends (grok / fal / reactor) own their params (#10741): the
+// retry editor offers no local model, sampler or chaining controls and an
+// untouched submit re-sends nothing, so provider fields survive verbatim.
+describe('MediaJobsQueue — hosted video retry editor (#10741)', () => {
+  const hostedJob = (mode, extra) => ({
+    id: `${mode}fail000000dead`,
+    kind: 'video',
+    status: 'failed',
+    error: 'boom',
+    queuedAt: '2026-06-19T10:00:00Z',
+    params: { prompt: 'a fox', mode, videoMode: 'text', ...extra },
+  });
+  const HOSTED_JOBS = {
+    grok: hostedJob('grok', { width: 1280, height: 720, duration: 6 }),
+    fal: hostedJob('fal', { modelId: 'fal-ai/provider-model', width: 1280, height: 720, duration: 5 }),
+    reactor: hostedJob('reactor', { seconds: 4, seed: 7, aspect: '16:9' }),
+  };
+
+  it.each(Object.keys(HOSTED_JOBS))('hides local controls on a %s job and submits no override when untouched', async (mode) => {
+    const user = userEvent.setup();
+    // A healthy local catalog: the controls must stay hidden because the job is
+    // hosted, not because there is nothing to choose from.
+    getVideoGenStatus.mockResolvedValue({ models: [{ id: 'ltx25-model', name: 'LTX-2.5', runtime: 'ltx25', supportedModes: ['text', 'image'] }] });
+    listQueueMediaJobs.mockResolvedValue([HOSTED_JOBS[mode]]);
+    render(<MediaJobsQueue kind="video" />);
+    await expandReel(user);
+    await user.click(await screen.findByLabelText('Edit and retry'));
+
+    expect(await screen.findByRole('button', { name: /Retry with changes/i })).toBeInTheDocument();
+    await waitFor(() => expect(getVideoGenStatus).toHaveBeenCalled());
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Reference mode')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Steps/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Chunks/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
+    expect(retryMediaJob).toHaveBeenCalledWith(HOSTED_JOBS[mode].id, null, { silent: true });
+  });
+});
