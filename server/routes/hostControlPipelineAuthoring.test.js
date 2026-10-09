@@ -37,6 +37,32 @@ const effects = vi.hoisted(() => ({
   updateIssue: vi.fn(async (id, patch) => ({ id, ...patch })),
   cancelAutoRun: vi.fn(() => true),
 }));
+// Remainder (#10907): one double per newly gated operation plus the store writes
+// an authorized handler performs afterwards. Distinct fns, so a call count of 6
+// (one per authorized caller) is attributable to exactly one route.
+const remainder = vi.hoisted(() => {
+  const returns = {
+    pov: { status: 'ok' },
+    completeness: { issues: [], runId: 'example-run' },
+    comicCover: { stage: { cover: {} } },
+    comicBackCover: { stage: { backCover: {} } },
+    extractScenes: { extracted: { scenes: [] }, runId: 'example-run' },
+    extractCanon: { universe: {}, results: [], failures: [] },
+    describeCanon: { universe: {}, report: {} },
+    audioCues: { cues: [], runId: 'example-run' },
+    seedReview: { comments: [] },
+    updateStage: { issue: {}, stage: { cues: [] } },
+  };
+  const names = [
+    'concepts', 'mergeAi', 'voice', 'arcOverview', 'arcVerify', 'arcResolve', 'arcDerive', 'episodes',
+    'volumeVerify', 'volumeBeats', 'volumeCoverConcepts', 'volumeCover', 'volumeBackCover', 'reverseOutline',
+    'continuity', 'pov', 'completeness', 'completenessStream', 'manuscriptFix', 'reformat', 'issueAnalyze',
+    'seriesAnalyze', 'judge', 'panel', 'rank', 'seriesReview', 'seriesFix', 'checksRun', 'checkPreview',
+    'comicCoverConcepts', 'comicCover', 'comicBackCover', 'extractScenes', 'extractCanon', 'describeCanon',
+    'audioCues', 'seedReview', 'trendSnapshot', 'updateStage',
+  ];
+  return Object.fromEntries(names.map((name) => [name, vi.fn(async () => returns[name] ?? {})]));
+});
 vi.mock('../services/auth.js', async (importOriginal) => ({
   ...await importOriginal(),
   isAuthEnabled: vi.fn(async () => auth.enabled),
@@ -59,6 +85,10 @@ vi.mock('../services/pipeline/visualStages.js', () => ({
   refineComicPageRender: effects.refineRender,
   enqueueStoryboardShotStartFrame: effects.shotFrame,
   enqueueStoryboardSceneVideo: vi.fn(),
+  renderComicCover: remainder.comicCover,
+  renderComicBackCover: remainder.comicBackCover,
+  renderVolumeCover: remainder.volumeCover,
+  renderVolumeBackCover: remainder.volumeBackCover,
   refineComicPanelPrompt: effects.refinePanel,
   generateComicPanelImagePrompts: effects.panelCandidates,
   refineStoryboardScenePrompt: effects.refineScene,
@@ -67,27 +97,127 @@ vi.mock('../services/pipeline/visualStages.js', () => ({
 vi.mock('../services/pipeline/series.js', async (importOriginal) => ({
   ...await importOriginal(),
   updateSeries: effects.updateSeries,
+  getSeries: vi.fn(async (id) => ({ id, name: 'Example Series', universeId: 'example-universe' })),
 }));
 vi.mock('../services/pipeline/issues.js', async (importOriginal) => ({
   ...await importOriginal(),
   updateIssue: effects.updateIssue,
+  updateStage: remainder.updateStage,
+  updateStageWithLatest: remainder.updateStage,
   getIssue: vi.fn(async (id) => ({
     id,
-    stages: { comicPages: { pages: [{ panels: [{}] }] }, storyboards: { scenes: [{ shots: [{}] }] } },
+    seriesId: 'example-series',
+    stages: {
+      comicPages: { pages: [{ panels: [{}] }] },
+      storyboards: { scenes: [{ shots: [{}] }] },
+      prose: { output: 'Example prose' },
+      teleplay: { output: 'Example teleplay' },
+    },
   })),
+}));
+vi.mock('../services/pipeline/seriesCanon.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  getSeriesCanon: vi.fn(async () => ({ characters: [], places: [], objects: [] })),
+}));
+vi.mock('../services/pipeline/seriesGenerate.js', async (importOriginal) => ({
+  ...await importOriginal(), generateSeriesConcepts: remainder.concepts,
+}));
+vi.mock('../services/recordMergeAI.js', async (importOriginal) => ({
+  ...await importOriginal(), mergeFieldsWithAI: remainder.mergeAi,
+}));
+vi.mock('../services/pipeline/seriesVoiceDiscover.js', async (importOriginal) => ({
+  ...await importOriginal(), discoverSeriesVoice: remainder.voice,
+}));
+vi.mock('../services/pipeline/arcPlanner.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  generateArcOverview: remainder.arcOverview,
+  verifyArc: remainder.arcVerify,
+  resolveVerifyIssues: remainder.arcResolve,
+  deriveFromManuscript: remainder.arcDerive,
+  generateSeasonEpisodes: remainder.episodes,
+  verifyVolume: remainder.volumeVerify,
+  generateVolumeCoverConcepts: remainder.volumeCoverConcepts,
+  generateComicCoverConcepts: remainder.comicCoverConcepts,
+  analyzeManuscriptCompleteness: remainder.completeness,
+}));
+vi.mock('../services/pipeline/volumeBeatsRunner.js', async (importOriginal) => ({
+  ...await importOriginal(), startVolumeBeatsRun: remainder.volumeBeats,
+}));
+vi.mock('../services/pipeline/reverseOutline.js', async (importOriginal) => ({
+  ...await importOriginal(), startReverseOutlineRun: remainder.reverseOutline,
+}));
+vi.mock('../services/pipeline/continuityBible.js', async (importOriginal) => ({
+  ...await importOriginal(), startContinuityBibleRun: remainder.continuity,
+}));
+vi.mock('../services/pipeline/perspectiveRewrite.js', async (importOriginal) => ({
+  ...await importOriginal(), generatePerspectiveRewrite: remainder.pov,
+}));
+vi.mock('../services/pipeline/manuscriptReview.js', async (importOriginal) => ({
+  ...await importOriginal(), seedReviewFromFindings: remainder.seedReview,
+}));
+vi.mock('../services/pipeline/manuscriptFix.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  generateManuscriptFix: remainder.manuscriptFix,
+  reformatManuscriptStageText: remainder.reformat,
+}));
+vi.mock('../services/pipeline/manuscriptCompletenessRunner.js', async (importOriginal) => ({
+  ...await importOriginal(), startCompletenessReview: remainder.completenessStream,
+}));
+vi.mock('../services/pipeline/editorialScore.js', async (importOriginal) => ({
+  ...await importOriginal(), recordTrendSnapshot: remainder.trendSnapshot,
+}));
+vi.mock('../services/pipeline/editorialAnalysis.js', async (importOriginal) => ({
+  ...await importOriginal(), analyzeIssue: remainder.issueAnalyze,
+}));
+vi.mock('../services/pipeline/editorialAnalysisRunner.js', async (importOriginal) => ({
+  ...await importOriginal(), startSeriesAnalysis: remainder.seriesAnalyze,
+}));
+vi.mock('../services/pipeline/pipelineJudge.js', async (importOriginal) => ({
+  ...await importOriginal(), judgeIssue: remainder.judge,
+}));
+vi.mock('../services/pipeline/readerPanelRunner.js', async (importOriginal) => ({
+  ...await importOriginal(), startReaderPanel: remainder.panel,
+}));
+vi.mock('../services/pipeline/editorial/comparativeRank.js', async (importOriginal) => ({
+  ...await importOriginal(), runComparativeRank: remainder.rank,
+}));
+vi.mock('../services/pipeline/seriesReview.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  startSeriesReviewRun: remainder.seriesReview,
+  startSeriesFixRun: remainder.seriesFix,
+}));
+vi.mock('../services/pipeline/editorial/checkRunner.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  startEditorialChecksRun: remainder.checksRun,
+  previewCustomCheck: remainder.checkPreview,
+}));
+vi.mock('../services/sceneExtractor.js', async (importOriginal) => ({
+  ...await importOriginal(), extractScenes: remainder.extractScenes,
+}));
+vi.mock('../services/universeCanon.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  extractCanonFromProse: remainder.extractCanon,
+  describeCanonFromProse: remainder.describeCanon,
+}));
+vi.mock('../services/pipeline/audioCues.js', async (importOriginal) => ({
+  ...await importOriginal(), deriveAudioCues: remainder.audioCues,
 }));
 
 import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession, revokeSessionById } from '../services/auth.js';
-import seriesRoutes from './pipeline/series.js';
-import issueRoutes from './pipeline/issues.js';
+import pipelineRoutes from './pipeline/index.js';
 
 let ownerSession;
 const id = '00000000-0000-4000-8000-000000000001';
 const picker = { providerId: 'example-cli', model: 'example-model' };
 const issue = `/api/pipeline/issues/${id}`;
 const imageBody = { description: 'Example scene', width: 512, height: 512 };
-// [path, body, effect observed on success]
+const series = `/api/pipeline/series/${id}`;
+const season = `${series}/seasons/example-season`;
+const pickOverride = { providerOverride: 'example-cli', modelOverride: 'example-model' };
+const squarePx = { width: 512, height: 512 };
+const customCheck = { label: 'Example check', prompt: 'Flag example problems' };
+// [path, body, effect observed on success, picker key the effect receives (default: derived from the body)]
 const operations = [
   [`/api/pipeline/series/${id}/generate-title-logo`, picker, effects.titleLogo],
   [`${issue}/stages/prose/generate`, { seedInput: 'Example seed', ...picker }, effects.generateStage],
@@ -101,6 +231,48 @@ const operations = [
   [`${issue}/stages/comicPages/pages/0/refine-render`,
     { instruction: 'Example correction', width: 512, height: 512, ...picker }, effects.refineRender],
   [`${issue}/stages/storyboards/scenes/0/shots/0/render`, { width: 512, height: 512 }, effects.shotFrame],
+  // Remainder (#10907)
+  ['/api/pipeline/series/generate-concept', { universeId: 'example-universe', ...picker }, remainder.concepts],
+  ['/api/pipeline/series/merge/ai-resolve', {
+    survivorId: 'ser-00000000-0000-4000-8000-000000000002', loserId: 'ser-00000000-0000-4000-8000-000000000003',
+    fields: ['name'], ...picker,
+  }, remainder.mergeAi],
+  [`${series}/discover-voice`, picker, remainder.voice],
+  [`${series}/arc/generate`, pickOverride, remainder.arcOverview],
+  [`${series}/arc/verify`, pickOverride, remainder.arcVerify],
+  [`${series}/arc/resolve-issues`, pickOverride, remainder.arcResolve],
+  [`${series}/arc/derive-from-manuscript`, pickOverride, remainder.arcDerive],
+  [`${season}/episodes/generate`, pickOverride, remainder.episodes],
+  [`${season}/verify`, pickOverride, remainder.volumeVerify],
+  [`${season}/generate-beats`, pickOverride, remainder.volumeBeats, 'providerId'],
+  [`${season}/cover-concepts/generate`, pickOverride, remainder.volumeCoverConcepts],
+  [`${season}/cover/render`, squarePx, remainder.volumeCover, null],
+  [`${season}/back-cover/render`, squarePx, remainder.volumeBackCover, null],
+  [`${series}/reverse-outline/generate`, picker, remainder.reverseOutline],
+  [`${series}/continuity-bible/generate`, picker, remainder.continuity],
+  [`${issue}/pov-rewrites`, { povCharacterId: 'example-character', ...picker }, remainder.pov],
+  [`${series}/manuscript/completeness`, pickOverride, remainder.completeness],
+  [`${series}/manuscript/completeness/stream`, pickOverride, remainder.completenessStream],
+  [`${series}/manuscript/review/comments/example-comment/fix`, pickOverride, remainder.manuscriptFix],
+  [`${series}/manuscript/reformat`, { stageId: 'prose', content: 'Example text', ...pickOverride }, remainder.reformat],
+  [`${issue}/editorial/analyze`, picker, remainder.issueAnalyze],
+  [`${series}/editorial/analyze`, picker, remainder.seriesAnalyze],
+  [`${issue}/judge`, picker, remainder.judge],
+  [`${series}/editorial/panel/run`, picker, remainder.panel],
+  [`${series}/editorial/rank`, picker, remainder.rank],
+  [`${series}/review`, picker, remainder.seriesReview, 'providerOverride'],
+  [`${series}/review/fix`, picker, remainder.seriesFix, 'providerOverride'],
+  [`${series}/editorial/checks/run`, picker, remainder.checksRun, 'providerOverride'],
+  [`${series}/editorial/custom-checks/preview`, { ...customCheck, ...picker }, remainder.checkPreview, 'providerOverride'],
+  [`${issue}/cover-concepts/generate`, pickOverride, remainder.comicCoverConcepts],
+  [`${issue}/stages/comicPages/cover/render`, squarePx, remainder.comicCover, null],
+  [`${issue}/stages/comicPages/back-cover/render`, squarePx, remainder.comicBackCover, null],
+  [`${issue}/stages/storyboards/extract-scenes`, { force: true, ...pickOverride }, remainder.extractScenes],
+  [`${issue}/stages/prose/extract-canon`, { providerOverride: 'example-cli', model: 'example-model' }, remainder.extractCanon],
+  [`${issue}/stages/prose/describe-canon`, {
+    providerOverride: 'example-cli', model: 'example-model', targets: [{ id: 'example-noun', kind: 'character' }],
+  }, remainder.describeCanon],
+  [`${issue}/stages/audio/cues/generate`, pickOverride, remainder.audioCues],
 ];
 const appFor = (address = '192.0.2.10') => {
   const app = express();
@@ -109,8 +281,7 @@ const appFor = (address = '192.0.2.10') => {
     next();
   });
   app.use(authGate, hostControlRouteGate, express.json());
-  app.use('/api/pipeline', seriesRoutes);
-  app.use('/api/pipeline', issueRoutes);
+  app.use('/api/pipeline', pipelineRoutes);
   app.use(errorMiddleware);
   return app;
 };
@@ -120,7 +291,7 @@ const call = (app, [path, body], headers = {}, method = 'post') => {
   return pending.send(body);
 };
 const expectNoEffects = () => {
-  for (const effect of Object.values(effects)) expect(effect).not.toHaveBeenCalled();
+  for (const effect of [...Object.values(effects), ...Object.values(remainder)]) expect(effect).not.toHaveBeenCalled();
 };
 
 beforeEach(async () => {
@@ -129,7 +300,7 @@ beforeEach(async () => {
   ownerSession = await createSession();
 });
 
-describe('Pipeline agent-backed generation authority (#10068)', () => {
+describe('Pipeline agent-backed generation authority (#10068, #10907)', () => {
   it('refuses remote and proxy-marked password-free callers before any effect', async () => {
     for (const operation of operations) {
       for (const [address, headers] of [
@@ -207,11 +378,11 @@ describe('Pipeline agent-backed generation authority (#10068)', () => {
         expect(response.status, `${operation[0]}: ${JSON.stringify(response.body)}`).toBe(200);
       }
     }
-    for (const [path, body, effect] of operations) {
+    for (const [path, body, effect, key = ['providerId', 'providerOverride'].find((name) => body[name])] of operations) {
       expect(effect, path).toHaveBeenCalledTimes(6);
-      if (body.providerId) {
-        const options = effect.mock.lastCall.find((value) => value && typeof value === 'object' && value.providerId);
-        expect(options, path).toEqual(expect.objectContaining(picker));
+      if (key) {
+        const options = effect.mock.lastCall.find((value) => value && typeof value === 'object' && value[key]);
+        expect(options?.[key], path).toBe('example-cli');
       }
     }
   });
