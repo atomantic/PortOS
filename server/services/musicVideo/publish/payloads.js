@@ -69,10 +69,8 @@ function pickVerticalCut(project, options) {
 /** The full video's public link: the recorded YouTube post, else the one the director gave the kit. */
 const fullVideoUrl = (kit) => releaseLinkUrl(kit, 'youtube');
 /** The Suno song a post links or plays: the director's pick, else the recorded Suno post, else the kit's song link. */
-export const publishSongUrl = (project, options) => {
-  const kit = kitOf(project);
-  return releaseLinkUrl(kitOf(project), 'suno', { songUrl: text(options?.songUrl) });
-};
+export const publishSongUrl = (project, options) =>
+  releaseLinkUrl(kitOf(project), 'suno', { songUrl: text(options?.songUrl) });
 const songUrl = (kit, options) => publishSongUrl({ publishKit: kit }, options);
 
 function requireTitle(platform, title) {

@@ -90,8 +90,8 @@ export const AUTONOMOUS_NAME_MAX = 200;
 export const AUTONOMOUS_ORIGINS = Object.freeze(['manual', 'schedule']);
 
 // The Production review stages a run may approve by itself once the operator
-// grants it (`brief.autoApprove`, set with the instance password on start or
-// resume). In review order; readiness checks still gate every one.
+// grants it (`brief.autoApprove`, set by an authenticated browser or agent
+// session on start/resume). In review order; readiness checks still gate every one.
 export const AUTONOMOUS_AUTO_APPROVE_STAGES = Object.freeze(['art', 'storyboard', 'proof']);
 
 /** Known auto-approve stages, de-duplicated, in review order. */
