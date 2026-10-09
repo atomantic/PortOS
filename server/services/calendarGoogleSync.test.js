@@ -69,6 +69,21 @@ const rawEvent = (id, summary) => ({
 
 const savedCache = () => saveCache.mock.calls.at(-1)[1];
 
+// The completion contract (#10869): a zero-exit reply only licenses a prune for a
+// calendar that echoes the requested window, carries `complete: true` and has no
+// remaining page token. The window is read back out of the prompt the service
+// actually sent, so these fixtures cannot drift from what it asked for.
+const windowFromPrompt = (prompt) => {
+  const [, timeMin, timeMax] = prompt.match(/date range (\d{4}-[\w:.-]+Z) to (\d{4}-[\w:.-]+Z)/);
+  return { timeMin, timeMax };
+};
+// `undefined` overrides drop a field from the JSON, simulating a legacy envelope.
+const completeCalendar = (prompt, cal) => ({ calendarName: 'Work', complete: true, nextPageToken: null, ...windowFromPrompt(prompt), ...cal });
+const cliReply = (calendars, cli = {}) => async ({ prompt }) => ({
+  text: JSON.stringify({ calendars: calendars.map((cal) => completeCalendar(prompt, cal)) }),
+  exitCode: 0, partial: false, stderrTail: '', ...cli,
+});
+
 describe('mcpSyncAccount CLI exit-status agreement (#5302)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -77,12 +92,7 @@ describe('mcpSyncAccount CLI exit-status agreement (#5302)', () => {
   });
 
   it('prunes cache-only events on a clean exit 0 and records success', async () => {
-    runCliProviderPrompt.mockResolvedValue({
-      text: JSON.stringify({ calendars: [{ calendarId: CAL_ID, calendarName: 'Work', events: [rawEvent('upstream-2', 'Design review')] }] }),
-      exitCode: 0,
-      partial: false,
-      stderrTail: '',
-    });
+    runCliProviderPrompt.mockImplementation(cliReply([{ calendarId: CAL_ID, events: [rawEvent('upstream-2', 'Design review')] }]));
 
     const result = await mcpSyncAccount(ACCOUNT_ID, null);
 
@@ -196,7 +206,7 @@ describe('MCP transcript extraction', () => {
     const event = rawEvent('new-event', 'Review [draft] {v2}');
     event.description = 'Keep ```json {"example":[]} ``` in the notes.';
     runCliProviderPrompt.mockImplementation(async ({ prompt }) => ({
-      text: `${prompt}\nMetadata: {"request":"complete"}\n${prompt}\nActual: \`\`\`json\n${JSON.stringify({ calendars: [{ calendarId: CAL_ID, events: [event] }] })}\n\`\`\``,
+      text: `${prompt}\nMetadata: {"request":"complete"}\n${prompt}\nActual: \`\`\`json\n${JSON.stringify({ calendars: [completeCalendar(prompt, { calendarId: CAL_ID, events: [event] })] })}\n\`\`\``,
       exitCode: 0, partial: false,
     }));
 
@@ -207,12 +217,13 @@ describe('MCP transcript extraction', () => {
   });
 
   it('accepts an empty event snapshot and an empty calendar response', async () => {
-    runCliProviderPrompt.mockResolvedValue({ text: JSON.stringify({ calendars: [{ calendarId: CAL_ID, events: [] }] }), exitCode: 0 });
+    runCliProviderPrompt.mockImplementation(cliReply([{ calendarId: CAL_ID, events: [] }]));
     expect((await mcpSyncAccount(ACCOUNT_ID, null)).pruned).toBe(1);
     expect(savedCache().events).toEqual([]);
     saveCache.mockClear();
     runCliProviderPrompt.mockResolvedValue({ text: '{"calendars":[]}', exitCode: 0 });
-    expect((await mcpSyncAccount(ACCOUNT_ID, null)).calendars).toEqual([]);
+    // Nothing was described, so nothing was reconciled: not a success.
+    expect(await mcpSyncAccount(ACCOUNT_ID, null)).toMatchObject({ calendars: [], status: 'partial' });
     expect(saveCache).not.toHaveBeenCalled();
   });
 
@@ -245,6 +256,123 @@ describe('MCP transcript extraction', () => {
   });
 });
 
+// #10869: a zero CLI exit proves the process finished, not that the source
+// handed over every page. These pin the per-calendar completion contract at the
+// service boundary, where a wrong answer silently deletes real cached events and
+// reports the sync as a success.
+describe('Google MCP page completeness (#10869)', () => {
+  const OLD_ROOM = 'https://meet.example.com/old-room';
+  const TWO_CALENDARS = 'team@example.com';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getAccount.mockResolvedValue(account());
+    loadCache.mockResolvedValue({ events: cachedEvents() });
+  });
+
+  it('asks the model to drain every page and echo the window and completion state', async () => {
+    runCliProviderPrompt.mockImplementation(cliReply([{ calendarId: CAL_ID, events: [] }]));
+    await mcpSyncAccount(ACCOUNT_ID, null);
+    const { prompt } = runCliProviderPrompt.mock.calls.at(-1)[0];
+    expect(prompt).toMatch(/maxResults=250/);
+    expect(prompt).toMatch(/pageToken set to that token/);
+    expect(prompt).toMatch(/"complete":true,"nextPageToken":null/);
+  });
+
+  it('reconciles a fully drained multi-page calendar: upserts every page and prunes only the genuine deletion', async () => {
+    const firstPage = Array.from({ length: 3 }, (_, i) => rawEvent(`page1-${i}`, `Page one ${i}`));
+    const secondPage = [rawEvent('page2-0', 'Page two 0')];
+    runCliProviderPrompt.mockImplementation(cliReply([{ calendarId: CAL_ID, events: [...firstPage, ...secondPage] }]));
+
+    const result = await mcpSyncAccount(ACCOUNT_ID, null);
+
+    expect(result).toMatchObject({ status: 'success', newEvents: 4, pruned: 1 });
+    expect(result.reason).toBeUndefined();
+    expect(savedCache().events.map((e) => e.title).sort()).toEqual(['Page one 0', 'Page one 1', 'Page one 2', 'Page two 0']);
+  });
+
+  // The synthetic reproduction from the issue: one received event, a token that
+  // says more exist, a different event already cached in the window.
+  it.each([
+    ['a remaining nextPageToken', { nextPageToken: 'synthetic-next-page' }, 'more event pages'],
+    ['a legacy envelope with no completion fields', { complete: undefined, nextPageToken: undefined, timeMin: undefined, timeMax: undefined }, 'no completion marker'],
+    ['an explicit complete:false', { complete: false }, 'incomplete'],
+    ['complete:true but no window echo', { timeMin: undefined, timeMax: undefined }, 'window metadata'],
+    ['a window that contradicts the request', { timeMax: '2000-01-01T00:00:00.000Z' }, 'window metadata'],
+    ['a calendar that was never requested', { calendarId: 'stranger@example.com' }, 'not requested'],
+  ])('upserts but never prunes on %s, and reports a partial result', async (_name, override, reasonFragment) => {
+    runCliProviderPrompt.mockImplementation(cliReply([{ calendarId: CAL_ID, events: [rawEvent('upstream-2', 'Design review')], ...override }]));
+    const io = { emit: vi.fn() };
+
+    const result = await mcpSyncAccount(ACCOUNT_ID, io);
+
+    expect(result).toMatchObject({ status: 'partial', pruned: 0, reason: expect.stringContaining(reasonFragment) });
+    expect(updateSyncStatus).toHaveBeenLastCalledWith(ACCOUNT_ID, 'partial');
+    expect(io.emit).toHaveBeenCalledWith('calendar:sync:completed', expect.objectContaining({
+      status: 'partial', pruned: 0, reason: expect.stringContaining(reasonFragment),
+    }));
+    // The cached event the response never mentioned survives alongside the new one.
+    expect(savedCache().events.map((e) => e.title).sort()).toEqual(['Design review', 'Standing 1:1']);
+  });
+
+  it('keeps cached conference and participant metadata that an incomplete page omits', async () => {
+    const full = {
+      ...rawEvent('upstream-move', 'Weekly sync'),
+      conferenceData: { entryPoints: [{ entryPointType: 'video', uri: OLD_ROOM }] },
+      organizer: { email: 'alice@example.com' },
+      attendees: [{ email: 'alice@example.com', self: true, responseStatus: 'declined' }],
+    };
+    runCliProviderPrompt.mockImplementation(cliReply([{ calendarId: CAL_ID, events: [full] }]));
+    await mcpSyncAccount(ACCOUNT_ID, null);
+    loadCache.mockResolvedValue({ events: [savedCache().events.at(-1)] });
+
+    runCliProviderPrompt.mockImplementation(cliReply([{ calendarId: CAL_ID, nextPageToken: 'synthetic-next-page', events: [rawEvent('upstream-move', 'Weekly sync')] }]));
+    const result = await mcpSyncAccount(ACCOUNT_ID, null);
+
+    expect(result.status).toBe('partial');
+    expect(savedCache().events[0]).toMatchObject({
+      meetingUrl: OLD_ROOM, organizer: { email: 'alice@example.com' }, myStatus: 'declined',
+    });
+  });
+
+  it('treats a calendar returned twice as contradictory instead of trusting either copy', async () => {
+    runCliProviderPrompt.mockImplementation(cliReply([
+      { calendarId: CAL_ID, events: [rawEvent('upstream-2', 'Design review')] },
+      { calendarId: CAL_ID, events: [rawEvent('upstream-3', 'Retro')] },
+    ]));
+
+    const result = await mcpSyncAccount(ACCOUNT_ID, null);
+
+    expect(result).toMatchObject({ status: 'partial', pruned: 0, reason: expect.stringContaining('more than once') });
+    expect(savedCache().events.map((e) => e.title)).toContain('Standing 1:1');
+  });
+
+  it('judges each calendar on its own: the complete one prunes, the one the reply never described is reported', async () => {
+    getAccount.mockResolvedValue({
+      ...account(),
+      subcalendars: [...account().subcalendars, { calendarId: TWO_CALENDARS, name: 'Team', enabled: true, dormant: false }],
+    });
+    runCliProviderPrompt.mockImplementation(cliReply([{ calendarId: CAL_ID, events: [rawEvent('upstream-2', 'Design review')] }]));
+
+    const result = await mcpSyncAccount(ACCOUNT_ID, null);
+
+    expect(result).toMatchObject({ status: 'partial', pruned: 1, reason: expect.stringContaining('"Team": missing from the response') });
+    expect(result.calendars).toEqual([expect.objectContaining({ calendarId: CAL_ID, complete: true, pruned: 1 })]);
+    expect(savedCache().events.map((e) => e.title)).toEqual(['Design review']);
+  });
+
+  it('a non-zero CLI exit stays partial even when the envelope claims completeness', async () => {
+    runCliProviderPrompt.mockImplementation(cliReply(
+      [{ calendarId: CAL_ID, events: [rawEvent('upstream-2', 'Design review')] }],
+      { exitCode: 1, partial: true, stderrTail: 'stream aborted' },
+    ));
+
+    const result = await mcpSyncAccount(ACCOUNT_ID, null);
+
+    expect(result).toMatchObject({ status: 'partial', pruned: 0, reason: 'stream aborted' });
+  });
+});
+
 // #6289: a Google event's join link is projected into a single cached
 // `meetingUrl`. The regressions these pin are (a) caching something that is not
 // a usable video link, and (b) an older producer that omits the conference
@@ -257,12 +385,7 @@ describe('meetingUrl projection (#6289)', () => {
   });
 
   const resync = async (raw) => {
-    runCliProviderPrompt.mockResolvedValue({
-      text: JSON.stringify({ calendars: [{ calendarId: CAL_ID, calendarName: 'Work', events: [raw] }] }),
-      exitCode: 0,
-      partial: false,
-      stderrTail: '',
-    });
+    runCliProviderPrompt.mockImplementation(cliReply([{ calendarId: CAL_ID, events: [raw] }]));
     return mcpSyncAccount(ACCOUNT_ID, null);
   };
 
@@ -537,11 +660,11 @@ describe('Google participant snapshot reconciliation (#8838)', () => {
       attendees: [{ email: 'alice@example.com', self: true, responseStatus: 'declined' }],
     }]);
     loadCache.mockResolvedValue(savedCache());
-    const text = JSON.stringify({ calendars: [{ calendarId: CAL_ID, calendarName: 'Work', events: [rawEvent('identity', 'Updated')] }] });
-    runCliProviderPrompt.mockResolvedValue({ text, exitCode: 1, partial: true });
+    const reply = cliReply([{ calendarId: CAL_ID, events: [rawEvent('identity', 'Updated')] }]);
+    runCliProviderPrompt.mockImplementation(reply);
+    runCliProviderPrompt.mockImplementationOnce(async (args) => ({ ...(await reply(args)), exitCode: 1, partial: true }));
     await mcpSyncAccount(ACCOUNT_ID, null);
     expect(savedCache().events[0].myStatus).toBe('declined');
-    runCliProviderPrompt.mockResolvedValue({ text, exitCode: 0, partial: false });
     await mcpSyncAccount(ACCOUNT_ID, null);
     expect(savedCache().events[0]).toMatchObject({ organizer: null, attendees: [] });
     expect(savedCache().events[0].myStatus).toBeUndefined();

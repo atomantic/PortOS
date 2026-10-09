@@ -83,7 +83,8 @@ export function getSyncDateRange(pastDays = 7, futureDays = 30) {
  * `options.prune` (default true) removes cached events for this subcalendar
  * that the incoming batch didn't mention — correct only when `rawEvents` is the
  * COMPLETE set for the range. A caller working from a possibly-truncated payload
- * (a CLI that exited non-zero mid-stream) must pass `prune: false`, or the
+ * (a CLI that exited non-zero mid-stream, or a source that still had event
+ * pages left) must pass `prune: false`, or the
  * missing tail reads as "these events were deleted upstream" and destroys real
  * calendar data. `options.status` labels the resulting sync for the UI.
  *
@@ -218,10 +219,11 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
  * what a complete Google response actually means, matching what the direct-API
  * mapper emits for the same reason.
  *
- * Only a COMPLETE payload earns this. A partial one (the CLI died mid-stream)
- * is relayed untouched, so a truncated event that lost its conference fields
- * reads as "unknown" rather than "cleared" — the same rule that already stops a
- * partial payload from driving a prune. Clearing a link is destructive too.
+ * Only a COMPLETE calendar earns this (see `incompleteReason`). A partial one —
+ * the CLI died mid-stream, or the source still had event pages — is relayed
+ * untouched, so a truncated event that lost its conference fields reads as
+ * "unknown" rather than "cleared", the same rule that stops it from driving a
+ * prune. Clearing a link is destructive too.
  */
 function withExplicitConferenceFields(event) {
   return { ...event, organizer: event?.organizer ?? null, attendees: event?.attendees ?? [], hangoutLink: event?.hangoutLink ?? null, conferenceData: event?.conferenceData ?? null };
@@ -261,10 +263,12 @@ async function runMcpSyncAccount(accountId, io) {
 
 ${calendarList}
 
-For EACH calendar, call gcal_list_events with the calendarId, timeMin, and timeMax. Use maxResults=250.
+For EACH calendar, call gcal_list_events with the calendarId, timeMin, and timeMax. Use maxResults=250. If a response carries a nextPageToken, call gcal_list_events again with the same calendarId, timeMin and timeMax plus pageToken set to that token, and repeat until a response carries no nextPageToken. Concatenate the events of every page into one array for that calendar.
 
 After fetching ALL calendars, output ONLY a single JSON object (no markdown fences, no explanation) with this exact structure:
-{"calendars":[{"calendarId":"...","calendarName":"...","events":[...raw events from gcal_list_events response...]}]}
+{"calendars":[{"calendarId":"...","calendarName":"...","timeMin":"...","timeMax":"...","complete":true,"nextPageToken":null,"events":[...raw events from every page...]}]}
+
+Per calendar, "timeMin" and "timeMax" echo the exact values you queried with. Set "complete" to true ONLY when you fetched every page and the final response carried no nextPageToken; otherwise set "complete" to false and "nextPageToken" to the last token you still hold. Never claim completeness you did not verify.
 
 Include the full events arrays as returned by gcal_list_events, with every field each event carries — do NOT abbreviate, summarize, or drop fields. In particular keep "conferenceData" and "hangoutLink" exactly as returned, and omit them only when the event itself does not have them. Output NOTHING else — just the JSON.`;
 
@@ -275,8 +279,8 @@ Include the full events arrays as returned by gcal_list_events, with every field
     // JSON may be cut off mid-array, so every calendar it does describe is
     // treated as incomplete. Upsert what arrived, but never prune from it —
     // absent events mean "the CLI died", not "deleted upstream".
-    const { partial, stderrTail } = result;
-    const status = partial ? 'partial' : 'success';
+    const { partial: cliPartial, stderrTail } = result;
+    const cliReason = stderrTail || `CLI exited with code ${result.exitCode}`;
 
     // Parse Claude's output and push events
     const parsed = parseCalendarJson(result.output.split(prompt).join(''));
@@ -287,6 +291,15 @@ Include the full events arrays as returned by gcal_list_events, with every field
       throw new ServerError(`Failed to parse calendar data from Claude response${reason}`, { status: 502 });
     }
 
+    // A zero exit proves the CLI finished, NOT that the source handed over every
+    // page: each calendar must vouch for itself (#10869). Only a calendar that
+    // does earns the prune and the authoritative metadata clear.
+    const requestedIds = new Map(enabledCalendars.map(sc => [sc.calendarId, sc.name]));
+    const returnedCounts = new Map();
+    for (const cal of parsed.calendars) returnedCounts.set(cal.calendarId, (returnedCounts.get(cal.calendarId) || 0) + 1);
+    const context = { requestedIds, duplicateIds: new Set([...returnedCounts].filter(([, n]) => n > 1).map(([id]) => id)), timeMin, timeMax };
+    const incompleteReasons = [];
+
     let totalNew = 0;
     let totalUpdated = 0;
     let totalPruned = 0;
@@ -294,19 +307,34 @@ Include the full events arrays as returned by gcal_list_events, with every field
 
     for (const cal of parsed.calendars) {
       if (!cal.calendarId || !Array.isArray(cal.events)) continue;
+      const calendarName = cal.calendarName || cal.calendarId;
+      const why = cliPartial ? 'the CLI did not exit cleanly' : incompleteReason(cal, context);
+      if (why && !cliPartial) incompleteReasons.push(`"${calendarName}": ${why}`);
+      const complete = !why;
       const syncResult = await pushSyncEvents(
         accountId,
         cal.calendarId,
-        cal.calendarName || cal.calendarId,
-        partial ? cal.events : cal.events.map(withExplicitConferenceFields),
+        calendarName,
+        complete ? cal.events.map(withExplicitConferenceFields) : cal.events,
         null,
-        { prune: !partial, status, dateRange: { pastDate, futureDate } },
+        { prune: complete, status: complete ? 'success' : 'partial', dateRange: { pastDate, futureDate } },
       );
       totalNew += syncResult.newEvents;
       totalUpdated += syncResult.updated;
       totalPruned += syncResult.pruned;
-      results.push({ calendarId: cal.calendarId, calendarName: cal.calendarName, ...syncResult });
+      results.push({ calendarId: cal.calendarId, calendarName: cal.calendarName, complete, ...(why ? { reason: why } : {}), ...syncResult });
     }
+
+    // A requested calendar the response never described was not reconciled at all.
+    if (!cliPartial) {
+      for (const [id, name] of requestedIds) {
+        if (!returnedCounts.has(id)) incompleteReasons.push(`"${name || id}": missing from the response`);
+      }
+    }
+
+    const partial = cliPartial || incompleteReasons.length > 0;
+    const status = partial ? 'partial' : 'success';
+    const reason = cliPartial ? cliReason : summarizeReasons(incompleteReasons);
 
     await updateSyncStatus(accountId, status);
     io?.emit('calendar:sync:completed', {
@@ -316,10 +344,10 @@ Include the full events arrays as returned by gcal_list_events, with every field
       pruned: totalPruned,
       status,
       method: 'mcp',
-      ...(partial ? { reason: stderrTail || `CLI exited with code ${result.exitCode}` } : {}),
+      ...(partial ? { reason } : {}),
     });
     if (partial) {
-      console.warn(`⚠️ MCP sync PARTIAL for ${account.name} (exit ${result.exitCode}): ${totalNew} new, ${totalUpdated} updated, prune skipped across ${results.length} calendars`);
+      console.warn(`⚠️ MCP sync PARTIAL for ${account.name}: ${reason} — ${totalNew} new, ${totalUpdated} updated, ${totalPruned} pruned across ${results.length} calendars`);
     } else {
       console.log(`📅 MCP sync complete for ${account.name}: ${totalNew} new, ${totalUpdated} updated, ${totalPruned} pruned across ${results.length} calendars`);
     }
@@ -330,7 +358,7 @@ Include the full events arrays as returned by gcal_list_events, with every field
       pruned: totalPruned,
       calendars: results,
       status,
-      ...(partial ? { reason: stderrTail || `CLI exited with code ${result.exitCode}` } : {}),
+      ...(partial ? { reason } : {}),
     };
   };
 
@@ -340,6 +368,31 @@ Include the full events arrays as returned by gcal_list_events, with every field
     await updateSyncStatus(accountId, 'error').catch(() => {});
     throw error instanceof ServerError ? error : new ServerError(error.message, { status: 502 });
   });
+}
+
+const hasPageToken = token => token !== undefined && token !== null && token !== '';
+const sameInstant = (a, b) => typeof a === 'string' && Date.parse(a) === Date.parse(b);
+
+/**
+ * Why one returned calendar cannot be treated as the COMPLETE event set for the
+ * requested window, or null when it can (#10869). The CLI exiting 0 only proves
+ * the process finished; Google paginates, so a first page alone also exits 0.
+ * Only an explicit `complete: true`, no remaining `nextPageToken`, a calendar we
+ * asked for (once) and an echo of the requested window together license a prune.
+ * Anything missing, legacy or contradictory degrades to upsert-only.
+ */
+function incompleteReason(cal, { requestedIds, duplicateIds, timeMin, timeMax }) {
+  if (!requestedIds.has(cal.calendarId)) return 'calendar was not requested';
+  if (duplicateIds.has(cal.calendarId)) return 'calendar was returned more than once';
+  if (hasPageToken(cal.nextPageToken)) return 'the source still has more event pages';
+  if (cal.complete !== true) return cal.complete === false ? 'the source reported the event list as incomplete' : 'no completion marker';
+  if (!sameInstant(cal.timeMin, timeMin) || !sameInstant(cal.timeMax, timeMax)) return 'window metadata is missing or differs from the request';
+  return null;
+}
+
+function summarizeReasons(reasons) {
+  const shown = reasons.slice(0, 3).join('; ');
+  return reasons.length > 3 ? `${shown}; and ${reasons.length - 3} more` : shown;
 }
 
 const isCalendarPayload = value => Array.isArray(value?.calendars) && value.calendars.every(cal =>
