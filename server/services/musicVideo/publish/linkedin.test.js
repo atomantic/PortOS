@@ -55,6 +55,9 @@ describe('LinkedIn adapter', () => {
     await expect(linkedinAdapter.findPost(page, payload)).resolves.toBe('https://www.linkedin.com/feed/update/urn:li:activity:7123456789/');
     expect(page.log.filter(([kind]) => kind === 'paste').map(([, , text]) => text)).toEqual([payload.firstComment]);
     expect(page.log.filter(([kind]) => kind === 'click').every(([, sel]) => /comment/.test(sel))).toBe(true);
+    // A reload of the post page records it again but never types the comment twice.
+    await linkedinAdapter.findPost(page, payload);
+    expect(page.log.filter(([kind]) => kind === 'paste')).toHaveLength(1);
   });
 
   it('ignores the feed and other posts', async () => {
@@ -68,7 +71,7 @@ describe('LinkedIn adapter', () => {
     const page = fakePage({ url: 'https://www.linkedin.com/feed/update/urn:li:activity:7/', shows: 'I made a music video.' });
     page.locator = () => ({ first() { return this; }, click: async () => { throw new Error('no comment box'); } });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    await expect(linkedinAdapter.findPost(page, payload)).resolves.toBe('https://www.linkedin.com/feed/update/urn:li:activity:7/');
+    await expect(linkedinAdapter.findPost(page, { ...payload })).resolves.toBe('https://www.linkedin.com/feed/update/urn:li:activity:7/');
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });

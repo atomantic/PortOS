@@ -21,6 +21,8 @@ const SIGN_IN = /linkedin\.com\/(?:login|authwall|checkpoint|uas\/login|signup)/
 const DIALOG = '[role=dialog]';
 const EDITOR = `${DIALOG} .ql-editor[contenteditable=true]`;
 const COMMENT_EDITOR = '.comments-comment-box .ql-editor[contenteditable=true], .comments-comment-texteditor .ql-editor[contenteditable=true]';
+// Drafts whose first comment was already typed: a reload of the post page must not type it twice.
+const commented = new WeakSet();
 const POST_URL = /^https:\/\/www\.linkedin\.com\/feed\/update\/urn:li:(?:activity|share|ugcPost):\d+/;
 
 /** The post's opening words, as the post page shows them (its first line; LinkedIn folds the rest under "see more"). */
@@ -82,7 +84,8 @@ export const linkedinAdapter = {
   },
   async findPost(page, payload) {
     const url = await landedOnPost(page, POST_URL, opening(payload.text), ([match]) => `${match}/`);
-    if (url && payload.firstComment) {
+    if (url && payload.firstComment && !commented.has(payload)) {
+      commented.add(payload);
       // Typed, never sent: the director presses Comment. A miss still records the post.
       await page.locator(COMMENT_EDITOR).first().click({ timeout: 10_000 })
         .then(() => pasteText(page, COMMENT_EDITOR, payload.firstComment))
