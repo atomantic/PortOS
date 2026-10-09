@@ -367,9 +367,10 @@ function TargetRow({ project, kit, entry, publishing }) {
     const legacy = legacyDistrokid();
     if (!Object.keys(legacy).length) return;
     publishing.setPlatform('distrokid', { defaults: legacy }).then((saved) => { if (saved) safeRemoveStorage(SONGWRITER_KEY); });
-    // Once per mount: the settings answer above wins from then on.
+    // Once the platforms have loaded (rows only render after that, since they
+    // come from enabledTargets); the settings answer wins from then on.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target]);
+  }, [target, !!publishing.platforms?.distrokid]);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [confirmAgain, setConfirmAgain] = useState(false);
   const draft = publishing.drafts[target];
