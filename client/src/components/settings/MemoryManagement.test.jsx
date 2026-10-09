@@ -58,12 +58,34 @@ describe('MemoryManagement', () => {
     getLoadedLlmModels.mockRejectedValueOnce(new Error('LLM status failed'));
     getTtsStatus.mockRejectedValueOnce(new Error('TTS status failed'));
     getVoiceStatus.mockRejectedValueOnce(new Error('voice status failed'));
-    fireEvent.click(screen.getByRole('button', { name: 'Free everything' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Unload listed resources' }));
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('could not verify')));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('Cleanup skipped those sources')));
     expect(unloadLmStudioModel).not.toHaveBeenCalled();
-    expect(toast.success).not.toHaveBeenCalledWith('Freed all memory-resident models');
+    expect(toast.success).not.toHaveBeenCalled();
     expect(screen.queryByText(/full unified memory is available/i)).not.toBeInTheDocument();
+  });
+
+  it('does not claim free system memory for a successful empty observation', async () => {
+    getLoadedLlmModels.mockResolvedValue({ ollama: [], lmstudio: [] });
+    render(<MemoryManagement />);
+
+    expect(await screen.findByText(/does not measure free system memory/i)).toBeInTheDocument();
+    expect(screen.getByText(/Ollama, LM Studio, Whisper and Kokoro only/)).toBeInTheDocument();
+    expect(screen.queryByText(/full unified memory/i)).not.toBeInTheDocument();
+  });
+
+  it('reports failure, not partial success, when the only real unload fails', async () => {
+    unloadLmStudioModel.mockRejectedValue(new Error('unload failed'));
+    render(<MemoryManagement />);
+    expect(await screen.findByText('example/lmstudio-model')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Unload listed resources' }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
+      '1 cleanup action failed. Check the refreshed residency list before starting a large render.',
+    ));
+    expect(toast.error).not.toHaveBeenCalledWith(expect.stringContaining('most resources'));
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it('ignores an older refresh that resolves after a newer snapshot', async () => {
@@ -117,7 +139,7 @@ describe('MemoryManagement', () => {
 
      // Wait for the first refresh to clear the loading state so the poll result
      // is the thing under test, not the pre-poll empty render.
-    expect(await screen.findByRole('button', { name: 'Free everything' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Unload listed resources' })).toBeInTheDocument();
      // The banned nag is suppressed for the disabled backend, even though its
      // residency is unknown.
     expect(screen.queryByText(/Status unavailable for LM Studio/i)).not.toBeInTheDocument();
@@ -174,7 +196,7 @@ describe('MemoryManagement', () => {
     render(<MemoryManagement />);
        // First (good) poll: lmstudio is known-disabled, so the banner is silent even
        // though its residency error would otherwise show.
-    expect(await screen.findByRole('button', { name: 'Free everything' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Unload listed resources' })).toBeInTheDocument();
     expect(screen.queryByText(/Status unavailable for/i)).not.toBeInTheDocument();
        // A later FAILED poll re-adds both backends to unavailableSources, but the
        // still-known-disabled lmstudio must stay excluded from the banner (ollama,
@@ -182,6 +204,6 @@ describe('MemoryManagement', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     await waitFor(() => expect(getLoadedLlmModels).toHaveBeenCalledTimes(2));
     expect(screen.getByText(/Status unavailable for Ollama/i)).toBeInTheDocument();
-    expect(screen.queryByText(/LM Studio/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Status unavailable for LM Studio/i)).not.toBeInTheDocument();
        });
 });

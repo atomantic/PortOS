@@ -78,7 +78,7 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
   const [lastFetched, setLastFetched] = useState(0);
   const [unavailableSources, setUnavailableSources] = useState([]);
    // Backends the user marked intentionally disabled stay in unavailableSources
-   // (so "Free everything" still skips their unknown residency) but are excluded
+   // (so "Unload listed resources" still skips their unknown residency) but are excluded
    // from the "Status unavailable" banner — the nag the user opted out of.
   const [disabledSources, setDisabledSources] = useState([]);
   // Guards asynchronous setState calls — a late /voice/status response that
@@ -97,7 +97,7 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
   // the prior snapshot.
   const refresh = useCallback(async (options = {}) => {
     const priority = options?.priority === true;
-    // "Free everything" needs one authoritative pre-action snapshot. Do not
+    // "Unload listed resources" needs one authoritative pre-action snapshot. Do not
     // let a socket event start a newer read while that priority refresh is in
     // flight, or the caller would have to act on an older last-known snapshot.
     if (!priority && priorityRefreshRef.current) return snapshotRef.current;
@@ -217,9 +217,9 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
     const failed = results.filter((r) => r.status === 'rejected').length;
     if (fresh.unavailableSources.length > 0) {
       const labels = fresh.unavailableSources.map((source) => SOURCE_LABELS[source] || source).join(', ');
-      toast.error(`Freed verified resources only — could not verify ${labels}`);
-    } else if (failed) toast.error(`Freed most resources — ${failed} action(s) failed`);
-    else toast.success('Freed all memory-resident models');
+      toast.error(`Could not check ${labels}. Cleanup skipped those sources; check the refreshed residency list.`);
+    } else if (failed) toast.error(`${failed} cleanup ${failed === 1 ? 'action' : 'actions'} failed. Check the refreshed residency list before starting a large render.`);
+    else toast.success('Cleanup requests completed for the listed models and voice services.');
     await refresh();
   });
 
@@ -251,6 +251,9 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
           <div className="text-xs text-gray-500">
             Free unified memory before running large diffusion / video models
           </div>
+          <div className="text-xs text-gray-500">
+            This panel checks Ollama, LM Studio, Whisper and Kokoro only. Other runtimes and system memory are not measured.
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -270,7 +273,7 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
             className={`${btnClass} text-port-warning border border-port-warning/50 hover:bg-port-warning/10`}
           >
             <Trash2 className="w-3 h-3" />
-            Free everything
+            Unload listed resources
           </button>
         </div>
       </div>
@@ -280,7 +283,7 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
            <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
            <span>
             Status unavailable for {bannerSources.map((source) => SOURCE_LABELS[source] || source).join(', ')}.
-            Last known values remain visible; unknown resources are excluded from Free everything.
+            Last known values remain visible; unknown resources are excluded from Unload listed resources.
            </span>
           </div>
          )}
@@ -288,7 +291,7 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
       {loadedOllama.length === 0 && loadedLmStudio.length === 0
         && !whisperRunning && ttsState.state === 'lazy' && unavailableSources.length === 0 ? (
         <div className="px-3 py-3 text-xs text-gray-500 italic">
-          Nothing memory-resident — full unified memory is available for diffusion.
+          No models or voice services monitored by this panel are reported as loaded. This does not measure free system memory.
         </div>
       ) : (
         <div>
