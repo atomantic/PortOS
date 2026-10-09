@@ -1,9 +1,6 @@
-// iOS Home Screen (standalone) PWAs have no browser chrome: a tap on
-// `<a download>` navigates the whole app to Quick Look's file preview, which has
-// no back affordance, so the user must swipe-kill and relaunch. In that mode we
-// intercept same-origin `a[download]` clicks, fetch the bytes, and hand them to
-// the native share sheet (Save Image / Save Video / Files) — the app never
-// navigates. Everywhere else the default download behavior is untouched.
+// Mobile downloads use a visible preparation step, followed by a fresh tap to
+// share/save. Fetching a large video can outlive Safari's transient activation;
+// never call navigator.share automatically after the network request.
 
 export function isStandalonePwa() {
   if (typeof window === 'undefined') return false;
@@ -24,35 +21,39 @@ function filenameFor(anchor, url) {
   return last || 'download';
 }
 
-export async function shareDownload(anchor) {
-  const url = new URL(anchor.href, window.location.href);
-  const filename = filenameFor(anchor, url);
-  const res = await fetch(url.href, { credentials: 'same-origin' });
+// Ask the static mount for an attachment while leaving preview URLs inline.
+export function assetDownloadUrl(href) {
+  if (!href) return href;
+  const url = new URL(href, window.location.href);
+  if (url.origin !== window.location.origin || !url.pathname.startsWith('/data/')) return href;
+  url.searchParams.set('download', '1');
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+export async function prepareDownload({ url, filename }, signal) {
+  const res = await fetch(url, { credentials: 'same-origin', signal });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const blob = await res.blob();
   const ext = filename.split('.').pop()?.toLowerCase();
   const type = blob.type && blob.type !== 'application/octet-stream' ? blob.type : (MIME_BY_EXT[ext] || blob.type);
   const file = new File([blob], filename, { type });
-  if (!navigator.canShare?.({ files: [file] })) throw new Error('share unsupported');
-  await navigator.share({ files: [file] });
+  if (!navigator.canShare?.({ files: [file] })) throw new Error('This file cannot be saved with the share sheet. Use the browser download below.');
+  return file;
 }
 
 // Returns an uninstall function. Capture phase so it runs before the browser's
 // default download navigation.
-export function installStandaloneDownloadHandler() {
-  if (!isStandalonePwa() || typeof navigator.share !== 'function') return () => {};
+export function installStandaloneDownloadHandler(onDownload) {
+  const mobile = isStandalonePwa() || window.matchMedia?.('(pointer: coarse)')?.matches;
+  if (!mobile || typeof navigator.share !== 'function' || typeof navigator.canShare !== 'function') return () => {};
   const onClick = (event) => {
-    if (event.defaultPrevented || event.button > 0) return;
+    if (event.defaultPrevented || event.button > 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     const anchor = event.target?.closest?.('a[download][href]');
-    if (!anchor) return;
+    if (!anchor || anchor.hasAttribute('data-native-download')) return;
     const url = new URL(anchor.href, window.location.href);
     if (url.origin !== window.location.origin) return;
     event.preventDefault();
-    shareDownload(anchor).catch((err) => {
-      // User dismissing the share sheet is not an error.
-      if (err?.name === 'AbortError') return;
-      console.error(`❌ Download share failed: ${err.message}`);
-    });
+    onDownload({ url: url.href, filename: filenameFor(anchor, url) });
   };
   document.addEventListener('click', onClick, true);
   return () => document.removeEventListener('click', onClick, true);

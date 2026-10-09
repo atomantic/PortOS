@@ -224,6 +224,7 @@ async function streamFromPeer(peer, path, req, res, drop) {
     return;
   }
   res.status(upstream.status);
+  if (res.locals.assetDownload) res.attachment(decodeURIComponent(basename(path)));
   for (const name of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'last-modified', 'etag']) {
     const value = upstream.headers[name];
     if (value) res.setHeader(name, value);
