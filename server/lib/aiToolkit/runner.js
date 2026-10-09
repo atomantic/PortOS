@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, rm } from 'fs/promises';
 import { atomicWrite } from './internal/atomicWrite.js';
 import { evaluateSecretEndpoint } from './endpointGuard.js';
 import { existsSync } from 'fs';
-import { join, extname, basename, isAbsolute, delimiter } from 'path';
+import { join, extname, basename, isAbsolute } from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import { randomUUID } from 'crypto';
 import { analyzeError, ERROR_CATEGORIES } from './errorDetection.js';
@@ -19,19 +19,10 @@ import { DEFAULT_API_RUN_TIMEOUT_MS, apiRunAbsoluteTimeoutMs } from './internal/
 import { streamTransportDispatcher } from './internal/streamTransport.js';
 import { createRunLifecycle } from './internal/runLifecycle.js';
 import { createRunFinalizer } from './internal/runFinalizer.js';
+import { resolveWindowsExecutable, prepareWindowsSafeSpawn } from './internal/windowsSafeSpawn.js';
 
-// npm-installed CLI providers (claude, codex, opencode, …) are .cmd/.bat
-// shims on Windows; Node's spawn() can't execute those without going through
-// cmd.exe. Mirrors `server/lib/bufferedSpawn.js`'s IS_WIN32/killProcessTree/
-// resolveWindowsExecutable pattern — duplicated rather than imported, since
-// this directory must stay self-contained (see ./AGENTS.md).
+// Windows process-tree teardown stays local; command preparation uses the shared leaf.
 const IS_WIN32 = process.platform === 'win32';
-
-// Extensions Windows can launch directly, checked in cmd.exe's own resolution
-// preference. Deliberately excludes an extension-less match — npm ships a
-// POSIX shell-script stub alongside a package's `.cmd`/`.bat`/`.ps1` Windows
-// wrappers (for Git Bash/WSL), and that stub is not natively launchable here.
-const WIN_EXECUTABLE_EXTS = ['.exe', '.cmd', '.bat', '.com'];
 
 const DEFAULT_OUTPUT_RESERVE_TOKENS = 8000;
 const CHARS_PER_TOKEN = 4;
@@ -42,73 +33,6 @@ function deriveRequestCapabilities({ prompt, screenshots, requestCapabilities })
     requiredContextTokens: Math.ceil(String(prompt ?? '').length / CHARS_PER_TOKEN) + DEFAULT_OUTPUT_RESERVE_TOKENS,
     hasImages: Array.isArray(screenshots) && screenshots.length > 0,
   };
-}
-
-/**
- * Resolve a bare command name to its full path WITH extension on Windows, so
- * the caller knows exactly which file (and which kind — `.exe` vs
- * `.cmd`/`.bat`) it's about to launch. Filesystem-only (no subprocess). See
- * server/lib/bufferedSpawn.js's `resolveWindowsExecutable` docstring for the
- * full root-cause explanation (including why `searchEnv` matters — a
- * provider-configured PATH override), mirrored here for self-containment.
- * Pair with `prepareWindowsSafeSpawn` below to get a launchable
- * `{ command, args }`.
- */
-function resolveWindowsExecutable(command, isWin32 = IS_WIN32, searchEnv = process.env) {
-  if (!isWin32 || !command || isAbsolute(command) || /[\\/]/.test(command)) return null;
-  const pathDirs = (searchEnv.PATH || searchEnv.Path || '').split(delimiter).filter(Boolean);
-  for (const dir of pathDirs) {
-    for (const ext of WIN_EXECUTABLE_EXTS) {
-      const candidate = join(dir, `${command}${ext}`);
-      if (existsSync(candidate)) return candidate;
-    }
-  }
-  return null;
-}
-
-const WIN_BATCH_EXT_RE = /\.(cmd|bat)$/i;
-
-/**
- * Return the `{ command, args }` pair that's actually safe to hand to
- * `spawn()` under `shell:false` — THE ACTUAL FIX FOR #1865. `.bat`/`.cmd`
- * files cannot be launched directly under `shell:false` even with the
- * explicit extension (Node's CVE-2024-27980 patch makes `spawn()` refuse
- * them outright, full stop — it does NOT safely auto-wrap them). Node's
- * documented safe alternative is to spawn `cmd.exe /c <path> <args>`
- * directly: `cmd.exe` is a normal `.exe`, so Node's existing, already-tested
- * non-shell argv→command-line escaping governs the result, with none of
- * `shell:true`'s DEP0190 unescaped-join hazard. Mirrors
- * server/lib/bufferedSpawn.js's `prepareWindowsSafeSpawn` for self-containment.
- */
-function prepareWindowsSafeSpawn(command, args, isWin32 = IS_WIN32) {
-  if (isWin32 && WIN_BATCH_EXT_RE.test(command)) {
-    return {
-      command: 'cmd.exe',
-      args: ['/c', escapeCmdMetacharsIfUnquoted(command), ...args.map(escapeCmdMetacharsIfUnquoted)],
-    };
-  }
-  return { command, args };
-}
-
-// cmd.exe metacharacters that act as command separators / redirection /
-// grouping on its raw command line.
-const CMD_METACHAR_RE = /[&|<>^()]/g;
-// Node's argv→command-line quoting wraps an argument in literal double
-// quotes only when it contains whitespace or a `"`; characters inside that
-// quoted span are not re-interpreted by cmd.exe.
-const NEEDS_NODE_QUOTING_RE = /[\s"]/;
-
-/**
- * Caret-escape cmd.exe metacharacters, but ONLY when Node's own quoting
- * would otherwise leave the argument unquoted on cmd.exe's raw command line
- * (an argument WITH whitespace is already double-quoted by Node, and
- * caret-escaping it too would inject literal `^` into the value the target
- * program receives). Mirrors server/lib/bufferedSpawn.js for self-containment.
- */
-function escapeCmdMetacharsIfUnquoted(value) {
-  const str = String(value);
-  if (NEEDS_NODE_QUOTING_RE.test(str)) return str;
-  return str.replace(CMD_METACHAR_RE, '^$&');
 }
 
 // On Windows, taskkill (used below) runs in a separate detached process that
@@ -490,7 +414,7 @@ export function createRunnerService(config = {}) {
       // shell metacharacters, and so the full prompt isn't visible in
       // process listings as a single command-line argument. On Windows,
       // resolve+wrap a .cmd/.bat target instead of enabling a shell — see
-      // prepareWindowsSafeSpawn above for why shell:true is unsafe here.
+      // internal/windowsSafeSpawn.js for why shell:true is unsafe here.
       const args = [...(provider.args || [])];
       console.log(`🚀 Executing CLI: ${provider.command} ${args.join(' ')} (${prompt.length} chars via stdin)`);
 

@@ -1,6 +1,8 @@
 import { spawn, ChildProcess } from './childProcess.js';
-import { existsSync } from 'fs';
-import { delimiter, isAbsolute, join } from 'path';
+import { resolveWindowsExecutable, prepareWindowsSafeSpawn } from './aiToolkit/internal/windowsSafeSpawn.js';
+
+// Keep the host's public API while sharing the toolkit's self-contained leaf.
+export { resolveWindowsExecutable, prepareWindowsSafeSpawn };
 import { withSpawnCwdEnv } from './spawnCwd.js';
 
 /**
@@ -35,99 +37,6 @@ export const WIN_CMD_SHIMS = new Set(['npm', 'npx']);
  */
 export const needsShell = (cmd) => IS_WIN32 && WIN_CMD_SHIMS.has(cmd);
 
-// Extensions Windows can launch directly, checked in cmd.exe's own resolution
-// preference (a real .exe wins over a batch shim when both exist). Deliberately
-// excludes an extension-less match — npm ships a POSIX shell-script stub
-// alongside a package's `.cmd`/`.bat`/`.ps1` Windows wrappers (for Git
-// Bash/WSL), and that stub is not natively launchable on Windows.
-const WIN_EXECUTABLE_EXTS = ['.exe', '.cmd', '.bat', '.com'];
-
-/**
- * Resolve a bare command name (e.g. "opencode") to its full path WITH
- * extension on Windows, so the caller knows exactly which file (and which
- * kind — `.exe` vs `.cmd`/`.bat`) it's about to launch.
- *
- * A bare command with no extension never resolves on Windows even though
- * typing it at a real cmd.exe prompt works fine: libuv's internal PATHEXT
- * search finds e.g. "opencode.cmd", but `spawn()`'s default `shell: false`
- * doesn't apply that search at all (it targets the literal string given).
- *
- * Deliberately filesystem-only (no `where`/`which` subprocess) so resolution
- * is synchronous and side-effect-free. Pair with `prepareWindowsSafeSpawn`
- * below to get a `{ command, args }` pair that's actually launchable.
- *
- * Searches `searchEnv.PATH`/`.Path`, NOT necessarily `process.env` — pass the
- * actual env object the child will run under (e.g. after merging a
- * provider's `envVars`) so a per-provider `PATH` override is honored. The
- * default is `process.env` for callers that don't customize the child env.
- *
- * @param {string} command - bare command name, or an existing path (returned unchanged)
- * @param {boolean} [isWin32] - injectable for tests; defaults to the real platform
- * @param {NodeJS.ProcessEnv} [searchEnv] - env to read PATH from; defaults to `process.env`
- * @returns {string|null} the resolved absolute path, or null when not found
- *   (off win32, command is already a path, or no match exists on PATH)
- */
-export function resolveWindowsExecutable(command, isWin32 = IS_WIN32, searchEnv = process.env) {
-  if (!isWin32 || !command || isAbsolute(command) || /[\\/]/.test(command)) return null;
-  const pathDirs = (searchEnv.PATH || searchEnv.Path || '').split(delimiter).filter(Boolean);
-  for (const dir of pathDirs) {
-    for (const ext of WIN_EXECUTABLE_EXTS) {
-      const candidate = join(dir, `${command}${ext}`);
-      if (existsSync(candidate)) return candidate;
-    }
-  }
-  return null;
-}
-
-const WIN_BATCH_EXT_RE = /\.(cmd|bat)$/i;
-
-/**
- * Return the `{ command, args }` pair that's actually safe to hand to
- * `spawn()`/`execFile()` under the default `shell: false`, given a (possibly
- * `resolveWindowsExecutable`-resolved) command.
- *
- * THE ACTUAL FIX FOR #1865. An earlier version of this fix assumed Node's
- * CVE-2024-27980 patch safely auto-escapes a `.bat`/`.cmd` target under
- * `shell: false` once it carries the explicit extension — that's wrong. The
- * shipped patch instead makes `spawn()`/`spawnSync()` **refuse** (an
- * `'error'`/EINVAL-class failure) any `.bat`/`.cmd` target under
- * `shell: false`, full stop; per Node's own docs, `.bat`/`.cmd` files
- * "are not executable on their own... and cannot be launched" that way.
- * Node's documented safe alternative is to spawn `cmd.exe /c <path> <args>`
- * directly: `cmd.exe` is a normal `.exe`, so Node's existing, already-tested
- * non-shell argv→command-line escaping governs the result — correctly
- * preserving spaces/quotes in each arg — with none of `shell: true`'s
- * DEP0190 unescaped-join hazard (a literal `shell: true` + args array does
- * NOT escape arguments, it just space-joins them).
- *
- * A resolved native `.exe`/`.com` target needs no wrapping at all — it's
- * directly launchable, so it's returned unchanged.
- *
- * The resolved path AND each arg are passed through
- * `escapeCmdMetacharsIfUnquoted` (see its docstring) — Node's own
- * argv→command-line quoting only wraps a value in literal double quotes when
- * it contains whitespace/a quote; a value with none of those reaches
- * cmd.exe's raw command line UNQUOTED, so a bare metacharacter like `&` in
- * it would still be interpreted by cmd.exe as a command separator despite
- * `shell:false` — this covers both a metacharacter in an arg AND one in the
- * resolved install path itself (e.g. a custom npm prefix directory named
- * `C:\Tools&CLIs\npm`).
- *
- * @param {string} command - bare name, or a resolveWindowsExecutable result
- * @param {string[]} args
- * @param {boolean} [isWin32] - injectable for tests; defaults to the real platform
- * @returns {{ command: string, args: string[] }}
- */
-export function prepareWindowsSafeSpawn(command, args, isWin32 = IS_WIN32) {
-  if (isWin32 && WIN_BATCH_EXT_RE.test(command)) {
-    return {
-      command: 'cmd.exe',
-      args: ['/c', escapeCmdMetacharsIfUnquoted(command), ...args.map(escapeCmdMetacharsIfUnquoted)],
-    };
-  }
-  return { command, args };
-}
-
 /**
  * Compose `resolveWindowsExecutable` + `prepareWindowsSafeSpawn` into the single
  * `{ command, args }` pair a caller should hand to `spawn()` under the default
@@ -160,32 +69,6 @@ export function prepareWindowsSafeSpawn(command, args, isWin32 = IS_WIN32) {
 export function prepareCliSpawn(command, args, searchEnv = process.env, isWin32 = IS_WIN32) {
   const resolved = resolveWindowsExecutable(command, isWin32, searchEnv) || command;
   return prepareWindowsSafeSpawn(resolved, args, isWin32);
-}
-
-// cmd.exe metacharacters that act as command separators / redirection /
-// grouping on its raw command line.
-const CMD_METACHAR_RE = /[&|<>^()]/g;
-// Node's argv→command-line quoting (CommandLineToArgvW rules, used because
-// cmd.exe is a normal executable target from Node's point of view) wraps an
-// argument in literal double quotes only when it contains whitespace or a
-// `"` — characters inside that quoted span are not re-interpreted by cmd.exe.
-const NEEDS_NODE_QUOTING_RE = /[\s"]/;
-
-/**
- * Caret-escape cmd.exe metacharacters in an argument, but ONLY when Node's
- * own quoting (see NEEDS_NODE_QUOTING_RE above) would otherwise leave it
- * unquoted on cmd.exe's raw command line. An argument containing whitespace
- * is deliberately left untouched here — it's already wrapped in literal
- * double quotes by Node, and caret-escaping it too would inject literal `^`
- * characters into the value the target program receives, corrupting it.
- * This is the narrower, conservative fix for the specific gap: an argument
- * with NO whitespace but a metacharacter (e.g. `foo&calc`) reaches cmd.exe
- * unquoted and unprotected without this.
- */
-function escapeCmdMetacharsIfUnquoted(value) {
-  const str = String(value);
-  if (NEEDS_NODE_QUOTING_RE.test(str)) return str;
-  return str.replace(CMD_METACHAR_RE, '^$&');
 }
 
 // Cap buffered stdout/stderr so a runaway child can't exhaust memory; we only
