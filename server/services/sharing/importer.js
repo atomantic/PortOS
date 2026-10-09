@@ -584,52 +584,67 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
       }
       return;
     }
-    if (remoteWins(existing.updatedAt, record.updatedAt)) {
+    // Cheap out-of-queue early-out: a local copy already at or past the remote
+    // clock can only move further ahead, so there is nothing to apply. The
+    // authoritative comparison re-runs below INSIDE the owning write queue.
+    if (!remoteWins(existing.updatedAt, record.updatedAt)) return;
+    // Re-read, compare, journal, and persist inside the domain write queue so a
+    // local edit that lands after the read above can't be clobbered by this
+    // older snapshot (#10761). `updatedAt: record.updatedAt` keeps the winning
+    // SOURCE clock — a receipt-time stamp would out-rank the next delayed source
+    // revision and silently drop it once its manifest is marked processed.
+    let wrote = false;
+    await withReexportSuppressed(suppressKind, suppressId, () => updateFn(existing.id, async (latest) => {
+      if (!remoteWins(latest.updatedAt, record.updatedAt)) return null;
+      let incoming = record;
       // A remote series that arrived without a universe link (an orphan on the
       // sender — older peer, or a record whose link was cleared before the
-      // hierarchy rule shipped) must NOT clear the local link: updateSeries now
+      // hierarchy rule shipped) must NOT clear the local link: updateSeries
       // refuses to unlink a linked series and would throw, aborting the whole
       // manifest. Preserve the existing link (a *move* to a different non-empty
-      // universe still applies). Mirrors the legacy-canon re-stamp above, but
+      // universe still applies). Mirrors the legacy-canon re-stamp below, but
       // for every series — not just ones carrying legacy canon arrays.
-      if (kind === 'series' && !record.universeId && existing.universeId) {
-        record = { ...record, universeId: existing.universeId };
+      if (kind === 'series' && !incoming.universeId && latest.universeId) {
+        incoming = { ...incoming, universeId: latest.universeId };
       }
       if (kind === 'issue' && senderCannotRepresentClimax
-        && existing.arcRole === 'climax' && record.arcRole !== 'climax') {
-        record = { ...record, arcRole: 'climax' };
+        && latest.arcRole === 'climax' && incoming.arcRole !== 'climax') {
+        incoming = { ...incoming, arcRole: 'climax' };
       }
       if (kind === 'universe') {
-        record = preserveLegacyUniverseFields(record, existing, senderUniversesVersion);
+        incoming = preserveLegacyUniverseFields(incoming, latest, senderUniversesVersion);
       }
       // Non-blocking conflict journal for every synced record kind — a
       // share-bucket import that LWW-overwrites a locally-diverged record
-      // archives the losing local version first. Issues are included now
-      // (they previously rode LWW silently).
+      // archives the losing local version first.
       if (JOURNALED_KINDS.has(kind)) {
         await maybeJournalBeforeOverwrite({
-          kind, id: record.id, local: existing, remote: record,
+          kind, id: incoming.id, local: latest, remote: incoming,
           source: { via: 'share-bucket', bucketId: bucket.id, peerId: manifest.senderInstanceId ?? null },
         });
       }
-      await withReexportSuppressed(suppressKind, suppressId, () => updateFn(existing.id, record));
+      wrote = true;
+      return incoming;
+    }, { updatedAt: record.updatedAt }));
+    // Count only a write the queue actually performed — a newer local edit that
+    // landed first turns this merge into a no-op.
+    if (wrote) {
       overridden.push({ kind, id: record.id, label });
       applied++;
     }
   };
 
   // Universes first — series may reference them via universeId.
-  // Wrap updateUniverse in a mutator form so the service-side
-  // `referenceSheetImageRef` preservation guard (gated on `!isMutator`) is
-  // skipped: sync's intent is that the remote's newer record wins LWW,
+  // updateUniverse's mutator form (which mergeOne always uses) also skips the
+  // service-side `referenceSheetImageRef` preservation guard (gated on
+  // `!isMutator`): sync's intent is that the remote's newer record wins LWW,
   // including server-owned operational pointers like the rendered sheet
   // filename. A literal-patch call would let the local stale pointer
   // overwrite the remote's freshly-rendered one.
   for (const uni of records.universes) {
     await mergeOne({
       kind: 'universe', record: uni, label: uni.name,
-      getFn: getUniverse, insertFn: insertUniverseWithId,
-      updateFn: (id, record) => updateUniverse(id, () => record),
+      getFn: getUniverse, insertFn: insertUniverseWithId, updateFn: updateUniverse,
     });
   }
   // Pre-B.4 peers ship series records with legacy canon arrays (`characters /
