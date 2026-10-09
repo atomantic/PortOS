@@ -30,20 +30,26 @@ export default function OverlayTextCheck({ report, onCheck, busy = false, onSeek
   const running = report.status === 'running';
   const stale = report.status === 'complete' && !report.current;
   const summary = summaryOf(report);
-  const renderFinding = (finding) => (
-    <li key={finding.id} className="min-w-0">
-      <div className="flex flex-wrap items-center gap-x-2">
-        <span className={`font-medium ${finding.severity === 'error' ? 'text-port-error' : 'text-port-warning'}`}>{KIND_LABELS[finding.kind] || finding.kind}</span>
-        {onSeek
-          ? <button type="button" onClick={() => onSeek(finding.atSec)} aria-label={`Play ${formatTimecode(finding.atSec)} in the preview`}
-            className="min-h-[44px] text-port-accent underline sm:min-h-0">{formatTimecode(finding.atSec)}</button>
-          : <span>{formatTimecode(finding.atSec)}</span>}
-        {finding.sceneLabel && <span className="min-w-0 break-words text-xs text-port-text-muted">{finding.sceneLabel}</span>}
-        {finding.count > 1 && <span className="text-xs text-port-text-muted">seen {formatCount(finding.count)} times</span>}
-      </div>
-      <p className="break-words text-xs text-port-text-muted">{finding.message}</p>
-    </li>
-  );
+  const renderFinding = (finding) => {
+    // A problem traced to a few frames shows its exact first frame and its length, so it isn't mistaken for a false alarm.
+    const momentary = finding.span && !finding.span.open && finding.span.frames > 0;
+    const time = formatTimecode(finding.atSec, momentary ? 3 : 2);
+    return (
+      <li key={finding.id} className="min-w-0">
+        <div className="flex flex-wrap items-center gap-x-2">
+          <span className={`font-medium ${finding.severity === 'error' ? 'text-port-error' : 'text-port-warning'}`}>{KIND_LABELS[finding.kind] || finding.kind}</span>
+          {onSeek
+            ? <button type="button" onClick={() => onSeek(finding.atSec)} aria-label={`Play ${time} in the preview`}
+              className="min-h-[44px] text-port-accent underline sm:min-h-0">{time}</button>
+            : <span>{time}</span>}
+          {momentary && <span className="text-xs text-port-warning">{plural(finding.span.frames, 'frame')} only</span>}
+          {finding.sceneLabel && <span className="min-w-0 break-words text-xs text-port-text-muted">{finding.sceneLabel}</span>}
+          {finding.count > 1 && <span className="text-xs text-port-text-muted">seen {formatCount(finding.count)} times</span>}
+        </div>
+        <p className="break-words text-xs text-port-text-muted">{finding.message}</p>
+      </li>
+    );
+  };
   const shown = report.findings.slice(0, SHOWN);
   const folded = report.findings.slice(SHOWN);
   return (

@@ -20,7 +20,8 @@ import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
 import { overlayTextBasis, productionReadiness } from './productionReview.js';
 import {
-  OVERLAY_TEXT_PROCESS_ID, analyzeTextFrame, backdropStats, mergeTextRecords, planTextSampleTimes, summarizeTextFindings,
+  OVERLAY_TEXT_PROCESS_ID, OVERLAY_TEXT_SPAN_FRAMES, OVERLAY_TEXT_SPAN_KINDS, analyzeTextFrame, backdropStats, mergeTextRecords,
+  planTextSampleTimes, sameIssue, summarizeTextFindings,
 } from './overlayText.js';
 
 const inflight = new Map(); // projectId → { id, controller, done }
@@ -48,17 +49,62 @@ function assertCheckable(project) {
 async function inspectOverlayText(project, { signal, onProgress } = {}) {
   const { probeDocumentText } = await import('./documentRender.js');
   const samples = [];
+  // Each extra probe, in the order it was queued: which sample's problems it traces, which way, how far.
+  const steps = [];
+  let plannedCount = 0;
+  let clock = null;
   let textSamples = 0;
+  const frameAt = (t) => Math.round(t * clock.fps);
+  const lastFrame = () => Math.floor(clock.durationSec * clock.fps - 1e-6);
+  // The next frame along `dir` (-1 back, +1 forward) for a sample's traced problems, or nothing past either end.
+  const stepFrom = (sample, atSec, dir, step) => {
+    const next = frameAt(atSec) + dir;
+    if (next < 0 || next > lastFrame()) return [];
+    steps.push({ sample, dir, step });
+    return [next / clock.fps];
+  };
   const result = await probeDocumentText({
     project, jobId: `text-check-${randomUUID()}`, signal, onProgress,
-    sampleTimes: (data, clock) => planTextSampleTimes({ lyrics: data.lyrics, textCues: data.textCues, scenes: data.scenes, durationSec: clock.durationSec, fps: clock.fps }),
-    onSample: ({ atSec, frame, records, backdrop }) => {
+    sampleTimes: (data, docClock) => {
+      clock = docClock;
+      const times = planTextSampleTimes({ lyrics: data.lyrics, textCues: data.textCues, scenes: data.scenes, durationSec: docClock.durationSec, fps: docClock.fps });
+      plannedCount = times.length;
+      return times;
+    },
+    // A collision or cut-off line is traced frame by frame each way (extra probe
+    // times returned to the renderer), so a momentary one reports its length.
+    onSample: ({ index, atSec, frame, records, backdrop }) => {
       const items = mergeTextRecords(records);
-      if (items.length) textSamples += 1;
       for (const item of items) item.backdrop = backdropStats(backdrop, item);
-      samples.push({ atSec, issues: analyzeTextFrame(items, frame) });
+      const issues = analyzeTextFrame(items, frame);
+      if (index < plannedCount) {
+        if (items.length) textSamples += 1;
+        const traced = issues.filter((i) => OVERLAY_TEXT_SPAN_KINDS.includes(i.kind));
+        for (const issue of traced) issue.span = { startSec: atSec, endSec: atSec, open: false, alive: { [-1]: true, [1]: true } };
+        const sample = { atSec, issues };
+        samples.push(sample);
+        return traced.length ? [...stepFrom(sample, atSec, -1, 1), ...stepFrom(sample, atSec, 1, 1)] : undefined;
+      }
+      const { sample, dir, step } = steps[index - plannedCount];
+      let going = false;
+      for (const issue of sample.issues) {
+        if (!issue.span?.alive[dir]) continue;
+        if (!issues.some((later) => sameIssue(issue, later))) { issue.span.alive[dir] = false; continue; }
+        issue.span[dir < 0 ? 'startSec' : 'endSec'] = atSec;
+        if (step >= OVERLAY_TEXT_SPAN_FRAMES) { issue.span.open = true; issue.span.alive[dir] = false; } else going = true;
+      }
+      return going ? stepFrom(sample, atSec, dir, step + 1) : undefined;
     },
   });
+  for (const sample of samples) {
+    for (const issue of sample.issues) {
+      if (!issue.span) continue;
+      const { startSec, endSec, open } = issue.span;
+      // Milliseconds rounded up, so a seek to either end lands on that frame.
+      const ms = (t) => Math.ceil(t * 1000 - 1e-6) / 1000;
+      issue.span = { startSec: ms(startSec), endSec: ms(endSec), open, frames: frameAt(endSec) - frameAt(startSec) + 1 };
+    }
+  }
   return { samples: result.samples, textSamples, frame: result.frame, findings: summarizeTextFindings(samples, result.scenes) };
 }
 

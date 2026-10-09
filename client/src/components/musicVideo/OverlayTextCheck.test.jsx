@@ -25,6 +25,13 @@ describe('OverlayTextCheck', () => {
     expect(screen.getByText('Hard to read')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Play 1:01.00 in the preview' }));
     expect(onSeek).toHaveBeenCalledWith(61);
+
+    // A collision traced to one frame shows that frame exactly, and its length.
+    const momentary = { ...finding(5), atSec: 44.767, span: { startSec: 44.767, endSec: 44.767, frames: 1, open: false } };
+    rerender(<OverlayTextCheck report={{ status: 'complete', current: true, textSamples: 40, findings: [momentary], counts: counts(1) }} onCheck={onCheck} onSeek={onSeek} />);
+    expect(screen.getByText('1 frame only')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Play 0:44.767 in the preview' }));
+    expect(onSeek).toHaveBeenLastCalledWith(44.767);
   });
 
   it('says when the text is clean, when the result is for an earlier version, and why a check failed', () => {

@@ -632,11 +632,11 @@ export function formatDurationSec(seconds) {
  * Format a number of seconds as M:SS.ss for video-editor timecodes
  * (e.g. 95.42 → "1:35.42"). Negative or non-finite inputs render as "0:00.00".
  */
-export function formatTimecode(seconds) {
-  if (!Number.isFinite(seconds) || seconds < 0) return '0:00.00';
+export function formatTimecode(seconds, digits = 2) {
+  if (!Number.isFinite(seconds) || seconds < 0) return `0:00.${'0'.repeat(digits)}`;
   const m = Math.floor(seconds / 60);
   const s = seconds - m * 60;
-  return `${m}:${s.toFixed(2).padStart(5, '0')}`;
+  return `${m}:${s.toFixed(digits).padStart(3 + digits, '0')}`;
 }
 
 /**
