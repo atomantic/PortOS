@@ -1395,6 +1395,22 @@ rather than being erased by it.
 local, never federated (`docs/STORAGE.md`). A controller crosses to a peer only
 as the *body* of a promoted foundation, which carries no install.
 
+**Delivery evidence (#10818).** Both the common list and semantic inspect
+projection expose nullable `lastCompletedDelivery: { at, tick, ok, delivered,
+reason }`. It changes only after a `say` or `augment` delivery finishes and
+still matches the installed record's latest tick. `at` is that tick's time;
+read it and `tick` to assess the age of the acknowledgement. A refusal (including
+partial delivery) or thrown error replaces prior success. Quiet ticks, local
+notes, disabled delivery, step failures and in-flight requests leave the prior
+completed verdict intact. Arming/config edits preserve it; reinstall resets it.
+
+`lastDelivery` retains its latest-tick contract: quiet ticks report unknown
+(`ok: null`). Neither historical acknowledgement nor pulse/failure counters or
+`recentEffects` proposals prove current world state or visible rendering.
+Migration 425 upgrades older stores to schema version 2 with unknown (`null`)
+completed history, preserving their state and counters rather than manufacturing
+success from ambiguous old outcomes. There is no shipped store seed.
+
 **Shipped controllers.** `ambient-beacon` counts ticks and marks a pulse every
 Nth one (`announce` decides whether that pulse is spoken into the world or kept
 as a note). `lantern-keeper` re-issues the `light` verb for a fixed set of world

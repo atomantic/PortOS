@@ -179,6 +179,16 @@ const controllerTickOutcomeSchema = z.object({
   deliveryError: z.string().trim().min(1).max(EIDOVERSE_CONTROLLER_LIMITS.reasonMax).nullable().default(null),
 }).strict();
 
+/** A completed outbound attempt, retained independently of quiet/failed ticks.
+ * `at` is the originating tick's time; no legacy proposal implies a verdict. */
+const controllerCompletedDeliverySchema = z.object({
+  at: isoDateSchema,
+  tick: z.number().int().min(0),
+  ok: z.boolean(),
+  delivered: z.number().int().min(0),
+  reason: z.string().trim().min(1).max(EIDOVERSE_CONTROLLER_LIMITS.reasonMax).nullable().default(null),
+}).strict();
+
 /** The persisted install record. Machine-local; nothing here federates. */
 export const eidoverseControllerRecordSchema = eidoverseControllerInstallSchema.extend({
   installedBy: installedBySchema,
@@ -192,6 +202,7 @@ export const eidoverseControllerRecordSchema = eidoverseControllerInstallSchema.
   nextTickAt: isoDateSchema,
   lastTickAt: isoDateSchema.nullable().default(null),
   lastOutcome: controllerTickOutcomeSchema.nullable().default(null),
+  lastCompletedDelivery: controllerCompletedDeliverySchema.nullable().default(null),
   recentEffects: z.array(z.object({
     at: isoDateSchema,
     tick: z.number().int().min(0),
@@ -432,6 +443,7 @@ export function summarizeControllerInstall(record, { includeState = false } = {}
     // produced nothing to deliver" — neither is a failure, so neither
     // collapses into `false`.
     lastDelivery: summarizeLastDelivery(record),
+    lastCompletedDelivery: record?.lastCompletedDelivery ?? null,
     consecutiveDeliveryFailures: record?.consecutiveDeliveryFailures ?? 0,
     disarmedReason: record?.disarmedReason ?? null,
     note: record?.note ?? null,
