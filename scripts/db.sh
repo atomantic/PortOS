@@ -401,27 +401,49 @@ stop_docker() {
   info "Stopping Docker PostgreSQL..."
   require_docker_compose
   cd "$ROOT_DIR"
-  docker compose stop db 2>/dev/null || true
+  # Stopping an absent or already-stopped container exits 0, so a nonzero exit
+  # is a genuine failure (daemon down, permissions) and must not read as success.
+  if ! docker compose stop db; then
+    err "Failed to stop Docker PostgreSQL"
+    exit 1
+  fi
   log "Stopped"
+}
+
+# True while the selected native endpoint still accepts connections.
+native_accepting() {
+  pg_bound pg_isready -h "$PGHOST" -p "$PGPORT" >/dev/null 2>&1
 }
 
 stop_native() {
   info "Stopping native PostgreSQL..."
+  local stop_failed=false
   # Stop via Homebrew services (macOS)
   if [ "$(uname)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
-    brew services stop postgresql@17 2>/dev/null || true
-    log "Stopped"
-    return
-  fi
-  # Fallback: pg_ctl
-  if command -v pg_ctl >/dev/null 2>&1; then
+    brew services stop postgresql@17 || stop_failed=true
+  elif command -v pg_ctl >/dev/null 2>&1; then
+    # Fallback: pg_ctl
     local datadir=""
     if [ "$(uname)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
       datadir="$(brew --prefix)/var/postgresql@17"
     fi
     if [ -n "$datadir" ] && [ -d "$datadir" ]; then
-      pg_ctl -D "$datadir" stop -m fast 2>/dev/null || true
+      pg_ctl -D "$datadir" stop -m fast || stop_failed=true
     fi
+  fi
+  # Claim Stopped only once the endpoint stops answering. A failing stop command
+  # against an endpoint that is already down stays an idempotent success.
+  local tries=0
+  while native_accepting && [ "$tries" -lt 8 ]; do
+    sleep 0.25
+    tries=$((tries + 1))
+  done
+  if native_accepting; then
+    err "Native PostgreSQL is still accepting connections on port $PGPORT"
+    exit 1
+  fi
+  if [ "$stop_failed" = true ]; then
+    warn "Stop command failed, but nothing is listening on port $PGPORT"
   fi
   log "Stopped"
 }

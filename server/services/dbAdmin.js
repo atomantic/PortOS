@@ -102,6 +102,26 @@ function runCmd(cmd, args, timeout = 120_000, env = process.env) {
   });
 }
 
+const DIAGNOSTIC_LIMIT = 400;
+
+/** Bounded, single-line, secret-free command diagnostics for an error envelope. */
+function commandDetail(result) {
+  let detail = (result.stderr || result.stdout || '').replace(/\s+/g, ' ').trim();
+  if (pgPassword) detail = detail.split(pgPassword).join('***');
+  return detail.length > DIAGNOSTIC_LIMIT ? `${detail.slice(0, DIAGNOSTIC_LIMIT)}...` : detail;
+}
+
+/** Throw a coded 500 when a lifecycle command exited nonzero; else return its result. */
+function requireCommandSuccess(result, failureMessage) {
+  if (result.exitCode === 0) return result;
+  const detail = commandDetail(result);
+  throw new ServerError(detail ? `${failureMessage}: ${detail}` : failureMessage, {
+    status: 500,
+    code: 'DATABASE_COMMAND_FAILED',
+    context: { exitCode: result.exitCode, details: detail }
+  });
+}
+
 const runDbScript = (args) => runCmd(bashBinary, [dbScript, ...args]);
 
 function _parseDbMode(stdout) {
@@ -644,25 +664,36 @@ function nativeLifecycleEnv() {
 async function startDatabaseImpl(backend) {
   if (backend === 'docker') {
     const result = await runCmd('docker', ['compose', 'up', '-d', 'db'], 60_000);
-    return { success: result.exitCode === 0, output: result.stdout };
+    return { success: true, output: requireCommandSuccess(result, 'Failed to start Docker database').stdout };
   }
 
   // Native: db.sh handles brew services / pg_ctl, but picks its operation from
   // the mode it loads. Bind the child to the native backend explicitly.
   const result = await runCmd(bashBinary, [dbScript, 'start'], 30_000, nativeLifecycleEnv());
-  return { success: result.exitCode === 0, output: result.stdout };
+  return { success: true, output: requireCommandSuccess(result, 'Failed to start native database').stdout };
 }
 
 /** Stop a specific database backend. */
 async function stopDatabaseImpl(backend) {
   if (backend === 'docker') {
     const result = await runCmd('docker', ['compose', 'stop', 'db'], 30_000);
-    return { success: result.exitCode === 0, output: result.stdout };
+    return { success: true, output: requireCommandSuccess(result, 'Failed to stop Docker database').stdout };
   }
 
   // Native stop: never let the active (possibly Docker) mode choose the target.
   const result = await runCmd(bashBinary, [dbScript, 'stop'], 15_000, nativeLifecycleEnv());
-  return { success: result.exitCode === 0, output: result.stdout };
+  return { success: true, output: requireCommandSuccess(result, 'Failed to stop native database').stdout };
+}
+
+const DOCKER_VOLUMES = ['portos_portos-pgdata', 'portos-pgdata'];
+
+/** True when `docker volume inspect` proves the volume is gone; throws on any other failure. */
+async function dockerVolumeAbsent(name) {
+  const result = await runCmd('docker', ['volume', 'inspect', name], 15_000);
+  if (result.exitCode === 0) return false;
+  if (/no such volume/i.test(`${result.stderr} ${result.stdout}`)) return true;
+  requireCommandSuccess(result, `Could not verify Docker volume ${name} was removed`);
+  return false;
 }
 
 /** Destroy an inactive database backend's data. */
@@ -692,13 +723,28 @@ async function destroyDatabaseImpl(backend) {
   }
 
   if (backend === 'docker') {
-    // Stop and remove container + volume
-    await runCmd('docker', ['compose', 'stop', 'db'], 15_000);
-    await runCmd('docker', ['compose', 'rm', '-f', 'db'], 15_000);
-    const result = await runCmd('docker', ['volume', 'rm', '-f', 'portos_portos-pgdata'], 15_000);
-    // Also try alternate volume name
-    await runCmd('docker', ['volume', 'rm', '-f', 'portos-pgdata'], 15_000);
-    return { success: true, output: result.stdout };
+    // Stop and remove container + volumes. `rm -f` already treats an absent
+    // container/volume as success (the alternate volume name usually is), so any
+    // nonzero exit is a genuine failure and aborts before claiming deletion.
+    requireCommandSuccess(await runCmd('docker', ['compose', 'stop', 'db'], 15_000), 'Failed to stop Docker database before deletion');
+    requireCommandSuccess(await runCmd('docker', ['compose', 'rm', '-f', 'db'], 15_000), 'Failed to remove Docker database container');
+    let output = '';
+    for (const volume of DOCKER_VOLUMES) {
+      const result = requireCommandSuccess(await runCmd('docker', ['volume', 'rm', '-f', volume], 15_000), `Failed to remove Docker volume ${volume}`);
+      output ||= result.stdout;
+    }
+    // Success only once the selected resources are provably gone.
+    const remaining = await runCmd('docker', ['compose', 'ps', '-a', '-q', 'db'], 15_000);
+    requireCommandSuccess(remaining, 'Could not verify the Docker database container was removed');
+    if (remaining.stdout.trim()) {
+      throw new ServerError('Docker database container still exists after removal. Data was not fully destroyed.', { status: 500, code: 'DATABASE_COMMAND_FAILED' });
+    }
+    for (const volume of DOCKER_VOLUMES) {
+      if (!(await dockerVolumeAbsent(volume))) {
+        throw new ServerError(`Docker volume ${volume} still exists after removal. Data was not fully destroyed.`, { status: 500, code: 'DATABASE_COMMAND_FAILED' });
+      }
+    }
+    return { success: true, output };
   }
 
   // Native: drop the portos database (system pg stays running)
@@ -707,7 +753,7 @@ async function destroyDatabaseImpl(backend) {
     '-h', 'localhost', '-p', NATIVE_PORT, '-U', sysUser, '-d', 'postgres',
     '-c', `DROP DATABASE IF EXISTS ${pgQuoteIdentifier(pgDb)}`
   ], 15_000);
-  return { success: result.exitCode === 0, output: result.stdout };
+  return { success: true, output: requireCommandSuccess(result, 'Failed to delete native database').stdout };
 }
 
 /** Install and configure native PostgreSQL. */
