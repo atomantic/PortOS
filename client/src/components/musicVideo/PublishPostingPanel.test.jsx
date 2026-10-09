@@ -78,6 +78,18 @@ describe('PublishPostingPanel (#9282)', () => {
     expect(publishing.prepare).toHaveBeenLastCalledWith(target, { linksComment: false });
   });
 
+  it('turns on the Facebook AI label unless the director turns it off', () => {
+    const publishing = hook();
+    render(<PublishPostingPanel project={project()} publishing={publishing} />);
+    expandAll();
+    const card = row('Facebook');
+    const label = within(card).getByLabelText("Add Facebook's AI label");
+    expect(label).toBeChecked();
+    fireEvent.click(label);
+    fireEvent.click(within(card).getByRole('button', { name: 'Fill draft' }));
+    expect(publishing.prepare).toHaveBeenLastCalledWith('facebook', { aiLabel: false });
+  });
+
   it('picks the X story image from thumbnails, with No image as the default', () => {
     const publishing = hook();
     render(<PublishPostingPanel project={project({ thumbnails: ['t1.jpg', 't2.jpg'] })} publishing={publishing} />);

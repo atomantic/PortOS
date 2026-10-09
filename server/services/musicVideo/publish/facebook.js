@@ -5,10 +5,13 @@
  * director wants them, saved for the first comment instead.
  *
  * prepare() opens the feed's "What's on your mind" composer, pastes the text,
- * attaches the 1080p encode through Photo/video and waits for the upload.
- * PortOS never presses Next or Post. The composer posts as whichever profile
- * is active in the PortOS Browser, so a Page posts the same way once the
- * director switches to it.
+ * hands the 1080p encode to the composer's file input (its drop zone holds one
+ * from the start; older layouts show it behind a Photo/video button), waits for
+ * the upload (the caption box then reads "Describe your reel") and turns on
+ * Facebook's AI label unless the director said not to. PortOS never presses
+ * Next or Post, and leaves the audience as Facebook has it. The composer posts
+ * as whichever profile is active in the PortOS Browser, so a Page posts the
+ * same way once the director switches to it.
  *
  * Facebook stays on the feed after Post. Once the director opens the new post
  * (its timestamp), findPost records the post's link and, when there is a
@@ -29,6 +32,8 @@ const COMMENT_BOX = `${TEXTBOX}[aria-label*="comment" i]`;
 // Drafts whose first comment was already typed: a reload of the post page must not type it twice.
 const commented = new WeakSet();
 const UPLOAD_WAIT_MS = 600_000;
+const MEDIA_BUTTON = /Add photos(?:\/| or )videos/i;
+const AI_LABEL = /^\s*Add AI label/i;
 // A post's own page: a reel (every uploaded video), a video, a post, or a permalink.
 const POST_URL = /^https:\/\/(?:www|web|m)\.facebook\.com\/(?:reel\/\d+|[\w.-]+\/(?:posts|videos)\/[\w.-]+|permalink\.php\?[^#]*story_fbid=[\w-]+[^#]*|watch\/?\?v=\d+)/;
 
@@ -59,10 +64,14 @@ async function pasteInto(page, locator, text) {
   }
 }
 
-/** Whether the composer is done uploading: no progress bar or Uploading/Processing note. */
+/**
+ * Whether the composer is done uploading: an "Uploaded media" section with a
+ * Remove video button, and no Uploading/Processing note or progress bar.
+ */
 async function uploadSettled(page) {
   const composer = page.locator(COMPOSER).last();
-  if (!(await composer.locator('video, img').count())) return false;
+  if (!(await page.locator(COMPOSER).filter({ hasText: /Uploaded media/i }).count())) return false;
+  if (!(await button(composer, 'Remove video').count())) return false;
   if (await composer.locator('[role=progressbar], progress').count()) return false;
   return !(await page.locator(COMPOSER).filter({ hasText: /Uploading|Processing/i }).count());
 }
@@ -80,19 +89,35 @@ async function openComposer(page) {
 async function attachVideo(page, video) {
   await step(label, 'attach the video', async () => {
     const composer = page.locator(COMPOSER).last();
-    // Photo/video opens the composer's media area, which holds the file input.
-    await button(composer, 'Photo/video').click({ timeout: T });
     const input = composer.locator('input[type=file]').first();
-    if (await input.waitFor({ state: 'attached', timeout: 10_000 }).then(() => true, () => false)) {
+    const hasInput = () => input.waitFor({ state: 'attached', timeout: 5000 }).then(() => true, () => false);
+    // The drop zone's input is there from the start; an older layout adds it behind Photo/video.
+    if (!(await hasInput())) await button(composer, 'Photo/video').click({ timeout: 10_000 }).catch(() => {});
+    if (await hasInput()) {
       await input.setInputFiles(video.path);
       return;
     }
     const [chooser] = await Promise.all([
       page.waitForEvent('filechooser', { timeout: T }),
-      composer.locator('[role=button]', { hasText: /Add photos\/videos/i }).first().click({ timeout: T }),
+      composer.locator('[role=button]', { hasText: MEDIA_BUTTON }).first().click({ timeout: T }),
     ]);
     await chooser.setFiles(video.path);
   });
+}
+
+/**
+ * Turn on the composer's "Add AI label" row. Its switch has no useful name
+ * ("Off"), so the row is found by its text and the switch inside it read for
+ * its state. Resolves 'On', or null when the row is missing or did not turn on.
+ */
+async function labelAsAi(composer) {
+  const row = composer.locator('[role=button]').filter({ hasText: AI_LABEL }).first();
+  if (!(await row.count())) return null;
+  const toggle = row.locator('[role=switch]').first();
+  const on = async () => (await toggle.getAttribute('aria-checked', { timeout: 5000 }).catch(() => null)) === 'true';
+  if (await on()) return 'On';
+  await ((await toggle.count()) ? toggle : row).click({ timeout: 10_000 });
+  return (await on()) ? 'On' : null;
 }
 
 /** Type `text` into the open post's comment box (never sent: the director presses Enter). */
@@ -115,10 +140,15 @@ export const facebookAdapter = {
       }
     });
     const composer = page.locator(COMPOSER).last();
+    const aiLabel = payload.aiLabel === false ? 'Off (you chose)'
+      // A miss never fails the draft: the summary asks the director to turn it on.
+      : (await labelAsAi(composer).catch(() => null)) || 'Not turned on: switch on Add AI label yourself';
     const length = await composer.locator(TEXTBOX).first().innerText().then((t) => t.trim().length, () => null);
     const next = await button(composer, 'Next').count().catch(() => 0);
     return {
       characters: length,
+      aiLabel,
+      audience: 'As Facebook has it (check Post audience)',
       // A video post may ask for Next (post settings) before Post; neither is pressed here.
       youPress: next ? 'Next, then Post' : 'Post',
       firstComment: payload.firstComment ? 'Typed into the comment box once you press Post and open the post' : null,

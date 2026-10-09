@@ -65,12 +65,12 @@ describe('buildPublishPayload (#9282)', () => {
     const posted = project({ copy: { facebook: { post: 'I made a music video.' } }, posts: { x: { url: 'https://x.com/example/status/42' }, facebook: { url: 'https://www.facebook.com/reel/1' } } });
     const p = buildPublishPayload('facebook', posted);
     expect(p).toEqual({
-      video: { dir: 'videos', name: 'x.mp4' }, text: 'I made a music video.',
+      video: { dir: 'videos', name: 'x.mp4' }, text: 'I made a music video.', aiLabel: true,
       firstComment: 'Full video: https://youtu.be/abc\nThe song: https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc\nX: https://x.com/example/status/42',
       crossLinks: ['youtube', 'suno', 'x'],
     });
-    expect(publishPreviewParts('facebook', posted, p).map((r) => r.label)).toEqual(['Video', 'Post', 'First comment (you press Enter)']);
-    expect(buildPublishPayload('facebook', posted, { linksComment: false })).toMatchObject({ firstComment: null, crossLinks: [] });
+    expect(publishPreviewParts('facebook', posted, p).map((r) => r.label)).toEqual(['Video', 'Post', 'AI label', 'First comment (you press Enter)']);
+    expect(buildPublishPayload('facebook', posted, { linksComment: false, aiLabel: false })).toMatchObject({ firstComment: null, crossLinks: [], aiLabel: false });
     expect(() => buildPublishPayload('facebook', project())).toThrow(/Facebook post/);
   });
 

@@ -822,6 +822,8 @@ export const musicVideoPublishPrepareSchema = z.object({
   firstComment: kitText(10000),
   // LinkedIn, Facebook: put the full video and song links in a first comment (default on).
   linksComment: z.boolean(),
+  // Facebook: turn on the post's AI label (default on).
+  aiLabel: z.boolean(),
   territory: z.string().max(40),
   // Substack: the publication (name.substack.com or a custom domain); defaults to the account under Where you post.
   publication: z.string().trim().min(1).max(200),

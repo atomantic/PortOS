@@ -19,7 +19,7 @@ export const PUBLISH_TARGETS = [
   },
   {
     target: 'facebook', label: 'Facebook', accountPlaceholder: 'Your name or Page',
-    note: 'Your short post with the 1080p video uploaded (Facebook shares it as a reel), and the links in a first comment. Posts as the profile or Page active in the PortOS Browser. You press Post, then open the post: PortOS records the link and types the comment for you to send',
+    note: 'Your short post with the 1080p video uploaded (Facebook shares it as a reel) and its AI label on, and the links in a first comment. Posts as the profile or Page active in the PortOS Browser. You press Post, then open the post: PortOS records the link and types the comment for you to send',
   },
   { target: 'shorts', label: 'YouTube Shorts', note: 'A 9:16 cut (the newest by default)' },
   { target: 'tiktok', label: 'TikTok', note: 'A 9:16 cut (the newest by default), labelled AI-generated' },
@@ -199,10 +199,16 @@ function TargetOptions({ target, kit, project, options, setOption, commitOption,
     );
   }
   if (target === 'linkedin' || target === 'facebook') {
-    return (
-      <label className="flex items-center gap-1.5 text-xs min-h-[44px] sm:min-h-0">
-        <input type="checkbox" checked={options.linksComment !== false} onChange={(e) => setOption('linksComment', e.target.checked)} /> Put the links (full video, song, other posts) in a first comment
+    const check = (key, text) => (
+      <label key={key} className="flex items-center gap-1.5 text-xs min-h-[44px] sm:min-h-0">
+        <input type="checkbox" checked={options[key] !== false} onChange={(e) => setOption(key, e.target.checked)} /> {text}
       </label>
+    );
+    return (
+      <div className="flex flex-wrap gap-x-4">
+        {check('linksComment', 'Put the links (full video, song, other posts) in a first comment')}
+        {target === 'facebook' && check('aiLabel', "Add Facebook's AI label")}
+      </div>
     );
   }
   if (target === 'stackerNews') {
