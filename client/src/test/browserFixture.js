@@ -30,8 +30,8 @@
  * busy, while on a GitHub runner two first launches timed out together at 15s
  * with Vite already up in under 100ms. The DB-suite launcher caught the same
  * stall in the act (#9641): Chrome alive in uninterruptible sleep, waiting on
- * page faults, under heavy I/O pressure. That points to a runner whose disk
- * stalls, not a launch that needs more CPU, so the launch gets two attempts: a
+ * page faults, under heavy I/O pressure. Those samples do not establish a
+ * causal disk fault. The existing mitigation gives the launch two attempts: a
  * first one killed at half the phase, and a fresh process for the rest. The
  * pages the first attempt did read stay in the kernel's cache, so a slow disk
  * loses no progress, and a child that wedged is replaced rather than waited
@@ -78,14 +78,16 @@ const PHASE_NAMES = { vite: 'Vite server start', chromium: 'Chromium launch', wa
 
 const timeoutError = ms => Object.assign(new Error(`timed out after ${ms}ms`), { name: 'TimeoutError' });
 
-// Linux-only, bounded reads: up to 64 worker threads' `children` lists and one
-// 4096-byte stat prefix per child. Never read cmdline, environ or links, and
-// never print a PID or process name — only counts and the shared process facts.
+// Linux-only, bounded discovery: at most 64 worker threads, 256 child
+// identities and 4096 bytes per read. An incomplete census is unavailable,
+// never evidence that a unique child was found. No raw proc text is reported.
 const readPrefix = (path) => {
   const fd = openSync(path, 'r');
   try {
-    const bytes = Buffer.alloc(4096);
-    return bytes.subarray(0, readSync(fd, bytes, 0, bytes.length, 0)).toString();
+    const bytes = Buffer.alloc(4097);
+    const length = readSync(fd, bytes, 0, bytes.length, 0);
+    if (length > 4096) throw new Error('process observation limit');
+    return bytes.subarray(0, length).toString();
   } finally { closeSync(fd); }
 };
 const listDir = (path) => {
@@ -93,54 +95,87 @@ const listDir = (path) => {
   const names = [];
   try {
     let entry;
-    for (let count = 0; count < 64 && (entry = dir.readSync()); count++) names.push(entry.name);
+    while ((entry = dir.readSync())) {
+      if (names.length === 64) throw new Error('process observation limit');
+      names.push(entry.name);
+    }
   } finally { dir.closeSync(); }
   return names;
 };
 const BROWSER_PROCESS_NAME = /^(chrome|chromium|google-chrome|headless_shell|chrome-headless)/;
 
-/**
- * Starts observing one launch attempt: the worker's browser children that
- * already exist (an earlier attempt still exiting) are excluded, and the
- * returned function describes the one browser child that appeared since. Only
- * a direct child of this worker is ever inspected, so the PID is owned; the
- * shared facts re-check that its parent is this worker.
- */
+// Keeping the proc directory open binds subsequent reads to that process,
+// even if it exits and its numeric PID is recycled before the sample ends.
+// The kernel then refuses reads rather than following the replacement PID.
+const openChild = (pid) => {
+  const fd = openSync(`/proc/${pid}`, 'r');
+  return {
+    read: suffix => readPrefix(`/proc/self/fd/${fd}/${suffix}`),
+    list: suffix => listDir(`/proc/self/fd/${fd}/${suffix}`),
+    close: () => closeSync(fd),
+  };
+};
+const childIdentity = (text, workerPid) => {
+  const end = text.lastIndexOf(')');
+  if (end < 0) return null;
+  const fields = text.slice(end + 2).trim().split(/\s+/);
+  const name = text.slice(text.indexOf('(') + 1, end);
+  // Field 22 (index 19 after comm) is the process start time in clock ticks.
+  if (fields[1] !== String(workerPid) || !/^\d+$/.test(fields[19] ?? '')) return null;
+  return { browser: BROWSER_PROCESS_NAME.test(name), started: fields[19] };
+};
+
+/** Observe only a newly discovered direct browser child, with a stable identity. */
 export function _observeOwnedBrowserLaunch({
   platform = process.platform, workerPid = process.pid, read = readPrefix, list = listDir,
-  processFacts = _testChromeProcessFacts,
+  processFacts = _testChromeProcessFacts, open = openChild,
 } = {}) {
   if (platform !== 'linux') return () => 'os=unsupported';
-  // A thread or child that exits between the listing and its read is skipped,
-  // but no readable `children` list at all (a kernel without them) means the
-  // observation is unavailable — never an empty one.
-  const readOrNull = (path) => { try { return read(path); } catch { return null; } };
   const browserChildren = () => {
+    const browsers = new Map();
     const pids = new Set();
-    let readable = false;
-    for (const tid of list(`/proc/${workerPid}/task`).filter(name => /^[1-9]\d*$/.test(name))) {
-      const children = readOrNull(`/proc/${workerPid}/task/${tid}/children`);
-      if (children === null) continue;
-      readable = true;
-      for (const pid of children.trim().split(/\s+/)) {
-        if (!/^[1-9]\d*$/.test(pid)) continue;
-        const stat = readOrNull(`/proc/${pid}/stat`) ?? '';
-        const name = stat.slice(stat.indexOf('(') + 1, stat.lastIndexOf(')'));
-        if (BROWSER_PROCESS_NAME.test(name)) pids.add(pid);
+    const tids = list(`/proc/${workerPid}/task`).filter(name => /^[1-9]\d*$/.test(name));
+    if (!tids.length || tids.length > 64) throw new Error('incomplete thread census');
+    for (const tid of tids) {
+      const children = read(`/proc/${workerPid}/task/${tid}/children`);
+      if (children.length > 4096) throw new Error('process observation limit');
+      for (const pid of children.trim().split(/\s+/).filter(Boolean)) {
+        if (!/^[1-9]\d*$/.test(pid)) throw new Error('invalid child identity');
+        pids.add(pid);
+        if (pids.size > 256) throw new Error('process observation limit');
       }
     }
-    if (!readable) throw new Error('no readable children list');
-    return pids;
+    for (const pid of pids) {
+      const child = open(pid);
+      try {
+        const identity = childIdentity(child.read('stat'), workerPid);
+        if (!identity) throw new Error('child ownership unavailable');
+        if (identity.browser) browsers.set(pid, identity.started);
+      } finally { child.close(); }
+    }
+    return browsers;
   };
   let earlier;
   try { earlier = browserChildren(); } catch { earlier = null; }
   return () => {
     if (!earlier) return 'browserChildren=unavailable';
-    let fresh;
-    try { fresh = [...browserChildren()].filter(pid => !earlier.has(pid)); }
-    catch { return 'browserChildren=unavailable'; }
-    if (fresh.length !== 1) return `browserChildren=${fresh.length}`;
-    return `browserChildren=1 ${processFacts({ pid: Number(fresh[0]), exitCode: null, signalCode: null }, { workerPid })}`;
+    try {
+      const fresh = [...browserChildren()].filter(([pid]) => !earlier.has(pid));
+      if (fresh.length !== 1) return `browserChildren=${fresh.length}`;
+      const [pid, started] = fresh[0];
+      const child = open(pid);
+      try {
+        const identity = childIdentity(child.read('stat'), workerPid);
+        if (!identity?.browser || identity.started !== started) return 'browserChildren=unavailable';
+        const prefix = `/proc/${pid}/`;
+        const facts = processFacts({ pid: Number(pid), exitCode: null, signalCode: null }, {
+          platform, workerPid,
+          read: path => path.startsWith(prefix) ? child.read(path.slice(prefix.length)) : read(path),
+          threads: path => child.list(path.slice(prefix.length)),
+        });
+        return `browserChildren=1 ${facts}`;
+      } finally { child.close(); }
+    } catch { return 'browserChildren=unavailable'; }
   };
 }
 

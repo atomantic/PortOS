@@ -270,46 +270,116 @@ describe('startBrowserFixture', () => {
 });
 
 describe('_observeOwnedBrowserLaunch', () => {
-  // A fake /proc: `children` lists per worker thread, and each child's stat.
+  const procStat = (pid, { name = 'chrome', parent = 42, started = 100 } = {}) =>
+    `${pid} (${name}) S ${parent} 42 42 ${Array(15).fill(0).join(' ')} ${started}`;
+  // Open handles retain the process identity even when the numeric PID changes.
   const fakeProc = (state) => ({
     list: (path) => {
       if (path !== '/proc/42/task') throw new Error(`unexpected ${path}`);
-      return ['42', '43', 'not-a-thread'];
+      return state.tids ?? ['42', '43', 'not-a-thread'];
     },
-    read: (path) => {
+    read: vi.fn((path) => {
       if (state.unreadable) throw new Error('ENOENT');
       const thread = path.match(/^\/proc\/42\/task\/(\d+)\/children$/);
-      if (thread) return `${state.children[thread[1]] ?? ''} `;
-      const pid = path.match(/^\/proc\/(\d+)\/stat$/)?.[1];
-      if (state.names[pid]) return `${pid} (${state.names[pid]}) S 42 42 42 0 -1`;
-      throw new Error('ENOENT');
-    },
+      if (thread) {
+        if (thread[1] === state.unreadableThread) throw new Error('EACCES');
+        return `${state.children[thread[1]] ?? ''} `;
+      }
+      throw new Error(`unexpected unanchored read: ${path}`);
+    }),
+    open: vi.fn((pid) => {
+      const record = state.records[pid];
+      if (!record) throw new Error('ENOENT');
+      const read = vi.fn(suffix => {
+        if (record.exited) throw new Error('ENOENT');
+        if (suffix === 'stat') return procStat(pid, record);
+        if (suffix === 'wchan') return 'folio_wait_bit_common';
+        throw new Error('unavailable');
+      });
+      const handle = { read, list: vi.fn(() => []), close: vi.fn() };
+      state.handles.push(handle);
+      return handle;
+    }),
   });
+  const procState = () => ({ children: {}, records: {}, handles: [] });
 
-  it('describes only the browser child this worker spawned for the attempt, without its PID or name', () => {
-    const state = { children: { 42: '1100 1200' }, names: { 1100: 'chrome', 1200: 'esbuild', 1300: 'chrome', 1400: 'node' } };
-    const processFacts = vi.fn(() => 'os=linux child=uninterruptible');
+  it('describes only the new owned browser and anchors every child read until the sample closes', () => {
+    const state = { ...procState(), children: { 42: '1100 1200' },
+      records: { 1100: {}, 1200: { name: 'esbuild' }, 1300: {}, 1400: { name: 'node' } } };
+    const processFacts = vi.fn((proc, options) => {
+      expect(proc).toEqual({ pid: 1300, exitCode: null, signalCode: null });
+      expect(options.read('/proc/1300/wchan')).toBe('folio_wait_bit_common');
+      expect(options.threads('/proc/1300/task')).toEqual([]);
+      return 'os=linux child=uninterruptible';
+    });
     const sample = _observeOwnedBrowserLaunch({ platform: 'linux', workerPid: 42, processFacts, ...fakeProc(state) });
-    // The earlier attempt's browser (1100) is still exiting; the new one is on another thread.
     state.children = { 42: '1100 1200', 43: '1300 1400' };
 
     expect(sample()).toBe('browserChildren=1 os=linux child=uninterruptible');
-    expect(processFacts).toHaveBeenCalledWith({ pid: 1300, exitCode: null, signalCode: null }, { workerPid: 42 });
+    expect(processFacts).toHaveBeenCalledOnce();
+    expect(state.handles.every(handle => handle.close.mock.calls.length === 1)).toBe(true);
 
-    // Two candidates cannot be told apart, and none means nothing was spawned
-    // or it already exited: neither is inspected.
     processFacts.mockClear();
     state.children = { 42: '1100', 43: '1300 1500' };
-    state.names[1500] = 'headless_shell';
+    state.records[1500] = { name: 'headless_shell' };
     expect(sample()).toBe('browserChildren=2');
     state.children = { 42: '1100' };
     expect(sample()).toBe('browserChildren=0');
     expect(processFacts).not.toHaveBeenCalled();
   });
 
-  it('reports an unreadable process table as unavailable, never as an empty one', () => {
-    const state = { children: {}, names: {}, unreadable: true };
-    expect(_observeOwnedBrowserLaunch({ platform: 'linux', workerPid: 42, ...fakeProc(state) })()).toBe('browserChildren=unavailable');
+  it.each(['foreign-parent', 'recycled-before-sample', 'reaped-during-sample'])(
+    'does not follow an unowned or recycled PID: %s', (race) => {
+      const state = procState();
+      const access = fakeProc(state);
+      const processFacts = vi.fn((proc, { read }) => {
+        // The replacement has the same numeric PID, but the open proc handle
+        // must still refer to the now-dead original process.
+        state.records[1300].exited = true;
+        state.records[1300] = { parent: 999, started: 101 };
+        expect(() => read('/proc/1300/wchan')).toThrow('ENOENT');
+        return 'os=linux child=unavailable';
+      });
+      const sample = _observeOwnedBrowserLaunch({ platform: 'linux', workerPid: 42, processFacts, ...access });
+      state.children = { 43: '1300' };
+      state.records[1300] = race === 'foreign-parent' ? { parent: 999 } : {};
+      if (race === 'recycled-before-sample') {
+        const originalOpen = access.open.getMockImplementation();
+        access.open.mockImplementation(pid => {
+          if (access.open.mock.calls.length === 2) state.records[pid] = { started: 101 };
+          return originalOpen(pid);
+        });
+      }
+      expect(sample()).toBe(race === 'reaped-during-sample'
+        ? 'browserChildren=1 os=linux child=unavailable' : 'browserChildren=unavailable');
+      expect(processFacts).toHaveBeenCalledTimes(race === 'reaped-during-sample' ? 1 : 0);
+      expect(state.handles.every(handle => handle.close.mock.calls.length === 1)).toBe(true);
+    },
+  );
+
+  it.each(['all-unreadable', 'one-unreadable', 'thread-limit', 'child-limit', 'byte-limit', 'missing-child'])(
+    'fails closed on an incomplete census: %s', (failure) => {
+      const state = procState();
+      const processFacts = vi.fn();
+      const access = fakeProc(state);
+      const sample = _observeOwnedBrowserLaunch({ platform: 'linux', workerPid: 42, processFacts, ...access });
+      if (failure === 'all-unreadable') state.unreadable = true;
+      if (failure === 'one-unreadable') state.unreadableThread = '43';
+      if (failure === 'thread-limit') state.tids = Array.from({ length: 65 }, (_, i) => String(42 + i));
+      if (failure === 'child-limit') state.children = { 42: Array.from({ length: 257 }, (_, i) => String(1000 + i)).join(' ') };
+      if (failure === 'byte-limit') state.children = { 42: ' '.repeat(4097) };
+      if (failure === 'missing-child') state.children = { 42: '1300' };
+      expect(sample()).toBe('browserChildren=unavailable');
+      expect(processFacts).not.toHaveBeenCalled();
+      expect(access.open.mock.calls.length).toBeLessThanOrEqual(256);
+    },
+  );
+
+  it('keeps an unavailable baseline unavailable and avoids proc reads on unsupported platforms', () => {
+    const state = { ...procState(), unreadable: true };
+    const sample = _observeOwnedBrowserLaunch({ platform: 'linux', workerPid: 42, ...fakeProc(state) });
+    state.unreadable = false;
+    expect(sample()).toBe('browserChildren=unavailable');
     expect(_observeOwnedBrowserLaunch({ platform: 'darwin' })()).toBe('os=unsupported');
   });
 });
