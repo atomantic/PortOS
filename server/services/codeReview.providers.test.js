@@ -92,6 +92,46 @@ describe('configured provider reviewers', () => {
     expect(config.optionalReviewers.includes(backend)).toBe(optional);
   });
 
+  // #10832: agy answered a pinned claim review with the complete envelope inside
+  // one ```json fence, which the strict parse reported as invalid_json.
+  describe('pinned Antigravity CLI reviewer envelope', () => {
+    const agy = { ...provider, id: 'antigravity-cli', type: 'cli', command: 'agy', models: [] };
+    const agyBackend = 'provider:antigravity-cli';
+    const finding = { severity: 'blocking', location: 'example.js:2', outcome: 'The sum now subtracts.', fix: 'Restore the addition.' };
+    const findings = JSON.stringify({ verdict: 'findings', findings: [finding] });
+    const review = text => {
+      runCliProviderPrompt.mockResolvedValue({ text, partial: false, exitCode: 0, stderr: '' });
+      return runLocalCodeReview({ backend: agyBackend, model: 'gemini-3.8-flash', effort: 'low', kind: 'claim-review', toolFree: true, diff: 'example diff' });
+    };
+
+    beforeEach(() => getProviderById.mockResolvedValue(agy));
+
+    it.each([
+      ['a json fence', `\`\`\`json\n${findings}\n\`\`\``],
+      ['a bare fence with surrounding whitespace', `\n  \`\`\`\n${findings}\n\`\`\`\n`],
+    ])('accepts the complete envelope wrapped whole in %s', async (_label, text) => {
+      expect(await review(text)).toMatchObject({ ok: true, verdict: 'findings',
+        findings: '## Blocking\n\n- example.js:2: The sum now subtracts. Restore the addition.' });
+      expect(runCliProviderPrompt.mock.lastCall[0]).toMatchObject({ provider: { id: 'antigravity-cli', effort: 'low' }, model: 'gemini-3.8-flash', exactPins: true, codeReview: true });
+      expect(await review('```json\n{"verdict":"clean","findings":[]}\n```')).toMatchObject({ ok: true, verdict: 'clean', findings: 'No findings.' });
+    });
+
+    it.each([
+      ['an unclosed (truncated) fence', `\`\`\`json\n${findings}`],
+      ['a truncated envelope inside a fence', '```json\n{"verdict":"findings","findings":[{"severity":"blocking"\n```'],
+      ['prose after the fence', `\`\`\`json\n{"verdict":"clean","findings":[]}\n\`\`\`\nBut a blocking defect remains.`],
+      ['prose before the fence', `Here is my review:\n\`\`\`json\n{"verdict":"clean","findings":[]}\n\`\`\``],
+      ['two fenced blocks', '```json\n{"verdict":"clean","findings":[]}\n```\n```json\n{"verdict":"clean","findings":[]}\n```'],
+      ['a fenced contradictory envelope', '```json\n{"verdict":"clean","findings":[{"severity":"blocking","location":"a.js:1","outcome":"x","fix":"y"}]}\n```'],
+    ])('keeps %s inconclusive with bounded diagnostics', async (_label, text) => {
+      const result = await review(text);
+      expect(result).toMatchObject({ ok: false, code: 'MALFORMED_REVIEW' });
+      expect(result).not.toHaveProperty('verdict');
+      expect(result).not.toHaveProperty('findings');
+      expect(JSON.stringify(result)).not.toContain('Restore the addition');
+    });
+  });
+
   it('uses only this provider default when unpinned and returns provider failure without substitution', async () => {
     callProviderAISimple.mockResolvedValue({ error: 'Selected model is unavailable' });
     expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: false, error: 'Selected model is unavailable' });
