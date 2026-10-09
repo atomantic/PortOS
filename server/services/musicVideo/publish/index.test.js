@@ -121,6 +121,15 @@ describe('publish drafts (#9282)', () => {
     expect(project.publishKit.posts.stackerNews.url).toBe(post.url);
   });
 
+  it('starts a replaced post over with only the links its replacement carries, and unlinks it from the others', async () => {
+    const id = await readyProject();
+    await recordPublishPost(id, 'youtube', { url: 'https://youtu.be/old' });
+    await recordPublishPost(id, 'x', { url: 'https://x.com/a/status/1', links: ['youtube'] });
+    const { post, project } = await recordPublishPost(id, 'youtube', { url: 'https://youtu.be/new', links: [] });
+    expect(post.links).toEqual([]);
+    expect(project.publishKit.posts.x.links).toEqual([]);
+  });
+
   it('records the post the director makes by hand in the filled tab, and nothing else they browse to', async () => {
     const id = await readyProject();
     const { connect, pages } = fakeBrowser();
