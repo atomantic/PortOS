@@ -101,4 +101,19 @@ describe('startBrowserFixture', () => {
     expect(browser.close).toHaveBeenCalledTimes(1);
     expect(server.close).toHaveBeenCalledTimes(1);
   });
+
+  it('bounds close() so a stalled browser teardown rejects naming it, still closes Vite, and removes the temp dir', async () => {
+    const { server, createServer } = fakeVite();
+    const browser = fakeBrowser({ close: vi.fn(async () => {}) });
+    browser.close = vi.fn(() => new Promise(() => {}));
+    const chromium = { launch: vi.fn(async () => browser) };
+    const fixture = await startBrowserFixture({ name: 'example', createServer, viteConfig: () => SCOPED, chromium, phaseMs: PHASE_MS });
+    expect(existsSync(fixture.temp)).toBe(true);
+
+    const error = await fixture.close().catch(caught => caught);
+
+    expect(error.message).toBe('browser close stalled after 50ms');
+    expect(server.close).toHaveBeenCalledTimes(1);
+    expect(existsSync(fixture.temp)).toBe(false);
+  });
 });

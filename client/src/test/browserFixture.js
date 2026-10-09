@@ -86,15 +86,19 @@ export async function startBrowserFixture({
   let failed = false;
   // A resource acquired after its phase already failed is closed at once
   // instead of leaking past the hook that abandoned it.
-  const own = (closer) => {
+  const own = (closer, label) => {
     if (failed) closer().catch(() => {});
-    else closers.push(closer);
+    else closers.push({ closer, label });
   };
+  // Every closer runs under its own cleanup deadline, concurrently, so one
+  // stalled teardown neither starves the other nor outlives the `afterAll`
+  // hook (#10791). The temp dir is removed whether or not a closer stalled.
   const closeOwned = async () => {
     const errors = [];
-    for (const closer of closers.splice(0).reverse()) {
-      await closer().catch(error => errors.push(error.message));
-    }
+    await Promise.all(closers.splice(0).reverse().map(({ closer, label }) => withDeadline(
+      Promise.resolve().then(closer), phaseMs.cleanup,
+      () => new Error(`${label} close stalled after ${phaseMs.cleanup}ms`),
+    ).catch(error => errors.push(error.message))));
     await rm(temp, { recursive: true, force: true });
     if (errors.length) throw new Error(errors.join('; '));
   };
@@ -125,7 +129,7 @@ export async function startBrowserFixture({
       env: { ...process.env, ...launchOptions.env, TMPDIR: temp, TMP: temp, TEMP: temp },
     }).then((launched) => {
       if (abandoned) launched.close().catch(() => {});
-      else own(() => launched.close());
+      else own(() => launched.close(), 'browser');
       return launched;
     });
     return { launching, abandon: () => { abandoned = true; } };
@@ -138,7 +142,7 @@ export async function startBrowserFixture({
         throw new Error('viteConfig must set optimizeDeps.entries to the rendered source files, or Vite scans the whole app');
       }
       const vite = await createServer(config);
-      own(() => vite.close());
+      own(() => vite.close(), 'Vite server');
       // A server that arrives after the deadline was just closed by own();
       // listening would bind a port nothing closes.
       if (failed) return vite;
