@@ -610,9 +610,23 @@ queue while retaining the existing restore diagnostics. Malformed restored
 settings still invalidate the cache rather than broadcasting empty defaults.
 Dry runs and unrelated selective restores do not acquire this settings boundary.
 
-A full restore acquires boundaries in this order: shared snapshot cut, task schedule,
-settings, CoS configuration, CoS runtime state, media model registry. The settings queue remains held through CoS reconciliation. A
-restore callback must never call a queued settings write API; cache reload reads
+A full live restore acquires boundaries in this order: shared snapshot cut
+(asset publications drained), task schedule, settings, CoS configuration, CoS
+runtime state, media model registry. A selective restore acquires the same order
+minus the boundaries its scope does not touch; the snapshot cut is always held.
+Each boundary stays held until everything inside it — transfer and cache
+reconciliation, including after a partial transfer failure — has settled, so the
+settings queue remains held through CoS reconciliation. The order is declared once
+in `LIVE_FILE_RESTORE_OWNERS` (`server/services/backup.js`); insert a new
+boundary there rather than nesting another wrapper. Snapshot integrity is
+verified before any boundary is acquired, and a dry run acquires none of them.
+
+The peer-execution identity fence is shorter-lived: it wraps only the rsync
+transfer, never reconciliation, and only when the scope can reach
+`instances.json` and the snapshot actually contains that file (probed inside the
+held boundaries).
+
+A restore callback must never call a queued settings write API; cache reload reads
 directly and does not re-enter the queue.
 
 ### Restoring task schedules in a running server

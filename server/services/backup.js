@@ -1573,82 +1573,134 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
     flags.push('--exclude=*');
   }
 
-  // Rsync may overwrite live files before reporting failure. Settle the
-  // transfer so every live attempt reaches reconciliation before it rejects.
   // The preflight just walked the scope, so its largest file is free — one
   // file whose digest outlasts the default deadline emits no `-ii` heartbeat
   // until it finishes (#7302), so this restore's idle floor scales to it.
   const idleTimeoutMs = restoreIdleTimeoutMs(verification.largestFileBytes);
-  const restoreFiles = async () => {
-    const transferFiles = () => runRsync(srcDir, PATHS.data, flags, { idleTimeoutMs });
-    const transferWithIdentityFence = async () => {
-      if (!dryRun && (!scope || scope === 'instances.json') && await stat(join(srcDir, 'instances.json')).then(info => info.isFile(), error => { if (error.code === 'ENOENT') return false; throw error; })) {
-        const { withPeerExecutionIdentityRestore } = await import('./peerExecutionRuntime.js');
-        return withPeerExecutionIdentityRestore(transferFiles);
-      }
-      return transferFiles();
-    };
-    const [transfer] = await Promise.allSettled([transferWithIdentityFence()]);
-    const reconciliationError = !dryRun
-      ? await reconcileLiveFileRestore(subdirFilter).then(
-        () => null,
-        error => error,
-      )
-      : null;
-
-    if (transfer.status === 'rejected') {
-      if (dryRun) throw transfer.reason;
-      const partialRestoreError = new Error(
-        `${transfer.reason.message}. Some files may already have been overwritten because file restore is not transactional.${reconciliationError ? ` ${reconciliationError.message}` : ''}`,
-        { cause: transfer.reason },
-      );
-      if (transfer.reason?.code) partialRestoreError.code = transfer.reason.code;
-      throw partialRestoreError;
-    }
-    if (reconciliationError) throw reconciliationError;
-
-    return { dryRun, snapshotId, subdirFilter, changedFiles: transfer.value, verification };
-  };
-  const scope = subdirFilter?.split('/').filter(part => part && part !== '.').join('/');
-  // Innermost boundary: the media registry has no queue other boundaries wait
-  // on, and acquiring it last keeps its write fence from outliving a refused
-  // CoS restore.
-  const restoreWithMediaBoundary = async () => {
-    if (!dryRun && (!scope || scope === 'media-models.json')) {
-      const { withLiveMediaModelsRestore } = await import('../lib/mediaModels.js');
-      return withLiveMediaModelsRestore(restoreFiles);
-    }
-    return restoreFiles();
-  };
-  const restoreWithCosBoundary = async () => {
-    if (!dryRun && (!scope || ['cos', 'cos/config.json', 'cos/state.json', 'cos/agents'].includes(scope) || scope.startsWith('cos/agents/'))) {
-      const { withLiveCosRestore } = await import('./cosState.js');
-      return withLiveCosRestore(restoreWithMediaBoundary);
-    }
-    return restoreWithMediaBoundary();
-  };
-  // Fixed acquisition order: snapshot cut -> schedule -> settings -> CoS config -> CoS
-  // runtime -> media registry. Drain publications BEFORE holding any domain
-  // queue they may need to finish, and keep admission closed through transfer
-  // and all cache reconciliation, including a partially failed transfer.
-  const restoreWithSettingsBoundary = () => !dryRun && (!scope || scope === 'settings.json')
-    ? withLiveSettingsRestore(restoreWithCosBoundary)
-    : restoreWithCosBoundary();
-  // Schedule mutations can await CoS state, so drain them before CoS ownership.
-  const restoreWithScheduleBoundary = async () => {
-    if (!dryRun && (!scope || scope === 'cos' || scope === 'cos/task-schedule.json')) {
-      const { withLiveTaskScheduleRestore } = await import('./taskScheduleStore.js');
-      return withLiveTaskScheduleRestore(restoreWithSettingsBoundary);
-    }
-    return restoreWithSettingsBoundary();
-  };
-  if (dryRun) return restoreWithScheduleBoundary();
-  const releaseSnapshotCut = await acquireBackupSnapshotCut();
-  try {
-    return await restoreWithScheduleBoundary();
-  } finally {
-    releaseSnapshotCut();
+  const transferFiles = () => runRsync(srcDir, PATHS.data, flags, { idleTimeoutMs });
+  // A preview holds no owner, fences no identity and reconciles no cache.
+  if (dryRun) {
+    const changedFiles = await transferFiles();
+    return { dryRun, snapshotId, subdirFilter, changedFiles, verification };
   }
+
+  // Applicability uses the normalized scope; reconciliation keeps the raw filter.
+  const scope = subdirFilter?.split('/').filter(part => part && part !== '.').join('/');
+  const changedFiles = await withLiveFileRestoreOwners(scope, () => transferAndReconcileLiveFiles({
+    subdirFilter,
+    transfer: () => transferWithIdentityFence({ scope, srcDir, transferFiles }),
+  }));
+  return { dryRun, snapshotId, subdirFilter, changedFiles, verification };
+}
+
+const COS_RESTORE_SCOPES = ['cos', 'cos/config.json', 'cos/state.json', 'cos/agents'];
+
+/**
+ * Owners a live file restore holds, OUTERMOST FIRST — this array order IS the
+ * acquisition order, and each owner is released in reverse after everything
+ * inside it (transfer plus partial-failure reconciliation) has settled.
+ * `appliesTo` receives the normalized scope (`''`/undefined = full restore);
+ * `hold` acquires the owner, runs `inner`, and releases on every exit. Domain
+ * modules are imported only once every outer owner is held.
+ *
+ * - The snapshot cut drains in-flight asset publications BEFORE any domain
+ *   queue they may need to finish, and keeps admission closed throughout.
+ * - Schedule mutations can await CoS state, so their queue precedes CoS.
+ * - The settings queue stays held through CoS reconciliation.
+ * - CoS acquires config then runtime internally (`withLiveCosRestore`) and
+ *   refuses a busy daemon/mind/agent with `COS_RESTORE_BUSY`.
+ * - The media registry refuses edits for the whole hold and is acquired last,
+ *   so its write fence never outlives a refused CoS restore.
+ */
+const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
+  {
+    name: 'backup snapshot cut',
+    appliesTo: () => true,
+    hold: async (inner) => {
+      const releaseSnapshotCut = await acquireBackupSnapshotCut();
+      try {
+        return await inner();
+      } finally {
+        releaseSnapshotCut();
+      }
+    },
+  },
+  {
+    name: 'task schedule',
+    appliesTo: scope => !scope || scope === 'cos' || scope === 'cos/task-schedule.json',
+    hold: async (inner) => {
+      const { withLiveTaskScheduleRestore } = await import('./taskScheduleStore.js');
+      return withLiveTaskScheduleRestore(inner);
+    },
+  },
+  {
+    name: 'settings',
+    appliesTo: scope => !scope || scope === 'settings.json',
+    hold: inner => withLiveSettingsRestore(inner),
+  },
+  {
+    name: 'CoS config and runtime',
+    appliesTo: scope => !scope || COS_RESTORE_SCOPES.includes(scope) || scope.startsWith('cos/agents/'),
+    hold: async (inner) => {
+      const { withLiveCosRestore } = await import('./cosState.js');
+      return withLiveCosRestore(inner);
+    },
+  },
+  {
+    name: 'media model registry',
+    appliesTo: scope => !scope || scope === 'media-models.json',
+    hold: async (inner) => {
+      const { withLiveMediaModelsRestore } = await import('../lib/mediaModels.js');
+      return withLiveMediaModelsRestore(inner);
+    },
+  },
+]);
+
+/** Run `operation` inside every live-restore owner that applies to `scope`, in table order. */
+function withLiveFileRestoreOwners(scope, operation) {
+  const nested = LIVE_FILE_RESTORE_OWNERS.reduceRight(
+    (inner, owner) => (owner.appliesTo(scope) ? () => owner.hold(inner) : inner),
+    operation,
+  );
+  return nested();
+}
+
+/**
+ * Peer-execution identity fence: shorter-lived than the owners above. It wraps
+ * ONLY the rsync transfer, never reconciliation, and only when the scope can
+ * touch instances.json AND the snapshot actually carries that file — probed
+ * here, inside the already-held owners.
+ */
+async function transferWithIdentityFence({ scope, srcDir, transferFiles }) {
+  const identityInScope = !scope || scope === 'instances.json';
+  const snapshotHasIdentity = identityInScope && await stat(join(srcDir, 'instances.json')).then(
+    info => info.isFile(),
+    error => { if (error.code === 'ENOENT') return false; throw error; },
+  );
+  if (!snapshotHasIdentity) return transferFiles();
+  const { withPeerExecutionIdentityRestore } = await import('./peerExecutionRuntime.js');
+  return withPeerExecutionIdentityRestore(transferFiles);
+}
+
+/**
+ * Rsync may overwrite live files before reporting failure, so settle the
+ * transfer and reconcile caches while the owners are still held. A transfer
+ * failure stays the primary error (keeping its code); a reconciliation failure
+ * is appended to it, or thrown on its own after a successful transfer.
+ */
+async function transferAndReconcileLiveFiles({ subdirFilter, transfer }) {
+  const [result] = await Promise.allSettled([transfer()]);
+  const reconciliationError = await reconcileLiveFileRestore(subdirFilter).then(() => null, error => error);
+  if (result.status === 'rejected') {
+    const partialRestoreError = new Error(
+      `${result.reason.message}. Some files may already have been overwritten because file restore is not transactional.${reconciliationError ? ` ${reconciliationError.message}` : ''}`,
+      { cause: result.reason },
+    );
+    if (result.reason?.code) partialRestoreError.code = result.reason.code;
+    throw partialRestoreError;
+  }
+  if (reconciliationError) throw reconciliationError;
+  return result.value;
 }
 
 const DUMP_UNREADABLE = Object.freeze({ status: 'failed', reason: 'dump_unreadable', error: 'The snapshot database dump could not be read or staged for restore. Restore was refused without changing data.' });
