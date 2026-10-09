@@ -60,9 +60,17 @@ export async function sendDraft(draftId, io) {
   };
 
   const complete = async () => {
+    // An adapter reports a definite "not sent" by returning it. A throw after
+    // dispatch began proves nothing about whether the message left, so it is
+    // parked as unknown rather than downgraded to a re-approvable failure.
     const result = await dispatch().catch(async (error) => {
-      console.error(`📧 Draft send threw for ${draft.id}: ${messageLogError(error)}`);
-      return { success: false, status: 502, code: 'SEND_FAILED', error: error.message };
+      console.warn(`⚠️ Draft send threw for ${draft.id}: ${messageLogError(error)}`);
+      return {
+        success: false,
+        deliveryUnknown: true,
+        status: 502,
+        error: 'The send failed after it started, so PortOS cannot tell whether the message left. Check the Sent folder, then record the outcome. PortOS will not resend it.'
+      };
     });
 
     if (result?.success) {

@@ -382,16 +382,41 @@ export async function syncGmail(account, cache, io, options = {}) {
   return { messages: inboxMessages, inboxComplete, sentMessages, sentTruncated: sentCoveragePartial, sendAsAliases, status: 'success', syncMethod: 'api' };
 }
 
+// `users.messages.send` carries no idempotency key, so once the request may have
+// reached Gmail only a 2xx proves delivery and only a 4xx proves refusal. A lost
+// acknowledgement (timeout, reset socket, 5xx after acceptance) cannot say
+// whether the message left — report it as unknown so the draft is parked for
+// reconciliation, never as a `failed` draft that can be re-approved and resent.
+const GMAIL_DELIVERY_UNKNOWN = {
+  success: false,
+  deliveryUnknown: true,
+  status: 502,
+  code: 'DELIVERY_UNKNOWN',
+  error: 'Gmail did not confirm delivery and it may already have been sent. Check Sent Mail, then record the outcome. PortOS will not resend it.'
+};
+
+// A 4xx is Gmail refusing the request, so nothing was sent. 408 is excluded: it
+// is a timeout, which is exactly the ambiguity this classification exists for.
+const isDefinitiveRefusal = (status) => Number.isInteger(status) && status >= 400 && status < 500 && status !== 408;
+
 /**
  * Send email via Gmail API.
  * @param {object} account - Account config
  * @param {object} draft - Draft with to, cc, subject, body
- * @returns {{ success: boolean, error?: string }}
+ * @returns {{ success: boolean, deliveryUnknown?: boolean, error?: string }}
  */
 export async function sendGmail(account, draft) {
   const auth = await getAuthenticatedClient();
   if (!auth) {
     return { success: false, error: 'Google OAuth not configured', status: 502, code: 'GMAIL_NOT_CONFIGURED' };
+  }
+
+  // Refresh the access token before dispatch, so a token failure is a definite
+  // "not sent" rather than an error from inside the send call.
+  const tokenError = await auth.getAccessToken().then(() => null, err => err);
+  if (tokenError) {
+    console.error(`📧 Gmail send failed before dispatch: draft ${draft.id}: ${messageLogError(tokenError)}`);
+    return { success: false, error: 'Google sign-in could not be refreshed — nothing was sent', status: 502, code: 'GMAIL_AUTH_FAILED' };
   }
 
   const gmailClient = gmail({ version: 'v1', auth });
@@ -417,16 +442,20 @@ export async function sendGmail(account, draft) {
 
   const raw = Buffer.from(lines.join('\r\n')).toString('base64url');
 
-  const result = await gmailClient.users.messages.send({
+  // `retry: false`: the client must never resubmit a send on its own — a retry
+  // after a lost acknowledgement is a duplicate message.
+  const sendError = await gmailClient.users.messages.send({
     userId: 'me',
     requestBody: { raw }
-  }).catch(err => {
-    console.error(`📧 Gmail send failed: ${messageLogError(err)}`);
-    return null;
-  });
+  }, { retry: false }).then(() => null, err => err);
 
-  if (!result) {
-    return { success: false, error: 'Gmail API send failed', status: 502, code: 'GMAIL_SEND_FAILED' };
+  if (sendError) {
+    if (isDefinitiveRefusal(sendError.response?.status)) {
+      console.error(`📧 Gmail send failed: draft ${draft.id}: ${messageLogError(sendError)}`);
+      return { success: false, error: 'Gmail refused the message — nothing was sent', status: 502, code: 'GMAIL_SEND_FAILED' };
+    }
+    console.warn(`⚠️ Gmail delivery unconfirmed: draft ${draft.id}: ${messageLogError(sendError)}`);
+    return GMAIL_DELIVERY_UNKNOWN;
   }
 
   console.log(`📧 Gmail sent: draft ${draft.id}`);
