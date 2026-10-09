@@ -612,12 +612,20 @@ or
 
 A clean verdict requires an empty findings array. A findings verdict requires one to five complete findings. severity is "blocking" or "recommended"; location names the file:line when known (otherwise the affected boundary). Explain the concrete wrong outcome + suggested fix in one or two sentences, with each field at most 1000 characters. Never mix a clean verdict with findings, emit an incomplete finding, or add fields beyond this envelope.`
 
+// An agentic CLI reviewer (agy) routinely returns the requested envelope as ONE
+// markdown-fenced block despite "no markdown" — the reply is the whole envelope,
+// only dressed. Unwrap it only when the fence spans the entire reply, so prose
+// before/after a fence, an unclosed (truncated) fence, or several blocks still
+// fall through to the strict parse and stay inconclusive (#10832).
+const WHOLE_REPLY_JSON_FENCE = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/i
+
 // Transport success is not a review verdict. Accept only the exact legacy
 // clean reply or the complete bounded envelope we request; never extract a
 // clean substring from contradictory prose or salvage a truncated JSON reply.
 function normalizeCodeReviewVerdict(content) {
-  const text = typeof content === 'string' ? content.trim() : ''
-  if (/^no findings\.?$/i.test(text)) return { verdict: { verdict: 'clean', findings: text } }
+  const trimmed = typeof content === 'string' ? content.trim() : ''
+  if (/^no findings\.?$/i.test(trimmed)) return { verdict: { verdict: 'clean', findings: trimmed } }
+  const text = WHOLE_REPLY_JSON_FENCE.exec(trimmed)?.[1].trim() ?? trimmed
   if (text.length > 20000) return { reason: 'oversized_content' }
   let parsed
   try {
