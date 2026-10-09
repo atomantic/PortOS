@@ -1017,7 +1017,7 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
 export function describeIdleReconcilePark(skipped = [], heldLive = []) {
   // Only worktree-* skips are a HOLD; 'not-merged-on-recheck' and 'cleanup-disabled'
   // mean the branch was never eligible, so they must not read as pending work.
-  const heldBackMerged = skipped.filter((s) => s.reason?.startsWith('worktree-'));
+  const heldBackMerged = skipped.filter((s) => !s.detached && s.reason?.startsWith('worktree-'));
   const lifts = heldBackMerged.map((entry) => Date.parse(entry.retryAt)).filter(Number.isFinite);
   const reason = heldLive.length
     ? 'branches-held-by-live-owners'
@@ -1337,6 +1337,96 @@ async function retireBranchNow(repoPath, b, { activeAgentIds = new Set(), staleC
 }
 
 /**
+ * Gather every worktree whose HEAD is detached — a tree with no branch, which
+ * `gatherBranchState` (keyed by local branch) can never see. Only trees sitting
+ * at a commit already on the default branch are returned: that is the trash this
+ * exists for, and a detached tree at unmerged commits may be someone's work.
+ * The main checkout, bare and prunable entries are never gathered.
+ *
+ * @param {string} repoPath
+ * @param {string} defaultBranch
+ * @returns {Promise<{path:string, head:string|null, locked:boolean, worktreeAgeMs:number|null, dirtyPaths:string[]}[]>}
+ */
+export async function gatherDetachedWorktrees(repoPath, defaultBranch) {
+  const worktrees = await listWorktrees(repoPath).catch(() => []);
+  const detached = [];
+  for (const [index, entry] of worktrees.entries()) {
+    // git lists the main checkout first; the path check covers a caller whose list is not ordered.
+    if (index === 0 || entry.branch || entry.bare || entry.prunable || entry.path === repoPath || !entry.head) continue;
+    if (!await isCommitOnBranch(repoPath, entry.head, defaultBranch)) continue;
+    detached.push({
+      path: entry.path,
+      head: entry.head,
+      locked: Boolean(entry.locked),
+      worktreeAgeMs: await worktreeAgeMs(entry.path),
+      dirtyPaths: await worktreeDirtyPaths(entry.path),
+    });
+  }
+  return detached;
+}
+
+const isCommitOnBranch = (repoPath, sha, branch) =>
+  execGit(['merge-base', '--is-ancestor', sha, branch], repoPath, { ignoreExitCode: true })
+    .then((r) => r?.exitCode === 0)
+    .catch(() => false);
+
+/**
+ * Retire the detached worktrees `gatherDetachedWorktrees` found, with the same
+ * gate order as `retireBranchNow` (protection → still clean → remove), minus the
+ * branch deletion a detached tree does not have.
+ *
+ * A tree outside the managed roots is REPORTED, never removed (#10270): nothing
+ * about it proves its creator is finished, so the coordinator decides. A held
+ * tree inside the roots is `skipped` with its `worktree-*` reason; both are in
+ * `held` so the park log can name them.
+ *
+ * @param {string} repoPath
+ * @param {string} defaultBranch
+ * @param {object[]} detached - `gatherDetachedWorktrees`' entries
+ * @param {{ activeAgentIds?: Set<string>, claimOwners?: { agents: object[]|null } }} [opts]
+ * @returns {Promise<{cleaned:string[], skipped:object[], held:{path:string, head:string|null, reason:string, managed:boolean, retryAt?:string}[]}>}
+ */
+export async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { activeAgentIds = new Set(), claimOwners } = {}) {
+  const cleaned = [];
+  const skipped = [];
+  const held = [];
+  const roots = reconcileWorktreeRoots(repoPath);
+  const hold = (tree, reason, retryAt) => {
+    const managed = reason !== 'worktree-unmanaged-location';
+    held.push({ path: tree.path, head: tree.head, reason, managed, ...(retryAt ? { retryAt } : {}) });
+    // `detached` keeps the entry out of describeIdleReconcilePark's merged-branch count.
+    if (managed) skipped.push({ branch: tree.path, path: tree.path, detached: true, reason, ...(retryAt ? { retryAt } : {}) });
+  };
+  for (const tree of detached) {
+    if (claimOwners !== undefined && !Array.isArray(claimOwners?.agents)) {
+      hold(tree, 'claim-ownership-unreadable');
+      continue;
+    }
+    const gate = {
+      path: tree.path, locked: tree.locked, activeAgentIds, ageMs: tree.worktreeAgeMs, roots,
+    };
+    const protectedReason = worktreeProtectionReason(gate);
+    if (protectedReason) {
+      hold(tree, protectedReason, worktreeProtectionExpiresAt(gate));
+      continue;
+    }
+    if (tree.dirtyPaths.length > 0 || await isWorktreeDirty(tree.path)) {
+      hold(tree, 'worktree-dirty');
+      continue;
+    }
+    // Re-verify at action time — the HEAD may have moved since the gather.
+    if (!await isCommitOnBranch(repoPath, tree.head, defaultBranch)) continue;
+    const removal = await forceRemoveWorktreeDir(repoPath, tree.path, { label: '🔀 branch-reconcile: remove detached worktree', log: 'all' });
+    if (!removal.removed) {
+      hold(tree, 'worktree-remove-failed');
+      continue;
+    }
+    cleaned.push(tree.path);
+  }
+  return { cleaned, skipped, held };
+}
+
+/**
  * Full Tier-1 reconcile: gather → classify → clean up merged + verified-superseded.
  * Returns the in-flight set (branches needing an agent) for the scheduler to dispatch.
  *
@@ -1465,7 +1555,11 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
   const { cleaned: cleanedBranches, skipped } = cleanup
     ? await cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds, claimOwners, origin, forgeExec, forgeAccount })
     : { cleaned: [], skipped: merged.map((m) => ({ branch: m.branch, reason: 'cleanup-disabled' })) };
-  const cleaned = [...new Set([...cleanedWorktrees, ...cleanedBranches])];
+  // Detached worktrees have no branch, so nothing above can see them (#10825).
+  const detachedReap = cleanup
+    ? await reapDetachedWorktrees(repoPath, defaultBranch, await gatherDetachedWorktrees(repoPath, defaultBranch), { activeAgentIds, claimOwners })
+    : { cleaned: [], skipped: [], held: [] };
+  const cleaned = [...new Set([...cleanedWorktrees, ...cleanedBranches, ...detachedReap.cleaned])];
 
   // Runs AFTER cleanupMerged on purpose: that step deletes merged local branches
   // and leaves their `origin/*` counterpart behind, which is precisely the orphan
@@ -1490,7 +1584,9 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
     // the coordinator prompt.
     superseded: supersededReap.held,
     wip,
-    skipped: [...skipped, ...supersededReap.skipped],
+    skipped: [...skipped, ...supersededReap.skipped, ...detachedReap.skipped],
+    // Detached trees at merged commits that were NOT removed, managed or not.
+    detachedWorktrees: detachedReap.held,
     orphanRemotes,
     prStateUnavailable
   };
@@ -1781,7 +1877,7 @@ async function dispatchHintLineForBranch(branchName, repoPath) {
  *   `appId` adds each branch's pre-mutation ownership recheck command.
  * @returns {Promise<string>}
  */
-export async function formatInFlightForPrompt(inFlight, { defaultBranch, actions, branchesPerAgent, repoPath, appId } = {}) {
+export async function formatInFlightForPrompt(inFlight, { defaultBranch, actions, branchesPerAgent, repoPath, appId, detachedWorktrees = [] } = {}) {
   // One gh round-trip per issue-derived branch — resolved in parallel (not
   // inline in the loop below) so N branches cost one round-trip's latency,
   // not N of them in series.
@@ -1830,5 +1926,15 @@ export async function formatInFlightForPrompt(inFlight, { defaultBranch, actions
     })}`);
     lines.push('');
   });
+  // Detached trees outside the managed roots are never removed by the deterministic
+  // pass; the coordinator confirms nothing is using one, then removes it.
+  const unmanaged = detachedWorktrees.filter((d) => !d.managed);
+  if (unmanaged.length) {
+    lines.push(`Detached worktrees at commits already on \`${defaultBranch}\`, outside PortOS's managed roots (${unmanaged.length}):`, '');
+    for (const d of unmanaged) {
+      lines.push(`### Detached worktree \`${d.path}\``);
+      lines.push(`- Do: confirm nothing is using \`${d.path}\` (no running process, no uncommitted work), then run \`git worktree remove ${d.path}\` yourself.`, '');
+    }
+  }
   return lines.join('\n');
 }

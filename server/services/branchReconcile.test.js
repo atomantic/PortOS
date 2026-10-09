@@ -1789,6 +1789,82 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
 // worktree holding only that read as ABANDONED_WIP forever: cleanupMerged
 // refused to delete a dirty tree, and every pass instead spent a coordinator run
 // that came back "no real work product, a human should discard it".
+describe('reconcile — detached-HEAD worktrees (#10825)', () => {
+  const MAIN = { path: '/repo', head: 'aaa111', branch: 'refs/heads/main' };
+  const detachedTree = (path, extra = {}) => ({ path, head: 'bbb222', detached: true, ...extra });
+  // Only the ancestry probe cares about argv; status reads clean unless a test says otherwise.
+  const stubGit = ({ merged = true, dirty = false } = {}) => execGit.mockImplementation(async (args) => {
+    if (args[0] === 'merge-base') return { stdout: '', exitCode: merged ? 0 : 1 };
+    if (args[0] === 'status') return { stdout: dirty ? ' M src/a.js\n' : '', exitCode: 0 };
+    return { stdout: '', exitCode: 0 };
+  });
+
+  beforeEach(() => {
+    git.getBranches.mockResolvedValue([]);
+    execGh.mockResolvedValue('[]');
+  });
+
+  it('removes a clean managed detached tree at a merged commit and lists it in cleaned', async () => {
+    const path = '/repo/data/cos/worktrees/agent-1234abcd';
+    wt.listWorktrees.mockResolvedValue([MAIN, detachedTree(path)]);
+    stubGit();
+    const res = await reconcile('/repo');
+    expect(res.cleaned).toContain(path);
+    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', path, expect.any(Object));
+    expect(res.detachedWorktrees).toEqual([]);
+  });
+
+  it.each([
+    ['locked', { locked: true }, false, 'worktree-locked'],
+    ['dirty', {}, true, 'worktree-dirty'],
+  ])('holds a %s managed detached tree with its worktree-* reason', async (_name, extra, dirty, reason) => {
+    const path = '/repo/data/cos/worktrees/some-tree';
+    wt.listWorktrees.mockResolvedValue([MAIN, detachedTree(path, extra)]);
+    stubGit({ dirty });
+    const res = await reconcile('/repo');
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    expect(res.skipped).toContainEqual(expect.objectContaining({ path, reason, detached: true }));
+    expect(res.detachedWorktrees).toContainEqual(expect.objectContaining({ path, reason }));
+    // Not double-counted as a merged BRANCH held back.
+    expect(describeIdleReconcilePark(res.skipped, []).heldBackMerged).toEqual([]);
+  });
+
+  it('holds a managed tree owned by a live agent', async () => {
+    const path = '/repo/data/cos/worktrees/agent-1234abcd';
+    wt.listWorktrees.mockResolvedValue([MAIN, detachedTree(path)]);
+    stubGit();
+    const res = await reconcile('/repo', { activeAgentIds: new Set(['agent-1234abcd']) });
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    expect(res.skipped[0]).toMatchObject({ path, detached: true, reason: expect.stringMatching(/^worktree-/) });
+  });
+
+  it('reports, never removes, a detached tree outside the managed roots — and renders it for the coordinator', async () => {
+    const path = '/tmp/example-validation-tree';
+    wt.listWorktrees.mockResolvedValue([MAIN, detachedTree(path)]);
+    stubGit();
+    const res = await reconcile('/repo');
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    expect(res.cleaned).toEqual([]);
+    expect(res.skipped).toEqual([]);
+    expect(res.detachedWorktrees).toEqual([expect.objectContaining({ path, managed: false, reason: 'worktree-unmanaged-location' })]);
+    const prompt = await formatInFlightForPrompt([], { defaultBranch: 'main', detachedWorktrees: res.detachedWorktrees });
+    expect(prompt).toContain(path);
+    expect(prompt).toContain(`git worktree remove ${path}`);
+  });
+
+  it('never gathers the main checkout or a detached tree at unmerged commits', async () => {
+    wt.listWorktrees.mockResolvedValue([
+      { path: '/repo', head: 'aaa111', detached: true },
+      detachedTree('/repo/data/cos/worktrees/unmerged-work'),
+    ]);
+    stubGit({ merged: false });
+    const res = await reconcile('/repo');
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    expect(res.detachedWorktrees).toEqual([]);
+    expect(res.skipped).toEqual([]);
+  });
+});
+
 describe('reconcile — a worktree holding only PortOS runtime scratch', () => {
   const BRANCH = 'cos/app-improve-pr-reviewer-x/agent-985a8c77';
   const WORKTREE = '/repo/data/cos/worktrees/agent-985a8c77';

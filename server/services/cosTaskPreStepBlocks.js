@@ -495,6 +495,8 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   // log so "nothing actionable" doesn't read as "no branches exist".
   const heldLive = (result.wip || []).filter((b) => b.liveOwnerReason);
   const heldLiveSuffix = countSuffix(heldLive, 'branch(es) left to their live owners', (b) => b.liveOwnerReason);
+  // A detached worktree has no branch to list anywhere else, so name it here too.
+  const detachedSuffix = countSuffix(result.detachedWorktrees, 'detached worktree(s) held back', (d) => d.reason);
   const allActionable = filterActionable(result.inFlight, actions);
   const actionable = limitBranchesForAgent(allActionable, metadata.branchesPerAgent);
   if (allActionable.length === 0) {
@@ -514,7 +516,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     // sees a park while real branches sit there (the same invisibility that hid
     // the abandoned-worktree case).
     const gatedSuffix = countSuffix(result.inFlight, 'in-flight branch(es) skipped by disabled action toggles', (b) => b.state);
-    emitLog('info', `🔀 branch-reconcile parked for ${app.name}: nothing actionable (cleaned ${result.cleaned.length}${heldSuffix}${gatedSuffix}${heldLiveSuffix}${supersededSuffix})`, { appId: app.id });
+    emitLog('info', `🔀 branch-reconcile parked for ${app.name}: nothing actionable (cleaned ${result.cleaned.length}${heldSuffix}${gatedSuffix}${heldLiveSuffix}${supersededSuffix}${detachedSuffix})`, { appId: app.id });
     return { skip: true };
   }
   // Convergence guards — no-progress, then the consecutive-dispatch cap. See
@@ -534,14 +536,15 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
       actions,
       branchesPerAgent: metadata.branchesPerAgent,
       repoPath: app.repoPath,
-      appId: app.id
+      appId: app.id,
+      detachedWorktrees: result.detachedWorktrees
     }),
     supersededBlock
   ].filter(Boolean).join('\n');
   const batchSuffix = allActionable.length > actionable.length
     ? ` (selected ${actionable.length} of ${allActionable.length})`
     : '';
-  emitLog('info', `🔀 branch-reconcile dispatching for ${app.name}: ${actionable.length} in-flight branch(es)${batchSuffix}${heldLiveSuffix}${supersededSuffix}`, { appId: app.id, analysisType: taskType });
+  emitLog('info', `🔀 branch-reconcile dispatching for ${app.name}: ${actionable.length} in-flight branch(es)${batchSuffix}${heldLiveSuffix}${supersededSuffix}${detachedSuffix}`, { appId: app.id, analysisType: taskType });
   return { skip: false, block };
 }
 
