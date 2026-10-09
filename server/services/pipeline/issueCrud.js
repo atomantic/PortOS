@@ -18,7 +18,7 @@ import {
   store, queueSeriesIssuesWrite, readState, readStateForSeries,
   saveIssueNow, saveIssuesNow, renumberInline, sanitizeIssue,
   snapshotRunHistory, ISSUE_ID_RE,
-  ERR_NOT_FOUND, ERR_VALIDATION, ERR_DUPLICATE, ERR_SEASON_LOCKED,
+  ERR_NOT_FOUND, ERR_VALIDATION, ERR_DUPLICATE, ERR_SEASON_LOCKED, ERR_ARC_POSITION_CONFLICT,
   TITLE_MAX, SERIES_ID_MAX, ISSUES_PER_RESPONSE_MAX,
 } from './issuesShared.js';
 import { isNonBlankStr, isStr, trimTo } from '../../lib/textUtils.js';
@@ -161,6 +161,12 @@ export function createIssue(input = {}, { preloadedSeries = null } = {}) {
  *
  * A tombstoned id, or one living in another series, is refused (ERR_DUPLICATE)
  * rather than resurrected — the caller re-plans a fresh id for that slot.
+ *
+ * A NEW issue's planned `arcPosition` is re-checked against the series' live
+ * issues inside the series write queue (#10763): the caller validated it
+ * against an earlier read, and any other writer queued in between may have
+ * taken it. A taken position is refused (ERR_ARC_POSITION_CONFLICT) rather
+ * than landed as a duplicate.
  */
 export function ensureIssueWithId(id, input = {}) {
   if (!isStr(id) || !ISSUE_ID_RE.test(id)) {
@@ -181,6 +187,11 @@ function queueNewIssue(id, input, { preloadedSeries = null, reuseExisting = fals
       const existing = state.issues.find((i) => i.id === id);
       if (existing && !existing.deleted && existing.seriesId === seriesId) return { issue: existing, created: false };
       if (existing) throw codedError(`Issue id already used: ${id}`, ERR_DUPLICATE);
+      const pos = input.arcPosition;
+      if (Number.isInteger(pos) && pos >= 1
+          && state.issues.some((i) => i.seriesId === seriesId && !i.deleted && i.arcPosition === pos)) {
+        throw codedError(`arcPosition ${pos} is already held by another issue in this series`, ERR_ARC_POSITION_CONFLICT);
+      }
     }
     const next = sanitizeIssue({
       id,

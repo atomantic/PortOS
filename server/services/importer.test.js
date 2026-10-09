@@ -1994,6 +1994,167 @@ describe('commitImport import sessions (#9943)', () => {
   });
 });
 
+// #10763: commits into one series are admitted one at a time, whatever their
+// importId, and the issue publication rechecks positions against fresh state.
+// Each interleaving test holds the FIRST commit's first issue write at a
+// barrier — the point where the issue's reproduction found both commits had
+// already passed the collision check — and lets the second commit run into it.
+describe('commitImport series admission (#10763)', () => {
+  function holdFirstPublication() {
+    let reached;
+    let release;
+    const reachedP = new Promise((resolve) => { reached = resolve; });
+    const releaseP = new Promise((resolve) => { release = resolve; });
+    mockEnsureIssue.mockImplementationOnce(async (...args) => {
+      reached();
+      await releaseP;
+      return realIssuesRef.current.ensureIssueWithId(...args);
+    });
+    return { reached: reachedP, release };
+  }
+  const importIdFor = (ser, source) => sessionsSvc.deriveImportId({ seriesId: ser.id, source });
+  const livePositions = async (ser) => (await issuesSvc.listIssues({ seriesId: ser.id }))
+    .map((i) => i.arcPosition).sort((a, b) => a - b);
+
+  it('two manuscripts claiming one explicit position: one commits, the other is refused before any write', async () => {
+    const { uni, ser } = await setupForCommit();
+    const held = holdFirstPublication();
+    const first = importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id, importId: importIdFor(ser, 'manuscript A'),
+      canonSelections: { characters: [{ name: 'Aria' }] },
+      issues: [{ title: 'A1', arcPosition: 1, proseExcerpt: 'a' }],
+    });
+    await held.reached;
+    const second = importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id, importId: importIdFor(ser, 'manuscript B'),
+      canonSelections: { characters: [{ name: 'Intruder' }] },
+      arc: { logline: 'B logline', summary: 'B summary', shape: 'rags-to-riches' },
+      issues: [{ title: 'B1', arcPosition: 1, proseExcerpt: 'b' }],
+    });
+    const secondOutcome = second.then(() => null, (err) => err);
+    held.release();
+
+    await expect(first).resolves.toMatchObject({ createdIssueIds: [expect.any(String)] });
+    const err = await secondOutcome;
+    expect(err?.code).toBe(importerSvc.ERR_VALIDATION);
+    expect(err.message).toMatch(/collides with an existing issue/);
+    expect((await issuesSvc.listIssues({ seriesId: ser.id })).map((i) => i.title)).toEqual(['A1']);
+    // The refused batch wrote nothing: no canon, no arc.
+    const universeAfter = await universeSvc.getUniverse(uni.id);
+    expect(universeAfter.characters.map((c) => c.name)).toEqual(['Aria']);
+    expect((await seriesSvc.getSeries(ser.id)).arc?.shape).not.toBe('rags-to-riches');
+  });
+
+  it('concurrent manuscripts with omitted positions get distinct sequential positions', async () => {
+    const { uni, ser } = await setupForCommit();
+    const held = holdFirstPublication();
+    const first = importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id, importId: importIdFor(ser, 'manuscript A'),
+      issues: [{ title: 'A1', proseExcerpt: 'a' }, { title: 'A2', proseExcerpt: 'a2' }],
+    });
+    await held.reached;
+    const second = importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id, importId: importIdFor(ser, 'manuscript B'),
+      issues: [{ title: 'B1', proseExcerpt: 'b' }],
+    });
+    held.release();
+    await Promise.all([first, second]);
+    expect(await livePositions(ser)).toEqual([1, 2, 3]);
+  });
+
+  it('applies the same admission to legacy commits with no importId', async () => {
+    const { uni, ser } = await setupForCommit();
+    const held = holdFirstPublication();
+    const body = (title) => ({ universeId: uni.id, seriesId: ser.id, issues: [{ title, arcPosition: 1, proseExcerpt: 'p' }] });
+    const first = importerSvc.commitImport(body('Legacy A'));
+    await held.reached;
+    const second = importerSvc.commitImport(body('Legacy B')).then(() => null, (err) => err);
+    held.release();
+    await first;
+    expect((await second)?.code).toBe(importerSvc.ERR_VALIDATION);
+    expect(await livePositions(ser)).toEqual([1]);
+  });
+
+  it('lets a commit into an unrelated series proceed while one series is held', async () => {
+    const { uni, ser } = await setupForCommit();
+    const other = await seriesSvc.createSeries({ name: 'Other S', universeId: uni.id, ephemeral: true });
+    const held = holdFirstPublication();
+    const first = importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id, issues: [{ title: 'Held', arcPosition: 1, proseExcerpt: 'h' }],
+    });
+    await held.reached;
+    // Resolves while the first series is still held — no shared admission.
+    const result = await importerSvc.commitImport({
+      universeId: uni.id, seriesId: other.id, issues: [{ title: 'Free', arcPosition: 1, proseExcerpt: 'f' }],
+    });
+    expect(result.createdIssueIds).toHaveLength(1);
+    held.release();
+    await first;
+    expect(await livePositions(ser)).toEqual([1]);
+  });
+
+  it.each([
+    ['explicit', { arcPosition: 1 }],
+    ['omitted', {}],
+  ])('a plain issue create racing the import cannot silently duplicate an %s position', async (_label, position) => {
+    const { uni, ser } = await setupForCommit();
+    // An ordinary create lands on the series after admission planned the
+    // position, before the import publishes it.
+    mockEnsureIssue.mockImplementationOnce(async (...args) => {
+      await realIssuesRef.current.createIssue({ seriesId: ser.id, title: 'Manual', arcPosition: 1 });
+      return realIssuesRef.current.ensureIssueWithId(...args);
+    });
+    await expect(importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id, issues: [{ title: 'Imported', ...position, proseExcerpt: 'i' }],
+    })).rejects.toMatchObject({
+      code: importerSvc.ERR_PARTIAL_COMMIT_ISSUES,
+      message: expect.stringMatching(/already held by another issue/),
+    });
+    expect((await issuesSvc.listIssues({ seriesId: ser.id })).map((i) => i.title)).toEqual(['Manual']);
+  });
+
+  it('releases admission after a failed commit so the next one into the series proceeds', async () => {
+    const { uni, ser } = await setupForCommit();
+    mockEnsureIssue.mockRejectedValueOnce(new Error('simulated write failure'));
+    await expect(importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id, issues: [{ title: 'Fails', arcPosition: 1, proseExcerpt: 'f' }],
+    })).rejects.toMatchObject({ code: importerSvc.ERR_PARTIAL_COMMIT_ISSUES });
+    const result = await importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id, issues: [{ title: 'Works', arcPosition: 1, proseExcerpt: 'w' }],
+    });
+    expect(result.createdIssueIds).toHaveLength(1);
+  });
+
+  it('runs cleanupFormatting outside the admission: another commit lands while the reformat is in flight', async () => {
+    const { uni, ser } = await setupForCommit();
+    let releaseReformat;
+    const reformatGate = new Promise((resolve) => { releaseReformat = resolve; });
+    let reformatStarted;
+    const started = new Promise((resolve) => { reformatStarted = resolve; });
+    mockRunStagedLLM.mockImplementation(async () => {
+      reformatStarted();
+      await reformatGate;
+      return { content: 'The vault loomed in the dark.', runId: 'r1' };
+    });
+    const slow = importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id, contentType: 'short-story', cleanupFormatting: true,
+      issues: [{ title: 'Slow', proseExcerpt: 'The vault  loomed in the\ndark.' }],
+    });
+    await started;
+    // Completes while the slow commit's LLM pass is still pending.
+    await importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id, issues: [{ title: 'Fast', proseExcerpt: 'f' }],
+    });
+    releaseReformat();
+    await slow;
+    // The slow commit allocated from the state it found AFTER formatting, and
+    // seeded the cleaned excerpt.
+    const after = await issuesSvc.listIssues({ seriesId: ser.id });
+    expect(Object.fromEntries(after.map((i) => [i.title, i.arcPosition]))).toEqual({ Fast: 1, Slow: 2 });
+    expect(after.find((i) => i.title === 'Slow').stages.prose.output).toBe('The vault loomed in the dark.');
+  });
+});
+
 describe('mergeSeasons (pure helper)', () => {
   const stubBuildSeason = (input) => ({
     id: `built-${input.number}`,

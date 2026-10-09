@@ -40,6 +40,7 @@ import { IMPORTER_CONTENT_TYPES, IMPORTER_PROSE_EXCERPT_MAX } from '../lib/valid
 export { IMPORTER_PROSE_EXCERPT_MAX };
 import { mergeExtractedBible, BIBLE_KIND } from '../lib/storyBible.js';
 import { isStr } from '../lib/textUtils.js';
+import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import {
   deriveImportId, getImportSession, recordImportProgress, withImportLock, SESSION_STATUS,
 } from './importerSessions.js';
@@ -1117,13 +1118,59 @@ export async function retryIssueSplit({
  * a second tab, a retry after a reload dropped the client's own markers —
  * replays the recorded result or resumes at the issues instead of re-sending
  * canon/arc and duplicating the issue set. Absent, the commit behaves as before.
+ *
+ * Every commit into a series — any importId, a same-id retry, or an older
+ * client sending none — is admitted one at a time per series (#10763). The
+ * position checks read the series' issue inventory and allocate from it; two
+ * manuscripts committed side by side would otherwise both pass against the
+ * same snapshot and land duplicate arcPositions.
  */
 export async function commitImport(args = {}) {
   const { importId = null } = args;
   return importId ? withImportLock(importId, () => commitImportOnce(args)) : commitImportOnce(args);
 }
 
-async function commitImportOnce({
+// Per-series commit admission (#10763). Held from the inventory read through
+// the last issue write, so the collision checks and the positions the plan
+// allocates stay true until the issues are published. Different series run
+// concurrently. Never re-entered from inside a commit, and the import lock is
+// always taken outside it, so the two cannot deadlock.
+const seriesCommitQueue = createKeyCachedQueue();
+
+async function commitImportOnce(args) {
+  const { universeId, seriesId, issues, contentType = null, cleanupFormatting = false } = args;
+  // Payload-only checks — no reads — so a malformed commit fails before it
+  // queues behind another import or spends an LLM call.
+  if (!isStr(universeId)) throw codedError('universeId is required', ERR_VALIDATION);
+  if (!isStr(seriesId)) throw codedError('seriesId is required', ERR_VALIDATION);
+  if (!Array.isArray(issues) || issues.length === 0) {
+    throw codedError('At least one issue is required', ERR_VALIDATION);
+  }
+  let formattedExcerpts = null;
+  if (cleanupFormatting) {
+    // The optional AI cleanup (issue #1335) is one LLM call per issue — minutes
+    // for a long manuscript. Check the commit against current state first so a
+    // doomed or already-committed import never burns those calls, then run them
+    // OUTSIDE the series admission so one slow import doesn't hold up every
+    // other commit into the series. Admission re-checks fresh state and takes
+    // only the cleaned excerpts from here — never the positions this precheck
+    // saw, which may be stale by then.
+    const precheck = await admitAndCommit(args, { precheck: true });
+    if (!precheck.replay) {
+      const cleaned = await reformatSeededExcerpts(precheck.pendingProposals, { contentType });
+      formattedExcerpts = cleaned.map((proposal) => proposal?.proseExcerpt);
+    }
+  }
+  return seriesCommitQueue(seriesId, () => admitAndCommit(args, { formattedExcerpts }));
+}
+
+// Validates and plans the commit against fresh state, then writes it. Runs
+// inside the series admission, except for the `precheck` pass (a fail-fast
+// before formatting, which writes nothing): that returns `{ replay: true }`
+// for an import already committed, else `{ pendingProposals }` — the excerpts
+// the formatting pass should clean. `formattedExcerpts[i]` (from that pass)
+// replaces proposal i's excerpt when it is still to be created.
+async function admitAndCommit({
   universeId,
   seriesId,
   importId = null,
@@ -1134,31 +1181,20 @@ async function commitImportOnce({
   // Content type drives which stage each issue's verbatim excerpt seeds (see
   // the stage-seed block below). Absent → prose-seed (prior behavior).
   contentType = null,
-  // Opt-in AI cleanup: run each seeded excerpt through the manuscript-reformat
-  // pass before seeding so imported prose/scripts arrive already-clean (issue
-  // #1335). Best-effort + per-issue (one LLM call each), so it defaults off.
-  cleanupFormatting = false,
   // Destructive replace: wipes existing issues, overwrites arc + seasons.
   // Universe canon still merges additively (it's shared across series, so
   // a per-series destructive replace would be too coarse). Default false.
   replaceMode = false,
-} = {}) {
-  if (!isStr(universeId)) throw codedError('universeId is required', ERR_VALIDATION);
-  if (!isStr(seriesId)) throw codedError('seriesId is required', ERR_VALIDATION);
-  if (!Array.isArray(issues) || issues.length === 0) {
-    throw codedError('At least one issue is required', ERR_VALIDATION);
-  }
-
+} = {}, { precheck = false, formattedExcerpts = null } = {}) {
   // Read for validation (universeId/seriesId linkage, lock checks, the
   // arcPosition/season-number gates below) and for the up-front counts used
   // to size auto-assigned positions and the additive issue-count target.
-  // NOT the source of truth the universe/series writes below merge against —
-  // `cleanupFormatting` can spend minutes in per-issue LLM calls after this
-  // read, so a concurrent edit to universe canon or series seasons could
-  // land in that window. The actual canon/season merges use the mutator form
-  // of `updateUniverse`/`updateSeries`, which re-reads the freshest persisted
-  // record inside the write queue (issue #8453) — this snapshot is stale by
-  // the time those writes run.
+  // The series admission keeps other importer commits out of this series, but
+  // NOT edits made outside the importer, and the universe is shared across
+  // series — so this snapshot is not the source of truth the universe/series
+  // writes below merge against. Those use the mutator form of
+  // `updateUniverse`/`updateSeries`, which re-reads the freshest persisted
+  // record inside the write queue (issue #8453).
   const universe = await getUniverse(universeId);
   const series = await getSeries(seriesId);
 
@@ -1186,6 +1222,8 @@ async function commitImportOnce({
   // the session; additive mode would duplicate, so it does.
   const session = importId && !replaceMode ? await resolveImportSession(importId, series.id) : null;
   if (session?.status === SESSION_STATUS.COMMITTED) {
+    // The precheck writes nothing; admission answers the replay.
+    if (precheck) return { replay: true };
     // Answered before the locked-arc gate: nothing new is written, so a lock
     // added since the commit cannot turn a recorded success into an error.
     // A receipt lost after the last issue landed (#10762) is completed here.
@@ -1398,13 +1436,12 @@ async function commitImportOnce({
     }
   }
 
-  // Optional AI cleanup of the seeded excerpts (issue #1335). Runs AFTER all
-  // the cheap fail-fast validation (so a bad payload never burns LLM calls) but
-  // BEFORE any destructive write (the wipe + universe/series writes below), so
-  // the heavy per-issue reformat happens while the on-disk state is untouched.
+  // Optional AI cleanup of the seeded excerpts (issue #1335) runs between the
+  // precheck pass and admission (see commitImportOnce): AFTER all the cheap
+  // fail-fast validation above (so a bad payload never burns LLM calls) but
+  // BEFORE any destructive write (the wipe + universe/series writes below).
   // Best-effort — `reformatSeededExcerpts` falls back to the verbatim excerpt
-  // per issue, so import never breaks. Returns a fresh array; the create loop
-  // below seeds from it.
+  // per issue, so import never breaks.
   // A resume only reformats the issues it still has to create — the excerpt is
   // dropped from a surviving one so it costs no LLM call (it is never re-written).
   const pendingProposals = resumePlan
@@ -1412,8 +1449,13 @@ async function commitImportOnce({
       ? { ...proposal, proseExcerpt: undefined }
       : proposal))
     : issuesWithPositions;
-  const issuesToCreate = cleanupFormatting
-    ? await reformatSeededExcerpts(pendingProposals, { contentType })
+  if (precheck) return { pendingProposals };
+  // An issue that became pending only since the precheck (a survivor deleted in
+  // between) has no cleaned excerpt and keeps its verbatim one.
+  const issuesToCreate = formattedExcerpts
+    ? pendingProposals.map((proposal, i) => (proposal.proseExcerpt && isStr(formattedExcerpts[i])
+      ? { ...proposal, proseExcerpt: formattedExcerpts[i] }
+      : proposal))
     : pendingProposals;
   // Issues already on the series that this import does not own — the base for
   // the additive issue-count target below.
@@ -1485,13 +1527,13 @@ async function commitImportOnce({
   // If the user supplied no canon at all (arc-only import), skip the
   // updateUniverse round-trip entirely.
   //
-  // Mutator form (issue #8453): `cleanupFormatting` above can spend minutes
-  // in per-issue LLM calls between the up-front `getUniverse` read and this
-  // write. Merging against the stale `universe` snapshot here would silently
-  // drop any canon edit a concurrent tab/job made to the SAME array during
-  // that window (mergeExtractedBible rebuilds the whole array from its base
-  // list). Merging against `latest` — the freshest persisted record, read
-  // inside updateUniverse's write queue — closes that race.
+  // Mutator form (issue #8453): the series admission serializes importer
+  // commits into ONE series, but the universe is shared across series and is
+  // edited outside the importer too, so the up-front `universe` snapshot can
+  // already be stale. Merging against it would silently drop a concurrent
+  // canon edit to the SAME array (mergeExtractedBible rebuilds the whole array
+  // from its base list). Merging against `latest` — the freshest persisted
+  // record, read inside updateUniverse's write queue — closes that race.
   const updatedUniverse = selectedKindMap.length > 0
     ? await updateUniverse(universe.id, (latest) => Object.fromEntries(
         selectedKindMap.map(([selectionKey, kind, storageKey]) => [
@@ -1546,9 +1588,9 @@ async function commitImportOnce({
       ...biblePatch,
     });
   } else if (sanitizedArc || seasons.length > 0 || Object.keys(biblePatch).length > 0) {
-    // Mutator form (issue #8453): same race as the universe write above —
-    // `cleanupFormatting` can run for minutes before this write, during which
-    // a concurrent tab/job may add or edit a season on this series.
+    // Mutator form (issue #8453): same race as the universe write above — a
+    // tab or job outside the importer may add or edit a season on this series
+    // between the up-front read and this write.
     // `mergeSeasons` rebuilds the whole array from its base list, so merging
     // against the stale `series` snapshot captured before that window would
     // silently drop the concurrent edit. Recompute the seasons merge and the
@@ -1690,6 +1732,11 @@ async function commitImportOnce({
         // the actual state: input present, generation not yet performed.
         stages.idea = { status: 'empty', input: ideaSeed };
       }
+      // The series admission keeps other imports out, but not an ordinary
+      // issue create; ensureIssueWithId re-checks the planned position against
+      // the live issues inside the series write queue and refuses one taken
+      // since the read above (#10763), so the race fails here loudly and rolls
+      // back instead of landing a duplicate position.
       const { created } = await ensureIssueWithId(item.issueId, {
         seriesId: updatedSeries.id,
         title: proposal.title,
