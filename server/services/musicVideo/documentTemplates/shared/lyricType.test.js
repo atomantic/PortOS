@@ -111,6 +111,15 @@ describe('lyricType timing', () => {
     expect(type.lines[0].endSec - type.lines[0].exitSec).toBeCloseTo(8 / 24, 6);
   });
 
+  it('cuts a hook at the next hook onset when it comes before the beat', () => {
+    const type = createLyricType({ song: { beats: [1, 3.5] } }, { exclusive: false, lines: [
+      { text: 'Example hook', role: 'hook', zone: 'upper-right', words: words('Example hook', 2, 0.02) },
+      { text: 'Example hook next', role: 'hook', zone: 'upper-right', words: words('Example hook next', 2.35, 0.02) },
+    ] });
+    expect(type.lines[0].endSec).toBeLessThanOrEqual(type.lines[1].startSec);
+    expect(type.lines[0]).toMatchObject({ exitSec: 2.35, endSec: 2.35 });
+  });
+
   it('preserves hook beat cuts and stamp minimum holds for crowded cues', () => {
     const type = createLyricType({ song: { beats: [3, 4] } }, { exclusive: false, lines: [
       { text: 'Example hook', role: 'hook', words: words('Example hook', 2, 0.02) },
@@ -118,7 +127,7 @@ describe('lyricType timing', () => {
       { text: 'Example stamp', role: 'stamp', words: words('Example stamp', 5, 0.02) },
       { text: 'Example stamp next', role: 'stamp', words: words('Example stamp next', 5.1, 0.02) },
     ] });
-    expect(type.lines[0]).toMatchObject({ exitSec: 3, endSec: 3 });
+    expect(type.lines[0]).toMatchObject({ exitSec: 2.1, endSec: 2.1 });
     expect(type.lines[2].exitSec).toBeCloseTo(5.8, 6);
     expect(type.lines[2].endSec).toBe(type.lines[2].exitSec);
   });

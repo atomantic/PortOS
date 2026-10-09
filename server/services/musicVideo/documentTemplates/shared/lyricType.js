@@ -152,7 +152,7 @@ function wordsForLine(line, songWords = []) {
  * stays at least LYRIC_TIMING.minOnScreenSec unless another cue takes its zone.
  * `line`/`data` fade 0.3s after the last word ends, finishing by the next cue in
  * their zone (or cutting at its onset when a full fade cannot fit). A `stamp`
- * cuts after its hold; a `hook` cuts on the next beat, with no fade.
+ * cuts after its hold; a `hook` cuts on the next beat (or at the next cue if that comes first), with no fade.
  */
 function lineWindow(words, role, { beats = [], nextOnset = null, fps = 24, endSec = null } = {}) {
   const T = LYRIC_TIMING;
@@ -164,7 +164,9 @@ function lineWindow(words, role, { beats = [], nextOnset = null, fps = 24, endSe
     const sorted = beats.filter(finite);
     const from = Math.max(lastEnd, last.startSec, minExit);
     const index = lastAtOrBefore(sorted, from - 1e-6) + 1;
-    const exitSec = index < sorted.length ? sorted[index] : from + T.lineExitDelaySec;
+    let exitSec = index < sorted.length ? sorted[index] : from + T.lineExitDelaySec;
+    // Never hold past the next cue: two hooks on screen together would collide.
+    if (finite(nextOnset) && nextOnset > onset && nextOnset < exitSec) exitSec = nextOnset;
     return { startSec: onset, exitSec, endSec: exitSec };
   }
   let exitSec = lastEnd + T.lineExitDelaySec;
