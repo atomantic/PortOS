@@ -14,6 +14,20 @@ const fakeVite = () => {
   return { server, createServer: vi.fn(async () => server) };
 };
 const fakeBrowser = (page) => ({ close: vi.fn(async () => {}), newPage: vi.fn(async () => page) });
+// A process-backed launch: a Playwright browser server owning `child`, and
+// the client browser `connect` hands the suite. By default a graceful close
+// exits the child; `close`/`kill` replace that server's own steps.
+const ownedServer = ({ close, kill } = {}) => {
+  const child = { exitCode: null, signalCode: null };
+  const server = { process: () => child, wsEndpoint: () => 'ws://127.0.0.1:1/owned',
+    close: vi.fn(close ?? (async () => { child.exitCode = 0; })),
+    kill: vi.fn(kill ?? (async () => { child.signalCode = 'SIGKILL'; })) };
+  return { child, server };
+};
+const ownedChromium = (server, browser = fakeBrowser()) => ({
+  launchServer: vi.fn(async () => server), connect: vi.fn(async () => browser),
+});
+const stalls = () => new Promise(() => {});
 // Each launch attempt's observation reports which attempt it described and
 // when it was taken, so a test can prove the facts came from before the kill.
 const fakeObserver = () => {
@@ -135,11 +149,12 @@ describe('startBrowserFixture', () => {
     expect(server.listen).not.toHaveBeenCalled();
   });
 
-  it('closes the launched browser and Vite when the warmup page fails', async () => {
+  it('closes the launched browser\'s own server and Vite when the warmup page fails', async () => {
     const { server, createServer } = fakeVite();
     const page = { close: vi.fn(async () => {}) };
     const browser = fakeBrowser(page);
-    const chromium = { launch: vi.fn(async () => browser) };
+    const owned = ownedServer();
+    const chromium = ownedChromium(owned.server, browser);
     const cause = new Error('net::ERR_CONNECTION_REFUSED');
 
     const { observeLaunch, samples } = fakeObserver();
@@ -152,23 +167,105 @@ describe('startBrowserFixture', () => {
     expect(samples).toEqual([]);
     expect(error.cause).toBe(cause);
     expect(page.close).toHaveBeenCalledTimes(1);
-    expect(browser.close).toHaveBeenCalledTimes(1);
+    expect(chromium.connect).toHaveBeenCalledWith('ws://127.0.0.1:1/owned', { timeout: 25 });
+    // A graceful close that exits the child needs no kill.
+    expect(owned.server.close).toHaveBeenCalledTimes(1);
+    expect(owned.child.exitCode).toBe(0);
+    expect(owned.server.kill).not.toHaveBeenCalled();
     expect(server.close).toHaveBeenCalledTimes(1);
   });
 
-  it('bounds close() so a stalled browser teardown rejects naming it, still closes Vite, and removes the temp dir', async () => {
+  it('kills an owned browser whose graceful close stalls, inside the cleanup budget, once it has an exit status', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const { server, createServer } = fakeVite();
-    const browser = fakeBrowser({ close: vi.fn(async () => {}) });
-    browser.close = vi.fn(() => new Promise(() => {}));
+    const owned = ownedServer({ close: stalls });
+    const chromium = ownedChromium(owned.server);
+    const fixture = await startBrowserFixture({ name: 'example', createServer, viteConfig: () => SCOPED, chromium, phaseMs: PHASE_MS });
+    expect(chromium.launchServer).toHaveBeenCalledWith(expect.objectContaining({ env: expect.objectContaining({ TMPDIR: fixture.temp }) }));
+
+    let settled = false;
+    const closing = fixture.close().finally(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(14);
+    expect(owned.server.kill).not.toHaveBeenCalled();
+    // 30% of the budget is the graceful close's; the kill and its exit fit in the rest.
+    await vi.advanceTimersByTimeAsync(1);
+    await closing;
+
+    expect(settled).toBe(true);
+    expect(owned.server.kill).toHaveBeenCalledTimes(1);
+    expect(owned.child.signalCode).toBe('SIGKILL');
+    expect(server.close).toHaveBeenCalledTimes(1);
+    expect(existsSync(fixture.temp)).toBe(false);
+  });
+
+  it('keeps a reap without an exit status a failure — a kill that returns proves nothing', async () => {
+    const { createServer } = fakeVite();
+    const owned = ownedServer({ close: stalls, kill: async () => {} });
+    const fixture = await startBrowserFixture({ name: 'example', createServer, viteConfig: () => SCOPED,
+      chromium: ownedChromium(owned.server), phaseMs: PHASE_MS });
+
+    const error = await fixture.close().catch(caught => caught);
+
+    expect(error.message).toBe('browser close stalled after 15ms, then its kill returned without an exit status');
+    expect(owned.server.kill).toHaveBeenCalledTimes(1);
+    expect(existsSync(fixture.temp)).toBe(false);
+  });
+
+  it('reaps owned browsers that arrive after startup gave up with the same bounded cleanup, and reports one it cannot', async () => {
+    // The reap's two steps share one budget with the backstop deadline around
+    // it; real timers would race them on a loaded runner.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { createServer } = fakeVite();
+    const reaped = ownedServer({ close: stalls });
+    const unreaped = ownedServer({ close: stalls, kill: stalls });
+    const arrive = [];
+    const chromium = {
+      launchServer: vi.fn(() => new Promise(resolve => { arrive.push(resolve); })),
+      connect: vi.fn(),
+    };
+    const failureLine = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let error;
+    const failing = startBrowserFixture({ name: 'example', createServer, viteConfig: () => SCOPED, chromium,
+      phaseMs: PHASE_MS, observeLaunch: () => () => 'sampled' }).catch((caught) => { error = caught; });
+
+    while (!chromium.launchServer.mock.calls.length) await new Promise(resolve => setImmediate(resolve));
+    await vi.advanceTimersByTimeAsync(50);
+    // Startup cleanup removes the temp dir with real I/O.
+    while (!error) await new Promise(resolve => setImmediate(resolve));
+    await failing;
+    expect(error.message).toMatch(/^example startup failed during Chromium launch: timed out after 50ms/);
+
+    arrive[0](reaped.server);
+    arrive[1](unreaped.server);
+    await vi.advanceTimersByTimeAsync(15);
+    // Both graceful closes stalled for their share of the budget.
+    expect(reaped.server.kill).toHaveBeenCalledTimes(1);
+    expect(reaped.child.signalCode).toBe('SIGKILL');
+    expect(failureLine).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(30);
+    expect(failureLine).toHaveBeenCalledWith('❌ example browser fixture could not close a late browser: '
+      + 'browser close stalled after 15ms, then its kill stalled after 30ms (no exit status)');
+    // An abandoned launch is never connected to.
+    expect(chromium.connect).not.toHaveBeenCalled();
+    failureLine.mockRestore();
+  });
+
+  it('only ever close()s an attached `{ launch }` adapter — a stalled one rejects naming it, never terminates it, and Vite and the temp dir still go', async () => {
+    const { server, createServer } = fakeVite();
+    const browser = fakeBrowser();
+    browser.close = vi.fn(stalls);
     const chromium = { launch: vi.fn(async () => browser) };
+    const signal = vi.spyOn(process, 'kill');
     const fixture = await startBrowserFixture({ name: 'example', createServer, viteConfig: () => SCOPED, chromium, phaseMs: PHASE_MS });
     expect(existsSync(fixture.temp)).toBe(true);
 
     const error = await fixture.close().catch(caught => caught);
 
     expect(error.message).toBe('browser close stalled after 50ms');
+    expect(signal).not.toHaveBeenCalled();
     expect(server.close).toHaveBeenCalledTimes(1);
     expect(existsSync(fixture.temp)).toBe(false);
+    signal.mockRestore();
   });
 });
 

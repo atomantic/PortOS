@@ -46,6 +46,18 @@
  * passing fixture's console output, so on GitHub Actions the ready and failure
  * lines are also appended to the job's step summary, which keeps the passing
  * timings for comparison with the runner's Chrome warm-up.
+ *
+ * Teardown stalls too (#10830): a graceful close of a system Chrome took 4–5s
+ * on an idle macOS host and 6–10s on a busy one, past the cleanup budget,
+ * which turned it into an error (#10791) while the browser and its profile
+ * directory stayed behind. Playwright's own kill of the same process takes
+ * well under a second and removes the profile, so it gets most of the budget. A `Browser` from `launch()` exposes no process, so a real launch
+ * goes through Playwright's process-backed `launchServer()` and connects to
+ * it: the fixture keeps the server, closes gracefully first, then kills only
+ * that server's own process, and reports success only on its exit status. A
+ * `{ launch }` stand-in — the CDP adapter attaching to an external browser
+ * among them — keeps only `close()`, which never terminates what it attached
+ * to.
  */
 import { appendFileSync, closeSync, openSync, opendirSync, readSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -148,13 +160,42 @@ const withDeadline = (promise, ms, onTimeout) => {
   return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
 };
 
+// Resolves to null once the work succeeds within `ms`, or else to why it did not.
+const failureWithin = (work, ms) => withDeadline(
+  Promise.resolve().then(work).then(() => null, error => `failed: ${error.message}`),
+  ms, () => timeoutError(ms),
+).catch(() => `stalled after ${ms}ms`);
+
+/**
+ * Closes a browser server the fixture launched, inside `budgetMs`: a graceful
+ * close for 30% of it, then the server's own kill for 60%, which signals only
+ * the process Playwright spawned (and its process group) and resolves once
+ * that process closed and its profile was removed. Each step counts only with
+ * the child's exit status in hand, never because a signal was sent; when
+ * neither produces one, the close rejects, saying whether the process had
+ * exited — the kill then waits on Playwright's own stdio and profile cleanup.
+ */
+const reapOwnedBrowser = async (server, budgetMs) => {
+  const child = server.process();
+  const exitStatus = () => child?.exitCode ?? child?.signalCode ?? null;
+  const confirmed = failure => failure ?? (exitStatus() === null ? 'returned without an exit status' : null);
+  const closeFailure = confirmed(await failureWithin(() => server.close(), Math.floor(budgetMs * 0.3)));
+  if (!closeFailure) return;
+  const killFailure = confirmed(await failureWithin(() => server.kill(), Math.floor(budgetMs * 0.6)));
+  if (!killFailure) return;
+  const exit = exitStatus();
+  const state = exit !== null ? ` (process exited with ${exit})` : killFailure.endsWith('exit status') ? '' : ' (no exit status)';
+  throw new Error(`browser close ${closeFailure}, then its kill ${killFailure}${state}`);
+};
+
 /**
  * @param {object} options
  * @param {string} options.name - fixture label used in errors and the temp-dir prefix
  * @param {Function} options.createServer - vite's `createServer`
  * @param {(temp: string) => object} options.viteConfig - inline Vite config; `temp` is the fixture's private temp dir
- * @param {object} options.chromium - playwright-core's `chromium`, or any `{ launch }` stand-in (e.g. one wrapping `connectOverCDP`)
- * @param {object} [options.launchOptions] - extra `chromium.launch` options (executablePath, args, …)
+ * @param {object} options.chromium - playwright-core's `chromium`, whose `launchServer` gives the fixture the browser
+ *   process to reap; or any `{ launch }` stand-in (e.g. one wrapping `connectOverCDP`), which it only ever `close()`s
+ * @param {object} [options.launchOptions] - extra launch options (executablePath, args, …)
  * @param {(page: object, origin: string) => Promise<void>} [options.warmup] - first navigation; the page is closed afterward
  * @param {object} [options.phaseMs] - per-phase budgets; defaults to BROWSER_FIXTURE_PHASE_MS
  * @param {() => () => string} [options.observeLaunch] - starts observing a launch attempt; defaults to _observeOwnedBrowserLaunch
@@ -172,21 +213,29 @@ export async function startBrowserFixture({
   const closers = [];
   const completed = [];
   let failed = false;
+  // Every closer runs under its own cleanup deadline, so one stalled teardown
+  // neither starves another nor outlives the `afterAll` hook (#10791).
+  const closeBounded = ({ closer, label }) => withDeadline(Promise.resolve().then(closer), phaseMs.cleanup,
+    () => new Error(`${label} close stalled after ${phaseMs.cleanup}ms`));
+  // Nothing awaits a resource closed after the hook that acquired it gave up,
+  // so a failure to close it is reported here rather than lost.
+  const discard = owned => closeBounded(owned).catch((error) => {
+    const line = `❌ ${name} browser fixture could not close a late ${owned.label}: ${error.message}`;
+    console.error(line);
+    retainLine(line);
+  });
   // A resource acquired after its phase already failed is closed at once
   // instead of leaking past the hook that abandoned it.
   const own = (closer, label) => {
-    if (failed) closer().catch(() => {});
+    if (failed) discard({ closer, label });
     else closers.push({ closer, label });
   };
-  // Every closer runs under its own cleanup deadline, concurrently, so one
-  // stalled teardown neither starves the other nor outlives the `afterAll`
-  // hook (#10791). The temp dir is removed whether or not a closer stalled.
+  // Closers run concurrently, and the temp dir is removed whether or not one
+  // stalled.
   const closeOwned = async () => {
     const errors = [];
-    await Promise.all(closers.splice(0).reverse().map(({ closer, label }) => withDeadline(
-      Promise.resolve().then(closer), phaseMs.cleanup,
-      () => new Error(`${label} close stalled after ${phaseMs.cleanup}ms`),
-    ).catch(error => errors.push(error.message))));
+    await Promise.all(closers.splice(0).reverse().map(owned => closeBounded(owned)
+      .catch(error => errors.push(error.message))));
     await rm(temp, { recursive: true, force: true });
     if (errors.length) throw new Error(errors.join('; '));
   };
@@ -205,13 +254,35 @@ export async function startBrowserFixture({
     retried = '';
     return value;
   };
+  // A real launch: Playwright's server owns the browser process and the
+  // fixture's browser is its client, so closing reaps that process. A
+  // stand-in without `launchServer` — an attached CDP browser above all —
+  // keeps only its own `close()`.
+  const ownsProcess = typeof chromium.launchServer === 'function';
+  const launchBrowser = async (options, isAbandoned) => {
+    if (!ownsProcess) {
+      const browser = await chromium.launch(options);
+      return { browser, closer: () => browser.close() };
+    }
+    const server = await chromium.launchServer(options);
+    const closer = () => reapOwnedBrowser(server, phaseMs.cleanup);
+    // Nobody will use a browser startup already gave up on: skip connecting.
+    if (isAbandoned()) return { closer };
+    try {
+      return { browser: await chromium.connect(server.wsEndpoint(), { timeout: options.timeout }), closer };
+    } catch (error) {
+      discard({ closer, label: 'browser' });
+      throw error;
+    }
+  };
   // Facts of every launch attempt that timed out, in attempt order, and the
   // recorder of the attempt in flight.
   const launchFacts = [];
   let recordTimedOutAttempt;
   // One Chromium process. A browser that arrives after its attempt was
-  // abandoned is closed at once; one that arrives in time joins `own`, which
-  // closes it at once if the fixture has failed meanwhile. Shortly before its
+  // abandoned is closed at once, under the same bounded cleanup; one that
+  // arrives in time joins `own`, which closes it at once if the fixture has
+  // failed meanwhile. Shortly before its
   // deadline, an attempt still pending samples its child: Playwright's own
   // launch timeout kills that child at the deadline, so a later look would
   // describe the kill rather than the stall.
@@ -229,16 +300,16 @@ export async function startBrowserFixture({
       try { facts = sample(); } catch { facts = 'unavailable'; }
     }, sampleAt);
     const settle = () => { settled = true; clearTimeout(timer); };
-    const launching = chromium.launch({
+    const launching = launchBrowser({
       headless: true,
       timeout,
       ...launchOptions,
       env: { ...process.env, ...launchOptions.env, TMPDIR: temp, TMP: temp, TEMP: temp },
-    }).then((launched) => {
+    }, () => abandoned || failed).then(({ browser, closer }) => {
       settle();
-      if (abandoned) launched.close().catch(() => {});
-      else own(() => launched.close(), 'browser');
-      return launched;
+      if (abandoned) discard({ closer, label: 'browser' });
+      else own(closer, 'browser');
+      return browser;
     }, (error) => { settle(); throw error; });
     const record = () => {
       if (recorded) return;
