@@ -352,6 +352,35 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     expect(result.reused).not.toBe(result.first);
   }, 30000);
 
+  it('lets img.decode() and complete wait for a bridged src instead of rejecting on an unset image', async () => {
+    const created = await projects.createProject({ name: 'Synthetic bridge decode' });
+    await projects.mutateProjectRecord(created.id, (current) => ({ project: { ...current,
+      audioAnalysis: { durationSec: 1, beats: [0], downbeats: [0], sections: [{ id: 'song', label: 'Verse', startSec: 0, endSec: 1 }] },
+      composition: { mode: 'document' },
+      scenes: [{ sceneId: 'card', startSec: 0, endSec: 1, visualLayer: 'card', cardText: '' }],
+    } }));
+    await importDocumentTemplate(created.id);
+    const page = await browser.newPage();
+    await page.setContent((await buildDocumentPreview(await projects.getProject(created.id))).html);
+    const result = await page.evaluate(async () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 2;
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+      addEventListener('message', ({ data }) => {
+        if (data?.type !== 'portos-mv:request') return;
+        setTimeout(() => postMessage({ type: 'portos-mv:asset', key: data.key, blob }, '*'), 50);
+      });
+      postMessage({ type: 'portos-mv:manifest', keys: ['media/a.png'] }, '*');
+      const img = new Image();
+      img.src = 'media/a.png';
+      const pendingComplete = img.complete;
+      await img.decode();
+      return { pendingComplete, complete: img.complete, src: img.src.slice(0, 5), width: img.naturalWidth };
+    });
+    await page.close();
+    expect(result).toEqual({ pendingComplete: false, complete: true, src: 'blob:', width: 2 });
+  }, 30000);
+
   it('keeps event frames identical across shuffled seeks, an excerpt and a full render, and freezes silence', async () => {
     const created = await projects.createProject({ name: 'Synthetic event proof' });
     const base = { durationSec: 0.2, narrativeFunction: 'Mark the story turn', mediumRationale: 'Exact code graphics' };
