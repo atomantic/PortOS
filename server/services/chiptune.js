@@ -14,10 +14,11 @@
  *     repo owns its own git — we only write files.
  */
 
-import { stat } from 'fs/promises';
+import { mkdir, realpath, stat } from 'fs/promises';
 import { join, resolve, isAbsolute } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
 import { atomicWrite, isPathInsideDir } from '../lib/fileUtils.js';
+import { isSymlinkFreeRepoPath } from '../lib/repoPublishPath.js';
 import { writeWavAudioFile } from '../lib/wavAudioFile.js';
 import { chiptuneScoreSchema, CHIPTUNE_LIMITS, CHIPTUNE_NOISE_PRESETS, scoreDurationSec } from '../lib/chiptuneScore.js';
 import { renderScoreToWav } from '../lib/chiptuneRender.js';
@@ -137,13 +138,13 @@ export async function renderChiptuneTrack({ trackId }) {
 const SLUG_RE = /[^a-z0-9-]+/g;
 const slugify = (s) => String(s || '').toLowerCase().trim().replace(SLUG_RE, '-').replace(/^-+|-+$/g, '').slice(0, 64);
 
+const badSubdir = (message) => new ServerError(message, { status: 400, code: 'CHIPTUNE_BAD_SUBDIR' });
+
 // A publish subdir must stay inside the app repo: relative, no traversal, no
 // backslashes (Windows-style separators would dodge the segment check).
 function assertSafeSubdir(subdir) {
-  if (isAbsolute(subdir) || subdir.includes('\\') || subdir.split('/').some((seg) => seg === '..')) {
-    throw new ServerError('Publish subdir must be a relative path inside the app repo', {
-      status: 400, code: 'CHIPTUNE_BAD_SUBDIR',
-    });
+  if (isAbsolute(subdir) || subdir.includes('\\') || subdir.includes('\0') || subdir.split('/').some((seg) => seg === '..')) {
+    throw badSubdir('Publish subdir must be a relative path inside the app repo');
   }
 }
 
@@ -166,11 +167,13 @@ export async function publishChiptuneTrack({ trackId, appId, subdir, slug }) {
   if (app.id === PORTOS_APP_ID || app.archived) {
     throw new ServerError('That app is not a publishable target', { status: 400, code: 'CHIPTUNE_APP_NOT_PUBLISHABLE' });
   }
-  const repoRoot = resolve(app.repoPath);
-  const repoStat = await stat(repoRoot).catch(() => null);
+  const repoStat = await stat(app.repoPath).catch(() => null);
   if (!repoStat?.isDirectory()) {
     throw new ServerError(`App repo path does not exist: ${app.repoPath}`, { status: 400, code: 'CHIPTUNE_APP_REPO_MISSING' });
   }
+  // Anchor on the REAL root: a lexical check cannot see a directory symlink
+  // inside the checkout that points elsewhere (#10894).
+  const repoRoot = await realpath(app.repoPath);
 
   // Validate the RAW subdir before any normalization — stripping a leading
   // slash first would launder an absolute path into a relative-looking one.
@@ -179,12 +182,27 @@ export async function publishChiptuneTrack({ trackId, appId, subdir, slug }) {
   const cleanSubdir = rawSubdir.replace(/\/+$/g, '');
   const targetDir = resolve(repoRoot, cleanSubdir);
   if (targetDir !== repoRoot && !isPathInsideDir(repoRoot, targetDir)) {
-    throw new ServerError('Publish target escapes the app repo', { status: 400, code: 'CHIPTUNE_BAD_SUBDIR' });
+    throw badSubdir('Publish target escapes the app repo');
   }
 
   const name = slugify(slug) || slugify(track.title) || 'track';
-  const audioFilename = await renderScoreToFile(score, targetDir, name);
   const scoreFilename = `${name}.score.json`;
+  // Preflight EVERY destination (WAV fallback, OGG, score sidecar) before the
+  // first mutation so a bad one can't leave a partial publish behind.
+  const assertDestinationsContained = async () => {
+    const targetOk = await isSymlinkFreeRepoPath(repoRoot, targetDir, { leaf: 'dir' });
+    const leavesOk = targetOk && (await Promise.all(
+      [`${name}.wav`, `${name}.ogg`, scoreFilename].map((f) => isSymlinkFreeRepoPath(repoRoot, join(targetDir, f), { leaf: 'file' })),
+    )).every(Boolean);
+    if (!leavesOk) throw badSubdir('Publish target must stay inside the app repo without symlinks');
+  };
+  await assertDestinationsContained();
+  // Create the directory ourselves and re-check the completed parent, so a
+  // link planted after the preflight (or created mid-path) is still caught.
+  await mkdir(targetDir, { recursive: true });
+  await assertDestinationsContained();
+
+  const audioFilename = await renderScoreToFile(score, targetDir, name);
   await atomicWrite(join(targetDir, scoreFilename), `${JSON.stringify(score, null, 2)}\n`);
 
   const rel = (f) => (cleanSubdir ? `${cleanSubdir}/${f}` : f);
