@@ -845,6 +845,40 @@ describe('openSnapshotStream', () => {
     vi.useRealTimers();
 
     await expect(failed).resolves.toMatchObject({ message: 'Snapshot download aborted: snap-1' });
+    // The killed child closes, ending its hold on the snapshot (#10898).
+    proc.emit('close', null, 'SIGKILL');
+  });
+
+  it('holds the snapshot against deletion until tar closes, even after the download aborts (#10898)', async () => {
+    const proc = readySnapshot();
+    const stream = await openSnapshotStream('/dest', 'snap-1');
+    stream.on('error', () => {});
+
+    await expect(deleteSnapshot('/dest', 'snap-1', { source: machineHost }))
+      .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_IN_USE' });
+    // The response is gone but tar may still be reading the snapshot.
+    stream.abort();
+    await expect(deleteSnapshot('/dest', 'snap-1'))
+      .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_IN_USE' });
+
+    proc.exitCode = 143;
+    proc.emit('close', null, 'SIGTERM');
+    // Past the lease, deletion reaches its own existence check.
+    fs.stat.mockResolvedValue({ isDirectory: () => false });
+    await expect(deleteSnapshot('/dest', 'snap-1'))
+      .rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' });
+  });
+
+  it('releases the snapshot when tar cannot be spawned (#10898)', async () => {
+    const proc = readySnapshot();
+    const stream = await openSnapshotStream('/dest', 'snap-1');
+    const failed = errored(stream);
+    proc.emit('error', Object.assign(new Error('spawn tar ENOENT'), { code: 'ENOENT' }));
+    await expect(failed).resolves.toMatchObject({ code: 'ENOENT' });
+
+    fs.stat.mockResolvedValue({ isDirectory: () => false });
+    await expect(deleteSnapshot('/dest', 'snap-1'))
+      .rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' });
   });
 
   it('does not escalate once tar has already exited', async () => {
@@ -860,6 +894,7 @@ describe('openSnapshotStream', () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(proc.kill).not.toHaveBeenCalled();
     vi.useRealTimers();
+    proc.emit('close', 0);
   });
 });
 
@@ -1313,6 +1348,28 @@ describe('restorePostgres', () => {
     expect(readRecoveryJournal()).toBeNull();
     expect(ensureSchema).not.toHaveBeenCalled();
     expect(runDbMigrations).not.toHaveBeenCalled();
+  });
+
+  it('holds the snapshot against deletion while its dump is being admitted, then releases it (#10898)', async () => {
+    const snapshotId = '2026-10-09T00-00-00';
+    // Same module instance as restorePostgres, whose lease table is module state.
+    const { deleteSnapshot } = await import('./backup.js');
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true, isDirectory: () => false });
+    mockLegacyDumpRead();
+    let releaseAdmission;
+    getServerMajorVersion.mockImplementationOnce(() => new Promise(resolveMajor => { releaseAdmission = () => resolveMajor(16); }));
+
+    const restoring = restorePostgres('/dest', snapshotId, { dryRun: true });
+    await vi.waitFor(() => expect(releaseAdmission).toBeTypeOf('function'));
+    // An explicit current-machine source names the same snapshot as the default.
+    await expect(deleteSnapshot('/dest', snapshotId, { source: machineHost }))
+      .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_IN_USE' });
+
+    releaseAdmission();
+    await expect(restoring).resolves.toMatchObject({ status: 'ok', dryRun: true });
+    // Past the lease, deletion reaches its own existence check.
+    await expect(deleteSnapshot('/dest', snapshotId))
+      .rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' });
   });
 
   it('refuses unexpected schema objects before entering maintenance or spawning replay', async () => {
@@ -2353,6 +2410,94 @@ describe('restoreSnapshot manifest verification', () => {
       else process.env.PORTOS_RSYNC = previousRsync;
       spawn.mockReset();
     }
+  });
+
+  // #10898: a verified source is worth nothing if it can be deleted while rsync
+  // still reads it. The child is paused after spawn so each interleaving is
+  // deterministic; verification, ownership and deletion run for real.
+  describe('snapshot source lifetime (#10898)', () => {
+    const relativePath = 'restore-integrity/example.json';
+
+    beforeEach(async () => {
+      await writeManifest({ [relativePath]: await writeSnapshotFile(relativePath, 'trusted backup') });
+    });
+
+    async function startRestore(options) {
+      const proc = fakeProc();
+      spawn.mockReturnValueOnce(proc);
+      const pending = restoreSnapshot(tmpRoot, 'snap-1', options);
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      return { proc, pending };
+    }
+
+    it('refuses deletion through a source alias while a manifested restore reads the snapshot, until rsync closes', async () => {
+      // A symlinked destination plus an explicit current-machine source is a
+      // second spelling of the same snapshot; it must meet the same owner.
+      const aliasRoot = await realFs.mkdtemp(joinPath(tmpdir(), 'portos-restore-alias-'));
+      const aliasDest = joinPath(aliasRoot, 'dest');
+      await realFs.symlink(tmpRoot, aliasDest, 'dir');
+      try {
+        const { proc, pending } = await startRestore({ dryRun: false, subdirFilter: 'restore-integrity' });
+
+        await expect(deleteSnapshot(aliasDest, 'snap-1', { source: machineHost }))
+          .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_IN_USE', context: { snapshotId: 'snap-1' } });
+        await expect(realFs.stat(snapshotDir)).resolves.toBeDefined();
+
+        proc.emit('close', 0);
+        await expect(pending).resolves.toMatchObject({ dryRun: false, verification: { status: 'verified' } });
+        await deleteSnapshot(aliasDest, 'snap-1', { source: machineHost });
+        await expect(realFs.stat(snapshotDir)).rejects.toMatchObject({ code: 'ENOENT' });
+      } finally {
+        await realFs.rm(aliasRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('refuses a new reader while an admitted deletion is still running', async () => {
+      let openGate;
+      const gate = new Promise(resolveGate => { openGate = resolveGate; });
+      // deleteSnapshot's first stat is its existence check, made under the lease.
+      fs.stat.mockImplementationOnce(async (path) => { await gate; return realFs.stat(path); });
+      const deleting = deleteSnapshot(tmpRoot, 'snap-1');
+      await vi.waitFor(() => expect(fs.stat).toHaveBeenCalled());
+
+      await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true }))
+        .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_DELETING' });
+      await expect(openSnapshotStream(tmpRoot, 'snap-1', { source: machineHost }))
+        .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_DELETING' });
+      expect(spawn).not.toHaveBeenCalled();
+
+      openGate();
+      await expect(deleting).resolves.toMatchObject({ deleted: true });
+      await expect(realFs.stat(snapshotDir)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('rejects a live restore whose source vanished (rsync exit 24) as partial, reconciles caches, and releases the source', async () => {
+      const { proc, pending } = await startRestore({ dryRun: false, subdirFilter: 'restore-integrity' });
+      reloadSettings.mockClear();
+      proc.stderr.emit('data', Buffer.from('file has vanished: "restore-integrity/example.json"'));
+      proc.emit('close', 24);
+
+      await expect(pending).rejects.toThrow(/rsync exited with code 24 \(source files vanished during transfer\).*not transactional/s);
+      expect(reloadSettings).toHaveBeenCalledTimes(1);
+      await expect(deleteSnapshot(tmpRoot, 'snap-1')).resolves.toMatchObject({ deleted: true });
+    });
+
+    it('rejects a preview whose source vanished (rsync exit 24) rather than reporting a clean plan', async () => {
+      const { proc, pending } = await startRestore({ dryRun: true });
+      proc.emit('close', 24);
+
+      await expect(pending).rejects.toThrow(/rsync exited with code 24/);
+      await expect(deleteSnapshot(tmpRoot, 'snap-1')).resolves.toMatchObject({ deleted: true });
+    });
+
+    it('releases the source when the integrity preflight refuses the restore', async () => {
+      await writeSnapshotFile('restore-integrity/unrecorded.json', 'added after backup');
+
+      await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false }))
+        .rejects.toMatchObject({ code: 'BACKUP_FILE_INTEGRITY_FAILED' });
+      expect(spawn).not.toHaveBeenCalled();
+      await expect(deleteSnapshot(tmpRoot, 'snap-1')).resolves.toMatchObject({ deleted: true });
+    });
   });
 
   // #10064: database-authority.json is machine-local admission state. A snapshot
@@ -4476,6 +4621,43 @@ describe('runBackup lifecycle', () => {
       await expect(fsp.stat(old1)).resolves.toBeDefined();
       await expect(fsp.stat(old2)).resolves.toBeDefined();
       expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^⚠️ Backup retention skipped: DB dump dump_error — keeping older snapshots$/));
+    });
+
+    it('skips a snapshot a restore is reading and still prunes the rest (#10898)', async () => {
+      const fsp = await actualFs();
+      const { restoreSnapshot } = await import('./backup.js');
+      const reading = await seedSnapshot(machineHost, '2020-01-01T00-00-00');
+      await fsp.writeFile(joinPath(reading, 'manifest.json'), JSON.stringify({ generatedAt: '2020-01-01T00:00:00.000Z', fileCount: 0, files: {} }));
+      const idle = await seedSnapshot(machineHost, '2020-01-02T00-00-00', { generatedAt: '2020-01-02T00:00:00.000Z' });
+
+      const restoreRsync = fakeProc();
+      const backupRsync = fakeProc();
+      spawn.mockReturnValueOnce(restoreRsync).mockReturnValueOnce(backupRsync);
+      const restoring = restoreSnapshot(destRoot, '2020-01-01T00-00-00', { dryRun: true });
+      await waitFor(() => spawn.mock.calls.length === 1, 'restore rsync spawn');
+
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const pending = runBackup(destRoot, { emit: vi.fn() }, { retentionCount: 1 });
+      await waitFor(() => spawn.mock.calls.length === 2, 'backup rsync spawn');
+      backupRsync.emit('close', 0);
+
+      await expect(pending).resolves.toMatchObject({ status: 'ok', prunedSnapshots: 1 });
+      await expect(fsp.stat(idle)).rejects.toThrow();
+      await expect(fsp.stat(reading)).resolves.toBeDefined();
+      expect(warn).toHaveBeenCalledWith('⚠️ Backup retention: skipped snapshot 2020-01-01T00-00-00 (SNAPSHOT_IN_USE)');
+
+      restoreRsync.emit('close', 0);
+      await expect(restoring).resolves.toMatchObject({ dryRun: true, verification: { status: 'verified' } });
+    });
+
+    it('keeps tolerating live source files that vanish mid-backup (rsync exit 24)', async () => {
+      const rsync = fakeProc();
+      spawn.mockReturnValue(rsync);
+      const pending = runBackup(destRoot, { emit: vi.fn() });
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      rsync.emit('close', 24);
+
+      await expect(pending).resolves.toMatchObject({ status: 'ok' });
     });
 
     it('still prunes when the explicit file-backend dump is skipped', async () => {
