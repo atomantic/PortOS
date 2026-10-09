@@ -23,6 +23,7 @@ import { tiktokAdapter } from './tiktok.js';
 import { instagramAdapter } from './instagram.js';
 import { xAdapter } from './x.js';
 import { linkedinAdapter } from './linkedin.js';
+import { facebookAdapter } from './facebook.js';
 import { redditAdapter } from './reddit.js';
 import { stackerNewsAdapter } from './stackerNews.js';
 import { substackAdapter } from './substack.js';
@@ -35,7 +36,7 @@ import { carriedLinks, crossLinkBackfill, dropCarriedLink, mergeCarriedLinks } f
 
 export const PUBLISH_ADAPTERS = Object.freeze({
   youtube: youtubeAdapter, shorts: shortsAdapter, tiktok: tiktokAdapter, instagram: instagramAdapter,
-  x: xAdapter, linkedin: linkedinAdapter, reddit: redditAdapter, stackerNews: stackerNewsAdapter, substack: substackAdapter, suno: sunoAdapter, sunoHook: sunoHookAdapter, distrokid: distrokidAdapter,
+  x: xAdapter, linkedin: linkedinAdapter, facebook: facebookAdapter, reddit: redditAdapter, stackerNews: stackerNewsAdapter, substack: substackAdapter, suno: sunoAdapter, sunoHook: sunoHookAdapter, distrokid: distrokidAdapter,
 });
 // The tab stays open past this: the human publishes from it. After the TTL only
 // the CDP session is dropped; the tab closes on Discard, Fill again, or by hand.
@@ -115,7 +116,7 @@ async function recordDetectedPost(draft, url) {
 /**
  * Follow a filled tab while its session is attached: each time it navigates,
  * the adapter's `findPost` says whether it now shows the director's new post
- * (by URL and title). PortOS presses nothing: at most it types a first comment for the director to send (LinkedIn).
+ * (by URL and title). PortOS presses nothing: at most it types a first comment for the director to send (LinkedIn, Facebook).
  */
 function watchForPost(draft, adapter) {
   const { page } = draft;

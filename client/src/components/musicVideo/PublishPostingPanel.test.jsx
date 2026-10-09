@@ -10,7 +10,7 @@ import PublishPostingPanel, { PUBLISH_TARGETS } from './PublishPostingPanel.jsx'
 // Publish cards and platform rows fold when done; open everything so a test sees the whole page.
 const expandAll = () => { for (let b = screen.queryAllByRole('button', { expanded: false }); b.length; b = screen.queryAllByRole('button', { expanded: false })) b.forEach((x) => fireEvent.click(x)); };
 
-const ALL = ['youtube', 'suno', 'sunoHook', 'x', 'linkedin', 'shorts', 'tiktok', 'instagram', 'reddit', 'stackerNews', 'substack', 'distrokid'];
+const ALL = ['youtube', 'suno', 'sunoHook', 'x', 'linkedin', 'facebook', 'shorts', 'tiktok', 'instagram', 'reddit', 'stackerNews', 'substack', 'distrokid'];
 const hook = (over = {}) => ({ drafts: {}, busy: {}, errors: {}, prepare: vi.fn(), submit: vi.fn(), discard: vi.fn(), enabledTargets: ALL, platforms: {}, recordPost: vi.fn(async () => null), ...over });
 const project = (kit = {}) => ({ id: 'mv-1', publishKit: { builtAt: '2026-01-01T00:00:00.000Z', thumbnails: ['t1.jpg'], ...kit } });
 const row = (label) => screen.getAllByRole('listitem').find((li) => li.querySelector('h4 button > span')?.firstChild?.textContent === label);
@@ -64,18 +64,18 @@ describe('PublishPostingPanel (#9282)', () => {
     expect(publishing.prepare).toHaveBeenLastCalledWith('substack', { publication: 'other' });
   });
 
-  it('fills a LinkedIn draft with the links comment on, unless the director turns it off', () => {
+  it.each([['LinkedIn', 'linkedin'], ['Facebook', 'facebook']])('fills a %s draft with the links comment on, unless the director turns it off', (label, target) => {
     const publishing = hook();
     render(<PublishPostingPanel project={project()} publishing={publishing} />);
     expandAll();
-    const linkedin = row('LinkedIn');
-    const links = within(linkedin).getByLabelText('Put the full video and song links in a first comment');
+    const card = row(label);
+    const links = within(card).getByLabelText('Put the links (full video, song, other posts) in a first comment');
     expect(links).toBeChecked();
-    fireEvent.click(within(linkedin).getByRole('button', { name: 'Fill draft' }));
-    expect(publishing.prepare).toHaveBeenCalledWith('linkedin', {});
+    fireEvent.click(within(card).getByRole('button', { name: 'Fill draft' }));
+    expect(publishing.prepare).toHaveBeenCalledWith(target, {});
     fireEvent.click(links);
-    fireEvent.click(within(linkedin).getByRole('button', { name: 'Fill draft' }));
-    expect(publishing.prepare).toHaveBeenLastCalledWith('linkedin', { linksComment: false });
+    fireEvent.click(within(card).getByRole('button', { name: 'Fill draft' }));
+    expect(publishing.prepare).toHaveBeenLastCalledWith(target, { linksComment: false });
   });
 
   it('picks the X story image from thumbnails, with No image as the default', () => {

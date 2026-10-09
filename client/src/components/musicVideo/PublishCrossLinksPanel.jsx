@@ -3,8 +3,8 @@ import { Check, Link2, LogIn } from 'lucide-react';
 import PublishCard from './PublishCard.jsx';
 import { crossLinkBackfill, crossLinksEnabled } from '../../../../server/lib/musicVideoCrossLinks.js';
 
-const LABELS = { youtube: 'YouTube description', suno: 'Suno caption', x: 'X reply', stackerNews: 'Stacker News comment' };
-const ACTION = { youtube: 'Fill edit', suno: 'Fill edit', x: 'Fill reply', stackerNews: 'Fill comment' };
+const LABELS = { youtube: 'YouTube description', suno: 'Suno caption', x: 'X reply', stackerNews: 'Stacker News comment', facebook: 'Facebook comment' };
+const ACTION = { youtube: 'Fill edit', suno: 'Fill edit', x: 'Fill reply', stackerNews: 'Fill comment', facebook: 'Fill comment' };
 const btn = 'flex items-center gap-1 border border-port-border disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0';
 
 /** One posted platform: the links it lacks, a Fill that opens its edit in the PortOS Browser, and Saved. */

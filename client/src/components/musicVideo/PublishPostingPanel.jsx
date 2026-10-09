@@ -17,6 +17,10 @@ export const PUBLISH_TARGETS = [
     target: 'linkedin', label: 'LinkedIn', accountPlaceholder: 'Your name',
     note: 'Your short post with the 1080p video uploaded, and the links in a first comment. You press Post, then View post: PortOS records the link and types the comment for you to send',
   },
+  {
+    target: 'facebook', label: 'Facebook', accountPlaceholder: 'Your name or Page',
+    note: 'Your short post with the 1080p video uploaded (Facebook shares it as a reel), and the links in a first comment. Posts as the profile or Page active in the PortOS Browser. You press Post, then open the post: PortOS records the link and types the comment for you to send',
+  },
   { target: 'shorts', label: 'YouTube Shorts', note: 'A 9:16 cut (the newest by default)' },
   { target: 'tiktok', label: 'TikTok', note: 'A 9:16 cut (the newest by default), labelled AI-generated' },
   { target: 'instagram', label: 'Instagram Reels', note: 'A 9:16 cut (the newest by default), with the AI label' },
@@ -194,10 +198,10 @@ function TargetOptions({ target, kit, project, options, setOption, commitOption,
       </div>
     );
   }
-  if (target === 'linkedin') {
+  if (target === 'linkedin' || target === 'facebook') {
     return (
       <label className="flex items-center gap-1.5 text-xs min-h-[44px] sm:min-h-0">
-        <input type="checkbox" checked={options.linksComment !== false} onChange={(e) => setOption('linksComment', e.target.checked)} /> Put the full video and song links in a first comment
+        <input type="checkbox" checked={options.linksComment !== false} onChange={(e) => setOption('linksComment', e.target.checked)} /> Put the links (full video, song, other posts) in a first comment
       </label>
     );
   }

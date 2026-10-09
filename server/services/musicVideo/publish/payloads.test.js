@@ -52,12 +52,26 @@ describe('buildPublishPayload (#9282)', () => {
     expect(p).toEqual({
       video: { dir: 'videos', name: 'x.mp4' }, text: 'I made a music video.',
       firstComment: 'Full video: https://youtu.be/abc\nThe song: https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc',
+      crossLinks: ['youtube', 'suno'],
     });
     expect(publishPreviewParts('linkedin', project(), p).map((r) => r.label)).toEqual(['Video', 'Post', 'First comment (you press Comment)']);
     expect(buildPublishPayload('linkedin', project(), { linksComment: false }).firstComment).toBeNull();
     expect(() => buildPublishPayload('linkedin', project({ copy: {} }))).toThrow(/LinkedIn post/);
     expect(() => buildPublishPayload('linkedin', project({ copy: { linkedin: { post: 'x'.repeat(3001) } } }))).toThrow(/limit is 3000/);
     expect(() => buildPublishPayload('linkedin', { ...project(), audioAnalysis: { durationSec: 16 * 60 } })).toThrow(/up to 15 minutes/);
+  });
+
+  it('uploads the 1080p encode to Facebook with the full video, song and other posts in the first comment', () => {
+    const posted = project({ copy: { facebook: { post: 'I made a music video.' } }, posts: { x: { url: 'https://x.com/example/status/42' }, facebook: { url: 'https://www.facebook.com/reel/1' } } });
+    const p = buildPublishPayload('facebook', posted);
+    expect(p).toEqual({
+      video: { dir: 'videos', name: 'x.mp4' }, text: 'I made a music video.',
+      firstComment: 'Full video: https://youtu.be/abc\nThe song: https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc\nX: https://x.com/example/status/42',
+      crossLinks: ['youtube', 'suno', 'x'],
+    });
+    expect(publishPreviewParts('facebook', posted, p).map((r) => r.label)).toEqual(['Video', 'Post', 'First comment (you press Enter)']);
+    expect(buildPublishPayload('facebook', posted, { linksComment: false })).toMatchObject({ firstComment: null, crossLinks: [] });
+    expect(() => buildPublishPayload('facebook', project())).toThrow(/Facebook post/);
   });
 
   it('does not repeat chapters the description already has', () => {
