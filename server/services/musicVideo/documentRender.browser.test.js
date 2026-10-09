@@ -1,4 +1,5 @@
 import { richSceneSource } from './__richSceneFixture.js';
+import { _withTestPreviewLoadDiagnostics } from './testPreviewLoadDiagnostics.js';
 /**
  * The shipped layered template with real Chrome and ffmpeg: an excerpt of a
  * composition-document project seeks the selected take's <video> on SONG time
@@ -216,8 +217,11 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
       WebGL2RenderingContext.prototype.deleteTexture = function (value) { live.delete(value); return remove.call(this, value); };
       window.liveTextureCount = () => live.size;
     });
-    await page.setContent(preview.html);
-    await page.waitForFunction(() => typeof window.portosComposition?.seek === 'function');
+    await _withTestPreviewLoadDiagnostics(page, async markReadiness => {
+      await page.setContent(preview.html);
+      markReadiness();
+      await page.waitForFunction(() => typeof window.portosComposition?.seek === 'function');
+    });
     const transports = await page.evaluate(() => ['RTCPeerConnection', 'webkitRTCPeerConnection', 'WebTransport'].map(key => {
       const descriptor = Object.getOwnPropertyDescriptor(globalThis, key);
       let message; try { new globalThis[key](); } catch (error) { message = error.message; }
