@@ -332,7 +332,7 @@ describe('_observeOwnedBrowserLaunch', () => {
     'does not follow an unowned or recycled PID: %s', (race) => {
       const state = procState();
       const access = fakeProc(state);
-      const processFacts = vi.fn((proc, { read }) => {
+      const processFacts = vi.fn((_proc, { read }) => {
         // The replacement has the same numeric PID, but the open proc handle
         // must still refer to the now-dead original process.
         state.records[1300].exited = true;
