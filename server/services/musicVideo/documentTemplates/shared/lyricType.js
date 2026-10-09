@@ -362,10 +362,14 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
     const placed = [];
     rows.forEach((row, r) => {
       const widths = row.map((item) => measure(`${item.text} `, fontFor(line.role, px)));
-      const rowW = widths.reduce((a, b) => a + b, 0) - measure(' ', fontFor(line.role, px));
+      const spaceW = measure(' ', fontFor(line.role, px));
+      const rowW = widths.reduce((a, b) => a + b, 0) - spaceW;
       let x = rect.align === 'left' ? rect.x : rect.align === 'right' ? rect.x + rect.w - rowW : rect.x + (rect.w - rowW) / 2;
       row.forEach((item, k) => {
-        placed.push({ index: item.index, text: item.text, x, y: top + r * lineH, w: widths[k] });
+        // Words scale about their own centre, so a slam may grow only until it meets the nearer zone edge.
+        const ink = widths[k] - spaceW;
+        const room = 2 * Math.min(x + ink / 2 - rect.x, rect.x + rect.w - (x + ink / 2));
+        placed.push({ index: item.index, text: item.text, x, y: top + r * lineH, w: widths[k], maxScale: ink > 0 ? Math.max(1, room / ink) : 1 });
         x += widths[k];
       });
     });
@@ -403,7 +407,8 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
         ctx.globalAlpha = clamp(s.alpha * exit.alpha);
         ctx.translate(cx + bx, word.y + (s.dy + exit.dy) * unit + by);
         if (s.tilt) ctx.rotate((s.tilt * Math.PI) / 180);
-        if (s.scale !== 1) ctx.scale(s.scale, s.scale);
+        const scale = Math.min(s.scale, word.maxScale);
+        if (scale !== 1) ctx.scale(scale, scale);
         const text = line.role === 'data' ? rollNumbers(word.text, (t - s.startSec) / T.dataRollSec) : word.text;
         const x0 = -(word.w - measure(' ', font)) / 2;
         if (line.role === 'data') {
