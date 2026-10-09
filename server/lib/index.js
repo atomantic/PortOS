@@ -755,6 +755,7 @@ export * from './creativeDirectorVideoCompiler.js';
 export * from './providerTypes.js';
 export * from './notificationTypes.js';
 export * from './videoTimelineFades.js';
+export * from './videoTimelineSourceSpans.js';
 // `tokenize` collides with `bm25.js`'s own tokenizer — namespaced like `runners`.
 export * as voiceEcho from './voiceEcho.js';
 export * from './voiceEngines.js';

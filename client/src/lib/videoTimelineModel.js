@@ -6,7 +6,11 @@
  * point of the lane model is that what the editor shows is what renders. When
  * a rule changes on one side (fade curve, overlay placement, asset kinds),
  * change it on the other in the same commit. Fade fitting is shared through
- * server/lib/videoTimelineFades.js rather than mirrored.
+ * server/lib/videoTimelineFades.js rather than mirrored, and so are the
+ * source-span rules (server/lib/videoTimelineSourceSpans.js): the export clamps
+ * a clip trim to the history clip's real length and a bed to its file's real
+ * length, so the preview plays `resolvePlaybackLanes()` — authored lanes run
+ * through those same rules — never the authored values directly.
  *
  * No React, no I/O — safe to import from the page, its child components, and
  * tests alike.
@@ -15,7 +19,15 @@
 import { clamp } from '../utils/formatters';
 import { fitFades } from '../../../server/lib/videoTimelineFades.js';
 
+import {
+  historySourceDuration,
+  resolveClipSpan,
+  resolveStillFades,
+  resolveAudioSpan,
+} from '../../../server/lib/videoTimelineSourceSpans.js';
+
 export { fitFades } from '../../../server/lib/videoTimelineFades.js';
+export { historySourceDuration };
 
 export const IMAGE_ASSET_KINDS = ['images', 'video-thumbnails'];
 export const AUDIO_ASSET_KINDS = ['audio', 'music'];
@@ -43,6 +55,55 @@ export const segmentDuration = (segment) => {
 };
 
 export const timelineDuration = (segments) => (segments || []).reduce((sum, s) => sum + segmentDuration(s), 0);
+
+const sameFades = (entry, fades) => (entry.fadeInSec || 0) === fades.fadeInSec && (entry.fadeOutSec || 0) === fades.fadeOutSec;
+
+/**
+ * The segment as the export will play it: a clip's trim clamped to the history
+ * clip's real length (`sourceDurationSec`, null when unknown) and its fades
+ * refit; a still's fades refit against its hold. Returns the SAME object when
+ * nothing had to move, so memoized blocks keep their identity.
+ */
+export const resolvePlaybackSegment = (segment, sourceDurationSec) => {
+  if (!segment) return segment;
+  if (segment.type === 'still') {
+    const fades = resolveStillFades(segment);
+    return sameFades(segment, fades) ? segment : { ...segment, ...fades };
+  }
+  const { inSec, outSec, fadeInSec, fadeOutSec } = resolveClipSpan(segment, sourceDurationSec);
+  if (outSec === segment.outSec && inSec === segment.inSec && sameFades(segment, { fadeInSec, fadeOutSec })) return segment;
+  return { ...segment, inSec, outSec, fadeInSec, fadeOutSec };
+};
+
+/** An audio bed as the export will play it, given its file's real length (null when unknown). */
+export const resolvePlaybackTrack = (track, fileDurationSec) => {
+  const span = resolveAudioSpan(track, fileDurationSec);
+  const same = span.offsetSec === (track.offsetSec || 0)
+    && span.durationSec === (track.durationSec || 0)
+    && sameFades(track, span);
+  return same ? track : { ...track, ...span };
+};
+
+/** Identity of a bed's audio file — what a loaded-duration report is keyed by. */
+export const bedAssetId = (track) => `${track.assetKind}/${track.assetFile}`;
+
+/**
+ * Authored lanes → the lanes the preview plays. `sourceDurationFor(clipId)` and
+ * `bedDurationFor(track)` return a known length in seconds or null; an unknown
+ * length leaves the authored span alone. Entries keep their `_key`s and lane
+ * positions, so selection and the dnd identity carry straight over. The authored
+ * lanes remain what the editor edits and saves — this is a view of them.
+ */
+export const resolvePlaybackLanes = ({ segments, audio }, { sourceDurationFor, bedDurationFor }) => ({
+  segments: (segments || []).map((segment) => resolvePlaybackSegment(
+    segment,
+    segment.type === 'still' ? null : sourceDurationFor(segment.clipId),
+  )),
+  audio: {
+    ...audio,
+    tracks: (audio?.tracks || []).map((track) => resolvePlaybackTrack(track, bedDurationFor(track))),
+  },
+});
 
 /**
  * Map project-time `t` to the (segmentIndex, withinSegmentSec) pair the
@@ -231,14 +292,21 @@ export const segmentVolumeAt = (segment, clipVolume, within) => {
  * carries only clip segments, so a project built from stills would report zero
  * blocks and zero seconds while playing back perfectly in the editor. A v1
  * project that predates the lane falls back to `clips`, which for it IS the
- * lane. `thumbnailFor(clipId)` resolves a video clip's thumbnail filename.
+ * lane. `thumbnailFor(clipId)` resolves a video clip's thumbnail filename;
+ * the optional `sourceDurationFor(clipId)` (seconds or null) makes the total
+ * source-aware, matching what the editor previews and the export renders.
  */
-export const projectSummary = (project, thumbnailFor) => {
+export const projectSummary = (project, thumbnailFor, sourceDurationFor = null) => {
   const segments = Array.isArray(project?.segments) ? project.segments : (project?.clips || []);
   let totalSec = 0;
   let firstThumb = null;
   for (const segment of segments) {
-    totalSec += segmentDuration(segment);
+    // With history durations available, count what the export will render
+    // rather than the trim as it was authored.
+    const playable = sourceDurationFor && segment.type !== 'still'
+      ? resolvePlaybackSegment(segment, sourceDurationFor(segment.clipId))
+      : segment;
+    totalSec += segmentDuration(playable);
     if (firstThumb) continue;
     firstThumb = segment.type === 'still'
       ? assetUrl(segment.assetKind, segment.assetFile)

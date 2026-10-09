@@ -47,6 +47,7 @@ import {
   fitFades,
 } from './segments.js';
 import { AUDIO_NORM, buildAudioBedMix, fmtSec } from './audioBedMix.js';
+import { historySourceDuration, resolveClipSpan, resolveStillFades, resolveAudioSpan } from '../../lib/videoTimelineSourceSpans.js';
 
 const PROJECTS_FILE = join(PATHS.data, 'video-projects.json');
 
@@ -55,9 +56,6 @@ const PROJECTS_FILE = join(PATHS.data, 'video-projects.json');
 const PROBE_CONCURRENCY = 8;
 // A stills-only project has no clip to take geometry from.
 const DEFAULT_CANVAS = { width: 1280, height: 720, fps: 24 };
-// Floor for a probe-clamped audio slice — atrim with start === end produces
-// an empty stream that amix rejects.
-const MIN_MEDIA_SEC = 0.05;
 
 // Per-project render mutex map. Keyed by projectId so two different projects
 // can render in parallel; same project re-render returns 409 with the
@@ -300,7 +298,7 @@ export async function resolveTimeline(rawProject) {
       if (!assetPath) { missingAssets.push(`${seg.assetKind}/${seg.assetFile}`); continue; }
       prepared.push({
         kind: 'still', i, seg, assetPath, duration: seg.durationSec,
-        fades: fitFades(seg.fadeInSec, seg.fadeOutSec, seg.durationSec),
+        fades: resolveStillFades(seg),
       });
       continue;
     }
@@ -308,20 +306,18 @@ export async function resolveTimeline(rawProject) {
     if (!entry) { missing.push(seg.clipId); continue; }
     const videoPath = safeUnder(PATHS.videos, entry.filename);
     if (!videoPath || !existsSync(videoPath)) { missing.push(seg.clipId); continue; }
-    const sourceDuration = entry.numFrames && entry.fps ? entry.numFrames / entry.fps : null;
-    const inSec = Math.max(0, seg.inSec);
-    const outSec = sourceDuration != null ? Math.min(seg.outSec, sourceDuration) : seg.outSec;
-    if (outSec - inSec < 1 / Math.max(1, entry.fps || 24)) {
+    // Shared with the editor preview (lib/videoTimelineSourceSpans.js): the
+    // trim is clamped to the history entry's real length and the fades refit
+    // against what is left, so a fade authored for the stored trim cannot
+    // outlast a clip that has since been shortened (a negative fade start
+    // renders as an all-black segment).
+    const { inSec, outSec, duration, fadeInSec, fadeOutSec } = resolveClipSpan(seg, historySourceDuration(entry));
+    if (duration < 1 / Math.max(1, entry.fps || 24)) {
       throw new ServerError(`Clip ${i} trim too short — must be ≥ 1 frame`, {
         status: 400, code: 'CLIP_TOO_SHORT', context: { index: i, clipId: seg.clipId },
       });
     }
-    // A fade authored against the stored trim can outlast a clip that the
-    // history entry has since shortened; rescale rather than emitting a
-    // negative fade start (which renders as an all-black segment).
-    const duration = outSec - inSec;
-    const fades = fitFades(seg.fadeInSec, seg.fadeOutSec, duration);
-    prepared.push({ kind: 'clip', i, seg, entry, videoPath, inSec, outSec, duration, fades });
+    prepared.push({ kind: 'clip', i, seg, entry, videoPath, inSec, outSec, duration, fades: { fadeInSec, fadeOutSec } });
   }
 
   const overlays = [];
@@ -358,15 +354,9 @@ export async function resolveTimeline(rawProject) {
 
   for (const tr of audioTracks) {
     const probed = durationByPath.get(tr.assetPath);
-    // A probe reporting LESS than the requested slice is authoritative.
-    // `null` (no ffprobe on PATH, unreadable container) must NOT collapse into
-    // "0 seconds available" — leave the stored slice alone in that case.
-    if (probed == null) continue;
-    tr.offsetSec = Math.min(tr.offsetSec, Math.max(0, probed - MIN_MEDIA_SEC));
-    tr.durationSec = Math.min(tr.durationSec, Math.max(MIN_MEDIA_SEC, probed - tr.offsetSec));
-    const fitted = fitFades(tr.fadeInSec, tr.fadeOutSec, tr.durationSec);
-    tr.fadeInSec = fitted.fadeInSec;
-    tr.fadeOutSec = fitted.fadeOutSec;
+    // An unknown probe (`null`: no ffprobe on PATH, unreadable container) keeps
+    // the stored slice — it must not collapse into "0 seconds available".
+    Object.assign(tr, resolveAudioSpan(tr, probed));
   }
 
   const resolvedSegments = prepared.map((p) => (p.kind === 'still'

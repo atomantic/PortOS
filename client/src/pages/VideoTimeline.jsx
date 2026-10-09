@@ -5,7 +5,7 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import { formatDurationSec } from '../utils/formatters';
-import { projectSummary } from '../lib/videoTimelineModel';
+import { projectSummary, historySourceDuration } from '../lib/videoTimelineModel';
 
 export default function VideoTimeline() {
   const navigate = useNavigate();
@@ -54,7 +54,8 @@ export default function VideoTimeline() {
   const projectStats = useMemo(() => {
     const historyMap = new Map(history.map((h) => [h.id, h]));
     const thumbnailFor = (clipId) => historyMap.get(clipId)?.thumbnail;
-    return new Map(projects.map((p) => [p.id, projectSummary(p, thumbnailFor)]));
+    const sourceDurationFor = (clipId) => historySourceDuration(historyMap.get(clipId));
+    return new Map(projects.map((p) => [p.id, projectSummary(p, thumbnailFor, sourceDurationFor)]));
   }, [projects, history]);
 
   return (

@@ -472,3 +472,111 @@ describe('lane caps', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Remove plate.png from timeline' })).toBeInTheDocument());
   });
 });
+
+// The saved lanes hold what the author ASKED for; the export resolves them
+// against the real sources (a shortened history clip, a short music file). The
+// preview must play that resolved timeline, or its cuts, fades and overlays run
+// on a different clock than the render (#10866).
+describe('source-aware playback', () => {
+  const seekTo = (seconds) => fireEvent.change(screen.getByRole('slider', { name: 'Playhead position' }), { target: { value: String(seconds) } });
+
+  it('advances past a clip whose source is shorter than its authored trim, matching the export', async () => {
+    // Authored 0-8s with 3s+3s fades, but the history entry is 1s long: the
+    // export renders 1s with the fades refit to 0.5s+0.5s.
+    api.history = [{ ...api.history[0], numFrames: 24, fps: 24 }];
+    api.project = project({
+      segments: [{ ...clipSegment, outSec: 8, fadeInSec: 3, fadeOutSec: 3 }, stillSegment],
+      overlays: [{ ...overlayEntry, startSec: 0, durationSec: 10, fadeOutSec: 2 }],
+    });
+    await renderEditor();
+
+    // Total is 1s clip + 3s still, not 8 + 3.
+    expect(screen.getByRole('slider', { name: 'Playhead position' })).toHaveAttribute('max', '4');
+
+    // Half a second in, the refit fade is already at full level: no scrim.
+    seekTo(0.5);
+    expect(screen.queryByTestId('fade-scrim')).not.toBeInTheDocument();
+
+    // The next cut lands at 1s, so the still is up at 1.5s.
+    const previewStill = () => document.querySelector('img.object-contain[src="/data/images/plate.png"]');
+    expect(previewStill()).toBeNull();
+    seekTo(1.5);
+    expect(previewStill()).not.toBeNull();
+
+    // The overlay's 10s window is clamped to the 4s timeline, so its fade-out
+    // starts at 2s and is half spent at 3s.
+    seekTo(3);
+    expect(Number(screen.getByTestId('overlay-preview').style.opacity)).toBeCloseTo(0.5);
+  });
+
+  it('keeps the authored spans when the history clip has no frame metadata', async () => {
+    api.history = [{ ...api.history[0], numFrames: undefined }];
+    api.project = project({ segments: [{ ...clipSegment, outSec: 8, fadeInSec: 3 }] });
+    await renderEditor();
+    expect(screen.getByRole('slider', { name: 'Playhead position' })).toHaveAttribute('max', '8');
+  });
+
+  describe('bed audio', () => {
+    const shortBed = { ...bedEntry, durationSec: 10, fadeInSec: 4, fadeOutSec: 4 };
+    // The lane block is the one carrying an inline width; a selected bed's
+    // inspector repeats the filename.
+    const bedBlock = () => screen.getAllByText('bed.mp3').map((node) => node.parentElement).find((node) => node.style.width);
+    const reportBedLength = (el, seconds) => {
+      Object.defineProperty(el, 'duration', { configurable: true, value: seconds });
+      act(() => { el.dispatchEvent(new Event('loadedmetadata')); });
+    };
+
+    it('plays a short file on the fade envelope the export builds once its length loads', async () => {
+      api.project = project({ segments: [clipSegment], audio: { clipVolume: 1, tracks: [shortBed] } });
+      const { container } = renderEditorRoute();
+      await awaitPageLoaded('Loading timeline project');
+      const el = container.querySelector('audio');
+
+      // Until the length is known the authored placement stands.
+      expect(bedBlock().style.width).toBe('600px');
+
+      reportBedLength(el, 2);
+      expect(bedBlock().style.width).toBe('120px');
+
+      // 2s file, 4s+4s authored fades refit to 1s+1s: gain is 0.5 at 0.5s.
+      seekTo(0.5);
+      await waitFor(() => expect(el.volume).toBeCloseTo(0.5));
+
+      // Past the end of the file the bed is inactive.
+      seekTo(3);
+      await waitFor(() => expect(el.volume).toBe(0));
+    });
+
+    it('ignores a length that is not finite and never persists a measured one', async () => {
+      api.project = project({ segments: [clipSegment], audio: { clipVolume: 1, tracks: [shortBed] } });
+      const { container, unmount } = renderEditorRoute();
+      await awaitPageLoaded('Loading timeline project');
+      const el = container.querySelector('audio');
+
+      reportBedLength(el, Infinity);
+      expect(bedBlock().style.width).toBe('600px');
+
+      reportBedLength(el, 2);
+      unmount();
+      // Nothing was edited, so nothing is saved; the measured span is a view.
+      expect(api.updateTimelineProject).not.toHaveBeenCalled();
+    });
+
+    it('forgets a removed bed so a later placement of the file starts from its own span', async () => {
+      api.project = project({ segments: [clipSegment], audio: { clipVolume: 1, tracks: [shortBed] } });
+      const { container } = renderEditorRoute();
+      await awaitPageLoaded('Loading timeline project');
+      reportBedLength(container.querySelector('audio'), 2);
+      expect(bedBlock().style.width).toBe('120px');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remove bed.mp3 from timeline' }));
+      expect(container.querySelector('audio')).toBeNull();
+
+      fireEvent.click(screen.getByRole('tab', { name: /Audio/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+      // The fresh placement is the 4s default (the timeline is 4s) until ITS
+      // element reports a length — the earlier measurement must not leak in.
+      expect(bedBlock().style.width).toBe('240px');
+    });
+  });
+});
