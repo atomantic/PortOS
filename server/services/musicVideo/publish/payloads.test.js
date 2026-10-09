@@ -17,6 +17,7 @@ const kit = (over = {}) => ({
     youtube: { title: 'Song — Music Video', description: 'The story.\n\nMore.', tags: ['ai music', ' '] },
     shorts: { title: 'Song #Shorts', description: 'Hook' },
     x: { hook: 'Watch this', story: 'How it was made' },
+    linkedin: { post: 'I made a music video.' },
     tiktok: { caption: 'tt caption' },
     instagram: { caption: 'made with @portos and @suno' },
     reddit: { title: '[Electropop] Song', body: 'Body' },
@@ -44,6 +45,19 @@ describe('buildPublishPayload (#9282)', () => {
     }
     const fresh = { ...project({ master: { filename: 'master.mp4', renderHistoryId: 'new' } }), renderHistoryId: 'new' };
     expect(buildPublishPayload('youtube', fresh).video.name).toBe('master.mp4');
+  });
+
+  it('uploads the 1080p encode to LinkedIn with the links in the first comment, never in the post', () => {
+    const p = buildPublishPayload('linkedin', project());
+    expect(p).toEqual({
+      video: { dir: 'videos', name: 'x.mp4' }, text: 'I made a music video.',
+      firstComment: 'Full video: https://youtu.be/abc\nThe song: https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc',
+    });
+    expect(publishPreviewParts('linkedin', project(), p).map((r) => r.label)).toEqual(['Video', 'Post', 'First comment (you press Comment)']);
+    expect(buildPublishPayload('linkedin', project(), { linksComment: false }).firstComment).toBeNull();
+    expect(() => buildPublishPayload('linkedin', project({ copy: {} }))).toThrow(/LinkedIn post/);
+    expect(() => buildPublishPayload('linkedin', project({ copy: { linkedin: { post: 'x'.repeat(3001) } } }))).toThrow(/limit is 3000/);
+    expect(() => buildPublishPayload('linkedin', { ...project(), audioAnalysis: { durationSec: 16 * 60 } })).toThrow(/up to 15 minutes/);
   });
 
   it('does not repeat chapters the description already has', () => {

@@ -12,6 +12,9 @@ import { suggestSocialCuts } from '../socialCuts.js';
 
 const TITLE_LIMITS = { youtube: 100, shorts: 100, reddit: 300, stackerNews: 80, substack: 100 };
 const DEFAULT_SUBREDDIT = 'aivideo';
+// LinkedIn's limits for a video post made from a computer: 3,000 characters of text, 15 minutes of video.
+const LINKEDIN_POST_MAX = 3000;
+const LINKEDIN_VIDEO_MAX_SEC = 15 * 60;
 
 const missing = (message) => new ServerError(message, { status: 422, code: 'PUBLISH_ASSET_MISSING' });
 const stale = () => new ServerError('The publishing kit was built from an earlier render — rebuild the kit before filling this draft', { status: 409, code: 'PUBLISH_KIT_STALE' });
@@ -154,6 +157,23 @@ const BUILDERS = {
       links ? { text: links, media: null } : null,
     ].filter(Boolean);
     return { posts };
+  },
+  // A native upload (LinkedIn shows those to more people than outside links);
+  // the links go in the first comment, never in the post.
+  linkedin: (project, kit, options = {}) => {
+    const post = text(kit.copy?.linkedin?.post);
+    if (!post) throw missing('Write the LinkedIn post in the release copy first');
+    if (post.length > LINKEDIN_POST_MAX) throw missing(`The LinkedIn post is ${post.length} characters; the limit is ${LINKEDIN_POST_MAX}`);
+    const clip = (kit.exports || []).find((e) => e.kind === 'x-1080p')?.filename;
+    if (!clip) throw missing('Build the publishing kit first — the LinkedIn post uploads its 1080p encode');
+    requireFreshKit(project, kit);
+    const duration = Number(project?.audioAnalysis?.durationSec);
+    if (duration > LINKEDIN_VIDEO_MAX_SEC) throw missing(`LinkedIn takes videos up to 15 minutes; this one is ${Math.ceil(duration / 60)}`);
+    const links = options.linksComment === false ? '' : [
+      fullVideoUrl(kit) ? `Full video: ${fullVideoUrl(kit)}` : '',
+      songUrl(kit, options) ? `The song: ${songUrl(kit, options)}` : '',
+    ].filter(Boolean).join('\n');
+    return { video: { dir: 'videos', name: clip }, text: post, firstComment: links || null };
   },
   reddit: (project, kit, options = {}) => {
     // r/aivideo is the default (#9307): a native video post, title + flair, no
@@ -322,6 +342,11 @@ export function publishPreviewParts(platform, project, payload) {
         const media = post.media ? (post.media.dir === 'videos' ? ' · with the 1080p video' : ' · with an image') : '';
         add(i === 0 ? `Post${media}` : `Reply ${i}${media}`, post.text);
       });
+      break;
+    case 'linkedin':
+      add('Video', 'The 1080p encode of the final render');
+      add('Post', p.text);
+      add('First comment (you press Comment)', p.firstComment);
       break;
     case 'reddit':
       add('Where', `r/${p.subreddit}`);

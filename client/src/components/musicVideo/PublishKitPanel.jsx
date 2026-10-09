@@ -22,6 +22,7 @@ export const PUBLISH_FIELDS = [
   ] },
   { platform: 'shorts', label: 'YouTube Shorts', fields: [{ key: 'title', label: 'Title', max: 100 }, { key: 'description', label: 'Description', multiline: true }] },
   { platform: 'x', label: 'X', fields: [{ key: 'hook', label: 'Hook post (no links)', max: 280, multiline: true }, { key: 'story', label: 'Story reply', multiline: true }] },
+  { platform: 'linkedin', label: 'LinkedIn', fields: [{ key: 'post', label: 'Post (no links: they go in the first comment)', max: 3000, multiline: true }] },
   { platform: 'tiktok', label: 'TikTok', fields: [{ key: 'caption', label: 'Caption', max: 2200, multiline: true }] },
   { platform: 'instagram', label: 'Instagram Reels', fields: [{ key: 'caption', label: 'Caption', max: 2200, multiline: true }] },
   { platform: 'reddit', label: 'Reddit', fields: [{ key: 'title', label: 'Title', max: 300 }, { key: 'body', label: 'Body (markdown)', multiline: true }] },
