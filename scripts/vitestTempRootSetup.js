@@ -5,7 +5,7 @@
  */
 import { readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { OWNER_FILE } from './lib/vitestStaleRunRoots.js';
+import { OWNER_FILE, killTestBrowsersUnder } from './lib/vitestStaleRunRoots.js';
 
 export function setup() {}
 
@@ -78,6 +78,9 @@ export function isEffectivelyEmpty(path) {
 export function teardown() {
   const root = process.env.PORTOS_TEST_TEMP_ROOT;
   if (!root) return;
+  // A browser a suite failed to tear down would outlive the run (#10840).
+  const browsers = process.platform === 'win32' ? 0 : killTestBrowsersUnder(root);
+  if (browsers) console.warn(`⚠️ test browser leak: stopped ${browsers} process${browsers === 1 ? '' : 'es'} still running under the run temp root`);
   let entries;
   try {
     entries = readdirSync(root);

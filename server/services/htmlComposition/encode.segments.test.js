@@ -112,6 +112,97 @@ describe('encodeComposition at segment seams', () => {
   });
 });
 
+// #10839: one stalled screenshot restarts that worker's browser, which redraws
+// the frame it was on; a frame that keeps stalling still fails the render.
+describe('encodeCompositionSegments when a worker browser stalls', () => {
+  const stalled = () => new Error('Browser command timed out: Page.captureScreenshot');
+  // `stallsAt(frame, captureCount)` decides whether this page's capture stalls.
+  const capturePage = (name, stallsAt = () => false) => {
+    const state = { name, closed: 0, captures: 0, failure: null, seekAt: null };
+    return Object.assign(state, {
+      check() { if (state.failure) throw state.failure; },
+      async evaluate(expression) { const match = /seek\(([^)]+)\)/.exec(expression); if (match) state.seekAt = Number(match[1]); },
+      async send(method) {
+        if (state.failure) throw state.failure;
+        if (method !== 'Page.captureScreenshot') return {};
+        state.captures += 1;
+        // A CDP deadline poisons the whole page connection, as in browser.js.
+        if (stallsAt(Math.round(state.seekAt * 10), state.captures)) throw (state.failure = stalled());
+        return { data: PNG };
+      },
+      async close() { state.closed += 1; },
+    });
+  };
+  const run = (first, openPage, options = {}) => {
+    const written = [];
+    const encode = (p, c, path, encodeOptions) => encodeComposition(p, c, path, {
+      ...encodeOptions, locateFfmpeg: async () => 'ffmpeg', tagFilter: async () => 'format=yuv420p',
+      spawnProcess: () => {
+        const proc = new EventEmitter();
+        proc.stderr = new EventEmitter();
+        proc.stdin = new EventEmitter();
+        proc.stdin.write = (_bytes, callback) => { written.push(path); callback?.(); return true; };
+        proc.stdin.end = () => proc.emit('close', 0);
+        // A stop (another worker failed) ends the stub encoder as ffmpeg would.
+        proc.kill = signal => { setImmediate(() => proc.emit('close', null, signal)); return true; };
+        return proc;
+      },
+    });
+    const result = encodeCompositionSegments(first, { fps: 10, durationSec: 48, width: 4, height: 4, motionBlur: 1 }, '/tmp/stall.mp4', {
+      workers: 2, openPage, encode, locateFfmpeg: async () => 'ffmpeg', runFfmpeg: async () => ({ ok: true }), ...options,
+    });
+    return { result, written };
+  };
+
+  it('restarts the stalled worker and still writes every frame', async () => {
+    const opened = [];
+    const retries = [];
+    // The second worker's first browser stalls once, on song frame 300.
+    const openPage = async () => {
+      const p = capturePage(`extra${opened.length}`, opened.length === 0 ? frame => frame === 300 : undefined);
+      opened.push(p);
+      return p;
+    };
+    const first = capturePage('first');
+    const { result, written } = run(first, openPage, { onRetry: detail => retries.push(detail) });
+    expect(await result).toEqual({});
+    expect(written.filter(path => path.endsWith('.part0.mp4'))).toHaveLength(240);
+    expect(written.filter(path => path.endsWith('.part1.mp4'))).toHaveLength(240);
+    expect(retries.map(({ frame, attempt, segment }) => ({ frame, attempt, segment }))).toEqual([{ frame: 300, attempt: 1, segment: 1 }]);
+    // The stalled browser closed before its replacement opened and redrew frame 300.
+    expect(opened).toHaveLength(2);
+    expect(opened.map(p => p.closed)).toEqual([1, 1]);
+    expect(opened[1].captures).toBe(180);
+    expect(first.closed).toBe(0);
+  });
+
+  it('replaces the caller\'s page when the first worker stalls and says so', async () => {
+    const first = capturePage('first', frame => frame === 10);
+    const { result } = run(first, async () => capturePage('extra'));
+    expect(await result).toEqual({ pageReplaced: true });
+    expect(first.closed).toBe(1);
+  });
+
+  it('fails the render, naming the frame, when the same frame keeps stalling', async () => {
+    const opened = [];
+    const openPage = async () => { const p = capturePage('extra', frame => frame === 300); opened.push(p); return p; };
+    const { result } = run(capturePage('first'), openPage);
+    await expect(result).rejects.toThrow(/song frame 300 still failing after 2 browser restarts/);
+    // The first worker's page, plus the second worker's original and two restarts.
+    expect(opened).toHaveLength(3);
+    expect(opened.every(p => p.closed === 1)).toBe(true);
+  });
+
+  it('does not restart for a composition script failure', async () => {
+    const opened = [];
+    const broken = capturePage('first');
+    broken.evaluate = async () => { throw new Error('Composition script failed: boom'); };
+    const { result } = run(broken, async () => { const p = capturePage('extra'); opened.push(p); return p; });
+    await expect(result).rejects.toThrow(/Composition script failed: boom/);
+    expect(opened).toHaveLength(1);
+  });
+});
+
 const ffmpeg = await findFfmpeg();
 describe.skipIf(!ffmpeg)('encodeCompositionSegments with real ffmpeg', () => {
   it('joins encoded segments into one stream with every frame and no leftovers', async () => {
