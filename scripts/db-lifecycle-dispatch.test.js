@@ -39,7 +39,12 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh start/stop backend 
     const binDir = join(root, 'bin');
     mkdirSync(binDir);
     symlinkSync(process.execPath, join(binDir, 'node'));
-    for (const name of ['docker', 'psql', 'pg_isready']) writeStub(binDir, name, LOGGING_STUB(name));
+    for (const name of ['docker', 'psql']) writeStub(binDir, name, LOGGING_STUB(name));
+    // Defaults to "accepting connections"; STUB_ISREADY_RC=2 simulates a down endpoint.
+    writeStub(binDir, 'pg_isready', `#!/bin/sh
+echo "pg_isready $*" >> "$STUB_LOG"
+exit "\${STUB_ISREADY_RC:-0}"
+`);
     // Not Darwin, so db.sh skips prepending a real Homebrew Postgres to PATH.
     writeStub(binDir, 'uname', '#!/bin/sh\necho Linux\n');
     stubLog = join(root, 'stub.log');
@@ -84,7 +89,7 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh start/stop backend 
   });
 
   it('stops only native when Docker is the active backend', () => {
-    const result = run('stop', NATIVE_CHILD);
+    const result = run('stop', { ...NATIVE_CHILD, STUB_ISREADY_RC: '2' });
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain('Stopping native PostgreSQL');
@@ -100,5 +105,31 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh start/stop backend 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain('Stopping Docker PostgreSQL');
     expect(readFileSync(stubLog, 'utf8')).toMatch(/^docker compose stop db$/m);
+  });
+
+  // #10889: a failed stop must not read as "Stopped" with exit 0.
+  it('fails Docker stop when `docker compose stop db` fails', () => {
+    writeStub(join(root, 'bin'), 'docker', '#!/bin/sh\necho "docker $*" >> "$STUB_LOG"\n[ "$1 $2" = "compose stop" ] && { echo "daemon unreachable" >&2; exit 1; }\nexit 0\n');
+
+    const result = run('stop');
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).not.toContain('Stopped');
+    expect(result.stderr + result.stdout).toContain('daemon unreachable');
+  });
+
+  it('fails native stop while the endpoint still accepts connections', () => {
+    const result = run('stop', { ...NATIVE_CHILD, STUB_ISREADY_RC: '0' });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).not.toMatch(/Stopped\b/);
+    expect(result.stdout).toContain('still accepting connections');
+  });
+
+  it('keeps native stop idempotent when the endpoint is already down', () => {
+    const result = run('stop', { ...NATIVE_CHILD, STUB_ISREADY_RC: '2' });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('Stopped');
   });
 });

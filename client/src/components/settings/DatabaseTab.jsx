@@ -402,6 +402,12 @@ export function DatabaseTab() {
     setActionInProgress(key);
     fn()
       .then((result) => {
+        // Legacy/defensive: a resolved `success: false` is a failure, never a success toast.
+        if (result?.success === false) {
+          toast.error(result.output || result.error || 'Database operation failed');
+          loadStatus();
+          return;
+        }
         if (successMsg) toast.success(typeof successMsg === 'function' ? successMsg(result) : successMsg);
         loadStatus();
       })
