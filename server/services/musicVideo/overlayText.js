@@ -25,6 +25,8 @@ import { createHash, randomUUID } from 'node:crypto';
 const PHONE_WIDTH_PX = 390;
 const OVERLAY_TEXT_LIMITS = Object.freeze({
   maxSamples: 180,
+  // Entrance frames: the first frame of each line and timed word, where a slam-in is at its largest.
+  maxEntrances: 240,
   maxFindings: 40,
   maxTimesPerFinding: 8,
   // Smallest em (font size) still readable at phone width, in phone pixels.
@@ -86,11 +88,18 @@ const contrastRatio = (a, b) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05
  * Song times (seconds, on the frame grid) to sample: each lyric line and text
  * cue once settled (0.35s after it starts), mid-way through a long one and near
  * its end; each shot just after it starts and at its middle. Times closer than
- * 0.15s collapse; more than `maxSamples` thin evenly.
+ * 0.15s collapse; more than `maxSamples` thin evenly. On top of those, the
+ * first frame each line, cue and timed word is on screen: a word that slams or
+ * stamps in is drawn largest there, so a transient swell past its neighbours or
+ * the frame edge lasts only a frame or two. Those are kept frame-exact (up to
+ * `maxEntrances`, thinned evenly).
  */
-export function planTextSampleTimes({ lyrics = [], textCues = [], scenes = [], durationSec, fps = 24, maxSamples = OVERLAY_TEXT_LIMITS.maxSamples }) {
+export function planTextSampleTimes({ lyrics = [], textCues = [], scenes = [], durationSec, fps = 24,
+  maxSamples = OVERLAY_TEXT_LIMITS.maxSamples, maxEntrances = OVERLAY_TEXT_LIMITS.maxEntrances }) {
   if (!(durationSec > 0)) return [];
   const times = [];
+  const entrances = [];
+  const enter = (t) => { if (finite(t)) entrances.push(t); };
   const span = (start, end) => {
     if (!finite(start)) return;
     const stop = finite(end) && end > start ? end : start + 1;
@@ -103,8 +112,10 @@ export function planTextSampleTimes({ lyrics = [], textCues = [], scenes = [], d
     const words = Array.isArray(line?.words) ? line.words.filter((w) => finite(w?.startSec)) : [];
     const end = finite(line?.endSec) ? line.endSec : words.length ? Math.max(...words.map((w) => (finite(w.endSec) ? w.endSec : w.startSec))) : null;
     span(line?.startSec ?? words[0]?.startSec, end);
+    enter(line?.startSec);
+    for (const w of words) enter(w.startSec);
   }
-  for (const cue of Array.isArray(textCues) ? textCues : []) span(cue?.startSec, cue?.endSec);
+  for (const cue of Array.isArray(textCues) ? textCues : []) { span(cue?.startSec, cue?.endSec); enter(cue?.startSec); }
   for (const scene of Array.isArray(scenes) ? scenes : []) {
     if (!finite(scene?.startSec) || !finite(scene?.endSec) || scene.endSec <= scene.startSec) continue;
     times.push(scene.startSec + Math.min(0.25, (scene.endSec - scene.startSec) / 2));
@@ -116,9 +127,15 @@ export function planTextSampleTimes({ lyrics = [], textCues = [], scenes = [], d
     .sort((a, b) => a - b);
   const kept = [];
   for (const t of snapped) if (!kept.length || t - kept[kept.length - 1] >= 0.15) kept.push(round3(t));
-  if (kept.length <= maxSamples) return kept;
-  return Array.from({ length: maxSamples }, (_, i) => kept[Math.floor(((i + 0.5) * kept.length) / maxSamples)]);
+  // The first frame drawn at or after the entrance (a frame before it shows nothing yet).
+  const firstFrames = [...new Set(entrances
+    .map((t) => round3(Math.min(last, Math.max(0, Math.ceil(t * fps - 1e-6) / fps)))))].sort((a, b) => a - b);
+  const merged = new Set([...thinEvenly(kept, maxSamples), ...thinEvenly(firstFrames, maxEntrances)]);
+  return [...merged].sort((a, b) => a - b);
 }
+
+const thinEvenly = (list, max) => (list.length <= max ? list
+  : Array.from({ length: max }, (_, i) => list[Math.floor(((i + 0.5) * list.length) / max)]));
 
 const widthOf = (b) => b.x1 - b.x0;
 const heightOf = (b) => b.y1 - b.y0;
@@ -282,10 +299,10 @@ const quote = (text) => `“${text}”`;
 /** One plain sentence for a finding (what is wrong, and the fix lyricType uses). */
 function describeTextFinding({ kind, texts, detail }) {
   switch (kind) {
-    case 'overlap': return `${quote(texts[0])} collides with ${quote(texts[1])}. Move one to a free corner or time them apart.`;
+    case 'overlap': return `${quote(texts[0])} collides with ${quote(texts[1])}. Move the smaller one to the corner opposite the sung words, or time them apart.`;
     case 'off-frame': return `${quote(texts[0])} runs off the edge of the frame. Keep it inside the safe margin or let it wrap.`;
     case 'small': return `${quote(texts[0])} is ${detail?.phoneEmPx ?? 'too few'}px tall at phone width. Set it larger (at least ${OVERLAY_TEXT_LIMITS.minPhoneEmPx}px on a phone).`;
-    case 'contrast': return `${quote(texts[0])} blends into the picture (${detail?.ratio ?? '?'}:1). Give it an ink outline wide enough to read on a phone${detail?.outlined ? ' (its outline is too thin there)' : ''}.`;
+    case 'contrast': return `${quote(texts[0])} blends into the picture (${detail?.ratio ?? '?'}:1). Give it an ink outline wide enough to read on a phone${detail?.outlined ? ' (its outline is too thin there)' : ''}, or a plate behind it.`;
     default: return quote(texts.join(' / '));
   }
 }

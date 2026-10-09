@@ -80,13 +80,14 @@ describe('summarizeTextFindings', () => {
 });
 
 describe('planTextSampleTimes', () => {
-  it('samples each line settled, long lines again, and each shot, on the frame grid without near-duplicates', () => {
+  it('samples each line settled, long lines again, each shot, and the first frame of each word, on the frame grid', () => {
     const times = planTextSampleTimes({
-      lyrics: [{ startSec: 1, endSec: 4, words: [] }],
+      lyrics: [{ startSec: 1, endSec: 4, words: [{ startSec: 1 }, { startSec: 2.02 }] }],
       scenes: [{ startSec: 0, endSec: 8 }],
       durationSec: 8, fps: 24,
     });
-    expect(times).toEqual([0.25, 1.333, 2.5, 3.792, 4]);
+    // 1 and 2.042 are entrance frames (a slam-in is largest there), kept however close to a settled sample.
+    expect(times).toEqual([0.25, 1, 1.333, 2.042, 2.5, 3.792, 4]);
     expect(times.every((t) => Math.abs(t * 24 - Math.round(t * 24)) < 0.05)).toBe(true);
     const many = planTextSampleTimes({ scenes: Array.from({ length: 300 }, (_, i) => ({ startSec: i, endSec: i + 1 })), durationSec: 300, maxSamples: 50 });
     expect(many).toHaveLength(50);
