@@ -28,7 +28,7 @@ import { spawn } from '../../lib/childProcess.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
-import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { cancelMusicVideoRenderJob, isMusicVideoRenderCanceled } from './renderCancellation.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { encodeFileContactSheetAtTimes } from '../htmlComposition/encode.js';
 import { getProject, listProjects, mutateProjectRecord } from './projects.js';
@@ -54,21 +54,7 @@ const PENDING = Symbol('mv-excerpt-render-pending');
 export const attachExcerptRenderSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
 export function cancelExcerptRender(jobId) {
-  const job = jobs.get(jobId);
-  if (!job) return false;
-  if (!job.process) {
-    if (job.status !== 'running' || !job.overlayAbort || job.overlayAbort.signal.aborted) return false;
-    job.overlayAbort.abort(new Error('Excerpt render cancelled'));
-    return true;
-  }
-  // ffmpeg often intercepts SIGTERM and exits itself (nonzero code, `signal:
-  // null` on the child's 'close' event) rather than dying FROM the signal —
-  // `onClose` below can't tell that apart from a genuine encode failure by
-  // signal alone, so record that a cancel was actually requested.
-  job.cancelRequested = true;
-  const proc = job.process;
-  killWithEscalation(proc, { label: 'music-video excerpt render', stillRunning: () => job.process === proc });
-  return true;
+  return cancelMusicVideoRenderJob(jobs.get(jobId), { label: 'music-video excerpt render' });
 }
 
 const round3 = (n) => Math.round(n * 1000) / 1000;
@@ -431,7 +417,7 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
         onClose: async (code, signal) => {
           job.process = null;
           if (code !== 0) {
-            const canceled = job.cancelRequested || signal === 'SIGTERM' || signal === 'SIGKILL';
+            const canceled = isMusicVideoRenderCanceled(job, signal);
             job.status = canceled ? 'canceled' : 'error';
             const reason = canceled ? 'Render cancelled' : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`;
             job.lastError = reason;

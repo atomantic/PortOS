@@ -85,6 +85,9 @@ import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
 import { unlink } from 'fs/promises';
 import { musicVideoEvents } from './events.js';
+import { broadcastSse } from '../../lib/sseUtils.js';
+import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 const lastProc = () => h.procs[h.procs.length - 1];
@@ -179,6 +182,55 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
     );
     expect(failedCalls).toHaveLength(1);
     expect(getRenderJobStatus(jobId).status).toBe('error');
+  });
+
+  it('preserves a completed project when canceled ffmpeg exits 255 without a signal', async () => {
+    const pid = 'cancel-close';
+    prime(pid);
+    getProject.mockResolvedValue({ ...(await getProject(pid)), status: 'complete' });
+    const events = [];
+    const onRender = (event) => events.push(event);
+    musicVideoEvents.on('render', onRender);
+    const { jobId } = await renderMusicVideo(pid);
+    const proc = lastProc();
+    proc.emit('spawn');
+    expect(cancelRender(jobId)).toBe(true);
+    expect(killWithEscalation).toHaveBeenCalledWith(proc, expect.objectContaining({ label: 'music-video render' }));
+    proc.emit('error', new Error('kill EPERM'));
+    await tick();
+    expect(getRenderJobStatus(jobId).status).toBe('running');
+    expect(maintenance.status().blockers).toContainEqual(expect.objectContaining({ kind: 'music-video', resource: pid }));
+    await expect(renderMusicVideo(pid)).rejects.toMatchObject({ code: 'RENDER_IN_PROGRESS' });
+
+    proc.emit('close', 255, null);
+    await tick();
+    proc.emit('close', 255, null);
+    await tick();
+    musicVideoEvents.off('render', onRender);
+    expect(getRenderJobStatus(jobId)).toEqual({ status: 'canceled', error: 'Render cancelled' });
+    expect(events).toEqual([{ projectId: pid, jobId, status: 'canceled', error: 'Render cancelled' }]);
+    expect(broadcastSse.mock.calls.filter(([job, frame]) => job.id === jobId && ['canceled', 'error'].includes(frame.type)))
+      .toEqual([[expect.objectContaining({ id: jobId }), { type: 'canceled', error: 'Render cancelled' }]]);
+    expect(updateProject.mock.calls.filter(([id, patch]) => id === pid && patch.status === 'complete')).toEqual([[pid, settled('complete')]]);
+    expect(unlink).toHaveBeenCalledWith(expect.stringMatching(/music-video-.*\.mp4$/));
+    expect(maintenance.status().blockers).not.toContainEqual(expect.objectContaining({ resource: pid }));
+    expect(cancelRender(jobId)).toBe(false);
+    const again = await renderMusicVideo(pid);
+    expect(again.jobId).not.toBe(jobId);
+    lastProc().emit('error', new Error('spawn ENOENT'));
+    await tick();
+  });
+
+  it('retains zero-exit success when cancellation arrives just before close', async () => {
+    const pid = 'cancel-success';
+    prime(pid);
+    const { jobId } = await renderMusicVideo(pid);
+    lastProc().emit('spawn');
+    expect(cancelRender(jobId)).toBe(true);
+    lastProc().emit('close', 0, null);
+    await tick();
+    expect(getRenderJobStatus(jobId).status).toBe('complete');
+    expect(updateProject).toHaveBeenCalledWith(pid, expect.objectContaining(settled('complete', { renderHistoryId: jobId })));
   });
 
   it('a late stray error after a successful close does not clobber the completed job', async () => {
