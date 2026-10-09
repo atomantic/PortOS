@@ -15,7 +15,7 @@
  * no longer there is reported in the summary as left for the director rather
  * than failing the whole draft.
  */
-import { PUBLISH_STEP_TIMEOUT_MS as T, loginRequired, step } from './browser.js';
+import { PUBLISH_STEP_TIMEOUT_MS as T, landedOnPost, loginRequired, step } from './browser.js';
 import { discloseDistrokidAi, fillDistrokidFields, setDistrokidArtist, untickDistrokidExtras } from '../../../lib/distrokidForm.js';
 
 const label = 'DistroKid';
@@ -125,4 +125,6 @@ export const distrokidAdapter = {
       leftForYou: [...leftForYou, 'which stores (DistroKid picks all by default)', 'the agreement checkboxes', 'Upload'],
     };
   },
+  // Uploaded, DistroKid opens the release's own dashboard page.
+  findPost: (page, payload) => landedOnPost(page, /^https:\/\/distrokid\.com\/dashboard\/album\/\?albumuuid=[0-9a-f-]+/i, payload.title),
 };

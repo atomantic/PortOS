@@ -4,7 +4,7 @@
  * (for example the starter prompt) posted as a reply. The url field is read
  * back after the body is written, because a stray keystroke once landed in it.
  */
-import { PUBLISH_STEP_TIMEOUT_MS as T, loginRequired, pasteText, step } from './browser.js';
+import { PUBLISH_STEP_TIMEOUT_MS as T, landedOnPost, loginRequired, pasteText, step } from './browser.js';
 
 const label = 'Stacker News';
 
@@ -32,6 +32,7 @@ export const stackerNewsAdapter = {
     const cost = await page.evaluate(() => [...document.querySelectorAll('button[type=submit]')].map((b) => b.innerText.trim()).find((t) => /post/i.test(t)) || null);
     return { territory: payload.territory, title: payload.title, url: payload.url, cost };
   },
+  findPost: (page, payload) => landedOnPost(page, /^https:\/\/stacker\.news\/items\/\d+/, payload.title),
   async submit(page, payload) {
     await step(label, 'post', () => page.locator('button[type=submit]').filter({ hasText: 'post' }).first().click({ timeout: T }));
     const url = await step(label, 'find the new post', async () => {
