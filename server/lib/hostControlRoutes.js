@@ -49,6 +49,15 @@
  *     fall back to a CLI/TUI one, so they can launch a tool-capable agent
  *     against stored creative text. Ordinary record CRUD, reads and
  *     cancellation stay open.
+ *   - Creative Director and Creative Commissions (#10867): project create/edit
+ *     choose agent instructions and provider pins; start/resume/directive/
+ *     replan/plan-step/auto-cast/smoke-test/review enqueue or re-arm writable
+ *     treatment, planner and scene agents, and the plan/treatment/scene PATCHes
+ *     are the agents' callbacks (authorized by their delegated
+ *     PORTOS_API_TOKEN session). Commission create/edit/run/feedback steer and
+ *     arm unattended agents. Left open: Creative Director pause, stop, delete
+ *     and catalog-only auto-cast/suggest, and commission delete — they only
+ *     reduce execution or remove records.
  *   - notes (#9007): vault add/repoint gated (chooses the host directory
  *     note CRUD reads/writes); note CRUD itself stays open.
  *   - browser: navigate uses the configured browser with its URL/IP guards;
@@ -141,6 +150,29 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/story-builder/:id/steps/:stepId/generate',
   'POST /api/story-builder/:id/steps/:stepId/refine',
   'POST /api/story-builder/:id/issues/generate',
+
+  // Creative Director and Creative Commissions (#10867): the legacy flow
+  // enqueues writable, auto-approved treatment/planner/scene agents, and
+  // commissions arm the same sink on a schedule or via Run Now. Authorize
+  // before any store write, starter, queue or schedule effect. Pause, stop,
+  // delete, catalog-only /auto-cast/suggest and commission delete stay open.
+  'POST /api/creative-director',
+  'PATCH /api/creative-director/:id',
+  'POST /api/creative-director/:id/start',
+  'POST /api/creative-director/:id/resume',
+  'POST /api/creative-director/:id/directive',
+  'POST /api/creative-director/:id/replan',
+  'POST /api/creative-director/:id/plan/step/:stepId',
+  'POST /api/creative-director/:id/auto-cast',
+  'POST /api/creative-director/smoke-test',
+  'POST /api/creative-director/:id/review',
+  'PATCH /api/creative-director/:id/plan',
+  'PATCH /api/creative-director/:id/treatment',
+  'PATCH /api/creative-director/:id/scene/:sceneId',
+  'POST /api/creative-commission',
+  'PATCH /api/creative-commission/:id',
+  'POST /api/creative-commission/:id/run',
+  'POST /api/creative-commission/:id/feedback',
 
   // Database cutover stops/restarts PortOS under PM2 and rewrites .env (#8851).
   'POST /api/database/maintenance/cutover',

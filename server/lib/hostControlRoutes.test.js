@@ -424,3 +424,26 @@ describe('FableLoom mutation inventory (#10668)', () => {
     expect([...new Set(open)].sort()).toEqual([...recordOrContained].sort());
   });
 });
+
+describe('Creative Director and Creative Commissions mutation inventory (#10867)', () => {
+  // Reviewed operations that only reduce execution or remove records. Every
+  // other mutation steers, enqueues or arms writable agents and needs host
+  // control; a new route must be classified here or in HOST_CONTROL_ROUTES.
+  const reduceOrRemove = [
+    'POST /api/creative-director/:id/pause',
+    'POST /api/creative-director/:id/stop',
+    'DELETE /api/creative-director/:id',
+    'POST /api/creative-director/auto-cast/suggest',
+    'DELETE /api/creative-commission/:id',
+  ];
+
+  const mutations = () => getApiRouteCatalog().routes.filter(({ method, path }) =>
+    /^(POST|PUT|PATCH|DELETE)$/.test(method) && /^\/api\/creative-(director|commission)(\/|$)/.test(path));
+
+  it('gates every execution or steering mutation and explicitly preserves the harmless five', () => {
+    const open = mutations().filter(({ method, path }) => !isHostControlRoute(method, path))
+      .map(({ method, path }) => `${method} ${path}`);
+    expect([...new Set(open)].sort()).toEqual([...reduceOrRemove].sort());
+    expect(new Set(mutations().map(({ method, path }) => `${method} ${path}`)).size).toBe(22);
+  });
+});
