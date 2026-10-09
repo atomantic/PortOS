@@ -796,6 +796,26 @@ async function appendJsonl(type, record) {
 // brain type. These wrappers keep the historical getInboxLog/createInboxLog/…
 // API (capturedAt sort, status counts) on top of the generic entity primitives.
 
+// Cursor pages share one contract: rows sort newest-first (timestamp descending)
+// with the id ascending as the tiebreak, and the cursor is the last row's
+// `<zero-padded timestamp>_<id>` key. Continuation therefore keeps older rows
+// and, at the cursor's own timestamp, only ids that sort AFTER the cursor id --
+// comparing the encoded key as a string would pick the smaller ids instead and
+// repeat/skip rows whenever a timestamp tie crosses a page boundary. The cursor
+// row itself need not still exist. A malformed cursor yields the first page.
+const cursorKeyOf = (id, timestampMs) => `${String(timestampMs).padStart(15, '0')}_${id}`;
+
+function rowsAfterCursor(rows, cursor, timestampOf) {
+  const match = /^(\d+)_(.*)$/s.exec(cursor);
+  if (!match) return rows;
+  const cursorMs = Number(match[1]);
+  const cursorId = match[2];
+  return rows.filter(([id, summary]) => {
+    const ms = timestampOf(summary);
+    return ms < cursorMs || (ms === cursorMs && id.localeCompare(cursorId) > 0);
+  });
+}
+
 /**
  * One page of inbox entries (newest-first by capturedAt), optional status/search filters and cursor pagination.
  */
@@ -821,11 +841,9 @@ export async function getInboxPage(options = {}) {
   matching.sort(([idA, a], [idB, b]) => (b.capturedAtMs - a.capturedAtMs) || idA.localeCompare(idB));
   const total = matching.length;
 
-  const keyOf = (id, s) => `${String(s.capturedAtMs).padStart(15, '0')}_${id}`;
-
   let remaining = matching;
   if (cursor) {
-    remaining = matching.filter(([id, s]) => keyOf(id, s) < cursor);
+    remaining = rowsAfterCursor(matching, cursor, (s) => s.capturedAtMs);
   } else if (offset > 0) {
     remaining = matching.slice(offset);
   }
@@ -837,7 +855,7 @@ export async function getInboxPage(options = {}) {
 
   const hasMore = remaining.length > boundedLimit;
   const nextCursor = hasMore && pageRows.length > 0
-    ? keyOf(pageRows[pageRows.length - 1][0], pageRows[pageRows.length - 1][1])
+    ? cursorKeyOf(pageRows[pageRows.length - 1][0], pageRows[pageRows.length - 1][1].capturedAtMs)
     : null;
 
   return {
@@ -1256,11 +1274,9 @@ export async function getEntityPage(type, options = {}) {
   matching.sort(([idA, a], [idB, b]) => (b.sortKey - a.sortKey) || idA.localeCompare(idB));
   const total = matching.length;
 
-  const keyOf = (id, s) => `${String(s.sortKey).padStart(15, '0')}_${id}`;
-
   let remaining = matching;
   if (cursor) {
-    remaining = matching.filter(([id, s]) => keyOf(id, s) < cursor);
+    remaining = rowsAfterCursor(matching, cursor, (s) => s.sortKey);
   } else if (offset > 0) {
     remaining = matching.slice(offset);
   }
@@ -1276,7 +1292,7 @@ export async function getEntityPage(type, options = {}) {
 
   const hasMore = remaining.length > boundedLimit;
   const nextCursor = hasMore && pageRows.length > 0
-    ? keyOf(pageRows[pageRows.length - 1][0], pageRows[pageRows.length - 1][1])
+    ? cursorKeyOf(pageRows[pageRows.length - 1][0], pageRows[pageRows.length - 1][1].sortKey)
     : null;
 
   return {
