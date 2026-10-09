@@ -27,7 +27,18 @@ vi.mock('../services/userActions.js', () => ({
   recordUserAction: vi.fn(async () => ({ id: 'evt' }))
 }));
 
+// The real client wrappers run against the mounted router: only the transport
+// (`request`) is replaced, so the URL each wrapper builds is what the router sees.
+const transport = vi.hoisted(() => ({ calls: [], send: null }));
+vi.mock('../../client/src/services/apiCore.js', () => ({
+  request: async (path, options) => {
+    transport.calls.push({ path, options });
+    return transport.send(path);
+  }
+}));
+
 // Import after hoisting mocks
+import * as clientBrainApi from '../../client/src/services/apiBrain.js';
 import * as brainStorage from '../services/brainStorage.js';
 import brainRoutes from './brain.js';
 
@@ -37,6 +48,14 @@ app.use('/api/brain', brainRoutes);
 
 const TOTAL_INBOX = 1200;
 const TOTAL_MEMORIES = 1500;
+const TOTAL_ENTITIES = 60;
+const ENTITY_TYPES = {
+  people: clientBrainApi.getBrainPeople,
+  projects: clientBrainApi.getBrainProjects,
+  ideas: clientBrainApi.getBrainIdeas,
+  admin: clientBrainApi.getBrainAdmin,
+  memories: clientBrainApi.getBrainMemories
+};
 const BASE_TIME = Date.parse('2026-08-01T00:00:00.000Z');
 
 async function seedRecord(type, id, record) {
@@ -93,7 +112,25 @@ describe('Brain collection pagination (synthetic thousands-record fixtures)', ()
       };
     });
 
+    for (const type of ['people', 'projects', 'ideas', 'admin']) {
+      await seedRecords(type, TOTAL_ENTITIES, (i) => {
+        const updatedAt = new Date(BASE_TIME + i * 60000).toISOString();
+        return {
+          name: `Example ${type} ${i}`,
+          title: `Example ${type} ${i}`,
+          status: i % 2 === 0 ? 'active' : 'done',
+          tags: i === 7 ? ['wanted-tag'] : [],
+          createdAt: updatedAt,
+          updatedAt
+        };
+      });
+    }
+
     brainStorage.invalidateAllCaches();
+    transport.send = async (path) => {
+      const res = await request(app).get(`/api${path}`);
+      return res.body;
+    };
   });
 
   afterAll(() => {
@@ -260,6 +297,59 @@ describe('Brain collection pagination (synthetic thousands-record fixtures)', ()
       });
       expect(res.body.memories).toHaveLength(10);
       expect(res.body.nextCursor).toBeUndefined();
+    });
+  });
+  describe('Initial entity request from the client wrappers', () => {
+    const lastPath = () => transport.calls[transport.calls.length - 1].path;
+
+    it.each(Object.keys(ENTITY_TYPES))('%s: a first-page request (cursor: null) selects cursor mode and can reach every record', async (type) => {
+      const total = type === 'memories' ? 1350 : TOTAL_ENTITIES;
+      const fetchPage = ENTITY_TYPES[type];
+      const first = await fetchPage({ cursor: null, limit: 25 });
+      expect(lastPath()).toContain('cursor=');
+      expect(first.items).toHaveLength(25);
+      expect(first.total).toBe(total);
+      expect(first.nextCursor).toBeTruthy();
+      expect(first.offset).toBeUndefined();
+
+      let seen = first.items.map(item => item.id);
+      let cursor = first.nextCursor;
+      while (cursor) {
+        const next = await fetchPage({ cursor, limit: 25 });
+        seen = seen.concat(next.items.map(item => item.id));
+        cursor = next.nextCursor;
+      }
+      expect(seen).toHaveLength(total);
+      expect(new Set(seen).size).toBe(total);
+    });
+
+    it('serves the compact memory projection on the initial page', async () => {
+      const first = await clientBrainApi.getBrainMemories({ cursor: null, limit: 25 });
+      expect(first.items.every(item => item.contentTruncated === true && item.content.length <= 300)).toBe(true);
+    });
+
+    it.each(['people', 'projects', 'ideas', 'admin', 'memories'])('%s: a caller that omits the cursor option keeps the legacy contract', async (type) => {
+      const legacyArray = await ENTITY_TYPES[type]();
+      expect(lastPath()).not.toContain('cursor');
+      expect(Array.isArray(legacyArray)).toBe(true);
+
+      const envelope = await ENTITY_TYPES[type]({ limit: 10, offset: 5 });
+      expect(lastPath()).not.toContain('cursor');
+      expect(envelope).toMatchObject({ limit: 10, offset: 5 });
+      expect(envelope.nextCursor).toBeUndefined();
+    });
+
+    it('keeps search, status filters and request options alongside the initial cursor', async () => {
+      const signal = new AbortController().signal;
+      const filtered = await clientBrainApi.getBrainProjects({ cursor: null, limit: 25, status: 'active', signal, silent: true });
+      expect(transport.calls[transport.calls.length - 1].options).toEqual({ silent: true, signal });
+      expect(lastPath()).toContain('status=active');
+      expect(filtered.total).toBe(TOTAL_ENTITIES / 2);
+      expect(filtered.items.every(item => item.status === 'active')).toBe(true);
+
+      const searched = await clientBrainApi.getBrainPeople({ cursor: null, limit: 25, search: 'wanted-tag' });
+      expect(searched.total).toBe(1);
+      expect(searched.nextCursor).toBeNull();
     });
   });
 });
