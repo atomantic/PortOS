@@ -454,6 +454,18 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'PUT /api/sprites/:id/publish-binding',
   'POST /api/sprites/:id/atlas/publish',
 
+  // Deck authoring/rendering and chiptune generation hand editable text to a
+  // provider that may fall back to a CLI/TUI, or enqueue an agent-backed image
+  // job; chiptune publication writes into a managed app repo (#10893). Gate the
+  // whole operation, API-first variants included. Deck/track CRUD, progress
+  // reads and the deterministic chiptune library render stay open.
+  'POST /api/decks/:id/analyze-sample',
+  'POST /api/decks/:id/generate-prompts',
+  'POST /api/decks/:id/render',
+  'POST /api/decks/:id/cards/:cardId/render',
+  'POST /api/tracks/:id/chiptune/generate',
+  'POST /api/tracks/:id/chiptune/publish',
+
   // Auxiliary media entry points reach the same tool-capable agents (#9672):
   // prompt refinement and image-to-prompt hand caller text/images to a provider
   // that may fall back to a CLI/TUI; retry and run-now (re)dispatch an
