@@ -19,6 +19,7 @@ import {
   segmentVolumeAt,
   projectSummary,
   canvasAspectRatio,
+  resolvePlaybackLanes,
 } from './videoTimelineModel';
 
 const clip = (inSec, outSec) => ({ type: 'clip', clipId: 'c', inSec, outSec });
@@ -247,6 +248,19 @@ describe('projectSummary — the index must count the lane, not the mirror', () 
     expect(summary).toMatchObject({ blockCount: 2, totalSec: 5 });
   });
 
+  it('counts the source-clamped trim when history durations are supplied, like the export', () => {
+    const project = {
+      segments: [
+        { type: 'clip', clipId: 'c1', inSec: 0, outSec: 8 },
+        { type: 'still', assetKind: 'images', assetFile: 'plate.png', durationSec: 3 },
+      ],
+    };
+    expect(projectSummary(project, thumbFor, () => 1)).toMatchObject({ totalSec: 4 });
+    // An unknown source length keeps the authored trim.
+    expect(projectSummary(project, thumbFor, () => null)).toMatchObject({ totalSec: 11 });
+    expect(projectSummary(project, thumbFor)).toMatchObject({ totalSec: 11 });
+  });
+
   it('does not report a stills-only project as empty', () => {
     const summary = projectSummary({
       segments: [{ type: 'still', assetKind: 'images', assetFile: 'plate.png', durationSec: 4 }],
@@ -342,5 +356,46 @@ describe('overlay fade parity when the timeline clamps the window', () => {
 describe('shared timeline fade contract', () => {
   it('uses the export fade implementation for preview and trim edits', () => {
     expect(previewFitFades).toBe(sharedFitFades);
+  });
+});
+
+describe('resolvePlaybackLanes — the preview plays what the export renders', () => {
+  const lanes = {
+    segments: [
+      { _key: 's0', type: 'clip', clipId: 'c1', inSec: 0, outSec: 8, fadeInSec: 3, fadeOutSec: 3, volume: 1 },
+      { _key: 's1', type: 'clip', clipId: 'c2', inSec: 0, outSec: 4, fadeInSec: 0, fadeOutSec: 0, volume: 1 },
+    ],
+    audio: {
+      clipVolume: 1,
+      tracks: [{ _key: 'b0', assetKind: 'music', assetFile: 'bed.mp3', startSec: 0, offsetSec: 0, durationSec: 10, volume: 1, fadeInSec: 4, fadeOutSec: 4 }],
+    },
+  };
+  const resolve = (sources = {}, beds = {}) => resolvePlaybackLanes(lanes, {
+    sourceDurationFor: (id) => sources[id] ?? null,
+    bedDurationFor: (track) => beds[track.assetFile] ?? null,
+  });
+
+  it('matches the export for a clip shorter than its trim (resolveTimeline: 1s, fades 0.5s/0.5s)', () => {
+    const { segments } = resolve({ c1: 1 });
+    expect(timelineDuration(segments)).toBe(5);
+    // The second cut starts at 1s, not 8s.
+    expect(findSegmentAt(segments, 1.2)).toMatchObject({ index: 1, startAtProj: 1 });
+    expect(segments[0]).toMatchObject({ outSec: 1, fadeInSec: 0.5, fadeOutSec: 0.5, _key: 's0' });
+    expect(segmentVolumeAt(segments[0], 1, 0.5)).toBe(1);
+  });
+
+  it('matches the export for a short bed file (resolveTimeline: 2s, fades 1s/1s)', () => {
+    const [track] = resolve({}, { 'bed.mp3': 2 }).audio.tracks;
+    expect(track).toMatchObject({ offsetSec: 0, durationSec: 2, fadeInSec: 1, fadeOutSec: 1, _key: 'b0' });
+    expect(audioTrackStateAt(track, 0.5).volume).toBeCloseTo(0.5);
+    expect(audioTrackStateAt(track, 2).active).toBe(false);
+  });
+
+  it('keeps the authored spans, by identity, when no source length is known', () => {
+    const resolved = resolve();
+    expect(resolved.segments[1]).toBe(lanes.segments[1]);
+    // Fades already fit the authored span, so nothing moves.
+    expect(resolved.segments[0]).toMatchObject({ outSec: 8, fadeInSec: 3, fadeOutSec: 3 });
+    expect(resolved.audio.tracks[0]).toBe(lanes.audio.tracks[0]);
   });
 });

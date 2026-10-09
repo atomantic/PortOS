@@ -39,6 +39,9 @@ import {
   overlayOpacityAt,
   audioTrackStateAt,
   segmentVolumeAt,
+  resolvePlaybackLanes,
+  historySourceDuration,
+  bedAssetId,
   clampTrim,
   fitFadePatch,
   timelinePatch,
@@ -118,6 +121,11 @@ function TimelineProjectEditor({ projectId }) {
   const [musicTracks, setMusicTracks] = useState([]);
   // Which catalogues have actually been fetched — see knownAbsent below.
   const [loaded, setLoaded] = useState({ clips: false, images: false, music: false });
+  // Real lengths the browser measured for the beds' audio files, keyed by asset
+  // identity (`music/<file>`). The preview resolves each placement against its
+  // file's length exactly as the export's probe does; an asset with no entry
+  // (metadata not loaded yet, or the load failed) keeps its authored span.
+  const [bedDurations, setBedDurations] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   // The three lanes live in ONE state object so a save always ships a
@@ -282,7 +290,19 @@ function TimelineProjectEditor({ projectId }) {
   const isOverlayMissing = useCallback((ov) => knownAbsent(ov.assetKind, ov.assetFile), [knownAbsent]);
   const isBedMissing = useCallback((tr) => knownAbsent(tr.assetKind, tr.assetFile), [knownAbsent]);
 
-  const total = useMemo(() => timelineDuration(segments), [segments]);
+  // What the export will actually render: the authored lanes resolved against
+  // the history clips' real lengths and the beds' measured file lengths, by the
+  // same rules `resolveTimeline` applies server-side. Playback, block lengths,
+  // fades and overlay timing all read THESE; the inspector and the save path
+  // keep reading the authored `lanes`, so nothing probe-derived is persisted.
+  const playback = useMemo(() => resolvePlaybackLanes(lanes, {
+    sourceDurationFor: (clipId) => historySourceDuration(historyMap.get(clipId)),
+    bedDurationFor: (track) => bedDurations[bedAssetId(track)] ?? null,
+  }), [lanes, historyMap, bedDurations]);
+  const playSegments = playback.segments;
+  const playTracks = playback.audio.tracks;
+
+  const total = useMemo(() => timelineDuration(playSegments), [playSegments]);
   const canvasAspect = useMemo(
     () => canvasAspectRatio(segments, (clipId) => historyMap.get(clipId)),
     [segments, historyMap],
@@ -518,10 +538,10 @@ function TimelineProjectEditor({ projectId }) {
   }, [playing, total]);
 
   const { index: activeIndex, within: activeWithin } = useMemo(
-    () => (segments.length > 0 ? findSegmentAt(segments, t) : { index: -1, within: 0 }),
-    [segments, t],
+    () => (playSegments.length > 0 ? findSegmentAt(playSegments, t) : { index: -1, within: 0 }),
+    [playSegments, t],
   );
-  const activeSegment = activeIndex >= 0 ? segments[activeIndex] : null;
+  const activeSegment = activeIndex >= 0 ? playSegments[activeIndex] : null;
   // `within` advances every frame; the media-sync effects read it from a ref so
   // they re-run on a segment CHANGE rather than once per animation frame.
   const withinRef = useRef(0);
@@ -594,7 +614,7 @@ function TimelineProjectEditor({ projectId }) {
   // Drive the bed <audio> elements from the same playhead the export mixes
   // against, so what the user hears while scrubbing is what amix will produce.
   useEffect(() => {
-    for (const track of audio.tracks) {
+    for (const track of playTracks) {
       const el = bedRefs.current.get(track._key);
       if (!el) continue;
       const state = audioTrackStateAt(track, t);
@@ -612,7 +632,7 @@ function TimelineProjectEditor({ projectId }) {
       if (playing && el.paused) el.play().catch(() => {});
       if (!playing && !el.paused) el.pause();
     }
-  }, [audio.tracks, t, playing, muted]);
+  }, [playTracks, t, playing, muted]);
 
   // Stop every bed when the editor unmounts — a detached <audio> that was
   // playing keeps producing sound in some browsers.
@@ -739,6 +759,24 @@ function TimelineProjectEditor({ projectId }) {
     width: `${(ov.width || 0.25) * 100}%`,
     overlay: ov,
   })), [overlays]);
+
+  // BedAudio reports a file's measured length here. Identical reports bail out
+  // so a re-fired `loadedmetadata` doesn't re-derive the playback lanes.
+  const reportBedDuration = useCallback((assetId, seconds) => {
+    setBedDurations((prev) => (prev[assetId] === seconds ? prev : { ...prev, [assetId]: seconds }));
+  }, []);
+  // Forget a file's length once no bed uses it: a removed bed's measurement must
+  // not resolve a later placement before that placement has loaded its own.
+  useEffect(() => {
+    const used = new Set(audio.tracks.map(bedAssetId));
+    setBedDurations((prev) => {
+      const stale = Object.keys(prev).filter((id) => !used.has(id));
+      if (stale.length === 0) return prev;
+      const next = { ...prev };
+      for (const id of stale) delete next[id];
+      return next;
+    });
+  }, [audio.tracks]);
 
   const selectSegment = useCallback((key) => setSelection({ lane: 'segment', key }), []);
   const removeSegment = useCallback((key) => removeFromLane('segment', key), [removeFromLane]);
@@ -984,8 +1022,10 @@ function TimelineProjectEditor({ projectId }) {
             <BedAudio
               key={track._key}
               trackKey={track._key}
+              assetId={bedAssetId(track)}
               src={assetUrl(track.assetKind, track.assetFile)}
               registry={bedRefs.current}
+              onDuration={reportBedDuration}
             />
           ))}
 
@@ -1058,7 +1098,7 @@ function TimelineProjectEditor({ projectId }) {
                   >
                     <SortableContext items={segmentKeys} strategy={horizontalListSortingStrategy}>
                       <div className="flex gap-1 items-stretch min-w-min py-1">
-                        {segments.map((segment) => (
+                        {playSegments.map((segment) => (
                           <TimelineBlock
                             key={segment._key}
                             clip={segment}
@@ -1092,7 +1132,7 @@ function TimelineProjectEditor({ projectId }) {
 
                 <FloatingLane
                   title="Audio"
-                  entries={audio.tracks}
+                  entries={playTracks}
                   emptyHint="Add a bed from the Audio tab"
                   tone="bg-port-success/15 border-port-success/40"
                   labelOf={bedLabel}

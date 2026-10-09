@@ -160,6 +160,9 @@ describe('resolveTimeline — fades that a later change made too long', () => {
 
     expect(segments[0].duration).toBe(1);
     expect(segments[0].fadeInSec + segments[0].fadeOutSec).toBeCloseTo(1);
+    // The editor preview resolves through the same helper and pins these exact
+    // numbers in client/src/lib/videoTimelineModel.test.js.
+    expect([segments[0].fadeInSec, segments[0].fadeOutSec]).toEqual([0.5, 0.5]);
   });
 
   it('refits a still fade against its own hold', async () => {
@@ -204,6 +207,12 @@ describe('resolveTimeline — bed probing', () => {
     h.probedDuration = 2;
     const { audioTracks } = await resolveTimeline(bedProject({ fadeInSec: 5, fadeOutSec: 5 }));
     expect(audioTracks[0].fadeInSec + audioTracks[0].fadeOutSec).toBeCloseTo(2);
+  });
+
+  it('resolves a short file to the span the editor preview pins (2s, fades 1s/1s)', async () => {
+    h.probedDuration = 2;
+    const { audioTracks } = await resolveTimeline(bedProject({ durationSec: 10, fadeInSec: 4, fadeOutSec: 4 }));
+    expect(audioTracks[0]).toMatchObject({ offsetSec: 0, durationSec: 2, fadeInSec: 1, fadeOutSec: 1 });
   });
 });
 
