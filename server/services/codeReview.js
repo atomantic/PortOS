@@ -608,7 +608,7 @@ export async function getProviderReviewCapability() {
 const REPOSITORY_ACCESS_GUIDANCE = 'When repository tools are available, inspect surrounding source, callers, and tests to understand the changed behavior. '
 const TOOL_FREE_ACCESS_GUIDANCE = 'No repository, shell, or network access is available in this review: do not run commands or open files, and judge the change from the diff alone. '
 
-export function buildCodeReviewSystemPrompt({ toolFree = false } = {}) {
+function buildCodeReviewSystemPrompt({ toolFree = false } = {}) {
   return CODE_REVIEW_SYSTEM_PROMPT_TEMPLATE
     .replace('{{REPOSITORY_ACCESS}}', toolFree ? TOOL_FREE_ACCESS_GUIDANCE : REPOSITORY_ACCESS_GUIDANCE)
 }
