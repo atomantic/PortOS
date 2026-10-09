@@ -142,7 +142,6 @@ export function planTextSampleTimes({ lyrics = [], textCues = [], scenes = [], d
 const thinEvenly = (list, max) => (list.length <= max ? list
   : Array.from({ length: max }, (_, i) => list[Math.floor(((i + 0.5) * list.length) / max)]));
 
-const widthOf = (b) => b.x1 - b.x0;
 const heightOf = (b) => b.y1 - b.y0;
 const emOf = (item) => (finite(item.emPx) && item.emPx > 0 ? item.emPx : heightOf(item));
 
