@@ -660,6 +660,8 @@ export function buildCiTestPlan(changedFiles, {
   clientDependencies = [],
   // Includes literal deferred imports; null means discovery was inconclusive.
   dbDependencies = [],
+  // Registered suite → reachable files; null retains that suite conservatively.
+  browserDependencies = {},
 } = {}) {
   const changed = uniqueSorted(changedFiles.filter(Boolean));
   const trackedSet = new Set(trackedFiles);
@@ -877,7 +879,12 @@ export function buildCiTestPlan(changedFiles, {
     changedFiles: changed,
     server,
     client,
-    browserFiles: browserSuitesIn(serverFiles),
+    browserFiles: browserSuitesIn([
+      ...serverFiles,
+      ...BROWSER_SUITES.filter((suite) => trackedSet.has(suite)
+        && serverSources.some((source) => browserDependencies[suite] === null
+          || browserDependencies[suite]?.includes(source))),
+    ]),
     db,
     lint: {
       // Same deleted-path guard as directTests above — ESLint given a
@@ -1043,13 +1050,13 @@ function collectClientDependencies(trackedFiles, cwd) {
   return uniqueSorted([...seen].filter((path) => path.startsWith('server/lib/')));
 }
 
-// DB suites are excluded from ordinary Vitest related selection. Walk their
-// imports separately, including deferred literals, without importing test code
-// or Vitest (the planner runs before npm installation). Unreadable or unresolved
-// local imports and computed imports retain DB coverage for server sources.
-function collectDbDependencies(files, cwd) {
+// Project DB and browser consumers without importing test code or Vitest (the
+// planner runs before npm installation). Include deferred literals; unreadable,
+// unresolved and computed imports retain conservative prerequisite coverage.
+// Share parsed edges between suite walks so common dependencies are read once.
+function collectTestDependencies(entries, files, cwd, importCache) {
   const known = new Set(files);
-  const pending = resolveDbTestFiles(files);
+  const pending = [...entries];
   const seen = new Set();
   const extensions = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts', '.json'];
   let inconclusive = false;
@@ -1059,16 +1066,21 @@ function collectDbDependencies(files, cwd) {
       if (seen.has(file)) continue;
       seen.add(file);
       if (!MODULE_SOURCE_RE.test(file)) continue;
-      const source = readFileSync(join(cwd, file), 'utf8');
-      const specifiers = staticImportSpecifiersFromSource(source);
-      // Scan all import calls. A nonliteral expression cannot safely prove
-      // absence of a dependency; template literals are resolvable only when
-      // they contain no interpolation. Extra matches in comments widen safely.
-      for (const match of source.matchAll(/\bimport\s*\(\s*([^)]*)\)/g)) {
-        const literal = match[1].trim().match(/^(['"`])([^'"`]*?)\1\s*(?:,.*)?$/s);
-        if (!literal || literal[2].includes('${')) inconclusive = true;
-        else specifiers.push(literal[2]);
+      if (!importCache.has(file)) {
+        const source = readFileSync(join(cwd, file), 'utf8');
+        const specifiers = staticImportSpecifiersFromSource(source);
+        let computed = false;
+        // A nonliteral cannot prove absence of a dependency; extra matches in
+        // comments widen safely. Template literals resolve without interpolation.
+        for (const match of source.matchAll(/\bimport\s*\(\s*([^)]*)\)/g)) {
+          const literal = match[1].trim().match(/^(['"`])([^'"`]*?)\1\s*(?:,.*)?$/s);
+          if (!literal || literal[2].includes('${')) computed = true;
+          else specifiers.push(literal[2]);
+        }
+        importCache.set(file, { specifiers, computed });
       }
+      const { specifiers, computed } = importCache.get(file);
+      if (computed) inconclusive = true;
       for (const specifier of specifiers) {
         if (!specifier.startsWith('.')) continue;
         const path = posix.normalize(posix.join(posix.dirname(file), specifier.split(/[?#]/)[0]));
@@ -1143,12 +1155,20 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
     ? collectClientDependencies(hasChangedFilesOverride ? uniqueSorted([...presentFiles, ...untrackedFiles]) : presentFiles, cwd)
     : [];
 
-  const dbDependencies = collectedChangedFiles.some((path) => isServerRunnerFile(path)
-    && MODULE_SOURCE_RE.test(path) && !isTestFile(path) && !isStructuralBarrel(path))
-    ? collectDbDependencies(hasChangedFilesOverride ? uniqueSorted([...presentFiles, ...untrackedFiles]) : presentFiles, cwd)
+  const hasRelatedServerSource = collectedChangedFiles.some((path) => isServerRunnerFile(path)
+    && MODULE_SOURCE_RE.test(path) && !isTestFile(path) && !isStructuralBarrel(path));
+  const dependencyFiles = hasChangedFilesOverride ? uniqueSorted([...presentFiles, ...untrackedFiles]) : presentFiles;
+  const importCache = new Map();
+  const dbDependencies = hasRelatedServerSource
+    ? collectTestDependencies(resolveDbTestFiles(dependencyFiles), dependencyFiles, cwd, importCache)
     : [];
+  const browserDependencies = hasRelatedServerSource
+    ? Object.fromEntries(browserSuitesIn(presentFiles).map((suite) => [suite,
+      collectTestDependencies([suite], dependencyFiles, cwd, importCache)]))
+    : {};
 
-  return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests, clientDependencies, dbDependencies };
+  return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests,
+    clientDependencies, dbDependencies, browserDependencies };
 }
 
 function main() {
@@ -1172,7 +1192,7 @@ function main() {
     && (!Array.isArray(changedFilesOverride) || changedFilesOverride.some((path) => typeof path !== 'string'))) {
     throw new Error('CI_CHANGED_FILES must be a JSON array of repository-relative path strings.');
   }
-  const { changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, dbDependencies } = collectPlanInputs({
+  const { changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, dbDependencies, browserDependencies } = collectPlanInputs({
     baseSha: base,
     forceFull,
     changedFiles: changedFilesOverride,
@@ -1185,6 +1205,7 @@ function main() {
     pathContractTests,
     clientDependencies,
     dbDependencies,
+    browserDependencies,
   }));
 }
 
