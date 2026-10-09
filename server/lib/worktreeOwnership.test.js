@@ -55,6 +55,27 @@ describe('worktree ownership', () => {
     })).toBe('worktree-missing-agent-id');
   });
 
+  it('admits a tree outside every configured root only through an explicit idle window', () => {
+    // The unmanaged-location hold is unconditional by default (#10270: a release
+    // worktree deleted a minute after a live run cut it). A caller that has an
+    // independent proof the tree is unwanted — the superseded reap, whose branch
+    // carries a recorded verdict and a backup — may name an idle window, after
+    // which the tree is judged by the remaining gates like any managed one.
+    const outside = { path: '/private/tmp/portos-elsewhere', roots: [{ path: COS_ROOT, requireAgentId: false }], activeAgentIds: new Set() };
+    expect(worktreeOwnershipReason(outside)).toBe('worktree-unmanaged-location');
+    expect(worktreeOwnershipReason({ ...outside, unmanagedIdleMs: 3_600_000, ageMs: 60_000 })).toBe('worktree-unmanaged-location');
+    expect(worktreeOwnershipReason({ ...outside, unmanagedIdleMs: 3_600_000, ageMs: 3_600_000 })).toBeNull();
+    // An unknown age never counts as idle.
+    for (const ageMs of [null, undefined, NaN]) {
+      expect(worktreeOwnershipReason({ ...outside, unmanagedIdleMs: 3_600_000, ageMs })).toBe('worktree-unmanaged-location');
+    }
+    // The window only replaces the LOCATION gate; every later hold still applies.
+    expect(worktreeOwnershipReason({ ...outside, unmanagedIdleMs: 3_600_000, ageMs: 7_200_000, locked: true })).toBe('worktree-locked');
+    expect(worktreeOwnershipReason({
+      ...outside, path: `${outside.path}/agent-live`, unmanagedIdleMs: 3_600_000, ageMs: 7_200_000, activeAgentIds: new Set(['agent-live'])
+    })).toBe('worktree-active-agent');
+  });
+
   it('fails closed when agent liveness is unknown and permits an explicitly non-agent root', () => {
     expect(worktreeOwnershipReason({
       path: `${COS_ROOT}/agent-unknown`,
@@ -148,6 +169,19 @@ describe('worktreeHoldExpiresAt', () => {
     expect(claim({ ageMs: 7_000 })).toBeNull();
     for (const ageMs of [null, undefined, NaN, 'old']) expect(claim({ ageMs })).toBeNull();
     expect(claim({ staleClaimIdleMs: undefined })).toBeNull();
+  });
+
+  it('dates an unmanaged-location hold to the end of the caller\'s idle window', () => {
+    const outside = {
+      path: '/private/tmp/portos-elsewhere', roots: [{ path: COS_ROOT, requireAgentId: false }],
+      activeAgentIds: new Set(), unmanagedIdleMs: 3_600_000, ageMs: 600_000, nowMs: NOW
+    };
+    expect(worktreeHoldExpiresAt(outside)).toBe(new Date(NOW + 3_000_000).toISOString());
+    // No window from this caller, or no measured age: nothing to date.
+    expect(worktreeHoldExpiresAt({ ...outside, unmanagedIdleMs: undefined })).toBeNull();
+    for (const ageMs of [null, undefined, NaN]) expect(worktreeHoldExpiresAt({ ...outside, ageMs })).toBeNull();
+    // A lock outlives the window and the gate reports it first, so no date.
+    expect(worktreeHoldExpiresAt({ ...outside, locked: true })).toBeNull();
   });
 
   it('gives no expiry to holds that are not the stale-claim window', () => {

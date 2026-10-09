@@ -109,7 +109,7 @@ import {
   actionOn, filterActionable, desiredEndState, formatInFlightForPrompt, actionableSignature,
   limitBranchesForAgent,
   branchPriorityRank, prioritizeBranches, worktreeProtectionExpiresAt, describeIdleReconcilePark,
-  SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS,
+  SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS, SUPERSEDED_UNMANAGED_IDLE_MS,
   isMalformedClaimBranch,
   listRemoteHeads, upstreamBranchName, parseRemoteHeads, partitionRemoteOrphans, reapOrphanedRemotes,
   reapSupersededBranches
@@ -1603,6 +1603,51 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     expect(backupSupersededBranchMock).not.toHaveBeenCalled();
     expect(res.held.map((b) => b.branch)).toEqual([CLAIM]);
     expect(res.skipped.find((sk) => sk.branch === CLAIM)?.reason).toBe('worktree-locked');
+  });
+
+  // A verified-superseded branch whose worktree lives OUTSIDE the managed roots
+  // (an agent's `/tmp` checkout) used to be held with
+  // 'worktree-unmanaged-location' on every cycle — a hold nothing ever lifts,
+  // so the coordinator was told "PortOS reaps it" about a branch PortOS never
+  // would. The verdict and the backup are the independent proof #10270's
+  // location gate lacks; a short idle floor covers a process still in the tree.
+  it('reaps a superseded branch from an unmanaged location once its worktree has sat idle', async () => {
+    const TMP_TREE = '/private/tmp/portos-deep-oversized-order';
+    const verdict = {
+      branch: BRANCH, repoPath: '/repo', verdict: 'SUPERSEDED', tip: 'aaaaaaa',
+      dirtyPaths: [], collisionPaths: ['server/services/thing.js'], replacedBy: ['ffffff1']
+    };
+    const entry = (worktreeAgeMs) => ({ branch: BRANCH, tip: 'aaaaaaa', worktreePath: TMP_TREE, worktreeLocked: false, worktreeAgeMs, dirtyPaths: [], verdict });
+
+    const young = await reapSupersededBranches('/repo', 'main', [entry(5 * 60 * 1000)], { activeAgentIds: new Set() });
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    expect(backupSupersededBranchMock).not.toHaveBeenCalled();
+    expect(young.reaped).toEqual([]);
+    const hold = young.skipped.find((sk) => sk.branch === BRANCH);
+    expect(hold.reason).toBe('worktree-unmanaged-location');
+    // The hold lifts on a clock, so the park can wake for it instead of waiting out a recheck.
+    expect(Date.parse(hold.retryAt)).toBeGreaterThan(Date.now());
+    expect(Date.parse(hold.retryAt)).toBeLessThanOrEqual(Date.now() + SUPERSEDED_UNMANAGED_IDLE_MS);
+    // The held entry names its own hold, so the prompt and the park log can too.
+    expect(young.held[0]).toMatchObject({ branch: BRANCH, holdReason: 'worktree-unmanaged-location', holdRetryAt: hold.retryAt });
+
+    const idle = await reapSupersededBranches('/repo', 'main', [entry(SUPERSEDED_UNMANAGED_IDLE_MS)], { activeAgentIds: new Set() });
+    expect(backupSupersededBranchMock).toHaveBeenCalledTimes(1);
+    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', TMP_TREE, expect.anything());
+    expect(git.deleteBranch).toHaveBeenCalledWith('/repo', BRANCH, { local: true });
+    expect(idle.reaped).toEqual([BRANCH]);
+    expect(idle.held).toEqual([]);
+  });
+
+  it('keeps the unmanaged-location hold for merged cleanup, which has no verdict to lean on', async () => {
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+    const res = await cleanupMerged('/repo', 'main', [{
+      branch: 'next/issue-2190', worktreePath: '/private/tmp/portos-next-2190', worktreeAgeMs: 30 * 24 * 60 * 60 * 1000
+    }]);
+    expect(res.cleaned).toEqual([]);
+    expect(res.skipped).toEqual([{ branch: 'next/issue-2190', reason: 'worktree-unmanaged-location' }]);
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
   });
 
   it('holds the reap of a superseded branch when an active CoS agent is running in it', async () => {

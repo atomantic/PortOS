@@ -488,7 +488,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   // lock or a live agent — so name them rather than letting them
   // vanish into a quiet park; the invisibility is the same failure mode as a
   // lingering worktree reported as "cleaned 0".
-  const supersededSuffix = countSuffix(result.superseded, 'branch(es) verified superseded, reap held back');
+  const supersededSuffix = countSuffix(result.superseded, 'branch(es) verified superseded, reap held back', (b) => b.holdReason);
   // Branches somebody is actively working in (a running CoS agent, a live human
   // /claim, a locked worktree) are classified WIP and never reach `inFlight` — the
   // reconcile is DONE when they are all that's left, not stuck. Named in the park
