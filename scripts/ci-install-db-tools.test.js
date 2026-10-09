@@ -91,12 +91,14 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('switching to http://archive.ubuntu.com/ubuntu/');
     expect(result.sources).toBe(RUNNER_SOURCES.replace('azure.archive.ubuntu.com', 'archive.ubuntu.com'));
-    expect(result.calls).toEqual([
-      'apt-get update',
+    // The stalled first update is killed on a 1s budget, so on a loaded host it
+    // may die before the fake logs its call: allow zero or one leading attempt.
+    expect(result.calls.slice(-3)).toEqual([
       'apt-get update',
       'apt-get install -y --download-only postgresql-client-17 ffmpeg',
       INSTALL_FROM_CACHE,
     ]);
+    expect(result.calls.slice(0, -3)).toSatisfy((stalled) => stalled.length <= 1 && stalled.every((c) => c === 'apt-get update'));
     expect(result.githubPath).toBe('/usr/lib/postgresql/17/bin\n');
   });
 
