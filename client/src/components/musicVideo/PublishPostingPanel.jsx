@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage.js';
 import { ExternalLink, X as XIcon, LogIn, Link as LinkIcon, Check, ChevronDown, ChevronRight, Undo2 } from 'lucide-react';
@@ -291,6 +291,12 @@ function TargetRow({ project, kit, entry, publishing }) {
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [confirmAgain, setConfirmAgain] = useState(false);
   const draft = publishing.drafts[target];
+  // A Suno share link the draft followed: show the song page it opened instead.
+  const draftSongUrl = draft?.songUrl;
+  useEffect(() => {
+    if (!draftSongUrl) return;
+    setOptions((prev) => (prev.songUrl && prev.songUrl !== draftSongUrl ? { ...prev, songUrl: draftSongUrl } : prev));
+  }, [draftSongUrl]);
   // A done platform folds to its header so the ones still to do are easy to reach.
   const [open, setOpen] = useState(() => !kit.posts?.[target]);
   const busy = publishing.busy[target];
