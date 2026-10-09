@@ -24,7 +24,28 @@ async function saveReview(date, data) {
   await atomicWrite(join(REVIEW_DIR, `${date}.json`), data);
 }
 
-export async function getDailyReview(date) {
+export const DAILY_REVIEW_PAGE_SIZE = 200;
+
+const eventKey = event => event.id || event.externalId;
+
+// Walk the source collection by its own total so the summary describes the whole
+// day, whatever page the caller asked to display. The walk stops on an empty
+// page, so a source that under-reports its total cannot spin forever.
+async function collectDayEvents(startDate, endDate) {
+  const events = [];
+  let total = 0;
+  do {
+    const page = await calendarSync.getEvents({
+      startDate, endDate, limit: DAILY_REVIEW_PAGE_SIZE, offset: events.length
+    });
+    total = Number.isSafeInteger(page.total) ? page.total : page.events.length;
+    if (!page.events.length) break;
+    events.push(...page.events);
+  } while (events.length < total);
+  return events;
+}
+
+export async function getDailyReview(date, { limit = DAILY_REVIEW_PAGE_SIZE, offset = 0 } = {}) {
   // Recover a durable intent before projecting confirmations or goal progress.
   const existing = await reviewQueue(date, async () => {
     const review = await loadReview(date) || { confirmations: Object.create(null), updatedAt: null };
@@ -40,8 +61,8 @@ export async function getDailyReview(date) {
   // Get all events for this date across all accounts
   const startDate = `${date}T00:00:00`;
   const endDate = `${date}T23:59:59`;
-  const [{ events }, accounts, goalsData] = await Promise.all([
-    calendarSync.getEvents({ startDate, endDate, limit: 200 }),
+  const [dayEvents, accounts, goalsData] = await Promise.all([
+    collectDayEvents(startDate, endDate),
     calendarAccounts.listAccounts(),
     getGoals()
   ]);
@@ -65,8 +86,9 @@ export async function getDailyReview(date) {
   }
 
   // Enrich events with confirmation status and goal matches
-  const enrichedEvents = events.map(event => {
-    const confirmation = existing.confirmations[event.id || event.externalId];
+  const pageEvents = dayEvents.slice(offset, offset + limit);
+  const enrichedEvents = pageEvents.map(event => {
+    const confirmation = existing.confirmations[eventKey(event)];
     const subcalInfo = subcalendarMap[event.subcalendarId];
     const matchingGoals = (subcalInfo?.linkedGoals || []).filter(lg => {
       if (!lg.matchPattern) return true;
@@ -100,19 +122,26 @@ export async function getDailyReview(date) {
     }
   }
 
+  const nextOffset = offset + pageEvents.length < dayEvents.length ? offset + pageEvents.length : null;
+
   return {
     date,
     events: enrichedEvents,
+    total: dayEvents.length,
+    limit,
+    offset,
+    nextOffset,
+    hasMore: nextOffset !== null,
     confirmations: existing.confirmations,
     pendingConfirmations: Object.fromEntries(Object.keys(existing.pendingOperations || {})
       .map(eventId => [eventId, { code: 'GOAL_NOT_FOUND' }])),
     progressEntries,
     lastSyncAt,
     summary: {
-      totalEvents: enrichedEvents.length,
+      totalEvents: dayEvents.length,
       confirmed: Object.values(existing.confirmations).filter(c => c.happened).length,
       skipped: Object.values(existing.confirmations).filter(c => c.happened === false).length,
-      unreviewed: enrichedEvents.filter(e => !existing.confirmations[e.id || e.externalId]).length
+      unreviewed: dayEvents.filter(e => !existing.confirmations[eventKey(e)]).length
     },
     updatedAt: existing.updatedAt
   };

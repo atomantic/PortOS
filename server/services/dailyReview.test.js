@@ -4,6 +4,8 @@ import { dirname, join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 const fault = vi.hoisted(() => ({ kind: null, countdown: 0 }));
+// Mirrors calendarSync.getEvents: a bounded page plus the filtered window's total.
+const source = vi.hoisted(() => ({ events: [], calls: [] }));
 vi.mock('../lib/fileUtils.js', async original => {
   const actual = await original();
   return makePathsProxy(actual, {
@@ -22,7 +24,12 @@ vi.mock('./mortalLoomStore.js', () => ({
   mlArrayIfEnabled: async () => null,
   mlReplace: vi.fn()
 }));
-vi.mock('./calendarSync.js', () => ({ getEvents: async () => ({ events: [{ id: 'event-a' }] }) }));
+vi.mock('./calendarSync.js', () => ({
+  getEvents: async ({ limit = 50, offset = 0 }) => {
+    source.calls.push({ limit, offset });
+    return { events: source.events.slice(offset, offset + limit), total: source.events.length };
+  }
+}));
 vi.mock('./calendarAccounts.js', () => ({ listAccounts: async () => [] }));
 vi.mock('./aiProvider.js', () => ({ callProviderAISimple: vi.fn(), parseLLMJSON: vi.fn() }));
 vi.mock('./meatspaceCalendar.js', () => ({ getActivities: async () => [] }));
@@ -47,6 +54,8 @@ let review;
 let goals;
 beforeEach(async () => {
   fault.kind = null;
+  source.events = [{ id: 'event-a' }];
+  source.calls = [];
   vi.resetModules();
   await rm(PATHS.calendar, { force: true, recursive: true });
   await write(goalsPath, { goals: [
@@ -59,6 +68,36 @@ beforeEach(async () => {
 afterAll(cleanupTempDataRoots);
 
 const allProgress = async () => (await read(goalsPath)).goals.flatMap(goal => goal.progressLog || []);
+
+describe('daily review pagination', () => {
+  const dayOf = count => Array.from({ length: count }, (_, i) => ({ id: `event-${i}`, title: `Event ${i}` }));
+
+  it('exposes the 201st event on a continuation page and keeps full-day counts on every page', async () => {
+    source.events = dayOf(201);
+    await review.confirmEvent(date, { eventId: 'event-200', happened: true });
+
+    const first = await review.getDailyReview(date);
+    expect(first.events).toHaveLength(200);
+    expect(first).toMatchObject({ total: 201, limit: 200, offset: 0, nextOffset: 200, hasMore: true });
+    expect(first.summary).toMatchObject({ totalEvents: 201, confirmed: 1, unreviewed: 200 });
+    expect(first.events.some(event => event.id === 'event-200')).toBe(false);
+    expect(first.confirmations['event-200'].happened).toBe(true);
+
+    const second = await review.getDailyReview(date, { limit: 200, offset: first.nextOffset });
+    expect(second.events.map(event => event.id)).toEqual(['event-200']);
+    expect(second.events[0].confirmation).toMatchObject({ happened: true });
+    expect(second).toMatchObject({ total: 201, offset: 200, nextOffset: null, hasMore: false });
+    expect(second.summary).toEqual(first.summary);
+  });
+
+  it('honors a smaller caller page without shrinking the summary', async () => {
+    source.events = dayOf(5);
+    const page = await review.getDailyReview(date, { limit: 2, offset: 2 });
+    expect(page.events.map(event => event.id)).toEqual(['event-2', 'event-3']);
+    expect(page).toMatchObject({ total: 5, nextOffset: 4, hasMore: true });
+    expect(page.summary.unreviewed).toBe(5);
+  });
+});
 
 describe('calendar confirmation persistence workflow', () => {
   it('replays a lost response, edits and moves one owned entry, then skips without removing manual progress', async () => {

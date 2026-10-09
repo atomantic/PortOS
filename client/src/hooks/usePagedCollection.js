@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-const emptyPage = () => ({ items: [], total: null, nextCursor: null, loaded: false, loading: false, error: null });
+const emptyPage = () => ({ items: [], total: null, meta: null, nextCursor: null, loaded: false, loading: false, error: null });
 
-// fetchPage({ cursor, signal }) returns { items, total?, nextCursor }.
+// fetchPage({ cursor, signal }) returns { items, total?, meta?, nextCursor }.
+// `meta` is the latest page's response-level data (e.g. a day summary); it is
+// replaced by each page and shares the items' stale-query protection.
 // Its identity is the query key: memoize it over the collection's filters.
 export function usePagedCollection(fetchPage, { enabled = true } = {}) {
   const [page, setPage] = useState(emptyPage);
@@ -29,7 +31,7 @@ export function usePagedCollection(fetchPage, { enabled = true } = {}) {
       // their records after merging, including gaps backfilled after reconnect.
       const items = new Map((refresh ? result.items : state.current.items).map(item => [item.id, item]));
       for (const item of refresh ? state.current.items : result.items) if (!refresh || !items.has(item.id)) items.set(item.id, item);
-      commit({ items: [...items.values()], total: result.total ?? state.current.total,
+      commit({ items: [...items.values()], total: result.total ?? state.current.total, meta: result.meta ?? state.current.meta,
         nextCursor: refresh && overlaps ? state.current.nextCursor : result.nextCursor ?? null, loaded: true, loading: false, error: null });
     } catch (error) {
       if (generation.current === epoch) {

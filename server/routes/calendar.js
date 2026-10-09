@@ -1,7 +1,7 @@
 import express from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, parsePagination, calendarAutoConfigureBodySchema } from '../lib/validation.js';
+import { validateRequest, parsePagination, calendarAutoConfigureBodySchema, dailyReviewQuerySchema } from '../lib/validation.js';
 import { UUID_RE } from '../lib/fileUtils.js';
 import { MEETING_URL_MAX } from '../lib/meetingUrl.js';
 import * as calendarAccounts from '../services/calendarAccounts.js';
@@ -418,7 +418,8 @@ router.get('/review/:date', asyncHandler(async (req, res) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
     throw new ServerError('Invalid date format, use YYYY-MM-DD', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  const review = await dailyReview.getDailyReview(dateStr);
+  const { limit, offset } = validateRequest(dailyReviewQuerySchema, req.query);
+  const review = await dailyReview.getDailyReview(dateStr, { limit, offset });
   res.json(review);
 }));
 
