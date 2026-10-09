@@ -20,6 +20,7 @@ import { validateVideoRetryParams } from '../services/videoGen/prepareParams.js'
 import { hostedVideoRetryValidator } from '../services/videoGen/hostedSubmission.js';
 import { I2V_REFERENCE_MODES } from '../lib/videoReferenceModes.js';
 import { DRAFT_DECODE_IDS, isFullDecode } from '../lib/videoDraftDecoders.js';
+import { VIDEO_STREAMING_MODES, isDefaultVideoStreamingMode } from '../lib/videoStreamingMode.js';
 
 const router = Router();
 
@@ -293,6 +294,10 @@ const RETRY_OVERRIDE_SCHEMA = z.object({
   // nothing, which the queue would then echo back into the next editor.
   draftDecode: z.enum(DRAFT_DECODE_IDS).nullable().optional()
     .transform((v) => (v === undefined ? undefined : (isFullDecode(v) ? null : v))),
+  // Auto/null clears an explicit memory request; absence inherits it. The
+  // render bridge still owns capability checks and refuses unsupported Stream.
+  streamingMode: z.enum(VIDEO_STREAMING_MODES).nullable().optional()
+    .transform((v) => (v === undefined ? undefined : (isDefaultVideoStreamingMode(v) ? null : v))),
   chunks: z.number().int().min(1).max(8).optional(),
   chunkPrompts: z.array(z.string().max(8000)).max(8).optional(),
   contextFrames: z.number().int().min(0).max(64).optional(),
@@ -365,7 +370,7 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
     const bounds = VIDEO_RETRY_BOUNDS_SCHEMA.safeParse(rawOverrides);
     if (!bounds.success) throw new ServerError('Video retry settings are outside the supported range', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  for (const key of ['seed', 'steps', 'guidanceScale', 'imageStrength', 'i2vReferenceMode', 'speedProfileId', 'draftDecode']) {
+  for (const key of ['seed', 'steps', 'guidanceScale', 'imageStrength', 'i2vReferenceMode', 'speedProfileId', 'draftDecode', 'streamingMode']) {
     if (rawOverrides[key] === null) delete params[key];
   }
   if (rawOverrides.chunks === 1) delete params.chunkPrompts;

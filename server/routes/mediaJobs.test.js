@@ -112,6 +112,28 @@ describe('mediaJobs routes', () => {
     expect(r.body.params.uploadedTempPath).toBeUndefined();
   });
 
+  it('GET /queue and the full list preserve video memory requests without exposing worker metadata', async () => {
+    const jobs = ['resident', 'stream'].map((streamingMode) => ({
+      id: `memory-${streamingMode}`, kind: 'video', status: 'failed',
+      params: {
+        prompt: 'an invented memory test', streamingMode,
+        pythonPath: '/private/python', projectDir: '/private/project',
+        apiKey: 'synthetic-secret', remotePeerReservation: true,
+      },
+    }));
+    jobs.forEach((job) => jobStore.set(job.id, job));
+    stubs.listQueueJobs.mockReturnValue(jobs);
+    const app = makeApp();
+    for (const path of ['/api/media-jobs/queue?kind=video', '/api/media-jobs']) {
+      const response = await request(app).get(path);
+      expect(response.status).toBe(200);
+      expect(response.body.map((job) => job.params)).toEqual([
+        { prompt: 'an invented memory test', streamingMode: 'resident' },
+        { prompt: 'an invented memory test', streamingMode: 'stream' },
+      ]);
+    }
+  });
+
   it('POST /prompt-from-media 400s when the image source has no filename', async () => {
     const r = await request(makeApp()).post('/api/media-jobs/prompt-from-media').send({
       sourceKind: 'image',
@@ -403,6 +425,48 @@ describe('mediaJobs routes', () => {
       .post('/api/media-jobs/j-video-decode-bad/retry')
       .send({ params: { draftDecode: 'turbo' } });
     expect(r.status).toBe(400);
+  });
+
+  it('POST /:id/retry carries a changed memory request to enqueue and inherits unrelated params', async () => {
+    jobStore.set('memory-retry', {
+      id: 'memory-retry', kind: 'video', status: 'failed', owner: null,
+      params: { prompt: 'an invented retry', mode: 'extend', streamingMode: 'resident', steps: 20, pythonPath: '/private/python' },
+    });
+    const response = await request(makeApp()).post('/api/media-jobs/memory-retry/retry')
+      .send({ params: { streamingMode: 'stream' } });
+    expect(response.status).toBe(200);
+    expect(stubs.enqueueJob.mock.calls[0][0].params).toEqual({
+      prompt: 'an invented retry', mode: 'extend', streamingMode: 'stream', steps: 20, pythonPath: '/private/python',
+    });
+  });
+
+  it('POST /:id/retry inherits an untouched memory request and clears it on Auto or null', async () => {
+    for (const overrides of [{}, { streamingMode: null }, { streamingMode: 'auto' }]) {
+      jobStore.set('memory-retry', {
+        id: 'memory-retry', kind: 'video', status: 'failed', owner: null,
+        params: { prompt: 'an invented retry', streamingMode: 'resident', steps: 20 },
+      });
+      const response = await request(makeApp()).post('/api/media-jobs/memory-retry/retry')
+        .send({ params: overrides });
+      expect(response.status).toBe(200);
+      expect(stubs.enqueueJob.mock.calls.at(-1)[0].params).toEqual({
+        prompt: 'an invented retry', steps: 20,
+        ...(Object.hasOwn(overrides, 'streamingMode') ? {} : { streamingMode: 'resident' }),
+      });
+    }
+  });
+
+  it('POST /:id/retry refuses malformed memory overrides before enqueue', async () => {
+    jobStore.set('memory-retry', {
+      id: 'memory-retry', kind: 'video', status: 'failed',
+      params: { prompt: 'an invented retry', streamingMode: 'resident' },
+    });
+    for (const streamingMode of ['unknown', '', false]) {
+      const response = await request(makeApp()).post('/api/media-jobs/memory-retry/retry')
+        .send({ params: { streamingMode } });
+      expect(response.status).toBe(400);
+    }
+    expect(stubs.enqueueJob).not.toHaveBeenCalled();
   });
 
   it('POST /:id/retry clears resettable numeric video controls with null', async () => {
