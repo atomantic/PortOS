@@ -13,6 +13,8 @@ const retryAfterMs = 5000;
 // reclaimable even from a running owner: that holder's pinned merge
 // (--match-head-commit) cannot land an unverified head, so the worst case is
 // one redundant resync rather than a repository blocked behind a hung parent.
+// This is not a forge-side fence: a merge request already in flight at the
+// deadline may still land, with the same exposure as two CLEAN merges.
 export const AGENT_LEASE_MAX_HOLD_MS = 5 * 60 * 1000;
 export const MERGE_ADMISSION_OUTCOMES = ['merged', 'leave-open', 'resync'];
 const serverOwner = randomUUID();

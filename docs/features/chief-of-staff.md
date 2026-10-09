@@ -66,7 +66,10 @@ An agent lease is recoverable from a matching finalized parent record
 its owner is still running. An expired holder's `check` is refused with
 `lease-expired`, and because every merge is pinned to the CI-verified head, a
 reclaimed holder cannot land an unverified head — the worst case is one
-redundant resync. Completed children and absent cwd processes never release a
+redundant resync. The lease is not a forge-side fence: a holder whose merge
+request was already in flight when its deadline passed can still complete it
+while the next holder merges. Both merges are pinned and forge-checked, so this
+is the same semantic-conflict exposure as two consecutive `CLEAN` merges. Completed children and absent cwd processes never release a
 lease early. A crashed deterministic sweep is recoverable only after its server
 process is proven absent. Failed reads and ambiguous/reused process identities
 hold admission conservatively.
