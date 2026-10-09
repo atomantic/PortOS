@@ -12,7 +12,7 @@ import { ServerError } from '../../../lib/errorHandler.js';
 import { PATHS, ensureDir } from '../../../lib/fileUtils.js';
 import { safeUnder } from '../../../lib/ffmpeg.js';
 import { getProject, mutateProjectRecord } from '../projects.js';
-import { buildPublishPayload } from './payloads.js';
+import { buildPublishPayload, publishPreviewParts } from './payloads.js';
 import { connectPortosBrowser, serializeBrowserOperation as serialize } from './browser.js';
 import { assertAccount, assertPlatformEnabled, getPublishPlatforms, normalizePost } from './platforms.js';
 import { youtubeAdapter, shortsAdapter } from './youtube.js';
@@ -195,6 +195,25 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
       throw err;
     }
   });
+}
+
+/**
+ * What Fill draft would post for `target` with these options, without opening
+ * anything: `{ ready: true, parts }` (the rows the director reads), or
+ * `{ ready: false, problem }` naming what is missing, in the words Fill draft
+ * would refuse with.
+ */
+export async function previewPublishPost(projectId, target, options = {}, deps = {}) {
+  if (!(deps.adapters || PUBLISH_ADAPTERS)[target]) throw new ServerError(`Unknown publish target: ${target}`, { status: 400, code: 'VALIDATION_ERROR' });
+  const project = await getProject(projectId);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const platforms = deps.platforms || await getPublishPlatforms();
+  return Promise.resolve()
+    .then(() => buildPublishPayload(target, project, withPlatformDefaults(target, options, platforms)))
+    .then((payload) => ({ ready: true, parts: publishPreviewParts(target, project, payload) }), (err) => {
+      if (err?.status === 422 || err?.status === 409) return { ready: false, problem: err.message };
+      throw err;
+    });
 }
 
 /** Close a draft without posting it. */

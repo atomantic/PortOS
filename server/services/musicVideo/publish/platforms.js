@@ -14,6 +14,7 @@ import { MUSIC_VIDEO_PUBLISH_TARGETS } from '../../../lib/musicVideoValidation.j
 import { ServerError } from '../../../lib/errorHandler.js';
 import { getSettings, updateSettingsWith } from '../../settings.js';
 import { listProjects } from '../projects.js';
+import { DISTROKID_REMEMBERED_OPTIONS } from '../../../lib/distrokidGenres.js';
 
 const SETTINGS_KEY = 'musicVideoPublishing';
 const RECEPTIONS = ['good', 'mixed', 'poor'];
@@ -21,12 +22,29 @@ const RECENT_NOTES = 5;
 
 const cleanAccount = (v) => (typeof v === 'string' ? v.trim().replace(/^@/, '').slice(0, 100) : '') || null;
 
-/** Every target's `{ enabled, account }`, defaulting to off. */
+// Release answers that repeat on every project, kept with the platform so any device refills them.
+const REMEMBERED = { distrokid: DISTROKID_REMEMBERED_OPTIONS };
+const SONGWRITER_ROLES = ['music', 'lyrics', 'both'];
+function cleanDefaults(target, stored) {
+  const keys = REMEMBERED[target] || [];
+  const source = stored && typeof stored === 'object' ? stored : {};
+  const out = {};
+  for (const key of keys) {
+    const v = typeof source[key] === 'string' ? source[key].trim().slice(0, 100) : '';
+    if (!v || (key === 'songwriterRole' && !SONGWRITER_ROLES.includes(v))) continue;
+    out[key] = v;
+  }
+  return out;
+}
+
+/** Every target's `{ enabled, account }` (plus `defaults` where answers repeat), defaulting to off. */
 function normalizePlatforms(stored) {
   const source = stored && typeof stored === 'object' ? stored : {};
   return Object.fromEntries(MUSIC_VIDEO_PUBLISH_TARGETS.map((target) => {
     const entry = source[target] && typeof source[target] === 'object' ? source[target] : {};
-    return [target, { enabled: entry.enabled === true, account: cleanAccount(entry.account) }];
+    const platform = { enabled: entry.enabled === true, account: cleanAccount(entry.account) };
+    if (REMEMBERED[target]) platform.defaults = cleanDefaults(target, entry.defaults);
+    return [target, platform];
   }));
 }
 
@@ -35,7 +53,7 @@ export async function getPublishPlatforms() {
   return normalizePlatforms(settings?.[SETTINGS_KEY]?.platforms);
 }
 
-/** Merge `{ [target]: { enabled?, account? } }` into the saved platforms; resolves the full set. */
+/** Merge `{ [target]: { enabled?, account?, defaults? } }` into the saved platforms; resolves the full set. */
 export async function updatePublishPlatforms(patch = {}) {
   let next = null;
   await updateSettingsWith((current) => {
@@ -45,6 +63,16 @@ export async function updatePublishPlatforms(patch = {}) {
       if (!platforms[target] || !change || typeof change !== 'object') continue;
       if (typeof change.enabled === 'boolean') platforms[target].enabled = change.enabled;
       if ('account' in change) platforms[target].account = cleanAccount(change.account);
+      // Per key: a value saves it, an empty one forgets it.
+      if (REMEMBERED[target] && change.defaults && typeof change.defaults === 'object') {
+        const merged = { ...platforms[target].defaults };
+        for (const [key, value] of Object.entries(change.defaults)) {
+          if (!REMEMBERED[target].includes(key)) continue;
+          if (value == null || value === '') delete merged[key];
+          else merged[key] = value;
+        }
+        platforms[target].defaults = cleanDefaults(target, merged);
+      }
     }
     next = platforms;
     return { ...current, [SETTINGS_KEY]: { ...section, platforms } };

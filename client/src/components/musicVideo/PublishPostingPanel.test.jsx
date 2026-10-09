@@ -68,53 +68,111 @@ describe('PublishPostingPanel (#9282)', () => {
     expect(publishing.prepare).toHaveBeenCalledWith('shorts', { cutId: 'kit-vertical' });
   });
 
-  it('fills a DistroKid release with the songwriter and AI parts, and remembers the songwriter on this device', () => {
-    const publishing = hook({ platforms: { distrokid: { enabled: true, account: 'Example Artist' } } });
+  // A settings store like the server's: setPlatform merges a platform's change, as PUT /publish/platforms does.
+  const settingsStore = (platforms) => {
+    const store = { platforms };
+    store.setPlatform = vi.fn(async (target, change) => {
+      const current = store.platforms[target] || {};
+      store.platforms = { ...store.platforms, [target]: { ...current, ...change, ...(change.defaults ? { defaults: { ...current.defaults, ...change.defaults } } : {}) } };
+      return store.platforms;
+    });
+    return store;
+  };
+
+  it('fills a DistroKid release with the songwriter and AI parts, and keeps the songwriter in settings for every device', () => {
+    const store = settingsStore({ distrokid: { enabled: true, account: 'Example Artist', defaults: {} } });
     const p = { ...project(), autonomousRun: { output: { lyrics: 'la la' } } };
-    const { unmount } = render(<PublishPostingPanel project={p} publishing={publishing} />);
+    const { unmount } = render(<PublishPostingPanel project={p} publishing={hook({ platforms: store.platforms, setPlatform: store.setPlatform })} />);
     expandAll();
     const dk = row('DistroKid');
     expect(within(dk).getByLabelText('Artist name')).toHaveAttribute('placeholder', 'Example Artist');
     expect(dk).toHaveTextContent('as Example Artist');
     expect(dk).not.toHaveTextContent('@Example Artist');
     expect(within(dk).getByLabelText('Instrumental')).toBeChecked(); // no lyric cues
-    fireEvent.change(within(dk).getByLabelText('Songwriter legal first name'), { target: { value: 'Alice' } });
-    fireEvent.change(within(dk).getByLabelText('Songwriter legal last name'), { target: { value: 'Example' } });
+    const first = within(dk).getByLabelText('Songwriter legal first name');
+    fireEvent.change(first, { target: { value: 'Alice' } });
+    fireEvent.blur(first);
+    expect(store.setPlatform).toHaveBeenLastCalledWith('distrokid', { defaults: { songwriterFirst: 'Alice' } });
+    const last = within(dk).getByLabelText('Songwriter legal last name');
+    fireEvent.change(last, { target: { value: 'Example' } });
+    fireEvent.blur(last);
+    fireEvent.click(within(dk).getByLabelText('Explicit lyrics'));
+    const publishing = hook({ platforms: store.platforms });
+    fireEvent.click(within(dk).getByRole('button', { name: 'Fill draft' }));
+    unmount();
+    // Another project (or device) reads the same settings and starts filled in.
+    render(<PublishPostingPanel project={project()} publishing={hook({ platforms: store.platforms, setPlatform: store.setPlatform })} />);
+    expandAll();
+    expect(within(row('DistroKid')).getByLabelText('Songwriter legal first name')).toHaveValue('Alice');
+    expect(within(row('DistroKid')).getByLabelText('Songwriter legal last name')).toHaveValue('Example');
+    expect(publishing.prepare).not.toHaveBeenCalled();
+  });
+
+  it('sends the typed songwriter with the AI parts, and editing the artist name renames the DistroKid account', () => {
+    const store = settingsStore({ distrokid: { enabled: true, account: 'Example Artist', defaults: { songwriterFirst: 'Alice', songwriterLast: 'Example' } } });
+    const publishing = hook({ platforms: store.platforms, setPlatform: store.setPlatform });
+    render(<PublishPostingPanel project={{ ...project(), autonomousRun: { output: { lyrics: 'la la' } } }} publishing={publishing} />);
+    expandAll();
+    const dk = row('DistroKid');
     fireEvent.click(within(dk).getByLabelText('Explicit lyrics'));
     fireEvent.click(within(dk).getByRole('button', { name: 'Fill draft' }));
     expect(publishing.prepare).toHaveBeenCalledWith('distrokid', { songwriterFirst: 'Alice', songwriterLast: 'Example', aiLyrics: true, explicit: true });
-    unmount();
-    render(<PublishPostingPanel project={project()} publishing={hook()} />);
-    expandAll();
-    expect(within(row('DistroKid')).getByLabelText('Songwriter legal first name')).toHaveValue('Alice');
+    const artist = within(dk).getByLabelText('Artist name');
+    fireEvent.change(artist, { target: { value: 'New Name' } });
+    fireEvent.blur(artist);
+    expect(store.setPlatform).toHaveBeenLastCalledWith('distrokid', { account: 'New Name' });
   });
 
-  it('suggests a genre from the song and remembers the once-only DistroKid answers', () => {
-    const publishing = hook({ platforms: { distrokid: { enabled: true, account: 'Example Artist' } } });
+  it('hands songwriter answers this device remembered before settings kept them over once', async () => {
+    localStorage.setItem('portos.musicVideo.distrokidSongwriter', JSON.stringify({ first: 'Alice', last: 'Example', language: 'Spanish' }));
+    const store = settingsStore({ distrokid: { enabled: true, account: null, defaults: {} } });
+    render(<PublishPostingPanel project={project()} publishing={hook({ platforms: store.platforms, setPlatform: store.setPlatform })} />);
+    expandAll();
+    expect(within(row('DistroKid')).getByLabelText('Songwriter legal first name')).toHaveValue('Alice');
+    expect(store.setPlatform).toHaveBeenCalledWith('distrokid', { defaults: { songwriterFirst: 'Alice', songwriterLast: 'Example', language: 'Spanish' } });
+    await act(async () => {});
+    expect(localStorage.getItem('portos.musicVideo.distrokidSongwriter')).toBeNull();
+  });
+
+  it('suggests a genre from the song and keeps only the answers that repeat across releases', () => {
+    const store = settingsStore({ distrokid: { enabled: true, account: 'Example Artist', defaults: {} } });
     const p = { ...project(), autonomousRun: { output: { sunoStyle: 'dark synthwave, pop hooks' } } };
-    const { unmount } = render(<PublishPostingPanel project={p} publishing={publishing} />);
+    const { unmount } = render(<PublishPostingPanel project={p} publishing={hook({ platforms: store.platforms, setPlatform: store.setPlatform })} />);
     expandAll();
     const dk = row('DistroKid');
     expect(within(dk).getByLabelText('Genre')).toHaveDisplayValue('Electronic (from the song\'s style)');
     expect(within(dk).getByLabelText('Secondary genre (optional)')).toHaveDisplayValue('Pop (from the song\'s style)');
-    fireEvent.change(within(dk).getByLabelText('Songwriter legal first name'), { target: { value: 'Alice' } });
-    fireEvent.change(within(dk).getByLabelText('Songwriter legal last name'), { target: { value: 'Example' } });
     fireEvent.change(within(dk).getByLabelText('Genre'), { target: { value: 'Rock' } });
-    fireEvent.change(within(dk).getByLabelText('Language'), { target: { value: 'Spanish' } });
+    const language = within(dk).getByLabelText('Language');
+    fireEvent.change(language, { target: { value: 'Spanish' } });
+    fireEvent.blur(language);
     fireEvent.click(within(dk).getByLabelText('First release as this artist (new store profiles)'));
-    fireEvent.click(within(dk).getByRole('button', { name: 'Fill draft' }));
-    expect(publishing.prepare).toHaveBeenCalledWith('distrokid', expect.objectContaining({ genre: 'Rock', language: 'Spanish', newArtistProfile: true }));
     unmount();
-    const later = hook({ platforms: { distrokid: { enabled: true, account: 'Example Artist' } } });
+    const later = hook({ platforms: store.platforms, setPlatform: store.setPlatform });
     render(<PublishPostingPanel project={project()} publishing={later} />);
     expandAll();
     const again = row('DistroKid');
     expect(within(again).getByLabelText('Language')).toHaveValue('Spanish');
-    // New store profiles are asked per release, never carried to the next one.
+    // New store profiles and the genre are asked per release, never carried to the next one.
     expect(within(again).getByLabelText('First release as this artist (new store profiles)')).not.toBeChecked();
+    expect(within(again).getByLabelText('Genre')).toHaveValue('');
     fireEvent.click(within(again).getByRole('button', { name: 'Fill draft' }));
     expect(later.prepare.mock.calls[0][1]).not.toHaveProperty('newArtistProfile');
-    expect(within(again).getByLabelText('Genre')).toHaveValue('');
+  });
+
+  it('shows what each platform will post, or what is missing, before Fill draft', async () => {
+    vi.useFakeTimers();
+    const preview = vi.fn(async (target) => (target === 'x'
+      ? { ready: true, parts: [{ label: 'Post · with the 1080p video', text: 'The hook' }, { label: 'Reply 1', text: 'Full video: https://youtu.be/example' }] }
+      : { ready: false, problem: 'Write the TikTok caption first' }));
+    render(<PublishPostingPanel project={project()} publishing={hook({ enabledTargets: ['x', 'tiktok'], preview })} />);
+    expandAll();
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    vi.useRealTimers();
+    expect(preview).toHaveBeenCalledWith('x', {});
+    expect(within(row('X thread')).getByText('What gets posted to X thread')).toBeInTheDocument();
+    expect(within(row('X thread')).getByText('Full video: https://youtu.be/example')).toBeInTheDocument();
+    expect(within(row('TikTok')).getByRole('status')).toHaveTextContent('Not ready to fill: Write the TikTok caption first');
   });
 
   it('asks before filling a second draft for a platform already posted to', () => {
@@ -194,10 +252,10 @@ describe('PublishPostingPanel (#9282)', () => {
     const x = row('X thread');
     const record = within(x).getByRole('button', { name: /Record/ });
     expect(record).toBeDisabled();
-    fireEvent.change(within(x).getByLabelText('Link to a X thread post made by hand'), { target: { value: 'https://x.com/antic/status/1' } });
+    fireEvent.change(within(x).getByLabelText('Link to the X thread post'), { target: { value: 'https://x.com/antic/status/1' } });
     await act(async () => { fireEvent.click(record); });
     expect(publishing.recordPost).toHaveBeenCalledWith('x', { url: 'https://x.com/antic/status/1' });
-    expect(within(x).getByLabelText('Link to a X thread post made by hand')).toHaveValue('');
+    expect(within(x).getByLabelText('Link to the X thread post')).toHaveValue('');
   });
 
   it('folds a done platform with its status, marks one done without a link, and undoes a mark', async () => {
@@ -220,7 +278,7 @@ describe('PublishPostingPanel (#9282)', () => {
     expect(within(done).getByText(/Marked done/)).toBeInTheDocument();
     fireEvent.click(within(done).getByRole('button', { name: /DistroKid.*Done/ }));
     // a link can still be added later, and the mark undone behind a confirm
-    expect(within(done).getByLabelText('Link to a DistroKid post made by hand')).toBeInTheDocument();
+    expect(within(done).getByLabelText('Link to the DistroKid post')).toBeInTheDocument();
     expect(within(done).queryByRole('button', { name: 'Mark DistroKid done' })).not.toBeInTheDocument();
     fireEvent.click(within(done).getByRole('button', { name: 'Not done…' }));
     fireEvent.click(within(done).getByRole('button', { name: 'Confirm marking DistroKid not done' }));

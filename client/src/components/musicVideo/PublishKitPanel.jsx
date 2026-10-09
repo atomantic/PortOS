@@ -101,6 +101,7 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
     // Only the newest save reports, so an earlier one landing late can't claim "saved" over it.
     return publishKit.saveCopy(patch).then((saved) => { if (seq === saveSeq.current) setSaveState(saved ? 'saved' : 'failed'); });
   };
+  const badLink = (value) => !!value.trim() && !/^https?:\/\//.test(value.trim());
   const saveLink = (key, value) => {
     const url = value.trim();
     if (url === (kit.links?.[key] || '') || (url && !/^https?:\/\//.test(url))) return;
@@ -231,11 +232,13 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
             <label htmlFor={idFor('youtube-url')} className="block text-[11px] text-port-text-muted">Full video URL (optional)</label>
             <input id={idFor('youtube-url')} value={youtubeUrl} onChange={(e) => setYoutubeUrl(e.target.value)} onBlur={() => saveLink('youtube', youtubeUrl)} placeholder="https://…"
               className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0" />
+            {badLink(youtubeUrl) && <p className="text-[11px] text-port-warning">Not saved: a link starts with https://</p>}
           </div>
           <div>
             <label htmlFor={idFor('song-url')} className="block text-[11px] text-port-text-muted">Song URL (optional)</label>
             <input id={idFor('song-url')} value={songUrl} onChange={(e) => setSongUrl(e.target.value)} onBlur={() => saveLink('song', songUrl)} placeholder="https://…"
               className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0" />
+            {badLink(songUrl) && <p className="text-[11px] text-port-warning">Not saved: a link starts with https://</p>}
           </div>
         </div>
         <fieldset className="space-y-1 rounded border border-port-border p-2">
