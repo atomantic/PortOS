@@ -81,7 +81,7 @@ function MediaCard({
               <button
                 type="button"
                 onClick={() => onToggleStar(item)}
-                className={`pointer-events-auto p-1 rounded-full ${starred ? 'bg-port-warning/90 text-black' : 'bg-black/50 text-white/70 hover:text-white'}`}
+                className={`pointer-events-auto min-h-[44px] min-w-[44px] flex items-center justify-center p-1 rounded-full ${starred ? 'bg-port-warning/90 text-black' : 'bg-black/50 text-white/70 hover:text-white'}`}
                 title={starred ? 'Unfavorite' : 'Favorite'}
                 aria-label={starred ? 'Unfavorite' : 'Favorite'}
               >
@@ -161,7 +161,7 @@ function MediaCard({
               <button
                 type="button"
                 onClick={() => onRemix(item)}
-                className="flex-1 min-w-0 px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded flex items-center justify-center gap-1"
+                className="flex-1 min-w-[80px] min-h-[44px] px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded flex items-center justify-center gap-1"
                 title="Reuse prompt and settings"
               >
                 <Sparkles className="w-3 h-3 shrink-0" /> <span className="truncate">Remix</span>
@@ -171,7 +171,7 @@ function MediaCard({
               <button
                 type="button"
                 onClick={() => onSendToImage(item)}
-                className="shrink-0 px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded flex items-center justify-center"
+                className="shrink-0 min-h-[44px] min-w-[44px] px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded flex items-center justify-center"
                 title="Send to image-to-image"
                 aria-label="Send to image-to-image"
               >
@@ -182,7 +182,7 @@ function MediaCard({
               <button
                 type="button"
                 onClick={() => onAnnotate(item)}
-                className="shrink-0 px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded flex items-center justify-center"
+                className="shrink-0 min-h-[44px] min-w-[44px] px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded flex items-center justify-center"
                 title="Annotate (draw over this image)"
                 aria-label="Annotate image"
               >
@@ -193,7 +193,7 @@ function MediaCard({
               <button
                 type="button"
                 onClick={() => onSendToVideo(item)}
-                className="shrink-0 px-1.5 py-1 bg-port-success/20 hover:bg-port-success/40 text-port-success text-[10px] rounded flex items-center justify-center"
+                className="shrink-0 min-h-[44px] min-w-[44px] px-1.5 py-1 bg-port-success/20 hover:bg-port-success/40 text-port-success text-[10px] rounded flex items-center justify-center"
                 title="Send to Video" aria-label="Send to Video"
               >
                 <Film className="w-3 h-3" />
@@ -203,7 +203,7 @@ function MediaCard({
               <button
                 type="button"
                 onClick={() => onSendTo3d(item)}
-                className="shrink-0 px-1.5 py-1 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 text-[10px] rounded flex items-center justify-center"
+                className="shrink-0 min-h-[44px] min-w-[44px] px-1.5 py-1 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 text-[10px] rounded flex items-center justify-center"
                 title="Send this image to the 3D page to generate a mesh"
                 aria-label="Send to 3D"
               >
@@ -214,7 +214,7 @@ function MediaCard({
               <button
                 type="button"
                 onClick={() => onContinue(item)}
-                className="flex-1 min-w-0 px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded flex items-center justify-center gap-1"
+                className="flex-1 min-w-[80px] min-h-[44px] px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded flex items-center justify-center gap-1"
                 title="Use last frame as Image Gen source"
               >
                 <ImageIcon className="w-3 h-3 shrink-0" /> <span className="truncate">Continue</span>
@@ -224,7 +224,7 @@ function MediaCard({
               <button
                 type="button"
                 onClick={() => onFinish(item)}
-                className="shrink-0 px-1.5 py-1 bg-port-success/20 hover:bg-port-success/40 text-port-success text-[10px] rounded flex items-center justify-center gap-1"
+                className="shrink-0 min-h-[44px] min-w-[44px] px-1.5 py-1 bg-port-success/20 hover:bg-port-success/40 text-port-success text-[10px] rounded flex items-center justify-center gap-1"
                 title={finishTitle}
               >
                 <Sparkles className="w-3 h-3 shrink-0" /> <span className="truncate">Finish</span>
@@ -234,7 +234,7 @@ function MediaCard({
               <button
                 type="button"
                 onClick={() => onUpscale(item)}
-                className="shrink-0 px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] rounded flex items-center justify-center"
+                className="shrink-0 min-h-[44px] min-w-[44px] px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] rounded flex items-center justify-center"
                 title="Upscale 2×" aria-label="Upscale 2×"
               >
                 <Maximize2 className="w-3 h-3" />
@@ -245,7 +245,7 @@ function MediaCard({
             <a
               href={assetDownloadUrl(downloadUrl)}
               download
-              className="shrink-0 px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] rounded flex items-center justify-center"
+              className="shrink-0 min-h-[44px] min-w-[44px] px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] rounded flex items-center justify-center"
               title="Download"
               aria-label="Download"
             >
@@ -255,7 +255,7 @@ function MediaCard({
               <button
                 type="button"
                 onClick={() => onToggleHidden(item)}
-                className="shrink-0 px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] rounded flex items-center justify-center"
+                className="shrink-0 min-h-[44px] min-w-[44px] px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] rounded flex items-center justify-center"
                 aria-label={item.hidden ? 'Unhide (move out of hidden section)' : 'Hide (move to hidden section)'}
                 title={item.hidden ? 'Unhide (move out of hidden section)' : 'Hide (move to hidden section)'}
               >
@@ -266,7 +266,7 @@ function MediaCard({
               <button
                 type="button"
                 onClick={() => setConfirmingDelete(true)}
-                className="shrink-0 px-1.5 py-1 bg-port-error/20 hover:bg-port-error/40 text-port-error text-[10px] rounded flex items-center justify-center"
+                className="shrink-0 min-h-[44px] min-w-[44px] px-1.5 py-1 bg-port-error/20 hover:bg-port-error/40 text-port-error text-[10px] rounded flex items-center justify-center"
                 aria-label="Delete"
                 title="Delete"
               >
