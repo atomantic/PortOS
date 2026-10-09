@@ -309,5 +309,75 @@ describe('Brain collection pagination & UI bounds', () => {
       // Full content rendered in reader pane
       expect(screen.getByText(/Detailed reflection that was loaded on demand/)).toBeTruthy();
     });
+
+    describe('failed collection reads stay distinct from empty results', () => {
+      const memoryPage = (ids, nextCursor = null, total = ids.length) => ({
+        items: ids.map(id => ({ id, title: `Memory ${id}`, content: 'teaser', contentTruncated: true })),
+        total,
+        nextCursor
+      });
+      const unavailable = () => Object.assign(new Error('Service unavailable'), { status: 503 });
+
+      it('shows an unavailable state with working retry on a failed first page, never empty onboarding', async () => {
+        api.getBrainMemories.mockRejectedValueOnce(unavailable());
+        mountMemory();
+
+        expect(await screen.findByText('Service unavailable')).toBeTruthy();
+        expect(screen.getByText('Memories could not be loaded.')).toBeTruthy();
+        expect(screen.queryByText(/No memories yet/)).toBeNull();
+        expect(api.getBrainMemories).toHaveBeenCalledWith(expect.objectContaining({ silent: true }));
+
+        api.getBrainMemories.mockResolvedValueOnce(memoryPage(['mem-a']));
+        fireEvent.click(screen.getByRole('button', { name: 'Retry loading' }));
+
+        await screen.findByText('Memory mem-a');
+        expect(screen.queryByText('Service unavailable')).toBeNull();
+        expect(screen.queryByText('Memories could not be loaded.')).toBeNull();
+      });
+
+      it('still shows normal onboarding after a successful empty read', async () => {
+        api.getBrainMemories.mockResolvedValueOnce({ items: [], total: 0, nextCursor: null });
+        mountMemory();
+
+        expect(await screen.findByText(/No memories yet/)).toBeTruthy();
+        expect(screen.queryByRole('button', { name: 'Retry loading' })).toBeNull();
+      });
+
+      it('keeps rows and the continuation when a later page fails, and retries that page', async () => {
+        api.getBrainMemories.mockResolvedValueOnce(memoryPage(['mem-1', 'mem-2'], 'cursor_2', 4));
+        mountMemory();
+        await screen.findByText('Memory mem-1');
+
+        api.getBrainMemories.mockRejectedValueOnce(unavailable());
+        fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+        expect(await screen.findByText('Service unavailable')).toBeTruthy();
+        expect(screen.getByText('Memory mem-1')).toBeTruthy();
+        expect(screen.getByText('Memory mem-2')).toBeTruthy();
+        expect(screen.queryByText(/No memories yet/)).toBeNull();
+
+        api.getBrainMemories.mockResolvedValueOnce(memoryPage(['mem-3', 'mem-4'], null, 4));
+        fireEvent.click(screen.getByRole('button', { name: 'Retry loading' }));
+        await screen.findByText('Memory mem-4');
+        expect(api.getBrainMemories).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 'cursor_2' }));
+        expect(screen.getAllByText(/^Memory mem-/)).toHaveLength(4);
+      });
+
+      it('keeps rows visible and retryable when a reconnect refresh fails', async () => {
+        api.getBrainMemories.mockResolvedValueOnce(memoryPage(['mem-1'], 'cursor_2', 2));
+        mountMemory();
+        await screen.findByText('Memory mem-1');
+
+        api.getBrainMemories.mockRejectedValueOnce(unavailable());
+        await act(async () => { mockSocket.emitEvent('connect'); });
+        expect(await screen.findByText('Service unavailable')).toBeTruthy();
+        expect(screen.getByText('Memory mem-1')).toBeTruthy();
+
+        api.getBrainMemories.mockResolvedValueOnce(memoryPage(['mem-1'], 'cursor_2', 2));
+        fireEvent.click(screen.getByRole('button', { name: 'Retry loading' }));
+        await waitFor(() => expect(screen.queryByText('Service unavailable')).toBeNull());
+        expect(screen.getByText('Memory mem-1')).toBeTruthy();
+        expect(screen.getByRole('button', { name: 'Load more' })).toBeTruthy();
+      });
+    });
   });
 });

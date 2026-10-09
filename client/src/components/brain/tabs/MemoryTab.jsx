@@ -92,32 +92,26 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
   }, [searchQuery]);
 
   const fetchPage = useCallback(async ({ cursor, signal }) => {
-    let res;
+    // Request failures propagate to usePagedCollection, which keeps loaded rows
+    // and the continuation and surfaces a retry control; swallowing them here
+    // would turn an outage into an authoritative empty collection. The footer
+    // owns the error UI, so the request helper's toast is suppressed.
     const options = {
       cursor,
       search: debouncedSearch || undefined,
       status: statusFilter || undefined,
       limit: 25,
+      silent: true,
       signal
     };
-
+    let res;
     switch (activeType) {
-      case 'people':
-        res = await api.getBrainPeople(options).catch(() => ({ items: [] }));
-        break;
-      case 'projects':
-        res = await api.getBrainProjects(options).catch(() => ({ items: [] }));
-        break;
-      case 'ideas':
-        res = await api.getBrainIdeas(options).catch(() => ({ items: [] }));
-        break;
-      case 'admin':
-        res = await api.getBrainAdmin(options).catch(() => ({ items: [] }));
-        break;
+      case 'people': res = await api.getBrainPeople(options); break;
+      case 'projects': res = await api.getBrainProjects(options); break;
+      case 'ideas': res = await api.getBrainIdeas(options); break;
+      case 'admin': res = await api.getBrainAdmin(options); break;
       case 'memories':
-      default:
-        res = await api.getBrainMemories(options).catch(() => ({ items: [] }));
-        break;
+      default: res = await api.getBrainMemories(options); break;
     }
 
     const items = Array.isArray(res) ? res : (res.items || res[activeType] || []);
@@ -973,7 +967,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
             <div className="flex items-center justify-center h-32">
               <BrailleSpinner text="Loading" />
             </div>
-          ) : filteredRecords.length === 0 ? (
+          ) : filteredRecords.length === 0 && !paged.error ? (
             <p className="text-gray-500 text-center py-8">
               {searchQuery
                 ? `No matches for "${searchQuery}"`
@@ -981,6 +975,11 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
             </p>
           ) : (
             <div>
+              {filteredRecords.length === 0 && (
+                <p className="text-gray-500 text-center pt-8 pb-2">
+                  {`${DESTINATIONS[activeType]?.label || 'Records'} could not be loaded.`}
+                </p>
+              )}
               {filteredRecords.map(record => (
                 <CollapsibleListItem key={`${activeType}:${record.id}`}
                   removing={removingIds.has(`${activeType}:${record.id}`)}
