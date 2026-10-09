@@ -89,6 +89,20 @@ describe('Calendar Routes — normalized error handling', () => {
   });
 
   describe('thrown ServerErrors map to the standard JSON envelope', () => {
+    it('GET /review/:date passes bounded page params to the service and defaults to the legacy first page', async () => {
+      dailyReview.getDailyReview.mockResolvedValue({ events: [], total: 0 });
+      await request(app).get('/api/calendar/review/2026-01-02');
+      expect(dailyReview.getDailyReview).toHaveBeenLastCalledWith('2026-01-02', { limit: 200, offset: 0 });
+      await request(app).get('/api/calendar/review/2026-01-02?limit=25&offset=200');
+      expect(dailyReview.getDailyReview).toHaveBeenLastCalledWith('2026-01-02', { limit: 25, offset: 200 });
+      dailyReview.getDailyReview.mockClear();
+      for (const bad of ['limit=999', 'limit=0', 'offset=-4', 'offset=abc']) {
+        const response = await request(app).get(`/api/calendar/review/2026-01-02?${bad}`);
+        expect(response.status, bad).toBe(400);
+      }
+      expect(dailyReview.getDailyReview).not.toHaveBeenCalled();
+    });
+
     it('POST /review/:date/confirm preserves typed missing-goal errors', async () => {
       dailyReview.confirmEvent.mockRejectedValue(new ServerError('Goal not found', { status: 404, code: 'GOAL_NOT_FOUND' }));
       const response = await request(app).post('/api/calendar/review/2026-01-02/confirm')
