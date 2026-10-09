@@ -95,7 +95,12 @@ async function recordDetectedPost(draft, url) {
   if (!drafts.has(draft.id)) return;
   drafts.delete(draft.id);
   draft.state = 'posted';
-  const { project } = await recordPublishPost(draft.projectId, draft.target, { url });
+  // A record that fails to save leaves the draft as it was: the card keeps it, and the link can still be pasted.
+  const { project } = await recordPublishPost(draft.projectId, draft.target, { url }).catch((err) => {
+    draft.state = 'open';
+    drafts.set(draft.id, draft);
+    throw err;
+  });
   await detachDraft(draft);
   musicVideoEvents.emit('publish-draft', { projectId: draft.projectId, draftId: draft.id, target: draft.target, state: 'posted', url, project });
   console.log(`🔗 ${draft.target} post recorded for music-video ${draft.projectId.slice(0, 8)}: ${url}`);
