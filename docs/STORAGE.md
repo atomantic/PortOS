@@ -410,6 +410,8 @@ The escape hatch is **guarded from bitrot by the test suite** (tests boot with `
 
 `PGPASSWORD`/`PGUSER`/`PGDATABASE`/`PGHOST`/`PGPORT` are resolved from `process.env` first, then `.env`, then the backward-compatible defaults (`portos`/`portos`/`portos`/`5432`). The default `portos` password is an **intentional** local-development fallback (see the Distribution model note in [`AGENTS.md`](../AGENTS.md)); production deployments override it via `PGPASSWORD`.
 
+**Compose receives the resolved values.** PortOS and PM2 read `.env` literally (matching surrounding quotes removed; no inline comments, no `$` expansion), but `docker-compose.yml` interpolates its `PGUSER`/`PGDATABASE`/`PGPASSWORD`/`PGPORT_DOCKER` with Docker's own `.env` grammar, which treats ` #` as a comment and expands `$`. So `npm run setup:db` and `scripts/db.sh` put the already-resolved values in the environment of every `docker compose` subprocess (process environment outranks Compose's `.env`), and the container is provisioned with exactly what PortOS connects with. They travel in the child environment only — never argv or logs. If you run `docker compose` yourself, Compose applies its own grammar to `.env`: wrap a password containing ` #` or `$` in single quotes (`PGPASSWORD='pa$$word'` — in Compose, single quotes are literal), or export the variables first.
+
 ### Moving between Docker and native
 
 Use **Settings → Database** for coordinated backend migration, including

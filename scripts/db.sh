@@ -69,6 +69,12 @@ if [ "$_DB_CONFIG_COMPLETE" != true ]; then
   exit 1
 fi
 unset key value _DB_CONFIG_COMPLETE
+# Compose interpolates docker-compose.yml with its own .env grammar (inline
+# comments, `$` expansion), which differs from the literal parser above. Process
+# environment outranks Compose's .env, so exporting the resolved values makes
+# every `docker compose` call below provision exactly what PortOS connects with.
+# Exported to child environments only — never argv or logs.
+export PGUSER PGDATABASE PGPASSWORD PGPORT_DOCKER
 # The maintenance coordinator names its install's dump directory explicitly
 # (its data root can differ from this checkout); otherwise use this checkout.
 DUMP_DIR="${PORTOS_DUMP_DIR:-$ROOT_DIR/data/db-dumps}"

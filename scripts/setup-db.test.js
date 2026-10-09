@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs';
+import { tmpdir } from 'node:os';
 import { runInNewContext } from 'node:vm';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -111,8 +113,8 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
           return '';
         }
         if (invocation.startsWith('docker compose exec -T db psql')) return '1\n';
-        if (['docker --version', 'docker info', 'docker compose version',
-          'docker compose exec -T db pg_isready -h 127.0.0.1 -U portos'].includes(invocation)) return '';
+        if (['docker --version', 'docker info', 'docker compose version'].includes(invocation)
+          || invocation.startsWith('docker compose exec -T db pg_isready -h 127.0.0.1 -U ')) return '';
         throw new Error(`Unexpected synthetic subprocess: ${invocation}`);
       }
     });
@@ -152,6 +154,32 @@ describe('setup preserves the selected database', () => {
       }
     }
   );
+
+  it('hands Compose the resolved settings on every compose subprocess, not its own .env parse', async () => {
+    const result = await runSetup({
+      dotEnv: {
+        PGUSER: 'example-user',
+        PGDATABASE: 'example_db',
+        PGPASSWORD: 'example-pass # local note',
+        PGPORT_DOCKER: '5599'
+      }
+    });
+    expect(result.exitCode).toBe(0);
+    const composeEnvs = result.calls
+      .map((call, i) => (call[0] === 'docker' && call[1] === 'compose' && !['version'].includes(call[2]) ? result.childEnvs[i] : null))
+      .filter(Boolean);
+    expect(composeEnvs.length).toBeGreaterThanOrEqual(3); // up, pg_isready, psql
+    for (const env of composeEnvs) {
+      expect(env).toMatchObject({
+        PGUSER: 'example-user',
+        PGDATABASE: 'example_db',
+        PGPASSWORD: 'example-pass # local note',
+        PGPORT_DOCKER: '5599'
+      });
+    }
+    expect(result.calls.flat().join(' ')).not.toContain('example-pass');
+    expect(result.logs.concat(result.errors).join('\n')).not.toContain('example-pass');
+  });
 
   it.each([true, false])('succeeds with selected Docker (container running: %s)', async (running) => {
     const result = await runSetup({ running });
@@ -221,5 +249,47 @@ describe('setup preserves the selected database', () => {
     expect(result.exitCode).toBe(0);
     expect(result.calls.some(([command]) => command === 'psql')).toBe(expectNative);
     expect(result.calls.some(([command]) => command === 'docker')).toBe(!expectNative);
+  });
+});
+
+// Config-only: `docker compose config` never contacts the daemon or mutates a
+// container. Skipped when the Compose plugin is not installed.
+const composeAvailable = spawnSync('docker', ['compose', 'version'], { stdio: 'ignore' }).status === 0;
+describe.skipIf(!composeAvailable)('Compose receives the resolved settings (config only)', () => {
+  it('process environment overrides the .env interpolation of comments and dollar expressions', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'portos-compose-'));
+    try {
+      writeFileSync(join(dir, 'docker-compose.yml'), dockerComposeSrc);
+      writeFileSync(join(dir, '.env'), [
+        'PGUSER=example-user',
+        'PGDATABASE=example_db',
+        'PGPASSWORD="example-$PORTOS_PROBE_SUFFIX"',
+        'PGPORT_DOCKER=5599 # note',
+        '',
+      ].join('\n'));
+      const config = (extraEnv) => {
+        const { PGUSER, PGDATABASE, PGPASSWORD, PGPORT_DOCKER, ...base } = process.env;
+        const result = spawnSync('docker', ['compose', 'config', '--format', 'json'], {
+          cwd: dir, encoding: 'utf8', env: { ...base, ...extraEnv }
+        });
+        expect(result.status, result.stderr).toBe(0);
+        return JSON.parse(result.stdout).services.db;
+      };
+      // Control: Compose alone expands the dollar expression — the divergence being fixed.
+      expect(config({}).environment.POSTGRES_PASSWORD).toBe('example-');
+      const forwarded = config({
+        PGUSER: 'example-user', PGDATABASE: 'example_db',
+        PGPASSWORD: 'example-$PORTOS_PROBE_SUFFIX', PGPORT_DOCKER: '5599'
+      });
+      expect(forwarded.environment).toMatchObject({
+        POSTGRES_USER: 'example-user',
+        POSTGRES_DB: 'example_db',
+        // `config` re-escapes a literal `$` as `$$`; the container receives one `$`.
+        POSTGRES_PASSWORD: 'example-$$PORTOS_PROBE_SUFFIX'
+      });
+      expect(forwarded.ports[0].published).toBe('5599');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

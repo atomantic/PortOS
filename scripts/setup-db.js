@@ -53,6 +53,20 @@ const PG_CHILD_ENV = {
   PGPORT: String(PG_PORT_NATIVE)
 };
 
+// Environment for every `docker compose` subprocess. Compose interpolates
+// docker-compose.yml from its own .env grammar (inline comments, `$` expansion),
+// which differs from the literal parser PortOS and PM2 share. Process
+// environment outranks Compose's .env, so forwarding the values resolved above
+// makes the container provision exactly what PortOS connects with. Child
+// environment only — the password never reaches argv or logs.
+const COMPOSE_ENV = {
+  ...process.env,
+  PGUSER: PG_USER,
+  PGDATABASE: PG_DATABASE,
+  PGPASSWORD: PG_PASSWORD,
+  PGPORT_DOCKER: String(PG_PORT_DOCKER)
+};
+
 function getMode() {
   // Nonempty exported PGMODE → .env → docker; must match ecosystem.config.cjs (#10758).
   return process.env.PGMODE || envFile.PGMODE || 'docker';
@@ -140,7 +154,7 @@ function isDockerSchemaReady() {
       'docker',
       ['compose', 'exec', '-T', 'db', 'psql', '-X', '-U', PG_USER, '-d', PG_DATABASE, '-tAc',
         "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'memories' LIMIT 1"],
-      { stdio: 'pipe', cwd: rootDir }
+      { stdio: 'pipe', cwd: rootDir, env: COMPOSE_ENV }
     ).toString();
     return output.trim() === '1';
   } catch {
@@ -163,7 +177,8 @@ function waitForHealth(maxAttempts = 30) {
     try {
       execFileSync('docker', ['compose', 'exec', '-T', 'db', 'pg_isready', '-h', '127.0.0.1', '-U', PG_USER], {
         stdio: 'pipe',
-        cwd: rootDir
+        cwd: rootDir,
+        env: COMPOSE_ENV
       });
       if (isDockerSchemaReady()) return true;
     } catch {
@@ -300,7 +315,8 @@ console.log('🐳 Reconciling PostgreSQL container configuration...');
 try {
   execFileSync('docker', ['compose', 'up', '-d', 'db'], {
     stdio: 'inherit',
-    cwd: rootDir
+    cwd: rootDir,
+    env: COMPOSE_ENV
   });
 } catch (err) {
   console.error(`❌ Failed to reconcile PostgreSQL container: ${err.message}`);
