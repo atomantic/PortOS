@@ -4,6 +4,8 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { EventEmitter } from 'events';
+import { ChildProcess } from 'child_process';
+import { pinPlatform } from '../../lib/testHelper.js';
 
 const admissionFault = vi.hoisted(() => ({ error: null }));
 vi.mock('../../lib/backupSnapshotBoundary.js', async original => {
@@ -28,7 +30,8 @@ vi.mock('os', async () => {
 // stdout/stderr lines, and trigger the close event whenever they want.
 const spawnCalls = [];
 const makeFakeChild = () => {
-  const child = new EventEmitter();
+  const child = new ChildProcess();
+  child.unref = vi.fn();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.kill = vi.fn();
@@ -49,6 +52,22 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => {
     }),
   };
 });
+
+// Exercise the real launch/tree-kill helpers with injectable platform facts.
+vi.mock('../../lib/bufferedSpawn.js', async original => {
+  const actual = await original();
+  return {
+    ...actual,
+    prepareCliSpawn: (bin, args) => actual.prepareCliSpawn(bin, args, process.env, process.platform === 'win32'),
+    killProcessTree: child => actual.killProcessTree(child, 'SIGTERM', {}, process.platform === 'win32'),
+  };
+});
+
+let restorePlatform;
+const setPlatform = value => {
+  restorePlatform?.();
+  restorePlatform = pinPlatform(value);
+};
 
 // Stable PATHS.images under the fake HOME so the harvest's copyFile lands
 // in a predictable place we can read back.
@@ -78,6 +97,7 @@ const { SSE_CLEANUP_DELAY_MS } = await import('../../lib/sseUtils.js');
 const flush = () => new Promise((r) => setImmediate(r));
 
 beforeEach(async () => {
+  setPlatform('linux');
   spawnCalls.length = 0;
   imageGenEvents.removeAllListeners();
   codex._internals.setHarvestTimeoutForTests(10);
@@ -86,6 +106,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  restorePlatform?.();
+  vi.unstubAllEnvs();
   vi.useRealTimers();
   codex._internals.setHarvestTimeoutForTests();
   await rm(TEST_HOME, { recursive: true, force: true }).catch(() => {});
@@ -829,5 +851,106 @@ describe('codex provider — launch refusal settlement', () => {
     expect(failed.mock.calls[0][0].error).toMatch(/launch setup failed: synthetic stream setup failure/);
     expect(codex.getActiveJob()).toBeNull();
     expect(codex.cancel(job.jobId)).toBe(false);
+  });
+});
+
+describe('codex provider — Windows shim lifecycle', () => {
+  it.each(['bare', 'explicit'])('prepares the %s shim for both probes and image launches without losing arguments', async kind => {
+    setPlatform('win32');
+    const cliDir = join(TEST_HOME, 'CLI shims');
+    const shim = join(cliDir, 'codex.cmd');
+    await mkdir(cliDir, { recursive: true });
+    await writeFile(shim, '@echo off');
+    vi.stubEnv('PATH', cliDir);
+    const codexPath = kind === 'explicit' ? shim : undefined;
+
+    const probe = codex.checkConnection({ codexPath });
+    const probeCall = spawnCalls[0];
+    expect(probeCall).toMatchObject({ bin: 'cmd.exe', args: ['/c', shim, '--version'], options: { shell: false } });
+    probeCall.child.stdout.emit('data', Buffer.from('codex-cli 1.2.3'));
+    probeCall.child.emit('close', 0);
+    await expect(probe).resolves.toMatchObject({ connected: true });
+
+    await mkdir(FAKE_IMAGES_DIR, { recursive: true });
+    const image = join(FAKE_IMAGES_DIR, 'reference & sketch.png');
+    await writeFile(image, 'synthetic image');
+    const job = await codex.generateImage({
+      codexPath, model: 'gpt-6.1-sol&example', effort: 'high',
+      prompt: 'a fox & tree | sky > clouds', initImagePath: image,
+    });
+    const call = spawnCalls[1];
+    expect(call.bin).toBe('cmd.exe');
+    expect(call.options.shell).toBe(false);
+    expect(call.args.slice(0, 3)).toEqual(['/c', shim, 'exec']);
+    expect(call.args).toEqual(expect.arrayContaining([
+      'model_reasoning_effort=high', '-i', image, '-m', 'gpt-6.1-sol^&example', '--',
+    ]));
+    expect(call.args.at(-1)).toContain('a fox & tree | sky > clouds');
+    expect(call.args.at(-1)).toMatch(/^\$imagegen /);
+    call.child.exitCode = 1;
+    call.child.emit('close', 1);
+    await flush();
+    expect(codex.cancel(job.jobId)).toBe(false);
+  });
+
+  it.each(['win32', 'linux'])('terminates only the selected %s job, then cancel-all terminates the remaining job', async platform => {
+    setPlatform(platform);
+    const first = await codex.generateImage({ prompt: 'first', codexPath: '/example/codex.cmd' });
+    const second = await codex.generateImage({ prompt: 'second', codexPath: '/example/codex.cmd' });
+    const firstChild = spawnCalls[0].child;
+    const secondChild = spawnCalls[1].child;
+    firstChild.pid = 4242;
+    secondChild.pid = 4243;
+
+    expect(codex.cancel(first.jobId)).toBe(true);
+    if (platform === 'win32') {
+      expect(spawnCalls.at(-1)).toMatchObject({ bin: 'taskkill', args: ['/T', '/F', '/PID', '4242'] });
+      expect(firstChild.kill).not.toHaveBeenCalled();
+    } else {
+      expect(firstChild.kill).toHaveBeenCalledWith('SIGTERM');
+    }
+    expect(secondChild.killed).toBe(false);
+    firstChild.exitCode = 1;
+    firstChild.emit('close', 1);
+    await flush();
+    expect(codex.getActiveJob()).toMatchObject({ generationId: second.jobId });
+    expect(codex.cancelAll()).toBe(true);
+    if (platform === 'win32') {
+      expect(spawnCalls.at(-1)).toMatchObject({ bin: 'taskkill', args: ['/T', '/F', '/PID', '4243'] });
+      expect(secondChild.kill).not.toHaveBeenCalled();
+    } else {
+      expect(secondChild.kill).toHaveBeenCalledWith('SIGTERM');
+    }
+    secondChild.exitCode = 1;
+    secondChild.emit('close', 1);
+    await flush();
+    expect(codex.cancelAll()).toBe(false);
+  });
+
+  it.each(['win32', 'linux'])('uses the same platform termination path for the %s wall-clock limit', async platform => {
+    setPlatform(platform);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const job = await codex.generateImage({ prompt: 'stalled synthetic render', codexPath: '/example/codex.cmd' });
+    const child = spawnCalls[0].child;
+    child.pid = 4242;
+    await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
+    if (platform === 'win32') {
+      expect(spawnCalls.at(-1)).toMatchObject({ bin: 'taskkill', args: ['/T', '/F', '/PID', '4242'] });
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(child.kill).not.toHaveBeenCalled();
+      expect(spawnCalls.filter(call => call.bin === 'taskkill')).toHaveLength(1);
+    } else {
+      expect(spawnCalls[0].bin).toBe('/example/codex.cmd');
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(child.kill).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(child.kill).toHaveBeenLastCalledWith('SIGKILL');
+    }
+    child.exitCode = 1;
+    child.emit('close', 1);
+    await flush();
+    expect(codex.cancel(job.jobId)).toBe(false);
+    vi.clearAllTimers();
   });
 });

@@ -1356,6 +1356,8 @@ describe('Windows escalation on a full plan (#7440)', () => {
       'server/services/agentTuiSpawning.js',
       'server/services/autonomousJobs/execution.shellSpawn.js',
       'server/services/voice/fineTuning.js',
+      'server/services/imageGen/codex.js',
+      'server/services/imageGen/codex.test.js',
       'server/routes/apps/index.js',
       'server/routes/scaffoldVite.js',
     ];

@@ -31,7 +31,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
  */
 
 import { spawn } from '../../lib/childProcess.js';
-import { bufferedSpawn, prepareCliSpawn } from '../../lib/bufferedSpawn.js';
+import { bufferedSpawn, prepareCliSpawn, killProcessTree } from '../../lib/bufferedSpawn.js';
 import { readFile, readdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -91,8 +91,14 @@ export const getActiveJob = () => {
 
 export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
-const sigtermWithEscalation = (id, proc) =>
+const sigtermWithEscalation = (id, proc) => {
+  if (process.platform === 'win32') {
+    // The cmd.exe wrapper owns a Codex descendant: terminate the whole tree.
+    killProcessTree(proc);
+    return;
+  }
   killWithEscalation(proc, { label: 'codex child', delayMs: 5000, stillRunning: () => activeProcs.get(id) === proc });
+};
 
 // Cancel one specific codex render. jobId is required — with parallel codex
 // renders an "anonymous cancel" is genuinely destructive (would nuke every
@@ -328,7 +334,8 @@ export const noImageReason = (stdoutTail = '') => buildNoImageReason(stdoutTail,
 function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA = false, denoise = false } = {}) {
   let proc;
   try {
-    proc = spawn(bin, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+    const prepared = prepareCliSpawn(bin, args);
+    proc = spawn(prepared.command, prepared.args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (err) {
     return finalizeJobFailure(job, jobId, null, `Failed to spawn ${bin}: ${err?.message || err}`);
   }
@@ -468,8 +475,7 @@ function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA
     timeoutTimer = setTimeout(() => {
       if (activeProcs.get(jobId) === proc) {
         console.log(`⏱️ codex timed out after ${CODEX_TIMEOUT_MS}ms [${jobId.slice(0, 8)}]`);
-        proc.kill('SIGTERM');
-        setTimeout(() => { if (proc.exitCode === null) proc.kill('SIGKILL'); }, 5000);
+        sigtermWithEscalation(jobId, proc);
       }
     }, CODEX_TIMEOUT_MS);
 
