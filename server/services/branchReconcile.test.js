@@ -1882,11 +1882,13 @@ describe('desiredEndState', () => {
     expect(instruction).not.toContain('read the default branch\'s current version');
   });
 
-  // A rebase onto a moved default branch can break code that passed on the old
-  // base, and a red PR costs a full round trip to notice.
-  it.each(['ABANDONED_WIP', 'NEEDS_PR', 'CONFLICTED'])('makes %s rebase and run the suites before pushing', (state) => {
+  // Verification remains mandatory; unrelated base movement must not rewrite
+  // the branch and invalidate its current-head checks.
+  it.each(['ABANDONED_WIP', 'NEEDS_PR', 'CONFLICTED'])('makes %s verify before pushing without mandatory base rebasing', (state) => {
     const instruction = desiredEndState(state, {}, { worktreePath: '/wt/agent-deadbeef' });
-    expect(instruction).toContain('Rebase onto the default branch before opening or updating a PR');
+    expect(instruction).toContain('Rebase only for actual conflicts');
+    expect(instruction).toContain('Base movement alone does not require a rebase or another CI run');
+    expect(instruction).not.toContain('Rebase onto the default branch before opening or updating a PR');
     expect(instruction).toContain('Never push a branch whose tests you have not seen pass');
   });
 

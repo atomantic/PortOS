@@ -56,10 +56,15 @@ git pull
 git add [changed files]
 git commit -m "fix: daily log no longer double-saves on blur"
 git fetch origin main
-git rebase origin/main
+# Rebase only for conflicts, enforced branch policy, or evidenced integration risk
+# git rebase origin/main
 npm run pregate
 git push
 ```
+
+A conflict-free feature branch may merge behind `main` once its current-head
+required checks and configured reviews pass. Do not restart validation solely
+because another agent merged; follow [the merge policy](../AGENTS.md#git-workflow).
 
 See [`.changelog/README.md`](../.changelog/README.md) — release notes are
 synthesized from commit history by `/do:release`, not staged during development.

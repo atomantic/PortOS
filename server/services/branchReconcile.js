@@ -1579,12 +1579,10 @@ const supersessionGate = ({ collisionPaths = [], behind } = {}) => {
   ].join(' ');
 };
 
-// Nothing reaches a PR unverified. `/do:pr` runs its own reviewer loop, but the
-// branch has to be sound BEFORE that — a rebase onto a default branch that moved
-// can break code that passed on the old base, and CI failing on an already-open
-// PR costs a whole round trip. Rebase first (so the PR is conflict-free by
-// construction), then run the touched workspaces' suites locally.
-const verifyGate = 'Rebase onto the default branch before opening or updating a PR, so the PR is conflict-free by construction rather than needing a merge fixed up later. Then run the test suites for the workspaces the diff touches (`cd server && npm test`, `cd client && npm test`) plus lint, and read the result — the rebase can break code that passed on the old base. If anything fails, fix it on the branch and re-run; if you cannot get it green, stop and report which suite fails and why. Never push a branch whose tests you have not seen pass.';
+// Verify before publication without rewriting a branch just because the base
+// advanced. Conflicts, enforced policy and concrete integration risk still need
+// recovery followed by fresh validation on the resulting head.
+const verifyGate = 'Fetch the default branch for comparison before opening or updating a PR; inspect semantic overlap and supersession. Rebase only for actual conflicts, an enforced up-to-date branch policy, or evidenced integration risk. Base movement alone does not require a rebase or another CI run; this overrides mandatory base-sync instructions in delegated slashdo workflows. Run the test suites for the workspaces the diff touches (`cd server && npm test`, `cd client && npm test`) plus lint, and read the result. After changing the head, rerun affected validation and required reviews/checks. If anything fails, fix it on the branch and re-run; if you cannot get it green, stop and report which suite fails and why. Never push a branch whose tests you have not seen pass.';
 
 // The terminal state of an auto-mergeable branch is MERGED — not "PR opened",
 // not "PR green and waiting". Every drive-to-merge instruction ends with this
@@ -1602,6 +1600,7 @@ const verifyGate = 'Rebase onto the default branch before opening or updating a 
 // `gh pr merge` line that loses these caveats.
 export const driveToMerge = (pr) => [
   'Opening (or approving) the PR is NOT the end state — a green PR left open is still an unfinished branch that this task will simply re-drive on its next run.',
+  'A conflict-free branch with passing current-head required checks and satisfied configured reviews may merge behind the default branch. Base movement alone does not require rebasing or restarting CI.',
   `Wait for CI in-session by re-polling \`gh pr checks ${pr} --required\` every 30s so the run stays observable while CI is pending. Budget 15 minutes for the run; past that, leave the PR open and report that CI was still pending.`,
   'If a required check FAILS, fix it on the branch, push, and re-poll (max 3 rounds); if it is still red after that, leave the PR open and report exactly which check failed.',
   `Once every required check is green AND the PR is MERGEABLE, merge it — from the repo root, NOT from inside the branch's worktree (\`gh\` can't delete a branch that is checked out elsewhere): \`gh pr merge ${pr} --merge --delete-branch\`. Repos differ in which methods they allow, so on a "not allowed" error retry with \`--squash\`, then \`--rebase\`. Never \`--auto\`: a queued auto-merge outlives this run, so a check that goes red afterward has nobody left to fix it.`,
