@@ -70,6 +70,8 @@ const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
  * Opening or closing it also calls `onSeek(scene)`, so the docked preview
  * jumps to the scene's start.
  */
+const MOVE_DOCUMENT_TITLE = "This video's shot order comes from its composition document";
+
 export default function SceneCard({
   scene, index, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null,
   settingsSaving, videoBlockedReason, canContinueShot,
@@ -208,11 +210,14 @@ export default function SceneCard({
       <div className="space-y-2 p-3 pt-0">
         {/* A move swaps this shot with its neighbor; the song timing and lyric stay with the slot. */}
         <div className="flex items-center justify-end gap-2">
-          <button type="button" onClick={() => onMove(index, -1)} disabled={index === 0} title="Swap with the previous shot; the song timing stays put"
+          {documentComposition && (
+            <span className="mr-auto text-[11px] text-gray-400">Shot order comes from the composition document, so it can't be reordered here.</span>
+          )}
+          <button type="button" onClick={() => onMove(index, -1)} disabled={index === 0 || documentComposition} title={documentComposition ? MOVE_DOCUMENT_TITLE : "Swap with the previous shot; the song timing stays put"}
             className="min-h-[44px] inline-flex items-center justify-center gap-1 rounded border border-port-border px-2 text-xs disabled:opacity-30 sm:min-h-0 sm:py-1">
             <ArrowUp size={14} aria-hidden="true" /> Move earlier
           </button>
-          <button type="button" onClick={() => onMove(index, 1)} disabled={isLast} title="Swap with the next shot; the song timing stays put"
+          <button type="button" onClick={() => onMove(index, 1)} disabled={isLast || documentComposition} title={documentComposition ? MOVE_DOCUMENT_TITLE : "Swap with the next shot; the song timing stays put"}
             className="min-h-[44px] inline-flex items-center justify-center gap-1 rounded border border-port-border px-2 text-xs disabled:opacity-30 sm:min-h-0 sm:py-1">
             <ArrowDown size={14} aria-hidden="true" /> Move later
           </button>

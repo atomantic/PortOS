@@ -128,3 +128,18 @@ describe('lyric type per shot (#10583)', () => {
     expect(onSave.mock.calls).toEqual([['s1', { textZone: 'upper' }], ['s1', { textZone: 'lower' }], ['s1', { textZone: 'none' }], ['s1', { lyricRole: 'stamp' }], ['s1', { textZone: null }]]);
   });
 });
+
+describe('move buttons (#10785)', () => {
+  const scene = { sceneId: 's1', startSec: 0, endSec: 5, takes: [] };
+  it('disables Move earlier/later on a document composition and explains why', () => {
+    const onMove = vi.fn();
+    const props = { scene, index: 1, isLast: false, onMove, onEditLocal: () => {}, onSave: () => {} };
+    const { rerender } = render(<SceneCard {...props} />);
+    expect(screen.getByRole('button', { name: /Move earlier/ }).disabled).toBe(false);
+    expect(screen.getByRole('button', { name: /Move later/ }).disabled).toBe(false);
+    rerender(<SceneCard {...props} documentComposition />);
+    expect(screen.getByRole('button', { name: /Move earlier/ }).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: /Move later/ }).disabled).toBe(true);
+    expect(screen.getByText(/comes from the composition document/)).toBeTruthy();
+  });
+});
