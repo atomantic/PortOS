@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import MediaModePicker from './MediaModePicker.jsx';
 import { Bot, Clapperboard, Plus, Music, Sparkles, FileText, CheckCircle2 } from 'lucide-react';
 import Drawer from '../Drawer.jsx';
@@ -7,6 +8,7 @@ import MoodBoardReferenceStrip from '../moodBoard/MoodBoardReferenceStrip.jsx';
 import { trackSourceLabel } from '../../lib/trackProvenance.js';
 import { formatDurationSec } from '../../utils/formatters.js';
 import { trackOptionLabels } from '../../utils/trackOptionLabels.js';
+import { listMusicVideoCharacterStyles } from '../../services/apiMusicVideo.js';
 
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 const MODES = [
@@ -18,13 +20,25 @@ const MODES = [
  * "New music video" drawer — track-first workflow:
  * 1. Select the music track (or import a Suno song or YouTube audio) — audio source for the video.
  * 2. Lyrics, concept, and style info are automatically read from the chosen track.
- * 3. Name, mode, universe/moodboard, and brief settings.
+ * 3. Name, mode, character style, universe/moodboard, and brief settings.
  */
 export default function CreateProjectDrawer({ open, onClose, form, onFormChange, tracks, universes, trackName, youtube, onSubmit, submitting }) {
   const autopilot = form.mode === 'autonomous';
   const optionLabels = trackOptionLabels(tracks || []);
   const selectedTrack = (tracks || []).find((t) => t.id === form.trackId) || null;
   const sourceLabel = trackSourceLabel(selectedTrack);
+  // null = not loaded yet; the list is static per install, so one fetch per open is enough.
+  const [characterStyles, setCharacterStyles] = useState(null);
+  const characterStyle = (characterStyles || []).find((s) => s.id === form.characterStyleId) || null;
+
+  useEffect(() => {
+    if (!open || characterStyles) return undefined;
+    let active = true;
+    listMusicVideoCharacterStyles({ silent: true })
+      .then((list) => { if (active) setCharacterStyles(list); })
+      .catch(() => { if (active) setCharacterStyles([]); });
+    return () => { active = false; };
+  }, [open, characterStyles]);
 
   const handleTrackChange = (trackId) => {
     const track = (tracks || []).find((t) => t.id === trackId);
@@ -157,8 +171,28 @@ export default function CreateProjectDrawer({ open, onClose, form, onFormChange,
           ))}
         </div>
 
-        {/* 4. Universe & Mood Board */}
+        {/* 4. Character style, Universe & Mood Board */}
         <div className="grid grid-cols-1 gap-3">
+          <div className="min-w-0">
+            <label htmlFor="mv-character-style" className="block text-xs text-port-text-muted mb-1">Character style</label>
+            <select
+              id="mv-character-style"
+              value={form.characterStyleId || ''}
+              onChange={(e) => onFormChange({ characterStyleId: e.target.value })}
+              className={inputClass}
+            >
+              <option value="">{characterStyles === null ? 'Loading…' : 'No character style'}</option>
+              {(characterStyles || []).map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+            </select>
+            {characterStyle && (
+              <p className="mt-1 text-xs text-port-text-muted">
+                {characterStyle.characterName} is cast as protagonist.{' '}
+                {characterStyle.referenceImageId
+                  ? 'Their character sheet is added as the character reference.'
+                  : 'No character sheet on this install yet; add one on the Look step.'}
+              </p>
+            )}
+          </div>
           <div className="min-w-0">
             <label htmlFor="mv-universe" className="block text-xs text-port-text-muted mb-1">Universe</label>
             <select

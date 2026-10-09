@@ -99,7 +99,7 @@ import { AUTONOMOUS_VIEWABLE_STAGES } from '../lib/musicVideoAutonomous.js';
 
 // Automation first: a new project defaults to autopilot with the free tools.
 const emptyCreateForm = () => ({
-  name: '', mode: 'autonomous', trackId: '', universeId: '', moodBoardId: '', automation: automationDraftFrom(null),
+  name: '', mode: 'autonomous', trackId: '', characterStyleId: '', universeId: '', moodBoardId: '', automation: automationDraftFrom(null),
 });
 
 // Format project label for the header dropdown: omit trailing media type parentheticals
@@ -507,7 +507,7 @@ export default function MusicVideo() {
       mediaMode: form.mediaMode || 'code-images-video',
       mode: form.mode,
       trackId: form.trackId || null,
-      concept: { universeId: form.universeId || null },
+      concept: { universeId: form.universeId || null, ...(form.characterStyleId ? { characterStyleId: form.characterStyleId } : {}) },
       ...(form.moodBoardId ? { visualSpec: { moodBoardId: form.moodBoardId } } : {}),
       ...(form.mode === 'autonomous' ? { automation: automationFromDraft(form.automation) } : {}),
     }, { silent: true })
