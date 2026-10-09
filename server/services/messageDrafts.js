@@ -142,7 +142,7 @@ export async function updateDraft(id, updates) {
 
 // The eligibility check and transition share the same queue as every draft edit.
 // Provider I/O happens after this promise resolves, never while holding the queue.
-export async function claimDraftForSend(id) {
+export async function claimDraftForSend(id, validateClaim) {
   return queueWrite(async () => {
     const drafts = await loadDrafts();
     const draft = drafts.find(d => d.id === id);
@@ -150,6 +150,7 @@ export async function claimDraftForSend(id) {
     if (draft.status !== 'approved') {
       throw new ServerError('Draft must be approved and not already sending or sent', { status: 409, code: 'DRAFT_STATE_CONFLICT' });
     }
+    validateClaim?.(draft);
     // Keep uncertain delivery blocked after a crash; never silently retry it.
     draft.status = 'sending';
     draft.updatedAt = new Date().toISOString();
