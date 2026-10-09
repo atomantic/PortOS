@@ -107,7 +107,7 @@ describe('normalizeAutonomousBrief', () => {
       expect(() => musicVideoAutonomousResumeSchema.parse({ autoApprove }), JSON.stringify(autoApprove)).toThrow();
     }
     expect(() => musicVideoAutonomousStartSchema.parse({ prompt: 'p', password: '' })).toThrow();
-    // A grant needs the operator's password on that request, so a saved schedule cannot carry one.
+    // A grant needs an authenticated session on that request; scheduled params cannot carry one.
     expect(normalizeAutopilotParams({ autoApprove: ['art'] })).not.toHaveProperty('autoApprove');
   });
 });

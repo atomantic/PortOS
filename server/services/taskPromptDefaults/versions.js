@@ -35,7 +35,7 @@ export const PROMPT_VERSIONS = {
   // default persisted, sometimes mis-flagged promptCustomized) auto-upgrade to the
   // current {appName} body. See the retired-hash history in
   // integrity.snapshot.json + the self-heal in taskScheduleStore.js readSchedule().
-  'security': 4, // v4: adds tenant/resource isolation, SSRF, and unsafe deserialization — the service and data-API defects the v3 list (written for a web app) did not name. v3: carries {modeInstructions} (the pre-v3 body had no placeholder, so its own "fix and commit" steps fought a file-issues dispatch) and defers to the project's documented threat model, requiring an attacker-or-accident story per finding instead of a generic OWASP checklist walk. Previously v2: generic {appName} body (older default hardcoded "PortOS"/"server/routes" paths)
+  'security': 5, // v5: distinguish delegated authority from untrusted content and require workflow-preserving boundary fixes. v4: adds tenant/resource isolation, SSRF, and unsafe deserialization — the service and data-API defects the v3 list (written for a web app) did not name. v3: carries {modeInstructions} (the pre-v3 body had no placeholder, so its own "fix and commit" steps fought a file-issues dispatch) and defers to the project's documented threat model, requiring an attacker-or-accident story per finding instead of a generic OWASP checklist walk. Previously v2: generic {appName} body (older default hardcoded "PortOS"/"server/routes" paths)
   'code-quality': 4, // v4: hands generated-artifact/hand-synced-registry/layout-coupling drift to the better-structural-drift lane and counted branching + reader cost to better-complexity / better-cognitive-load, keeping conventional maintainability defects — the split across PortOS's specialist tasks. Previously v3: inventory structural drift, duplicate sources of truth, volatile generated artifacts, and incidental-layout coupling before conventional maintainability checks. v2: generic {appName} body (older default hardcoded "PortOS")
   'test-coverage': 3, // v3: carries {modeInstructions}, ranks gaps by consequence rather than percentage, tests at the highest practical public boundary, requires naming the regression a new test uniquely catches, and hands existing-test quality to better-test-quality. Previously v2: generic {appName} body (older default hardcoded "PortOS")
   'performance': 5, // v5: adds required service/data-path coverage (query plans, streaming vs buffering, batch shape, pools, partition pruning, cold start), hands spend to cost-efficiency, and replaces PortOS-specific collection names with generic ones — the prompt runs against every managed app. v4: requires UI route-load, idle-network and large-collection evidence; missing measurements are explicitly unverified.
@@ -109,9 +109,10 @@ export const PROMPT_VERSIONS = {
 // agents copied verbatim into malformed label names (#9056).
 // Code review isolation is a preference; supported headless reviewers remain usable.
 // v39 (claim-issue) / v35 (gitlab) / v22 (jira): an optional reviewer (~opt) failure/timeout/provider error never sets review-blocked and does not prevent merge.
-PROMPT_VERSIONS['claim-issue'] = 39;
-PROMPT_VERSIONS['claim-issue-gitlab'] = 35;
-PROMPT_VERSIONS['claim-issue-jira'] = 22;
+// Revalidate current need and project alignment before claims, contributor handoff or epic splits.
+PROMPT_VERSIONS['claim-issue'] = 40;
+PROMPT_VERSIONS['claim-issue-gitlab'] = 36;
+PROMPT_VERSIONS['claim-issue-jira'] = 23;
 
 // Audit anchor for reference-watch's read/write coupling.
 // The reference-watch schedule default (`taskMetadata.readOnly` in DEFAULT_TASK_INTERVALS)
