@@ -1795,6 +1795,8 @@ describe('reconcile — detached-HEAD worktrees (#10825)', () => {
   // Only the ancestry probe cares about argv; status reads clean unless a test says otherwise.
   const stubGit = ({ merged = true, dirty = false } = {}) => execGit.mockImplementation(async (args) => {
     if (args[0] === 'merge-base') return { stdout: '', exitCode: merged ? 0 : 1 };
+    if (args[0] === 'symbolic-ref') return { stdout: '', exitCode: 1 };
+    if (args[0] === 'rev-parse') return { stdout: 'bbb222\n', exitCode: 0 };
     if (args[0] === 'status') return { stdout: dirty ? ' M src/a.js\n' : '', exitCode: 0 };
     return { stdout: '', exitCode: 0 };
   });
@@ -1850,6 +1852,18 @@ describe('reconcile — detached-HEAD worktrees (#10825)', () => {
     const prompt = await formatInFlightForPrompt([], { defaultBranch: 'main', detachedWorktrees: res.detachedWorktrees });
     expect(prompt).toContain(path);
     expect(prompt).toContain(`git worktree remove ${path}`);
+  });
+
+  it('does not remove a tree whose HEAD moved onto a branch after the gather', async () => {
+    wt.listWorktrees.mockResolvedValue([MAIN, detachedTree('/repo/data/cos/worktrees/agent-1234abcd')]);
+    stubGit();
+    const detachedStub = execGit.getMockImplementation();
+    execGit.mockImplementation(async (args, ...rest) => args[0] === 'symbolic-ref'
+      ? { stdout: 'refs/heads/feature/x\n', exitCode: 0 }
+      : detachedStub(args, ...rest));
+    const res = await reconcile('/repo');
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    expect(res.cleaned).toEqual([]);
   });
 
   it('never gathers the main checkout or a detached tree at unmerged commits', async () => {

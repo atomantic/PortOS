@@ -1370,6 +1370,17 @@ const isCommitOnBranch = (repoPath, sha, branch) =>
     .then((r) => r?.exitCode === 0)
     .catch(() => false);
 
+const isStillDetachedOnMerged = async (repoPath, treePath, defaultBranch) => {
+  const onBranch = await execGit(['symbolic-ref', '-q', 'HEAD'], treePath, { ignoreExitCode: true })
+    .then((r) => r?.exitCode === 0)
+    .catch(() => true);
+  if (onBranch) return false;
+  const head = await execGit(['rev-parse', 'HEAD'], treePath, { ignoreExitCode: true })
+    .then((r) => (r?.stdout || '').trim())
+    .catch(() => '');
+  return Boolean(head) && isCommitOnBranch(repoPath, head, defaultBranch);
+};
+
 /**
  * Retire the detached worktrees `gatherDetachedWorktrees` found, with the same
  * gate order as `retireBranchNow` (protection → still clean → remove), minus the
@@ -1414,8 +1425,9 @@ export async function reapDetachedWorktrees(repoPath, defaultBranch, detached, {
       hold(tree, 'worktree-dirty');
       continue;
     }
-    // Re-verify at action time — the HEAD may have moved since the gather.
-    if (!await isCommitOnBranch(repoPath, tree.head, defaultBranch)) continue;
+    // Re-verify at action time against what the tree holds NOW: its HEAD may have
+    // been switched to a branch or an unmerged commit since the gather.
+    if (!await isStillDetachedOnMerged(repoPath, tree.path, defaultBranch)) continue;
     const removal = await forceRemoveWorktreeDir(repoPath, tree.path, { label: '🔀 branch-reconcile: remove detached worktree', log: 'all' });
     if (!removal.removed) {
       hold(tree, 'worktree-remove-failed');
