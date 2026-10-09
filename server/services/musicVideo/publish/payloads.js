@@ -31,15 +31,17 @@ const isVerticalCut = (e) => e?.status === 'complete' && e.aspect === '9:16' && 
 /**
  * The vertical cuts a director can post (#10150), newest last: finished 9:16
  * excerpts flagged stale when the project changed since, plus the kit's
- * fit-with-blurred-fill 9:16 encode (16:9 renders) while the kit is fresh.
+ * 9:16 encode (16:9 renders) while the kit is fresh. `layout` says whether a
+ * cut was laid out at 9:16 ('native') or is the master fitted over a blurred
+ * fill of itself ('fit', which reads as a square on a phone).
  */
 function verticalCuts(project) {
   const kit = kitOf(project);
   const cuts = (project?.excerpts || []).filter(isVerticalCut)
-    .map((e) => ({ id: e.id ?? null, filename: e.filename, startSec: e.startSec, endSec: e.endSec, stale: musicVideoDependencyChanges(project, e.dependencies).length > 0 }));
+    .map((e) => ({ id: e.id ?? null, filename: e.filename, startSec: e.startSec, endSec: e.endSec, layout: 'native', stale: musicVideoDependencyChanges(project, e.dependencies).length > 0 }));
   const crop = (kit.exports || []).find((e) => e.kind === 'vertical-9x16' && e.filename);
   if (crop && (kit.master?.renderHistoryId ?? null) === (project?.renderHistoryId ?? null)) {
-    cuts.unshift({ id: 'kit-vertical', filename: crop.filename, startSec: crop.startSec ?? 0, endSec: crop.endSec ?? 0, stale: false });
+    cuts.unshift({ id: 'kit-vertical', filename: crop.filename, startSec: crop.startSec ?? 0, endSec: crop.endSec ?? 0, layout: crop.layout === 'native' ? 'native' : 'fit', stale: false });
   }
   return cuts;
 }
@@ -221,6 +223,7 @@ const BUILDERS = {
       durationSec: Number.isFinite(duration) && duration > 0 ? duration : null,
       // The audio window opens where the cut's own audio does.
       startSec: Math.max(0, Number(cut.startSec) || 0),
+      cutLayout: cut.layout,
       caption, showLyrics: options.showLyrics === true,
     };
   },

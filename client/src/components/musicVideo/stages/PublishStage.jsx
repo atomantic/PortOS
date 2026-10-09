@@ -11,12 +11,12 @@ import PromotionPlanPanel from '../PromotionPlanPanel.jsx';
  * steps for the director with reminders.
  */
 export default function PublishStage({ board }) {
-  const { project, locked, publishKit, publishing } = board;
+  const { project, locked, publishKit, publishing, excerpts } = board;
   return (
     <fieldset id="mv-publish-kit" disabled={locked} className="min-w-0 space-y-3">
       {publishing && <PublishPlatformsPanel projectId={project?.id} publishing={publishing} />}
       <PublishKitPanel project={project} publishKit={publishKit} enabledTargets={publishing?.enabledTargets} />
-      {publishing && <PublishPostingPanel project={project} publishing={publishing} />}
+      {publishing && <PublishPostingPanel project={project} publishing={publishing} excerpts={excerpts} />}
       <PromotionPlanPanel project={project} />
     </fieldset>
   );

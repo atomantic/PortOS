@@ -261,4 +261,23 @@ describe('PublishPostingPanel (#9282)', () => {
     expect(document.getElementById('mv-post-youtube')).not.toBeNull();
     localStorage.clear();
   });
+
+  it('flags a fitted Hook cut and renders a native 9:16 one of the same window (#10860)', () => {
+    const fittedKit = { master: { renderHistoryId: null }, exports: [{ kind: 'vertical-9x16', filename: 'v.mp4', startSec: 20, endSec: 50, layout: 'fit', fitReason: 'changed' }] };
+    const excerpts = { startExcerpt: vi.fn(), occupied: false, rendering: false, progress: 0 };
+    const p = { ...project(fittedKit), composition: { mode: 'document' } };
+    const { unmount } = render(<PublishPostingPanel project={p} publishing={hook({ enabledTargets: ['sunoHook'] })} excerpts={excerpts} />);
+    expandAll();
+    const card = row('Suno Hook');
+    expect(within(card).getByRole('status')).toHaveTextContent(/fitted.*reads as a square.*composition changed after the final render/);
+    fireEvent.click(within(card).getByRole('button', { name: 'Render a native 9:16 cut of 0:20-0:50' }));
+    expect(excerpts.startExcerpt).toHaveBeenCalledWith(20, 50, { aspect: '9:16', fade: true });
+    unmount();
+
+    // Once a native cut exists it is the default pick, and the warning goes.
+    const native = { ...p, excerpts: [{ id: 'e1', status: 'complete', aspect: '9:16', filename: 'n.mp4', startSec: 20, endSec: 50 }] };
+    render(<PublishPostingPanel project={native} publishing={hook({ enabledTargets: ['sunoHook'] })} excerpts={excerpts} />);
+    expandAll();
+    expect(within(row('Suno Hook')).queryByRole('status')).not.toBeInTheDocument();
+  });
 });
