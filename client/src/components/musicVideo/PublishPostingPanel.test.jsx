@@ -275,9 +275,20 @@ describe('PublishPostingPanel (#9282)', () => {
     unmount();
 
     // Once a native cut exists it is the default pick, and the warning goes.
-    const native = { ...p, excerpts: [{ id: 'e1', status: 'complete', aspect: '9:16', filename: 'n.mp4', startSec: 20, endSec: 50 }] };
+    const native = { ...p, excerpts: [{ id: 'e1', status: 'complete', aspect: '9:16', filename: 'n.mp4', startSec: 20, endSec: 50, dependencyState: { status: 'current' } }] };
     render(<PublishPostingPanel project={native} publishing={hook({ enabledTargets: ['sunoHook'] })} excerpts={excerpts} />);
     expandAll();
     expect(within(row('Suno Hook')).queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('skips a native cut the server would refuse (made before a change, or of unknown inputs) when picking the default', () => {
+    const fittedKit = { master: { renderHistoryId: null }, exports: [{ kind: 'vertical-9x16', filename: 'v.mp4', startSec: 20, endSec: 50, layout: 'fit' }] };
+    for (const status of ['stale', 'unknown']) {
+      const p = { ...project(fittedKit), excerpts: [{ id: 'e1', status: 'complete', aspect: '9:16', filename: 'n.mp4', startSec: 20, endSec: 50, dependencyState: { status } }] };
+      const { unmount } = render(<PublishPostingPanel project={p} publishing={hook({ enabledTargets: ['sunoHook'] })} />);
+      expandAll();
+      expect(within(row('Suno Hook')).getByRole('status')).toHaveTextContent(/fitted/);
+      unmount();
+    }
   });
 });

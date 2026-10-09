@@ -45,12 +45,16 @@ const summaryRows = (summary) => Object.entries(summary || {})
 const VERTICAL_TARGETS = ['shorts', 'tiktok', 'instagram'];
 const fmtSec = (n) => `${Math.floor(n / 60)}:${String(Math.floor(n % 60)).padStart(2, '0')}`;
 
-/** Postable 9:16 cuts, oldest first (mirrors the server's list and pick in publish/payloads.js). */
+/**
+ * Postable 9:16 cuts, oldest first (mirrors the server's list and pick in publish/payloads.js).
+ * The server refuses any excerpt with a dependency change, which the record presents as a
+ * dependencyState other than 'current' ('stale' or 'unknown').
+ */
 function verticalCutChoices(project) {
   const kit = project?.publishKit || {};
   const cuts = (project?.excerpts || [])
     .filter((e) => e?.status === 'complete' && e.aspect === '9:16' && e.filename)
-    .map((e) => ({ id: e.id, layout: 'native', stale: e.dependencyState?.status === 'stale', label: `Social cut ${fmtSec(e.startSec ?? 0)}-${fmtSec(e.endSec ?? 0)}` }));
+    .map((e) => ({ id: e.id, layout: 'native', stale: e.dependencyState?.status !== 'current', label: `Social cut ${fmtSec(e.startSec ?? 0)}-${fmtSec(e.endSec ?? 0)}` }));
   const crop = (kit.exports || []).find((e) => e.kind === 'vertical-9x16' && e.filename);
   if (crop && (kit.master?.renderHistoryId ?? null) === (project?.renderHistoryId ?? null)) {
     const layout = crop.layout === 'native' ? 'native' : 'fit';
