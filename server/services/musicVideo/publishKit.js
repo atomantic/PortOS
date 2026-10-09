@@ -265,11 +265,31 @@ export async function updatePublishKitCopy(projectId, patch) {
   return mutateProjectRecord(projectId, (current) => {
     const kit = projectPublishKit(current);
     const copy = { ...(kit.copy || {}) };
+    let postEdited = false;
     for (const platform of PUBLISH_PLATFORMS) {
-      if (patch?.[platform] && typeof patch[platform] === 'object') copy[platform] = { ...(copy[platform] || {}), ...patch[platform] };
+      if (patch?.[platform] && typeof patch[platform] === 'object') {
+        copy[platform] = { ...(copy[platform] || {}), ...patch[platform] };
+        postEdited = true;
+      }
     }
-    const next = { ...kit, copy, copyEditedAt: new Date().toISOString() };
+    // Only a post's own text counts as hand-edited copy a redraft must not silently replace.
+    const next = { ...kit, copy, ...(postEdited ? { copyEditedAt: new Date().toISOString() } : {}) };
     if (typeof patch?.notes === 'string') next.notes = patch.notes;
+    if (patch?.links && typeof patch.links === 'object') {
+      const links = { ...(kit.links || {}) };
+      for (const [key, url] of Object.entries(patch.links)) {
+        if (url) links[key] = url; else delete links[key];
+      }
+      next.links = links;
+    }
+    if (patch?.draftOptions && typeof patch.draftOptions === 'object') {
+      const prior = kit.draftOptions || {};
+      next.draftOptions = {
+        ...prior,
+        ...(patch.draftOptions.include ? { include: { ...(prior.include || {}), ...patch.draftOptions.include } } : {}),
+        ...(patch.draftOptions.length ? { length: patch.draftOptions.length } : {}),
+      };
+    }
     return { project: { ...current, publishKit: next } };
   });
 }
