@@ -59,6 +59,7 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
             import React, { useState } from 'react';
             import { createRoot } from 'react-dom/client';
             import MediaLightbox from '/src/components/media/MediaLightbox.jsx';
+            import MediaCard from '/src/components/media/MediaCard.jsx';
             import '/src/index.css';
             import { getTheme } from '/src/themes/portosThemes.js';
             const theme = getTheme(new URLSearchParams(location.search).get('theme') || 'classic-midnight');
@@ -93,11 +94,12 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
               const [item, setItem] = useState(null);
               const [index, setIndex] = useState(0);
               const video = { id: 'synthetic', key: 'video:synthetic', kind: 'video', filename: 'synthetic.webm', downloadUrl: clip, previewUrl: image, prompt: 'Synthetic video' };
-              const images = [0, 1].map(i => ({ key: 'image:synthetic-' + i, kind: 'image', filename: 'synthetic-' + i + '.png', previewUrl: image, prompt: 'Synthetic image ' + i, width: 1600, height: 900, model: 'Synthetic model', seed: 123 }));
+              const images = [0, 1].map(i => ({ key: 'image:synthetic-' + i, kind: 'image', downloadUrl: image, filename: 'synthetic-' + i + '.png', previewUrl: image, prompt: 'Synthetic image ' + i, width: 1600, height: 900, model: 'Synthetic model', seed: 123 }));
               const noop = async () => {};
               const showImage = i => { setIndex(i); setItem(images[i]); };
               return React.createElement(React.Fragment, null,
                 React.createElement('button', { id: 'opener', onClick: () => setItem(video) }, 'Open video'),
+                React.createElement('div', { id: 'cards', className: 'grid grid-cols-2 md:grid-cols-4 gap-4 p-4' }, images.map(image => React.createElement(MediaCard, { key: image.key, item: image, onRemix: noop, onSendToImage: noop, onSendToVideo: noop, onSendTo3d: noop, onAnnotate: noop, onToggleStar: noop, onDelete: noop }))),
                 React.createElement('button', { id: 'gallery', onClick: () => showImage(0) }, 'Open image gallery'),
                 React.createElement(MediaLightbox, { item, onClose: () => setItem(null),
                   hasPrevious: item?.kind === 'image' && index > 0,
@@ -116,7 +118,7 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
           vite.middlewares.use('/lightbox-test', async (_req, res) => {
             res.setHeader('Content-Type', 'text/html');
             res.end(await vite.transformIndexHtml('/lightbox-test',
-              '<div id="root"></div><script type="module" src="/lightbox-fixture.jsx"></script>'));
+              '<meta name="viewport" content="width=device-width, initial-scale=1"><div id="root"></div><script type="module" src="/lightbox-fixture.jsx"></script>'));
           });
         },
       }],
@@ -200,11 +202,11 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
       await page.route('**/api/**', route => route.fulfill({ json: { providers: [], items: [] } }));
       await page.goto(`${origin}lightbox-test`);
       await page.locator('#gallery').click();
-      await page.getByRole('img', { name: 'Synthetic image 0', exact: true }).waitFor();
+      await page.getByRole('dialog').getByRole('img', { name: 'Synthetic image 0', exact: true }).waitFor();
       await page.getByRole('button', { name: 'Next media' }).click();
-      await page.getByRole('img', { name: 'Synthetic image 1', exact: true }).waitFor();
+      await page.getByRole('dialog').getByRole('img', { name: 'Synthetic image 1', exact: true }).waitFor();
       await page.getByRole('button', { name: 'Previous media' }).click();
-      await page.getByRole('img', { name: 'Synthetic image 0', exact: true }).waitFor();
+      await page.getByRole('dialog').getByRole('img', { name: 'Synthetic image 0', exact: true }).waitFor();
       const close = page.locator('button[title="Close (Esc)"]');
       await close.focus();
       await page.keyboard.press('Tab');
@@ -255,11 +257,11 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
       const next = page.getByRole('button', { name: 'Next media' });
       await assertInsideMedia(next);
       await clickAtCenter(next);
-      await page.getByRole('img', { name: 'Synthetic image 1', exact: true }).waitFor();
+      await page.getByRole('dialog').getByRole('img', { name: 'Synthetic image 1', exact: true }).waitFor();
       const previous = page.getByRole('button', { name: 'Previous media' });
       await assertInsideMedia(previous);
       await clickAtCenter(previous);
-      await page.getByRole('img', { name: 'Synthetic image 0', exact: true }).waitFor();
+      await page.getByRole('dialog').getByRole('img', { name: 'Synthetic image 0', exact: true }).waitFor();
     } finally {
       await page.close();
     }
@@ -269,7 +271,7 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
   // class names. All media and callbacks are synthetic and requests intercepted.
   it.each(['classic-midnight', 'kestrel-neon'])('keeps settings and image/video actions reachable in %s', async theme => {
     for (const [width, height] of [[360, 640], [390, 667], [360, 800], [768, 1024], [1440, 900]]) {
-      const page = await browser.newPage({ viewport: { width, height } });
+      const page = await browser.newPage({ viewport: { width, height }, hasTouch: true });
       try {
         await page.route('**/api/**', route => route.fulfill({ json: { providers: [], items: [] } }));
         await page.goto(`${origin}lightbox-test?theme=${theme}`);
@@ -303,6 +305,14 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
           };
           await assertReachable(prompt);
           await assertReachable(aside.getByRole('button', { name: 'Save prompt' }));
+          for (const control of await aside.locator('footer button, footer a, button:has-text("Save prompt")').all()) {
+            const rect = await control.boundingBox();
+            expect(rect.height).toBeGreaterThanOrEqual(44);
+            expect(rect.width).toBeGreaterThanOrEqual(44);
+          }
+          const fullScreen = await page.getByRole('button', { name: 'Full screen', exact: true }).boundingBox();
+          expect(fullScreen.width).toBeGreaterThanOrEqual(44);
+          expect(fullScreen.height).toBeGreaterThanOrEqual(44);
           await assertReachable(aside.getByRole('textbox', { name: 'Note' }));
           for (const control of await aside.locator('footer button, footer a').all()) await assertReachable(control);
           if (!roomy) expect(await scroll.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
@@ -313,6 +323,51 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
       } finally {
         await page.close();
       }
+    }
+  }, 60000);
+
+  // Real card/menu primitives catch shrinking flex targets and neighboring hits.
+  it.each([[360, 800], [768, 1024], [1440, 900]])('gives touch media actions independent 44px targets at %dx%d', async (width, height) => {
+    const page = await browser.newPage({ viewport: { width, height }, hasTouch: true, isMobile: true });
+    let writes = 0;
+    try {
+      await page.route('**/api/**', route => {
+        if (route.request().method() !== 'GET') writes += 1;
+        return route.fulfill({ json: [{ id: 'synthetic', name: 'Synthetic organization', items: [] }] });
+      });
+      await page.goto(`${origin}lightbox-test`);
+      const card = page.locator('#cards > div').first();
+      for (const control of await card.locator('button, a').all()) {
+        await control.scrollIntoViewIfNeeded();
+        const rect = await control.boundingBox();
+        expect(rect.width).toBeGreaterThanOrEqual(44);
+        expect(rect.height).toBeGreaterThanOrEqual(44);
+        const cardRect = await card.boundingBox();
+        expect(rect.x).toBeGreaterThanOrEqual(cardRect.x);
+        expect(rect.x + rect.width).toBeLessThanOrEqual(cardRect.x + cardRect.width);
+        expect(await control.evaluate(el => {
+          const r = el.getBoundingClientRect();
+          return [-16, 16].every(offset => el.contains(document.elementFromPoint(r.x + r.width / 2 + offset, r.y + r.height / 2)));
+        })).toBe(true);
+      }
+      expect(await card.getByRole('button', { name: 'Remix' }).innerText()).toBe('Remix');
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      for (const name of ['Add to collection', 'Pin to mood board']) {
+        const trigger = card.getByRole('button', { name, exact: true });
+        await trigger.click();
+        const row = page.getByRole('button', { name: 'Synthetic organization', exact: true });
+        await row.waitFor();
+        expect((await row.boundingBox()).height).toBeGreaterThanOrEqual(43.99);
+        await row.focus();
+        await page.keyboard.press('Escape');
+        await row.waitFor({ state: 'detached' });
+        expect(await trigger.evaluate(el => document.activeElement === el)).toBe(true);
+      }
+      await card.getByRole('button', { name: 'Delete', exact: true }).click();
+      await card.getByText('Delete this image?').waitFor();
+      expect(writes).toBe(0);
+    } finally {
+      await page.close();
     }
   }, 60000);
 

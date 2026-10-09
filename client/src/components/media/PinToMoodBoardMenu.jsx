@@ -29,8 +29,8 @@ import {
 // menu's behavior.
 
 const SIZES = {
-  sm: { button: 'px-1.5 py-1 text-[10px]', icon: 'w-3 h-3' },
-  md: { button: 'px-2 py-1.5 text-xs', icon: 'w-3.5 h-3.5' },
+  sm: { button: 'min-h-[44px] min-w-[44px] px-1.5 py-1 text-[10px]', icon: 'w-3 h-3' },
+  md: { button: 'min-h-[44px] min-w-[44px] px-2 py-1.5 text-xs', icon: 'w-3.5 h-3.5' },
 };
 
 // Minimal mirror of the server's media-key vocabulary (server/lib/mediaItemKey
@@ -134,7 +134,7 @@ export default function PinToMoodBoardMenu({ item, size = 'sm' }) {
         type="button"
         disabled={busyId === board.id}
         onClick={() => handleTogglePin(board, updateCollections)}
-        className="w-full flex items-center justify-between gap-2 px-2 py-1.5 text-left text-[12px] text-gray-200 hover:bg-port-border rounded disabled:opacity-50"
+        className="w-full min-h-[44px] flex items-center justify-between gap-2 px-2 py-1.5 text-left text-[12px] text-gray-200 hover:bg-port-border rounded disabled:opacity-50"
         aria-pressed={pinned}
       >
         <span className="break-words min-w-0 flex-1">{board.name}</span>
