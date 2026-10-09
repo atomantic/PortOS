@@ -122,6 +122,17 @@ export const STALE_CLAIM_IDLE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 // teardown and still turns a week-long park into a single recheck.
 export const SHIPPED_CLAIM_IDLE_MS = 60 * 60 * 1000; // 1 hour
 
+// The idle floor a verified-SUPERSEDED branch's worktree must clear before the
+// reap may take it from OUTSIDE the managed roots (an agent's `/tmp` checkout —
+// see reconcileWorktreeRoots for why merged cleanup never goes there). The
+// superseded reap has what merged cleanup lacks: a verdict recorded against this
+// exact tip and dirty set, and a backup written before anything is removed. The
+// one thing neither proves is that no process is still standing in the tree, so
+// the same hour SHIPPED_CLAIM_IDLE_MS uses covers that — without it the hold was
+// permanent, and the coordinator was told "PortOS reaps it" about four branches
+// PortOS never would.
+export const SUPERSEDED_UNMANAGED_IDLE_MS = SHIPPED_CLAIM_IDLE_MS;
+
 /**
  * A claim branch without an issue number is never a valid /claim deliverable.
  * It can be left behind when a scheduled claim run creates its worktree before
@@ -336,7 +347,7 @@ async function getOpenPrsByHead(repoPath, providedOrigin, { forgeExec = null, fo
  * @param {{ path:string, locked?:boolean, activeAgentIds?:Set<string>, ageMs?:number, staleClaimIdleMs?:number, roots?:Array<{path:string, requireAgentId?:boolean}> }} input
  * @returns {string|null}
  */
-export function worktreeProtectionReason({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, roots = [] }) {
+export function worktreeProtectionReason({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, roots = [], unmanagedIdleMs }) {
   if (!path) return null;
   return worktreeOwnershipReason({
     path,
@@ -347,6 +358,7 @@ export function worktreeProtectionReason({ path, locked, activeAgentIds, ageMs, 
     allowLiveClaim,
     ageMs,
     staleClaimIdleMs,
+    unmanagedIdleMs,
   });
 }
 
@@ -363,7 +375,9 @@ export function worktreeProtectionReason({ path, locked, activeAgentIds, ageMs, 
  * Reconcile once deleted a release worktree a minute after a still-running
  * release run created it (#10270). So such a tree holds, at any age, with its
  * branch; the operator's explicit merged-branch cleanup (`deleteMergedBranches`,
- * `includeUnmanagedTrees`) keeps its wider reach.
+ * `includeUnmanagedTrees`) keeps its wider reach, and the superseded reap —
+ * which carries a recorded verdict and a backup, not just "merged and clean" —
+ * takes one after SUPERSEDED_UNMANAGED_IDLE_MS.
  *
  * Arbitrary names are accepted INSIDE these roots on purpose: claim trees are
  * `claim-*`, not `agent-*`, and still need their stale/shipped retirement.
@@ -388,7 +402,7 @@ function reconcileWorktreeRoots(repoPath) {
  * @param {{ path:string|null, locked?:boolean, activeAgentIds?:Set<string>, ageMs?:number|null, staleClaimIdleMs?:number, allowLiveClaim?:boolean }} input
  * @returns {string|null} ISO timestamp
  */
-export function worktreeProtectionExpiresAt({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, roots = [] }) {
+export function worktreeProtectionExpiresAt({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, roots = [], unmanagedIdleMs }) {
   if (!path) return null;
   return worktreeHoldExpiresAt({
     path,
@@ -397,6 +411,7 @@ export function worktreeProtectionExpiresAt({ path, locked, activeAgentIds, ageM
     roots,
     allowStaleClaim: true,
     allowLiveClaim,
+    unmanagedIdleMs,
     ageMs,
     staleClaimIdleMs,
   });
@@ -1165,7 +1180,12 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
   const reaped = [];
   const held = [];
   const skipped = [];
-  const hold = (b, failure) => { held.push(b); skipped.push({ branch: b.branch, ...failure }); };
+  // A held entry names its own hold (and when it lifts, if on a clock) so the
+  // coordinator prompt and the park log can say WHY rather than "something".
+  const hold = (b, failure) => {
+    held.push({ ...b, holdReason: failure.reason, ...(failure.retryAt ? { holdRetryAt: failure.retryAt } : {}) });
+    skipped.push({ branch: b.branch, ...failure });
+  };
 
   for (const b of superseded || []) {
     const verdict = b.verdict || {};
@@ -1186,6 +1206,10 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
       // verdict was recorded against these same paths (checked above) and
       // `prepare` copies them into the backup before anything is removed.
       requireCleanWorktree: false,
+      // A worktree outside the managed roots is reachable here and nowhere else —
+      // the verdict and the backup are the proof the location gate asks for, and
+      // the idle floor covers a process still in the tree. See the constant.
+      unmanagedIdleMs: SUPERSEDED_UNMANAGED_IDLE_MS,
       prepare: async () => {
         const backup = await backupSupersededBranch(repoPath, b, { defaultBranch, ...(cosDir ? { cosDir } : {}) })
           .catch((err) => ({ error: err.message }));
@@ -1225,7 +1249,7 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
  *
  * @param {string} repoPath
  * @param {object} b - a gathered branch entry
- * @param {{ activeAgentIds?: Set<string>, staleClaimIdleMs?: number, allowLiveClaim?: boolean, label: string, requireCleanWorktree?: boolean, prepare?: () => Promise<any> }} opts
+ * @param {{ activeAgentIds?: Set<string>, staleClaimIdleMs?: number, allowLiveClaim?: boolean, label: string, requireCleanWorktree?: boolean, unmanagedIdleMs?: number, prepare?: () => Promise<any> }} opts
  *   `prepare` runs after every gate has passed and before the first irreversible
  *   step, and aborts the retirement by resolving to `{ error }`. That is the only
  *   place work like "write a recoverable backup" belongs: earlier it is paid for
@@ -1238,6 +1262,10 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
  *   tree is the branch's whole deliverable and it accounts for that tree twice
  *   over — the verdict was recorded against exactly these paths, and `prepare`
  *   copies them out before anything is removed. Never set it false without both.
+ *
+ *   `unmanagedIdleMs` (default none) admits a worktree outside the managed roots
+ *   once it has sat idle that long. Same bar: only a caller with proof beyond
+ *   "merged and clean" may name it — see SUPERSEDED_UNMANAGED_IDLE_MS.
  * @returns {Promise<{ ok: true, prepared?: any } | { ok: false, reason: string, retryAt?: string }>}
  */
 async function retireBranch(repoPath, b, opts) {
@@ -1266,7 +1294,7 @@ async function retireBranch(repoPath, b, opts) {
   });
 }
 
-async function retireBranchNow(repoPath, b, { activeAgentIds = new Set(), staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, prepare }) {
+async function retireBranchNow(repoPath, b, { activeAgentIds = new Set(), staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare }) {
   if (b.worktreePath) {
     // Never tear down a worktree outside the managed roots (see
     // reconcileWorktreeRoots), one that's locked, a RECENT human /claim session,
@@ -1281,6 +1309,7 @@ async function retireBranchNow(repoPath, b, { activeAgentIds = new Set(), staleC
       staleClaimIdleMs,
       allowLiveClaim,
       roots: reconcileWorktreeRoots(repoPath),
+      unmanagedIdleMs,
     };
     const protectedReason = worktreeProtectionReason(gate);
     if (protectedReason) {

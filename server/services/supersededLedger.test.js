@@ -243,6 +243,18 @@ describe('formatSupersededForPrompt', () => {
     expect(out).toContain('/repo/data/cos/worktrees/agent-dead');
   });
 
+  it('names why the reap could not take the branch this cycle, and when that lifts', () => {
+    const out = formatSupersededForPrompt([{
+      ...branch(), verdict: entry(), holdReason: 'worktree-unmanaged-location', holdRetryAt: '2026-10-08T05:00:00.000Z'
+    }]);
+    expect(out).toContain('worktree-unmanaged-location');
+    expect(out).toContain('2026-10-08T05:00:00.000Z');
+    // A hold with no clock still names itself, without inventing a time.
+    const locked = formatSupersededForPrompt([{ ...branch(), verdict: entry(), holdReason: 'worktree-locked' }]);
+    expect(locked).toContain('worktree-locked');
+    expect(locked).not.toMatch(/lifts at/);
+  });
+
   // The reap is PortOS's own deterministic step now (reapSupersededBranches), so
   // a branch reaching this block is one the reap could not take. Handing the
   // coordinator a copy-pasteable `worktree remove` would race that step and skip
