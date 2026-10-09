@@ -583,6 +583,18 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/fableloom/:id/episodes/:episodeId/production/batch',
   'POST /api/fableloom/:id/episodes/:episodeId/production/batch/:runId/resume',
 
+  // Catalog generation (#10891): extraction, pruning and URL/file/voice/Brain
+  // ingest hand caller-supplied text to a caller-chosen provider, which may be
+  // a tool-capable CLI/TUI harness. Authorize the whole operation before the
+  // scrap write, STT/network fetch, run creation or provider dispatch. Scrap and
+  // ingredient CRUD, draft commit and reads stay open (data-only).
+  'POST /api/catalog/scraps/:id/extract',
+  'POST /api/catalog/scraps/:id/prune',
+  'POST /api/catalog/ingest/url',
+  'POST /api/catalog/ingest/file',
+  'POST /api/catalog/ingest/voice',
+  'POST /api/catalog/ingest/brain',
+
   // Eidoverse: clone and install a caller-named repo, or repoint it.
   'POST /api/settings/features/eidoverse/install',
   'PUT /api/settings/features/eidoverse/source',
