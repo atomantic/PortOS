@@ -846,7 +846,10 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
     if (runtimeSupportsI2vReferenceMode(currentModel.runtime, i2vReferenceMode)) return;
     setI2vReferenceMode(DEFAULT_I2V_REFERENCE_MODE);
   }, [currentModel, i2vReferenceMode]);
-  const isGrok = p.mode === 'grok';
+  // Hosted backends (grok / fal / reactor) own their params: `mode` is the
+  // dispatch discriminator and `modelId` is a provider id the local catalog
+  // doesn't know, so the local model / size / sampler / chaining controls don't apply.
+  const isHosted = isCloudVideoMode(p.mode);
   const loraFamily = videoLoraFamily(currentModel);
   const videoLoras = loraFamily ? availableLoras.filter((lora) => loraFamilyOf(lora) === loraFamily) : [];
   const encoderOptions = textEncoderOptionsForModel(currentModel);
@@ -913,6 +916,10 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
     if (!prompt.trim()) return;
     if (textChanged(prompt, p.prompt)) overrides.prompt = prompt.trim();
     if (textChanged(negativePrompt, p.negativePrompt)) overrides.negativePrompt = negativePrompt.trim();
+    // A hosted retry edits only the prompts: size, duration and model are the
+    // provider's own params, and every field below is a local-render knob that
+    // would rewrite them.
+    if (isHosted) return onSubmit(Object.keys(overrides).length ? overrides : null);
     if (textChanged(modelId, p.modelId)) overrides.modelId = modelId.trim();
     if (numberChanged(width, p.width) && width !== '') overrides.width = Number(width);
     if (numberChanged(height, p.height) && height !== '') overrides.height = Number(height);
@@ -977,21 +984,21 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
         </FormField>
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-        {!isGrok && (
+        {!isHosted && (
           <FormField className="col-span-2 sm:col-span-3" label="Model" labelClassName="block text-xs font-medium text-gray-400 mb-1">
             {models.length > 0 ? <ModelSelect models={models} value={modelId} onChange={handleModelChange} /> : (
               <input value={modelId} onChange={(e) => setModelId(e.target.value)} className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white" />
             )}
           </FormField>
         )}
-        <ResolutionField presets={resolutionOptionsForModel(currentModel)} width={width} height={height} onChange={(w, h) => { setWidth(w); setHeight(h); }} {...videoEdgeBoundsForModel(currentModel)} snapOnBlur />
+        {!isHosted && <ResolutionField presets={resolutionOptionsForModel(currentModel)} width={width} height={height} onChange={(w, h) => { setWidth(w); setHeight(h); }} {...videoEdgeBoundsForModel(currentModel)} snapOnBlur />}
       </div>
-      {!isGrok && encoderOptions.length > 1 && (
+      {!isHosted && encoderOptions.length > 1 && (
         <FormField label="Text encoder" labelClassName="block text-xs font-medium text-gray-400 mb-1">
           <ModelSelect models={encoderOptions} value={textEncoderId} onChange={(e) => setTextEncoderId(e.target.value)} getLabel={(option) => option.label} />
         </FormField>
       )}
-      {!isGrok && loraFamily && videoLoras.length > 0 && (
+      {!isHosted && loraFamily && videoLoras.length > 0 && (
         <LoraPicker
           availableLoras={videoLoras}
           selected={selectedLoras}
@@ -1001,7 +1008,7 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
           prompt={prompt}
         />
       )}
-      {!isGrok && (
+      {!isHosted && (
         <AdvancedParamsPanel
           mode={p.mode || 'text'} currentModel={currentModel}
           numFrames={displayedNumFrames} onNumFramesChange={setNumFrames}
