@@ -785,6 +785,9 @@ export function mergeNextScene(project, sceneId, { backend = null } = {}) {
   const lane = backend || project.videoSettings?.backend || null;
   const startSec = scene.startSec;
   const endSec = timedSec(following.endSec) ? following.endSec : scene.endSec;
+  if (timedSec(startSec) && timedSec(endSec) && (endSec <= startSec || (timedSec(scene.endSec) && endSec < scene.endSec))) {
+    throw new ServerError('The next scene ends before this one does — put the scenes in song order before merging them.', { status: 400, code: 'MUSIC_VIDEO_MERGE_OUT_OF_ORDER' });
+  }
   const maxSec = shotSplitLimit(scene, lane);
   if (maxSec != null) {
     if (!timedSec(startSec) || !timedSec(endSec)) {

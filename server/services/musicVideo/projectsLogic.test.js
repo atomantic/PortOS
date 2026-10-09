@@ -644,6 +644,8 @@ describe('mergeNextScene', () => {
     const long = applySceneUpdate(project, ids[2], { endSec: 20 }).project; // 4–20s > 10s
     expect(() => mergeNextScene(long, ids[1], { backend: 'grok' })).toThrow(/longer than this backend/);
     expect(() => mergeNextScene(project, ids[2])).toThrow(/no next scene/);
+    const swapped = applySceneUpdate(project, ids[1], { startSec: 0, endSec: 2 }).project;
+    expect(() => mergeNextScene(swapped, ids[0])).toThrow(/song order/);
     expect(() => mergeNextScene({ ...project, composition: { mode: 'document' } }, ids[0])).toThrow(/shot manifest/);
   });
 });
