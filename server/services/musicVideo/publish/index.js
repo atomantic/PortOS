@@ -12,7 +12,8 @@ import { ServerError } from '../../../lib/errorHandler.js';
 import { PATHS, ensureDir } from '../../../lib/fileUtils.js';
 import { safeUnder } from '../../../lib/ffmpeg.js';
 import { getProject, mutateProjectRecord } from '../projects.js';
-import { buildPublishPayload } from './payloads.js';
+import { buildPublishPayload, publishSongUrl } from './payloads.js';
+import { canonicalizeSunoUrl, isSunoShareLink } from '../../sunoShareLink.js';
 import { connectPortosBrowser, serializeBrowserOperation as serialize } from './browser.js';
 import { assertAccount, assertPlatformEnabled, getPublishPlatforms, normalizePost } from './platforms.js';
 import { youtubeAdapter, shortsAdapter } from './youtube.js';
@@ -39,6 +40,8 @@ const drafts = new Map();
 const draftPresentation = (draft) => ({
   draftId: draft.id, projectId: draft.projectId, target: draft.target, summary: draft.summary,
   screenshot: draft.screenshot, state: draft.state, createdAt: draft.createdAt, manualPublication: true,
+  // The song page a Suno share link resolved to, so the form can show it.
+  songUrl: draft.payload?.songUrl ?? null,
 });
 const emitDraft = (draft, state = draft.state) => musicVideoEvents.emit('publish-draft', {
   projectId: draft.projectId, draftId: draft.id, target: draft.target, state,
@@ -134,6 +137,19 @@ function withPlatformDefaults(target, options, platforms) {
   return { ...options, [key]: platforms?.[target]?.account || '' };
 }
 
+// The Suno targets find the song by the id in its page URL; a share link
+// (suno.com/s/…, what Suno's Share button copies) carries none until followed.
+const SUNO_SONG_TARGETS = new Set(['suno', 'sunoHook']);
+async function withSongPage(target, project, options, deps) {
+  if (!SUNO_SONG_TARGETS.has(target)) return options;
+  const url = publishSongUrl(project, options);
+  if (!isSunoShareLink(url)) return options;
+  const songUrl = await canonicalizeSunoUrl(url, deps).catch(() => {
+    throw new ServerError('That Suno share link did not open a song page. Open it in a browser and paste the suno.com/song/… address it lands on', { status: 422, code: 'PUBLISH_ASSET_MISSING' });
+  });
+  return { ...options, songUrl };
+}
+
 /** The release audio a distributor uploads: the project's own source song. */
 async function withAudio(target, payload, project, deps) {
   if (target !== 'distrokid') return payload;
@@ -166,7 +182,8 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
     const urls = existing.url ? [existing.url] : [];
     throw new ServerError(`Already posted to ${adapter.label}. Confirm "Post again" to fill another draft`, { status: 409, code: 'PUBLISH_ALREADY_POSTED', context: { target, urls } });
   }
-  let payload = resolveFiles(buildPublishPayload(target, project, withPlatformDefaults(target, options, platforms)));
+  const resolved = await withSongPage(target, project, withPlatformDefaults(target, options, platforms), deps);
+  let payload = resolveFiles(buildPublishPayload(target, project, resolved));
   payload = await withAudio(target, payload, project, deps);
   payload = await withCovers(target, payload, deps);
   for (const draft of [...drafts.values()]) if (draft.projectId === projectId && draft.target === target) await closeDraft(draft, deps);
@@ -213,7 +230,9 @@ export async function listPublishDrafts(projectId, deps = {}) {
 }
 
 /** Record or update one platform's post by hand: its link, reception (good/mixed/poor) and notes. */
-export async function recordPublishPost(projectId, target, input = {}) {
+export async function recordPublishPost(projectId, target, input = {}, deps = {}) {
+  // The Suno post's link is the song the Hook plays: keep its song page, not a share link.
+  if (target === 'suno' && isSunoShareLink(input.url)) input = { ...input, url: await canonicalizeSunoUrl(input.url, deps).catch(() => input.url) };
   const { project } = await mutateProjectRecord(projectId, (current) => {
     const kit = current.publishKit && typeof current.publishKit === 'object' ? current.publishKit : {};
     const posts = { ...(kit.posts || {}) };

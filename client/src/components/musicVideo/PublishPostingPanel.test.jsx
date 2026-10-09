@@ -30,6 +30,16 @@ describe('PublishPostingPanel (#9282)', () => {
     expect(within(row('YouTube')).getByRole('link')).toHaveAttribute('href', 'https://youtu.be/abc');
   });
 
+  it('shows the Suno song page a pasted share link resolved to once the draft is filled', () => {
+    const song = 'https://suno.com/song/0a1b2c3d-1111-4222-8333-444455556666';
+    const { rerender } = render(<PublishPostingPanel project={project()} publishing={hook()} />);
+    expandAll();
+    const field = () => within(row('Suno')).getByLabelText('Song URL (the take to publish)');
+    fireEvent.change(field(), { target: { value: 'https://suno.com/s/AbCdEf123' } });
+    rerender(<PublishPostingPanel project={project()} publishing={hook({ drafts: { suno: { draftId: 'd1', summary: {}, songUrl: song } } })} />);
+    expect(field()).toHaveValue(song);
+  });
+
   it('fills a Reddit draft with the subreddit and post type, dropping blanks', () => {
     const publishing = hook();
     render(<PublishPostingPanel project={project()} publishing={publishing} />);

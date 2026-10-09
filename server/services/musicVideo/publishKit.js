@@ -26,6 +26,7 @@ import { suggestSocialCuts } from './socialCuts.js';
 import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 import { buildChapters, buildSrt, buildPublishCopyPrompt, parsePublishCopy, normalizeCopyOptions, PUBLISH_PLATFORMS } from './publishKitText.js';
+import { canonicalizeSunoUrl, isSunoShareLink } from '../sunoShareLink.js';
 
 const jobs = new Map();
 const projectBuilds = new Map();
@@ -260,8 +261,13 @@ export async function selectPublishKitThumbnail(projectId, filename) {
 }
 
 /** Merge edited copy fields per platform (only known platforms and string/array fields). */
-export async function updatePublishKitCopy(projectId, patch) {
+export async function updatePublishKitCopy(projectId, patch, deps = {}) {
   await requireProject(projectId);
+  // Keep the song page, not a Suno share link: the Suno posts find the song by the id in its URL.
+  // A link that can't be followed now is kept as typed; publishing follows it again.
+  if (isSunoShareLink(patch?.links?.song)) {
+    patch = { ...patch, links: { ...patch.links, song: await canonicalizeSunoUrl(patch.links.song, deps).catch(() => patch.links.song) } };
+  }
   return mutateProjectRecord(projectId, (current) => {
     const kit = projectPublishKit(current);
     const copy = { ...(kit.copy || {}) };

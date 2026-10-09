@@ -349,6 +349,16 @@ describe('publishing kit copy (#9281)', () => {
     expect(project.publishKit).not.toHaveProperty('copyEditedAt');
   });
 
+  it('saves a Suno share link as the song page it opens, and keeps it as typed when it cannot be followed', async () => {
+    const { id } = await projects.createProject({ name: 'Example Song' });
+    const songId = '0a1b2c3d-1111-4222-8333-444455556666';
+    const resolveUrl = async () => `https://suno.com/song/${songId}`;
+    let { project } = await kit.updatePublishKitCopy(id, { links: { song: 'https://suno.com/s/AbCdEf123' } }, { resolveUrl });
+    expect(project.publishKit.links.song).toBe(`https://suno.com/song/${songId}`);
+    ({ project } = await kit.updatePublishKitCopy(id, { links: { song: 'https://suno.com/s/Gone1234' } }, { resolveUrl: async () => null }));
+    expect(project.publishKit.links.song).toBe('https://suno.com/s/Gone1234');
+  });
+
   it('clears tags an earlier draft wrote once hashtags are unticked', async () => {
     const { id } = await projects.createProject({ name: 'Example Song' });
     const reply = JSON.stringify({ youtube: { title: 'Drafted', description: 'd', tags: ['model tag'] } });

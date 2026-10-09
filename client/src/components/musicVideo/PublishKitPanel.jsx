@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Package, Download, Copy, Sparkles, Image as ImageIcon, Captions, ListOrdered } from 'lucide-react';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
@@ -85,6 +85,9 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
   const [notes, setNotes] = useState(kit.notes || '');
   const [youtubeUrl, setYoutubeUrl] = useState(kit.links?.youtube || '');
   const [songUrl, setSongUrl] = useState(kit.links?.song || '');
+  // The server saves a Suno share link as the song page it opens; show what was saved.
+  const savedSongUrl = kit.links?.song || '';
+  useEffect(() => { setSongUrl(savedSongUrl); }, [savedSongUrl]);
   const [include, setInclude] = useState({ ...DEFAULT_INCLUDE, ...(kit.draftOptions?.include || {}) });
   const [length, setLength] = useState(kit.draftOptions?.length === 'full' ? 'full' : 'short');
   // Same filter as the server's timedLines: only cues with text and a start time reach the writer.
