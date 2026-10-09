@@ -1347,7 +1347,7 @@ async function retireBranchNow(repoPath, b, { activeAgentIds = new Set(), staleC
  * @param {string} defaultBranch
  * @returns {Promise<{path:string, head:string|null, locked:boolean, worktreeAgeMs:number|null, dirtyPaths:string[]}[]>}
  */
-export async function gatherDetachedWorktrees(repoPath, defaultBranch) {
+async function gatherDetachedWorktrees(repoPath, defaultBranch) {
   const worktrees = await listWorktrees(repoPath).catch(() => []);
   const detached = [];
   for (const [index, entry] of worktrees.entries()) {
@@ -1397,7 +1397,7 @@ const isStillDetachedOnMerged = async (repoPath, treePath, defaultBranch) => {
  * @param {{ activeAgentIds?: Set<string>, claimOwners?: { agents: object[]|null } }} [opts]
  * @returns {Promise<{cleaned:string[], skipped:object[], held:{path:string, head:string|null, reason:string, managed:boolean, retryAt?:string}[]}>}
  */
-export async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { activeAgentIds = new Set(), claimOwners } = {}) {
+async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { activeAgentIds = new Set(), claimOwners } = {}) {
   const cleaned = [];
   const skipped = [];
   const held = [];
