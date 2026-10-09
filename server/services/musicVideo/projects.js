@@ -251,6 +251,15 @@ export async function splitProjectScene(id, sceneId, options = {}) {
   return mutateProjectRecord(id, (current) => splitScene(current, sceneId, options));
 }
 
+/**
+ * Join a scene with the next one (projectsLogic.mergeNextScene) — the inverse
+ * of the split. Returns `{ project, scene }`.
+ */
+export async function mergeProjectNextScene(id, sceneId, options = {}) {
+  const { mergeNextScene } = await import('./projectsLogic.js');
+  return mutateProjectRecord(id, (current) => mergeNextScene(current, sceneId, options));
+}
+
 // ---- scene takes (#8965) ----
 // Append candidate takes to one scene: `{ scene, appended }`. A take fills its
 // slot only while the slot is empty — never replaces a selection (takes.js).

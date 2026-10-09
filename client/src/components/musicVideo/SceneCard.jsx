@@ -3,7 +3,7 @@ import ShotActionInspector from './ShotActionInspector.jsx';
 import SceneCameraControls from './SceneCameraControls.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { useEffect, useRef, useState } from 'react';
-import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, Scissors } from 'lucide-react';
+import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, Merge, Scissors } from 'lucide-react';
 import { formatDurationSec, formatUsd } from '../../utils/formatters.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import PerformanceEvidence from './PerformanceEvidence.jsx';
@@ -64,6 +64,8 @@ const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
  * A shot longer than that lane renders in one take (the lip-sync audio window,
  * or Grok's longest clip) offers `onSplit(sceneId, backend)`, which cuts it
  * into contiguous scenes at lyric pauses / phrase boundaries server-side.
+ * Any scene but the last offers `onMergeNext(sceneId, backend)` (with `nextEndSec`, the next scene's end), the inverse;
+ * it is hidden when the joined span would exceed that lane's longest take.
  *
  * The card is a disclosure: collapsed it is one row — frame thumbnail, title,
  * timing, lyric line and status — and it opens on tap to the full editor.
@@ -78,7 +80,7 @@ export default function SceneCard({
   onMove, onDelete, onEditLocal, onSave,
   onGenerateFrame, onGenerateVideo, onContinueVideo,
   onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false, layered = false, documentComposition = false,
-  lipSyncBackend = '', songDurationSec = null, onSplit, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
+  lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
   expanded, onToggleExpand, footageOptional = false, failedScenes = null, songReview = null,
 }) {
   const detailsRef = useRef(null);
@@ -139,6 +141,9 @@ export default function SceneCard({
   const performanceCost = falTake?.performance ? (falCost || capability?.costLabel) : capability?.costLabel;
   const splitLimit = layer === 'footage' ? shotSplitLimit(scene, lipSyncBackend) : null;
   const canSplit = splitLimit != null && timedSpan != null && timedSpan > splitLimit + 1e-6;
+  const mergedSpan = typeof scene.startSec === 'number' && typeof nextEndSec === 'number' ? nextEndSec - scene.startSec : null;
+  const canMerge = !!onMergeNext && !isLast && !documentComposition
+    && (splitLimit == null || (mergedSpan != null && mergedSpan <= splitLimit + 1e-6));
   const instruction = scene.takes?.find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId)?.shotInstruction;
   const repairPlan = planPerformanceRepair({ scene, temporal: performanceReview?.shot,
     excerptStartSec: performanceReview?.excerptStartSec, backend: lipSyncBackend, videoSettings: falVideoSettings || {} });
@@ -387,6 +392,13 @@ export default function SceneCard({
             className="inline-flex items-center gap-1 rounded bg-port-bg border border-port-border hover:bg-port-border/40 px-2 py-1 text-xs min-h-[44px] sm:min-h-0"
             title={`Cut this ${timedSpan.toFixed(1)}s shot into scenes of at most ${splitLimit.toFixed(2)}s at lyric pauses or phrase boundaries — nothing is looped or stretched`}>
             <Scissors size={13} /> Split on lyric boundaries
+          </button>
+        )}
+        {canMerge && (
+          <button type="button" onClick={() => onMergeNext(scene.sceneId, lipSyncBackend || null)}
+            className="inline-flex items-center gap-1 rounded bg-port-bg border border-port-border hover:bg-port-border/40 px-2 py-1 text-xs min-h-[44px] sm:min-h-0"
+            title="Join this shot with the next one into a single shot — the inverse of split">
+            <Merge size={13} /> Merge with next
           </button>
         )}
         {underCovered && (

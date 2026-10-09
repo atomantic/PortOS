@@ -143,3 +143,21 @@ describe('move buttons (#10785)', () => {
     expect(screen.getByText(/comes from the composition document/)).toBeTruthy();
   });
 });
+
+describe('Merge with next (#10810)', () => {
+  const scene = { sceneId: 's1', startSec: 0, endSec: 4, takes: [] };
+  const props = { index: 0, expanded: true, onEditLocal: vi.fn(), onSave: vi.fn() };
+
+  it('merges into the next scene, and hides when last, in a document composition, or past the backend limit', () => {
+    const onMergeNext = vi.fn();
+    const { rerender } = render(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={8} lipSyncBackend="grok" />);
+    fireEvent.click(screen.getByRole('button', { name: /Merge with next/ }));
+    expect(onMergeNext).toHaveBeenCalledWith('s1', 'grok');
+    rerender(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={14} lipSyncBackend="grok" />);
+    expect(screen.queryByRole('button', { name: /Merge with next/ })).toBeNull();
+    rerender(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={8} isLast />);
+    expect(screen.queryByRole('button', { name: /Merge with next/ })).toBeNull();
+    rerender(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={8} documentComposition />);
+    expect(screen.queryByRole('button', { name: /Merge with next/ })).toBeNull();
+  });
+});
