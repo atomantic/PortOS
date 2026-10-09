@@ -202,4 +202,36 @@ describe('ecosystem.config.cjs parses .env with the setup grammar (#9471)', () =
     expect(config.DATABASE_MODE).toBe('docker');
     expect(server(config).env.PGPORT).toBe(5561);
   });
+  describe('mode precedence matches setup (#10758)', () => {
+    const ports = 'PGPORT=5433\nPGPORT_DOCKER=5570\n';
+    it.each([
+      ['docker', 'native', 5433],
+      ['native', 'docker', 5570],
+    ])('saved %s with exported %s resolves to the exported mode and port %i', (saved, exported, port) => {
+      const config = loadConfig(`PGMODE=${saved}\n${ports}`, { ...clearedPgEnv, PGMODE: exported });
+      expect(config.DATABASE_MODE).toBe(exported);
+      for (const name of ['portos-server', 'portos-cos']) {
+        expect(config.apps.find((a) => a.name === name).env.PGPORT).toBe(port);
+      }
+      expect(config.DATABASE_ENDPOINTS.native.port).toBe(5433);
+      expect(config.DATABASE_ENDPOINTS.docker.port).toBe(5570);
+    });
+
+    it('treats an empty exported PGMODE as unset and uses the saved mode', () => {
+      const config = loadConfig(`PGMODE=native\n${ports}`, { ...clearedPgEnv, PGMODE: '' });
+      expect(config.DATABASE_MODE).toBe('native');
+      expect(server(config).env.PGPORT).toBe(5433);
+    });
+
+    it('falls back to docker when the export is empty and no .env is saved', () => {
+      const config = loadConfig(null, { ...clearedPgEnv, PGMODE: '' });
+      expect(config.DATABASE_MODE).toBe('docker');
+    });
+
+    it('lets an exported mode apply with no saved .env', () => {
+      const config = loadConfig(null, { ...clearedPgEnv, PGMODE: 'native' });
+      expect(config.DATABASE_MODE).toBe('native');
+      expect(server(config).env.PGPORT).toBe(5432);
+    });
+  });
 });
