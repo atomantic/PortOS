@@ -536,6 +536,30 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
+// The mocked render child closes itself on a later tick and its close handler
+// (finalize + publication admission) is not awaited by generateVideo. Hold each
+// render open until that handler reports a terminal event, so no completion
+// outlives the test or the admission fixture's teardown, and a failed one
+// fails the test that started it instead of passing on argv alone.
+const renderToTerminal = async (request) => {
+  const jobId = request.jobId;
+  let terminal;
+  const settled = new Promise((resolve) => {
+    terminal = (status) => (event) => { if (event.generationId === jobId) resolve({ status, error: event.error }); };
+  });
+  const onCompleted = terminal('completed');
+  const onFailed = terminal('failed');
+  videoGenEvents.on('completed', onCompleted);
+  videoGenEvents.on('failed', onFailed);
+  try {
+    await generateVideo(request);
+    expect(await settled).toEqual({ status: 'completed', error: undefined });
+  } finally {
+    videoGenEvents.off('completed', onCompleted);
+    videoGenEvents.off('failed', onFailed);
+  }
+};
+
 // Render duration (#5878). The upscaled row is built by spreading the SOURCE
 // history row, so the source's `renderMs` is one careless spread away from being
 // displayed on a card whose only work was a 2x ffmpeg pass — and, before the
@@ -5670,7 +5694,7 @@ describe('generateVideo — LTX-2.5 speed profile (#4875)', () => {
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
-    await generateVideo({
+    await renderToTerminal({
       jobId,
       pythonPath: '/usr/bin/python3',
       modelId,
@@ -5828,7 +5852,7 @@ describe('generateVideo — LTX-2/2.5 block streaming (#6499)', () => {
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
-    await generateVideo({
+    await renderToTerminal({
       jobId,
       pythonPath: '/usr/bin/python3',
       modelId,
@@ -5871,7 +5895,7 @@ describe('generateVideo — LTX-2/2.5 block streaming (#6499)', () => {
       let started = null;
       const onStarted = (e) => { if (e.generationId === jobId) started = e; };
       videoGenEvents.on('started', onStarted);
-      await generateVideo({
+      await renderToTerminal({
         jobId,
         pythonPath: '/usr/bin/python3',
         modelId: 'ltx25_mlx_q8',
