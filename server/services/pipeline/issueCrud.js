@@ -148,14 +148,42 @@ export async function getIssue(id, { includeDeleted = false } = {}) {
 }
 
 export function createIssue(input = {}, { preloadedSeries = null } = {}) {
+  return queueNewIssue(`iss-${randomUUID()}`, input, { preloadedSeries }).then(({ issue }) => issue);
+}
+
+/**
+ * Create an issue under an id the caller planned in advance — or, when that id
+ * already exists live in the same series, return it untouched. This is the
+ * idempotent boundary a resumable batch (the manuscript importer, #10762) needs:
+ * replaying a planned create after a crash or a lost receipt recognizes the
+ * record it already wrote instead of minting a second identity, and never
+ * overwrites edits made to it since. Resolves `{ issue, created }`.
+ *
+ * A tombstoned id, or one living in another series, is refused (ERR_DUPLICATE)
+ * rather than resurrected — the caller re-plans a fresh id for that slot.
+ */
+export function ensureIssueWithId(id, input = {}) {
+  if (!isStr(id) || !ISSUE_ID_RE.test(id)) {
+    return Promise.reject(codedError(`ensureIssueWithId: invalid id "${id}" (expected iss-<uuid>)`, ERR_VALIDATION));
+  }
+  return queueNewIssue(id, input, { reuseExisting: true });
+}
+
+// Shared by createIssue (fresh random id) and ensureIssueWithId (planned id).
+function queueNewIssue(id, input, { preloadedSeries = null, reuseExisting = false } = {}) {
   const seriesId = trimTo(input.seriesId, SERIES_ID_MAX);
   if (!seriesId) return Promise.reject(codedError('seriesId is required', ERR_VALIDATION));
   const title = trimTo(input.title, TITLE_MAX);
   if (!title) return Promise.reject(codedError(`title is required (1..${TITLE_MAX} chars)`, ERR_VALIDATION));
   return queueSeriesIssuesWrite(seriesId, async () => {
     const state = await readState();
+    if (reuseExisting) {
+      const existing = state.issues.find((i) => i.id === id);
+      if (existing && !existing.deleted && existing.seriesId === seriesId) return { issue: existing, created: false };
+      if (existing) throw codedError(`Issue id already used: ${id}`, ERR_DUPLICATE);
+    }
     const next = sanitizeIssue({
-      id: `iss-${randomUUID()}`,
+      id,
       seriesId,
       // Placeholder — `renumberInline` below derives the canonical number.
       number: 0,
@@ -180,7 +208,7 @@ export function createIssue(input = {}, { preloadedSeries = null } = {}) {
     await saveIssuesNow(state.issues.filter((i) => i.seriesId === seriesId));
     // New issue = series-level change for any active share subscription.
     emitRecordUpdated('series', next.seriesId);
-    return next;
+    return { issue: next, created: true };
   });
 }
 

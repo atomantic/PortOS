@@ -10,7 +10,7 @@
  * future schema change only has to flip the third column.
  */
 
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { runStagedLLM } from './stageRunner.js';
 import { importerEvents, emitImporterProgress } from './importerEvents.js';
 // Re-export so consumers reach the analyze-phase progress bus through the
@@ -30,7 +30,7 @@ import {
   createSeries,
   updateSeries,
 } from './pipeline/series.js';
-import { createIssue, deleteIssue, listIssues } from './pipeline/issues.js';
+import { deleteIssue, ensureIssueWithId, listIssues, listIssuesForSeries } from './pipeline/issues.js';
 import { reformatManuscriptText } from './pipeline/manuscriptFix.js';
 import { sanitizeArc, sanitizeSeasonList, buildSeason, ARC_SHAPE_IDS, ARC_ROLES } from '../lib/storyArc.js';
 import { COMIC_NUM, COMIC_HEADER_TAIL } from '../lib/comicScriptParser.js';
@@ -53,6 +53,10 @@ export const ERR_LOCKED = 'IMPORTER_LOCKED';
 // already landed. Universe/series are preserved; the partial issue set is
 // rolled back. Retrying commit is safe (merges are idempotent).
 export const ERR_PARTIAL_COMMIT_ISSUES = 'IMPORTER_PARTIAL_COMMIT_ISSUES';
+// Thrown when a retry sends a DIFFERENT issue list while an earlier attempt's
+// planned issues still exist (#10762) — resuming would pair the old issues with
+// the wrong proposals, and starting over would duplicate them.
+export const ERR_IMPORT_IN_PROGRESS = 'IMPORTER_IMPORT_IN_PROGRESS';
 
 
 // Ordered stages surfaced to the client's live progress checklist during the
@@ -708,18 +712,89 @@ export async function classifyImportContent({ source, providerOverride, modelOve
  * while at least one issue it created still exists: a user who deleted the
  * imported issues and re-imports the same text is starting over, and treating
  * that as a replay would silently create nothing.
+ *
+ * An unfinished session with an issue plan (#10762) is checked against the
+ * series: when every planned issue exists, the import finished and only its
+ * receipt was lost, so it reads as `committed` with `receiptPending` set.
+ * Otherwise `liveIssueIds` names the planned issues that already exist.
  */
 async function resolveImportSession(importId, seriesId) {
   const session = await getImportSession(importId);
   if (!session || session.seriesId !== seriesId) return null;
-  if (session.status !== SESSION_STATUS.COMMITTED) return session;
-  const live = new Set((await listIssues({ seriesId })).map((issue) => issue.id));
-  return session.createdIssueIds.some((id) => live.has(id)) ? session : null;
+  if (session.status === SESSION_STATUS.ARC_PERSISTED && !session.plan) return session;
+  const live = new Set((await listIssuesForSeries(seriesId, { withHistory: false })).map((issue) => issue.id));
+  if (session.status === SESSION_STATUS.COMMITTED) {
+    return session.createdIssueIds.some((id) => live.has(id)) ? session : null;
+  }
+  const planIds = session.plan.items.map((item) => item.issueId);
+  if (planIds.every((id) => live.has(id))) {
+    return {
+      ...session,
+      status: SESSION_STATUS.COMMITTED,
+      createdIssueIds: planIds,
+      remappedIssues: session.plan.remappedIssues,
+      receiptPending: true,
+    };
+  }
+  return { ...session, liveIssueIds: planIds.filter((id) => live.has(id)) };
 }
 
-const summarizeImportSession = (session) => (session
-  ? { status: session.status, createdIssueIds: session.createdIssueIds }
-  : null);
+// Binds an issue plan to the payload it was made for (#10762): the fields that
+// decide what each planned issue is. Canon/arc/seasons are left out — a resume
+// drops them server-side — and so is `cleanupFormatting`, which only changes
+// how the excerpts of the issues still to be created get cleaned.
+function hashIssuePayload(issues, contentType) {
+  const shape = issues.map((p) => [
+    p?.title ?? null, p?.arcPosition ?? null, p?.arcRole ?? null, p?.seasonNumber ?? null,
+    p?.proseExcerpt ?? null, p?.logline ?? null, p?.synopsis ?? null,
+  ]);
+  return createHash('sha256').update(JSON.stringify([contentType ?? null, shape])).digest('hex');
+}
+
+/**
+ * Promote any import-draft shell once its import's issues all exist (issue
+ * #727). analyzeImport creates brand-new universe/series records as import
+ * drafts (`ephemeral` + `importDraft`) so an abandoned analyze leaves no
+ * syncing orphan; a finished commit turns them into normal records by clearing
+ * BOTH flags. Clearing `ephemeral` must go through updateUniverse/updateSeries
+ * (they wire the ephemeral→non-ephemeral peer re-subscribe), so the same patch
+ * clears `importDraft` too. Gate STRICTLY on `importDraft` — committing an
+ * import onto a user's pre-existing private (`ephemeral`-only) record must NOT
+ * silently un-privatize it.
+ */
+async function promoteImportDrafts(universe, series) {
+  const promotedUniverse = universe.importDraft === true
+    ? await updateUniverse(universe.id, { ephemeral: false, importDraft: false })
+    : universe;
+  const promotedSeries = series.importDraft === true
+    ? await updateSeries(series.id, { ephemeral: false, importDraft: false })
+    : series;
+  return { universe: promotedUniverse, series: promotedSeries };
+}
+
+// The issues exist, so failing to record that must not fail the commit. With
+// the issue plan still on disk a retry finishes the receipt without creating
+// anything (#10762), so logging is enough.
+function recordCommittedReceipt(importId, createdIssueIds, remappedIssues) {
+  return recordImportProgress(importId, {
+    status: SESSION_STATUS.COMMITTED,
+    createdIssueIds,
+    remappedIssues,
+    plan: null,
+  }).catch((err) => console.error(`❌ importer session ${importId} not marked committed (its issue plan stays resumable): ${err.message}`));
+}
+
+// A finished import whose receipt was lost (#10762) is reported as committed
+// only once its import-draft shells are promoted: until then the client must
+// still send the commit, which replays the issues and promotes them — a client
+// that took `committed` at its word would skip that and strand the drafts.
+const summarizeImportSession = (session, { universe, series }) => {
+  if (!session) return null;
+  if (session.receiptPending && (universe.importDraft === true || series.importDraft === true)) {
+    return { status: SESSION_STATUS.ARC_PERSISTED, createdIssueIds: [] };
+  }
+  return { status: session.status, createdIssueIds: session.createdIssueIds };
+};
 
 /**
  * Phase 1: analyze. Runs canon-extract + arc-extract in parallel (both read
@@ -958,7 +1033,7 @@ export async function analyzeImport({
     isExistingUniverse,
     isExistingSeries,
     importId,
-    importSession: summarizeImportSession(importSession),
+    importSession: summarizeImportSession(importSession, { universe, series }),
     canonPreview: {
       characters: Array.isArray(canonRun.content?.characters) ? canonRun.content.characters : [],
       places: Array.isArray(canonRun.content?.places) ? canonRun.content.places : [],
@@ -1111,23 +1186,46 @@ async function commitImportOnce({
   // the session; additive mode would duplicate, so it does.
   const session = importId && !replaceMode ? await resolveImportSession(importId, series.id) : null;
   if (session?.status === SESSION_STATUS.COMMITTED) {
-    // Answered before the locked-arc gate: nothing is written, so a lock added
-    // since the commit cannot turn a recorded success into an error.
+    // Answered before the locked-arc gate: nothing new is written, so a lock
+    // added since the commit cannot turn a recorded success into an error.
+    // A receipt lost after the last issue landed (#10762) is completed here.
+    let replayedRecords = { universe, series };
+    if (session.receiptPending) {
+      replayedRecords = await promoteImportDrafts(universe, series);
+      await recordCommittedReceipt(importId, session.createdIssueIds, session.remappedIssues);
+    }
     return {
-      universe,
-      series,
+      ...replayedRecords,
       createdIssueIds: session.createdIssueIds,
       remappedIssues: session.remappedIssues,
       replayed: true,
     };
   }
+  const payloadHash = hashIssuePayload(issues, contentType);
+  // The issue plan an earlier attempt left unfinished (#10762), when this
+  // retry carries the same issue list. `resumeLive` holds the planned issues
+  // that already exist: they are kept as they are now, never re-created.
+  let resumePlan = null;
+  const resumeLive = new Set();
   if (session?.status === SESSION_STATUS.ARC_PERSISTED) {
-    // The server kept canon/arc/seasons from the attempt whose issues rolled
-    // back. Resending them would overwrite edits made since, so the server
+    // The server kept canon/arc/seasons from the attempt whose issues did not
+    // finish. Resending them would overwrite edits made since, so the server
     // drops them itself rather than trusting the client to have remembered.
     canonSelections = {};
     arc = null;
     seasons = [];
+    if (session.plan?.payloadHash === payloadHash) {
+      resumePlan = session.plan;
+      for (const id of session.liveIssueIds) resumeLive.add(id);
+    } else if (session.plan && session.liveIssueIds.length > 0) {
+      const k = session.liveIssueIds.length;
+      throw codedError(
+        `An earlier attempt at this import already created ${k} of its ${session.plan.items.length} issues from a different issue list. Resubmit that issue list to finish it, or delete ${k === 1 ? 'that issue' : 'those issues'} (${session.liveIssueIds.join(', ')}) to start over with this one.`,
+        ERR_IMPORT_IN_PROGRESS,
+      );
+    }
+    // Otherwise none of the old plan's issues exist, so nothing is owned and a
+    // changed issue list simply plans afresh below.
   }
 
   if (series.locked?.arc === true) {
@@ -1216,7 +1314,9 @@ async function commitImportOnce({
   // off-limits — collisions silently land on disk today since
   // createIssue doesn't enforce uniqueness.
   const existingArcPositions = new Set();
-  if (!replaceMode) {
+  // A resumed plan already fixed every position; this import's own surviving
+  // issues must not count as collisions with it.
+  if (!replaceMode && !resumePlan) {
     for (const ex of existingIssues) {
       if (Number.isInteger(ex.arcPosition) && ex.arcPosition >= 1) {
         existingArcPositions.add(ex.arcPosition);
@@ -1237,9 +1337,24 @@ async function commitImportOnce({
       }
     }
   }
+  // A resume still owes the series unique positions: since the earlier attempt,
+  // a new issue — or one of this import's survivors, moved — may have taken a
+  // slot the plan reserved for a missing issue. Survivors left where the plan
+  // put them never collide: the plan's positions are distinct.
+  if (!replaceMode && resumePlan) {
+    const taken = new Set(existingIssues.map((ex) => ex.arcPosition).filter(Number.isInteger));
+    resumePlan.items.forEach((item, i) => {
+      if (!resumeLive.has(item.issueId) && taken.has(item.arcPosition)) {
+        throw codedError(
+          `Issue at position ${i + 1} was planned for arcPosition ${item.arcPosition}, which another issue now occupies — commit refused before any state changed. Move or delete that issue, then retry to finish this import.`,
+          ERR_VALIDATION,
+        );
+      }
+    });
+  }
   const allUsedArcPositions = new Set([...seenArcPositions, ...existingArcPositions]);
   let nextFreeArcPos = (allUsedArcPositions.size === 0) ? 1 : Math.max(...allUsedArcPositions) + 1;
-  const issuesWithPositions = issues.map((proposal) => {
+  const withAutoPosition = (proposal) => {
     if (Number.isInteger(proposal.arcPosition) && proposal.arcPosition >= 1) {
       return proposal;
     }
@@ -1251,7 +1366,12 @@ async function commitImportOnce({
     }
     const assigned = nextFreeArcPos++;
     return { ...proposal, arcPosition: assigned };
-  });
+  };
+  // A resume keeps the positions its plan fixed — auto-assigning again would
+  // start past this import's own survivors and shift every missing issue.
+  const issuesWithPositions = resumePlan
+    ? issues.map((proposal, i) => ({ ...proposal, arcPosition: resumePlan.items[i].arcPosition }))
+    : issues.map(withAutoPosition);
 
   // Same contract for seasons: route Zod enforces `number: int 1..99`,
   // commitImport mirrors both the floor AND the ceiling so the service is
@@ -1285,9 +1405,19 @@ async function commitImportOnce({
   // Best-effort — `reformatSeededExcerpts` falls back to the verbatim excerpt
   // per issue, so import never breaks. Returns a fresh array; the create loop
   // below seeds from it.
-  const issuesToCreate = cleanupFormatting
-    ? await reformatSeededExcerpts(issuesWithPositions, { contentType })
+  // A resume only reformats the issues it still has to create — the excerpt is
+  // dropped from a surviving one so it costs no LLM call (it is never re-written).
+  const pendingProposals = resumePlan
+    ? issuesWithPositions.map((proposal, i) => (resumeLive.has(resumePlan.items[i].issueId)
+      ? { ...proposal, proseExcerpt: undefined }
+      : proposal))
     : issuesWithPositions;
+  const issuesToCreate = cleanupFormatting
+    ? await reformatSeededExcerpts(pendingProposals, { contentType })
+    : pendingProposals;
+  // Issues already on the series that this import does not own — the base for
+  // the additive issue-count target below.
+  const priorIssueCount = existingIssues.filter((ex) => !resumeLive.has(ex.id)).length;
 
   // Wipe BEFORE universe + series writes so any delete failure aborts the
   // commit cleanly — universe canon + series arc are still in their
@@ -1402,7 +1532,7 @@ async function commitImportOnce({
     // Additive: target the POST-import total (issues already on the series plus
     // the ones being added), not just this batch — adding 3 issues to a series
     // that already has 2 should target 5, not 3. Only when no target is set yet.
-    const additiveTotal = existingIssues.length + issueCount;
+    const additiveTotal = priorIssueCount + issueCount;
     if (additiveTotal > 0 && !(series.issueCountTarget > 0)) biblePatch.issueCountTarget = additiveTotal;
   }
 
@@ -1440,10 +1570,10 @@ async function commitImportOnce({
       if (arcPremise && !(latest.premise || '').trim()) latestBiblePatch.premise = arcPremise;
       // Additive: target the POST-import total (issues already on the series
       // plus the ones being added), not just this batch — adding 3 issues to
-      // a series that already has 2 should target 5, not 3. `existingIssues`
+      // a series that already has 2 should target 5, not 3. `priorIssueCount`
       // is the up-front count; the issue-create loop below still runs
       // sequentially against `latest`'s state, so this total stays accurate.
-      const additiveTotal = existingIssues.length + issueCount;
+      const additiveTotal = priorIssueCount + issueCount;
       if (additiveTotal > 0 && !(latest.issueCountTarget > 0)) latestBiblePatch.issueCountTarget = additiveTotal;
       return {
         ...(sanitizedArc ? { arc: sanitizedArc } : {}),
@@ -1469,53 +1599,73 @@ async function commitImportOnce({
   const fallbackSeason = sortedSeasons[0] || null;
   const fallbackSeasonId = fallbackSeason?.id || null;
 
-  // Canon, arc and seasons are on disk. Mark that BEFORE the issue loop and let a
-  // failure here stop the commit: issues created without a way to find them
-  // again are exactly what a retry would duplicate.
+  // Plan every issue's identity BEFORE creating any (#10762): one stable id,
+  // position and season per proposal. A replay recognizes these ids instead of
+  // minting a second batch, and a planned id that never landed (or was rolled
+  // back or deleted since) gets a fresh one here, so a stale tombstone is never
+  // resurrected.
+  const liveSeasonIds = new Set((updatedSeries.seasons || []).map((s) => s.id));
+  const remappedIssues = resumePlan ? [...resumePlan.remappedIssues] : [];
+  const planItems = issuesToCreate.map((proposal, i) => {
+    const prior = resumePlan?.items[i];
+    if (prior) {
+      if (resumeLive.has(prior.issueId)) return prior;
+      const keepSeason = !prior.seasonId || liveSeasonIds.has(prior.seasonId);
+      return { ...prior, issueId: `iss-${randomUUID()}`, seasonId: keepSeason ? prior.seasonId : fallbackSeasonId };
+    }
+    let seasonId = fallbackSeasonId;
+    if (proposal.seasonNumber != null) {
+      const matched = seasonByNumber.get(proposal.seasonNumber);
+      if (matched) {
+        seasonId = matched.id;
+      } else {
+        // Surface season-remap events so the UI can warn "issue 3 wanted season
+        // 5 but landed in S2 — Diaspora." Each entry carries the actual landed
+        // season's number + title so the client toast can be specific, not
+        // just "first season" (which can lie when seasons are sparsely numbered).
+        remappedIssues.push({
+          title: proposal.title,
+          arcPosition: proposal.arcPosition,
+          requestedSeasonNumber: proposal.seasonNumber,
+          actualSeasonId: fallbackSeasonId,
+          actualSeasonNumber: fallbackSeason?.number ?? null,
+          actualSeasonTitle: fallbackSeason?.title ?? null,
+        });
+      }
+    }
+    return { issueId: `iss-${randomUUID()}`, arcPosition: proposal.arcPosition, seasonId };
+  });
+
+  // Canon, arc and seasons are on disk; record that together with the plan
+  // BEFORE the issue loop and let a failure here stop the commit: issues
+  // created without a durable record of their ids are exactly what a retry
+  // would duplicate.
   if (importId) {
     await recordImportProgress(importId, {
       universeId: updatedUniverse.id,
       seriesId: updatedSeries.id,
       status: SESSION_STATUS.ARC_PERSISTED,
+      plan: { payloadHash, items: planItems, remappedIssues },
     });
   }
 
-  const createdIssueIds = [];
-  // Surface season-remap events so the UI can warn "issue 3 wanted season 5
-  // but landed in S2 — Diaspora." Each entry carries the actual landed
-  // season's number + title so the client toast can be specific, not just
-  // "first season" (which can lie when seasons are sparsely numbered).
-  const remappedIssues = [];
+  // Issues this attempt wrote — the only ones a failure rolls back. Survivors
+  // of an earlier attempt belong to the plan and keep any edits made since.
+  const createdThisAttempt = [];
 
   // Thread C fix — issue-loop with rollback on failure. The universe +
-  // series are already written above. If createIssue throws mid-loop (e.g.
-  // transient FS error) we delete every issue created so far and re-throw,
-  // leaving the universe + series in their updated state but with no partial
-  // issue set. The universe + series writes are kept because they represent
-  // user-confirmed data; only the issue set is all-or-nothing from the
-  // commit's perspective.
+  // series are already written above. If an issue write throws mid-loop
+  // (e.g. transient FS error) we delete what this attempt created and
+  // re-throw, leaving the universe + series in their updated state. The
+  // universe + series writes are kept because they represent user-confirmed
+  // data. With an importId the plan stays on disk, so the retry recreates
+  // only what is missing under fresh planned ids.
   try {
-    for (const proposal of issuesToCreate) {
-      let seasonId = fallbackSeasonId;
-      if (proposal.seasonNumber != null) {
-        const matched = seasonByNumber.get(proposal.seasonNumber);
-        if (matched) {
-          seasonId = matched.id;
-        } else {
-          remappedIssues.push({
-            title: proposal.title,
-            arcPosition: proposal.arcPosition,
-            requestedSeasonNumber: proposal.seasonNumber,
-            actualSeasonId: fallbackSeasonId,
-            // Surface the landed season's number + title so the UI can
-            // render a precise toast ("Issue 'Cold Iron' landed in S2 —
-            // Diaspora") instead of an inaccurate "first season".
-            actualSeasonNumber: fallbackSeason?.number ?? null,
-            actualSeasonTitle: fallbackSeason?.title ?? null,
-          });
-        }
-      }
-      // Bundle stage seeds into the initial createIssue payload so the
+    for (let i = 0; i < issuesToCreate.length; i++) {
+      const item = planItems[i];
+      if (resumeLive.has(item.issueId)) continue;
+      const proposal = issuesToCreate[i];
+      // Bundle stage seeds into the initial create payload so the
       // serialized write tail handles one write per issue instead of
       // create + updateStage(prose) + updateStage(idea).
       const stages = {};
@@ -1540,33 +1690,45 @@ async function commitImportOnce({
         // the actual state: input present, generation not yet performed.
         stages.idea = { status: 'empty', input: ideaSeed };
       }
-      const issue = await createIssue({
+      const { created } = await ensureIssueWithId(item.issueId, {
         seriesId: updatedSeries.id,
         title: proposal.title,
-        seasonId,
-        arcPosition: proposal.arcPosition,
+        seasonId: item.seasonId,
+        arcPosition: item.arcPosition,
         arcRole: proposal.arcRole,
         stages,
       });
-      createdIssueIds.push(issue.id);
+      if (created) createdThisAttempt.push(item.issueId);
     }
   } catch (issueErr) {
-    // Roll back any issues already written so the system isn't left with a
-    // partial issue set. Rollback failures are logged but don't mask the
-    // original error — the user gets the real error and can re-commit.
-    for (const id of createdIssueIds) {
-      await deleteIssue(id).catch((delErr) =>
-        console.error(`❌ commitImport rollback: failed to delete issue ${id}: ${delErr.message}`),
-      );
+    // Roll back what this attempt created. A delete that fails leaves its
+    // issue in place: it is reported by id rather than claimed as removed,
+    // and with an importId the plan still owns it, so the retry keeps it.
+    const survivingIssueIds = [];
+    for (const id of createdThisAttempt) {
+      await deleteIssue(id).catch((delErr) => {
+        console.error(`❌ commitImport rollback: failed to delete issue ${id}: ${delErr.message}`);
+        survivingIssueIds.push(id);
+      });
     }
+    const n = issues.length;
+    const rolledBack = createdThisAttempt.length - survivingIssueIds.length;
+    const plural = (k) => `${k} issue${k === 1 ? '' : 's'}`;
+    const notes = [`${plural(rolledBack)} created by this attempt ${rolledBack === 1 ? 'was' : 'were'} rolled back.`];
+    if (survivingIssueIds.length > 0) {
+      const one = survivingIssueIds.length === 1;
+      notes.push(`${plural(survivingIssueIds.length)} could not be removed (${survivingIssueIds.join(', ')}) and ${one ? 'remains' : 'remain'} ${importId
+        ? `part of this import — a retry keeps ${one ? 'it' : 'them'} instead of creating a duplicate.`
+        : 'in the series.'}`);
+    }
+    if (resumeLive.size > 0) notes.push(`${plural(resumeLive.size)} from an earlier attempt ${resumeLive.size === 1 ? 'is' : 'are'} kept.`);
     // `context.arcAlreadyPersisted` tells the client to drop arc + seasons +
     // canon from the retry payload — otherwise the retry overwrites any edits
     // (parallel tab, collaborator) made to the persisted state after the
     // failure. `skipArcOnRetry` is the imperative form of the same signal.
-    const n = issues.length;
     const partial = Object.assign(
       new Error(
-        `The universe and series were updated successfully, but ${createdIssueIds.length} of ${n} issue${n === 1 ? '' : 's'} failed and were rolled back — retry to create the remaining issues. (Original error: ${issueErr.message})`,
+        `The universe and series were updated successfully, but creating ${n === 1 ? 'the issue' : `the ${n} issues`} failed. ${notes.join(' ')} Retry to create the remaining issues. (Original error: ${issueErr.message})`,
       ),
       {
         code: ERR_PARTIAL_COMMIT_ISSUES,
@@ -1575,45 +1737,23 @@ async function commitImportOnce({
           seriesId: updatedSeries.id,
           arcAlreadyPersisted: true,
           skipArcOnRetry: true,
+          survivingIssueIds,
         },
       },
     );
     throw partial;
   }
 
-  // Promote any import-draft shell now that the commit fully succeeded (issue
-  // #727). analyzeImport creates brand-new universe/series records as import
-  // drafts (`ephemeral` + `importDraft`) so an abandoned analyze leaves no
-  // syncing orphan; a successful commit turns them into normal records by
-  // clearing BOTH flags. Clearing `ephemeral` must go through
-  // updateUniverse/updateSeries (they wire the ephemeral→non-ephemeral peer
-  // re-subscribe), so the same patch clears `importDraft` too. Gate STRICTLY on
-  // `importDraft` — committing an import onto a user's pre-existing private
-  // (`ephemeral`-only) record must NOT silently un-privatize it. Done after the
-  // issue loop so a rolled-back commit leaves the draft shells GC-eligible.
-  let promotedUniverse = updatedUniverse;
-  let promotedSeries = updatedSeries;
-  if (updatedUniverse.importDraft === true) {
-    promotedUniverse = await updateUniverse(updatedUniverse.id, { ephemeral: false, importDraft: false });
-  }
-  if (updatedSeries.importDraft === true) {
-    promotedSeries = await updateSeries(updatedSeries.id, { ephemeral: false, importDraft: false });
-  }
+  // Done after the issue loop so a rolled-back commit leaves the draft shells
+  // GC-eligible.
+  const promoted = await promoteImportDrafts(updatedUniverse, updatedSeries);
 
-  // The issues exist now, so a failure to record that must not fail the commit:
-  // the client would retry and duplicate them. Worst case the next re-analyze
-  // finds no session and the import is guarded only by the client, as before.
-  if (importId) {
-    await recordImportProgress(importId, {
-      status: SESSION_STATUS.COMMITTED,
-      createdIssueIds,
-      remappedIssues,
-    }).catch((err) => console.error(`❌ importer session ${importId} not marked committed: ${err.message}`));
-  }
+  const createdIssueIds = planItems.map((item) => item.issueId);
+  if (importId) await recordCommittedReceipt(importId, createdIssueIds, remappedIssues);
 
   return {
-    universe: promotedUniverse,
-    series: promotedSeries,
+    universe: promoted.universe,
+    series: promoted.series,
     createdIssueIds,
     remappedIssues,
   };

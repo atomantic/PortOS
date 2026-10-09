@@ -15,6 +15,7 @@ import {
   ERR_VALIDATION,
   ERR_LOCKED,
   ERR_PARTIAL_COMMIT_ISSUES,
+  ERR_IMPORT_IN_PROGRESS,
   IMPORTER_SOURCE_CHAR_LIMIT,
 } from '../services/importer.js';
 import { ARC_ROLES, ARC_SHAPE_IDS } from '../lib/storyArc.js';
@@ -37,9 +38,12 @@ const router = Router();
 // and crashing on the missing createdIssueIds. 422 makes the helper throw
 // so the existing error toast surfaces the orchestrator's message
 // ("universe + series saved, retry to create the remaining issues").
+// `ERR_IMPORT_IN_PROGRESS` is a 409: the retry's issue list conflicts with the
+// issues an unfinished earlier attempt already created (#10762).
 const SERVICE_ERROR_STATUS = {
   [ERR_VALIDATION]: 400,
   [ERR_LOCKED]: 409,
+  [ERR_IMPORT_IN_PROGRESS]: 409,
   [ERR_PARTIAL_COMMIT_ISSUES]: 422,
   [universeSvc.ERR_NOT_FOUND]: 404,
   [seriesSvc.ERR_NOT_FOUND]: 404,

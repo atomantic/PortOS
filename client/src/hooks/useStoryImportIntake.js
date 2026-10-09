@@ -148,7 +148,7 @@ export default function useStoryImportIntake(onCreated) {
       const result = await commitImport(payload, { silent: true }).catch((err) => {
         if (err?.code === 'IMPORTER_PARTIAL_COMMIT_ISSUES' && err?.context?.arcAlreadyPersisted) {
           patch({ arcAlreadyPersisted: true });
-          toast.warning('Arc + seasons saved; issues failed and were rolled back. Click again to re-create the issues only — the arc won\'t be re-sent.');
+          toast.warning('Arc + seasons saved; the issues did not finish. Click again to create the remaining issues without duplicating any — the arc won\'t be re-sent.');
           return null;
         }
         toast.error(err?.message || 'Import failed');
