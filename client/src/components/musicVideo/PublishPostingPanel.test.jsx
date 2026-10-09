@@ -54,6 +54,22 @@ describe('PublishPostingPanel (#9282)', () => {
     expect(publishing.prepare).toHaveBeenLastCalledWith('substack', { publication: 'other' });
   });
 
+  it('picks the X story image from thumbnails, with No image as the default', () => {
+    const publishing = hook();
+    render(<PublishPostingPanel project={project({ thumbnails: ['t1.jpg', 't2.jpg'] })} publishing={publishing} />);
+    expandAll();
+    const picker = within(row('X thread')).getByRole('radiogroup', { name: 'Image on the story reply (optional)' });
+    expect(within(picker).getByRole('radio', { name: 'No image' })).toBeChecked();
+    expect(within(picker).getByRole('radio', { name: 'Video frame 2' }).querySelector('img')).toHaveAttribute('src', '/data/video-thumbnails/t2.jpg');
+    fireEvent.click(within(picker).getByRole('radio', { name: 'Video frame 2' }));
+    expect(within(picker).getByRole('radio', { name: 'Video frame 2' })).toBeChecked();
+    fireEvent.click(within(row('X thread')).getByRole('button', { name: 'Fill draft' }));
+    expect(publishing.prepare).toHaveBeenLastCalledWith('x', { storyImage: 't2.jpg' });
+    fireEvent.click(within(picker).getByRole('radio', { name: 'No image' }));
+    fireEvent.click(within(row('X thread')).getByRole('button', { name: 'Fill draft' }));
+    expect(publishing.prepare).toHaveBeenLastCalledWith('x', {});
+  });
+
   it('lets the director pick which 9:16 cut a Shorts draft posts (#10150)', () => {
     const publishing = hook();
     const p = { ...project({ master: { renderHistoryId: 'r1' }, exports: [{ kind: 'vertical-9x16', filename: 'v.mp4', startSec: 10, endSec: 40 }] }),

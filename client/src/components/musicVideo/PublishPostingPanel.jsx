@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage.js';
-import { ExternalLink, X as XIcon, LogIn, Link as LinkIcon, Check, ChevronDown, ChevronRight, Undo2 } from 'lucide-react';
+import { ExternalLink, X as XIcon, LogIn, Link as LinkIcon, Check, ChevronDown, ChevronRight, ImageOff, Undo2 } from 'lucide-react';
 import PublishCard from './PublishCard.jsx';
 import { DISTROKID_GENRES, suggestDistrokidGenres } from '../../../../server/lib/distrokidGenres.js';
 import { publishRowAnchor } from '../../lib/musicVideoStages.js';
@@ -56,6 +56,31 @@ function verticalCutChoices(project) {
     cuts.unshift({ id: 'kit-vertical', label: `Kit vertical (fit) ${fmtSec(crop.startSec ?? 0)}-${fmtSec(crop.endSec ?? 0)}` });
   }
   return cuts;
+}
+
+/** The story reply's image, picked by sight: a tile per video frame plus "No image". */
+function StoryImagePicker({ idFor, thumbnails, value, onChange }) {
+  const tile = (selected) => `relative rounded overflow-hidden border-2 aspect-video min-h-[44px] ${selected ? 'border-port-accent ring-2 ring-port-accent/40' : 'border-port-border'}`;
+  const mark = <span className="absolute top-1 right-1 rounded-full bg-port-accent text-white p-0.5" aria-hidden="true"><Check size={12} /></span>;
+  return (
+    <div className="space-y-0.5 min-w-0">
+      <span id={idFor('storyImage')} className="block text-[11px] text-port-text-muted">Image on the story reply (optional)</span>
+      <div role="radiogroup" aria-labelledby={idFor('storyImage')} className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+        <button type="button" role="radio" aria-checked={!value} onClick={() => onChange('')}
+          className={`${tile(!value)} flex items-center justify-center gap-1 bg-port-bg text-xs text-port-text-muted`}>
+          <ImageOff size={14} aria-hidden="true" /> No image
+          {!value && mark}
+        </button>
+        {thumbnails.map((name, i) => (
+          <button key={name} type="button" role="radio" aria-checked={value === name} aria-label={`Video frame ${i + 1}`} title={name}
+            onClick={() => onChange(name)} className={tile(value === name)}>
+            <img src={`/data/video-thumbnails/${encodeURIComponent(name)}`} alt="" loading="lazy" className="w-full h-full object-cover" />
+            {value === name && mark}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function TargetOptions({ target, kit, project, options, setOption, flairs, idFor, account }) {
@@ -184,11 +209,7 @@ function TargetOptions({ target, kit, project, options, setOption, flairs, idFor
     return (
       <div className="space-y-2">
         {area('prompt', 'Prompt reply (optional, e.g. the prompt that started it)')}
-        {kit.thumbnails?.length > 0 && field('storyImage', 'Image on the story reply (optional)',
-          <select id={idFor('storyImage')} aria-label="Image on the story reply" value={options.storyImage || ''} onChange={(e) => setOption('storyImage', e.target.value)} className={inputCls}>
-            <option value="">None</option>
-            {kit.thumbnails.map((name) => <option key={name} value={name}>{name}</option>)}
-          </select>)}
+        {kit.thumbnails?.length > 0 && <StoryImagePicker idFor={idFor} thumbnails={kit.thumbnails} value={options.storyImage || ''} onChange={(name) => setOption('storyImage', name)} />}
       </div>
     );
   }
