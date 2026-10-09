@@ -16,6 +16,7 @@ const { PATHS } = await import('../../../lib/paths.js');
 const projects = await import('../projects.js');
 const { preparePublishDraft, discardPublishDraft, listPublishDrafts, recordPublishPost, removePublishPost } = await import('./index.js');
 const { musicVideoEvents } = await import('../events.js');
+const { stackerNewsAdapter } = await import('./stackerNews.js');
 
 const platforms = { stackerNews: { enabled: true, account: null }, youtube: { enabled: true, account: null }, x: { enabled: true, account: 'antic' } };
 
@@ -33,10 +34,18 @@ function fakeBrowser() {
         pages: () => pages.filter((page) => !page.closed),
         newPage: async () => {
           const handlers = [];
+          const navigated = [];
+          const frame = {};
           const page = {
             closed: false, bringToFront: vi.fn(async () => {}), screenshot: vi.fn(async () => Buffer.from('jpg')),
-            url: () => `https://example.com/post/${pages.indexOf(page)}`,
+            href: null, text: '',
+            url: () => page.href || `https://example.com/post/${pages.indexOf(page)}`,
             once: (_event, fn) => handlers.push(fn),
+            on: (event, fn) => { if (event === 'framenavigated') navigated.push(fn); },
+            mainFrame: () => frame,
+            // The director moves the tab on (by posting, or browsing away).
+            navigate: async (href, text = '') => { page.href = href; page.text = text; navigated.forEach((fn) => fn(frame)); await new Promise((r) => setTimeout(r, 0)); },
+            waitForFunction: vi.fn(async (_fn, want) => { if (!page.text.includes(want)) throw new Error('timed out'); }),
             isClosed() { return this.closed; },
             close: vi.fn(async function close() { page.closed = true; handlers.forEach((fn) => fn()); }),
           };
@@ -110,6 +119,32 @@ describe('publish drafts (#9282)', () => {
     const { project, post } = await recordPublishPost(id, 'stackerNews', { url: 'https://stacker.news/items/1' });
     expect(post.url).toBe('https://stacker.news/items/1');
     expect(project.publishKit.posts.stackerNews.url).toBe(post.url);
+  });
+
+  it('records the post the director makes by hand in the filled tab, and nothing else they browse to', async () => {
+    const id = await readyProject();
+    const { connect, pages } = fakeBrowser();
+    const events = [];
+    const onEvent = (e) => events.push(e);
+    musicVideoEvents.on('publish-draft', onEvent);
+    try {
+      const adapters = { stackerNews: adapter({ findPost: stackerNewsAdapter.findPost }) };
+      const draft = await preparePublishDraft(id, 'stackerNews', { territory: 'art' }, { connect, adapters, platforms });
+      // Another item's page, or a page without this post's title, is not this post.
+      await pages[0].navigate('https://stacker.news/~art', 'Song');
+      await pages[0].navigate('https://stacker.news/items/99', 'Someone else\'s post');
+      expect((await projects.getProject(id)).publishKit.posts?.stackerNews).toBeUndefined();
+
+      await pages[0].navigate('https://stacker.news/items/123', 'Song \\ stacker news');
+      await vi.waitFor(() => expect(events.at(-1)).toMatchObject({ draftId: draft.draftId, state: 'posted', url: 'https://stacker.news/items/123' }));
+      expect(events.at(-1).project.publishKit.posts.stackerNews.url).toBe('https://stacker.news/items/123');
+      expect((await projects.getProject(id)).publishKit.posts.stackerNews).toMatchObject({ url: 'https://stacker.news/items/123', postedAt: expect.any(String) });
+      expect(adapters.stackerNews.submit).not.toHaveBeenCalled();
+      expect(pages[0].closed).toBe(false); // the tab now shows their post
+      expect(await listPublishDrafts(id, { connect })).toEqual([]);
+    } finally {
+      musicVideoEvents.off('publish-draft', onEvent);
+    }
   });
 
   it('closes the earlier draft when the same target is filled again, and discards on request', async () => {

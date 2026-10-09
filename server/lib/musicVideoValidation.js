@@ -1,6 +1,7 @@
 import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
 import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
+import { DISTROKID_REMEMBERED_OPTIONS } from './distrokidGenres.js';
 /**
  * Music Video production mode — Zod schemas + shared enums (issue #1760, Phase 1).
  *
@@ -789,7 +790,13 @@ const publishUrl = z.string().url().max(500);
 // #9287: which platforms the director posts to (opt-in), the account for each,
 // and a post's link, reception and notes.
 const publishPlatformEntry = z.object({ enabled: z.boolean(), account: z.string().max(100).nullable() }).partial().strict();
-export const musicVideoPublishPlatformsPatchSchema = z.object(Object.fromEntries(MUSIC_VIDEO_PUBLISH_TARGETS.map((t) => [t, publishPlatformEntry.optional()]))).strict();
+// DistroKid also keeps the release answers that repeat on every project ('' or null forgets one).
+const rememberedAnswer = z.string().max(100).nullable();
+const distrokidPlatformEntry = publishPlatformEntry.extend({
+  defaults: z.object(Object.fromEntries(DISTROKID_REMEMBERED_OPTIONS.map((k) => [k, rememberedAnswer]))).partial().strict(),
+}).partial().strict();
+export const musicVideoPublishPlatformsPatchSchema = z.object(Object.fromEntries(MUSIC_VIDEO_PUBLISH_TARGETS
+  .map((t) => [t, (t === 'distrokid' ? distrokidPlatformEntry : publishPlatformEntry).optional()]))).strict();
 export const musicVideoPublishPostSchema = z.object({
   url: publishUrl.nullable(),
   // Marks the platform done without a link (a DistroKid upload has none until the stores go live).

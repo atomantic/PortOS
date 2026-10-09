@@ -25,6 +25,15 @@ describe('publishing platforms (#9287)', () => {
     expect((await updatePublishPlatforms({ x: { account: '' } })).x).toEqual({ enabled: true, account: null });
   });
 
+  it('keeps the DistroKid answers that repeat across releases, one at a time, and forgets a cleared one', async () => {
+    expect((await getPublishPlatforms()).distrokid.defaults).toEqual({});
+    await updatePublishPlatforms({ distrokid: { defaults: { songwriterFirst: ' Alice ', language: 'Spanish' } } });
+    const saved = await updatePublishPlatforms({ distrokid: { defaults: { songwriterLast: 'Example', language: null, newArtistProfile: true } } });
+    expect(saved.distrokid.defaults).toEqual({ songwriterFirst: 'Alice', songwriterLast: 'Example' });
+    expect((await getPublishPlatforms()).distrokid.defaults).toEqual({ songwriterFirst: 'Alice', songwriterLast: 'Example' });
+    expect(saved.x).not.toHaveProperty('defaults');
+  });
+
   it('refuses disabled platforms and a known-wrong account only', () => {
     expect(() => assertPlatformEnabled({ x: { enabled: false } }, 'x')).toThrow(expect.objectContaining({ code: 'PUBLISH_PLATFORM_DISABLED' }));
     expect(() => assertPlatformEnabled({ x: { enabled: true } }, 'x')).not.toThrow();

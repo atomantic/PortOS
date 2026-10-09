@@ -60,7 +60,8 @@ import { EventEmitter } from 'events';
 //     `music-video:dev-artifact`.
 //   'publish-draft' → { projectId, draftId, target, state } — a publish draft's
 //     tab was filled ('open'), closed by hand ('closed') or discarded; bridged
-//     to `music-video:publish-draft`.
+//     to `music-video:publish-draft`. 'posted' adds `url` and `project`: the
+//     director posted from the filled tab and PortOS recorded the link.
 //   'cover-art'     → { projectId, project } — the release cover art was
 //     composed, or a cover source image was queued, landed or failed; bridged
 //     to `music-video:cover-art`.

@@ -132,7 +132,7 @@ import { startExcerptRender, attachExcerptRenderSseClient, cancelExcerptRender }
 import { deleteExcerpt, addReviewNote, editReviewNote, deleteReviewNote } from '../services/musicVideo/excerptService.js';
 import { suggestSocialCuts } from '../services/musicVideo/socialCuts.js';
 import { getActivePublishKitBuild, startPublishKitBuild, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, selectPublishKitThumbnail } from '../services/musicVideo/publishKit.js';
-import { preparePublishDraft, discardPublishDraft, listPublishDrafts, recordPublishPost, removePublishPost } from '../services/musicVideo/publish/index.js';
+import { preparePublishDraft, previewPublishPost, discardPublishDraft, listPublishDrafts, recordPublishPost, removePublishPost } from '../services/musicVideo/publish/index.js';
 import { getPublishPlatforms, updatePublishPlatforms, publishHistory } from '../services/musicVideo/publish/platforms.js';
 import { listArtistStyles, saveArtistStyle, removeArtistStyle } from '../services/musicVideo/publish/artistStyles.js';
 import { addCoverFont, coverFontPath, listCoverFonts, MAX_COVER_FONT_BYTES, removeCoverFont } from '../services/musicVideo/coverFonts.js';
@@ -1085,6 +1085,13 @@ router.put('/:id/publish/posts/:target', asyncHandler(async (req, res) => {
 router.delete('/:id/publish/posts/:target', asyncHandler(async (req, res) => {
   const target = validateRequest(musicVideoPublishTargetSchema, req.params.target);
   res.json(await removePublishPost(req.params.id, target));
+}));
+
+// What Fill draft would post, read-only: the rows of text and files, or what is still missing.
+router.post('/:id/publish/:target/preview', asyncHandler(async (req, res) => {
+  const target = validateRequest(musicVideoPublishTargetSchema, req.params.target);
+  const options = validateRequest(musicVideoPublishPrepareSchema, req.body || {});
+  res.json(await previewPublishPost(req.params.id, target, options));
 }));
 
 router.post('/:id/publish/:target/prepare', asyncHandler(async (req, res) => {

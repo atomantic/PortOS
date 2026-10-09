@@ -282,3 +282,88 @@ export function buildPublishPayload(platform, project, options = {}) {
   if (!build) throw new ServerError(`Unknown publish target: ${platform}`, { status: 400, code: 'VALIDATION_ERROR' });
   return build(project, kitOf(project), options || {});
 }
+
+const clock = (sec) => {
+  const s = Math.max(0, Math.floor(Number(sec) || 0));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
+const yesNo = (v) => (v ? 'Yes' : 'No');
+
+/** The 9:16 cut a payload posts, in words ("9:16 cut 0:40–1:10"). */
+function cutLabel(project, video) {
+  const cut = verticalCuts(project).find((c) => c.filename === video?.name);
+  return cut ? `${cut.id === 'kit-vertical' ? 'Kit vertical (fit)' : '9:16 cut'} ${clock(cut.startSec)}–${clock(cut.endSec)}` : '9:16 cut';
+}
+
+/**
+ * What one platform's post will say, as `[{ label, text }]` rows the director
+ * reads before Fill draft: every word PortOS types (titles, captions, the
+ * links it adds, the chapters it appends) and which file goes with it. Built
+ * from the same payload Fill draft posts, so the two cannot disagree.
+ */
+export function publishPreviewParts(platform, project, payload) {
+  const rows = [];
+  const add = (label, value) => { if (value != null && value !== '') rows.push({ label, text: String(value) }); };
+  const p = payload || {};
+  switch (platform) {
+    case 'youtube':
+      add('Video', 'The final render');
+      add('Title', p.title); add('Description', p.description);
+      add('Tags', p.tags?.length ? p.tags.join(', ') : 'None');
+      add('Thumbnail', p.thumbnail ? 'The one picked under Release assets' : 'None');
+      add('Captions', p.captions ? 'Lyric captions (SRT)' : 'None');
+      break;
+    case 'shorts':
+      add('Video', cutLabel(project, p.video)); add('Title', p.title); add('Description', p.description);
+      break;
+    case 'tiktok':
+    case 'instagram':
+      add('Video', cutLabel(project, p.video)); add('Caption', p.caption || '(empty)');
+      break;
+    case 'x':
+      (p.posts || []).forEach((post, i) => {
+        const media = post.media ? (post.media.dir === 'videos' ? ' · with the 1080p video' : ' · with an image') : '';
+        add(i === 0 ? `Post${media}` : `Reply ${i}${media}`, post.text);
+      });
+      break;
+    case 'reddit':
+      add('Where', `r/${p.subreddit}`);
+      add('Type', { video: 'Video upload (the final render)', self: 'Text post', link: 'Link post' }[p.kind]);
+      add('Title', p.title); add('Body', p.body); add('Link', p.url); add('First comment', p.firstComment);
+      break;
+    case 'stackerNews':
+      add('Where', `~${p.territory}`); add('Title', p.title); add('Link', p.url); add('Body', p.body); add('First comment', p.firstComment);
+      break;
+    case 'substack':
+      add('Publication', p.publication); add('Video at the top', p.videoUrl); add('Title', p.title); add('Subtitle', p.subtitle); add('Body', p.body);
+      add('Saved as', 'A draft in Substack (you choose who gets it)');
+      break;
+    case 'suno':
+      add('Song', p.songUrl); add('Caption', p.caption || '(empty)');
+      add('Cover', p.cover ? (p.cover.square ? 'The cover art' : 'The thumbnail, cut square') : 'None');
+      add('Pin to profile', yesNo(p.pin));
+      break;
+    case 'sunoHook':
+      add('Song', p.songUrl); add('Video', cutLabel(project, p.video));
+      add('Song window', `From ${clock(p.startSec)}`);
+      add('Caption', p.caption || '(empty)'); add("Suno's lyrics", p.showLyrics ? 'Shown' : 'Hidden');
+      break;
+    case 'distrokid': {
+      const ai = [p.ai?.music && 'music', p.ai?.vocals && 'all of the audio', p.ai?.lyrics && 'lyrics'].filter(Boolean);
+      add('Song title', p.title); add('Artist', p.artist);
+      add('Songwriter', `${p.songwriter?.first} ${p.songwriter?.last} (${{ both: 'music and lyrics', music: 'music', lyrics: 'lyrics' }[p.songwriterRole] || p.songwriterRole})`);
+      add('Release date', p.releaseDate || 'As soon as possible');
+      add('Genre', [p.genre || 'Not picked', p.secondaryGenre].filter(Boolean).join(' · '));
+      add('Language', p.language);
+      add('Explicit', yesNo(p.explicit)); add('Instrumental', yesNo(p.instrumental));
+      add('Made with AI', ai.length ? ai.join(', ') : 'Nothing');
+      add('Apple credits', `Performer ${p.credits?.performer}${p.credits?.performerRole ? ` (${p.credits.performerRole})` : ''} · Producer ${p.credits?.producer}`);
+      add('Cover', p.cover?.square ? 'The cover art' : 'The thumbnail, cut square');
+      if (p.previewStartSec != null) add('Store preview from', clock(p.previewStartSec));
+      break;
+    }
+    default:
+      break;
+  }
+  return rows;
+}
