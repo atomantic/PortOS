@@ -1,13 +1,28 @@
 import { join } from 'path';
-import { atomicWrite, ensureDir, PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { z } from 'zod';
+import { ServerError } from '../lib/errorHandler.js';
+import { atomicWrite, ensureDir, PATHS, readJSONFileStrict } from '../lib/fileUtils.js';
 
 const RULES_FILE = join(PATHS.messages, 'triage-rules.json');
+const MISSING_STORE = Symbol('missing triage rules');
+const rulesStoreSchema = z.object({
+  rules: z.array(z.object({
+    senderPattern: z.string(),
+    correctedAction: z.string(),
+    count: z.number().int().positive().optional()
+  }).passthrough())
+}).passthrough();
 
 async function loadRules() {
   await ensureDir(PATHS.messages);
-  const content = await tryReadFile(RULES_FILE);
-  if (!content) return { rules: [] };
-  return safeJSONParse(content, { rules: [] }, { context: 'triage-rules' });
+  const { ok, value } = await readJSONFileStrict(RULES_FILE, MISSING_STORE, { logError: false });
+  if (ok && value === MISSING_STORE) return { rules: [] };
+  if (!ok || !rulesStoreSchema.safeParse(value).success) {
+    throw new ServerError('Message triage rules storage is unavailable or invalid; original data preserved', {
+      status: 503, code: 'MESSAGE_TRIAGE_RULES_UNAVAILABLE'
+    });
+  }
+  return value;
 }
 
 async function saveRules(data) {

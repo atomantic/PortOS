@@ -115,3 +115,18 @@ describe('executeAction caller-error statuses', () => {
     await expect(executeAction(accountId, 'm', 'explode')).rejects.toMatchObject({ status: 400 });
   });
 });
+
+// Regression: a correction write failure cannot turn a completed provider action
+// into a failed request that invites a duplicate archive/delete.
+it('keeps a confirmed provider action successful when triage persistence fails', async () => {
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  mocks.account.mockResolvedValue({ type: 'gmail' });
+  mocks.message.mockResolvedValue({ ...message, apiId: 'api-target', evaluation: { action: 'keep' } });
+  mocks.correction.mockRejectedValue(new Error('Synthetic sensitive diagnostic'));
+  expect(await executeAction(accountId, message.id, 'archive')).toMatchObject({ success: true });
+  expect(mocks.modify).toHaveBeenCalledTimes(1);
+  expect(mocks.correction).toHaveBeenCalledTimes(1);
+  expect(mocks.write).toHaveBeenCalledWith(accountId, message.id);
+  expect(log).toHaveBeenCalledWith('❌ Message triage correction could not be persisted');
+  log.mockRestore();
+});

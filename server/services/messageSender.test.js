@@ -7,6 +7,9 @@ const doubles = vi.hoisted(() => ({
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { messages: '/mock/messages' },
   ensureDir: async () => {},
+  readJSONFileStrict: async (path, fallback) => ({
+    ok: true, value: doubles.files.has(path) ? JSON.parse(doubles.files.get(path)) : fallback
+  }),
   tryReadFile: async path => doubles.files.get(path) ?? null,
   atomicWrite: async (path, data) => {
     if (doubles.failTerminal && data.some(d => d.status === 'sent')) throw new Error('Example disk failure');
