@@ -90,7 +90,11 @@ export async function executeAction(accountId, messageId, action) {
       subject: message.subject || '',
       triaged,
       corrected: action
-    }).catch(() => {});
+    }).catch(() => {
+      // The provider action already completed. Report persistence failure without
+      // leaking mailbox content or turning success into a request to retry it.
+      console.error('❌ Message triage correction could not be persisted');
+    });
   }
 
   await removeMessageFromCache(accountId, messageId);

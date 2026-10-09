@@ -10,6 +10,9 @@ const doubles = vi.hoisted(() => ({ files: new Map(), auth: null, getAccount: vi
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { messages: '/mock/messages' },
   ensureDir: async () => {},
+  readJSONFileStrict: async (path, fallback) => ({
+    ok: true, value: doubles.files.has(path) ? JSON.parse(doubles.files.get(path)) : fallback
+  }),
   tryReadFile: async path => doubles.files.get(path) ?? null,
   atomicWrite: async (path, data) => { doubles.files.set(path, JSON.stringify(data)); },
   safeJSONParse: JSON.parse

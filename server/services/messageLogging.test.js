@@ -22,6 +22,9 @@ vi.mock('../lib/fileUtils.js', async (original) => ({
       return defaultValue;
     }
   },
+  readJSONFileStrict: async (path, fallback) => ({
+    ok: true, value: doubles.files.has(path) ? JSON.parse(doubles.files.get(path)) : fallback
+  }),
   tryReadFile: async path => doubles.files.get(path) ?? null,
   atomicWrite: async (path, value) => { doubles.files.set(path, JSON.stringify(value)); }
 }));
