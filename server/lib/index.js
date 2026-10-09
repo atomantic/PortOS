@@ -322,6 +322,7 @@ export * from './settingsStore.js';
 export * from './mimeTypes.js';
 export * from './motionSkills.js';
 export * from './pathContainment.js';
+export * from './repoPublishPath.js';
 export * from './paths.js';
 export * from './pathSafety.js';
 export * from './uploads.js';

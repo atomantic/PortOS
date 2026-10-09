@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm } from 'fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -216,5 +216,85 @@ describe('publishChiptuneTrack', () => {
 
     const result = await publishChiptuneTrack({ trackId: 'track-1', appId: 'app-1', subdir: 'assets/bgm', slug: 'Overworld Theme!' });
     expect(result.files[0]).toBe('assets/bgm/overworld-theme.wav');
+  });
+
+  describe('symlink containment (#10894)', () => {
+    // Disposable synthetic roots: <root>/app is the managed repo, <root>/outside is
+    // an unrelated directory holding pre-existing files a publish must not touch.
+    const setup = async () => {
+      const root = await makeTmp('chiptune-symlink-');
+      const repo = join(root, 'app');
+      const outside = join(root, 'outside');
+      await mkdir(repo);
+      await mkdir(outside);
+      await writeFile(join(outside, 'example.wav'), 'outside-wav');
+      await writeFile(join(outside, 'example.score.json'), 'outside-score');
+      tracks.getTrack.mockResolvedValue(baseTrack({ chiptuneScore: validScore() }));
+      apps.getAppById.mockResolvedValue({ id: 'app-1', name: 'Game', repoPath: repo });
+      return { repo, outside };
+    };
+    const publish = (subdir) => publishChiptuneTrack({ trackId: 'track-1', appId: 'app-1', subdir, slug: 'example' });
+    const expectOutsideUntouched = async (outside) => {
+      expect(await readFile(join(outside, 'example.wav'), 'utf8')).toBe('outside-wav');
+      expect(await readFile(join(outside, 'example.score.json'), 'utf8')).toBe('outside-score');
+      expect((await readdir(outside)).sort()).toEqual(['example.score.json', 'example.wav']);
+    };
+
+    it('refuses a subdir that is a directory symlink out of the app, leaving outside files unchanged', async () => {
+      const { repo, outside } = await setup();
+      await symlink(outside, join(repo, 'linked-assets'));
+      await expect(publish('linked-assets')).rejects.toMatchObject({ code: 'CHIPTUNE_BAD_SUBDIR' });
+      await expectOutsideUntouched(outside);
+    });
+
+    it('refuses a symlink in the middle of a nested subdir and a dangling directory link', async () => {
+      const { repo, outside } = await setup();
+      await symlink(outside, join(repo, 'shared'));
+      await expect(publish('shared/music')).rejects.toMatchObject({ code: 'CHIPTUNE_BAD_SUBDIR' });
+      await symlink(join(outside, 'nope'), join(repo, 'dangling'));
+      await expect(publish('dangling')).rejects.toMatchObject({ code: 'CHIPTUNE_BAD_SUBDIR' });
+      await expectOutsideUntouched(outside);
+      await expect(readdir(join(outside, 'nope'))).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('refuses a symlinked destination leaf before any write, so there is no partial publish', async () => {
+      const { repo, outside } = await setup();
+      const dir = join(repo, 'assets');
+      await mkdir(dir);
+      // Only the LAST destination (the score sidecar) is invalid: the WAV must not be written first.
+      await symlink(join(outside, 'example.score.json'), join(dir, 'example.score.json'));
+      await expect(publish('assets')).rejects.toMatchObject({ code: 'CHIPTUNE_BAD_SUBDIR' });
+      expect(await readdir(dir)).toEqual(['example.score.json']);
+      expect(await readFile(join(outside, 'example.score.json'), 'utf8')).toBe('outside-score');
+
+      await rm(join(dir, 'example.score.json'));
+      await symlink(join(outside, 'missing.ogg'), join(dir, 'example.ogg')); // dangling OGG link
+      await expect(publish('assets')).rejects.toMatchObject({ code: 'CHIPTUNE_BAD_SUBDIR' });
+      expect(await readdir(dir)).toEqual(['example.ogg']);
+      await expectOutsideUntouched(outside);
+    });
+
+    it('refuses a link substituted between two requests', async () => {
+      const { repo, outside } = await setup();
+      await publish('assets');
+      expect((await lstat(join(repo, 'assets/example.wav'))).isFile()).toBe(true);
+      await rm(join(repo, 'assets'), { recursive: true });
+      await symlink(outside, join(repo, 'assets'));
+      await expect(publish('assets')).rejects.toMatchObject({ code: 'CHIPTUNE_BAD_SUBDIR' });
+      await expectOutsideUntouched(outside);
+    });
+
+    it('still creates missing nested directories and publishes through a symlinked repo root', async () => {
+      const { repo, outside } = await setup();
+      const alias = join(await makeTmp('chiptune-alias-'), 'repo-link');
+      await symlink(repo, alias); // the checkout path itself may legitimately be a link
+      apps.getAppById.mockResolvedValue({ id: 'app-1', name: 'Game', repoPath: alias });
+      const result = await publish('a/b/music/');
+      expect(result.files).toEqual(['a/b/music/example.wav', 'a/b/music/example.score.json']);
+      const realRepo = await realpath(repo);
+      expect((await lstat(join(realRepo, 'a/b/music/example.wav'))).isFile()).toBe(true);
+      expect((await lstat(join(realRepo, 'a/b/music/example.score.json'))).isFile()).toBe(true);
+      await expectOutsideUntouched(outside);
+    });
   });
 });
