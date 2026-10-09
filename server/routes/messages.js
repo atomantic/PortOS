@@ -7,7 +7,7 @@ import {
   messageActionBodySchema, messageTokenProviderBodySchema,
 } from '../lib/validation.js';
 import { UUID_RE } from '../lib/fileUtils.js';
-import { sendViaForAccountType } from '../lib/messageTransport.js';
+import { MESSAGE_ACCOUNT_TRANSPORT, sendViaForAccountType } from '../lib/messageTransport.js';
 import * as messageAccounts from '../services/messageAccounts.js';
 import * as messageSync from '../services/messageSync.js';
 import * as messageDrafts from '../services/messageDrafts.js';
@@ -223,6 +223,11 @@ router.post('/drafts', asyncHandler(async (req, res) => {
   res.status(201).json(draft);
 }));
 
+const replySubject = (subject) => {
+  const trimmed = String(subject ?? '').trim();
+  return /^re:/i.test(trimmed) ? trimmed : `Re: ${trimmed}`.trim();
+};
+
 router.post('/drafts/generate', asyncHandler(async (req, res) => {
   const data = validateRequest(generateDraftSchema, req.body);
   const account = await messageAccounts.getAccount(data.accountId);
@@ -230,21 +235,29 @@ router.post('/drafts/generate', asyncHandler(async (req, res) => {
 
   // Fetch the original message to build AI reply
   let replyBody = '';
+  let to = [];
+  let subject = '';
   if (data.replyToMessageId) {
     const originalMsg = await messageSync.getMessage(data.accountId, data.replyToMessageId);
-    if (originalMsg) {
-      // Load thread context if available
-      let threadMessages = null;
-      if (data.threadId) {
-        threadMessages = await messageSync.getThread(data.accountId, data.threadId).catch(() => null);
-      }
-      const aiResult = await generateReplyBody(originalMsg, data.instructions, {
-        useVoice: data.useVoice,
-        threadMessages
-      });
-      if (!aiResult?.body?.trim()) throw new ServerError('The selected model did not produce a reply draft. Check Models > LLMs > Abuse Guard.', { status: 422, code: 'UNTRUSTED_REPLY_UNAVAILABLE' });
-      replyBody = aiResult.body;
+    if (!originalMsg) throw new ServerError('The message being replied to was not found', { status: 404, code: 'REPLY_ORIGINAL_NOT_FOUND' });
+    // Email replies need explicit delivery fields; Teams/browser chats target a conversation, not a mailbox.
+    if (MESSAGE_ACCOUNT_TRANSPORT[account.type]?.email) {
+      const sender = originalMsg.from?.email;
+      if (!sender) throw new ServerError('The original message has no sender address to reply to', { status: 422, code: 'REPLY_TARGET_UNAVAILABLE' });
+      to = [sender];
+      subject = replySubject(originalMsg.subject);
     }
+    // Load thread context if available
+    let threadMessages = null;
+    if (data.threadId) {
+      threadMessages = await messageSync.getThread(data.accountId, data.threadId).catch(() => null);
+    }
+    const aiResult = await generateReplyBody(originalMsg, data.instructions, {
+      useVoice: data.useVoice,
+      threadMessages
+    });
+    if (!aiResult?.body?.trim()) throw new ServerError('The selected model did not produce a reply draft. Check Models > LLMs > Abuse Guard.', { status: 422, code: 'UNTRUSTED_REPLY_UNAVAILABLE' });
+    replyBody = aiResult.body;
   }
   if (!replyBody) {
     replyBody = `[No original message found]\n\nContext: ${data.context}\nInstructions: ${data.instructions}`;
@@ -254,7 +267,8 @@ router.post('/drafts/generate', asyncHandler(async (req, res) => {
     accountId: data.accountId,
     replyToMessageId: data.replyToMessageId,
     threadId: data.threadId,
-    subject: '',
+    to,
+    subject,
     body: replyBody,
     generatedBy: 'ai',
     sendVia: sendViaForAccountType(account.type) ?? 'playwright'
