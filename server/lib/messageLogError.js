@@ -2,7 +2,8 @@
 // Never include free text, stacks or arbitrary provider codes in operational logs.
 const SAFE_CODES = new Set([
   'ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'ETIMEDOUT',
-  'ABORT_ERR', 'SEND_FAILED', 'GMAIL_SEND_FAILED', 'GMAIL_NOT_CONFIGURED'
+  'ABORT_ERR', 'SEND_FAILED', 'GMAIL_SEND_FAILED', 'GMAIL_NOT_CONFIGURED',
+  'GMAIL_AUTH_FAILED'
 ]);
 
 export function messageLogError(error) {

@@ -26,7 +26,7 @@ vi.mock('../lib/fileUtils.js', async (original) => ({
   atomicWrite: async (path, value) => { doubles.files.set(path, JSON.stringify(value)); }
 }));
 vi.mock('./readinessNotify.js', () => ({ noteReadinessChanged: () => {} }));
-vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: async () => ({}) }));
+vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: async () => ({ getAccessToken: async () => ({ token: 'synthetic-token' }) }) }));
 vi.mock('@googleapis/gmail', () => ({
   gmail: () => ({ users: {
     messages: { send: doubles.send, list: doubles.list, get: doubles.get, trash: doubles.trash, modify: doubles.modify },
