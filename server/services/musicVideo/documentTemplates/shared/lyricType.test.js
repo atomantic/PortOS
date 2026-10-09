@@ -169,6 +169,24 @@ describe('lyricType text zones', () => {
     }
   });
 
+  it('keeps a slamming hook word inside its zone on the first frame', () => {
+    for (const zone of ['upper-right', 'lower-left', 'center']) {
+      // One word that fills the whole zone width at the base size (0.5em per char).
+      const type = createLyricType({}, { lines: [{ text: 'UNIVERSEWORDS', role: 'hook', zone, startSec: 1, endSec: 3, words: [{ text: 'UNIVERSEWORDS', startSec: 1, endSec: 2 }] }] });
+      const hook = type.lines[0];
+      const placed = type.layout(hook, 1920, 1080, (str, font) => str.length * Number(/(\d+)px/.exec(font)[1]) * 0.5);
+      const [word] = placed.words;
+      const [state] = type.wordStates(hook, 1);
+      expect(state.scale).toBeGreaterThan(1);
+      const space = placed.px * 0.5;
+      const ink = word.w - space;
+      const scaled = ink * Math.min(state.scale, word.maxScale);
+      const centre = word.x + ink / 2;
+      expect(centre - scaled / 2).toBeGreaterThanOrEqual(placed.rect.x - 1e-6);
+      expect(centre + scaled / 2).toBeLessThanOrEqual(placed.rect.x + placed.rect.w + 1e-6);
+    }
+  });
+
   it('reframes zones for a portrait frame', () => {
     const rect = zoneRect('lower-left', 1080, 1920);
     expect(rect.x + rect.w).toBeCloseTo(1080 - rect.x, 6);
