@@ -603,6 +603,19 @@ describe('MusicVideo project header', () => {
   });
 });
 
+describe('MusicVideo version title', () => {
+  it('renames the open version from the pencil beside its title', async () => {
+    await openProject(PROJECT_WITH_CLIP);
+    fireEvent.click(screen.getByRole('button', { name: 'Rename v1' }));
+    // The editor takes the title's place, so the old heading is gone while editing.
+    expect(screen.queryByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name })).toBeNull();
+    updateMusicVideoProject.mockImplementationOnce(async (_id, patch) => ({ ...PROJECT_WITH_CLIP, ...patch }));
+    fireEvent.change(screen.getByLabelText('Project title'), { target: { value: 'Title Renamed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await screen.findByRole('heading', { level: 2, name: 'Title Renamed' });
+  });
+});
+
 describe('MusicVideo render control (#1760)', () => {
   it('enables Render and kicks off the job when a scene has a clip', async () => {
     await openProject(PROJECT_WITH_CLIP, 'review');
@@ -633,7 +646,7 @@ describe('MusicVideo render control (#1760)', () => {
     sseState.latest = null;
     currentProject = freshProject;
     fireEvent.click(screen.getByRole('button', { name: /^Render final$/ }));
-    await screen.findByTitle('Cancel render');
+    await screen.findAllByRole('button', { name: 'Cancel render' });
 
     sseState.latest = { type: 'complete', result: { id: 'rh-new' } };
     forceRerender();
@@ -652,7 +665,9 @@ describe('MusicVideo render control (#1760)', () => {
     await openStage('review');
 
     fireEvent.click(screen.getByRole('button', { name: /^Render final$/ }));
-    expect(screen.getByRole('button', { name: 'Preparing render…' })).toBeDisabled();
+    expect(screen.getByText('Preparing render…')).toBeInTheDocument();
+    // No job id yet, so there is nothing to stop.
+    expect(screen.queryByRole('button', { name: 'Cancel render' })).not.toBeInTheDocument();
     await openStage('setup');
     expect(screen.getByLabelText('Change track')).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Change track'), { target: { value: 'other-track' } });
@@ -664,7 +679,7 @@ describe('MusicVideo render control (#1760)', () => {
     expect(otherRender).toBeDisabled();
     fireEvent.click(otherRender);
     expect(renderMusicVideoProject).toHaveBeenCalledTimes(1);
-    expect(screen.queryByTitle('Cancel render')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancel render' })).not.toBeInTheDocument();
     await openStage('setup');
     expect(screen.getByLabelText('Change track')).not.toBeDisabled();
 
@@ -672,7 +687,7 @@ describe('MusicVideo render control (#1760)', () => {
     sseState.latest = { type: 'progress', progress: 0.375 };
     await selectProject(PROJECT_WITH_CLIP.id);
     await openStage('review');
-    expect(screen.getByTitle('Cancel render')).toHaveTextContent('38%');
+    expect(screen.getByText('Rendering 38%')).toBeInTheDocument();
     // The header offers no second render while this one is in flight — it shows the progress.
     expect(screen.getByRole('button', { name: 'Rendering… 38%' })).toBeDisabled();
     await openStage('setup');
@@ -682,7 +697,7 @@ describe('MusicVideo render control (#1760)', () => {
     sseState.latest = { type: 'status', message: 'Finishing output' };
     await clickNewProject();
     await openStage('review');
-    expect(screen.getByTitle('Cancel render')).toHaveTextContent('38%');
+    expect(screen.getByText('Rendering 38%')).toBeInTheDocument();
     await selectProject(other.id);
     sseState.latest = { type: 'complete', result: { id: 'rh-9' } };
     fireEvent.change(screen.getByPlaceholderText('Project name'), { target: { value: 'Unrelated draft' } });
@@ -707,8 +722,12 @@ describe('MusicVideo render control (#1760)', () => {
     await openStage('review');
 
     fireEvent.click(screen.getByRole('button', { name: /^Render final$/ }));
-    fireEvent.click(await screen.findByTitle('Cancel render'));
+    // Stopping discards the partial render, so the first tap only asks.
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Cancel render' }))[0]);
+    expect(cancelMusicVideoRender).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop the render' }));
     expect(cancelMusicVideoRender).toHaveBeenCalledWith('existing-render', { silent: true });
+    await waitFor(() => expect(screen.getAllByText('Stopping…').length).toBeGreaterThan(0));
     expect(toast.error).toHaveBeenCalledTimes(1);
     sseState.latest = { type: 'canceled' };
     forceRerender();
@@ -725,7 +744,7 @@ describe('MusicVideo render control (#1760)', () => {
     await selectProject(PROJECT_WITH_CLIP.id);
     await openStage('review');
     fireEvent.click(screen.getByRole('button', { name: /^Render final$/ }));
-    await screen.findByTitle('Cancel render');
+    await screen.findAllByRole('button', { name: 'Cancel render' });
     await selectProject(other.id);
     await openStage('review');
     sseState.latest = { type: 'error', error: 'Renderer stopped' };
@@ -747,7 +766,7 @@ describe('MusicVideo render control (#1760)', () => {
 
     sseState.latest = null;
     fireEvent.click(screen.getByRole('button', { name: /^Render final$/ }));
-    await screen.findByTitle('Cancel render');
+    await screen.findAllByRole('button', { name: 'Cancel render' });
     sseState.latest = { type: 'progress', progress: 0.4 };
     fireEvent.change(screen.getByPlaceholderText('Project name'), { target: { value: 'Draft' } });
     sseState.closed = true;
@@ -761,8 +780,8 @@ describe('MusicVideo render control (#1760)', () => {
     getMusicVideoActiveRender.mockResolvedValue({ jobId: 'render-live' });
     sseState.latest = { type: 'progress', progress: 0.5 };
     await openProject({ ...PROJECT_WITH_CLIP, status: 'rendering' }, 'review');
-    await screen.findByTitle('Cancel render');
-    await waitFor(() => expect(screen.getByTitle('Cancel render')).toHaveTextContent('50%'));
+    await screen.findAllByRole('button', { name: 'Cancel render' });
+    await waitFor(() => expect(screen.getByText('Rendering 50%')).toBeInTheDocument());
     expect(getMusicVideoActiveRender).toHaveBeenCalledWith('mv-1', { silent: true });
     // A page load only READS the render — it never starts one.
     expect(renderMusicVideoProject).not.toHaveBeenCalled();
@@ -776,8 +795,8 @@ describe('MusicVideo render control (#1760)', () => {
     await openProject({ ...PROJECT_WITH_CLIP, status: 'rendering' }, 'review');
     const reattach = await screen.findByRole('button', { name: 'Reattach to the final render' });
     fireEvent.click(reattach);
-    await screen.findByTitle('Cancel render');
-    await waitFor(() => expect(screen.getByTitle('Cancel render')).toHaveTextContent('25%'));
+    await screen.findAllByRole('button', { name: 'Cancel render' });
+    await waitFor(() => expect(screen.getByText('Rendering 25%')).toBeInTheDocument());
     expect(renderMusicVideoProject).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Reattach to the final render' })).not.toBeInTheDocument());
   });
@@ -2966,6 +2985,22 @@ describe('MusicVideo main page project cards', () => {
 
     // Navigates and loads the project board
     expect(await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name })).toBeInTheDocument();
+  });
+
+  it('renames a version straight from its project card', async () => {
+    listMusicVideoProjects.mockResolvedValue([PROJECT_WITH_CLIP]);
+    renderMV();
+    const card = await screen.findByTestId(`mv-project-card-${PROJECT_WITH_CLIP.id}`);
+    await act(async () => {
+      fireEvent.click(within(card).getByRole('button', { name: `Rename v1 of ${PROJECT_WITH_CLIP.name}` }));
+    });
+    const input = await screen.findByLabelText('Project title');
+    expect(input).toHaveValue(PROJECT_WITH_CLIP.name);
+    updateMusicVideoProject.mockImplementationOnce(async (_id, patch) => ({ ...PROJECT_WITH_CLIP, ...patch }));
+    fireEvent.change(input, { target: { value: 'Card Renamed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(PROJECT_WITH_CLIP.id, { name: 'Card Renamed' }));
+    await screen.findByRole('heading', { level: 2, name: 'Card Renamed' });
   });
 
   it('opens an existing final directly in Final render from the project card', async () => {

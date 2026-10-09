@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Film, Play, Music, Wand2, Sparkles, Copy, Trash2, ArrowUpRight, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Film, Play, Music, Wand2, Sparkles, Copy, Trash2, ArrowUpRight, ChevronLeft, ChevronRight, Pencil } from 'lucide-react';
 import MediaImage from '../MediaImage.jsx';
 import ScenePreview from '../creative-director/ScenePreview.jsx';
 import VideoArtifactThumbnail from './VideoArtifactThumbnail.jsx';
@@ -39,6 +39,7 @@ export default function MusicVideoProjectCard({
   versionCount = 1,
   versionIndex = 0,
   onVersionStep,
+  onRename,
 }) {
   const [playing, setPlaying] = useState(false);
   // The index loads bounded summaries (#10169) that carry these derived values; a
@@ -97,6 +98,17 @@ export default function MusicVideoProjectCard({
             {project.name}
           </button>
           <div className="flex items-center gap-1 shrink-0">
+            {onRename && (
+              <button
+                type="button"
+                onClick={onRename}
+                aria-label={`Rename v${project.version || 1} of ${project.name}`}
+                title="Rename this version"
+                className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded text-port-text-muted hover:text-port-text sm:min-h-[28px] sm:min-w-[28px]"
+              >
+                <Pencil size={13} aria-hidden="true" />
+              </button>
+            )}
             {versionCount > 1 ? (
               <span className="flex items-center gap-0.5 text-[10px] px-1 py-0.5 rounded bg-port-border text-port-text-muted font-mono" data-testid={`mv-version-switcher-${project.id}`}>
                 <button

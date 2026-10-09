@@ -251,6 +251,25 @@ export default function MusicVideo() {
   const [renamingId, setRenamingId] = useState(null);
   const renaming = !!selected && renamingId === selected.id;
   const [renameDraft, setRenameDraft] = useState('');
+  const renameForm = renaming ? (
+    <form
+      onSubmit={(e) => { e.preventDefault(); commitRename(); }}
+      className="flex min-w-0 flex-wrap items-center gap-2"
+    >
+      <label htmlFor="mv-rename-input" className="sr-only">Project title</label>
+      <input
+        id="mv-rename-input"
+        autoFocus
+        value={renameDraft}
+        maxLength={120}
+        onChange={(e) => setRenameDraft(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Escape') setRenamingId(null); }}
+        className="min-w-0 flex-1 basis-48 sm:max-w-md bg-port-bg border border-port-border rounded px-2 py-1.5 text-base sm:text-sm"
+      />
+      <button type="submit" disabled={!renameDraft.trim()} className="rounded bg-port-accent px-3 py-1.5 text-sm text-white disabled:opacity-50 min-h-[44px] sm:min-h-0">Save</button>
+      <button type="button" onClick={() => setRenamingId(null)} className="rounded border border-port-border px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0">Cancel</button>
+    </form>
+  ) : null;
   // A full record replaces its summary in the index list; the project card
   // derives from whichever it holds, so no summary-only field can go stale.
   const replaceProject = (next) => {
@@ -1287,11 +1306,11 @@ export default function MusicVideo() {
                 <button
                   type="button"
                   onClick={handleRename}
-                  title="Rename project"
+                  title="Rename this version"
                   aria-label="Rename project"
-                  className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm sm:min-h-0 sm:min-w-0"
+                  className="flex min-h-[44px] items-center justify-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm sm:min-h-0"
                 >
-                  <Pencil size={15} />
+                  <Pencil size={15} aria-hidden="true" /> Rename
                 </button>
                 <button
                   type="button"
@@ -1356,25 +1375,6 @@ export default function MusicVideo() {
           </>
         )}
       />
-      {renaming && (
-        <form
-          onSubmit={(e) => { e.preventDefault(); commitRename(); }}
-          className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-port-border"
-        >
-          <label htmlFor="mv-rename-input" className="text-sm text-gray-400">Project title</label>
-          <input
-            id="mv-rename-input"
-            autoFocus
-            value={renameDraft}
-            maxLength={120}
-            onChange={(e) => setRenameDraft(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Escape') setRenamingId(null); }}
-            className="min-w-0 flex-1 sm:max-w-md bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
-          />
-          <button type="submit" disabled={!renameDraft.trim()} className="rounded bg-port-accent px-3 py-1.5 text-sm text-white disabled:opacity-50 min-h-[44px] sm:min-h-0">Save</button>
-          <button type="button" onClick={() => setRenamingId(null)} className="rounded border border-port-border px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0">Cancel</button>
-        </form>
-      )}
 
       <CreateProjectDrawer
         open={createOpen}
@@ -1473,6 +1473,11 @@ export default function MusicVideo() {
                         cloning={cloningId === project.id}
                         versionCount={versions.length}
                         versionIndex={versionIndex}
+                        onRename={() => {
+                          setRenameDraft(project.name || '');
+                          setRenamingId(project.id);
+                          selectProject(project.id);
+                        }}
                         onVersionStep={(delta) => {
                           const target = versions[versionIndex + delta];
                           if (target) setPickedVersion((prev) => ({ ...prev, [rootId]: target.id }));
@@ -1510,6 +1515,9 @@ export default function MusicVideo() {
             autopilot={autopilotStatus(selected)}
             onOpenSettings={setSettingsTab}
             playerFirst={playerFirst}
+            onRename={handleRename}
+            renameForm={renameForm}
+            cancelRender={renderTargetsSelected && !renderJob.pending ? { onCancel: renderJob.cancel, cancelling: renderJob.cancelling } : null}
             lead={(
               <StageChecklist
                 items={stageChecklist(activeStage, selected, productionReview.readiness, publish)}
