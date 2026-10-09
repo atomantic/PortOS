@@ -92,6 +92,26 @@ warn() { echo -e "${YELLOW}⚠️  $1${NC}"; }
 err()  { echo -e "${RED}❌ $1${NC}"; }
 info() { echo -e "${BLUE}🗄️  $1${NC}"; }
 
+# Inherited libpq variables that choose WHERE a client connects or how the
+# session behaves, independent of the -h/-p/-U/-d arguments: PGHOSTADDR
+# overrides -h's network destination, PGSERVICE/PGSERVICEFILE can supply another
+# endpoint, and PGOPTIONS alters session settings (search_path). Keep this list
+# in step with ROUTING_ENV in scripts/setup-db.js. TLS and authentication
+# variables (PGSSLMODE, PGSSLROOTCERT, PGPASSFILE, ...) are deliberately NOT
+# listed: they are supported operator configuration, not endpoint identity.
+PG_ROUTING_VARS="PGHOSTADDR PGSERVICE PGSERVICEFILE PGOPTIONS"
+
+# Run a host libpq client (psql, pg_dump, pg_isready) with those variables
+# removed from ITS environment only; the operator's shell is untouched. Every
+# call site passes the resolved host/port/user/database as explicit arguments.
+pg_bound() (
+  local name
+  for name in $PG_ROUTING_VARS; do
+    unset "$name"
+  done
+  "$@"
+)
+
 get_mode() {
   printf '%s\n' "$PGMODE"
 }
@@ -166,7 +186,7 @@ require_docker_compose() {
 
 # Check if native PostgreSQL is accepting connections on the expected port
 native_running() {
-  PGPASSWORD="$PGPASSWORD" pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" >/dev/null 2>&1
+  PGPASSWORD="$PGPASSWORD" pg_bound pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" >/dev/null 2>&1
 }
 
 # Auto-detect Homebrew PostgreSQL 17 on macOS and add to PATH
@@ -188,7 +208,7 @@ has_native_pg() {
 # Detect an already-running system PostgreSQL and its port
 detect_system_pg() {
   # Check standard port 5432 first
-  if pg_isready -h localhost -p 5432 >/dev/null 2>&1; then
+  if pg_bound pg_isready -h localhost -p 5432 >/dev/null 2>&1; then
     echo "5432"
     return 0
   fi
@@ -239,7 +259,7 @@ cmd_status() {
     if sys_port=$(detect_system_pg); then
       log "  System PostgreSQL is running on port $sys_port"
       # Check if portos database exists
-      if PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$sys_port" -U "$PGUSER" -d "$PGDATABASE" -c "SELECT 1" >/dev/null 2>&1; then
+      if PGPASSWORD="$PGPASSWORD" pg_bound psql -h "$PGHOST" -p "$sys_port" -U "$PGUSER" -d "$PGDATABASE" -c "SELECT 1" >/dev/null 2>&1; then
         log "  PortOS database exists"
       else
         warn "  PortOS database/user not configured (run: scripts/db.sh setup-native)"
@@ -320,7 +340,7 @@ start_native() {
   fi
 
   # Check if system PostgreSQL is already running and accepting connections
-  if PGPASSWORD="$PGPASSWORD" pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" >/dev/null 2>&1; then
+  if native_running; then
     log "Native PostgreSQL already running on port $PGPORT"
     return
   fi
@@ -331,7 +351,7 @@ start_native() {
       info "Starting PostgreSQL via Homebrew services..."
       brew services start postgresql@17 2>/dev/null || true
       for i in $(seq 1 15); do
-        if pg_isready -h "$PGHOST" -p "$PGPORT" >/dev/null 2>&1; then
+        if pg_bound pg_isready -h "$PGHOST" -p "$PGPORT" >/dev/null 2>&1; then
           log "Native PostgreSQL ready on port $PGPORT"
           return
         fi
@@ -352,7 +372,7 @@ start_native() {
     if [ -n "$datadir" ] && [ -d "$datadir" ]; then
       pg_ctl -D "$datadir" -l "$datadir/server.log" start 2>/dev/null || true
       for i in $(seq 1 15); do
-        if pg_isready -h "$PGHOST" -p "$PGPORT" >/dev/null 2>&1; then
+        if pg_bound pg_isready -h "$PGHOST" -p "$PGPORT" >/dev/null 2>&1; then
           log "Native PostgreSQL ready on port $PGPORT"
           return
         fi
@@ -469,7 +489,7 @@ provision_role() {
   local sys_user="$1" statement="$2"
   printf '%s\n%s\n%s\n' '\getenv role PORTOS_BOOTSTRAP_ROLE' '\getenv pw PORTOS_BOOTSTRAP_PASSWORD' "$statement" |
     PORTOS_BOOTSTRAP_ROLE="$PGUSER" PORTOS_BOOTSTRAP_PASSWORD="$PGPASSWORD" \
-      psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -v ON_ERROR_STOP=1 -X -q
+      pg_bound psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -v ON_ERROR_STOP=1 -X -q
 }
 
 cmd_setup_native() {
@@ -512,13 +532,13 @@ cmd_setup_native() {
   # (role/password changes, schema) to a different cluster than the one chosen.
   if [ -n "$SELECTED_PGPORT" ] || [ -n "$SELECTED_PGHOST" ]; then
     PGPORT="${SELECTED_PGPORT:-5432}"
-    if pg_isready -h "$PGHOST" -p "$PGPORT" >/dev/null 2>&1; then
+    if pg_bound pg_isready -h "$PGHOST" -p "$PGPORT" >/dev/null 2>&1; then
       log "PostgreSQL already running at $PGHOST:$PGPORT"
     elif [ "$(uname)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
       info "Starting PostgreSQL..."
       brew services start postgresql@17
       sleep 2
-      if pg_isready -h "$PGHOST" -p "$PGPORT" >/dev/null 2>&1; then
+      if pg_bound pg_isready -h "$PGHOST" -p "$PGPORT" >/dev/null 2>&1; then
         log "PostgreSQL started at $PGHOST:$PGPORT"
       else
         err "PostgreSQL is not accepting connections at $PGHOST:$PGPORT. Start the selected cluster and try again."
@@ -555,7 +575,7 @@ cmd_setup_native() {
   # Connect as the current system user (default Homebrew superuser) to create the role
   local sys_user
   sys_user="$(whoami)"
-  if ! psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='$PGUSER'" 2>/dev/null | grep -q 1; then
+  if ! pg_bound psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='$PGUSER'" 2>/dev/null | grep -q 1; then
     info "Creating database user: $PGUSER"
     provision_role "$sys_user" 'CREATE ROLE :"role" WITH LOGIN PASSWORD :'"'"'pw'"'"' CREATEDB SUPERUSER;'
     log "User $PGUSER created"
@@ -566,9 +586,9 @@ cmd_setup_native() {
   fi
 
   # Step 4: Create portos database if it doesn't exist
-  if ! psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -lqt 2>/dev/null | cut -d\| -f1 | grep -qw "$PGDATABASE"; then
+  if ! pg_bound psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -lqt 2>/dev/null | cut -d\| -f1 | grep -qw "$PGDATABASE"; then
     info "Creating database: $PGDATABASE"
-    psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -c "CREATE DATABASE $PGDATABASE OWNER $PGUSER;"
+    pg_bound psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -c "CREATE DATABASE $PGDATABASE OWNER $PGUSER;"
     log "Database $PGDATABASE created"
   else
     log "Database $PGDATABASE already exists"
@@ -577,9 +597,9 @@ cmd_setup_native() {
   # Step 5: Enable pgvector extension and apply schema
   info "Applying schema..."
   # pgvector extension requires superuser — create as system user, then run schema as portos
-  psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d "$PGDATABASE" -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null || true
-  psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d "$PGDATABASE" -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;" 2>/dev/null || true
-  PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -v ON_ERROR_STOP=1 --single-transaction -f "$ROOT_DIR/server/scripts/init-db.sql"
+  pg_bound psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d "$PGDATABASE" -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null || true
+  pg_bound psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d "$PGDATABASE" -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;" 2>/dev/null || true
+  PGPASSWORD="$PGPASSWORD" pg_bound psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -v ON_ERROR_STOP=1 --single-transaction -f "$ROOT_DIR/server/scripts/init-db.sql"
   log "Schema applied"
 
   echo ""
@@ -612,7 +632,7 @@ run_psql() {
     return $?
   fi
   if command -v psql >/dev/null 2>&1; then
-    PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
+    PGPASSWORD="$PGPASSWORD" pg_bound psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
   elif uses_local_docker_endpoint && docker_running; then
     PGPASSWORD="$PGPASSWORD" docker exec -i -e PGPASSWORD portos-db psql -U "$PGUSER" -d "$PGDATABASE" "$@"
   else
@@ -630,7 +650,7 @@ run_pg_dump() {
   if uses_local_docker_endpoint && docker_running; then
     PGPASSWORD="$PGPASSWORD" docker exec -e PGPASSWORD portos-db pg_dump -U "$PGUSER" -d "$PGDATABASE" "$@"
   elif command -v pg_dump >/dev/null 2>&1; then
-    PGPASSWORD="$PGPASSWORD" pg_dump -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
+    PGPASSWORD="$PGPASSWORD" pg_bound pg_dump -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
   else
     err "pg_dump not found on host and Docker DB is not running" >&2
     # return (not exit) so cmd_export can clean up its temp file

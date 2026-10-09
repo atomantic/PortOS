@@ -44,8 +44,19 @@ const PG_PORT_DOCKER = parseDockerPort(envVar('PGPORT_DOCKER', 5561));
 // child process. Without this, db.sh setup-native would provision the
 // default `portos`/`portos` while isPortOSDbReady() probes with the
 // customized creds — leaving setup looping forever.
+//
+// Inherited libpq routing variables are dropped: PGHOSTADDR overrides the
+// network destination of the explicit PGHOST, PGSERVICE/PGSERVICEFILE can name
+// another endpoint, and PGOPTIONS alters session settings. A shell left over
+// from another PostgreSQL workflow must not redirect the readiness probe or
+// role provisioning to a different cluster. TLS/auth variables stay. Keep in
+// step with PG_ROUTING_VARS in db.sh.
+const ROUTING_ENV = ['PGHOSTADDR', 'PGSERVICE', 'PGSERVICEFILE', 'PGOPTIONS'];
+const inheritedEnv = Object.fromEntries(
+  Object.entries(process.env).filter(([name]) => !ROUTING_ENV.includes(name))
+);
 const PG_CHILD_ENV = {
-  ...process.env,
+  ...inheritedEnv,
   PGUSER: PG_USER,
   PGDATABASE: PG_DATABASE,
   PGPASSWORD: PG_PASSWORD,
