@@ -552,6 +552,8 @@ function InternalUsageMetrics() {
 
   const [usage, setUsage] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [readError, setReadError] = useState(false);
+  const [loadedRange, setLoadedRange] = useState(null);
   const { data: backfill, updateData: setBackfill, refetch: refreshBackfill } = useSocketResource(
     () => api.getUsageBackfillStatus({ silent: true }),
     { events: BACKFILL_EVENTS },
@@ -565,18 +567,26 @@ function InternalUsageMetrics() {
   const fetchUsage = useCallback(async () => {
     const token = ++requestRef.current;
     const params = isCustom ? { from, to } : { period };
-    const data = await api.getUsage(params).catch(() => null);
-    // Keep the previously-loaded metrics on a failed fetch (e.g. an in-progress
-    // custom range where from > to briefly 400s) so the filter controls stay on
-    // screen for the user to correct the range — and drop a response a newer
-    // request has already superseded.
-    if (data && token === requestRef.current) setUsage(data);
+    const rangeLabel = isCustom
+      ? `${from || 'Beginning'} to ${to || 'Today'}`
+      : (USAGE_PERIOD_OPTIONS.find((option) => option.id === period)?.label || period);
+    setLoading(true);
+    setReadError(false);
+    const data = await api.getUsage(params, { silent: true }).catch(() => null);
+    if (token === requestRef.current) {
+      if (data) {
+        setUsage(data);
+        setLoadedRange(rangeLabel);
+      }
+      setReadError(!data);
+      setLoading(false);
+    }
     return data;
   }, [period, from, to, isCustom]);
 
   useEffect(() => {
-    setLoading(true);
-    fetchUsage().finally(() => setLoading(false));
+    fetchUsage();
+    return () => { requestRef.current += 1; };
   }, [fetchUsage]);
 
   const [startBackfill, startingBackfill] = useAsyncAction(async () => {
@@ -612,21 +622,28 @@ function InternalUsageMetrics() {
     }, { replace: true });
   };
 
-  if (loading && !usage) {
-    return (
-      <PageSkeleton
-        label="Loading usage data"
-        titleWidthClass="w-44"
-        showAction={false}
-        layout="grid"
-        gridColsClass="grid-cols-2 sm:grid-cols-4"
-        cards={4}
-      />
-    );
-  }
+  const reportControls = (
+    <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-3">
+      <CostReportFilters period={period} from={from} to={to} isCustom={isCustom} onPeriod={setPeriod} onRange={setRange} />
+      {usage && <p className="text-sm text-gray-400">Showing usage for {loadedRange}.{(loading || readError) && ' Retained figures may be stale.'}</p>}
+      {loading && <p className="text-sm text-gray-400" role="status">Loading selected usage range…</p>}
+      {readError && (
+        <div role="alert" className="text-sm text-port-warning flex flex-wrap items-center gap-3">
+          <span>Usage unavailable for the selected range.</span>
+          <button type="button" onClick={fetchUsage} className="min-h-11 px-3 rounded-lg border border-port-border hover:border-port-accent">Retry usage</button>
+        </div>
+      )}
+    </div>
+  );
 
   if (!usage) {
-    return <div className="text-center py-8 text-gray-500">No usage data available</div>;
+    return (
+      <div className="space-y-6">
+        <h2 className="text-lg font-semibold text-white">PortOS AI Usage</h2>
+        {reportControls}
+        {loading && <PageSkeleton label="Loading usage data" titleWidthClass="w-44" showAction={false} layout="grid" gridColsClass="grid-cols-2 sm:grid-cols-4" cards={4} />}
+      </div>
+    );
   }
 
   const maxActivity = Math.max(1, ...(usage.last7Days?.map(d => d.sessions) || []));
@@ -638,6 +655,7 @@ function InternalUsageMetrics() {
   return (
     <div className="space-y-6">
       <h2 className="text-lg font-semibold text-white">PortOS AI Usage</h2>
+      {reportControls}
 
       <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
@@ -705,7 +723,6 @@ function InternalUsageMetrics() {
             <span className="text-xl font-bold text-port-success">{formatUsd(report?.totals?.estimatedCost)}</span>
           </div>
         </div>
-        <CostReportFilters period={period} from={from} to={to} isCustom={isCustom} onPeriod={setPeriod} onRange={setRange} />
         <CostReportTable report={report} />
         <p className="text-[10px] sm:text-xs text-gray-500">
           Informational estimate of what this usage would have cost under API billing (PortOS runs on subscriptions).
