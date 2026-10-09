@@ -3,6 +3,7 @@ import socket from '../services/socket';
 import {
   getMusicVideoPublishDrafts,
   prepareMusicVideoPublishDraft,
+  previewMusicVideoPublishPost,
   discardMusicVideoPublishDraft,
   getMusicVideoPublishPlatforms,
   updateMusicVideoPublishPlatforms,
@@ -22,7 +23,8 @@ const EMPTY_POSTING = { drafts: {}, busy: {}, errors: {} };
  * where they post (with an optional account each), `history` their posts and
  * ratings per platform across projects. `recordPost` saves a post made by hand
  * (a link, or `{ posted: true }` to mark it done without one) or rates one;
- * `removePost` undoes the done mark.
+ * `removePost` undoes the done mark. `preview` reads what Fill draft would
+ * post, without opening anything.
  */
 export default function useMusicVideoPublishing({ project, replaceProject } = {}) {
   const projectId = project?.id || null;
@@ -100,6 +102,9 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
       .finally(() => setFor('busy', target, null));
   };
 
+  // What Fill draft would post with these options; null when the preview itself failed.
+  const preview = (target, options = {}) => previewMusicVideoPublishPost(projectId, target, options, { silent: true }).catch(() => null);
+
   const discard = (target) => {
     const draft = drafts[target];
     setFor('drafts', target, null);
@@ -108,7 +113,16 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
 
   const setPlatform = (target, change) => {
     // Optimistic: the toggle flips at once and settles to the server's answer.
-    setPlatforms((prev) => ({ ...(prev || {}), [target]: { ...(prev?.[target] || {}), ...change } }));
+    // `defaults` merges per answer (null forgets one), as the server does.
+    setPlatforms((prev) => {
+      const current = prev?.[target] || {};
+      const next = { ...current, ...change };
+      if (change.defaults) {
+        next.defaults = { ...(current.defaults || {}) };
+        for (const [k, v] of Object.entries(change.defaults)) { if (v == null || v === '') delete next.defaults[k]; else next.defaults[k] = v; }
+      }
+      return { ...(prev || {}), [target]: next };
+    });
     return updateMusicVideoPublishPlatforms({ [target]: change })
       .then((res) => { if (res?.platforms) setPlatforms(res.platforms); return res?.platforms || null; })
       .catch(() => { loadPlatforms(); return null; });
@@ -124,5 +138,5 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
 
   const enabledTargets = Object.entries(platforms || {}).filter(([, p]) => p?.enabled).map(([t]) => t);
 
-  return { drafts, busy, errors, prepare, discard, platforms, history, enabledTargets, setPlatform, recordPost, removePost };
+  return { drafts, busy, errors, prepare, preview, discard, platforms, history, enabledTargets, setPlatform, recordPost, removePost };
 }

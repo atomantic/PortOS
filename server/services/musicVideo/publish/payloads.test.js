@@ -3,7 +3,7 @@
  * director's per-platform options, or a 422 naming the missing piece.
  */
 import { describe, expect, it } from 'vitest';
-import { buildPublishPayload } from './payloads.js';
+import { buildPublishPayload, publishPreviewParts } from './payloads.js';
 import { captureMusicVideoEvidence } from '../../../lib/musicVideoDependencies.js';
 
 const kit = (over = {}) => ({
@@ -167,5 +167,16 @@ describe('buildPublishPayload (#9282)', () => {
     expect(buildPublishPayload('distrokid', withCover, who).cover).toEqual({ dir: 'videoThumbnails', name: 'cover-1.jpg', square: true });
     expect(buildPublishPayload('distrokid', { ...withCover, publishKit: kit({ thumbnail: null, coverArt: { filename: 'cover-1.jpg' } }) }, who).cover.name).toBe('cover-1.jpg');
     expect(buildPublishPayload('suno', withCover, { songUrl: 'https://suno.com/song/87654321-dcba-4cba-8cba-cba987654321' }).cover.name).toBe('cover-1.jpg');
+  });
+
+  it('previews every word a post carries, including what PortOS adds (chapters, links, the Suno caption)', () => {
+    const rows = (target, p = project(), options = {}) => Object.fromEntries(publishPreviewParts(target, p, buildPublishPayload(target, p, options)).map((r) => [r.label, r.text]));
+    expect(rows('youtube').Description).toContain('Chapters\n0:00 Intro');
+    const x = rows('x');
+    expect(x['Post · with the 1080p video']).toBe('Watch this');
+    expect(x['Reply 1']).toBe('How it was made');
+    expect(x['Reply 2']).toBe('The song: https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc\nFull video: https://youtu.be/abc');
+    expect(rows('suno').Caption).toBe('The story. Music video: https://youtu.be/abc');
+    expect(rows('tiktok')).toMatchObject({ Video: '9:16 cut 0:10–0:30', Caption: 'tt caption' });
   });
 });

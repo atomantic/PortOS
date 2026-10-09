@@ -5,6 +5,16 @@
  * always pick another; the adapter matches DistroKid's option by its text.
  */
 
+/**
+ * The DistroKid answers that stay the same from release to release (the
+ * songwriter's legal name and role, language, Apple credits). PortOS keeps
+ * them in settings under Where you post, so every new project, on any device,
+ * starts with them filled in. The artist name is the DistroKid account itself.
+ */
+export const DISTROKID_REMEMBERED_OPTIONS = Object.freeze([
+  'songwriterFirst', 'songwriterLast', 'songwriterRole', 'language', 'performerName', 'performerRole', 'producerName',
+]);
+
 export const DISTROKID_GENRES = Object.freeze([
   'Alternative', 'Blues', "Children's Music", 'Classical', 'Comedy', 'Country', 'Dance', 'Electronic',
   'Folk', 'Hip Hop/Rap', 'Holiday', 'Industrial', 'Instrumental', 'J-Pop', 'Jazz', 'K-Pop', 'Latin',

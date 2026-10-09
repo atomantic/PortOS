@@ -576,6 +576,7 @@ leaves finished ones alone. Agents outside PortOS call these with `node scripts/
 | POST | `/human-actions/plans` | Schedule `{ planKey, title, steps: [{ title, dueAt, instructions[], content[{label,text}], links[{label,url}], priority }] }` (`dueAt` needs a UTC offset) |
 | GET | `/music-video/:id/publish/promotion-plan` | A music video's open promotion steps |
 | POST | `/music-video/:id/publish/promotion-plan` | Plan its promotion with one provider call `{ goal?, audience?, days?, providerId?, model? }` and schedule the steps |
+| POST | `/music-video/:id/publish/:target/preview` | What Fill draft would post for one platform (same body as prepare) → `{ ready, parts }` or `{ ready: false, problem }` |
 
 ### Notifications
 
