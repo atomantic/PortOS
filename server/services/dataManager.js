@@ -1,11 +1,11 @@
-import { readdir, opendir, stat, lstat, statfs, mkdtemp, open, link } from 'fs/promises';
+import { readdir, opendir, stat, lstat, statfs, mkdtemp, open, link, readFile } from 'fs/promises';
 import { join, relative, resolve, isAbsolute } from 'path';
 import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { assertNotRealDataWrite } from '../lib/testDataIsolation.js';
 import { execFile } from '../lib/childProcess.js';
 import { promisify } from 'util';
-import { parseFilesystemStats } from '../lib/fileCore.js';
+import { parseFilesystemStats, sha256Text } from '../lib/fileCore.js';
 import { PATHS, ensureDir, isTopLevelEntryName, rmGuarded, writeFileGuarded } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
@@ -419,7 +419,8 @@ export async function archiveCategory(categoryKey, options = {}) {
   const archivePath = join(backupDir, archiveName);
 
   try {
-    let oldFiles = [];
+    const capturedDays = [];
+    let queueDayWrite;
     if (categoryKey === 'health') {
       const daysToKeep = options.daysToKeep ?? 365;
       const cutoff = new Date();
@@ -427,12 +428,24 @@ export async function archiveCategory(categoryKey, options = {}) {
       const cutoffStr = cutoff.toISOString().slice(0, 10);
 
       const files = await readdir(dirPath);
-      oldFiles = files.filter(f => f.endsWith('.json') && f.slice(0, 10) < cutoffStr);
-      if (oldFiles.length === 0) return { archived: 0, archivePath: null, message: 'No old files to archive' };
+      const oldFiles = files.filter(f => /^\d{4}-\d{2}-\d{2}\.json$/.test(f) && f.slice(0, 10) < cutoffStr);
+      if (oldFiles.length === 0) return { archived: 0, removed: 0, retained: 0, alreadyAbsent: 0, archivePath: null, message: 'No old files to archive' };
 
+      // Share the importers' queue for capture and removal, but release it
+      // during tar so a large archive does not block a historical backfill.
+      ({ queueDayWrite } = await import('./appleHealthIngest.js'));
+      const stagedDays = join(operationDir, 'days');
+      await ensureDir(stagedDays);
+      for (const file of oldFiles) {
+        await queueDayWrite(file.slice(0, 10), async () => {
+          const bytes = await readFile(join(dirPath, file));
+          await writeFileGuarded(join(stagedDays, file), bytes, { flag: 'wx' });
+          capturedDays.push({ file, hash: sha256Text(bytes) });
+        });
+      }
       const listPath = join(operationDir, 'files.txt');
       await writeFileGuarded(listPath, oldFiles.join('\n'));
-      await execFileAsync('tar', ['-czf', stagedArchive, '-C', dirPath, '-T', listPath], { timeout: 120000 });
+      await execFileAsync('tar', ['-czf', stagedArchive, '-C', stagedDays, '-T', listPath], { timeout: 120000 });
     } else {
       await execFileAsync('tar', ['-czf', stagedArchive, '-C', DATA_DIR, categoryKey], { timeout: 120000 });
     }
@@ -451,11 +464,29 @@ export async function archiveCategory(categoryKey, options = {}) {
     }
     const archiveStat = await stat(archivePath);
 
-    for (const f of oldFiles) {
-      await rmGuarded(join(dirPath, f)).catch(() => {});
+    let removed = 0;
+    let retained = 0;
+    let alreadyAbsent = 0;
+    for (const { file, hash } of capturedDays) {
+      await queueDayWrite(file.slice(0, 10), async () => {
+        const livePath = join(dirPath, file);
+        const bytes = await readFile(livePath).catch(error => {
+          // Another archive may already have removed this exact day.
+          if (error.code === 'ENOENT') return null;
+          throw error;
+        });
+        if (bytes === null) {
+          alreadyAbsent++;
+        } else if (sha256Text(bytes) !== hash) {
+          retained++;
+        } else {
+          await rmGuarded(livePath);
+          removed++;
+        }
+      });
     }
     return categoryKey === 'health'
-      ? { archived: oldFiles.length, archivePath: relative(process.cwd(), archivePath), size: archiveStat.size }
+      ? { archived: capturedDays.length, removed, retained, alreadyAbsent, archivePath: relative(process.cwd(), archivePath), size: archiveStat.size }
       : { archived: 0, archivePath: relative(process.cwd(), archivePath), archiveSize: archiveStat.size };
   } finally {
     await rmGuarded(operationDir, { recursive: true, force: true });
