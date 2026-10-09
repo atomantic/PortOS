@@ -711,6 +711,12 @@ export const musicVideoPublishCopyPatchSchema = z.object({
   stackerNews: z.object({ title: kitText(80), body: kitText(40000) }).partial().strict().optional(),
   substack: z.object({ title: kitText(100), subtitle: kitText(250), body: kitText(40000) }).partial().strict().optional(),
   notes: kitText(8000).optional(),
+  // The draft inputs save as they are edited, not only when Draft runs; '' clears a link.
+  links: z.object({ youtube: z.union([z.string().url().max(500), z.literal('')]), song: z.union([z.string().url().max(500), z.literal('')]) }).partial().strict().optional(),
+  draftOptions: z.object({
+    include: z.object({ title: z.boolean(), lyrics: z.boolean(), spend: z.boolean(), chapters: z.boolean(), hashtags: z.boolean() }).partial().strict().optional(),
+    length: z.enum(['short', 'full']).optional(),
+  }).strict().optional(),
 }).strict();
 export const musicVideoPublishCopyDraftSchema = z.object({
   providerId: z.string().max(200).nullable().optional(),

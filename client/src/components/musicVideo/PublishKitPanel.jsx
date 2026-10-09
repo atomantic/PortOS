@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Package, Download, Copy, Sparkles, Image as ImageIcon, Captions, ListOrdered } from 'lucide-react';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
@@ -42,7 +42,7 @@ const fieldValue = (copy, platform, field) => {
   return typeof v === 'string' ? v : '';
 };
 
-function CopyField({ id, field, initial, onSave, disabled }) {
+function CopyField({ id, field, initial, onSave }) {
   const [value, setValue] = useState(initial);
   const over = field.max && value.length > field.max;
   const commit = () => {
@@ -60,7 +60,7 @@ function CopyField({ id, field, initial, onSave, disabled }) {
             aria-label={`Copy ${field.label}`} className="text-port-text-muted disabled:opacity-40 min-h-[44px] sm:min-h-0 px-1"><Copy size={12} /></button>
         </div>
       </div>
-      <Input id={id} value={value} disabled={disabled} rows={field.multiline ? 4 : undefined}
+      <Input id={id} value={value} rows={field.multiline ? 4 : undefined}
         onChange={(e) => setValue(e.target.value)} onBlur={commit}
         className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0" />
     </div>
@@ -91,6 +91,21 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
   const lyricLines = (project?.lyricCues || [])
     .filter((c) => typeof c?.text === 'string' && c.text.trim() && typeof c.startSec === 'number' && Number.isFinite(c.startSec)).length;
   const [confirmReplace, setConfirmReplace] = useState(false);
+  // Every field saves as it is edited (posts and notes on blur, choices on change);
+  // the card says so, since there is no Save button to press.
+  const [saveState, setSaveState] = useState(null);
+  const saveSeq = useRef(0);
+  const save = (patch) => {
+    const seq = ++saveSeq.current;
+    setSaveState('saving');
+    // Only the newest save reports, so an earlier one landing late can't claim "saved" over it.
+    return publishKit.saveCopy(patch).then((saved) => { if (seq === saveSeq.current) setSaveState(saved ? 'saved' : 'failed'); });
+  };
+  const saveLink = (key, value) => {
+    const url = value.trim();
+    if (url === (kit.links?.[key] || '') || (url && !/^https?:\/\//.test(url))) return;
+    save({ links: { [key]: url } });
+  };
   // Mirrors the server's copyEditedSinceDraft: a draft would replace posts written or edited by hand.
   const editedAt = Date.parse(kit.copyEditedAt || '');
   const draftedAt = Date.parse(kit.copyDraftedAt || '');
@@ -199,21 +214,27 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
 
       <PublishCard projectId={project?.id} cardId="copy" label="Release copy" icon={Sparkles}
         summary={hasCopy ? 'Drafted' : 'Not drafted yet'} defaultOpen={!hasCopy}>
-        <p className="text-port-text-muted">Each post below is exactly what goes out. Write it yourself, or have the writer draft it from your notes, the links and only what you tick under Draft from. Nothing runs until you press Draft.</p>
+        <p className="text-port-text-muted">Each post below is exactly what goes out. Write it yourself, or have the writer draft it from your notes, the links and only what you tick under Draft from. Nothing runs until you press Draft. Edits save on their own when you leave a field.</p>
+        {saveState && (
+          <p role="status" className={`text-[11px] ${saveState === 'failed' ? 'text-port-error' : 'text-port-text-muted'}`}>
+            {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'All changes saved' : 'Last change did not save. Edit the field again to retry.'}
+          </p>
+        )}
         <div className="space-y-0.5">
           <label htmlFor={idFor('notes')} className="text-[11px] text-port-text-muted">Making-of notes (your story, in your words)</label>
           <textarea id={idFor('notes')} value={notes} maxLength={8000} rows={4} onChange={(e) => setNotes(e.target.value)}
+            onBlur={() => { if (notes !== (kit.notes || '')) save({ notes }); }}
             className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs" />
         </div>
         <div className="grid sm:grid-cols-2 gap-2">
           <div>
             <label htmlFor={idFor('youtube-url')} className="block text-[11px] text-port-text-muted">Full video URL (optional)</label>
-            <input id={idFor('youtube-url')} value={youtubeUrl} onChange={(e) => setYoutubeUrl(e.target.value)} placeholder="https://…"
+            <input id={idFor('youtube-url')} value={youtubeUrl} onChange={(e) => setYoutubeUrl(e.target.value)} onBlur={() => saveLink('youtube', youtubeUrl)} placeholder="https://…"
               className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0" />
           </div>
           <div>
             <label htmlFor={idFor('song-url')} className="block text-[11px] text-port-text-muted">Song URL (optional)</label>
-            <input id={idFor('song-url')} value={songUrl} onChange={(e) => setSongUrl(e.target.value)} placeholder="https://…"
+            <input id={idFor('song-url')} value={songUrl} onChange={(e) => setSongUrl(e.target.value)} onBlur={() => saveLink('song', songUrl)} placeholder="https://…"
               className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0" />
           </div>
         </div>
@@ -222,7 +243,11 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
           {includeRows.map(({ key, label, detail, available }) => (
             <label key={key} htmlFor={idFor(`include-${key}`)} className={`flex items-center gap-2 min-h-[44px] sm:min-h-0 ${available ? '' : 'opacity-50'}`}>
               <input id={idFor(`include-${key}`)} type="checkbox" checked={available && include[key]} disabled={!available || publishKit.drafting}
-                onChange={(e) => setInclude((cur) => ({ ...cur, [key]: e.target.checked }))} />
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setInclude((cur) => ({ ...cur, [key]: checked }));
+                  save({ draftOptions: { include: { [key]: checked } } });
+                }} />
               <span>{label} <span className="text-port-text-muted">· {detail}</span></span>
             </label>
           ))}
@@ -232,7 +257,7 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
           {[['short', 'A sentence or two'], ['full', 'Full making-of']].map(([value, label]) => (
             <label key={value} htmlFor={idFor(`length-${value}`)} className="flex items-center gap-1.5 min-h-[44px] sm:min-h-0">
               <input id={idFor(`length-${value}`)} type="radio" name={idFor('length')} value={value} checked={length === value}
-                disabled={publishKit.drafting} onChange={() => setLength(value)} />
+                disabled={publishKit.drafting} onChange={() => { setLength(value); save({ draftOptions: { length: value } }); }} />
               {label}
             </label>
           ))}
@@ -266,8 +291,8 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
                 <legend className="px-1 text-[11px] font-medium">{label}</legend>
                 {fields.map((field) => (
                   <CopyField key={field.key} id={idFor(`${platform}-${field.key}`)} field={field}
-                    initial={fieldValue(kit.copy, platform, field)} disabled={publishKit.saving}
-                    onSave={(value) => publishKit.saveCopy({ [platform]: { [field.key]: value } })} />
+                    initial={fieldValue(kit.copy, platform, field)}
+                    onSave={(value) => save({ [platform]: { [field.key]: value } })} />
                 ))}
               </fieldset>
             ))}
