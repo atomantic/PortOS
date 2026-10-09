@@ -126,7 +126,7 @@ describe('buildPublishPayload (#9282)', () => {
     expect(() => host('https://substack.com/@example')).toThrow(/Substack publication/);
     expect(() => host('www.substack.com')).toThrow(/Substack publication/);
     expect(buildPublishPayload('substack', project({ copy }), { publication: 'example' }))
-      .toEqual({ publication: 'example.substack.com', videoUrl: 'https://youtu.be/abc', title: 'Song', subtitle: '', body: 'Body' });
+      .toEqual({ publication: 'example.substack.com', videoUrl: 'https://youtu.be/abc', title: 'Song', subtitle: '', body: 'Body\n\nSong: https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc', crossLinks: ['youtube', 'suno'] });
     expect(() => buildPublishPayload('substack', project({ copy, links: {} }), { publication: 'example' })).toThrow(/publish to YouTube first/);
     expect(() => buildPublishPayload('substack', project(), { publication: 'example' })).toThrow(/substack title/);
   });
@@ -149,6 +149,37 @@ describe('buildPublishPayload (#9282)', () => {
     expect(() => buildPublishPayload('suno', project({ links: {} }))).toThrow(/Suno song URL/);
     // The adapter needs the song's id to find its menu, so an id-less song URL is refused up front.
     expect(() => buildPublishPayload('suno', project({ links: {} }), { songUrl: 'https://suno.com/song/example' })).toThrow(/Suno song URL/);
+  });
+
+  it('lists the release posts already made in later drafts, never cutting a link, and none when turned off', () => {
+    const posts = {
+      suno: { url: 'https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc', postedAt: '2026-01-01T00:00:00Z' },
+      x: { url: 'https://x.com/example/status/1', postedAt: '2026-01-01T00:01:00Z' },
+      stackerNews: { url: 'https://stacker.news/items/1', postedAt: '2026-01-01T00:02:00Z' },
+    };
+    const yt = buildPublishPayload('youtube', project({ posts }));
+    expect(yt.description).toContain('The story.\n\nMore.\n\nSong: https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc\nX: https://x.com/example/status/1\nStacker News: https://stacker.news/items/1\n\nChapters');
+    expect(yt.crossLinks).toEqual(['suno', 'x', 'stackerNews']);
+    // X keeps the full video last (its link card) with the others between.
+    const x = buildPublishPayload('x', project({ posts }));
+    expect(x.posts.at(-1).text).toBe('The song: https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc\nStacker News: https://stacker.news/items/1\nFull video: https://youtu.be/abc');
+    expect(x.crossLinks).toEqual(['suno', 'stackerNews', 'youtube']);
+    const suno = buildPublishPayload('suno', project({ posts }));
+    expect(suno.caption).toBe('The story. Music video: https://youtu.be/abc\nX: https://x.com/example/status/1\nStacker News: https://stacker.news/items/1');
+    expect(suno.crossLinks).toEqual(['youtube', 'x', 'stackerNews']);
+    const sn = buildPublishPayload('stackerNews', project({ posts }));
+    expect(sn.body).toBe('SN body\n\nSong: https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc\nX: https://x.com/example/status/1');
+    // A link the copy already shows is not repeated.
+    const typed = buildPublishPayload('stackerNews', project({ posts, copy: { ...kit().copy, stackerNews: { title: 'Song', body: 'On X: https://x.com/example/status/1' } } }));
+    expect(typed.body).toBe('On X: https://x.com/example/status/1\n\nSong: https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc');
+    expect(typed.crossLinks).toEqual(['youtube', 'x', 'suno']);
+    // A long caption keeps whole links: the video always, the rest while they fit.
+    const long = buildPublishPayload('suno', project({ posts, copy: { youtube: { description: 'w'.repeat(600) } } }));
+    expect(long.caption.length).toBeLessThanOrEqual(500);
+    expect(long.caption.endsWith('Music video: https://youtu.be/abc')).toBe(true);
+    expect(long.crossLinks).toEqual(['youtube']);
+    const off = buildPublishPayload('youtube', project({ posts, crossLinks: false }));
+    expect(off.description).not.toContain('x.com');
   });
 
   it('rejects an unknown target', () => {
