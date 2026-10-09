@@ -88,6 +88,11 @@ export const PERSISTENT_MIND_WAKE_EVENT_ID = 'cos-persistent-mind-wake';
 export const PERSISTENT_MIND_WATCHDOG_EVENT_ID = 'cos-persistent-mind-watchdog';
 export const PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID = 'cos-persistent-mind-usage-limit-probe';
 export const PERSISTENT_MIND_WATCHDOG_INTERVAL_MS = 30_000;
+// A watchdog tick that arrives this long after the previous one means this
+// process itself did not run in between (host sleep, VM suspend/snapshot, or a
+// frozen event loop). The turn's heartbeat timer was frozen for the same span,
+// so the heartbeat's age measures the pause rather than a dead turn.
+export const PERSISTENT_MIND_WATCHDOG_SUSPEND_GAP_MS = PERSISTENT_MIND_LIMITS.HEARTBEAT_STALE_WARNING_MS;
 
 let turnAdapter = null;
 let activeRun = null;
@@ -96,6 +101,10 @@ let runtimeGeneration = 0;
 let supervisorStopping = false;
 /** Zero-based attempt count for the in-flight usage-limit readiness probe. */
 let usageLimitProbeAttempt = 0;
+/** Wall time of the previous watchdog tick, to detect host suspend gaps. */
+let lastWatchdogCheckAt = null;
+/** Wall time this process was last seen resuming from such a gap. */
+let watchdogResumedAt = null;
 
 const nowIso = () => new Date().toISOString();
 const errorMessage = (error) => String(error?.message || error || 'Persistent mind turn failed')
@@ -178,6 +187,8 @@ function emitMindStatus(state) {
 
 function armWatchdog() {
   if (supervisorStopping || !isDaemonRunning()) return;
+  // A fresh interval has no prior tick; a gap spent disarmed is not a suspend.
+  lastWatchdogCheckAt = null;
   schedule({
     id: PERSISTENT_MIND_WATCHDOG_EVENT_ID,
     type: 'interval',
@@ -1594,9 +1605,29 @@ export async function drainPersistentMind({ rearm = true } = {}) {
   return activeRun;
 }
 
-export async function checkPersistentMindWatchdog() {
+/**
+ * Track the watchdog's own cadence. When a tick lands long after the previous
+ * one, the whole process (and with it the turn's heartbeat pulse and, on a
+ * suspended host, the local model server) was paused, so the stale window is
+ * restarted from the resume instead of killing an in-flight call that will
+ * continue as soon as the host runs again.
+ */
+function noteWatchdogTick(now) {
+  const previous = lastWatchdogCheckAt;
+  lastWatchdogCheckAt = now;
+  if (previous != null && now - previous >= PERSISTENT_MIND_WATCHDOG_SUSPEND_GAP_MS) {
+    watchdogResumedAt = now;
+    console.log(`⏸️ Persistent mind watchdog resumed after a ${Math.round((now - previous) / 1000)}s pause; restarting the heartbeat window`);
+  }
+}
+
+export async function checkPersistentMindWatchdog(now = Date.now()) {
+  noteWatchdogTick(now);
   const state = await getPersistentMindState();
-  if (!persistentMindTurnIsStale(state)) return { interrupted: false };
+  if (!persistentMindTurnIsStale(state, now)) return { interrupted: false };
+  if (watchdogResumedAt != null && now - watchdogResumedAt < PERSISTENT_MIND_LIMITS.WATCHDOG_STALE_MS) {
+    return { interrupted: false, resumeGrace: true };
+  }
   const result = await interruptActiveTurn('Persistent mind turn heartbeat expired', 'interrupted', {
     retry: true,
     expectedTurnId: state.activeTurn.id,
@@ -1693,6 +1724,8 @@ export function __resetPersistentMindSupervisorForTests() {
   runtimeGeneration = 0;
   supervisorStopping = false;
   usageLimitProbeAttempt = 0;
+  lastWatchdogCheckAt = null;
+  watchdogResumedAt = null;
   cancel(PERSISTENT_MIND_WAKE_EVENT_ID);
   cancel(PERSISTENT_MIND_WATCHDOG_EVENT_ID);
   cancel(PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID);
