@@ -120,3 +120,17 @@ export async function ensureToggleBeside(page, labelText) {
     return null;
   }, labelText);
 }
+
+/**
+ * Whether the tab now shows the post the director made by hand: its URL is the
+ * platform's page for a new post (`pattern`) and the page shows the post's
+ * title, so browsing elsewhere in the filled tab never counts. Resolves the
+ * post's link (`canonical` of the match) or null. Nothing is pressed.
+ */
+export async function landedOnPost(page, pattern, title, canonical = (match) => match[0]) {
+  const match = page.url().match(pattern);
+  const want = String(title || '').trim().slice(0, 40);
+  if (!match || !want) return null;
+  const shown = await page.waitForFunction((t) => (document.body?.innerText || '').includes(t), want, { timeout: 15_000 }).then(() => true, () => false);
+  return shown ? canonical(match) : null;
+}

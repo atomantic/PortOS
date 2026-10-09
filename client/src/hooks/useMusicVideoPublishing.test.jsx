@@ -27,9 +27,9 @@ const deferred = () => {
   const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
   return { promise, resolve, reject };
 };
-function Posting({ id }) {
+function Posting({ id, replaceProject = vi.fn() }) {
   const selected = project(id);
-  const publishing = useMusicVideoPublishing({ project: selected, replaceProject: vi.fn() });
+  const publishing = useMusicVideoPublishing({ project: selected, replaceProject });
   return <PublishPostingPanel project={selected} publishing={publishing} />;
 }
 
@@ -97,5 +97,18 @@ describe('music-video publishing project boundary', () => {
     act(() => onDraft({ projectId: 'project-a', draftId: 'draft-a', target: 'youtube', state: 'closed' }));
     expect(screen.getByText('Tab closed — Fill again')).toBeInTheDocument();
     expect(screen.queryByText('Example A')).not.toBeInTheDocument();
+  });
+
+  it('applies the post the server detected in a filled tab: the draft goes and its recorded link arrives', async () => {
+    api.getMusicVideoPublishDrafts.mockResolvedValueOnce({ drafts: [{ draftId: 'draft-a', target: 'youtube', state: 'open', summary: { title: 'Example A' } }] });
+    const replaceProject = vi.fn();
+    render(<Posting id="project-a" replaceProject={replaceProject} />);
+    expect(await screen.findByText('Example A')).toBeInTheDocument();
+    const onDraft = socket.on.mock.calls.find(([event]) => event === 'music-video:publish-draft')[1];
+    const posted = { id: 'project-a', publishKit: { posts: { youtube: { url: 'https://www.youtube.com/watch?v=example' } } } };
+    await act(async () => { onDraft({ projectId: 'project-a', draftId: 'draft-a', target: 'youtube', state: 'posted', url: posted.publishKit.posts.youtube.url, project: posted }); });
+    expect(replaceProject).toHaveBeenCalledWith(posted);
+    expect(screen.queryByText('Example A')).not.toBeInTheDocument();
+    expect(api.getMusicVideoPublishPlatforms).toHaveBeenCalledTimes(2); // history refreshed
   });
 });

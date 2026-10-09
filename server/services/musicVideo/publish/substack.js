@@ -8,7 +8,8 @@
  * into, so a filled draft also appears under the publication's Drafts. PortOS
  * never presses Continue or Publish: sending to subscribers stays with the director.
  */
-import { PUBLISH_STEP_TIMEOUT_MS as T, loginRequired, pasteText, step } from './browser.js';
+import { escapeRegExp } from '../../../lib/textUtils.js';
+import { PUBLISH_STEP_TIMEOUT_MS as T, landedOnPost, loginRequired, pasteText, step } from './browser.js';
 
 const label = 'Substack';
 const TITLE = '[data-testid="post-title"], textarea#post-title, textarea.post-title, textarea[placeholder="Title"]';
@@ -52,4 +53,6 @@ export const substackAdapter = {
       saved: 'Substack keeps this under Drafts; each Fill again saves another draft there',
     };
   },
+  // Published, the post lives at /p/<slug> on the publication.
+  findPost: (page, payload) => landedOnPost(page, new RegExp(`^https://${escapeRegExp(payload.publication)}/p/[^/?#]+`), payload.title),
 };

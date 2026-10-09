@@ -35,6 +35,9 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
   const { drafts, busy, errors } = posting.scope === scope ? posting : EMPTY_POSTING;
   const [platforms, setPlatforms] = useState(null);
   const [history, setHistory] = useState({});
+  // The socket handler below outlives renders; it reads the latest callback.
+  const replaceProjectRef = useRef(replaceProject);
+  replaceProjectRef.current = replaceProject;
 
   const loadPlatforms = useCallback(() => getMusicVideoPublishPlatforms({ silent: true })
     .then((res) => { setPlatforms(res?.platforms || {}); setHistory(res?.history || {}); })
@@ -54,7 +57,8 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
   };
 
   // Rehydrate from the server after a reload, and follow its draft events
-  // (a tab filled elsewhere, closed by hand, or discarded).
+  // (a tab filled elsewhere, closed by hand, discarded, or posted from by the
+  // director, in which case the server has already recorded the post's link).
   useEffect(() => {
     if (!projectId) return undefined;
     let cancelled = false;
@@ -62,7 +66,11 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
     getMusicVideoPublishDrafts(projectId, { silent: true }).then((res) => apply(res?.drafts || [])).catch(() => {});
     const onDraft = (e) => {
       if (e?.projectId !== projectId) return;
-      if (e.state === 'discarded') {
+      if (e.state === 'posted') {
+        if (e.project) replaceProjectRef.current?.(e.project);
+        loadPlatforms();
+      }
+      if (e.state === 'discarded' || e.state === 'posted') {
         setPosting((prev) => {
           const current = prev.scope === scope ? prev.drafts[e.target] : null;
           if (!current || current.draftId !== e.draftId) return prev;
@@ -81,7 +89,7 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
     socket.on('music-video:publish-draft', onDraft);
     return () => { cancelled = true; socket.off('music-video:publish-draft', onDraft); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, scope]);
+  }, [projectId, scope, loadPlatforms]);
 
   const prepare = (target, options = {}) => {
     setFor('busy', target, 'prepare');

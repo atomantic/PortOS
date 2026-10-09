@@ -2,8 +2,10 @@
  * Prepare external platform drafts for manual review and publication.
  * Draft preparation requires an existing authenticated session, including agents.
  * PortOS never submits a draft; the operator publishes in the destination
- * platform and records its URL. Adapter preparation runs in a serialized,
- * dedicated browser tab. Existing drafts can be discarded or replaced.
+ * platform. Where a platform lands the filled tab on the new post's own page,
+ * PortOS records that link itself; otherwise the operator pastes it. Adapter
+ * preparation runs in a serialized, dedicated browser tab. Existing drafts can
+ * be discarded or replaced.
  */
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
@@ -83,6 +85,44 @@ async function closeDraft(draft, deps) {
   draft.reconnect = null;
   await session.browser?.close().catch(() => {}); // disconnects; the PortOS Browser keeps running
   emitDraft(draft, 'discarded');
+}
+
+/**
+ * Record the post the director just made by hand in a filled tab, and let the
+ * tab go: it now shows their post, so it stays open with no session attached.
+ */
+async function recordDetectedPost(draft, url) {
+  if (!drafts.has(draft.id)) return;
+  drafts.delete(draft.id);
+  draft.state = 'posted';
+  const { project } = await recordPublishPost(draft.projectId, draft.target, { url });
+  await detachDraft(draft);
+  musicVideoEvents.emit('publish-draft', { projectId: draft.projectId, draftId: draft.id, target: draft.target, state: 'posted', url, project });
+  console.log(`🔗 ${draft.target} post recorded for music-video ${draft.projectId.slice(0, 8)}: ${url}`);
+}
+
+/**
+ * Follow a filled tab while its session is attached: each time it navigates,
+ * the adapter's `findPost` says whether it now shows the director's new post
+ * (by URL and title). Reads only; PortOS still presses nothing.
+ */
+function watchForPost(draft, adapter) {
+  const { page } = draft;
+  if (typeof adapter.findPost !== 'function' || typeof page.on !== 'function') return;
+  let checking = false;
+  let again = false;
+  const check = () => {
+    if (draft.page !== page || !drafts.has(draft.id)) return;
+    if (checking) { again = true; return; }
+    checking = true;
+    again = false;
+    Promise.resolve()
+      .then(() => adapter.findPost(page, draft.payload))
+      .then((url) => (url ? recordDetectedPost(draft, url) : null))
+      .catch((err) => console.warn(`⚠️ ${adapter.label}: could not read the new post's link (${err?.message})`))
+      .finally(() => { checking = false; if (again) check(); });
+  };
+  page.on('framenavigated', (frame) => { if (frame === page.mainFrame()) check(); });
 }
 
 const DIRS = { videos: () => PATHS.videos, videoThumbnails: () => PATHS.videoThumbnails };
@@ -186,6 +226,7 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
       draft.timer.unref?.();
       page.once?.('close', () => { if (draft.page === page && draft.state === 'open' && drafts.has(id)) { draft.state = 'closed'; emitDraft(draft); } });
       drafts.set(id, draft);
+      watchForPost(draft, adapter);
       emitDraft(draft);
       console.log(`📝 ${adapter.label} draft filled for music-video ${projectId.slice(0, 8)} [${id.slice(6, 14)}]`);
       return draftPresentation(draft);
