@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,7 +70,7 @@ describe('CI client lint runner', () => {
 
   // Vitest's HTML reporter writes JS assets under server/coverage/; lint must
   // ignore them while still failing on an undeclared identifier in real source.
-  it('ignores generated coverage assets but still flags undeclared variables in source', () => {
+  it.skipIf(!existsSync(BIOME_BIN))('ignores generated coverage assets but still flags undeclared variables in source', () => {
     const serverDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'server');
     const dir = mkdtempSync(join(tmpdir(), 'biome-cov-'));
     try {
