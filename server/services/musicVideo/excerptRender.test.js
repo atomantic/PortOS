@@ -60,7 +60,10 @@ vi.mock('./compositionRender.js', () => ({
 import { startExcerptRender, cancelExcerptRender } from './excerptRender.js';
 import { unlink } from 'fs/promises';
 import { broadcastSse } from '../../lib/sseUtils.js';
-import { removeCompositionScratch } from './compositionRender.js';
+import { buildTypographyDocument } from './composition.js';
+import { planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes } from './render.js';
+import { encodeFileContactSheetAtTimes } from '../htmlComposition/encode.js';
+import { renderTypographyOverlays, removeCompositionScratch } from './compositionRender.js';
 import { musicVideoEvents } from './events.js';
 
 const prime = (id, composition = null) => h.store.set(id, { id, name: 'Test', scenes: [], excerpts: [], composition });
@@ -141,5 +144,40 @@ describe('excerpt render cancellation', () => {
     expect(again.jobId).not.toBe(jobId);
     cancelExcerptRender(again.jobId);
     await vi.waitFor(() => expect(terminalFrames(again.jobId)).toHaveLength(1));
+  });
+});
+
+
+describe('excerpt typography parity (#10703)', () => {
+  it.each([['HUD counters', 'pop', 'Menlo'], [undefined, 'fade', 'Georgia']])('preserves treatment %s, song-time clipping and contact-sheet cues', async (graphicLanguage, template, font) => {
+    const id = `typography-${template}`;
+    prime(id, { mode: 'composed', style: { font: 'serif', graphicLanguage: 'HUD' }, textCues: [
+      { id: 'before', text: 'Before', startSec: 0, endSec: 1 },
+      { id: 'inside', text: 'Inside', startSec: 1.5, endSec: 2.5 },
+      { id: 'after', text: 'After', startSec: 3, endSec: 4 },
+    ] });
+    h.store.get(id).treatment = { brief: { graphicLanguage } };
+    const clips = [{ sceneId: 'card', layer: 'card', cardText: 'Count' }];
+    const sections = [{ sceneId: 'card', layer: 'card', startSec: 0, endSec: 4 }];
+    planMusicVideoRender.mockResolvedValueOnce({ ffmpeg: 'ffmpeg', audioPath: '/test/song.wav', clips, composed: true, audioDurationSec: 4, soundBed: null });
+    buildMusicVideoFfmpegArgs.mockReturnValueOnce({ args: [], totalDuration: 4, canonW: 64, canonH: 64, fps: 24, sections });
+    const { jobId } = await startExcerptRender(id, { startSec: 1, endSec: 3 });
+    const options = renderTypographyOverlays.mock.calls[0][0];
+    expect(options.cues).toEqual([
+      expect.objectContaining({ id: 'card-card', template, startSec: 1, endSec: 4 }),
+      expect.objectContaining({ id: 'inside', startSec: 1.5, endSec: 2.5 }),
+    ]);
+    expect(options).toMatchObject({ durationSec: 3, style: { font: 'serif', graphicLanguage } });
+    expect(buildTypographyDocument(options)).toContain(font);
+    h.overlays.resolve([]);
+    await vi.waitFor(() => expect(h.procs).toHaveLength(1));
+    lastProc().emit('spawn');
+    lastProc().emit('close', 0, null);
+    await vi.waitFor(() => expect(terminalFrames(jobId)).toHaveLength(1));
+    expect(excerptBoundaryTimes).toHaveBeenCalledWith(sections, [
+      expect.objectContaining({ id: 'card-card', template, startSec: 0, endSec: 4 }),
+      expect.objectContaining({ id: 'inside', startSec: 1.5, endSec: 2.5 }),
+    ], 1, 3, { fps: 24 });
+    expect(encodeFileContactSheetAtTimes).toHaveBeenCalledWith(expect.any(String), expect.any(String), [0], { width: 64, height: 64, fps: 24 });
   });
 });

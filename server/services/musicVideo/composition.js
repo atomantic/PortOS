@@ -230,6 +230,16 @@ export function renderableCues(composition, durationSec) {
     .sort((a, b) => a.startSec - b.startSec);
 }
 
+/** Shared absolute-song-time cues and style for full renders and draft excerpts. */
+export function projectTypographyPlan(project, clips, sections, durationSec) {
+  const graphicLanguage = project.treatment?.brief?.graphicLanguage;
+  return {
+    cues: [...renderableCues(project.composition, durationSec), ...sectionCardCues(clips, sections, durationSec, graphicLanguage)]
+      .sort((a, b) => a.startSec - b.startSec),
+    style: { ...project.composition?.style, graphicLanguage },
+  };
+}
+
 /**
  * A title card's text (#8985), drawn by the typography layer for exactly its
  * section on the output timebase (`sections` from buildMusicVideoFfmpegArgs),
