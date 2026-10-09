@@ -52,7 +52,7 @@ export default function DownloadManager() {
     <div className="flex flex-wrap items-center gap-3">
       <button type="button" disabled={!file || sharing} onClick={save} className="min-h-[44px] rounded bg-port-accent text-port-bg px-4 disabled:opacity-50">{sharing ? 'Saving…' : 'Save'}</button>
       <button type="button" onClick={close} className="min-h-[44px] px-3">Close</button>
-      {download && <a href={assetDownloadUrl(download.url)} download={download.filename} data-native-download target="_blank" rel="noopener noreferrer" className="min-h-[44px] inline-flex items-center text-sm text-port-accent">Browser download</a>}
+      {download && <a href={assetDownloadUrl(download.url)} download={download.filename} data-native-download onClick={close} target="_blank" rel="noopener noreferrer" className="min-h-[44px] inline-flex items-center text-sm text-port-accent">Browser download</a>}
     </div>
   </Modal>;
 }

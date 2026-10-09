@@ -75,6 +75,8 @@ it.each(['HTTP error', 'unsupported file'])('shows a visible %s and provides a n
   }, { once: true });
   fireEvent.click(fallback);
   expect(fetch).toHaveBeenCalledTimes(1);
+  expect(fetch.mock.calls[0][1].signal.aborted).toBe(true);
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 });
 
 it('aborts a closed download and ignores its late response', async () => {
