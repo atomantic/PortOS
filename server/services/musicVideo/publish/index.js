@@ -30,6 +30,8 @@ import { sunoAdapter } from './suno.js';
 import { sunoHookAdapter } from './sunoHook.js';
 import { distrokidAdapter } from './distrokid.js';
 import { musicVideoEvents } from '../events.js';
+import { CROSS_LINK_ADAPTERS } from './crossLinkEdits.js';
+import { carriedLinks, crossLinkBackfill, dropCarriedLink, mergeCarriedLinks } from '../../../lib/musicVideoCrossLinks.js';
 
 export const PUBLISH_ADAPTERS = Object.freeze({
   youtube: youtubeAdapter, shorts: shortsAdapter, tiktok: tiktokAdapter, instagram: instagramAdapter,
@@ -100,7 +102,7 @@ async function recordDetectedPost(draft, url) {
   drafts.delete(draft.id);
   draft.state = 'posted';
   // A record that fails to save leaves the draft as it was: the card keeps it, and the link can still be pasted.
-  const { project } = await recordPublishPost(draft.projectId, draft.target, { url }).catch((err) => {
+  const { project } = await recordPublishPost(draft.projectId, draft.target, { url, links: draft.payload?.crossLinks }).catch((err) => {
     draft.state = 'open';
     drafts.set(draft.id, draft);
     throw err;
@@ -295,17 +297,75 @@ export async function listPublishDrafts(projectId, deps = {}) {
   return mine.map(draftPresentation);
 }
 
-/** Record or update one platform's post by hand: its link, reception (good/mixed/poor) and notes. */
+/**
+ * Record or update one platform's post by hand: its link, reception
+ * (good/mixed/poor) and notes, and `links`, the release's other posts it now
+ * links to (added to what it linked already). A link pasted for a post filled
+ * here takes the links that draft carried.
+ */
 export async function recordPublishPost(projectId, target, input = {}, deps = {}) {
   // The Suno post's link is the song the Hook plays: keep its song page, not a share link.
   if (target === 'suno' && isSunoShareLink(input.url)) input = { ...input, url: await canonicalizeSunoUrl(input.url, deps).catch(() => input.url) };
+  if (input.url && !input.links) {
+    const filled = [...drafts.values()].filter((d) => d.projectId === projectId && d.target === target).at(-1);
+    if (filled?.payload?.crossLinks) input = { ...input, links: filled.payload.crossLinks };
+  }
   const { project } = await mutateProjectRecord(projectId, (current) => {
     const kit = current.publishKit && typeof current.publishKit === 'object' ? current.publishKit : {};
-    const posts = { ...(kit.posts || {}) };
-    posts[target] = normalizePost(posts[target], input);
+    let posts = { ...(kit.posts || {}) };
+    const before = posts[target];
+    const replaced = !!before?.url && typeof input.url === 'string' && input.url.trim() !== before.url;
+    // A replacement post starts over: only the links its own draft carried.
+    if (replaced) input = { ...input, links: mergeCarriedLinks([], input.links) };
+    else if (Array.isArray(input.links) && before) input = { ...input, links: mergeCarriedLinks(carriedLinks(kit, target), input.links) };
+    const next = normalizePost(before, input);
+    // Other posts that linked the old URL no longer link this post.
+    if (replaced) posts = dropCarriedLink(kit, posts, target);
+    posts[target] = next;
     return { project: { ...current, publishKit: { ...kit, posts } } };
   });
   return { project, post: project.publishKit.posts[target] };
+}
+
+/** Turn on or off whether new drafts list the release's other posts. */
+export async function setPublishCrossLinks(projectId, enabled) {
+  const { project } = await mutateProjectRecord(projectId, (current) => {
+    const kit = current.publishKit && typeof current.publishKit === 'object' ? current.publishKit : {};
+    return { project: { ...current, publishKit: { ...kit, crossLinks: enabled === true } } };
+  });
+  return { project };
+}
+
+/**
+ * Open a posted platform's edit form (or a reply under it) in the PortOS
+ * Browser and add the links to the release's posts it lacks. Nothing is
+ * saved or posted: the director reviews the tab and saves it, then marks it
+ * linked here. Resolves `{ target, links, summary, screenshot }`.
+ */
+export async function prepareCrossLinkEdit(projectId, target, deps = {}) {
+  const adapter = (deps.crossLinkAdapters || CROSS_LINK_ADAPTERS)[target];
+  if (!adapter) throw new ServerError(`No cross-link edit for ${target}`, { status: 400, code: 'VALIDATION_ERROR' });
+  const project = await getProject(projectId);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const row = crossLinkBackfill(project.publishKit).find((r) => r.target === target);
+  if (!row) throw new ServerError(`Record the ${adapter.label} post's link first`, { status: 422, code: 'PUBLISH_ASSET_MISSING' });
+  if (!row.missing.length) throw new ServerError(`The ${adapter.label} post already links every other post`, { status: 409, code: 'PUBLISH_CROSS_LINKS_CURRENT' });
+  return serialize(async () => {
+    const { browser, context } = await (deps.connect || connectPortosBrowser)();
+    const page = await context.newPage();
+    try {
+      await page.bringToFront();
+      const summary = await adapter.prepare(page, row);
+      const shot = await page.screenshot({ type: 'jpeg', quality: 70 }).catch(() => null);
+      console.log(`🔗 ${adapter.label} cross-link edit filled for music-video ${projectId.slice(0, 8)}`);
+      return { target, links: row.missing.map((l) => l.target), summary, screenshot: shot ? `data:image/jpeg;base64,${shot.toString('base64')}` : null };
+    } catch (err) {
+      await page.close().catch(() => {});
+      throw err;
+    } finally {
+      await browser.close().catch(() => {}); // disconnects; the tab stays open for the director
+    }
+  });
 }
 
 /** Undo a platform's "done": drop its post record (a mistaken mark, or a post taken down). */
@@ -313,8 +373,8 @@ export async function removePublishPost(projectId, target) {
   const { project } = await mutateProjectRecord(projectId, (current) => {
     const kit = current.publishKit && typeof current.publishKit === 'object' ? current.publishKit : {};
     if (!kit.posts?.[target]) return { project: current };
-    const { [target]: _removed, ...posts } = kit.posts;
-    return { project: { ...current, publishKit: { ...kit, posts } } };
+    const { [target]: _removed, ...rest } = kit.posts;
+    return { project: { ...current, publishKit: { ...kit, posts: dropCarriedLink(kit, rest, target) } } };
   });
   return { project };
 }

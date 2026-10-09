@@ -14,7 +14,7 @@ vi.mock('../../../lib/paths.js', async (importOriginal) => makePathsProxy(await 
 
 const { PATHS } = await import('../../../lib/paths.js');
 const projects = await import('../projects.js');
-const { preparePublishDraft, discardPublishDraft, listPublishDrafts, recordPublishPost, removePublishPost } = await import('./index.js');
+const { preparePublishDraft, discardPublishDraft, listPublishDrafts, recordPublishPost, removePublishPost, prepareCrossLinkEdit, setPublishCrossLinks } = await import('./index.js');
 const { musicVideoEvents } = await import('../events.js');
 const { stackerNewsAdapter } = await import('./stackerNews.js');
 
@@ -82,7 +82,7 @@ describe('publish drafts (#9282)', () => {
     const { connect } = fakeBrowser();
     const substack = adapter({ label: 'Substack' });
     await preparePublishDraft(id, 'substack', {}, { connect, adapters: { substack }, platforms: { substack: { enabled: true, account: 'example' } } });
-    expect(substack.prepare).toHaveBeenCalledWith(expect.anything(), { publication: 'example.substack.com', videoUrl: 'https://youtu.be/abc', title: 'Song', subtitle: 'Sub', body: 'b' });
+    expect(substack.prepare).toHaveBeenCalledWith(expect.anything(), { publication: 'example.substack.com', videoUrl: 'https://youtu.be/abc', title: 'Song', subtitle: 'Sub', body: 'b', crossLinks: ['youtube'] });
     await expect(preparePublishDraft(id, 'substack', { again: true }, { connect, adapters: { substack }, platforms: { substack: { enabled: true, account: null } } }))
       .rejects.toMatchObject({ status: 422, message: expect.stringMatching(/publication/) });
   });
@@ -119,6 +119,15 @@ describe('publish drafts (#9282)', () => {
     const { project, post } = await recordPublishPost(id, 'stackerNews', { url: 'https://stacker.news/items/1' });
     expect(post.url).toBe('https://stacker.news/items/1');
     expect(project.publishKit.posts.stackerNews.url).toBe(post.url);
+  });
+
+  it('starts a replaced post over with only the links its replacement carries, and unlinks it from the others', async () => {
+    const id = await readyProject();
+    await recordPublishPost(id, 'youtube', { url: 'https://youtu.be/old' });
+    await recordPublishPost(id, 'x', { url: 'https://x.com/a/status/1', links: ['youtube'] });
+    const { post, project } = await recordPublishPost(id, 'youtube', { url: 'https://youtu.be/new', links: [] });
+    expect(post.links).toEqual([]);
+    expect(project.publishKit.posts.x.links).toEqual([]);
   });
 
   it('records the post the director makes by hand in the filled tab, and nothing else they browse to', async () => {
@@ -321,5 +330,41 @@ describe('publish drafts (#9282)', () => {
     await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, uploadedAudioFilename: 'gone.wav' } }));
     await expect(preparePublishDraft(id, 'distrokid', options, deps)).rejects.toMatchObject({ status: 422, code: 'PUBLISH_ASSET_MISSING', message: expect.stringMatching(/missing on disk/) });
     expect(connect).not.toHaveBeenCalled();
+  });
+
+  it('records the links a filled draft carried when its link is pasted', async () => {
+    const id = await readyProject();
+    const { connect } = fakeBrowser();
+    await preparePublishDraft(id, 'stackerNews', { territory: 'art' }, { connect, adapters: { stackerNews: adapter() }, platforms });
+    const { post } = await recordPublishPost(id, 'stackerNews', { url: 'https://stacker.news/items/5' });
+    expect(post.links).toEqual(['youtube']);
+  });
+
+  it('backfills a post made before the others: fills the missing links, leaves the tab for the director, then counts them once Saved', async () => {
+    const id = await readyProject();
+    await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, publishKit: { ...current.publishKit, posts: {
+      // Posted before YouTube existed, and before posts recorded their links.
+      x: { url: 'https://x.com/example/status/42', postedAt: '2026-01-01T00:00:00Z' },
+      youtube: { url: 'https://youtu.be/abc', postedAt: '2026-01-01T01:00:00Z', links: [] },
+      stackerNews: { url: 'https://stacker.news/items/7', postedAt: '2026-01-01T02:00:00Z', links: ['youtube'] },
+    } } } }));
+    const { connect, pages, browsers } = fakeBrowser();
+    const x = { label: 'X', prepare: vi.fn(async () => ({ leftForYou: ['Reply'] })) };
+    const filled = await prepareCrossLinkEdit(id, 'x', { connect, crossLinkAdapters: { x } });
+    expect(x.prepare.mock.calls[0][1]).toMatchObject({ target: 'x', url: 'https://x.com/example/status/42', text: 'Music video: https://youtu.be/abc\nStacker News: https://stacker.news/items/7' });
+    expect(filled).toMatchObject({ target: 'x', links: ['youtube', 'stackerNews'], summary: { leftForYou: ['Reply'] }, screenshot: expect.stringMatching(/^data:image\/jpeg/) });
+    expect(pages[0].closed).toBe(false);
+    expect(browsers[0].close).toHaveBeenCalled();
+
+    const { post } = await recordPublishPost(id, 'x', { links: filled.links });
+    expect(post.links).toEqual(['youtube', 'stackerNews']);
+    await expect(prepareCrossLinkEdit(id, 'x', { connect, crossLinkAdapters: { x } })).rejects.toMatchObject({ status: 409, code: 'PUBLISH_CROSS_LINKS_CURRENT' });
+    await expect(prepareCrossLinkEdit(id, 'suno', { connect, crossLinkAdapters: { suno: x } })).rejects.toMatchObject({ status: 422 });
+  });
+
+  it('turns cross-links in new drafts off and on', async () => {
+    const id = await readyProject();
+    expect((await setPublishCrossLinks(id, false)).project.publishKit).toMatchObject({ crossLinks: false, copy: { stackerNews: { title: 'Song' } } });
+    expect((await setPublishCrossLinks(id, true)).project.publishKit.crossLinks).toBe(true);
   });
 });

@@ -9,6 +9,7 @@ import { chaptersText } from '../publishKitText.js';
 import { musicVideoDependencyChanges } from '../../../lib/musicVideoDependencies.js';
 import { suggestDistrokidGenres } from '../../../lib/distrokidGenres.js';
 import { suggestSocialCuts } from '../socialCuts.js';
+import { crossLinkLines, crossLinksEnabled, releaseLinkUrl, releaseLinks } from '../../../lib/musicVideoCrossLinks.js';
 
 const TITLE_LIMITS = { youtube: 100, shorts: 100, reddit: 300, stackerNews: 80, substack: 100 };
 const DEFAULT_SUBREDDIT = 'aivideo';
@@ -66,11 +67,11 @@ function pickVerticalCut(project, options) {
 }
 
 /** The full video's public link: the recorded YouTube post, else the one the director gave the kit. */
-const fullVideoUrl = (kit) => text(kit.posts?.youtube?.url) || text(kit.links?.youtube) || '';
+const fullVideoUrl = (kit) => releaseLinkUrl(kit, 'youtube');
 /** The Suno song a post links or plays: the director's pick, else the recorded Suno post, else the kit's song link. */
 export const publishSongUrl = (project, options) => {
   const kit = kitOf(project);
-  return text(options?.songUrl) || text(kit.posts?.suno?.url) || text(kit.links?.song) || '';
+  return releaseLinkUrl(kitOf(project), 'suno', { songUrl: text(options?.songUrl) });
 };
 const songUrl = (kit, options) => publishSongUrl({ publishKit: kit }, options);
 
@@ -81,11 +82,42 @@ function requireTitle(platform, title) {
   return title;
 }
 
-function youtubeDescription(kit) {
-  const body = text(kit.copy?.youtube?.description);
+/**
+ * The release's other posts this one lists (unless the director turned
+ * cross-links off), as `Label: url` lines missing from `base`, and every
+ * target the finished post links (`carried`), which its record keeps.
+ */
+function otherPosts(kit, options, base, { exclude, always = [] }) {
+  const links = crossLinksEnabled(kit) ? releaseLinks(kit, { exclude, songUrl: text(options?.songUrl) }) : [];
+  const found = crossLinkLines(links, base);
+  return { ...found, carried: [...always, ...found.carried, ...found.targets] };
+}
+const withLines = (body, lines) => [body, lines.join('\n')].filter(Boolean).join('\n\n');
+
+function youtubeDescription(kit, options) {
+  const copy = text(kit.copy?.youtube?.description);
+  const links = otherPosts(kit, options, copy, { exclude: ['youtube'] });
+  const body = withLines(copy, links.lines);
   // YouTube makes chapters from the description's timestamps; add them unless the copy already has them.
   const chapters = Array.isArray(kit.chapters) && kit.chapters.length && !/(^|\n)0:00\s/.test(body) ? `\n\nChapters\n${chaptersText(kit.chapters)}` : '';
-  return `${body}${chapters}`.trim();
+  return { description: `${body}${chapters}`.trim(), crossLinks: links.carried };
+}
+
+const SUNO_CAPTION_MAX = 500;
+/** The Suno caption: the story's lead, the video, then the other posts while they fit (a link is never cut). */
+function sunoCaption(kit, options) {
+  const video = fullVideoUrl(kit);
+  const tail = video ? `Music video: ${video}` : '';
+  const lead = text(kit.copy?.youtube?.description).split(/\n\s*\n/)[0] || '';
+  let caption = [lead.slice(0, Math.max(0, SUNO_CAPTION_MAX - tail.length - 1)), tail].filter(Boolean).join(' ');
+  const links = otherPosts(kit, options, caption, { exclude: ['suno', 'youtube'], always: video ? ['youtube'] : [] });
+  const carried = links.carried.filter((t) => !links.targets.includes(t));
+  links.lines.forEach((line, i) => {
+    if (caption.length + line.length + 1 > SUNO_CAPTION_MAX) return;
+    caption = `${caption}\n${line}`;
+    carried.push(links.targets[i]);
+  });
+  return { caption, crossLinks: carried };
 }
 
 // A typed "@" on Instagram opens the mention picker, which swallows the next word.
@@ -115,13 +147,13 @@ const releaseCover = (kit) => {
 };
 
 const BUILDERS = {
-  youtube: (project, kit) => {
+  youtube: (project, kit, options = {}) => {
     if (!kit.master?.filename) throw missing('Build the publishing kit first — it names the final render to upload');
     requireFreshKit(project, kit);
     return {
       video: { dir: 'videos', name: kit.master.filename },
       title: requireTitle('youtube', text(kit.copy?.youtube?.title)),
-      description: youtubeDescription(kit),
+      ...youtubeDescription(kit, options),
       tags: (kit.copy?.youtube?.tags || []).map(text).filter(Boolean),
       thumbnail: kit.thumbnail ? { dir: 'videoThumbnails', name: kit.thumbnail } : null,
       captions: kit.captionsFilename ? { dir: 'videos', name: kit.captionsFilename } : null,
@@ -147,18 +179,22 @@ const BUILDERS = {
     const clip = (kit.exports || []).find((e) => e.kind === 'x-1080p')?.filename;
     if (!clip) throw missing('Build the publishing kit first — the X post carries its 1080p encode');
     requireFreshKit(project, kit);
+    const writing = [hook, text(kit.copy?.x?.story), text(options.prompt)].join('\n');
+    const others = otherPosts(kit, options, writing, { exclude: ['suno', 'youtube', 'x'] });
     const links = [
       songUrl(kit, options) ? `The song: ${songUrl(kit, options)}` : '',
+      ...others.lines,
       // X builds a post's link card from its LAST link, so the full video goes last.
       fullVideoUrl(kit) ? `Full video: ${fullVideoUrl(kit)}` : '',
     ].filter(Boolean).join('\n');
+    const crossLinks = [...(songUrl(kit, options) ? ['suno'] : []), ...others.carried, ...(fullVideoUrl(kit) ? ['youtube'] : [])];
     const posts = [
       { text: hook, media: { dir: 'videos', name: clip } },
       text(kit.copy?.x?.story) ? { text: text(kit.copy.x.story), media: options.storyImage ? { dir: 'videoThumbnails', name: options.storyImage } : null } : null,
       text(options.prompt) ? { text: text(options.prompt), media: null } : null,
       links ? { text: links, media: null } : null,
     ].filter(Boolean);
-    return { posts };
+    return { posts, crossLinks };
   },
   // A native upload (LinkedIn shows those to more people than outside links);
   // the links go in the first comment, never in the post.
@@ -208,27 +244,31 @@ const BUILDERS = {
     if (!url) throw missing('Stacker News posts link to the full video: publish to YouTube first, or add its URL to the kit');
     const territory = text(options.territory || 'art').replace(/^~/, '');
     if (!/^[A-Za-z0-9_]{1,32}$/.test(territory)) throw missing('Name the Stacker News territory');
-    return { territory, title: requireTitle('stackerNews', text(kit.copy?.stackerNews?.title)), url, body: text(kit.copy?.stackerNews?.body), firstComment: text(options.firstComment) || null };
+    const copy = text(kit.copy?.stackerNews?.body);
+    const links = otherPosts(kit, options, copy, { exclude: ['youtube', 'stackerNews'], always: ['youtube'] });
+    return {
+      territory, title: requireTitle('stackerNews', text(kit.copy?.stackerNews?.title)), url, body: withLines(copy, links.lines),
+      firstComment: text(options.firstComment) || null, crossLinks: links.carried,
+    };
   },
   substack: (project, kit, options = {}) => {
     const publication = substackPublication(options.publication);
     if (!publication) throw missing('Name your Substack publication (name.substack.com) under Where you post');
     const videoUrl = fullVideoUrl(kit);
     if (!videoUrl) throw missing('Substack posts embed the full video: publish to YouTube first, or add its URL to the kit');
+    const copy = text(kit.copy?.substack?.body);
+    const body = { text: copy, ...otherPosts(kit, options, copy, { exclude: ['youtube', 'substack'], always: ['youtube'] }) };
     return {
       publication, videoUrl,
       title: requireTitle('substack', text(kit.copy?.substack?.title)),
-      subtitle: text(kit.copy?.substack?.subtitle), body: text(kit.copy?.substack?.body),
+      subtitle: text(kit.copy?.substack?.subtitle), body: withLines(body.text, body.lines), crossLinks: body.carried,
     };
   },
   suno: (project, kit, options = {}) => {
     const song = songUrl(kit, options);
     // The adapter finds the song's own menu by its id, so the URL must carry it.
     if (!/^https:\/\/(www\.)?suno\.com\/song\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(song)) throw missing('Give the Suno song URL to publish (suno.com/song/… or a suno.com/s/… share link)');
-    const video = fullVideoUrl(kit);
-    const lead = text(kit.copy?.youtube?.description).split(/\n\s*\n/)[0] || '';
-    const caption = [lead, video ? `Music video: ${video}` : ''].filter(Boolean).join(' ').slice(0, 500);
-    return { songUrl: song, caption, cover: releaseCover(kit), pin: options.pin !== false };
+    return { songUrl: song, ...sunoCaption(kit, options), cover: releaseCover(kit), pin: options.pin !== false };
   },
   // A Suno Hook (#10375): the vertical cut set to a window of the project's song.
   sunoHook: (project, kit, options = {}) => {

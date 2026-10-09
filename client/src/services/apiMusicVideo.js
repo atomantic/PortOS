@@ -312,6 +312,13 @@ export const recordMusicVideoPublishPost = (id, target, body, options = {}) =>
 // Undo a platform's "done" (PortOS's record only) → { project }.
 export const removeMusicVideoPublishPost = (id, target, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish/posts/${encodeURIComponent(target)}`, { method: 'DELETE', ...options });
+// Cross-links between the release's posts: whether new drafts list the others
+// → { project }, and filling a posted platform's edit with the links it lacks
+// → { target, links, summary, screenshot } (the director saves it there).
+export const setMusicVideoPublishCrossLinks = (id, enabled, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish/cross-links`, { method: 'PUT', body: JSON.stringify({ enabled }), ...options });
+export const prepareMusicVideoCrossLinkEdit = (id, target, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish/${encodeURIComponent(target)}/cross-links`, { method: 'POST', body: '{}', ...options });
 export const musicVideoExcerptRenderEventsUrl = (jobId) =>
   `/api/music-video/excerpt/${encodeURIComponent(jobId)}/events`;
 export const cancelMusicVideoExcerptRender = (jobId, options = {}) =>

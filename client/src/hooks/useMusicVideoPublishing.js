@@ -9,6 +9,8 @@ import {
   updateMusicVideoPublishPlatforms,
   recordMusicVideoPublishPost,
   removeMusicVideoPublishPost,
+  setMusicVideoPublishCrossLinks,
+  prepareMusicVideoCrossLinkEdit,
 } from '../services/apiMusicVideo.js';
 
 const EMPTY_POSTING = { drafts: {}, busy: {}, errors: {} };
@@ -136,7 +138,14 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
     .then((res) => { if (res?.project) replaceProject?.(res.project); loadPlatforms(); return true; })
     .catch(() => false);
 
+  // Cross-links: whether new drafts list the release's other posts.
+  const setCrossLinks = (enabled) => setMusicVideoPublishCrossLinks(projectId, enabled)
+    .then((res) => { if (res?.project) replaceProject?.(res.project); return true; })
+    .catch(() => false);
+  // Fill a posted platform's edit (or a reply under it) with the links it lacks; errors stay with the caller.
+  const prepareCrossLinks = (target) => prepareMusicVideoCrossLinkEdit(projectId, target, { silent: true });
+
   const enabledTargets = Object.entries(platforms || {}).filter(([, p]) => p?.enabled).map(([t]) => t);
 
-  return { drafts, busy, errors, prepare, preview, discard, platforms, history, enabledTargets, setPlatform, recordPost, removePost };
+  return { drafts, busy, errors, prepare, preview, discard, platforms, history, enabledTargets, setPlatform, recordPost, removePost, setCrossLinks, prepareCrossLinks };
 }

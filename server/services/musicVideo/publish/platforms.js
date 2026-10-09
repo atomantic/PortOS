@@ -15,6 +15,7 @@ import { ServerError } from '../../../lib/errorHandler.js';
 import { getSettings, updateSettingsWith } from '../../settings.js';
 import { listProjects } from '../projects.js';
 import { DISTROKID_REMEMBERED_OPTIONS } from '../../../lib/distrokidGenres.js';
+import { mergeCarriedLinks } from '../../../lib/musicVideoCrossLinks.js';
 
 const SETTINGS_KEY = 'musicVideoPublishing';
 const RECEPTIONS = ['good', 'mixed', 'poor'];
@@ -103,6 +104,8 @@ export function normalizePost(existing = {}, input = {}) {
   const post = { ...(existing && typeof existing === 'object' ? existing : {}) };
   if ('url' in input) post.url = typeof input.url === 'string' && input.url.trim() ? input.url.trim() : null;
   if ('reception' in input) post.reception = RECEPTIONS.includes(input.reception) ? input.reception : null;
+  // The release's other posts this one links to (cross-links).
+  if (Array.isArray(input.links)) post.links = mergeCarriedLinks([], input.links);
   if ('notes' in input) post.notes = typeof input.notes === 'string' && input.notes.trim() ? input.notes.trim().slice(0, 2000) : null;
   if (!post.postedAt && (post.url || input.posted === true)) post.postedAt = new Date().toISOString();
   if ('reception' in input || 'notes' in input) post.ratedAt = new Date().toISOString();

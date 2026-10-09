@@ -2,6 +2,7 @@ import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
 import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
 import { DISTROKID_REMEMBERED_OPTIONS } from './distrokidGenres.js';
+import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
 /**
  * Music Video production mode — Zod schemas + shared enums (issue #1760, Phase 1).
  *
@@ -804,7 +805,13 @@ export const musicVideoPublishPostSchema = z.object({
   posted: z.literal(true),
   reception: z.enum(['good', 'mixed', 'poor']).nullable(),
   notes: z.string().max(2000).nullable(),
-}).partial().strict().refine((b) => Object.keys(b).length > 0, { message: 'url, posted, reception or notes is required' });
+  // The release's other posts this one now links to (cross-links), added to what it linked already.
+  links: z.array(musicVideoPublishTargetSchema).max(MUSIC_VIDEO_PUBLISH_TARGETS.length),
+}).partial().strict().refine((b) => Object.keys(b).length > 0, { message: 'url, posted, reception, notes or links is required' });
+// Whether new drafts list the release's other posts, and which posted platform gets its missing links.
+export const musicVideoPublishCrossLinksSchema = z.object({ enabled: z.boolean() }).strict();
+export const musicVideoCrossLinkTargetSchema = z.enum(CROSS_LINK_EDIT_TARGETS);
+export const musicVideoCrossLinkEditSchema = z.object({}).strict();
 export const musicVideoPublishPrepareSchema = z.object({
   subreddit: z.string().max(40),
   kind: z.enum(['self', 'link', 'video']),
