@@ -140,6 +140,8 @@ const defaults = {
   reviseFromFeedback: async (...args) => (await import('./productionReviewService.js')).reviseProductionFromFeedback(...args),
   guideImagePath: async (artifact) => (await import('./devArtifactStore.js')).resolveDevArtifactFile(artifact.file),
   finalReviewFrames: async (jobId) => (await import('./orchestratorReview.js')).captureFinalReviewFrames(jobId),
+  // The overlay text pass before a final render: resolves the finished check.
+  checkOverlayText: async (projectId) => (await import('./overlayTextService.js')).startOverlayTextCheck(projectId).then((started) => started.done),
   // The final-video revision of footage: a board-owned auto-review over the flagged window.
   startAutoReview: async (...args) => (await import('./autoReviewService.js')).startAutoReview(...args),
   cancelAutoReview: async (...args) => (await import('./autoReviewService.js')).cancelAutoReview(...args),
@@ -259,6 +261,9 @@ const ideaOf = (run) => ({ prompt: run.brief.prompt, guidance: run.brief.guidanc
 const orchestratorIdentity = (run, route) => ({ kind: 'orchestrator', runId: run.id,
   providerId: route?.providerId || run.brief.orchestrator.providerId, model: route?.model || run.brief.orchestrator.model || null,
   authorizedBy: run.brief.orchestratorAuthorizedBy || null });
+// Who acts on the run's own change requests: its orchestrator, else the autopilot.
+const runReviewer = (run) => (isOrchestratedRun(run) ? orchestratorIdentity(run)
+  : { kind: 'autopilot', runId: run.id, authorizedBy: run.brief.autoApproveAuthorizedBy || null });
 
 /**
  * Append one decision to the run's review log (oldest dropped past the cap).
@@ -497,7 +502,7 @@ async function settleLyricTiming(projectId, run) {
     await record('revise', `${notes} ${held}`);
     return `${notes} ${held}`;
   }
-  const reviewer = orchestrated ? orchestratorIdentity(run) : { kind: 'autopilot', runId: run.id, authorizedBy: run.brief.autoApproveAuthorizedBy || null };
+  const reviewer = runReviewer(run);
   await deps.verifyAlignment(projectId, { basis: productionAlignmentBasis(project), notes, reviewer });
   await record('approve', notes);
 }
@@ -720,12 +725,12 @@ async function startFinalRevision(projectId, run, issues) {
   return 'wait';
 }
 
-async function reauthorFinal(projectId, run, issues) {
+async function reauthorFinal(projectId, run, issues, { target = 'final' } = {}) {
   const project = await getProject(projectId);
   const basis = productionReviewBasis(project).proof;
   const before = new Set((project.productionReview?.feedback || []).map((f) => f.id));
   for (const issue of issues.slice(0, 12)) {
-    await deps.addFeedback(projectId, { stage: 'proof', basis, target: `final@${timecode(issue.atSec)}`, text: issue.text, decision: 'request-changes' });
+    await deps.addFeedback(projectId, { stage: 'proof', basis, target: `${target}@${timecode(issue.atSec)}`, text: issue.text, decision: 'request-changes' });
   }
   const authoring = !run.brief.llmStages?.authoring && run.brief.authoring ? run.brief.authoring : await llmOf(run, 'authoring');
   const input = { providerId: authoring.providerId, model: authoring.model || undefined, ...(authoring.effort ? { effort: authoring.effort } : {}) };
@@ -736,9 +741,55 @@ async function reauthorFinal(projectId, run, issues) {
   })().then(() => null, (err) => err);
   // Requests stay open through authoring (the prompt carries them), then close either way.
   const created = ((await getProject(projectId)).productionReview?.feedback || []).filter((f) => !before.has(f.id) && !f.resolvedAt);
-  const resolution = failure ? `The re-authoring failed (${trimTo(failure.message, 200)}); kept the film.` : 'Re-authored by the orchestrator.';
-  for (const entry of created) await deps.closeFeedback(projectId, { feedbackId: entry.id, resolution, reviewer: orchestratorIdentity(run) });
+  const resolution = failure ? `The re-authoring failed (${trimTo(failure.message, 200)}); kept the film.`
+    : `Re-authored by the ${isOrchestratedRun(run) ? 'orchestrator' : 'autopilot'}.`;
+  for (const entry of created) await deps.closeFeedback(projectId, { feedbackId: entry.id, resolution, reviewer: runReviewer(run) });
   if (failure) throw failure;
+}
+
+const TEXT_CHECK_STEP = 'text-check';
+const TEXT_CHECKPOINT = 'text';
+const textEntry = (verdict, notes, issues = []) => ({ checkpoint: TEXT_CHECKPOINT, verdict, score: null, notes, issues, route: null, visual: false });
+
+/**
+ * The overlay text pass before the film renders (overlayTextService.js): check
+ * the composition document's text where it appears; when the run's own
+ * generated document collides, runs off frame, blends in or is too small,
+ * send the findings back to its author and check again, bounded by the run's
+ * review attempts. A hand-made document is never rewritten (its findings are
+ * logged for the director), and a check that cannot run never holds the
+ * render. Returns false when the run stopped meanwhile.
+ */
+async function settleOverlayText(projectId, run) {
+  for (;;) {
+    const project = await getProject(projectId);
+    if (project?.composition?.mode !== 'document' || !project.composition.document?.directory) return true;
+    await patchRun(projectId, (r) => stagePatch(r, 'produce', { status: 'running', step: TEXT_CHECK_STEP }));
+    const check = await deps.checkOverlayText(projectId).catch((err) => ({ status: 'failed', error: err.message }));
+    if ((await latestRun(projectId))?.status !== 'running') return false;
+    if (check?.status !== 'complete') {
+      await recordReview(projectId, textEntry('noted', `The overlay text check could not run (${trimTo(check?.error || 'it was replaced by a newer check', 200)}); rendering anyway.`));
+      return true;
+    }
+    const findings = check.findings || [];
+    if (!findings.length) {
+      await recordReview(projectId, textEntry('approve', `No overlay text problems in ${check.textSamples ?? 0} frames with text.`));
+      return true;
+    }
+    const issues = findings.slice(0, 12).map((f) => ({ atSec: f.atSec, text: trimTo(f.message, 300) }));
+    const generated = project.composition.document.source?.kind === 'generated';
+    if (!generated || revisionsSpent(await latestRun(projectId), TEXT_CHECKPOINT) >= reviewLimit(run)) {
+      await recordReview(projectId, textEntry('noted', generated ? 'Revision limit reached; rendering the latest document.' : 'This document was made by hand, so it is left for the director to fix; rendering it as is.', issues));
+      return true;
+    }
+    try {
+      await reauthorFinal(projectId, run, issues, { target: 'text' });
+    } catch (err) {
+      await recordReview(projectId, textEntry('noted', `The re-authoring did not go through (${trimTo(err.message, 200)}); rendering the current document.`, issues));
+      return true;
+    }
+    await recordReview(projectId, textEntry('revise', `Sent ${issues.length} overlay text problem${issues.length === 1 ? '' : 's'} back to the document's author.`, issues));
+  }
 }
 
 // ---- stage executors -------------------------------------------------------------
@@ -1027,6 +1078,8 @@ const STAGES = {
           : await deps.generateDocument(project.id, input);
         await deps.acceptDocument(project.id, candidate.document.directory);
       }
+      // Stopped during the check: the advance loop sees the run is no longer running and lets it be.
+      if (!await settleOverlayText(project.id, run)) throw runError(409, 'RUN_STOPPED', 'The run stopped during the overlay text check');
       // The animated proof is optional review evidence, so the run renders the film once the
       // storyboard is approved; the director can still render and approve a proof by hand.
       const render = await deps.renderVideo(project.id);
@@ -1584,6 +1637,7 @@ async function reconcileFinalRender(projectId, { restart = false } = {}) {
 
 /** Render the film (again) and wait for the render's own event. */
 async function startFinalRender(projectId, run) {
+  if (!await settleOverlayText(projectId, run)) return;
   const render = await deps.renderVideo(projectId).catch((err) => ({ error: err }));
   if (render.error) return failFinalRender(projectId, `The final render did not start: ${render.error.message}`, render.error.code || 'FINAL_RENDER_FAILED');
   await patchRun(projectId, (r) => ({ output: { renderJobId: render.jobId || null }, ...stagePatch(r, 'produce', { status: 'running', error: null, step: RENDER_STEP }), error: null, errorCode: null }));

@@ -697,6 +697,14 @@ router.post('/:id/production-review/revise', asyncHandler(async (req, res) => {
 router.post('/:id/production-review/revert', asyncHandler(async (req, res) => {
   res.json(await revertProductionInput(req.params.id, validateRequest(musicVideoProductionRevertSchema, req.body)));
 }));
+// The overlay text quality pass: render the composition document at its text
+// moments and flag collisions, cut-off, low contrast and phone-size text.
+router.post('/:id/production-review/text-check', asyncHandler(async (req, res) => {
+  const { startOverlayTextCheck } = await import('../services/musicVideo/overlayTextService.js');
+  const { project, readiness } = await startOverlayTextCheck(req.params.id);
+  res.status(202).json({ project, readiness });
+}));
+
 router.get('/:id/production-review', asyncHandler(async (req, res) => {
   res.json(await getProductionReview(req.params.id));
 }));
@@ -781,6 +789,14 @@ const requireProject = async (id) => {
   return project;
 };
 
+// A new document gets its overlay text checked in the background, so the
+// findings are waiting at the storyboard approval (local browser work, no provider).
+const checkOverlayTextAfterImport = (projectId) => {
+  import('../services/musicVideo/overlayTextService.js')
+    .then(({ checkOverlayTextInBackground }) => checkOverlayTextInBackground(projectId))
+    .catch((err) => console.error(`❌ Overlay text check did not start: ${err.message}`));
+};
+
 const documentZipUpload = uploadSingle('file', {
   limits: { fileSize: DOCUMENT_ZIP_MAX_BYTES },
   fileFilter: (_req, file, cb) => {
@@ -797,6 +813,7 @@ router.post('/:id/composition/document/zip', documentZipUpload, asyncHandler(asy
   if (!req.file) throw new ServerError('No file uploaded (multipart field "file")', { status: 400, code: 'VALIDATION_ERROR' });
   try {
     res.status(201).json(await importDocumentZip(req.params.id, req.file.path, req.file.originalname));
+    checkOverlayTextAfterImport(req.params.id);
   } finally {
     await unlink(req.file.path).catch(() => {});
   }
@@ -805,6 +822,7 @@ router.post('/:id/composition/document/zip', documentZipUpload, asyncHandler(asy
 router.post('/:id/composition/document/directory', asyncHandler(async (req, res) => {
   const { directory } = validateRequest(musicVideoDocumentDirectoryImportSchema, req.body || {});
   res.status(201).json(await importDocumentDirectory(req.params.id, directory));
+  checkOverlayTextAfterImport(req.params.id);
 }));
 
 router.post('/:id/composition/document/template', asyncHandler(async (req, res) => {
@@ -840,6 +858,7 @@ router.post('/:id/composition/document/sections/:sectionId/regenerate', asyncHan
 router.post('/:id/composition/document/accept', asyncHandler(async (req, res) => {
   const { directory } = validateRequest(musicVideoDocumentCandidateSchema, req.body || {});
   res.json(await acceptMixedMediaDocument(req.params.id, directory));
+  checkOverlayTextAfterImport(req.params.id);
 }));
 
 router.delete('/:id/composition/document/candidate', asyncHandler(async (req, res) => {

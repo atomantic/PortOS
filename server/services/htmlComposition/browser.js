@@ -90,7 +90,9 @@ async function readSlice(asset, start, end) {
   } finally { await handle.close(); }
 }
 
-export async function openComposition(directory, { signal, validateAssets, streamMedia = false, mediaMode = 'code-images-video', ownedBrowser = false } = {}) {
+// `initScripts` run in every new document before its own scripts, after the
+// sandbox guards (a read-only probe such as the overlay text check).
+export async function openComposition(directory, { signal, validateAssets, streamMedia = false, mediaMode = 'code-images-video', ownedBrowser = false, initScripts = [] } = {}) {
   const assets = await snapshotAssets(directory, { streamMedia });
   validateAssets?.(assets);
   signal?.throwIfAborted();
@@ -98,7 +100,7 @@ export async function openComposition(directory, { signal, validateAssets, strea
     const { launchCompositionBrowser } = await import('./ownedBrowser.js');
     const owner = await launchCompositionBrowser({ signal });
     try {
-      const page = await connectComposition(assets, { signal, mediaMode,
+      const page = await connectComposition(assets, { signal, mediaMode, initScripts,
         version: { webSocketDebuggerUrl: owner.webSocketDebuggerUrl, 'User-Agent': 'HeadlessChrome/' } });
       return { ...page, close: async options => {
         try { await page.close(options); } finally { await owner.close(); }
@@ -111,10 +113,10 @@ export async function openComposition(directory, { signal, validateAssets, strea
   const response = await cdpRequest('/json/version');
   if (!response.ok) throw new Error('Managed browser is unavailable');
   const version = await response.json();
-  return connectComposition(assets, { signal, mediaMode, version });
+  return connectComposition(assets, { signal, mediaMode, version, initScripts });
 }
 
-async function connectComposition(assets, { signal, mediaMode, version }) {
+async function connectComposition(assets, { signal, mediaMode, version, initScripts = [] }) {
   const { webSocketDebuggerUrl } = version;
   if (!webSocketDebuggerUrl) throw new Error('Managed browser has no CDP endpoint');
   const ws = new WebSocket(webSocketDebuggerUrl, { handshakeTimeout: 10000 });
@@ -326,6 +328,7 @@ async function connectComposition(assets, { signal, mediaMode, version }) {
         }
       }
     })();` });
+    for (const source of initScripts) await send('Page.addScriptToEvaluateOnNewDocument', { source });
     await send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
     const navigation = await send('Page.navigate', { url: `${ORIGIN}/index.html` });
     if (navigation.errorText) throw new Error(`Composition navigation failed: ${navigation.errorText}`);

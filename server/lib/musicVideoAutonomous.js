@@ -112,6 +112,8 @@ export const ORCHESTRATOR_CHECKPOINTS = Object.freeze([
   Object.freeze({ id: 'art', label: 'Art direction' }),
   Object.freeze({ id: 'alignment', label: 'Lyric timing' }),
   Object.freeze({ id: 'storyboard', label: 'Storyboard' }),
+  // Measured, not judged: the overlay text check before the final render (overlayTextService.js).
+  Object.freeze({ id: 'text', label: 'Overlay text' }),
   Object.freeze({ id: 'final', label: 'Final video' }),
 ]);
 export const ORCHESTRATOR_CHECKPOINT_IDS = Object.freeze(ORCHESTRATOR_CHECKPOINTS.map((c) => c.id));
