@@ -185,9 +185,9 @@ describe('startBrowserFixture', () => {
 
     let settled = false;
     const closing = fixture.close().finally(() => { settled = true; });
-    await vi.advanceTimersByTimeAsync(24);
+    await vi.advanceTimersByTimeAsync(14);
     expect(owned.server.kill).not.toHaveBeenCalled();
-    // Half the budget is the graceful close's; the kill and its exit fit in the rest.
+    // 30% of the budget is the graceful close's; the kill and its exit fit in the rest.
     await vi.advanceTimersByTimeAsync(1);
     await closing;
 
@@ -206,7 +206,7 @@ describe('startBrowserFixture', () => {
 
     const error = await fixture.close().catch(caught => caught);
 
-    expect(error.message).toBe('browser close stalled after 25ms, then its kill returned without an exit status');
+    expect(error.message).toBe('browser close stalled after 15ms, then its kill returned without an exit status');
     expect(owned.server.kill).toHaveBeenCalledTimes(1);
     expect(existsSync(fixture.temp)).toBe(false);
   });
@@ -237,14 +237,14 @@ describe('startBrowserFixture', () => {
 
     arrive[0](reaped.server);
     arrive[1](unreaped.server);
-    await vi.advanceTimersByTimeAsync(25);
-    // Both graceful closes stalled for their half of the budget.
+    await vi.advanceTimersByTimeAsync(15);
+    // Both graceful closes stalled for their share of the budget.
     expect(reaped.server.kill).toHaveBeenCalledTimes(1);
     expect(reaped.child.signalCode).toBe('SIGKILL');
     expect(failureLine).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(30);
     expect(failureLine).toHaveBeenCalledWith('❌ example browser fixture could not close a late browser: '
-      + 'browser close stalled after 25ms, then its kill stalled after 20ms');
+      + 'browser close stalled after 15ms, then its kill stalled after 30ms (no exit status)');
     // An abandoned launch is never connected to.
     expect(chromium.connect).not.toHaveBeenCalled();
     failureLine.mockRestore();

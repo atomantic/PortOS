@@ -47,11 +47,11 @@
  * lines are also appended to the job's step summary, which keeps the passing
  * timings for comparison with the runner's Chrome warm-up.
  *
- * Teardown stalls too (#10830): a graceful close of a system Chrome took 6–10s
- * on a busy macOS host, past the cleanup budget, which turned it into an
- * error (#10791) while the browser and its profile directory stayed behind.
- * Playwright's own kill of the same process takes ~100ms and removes the
- * profile. A `Browser` from `launch()` exposes no process, so a real launch
+ * Teardown stalls too (#10830): a graceful close of a system Chrome took 4–5s
+ * on an idle macOS host and 6–10s on a busy one, past the cleanup budget,
+ * which turned it into an error (#10791) while the browser and its profile
+ * directory stayed behind. Playwright's own kill of the same process takes
+ * well under a second and removes the profile, so it gets most of the budget. A `Browser` from `launch()` exposes no process, so a real launch
  * goes through Playwright's process-backed `launchServer()` and connects to
  * it: the fixture keeps the server, closes gracefully first, then kills only
  * that server's own process, and reports success only on its exit status. A
@@ -168,20 +168,24 @@ const failureWithin = (work, ms) => withDeadline(
 
 /**
  * Closes a browser server the fixture launched, inside `budgetMs`: a graceful
- * close for half of it, then the server's own kill, which signals only the
- * process Playwright spawned (and its process group) and resolves once that
- * process closed and its profile was removed. Each step counts only with the
- * child's exit status in hand, never because a signal was sent; when neither
- * produces one, the close rejects.
+ * close for 30% of it, then the server's own kill for 60%, which signals only
+ * the process Playwright spawned (and its process group) and resolves once
+ * that process closed and its profile was removed. Each step counts only with
+ * the child's exit status in hand, never because a signal was sent; when
+ * neither produces one, the close rejects, saying whether the process had
+ * exited — the kill then waits on Playwright's own stdio and profile cleanup.
  */
 const reapOwnedBrowser = async (server, budgetMs) => {
   const child = server.process();
-  const confirmed = failure => failure
-    ?? (child && (child.exitCode !== null || child.signalCode !== null) ? null : 'returned without an exit status');
-  const closeFailure = confirmed(await failureWithin(() => server.close(), Math.floor(budgetMs / 2)));
+  const exitStatus = () => child?.exitCode ?? child?.signalCode ?? null;
+  const confirmed = failure => failure ?? (exitStatus() === null ? 'returned without an exit status' : null);
+  const closeFailure = confirmed(await failureWithin(() => server.close(), Math.floor(budgetMs * 0.3)));
   if (!closeFailure) return;
-  const killFailure = confirmed(await failureWithin(() => server.kill(), Math.floor(budgetMs * 0.4)));
-  if (killFailure) throw new Error(`browser close ${closeFailure}, then its kill ${killFailure}`);
+  const killFailure = confirmed(await failureWithin(() => server.kill(), Math.floor(budgetMs * 0.6)));
+  if (!killFailure) return;
+  const exit = exitStatus();
+  const state = exit !== null ? ` (process exited with ${exit})` : killFailure.endsWith('exit status') ? '' : ' (no exit status)';
+  throw new Error(`browser close ${closeFailure}, then its kill ${killFailure}${state}`);
 };
 
 /**
