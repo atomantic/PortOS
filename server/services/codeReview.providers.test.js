@@ -116,6 +116,19 @@ describe('configured provider reviewers', () => {
       expect(await review('```json\n{"verdict":"clean","findings":[]}\n```')).toMatchObject({ ok: true, verdict: 'clean', findings: 'No findings.' });
     });
 
+    // #10905: agy intermittently reached for shell commands to "inspect surrounding
+    // source" in the scratch dir and headless mode aborted the run. A tool-free
+    // review must not invite tool use; an ordinary review keeps the guidance.
+    it('does not invite repository inspection in a tool-free claim review prompt', async () => {
+      await review('{"verdict":"clean","findings":[]}');
+      const toolFreePrompt = runCliProviderPrompt.mock.lastCall[0].prompt;
+      expect(toolFreePrompt).toContain('do not run commands or open files');
+      expect(toolFreePrompt).not.toContain('When repository tools are available');
+      runCliProviderPrompt.mockResolvedValue({ text: '{"verdict":"clean","findings":[]}', partial: false, exitCode: 0, stderr: '' });
+      await runLocalCodeReview({ backend: agyBackend, model: 'gemini-3.8-flash', effort: 'low', diff: 'example diff' });
+      expect(runCliProviderPrompt.mock.lastCall[0].prompt).toContain('When repository tools are available');
+    });
+
     it.each([
       ['an unclosed (truncated) fence', `\`\`\`json\n${findings}`],
       ['a truncated envelope inside a fence', '```json\n{"verdict":"findings","findings":[{"severity":"blocking"\n```'],
