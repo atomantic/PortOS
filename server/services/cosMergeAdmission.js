@@ -1,10 +1,22 @@
-/** Repository-wide final-merge admission for participating runs on this install. */
+/**
+ * Repository-wide merge-instant admission for participating runs on this install.
+ * Sync, pregate, push and CI run outside the lease; it spans only the final
+ * verify-and-merge, so holds take seconds (#10803).
+ */
 import { randomUUID } from 'node:crypto';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { isPlainObject } from '../lib/objects.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 
-const retryAfterMs = 15000;
+const retryAfterMs = 5000;
+// An agent lease covers only verify-and-merge. Past this deadline it is
+// reclaimable even from a running owner: that holder's pinned merge
+// (--match-head-commit) cannot land an unverified head, so the worst case is
+// one redundant resync rather than a repository blocked behind a hung parent.
+// This is not a forge-side fence: a merge request already in flight at the
+// deadline may still land, with the same exposure as two CLEAN merges.
+export const AGENT_LEASE_MAX_HOLD_MS = 5 * 60 * 1000;
+export const MERGE_ADMISSION_OUTCOMES = ['merged', 'leave-open', 'resync'];
 const serverOwner = randomUUID();
 const sweepTokens = new Set();
 const refuse = (reason) => ({ admitted: false, reason, retryAfterMs });
@@ -21,6 +33,7 @@ const validLease = (lease, repository) => isPlainObject(lease) && lease.reposito
   && (lease.kind === 'agent'
     ? typeof lease.agentId === 'string' && typeof lease.startedAt === 'string' && typeof lease.taskId === 'string'
     : lease.kind === 'sweep' && typeof lease.serverOwner === 'string' && Number.isInteger(lease.pid) && lease.pid > 0);
+const expired = (lease) => lease.kind === 'agent' && Date.now() - Date.parse(lease.acquiredAt) >= AGENT_LEASE_MAX_HOLD_MS;
 
 async function transaction(work) {
   // Lazy: almost every task-generator suite reaches prWatcher, even when no
@@ -48,11 +61,13 @@ async function transaction(work) {
 async function inactive(lease, state) {
   if (lease.kind === 'sweep') {
     if (lease.serverOwner === serverOwner) return !sweepTokens.has(lease.token);
-    // Never expire on age: a long CI wait is legitimate. A different server
-    // incarnation is recoverable only once its process is proven absent.
+    // Never expire on age: the sweep holds only its own bounded merge attempt.
+    // A different server incarnation is recoverable only once its process is
+    // proven absent.
     try { process.kill(lease.pid, 0); return false; }
     catch (err) { return err.code === 'ESRCH'; }
   }
+  if (expired(lease)) return true;
   let owner = state.agents[lease.agentId];
   if (!owner) {
     const { readAgentRecordOrUnreadable } = await import('./cosAgentLifecycle.js');
@@ -65,7 +80,9 @@ async function admit(state, save, repository, owner) {
   const held = state.mergeAdmissions[repository];
   if (Object.hasOwn(state.mergeAdmissions, repository)) {
     if (!validLease(held, repository)) return refuse('lease-unreadable');
-    if (owner.kind === 'agent' && held.kind === 'agent' && held.agentId === owner.agentId && held.startedAt === owner.startedAt && held.taskId === owner.taskId) {
+    // Re-entry keeps a live token; an expired one is voided and re-minted below.
+    if (owner.kind === 'agent' && held.kind === 'agent' && held.agentId === owner.agentId && held.startedAt === owner.startedAt
+      && held.taskId === owner.taskId && !expired(held)) {
       return { admitted: true, token: held.token, repository };
     }
     if (!await inactive(held, state)) return refuse('owner-active-or-unverified');
@@ -99,8 +116,10 @@ export async function claimMergeAdmission({ agentId, action, token, outcome }) {
     if (!validLease(lease, repository) || lease.kind !== 'agent' || !sameAgent(lease, agent) || lease.token !== token) {
       return refuse('lease-owner-mismatch');
     }
-    if (action === 'check') return { admitted: true, token, repository };
-    if (action !== 'release' || !['merged', 'leave-open'].includes(outcome)) return refuse('outcome-required');
+    // An expired holder must stop and re-acquire before merging; releasing
+    // its own still-unclaimed lease stays permitted.
+    if (action === 'check') return expired(lease) ? refuse('lease-expired') : { admitted: true, token, repository };
+    if (action !== 'release' || !MERGE_ADMISSION_OUTCOMES.includes(outcome)) return refuse('outcome-required');
     delete state.mergeAdmissions[repository];
     state.agents[agentId] = { ...agent, metadata: { ...agent.metadata,
       lastMergeAdmission: { repository, outcome, releasedAt: new Date().toISOString() },

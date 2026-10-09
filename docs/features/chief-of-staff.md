@@ -27,35 +27,58 @@ Autonomous agent manager that watches task files, spawns sub-agents, and maintai
 ## Repository merge admission
 
 Self-managed claim parents and the deterministic pending-merge sweep share one
-repository-scoped final-merge lease (`server/services/cosMergeAdmission.js`).
+repository-scoped merge-instant lease (`server/services/cosMergeAdmission.js`).
 The host-control-gated `POST /api/cos/merge-admission` accepts the registered
 parent agent ID and `acquire`, `check`, or `release`; check/release require the
-returned token. Repository identity comes from that parent's registered source
-checkout and normalized origin host/repository, not its child worktree path.
+returned token, and release records one of `merged`, `leave-open` or `resync`
+in the parent's `lastMergeAdmission`. Repository identity comes from that
+parent's registered source checkout and normalized origin host/repository, not
+its child worktree path.
 
-Acquire after local review and PR publication, before final base synchronization,
-pregate/push, current-head CI and merge. Keep the lease through verified merge
-and cleanup, or release with a recorded `leave-open` outcome. Swarm children
-continue implementing and reviewing concurrently; the parent holds admission
-while they finish and while CI runs. A waiter reports the refusal reason every
-minute, retries at 15-second intervals for at most 30 minutes, then leaves the
-reviewed PR and claim intact. Sweep deferrals preserve their retry budget.
+The lease spans only the final verify-and-merge (#10803). Base sync, pregate,
+push and the required-CI wait run concurrently across claim runs and across
+every PR in a swarm, without admission. Once required CI is green on the exact
+pushed head, the parent acquires, re-reads the PR, and:
+
+- merges pinned to that CI-verified head (`gh pr merge --match-head-commit`,
+  GitLab `glab mr merge --sha`) when the forge reports it mergeable (`CLEAN`),
+  then releases with `merged`;
+- releases with `resync` when the head changed or the PR is no longer mergeable
+  (`DIRTY`, `BEHIND` under an up-to-date-branch rule, `BLOCKED`), then syncs,
+  reruns pregate and waits for CI again outside the lease before re-acquiring.
+
+A base that moved while the PR stays `CLEAN` does not force a resync or a fresh
+CI run: the forge's merge check is authoritative, as it is for manual merges.
+The remaining exposure is a semantic conflict between two individually green
+PRs, which post-merge default-branch CI catches — the same exposure manual and
+cross-install merges already carry. A refused acquire retries every 5 seconds
+and reports progress every minute; after 10 minutes the reviewed PR and claim
+are left open. Sweep deferrals preserve their retry budget; the sweep already
+holds the lease only around its own read → assess → pinned merge.
 
 Leases extend the existing machine-local CoS runtime ownership in
 `data/cos/state.json`, under its existing write queue; there is no new store,
 seed, migration, or federation payload. Missing lease fields are compatible
 with older state. Unreadable, mismatched or stale ownership refuses admission.
-A claim lease can be recovered only from a matching finalized parent record
-(including its archive); elapsed time, completed children and absent cwd
-processes never release a running/paused parent. A crashed deterministic sweep
-is recoverable only after its server process is proven absent. Failed reads and
-ambiguous/reused process identities hold admission conservatively.
+An agent lease is recoverable from a matching finalized parent record
+(including its archive), or by any participant once its 5-minute hold deadline
+(`AGENT_LEASE_MAX_HOLD_MS`, measured from `acquiredAt`) has passed even while
+its owner is still running. An expired holder's `check` is refused with
+`lease-expired`, and because every merge is pinned to the CI-verified head, a
+reclaimed holder cannot land an unverified head — the worst case is one
+redundant resync. The lease is not a forge-side fence: a holder whose merge
+request was already in flight when its deadline passed can still complete it
+while the next holder merges. Both merges are pinned and forge-checked, so this
+is the same semantic-conflict exposure as two consecutive `CLEAN` merges. Completed children and absent cwd processes never release a
+lease early. A crashed deterministic sweep is recoverable only after its server
+process is proven absent. Failed reads and ambiguous/reused process identities
+hold admission conservatively.
 
 This coordinates participating runs on **one install**. Manual merges, older
-prompts and other installs can still move the base. Always re-read the live base
-before merge and repeat sync, pregate and fresh current-head CI when it changes.
-Admission does not grant permission to adopt another owner's branch or checkout,
-does not replace reviews/CI, and does not make queued auto-merge a completed merge.
+prompts and other installs can still move the base; the forge's merge state
+reflects that at the merge instant. Admission does not grant permission to
+adopt another owner's branch or checkout, does not replace reviews/CI, and
+does not make queued auto-merge a completed merge.
 
 ## Claim branch ownership
 

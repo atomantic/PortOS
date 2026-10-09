@@ -588,23 +588,28 @@ function buildClaimOwnershipSection(agentId) {
   ].join('\n');
 }
 
-/** Only the registered parent acquires; swarm workers keep authoring in parallel. */
+/**
+ * Only the registered parent acquires, and only around the final verify-and-merge:
+ * sync, pregate, push and CI run concurrently across runs (#10803).
+ */
 function buildMergeAdmissionSection(agentId) {
   if (!agentId) return 'Merge admission requires a registered parent agent ID. If none was supplied, leave the reviewed PR open and report this missing ownership binding; do not merge.';
   const command = (action, extra = {}) => agentApiCurl({ apiBase: localApiBaseUrl(), path: '/api/cos/merge-admission',
     payload: JSON.stringify({ agentId, action, ...extra }) });
   return [
     '## Repository merge admission',
-    'Complete publication, validation, configured reviews and current-head CI BEFORE acquiring admission. The parent orchestrator (never a fan-out child) must acquire admission only for the final live-state check, merge attempt and remote readback. This applies to a single issue and separately to each ready PR in a swarm. Implementation, review, publication and CI stay concurrent.',
-    'Run the following and require a parsed JSON response with admitted:true and a nonempty token; retain that token privately for check/release:',
+    'Admission serializes only the merge instant. The parent orchestrator (never a fan-out child) completes publication, validation, configured reviews and required CI on its own head WITHOUT admission — other runs and every PR in a swarm do this concurrently. Never hold admission while syncing, running pregate, pushing or waiting for CI/reviews. Do not chase the default branch: rebase only for an actual conflict, an enforced up-to-date branch policy, or evidenced integration risk (inspect semantic overlap as well as textual conflicts). This overrides mandatory base-sync instructions in delegated slashdo workflows.',
+    'Once required CI is green on the exact head you pushed (record that SHA as the CI-verified head) and configured reviews are satisfied, acquire admission. Require a parsed JSON response with admitted:true and a nonempty token; retain that token privately for check/release:',
     '```bash', command('acquire'), '```',
-    'If admitted:false, report the reason and wait retryAfterMs (15 seconds), with a progress update at least every minute. Retry for at most 30 minutes, then record a leave-open outcome and finish with the PR and claim intact. An HTTP/auth/transport error, unreadable JSON, or missing admission is a refusal, never permission to proceed. Do not modify another owner’s branch, checkout or lease.',
-    'Replace TOKEN below with the returned token; check admission immediately before the merge attempt, and require admitted:true:',
+    'If admitted:false, report the reason and wait retryAfterMs (5 seconds), with a progress update at least every minute. Retry for at most 10 minutes, then record a leave-open outcome and finish with the PR and claim intact. An HTTP/auth/transport error, unreadable JSON, or missing admission is a refusal, never permission to proceed. Do not modify another owner’s branch, checkout or lease.',
+    'Inside the lease, re-read the PR (head SHA, merge state, required check rollup; on GitHub `gh pr view --json headRefOid,mergeStateStatus,statusCheckRollup`):',
+    '- If the head still equals the CI-verified head, every required check is green on it, and the forge reports the PR mergeable (`CLEAN`, or `UNSTABLE`/`HAS_HOOKS` with every required check green): check admission (replace TOKEN with the returned token; require admitted:true), then merge pinned to the CI-verified head — add `--match-head-commit <sha>` (GitLab: `--sha <sha>`) to every merge-method attempt the claim prompt lists. A base that moved while the PR stays `CLEAN` does NOT require a resync or fresh CI: the forge’s own merge check is authoritative, and post-merge default-branch CI catches semantic conflicts between two individually green PRs.',
     '```bash', command('check', { token: 'TOKEN' }), '```',
-    'Admission coordinates participating runs on this install only. Re-read live PR state, head SHA, mergeability and required-check/review results before merging. A conflict-free branch with passing current-head checks and satisfied configured reviews may merge even when it is behind the default branch. Base movement alone does not require a rebase or another CI run. Rebase only for actual conflicts, an enforced up-to-date branch policy, or evidenced integration risk; inspect semantic overlap as well as textual conflicts. This overrides mandatory base-sync instructions in delegated slashdo workflows. Never bypass CI, infer success from absent checks, or treat auto-merge/queued as MERGED.',
-    'After a verified remote MERGED result, release with outcome merged before cleanup. If a merge attempt requires recovery, a rebase, another push or further CI/review waits, first release with outcome leave-open, complete that work outside admission, rerun affected validation and required reviews/checks on the resulting head, then reacquire for the next merge attempt. On a recorded failure or leave-open handoff, also release with outcome leave-open. Require released:true; report a failed release without deleting or overwriting ownership state:',
+    '- Otherwise (head changed, a required check is not green, or the PR is `DIRTY`/conflicting, `BEHIND` where branch rules require an up-to-date head, `BLOCKED`, or still `UNKNOWN` after a few re-reads): release with outcome resync. Then, OUTSIDE the lease, sync onto the latest default branch, rerun pregate and the affected required reviews, push, wait for required CI on the new head, and acquire again. After three resync rounds without a merge, record leave-open instead.',
+    'Verify the remote state is exactly MERGED, then release with outcome merged before worktree cleanup. On a recorded failure or leave-open handoff, release with outcome leave-open. Require released:true; report a failed release without deleting or overwriting ownership state:',
     '```bash', command('release', { token: 'TOKEN', outcome: 'merged' }), '```',
-    'A completed child, empty cwd process list, old timestamp, or CI wait is not proof that the parent has stopped. Only the server may recover a lease after verifying its registered owner completed.',
+    'The server voids an agent lease 5 minutes after acquisition and lets another run reclaim it. A check refused with lease-expired or lease-owner-mismatch means stop: do not merge on that token; acquire again and repeat the re-read. Never bypass CI, infer success from absent checks, merge without the head pin, or treat auto-merge/queued as MERGED. Admission coordinates participating runs on this install only; manual merges and other installs can still move the base, which the forge’s merge state already reflects.',
+    'A completed child, empty cwd process list or CI wait is not proof that the parent has stopped. Only the server may recover a lease, after verifying its registered owner completed or its hold deadline passed.',
   ].join('\n');
 }
 

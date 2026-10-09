@@ -13,7 +13,7 @@ vi.mock('../lib/gitRemote.js', () => ({
     fullName: path === '/repos/other' ? 'example/other' : 'Example/Repo' }),
 }));
 vi.mock('./cosAgentLifecycle.js', () => ({ readAgentRecordOrUnreadable: async () => fixture.archived }));
-import { claimMergeAdmission, withPendingMergeAdmission } from './cosMergeAdmission.js';
+import { AGENT_LEASE_MAX_HOLD_MS, claimMergeAdmission, withPendingMergeAdmission } from './cosMergeAdmission.js';
 const origin = { host: 'github.com', fullName: 'example/repo' };
 const parent = (id, sourceWorkspace = '/repos/example') => ({ id, taskId: `task-${id}`, status: 'running',
   startedAt: '2026-01-01T00:00:00Z', metadata: { sourceWorkspace, claimPicksOwnBranch: true } });
@@ -29,33 +29,68 @@ beforeEach(() => {
 });
 
 describe('repository final merge workflow', () => {
-  it('serializes two live parents and a sweep, avoiding an extra base sync during CI', async () => {
-    let base = 1;
-    let validations = 0;
-    const syncAndValidate = () => { validations++; return base; };
-    // The uncoordinated failure: another merge invalidates A's validated base.
-    const uncoordinatedHead = syncAndValidate();
-    base++;
-    expect(uncoordinatedHead).not.toBe(base);
-    syncAndValidate();
-    expect(validations).toBe(2);
-    base = 1; validations = 0;
+  it('validates two parents concurrently and serializes only the pinned merge instant', async () => {
+    // Synthetic forge: a pinned merge refuses any head but the verified one.
+    const forge = { base: 1, prs: {} };
+    const validate = (id) => { forge.prs[id] = { head: `${id}-head-on-${forge.base}`, state: 'CLEAN' }; return forge.prs[id].head; };
+    const merge = (id, sha) => {
+      if (forge.prs[id].head !== sha) return false;
+      forge.base++;
+      return true;
+    };
+    // Sync/pregate/CI never needs the lease, so both parents validate at once.
+    const [aHead, bHead] = [validate('a'), validate('b')];
+    expect(fixture.state.mergeAdmissions).toEqual({});
 
     const [a, b] = await Promise.all([acquire('a'), acquire('b')]);
     expect(a.admitted).toBe(true);
-    expect(b.admitted).toBe(false);
-    const validatedBase = syncAndValidate();
-    fixture.state.agents.child = { ...parent('child'), status: 'completed', completedAt: '2026-01-01T01:00:00Z' };
-    persist();
-    const sweep = vi.fn(() => { base++; });
+    expect(b).toMatchObject({ admitted: false, retryAfterMs: 5000 });
+    const sweep = vi.fn();
     expect(await withPendingMergeAdmission(origin, sweep)).toMatchObject({ admitted: false });
     expect(sweep).not.toHaveBeenCalled();
-    expect(await acquire('b')).toMatchObject({ admitted: false, retryAfterMs: 15000 });
     expect(await claimMergeAdmission({ agentId: 'a', action: 'check', token: a.token })).toMatchObject({ admitted: true });
-    expect(validatedBase).toBe(base);
-    expect(validations).toBe(1);
+    expect(merge('a', aHead)).toBe(true);
     expect(await release('a', a.token)).toMatchObject({ released: true });
-    expect((await acquire('b')).admitted).toBe(true);
+
+    // The base moved but B stays CLEAN: it merges its CI-verified head as is.
+    const b2 = await acquire('b');
+    expect(forge.prs.b.state).toBe('CLEAN');
+    expect(merge('b', bHead)).toBe(true);
+    expect(await release('b', b2.token)).toMatchObject({ released: true });
+
+    // A DIRTY PR releases with resync and re-validates outside the lease.
+    validate('a'); forge.prs.a.state = 'DIRTY';
+    const a2 = await acquire('a');
+    expect(await release('a', a2.token, 'resync')).toMatchObject({ released: true, outcome: 'resync' });
+    expect(fixture.state.agents.a.metadata.lastMergeAdmission.outcome).toBe('resync');
+    expect(fixture.state.mergeAdmissions).toEqual({});
+    const revalidated = validate('a');
+    const a3 = await acquire('a');
+    expect(merge('a', revalidated)).toBe(true);
+    expect(await release('a', a3.token)).toMatchObject({ released: true });
+  });
+
+  it('lets another participant reclaim a running holder past the hold deadline', async () => {
+    vi.useFakeTimers({ now: Date.parse('2026-01-01T00:00:00Z') });
+    try {
+      const stale = await acquire('a');
+      vi.advanceTimersByTime(AGENT_LEASE_MAX_HOLD_MS - 1);
+      expect((await acquire('b')).admitted).toBe(false);
+      vi.advanceTimersByTime(1);
+      expect(await claimMergeAdmission({ agentId: 'a', action: 'check', token: stale.token })).toMatchObject({ admitted: false, reason: 'lease-expired' });
+      expect(fixture.state.agents.a.status).toBe('running');
+      const reclaimed = await acquire('b');
+      expect(reclaimed.admitted).toBe(true);
+      // The stale token is void; the holder's head-pinned merge (prompt
+      // contract) is what keeps a late merge from landing an unverified head.
+      expect(await claimMergeAdmission({ agentId: 'a', action: 'check', token: stale.token })).toMatchObject({ admitted: false, reason: 'lease-owner-mismatch' });
+      expect((await release('a', stale.token)).released).not.toBe(true);
+      // A holder re-acquiring its own expired lease gets a fresh token.
+      vi.advanceTimersByTime(AGENT_LEASE_MAX_HOLD_MS);
+      const renewed = await acquire('b');
+      expect(renewed.token).not.toBe(reclaimed.token);
+      expect(await claimMergeAdmission({ agentId: 'b', action: 'check', token: renewed.token })).toMatchObject({ admitted: true });
+    } finally { vi.useRealTimers(); }
   });
 
   it('holds the sweep through async merge and permits another repository concurrently', async () => {
@@ -107,6 +142,9 @@ describe('repository final merge workflow', () => {
     expect((await release('a', a.token)).released).not.toBe(true);
     expect(await release('a', next.token)).toMatchObject({ released: true });
     expect(fixture.state.agents.a.metadata.lastMergeAdmission.outcome).toBe('merged');
+    const last = await acquire('a');
+    expect(await release('a', last.token, 'abandoned')).toMatchObject({ admitted: false, reason: 'outcome-required' });
+    expect(fixture.state.mergeAdmissions['github.com/example/repo'].token).toBe(last.token);
   });
 
   it('recovers a crashed sweep only when its process is proven absent', async () => {
