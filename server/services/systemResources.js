@@ -340,6 +340,24 @@ function loadedModelInventory({ ollamaLoaded, lmStudioLoaded }) {
   ];
 }
 
+// Remember transitions across report/cache refreshes without logging private errors.
+let agentCensusUnavailable = false;
+
+function readAgentCensus() {
+  return cos.getAgents().then((agents) => {
+    if (agentCensusUnavailable) console.log('✅ Resource probe recovered (source=agent-census)');
+    agentCensusUnavailable = false;
+    return agents;
+  }).catch((error) => {
+    if (!agentCensusUnavailable) {
+      const code = typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]{0,31}$/.test(error.code) ? error.code : 'unknown';
+      console.error(`❌ Resource probe unavailable (source=agent-census, code=${code})`);
+    }
+    agentCensusUnavailable = true;
+    return null;
+  });
+}
+
 /**
  * Queue depth vs work in flight, settled against the agent list.
  *
@@ -352,18 +370,19 @@ function loadedModelInventory({ ollamaLoaded, lmStudioLoaded }) {
  */
 function agentQueueSummary(tasks, status, agents) {
   if (!tasks) return null;
+  const censusAvailable = agents != null;
   const runningAgents = runningAgentsByTaskId(agents);
   const pendingUser = tasks.user?.grouped?.pending || [];
   const pendingSystem = tasks.cos?.grouped?.pending || [];
   const spawningUser = countSpawningTasks(pendingUser, runningAgents);
   const spawningSystem = countSpawningTasks(pendingSystem, runningAgents);
   return {
-    pendingUser: pendingUser.length - spawningUser,
-    pendingSystem: pendingSystem.length - spawningSystem,
+    pendingUser: censusAvailable ? pendingUser.length - spawningUser : null,
+    pendingSystem: censusAvailable ? pendingSystem.length - spawningSystem : null,
     awaitingApproval: tasks.cos?.awaitingApproval?.length || 0,
-    inProgress: (tasks.user?.grouped?.in_progress?.length || 0)
+    inProgress: censusAvailable ? (tasks.user?.grouped?.in_progress?.length || 0)
       + (tasks.cos?.grouped?.in_progress?.length || 0)
-      + spawningUser + spawningSystem,
+      + spawningUser + spawningSystem : null,
     activeAgents: status ? status.activeAgents || 0 : null,
     pausedAgents: status ? status.pausedAgents || 0 : null,
     daemonRunning: status?.running ?? null,
@@ -432,7 +451,7 @@ export async function buildSystemResourceReport() {
     dirSize(PATHS.browserDownloads, { strict: true }).catch(() => null),
     cos.getAllTasks().catch(() => null),
     cos.getStatus().catch(() => null),
-    cos.getAgents().catch(() => null),
+    readAgentCensus(),
     scanModelDuplicates().catch(() => ({ pinokioDetected: null, items: [], totalReclaimableBytes: 0, error: 'Duplicate model scan unavailable' })),
   ]);
 
@@ -584,16 +603,17 @@ export async function buildSystemResourceReport() {
     ...(lmStudioResidencyError ? ['lmstudio-residency'] : []),
     ...(cosTasks == null ? ['agent-queue'] : []),
     ...(cosStatus == null ? ['agent-status'] : []),
+    ...(cosAgents == null ? ['agent-census'] : []),
   ])];
   const managedReclaimableBytes = sumBytes(cleanupCandidates
     .filter((candidate) => candidate.risk === 'low' && candidate.action)
     .map((candidate) => candidate.estimatedBytes));
-  const queuedAgents = agentQueue
+  const queuedAgents = agentQueue && cosAgents != null
     // Awaiting-approval tasks are already part of pendingSystem. Keep the
     // review count as a useful breakdown without counting those tasks twice in
     // the top-line queued total.
     ? agentQueue.pendingUser + agentQueue.pendingSystem
-    : 0;
+    : null;
 
   // Every full scan heals the persisted manifest, so Models → Status has a fresh
   // answer to fall back on next time without walking the model stores again, and
@@ -616,8 +636,8 @@ export async function buildSystemResourceReport() {
       modelBytes,
       managedReclaimableBytes,
       loadedModels: loadedModels.length,
-      queuedJobs: agentQueue ? mediaQueue.queued + queuedAgents : null,
-      runningJobs: agentQueue ? mediaQueue.running + agentQueue.inProgress : null,
+      queuedJobs: queuedAgents != null ? mediaQueue.queued + queuedAgents : null,
+      runningJobs: agentQueue?.inProgress != null ? mediaQueue.running + agentQueue.inProgress : null,
     },
     storageAreas,
     dataCategories: categories,
