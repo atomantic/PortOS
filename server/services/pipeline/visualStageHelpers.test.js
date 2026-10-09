@@ -18,7 +18,7 @@ vi.mock('../../lib/runners.js', () => ({ loraCompatKey: (...args) => mocks.loraC
 vi.mock('../characterLoraResolver.js', () => ({
   resolveCharacterLoras: (...args) => mocks.resolveCharacterLoras(...args),
 }));
-vi.mock('../imageGen/index.js', () => ({
+vi.mock('../../lib/imageCleanDefaults.js', () => ({
   resolveImageCleaners: vi.fn(() => ({ cleanC2PA: false, denoise: false })),
 }));
 

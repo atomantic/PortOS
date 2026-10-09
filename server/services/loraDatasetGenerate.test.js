@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+vi.mock('../lib/imageCleanDefaults.js', () => ({
+  resolveImageCleaners: vi.fn(() => ({ cleanC2PA: false, denoise: false })),
+}));
+
 const renderMocks = vi.hoisted(() => ({
   getSettings: vi.fn(),
   enqueueJob: vi.fn(),
@@ -50,10 +54,6 @@ vi.mock('./mediaJobQueue/index.js', async () => ({
   enqueueJob: (...args) => renderMocks.enqueueJob(...args),
   getJob: (...args) => renderMocks.getJob(...args),
   mediaJobEvents: new (await import('node:events')).EventEmitter(),
-}));
-vi.mock('./imageGen/index.js', () => ({
-  IMAGE_GEN_MODE: { LOCAL: 'local', CODEX: 'codex', EXTERNAL: 'external' },
-  resolveImageCleaners: vi.fn(() => ({ cleanC2PA: false, denoise: false })),
 }));
 vi.mock('../lib/mediaModels.js', async (importOriginal) => ({
   ...(await importOriginal()),

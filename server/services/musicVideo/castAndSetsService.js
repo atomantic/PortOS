@@ -262,7 +262,7 @@ function referencePaths(stage, item) {
 export async function imageJobParams(settings, route, common) {
   const [{ resolveRenderTargetConfig }, { resolveImageCleaners }, { resolveLocalImageModel }] = await Promise.all([
     import('../imageGen/cloudProviderConfig.js'),
-    import('../imageGen/index.js'),
+    import('../../lib/imageCleanDefaults.js'),
     import('../imageGen/prepareParams.js'),
   ]);
   const resolved = resolveRenderTargetConfig(settings, RENDER_TARGET.MUSIC_VIDEO, { mode: route.mode, model: route.model });

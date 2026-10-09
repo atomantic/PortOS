@@ -51,7 +51,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   } };
 });
 
-vi.mock('../imageGen/index.js', () => ({
+vi.mock('../../lib/imageCleanDefaults.js', () => ({
   resolveImageCleaners: () => ({ cleanC2PA: false, denoise: false }),
 }));
 vi.mock('../settings.js', () => ({

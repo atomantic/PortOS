@@ -45,7 +45,7 @@ function buildItemRenderPrompt(board, item) {
 async function itemRenderParams(settings, { mode = null, model = null, target = null }, common) {
   const [{ resolveRenderTargetConfig }, { resolveImageCleaners }, { resolveLocalImageModel }] = await Promise.all([
     import('../imageGen/cloudProviderConfig.js'),
-    import('../imageGen/index.js'),
+    import('../../lib/imageCleanDefaults.js'),
     import('../imageGen/prepareParams.js'),
   ]);
   const resolved = resolveRenderTargetConfig(settings, target, { mode, model, usableInstallFallback: true });

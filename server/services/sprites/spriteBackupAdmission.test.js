@@ -44,7 +44,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
 
 const executeTuiRun = vi.fn(() => new Promise(() => {}));
 vi.mock('../tuiPromptRunner.js', () => ({ executeTuiRun: (...args) => executeTuiRun(...args) }));
-vi.mock('../imageGen/index.js', () => ({ resolveImageCleaners: () => ({ cleanC2PA: false, denoise: false }) }));
+vi.mock('../../lib/imageCleanDefaults.js', () => ({ resolveImageCleaners: () => ({ cleanC2PA: false, denoise: false }) }));
 vi.mock('../settings.js', () => ({
   getSettings: async () => ({ imageGen: { mode: 'grok', grok: { enabled: true, grokPath: '/usr/local/bin/grok' } } }),
 }));

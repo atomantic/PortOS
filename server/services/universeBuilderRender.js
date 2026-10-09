@@ -20,7 +20,7 @@ import { IMAGE_GEN_MODE, QUEUEABLE_IMAGE_MODES } from './imageGen/modes.js';
 import { resolveRenderTargetConfig } from './imageGen/cloudProviderConfig.js';
 import { resolveLocalImageModel } from './imageGen/prepareParams.js';
 import { RENDER_TARGET, recordRenderPin } from '../lib/renderTargets.js';
-import { resolveImageCleaners } from './imageGen/index.js';
+import { resolveImageCleaners } from '../lib/imageCleanDefaults.js';
 import { getStylePresetById } from '../lib/writersRoomStylePresets.js';
 import { ServerError } from '../lib/errorHandler.js';
 

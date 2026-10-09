@@ -45,6 +45,8 @@ const reaches = (entry, target) => staticImportClosure(abs(entry)).files.has(abs
 
 // Each row: the entry that was narrowed, the module it must no longer
 const NARROWED = [
+  ['services/imageGen/prepareParams.js', 'services/imageGen/index.js',
+    'reads cleaner request policy without loading execution backends'],
   ['services/codeReview.js', 'lib/validation.js',
     'reads reviewer vocabulary from its pure declaring module without the validation barrel'],
   ['services/backup.js', 'services/socket.js',
@@ -185,6 +187,8 @@ describe('narrowed imports stay narrow (#6009)', () => {
   it('leaves the editorial barrel and the schema composer intact', () => {
     expect(reaches('lib/editorial/checkRegistry.js', 'lib/editorial/checks/proseStyle.js')).toBe(true);
     expect(reaches('lib/db/schema/index.js', 'lib/db/schema/catalog.js')).toBe(true);
+    expect(reaches('services/imageGen/index.js', 'services/imageGen/codex.js')).toBe(true);
+    expect(reaches('services/imageGen/prepareParams.js', 'lib/imageCleanDefaults.js')).toBe(true);
   });
 });
 

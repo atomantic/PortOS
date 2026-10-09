@@ -29,7 +29,7 @@ vi.mock('../mediaJobQueue/index.js', () => ({
   enqueueJob: () => ({ jobId: 'job-x', position: 0, status: 'queued' }),
   mediaJobEvents: { on: () => {}, off: () => {} },
 }));
-vi.mock('../imageGen/index.js', () => ({
+vi.mock('../../lib/imageCleanDefaults.js', () => ({
   resolveImageCleaners: () => ({ cleanC2PA: false, denoise: false }),
 }));
 vi.mock('../settings.js', () => ({ getSettings: async () => ({ imageGen: { mode: 'codex' } }) }));
