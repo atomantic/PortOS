@@ -29,6 +29,7 @@ import {
   DEFAULT_SPEED_PROFILE_ID, normalizeSpeedProfileForModel, speedProfileIdFromRecord,
   isFullDecodeId, resolveDraftDecodeForModel, draftDecodeFromRecord,
 } from '../../lib/videoGenParams';
+import { isDefaultVideoStreamingMode, videoStreamingModeFromRecord } from '../../lib/videoStreamingMode';
 import { isDeliveryVideoModel } from '../../lib/videoFinish';
 import { loraFamilyOf, videoLoraFamily } from '../../lib/runnerFamilies';
 import LoraPicker from '../imageGen/LoraPicker';
@@ -818,6 +819,9 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
   // for the same reason the schedule above is: an untouched requeue must
   // re-submit what the original render asked for, not snap silently back to Full.
   const [draftDecode, setDraftDecode] = useState(draftDecodeFromRecord(p.draftDecode));
+  // Keep a recorded explicit memory request editable until the catalog loads;
+  // only the render bridge decides whether its pinned pipeline can honor it.
+  const [streamingMode, setStreamingMode] = useState(videoStreamingModeFromRecord(p.streamingMode));
   const [availableLoras, setAvailableLoras] = useState([]);
   const [selectedLoras, setSelectedLoras] = useState(Array.isArray(p.loras) ? p.loras : []);
 
@@ -969,6 +973,9 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
     if (textChanged(modelId, p.modelId) || draftDecode !== originalDraftDecode) {
       overrides.draftDecode = isFullDecodeId(draftDecode) ? null : draftDecode;
     }
+    if (streamingMode !== videoStreamingModeFromRecord(p.streamingMode)) {
+      overrides.streamingMode = isDefaultVideoStreamingMode(streamingMode) ? null : streamingMode;
+    }
     if (JSON.stringify(selectedLoras) !== JSON.stringify(p.loras || [])) overrides.loras = selectedLoras;
     onSubmit(Object.keys(overrides).length ? overrides : null);
   };
@@ -1018,6 +1025,8 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
           fps={displayedFps} onFpsChange={setFps} seed={seed} onSeedChange={setSeed} onRandomSeed={() => setSeed(Math.floor(Math.random() * 2147483647))}
           steps={steps} onStepsChange={setSteps} guidanceScale={guidanceScale} onGuidanceScaleChange={setGuidanceScale}
           speedProfileId={speedProfileId} onSpeedProfileChange={setSpeedProfileId}
+          streamingMode={streamingMode} onStreamingModeChange={setStreamingMode}
+          showStreamingMode={currentModel ? undefined : !isDefaultVideoStreamingMode(p.streamingMode)}
           draftDecode={draftDecode} onDraftDecodeChange={setDraftDecode} draftDecodeLocked={deliveryModel}
           imageStrength={imageStrength} onImageStrengthChange={setImageStrength} tiling={tiling} onTilingChange={setTiling}
           i2vReferenceMode={i2vReferenceMode} onI2vReferenceModeChange={setI2vReferenceMode}
