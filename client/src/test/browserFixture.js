@@ -36,10 +36,22 @@
  * pages the first attempt did read stay in the kernel's cache, so a slow disk
  * loses no progress, and a child that wedged is replaced rather than waited
  * on. Vite's budget pays for it: it starts in well under 2s even under load.
+ *
+ * The retry hides the stall it recovers from, and the launch error names no
+ * state, so each attempt also observes its own browser child shortly before
+ * its deadline, with the DB launcher's redacted Linux process facts (#9641).
+ * Those facts are reported only for an attempt that then timed out: in the
+ * startup error, or on the ready line when the retry recovered. A launch that
+ * settles first discards them. Vitest's CI `--silent=passed-only` drops a
+ * passing fixture's console output, so on GitHub Actions the ready and failure
+ * lines are also appended to the job's step summary, which keeps the passing
+ * timings for comparison with the runner's Chrome warm-up.
  */
+import { appendFileSync, closeSync, openSync, opendirSync, readSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { _testChromeProcessFacts } from '../../../server/services/htmlComposition/testBrowserCleanup.js';
 
 export const BROWSER_FIXTURE_STARTUP_MS = 60000;
 
@@ -53,6 +65,80 @@ export const BROWSER_FIXTURE_PHASE_MS = Object.freeze({
 const PHASE_NAMES = { vite: 'Vite server start', chromium: 'Chromium launch', warmup: 'first page warmup' };
 
 const timeoutError = ms => Object.assign(new Error(`timed out after ${ms}ms`), { name: 'TimeoutError' });
+
+// Linux-only, bounded reads: up to 64 worker threads' `children` lists and one
+// 4096-byte stat prefix per child. Never read cmdline, environ or links, and
+// never print a PID or process name — only counts and the shared process facts.
+const readPrefix = (path) => {
+  const fd = openSync(path, 'r');
+  try {
+    const bytes = Buffer.alloc(4096);
+    return bytes.subarray(0, readSync(fd, bytes, 0, bytes.length, 0)).toString();
+  } finally { closeSync(fd); }
+};
+const listDir = (path) => {
+  const dir = opendirSync(path);
+  const names = [];
+  try {
+    let entry;
+    for (let count = 0; count < 64 && (entry = dir.readSync()); count++) names.push(entry.name);
+  } finally { dir.closeSync(); }
+  return names;
+};
+const BROWSER_PROCESS_NAME = /^(chrome|chromium|google-chrome|headless_shell|chrome-headless)/;
+
+/**
+ * Starts observing one launch attempt: the worker's browser children that
+ * already exist (an earlier attempt still exiting) are excluded, and the
+ * returned function describes the one browser child that appeared since. Only
+ * a direct child of this worker is ever inspected, so the PID is owned; the
+ * shared facts re-check that its parent is this worker.
+ */
+export function _observeOwnedBrowserLaunch({
+  platform = process.platform, workerPid = process.pid, read = readPrefix, list = listDir,
+  processFacts = _testChromeProcessFacts,
+} = {}) {
+  if (platform !== 'linux') return () => 'os=unsupported';
+  // A thread or child that exits between the listing and its read is skipped,
+  // but no readable `children` list at all (a kernel without them) means the
+  // observation is unavailable — never an empty one.
+  const readOrNull = (path) => { try { return read(path); } catch { return null; } };
+  const browserChildren = () => {
+    const pids = new Set();
+    let readable = false;
+    for (const tid of list(`/proc/${workerPid}/task`).filter(name => /^[1-9]\d*$/.test(name))) {
+      const children = readOrNull(`/proc/${workerPid}/task/${tid}/children`);
+      if (children === null) continue;
+      readable = true;
+      for (const pid of children.trim().split(/\s+/)) {
+        if (!/^[1-9]\d*$/.test(pid)) continue;
+        const stat = readOrNull(`/proc/${pid}/stat`) ?? '';
+        const name = stat.slice(stat.indexOf('(') + 1, stat.lastIndexOf(')'));
+        if (BROWSER_PROCESS_NAME.test(name)) pids.add(pid);
+      }
+    }
+    if (!readable) throw new Error('no readable children list');
+    return pids;
+  };
+  let earlier;
+  try { earlier = browserChildren(); } catch { earlier = null; }
+  return () => {
+    if (!earlier) return 'browserChildren=unavailable';
+    let fresh;
+    try { fresh = [...browserChildren()].filter(pid => !earlier.has(pid)); }
+    catch { return 'browserChildren=unavailable'; }
+    if (fresh.length !== 1) return `browserChildren=${fresh.length}`;
+    return `browserChildren=1 ${processFacts({ pid: Number(fresh[0]), exitCode: null, signalCode: null }, { workerPid })}`;
+  };
+}
+
+// Appends one line to the GitHub Actions step summary, when there is one. The
+// summary only retains evidence: a write failure never changes the fixture.
+const retainLine = (line) => {
+  const summary = process.env.GITHUB_STEP_SUMMARY;
+  if (!summary) return;
+  try { appendFileSync(summary, `- ${line}\n`); } catch { /* evidence only */ }
+};
 
 const withDeadline = (promise, ms, onTimeout) => {
   let timer;
@@ -71,10 +157,12 @@ const withDeadline = (promise, ms, onTimeout) => {
  * @param {object} [options.launchOptions] - extra `chromium.launch` options (executablePath, args, …)
  * @param {(page: object, origin: string) => Promise<void>} [options.warmup] - first navigation; the page is closed afterward
  * @param {object} [options.phaseMs] - per-phase budgets; defaults to BROWSER_FIXTURE_PHASE_MS
+ * @param {() => () => string} [options.observeLaunch] - starts observing a launch attempt; defaults to _observeOwnedBrowserLaunch
  * @returns {Promise<{ origin: string, browser: object, server: object, temp: string, close: () => Promise<void> }>}
  */
 export async function startBrowserFixture({
   name, createServer, viteConfig, chromium, launchOptions = {}, warmup, phaseMs = BROWSER_FIXTURE_PHASE_MS,
+  observeLaunch = _observeOwnedBrowserLaunch,
 }) {
   const budget = phaseMs.vite + phaseMs.chromium + phaseMs.warmup + phaseMs.cleanup;
   if (budget >= BROWSER_FIXTURE_STARTUP_MS) {
@@ -117,23 +205,51 @@ export async function startBrowserFixture({
     retried = '';
     return value;
   };
+  // Facts of every launch attempt that timed out, in attempt order, and the
+  // recorder of the attempt in flight.
+  const launchFacts = [];
+  let recordTimedOutAttempt;
   // One Chromium process. A browser that arrives after its attempt was
   // abandoned is closed at once; one that arrives in time joins `own`, which
-  // closes it at once if the fixture has failed meanwhile.
+  // closes it at once if the fixture has failed meanwhile. Shortly before its
+  // deadline, an attempt still pending samples its child: Playwright's own
+  // launch timeout kills that child at the deadline, so a later look would
+  // describe the kill rather than the stall.
   const launchOnce = (timeout) => {
+    const number = launchFacts.length + 1;
     let abandoned = false;
+    let settled = false;
+    let recorded = false;
+    let facts;
+    let sample;
+    try { sample = observeLaunch(); } catch { sample = () => 'unavailable'; }
+    const sampleAt = timeout - Math.min(1000, Math.floor(timeout / 10));
+    const timer = setTimeout(() => {
+      if (settled) return;
+      try { facts = sample(); } catch { facts = 'unavailable'; }
+    }, sampleAt);
+    const settle = () => { settled = true; clearTimeout(timer); };
     const launching = chromium.launch({
       headless: true,
       timeout,
       ...launchOptions,
       env: { ...process.env, ...launchOptions.env, TMPDIR: temp, TMP: temp, TEMP: temp },
     }).then((launched) => {
+      settle();
       if (abandoned) launched.close().catch(() => {});
       else own(() => launched.close(), 'browser');
       return launched;
-    });
-    return { launching, abandon: () => { abandoned = true; } };
+    }, (error) => { settle(); throw error; });
+    const record = () => {
+      if (recorded) return;
+      recorded = true;
+      settle();
+      launchFacts.push(facts === undefined ? `attempt ${number}: not sampled` : `attempt ${number} at ${sampleAt}ms: ${facts}`);
+    };
+    recordTimedOutAttempt = record;
+    return { launching, abandon: () => { abandoned = true; record(); } };
   };
+  const describeLaunchFacts = () => (launchFacts.length ? `; launch facts: ${launchFacts.join('; ')}` : '');
 
   try {
     const server = await runPhase('vite', async () => {
@@ -180,15 +296,22 @@ export async function startBrowserFixture({
     }
     // Passing runs record their phase timings too, so CI logs show how close
     // each budget runs before one of them fails.
-    console.log(`🧪 ${name} browser fixture ready (${completed.join(', ')})`);
+    const ready = `🧪 ${name} browser fixture ready (${completed.join(', ')}${describeLaunchFacts()})`;
+    console.log(ready);
+    retainLine(ready);
     return { origin, browser, server, temp, close: closeOwned };
   } catch (error) {
     failed = true;
+    // The phase deadline abandons the attempt in flight; Playwright's own
+    // launch timeout carries the same error name. A crash records nothing.
+    if (phase === 'chromium' && error.name === 'TimeoutError') recordTimedOutAttempt?.();
     const cleanup = await withDeadline(closeOwned().then(() => 'cleaned up'), phaseMs.cleanup,
       () => new Error(`timed out after ${phaseMs.cleanup}ms`))
       .catch(cleanupError => `cleanup failed: ${cleanupError.message}`);
     const done = completed.length ? completed.join(', ') : 'none';
-    throw new Error(`${name} startup failed during ${PHASE_NAMES[phase]}: ${error.message} `
-      + `(completed: ${done}; ${cleanup})`, { cause: error });
+    const failure = `${name} startup failed during ${PHASE_NAMES[phase]}: ${error.message} `
+      + `(completed: ${done}; ${cleanup}${describeLaunchFacts()})`;
+    retainLine(`❌ ${failure}`);
+    throw new Error(failure, { cause: error });
   }
 }
