@@ -230,6 +230,25 @@ export async function _describeTestChromeStartup(proc, { source = 'unknown', exe
     + ` profile=${profileState} devToolsActivePort=${port}`;
 }
 
+// A test process that exits without its suite's cleanup (a crash, a worker
+// torn down mid-test) takes its browser with it instead of orphaning it (#10840).
+// One exit hook for the module; the browsers themselves get no extra listeners.
+const startedBrowsers = new Set();
+let exitHooked = false;
+const settled = child => child.exitCode !== null || child.signalCode !== null;
+function killWithTestProcess(proc) {
+  if (!exitHooked) {
+    exitHooked = true;
+    process.once('exit', () => {
+      for (const child of startedBrowsers) {
+        if (!settled(child)) try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      }
+    });
+  }
+  for (const child of startedBrowsers) if (settled(child)) startedBrowsers.delete(child);
+  startedBrowsers.add(proc);
+}
+
 // Chrome writes its CDP address to stderr. Keep only a bounded tail and report
 // known failure categories: raw stderr can contain the user's profile path.
 export function _waitForTestChrome(proc, timeoutMs = 20000, startup, { observeProcess = _testChromeProcessFacts, spawnVersion = spawn } = {}) {
@@ -272,6 +291,7 @@ export function _waitForTestChrome(proc, timeoutMs = 20000, startup, { observePr
         diagnostic().then(rejectWithFacts, () => rejectWithFacts('; diagnostic unavailable'));
       } else {
         proc.removeListener('error', onError);
+        killWithTestProcess(proc);
         resolve(value);
       }
     };

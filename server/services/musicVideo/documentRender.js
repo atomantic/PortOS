@@ -399,13 +399,18 @@ export async function encodeDocumentComposition({
       }
     }
     // Long windows split across several browsers (encodeCompositionSegments).
-    await encodeCompositionSegments(page, { ...target, durationSec: window.durationSec }, silent, {
+    // A stalled worker browser restarts and redraws its frame (#10839).
+    const encoded = await encodeCompositionSegments(page, { ...target, durationSec: window.durationSec }, silent, {
       openPage, encode: encodeComposition,
       videoFilterAt: (offsetSec) => musicVideoGradeFilter(project.composition?.grade, data.scenes, { fps: target.fps, offsetSec }),
       signal, offsetSec: window.startSec, onProgress: (fraction) => onProgress?.(fraction * 0.95),
+      onRetry: ({ frame, attempt, segment, error }) => console.warn(`⚠️ Music-video composition render [${String(jobId).slice(0, 8)}] ${segment == null ? '' : `worker ${segment + 1} `}restarting its browser at song frame ${frame} (retry ${attempt}): ${error.message}`),
     });
-    page.check();
-    await page.close({ verify: true });
+    // A replaced first page was already closed after its failure.
+    if (!encoded?.pageReplaced) {
+      page.check();
+      await page.close({ verify: true });
+    }
     page = null;
     signal?.throwIfAborted();
     const mux = await runFfmpegProcess({
