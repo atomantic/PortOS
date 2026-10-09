@@ -220,6 +220,18 @@ describe('resolveSwarmBlock', () => {
     expect(block).toMatch(/Never loop on it/i);
   });
 
+  it('validates every PR concurrently and holds admission only around each pinned merge', () => {
+    const block = resolveSwarmBlock('claim-issue', 3);
+    const phaseC = block.slice(block.indexOf('## Phase C'));
+    const order = ['CONCURRENTLY, without merge admission', 'required** CI', 'acquires the repository merge admission', 'gh pr merge --match-head-commit <ci-verified-sha>', 'releases its own lease immediately'];
+    const positions = order.map((marker) => phaseC.indexOf(marker));
+    expect(positions.every((at) => at >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((x, y) => x - y));
+    expect(phaseC).toContain('outcome resync');
+    expect(phaseC).not.toMatch(/before its final base sync/i);
+    expect(resolveSwarmBlock('claim-issue-gitlab', 3)).toContain('glab mr merge --sha <ci-verified-sha>');
+  });
+
   it('returns a glab/MR swarm directive for the gitlab claim body', () => {
     const block = resolveSwarmBlock('claim-issue-gitlab', 4);
     expect(block).toContain('--swarm=4');

@@ -21,7 +21,6 @@ describe('review-enabled completion merge gate', () => {
     expect(section).toContain('4. **Wait for CI to finish**');
     expect(section).toContain('gh pr checks "<PR_URL>" --watch --fail-fast --interval 30');
     expect(section).toContain('repeat the configured review loop for `copilot` against the new HEAD');
-    expect(section).toContain('Base movement alone does not require rebasing or restarting CI');
     expect(section).toContain('gh pr merge "<PR_URL>" --merge --delete-branch');
     expect(section.indexOf('4. **Wait for CI to finish**')).toBeLessThan(section.indexOf('gh pr merge'));
     expect(section).toContain('8. Write a short markdown summary');
@@ -58,21 +57,29 @@ describe('claim ownership binding instructions (#10089)', () => {
 });
 
 describe('claim parent merge admission instructions', () => {
-  it('keeps CI concurrent and holds parent admission only for the merge attempt and readback', () => {
+  it('acquires only after green CI, merges a CLEAN head pinned and resyncs outside the lease', () => {
     const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
     expect(prompt).toContain('"agentId":"parent-example","action":"acquire"');
     expect(prompt).toContain('"action":"check"');
     expect(prompt).toContain('"action":"release"');
     expect(prompt).toContain('Authorization: Bearer');
     expect(prompt).toContain('never a fan-out child');
-    expect(prompt).toContain('at most 30 minutes');
-    expect(prompt).toContain('current-head CI BEFORE acquiring admission');
-    expect(prompt).toContain('Base movement alone does not require a rebase or another CI run');
-    expect(prompt).toContain('first release with outcome leave-open');
-    expect(prompt).toContain('rerun affected validation and required reviews/checks on the resulting head');
-    expect(prompt).not.toContain('if it moved, sync again');
+    // Ordering: CI-verified head → acquire → final PR re-read → pinned merge.
+    const order = ['WITHOUT admission', 'Once required CI is green', '"action":"acquire"', 'Inside the lease, re-read the PR', '--match-head-commit'];
+    const positions = order.map((marker) => prompt.indexOf(marker));
+    expect(positions.every((at) => at >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((x, y) => x - y));
+    expect(prompt).toContain('does NOT require a resync or fresh CI');
+    expect(prompt).toContain('release with outcome resync');
+    expect(prompt).toContain('OUTSIDE the lease');
+    expect(prompt).toContain('at most 10 minutes');
+    expect(prompt).toContain('lease-expired');
+    expect(prompt).toContain('overrides mandatory base-sync instructions in delegated slashdo workflows');
     expect(prompt).toContain('outcome leave-open');
     expect(prompt).toContain('never permission to proceed');
+    expect(prompt).not.toMatch(/BEFORE the final base sync/i);
+    expect(prompt).not.toMatch(/Keep admission through[^.]*CI/i);
+    expect(prompt).not.toContain('if it moved, sync again');
     expect(buildClaimFlowCompletionSection()).toContain('do not merge');
     expect(buildClaimFlowCompletionSection({ agentId: 'parent-example', leavePrOpen: true })).not.toContain('/merge-admission');
   });
