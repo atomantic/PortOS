@@ -9,6 +9,7 @@ import { isPlainObject } from '../lib/objects.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 
 const retryAfterMs = 5000;
+export const ADMISSION_QUEUE_TIMEOUT_MS = 15_000;
 // An agent lease covers only verify-and-merge. Past this deadline it is
 // reclaimable even from a running owner: that holder's pinned merge
 // (--match-head-commit) cannot land an unverified head, so the worst case is
@@ -35,26 +36,70 @@ const validLease = (lease, repository) => isPlainObject(lease) && lease.reposito
     : lease.kind === 'sweep' && typeof lease.serverOwner === 'string' && Number.isInteger(lease.pid) && lease.pid > 0);
 const expired = (lease) => lease.kind === 'agent' && Date.now() - Date.parse(lease.acquiredAt) >= AGENT_LEASE_MAX_HOLD_MS;
 
-async function transaction(work) {
+async function transaction(work, operation) {
   // Lazy: almost every task-generator suite reaches prWatcher, even when no
   // pending merge exists. Admission needs runtime state only on the merge path.
   const { withStateLock, readMergeAdmissionStateForSafetyCheck, loadState, saveState } = await import('./cosState.js');
-  return withStateLock(async () => {
-    const snapshot = await readMergeAdmissionStateForSafetyCheck().catch(() => null);
-    if (!snapshot?.trusted || !isPlainObject(snapshot.agents) || !isPlainObject(snapshot.mergeAdmissions)) {
-      return refuse('ownership-unreadable');
-    }
-    const state = await loadState();
-    // A recovered/defaulted or externally replaced state is not proof of an
-    // empty ownership set. Do not let the cache overwrite contradictory disk.
-    if (JSON.stringify(state.agents) !== JSON.stringify(snapshot.agents)
-      || JSON.stringify(state.mergeAdmissions ?? {}) !== JSON.stringify(snapshot.mergeAdmissions)) {
-      return refuse('ownership-stale');
-    }
-    // Copy before mutation: a failed atomic write must not admit from a cache
-    // that falsely remembers a successful grant/release.
-    const next = { ...state, agents: { ...state.agents }, mergeAdmissions: { ...snapshot.mergeAdmissions } };
-    return work(next, saveState);
+  const queuedAt = performance.now();
+  let started = false;
+  let cancelled = false;
+  let phase = 'queue';
+  let phaseStartedAt = queuedAt;
+  const timings = { queue: 0, trustedState: 0, stateLoad: 0, origin: 0, ownerRecovery: 0, persistence: 0 };
+  const elapsed = (since) => Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.round(performance.now() - since)));
+  // Only fixed operation/phase names and bounded numeric timings reach logs.
+  const report = (status) => {
+    const log = status === 'failed' ? console.error : status === 'settled' ? console.log : console.warn;
+    log(`🚦 Merge admission operation=${operation} status=${status} phase=${phase} phaseMs=${elapsed(phaseStartedAt)} totalMs=${elapsed(queuedAt)} queueMs=${timings.queue} trustedStateMs=${timings.trustedState} stateLoadMs=${timings.stateLoad} originMs=${timings.origin} ownerRecoveryMs=${timings.ownerRecovery} persistenceMs=${timings.persistence}`);
+  };
+  const measure = async (name, fn) => {
+    phase = name;
+    phaseStartedAt = performance.now();
+    try { return await fn(); }
+    finally { timings[name] = elapsed(phaseStartedAt); }
+  };
+  return new Promise((resolve, reject) => {
+    const expire = () => {
+      cancelled = true;
+      timings.queue = elapsed(queuedAt);
+      report('queue-timeout');
+      resolve(refuse('state-queue-timeout'));
+    };
+    const timer = setTimeout(() => {
+      if (!started) expire();
+      else report('pending');
+    }, ADMISSION_QUEUE_TIMEOUT_MS);
+    const queued = withStateLock(async () => {
+      // Check the clock as well: a delayed timer must not let an expired
+      // callback mutate a lease when the state queue resumes first.
+      if (cancelled) return;
+      if (performance.now() - queuedAt >= ADMISSION_QUEUE_TIMEOUT_MS) { expire(); return; }
+      started = true;
+      timings.queue = elapsed(queuedAt);
+      const snapshot = await measure('trustedState', () => readMergeAdmissionStateForSafetyCheck().catch(() => null));
+      if (!snapshot?.trusted || !isPlainObject(snapshot.agents) || !isPlainObject(snapshot.mergeAdmissions)) {
+        return refuse('ownership-unreadable');
+      }
+      const state = await measure('stateLoad', loadState);
+      // A recovered/defaulted or externally replaced state is not proof of an
+      // empty ownership set. Do not let the cache overwrite contradictory disk.
+      if (JSON.stringify(state.agents) !== JSON.stringify(snapshot.agents)
+        || JSON.stringify(state.mergeAdmissions ?? {}) !== JSON.stringify(snapshot.mergeAdmissions)) {
+        return refuse('ownership-stale');
+      }
+      // Copy before mutation: a failed atomic write must not admit from a cache
+      // that falsely remembers a successful grant/release.
+      const next = { ...state, agents: { ...state.agents }, mergeAdmissions: { ...snapshot.mergeAdmissions } };
+      return work(next, (value) => measure('persistence', () => saveState(value)), measure);
+    });
+    // Once started, the queue owns the entire transaction through durable
+    // settlement. The deadline diagnoses a slow phase but cannot return a
+    // refusal while an unfenced acquire/release is still able to commit.
+    queued.then((result) => {
+      if (!cancelled) { report('settled'); resolve(result); }
+    }, (error) => {
+      if (!cancelled) { report('failed'); reject(error); }
+    }).finally(() => clearTimeout(timer));
   });
 }
 
@@ -76,7 +121,7 @@ async function inactive(lease, state) {
   return sameAgent(lease, owner) && owner.status === 'completed' && Number.isFinite(Date.parse(owner.completedAt));
 }
 
-async function admit(state, save, repository, owner) {
+async function admit(state, save, repository, owner, measure) {
   const held = state.mergeAdmissions[repository];
   if (Object.hasOwn(state.mergeAdmissions, repository)) {
     if (!validLease(held, repository)) return refuse('lease-unreadable');
@@ -85,7 +130,7 @@ async function admit(state, save, repository, owner) {
       && held.taskId === owner.taskId && !expired(held)) {
       return { admitted: true, token: held.token, repository };
     }
-    if (!await inactive(held, state)) return refuse('owner-active-or-unverified');
+    if (!await measure('ownerRecovery', () => inactive(held, state))) return refuse('owner-active-or-unverified');
   }
   const lease = { ...owner, repository, token: randomUUID(), acquiredAt: new Date().toISOString() };
   state.mergeAdmissions[repository] = lease;
@@ -96,21 +141,21 @@ async function admit(state, save, repository, owner) {
 
 /** The ID is the registered parent, never a worker-child ID or a cwd PID. */
 export async function claimMergeAdmission({ agentId, action, token, outcome }) {
-  return transaction(async (state, save) => {
+  return transaction(async (state, save, measure) => {
     const agent = state.agents[agentId];
     if (!agent || agent.id !== agentId || agent.status !== 'running' || !agent.startedAt || !agent.taskId
       || !(isTruthyMeta(agent.metadata?.claimPicksOwnBranch) || agent.metadata?.claimBranch)) {
       return refuse('claim-owner-unverified');
     }
     if (!ownerPath(agent)) return refuse('repository-unreadable');
-    const repository = repositoryKey(await getOriginInfo(ownerPath(agent)).catch(() => null));
+    const repository = repositoryKey(await measure('origin', () => getOriginInfo(ownerPath(agent)).catch(() => null)));
     if (!repository) return refuse('repository-unreadable');
     if (action === 'acquire') {
       if (Object.entries(state.mergeAdmissions).some(([key, held]) =>
         !validLease(held, key) || (held.agentId === agentId && (!sameAgent(held, agent) || key !== repository)))) {
         return refuse('lease-owner-mismatch');
       }
-      return admit(state, save, repository, { kind: 'agent', ...binding(agent) });
+      return admit(state, save, repository, { kind: 'agent', ...binding(agent) }, measure);
     }
     const lease = state.mergeAdmissions[repository];
     if (!validLease(lease, repository) || lease.kind !== 'agent' || !sameAgent(lease, agent) || lease.token !== token) {
@@ -126,16 +171,16 @@ export async function claimMergeAdmission({ agentId, action, token, outcome }) {
     } };
     await save(state);
     return { admitted: false, released: true, outcome };
-  });
+  }, ['acquire', 'check', 'release'].includes(action) ? action : 'unknown');
 }
 
 /** A sweep holds admission only around its final read/assessment/merge attempt. */
 export async function withPendingMergeAdmission(origin, work) {
   const repository = repositoryKey(origin);
   if (!repository) return refuse('repository-unreadable');
-  const admission = await transaction((state, save) => admit(state, save, repository, {
+  const admission = await transaction((state, save, measure) => admit(state, save, repository, {
     kind: 'sweep', serverOwner, pid: process.pid,
-  }));
+  }, measure), 'sweep-acquire');
   if (!admission.admitted) return admission;
   try {
     return { admitted: true, result: await work() };
@@ -147,7 +192,7 @@ export async function withPendingMergeAdmission(origin, work) {
         delete state.mergeAdmissions[repository];
         await save(state);
         return { released: true };
-      });
+      }, 'sweep-release');
       if (!released.released) console.error(`❌ Pending merge admission release withheld: ${released.reason}`);
     } finally {
       // The callback has stopped even if persistence failed. Keep the durable
