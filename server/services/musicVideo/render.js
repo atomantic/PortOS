@@ -35,7 +35,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { findFfmpeg, safeUnder, generateThumbnail, probeVideoDuration, probeVideoGeometry } from '../../lib/ffmpeg.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
-import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { cancelMusicVideoRenderJob, isMusicVideoRenderCanceled } from './renderCancellation.js';
 import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
 import { loadHistory, mutateVideoHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
@@ -157,18 +157,7 @@ export function getRenderJobStatus(jobId) {
 }
 
 export function cancelRender(jobId) {
-  const job = jobs.get(jobId);
-  if (!job) return false;
-  // A composed render spends its first phase capturing the typography overlay
-  // (no ffmpeg yet); abort that capture instead.
-  if (!job.process) {
-    if (job.status !== 'running' || !job.overlayAbort || job.overlayAbort.signal.aborted) return false;
-    job.overlayAbort.abort(new Error('Render cancelled'));
-    return true;
-  }
-  const proc = job.process;
-  killWithEscalation(proc, { label: 'music-video render', stillRunning: () => job.process === proc });
-  return true;
+  return cancelMusicVideoRenderJob(jobs.get(jobId), { label: 'music-video render' });
 }
 
 // Resolve the project's source audio to a verified path under data/music/.
@@ -948,7 +937,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
         onClose: async (code, signal) => {
           job.process = null;
           if (code !== 0) {
-            const canceled = signal === 'SIGTERM' || signal === 'SIGKILL';
+            const canceled = isMusicVideoRenderCanceled(job, signal);
             job.status = canceled ? 'canceled' : 'error';
             const reason = canceled ? 'Render cancelled' : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`;
             job.lastError = reason;
