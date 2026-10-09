@@ -58,7 +58,17 @@ holds the lease only around its own read → assess → pinned merge.
 
 Leases extend the existing machine-local CoS runtime ownership in
 `data/cos/state.json`, under its existing write queue; there is no new store,
-seed, migration, or federation payload. Missing lease fields are compatible
+seed, migration, or federation payload. Admission waits at most 15 seconds to
+start its state-queue callback; an expired waiter returns `admitted: false`,
+`reason: state-queue-timeout`, and `retryAfterMs: 5000`. Its fenced callback
+cannot later grant or release a lease. A refused check grants no merge authority;
+retry and require a fresh successful check. Once a transaction starts, it retains
+the queue until its actual result settles, including persistence failures.
+The deadline then logs the pending phase rather than reporting an incomplete
+write as a refusal or successful release. Diagnostics contain fixed operation
+and phase names plus numeric timings for queue wait, trusted-state read, cached
+state load, origin lookup, owner recovery, and persistence; no owner, token,
+repository, or path is logged. Missing lease fields are compatible
 with older state. Unreadable, mismatched or stale ownership refuses admission.
 An agent lease is recoverable from a matching finalized parent record
 (including its archive), or by any participant once its 5-minute hold deadline
