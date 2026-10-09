@@ -220,6 +220,51 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
       await page.close();
     }
   }, 60000);
+
+  it.each([[360, 568], [360, 640], [390, 667], [360, 800]])('keeps phone navigation inside media and settings Close clickable at %dx%d', async (width, height) => {
+    const page = await browser.newPage({ viewport: { width, height } });
+    try {
+      await page.route('**/api/**', route => route.fulfill({ json: { providers: [], items: [] } }));
+      await page.goto(`${origin}lightbox-test`);
+      await page.locator('#gallery').click();
+      const media = page.getByRole('dialog').locator(':scope > div > div').first();
+      const assertInsideMedia = async locator => {
+        const box = await locator.boundingBox();
+        const surface = await media.boundingBox();
+        expect(box.width).toBeGreaterThanOrEqual(44);
+        expect(box.height).toBeGreaterThanOrEqual(44);
+        expect(box.x).toBeGreaterThanOrEqual(surface.x - 1);
+        expect(box.y).toBeGreaterThanOrEqual(surface.y - 1);
+        expect(box.x + box.width).toBeLessThanOrEqual(surface.x + surface.width + 1);
+        expect(box.y + box.height).toBeLessThanOrEqual(surface.y + surface.height + 1);
+      };
+      const clickAtCenter = async locator => {
+        const box = await locator.boundingBox();
+        const x = box.x + box.width / 2;
+        const y = box.y + box.height / 2;
+        expect(await page.evaluate(({ x, y, name }) => document.elementFromPoint(x, y)?.closest('button')?.getAttribute('aria-label') === name,
+          { x, y, name: await locator.getAttribute('aria-label') })).toBe(true);
+        await page.mouse.click(x, y);
+      };
+
+      const close = page.locator('aside header button[aria-label="Close"]');
+      await clickAtCenter(close);
+      await page.getByRole('dialog').waitFor({ state: 'detached' });
+
+      await page.locator('#gallery').click();
+      const next = page.getByRole('button', { name: 'Next media' });
+      await assertInsideMedia(next);
+      await clickAtCenter(next);
+      await page.getByRole('img', { name: 'Synthetic image 1', exact: true }).waitFor();
+      const previous = page.getByRole('button', { name: 'Previous media' });
+      await assertInsideMedia(previous);
+      await clickAtCenter(previous);
+      await page.getByRole('img', { name: 'Synthetic image 0', exact: true }).waitFor();
+    } finally {
+      await page.close();
+    }
+  }, 60000);
+
   // This catches footer-induced body collapse using real CSS rectangles, not
   // class names. All media and callbacks are synthetic and requests intercepted.
   it.each(['classic-midnight', 'kestrel-neon'])('keeps settings and image/video actions reachable in %s', async theme => {

@@ -300,9 +300,28 @@ export default function MediaLightbox({
   const overlayPad = fullScreen ? 'p-0' : 'p-4';
   const imgMax = fullScreen ? 'max-w-[100vw] max-h-dvh-cap' : 'max-w-full max-h-dvh-cap [--dvh-cap:92vh] [--dvh-cap-dynamic:92dvh] [--dvh-inset:2rem]';
   // Anchor low in fullscreen so the chevrons land in the letterbox bar of a
-  // landscape image instead of covering it. Non-fullscreen keeps them centered
-  // — bottom-anchoring would bury them in the SettingsPane underneath.
+  // landscape image instead of covering it. On phones, render arrows inside
+  // the media surface; the settings pane is stacked below it and must never
+  // share their hit area. Wider layouts keep viewport-edge navigation.
   const chevronPositionClass = fullScreen ? 'bottom-4' : 'top-1/2 -translate-y-1/2';
+  const renderNavigationButton = (direction, placement) => {
+    const previous = direction === 'previous';
+    const handler = previous ? onPrevious : onNext;
+    const label = previous ? 'Previous media' : 'Next media';
+    const position = previous ? 'left-3 md:left-5' : 'right-3 md:right-5';
+    return (
+      <button
+        key={`${direction}-${placement}`}
+        type="button"
+        onClick={(e) => { e.stopPropagation(); handler?.(); }}
+        className={`absolute ${position} ${placement === 'mobile' ? 'top-1/2 -translate-y-1/2 md:hidden' : placement === 'wide' ? `hidden md:block ${chevronPositionClass}` : 'bottom-4'} z-30 p-2.5 text-white/80 hover:text-white bg-black/40 hover:bg-black/60 backdrop-blur-sm focus:outline-none focus:ring-2 focus:ring-port-accent rounded-full`}
+        aria-label={label}
+        title={previous ? 'Previous' : 'Next'}
+      >
+        {previous ? <ChevronLeft className="w-6 h-6" /> : <ChevronRight className="w-6 h-6" />}
+      </button>
+    );
+  };
 
   // Portal to <body>. The overlay is a hand-rolled `fixed inset-0` (this file
   // opts out of <ui/Modal> and its `usePortal`, see the note at the top), and
@@ -328,28 +347,14 @@ export default function MediaLightbox({
       // (button, input) and only fires if this div itself were ever focused.
       onKeyDown={onActivateKeyDown(onClose)}
     >
-      {hasPrevious && (
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); onPrevious?.(); }}
-          className={`absolute left-3 md:left-5 ${chevronPositionClass} z-30 p-2.5 text-white/80 hover:text-white bg-black/40 hover:bg-black/60 backdrop-blur-sm focus:outline-none focus:ring-2 focus:ring-port-accent rounded-full`}
-          aria-label="Previous media"
-          title="Previous"
-        >
-          <ChevronLeft className="w-6 h-6" />
-        </button>
-      )}
-      {hasNext && (
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); onNext?.(); }}
-          className={`absolute right-3 md:right-5 ${chevronPositionClass} z-30 p-2.5 text-white/80 hover:text-white bg-black/40 hover:bg-black/60 backdrop-blur-sm focus:outline-none focus:ring-2 focus:ring-port-accent rounded-full`}
-          aria-label="Next media"
-          title="Next"
-        >
-          <ChevronRight className="w-6 h-6" />
-        </button>
-      )}
+      {!fullScreen && <>
+        {hasPrevious && renderNavigationButton('previous', 'wide')}
+        {hasNext && renderNavigationButton('next', 'wide')}
+      </>}
+      {fullScreen && <>
+        {hasPrevious && renderNavigationButton('previous', 'fullscreen')}
+        {hasNext && renderNavigationButton('next', 'fullscreen')}
+      </>}
       <div
         className={cardClasses}
         onClick={(e) => e.stopPropagation()}
@@ -370,6 +375,8 @@ export default function MediaLightbox({
           // navigation while the browser is handling the gesture.
           style={{ touchAction: 'manipulation' }}
         >
+          {!fullScreen && hasPrevious && renderNavigationButton('previous', 'mobile')}
+          {!fullScreen && hasNext && renderNavigationButton('next', 'mobile')}
           {/* Fail-safe close — the SettingsPane's X is hidden in fullscreen
               and unreachable if iOS Safari mis-lays out the page. Keep it
               before the media so native video controls sit inside the trap's
