@@ -75,7 +75,7 @@ export function carriedLinks(kit, target) {
 export function crossLinkBackfill(kit) {
   const posts = kitOf(kit).posts || {};
   return CROSS_LINK_EDIT_TARGETS.filter((target) => str(posts[target]?.url)).map((target) => {
-    const exclude = [target, ...carriedLinks(kit, target), ...(target === 'stackerNews' ? ['youtube'] : [])];
+    const exclude = [target, ...carriedLinks(kit, target)];
     const missing = releaseLinks(kit, { exclude });
     return { target, url: str(posts[target].url), missing, text: missing.map((l) => `${l.label}: ${l.url}`).join('\n') };
   });

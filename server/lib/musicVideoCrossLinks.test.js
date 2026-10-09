@@ -41,4 +41,14 @@ describe('cross-links between release posts', () => {
     const reposted = { posts: { ...posts, youtube: { url: 'https://youtu.be/new', postedAt: '2026-01-04T00:00:00Z', links: [] } } };
     expect(crossLinkBackfill(reposted).find((r) => r.target === 'x').missing.map((l) => l.url)).toContain('https://youtu.be/new');
   });
+
+  it('offers a replaced YouTube video to a Stacker News post that linked the old one', () => {
+    const kit = { posts: {
+      youtube: { url: 'https://youtu.be/new', postedAt: '2026-01-04T00:00:00Z', links: [] },
+      stackerNews: { url: 'https://stacker.news/items/7', postedAt: '2026-01-02T00:00:00Z', links: ['youtube'] },
+    } };
+    expect(crossLinkBackfill(kit).find((r) => r.target === 'stackerNews').missing).toEqual([]);
+    const dropped = { posts: dropCarriedLink(kit, kit.posts, 'youtube') };
+    expect(crossLinkBackfill(dropped).find((r) => r.target === 'stackerNews').missing.map((l) => l.url)).toEqual(['https://youtu.be/new']);
+  });
 });

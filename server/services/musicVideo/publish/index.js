@@ -313,11 +313,14 @@ export async function recordPublishPost(projectId, target, input = {}, deps = {}
   const { project } = await mutateProjectRecord(projectId, (current) => {
     const kit = current.publishKit && typeof current.publishKit === 'object' ? current.publishKit : {};
     let posts = { ...(kit.posts || {}) };
-    if (Array.isArray(input.links) && posts[target]) input = { ...input, links: mergeCarriedLinks(carriedLinks(kit, target), input.links) };
     const before = posts[target];
+    const replaced = !!before?.url && typeof input.url === 'string' && input.url.trim() !== before.url;
+    // A replacement post starts over: only the links its own draft carried.
+    if (replaced) input = { ...input, links: mergeCarriedLinks([], input.links) };
+    else if (Array.isArray(input.links) && before) input = { ...input, links: mergeCarriedLinks(carriedLinks(kit, target), input.links) };
     const next = normalizePost(before, input);
     // Other posts that linked the old URL no longer link this post.
-    if (before?.url && before.url !== next.url) posts = dropCarriedLink(kit, posts, target);
+    if (replaced) posts = dropCarriedLink(kit, posts, target);
     posts[target] = next;
     return { project: { ...current, publishKit: { ...kit, posts } } };
   });
