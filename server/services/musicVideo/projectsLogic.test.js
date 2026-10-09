@@ -571,6 +571,34 @@ describe('scene board operations', () => {
     expect(() => applySceneUpdate(project, scene.sceneId, { lyricRole: 'karaoke' })).toThrow();
   });
 
+  it('keeps each position\'s song slot and moves the shot between slots', () => {
+    let p = baseProject();
+    const ids = [];
+    for (const [prompt, startSec, endSec, lyricText] of [['fire', 0, 4, 'line one'], ['cave', 4, 10, 'line two']]) {
+      const r = addScene(p, { prompt, startSec, endSec, lyricText, sectionLabel: 'Intro', label: prompt });
+      p = r.project; ids.push(r.scene.sceneId);
+    }
+    p = applySceneUpdate(p, ids[0], { referenceImageId: 'fire.png' }).project;
+    p = { ...p,
+      songRevision: { sceneReview: { [ids[0]]: { status: 'changed' } } },
+      productionReview: { draft: { storyboard: [
+        { sceneId: ids[0], startSec: 0, endSec: 4, lyricCueIds: ['c1'], action: 'gather' },
+        { sceneId: ids[1], startSec: 4, endSec: 10, lyricCueIds: ['c2'], action: 'paint' },
+      ] } } };
+    const next = reorderScenes(p, [ids[1], ids[0]]);
+    expect(next.scenes.map((s) => [s.sceneId, s.label, s.startSec, s.endSec, s.lyricText, s.order])).toEqual([
+      [ids[1], 'cave', 0, 4, 'line one', 0],
+      [ids[0], 'fire', 4, 10, 'line two', 1],
+    ]);
+    expect(next.scenes[1].referenceImageId).toBe('fire.png');
+    expect(next.productionReview.draft.storyboard).toEqual([
+      { sceneId: ids[0], startSec: 4, endSec: 10, lyricCueIds: ['c2'], action: 'gather' },
+      { sceneId: ids[1], startSec: 0, endSec: 4, lyricCueIds: ['c1'], action: 'paint' },
+    ]);
+    // The revised-song verdict was about the first slot's lyric, now under the cave shot.
+    expect(next.songRevision.sceneReview).toEqual({ [ids[1]]: { status: 'changed' } });
+  });
+
   it('rejects a reorder that is not an exact permutation', () => {
     let p = baseProject();
     const r = addScene(p, { prompt: 'a' }); p = r.project;
