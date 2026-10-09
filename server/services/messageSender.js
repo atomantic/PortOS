@@ -41,19 +41,28 @@ export async function sendDraft(draftId, io) {
   }
 
   let delivery = null;
+  let validateClaim;
   if (draft.sendVia === 'playwright') {
     const prepared = await prepareBrowserDelivery(account, draft);
     if (prepared.refusal) return prepared.refusal;
     delivery = prepared.delivery;
+  } else if (draft.replyToMessageId) {
+    const { getMessage } = await import('./messageSync.js');
+    const { prepareGmailReply, assertGmailReplyDraft } = await import('./messageGmailSync.js');
+    const original = await getMessage(account.id, draft.replyToMessageId);
+    const prepared = await prepareGmailReply(account, draft, original);
+    if (prepared.refusal) return prepared.refusal;
+    delivery = prepared.delivery;
+    validateClaim = claimed => assertGmailReplyDraft(account, claimed, delivery);
   }
 
-  draft = await claimDraftForSend(draftId);
+  draft = await claimDraftForSend(draftId, validateClaim);
   console.log(`📧 Sending draft ${draft.id} via ${draft.sendVia}`);
 
   const dispatch = async () => {
     if (draft.sendVia === 'api') {
       const { sendGmail } = await import('./messageGmailSync.js');
-      return sendGmail(account, draft);
+      return delivery ? sendGmail(account, draft, delivery) : sendGmail(account, draft);
     }
     const { sendPlaywright } = await import('./messagePlaywrightSync.js');
     return sendPlaywright(account, draft, delivery);
