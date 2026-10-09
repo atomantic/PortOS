@@ -51,18 +51,32 @@ vi.mock('../providers.js', () => ({
 
 const TEST_ROOT = join(tmpdir(), `portos-agy-test-${process.pid}-${Date.now()}`);
 const FAKE_IMAGES_DIR = join(TEST_ROOT, 'data-images');
+const FAKE_DATA_DIR = join(TEST_ROOT, 'data');
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
   actual.PATHS.images = FAKE_IMAGES_DIR;
   return {
     ...actual,
     ensureDir: vi.fn(async (dir) => mkdir(dir, { recursive: true })),
+    rmGuarded: vi.fn(actual.rmGuarded),
   };
 });
+// A test-rooted maintenance journal, so cleanup-failure ownership is observable.
+const fixture = vi.hoisted(() => ({ admission: null }));
+vi.mock('../../lib/maintenanceAdmission.js', async importOriginal => ({
+  ...await importOriginal(),
+  maintenance: new Proxy({}, { get: (_target, property) => fixture.admission[property] }),
+}));
 
 const agy = await import('./agy.js');
 const { AGY_IMAGEGEN_DEFAULT_MODEL } = await import('../../lib/imageGenCapabilities.js');
 const { imageGenEvents } = await import('../imageGenEvents.js');
+const { spawn } = await import('../../lib/childProcess.js');
+const { spawn: realSpawn } = await vi.importActual('../../lib/childProcess.js');
+const { SSE_CLEANUP_DELAY_MS } = await import('../../lib/sseUtils.js');
+const { createMaintenanceAdmission } = await import('../../lib/maintenanceAdmission.js');
+const { rmGuarded } = await import('../../lib/fileUtils.js');
+const realFiles = await vi.importActual('../../lib/fileUtils.js');
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const stagingPathFor = (jobId) => join(tmpdir(), `portos-agy-${jobId}`, 'output.png');
 
@@ -78,10 +92,13 @@ beforeEach(async () => {
   imageGenEvents.removeAllListeners();
   agy._internals.setHarvestTimeoutForTests(10);
   await rm(TEST_ROOT, { recursive: true, force: true }).catch(() => {});
-  await mkdir(TEST_ROOT, { recursive: true });
+  await mkdir(FAKE_DATA_DIR, { recursive: true });
+  fixture.admission = createMaintenanceAdmission(FAKE_DATA_DIR);
+  rmGuarded.mockReset().mockImplementation(realFiles.rmGuarded);
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   agy._internals.setHarvestTimeoutForTests();
   await rm(TEST_ROOT, { recursive: true, force: true }).catch(() => {});
 });
@@ -409,4 +426,88 @@ it('settles admission rejection from the actual close event and clears the activ
     expect(response.write.mock.calls[0][0]).toContain('injected publication admission refusal');
     response.req.emit('close');
   } finally { admissionFault.error = null; }
+});
+
+// #10749 — a launch that throws must settle through the job's own finalizer and
+// release the job-owned scratch dir, not leave a phantom 'running' job whose SSE
+// stream never terminates and whose scratch dir leaks.
+describe('agy image provider — launch refusal settlement', () => {
+  const scratchDirFor = (jobId) => join(tmpdir(), `portos-agy-${jobId}`);
+  const sseClient = () => ({ writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: new EventEmitter() });
+
+  it.each([
+    // Node validates argv synchronously and throws before any child exists.
+    ['a real Node argument refusal', { agyPath: 'agy\0probe' }, () => spawn.mockImplementationOnce(realSpawn), /Failed to spawn/],
+    ['a synthetic launch refusal', {}, () => spawn.mockImplementationOnce(() => { throw new Error('synthetic launch refusal'); }), /synthetic launch refusal/],
+  ])('settles %s once and removes its scratch dir', async (_label, params, arrange, reason) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const failed = vi.fn();
+    imageGenEvents.on('failed', failed);
+    arrange();
+    const job = await agy.generateImage({ prompt: 'synthetic', ...params });
+    await vi.waitFor(() => expect(existsSync(scratchDirFor(job.jobId))).toBe(false));
+
+    expect(spawnCalls).toHaveLength(0);
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(failed.mock.calls[0][0]).toMatchObject({ mode: 'agy', generationId: job.jobId, error: expect.stringMatching(reason) });
+    expect(agy.getActiveJob()).toBeNull();
+    expect(agy.cancel(job.jobId)).toBe(false);
+    const client = sseClient();
+    expect(agy.attachSseClient(job.jobId, client)).toBe(true);
+    expect(JSON.parse(client.write.mock.calls[0][0].replace(/^data: /, ''))).toMatchObject({ type: 'error', error: expect.stringMatching(reason) });
+    client.req.emit('close');
+
+    vi.advanceTimersByTime(SSE_CLEANUP_DELAY_MS);
+    expect(agy.attachSseClient(job.jobId, sseClient())).toBe(false);
+  });
+
+  it('retains an unsettled maintenance blocker when the refused launch cannot remove its scratch dir', async () => {
+    const jobId = 'agy-launch-refusal-cleanup';
+    rmGuarded.mockRejectedValueOnce(Object.assign(new Error('Cleanup denied'), { code: 'EACCES' }));
+    spawn.mockImplementationOnce(() => { throw new Error('synthetic launch refusal'); });
+    const failed = vi.fn();
+    imageGenEvents.on('failed', failed);
+    const permit = fixture.admission.admit('image', jobId);
+    await permit.run(() => agy.generateImage({ jobId, prompt: 'synthetic' }));
+    fixture.admission.begin({ reason: 'Drain renderer', owner: 'Operator' });
+    await vi.waitFor(() => expect(rmGuarded).toHaveBeenCalledTimes(1));
+    await flush();
+    await permit.finish();
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(fixture.admission.status()).toMatchObject({
+      state: 'draining', blockers: expect.arrayContaining([expect.objectContaining({ resource: jobId, unsettled: true })]),
+    });
+    await realFiles.rmGuarded(scratchDirFor(jobId), { recursive: true, force: true });
+  });
+
+  it('terminates a live child whose setup fails and releases its scratch dir only after it physically closes', async () => {
+    spawn.mockImplementationOnce((bin, args) => {
+      const child = makeFakeChild();
+      child.stdout.on = () => { throw new Error('synthetic stream setup failure'); };
+      spawnCalls.push({ bin, args, child });
+      return child;
+    });
+    const failed = vi.fn();
+    imageGenEvents.on('failed', failed);
+    const job = await agy.generateImage({ prompt: 'synthetic' });
+    const { child } = spawnCalls[0];
+    child.pid = 4242;
+
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    child.emit('error', new Error('signal delivery failed'));
+    await flush();
+    expect(failed).not.toHaveBeenCalled();
+    expect(existsSync(scratchDirFor(job.jobId))).toBe(true);
+    expect(agy.getActiveJob()).toMatchObject({ generationId: job.jobId });
+
+    child.exitCode = 0;
+    child.emit('close', 0, null);
+    child.emit('close', 0, null);
+    await vi.waitFor(() => expect(existsSync(scratchDirFor(job.jobId))).toBe(false));
+    await flush();
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(failed.mock.calls[0][0].error).toMatch(/launch setup failed: synthetic stream setup failure/);
+    expect(agy.getActiveJob()).toBeNull();
+    expect(agy.cancel(job.jobId)).toBe(false);
+  });
 });

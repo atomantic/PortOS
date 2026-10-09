@@ -299,7 +299,6 @@ export async function generateImage({
   const outputPath = join(PATHS.images, filename);
   const scratchDir = join(tmpdir(), `portos-agy-${jobId}`);
   const stagingPath = join(scratchDir, 'output.png');
-  await mkdir(scratchDir, { recursive: true });
 
   const fullPrompt = buildAgyPrompt({
     prompt, negativePrompt, width, height, stagingPath, inputImages, initImageStrength,
@@ -327,6 +326,9 @@ export async function generateImage({
     ...(visualConditioning ? { visualConditioning } : {}),
     createdAt: new Date().toISOString(),
   };
+  // The scratch dir is the last fallible step before the job exists, so a
+  // refusal above leaves nothing behind; from here on runAgy owns it.
+  await mkdir(scratchDir, { recursive: true });
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   jobs.set(jobId, job);
   activeJobs.set(jobId, {
@@ -349,8 +351,6 @@ export async function generateImage({
     meta,
     cleanC2PA,
     denoise,
-  }).catch((err) => {
-    console.error(`❌ agy run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
   });
 
   return {
@@ -364,7 +364,12 @@ export async function generateImage({
   };
 }
 
-async function runAgy(job, jobId, bin, args, {
+// Launch is synchronous so every failure has one owner: a refusal before a
+// child exists (shim resolution, or Node rejecting an invalid argv/bin
+// synchronously) releases the scratch dir and settles the job here; a setup
+// failure after spawn terminates the child and leaves the close handler to
+// release the scratch dir once it has physically exited.
+function runAgy(job, jobId, bin, args, {
   scratchDir,
   stagingPath,
   outputPath,
@@ -373,35 +378,31 @@ async function runAgy(job, jobId, bin, args, {
   cleanC2PA,
   denoise,
 }) {
-  const resolvedBin = (!isAbsolute(bin) && (bin.includes('/') || bin.includes(sep))) ? pathResolve(bin) : bin;
-  const { command, args: spawnArgs } = prepareCliSpawn(resolvedBin, args);
-  // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). agy reads
-  // process.cwd(), so this is defensive rather than a live fix; it keeps every
-  // scratch-dir spawn telling the child one consistent story about where it is.
-  const proc = spawn(command, spawnArgs, { cwd: scratchDir, env: withSpawnCwdEnv(process.env, scratchDir), shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
-  activeProcs.set(jobId, proc);
+  // A failed removal keeps the maintenance settlement unsettled rather than
+  // claiming the scratch dir was released; removal is idempotent.
   const removeScratch = () => maintenance.continueSettlement(
     () => rmGuarded(scratchDir, { recursive: true, force: true }),
   ).catch((err) => {
     maintenance.markCurrentUnsettled();
     console.error(`❌ agy scratch cleanup failed: ${err.message}`);
   });
+  let proc;
+  try {
+    const resolvedBin = (!isAbsolute(bin) && (bin.includes('/') || bin.includes(sep))) ? pathResolve(bin) : bin;
+    const { command, args: spawnArgs } = prepareCliSpawn(resolvedBin, args);
+    // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). agy reads
+    // process.cwd(), so this is defensive rather than a live fix; it keeps every
+    // scratch-dir spawn telling the child one consistent story about where it is.
+    proc = spawn(command, spawnArgs, { cwd: scratchDir, env: withSpawnCwdEnv(process.env, scratchDir), shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (err) {
+    removeScratch();
+    return finalizeJobFailure(job, jobId, null, `Failed to spawn ${bin}: ${err?.message || err}`);
+  }
+  activeProcs.set(jobId, proc);
   let stdoutTail = '';
   let stderrTail = '';
-  const timeoutTimer = setTimeout(() => {
-    if (activeProcs.get(jobId) === proc) {
-      console.log(`⏱️ agy timed out after ${AGY_TIMEOUT_MS}ms [${jobId.slice(0, 8)}]`);
-      terminate(jobId, proc);
-    }
-  }, AGY_TIMEOUT_MS);
-
-  proc.stdout.on('data', (chunk) => {
-    stdoutTail = `${stdoutTail}${chunk}`.slice(-8192);
-    broadcastSse(job, { type: 'status', message: 'Running…' });
-  });
-  proc.stderr.on('data', (chunk) => {
-    stderrTail = `${stderrTail}${chunk}`.slice(-32768);
-  });
+  let timeoutTimer = null;
+  let setupError = null;
   let processError;
   proc.on('error', (err) => {
     processError = err;
@@ -415,6 +416,10 @@ async function runAgy(job, jobId, bin, args, {
     await withBackupAssetPublication(async () => {
       clearTimeout(timeoutTimer);
       try {
+        if (setupError) {
+          removeScratch();
+          return finalizeJobFailure(job, jobId, proc, `Agy launch setup failed: ${setupError?.message || setupError}`);
+        }
         if (code !== 0 || processError) {
           removeScratch();
           const reason = processError?.message || (signal ? `Killed by signal ${signal}` : `Exit code ${code}`);
@@ -488,6 +493,30 @@ async function runAgy(job, jobId, bin, args, {
       finalizeJobFailure(job, jobId, proc, `Agy publication admission failed: ${err?.message || err}`);
     });
   });
+
+  // Post-spawn setup. The error/close owners above are already installed, so a
+  // throw here must not settle the job or release its scratch dir under a live
+  // child: record it, terminate the child, and let close settle after exit.
+  try {
+    timeoutTimer = setTimeout(() => {
+      if (activeProcs.get(jobId) === proc) {
+        console.log(`⏱️ agy timed out after ${AGY_TIMEOUT_MS}ms [${jobId.slice(0, 8)}]`);
+        terminate(jobId, proc);
+      }
+    }, AGY_TIMEOUT_MS);
+
+    proc.stdout.on('data', (chunk) => {
+      stdoutTail = `${stdoutTail}${chunk}`.slice(-8192);
+      broadcastSse(job, { type: 'status', message: 'Running…' });
+    });
+    proc.stderr.on('data', (chunk) => {
+      stderrTail = `${stderrTail}${chunk}`.slice(-32768);
+    });
+  } catch (err) {
+    setupError = err;
+    clearTimeout(timeoutTimer);
+    terminate(jobId, proc);
+  }
 }
 
 const finalizeJobFailure = createJobFailureFinalizer({

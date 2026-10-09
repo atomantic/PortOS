@@ -71,6 +71,9 @@ vi.mock('../../lib/fileUtils.js', async () => {
 const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
 const codex = await import('./codex.js');
 const { imageGenEvents } = await import('../imageGenEvents.js');
+const { spawn } = await import('../../lib/childProcess.js');
+const { spawn: realSpawn } = await vi.importActual('../../lib/childProcess.js');
+const { SSE_CLEANUP_DELAY_MS } = await import('../../lib/sseUtils.js');
 
 const flush = () => new Promise((r) => setImmediate(r));
 
@@ -763,4 +766,68 @@ it('settles admission rejection from the actual close event and clears the activ
     expect(response.write.mock.calls[0][0]).toContain('injected publication admission refusal');
     response.req.emit('close');
   } finally { admissionFault.error = null; }
+});
+
+// #10749 — a launch that throws must settle through the job's own finalizer,
+// not leave a phantom 'running' job, a never-terminating SSE stream and a
+// cancel that cannot find a process.
+describe('codex provider — launch refusal settlement', () => {
+  const sseClient = () => ({ writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: new EventEmitter() });
+
+  it.each([
+    // Node validates argv synchronously and throws before any child exists.
+    ['a real Node argument refusal', { codexPath: 'codex\0probe' }, () => spawn.mockImplementationOnce(realSpawn), /without null bytes/],
+    ['a synthetic launch refusal', {}, () => spawn.mockImplementationOnce(() => { throw new Error('synthetic launch refusal'); }), /synthetic launch refusal/],
+  ])('settles %s exactly once with a replayable terminal frame', async (_label, params, arrange, reason) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const failed = vi.fn();
+    imageGenEvents.on('failed', failed);
+    arrange();
+    const job = await codex.generateImage({ prompt: 'synthetic', ...params });
+
+    expect(spawnCalls).toHaveLength(0);
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(failed.mock.calls[0][0]).toMatchObject({ mode: 'codex', generationId: job.jobId, error: expect.stringMatching(reason) });
+    expect(codex.getActiveJob()).toBeNull();
+    expect(codex.cancel(job.jobId)).toBe(false);
+    const client = sseClient();
+    expect(codex.attachSseClient(job.jobId, client)).toBe(true);
+    expect(JSON.parse(client.write.mock.calls[0][0].replace(/^data: /, ''))).toMatchObject({ type: 'error', error: expect.stringMatching(reason) });
+    client.req.emit('close');
+
+    vi.advanceTimersByTime(SSE_CLEANUP_DELAY_MS);
+    expect(codex.attachSseClient(job.jobId, sseClient())).toBe(false);
+  });
+
+  it('terminates a live child whose setup fails and settles once, only after it physically closes', async () => {
+    spawn.mockImplementationOnce((bin, args, options) => {
+      const child = makeFakeChild();
+      child.stdout.on = () => { throw new Error('synthetic stream setup failure'); };
+      spawnCalls.push({ bin, args, options, child });
+      return child;
+    });
+    const failed = vi.fn();
+    imageGenEvents.on('failed', failed);
+    const job = await codex.generateImage({ prompt: 'synthetic' });
+    const { child } = spawnCalls[0];
+    child.pid = 4242;
+
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(failed).not.toHaveBeenCalled();
+    expect(codex.getActiveJob()).toMatchObject({ generationId: job.jobId });
+
+    // A live-child error is not exit; the close that follows settles exactly once.
+    child.emit('error', new Error('signal delivery failed'));
+    await flush();
+    expect(failed).not.toHaveBeenCalled();
+    child.exitCode = 0;
+    child.emit('close', 0, null);
+    child.emit('close', 0, null);
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+    await flush();
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(failed.mock.calls[0][0].error).toMatch(/launch setup failed: synthetic stream setup failure/);
+    expect(codex.getActiveJob()).toBeNull();
+    expect(codex.cancel(job.jobId)).toBe(false);
+  });
 });

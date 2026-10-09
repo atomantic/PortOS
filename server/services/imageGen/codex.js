@@ -285,10 +285,9 @@ export async function generateImage({
 
   // generateImage returns a job descriptor synchronously; the actual codex
   // child runs out-of-band so the HTTP response can ship while the client
-  // attaches to the per-job SSE stream (mirrors local.js).
-  runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA, denoise }).catch((err) => {
-    console.error(`❌ codex run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
-  });
+  // attaches to the per-job SSE stream (mirrors local.js). runCodex settles
+  // every launch failure through the job's own failure finalizer.
+  runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA, denoise });
 
   return {
     jobId, filename, path: `/data/images/${filename}`, generationId: jobId,
@@ -322,8 +321,17 @@ export const noImageReason = (stdoutTail = '') => buildNoImageReason(stdoutTail,
   ),
 });
 
-async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA = false, denoise = false } = {}) {
-  const proc = spawn(bin, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+// Launch is synchronous so every failure has one owner: a refusal before a
+// child exists (Node rejects an invalid argv/bin synchronously) settles the job
+// here, and a setup failure after spawn terminates the child and leaves the
+// close handler to settle once it has physically exited.
+function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA = false, denoise = false } = {}) {
+  let proc;
+  try {
+    proc = spawn(bin, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (err) {
+    return finalizeJobFailure(job, jobId, null, `Failed to spawn ${bin}: ${err?.message || err}`);
+  }
   activeProcs.set(jobId, proc);
 
   let sessionId = null;
@@ -334,13 +342,8 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cle
   // can surface the model's actual words instead of a generic "no image" guess.
   let stdoutTail = '';
   const STDOUT_TAIL_BYTES = 8 * 1024;
-  let timeoutTimer = setTimeout(() => {
-    if (activeProcs.get(jobId) === proc) {
-      console.log(`⏱️ codex timed out after ${CODEX_TIMEOUT_MS}ms [${jobId.slice(0, 8)}]`);
-      proc.kill('SIGTERM');
-      setTimeout(() => { if (proc.exitCode === null) proc.kill('SIGKILL'); }, 5000);
-    }
-  }, CODEX_TIMEOUT_MS);
+  let timeoutTimer = null;
+  let setupError = null;
 
   // Banner is roughly 12 lines / ~500 bytes — keep a small rolling
   // buffer so a session-id line that gets split across chunk boundaries
@@ -377,26 +380,6 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cle
     finalizeJobFailure(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
   });
 
-  proc.stdout.on('data', (chunk) => {
-    // Codex prints the `session id:` banner on stderr only — don't feed
-    // stdout into bannerBuf. A stdout chunk arriving between two stderr
-    // chunks of the banner can split the session-id line with unrelated
-    // text and break the regex match.
-    // We DO retain stdout here (the model's turn narration) so a no-image
-    // finish can report why — a content decline, or a "generated" claim with
-    // no file (tool unavailable / image-gen rate-limited on the account).
-    stdoutTail += chunk.toString();
-    if (stdoutTail.length > STDOUT_TAIL_BYTES) stdoutTail = stdoutTail.slice(-STDOUT_TAIL_BYTES);
-    broadcastSse(job, { type: 'status', message: 'Running…' });
-  });
-
-  proc.stderr.on('data', (chunk) => {
-    const text = chunk.toString();
-    captureSession(text);
-    stderrTail += text;
-    if (stderrTail.length > STDERR_TAIL_BYTES) stderrTail = stderrTail.slice(-STDERR_TAIL_BYTES);
-  });
-
   proc.on('close', async (code, signal) => {
     await withBackupAssetPublication(async () => {
       clearTimeout(timeoutTimer);
@@ -410,6 +393,9 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cle
       // unhandled rejection (process-killing on Node ≥15) and the job would
       // be stuck in 'running' forever with no SSE error to the client.
       try {
+        if (setupError) {
+          return finalizeJobFailure(job, jobId, proc, `Codex launch setup failed: ${setupError?.message || setupError}`);
+        }
         if (code !== 0 || processError) {
           const reason = processError?.message || (signal ? `Killed by signal ${signal}` : `Exit code ${code}`);
           const tail = stderrTail.trim().split('\n').slice(-6).join('\n');
@@ -474,6 +460,43 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cle
       finalizeJobFailure(job, jobId, proc, `Codex publication admission failed: ${err?.message || err}`);
     });
   });
+
+  // Post-spawn setup. The error/close owners above are already installed, so a
+  // throw here must not settle the job under a live child: record it,
+  // terminate the child, and let close settle once it has physically exited.
+  try {
+    timeoutTimer = setTimeout(() => {
+      if (activeProcs.get(jobId) === proc) {
+        console.log(`⏱️ codex timed out after ${CODEX_TIMEOUT_MS}ms [${jobId.slice(0, 8)}]`);
+        proc.kill('SIGTERM');
+        setTimeout(() => { if (proc.exitCode === null) proc.kill('SIGKILL'); }, 5000);
+      }
+    }, CODEX_TIMEOUT_MS);
+
+    proc.stdout.on('data', (chunk) => {
+      // Codex prints the `session id:` banner on stderr only — don't feed
+      // stdout into bannerBuf. A stdout chunk arriving between two stderr
+      // chunks of the banner can split the session-id line with unrelated
+      // text and break the regex match.
+      // We DO retain stdout here (the model's turn narration) so a no-image
+      // finish can report why — a content decline, or a "generated" claim with
+      // no file (tool unavailable / image-gen rate-limited on the account).
+      stdoutTail += chunk.toString();
+      if (stdoutTail.length > STDOUT_TAIL_BYTES) stdoutTail = stdoutTail.slice(-STDOUT_TAIL_BYTES);
+      broadcastSse(job, { type: 'status', message: 'Running…' });
+    });
+
+    proc.stderr.on('data', (chunk) => {
+      const text = chunk.toString();
+      captureSession(text);
+      stderrTail += text;
+      if (stderrTail.length > STDERR_TAIL_BYTES) stderrTail = stderrTail.slice(-STDERR_TAIL_BYTES);
+    });
+  } catch (err) {
+    setupError = err;
+    clearTimeout(timeoutTimer);
+    sigtermWithEscalation(jobId, proc);
+  }
 }
 
 const finalizeJobFailure = createJobFailureFinalizer({
