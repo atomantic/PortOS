@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { join } from 'node:path';
 
 const h = vi.hoisted(() => {
   const emitter = () => {
@@ -94,7 +95,7 @@ describe('excerpt render cancellation', () => {
     musicVideoEvents.off('excerpt-render', onRender);
     expect(terminalFrames(jobId)).toEqual([{ type: 'canceled', error: 'Render cancelled' }]);
     expect(excerpt(id, excerptId)).toMatchObject({ status: 'canceled', filename: null, partialFilename: null, jobId: null, renderingOn: null, error: null });
-    expect(unlink.mock.calls).toEqual([[`/test/videos/${partialFilename}`]]);
+    expect(unlink.mock.calls).toEqual([[join('/test/videos', partialFilename)]]);
     expect(events).toEqual([{ projectId: id, excerptId, status: 'canceled' }]);
     expect(cancelExcerptRender(jobId)).toBe(false);
     const again = await startExcerptRender(id, { startSec: 0, endSec: 2 });
