@@ -163,6 +163,7 @@ export const WINDOWS_RISK_RULES = [
   // with an interpreter-startup budget mistaken for a state-machine defect
   // (#6268).
   /^server\/services\/voice\/fineTuning(?:\.test)?\.js$/,
+  /^server\/services\/imageGen\/codex(?:\.test)?\.js$/,
   /^server\/routes\/apps\//,
   /^server\/routes\/scaffoldVite\.js$/,
 ];
