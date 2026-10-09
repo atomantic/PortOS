@@ -50,17 +50,63 @@ const summaryRows = (summary) => Object.entries(summary || {})
 const VERTICAL_TARGETS = ['shorts', 'tiktok', 'instagram'];
 const fmtSec = (n) => `${Math.floor(n / 60)}:${String(Math.floor(n % 60)).padStart(2, '0')}`;
 
-/** Postable 9:16 cuts, oldest first (mirrors the server's pick; it still refuses a stale one). */
+/**
+ * Postable 9:16 cuts, oldest first (mirrors the server's list and pick in publish/payloads.js).
+ * The server refuses any excerpt with a dependency change, which the record presents as a
+ * dependencyState other than 'current' ('stale' or 'unknown').
+ */
 function verticalCutChoices(project) {
   const kit = project?.publishKit || {};
   const cuts = (project?.excerpts || [])
     .filter((e) => e?.status === 'complete' && e.aspect === '9:16' && e.filename)
-    .map((e) => ({ id: e.id, label: `Social cut ${fmtSec(e.startSec ?? 0)}-${fmtSec(e.endSec ?? 0)}` }));
+    .map((e) => ({ id: e.id, layout: 'native', stale: e.dependencyState?.status !== 'current', label: `Social cut ${fmtSec(e.startSec ?? 0)}-${fmtSec(e.endSec ?? 0)}` }));
   const crop = (kit.exports || []).find((e) => e.kind === 'vertical-9x16' && e.filename);
   if (crop && (kit.master?.renderHistoryId ?? null) === (project?.renderHistoryId ?? null)) {
-    cuts.unshift({ id: 'kit-vertical', label: `Kit vertical (fit) ${fmtSec(crop.startSec ?? 0)}-${fmtSec(crop.endSec ?? 0)}` });
+    const layout = crop.layout === 'native' ? 'native' : 'fit';
+    cuts.unshift({ id: 'kit-vertical', layout, stale: false, fitReason: crop.fitReason, startSec: crop.startSec ?? 0, endSec: crop.endSec ?? 0,
+      label: `Kit vertical (${layout}) ${fmtSec(crop.startSec ?? 0)}-${fmtSec(crop.endSec ?? 0)}` });
   }
   return cuts;
+}
+
+/** The cut a fill posts: the director's pick, else the newest fresh one. */
+const postedCut = (cuts, cutId) => (cutId ? cuts.find((c) => c.id === cutId) : cuts.filter((c) => !c.stale).at(-1)) || null;
+
+const FIT_REASONS = {
+  changed: 'the composition changed after the final render',
+  unavailable: 'the composition has no 9:16 layout, or its 9:16 render failed',
+  footage: 'a footage edit has no 9:16 layout of its own',
+};
+const SEEKED_MODES = ['document', 'code', 'eidoverse'];
+
+/**
+ * A fitted cut (the 16:9 master over a blurred fill of itself) reads as a square on a phone
+ * (#10860). Say so, and for a composition that can lay itself out at 9:16, offer a native render
+ * of the same window: it becomes the newest cut, so the next fill posts it.
+ */
+function FittedCutNotice({ project, cut, excerpts }) {
+  const canRender = SEEKED_MODES.includes(project?.composition?.mode) && excerpts?.startExcerpt;
+  const failed = (project?.excerpts || []).filter((e) => e?.aspect === '9:16' && e.status === 'error' && e.error).at(-1);
+  return (
+    <div role="status" className="sm:col-span-2 rounded border border-port-warning/40 bg-port-warning/10 p-2 text-xs space-y-1.5">
+      <p>
+        This cut is fitted: the 16:9 frame over a blurred copy of itself, so it reads as a square on a phone
+        {FIT_REASONS[cut.fitReason] ? ` (${FIT_REASONS[cut.fitReason]})` : ''}.
+      </p>
+      {canRender && (
+        excerpts.rendering ? (
+          <p className="text-port-text-muted">Rendering a native 9:16 cut… {Math.round(excerpts.progress || 0)}%</p>
+        ) : (
+          <button type="button" disabled={excerpts.occupied}
+            onClick={() => excerpts.startExcerpt(cut.startSec, cut.endSec, { aspect: '9:16', fade: true })}
+            className="border border-port-border disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] sm:min-h-0">
+            Render a native 9:16 cut of {fmtSec(cut.startSec)}-{fmtSec(cut.endSec)}
+          </button>
+        )
+      )}
+      {canRender && !excerpts.rendering && failed && <p className="text-port-error break-words">The last 9:16 render failed: {failed.error}</p>}
+    </div>
+  );
 }
 
 /** The story reply's image, picked by sight: a tile per video frame plus "No image". */
@@ -88,7 +134,7 @@ function StoryImagePicker({ idFor, thumbnails, value, onChange }) {
   );
 }
 
-function TargetOptions({ target, kit, project, options, setOption, commitOption, flairs, idFor, account }) {
+function TargetOptions({ target, kit, project, options, setOption, commitOption, flairs, idFor, account, excerpts }) {
   const field = (key, label, input) => (
     <div key={key} className="space-y-0.5 min-w-0">
       <label htmlFor={idFor(key)} className="block text-[11px] text-port-text-muted">{label}</label>
@@ -101,8 +147,10 @@ function TargetOptions({ target, kit, project, options, setOption, commitOption,
   const area = (key, label) => field(key, label,
     <textarea id={idFor(key)} value={options[key] || ''} rows={3} onChange={(e) => setOption(key, e.target.value)} className={inputCls} />);
 
+  const cuts = verticalCutChoices(project);
+  const cut = postedCut(cuts, options.cutId);
+  const fitted = cut?.layout === 'fit' ? <FittedCutNotice key="fitted" project={project} cut={cut} excerpts={excerpts} /> : null;
   const cutPicker = () => {
-    const cuts = verticalCutChoices(project);
     if (cuts.length < 2) return null;
     return field('cutId', 'Vertical cut to post', (
       <select id={idFor('cutId')} aria-label="Vertical cut to post" value={options.cutId || ''} onChange={(e) => setOption('cutId', e.target.value)} className={inputCls}>
@@ -110,7 +158,7 @@ function TargetOptions({ target, kit, project, options, setOption, commitOption,
         {[...cuts].reverse().map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
       </select>));
   };
-  if (VERTICAL_TARGETS.includes(target)) return cutPicker();
+  if (VERTICAL_TARGETS.includes(target)) return <div className="grid sm:grid-cols-2 gap-2 items-end">{cutPicker()}{fitted}</div>;
   if (target === 'sunoHook') {
     return (
       <div className="grid sm:grid-cols-2 gap-2 items-end">
@@ -119,6 +167,7 @@ function TargetOptions({ target, kit, project, options, setOption, commitOption,
         <label className="flex items-center gap-1.5 text-xs min-h-[44px] sm:min-h-0">
           <input type="checkbox" checked={options.showLyrics === true} onChange={(e) => setOption('showLyrics', e.target.checked)} /> Show Suno's lyrics (off when the cut has its own)
         </label>
+        {fitted}
       </div>
     );
   }
@@ -353,7 +402,7 @@ function PostPreview({ label, preview }) {
 
 const STATUS = { posted: ['Done', 'text-port-success border-port-success/40'], draft: ['Draft open', 'text-port-warning border-port-warning/40'], none: ['To do', 'text-port-text-muted border-port-border'] };
 
-function TargetRow({ project, kit, entry, publishing }) {
+function TargetRow({ project, kit, entry, publishing, excerpts }) {
   const { target, label, note, linkPlaceholder } = entry;
   const idFor = (key) => `mv-post-${project.id}-${target}-${key}`;
   const [options, setOptions] = useState(() => {
@@ -470,7 +519,7 @@ function TargetRow({ project, kit, entry, publishing }) {
           <UndoDone label={label} onUndo={() => publishing.removePost?.(target)} />
         </>
       )}
-      <TargetOptions target={target} kit={kit} project={project} options={options} setOption={setOption} commitOption={commitOption} flairs={flairs} idFor={idFor} account={account} />
+      <TargetOptions target={target} kit={kit} project={project} options={options} setOption={setOption} commitOption={commitOption} flairs={flairs} idFor={idFor} account={account} excerpts={excerpts} />
       <PostPreview label={label} preview={preview} />
       {!posted && <ManualLink idFor={idFor} label={label} placeholder={linkPlaceholder} onSave={(body) => publishing.recordPost(target, body)} />}
       {error && (
@@ -517,7 +566,7 @@ function TargetRow({ project, kit, entry, publishing }) {
  * a new tab, with the director's signed-in sessions) and shown back here as
  * a screenshot and summary. Publication is performed manually on the platform.
  */
-export default function PublishPostingPanel({ project, publishing }) {
+export default function PublishPostingPanel({ project, publishing, excerpts = null }) {
   const kit = project?.publishKit || {};
   if (!kit.builtAt) return null;
   // Only the platforms the director turned on (#9287), in posting order.
@@ -529,7 +578,7 @@ export default function PublishPostingPanel({ project, publishing }) {
       <p className="text-port-text-muted">Each platform shows what gets posted. Fill draft opens a tab in the PortOS Browser on the computer running PortOS (sign in there first), fills the post and shows a screenshot here. You press Post there. Then paste the post&apos;s link and press Record, or press Mark done when there is no link yet.</p>
       {!targets.length && <p className="text-port-text-muted">Turn on the platforms you use under Where you post to prepare drafts. Final publication happens on each platform.</p>}
       <ul className="space-y-2">
-        {targets.map((entry) => <TargetRow key={`${project.id}-${entry.target}`} project={project} kit={kit} entry={entry} publishing={publishing} />)}
+        {targets.map((entry) => <TargetRow key={`${project.id}-${entry.target}`} project={project} kit={kit} entry={entry} publishing={publishing} excerpts={excerpts} />)}
       </ul>
     </PublishCard>
   );
