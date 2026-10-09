@@ -596,10 +596,24 @@ export function removeScene(project, sceneId) {
   return touch(project, { scenes: nextScenes });
 }
 
+// What a board position owns rather than the shot placed in it: the span of
+// the song, its section, and the lyric sung there. A reorder leaves these on
+// their positions and moves only the shot (prompts, frames, clips, takes,
+// direction, camera), so swapping two shots keeps the song timing intact.
+const SCENE_SLOT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'sectionIndex', 'sectionLabel', 'lyricText', 'lyricRole'];
+const DRAFT_SHOT_SLOT_FIELDS = ['startSec', 'endSec', 'lyricCueIds'];
+const pickSlot = (record, fields) => Object.fromEntries(fields.filter((k) => k in record).map((k) => [k, record[k]]));
+const withoutSlot = (record, fields) => Object.fromEntries(Object.entries(record).filter(([k]) => !fields.includes(k)));
+
 /**
  * Reorder the board to the given sceneId order. `orderedIds` must be exactly the
  * project's current scene ids (a permutation) — a missing/extra/unknown id is a
- * 400 so a stale client can't silently drop scenes. Returns the next record.
+ * 400 so a stale client can't silently drop scenes. Each board position keeps
+ * its song slot (SCENE_SLOT_FIELDS) and the shots move between the slots; the
+ * lyric-timed storyboard draft's shots follow their scenes into the new slots,
+ * and a revised song's per-shot lyric verdicts stay with their slots.
+ * The storyboard and proof approvals hash scene timing and content, so they go
+ * stale on their own. Returns the next record.
  */
 export function reorderScenes(project, orderedIds) {
   const scenes = project.scenes || [];
@@ -607,8 +621,32 @@ export function reorderScenes(project, orderedIds) {
   if (orderedIds.length !== scenes.length || !orderedIds.every((id) => byId.has(id)) || new Set(orderedIds).size !== orderedIds.length) {
     throw new ServerError('Reorder must list each existing scene id exactly once', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  const nextScenes = orderedIds.map((id, i) => ({ ...byId.get(id), order: i }));
-  return touch(project, { scenes: nextScenes });
+  // The scene whose slot each moved scene now fills.
+  const slotOwner = new Map(orderedIds.map((id, i) => [id, scenes[i]]));
+  const nextScenes = orderedIds.map((id, i) => ({
+    ...withoutSlot(byId.get(id), SCENE_SLOT_FIELDS), ...pickSlot(scenes[i], SCENE_SLOT_FIELDS), order: i,
+  }));
+  const extra = { scenes: nextScenes };
+  // A revised song's verdicts are about the lyric in a slot, so they stay with it.
+  const sceneReview = project.songRevision?.sceneReview;
+  if (sceneReview && typeof sceneReview === 'object') {
+    const holder = new Map(scenes.map((s, i) => [s.sceneId, orderedIds[i]]));
+    extra.songRevision = { ...project.songRevision,
+      sceneReview: Object.fromEntries(Object.entries(sceneReview).map(([id, verdict]) => [holder.get(id) ?? id, verdict])) };
+  }
+  const draft = project.productionReview?.draft;
+  if (!Array.isArray(draft?.storyboard) || draft.storyboardSource === 'document') return touch(project, extra);
+  const draftShots = new Map(draft.storyboard.filter((shot) => shot?.sceneId).map((shot) => [shot.sceneId, shot]));
+  const storyboard = draft.storyboard.map((shot) => {
+    const owner = shot?.sceneId && slotOwner.get(shot.sceneId);
+    if (!owner || owner.sceneId === shot.sceneId) return shot;
+    // The owner's own draft shot carries that slot's lyric anchors; without one,
+    // take the slot's timing and let the storyboard check ask for anchors.
+    const slot = draftShots.get(owner.sceneId);
+    return slot ? { ...shot, ...pickSlot(slot, DRAFT_SHOT_SLOT_FIELDS) }
+      : { ...shot, startSec: owner.startSec ?? shot.startSec, endSec: owner.endSec ?? shot.endSec, lyricCueIds: [] };
+  });
+  return touch(project, { ...extra, productionReview: { ...project.productionReview, draft: { ...draft, storyboard } } });
 }
 
 // Label suffix budget: the scene label schema caps at 120 characters.

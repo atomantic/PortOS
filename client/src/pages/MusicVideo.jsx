@@ -86,6 +86,7 @@ import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
 import { sceneTakeList } from '../lib/musicVideoTakes.js';
 import { pluralize } from '../lib/textUtils.js';
+import { formatTimecode } from '../utils/formatters.js';
 import { deriveAttentionItems } from '../lib/musicVideoAttention.js';
 import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
 import { useMusicVideoReviewDraft } from '../hooks/useMusicVideoReviewDraft.js';
@@ -887,8 +888,18 @@ export default function MusicVideo() {
     if (target < 0 || target >= scenes.length) return;
     const ids = scenes.map((s) => s.sceneId);
     [ids[idx], ids[target]] = [ids[target], ids[idx]];
+    // The server keeps each slot's song timing and lyric and moves the shots
+    // between them, so the moved shot now plays at its neighbor's time.
+    const moved = scenes[idx];
+    const wasApproved = !!productionReview.readiness?.storyboard?.approved;
     reorderMusicVideoScenes(selected.id, ids, { silent: true })
-      .then((proj) => replaceProject(proj))
+      .then((proj) => {
+        replaceProject(proj);
+        const now = (proj.scenes || []).find((s) => s.sceneId === moved.sceneId);
+        if (now) seekToScene(now);
+        const at = typeof now?.startSec === 'number' ? ` to ${formatTimecode(now.startSec)}` : '';
+        toast.success(`Moved ${moved.label || 'shot'}${at}${wasApproved ? '; re-approve the storyboard' : ''}`);
+      })
       .catch((err) => toast.error(err?.message || 'Failed to reorder'));
   };
 

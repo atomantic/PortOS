@@ -206,9 +206,16 @@ export default function SceneCard({
         <SceneRenderProgress kind="Video" generating={generatingVideo} progress={videoProgress} />
       </summary>
       <div className="space-y-2 p-3 pt-0">
+        {/* A move swaps this shot with its neighbor; the song timing and lyric stay with the slot. */}
         <div className="flex items-center justify-end gap-2">
-          <button onClick={() => onMove(index, -1)} disabled={index === 0} aria-label="Move up" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 disabled:opacity-30" title="Move up"><ArrowUp size={14} /></button>
-          <button onClick={() => onMove(index, 1)} disabled={isLast} aria-label="Move down" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 disabled:opacity-30" title="Move down"><ArrowDown size={14} /></button>
+          <button type="button" onClick={() => onMove(index, -1)} disabled={index === 0} title="Swap with the previous shot; the song timing stays put"
+            className="min-h-[44px] inline-flex items-center justify-center gap-1 rounded border border-port-border px-2 text-xs disabled:opacity-30 sm:min-h-0 sm:py-1">
+            <ArrowUp size={14} aria-hidden="true" /> Move earlier
+          </button>
+          <button type="button" onClick={() => onMove(index, 1)} disabled={isLast} title="Swap with the next shot; the song timing stays put"
+            className="min-h-[44px] inline-flex items-center justify-center gap-1 rounded border border-port-border px-2 text-xs disabled:opacity-30 sm:min-h-0 sm:py-1">
+            <ArrowDown size={14} aria-hidden="true" /> Move later
+          </button>
           <button onClick={() => onDelete(scene.sceneId)} aria-label="Delete scene" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-error" title="Delete scene"><Trash2 size={14} /></button>
         </div>
         <textarea
