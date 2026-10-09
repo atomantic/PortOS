@@ -158,4 +158,16 @@ describe('local attention reasons through builder-to-observation', () => {
     expect(place(healthy, 'nexus').attentionSignals).toEqual([]);
     expect(place(healthy, 'nexus').status).toBe('active');
   });
+  it.each([
+    ['persisted degraded shape', { status: 'degraded', pgBackup: { status: 'failed', reason: 'dump_error' } }],
+    ['legacy degraded without pgBackup', { status: 'degraded' }],
+    ['failed pgBackup under ok status', { status: 'ok', pgBackup: { status: 'failed', reason: 'dump_error' } }],
+  ])('flags %s as backup_failure in both rollups without leaking detail', (_label, backupState) => {
+    const signals = place(project({ backupState: { ...backupState, error: 'invented-secret-error' }, cosStatus: { running: true }, diskPercent: 20 }), 'nexus').attentionSignals;
+    expect(signals.map((signal) => [signal.source, signal.severity])).toEqual([['health', 'error'], ['operations', 'error']]);
+    for (const signal of signals) expect(signal.reasons).toEqual([{ code: 'backup_failure', affectedCount: null }]);
+    expect(JSON.stringify(signals)).not.toMatch(/dump_error|invented-secret/);
+    const recovered = place(project({ backupState: { status: 'ok', pgBackup: { status: 'ok' } }, cosStatus: { running: true }, diskPercent: 20 }), 'nexus');
+    expect(recovered.attentionSignals).toEqual([]);
+  });
 });
