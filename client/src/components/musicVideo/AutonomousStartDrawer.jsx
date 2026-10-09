@@ -7,6 +7,7 @@ import Drawer from '../Drawer.jsx';
 import ToggleChip from '../ui/ToggleChip.jsx';
 import ToolPicker from './ToolPicker.jsx';
 import MoodBoardPicker from './MoodBoardPicker.jsx';
+import CharacterStyleSelect from './CharacterStyleSelect.jsx';
 import SongSourcePicker from './SongSourcePicker.jsx';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import MusicVideoLlmStagesPicker from './MusicVideoLlmStagesPicker.jsx';
@@ -142,6 +143,7 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
         <CodeAuthoringPicker value={draft.authoring} onChange={(authoring) => patch({ authoring })} onValidityChange={setAuthoringReady} disabled={submitting} />
         <ToolPicker tools={draft.tools} models={draft.models} onChange={patch} />
 
+        <CharacterStyleSelect id="mv-auto-character-style" value={draft.characterStyleId} onChange={(characterStyleId) => patch({ characterStyleId })} />
         <MoodBoardPicker id="mv-auto-mood-board" value={draft.moodBoardId} onChange={(moodBoardId) => patch({ moodBoardId })} />
 
         <div>

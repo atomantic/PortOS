@@ -29,6 +29,7 @@ import { MUSIC_VIDEO_MEDIA_MODES, musicVideoMediaMode } from './musicVideoMediaP
 
 import { MUSIC_VIDEO_AUTOMATION_TOOL_IDS, normalizeMusicVideoEffort, normalizeMusicVideoLlm, normalizeMusicVideoLlmStages } from './musicVideoAutomation.js';
 import { isStr, trimTo } from './textUtils.js';
+import { getMusicVideoCharacterStyle } from './musicVideoCharacterStyles.js';
 
 export const AUTONOMOUS_STAGES = Object.freeze([
   Object.freeze({ id: 'brief', label: 'Creative brief' }),
@@ -225,6 +226,8 @@ function normalizeAutonomousSettings(raw = {}) {
     checkpoints,
     // An existing mood board to reuse instead of generating one (blank = generate).
     moodBoardId: clean(raw.moodBoardId, 64) || null,
+    // A built-in character style cast as protagonist (null = none).
+    characterStyleId: getMusicVideoCharacterStyle(raw.characterStyleId)?.id || null,
     llm: llm ? { providerId: llm.providerId, model: llm.model, ...(llm.effort ? { effort: llm.effort } : {}) } : null,
     authoring: authoringProvider && authoringModel
       ? { providerId: authoringProvider, model: authoringModel, ...(authoringEffort ? { effort: authoringEffort } : {}) } : null,

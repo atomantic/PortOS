@@ -20,6 +20,7 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
   resumeAutonomousMusicVideo: vi.fn(),
   stopAutonomousMusicVideo: vi.fn(),
   cancelAutonomousMusicVideo: vi.fn(),
+  listMusicVideoCharacterStyles: vi.fn(async () => [{ id: 'example-style', label: 'Example style', characterName: 'Example Performer', referenceImageId: null }]),
 }));
 vi.mock('../../services/apiMoodBoard.js', () => ({ listMoodBoardNames: vi.fn(async () => [{ id: 'mb-1', name: 'Neon Rain' }]) }));
 vi.mock('../../services/apiMusic.js', () => ({
@@ -317,11 +318,14 @@ describe('AutonomousStartDrawer', () => {
     fireEvent.change(screen.getByLabelText(/video generation budget/i), { target: { value: '12' } });
     await waitFor(() => expect(screen.getByRole('option', { name: 'Neon Rain' })).toBeTruthy());
     fireEvent.change(screen.getByLabelText('Mood board'), { target: { value: 'mb-1' } });
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Example style' })).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('Character style'), { target: { value: 'example-style' } });
+    expect(screen.getByText(/Example Performer is cast as protagonist/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Code authoring provider'), { target: { value: 'fixture-api' } });
     fireEvent.click(screen.getByRole('button', { name: /start autonomous video/i }));
     await waitFor(() => expect(api.startAutonomousMusicVideo).toHaveBeenCalled());
     expect(api.startAutonomousMusicVideo.mock.calls[0][0]).toMatchObject({
-      checkpoints: ['lyrics'], models: { 'image:local': 'example-image' }, budgetUsd: 12, moodBoardId: 'mb-1',
+      checkpoints: ['lyrics'], models: { 'image:local': 'example-image' }, budgetUsd: 12, moodBoardId: 'mb-1', characterStyleId: 'example-style',
     });
   });
 

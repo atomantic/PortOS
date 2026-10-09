@@ -62,6 +62,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { probeVideoDuration } from '../../lib/ffmpeg.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { trimTo } from '../../lib/textUtils.js';
+import { getMusicVideoCharacterStyle } from '../../lib/musicVideoCharacterStyles.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { IMAGE_GEN_MODE } from '../../lib/generationModes.js';
 import { assertFootageVideoModelsCapable, loadPoolEnv } from './productionPool.js';
@@ -920,11 +921,20 @@ async function createRunStyle({ project, run }) {
   return { output: { moodBoardId } };
 }
 
+// The brief is written knowing who stars in the video, so its concept and look
+// fit the fixed character instead of inventing a different lead.
+function briefGuidance(brief) {
+  const style = getMusicVideoCharacterStyle(brief.characterStyleId);
+  if (!style) return brief.guidance;
+  const lead = `The video stars ${style.character.name} (${style.label} character style), a fixed-identity performer: ${style.summary}`;
+  return [brief.guidance, lead].filter(Boolean).join('\n\n');
+}
+
 const STAGES = {
   async brief({ project, run }) {
     const { route, ...llm } = await llmOf(run, 'brief');
     const { brief } = await deps.draftCreativeBrief({
-      prompt: run.brief.prompt, guidance: run.brief.guidance, instrumental: run.brief.instrumental, ...llm,
+      prompt: run.brief.prompt, guidance: briefGuidance(run.brief), instrumental: run.brief.instrumental, ...llm,
     });
     // A blank project name from the prompt gives way to the song title.
     if (!run.brief.name) await deps.updateProject(project.id, { name: trimTo(brief.title, 200) });
@@ -1224,7 +1234,8 @@ export async function startAutonomousVideo(input, { autoApproveAuthorized = fals
     mode: 'autonomous',
     mediaMode: brief.mediaMode,
     ...(brief.mediaMode !== 'code-images-video' ? { productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } } : {}),
-    concept: { prompt: trimTo(brief.prompt, 8000) },
+    // The style id makes createProject cast its character and attach the sheet (styleSnapshots.js).
+    concept: { prompt: trimTo(brief.prompt, 8000), ...(brief.characterStyleId ? { characterStyleId: brief.characterStyleId } : {}) },
     automation: {
       tools: brief.tools,
       guidance: brief.guidance,

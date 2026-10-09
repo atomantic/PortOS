@@ -74,6 +74,7 @@ export const emptyAutonomousDraft = () => ({
   maxGenerations: String(AUTONOMOUS_DEFAULT_LIMITS.maxGenerations),
   checkpoints: [],
   moodBoardId: '',
+  characterStyleId: '',
   // Suno's Advanced-form options; blank leaves that control as Suno has it.
   suno: { excludeStyles: '', vocalGender: '', model: '', maxMode: '' },
   // A provider/model/effort per LLM stage (`{ [stage]: llmDraft }`; absent = the direction LLM).
@@ -144,6 +145,7 @@ export function autonomousRequestFromDraft(draft, { providerId, model, effort } 
       ...(draft.orchestrator.effort ? { effort: draft.orchestrator.effort } : {}),
     } } : {}),
     ...(draft.moodBoardId ? { moodBoardId: draft.moodBoardId } : {}),
+    ...(draft.characterStyleId ? { characterStyleId: draft.characterStyleId } : {}),
     ...(llmStages ? { llmStages } : {}),
     ...(draft.lyricsReview === true ? { lyricsReview: true } : {}),
     ...(providerId ? { providerId, ...(model ? { model } : {}), ...(effort ? { effort } : {}) } : {}),
