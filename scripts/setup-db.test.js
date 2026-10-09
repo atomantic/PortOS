@@ -66,7 +66,7 @@ describe('native setup inherited endpoint', () => {
 
 // Run the actual CLI body with synthetic configuration and subprocesses. No
 // imports execute, no install .env is read, and no database can be contacted.
-async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady = true, running = true, hostBinding = '127.0.0.1', hostPort = 5561, dotEnv = {}, exportedMode } = {}) {
+async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady = true, running = true, hostBinding = '127.0.0.1', hostPort = 5561, dotEnv = {}, exportedMode, exportedEnv = {} } = {}) {
   const savedEnv = { PGMODE: mode, EXAMPLE_SETTING: 'preserved', ...dotEnv };
   const initialEnv = { ...savedEnv };
   const calls = [];
@@ -91,7 +91,7 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
       createInterface: () => { throw new Error('Setup must not prompt to switch backends'); },
       resolveBashBinary: () => 'bash',
       process: {
-        env: exportedMode === undefined ? {} : { PGMODE: exportedMode }, platform: 'linux', stdin: { isTTY: tty }, stdout: { isTTY: tty },
+        env: { ...(exportedMode === undefined ? {} : { PGMODE: exportedMode }), ...exportedEnv }, platform: 'linux', stdin: { isTTY: tty }, stdout: { isTTY: tty },
         exit: (code) => { exitCode = code; throw exitSignal; }
       },
       console: { log: (message) => logs.push(message), error: (message) => errors.push(message) },
@@ -222,6 +222,28 @@ describe('setup preserves the selected database', () => {
     expect(result.exitCode).toBe(0);
     expect(result.calls.some(([command]) => command === 'docker')).toBe(false);
     expect(result.calls.some((call) => call.includes('setup-native'))).toBe(!nativeReady);
+  });
+
+  // The command-boundary contract for #10757: a shell left over from another
+  // PostgreSQL workflow must not redirect the readiness probe or the bootstrap
+  // child; TLS/auth settings keep working.
+  it('drops inherited libpq routing variables from the readiness probe and bootstrap child', async () => {
+    const result = await runSetup({
+      mode: 'native', nativeReady: false,
+      dotEnv: { PGHOST: 'db.example.invalid', PGPORT: '5433' },
+      exportedEnv: {
+        PGHOSTADDR: '192.0.2.10', PGSERVICE: 'other', PGSERVICEFILE: '/example/service.conf',
+        PGOPTIONS: '-c search_path=other', PGSSLMODE: 'verify-full', PGPASSFILE: '/example/pgpass',
+      },
+    });
+    expect(result.exitCode).toBe(0);
+    const psqlEnvs = result.childEnvs.filter((_, i) => result.calls[i][0] === 'psql');
+    const bootstrapEnv = result.childEnvs[result.calls.findIndex((call) => call.includes('setup-native'))];
+    expect(psqlEnvs).toHaveLength(2);
+    for (const env of [...psqlEnvs, bootstrapEnv]) {
+      for (const name of ['PGHOSTADDR', 'PGSERVICE', 'PGSERVICEFILE', 'PGOPTIONS']) expect(env).not.toHaveProperty(name);
+      expect(env).toMatchObject({ PGHOST: 'db.example.invalid', PGPORT: '5433', PGSSLMODE: 'verify-full', PGPASSFILE: '/example/pgpass' });
+    }
   });
 
   it('probes and provisions the endpoint selected in .env, host and port alike', async () => {

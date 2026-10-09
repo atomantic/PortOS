@@ -380,6 +380,20 @@ dump/import tools are used only for the selected local Docker endpoint; a
 host/port override cannot silently fall back to the local container. Maintenance
 `--endpoint` transfers remain bound to their explicitly recorded endpoint.
 
+**Endpoint binding (#10757).** The resolved host, port, user and database are
+passed as explicit arguments, but libpq also honors inherited variables that
+choose where a client really connects: `PGHOSTADDR` overrides the network
+destination of `-h`, `PGSERVICE`/`PGSERVICEFILE` can supply another endpoint,
+and `PGOPTIONS` alters session settings. Every host `psql`, `pg_dump` and
+`pg_isready` that `scripts/db.sh` starts — readiness, `setup-native` role,
+database, extension and schema statements, and ordinary `export`/`import` —
+runs with those four variables removed from the child only (`pg_bound`), as does
+the readiness probe and bootstrap child of `scripts/setup-db.js`. The operator's
+shell is never modified. Supported TLS and authentication settings (`PGSSLMODE`,
+`PGSSLROOTCERT`, `PGPASSFILE`, ...) pass through on these ordinary paths;
+`--endpoint` maintenance transfers keep their stricter scrub of every `PG*`
+variable. Passwords stay in the child environment or stdin, never argv.
+
 ### `MEMORY_BACKEND=file` is a development/test-only escape hatch — NOT a deployment mode
 
 The file backend (`server/services/memory.js`, JSON under `./data/`) is **unsupported for production and for federated peers.** It exists only so the test suite (and ad-hoc local development) can boot without a database. It is **not** a fallback, a "lite" mode, or a way to run PortOS without Postgres:
