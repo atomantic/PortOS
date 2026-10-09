@@ -77,6 +77,7 @@ vi.mock('./compositionRender.js', () => ({
 vi.mock('./projects.js', () => ({ getProject: vi.fn(), listProjects: vi.fn(async () => []), updateProject: vi.fn(async () => ({})), mutateProjectRecord: vi.fn() }));
 vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'inst-self') }));
 
+import { buildTypographyDocument } from './composition.js';
 import { renderMusicVideo, getRenderJobStatus, cancelRender } from './render.js';
 import { removeCompositionScratch } from './compositionRender.js';
 import { findFfmpeg, generateThumbnail } from '../../lib/ffmpeg.js';
@@ -575,6 +576,20 @@ describe('layered sections (#8985)', () => {
     expect(graph).toContain('color=c=0x112233:s=768x512:r=24,setsar=1,format=yuv420p,trim=end_frame=24,setpts=PTS-STARTPTS[v2]');
     // The song is still the one and only audio: two section inputs, then the master.
     expect(args[args.lastIndexOf('-map') + 1]).toBe('2:a');
+  });
+
+  it.each([['HUD counters', 'pop', 'Menlo'], [undefined, 'fade', 'Georgia']])('applies shared card and font treatment %s at the full render entrypoint', async (graphicLanguage, template, font) => {
+    const id = `typography-${template}`;
+    primeLayered(id, 'composed');
+    const project = await getProject(id);
+    getProject.mockResolvedValue({ ...project, composition: { ...project.composition, style: { font: 'serif' } }, treatment: { brief: { graphicLanguage } } });
+    const { jobId } = await renderMusicVideo(id);
+    const options = h.overlays.calls[0];
+    expect(options.cues[0]).toMatchObject({ id: 'card-s3', template });
+    expect(options.style).toEqual({ font: 'serif', graphicLanguage });
+    expect(buildTypographyDocument(options)).toContain(font);
+    cancelRender(jobId);
+    await tick();
   });
 
   it('refuses a still with no reference frame and an untimed card, without spawning', async () => {

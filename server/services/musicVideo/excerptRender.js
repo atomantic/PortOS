@@ -36,7 +36,7 @@ import { assertCurrentPerformanceTakes } from './performanceShot.js';
 import { assertCurrentClipDependencies, planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes, isLocalRenderMark, resolveMasterAudioPath, resolveSoundBedPath } from './render.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { encodeDocumentComposition, prepareDocumentRender } from './documentRender.js';
-import { renderableCues, sectionCardCues } from './composition.js';
+import { projectTypographyPlan } from './composition.js';
 import { renderTypographyOverlays, removeCompositionScratch } from './compositionRender.js';
 import { startExcerptOnProject, applyExcerptPatch } from './excerpt.js';
 import { markRevisionRendering, settleRevisionRender } from './revision.js';
@@ -318,10 +318,8 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
 
     // Only the cue/card windows overlapping the window are worth capturing —
     // typography outside it never survives the final trim.
-    const allCues = composed
-      ? [...renderableCues(project.composition, probe.totalDuration), ...sectionCardCues(clips, probe.sections, probe.totalDuration)]
-        .sort((a, b) => a.startSec - b.startSec)
-      : [];
+    const { cues: plannedCues, style } = projectTypographyPlan(project, clips, probe.sections, probe.totalDuration);
+    const allCues = composed ? plannedCues : [];
     const cues = allCues.filter((c) => c.startSec < endClamped && c.endSec > startSec);
     const composition = cues.length > 0 ? project.composition : null;
 
@@ -470,7 +468,7 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
     // anything before `startSec` anyway, so nothing visible is lost.
     const captureCues = cues.map((c) => ({ ...c, startSec: Math.max(c.startSec, startSec) }));
     renderTypographyOverlays({
-      jobId, cues: captureCues, style: composition.style, width: probe.canonW, height: probe.canonH, fps: probe.fps, durationSec: endClamped, signal,
+      jobId, cues: captureCues, style, width: probe.canonW, height: probe.canonH, fps: probe.fps, durationSec: endClamped, signal,
       onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: 0.5 * fraction }),
     }).then((overlays) => {
       signal.throwIfAborted();
