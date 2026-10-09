@@ -142,7 +142,7 @@ describe('DataManager per-item purge (#3327)', () => {
     expandRow('Images');
     await waitFor(() => expect(screen.getByText(/no whole-category purge/)).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: 'Purge' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Archive/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Export backup (keeps originals)' })).toBeInTheDocument();
   });
 
   it('deletes a single entry through the subPath purge', async () => {
@@ -618,7 +618,7 @@ it('prevents overlapping item cleanup and an already-open bucket purge', async (
   fireEvent.click(remove);
   fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
   expect(screen.getByRole('button', { name: 'Purge' })).toBeDisabled();
-  expect(screen.getByRole('button', { name: 'Archive' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Export backup (keeps originals)' })).toBeDisabled();
   await act(async () => finish({ category: 'messages', subPath: 'example-account' }));
 });
 
@@ -682,5 +682,29 @@ describe('DataManager independent read failures (#9446)', () => {
     fireEvent.click(screen.getByRole('button', { name: resource === 'overview' ? 'Retry storage overview' : 'Retry backups' }));
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
     expect(healthy).toHaveBeenCalledTimes(healthyCalls);
+  });
+});
+
+describe('DataManager archive action disclosure (#10728)', () => {
+  const cats = [
+    { key: 'health', path: 'data/health', label: 'Apple Health', description: 'Health days', archivable: true, deletable: false, classified: true, size: 100, fileCount: 2 },
+    { key: 'reports', path: 'data/reports', label: 'Reports', description: 'Reports', archivable: true, deletable: false, classified: true, size: 100, fileCount: 2 },
+  ];
+
+  beforeEach(() => {
+    getDataOverview.mockReset().mockResolvedValue({ totalSize: 200, dataDir: 'data', categories: cats });
+    getDataCategory.mockReset().mockResolvedValue({ key: 'health', items: [] });
+  });
+
+  it('tells Apple Health users older days leave active history, but generic backups keep originals', async () => {
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getAllByText('Apple Health').length).toBeGreaterThan(0));
+
+    expandRow('Apple Health');
+    expect(await screen.findByRole('button', { name: 'Archive days older than 365 days' })).toBeInTheDocument();
+    expect(screen.getByText(/removes them from active health history/)).toBeInTheDocument();
+
+    expandRow('Reports');
+    expect(await screen.findByRole('button', { name: 'Export backup (keeps originals)' })).toBeInTheDocument();
   });
 });
