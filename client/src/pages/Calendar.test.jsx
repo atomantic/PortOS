@@ -58,7 +58,7 @@ beforeEach(() => {
   api.getCalendarEvents.mockResolvedValue({ events: [], total: 0 });
   api.getCalendarTokenStatus.mockResolvedValue({ providers: [] });
   api.getGoogleAuthStatus.mockResolvedValue(null);
-  api.getDailyReview.mockResolvedValue({ events: [], summary: { totalEvents: 0, confirmed: 0, skipped: 0, unreviewed: 0 } });
+  api.getDailyReview.mockResolvedValue({ events: [], total: 0, nextOffset: null, summary: { totalEvents: 0, confirmed: 0, skipped: 0, unreviewed: 0 } });
   api.getChronotypeEnergySchedule.mockResolvedValue(null);
 });
 
