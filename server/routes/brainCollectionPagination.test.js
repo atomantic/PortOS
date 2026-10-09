@@ -37,6 +37,8 @@ app.use('/api/brain', brainRoutes);
 
 const TOTAL_INBOX = 1200;
 const TOTAL_MEMORIES = 1500;
+const TOTAL_ENTITIES = 60;
+const ENTITY_TYPES = ['people', 'projects', 'ideas', 'admin'];
 const BASE_TIME = Date.parse('2026-08-01T00:00:00.000Z');
 
 async function seedRecord(type, id, record) {
@@ -92,6 +94,19 @@ describe('Brain collection pagination (synthetic thousands-record fixtures)', ()
         updatedAt
       };
     });
+
+    for (const type of ENTITY_TYPES) {
+      await seedRecords(type, TOTAL_ENTITIES, (i) => {
+        const updatedAt = new Date(BASE_TIME + i * 60000).toISOString();
+        return {
+          name: `Example ${type} ${i}`,
+          title: `Example ${type} ${i}`,
+          status: i % 2 === 0 ? 'active' : 'done',
+          createdAt: updatedAt,
+          updatedAt
+        };
+      });
+    }
 
     brainStorage.invalidateAllCaches();
   });
@@ -260,6 +275,40 @@ describe('Brain collection pagination (synthetic thousands-record fixtures)', ()
       });
       expect(res.body.memories).toHaveLength(10);
       expect(res.body.nextCursor).toBeUndefined();
+    });
+  });
+  // The client wrappers (client/src/services/apiBrain.test.js) send `cursor=` on a
+  // collection's first request; this pins what the router does with that URL.
+  describe('First-page request from the Brain collection views (empty initial cursor)', () => {
+    it.each([...ENTITY_TYPES, 'memories'])('%s: cursor mode returns a continuation that reaches every record', async (type) => {
+      const total = type === 'memories' ? 1350 : TOTAL_ENTITIES;
+      const first = await request(app).get(`/api/brain/${type}?cursor=&limit=25`);
+      expect(first.status).toBe(200);
+      expect(first.body.items).toHaveLength(25);
+      expect(first.body.total).toBe(total);
+      expect(first.body.nextCursor).toBeTruthy();
+      expect(first.body.offset).toBeUndefined();
+
+      let seen = first.body.items.map(item => item.id);
+      let cursor = first.body.nextCursor;
+      while (cursor) {
+        const next = await request(app).get(`/api/brain/${type}?cursor=${encodeURIComponent(cursor)}&limit=25`);
+        seen = seen.concat(next.body.items.map(item => item.id));
+        cursor = next.body.nextCursor;
+      }
+      expect(new Set(seen).size).toBe(total);
+    });
+
+    it.each(ENTITY_TYPES)('%s: a request without cursor keeps the legacy offset envelope', async (type) => {
+      const res = await request(app).get(`/api/brain/${type}?limit=25`);
+      expect(res.body).toMatchObject({ total: TOTAL_ENTITIES, limit: 25, offset: 0 });
+      expect(res.body.nextCursor).toBeUndefined();
+    });
+
+    it('combines the empty cursor with a status filter', async () => {
+      const res = await request(app).get('/api/brain/projects?cursor=&limit=25&status=active');
+      expect(res.body.total).toBe(TOTAL_ENTITIES / 2);
+      expect(res.body.items.every(item => item.status === 'active')).toBe(true);
     });
   });
 });
