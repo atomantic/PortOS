@@ -554,7 +554,7 @@ describe('StoryBuilder — detail stepper', () => {
     expect(screen.queryByRole('button', { name: /Characters/ })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
-    expect(await screen.findByRole('button', { name: /Characters/ })).toBeTruthy();
+    expect(await screen.findByRole('tab', { name: /Characters/ })).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
@@ -577,6 +577,23 @@ describe('StoryBuilder — detail stepper', () => {
     await act(async () => { resolveOld({ id: 'stb-old', title: 'Old story', currentStep: 'idea', steps: mkSteps() }); });
     expect(screen.getByRole('heading', { name: 'Current story' })).toBeTruthy();
     expect(screen.queryByText('Old story')).toBeNull();
+  });
+
+  it('keeps one continuation control in the stage header and every destination in the shared navigator', async () => {
+    api.getStorySession.mockResolvedValue({
+      id: 'stb-1', title: 'Example story', currentStep: 'idea', seedIdea: 'Long generated work. '.repeat(1000),
+      universeId: 'u1', seriesId: 's1', steps: mkSteps(), staleSteps: [],
+    });
+    renderAt('/story-builder/stb-1/idea');
+    const action = await screen.findByRole('button', { name: 'Lock & continue' });
+    const work = screen.getByRole('region', { name: 'Stage work' });
+    expect(action.closest('header').getAttribute('aria-label')).toBe('Stage actions');
+    expect(work.contains(action)).toBe(false);
+    expect(screen.getAllByRole('button', { name: 'Lock & continue' })).toHaveLength(1);
+    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(STEPS.map(step => step.label));
+    expect(screen.getByRole('tab', { name: 'Idea' }).getAttribute('aria-selected')).toBe('true');
+    expect(api.generateStoryStep).not.toHaveBeenCalled();
+    expect(api.refineStoryStep).not.toHaveBeenCalled();
   });
 
   it('gates the Next button until the active step is locked', async () => {
@@ -779,7 +796,7 @@ describe('StoryBuilder — detail stepper', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Idea' })).toBeTruthy());
     const callsBefore = api.getStorySession.mock.calls.length;
 
-    fireEvent.click(screen.getByRole('button', { name: /Plot Arc/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Plot Arc/i }));
     await waitFor(() => expect(api.setStoryCurrentStep).toHaveBeenCalledWith('stb-1', 'plotArc', expect.anything()));
     // Rejection → the catch path toasts + resyncs (reload refetches the session),
     // and the URL never advances, so the heading stays on Idea instead of
@@ -961,7 +978,7 @@ describe('StoryBuilder — detail stepper', () => {
     await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
 
     // Navigate the rail to another step — the panel unmounts.
-    fireEvent.click(screen.getByRole('button', { name: /Characters/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /Characters/ }));
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Characters' })).toBeTruthy());
     expect(lastEventSource().closed).toBe(false);
 
@@ -1024,7 +1041,7 @@ describe('StoryBuilder — detail stepper', () => {
       // A rejected pointer move triggers the same reload used after completed work.
       api.setStoryCurrentStep.mockRejectedValueOnce(new Error('Could not switch'));
       api.getStorySession.mockRejectedValueOnce(Object.assign(new Error('Temporary read failure'), { status: 503 }));
-      fireEvent.click(screen.getByRole('button', { name: /Idea/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /Idea/ }));
 
       expect((await screen.findByRole('alert')).textContent).toContain('Showing the last loaded story');
       expect(screen.queryByText(/Session not found/)).toBeNull();

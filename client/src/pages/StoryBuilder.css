@@ -1,0 +1,82 @@
+.story-builder-workspace {
+  container: story-builder / inline-size;
+}
+
+.story-stage-layout {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Compact navigation follows the workspace, including narrow desktop panes. */
+.story-stage-tabs [role='tab'] {
+  min-width: 44px;
+  min-height: 44px;
+  justify-content: center;
+}
+
+.story-stage-tabs [role='tab'] > span,
+.story-direction-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+.story-stage-tabs > button {
+  display: flex;
+}
+
+@container story-builder (min-width: 52rem) {
+  .story-stage-layout {
+    grid-template-columns: 220px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .story-stage-nav {
+    overflow-y: auto;
+  }
+
+  .story-stage-tabs [role='tablist'] {
+    flex-direction: column;
+    align-items: stretch;
+    border: 0;
+  }
+
+  .story-stage-tabs [role='tab'] {
+    justify-content: flex-start;
+    white-space: normal;
+    text-align: left;
+  }
+
+  .story-stage-tabs [role='tab'] > span {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+  }
+
+  .story-stage-tabs > button {
+    display: none;
+  }
+}
+
+@container story-builder (min-width: 20rem) {
+  .story-direction-label {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+  }
+}
