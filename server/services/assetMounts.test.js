@@ -72,6 +72,28 @@ beforeAll(async () => {
 });
 
 describe('the server-owned namespace terminators', () => {
+  it('serves explicit video downloads as attachments while previews retain inline and range behavior', async () => {
+    mkdirSync(join(tempRoot, 'videos'), { recursive: true });
+    writeFileSync(join(tempRoot, 'videos', 'example.mp4'), 'VIDEOBYTES');
+    const preview = await request(app).get('/data/videos/example.mp4');
+    expect(preview.status).toBe(200);
+    expect(preview.headers['content-disposition']).toBeUndefined();
+    const download = await request(app).get('/data/videos/example.mp4?download=1');
+    expect(download.status).toBe(200);
+    expect(download.headers['content-disposition']).toBe('attachment; filename="example.mp4"');
+    expect(download.headers['content-type']).toContain('video/mp4');
+    expect(download.headers['content-security-policy']).toContain('sandbox');
+    expect(download.headers['x-content-type-options']).toBe('nosniff');
+    const range = await request(app).get('/data/videos/example.mp4?download=1').set('Range', 'bytes=0-3');
+    expect(range.status).toBe(206);
+    expect(range.headers['content-range']).toBe('bytes 0-3/10');
+    expect(range.headers['content-disposition']).toContain('attachment;');
+    const missing = await request(app).get('/data/videos/missing.mp4?download=1');
+    expect(missing.status).toBe(404);
+    expect(missing.body).toMatchObject({ code: 'NOT_FOUND' });
+    expect(missing.headers['content-disposition']).toBeUndefined();
+  });
+
   it('never serves the private API key store even when the file exists', async () => {
     mkdirSync(join(tempRoot, 'private'), { recursive: true });
     writeFileSync(join(tempRoot, 'private/api-keys.json'), '{"example":"example-secret"}');

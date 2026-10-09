@@ -6,6 +6,7 @@ import PinToMoodBoardMenu from './PinToMoodBoardMenu';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { loraDisplayName } from './normalize';
 import { formatDurationMs } from '../../utils/formatters';
+import { assetDownloadUrl } from '../../lib/standaloneDownload.js';
 
 // Single card used everywhere a generated image/video appears in a grid:
 // the Image Gen page's recent gallery, the Video Gen page's recent renders,
@@ -242,7 +243,7 @@ function MediaCard({
             {showCollectionMenu && <AddToCollectionMenu item={item} />}
             {showMoodBoardMenu && <PinToMoodBoardMenu item={item} />}
             <a
-              href={downloadUrl}
+              href={assetDownloadUrl(downloadUrl)}
               download
               className="shrink-0 px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] rounded flex items-center justify-center"
               title="Download"

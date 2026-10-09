@@ -111,11 +111,12 @@ describe('static-mount fallback', () => {
     expect(streamRequest).not.toHaveBeenCalled();
   });
 
-  it('forwards Range so a hosted video can be scrubbed', async () => {
+  it('forwards Range and retains attachment semantics when downloading a hosted video', async () => {
     await markHosted(PEER.instanceId, [{ kind: 'video', filename: 'clip.mp4' }]);
     streamRequest.mockResolvedValue(upstream('PART', 206, { 'content-type': 'video/mp4', 'content-range': 'bytes 0-3/100' }));
-    const res = await request(app).get('/data/videos/clip.mp4').set('Range', 'bytes=0-3');
+    const res = await request(app).get('/data/videos/clip.mp4?download=1').set('Range', 'bytes=0-3');
     expect(res.status).toBe(206);
+    expect(res.headers['content-disposition']).toBe('attachment; filename="clip.mp4"');
     expect(streamRequest.mock.calls[0][1].headers.Range).toBe('bytes=0-3');
   });
 
