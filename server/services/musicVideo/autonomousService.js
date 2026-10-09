@@ -646,11 +646,6 @@ const settleProductionStage = (project, run, stage) => (isOrchestratedRun(run)
   : autoApproveStage(project, run, stage));
 
 /**
- * The orchestrator's look at the finished film. Nothing is left to change at
- * this point, so a critical verdict is logged as notes (`noted`) beside the
- * render rather than holding the run. A failed look is logged, never fatal.
- */
-/**
  * Watch the finished film and send flagged sections back, as a director would:
  * a `revise` verdict with timecoded issues starts one revision (startFinalRevision)
  * while revisions remain; anything else is logged and the film is kept. Returns
@@ -1296,6 +1291,37 @@ const assertAtSongCheckpoint = (run) => {
 // credit-spending choice) or a new local render on a new track.
 const SONG_OUTPUT_KEYS = ['trackId', 'sunoSongIds', 'songSource', 'songFallbackReason', 'localTrackId', 'localSongJobId'];
 
+/**
+ * How a run continues on its produce stage, read from the checkpoint ids in its
+ * output. Those ids overlap on purpose — `patchRun` merges output, so each later
+ * checkpoint is written beside the earlier ones, never in place of them:
+ * `productionRunId` stays set once production completes (`finishFromProduction`
+ * adds `productionDone`, and maybe an adopted `renderJobId`), and `renderJobId`
+ * stays set while the orchestrator reviews that film and while a footage
+ * revision (`finalAutoReviewId`) works on it. So this is two views, not a phase:
+ *
+ * - `finalDelivery`: the film is being rendered, reviewed or revised — after
+ *   production, or straight after code generation for a code-only brief.
+ *   `productionDone` alone counts (production finished, the render has not
+ *   started), and it does not mean the autonomous run is done.
+ * - `resume`: the one continuation Resume takes, latest checkpoint first —
+ *   `final-revision` (its review id), else `final-render` (the render id, or
+ *   null when none started), else `production` (its run id), else `advance`.
+ *
+ * Neither proves anything finished: callers keep their own status, step and
+ * identity checks, and check the render job, document and history themselves.
+ */
+function produceContinuation(run) {
+  const output = run?.stage === 'produce' ? run.output : null;
+  if (!output) return { finalDelivery: false, resume: { kind: 'advance', id: null } };
+  const finalDelivery = Boolean(output.renderJobId || output.productionDone);
+  const resume = output.finalAutoReviewId ? { kind: 'final-revision', id: output.finalAutoReviewId }
+    : finalDelivery ? { kind: 'final-render', id: output.renderJobId || null }
+      : output.productionRunId ? { kind: 'production', id: output.productionRunId }
+        : { kind: 'advance', id: null };
+  return { finalDelivery, resume };
+}
+
 export async function resumeAutonomousVideo(projectId, edits = {}, { autoApproveAuthorized = false } = {}) {
   const { run } = await requireRun(projectId);
   // A model swap is validated like Start, then replaces the parked production run's pool (#10473).
@@ -1348,11 +1374,12 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
     };
   });
   if (retakenTrackId) await unlinkRunTrack(projectId, out.run.id, retakenTrackId);
-  if (out.run.stage === 'produce' && out.run.output.finalAutoReviewId) {
+  const { resume } = produceContinuation(out.run);
+  if (resume.kind === 'final-revision') {
     // The orchestrator's footage revision picks up where it stopped. One that
     // already ended (or a director finished) leaves a revised film to render
     // and review again; any other failure is the director's to see.
-    const failure = await deps.resumeAutoReview(projectId, out.run.output.finalAutoReviewId).then(() => null, (err) => err);
+    const failure = await deps.resumeAutoReview(projectId, resume.id).then(() => null, (err) => err);
     if (!failure) {
       const { project: next, run } = await patchRun(projectId, (r) => stagePatch(r, 'produce', { status: 'running', step: FINAL_REVISION_STEP }));
       return { project: presentProjectAutonomousRun(next), run: presentAutonomousRun(run) };
@@ -1363,7 +1390,7 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
     }
     // A hand-off the director has not finished yet still holds its revision open.
     const { openAttemptRevisionId } = await import('./autoReview.js');
-    if (openAttemptRevisionId(await getProject(projectId), out.run.output.finalAutoReviewId)) {
+    if (openAttemptRevisionId(await getProject(projectId), resume.id)) {
       const parked = await park(projectId, 'needs-human', { error: 'Finish or cancel the open revision of the final video first, then Resume.', errorCode: 'FINAL_REVISION_NEEDS_HUMAN' });
       return { project: parked.project, run: presentAutonomousRun(parked.run) };
     }
@@ -1372,13 +1399,13 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
     const latest = await getProject(projectId);
     return { project: presentProjectAutonomousRun(latest), run: presentAutonomousRun(projectAutonomousRun(latest)) };
   }
-  if (out.run.stage === 'produce' && (out.run.output.renderJobId || out.run.output.productionDone)) {
-    // Production (or the code render) already finished; only the final render is left.
+  if (resume.kind === 'final-render') {
+    // Production (or the code render) already finished; only the final render and its review are left.
     await reconcileFinalRender(projectId, { restart: true });
     const latest = await getProject(projectId);
     return { project: presentProjectAutonomousRun(latest), run: presentAutonomousRun(projectAutonomousRun(latest)) };
   }
-  if (out.run.stage === 'produce' && out.run.output.productionRunId) {
+  if (resume.kind === 'production') {
     return resumeDelegatedProduction(projectId, out.run, { swapModels: modelsChanged, limits: edits.limits });
   }
   advanceInBackground(projectId);
@@ -1608,10 +1635,16 @@ async function completeFinalRender(projectId, run) {
   console.log(`✅ Autonomous music video ${short(run.id)} finished — final video rendered`);
 }
 
-/** The run, when it is live on its produce stage waiting for the final render (job id or not yet started). */
-const runAwaitingRender = (project) => {
+/**
+ * The run, when it is running with its final-delivery checkpoint set
+ * (produceContinuation): rendering the film — with a job id or not yet started —
+ * reviewing it, or revising its footage. Deliberately broader than an active
+ * render: the revision handler is admitted through it too, and each caller adds
+ * its own identity and step checks.
+ */
+const runInFinalDelivery = (project) => {
   const run = projectAutonomousRun(project);
-  return run && run.stage === 'produce' && run.status === 'running' && (run.output.renderJobId || run.output.productionDone) ? run : null;
+  return run?.status === 'running' && produceContinuation(run).finalDelivery ? run : null;
 };
 
 /**
@@ -1623,7 +1656,7 @@ const runAwaitingRender = (project) => {
  */
 async function reconcileFinalRender(projectId, { restart = false } = {}) {
   const project = await getProject(projectId).catch(() => null);
-  const run = runAwaitingRender(project);
+  const run = runInFinalDelivery(project);
   if (!run) return;
   const jobId = run.output.renderJobId || null;
   if (jobId && (project.status === 'rendering' || (await deps.activeRenderJobId(projectId)) === jobId)) {
@@ -1657,7 +1690,7 @@ async function startFinalRender(projectId, run) {
 async function onAutoReviewEvent({ projectId, runId, run: review }) {
   if (!projectId || !runId || !review || review.status === 'running') return;
   const project = await getProject(projectId).catch(() => null);
-  const run = runAwaitingRender(project);
+  const run = runInFinalDelivery(project);
   if (!run || run.output.finalAutoReviewId !== runId || run.stages.produce?.step !== FINAL_REVISION_STEP) return;
   if (['needs-human', 'failed'].includes(review.status)) {
     const reason = [review.stopReason, review.error].find((v) => typeof v === 'string' && v.trim()) || `the revision ${review.status === 'failed' ? 'failed' : 'needs a director'}`;
@@ -1675,7 +1708,7 @@ async function onAutoReviewEvent({ projectId, runId, run: review }) {
 async function onRenderEvent({ projectId, jobId, status, error }) {
   if (!projectId || !jobId) return;
   const project = await getProject(projectId).catch(() => null);
-  const run = runAwaitingRender(project);
+  const run = runInFinalDelivery(project);
   if (!run || run.output.renderJobId !== jobId) return;
   if (status === 'completed') return completeFinalRender(projectId, run);
   return failFinalRender(projectId, error || (status === 'canceled' ? 'The final render was cancelled' : 'The final render failed'));
