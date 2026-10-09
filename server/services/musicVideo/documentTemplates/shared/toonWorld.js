@@ -11,6 +11,11 @@ export function toonMaterial(THREE, { lit = '#f6ce86', mid = '#ba817b', shadow =
       toonShadow: { value: new THREE.Color(shadow) }, toonBands: { value: bands },
     });
     shader.fragmentShader = 'uniform vec3 toonLit, toonMid, toonShadow; uniform float toonBands;\n' + shader.fragmentShader;
+    // Accumulate continuous light before selecting the palette band. Three's
+    // default two-step irradiance would quantize the light a second time and
+    // can collapse the mid/shadow bands under a bright directional light.
+    shader.fragmentShader = shader.fragmentShader.replace('#include <gradientmap_pars_fragment>',
+      'vec3 getGradientIrradiance(vec3 normal, vec3 lightDirection) { return vec3(max(dot(normal, lightDirection), 0.)); }');
     shader.fragmentShader = shader.fragmentShader.replace(
       'vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + totalEmissiveRadiance;',
       `vec3 illumination = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;
@@ -181,14 +186,21 @@ uniform vec2 uInkRes; uniform vec3 uInkColor;
 uniform float uInkWidth, uInkDepthThreshold, uInkNormalThreshold, uInkEnabled;
 vec3 inkPosition(vec2 uv){
   float d = texture2D(tInkDepth, uv).x;
-  vec4 p = uInkInverseProjection * vec4(uv * 2. - 1., d * 2. - 1., 1.);
-  return p.xyz / p.w;
+  float z = d * 2. - 1.;
+  // Standard Three perspective/off-axis and orthographic projections have
+  // this sparse inverse. Avoid five full mat4 multiplies per output pixel.
+  vec2 xy = (uv * 2. - 1.) * vec2(uInkInverseProjection[0][0], uInkInverseProjection[1][1])
+    + vec2(uInkInverseProjection[3][0], uInkInverseProjection[3][1]);
+  return vec3(xy, z * uInkInverseProjection[2][2] + uInkInverseProjection[3][2])
+    / (z * uInkInverseProjection[2][3] + uInkInverseProjection[3][3]);
 }
-float inkEdge(vec3 delta, vec3 nn, vec3 n, float planeThreshold2, float alignmentThreshold){
-  float distanceToPlane = dot(delta, n), alignment = dot(n, nn);
-  float discontinuity = step(planeThreshold2, distanceToPlane * distanceToPlane);
-  float crease = step(alignment * alignment, alignmentThreshold * dot(nn, nn));
-  return step(delta.z, 1e-5) * max(discontinuity, crease);
+float inkPlaneEdge(vec3 delta, vec3 n, float threshold){
+  float distanceToPlane = dot(delta, n);
+  return step(delta.z, 1e-5) * step(threshold, distanceToPlane * distanceToPlane);
+}
+float inkCrease(vec3 a, vec3 b, float alignment2){
+  float alignment = dot(a, b);
+  return step(alignment * alignment, alignment2 * dot(a, a) * dot(b, b));
 }
 vec3 applyInk(vec3 color, vec2 uv){
   if (uInkEnabled < .5 || uInkWidth <= 0.) return color;
@@ -208,12 +220,16 @@ vec3 applyInk(vec3 color, vec2 uv){
   float normalLength2 = max(dot(n, n), 1e-20);
   float planeThreshold2 = uInkDepthThreshold * uInkDepthThreshold * max(dot(p, p), 1e-6) * normalLength2;
   float alignment2 = (1. - uInkNormalThreshold) * (1. - uInkNormalThreshold);
-  float alignmentThreshold = alignment2 * normalLength2;
-  float edge = max(
-    max(inkEdge(r, cross(r, ny), n, planeThreshold2, alignmentThreshold),
-        inkEdge(-l, cross(l, ny), n, planeThreshold2, alignmentThreshold)),
-    max(inkEdge(u, cross(nx, u), n, planeThreshold2, alignmentThreshold),
-        inkEdge(-d, cross(nx, d), n, planeThreshold2, alignmentThreshold)));
+  float planeEdge = max(
+    max(inkPlaneEdge(r, n, planeThreshold2), inkPlaneEdge(-l, n, planeThreshold2)),
+    max(inkPlaneEdge(u, n, planeThreshold2), inkPlaneEdge(-d, n, planeThreshold2)));
+  // One of each pair is exactly the nearest normal selected above, so a
+  // single comparison per axis replaces four comparisons to that normal.
+  float creaseX = inkCrease(cross(r, ny), cross(l, ny), alignment2)
+    * step(abs(r.z) < abs(l.z) ? -l.z : r.z, 1e-5);
+  float creaseY = inkCrease(cross(nx, u), cross(nx, d), alignment2)
+    * step(abs(u.z) < abs(d.z) ? -d.z : u.z, 1e-5);
+  float edge = max(planeEdge, max(creaseX, creaseY));
   return mix(color, uInkColor, edge);
 }`;
 

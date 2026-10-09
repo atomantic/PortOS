@@ -172,8 +172,16 @@ export function createPost(THREE, renderer) {
       c += (hash(vUv * uRes + mod(uFrame, 251.) * 7.13) - .5) * uGrain;
       gl_FragColor = vec4(clamp(c, 0., 1.), 1.);
     }`, { tColor: { value: null }, tBloom: { value: null }, uRes: { value: new THREE.Vector2() }, uBloom: { value: 0 }, uExposure: { value: 1 }, uVignette: { value: 0 }, uGrain: { value: 0 }, uFrame: { value: 0 }, ...ink.uniforms });
+  // Ink alone must preserve the direct path's palette and avoid paying for
+  // inactive bloom, highlight grading and grain in the cinematic composite.
+  const inkOnly = pass(/* glsl */`
+    ${toonWorld.inkShader}
+    varying vec2 vUv; uniform sampler2D tColor;
+    vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1. / 2.4)) - .055, step(.0031308, c)); }
+    void main(){ gl_FragColor = vec4(srgb(clamp(applyInk(texture2D(tColor, vUv).rgb, vUv), 0., 1.)), 1.); }
+  `, { tColor: { value: null }, ...ink.uniforms });
   let targets = [];
-  let hdr, hdrDepth, colour, small, smallB, w = 1, h = 1;
+  let hdr, hdrDepth, inkTarget, colour, small, smallB, w = 1, h = 1;
   // A software rasterizer (CI, GPU-less hosts) multiplies every MSAA sample, so
   // it renders single-sampled; real GPUs keep 4x.
   const gl = renderer.getContext();
@@ -190,10 +198,11 @@ export function createPost(THREE, renderer) {
       // depth texture (resolving one is a full extra copy every frame).
       hdr = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, samples });
       hdrDepth = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, samples, depthTexture: new THREE.DepthTexture(w, h, THREE.FloatType) });
+      inkTarget = new THREE.WebGLRenderTarget(w, h, { samples, depthTexture: new THREE.DepthTexture(w, h, THREE.FloatType) });
       colour = new THREE.WebGLRenderTarget(w, h, linear);
       small = new THREE.WebGLRenderTarget(Math.ceil(w / 4), Math.ceil(h / 4), linear);
       smallB = new THREE.WebGLRenderTarget(Math.ceil(w / 4), Math.ceil(h / 4), linear);
-      targets = [hdr, hdrDepth, colour, small, smallB];
+      targets = [hdr, hdrDepth, inkTarget, colour, small, smallB];
       // Allocate every target now: passes a lens skips must not create GPU
       // textures on a later seek.
       for (const target of targets) renderer.initRenderTarget(target);
@@ -217,6 +226,13 @@ export function createPost(THREE, renderer) {
       const inking = Boolean(lens.ink);
       if (!inking && !focusing && !bloom && !vignette && !grain && exposure === 1) {
         renderer.setRenderTarget(null); renderer.render(world, view);
+        return;
+      }
+      if (inking && !focusing && !bloom && !vignette && !grain && exposure === 1) {
+        ink.configure(inkTarget.depthTexture, view, w, h, typeof lens.ink === 'object' ? lens.ink : {});
+        renderer.setRenderTarget(inkTarget); renderer.clear(); renderer.render(world, view);
+        inkOnly.uniforms.tColor.value = inkTarget.texture;
+        draw(inkOnly, null);
         return;
       }
       const sceneTarget = focusing || inking ? hdrDepth : hdr;

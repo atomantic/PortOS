@@ -58,9 +58,18 @@ describe.skipIf(!canRun)('toon world headless dish proof', () => {
     expect(results.ratio).toBeLessThanOrEqual(2);
   }, 60000);
 
+  it('selects all three explicit palette colors from illumination before receiving shadows', async () => {
+    const colors = await page.evaluate(() => window.paletteProof());
+    for (const [i, expected] of [[87, 69, 111], [186, 129, 123], [246, 206, 134]].entries()) {
+      for (let channel = 0; channel < 3; channel++) expect(Math.abs(colors[i][channel] - expected[channel])).toBeLessThanOrEqual(1);
+    }
+    expect(errors).toEqual([]);
+  });
+
   it('supports a manual/layered post stack and restores the caller target', async () => {
     const result = await page.evaluate(() => window.manualProof());
-    expect(result.changed).toBeGreaterThan(300);
+    expect(result.changed).toHaveLength(2);
+    for (const count of result.changed) expect(count).toBeGreaterThan(300);
     expect(result.restored).toBe(true);
     expect(result.feedbackRefused).toBe(true);
     expect(errors).toEqual([]);
@@ -94,18 +103,38 @@ ground.rotation.x=-Math.PI/2;ground.receiveShadow=true;scene.add(ground);
 const pixels=()=>{const gl=renderer.getContext(),p=new Uint8Array(640*360*4);gl.readPixels(0,0,640,360,gl.RGBA,gl.UNSIGNED_BYTE,p);return p;};
 const changed=(a,b,region=()=>true)=>{let count=0;for(let i=0;i<a.length;i+=4)if(region(i/4)&&a.slice(i,i+3).some((v,j)=>Math.abs(v-b[i+j])>3))count++;return count;};
 const draw=(lens={})=>{post.render(scene,camera,lens,0);renderer.getContext().finish();return pixels();};
+window.paletteProof=()=>{
+  const world=new THREE.Scene(),view=new THREE.OrthographicCamera(-1,1,1,-1,.1,10);
+  view.position.z=3;
+  const mat=kit.toonMaterial(THREE),geometry=new THREE.PlaneGeometry(2,2);
+  world.add(new THREE.Mesh(geometry,mat));
+  const light=new THREE.DirectionalLight('#ffffff',1);world.add(light);
+  const colors=[];
+  for(const dot of [.1,.5,.9]){
+    light.position.set(Math.sqrt(1-dot*dot),0,dot);
+    renderer.setRenderTarget(null);renderer.render(world,view);
+    const p=pixels(),center=(180*640+320)*4;colors.push([...p.slice(center,center+3)]);
+  }
+  mat.dispose();geometry.dispose();
+  return colors;
+};
 window.manualProof=()=>{
   const input=new THREE.WebGLRenderTarget(640,360,{type:THREE.HalfFloatType,depthTexture:new THREE.DepthTexture(640,360,THREE.FloatType)});
   const output=new THREE.WebGLRenderTarget(640,360,{depthBuffer:false});
   const ink=kit.createInkPass(THREE,renderer);
-  renderer.setRenderTarget(input);renderer.render(scene,camera);
+  const ortho=new THREE.OrthographicCamera(-12,12,6.75,-6.75,.1,100);
+  ortho.position.copy(camera.position);ortho.lookAt(0,1,0);
   const read=()=>{const p=new Uint8Array(640*360*4);renderer.readRenderTargetPixels(output,0,0,640,360,p);return p;};
-  ink.render(input,camera,output,{enabled:false});const baseline=read();
-  ink.render(input,camera,output);const outlined=read();
-  const restored=renderer.getRenderTarget()===input;
+  const changes=[];let restored=true;
+  for(const view of [camera,ortho]){
+    renderer.setRenderTarget(input);renderer.render(scene,view);
+    ink.render(input,view,output,{enabled:false});const baseline=read();
+    ink.render(input,view,output);const outlined=read();
+    changes.push(changed(baseline,outlined));restored&&=renderer.getRenderTarget()===input;
+  }
   let feedbackRefused=false;try{ink.render(input,camera,input);}catch{feedbackRefused=true;}
   renderer.setRenderTarget(null);ink.dispose();input.dispose();output.dispose();
-  return {changed:changed(baseline,outlined),restored,feedbackRefused};
+  return {changed:changes,restored,feedbackRefused};
 };
 window.proof=()=>{
   const baseline=draw(), ink=draw({ink:true});
