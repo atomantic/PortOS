@@ -86,3 +86,19 @@ export function mergeCarriedLinks(existing, added) {
   const all = [...(Array.isArray(existing) ? existing : []), ...(Array.isArray(added) ? added : [])];
   return [...new Set(all.filter((t) => Object.hasOwn(CROSS_LINK_LABELS, t)))];
 }
+
+/**
+ * `posts` with `target` struck from every other post's carried links: those
+ * posts show the old URL (or a removed post), not whatever `target` becomes.
+ * Posts reading their links from the legacy defaults are given an explicit list.
+ * `kit` is the kit as it was before the change.
+ */
+export function dropCarriedLink(kit, posts, target) {
+  const out = { ...posts };
+  for (const [other, post] of Object.entries(posts)) {
+    if (other === target || !post || typeof post !== 'object') continue;
+    const carried = carriedLinks(kit, other);
+    if (carried.includes(target)) out[other] = { ...post, links: carried.filter((t) => t !== target) };
+  }
+  return out;
+}

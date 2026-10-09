@@ -31,7 +31,7 @@ import { sunoHookAdapter } from './sunoHook.js';
 import { distrokidAdapter } from './distrokid.js';
 import { musicVideoEvents } from '../events.js';
 import { CROSS_LINK_ADAPTERS } from './crossLinkEdits.js';
-import { carriedLinks, crossLinkBackfill, mergeCarriedLinks } from '../../../lib/musicVideoCrossLinks.js';
+import { carriedLinks, crossLinkBackfill, dropCarriedLink, mergeCarriedLinks } from '../../../lib/musicVideoCrossLinks.js';
 
 export const PUBLISH_ADAPTERS = Object.freeze({
   youtube: youtubeAdapter, shorts: shortsAdapter, tiktok: tiktokAdapter, instagram: instagramAdapter,
@@ -312,9 +312,13 @@ export async function recordPublishPost(projectId, target, input = {}, deps = {}
   }
   const { project } = await mutateProjectRecord(projectId, (current) => {
     const kit = current.publishKit && typeof current.publishKit === 'object' ? current.publishKit : {};
-    const posts = { ...(kit.posts || {}) };
+    let posts = { ...(kit.posts || {}) };
     if (Array.isArray(input.links) && posts[target]) input = { ...input, links: mergeCarriedLinks(carriedLinks(kit, target), input.links) };
-    posts[target] = normalizePost(posts[target], input);
+    const before = posts[target];
+    const next = normalizePost(before, input);
+    // Other posts that linked the old URL no longer link this post.
+    if (before?.url && before.url !== next.url) posts = dropCarriedLink(kit, posts, target);
+    posts[target] = next;
     return { project: { ...current, publishKit: { ...kit, posts } } };
   });
   return { project, post: project.publishKit.posts[target] };
@@ -366,8 +370,8 @@ export async function removePublishPost(projectId, target) {
   const { project } = await mutateProjectRecord(projectId, (current) => {
     const kit = current.publishKit && typeof current.publishKit === 'object' ? current.publishKit : {};
     if (!kit.posts?.[target]) return { project: current };
-    const { [target]: _removed, ...posts } = kit.posts;
-    return { project: { ...current, publishKit: { ...kit, posts } } };
+    const { [target]: _removed, ...rest } = kit.posts;
+    return { project: { ...current, publishKit: { ...kit, posts: dropCarriedLink(kit, rest, target) } } };
   });
   return { project };
 }

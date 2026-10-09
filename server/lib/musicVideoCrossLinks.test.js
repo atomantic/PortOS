@@ -3,7 +3,7 @@
  * what its draft always linked, counted only when that link existed first.
  */
 import { describe, expect, it } from 'vitest';
-import { carriedLinks, crossLinkBackfill } from './musicVideoCrossLinks.js';
+import { carriedLinks, crossLinkBackfill, dropCarriedLink } from './musicVideoCrossLinks.js';
 
 const song = 'https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc';
 
@@ -24,5 +24,21 @@ describe('cross-links between release posts', () => {
     expect(rows.suno.missing.map((l) => l.target)).toEqual(['youtube', 'x']);
     expect(rows.youtube.missing.map((l) => l.target)).toEqual(['suno', 'x']);
     expect(rows.stackerNews).toBeUndefined();
+  });
+
+  it('stops counting a removed or replaced post as linked, so backfill offers the new URL', () => {
+    const kit = { posts: {
+      youtube: { url: 'https://youtu.be/abc', postedAt: '2026-01-01T00:00:00Z', links: [] },
+      x: { url: 'https://x.com/a/status/1', postedAt: '2026-01-02T00:00:00Z', links: ['youtube'] },
+    } };
+    const posts = dropCarriedLink(kit, kit.posts, 'youtube');
+    expect(posts.x.links).toEqual([]);
+    expect(posts.youtube).toBe(kit.posts.youtube);
+    // Legacy post without a links list is given an explicit one.
+    const legacy = { posts: { youtube: kit.posts.youtube, suno: { url: song, postedAt: '2026-01-03T00:00:00Z' } } };
+    expect(dropCarriedLink(legacy, legacy.posts, 'youtube').suno.links).toEqual([]);
+    // Reposted on a new URL: the other post is missing it again.
+    const reposted = { posts: { ...posts, youtube: { url: 'https://youtu.be/new', postedAt: '2026-01-04T00:00:00Z', links: [] } } };
+    expect(crossLinkBackfill(reposted).find((r) => r.target === 'x').missing.map((l) => l.url)).toContain('https://youtu.be/new');
   });
 });

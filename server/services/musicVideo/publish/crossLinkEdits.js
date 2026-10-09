@@ -10,6 +10,9 @@
 import { PUBLISH_STEP_TIMEOUT_MS as T, loginRequired, pasteText, step } from './browser.js';
 import { markSunoSongMenu } from '../../../lib/sunoPage.js';
 
+// Suno's caption limit; the new-draft builder enforces the same one.
+const SUNO_CAPTION_MAX = 500;
+
 const youtubeIdOf = (url) => String(url).match(/(?:youtu\.be\/|[?&]v=|\/shorts\/)([\w-]{6,})/)?.[1] || null;
 const tweetIdOf = (url) => String(url).match(/\/status\/(\d+)/)?.[1] || null;
 const sunoSongIdOf = (url) => String(url).match(/\/song\/([0-9a-f-]{36})/i)?.[1] || null;
@@ -66,9 +69,21 @@ const suno = {
     })().catch(() => null);
     if (!caption) return { added: [], leftForYou: [`Open the song's details and add to its caption:\n${row.text}`, 'Save'] };
     const current = await caption.inputValue();
-    const lines = linesNotIn(row.text, current);
-    if (lines.length) await step(this.label, 'add the links to the caption', () => caption.fill([current.trimEnd(), lines.join('\n')].filter(Boolean).join('\n')));
-    return { added: lines.length ? lines : ['Nothing: the caption already has every link'], leftForYou: ['Save'] };
+    const pending = linesNotIn(row.text, current);
+    // Whole lines only, while the caption fits: an overflow link stays for the director.
+    let next = current.trimEnd();
+    const lines = [];
+    const overflow = [];
+    for (const line of pending) {
+      const joined = next ? `${next}\n${line}` : line;
+      if (joined.length > SUNO_CAPTION_MAX) { overflow.push(line); continue; }
+      next = joined;
+      lines.push(line);
+    }
+    if (lines.length) await step(this.label, 'add the links to the caption', () => caption.fill(next));
+    const leftForYou = ['Save'];
+    if (overflow.length) leftForYou.unshift(`Too long for the ${SUNO_CAPTION_MAX}-character caption, add elsewhere:\n${overflow.join('\n')}`);
+    return { added: lines.length ? lines : [overflow.length ? 'Nothing: the caption has no room' : 'Nothing: the caption already has every link'], leftForYou };
   },
 };
 

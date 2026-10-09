@@ -43,4 +43,16 @@ describe('cross-link edits', () => {
     expect(summary.added).toEqual([]);
     expect(summary.leftForYou[0]).toContain('Stacker News: https://stacker.news/items/7');
   });
+
+  it('keeps the Suno caption within its limit and leaves an overflow link for the director', async () => {
+    const url = 'https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc';
+    const filled = [];
+    const field = { waitFor: async () => {}, inputValue: async () => 'x'.repeat(480), fill: async (t) => filled.push(t) };
+    const item = { isVisible: async () => true, click: async () => {}, hover: async () => {} };
+    const page = fakePage({ url });
+    page.locator = (sel) => (String(sel).includes('textarea') ? { first: () => field } : { first: () => item, filter: () => ({ first: () => item }), click: async () => {}, count: async () => 1 });
+    const summary = await CROSS_LINK_ADAPTERS.suno.prepare(page, row('suno', url));
+    expect(filled.every((t) => t.length <= 500)).toBe(true);
+    expect(summary.leftForYou[0]).toContain('https://stacker.news/items/7');
+  });
 });
