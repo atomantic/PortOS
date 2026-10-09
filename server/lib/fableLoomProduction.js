@@ -540,6 +540,15 @@ export function verifyExactInputProvenance(recordedProvenance, {
  * Enumerate and plan all production assets for an episode.
  * Pure deterministic preflight and DAG generation.
  */
+// One status policy for the still/entry/hold/exit media assets: an existing asset
+// is reused unless exact_inputs demands a re-render; everything else is ready or
+// blocked. `reuseAllowed` is supplied per asset (it is deliberately not derived
+// from `ready`: an existing still or entry stays reusable without a prompt).
+const plannedMediaAssetStatus = ({ existingAssetId, reuseAllowed, ready, mode }) => {
+  if (existingAssetId && reuseAllowed && mode !== 'exact_inputs') return 'already_rendered';
+  return ready ? 'ready' : 'blocked';
+};
+
 export function buildEpisodeProductionPlan({
   loom = null,
   episode = null,
@@ -753,9 +762,12 @@ export function buildEpisodeProductionPlan({
       temporalSourceNodeId,
       dependencies: imageDependencies,
       existingAssetId: existingStill,
-      status: existingStill && nodeBlockers.length === 0 && effectiveMode !== 'exact_inputs'
-        ? 'already_rendered'
-        : (imageHasPrompt && nodeBlockers.length === 0 ? 'ready' : 'blocked'),
+      status: plannedMediaAssetStatus({
+        existingAssetId: existingStill,
+        reuseAllowed: nodeBlockers.length === 0,
+        ready: imageReady,
+        mode: effectiveMode,
+      }),
       readiness: {
         ready: imageReady,
         reasons: imageBlockers,
@@ -785,9 +797,12 @@ export function buildEpisodeProductionPlan({
       cameraMovement: node.cameraMovement || null,
       dependencies: [imageAssetId],
       existingAssetId: existingEntryVideo,
-      status: existingEntryVideo && nodeBlockers.length === 0 && effectiveMode !== 'exact_inputs'
-        ? 'already_rendered'
-        : (videoReady ? 'ready' : 'blocked'),
+      status: plannedMediaAssetStatus({
+        existingAssetId: existingEntryVideo,
+        reuseAllowed: nodeBlockers.length === 0,
+        ready: videoReady,
+        mode: effectiveMode,
+      }),
       readiness: {
         ready: videoReady,
         reasons: videoBlockers,
@@ -813,6 +828,7 @@ export function buildEpisodeProductionPlan({
         }
       }
 
+      const holdReady = videoHasPrompt && holdBlockers.length === 0;
       plannedAssets.push({
         id: holdAssetId,
         nodeId: node.id,
@@ -824,11 +840,14 @@ export function buildEpisodeProductionPlan({
         cameraMovement: node.cameraMovement || null,
         dependencies: [imageAssetId],
         existingAssetId: existingHold,
-        status: existingHold && holdBlockers.length === 0 && effectiveMode !== 'exact_inputs'
-          ? 'already_rendered'
-          : (videoHasPrompt && holdBlockers.length === 0 ? 'ready' : 'blocked'),
+        status: plannedMediaAssetStatus({
+          existingAssetId: existingHold,
+          reuseAllowed: holdBlockers.length === 0,
+          ready: holdReady,
+          mode: effectiveMode,
+        }),
         readiness: {
-          ready: videoHasPrompt && holdBlockers.length === 0,
+          ready: holdReady,
           reasons: videoHasPrompt ? holdBlockers : [...holdBlockers, 'Scene has neither videoPrompt nor prose for video.'],
         },
       });
@@ -845,6 +864,7 @@ export function buildEpisodeProductionPlan({
       if (lockedCanon && !existingExit && node.visualCanon?.storyboardImageApproved !== true) {
         exitBlockers.push('Locked canon video requires an author-approved storyboard image.');
       }
+      const exitReady = exitHasPrompt && exitBlockers.length === 0;
       plannedAssets.push({
         id: exitAssetId,
         nodeId: node.id,
@@ -857,11 +877,14 @@ export function buildEpisodeProductionPlan({
         prompt: tr.description || videoPrompt,
         dependencies: [imageAssetId],
         existingAssetId: existingExit,
-        status: existingExit && exitBlockers.length === 0 && effectiveMode !== 'exact_inputs'
-          ? 'already_rendered'
-          : (exitHasPrompt && exitBlockers.length === 0 ? 'ready' : 'blocked'),
+        status: plannedMediaAssetStatus({
+          existingAssetId: existingExit,
+          reuseAllowed: exitBlockers.length === 0,
+          ready: exitReady,
+          mode: effectiveMode,
+        }),
         readiness: {
-          ready: exitHasPrompt && exitBlockers.length === 0,
+          ready: exitReady,
           reasons: exitBlockers,
         },
       });
