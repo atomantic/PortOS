@@ -616,8 +616,9 @@ Dry runs and unrelated selective restores do not acquire this settings boundary.
 
 A full live restore acquires boundaries in this order: shared snapshot cut
 (asset publications drained), task schedule, settings, CoS configuration, CoS
-runtime state, media model registry. A selective restore acquires the same order
-minus the boundaries its scope does not touch; the snapshot cut is always held.
+runtime state, media model registry, Apple Health day-file admission. A
+selective restore acquires the same order minus the boundaries its scope does
+not touch; the snapshot cut is always held.
 Each boundary stays held until everything inside it — transfer and cache
 reconciliation, including after a partial transfer failure — has settled, so the
 settings queue remains held through CoS reconciliation. The order is declared once
@@ -663,6 +664,27 @@ failure. Subsequent partial settings saves preserve restored fields. Transfer
 errors still report that files may have been overwritten; a cache-reload failure
 requires restarting PortOS before using CoS. Dry runs and selective restores
 outside the CoS state/config scope do not acquire this boundary.
+
+### Restoring Apple Health day files in a running server
+
+Full live file restores, `health` restores, and single-day `health/...` restores
+own Apple Health mutation admission (`withLiveHealthRestore` in
+`server/services/appleHealthIngest.js`). JSON ingest, XML import batch flushes,
+and health archive capture and removal each take admission before their day's
+write queue and hold it until that day's read-modify-write (or capture/removal)
+settles, so no cycle can carry a pre-restore read across the transfer.
+
+From the moment the restore is requested, new day cycles wait. Cycles already
+admitted finish first; then rsync runs; then health caches are invalidated and
+admission reopens — on success, partial transfer failure, or reconciliation
+failure alike. Waiting imports then read the restored day files, so points the
+snapshot recovered are preserved. An XML import takes admission per day, so a
+restore can land between two of its days. Archival releases admission while
+`tar` encodes; its hash-conditional removal retains any day whose bytes the
+restore changed. Outside a restore, different days still import concurrently.
+Health admission is acquired last, so a restore refused earlier (for example by
+`COS_RESTORE_BUSY`) never pauses imports. Dry runs and unrelated selective
+restores do not acquire it.
 
 ## Database maintenance admission
 

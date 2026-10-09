@@ -1728,8 +1728,11 @@ const COS_RESTORE_SCOPES = ['cos', 'cos/config.json', 'cos/state.json', 'cos/age
  * - The settings queue stays held through CoS reconciliation.
  * - CoS acquires config then runtime internally (`withLiveCosRestore`) and
  *   refuses a busy daemon/mind/agent with `COS_RESTORE_BUSY`.
- * - The media registry refuses edits for the whole hold and is acquired last,
- *   so its write fence never outlives a refused CoS restore.
+ * - The media registry refuses edits for the whole hold and is acquired after
+ *   CoS, so its write fence never outlives a refused CoS restore.
+ * - Apple Health admission is acquired last, for the same reason: it closes
+ *   import/archive admission and drains admitted day cycles (which wait on no
+ *   other owner) before the transfer, then reopens after cache invalidation.
  */
 const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
   {
@@ -1771,6 +1774,14 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
     hold: async (inner) => {
       const { withLiveMediaModelsRestore } = await import('../lib/mediaModels.js');
       return withLiveMediaModelsRestore(inner);
+    },
+  },
+  {
+    name: 'Apple Health day files',
+    appliesTo: scope => !scope || scope === 'health' || scope.startsWith('health/'),
+    hold: async (inner) => {
+      const { withLiveHealthRestore } = await import('./appleHealthIngest.js');
+      return withLiveHealthRestore(inner);
     },
   },
 ]);
