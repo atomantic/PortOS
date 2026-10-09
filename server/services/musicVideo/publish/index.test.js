@@ -78,6 +78,26 @@ describe('publish drafts (#9282)', () => {
       .rejects.toMatchObject({ status: 422, message: expect.stringMatching(/publication/) });
   });
 
+  it('follows a Suno share link to its song page for the Suno post, and records the song page', async () => {
+    const songId = '0a1b2c3d-1111-4222-8333-444455556666';
+    const { id } = await projects.createProject({ name: 'Release' });
+    const { connect } = fakeBrowser();
+    const suno = adapter({ label: 'Suno' });
+    const resolveUrl = vi.fn(async () => `https://suno.com/song/${songId}?sh=abc`);
+    const deps = { connect, adapters: { suno }, platforms: { suno: { enabled: true, account: null } }, resolveUrl };
+    const draft = await preparePublishDraft(id, 'suno', { songUrl: 'https://suno.com/s/AbCdEf123' }, deps);
+    expect(resolveUrl).toHaveBeenCalledWith('https://suno.com/s/AbCdEf123', expect.objectContaining({ allowUrl: expect.any(Function) }));
+    expect(suno.prepare).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ songUrl: `https://suno.com/song/${songId}` }));
+    expect(draft.songUrl).toBe(`https://suno.com/song/${songId}`);
+
+    const dead = { ...deps, resolveUrl: vi.fn(async () => null) };
+    await expect(preparePublishDraft(id, 'suno', { songUrl: 'https://suno.com/s/Gone1234' }, dead))
+      .rejects.toMatchObject({ status: 422, message: expect.stringMatching(/suno\.com\/song/) });
+
+    const { post } = await recordPublishPost(id, 'suno', { url: 'https://suno.com/s/AbCdEf123' }, { resolveUrl });
+    expect(post.url).toBe(`https://suno.com/song/${songId}`);
+  });
+
   it('fills a reviewable draft but never submits it; records a manually published link', async () => {
     const id = await readyProject();
     const { connect, pages } = fakeBrowser();

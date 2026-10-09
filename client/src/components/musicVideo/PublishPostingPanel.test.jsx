@@ -30,6 +30,16 @@ describe('PublishPostingPanel (#9282)', () => {
     expect(within(row('YouTube')).getByRole('link')).toHaveAttribute('href', 'https://youtu.be/abc');
   });
 
+  it('shows the Suno song page a pasted share link resolved to once the draft is filled', () => {
+    const song = 'https://suno.com/song/0a1b2c3d-1111-4222-8333-444455556666';
+    const { rerender } = render(<PublishPostingPanel project={project()} publishing={hook()} />);
+    expandAll();
+    const field = () => within(row('Suno')).getByLabelText('Song URL (the take to publish)');
+    fireEvent.change(field(), { target: { value: 'https://suno.com/s/AbCdEf123' } });
+    rerender(<PublishPostingPanel project={project()} publishing={hook({ drafts: { suno: { draftId: 'd1', summary: {}, songUrl: song } } })} />);
+    expect(field()).toHaveValue(song);
+  });
+
   it('fills a Reddit draft with the subreddit and post type, dropping blanks', () => {
     const publishing = hook();
     render(<PublishPostingPanel project={project()} publishing={publishing} />);
@@ -52,6 +62,22 @@ describe('PublishPostingPanel (#9282)', () => {
     fireEvent.change(within(substack).getByLabelText('Publication'), { target: { value: 'other' } });
     fireEvent.click(within(substack).getByRole('button', { name: 'Fill draft' }));
     expect(publishing.prepare).toHaveBeenLastCalledWith('substack', { publication: 'other' });
+  });
+
+  it('picks the X story image from thumbnails, with No image as the default', () => {
+    const publishing = hook();
+    render(<PublishPostingPanel project={project({ thumbnails: ['t1.jpg', 't2.jpg'] })} publishing={publishing} />);
+    expandAll();
+    const picker = within(row('X thread')).getByRole('radiogroup', { name: 'Image on the story reply (optional)' });
+    expect(within(picker).getByRole('radio', { name: 'No image' })).toBeChecked();
+    expect(within(picker).getByRole('radio', { name: 'Video frame 2' }).querySelector('img')).toHaveAttribute('src', '/data/video-thumbnails/t2.jpg');
+    fireEvent.click(within(picker).getByRole('radio', { name: 'Video frame 2' }));
+    expect(within(picker).getByRole('radio', { name: 'Video frame 2' })).toBeChecked();
+    fireEvent.click(within(row('X thread')).getByRole('button', { name: 'Fill draft' }));
+    expect(publishing.prepare).toHaveBeenLastCalledWith('x', { storyImage: 't2.jpg' });
+    fireEvent.click(within(picker).getByRole('radio', { name: 'No image' }));
+    fireEvent.click(within(row('X thread')).getByRole('button', { name: 'Fill draft' }));
+    expect(publishing.prepare).toHaveBeenLastCalledWith('x', {});
   });
 
   it('lets the director pick which 9:16 cut a Shorts draft posts (#10150)', () => {

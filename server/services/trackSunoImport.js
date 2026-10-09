@@ -18,10 +18,11 @@ import { ServerError } from '../lib/errorHandler.js';
 import { shortId } from '../lib/fileUtils.js';
 import { findFfmpeg, probeVideoDuration, runFfmpegProcess } from '../lib/ffmpeg.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
-import { fetchPublicBinary, fetchPublicText, resolvePublicUrl } from '../lib/safeUrlFetch.js';
+import { fetchPublicBinary, fetchPublicText } from '../lib/safeUrlFetch.js';
 import {
-  isSunoSongUrl, isSunoHost, sunoSongIdFromUrl, sunoCdnAudioUrl, sunoCdnVideoUrl, parseSunoSongPage, SUNO_URL_INVALID_MESSAGE,
+  isSunoSongUrl, sunoCdnAudioUrl, sunoCdnVideoUrl, parseSunoSongPage, SUNO_URL_INVALID_MESSAGE,
 } from '../lib/sunoSong.js';
+import { resolveSunoSongId, SUNO_FETCH_HEADERS as HEADERS } from './sunoShareLink.js';
 import { importUploadedTrack, MUSIC_UPLOAD_MAX_BYTES } from './pipeline/musicLibrary.js';
 import { createTrack } from './tracks/index.js';
 import { RENDER_SOURCES } from './tracks/logic.js';
@@ -31,8 +32,6 @@ const PAGE_MAX_BYTES = 5 * 1024 * 1024;
 const AUDIO_TIMEOUT_MS = 5 * 60 * 1000;
 // The song's video carries a picture track too, so it may run well past the audio cap.
 const VIDEO_MAX_BYTES = 250 * 1024 * 1024;
-// Suno serves its pages to browsers; a bare fetch user agent can get a challenge page instead.
-const HEADERS = { 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36' };
 
 // Suno's CDN serves audio/mpeg; a missing type or octet-stream is still worth probing.
 const isAudioResponse = (contentType) => {
@@ -147,18 +146,6 @@ export function cancelSunoImport(jobId) {
   return true;
 }
 
-// A share link (suno.com/s/…) redirects to the song page; follow it on Suno's own hosts only.
-async function resolveSongId(url) {
-  const direct = sunoSongIdFromUrl(url);
-  if (direct) return direct;
-  const finalUrl = await resolvePublicUrl(url, {
-    timeoutMs: PAGE_TIMEOUT_MS, headers: HEADERS, allowUrl: (u) => u.protocol === 'https:' && isSunoHost(u.hostname),
-  });
-  const songId = sunoSongIdFromUrl(finalUrl);
-  if (!songId) throw new Error('That Suno link did not lead to a song page');
-  return songId;
-}
-
 /**
  * Kick off a Suno song import. Throws 400 for a URL that isn't a Suno song
  * link; everything after that runs detached and reports over SSE.
@@ -181,7 +168,7 @@ export async function startSunoImport(url) {
     };
     try {
       broadcastSse(job, { type: 'progress', percent: 5, stage: 'reading' });
-      const songId = await resolveSongId(url.trim());
+      const songId = await resolveSunoSongId(url.trim());
       // The page only adds metadata; a page Suno won't serve still imports the audio.
       const html = await fetchPublicText(`https://suno.com/song/${songId}`, {
         timeoutMs: PAGE_TIMEOUT_MS, headers: HEADERS, maxBytes: PAGE_MAX_BYTES, throwOnUnsafe: false,

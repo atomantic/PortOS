@@ -62,7 +62,12 @@ function pickVerticalCut(project, options) {
 
 /** The full video's public link: the recorded YouTube post, else the one the director gave the kit. */
 const fullVideoUrl = (kit) => text(kit.posts?.youtube?.url) || text(kit.links?.youtube) || '';
-const songUrl = (kit, options) => text(options?.songUrl) || text(kit.posts?.suno?.url) || text(kit.links?.song) || '';
+/** The Suno song a post links or plays: the director's pick, else the recorded Suno post, else the kit's song link. */
+export const publishSongUrl = (project, options) => {
+  const kit = kitOf(project);
+  return text(options?.songUrl) || text(kit.posts?.suno?.url) || text(kit.links?.song) || '';
+};
+const songUrl = (kit, options) => publishSongUrl({ publishKit: kit }, options);
 
 function requireTitle(platform, title) {
   if (!title) throw missing(`Write the ${platform} title in the release copy first`);
@@ -197,7 +202,7 @@ const BUILDERS = {
   suno: (project, kit, options = {}) => {
     const song = songUrl(kit, options);
     // The adapter finds the song's own menu by its id, so the URL must carry it.
-    if (!/^https:\/\/(www\.)?suno\.com\/song\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(song)) throw missing('Give the Suno song URL to publish (suno.com/song/…)');
+    if (!/^https:\/\/(www\.)?suno\.com\/song\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(song)) throw missing('Give the Suno song URL to publish (suno.com/song/… or a suno.com/s/… share link)');
     const video = fullVideoUrl(kit);
     const lead = text(kit.copy?.youtube?.description).split(/\n\s*\n/)[0] || '';
     const caption = [lead, video ? `Music video: ${video}` : ''].filter(Boolean).join(' ').slice(0, 500);
@@ -207,7 +212,7 @@ const BUILDERS = {
   sunoHook: (project, kit, options = {}) => {
     const song = songUrl(kit, options);
     const songId = song.match(SUNO_SONG_URL)?.[1]?.toLowerCase();
-    if (!songId) throw missing('Give the Suno song URL the Hook plays (suno.com/song/…)');
+    if (!songId) throw missing('Give the Suno song URL the Hook plays (suno.com/song/… or a suno.com/s/… share link)');
     const cut = pickVerticalCut(project, options);
     const caption = text(kit.copy?.tiktok?.caption) || text(kit.copy?.shorts?.description).slice(0, 300);
     const duration = Number(project?.audioAnalysis?.durationSec);
