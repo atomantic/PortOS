@@ -55,4 +55,15 @@ describe('cross-link edits', () => {
     expect(filled.every((t) => t.length <= 500)).toBe(true);
     expect(summary.leftForYou[0]).toContain('https://stacker.news/items/7');
   });
+
+  it('types the missing links as a comment on the Facebook post and leaves sending it to the director', async () => {
+    const pasted = [];
+    const box = { click: async () => {}, evaluate: async (_fn, t) => pasted.push(t), innerText: async () => pasted.join('') };
+    const page = fakePage({ count: 0 });
+    page.locator = (sel) => (String(sel).includes('comment') ? { first: () => box } : { count: async () => 0 });
+    const summary = await CROSS_LINK_ADAPTERS.facebook.prepare(page, row('facebook', 'https://www.facebook.com/reel/1'));
+    expect(page.goto.mock.calls[0][0]).toBe('https://www.facebook.com/reel/1');
+    expect(pasted).toEqual([row('facebook').text]);
+    expect(summary.leftForYou).toEqual(['Enter (sends the comment)']);
+  });
 });

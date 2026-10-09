@@ -11,12 +11,12 @@
 
 /** Every post another post can link to, in the order a link list shows them. */
 export const CROSS_LINK_LABELS = Object.freeze({
-  suno: 'Song', youtube: 'Music video', x: 'X', tiktok: 'TikTok', instagram: 'Instagram',
+  suno: 'Song', youtube: 'Music video', x: 'X', linkedin: 'LinkedIn', facebook: 'Facebook', tiktok: 'TikTok', instagram: 'Instagram',
   reddit: 'Reddit', stackerNews: 'Stacker News', substack: 'Substack', distrokid: 'Streaming',
 });
 
 /** Posts whose text can still take links after posting: an edit, or a reply/comment under it. */
-export const CROSS_LINK_EDIT_TARGETS = Object.freeze(['youtube', 'suno', 'x', 'stackerNews']);
+export const CROSS_LINK_EDIT_TARGETS = Object.freeze(['youtube', 'suno', 'x', 'stackerNews', 'facebook']);
 
 // What each draft linked before posts recorded their links.
 const LEGACY_LINKS = { youtube: [], suno: ['youtube'], x: ['suno', 'youtube'], stackerNews: ['youtube'] };

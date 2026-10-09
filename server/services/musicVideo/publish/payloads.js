@@ -16,6 +16,8 @@ const DEFAULT_SUBREDDIT = 'aivideo';
 // LinkedIn's limits for a video post made from a computer: 3,000 characters of text, 15 minutes of video.
 const LINKEDIN_POST_MAX = 3000;
 const LINKEDIN_VIDEO_MAX_SEC = 15 * 60;
+// Facebook's post text limit; uploaded video has no practical length limit (every upload is a reel since 2025).
+const FACEBOOK_POST_MAX = 63206;
 
 const missing = (message) => new ServerError(message, { status: 422, code: 'PUBLISH_ASSET_MISSING' });
 const stale = () => new ServerError('The publishing kit was built from an earlier render — rebuild the kit before filling this draft', { status: 409, code: 'PUBLISH_KIT_STALE' });
@@ -144,6 +146,29 @@ const releaseCover = (kit) => {
   return kit.thumbnail ? { dir: 'videoThumbnails', name: kit.thumbnail } : null;
 };
 
+/** The 1080p encode a native video post (LinkedIn, Facebook) uploads. */
+function nativeVideo(project, kit, platform) {
+  const clip = (kit.exports || []).find((e) => e.kind === 'x-1080p')?.filename;
+  if (!clip) throw missing(`Build the publishing kit first — the ${platform} post uploads its 1080p encode`);
+  requireFreshKit(project, kit);
+  return { dir: 'videos', name: clip };
+}
+
+/**
+ * A native video post's first comment (unless the director turned it off):
+ * the full video and the song, then the release's other posts.
+ */
+function linksComment(kit, options, self) {
+  if (options.linksComment === false) return { firstComment: null, crossLinks: [] };
+  const lead = [
+    fullVideoUrl(kit) ? { target: 'youtube', line: `Full video: ${fullVideoUrl(kit)}` } : null,
+    songUrl(kit, options) ? { target: 'suno', line: `The song: ${songUrl(kit, options)}` } : null,
+  ].filter(Boolean);
+  const others = otherPosts(kit, options, '', { exclude: ['youtube', 'suno', self] });
+  const lines = [...lead.map((l) => l.line), ...others.lines];
+  return { firstComment: lines.join('\n') || null, crossLinks: [...lead.map((l) => l.target), ...others.carried] };
+}
+
 const BUILDERS = {
   youtube: (project, kit, options = {}) => {
     if (!kit.master?.filename) throw missing('Build the publishing kit first — it names the final render to upload');
@@ -200,16 +225,17 @@ const BUILDERS = {
     const post = text(kit.copy?.linkedin?.post);
     if (!post) throw missing('Write the LinkedIn post in the release copy first');
     if (post.length > LINKEDIN_POST_MAX) throw missing(`The LinkedIn post is ${post.length} characters; the limit is ${LINKEDIN_POST_MAX}`);
-    const clip = (kit.exports || []).find((e) => e.kind === 'x-1080p')?.filename;
-    if (!clip) throw missing('Build the publishing kit first — the LinkedIn post uploads its 1080p encode');
-    requireFreshKit(project, kit);
+    const video = nativeVideo(project, kit, 'LinkedIn');
     const duration = Number(project?.audioAnalysis?.durationSec);
     if (duration > LINKEDIN_VIDEO_MAX_SEC) throw missing(`LinkedIn takes videos up to 15 minutes; this one is ${Math.ceil(duration / 60)}`);
-    const links = options.linksComment === false ? '' : [
-      fullVideoUrl(kit) ? `Full video: ${fullVideoUrl(kit)}` : '',
-      songUrl(kit, options) ? `The song: ${songUrl(kit, options)}` : '',
-    ].filter(Boolean).join('\n');
-    return { video: { dir: 'videos', name: clip }, text: post, firstComment: links || null };
+    return { video, text: post, ...linksComment(kit, options, 'linkedin') };
+  },
+  // The same shape as LinkedIn: Facebook favors uploaded video over outside links.
+  facebook: (project, kit, options = {}) => {
+    const post = text(kit.copy?.facebook?.post);
+    if (!post) throw missing('Write the Facebook post in the release copy first');
+    if (post.length > FACEBOOK_POST_MAX) throw missing(`The Facebook post is ${post.length} characters; the limit is ${FACEBOOK_POST_MAX}`);
+    return { video: nativeVideo(project, kit, 'Facebook'), text: post, ...linksComment(kit, options, 'facebook') };
   },
   reddit: (project, kit, options = {}) => {
     // r/aivideo is the default (#9307): a native video post, title + flair, no
@@ -385,9 +411,10 @@ export function publishPreviewParts(platform, project, payload) {
       });
       break;
     case 'linkedin':
+    case 'facebook':
       add('Video', 'The 1080p encode of the final render');
       add('Post', p.text);
-      add('First comment (you press Comment)', p.firstComment);
+      add(platform === 'facebook' ? 'First comment (you press Enter)' : 'First comment (you press Comment)', p.firstComment);
       break;
     case 'reddit':
       add('Where', `r/${p.subreddit}`);

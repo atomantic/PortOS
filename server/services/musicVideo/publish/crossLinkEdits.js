@@ -2,13 +2,15 @@
  * Backfill cross-links: open a post that is already up and add the links to
  * the release's posts made after it. Each prepare() fills a form in its own
  * tab and stops there: the director reviews it and presses Save (YouTube,
- * Suno) or Reply (X, Stacker News). PortOS never saves, posts or deletes.
+ * Suno), Reply (X, Stacker News) or Enter (a Facebook comment). PortOS never
+ * saves, posts or deletes.
  *
  * `row` is one `crossLinkBackfill()` entry: `{ target, url, missing, text }`,
  * `text` being the `Label: url` lines to add.
  */
 import { PUBLISH_STEP_TIMEOUT_MS as T, loginRequired, pasteText, step } from './browser.js';
 import { markSunoSongMenu } from '../../../lib/sunoPage.js';
+import { facebookSignedOut, typeFacebookComment } from './facebook.js';
 
 // Suno's caption limit; the new-draft builder enforces the same one.
 const SUNO_CAPTION_MAX = 500;
@@ -120,4 +122,15 @@ const stackerNews = {
   },
 };
 
-export const CROSS_LINK_ADAPTERS = Object.freeze({ youtube, suno, x, stackerNews });
+const facebook = {
+  label: 'Facebook',
+  async prepare(page, row) {
+    await step(this.label, 'open the post', () => page.goto(row.url, { waitUntil: 'domcontentloaded', timeout: T }));
+    await page.waitForTimeout(4000);
+    if (await facebookSignedOut(page)) throw loginRequired(this.label, 'https://www.facebook.com/login');
+    await step(this.label, 'write the comment', () => typeFacebookComment(page, row.text));
+    return { added: row.text.split('\n'), leftForYou: ['Enter (sends the comment)'] };
+  },
+};
+
+export const CROSS_LINK_ADAPTERS = Object.freeze({ youtube, suno, x, stackerNews, facebook });
