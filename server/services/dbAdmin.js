@@ -622,6 +622,24 @@ async function syncDatabaseImpl(io) {
   return { success: true, dumpFile };
 }
 
+/**
+ * Child environment that pins db.sh to the native backend for one lifecycle
+ * command. db.sh chooses start/stop from PGMODE and the endpoint from PGPORT, and
+ * both normally describe the ACTIVE backend (inherited from this process or the
+ * saved .env), so a native request under Docker would otherwise start/stop Docker.
+ * The override is child-only: saved configuration and the running pool are
+ * untouched. Refuses to run when the canonical native endpoint is unusable or
+ * collides with the Docker endpoint, before any lifecycle effect.
+ */
+function nativeLifecycleEnv() {
+  const port = Number(NATIVE_PORT);
+  if (!Number.isInteger(port) || port < 1 || port > 65535
+      || endpointsAlias('localhost', NATIVE_PORT, 'localhost', DOCKER_PORT)) {
+    throw new ServerError('Cannot resolve a distinct native database endpoint. Nothing was started or stopped.', { status: 500 });
+  }
+  return { ...pgEnv(NATIVE_PORT), PGMODE: 'native' };
+}
+
 /** Start a specific database backend. */
 async function startDatabaseImpl(backend) {
   if (backend === 'docker') {
@@ -629,8 +647,9 @@ async function startDatabaseImpl(backend) {
     return { success: result.exitCode === 0, output: result.stdout };
   }
 
-  // Native: use db.sh which handles brew services / pg_ctl
-  const result = await runCmd(bashBinary, [dbScript, 'start'], 30_000);
+  // Native: db.sh handles brew services / pg_ctl, but picks its operation from
+  // the mode it loads. Bind the child to the native backend explicitly.
+  const result = await runCmd(bashBinary, [dbScript, 'start'], 30_000, nativeLifecycleEnv());
   return { success: result.exitCode === 0, output: result.stdout };
 }
 
@@ -641,8 +660,8 @@ async function stopDatabaseImpl(backend) {
     return { success: result.exitCode === 0, output: result.stdout };
   }
 
-  // Native stop
-  const result = await runCmd(bashBinary, [dbScript, 'stop'], 15_000);
+  // Native stop: never let the active (possibly Docker) mode choose the target.
+  const result = await runCmd(bashBinary, [dbScript, 'stop'], 15_000, nativeLifecycleEnv());
   return { success: result.exitCode === 0, output: result.stdout };
 }
 

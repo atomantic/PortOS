@@ -168,6 +168,70 @@ describe('database admin maintenance admission', () => {
   });
 });
 
+// #10888: db.sh picks start/stop from the mode it loads, which is the ACTIVE
+// backend (inherited env / saved .env). A native request must pin the child to
+// native, and must never touch Docker or the process's own environment.
+describe('native lifecycle targeting', () => {
+  const saved = { PGMODE: process.env.PGMODE, PGPORT: process.env.PGPORT, PGHOST: process.env.PGHOST };
+  afterEach(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  });
+
+  it.each(['start', 'stop'])('binds native %s to the native endpoint while Docker is the active mode', async (action) => {
+    process.env.PGMODE = 'docker';
+    process.env.PGPORT = '5561';
+    process.env.PGHOST = 'docker-host.example.com';
+    mockExecFile([{ exitCode: 0, stdout: `native ${action}` }]);
+
+    const res = await request(makeApp()).post(`/api/database/${action}`).send({ backend: 'native' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, output: `native ${action}` });
+    expect(execFile).toHaveBeenCalledTimes(1);
+    const [cmd, args, opts] = execFile.mock.calls[0];
+    expect(cmd).toBe('bash');
+    expect(args.at(-1)).toBe(action);
+    expect(opts.env).toMatchObject({ PGMODE: 'native', PGHOST: 'localhost', PGPORT: '5432' });
+    // Child-only: the server's own active-backend environment is unchanged.
+    expect(process.env).toMatchObject({ PGMODE: 'docker', PGPORT: '5561', PGHOST: 'docker-host.example.com' });
+  });
+
+  it.each([
+    ['start', ['compose', 'up', '-d', 'db']],
+    ['stop', ['compose', 'stop', 'db']],
+  ])('keeps Docker %s on Docker and away from db.sh', async (action, composeArgs) => {
+    process.env.PGMODE = 'native';
+    mockExecFile([{ exitCode: 0, stdout: '' }]);
+
+    const res = await request(makeApp()).post(`/api/database/${action}`).send({ backend: 'docker' });
+
+    expect(res.status).toBe(200);
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(execFile.mock.calls[0][0]).toBe('docker');
+    expect(execFile.mock.calls[0][1]).toEqual(composeArgs);
+  });
+
+  it('refuses native lifecycle before any child process when the native endpoint aliases Docker', async () => {
+    vi.resetModules();
+    vi.doMock('../lib/ports.js', async (importOriginal) => ({
+      ...(await importOriginal()),
+      resolvePostgresPort: () => 5561,
+    }));
+    try {
+      const { startDatabase, stopDatabase } = await import('../services/dbAdmin.js');
+      for (const lifecycle of [startDatabase, stopDatabase]) {
+        await expect(lifecycle('native')).rejects.toThrow(/distinct native database endpoint/);
+      }
+      expect(execFile).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock('../lib/ports.js');
+      vi.resetModules();
+    }
+  });
+});
+
 // A fenced operation must remain inspectable without pool/shell admission,
 // while endpoint identities and damaged on-disk bytes never reach the API.
 describe('database maintenance status', () => {
