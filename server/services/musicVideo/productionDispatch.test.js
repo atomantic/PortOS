@@ -17,7 +17,7 @@ vi.mock('../videoGen/submitJob.js', () => ({ submitVideoGenJob: (...a) => submit
 vi.mock('./productionService.js', () => ({ assertProductionSubmission: vi.fn(async () => {}) }));
 const assertRevisionOpen = vi.fn(async () => {});
 vi.mock('./revisionService.js', () => ({ assertRevisionOpen: (...a) => assertRevisionOpen(...a) }));
-vi.mock('../imageGen/index.js', () => ({ resolveImageCleaners: () => ({ cleanC2PA: false, denoise: false }) }));
+vi.mock('../../lib/imageCleanDefaults.js', () => ({ resolveImageCleaners: () => ({ cleanC2PA: false, denoise: false }) }));
 
 const { dispatchProductionStep } = await import('./productionDispatch.js');
 const { assertProductionSubmission } = await import('./productionService.js');

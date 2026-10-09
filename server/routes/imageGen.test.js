@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import express from 'express';
-import { resolveCleanersFromConfig } from '../lib/imageCleanDefaults.js';
+import { resolveImageCleaners } from '../lib/imageCleanDefaults.js';
 import { request as httpRequest } from 'node:http';
 import { pinPlatform, request, startLoopbackServer, closeLoopbackServer } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -74,16 +74,7 @@ vi.mock('../services/imageGen/index.js', () => ({
   IMAGE_GEN_MODE: { EXTERNAL: 'external', LOCAL: 'local', CODEX: 'codex', GROK: 'grok', AGY: 'agy' },
   IMAGE_GEN_MODES: ['external', 'local', 'codex', 'grok', 'agy'],
   CLOUD_IMAGE_GEN_MODES: ['codex', 'grok', 'agy'],
-  // Mirror the real precedence by delegating to the same helper the prod
-  // resolver uses — keeps test mock and prod in lock-step automatically.
-  // Legacy `autoClean: true` no longer carries into denoise (lossy, opt-in only).
-  resolveImageCleaners: (body, settings, mode) => {
-    const saved = resolveCleanersFromConfig(settings?.imageGen?.[mode], mode);
-    return {
-      cleanC2PA: typeof body?.cleanC2PA === 'boolean' ? body.cleanC2PA : saved.cleanC2PA,
-      denoise: typeof body?.denoise === 'boolean' ? body.denoise : saved.denoise,
-    };
-  },
+  resolveImageCleaners,
   local: {
     listImageModels: vi.fn(() => []),
     listLoraFilenames: vi.fn(async () => []),

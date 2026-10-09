@@ -50,7 +50,7 @@ vi.mock('../mediaJobQueue/index.js', () => ({
   mediaJobEvents: { on: () => {}, off: () => {} },
 }));
 
-vi.mock('../imageGen/index.js', () => ({
+vi.mock('../../lib/imageCleanDefaults.js', () => ({
   resolveImageCleaners: () => ({ cleanC2PA: false, denoise: false }),
 }));
 vi.mock('../../lib/mediaModels.js', async (importOriginal) => ({

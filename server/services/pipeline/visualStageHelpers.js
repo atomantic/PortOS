@@ -25,7 +25,7 @@ import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
 import { resolveRenderTargetConfig } from '../imageGen/cloudProviderConfig.js';
 import { imageModeCandidates, pickUsableMode } from '../../lib/renderModeLadder.js';
 import { RENDER_TARGET, recordRenderPin } from '../../lib/renderTargets.js';
-import { resolveImageCleaners } from '../imageGen/index.js';
+import { resolveImageCleaners } from '../../lib/imageCleanDefaults.js';
 import { selectLocalImageModelFromSettings } from '../imageGen/prepareParams.js';
 
 const joinStyleParts = (...parts) =>

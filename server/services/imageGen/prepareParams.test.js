@@ -283,3 +283,20 @@ it('uses moodboard caption text on a backend without image-reference support', a
   expect(data.prompt).toContain('fine silver grain');
   expect(data.referenceImagePaths).toBeUndefined();
 });
+
+// Pins cleaner precedence where requests are prepared, without loading a backend.
+describe('prepared image cleaner policy', () => {
+  it('inherits saved per-mode flags and accepts explicit boolean overrides', async () => {
+    getSettings.mockResolvedValue({ imageGen: { mode: 'external', external: { cleanC2PA: true, denoise: false } } });
+    expect((await run({ prompt: 'p' })).data).toMatchObject({ cleanC2PA: true, denoise: false });
+    expect((await run({ prompt: 'p', cleanC2PA: false, denoise: true })).data).toMatchObject({ cleanC2PA: false, denoise: true });
+    expect((await run({ prompt: 'p', cleanC2PA: 'false', denoise: null })).data).toMatchObject({ cleanC2PA: true, denoise: false });
+  });
+
+  it('defaults cleanup on only for emitting modes and never opts into denoise', async () => {
+    for (const mode of ['external', 'codex', 'grok']) {
+      getSettings.mockResolvedValue({ imageGen: { mode, codex: { enabled: true }, grok: { enabled: true } } });
+      expect((await run({ prompt: 'p' })).data).toMatchObject({ cleanC2PA: mode !== 'grok', denoise: false });
+    }
+  });
+});

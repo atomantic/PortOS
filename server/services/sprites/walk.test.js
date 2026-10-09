@@ -46,7 +46,7 @@ vi.mock('../tuiPromptRunner.js', () => ({
   executeTuiRun: (...args) => executeTuiRun(...args),
 }));
 
-vi.mock('../imageGen/index.js', () => ({
+vi.mock('../../lib/imageCleanDefaults.js', () => ({
   resolveImageCleaners: () => ({ cleanC2PA: false, denoise: false }),
 }));
 
