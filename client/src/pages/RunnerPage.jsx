@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router';
-import { Clock, Image, X, Info } from 'lucide-react';
+import { Clock, Image, X, Info, Code2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
 import * as api from '../services/api';
@@ -8,6 +8,7 @@ import socket from '../services/socket';
 import { processScreenshotUploads } from '../services/apiMedia';
 import { filterSelectableModels } from '../utils/providers';
 import ProviderModelSelector from '../components/ProviderModelSelector';
+import PageHeader from '../components/PageHeader';
 
 export function RunnerPage() {
   const location = useLocation();
@@ -252,7 +253,11 @@ ${prompt.trim()}`;
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-white">Code</h1>
+      <PageHeader
+        icon={Code2}
+        title="Code Runner"
+        subtitle="Execute AI assistant tasks and shell commands across workspaces"
+      />
 
       {/* Continuation Context Banner */}
       {continueContext && (
