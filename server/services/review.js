@@ -91,8 +91,8 @@ const ARCHIVE_ELIGIBLE_STATUSES = new Set(['completed', 'dismissed']);
 
 // Module-level cache of the parsed items.json, keyed on file identity (mtime +
 // size) rather than an in-process "loaded" flag: `dataManager.js` registers
-// `review` as archivable/deletable, so `data/review/` can be archived or
-// deleted out from under this process while it runs, and a flag-based cache
+// `review` as archivable, so `data/review/` can still be replaced out from
+// under this process while it runs (restore, or a manual delete), and a flag-based cache
 // would keep serving a since-deleted file's contents forever. `saveItems`
 // INVALIDATES the cache after every write rather than seeding it from what it
 // wrote: writes are serialized by `runMutation`, but unqueued reads (`getItems`,

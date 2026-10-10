@@ -120,7 +120,7 @@ const scopedOverview = {
   dataDir: 'data',
   categories: [
     { key: 'images', path: 'data/images', label: 'Images', description: 'Uploaded and generated images', archivable: true, deletable: true, purgeScope: 'items', classified: true, size: 2000, fileCount: 2 },
-    { key: 'messages', path: 'data/messages', label: 'Messages', description: 'Email and messaging data', archivable: true, deletable: true, purgeScope: 'category', classified: true, size: 1000, fileCount: 5 },
+    { key: 'screenshots', path: 'data/screenshots', label: 'Screenshots', description: 'Task screenshots and images dropped into shell sessions', archivable: true, deletable: true, purgeScope: 'category', classified: true, size: 1000, fileCount: 5 },
     { key: 'legacy', path: 'data/legacy', label: 'Legacy', description: 'From a server that predates purgeScope', archivable: false, deletable: true, classified: true, size: 500, fileCount: 1 },
   ],
 };
@@ -177,9 +177,9 @@ describe('DataManager per-item purge (#3327)', () => {
 
   it('keeps the category-wide Purge button for category-scoped and legacy rows', async () => {
     render(<DataManager />);
-    await waitFor(() => expect(screen.getAllByText('Messages').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText('Screenshots').length).toBeGreaterThan(0));
 
-    expandRow('Messages');
+    expandRow('Screenshots');
     await waitFor(() => expect(screen.getByRole('button', { name: /Purge/ })).toBeInTheDocument());
 
     // A server that predates purgeScope omits the field — the button must not
@@ -199,7 +199,7 @@ const busyOverview = {
   dataDir: 'data',
   categories: [
     { key: 'training-runs', path: 'data/training-runs', label: 'LoRA Training Runs', description: 'Training checkpoints', archivable: false, deletable: true, purgeScope: 'category', classified: true, busy: true, busyReason: BUSY_REASON, size: 2000, fileCount: 9 },
-    { key: 'messages', path: 'data/messages', label: 'Messages', description: 'Email and messaging data', archivable: true, deletable: true, purgeScope: 'category', classified: true, busy: false, busyReason: null, size: 1000, fileCount: 5 },
+    { key: 'screenshots', path: 'data/screenshots', label: 'Screenshots', description: 'Task screenshots and images dropped into shell sessions', archivable: true, deletable: true, purgeScope: 'category', classified: true, busy: false, busyReason: null, size: 1000, fileCount: 5 },
   ],
 };
 
@@ -222,9 +222,9 @@ describe('DataManager busy categories (#3342)', () => {
 
   it('keeps the Purge button for an idle category in the same list', async () => {
     render(<DataManager />);
-    await waitFor(() => expect(screen.getAllByText('Messages').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText('Screenshots').length).toBeGreaterThan(0));
 
-    expandRow('Messages');
+    expandRow('Screenshots');
     await waitFor(() => expect(screen.getByRole('button', { name: /Purge/ })).toBeInTheDocument());
   });
 
@@ -257,7 +257,7 @@ describe('DataManager busy categories (#3342)', () => {
     await waitFor(() => expect(screen.getAllByText('LoRA Training Runs').length).toBeGreaterThan(0));
 
     expandRow('LoRA Training Runs');
-    expandRow('Messages');
+    expandRow('Screenshots');
     await waitFor(() => expect(screen.getByRole('button', { name: /Purge/ })).toBeInTheDocument());
 
     // The stale training-runs detail arrives last and must be dropped.
@@ -281,9 +281,9 @@ describe('DataManager busy categories (#3342)', () => {
     purgeDataCategory.mockImplementation(() => new Promise((res) => { resolvePurge = res; }));
 
     render(<DataManager />);
-    await waitFor(() => expect(screen.getAllByText('Messages').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText('Screenshots').length).toBeGreaterThan(0));
 
-    expandRow('Messages');
+    expandRow('Screenshots');
     await waitFor(() => expect(screen.getByRole('button', { name: /Purge/ })).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /Purge/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Purge' }));
@@ -291,7 +291,7 @@ describe('DataManager busy categories (#3342)', () => {
     expandRow('LoRA Training Runs');
     await waitFor(() => expect(screen.getByText(BUSY_REASON)).toBeInTheDocument());
 
-    resolvePurge({ category: 'messages', subPath: null });
+    resolvePurge({ category: 'screenshots', subPath: null });
     await waitFor(() => expect(getDataOverview).toHaveBeenCalledTimes(2));
     expect(screen.getByText(BUSY_REASON)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Purge/ })).not.toBeInTheDocument();
@@ -404,20 +404,20 @@ describe('DataManager treemap + selection panel', () => {
     });
     getDataCategory.mockReset().mockImplementation((key) => Promise.resolve({
       key,
-      items: key === 'messages' ? [{ name: 'inbox-archive', type: 'directory', size: 900, fileCount: 4 }] : [],
+      items: key === 'screenshots' ? [{ name: 'inbox-archive', type: 'directory', size: 900, fileCount: 4 }] : [],
     }));
   });
 
   it('selects a category from its tile and nests its entries in the map', async () => {
     render(<DataManager />);
-    const tile = await screen.findByRole('button', { name: /^Messages/, pressed: false });
+    const tile = await screen.findByRole('button', { name: /^Screenshots/, pressed: false });
     fireEvent.click(tile);
 
-    await waitFor(() => expect(screen.getByRole('button', { name: /^Messages/, pressed: true })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Screenshots/, pressed: true })).toBeInTheDocument());
     // Entry name shows in the nested tile and in the expanded row's table.
     await waitFor(() => expect(screen.getAllByText('inbox-archive').length).toBe(2));
     const panel = screen.getByRole('complementary', { name: 'Selection details' });
-    expect(panel).toHaveTextContent('data/messages');
+    expect(panel).toHaveTextContent('data/screenshots');
     expect(panel).toHaveTextContent('Reclaimable');
   });
 
@@ -439,7 +439,7 @@ describe('DataManager treemap + selection panel', () => {
     await waitFor(() => expect(panel).toHaveTextContent('Worth a look'));
 
     const shortlist = panel.querySelector('ul');
-    expect(shortlist).toHaveTextContent('Messages');
+    expect(shortlist).toHaveTextContent('Screenshots');
     expect(shortlist).toHaveTextContent('Legacy');
     expect(shortlist).not.toHaveTextContent('Images');
     expect(panel).toHaveTextContent('4 GB');
@@ -604,12 +604,12 @@ describe('DataManager training-run sources and individual cleanup', () => {
 
 it('prevents overlapping item cleanup and an already-open bucket purge', async () => {
   getDataOverview.mockResolvedValue({ ...busyOverview, categories: [{ ...busyOverview.categories[1] }] });
-  getDataCategory.mockResolvedValue({ key: 'messages', items: [{ name: 'example-account', type: 'directory', size: 100 }] });
+  getDataCategory.mockResolvedValue({ key: 'screenshots', items: [{ name: 'example-account', type: 'directory', size: 100 }] });
   purgeDataCategory.mockReset();
   render(<DataManager />);
-  await screen.findAllByText('Messages');
-  expandRow('Messages');
-  const remove = await screen.findByRole('button', { name: 'Delete example-account from Messages' });
+  await screen.findAllByText('Screenshots');
+  expandRow('Screenshots');
+  const remove = await screen.findByRole('button', { name: 'Delete example-account from Screenshots' });
   fireEvent.click(screen.getByRole('button', { name: 'Purge' }));
   expect(remove).toBeDisabled();
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -619,7 +619,7 @@ it('prevents overlapping item cleanup and an already-open bucket purge', async (
   fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
   expect(screen.getByRole('button', { name: 'Purge' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Export backup (keeps originals)' })).toBeDisabled();
-  await act(async () => finish({ category: 'messages', subPath: 'example-account' }));
+  await act(async () => finish({ category: 'screenshots', subPath: 'example-account' }));
 });
 
 

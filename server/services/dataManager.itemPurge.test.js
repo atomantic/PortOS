@@ -36,9 +36,9 @@ beforeEach(() => {
   writeFileSync(dataPath('images', 'render-0001.png'), 'png');
   writeFileSync(dataPath('images', 'render-0002.png'), 'png');
   writeFileSync(dataPath('images', '.scratch', 'work.tmp'), 'tmp');
-  // `messages` stays category-scoped.
-  mkdirSync(dataPath('messages', 'account'), { recursive: true });
-  writeFileSync(dataPath('messages', 'index.json'), '{}');
+  // `screenshots` stays category-scoped (and deletable: messages/review are not).
+  mkdirSync(dataPath('screenshots', 'account'), { recursive: true });
+  writeFileSync(dataPath('screenshots', 'index.json'), '{}');
 });
 
 describe('purgeCategory — item-scoped categories (#3327)', () => {
@@ -92,29 +92,29 @@ describe('purgeCategory — item-scoped categories (#3327)', () => {
 
 describe('purgeCategory — category-scoped categories keep their behavior', () => {
   it('empties the directory when no subPath is given', async () => {
-    const result = await purgeCategory('messages');
-    expect(result).toEqual({ category: 'messages', subPath: null });
-    expect(existsSync(dataPath('messages', 'index.json'))).toBe(false);
-    expect(existsSync(dataPath('messages', 'account'))).toBe(false);
-    expect(existsSync(dataPath('messages'))).toBe(true);
+    const result = await purgeCategory('screenshots');
+    expect(result).toEqual({ category: 'screenshots', subPath: null });
+    expect(existsSync(dataPath('screenshots', 'index.json'))).toBe(false);
+    expect(existsSync(dataPath('screenshots', 'account'))).toBe(false);
+    expect(existsSync(dataPath('screenshots'))).toBe(true);
   });
 
   it('removes a named subdirectory recursively', async () => {
-    writeFileSync(dataPath('messages', 'account', 'inbox.json'), '{}');
-    await purgeCategory('messages', { subPath: 'account' });
-    expect(existsSync(dataPath('messages', 'account'))).toBe(false);
-    expect(existsSync(dataPath('messages', 'index.json'))).toBe(true);
+    writeFileSync(dataPath('screenshots', 'account', 'inbox.json'), '{}');
+    await purgeCategory('screenshots', { subPath: 'account' });
+    expect(existsSync(dataPath('screenshots', 'account'))).toBe(false);
+    expect(existsSync(dataPath('screenshots', 'index.json'))).toBe(true);
   });
 
   // A caller that meant to name an entry and produced an empty string must not
   // land in the branch that empties the whole directory.
   it('400s an empty subPath instead of widening it into a whole-category wipe', async () => {
-    await expect(purgeCategory('messages', { subPath: '' })).rejects.toThrow(/single entry/);
-    expect(existsSync(dataPath('messages', 'index.json'))).toBe(true);
+    await expect(purgeCategory('screenshots', { subPath: '' })).rejects.toThrow(/single entry/);
+    expect(existsSync(dataPath('screenshots', 'index.json'))).toBe(true);
   });
 
   it('still refuses a nested subPath', async () => {
-    await expect(purgeCategory('messages', { subPath: '../images/render-0001.png' })).rejects.toThrow(/single entry/);
+    await expect(purgeCategory('screenshots', { subPath: '../images/render-0001.png' })).rejects.toThrow(/single entry/);
     expect(existsSync(dataPath('images', 'render-0001.png'))).toBe(true);
   });
 });

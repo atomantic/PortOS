@@ -48,7 +48,6 @@ const LOW_RISK_DATA_CATEGORIES = new Set([
   'image-clean-tmp',
   'insights',
   'jira-reports',
-  'review',
   'runs',
   'screenshots',
   'tools',

@@ -145,7 +145,11 @@ export const CATEGORIES = {
   'meatspace': { label: 'MeatSpace', description: 'Body metrics, blood tests, eyes', archivable: true, deletable: false },
   'media-collections': { label: 'Media Collections', description: 'Media collection records', archivable: true, deletable: false },
   'media-sketches': { label: 'Media Sketches', description: 'Saved sketch canvases used as render inputs', archivable: true, deletable: false },
-  'messages': { label: 'Messages', description: 'Email and messaging data', archivable: true, deletable: true, purgeScope: 'category' },
+  // Not deletable: drafts, the send-attempt audit (`delivery_unknown` records
+  // that stop a possibly-sent message being resent), triage rules and account
+  // configuration are user-authored and not regenerable. Only the mail cache is
+  // reproducible, and it is bounded per account, so no cache-only purge is offered.
+  'messages': { label: 'Messages', description: 'Message accounts, drafts, triage rules and cached mail — drafts and rules are not regenerable', archivable: true, deletable: false },
   'model-personality': { label: 'Model Personality', description: 'Model personality probe results and settings', archivable: true, deletable: false },
   'model-tests': { label: 'Model Capability Tests', description: 'Throwaway agent sandboxes from the capability test suite — recreated per run, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
   'music': { label: 'Music', description: 'Uploaded and generated background tracks', archivable: true, deletable: false },
@@ -169,7 +173,9 @@ export const CATEGORIES = {
   // cache of anything re-fetchable, so it is neither archivable nor deletable.
   'rapid-reader-library': { label: 'Rapid Reader Shelf', description: 'Saved books for Rapid Reader — pasted and URL-imported prose kept on this machine, not regenerable', archivable: false, deletable: false },
   'repos': { label: 'Cloned Repos', description: 'Git repositories cloned by agents', archivable: false, deletable: true, purgeScope: 'category' },
-  'review': { label: 'Review', description: 'Review hub items', archivable: true, deletable: true, purgeScope: 'category' },
+  // Not deletable: user todos, pending CoS action requests and private security
+  // assessment reports live here and have no other copy.
+  'review': { label: 'Review', description: 'Review Hub todos, action requests and assessment reports', archivable: true, deletable: false },
   'rigging': { label: 'Rigging Clip Library', description: 'User-dropped animation-bearing GLB source files for retargeting — the only copy of assets you supplied', archivable: false, deletable: false },
   'runs': { label: 'AI Runs', description: 'Agent run logs and outputs', archivable: true, deletable: true, purgeScope: 'category' },
   'screenshots': { label: 'Screenshots', description: 'Task screenshots and images dropped into shell sessions — shell drops auto-delete after 7 days, others after 30 days unless an open task still uses them', archivable: true, deletable: true, purgeScope: 'category' },
