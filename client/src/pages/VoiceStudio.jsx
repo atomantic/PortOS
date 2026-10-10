@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { AudioLines, Plus, Loader2, ArrowLeft, Check } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
 import { usePagedCollection } from '../hooks/usePagedCollection';
 import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
 import { useSocketResource } from '../hooks/useSocketResource';
@@ -126,12 +127,16 @@ export default function VoiceStudio() {
     if (key === 'universeId') next.delete('characterId');
     setParams(next);
   };
-  return <div className="@container space-y-4 min-w-0">
-    <header className="flex flex-wrap items-center justify-between gap-3">
-      <h1 className="flex items-center gap-2 text-2xl font-semibold"><AudioLines /> Voice Studio</h1>
-      <Link to={`/voices/new?${newVoiceParams}`} className={buttonClass}><Plus size={16} /> Create voice</Link>
-    </header>
-    <p className="text-sm text-gray-400">Create voices once, audition them, and cast characters across your universes and stories.</p>
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <PageHeader
+        icon={AudioLines}
+        title="Voice Studio"
+        subtitle="Create voices once, audition them, and cast characters across your universes and stories."
+        actions={<Link to={`/voices/new?${newVoiceParams}`} className={buttonClass}><Plus size={16} /> Create voice</Link>}
+      />
+      <div className="@container min-w-0 flex-1 min-h-0 overflow-auto p-4">
+      <div className="space-y-4">
     {engine.error && <p role="alert" className="text-port-error">{engine.error.message} <button onClick={engine.refetch} className="underline">Retry</button></p>}
     {library.loading && <p role="status">Loading voice library…</p>}
     {status && <section aria-label="Voice engine" className="rounded border border-port-border p-3 flex flex-wrap items-center gap-3">
@@ -190,5 +195,8 @@ export default function VoiceStudio() {
             <p className="text-sm text-gray-400">Select a voice to listen and assign, or create a new character voice.</p>}
       </section>
     </div>
-  </div>;
+      </div>
+      </div>
+    </div>
+  );
 }

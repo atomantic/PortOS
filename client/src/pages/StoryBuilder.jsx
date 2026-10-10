@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useId, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, useLocation, Link } from 'react-router';
+import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import { filterSelectableModels } from '../utils/providers';
 import { composeCanonStyledPrompt } from '../lib/composeStyledPrompt';
@@ -251,22 +252,19 @@ function StoryBuilderIndex() {
   const intake = useStoryImportIntake(onCreated);
 
   return (
-    // Wide two-column shell when the container fits: create form left, "Continue a story" list
-    // right (mirrors the POST launcher redesign, #1986). In narrow containers the grid
-    // collapses to a single stacked column so mobile is unchanged. The 22rem
-    // sidebar track is reserved even with no sessions so the form keeps a
-    // comfortable ~48rem width instead of stretching the full shell.
-    <div className="@container/page min-w-0 max-w-6xl mx-auto space-y-6">
-      <header>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Sparkles className="w-6 h-6 text-port-accent" /> Story Builder
-        </h1>
-        <p className="text-gray-400 mt-1">
-          One guided path from idea to video — start from a seed idea or import a finished work, then review and
-          lock each stage (aesthetic → plot arc → reader map → characters → issues) before moving on.
-        </p>
-      </header>
-
+    <div className="flex h-full min-h-0 flex-col">
+      <PageHeader
+        icon={Wand2}
+        title="Story Builder"
+        subtitle="One guided path from idea to video — start from a seed idea or import a finished work, then review and lock each stage (aesthetic → plot arc → reader map → characters → issues) before moving on."
+      />
+      <div className="flex-1 min-h-0 overflow-auto p-4">
+        {/* Wide two-column shell when the container fits: create form left, "Continue a story" list
+            right (mirrors the POST launcher redesign, #1986). In narrow containers the grid
+            collapses to a single stacked column so mobile is unchanged. The 22rem
+            sidebar track is reserved even with no sessions so the form keeps a
+            comfortable ~48rem width instead of stretching the full shell. */}
+        <div className="@container/page min-w-0 max-w-6xl mx-auto">
       <div className="grid grid-cols-1 @5xl/page:grid-cols-[minmax(0,1fr)_22rem] gap-6 items-start">
       <section className="bg-port-card border border-port-border rounded-lg">
         <TabPills
@@ -370,6 +368,8 @@ function StoryBuilderIndex() {
           ))}
         </section>
       )}
+      </div>
+        </div>
       </div>
     </div>
   );
@@ -1343,7 +1343,13 @@ function StoryBuilderDetail({ storyId, stepParam }) {
       </div>
     );
   }
-  if (sessionMissing) return <div className="p-6 text-gray-400">Session not found. <Link to="/story-builder" className="text-port-accent">Back to Story Builder</Link></div>;
+  if (sessionMissing) {
+    return (
+      <div className="h-full overflow-y-auto p-6 text-gray-400">
+        Session not found. <Link to="/story-builder" className="text-port-accent">Back to Story Builder</Link>
+      </div>
+    );
+  }
 
   if (!session || !steps) return (
     <div className="h-full overflow-y-auto p-4 md:p-6">
@@ -1352,18 +1358,19 @@ function StoryBuilderDetail({ storyId, stepParam }) {
   );
 
   return (
-    <div className="story-builder-workspace h-full min-h-0 p-3">
-      <div className="max-w-5xl mx-auto w-full min-w-0 min-h-0 h-full flex flex-col">
+    <div className="story-builder-workspace flex h-full min-h-0 flex-col">
+      <PageHeader
+        icon={Wand2}
+        title={session.title}
+        actions={(
+          <Link to="/story-builder" aria-label="All stories" className="inline-flex min-h-[44px] items-center text-xs text-gray-500 hover:text-port-accent">
+            ← All stories
+          </Link>
+        )}
+      />
+      <div className="flex-1 min-h-0 overflow-hidden">
+        <div className="max-w-5xl mx-auto w-full min-w-0 min-h-0 h-full flex flex-col p-3">
         {readNotice}
-        <header className="mb-3 shrink-0 min-w-0">
-          <div className="min-w-0 max-w-full">
-            <Link to="/story-builder" className="text-xs text-gray-500 hover:text-port-accent">← All stories</Link>
-            <h1 className="text-2xl font-bold flex items-start gap-2 mt-1 min-w-0">
-              <Sparkles className="w-6 h-6 text-port-accent shrink-0 mt-1" />
-              <span className="min-w-0 [overflow-wrap:anywhere]">{session.title}</span>
-            </h1>
-          </div>
-        </header>
 
         {/* Live runs — own kickoffs and ones adopted after a reload / second tab —
             stay visible whichever step is open, with a way back to the step. */}
@@ -1538,6 +1545,7 @@ function StoryBuilderDetail({ storyId, stepParam }) {
               />
             </div>
           </section>
+        </div>
         </div>
       </div>
     </div>

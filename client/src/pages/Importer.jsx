@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { FileInput, Loader2, ArrowLeft, CheckCircle2, AlertTriangle, ChevronDown, ChevronRight, Wand2, Sparkles } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
 import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useImporterProgress, stageStatusIcon } from '../hooks/useImporterProgress';
@@ -482,18 +483,14 @@ export default function Importer() {
   }, { errorMessage: 'Failed to retry issue split' });
 
   return (
-    <div className="space-y-6">
-      <header className="flex items-start gap-3">
-        <FileInput className="w-7 h-7 text-port-accent mt-1" />
-        <div>
-          <h1 className="text-2xl font-bold text-white">Importer</h1>
-          <p className="text-sm text-port-text-muted mt-1">
-            Reverse-engineer a finished story, novel, screenplay, or comic script into the pipeline.
-            The LLM extracts universe canon, the story arc, and a proposed issue split; you review,
-            edit, and commit.
-          </p>
-        </div>
-      </header>
+    <div className="flex h-full min-h-0 flex-col">
+      <PageHeader
+        icon={FileInput}
+        title="Importer"
+        subtitle="Reverse-engineer a finished story, novel, screenplay, or comic script into the pipeline. The LLM extracts universe canon, the story arc, and a proposed issue split; you review, edit, and commit."
+      />
+      <div className="flex-1 min-h-0 overflow-auto p-4">
+      <div className="space-y-6">
 
       {phase === 'intake' && (
         <IntakeForm
@@ -550,6 +547,8 @@ export default function Importer() {
           retryingIssues={retryingIssues}
         />
       )}
+      </div>
+      </div>
     </div>
   );
 }

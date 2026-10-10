@@ -38,6 +38,24 @@ const EXACT_FULL_WIDTH_PATHS = [
   // overflow-auto` scroll region that wraps the centered max-w-4xl
   // content — keep it out of the default padded main or it double-pads.
   '/timeline',
+  // Create index pages share one PageHeader bar over a `flex-1 overflow-auto`
+  // body (#10994). Exact entries are the indexes whose detail routes are a
+  // different component (and already classified, or intentionally padded).
+  '/catalog',
+  '/universes',
+  '/rounds',
+  '/story-builder',
+  '/pipeline',
+  '/pipeline/editorial-checks',
+  '/game',
+  '/3d',
+  '/decks',
+  '/fableloom',
+  '/mood-boards',
+  '/creative-commission',
+  '/creative-commission/new',
+  '/importer',
+  '/start-story',
 ];
 
 const FULL_WIDTH_PATH_PREFIXES = [
@@ -49,9 +67,8 @@ const FULL_WIDTH_PATH_PREFIXES = [
   '/code-animation/',
   '/ask/',
   '/calendar',
-  // Only the Catalog DETAIL editor (/catalog/{type}/{id}) and the
-  // Ingest page (/catalog/ingest) are full-width — they own their
-  // own scroll. The /catalog list/index page stays scrolling-default.
+  // Catalog detail (/catalog/{type}/{id}) and Ingest (/catalog/ingest)
+  // own their scroll. The /catalog index is an EXACT full-width entry above.
   '/catalog/',
   '/cos',
   // Both the Creative Director index and its detail editor manage
@@ -77,23 +94,18 @@ const FULL_WIDTH_PATH_PREFIXES = [
   '/models',
   '/api-reference',
   '/settings',
-  // Round EDITOR (/rounds/:id) and the Learning Guide (/rounds/guide)
-  // are full-width and own their own scroll; the bare /rounds index
-  // (list + create form) takes the normal padded+scrolling main.
+  // Round editor (/rounds/:id) and the Learning Guide (/rounds/guide).
+  // The /rounds index is an EXACT full-width entry above.
   '/rounds/',
   '/wiki',
-  // Only the universe EDITOR (/universes/:id, /universes/new) is
-  // full-width — it manages its own scroll. The /universes index
-  // (list/table) takes the normal padded+scrolling main, mirroring
-  // the Series Pipeline index (/pipeline is not full-width either).
+  // Universe editor (/universes/:id, /universes/new). The /universes
+  // index is an EXACT full-width entry above.
   '/universes/',
-  // Story Builder DETAIL (/story-builder/:id/:step) is a full-width
-  // stepper that owns its own scroll; the bare /story-builder index
-  // (list + create form) takes the normal padded+scrolling main.
+  // Story Builder detail (/story-builder/:id/:step). The index is an
+  // EXACT full-width entry above.
   '/story-builder/',
-  // FableLoom EDITOR (/fableloom/:loomId/...) is a full-width canvas that
-  // owns its own scroll; the bare /fableloom index takes the normal
-  // padded+scrolling main.
+  // FableLoom editor (/fableloom/:loomId/...). The index is an EXACT
+  // full-width entry above.
   '/fableloom/',
   // The AI Providers editor is a drawer over the same page (/ai/new,
   // /ai/:providerId), so its sub-routes need the bare full-width main the
@@ -111,6 +123,12 @@ const FULL_WIDTH_PATH_PREFIXES = [
   // its autoscroll container). They share the standard bordered
   // PageHeader bar over that scroll region.
   '/songbook',
+  // Same component on the index and the :id route, so both own the
+  // PageHeader shell (#10994).
+  '/sprites',
+  '/authors',
+  '/sharing',
+  '/voices',
 ];
 
 const FULL_WIDTH_PATH_REGEXES = [
@@ -129,8 +147,9 @@ const FULL_WIDTH_PATH_REGEXES = [
   // clips the form. Boundary-specific so `/video-gen` (legacy redirect) is
   // not swallowed the way a `/video` prefix would.
   /^\/video(?:\/|$)/,
-  // Only Game DETAIL workspaces own an internal scroll region; the
-  // bare /game index stays on the normal padded page layout.
+  // Game detail (/game/:id) owns an internal scroll region. The bare
+  // /game index is an EXACT full-width entry above; this stays
+  // one-segment so /game/:id/:extra is not swallowed.
   /^\/game\/[^/]+\/?$/,
   // Only the App DETAIL editor (/apps/:id, /apps/:id/:tab) is
   // full-width and owns its own scroll; the Add App form
@@ -142,7 +161,7 @@ const FULL_WIDTH_PATH_REGEXES = [
   /^\/apps\/(?!create(?:\/|$))[^/]+(?:\/|$)/,
 ];
 
-// Exported for the table-driven regression test in Layout.test.jsx — the 41
+// Exported for the table-driven regression test in Layout.test.jsx — the
 // classification rules above have no other coverage, and a dropped or retyped
 // entry silently changes a page's layout.
 export function isFullWidthRoute(pathname) {

@@ -142,8 +142,8 @@ describe('Game page', () => {
     expect(back.className).toContain('h-11');
     expect(back.className).toContain('w-11');
     expect(back).toHaveAttribute('title', 'All Games');
-    expect(back.closest('header')?.className).toContain('shrink-0');
-    expect(screen.getByRole('tabpanel').parentElement?.parentElement?.className)
+    expect(back.closest('[class*="border-b"]')?.className).toContain('shrink-0');
+    expect(screen.getByRole('tabpanel').parentElement?.className)
       .toContain('overflow-y-auto');
   });
 

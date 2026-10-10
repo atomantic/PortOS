@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
 import { PersonStanding, LayoutGrid, Images, Scissors, Film } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import EmptyState from '../components/EmptyState';
 import toast from '../components/ui/Toast';
@@ -436,44 +437,47 @@ export default function Sprites() {
   }, [detail, walkRenders.pendingJobs, referenceRenders.pendingJobs, generateWalk, generateAnchor, hasImageBackend, imageMode, openTrimmer]);
 
   return (
-    <div className="space-y-4">
-      {/* Header owns identity (left) plus every library-wide control (right):
-          a "Library" link back to the catalog (only while a sprite is open),
-          search, and the create/import actions — no left sidebar, so the
-          catalog/detail pane below runs full width. */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-3 mr-auto">
-          <PersonStanding className="w-6 h-6 text-port-accent" />
-          <h1 className="text-2xl font-bold text-white">Sprite Manager</h1>
-        </div>
-        {id && (
-          <button
-            type="button"
-            onClick={() => navigate('/sprites')}
-            className="flex items-center gap-2 px-3 py-1.5 bg-port-card border border-port-border hover:border-port-accent text-gray-300 rounded text-sm"
-          >
-            <LayoutGrid className="w-4 h-4" /> Library
-          </button>
+    <div className="flex h-full min-h-0 flex-col">
+      {/* Library-wide controls sit in the title bar: a "Library" link back to
+          the catalog (only while a sprite is open), search, and the
+          create/import actions — no left sidebar, so the catalog/detail pane
+          below runs full width. */}
+      <PageHeader
+        icon={PersonStanding}
+        title="Sprite Manager"
+        actions={(
+          <>
+            {id && (
+              <button
+                type="button"
+                onClick={() => navigate('/sprites')}
+                className="flex items-center gap-2 px-3 py-1.5 bg-port-card border border-port-border hover:border-port-accent text-gray-300 rounded text-sm"
+              >
+                <LayoutGrid className="w-4 h-4" /> Library
+              </button>
+            )}
+            {records?.length > 0 && <SpriteSearch records={records} onSelect={goto} />}
+            {/* Library-wide, so it sits beside create/import and is reachable from
+                the bare /sprites catalog as well as an open record. */}
+            <button
+              type="button"
+              onClick={() => setAnimationTypesOpen(true)}
+              className="flex items-center gap-2 px-3 py-1.5 bg-port-card border border-port-border hover:border-port-accent text-gray-300 rounded text-sm"
+            >
+              <Film className="w-4 h-4" /> Animation types
+            </button>
+            <NewSpritePanel
+              open={newSpriteOpen}
+              onOpenChange={setNewSpriteOpen}
+              onCreated={(record) => { refresh(); navigate(`/sprites/${record.id}`); }}
+            />
+            {/* Re-import while a sprite is open must refresh the open detail too,
+                not just the library list. */}
+            <ImportPanel onImported={() => { refresh(); if (id) refreshDetail(); }} />
+          </>
         )}
-        {records?.length > 0 && <SpriteSearch records={records} onSelect={goto} />}
-        {/* Library-wide, so it sits beside create/import and is reachable from
-            the bare /sprites catalog as well as an open record. */}
-        <button
-          type="button"
-          onClick={() => setAnimationTypesOpen(true)}
-          className="flex items-center gap-2 px-3 py-1.5 bg-port-card border border-port-border hover:border-port-accent text-gray-300 rounded text-sm"
-        >
-          <Film className="w-4 h-4" /> Animation types
-        </button>
-        <NewSpritePanel
-          open={newSpriteOpen}
-          onOpenChange={setNewSpriteOpen}
-          onCreated={(record) => { refresh(); navigate(`/sprites/${record.id}`); }}
-        />
-        {/* Re-import while a sprite is open must refresh the open detail too,
-            not just the library list. */}
-        <ImportPanel onImported={() => { refresh(); if (id) refreshDetail(); }} />
-      </div>
+      />
+      <div className="flex-1 min-h-0 overflow-auto p-4">
       <div>
         <section className="min-w-0">
           {!id ? (
@@ -641,6 +645,7 @@ export default function Sprites() {
             </div>
           )}
         </section>
+      </div>
       </div>
       {/* Rendered last so the slide-in panel layers over the catalog/detail pane.
           A newly-authored type only reaches an OPEN record's workflow list on the

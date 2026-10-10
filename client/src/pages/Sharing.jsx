@@ -12,6 +12,7 @@ import { useParams, useNavigate } from 'react-router';
 import {
   Share2, Plus, Trash2, Folder, Inbox, History, Save, Loader2, Check, X, Users, AlertCircle, RefreshCw, Copy, GitMerge,
 } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
@@ -73,17 +74,17 @@ const BUCKET_TABS = [
   { id: 'settings', label: 'Settings', icon: Save },
 ];
 
-function SharingHeader({ active }) {
+function SharingHeader({ active, children }) {
   return (
-    <>
-      <div className="flex items-center gap-3 mb-4">
-        <Share2 className="w-6 h-6 text-port-accent" />
-        <h1 className="text-2xl font-bold text-white">Sharing</h1>
-      </div>
-      <div className="mb-6">
+    <div className="flex h-full min-h-0 flex-col">
+      <PageHeader icon={Share2} title="Sharing" />
+      <div className="shrink-0">
         <RouteTabsHeader tabs={SECTIONS} activeTab={active} ariaLabel="Sharing sections" />
       </div>
-    </>
+      <div className="flex-1 min-h-0 overflow-auto p-4">
+        {children}
+      </div>
+    </div>
   );
 }
 
@@ -95,13 +96,12 @@ export default function Sharing() {
     // tab id that doesn't exist (#7420).
     const activeTabLabel = SECTIONS.find((item) => item.id === section)?.label;
     return (
-      <div>
-        <SharingHeader active={section} />
+      <SharingHeader active={section}>
         <div role="tabpanel" aria-labelledby="sharing-panel-heading">
           <h2 id="sharing-panel-heading" className="sr-only">{activeTabLabel}</h2>
           {section === 'duplicates' ? <DuplicatesTab /> : <ConflictsTab />}
         </div>
-      </div>
+      </SharingHeader>
     );
   }
   return <SharingBuckets selectedId={bucketId || null} />;
@@ -292,8 +292,7 @@ function SharingBuckets({ selectedId }) {
   const displayNameDirty = sharingDisplayName !== savedDisplayName || sharingBio !== savedBio;
 
   return (
-    <div>
-      <SharingHeader active="buckets" />
+    <SharingHeader active="buckets">
       {/* RouteTabsHeader passes no `controlsIdPrefix`, so the panel names
           itself with its own heading rather than an `aria-labelledby`
           borrowed from a tab id that doesn't exist (#7420). */}
@@ -556,7 +555,7 @@ function SharingBuckets({ selectedId }) {
         </section>
       </div>
       </div>
-    </div>
+    </SharingHeader>
   );
 }
 

@@ -1,5 +1,6 @@
 import { useNavigate, useLocation, Outlet } from 'react-router';
 import { Layers, Image as ImageIcon, Film, History, Scissors, FolderOpen, Box, Pencil, ScanEye } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
 import { getPageNavTabs } from '../../../server/lib/navManifest.js';
 import { buildPageNavTabs } from '../lib/pageNavTabs.js';
@@ -33,10 +34,7 @@ export default function MediaGen() {
 
   return (
     <div className="flex min-w-0 flex-col h-full">
-      <div className="flex min-w-0 items-center gap-3 p-3 sm:p-4 border-b border-port-border">
-        <Layers className="w-6 h-6 text-port-accent" />
-        <h1 className="min-w-0 truncate text-2xl font-bold text-white">Media Gen</h1>
-      </div>
+      <PageHeader icon={Layers} title="Media Gen" />
 
       <TabPills
         tabs={TABS}
